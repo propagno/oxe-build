@@ -13,6 +13,8 @@ Se o utilizador mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear
 | Scan | `oxe/workflows/scan.md` | “oxe scan”, “mapear o repo”, “atualizar codebase OXE” |
 | Spec | `oxe/workflows/spec.md` | “oxe spec”, “escrever SPEC.md”, “requisitos OXE” |
 | Plan | `oxe/workflows/plan.md` | “oxe plan”, “PLAN.md”, “plano com testes por tarefa” |
+| Quick | `oxe/workflows/quick.md` | “oxe quick”, “fix rápido OXE”, “QUICK.md” |
+| Execute | `oxe/workflows/execute.md` | “oxe execute”, “executar onda”, “onda 2 OXE” |
 | Verify | `oxe/workflows/verify.md` | “oxe verify”, “validar plano OXE”, “VERIFY.md” |
 | Next | `oxe/workflows/next.md` | “oxe next”, “próximo passo OXE” |
 | Help | `oxe/workflows/help.md` | “oxe help”, “como usar OXE” |
@@ -21,13 +23,13 @@ Se o utilizador mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear
 
 ## Artefatos
 
-- `.oxe/STATE.md`, `.oxe/codebase/*.md`, `.oxe/SPEC.md`, `.oxe/PLAN.md`, `.oxe/VERIFY.md`
+- `.oxe/STATE.md`, `.oxe/codebase/*.md`, `.oxe/SPEC.md`, `.oxe/PLAN.md`, `.oxe/VERIFY.md`, `.oxe/QUICK.md`, `.oxe/SUMMARY.md`
 - Templates: `oxe/templates/`
 
 ## Cursor vs Copilot
 
 - **Cursor:** slash commands em `.cursor/commands/oxe-*.md` apontam para os mesmos workflows.
-- **Copilot:** prompt files em `.github/prompts/oxe-*.prompt.md` (anexar no Chat → Prompt…) incluem o workflow via `#file:`.
+- **Copilot:** prompt files em `.github/prompts/oxe-*.prompt.md`; cada um indica o workflow em `oxe/workflows/<passo>.md` na raiz do repo.
 
 ## Manutenção deste pacote (oxe-build)
 

@@ -1,0 +1,6 @@
+{
+  "discuss_before_plan": false,
+  "after_verify_suggest_pr": true,
+  "after_verify_draft_commit": true,
+  "default_verify_command": ""
+}

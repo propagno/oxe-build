@@ -30,9 +30,18 @@ Opções úteis:
 | `--no-agents` | Não copia `AGENTS.md` |
 | `--force` / `-f` | Sobrescreve ficheiros já existentes |
 | `--dry-run` | Mostra o que faria sem escrever |
+| `--no-init-oxe` | Não cria `.oxe/STATE.md` nem `.oxe/codebase/` após instalar |
+| `--oxe-only` | Copia só a pasta `oxe/` (sem Cursor, Copilot, `commands/oxe`, `AGENTS.md`) |
 | `-h` / `--help`, `-v` / `--version` | Ajuda e versão |
 
-A pasta **`oxe/`** (workflows + templates) é **sempre** copiada. `--cursor` / `--copilot` apenas controlam se entram ficheiros em `.cursor/` e `.github/`.
+**Subcomandos:**
+
+| Comando | Efeito |
+|---------|--------|
+| `oxe-cc doctor [dir]` | Verifica Node.js, compara `oxe/workflows/*.md` com o pacote, nota `.oxe/STATE.md` |
+| `oxe-cc init-oxe [dir]` | Só inicializa `.oxe/` (STATE a partir do template + pasta `codebase/`) |
+
+A pasta **`oxe/`** (workflows + templates) é **sempre** copiada na instalação normal. `--cursor` / `--copilot` apenas controlam se entram ficheiros em `.cursor/` e `.github/`.
 
 Instalação global (opcional): `npm install -g oxe-cc` e depois `oxe-cc` em qualquer pasta.
 
@@ -56,11 +65,13 @@ Depois de publicar, o comando extra fica disponível **globalmente** com `npm i 
 
 O ficheiro do script (`bin/oxe-cc.js`) pode ser renomeado desde que atualizes o caminho no mapa `bin`.
 
-**Desenvolvimento local sem publicar:** na pasta `oxe-build`, `npm link` e no projeto alvo `npm link oxe-cc`, depois `oxe-cc`; ou `node /caminho/para/oxe-build/bin/oxe-cc.js`.
+**Desenvolvimento local sem publicar:** na pasta `oxe-build`, `npm link` e no projeto alvo `npm link oxe-cc`, depois `oxe-cc`; ou `node /caminho/para/oxe-build/bin/oxe-cc.js`. Testes: `npm test`.
 
 ## Fonte única
 
-Os passos detalhados vivem em **`oxe/workflows/`** (`scan.md`, `spec.md`, `plan.md`, `verify.md`, `next.md`, `help.md`). Comandos Cursor, prompts Copilot e o atalho `commands/oxe/*` apenas **delegam** para esses ficheiros.
+Os passos detalhados vivem em **`oxe/workflows/`** (`scan.md`, `spec.md`, `plan.md`, `quick.md`, `execute.md`, `verify.md`, `next.md`, `help.md`). Comandos Cursor, prompts Copilot e o atalho `commands/oxe/*` apenas **delegam** para esses ficheiros.
+
+Por omissão, após instalar, o CLI cria **`.oxe/`** mínimo (`STATE.md` a partir de `oxe/templates/STATE.md` e pasta `codebase/`) se ainda não existir — exceto com `--no-init-oxe`.
 
 ## Cursor
 
@@ -69,6 +80,8 @@ Os passos detalhados vivem em **`oxe/workflows/`** (`scan.md`, `spec.md`, `plan.
 | `/oxe-scan` | `oxe/workflows/scan.md` |
 | `/oxe-spec` | `oxe/workflows/spec.md` |
 | `/oxe-plan` | `oxe/workflows/plan.md` |
+| `/oxe-quick` | `oxe/workflows/quick.md` |
+| `/oxe-execute` | `oxe/workflows/execute.md` |
 | `/oxe-verify` | `oxe/workflows/verify.md` |
 | `/oxe-next` | `oxe/workflows/next.md` |
 | `/oxe-help` | `oxe/workflows/help.md` |
@@ -78,7 +91,7 @@ Ficheiros: `.cursor/commands/oxe-*.md` e regra `.cursor/rules/oxe-workflow.mdc`.
 ## GitHub Copilot
 
 1. **Instruções do repositório** — [`.github/copilot-instructions.md`](.github/copilot-instructions.md): ativadas automaticamente no chat quando o repositório está em contexto (ver [documentação](https://docs.github.com/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot)).
-2. **Prompt files** — [`.github/prompts/*.prompt.md`](.github/prompts/): no chat, escreve `/` e escolhe por exemplo **`oxe-scan`**, **`oxe-spec`**, etc. (o `name` no frontmatter define o comando).
+2. **Prompt files** — [`.github/prompts/*.prompt.md`](.github/prompts/): no chat, escreve `/` e escolhe por exemplo **`oxe-scan`**, **`oxe-quick`**, **`oxe-execute`**, etc. (o `name` no frontmatter define o comando). Cada prompt referencia `oxe/workflows/<passo>.md` na **raiz do repo em contexto**.
 
 Este repo inclui [`.vscode/settings.json`](.vscode/settings.json) com `"chat.promptFiles": true` para expor a pasta `.github/prompts`. Podes copiar essa definição para o teu `settings.json` global se preferires.
 
@@ -86,24 +99,23 @@ Este repo inclui [`.vscode/settings.json`](.vscode/settings.json) com `"chat.pro
 
 ## Fluxo recomendado
 
-1. **scan** — após clonar ou mudanças grandes no código.  
-2. **spec** — objetivo e critérios de aceite.  
-3. **plan** — tarefas em ondas + **Verificar** por tarefa.  
-4. Implementar no editor/agente.  
-5. **verify** — validar e registar `.oxe/VERIFY.md`.  
-6. **next** — retomar trabalho.
+**Completo:** 1. **scan** → 2. **spec** → 3. **plan** → 4. **execute** (opcional, onda a onda) → 5. implementar → 6. **verify** → 7. **next**.
+
+**Rápido (tarefas pequenas):** **quick** gera `.oxe/QUICK.md` com passos curtos + verificação; depois **execute** (sobre o QUICK) ou implementação direta e **verify**. Promover a spec/plan se o trabalho crescer (muitos ficheiros, API pública, segurança).
 
 ## Artefatos (`.oxe/` no projeto alvo)
 
 | Caminho | Conteúdo |
 |---------|----------|
 | `.oxe/STATE.md` | Fase, último scan, próximo passo |
-| `.oxe/codebase/*.md` | Mapa (OVERVIEW, STACK, STRUCTURE, TESTING) |
+| `.oxe/codebase/*.md` | Mapa (OVERVIEW, STACK, STRUCTURE, TESTING, **INTEGRATIONS**) |
 | `.oxe/SPEC.md` | Especificação |
 | `.oxe/PLAN.md` | Plano com verificação por tarefa |
+| `.oxe/QUICK.md` | Modo rápido: passos curtos + verificar |
 | `.oxe/VERIFY.md` | Resultado das verificações |
+| `.oxe/SUMMARY.md` | Resumo de sessão / contexto para replan (opcional) |
 
-Templates: **`oxe/templates/`**.
+Templates: **`oxe/templates/`** (`STATE.md`, `SPEC.template.md`, `PLAN.template.md`, `SUMMARY.template.md`).
 
 Neste repositório, **`.oxe/` está no `.gitignore`** para não versionar scans locais do *oxe-build*. No teu produto, remove ou ajusta essa regra se quiseres commitar `.oxe/` com a equipa.
 
@@ -119,10 +131,10 @@ Alternativa manual: copia os mesmos caminhos que o instalador usa (`oxe/`, `.cur
 
 | Pasta / ficheiro | Função |
 |------------------|--------|
-| `bin/oxe-cc.js` | Instalador CLI (`npx` / `oxe-cc`) |
+| `bin/oxe-cc.js` | CLI: instalar, `doctor`, `init-oxe` |
 | `package.json` | Metadados npm (`oxe-cc`, `files`, `bin`) |
 | `oxe/workflows/` | Workflows canónicos (fonte única) |
-| `oxe/templates/` | Modelos para STATE / SPEC / PLAN |
+| `oxe/templates/` | Modelos (STATE, SPEC, PLAN, SUMMARY) |
 | `.cursor/commands/` | Slash commands Cursor |
 | `.cursor/rules/` | Regras do projeto Cursor |
 | `.github/copilot-instructions.md` | Instruções Copilot no repo |

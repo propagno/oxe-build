@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 /**
- * OXE installer — copies packaged assets into a target project (like get-shit-done-cc, minimal).
- * Usage: npx oxe-cc [--cursor] [--copilot] [--vscode] [--force] [--dry-run] [dir]
+ * OXE — install workflows into a target project; bootstrap `.oxe/`; doctor.
+ * Usage:
+ *   npx oxe-cc [options] [target-dir]
+ *   npx oxe-cc doctor [options] [target-dir]
+ *   npx oxe-cc init-oxe [options] [target-dir]
  */
 
 const fs = require('fs');
@@ -13,9 +16,17 @@ const cyan = '\x1b[36m';
 const green = '\x1b[32m';
 const yellow = '\x1b[33m';
 const dim = '\x1b[2m';
+const red = '\x1b[31m';
 const reset = '\x1b[0m';
 
-function parseArgs(argv) {
+/** @typedef {{ help: boolean, version: boolean, cursor: boolean, copilot: boolean, vscode: boolean, commands: boolean, agents: boolean, force: boolean, dryRun: boolean, dir: string, all: boolean, noInitOxe: boolean, oxeOnly: boolean, parseError: boolean, unknownFlag: string }} InstallOpts */
+
+/**
+ * @param {string[]} argv
+ * @returns {InstallOpts & { restPositional: string[] }}
+ */
+function parseInstallArgs(argv) {
+  /** @type {InstallOpts & { restPositional: string[] }} */
   const out = {
     help: false,
     version: false,
@@ -28,8 +39,12 @@ function parseArgs(argv) {
     dryRun: false,
     dir: process.cwd(),
     all: false,
+    noInitOxe: false,
+    oxeOnly: false,
+    parseError: false,
+    unknownFlag: '',
+    restPositional: [],
   };
-  const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-h' || a === '--help') out.help = true;
@@ -42,19 +57,28 @@ function parseArgs(argv) {
     else if (a === '--force' || a === '-f') out.force = true;
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--all' || a === '-a') out.all = true;
+    else if (a === '--no-init-oxe') out.noInitOxe = true;
+    else if (a === '--oxe-only') out.oxeOnly = true;
     else if (a === '--dir' && argv[i + 1]) {
       out.dir = path.resolve(argv[++i]);
-    } else if (!a.startsWith('-')) rest.push(a);
+    } else if (!a.startsWith('-')) out.restPositional.push(a);
     else {
-      console.error(`${yellow}Unknown option: ${a}${reset}`);
-      out.help = true;
+      out.parseError = true;
+      out.unknownFlag = a;
+      break;
     }
   }
-  if (out.all || (!out.cursor && !out.copilot)) {
+  if (out.oxeOnly) {
+    out.cursor = false;
+    out.copilot = false;
+    out.vscode = false;
+    out.commands = false;
+    out.agents = false;
+  } else if (out.all || (!out.cursor && !out.copilot)) {
     out.cursor = true;
     out.copilot = true;
   }
-  if (rest.length) out.dir = path.resolve(rest[0]);
+  if (out.restPositional.length) out.dir = path.resolve(out.restPositional[0]);
   return out;
 }
 
@@ -68,10 +92,24 @@ function readPkgVersion() {
   }
 }
 
+function readMinNode() {
+  try {
+    const p = path.join(PKG_ROOT, 'package.json');
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const eng = j.engines && j.engines.node;
+    if (!eng || typeof eng !== 'string') return 18;
+    const m = eng.match(/>=?\s*(\d+)/);
+    return m ? parseInt(m[1], 10) : 18;
+  } catch {
+    return 18;
+  }
+}
+
 function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
 }
 
+/** @param {string} src @param {string} dest @param {{ dryRun: boolean }} opts */
 function copyFile(src, dest, opts) {
   if (opts.dryRun) {
     console.log(`${dim}file${reset}  ${src} → ${dest}`);
@@ -81,6 +119,7 @@ function copyFile(src, dest, opts) {
   fs.copyFileSync(src, dest);
 }
 
+/** @param {string} srcDir @param {string} destDir @param {{ dryRun: boolean, force: boolean }} opts */
 function copyDir(srcDir, destDir, opts) {
   if (!fs.existsSync(srcDir)) return;
   ensureDir(destDir);
@@ -103,6 +142,88 @@ function copyDir(srcDir, destDir, opts) {
   }
 }
 
+/**
+ * Create `.oxe/STATE.md` from template and ensure `.oxe/codebase/` exists.
+ * @param {string} target
+ * @param {{ dryRun: boolean, force: boolean }} opts
+ */
+function bootstrapOxe(target, opts) {
+  const oxeDir = path.join(target, '.oxe');
+  const codebaseDir = path.join(oxeDir, 'codebase');
+  const stateSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'STATE.md');
+  const stateDest = path.join(oxeDir, 'STATE.md');
+
+  if (!fs.existsSync(stateSrc)) {
+    console.error(`${yellow}warn:${reset} template missing: ${stateSrc}`);
+    return;
+  }
+
+  if (opts.dryRun) {
+    console.log(`${dim}init${reset}  ${oxeDir}/ (STATE.md + codebase/)`);
+    return;
+  }
+
+  ensureDir(codebaseDir);
+
+  if (fs.existsSync(stateDest) && !opts.force) {
+    console.log(`${dim}skip${reset} ${stateDest} (exists, use --force to replace)`);
+    return;
+  }
+
+  copyFile(stateSrc, stateDest, { dryRun: false });
+  console.log(`${green}init${reset}  ${stateDest}`);
+}
+
+/** @param {string} target */
+function runDoctor(target) {
+  const v = process.versions.node;
+  const major = parseInt(v.split('.')[0], 10);
+  const minNode = readMinNode();
+  console.log(`${cyan}oxe-cc doctor${reset} — ${target}`);
+  console.log(`Node.js ${v} (require >= ${minNode})`);
+  if (major < minNode) {
+    console.log(`${red}FAIL${reset} Node.js version below package engines`);
+    process.exit(1);
+  }
+  console.log(`${green}OK${reset} Node.js`);
+
+  const wfPkg = path.join(PKG_ROOT, 'oxe', 'workflows');
+  const wfTgt = path.join(target, 'oxe', 'workflows');
+  if (!fs.existsSync(wfPkg)) {
+    console.log(`${red}FAIL${reset} package workflows missing: ${wfPkg}`);
+    process.exit(1);
+  }
+  const expected = fs
+    .readdirSync(wfPkg)
+    .filter((f) => f.endsWith('.md'))
+    .sort();
+
+  if (!fs.existsSync(wfTgt)) {
+    console.log(`${yellow}WARN${reset} Target has no oxe/workflows/ — run ${cyan}oxe-cc${reset} to install.`);
+    process.exit(1);
+  }
+
+  const actual = fs
+    .readdirSync(wfTgt)
+    .filter((f) => f.endsWith('.md'))
+    .sort();
+  const missing = expected.filter((f) => !actual.includes(f));
+  const extra = actual.filter((f) => !expected.includes(f));
+
+  if (missing.length) {
+    console.log(`${red}FAIL${reset} Missing workflows vs package: ${missing.join(', ')}`);
+    process.exit(1);
+  }
+  if (extra.length) console.log(`${dim}Note:${reset} Extra workflows in target (ok for forks): ${extra.join(', ')}`);
+  console.log(`${green}OK${reset} oxe/workflows has all ${expected.length} package files`);
+
+  const oxeState = path.join(target, '.oxe', 'STATE.md');
+  if (fs.existsSync(oxeState)) console.log(`${green}OK${reset} .oxe/STATE.md present`);
+  else console.log(`${dim}Note:${reset} .oxe/STATE.md absent — run ${cyan}oxe-cc init-oxe${reset} or install without ${cyan}--no-init-oxe${reset}`);
+
+  console.log(`\n${green}Doctor finished.${reset}`);
+}
+
 function usage() {
   console.log(`
 ${cyan}oxe-cc${reset} — install OXE workflows (Cursor + GitHub Copilot) into a project
@@ -110,14 +231,18 @@ ${cyan}oxe-cc${reset} — install OXE workflows (Cursor + GitHub Copilot) into a
 ${green}Usage:${reset}
   npx oxe-cc@latest [options] [target-dir]
   npx oxe-cc@latest --dir /path/to/project
+  npx oxe-cc doctor [options] [target-dir]
+  npx oxe-cc init-oxe [options] [target-dir]
 
-${green}Options:${reset}
+${green}Install options:${reset}
   --cursor       Install .cursor/commands and .cursor/rules (default with --all)
   --copilot      Install .github/copilot-instructions.md and .github/prompts
   --vscode       Also copy .vscode/settings.json (chat.promptFiles)
   --all, -a      Cursor + Copilot (default when neither --cursor nor --copilot)
   --no-commands  Skip commands/oxe (Claude-style frontmatter)
   --no-agents    Skip AGENTS.md
+  --no-init-oxe  Do not create .oxe/STATE.md + .oxe/codebase/ after install
+  --oxe-only     Only copy oxe/ (skip Cursor, Copilot, commands, AGENTS.md)
   --force, -f    Overwrite existing files
   --dry-run      Print actions without writing
   --dir <path>   Target directory (default: cwd)
@@ -128,20 +253,12 @@ ${green}Examples:${reset}
   npx oxe-cc@latest
   npx oxe-cc@latest ./my-app
   npx oxe-cc@latest --cursor --dry-run
+  npx oxe-cc doctor
+  npx oxe-cc init-oxe --dir ./my-app
 `);
 }
 
-function main() {
-  const opts = parseArgs(process.argv.slice(2));
-  if (opts.help) {
-    usage();
-    process.exit(0);
-  }
-  if (opts.version) {
-    console.log(`oxe-cc v${readPkgVersion()}`);
-    process.exit(0);
-  }
-
+function runInstall(opts) {
   const target = opts.dir;
   if (!opts.dryRun && !fs.existsSync(target)) {
     console.error(`${yellow}Target directory does not exist: ${target}${reset}`);
@@ -153,7 +270,6 @@ function main() {
 
   const copyOpts = { dryRun: opts.dryRun, force: opts.force };
 
-  // Always: workflows + templates
   copyDir(path.join(PKG_ROOT, 'oxe'), path.join(target, 'oxe'), copyOpts);
 
   if (opts.cursor) {
@@ -206,9 +322,61 @@ function main() {
     }
   }
 
+  if (!opts.noInitOxe) bootstrapOxe(target, { dryRun: opts.dryRun, force: opts.force });
+
   console.log(
     `\n${green}Done.${reset} Open the project in Cursor (${cyan}/oxe-scan${reset}) or VS Code + Copilot (prompt ${cyan}/oxe-scan${reset}).`
   );
+}
+
+function main() {
+  const argv = process.argv.slice(2);
+  let command = 'install';
+  if (argv[0] === 'doctor' || argv[0] === 'init-oxe') {
+    command = argv[0];
+    argv.shift();
+  }
+
+  const opts = parseInstallArgs(argv);
+
+  if (opts.parseError) {
+    console.error(`${red}Unknown option:${reset} ${opts.unknownFlag}`);
+    usage();
+    process.exit(1);
+  }
+
+  if (opts.help) {
+    usage();
+    process.exit(0);
+  }
+  if (opts.version) {
+    console.log(`oxe-cc v${readPkgVersion()}`);
+    process.exit(0);
+  }
+
+  const target = opts.dir;
+  if (command === 'doctor') {
+    if (!fs.existsSync(target)) {
+      console.error(`${yellow}Target directory does not exist: ${target}${reset}`);
+      process.exit(1);
+    }
+    runDoctor(target);
+    return;
+  }
+
+  if (command === 'init-oxe') {
+    if (!opts.dryRun && !fs.existsSync(target)) {
+      console.error(`${yellow}Target directory does not exist: ${target}${reset}`);
+      process.exit(1);
+    }
+    console.log(`${cyan}OXE${reset} init-oxe → ${green}${target}${reset}`);
+    if (opts.dryRun) console.log(`${yellow}(dry-run)${reset}`);
+    bootstrapOxe(target, { dryRun: opts.dryRun, force: opts.force });
+    console.log(`\n${green}Done.${reset}`);
+    return;
+  }
+
+  runInstall(opts);
 }
 
 main();

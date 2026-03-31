@@ -3,6 +3,10 @@
 <objective>
 Registrar a intenção do utilizador em **`.oxe/SPEC.md`**: escopo, critérios de aceite mensuráveis, não-objetivos e suposições. A spec deve ser o contrato antes do plano.
 
+Para trabalho **muito pequeno**, o utilizador pode preferir **`oxe:quick`** (`.oxe/QUICK.md`) em vez deste fluxo — não bloqueies: se pedirem explicitamente quick, redireciona.
+
+Se **`.oxe/config.json`** tiver `discuss_before_plan: true`, mencionar no fim da resposta que o próximo passo recomendado é **`oxe:discuss`** antes do plano.
+
 Entrada: texto livre na mensagem ou caminho `@arquivo.md` / anexo para incorporar PRD/notas.
 </objective>
 

@@ -1,6 +1,6 @@
 {
   "name": "oxe-cc",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "OXE — spec-driven workflows for Cursor and GitHub Copilot (install via npx)",
   "license": "GPL-3.0",
   "author": "",
@@ -32,6 +32,7 @@
     "README.md"
   ],
   "scripts": {
-    "prepublishOnly": "node bin/oxe-cc.js --version"
+    "test": "node --test tests/install.test.cjs",
+    "prepublishOnly": "node --test tests/install.test.cjs && node bin/oxe-cc.js --version"
   }
 }

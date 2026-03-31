@@ -12,6 +12,14 @@
 
 - (ex.: branch base, feature flags, migrations)
 
+## Replanejamento
+
+> Preencher apenas em **--replan** ou após verify falhado. Manter histórico legível.
+
+- **Data / motivo:** …
+- **Lições de VERIFY / SUMMARY:** …
+- **Alterações ao plano anterior:** (tarefas removidas, novas, renumeradas) …
+
 ## Tarefas
 
 ### T1 — (título)
