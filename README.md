@@ -4,7 +4,7 @@
   <img src="assets/readme-banner.svg" alt="OXE" width="920" />
 </p>
 
-**Fluxo spec-driven e context engineering para [Cursor](https://cursor.com) e [GitHub Copilot](https://github.com/features/copilot) — inspirado na ideia do [GSD](https://github.com/gsd-build/get-shit-done), com **menos comandos** e foco em **`.oxe/`** + **`oxe/workflows/`**.**
+**Fluxo spec-driven e context engineering para [Cursor](https://cursor.com) e [GitHub Copilot](https://github.com/features/copilot) — inspirado na ideia do [GSD](https://github.com/gsd-build/get-shit-done), com **menos comandos** e foco em **`.oxe/`** (workflows em **`.oxe/workflows/`** por defeito, ou **`oxe/workflows/`** com `--global`).**
 
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
@@ -25,7 +25,7 @@ npx oxe-cc@latest
 
 Para quem quer **descrever o que quer e ver isso construído de forma consistente** — **sem** simular uma organização enorme de processos em cima do repositório.
 
-OXE é **enxuto**: não há dezenas de slash commands nem instalador multi-runtime. Há **um CLI** que copia ficheiros para o projeto, **workflows em Markdown** que o agente segue, e **estado em disco** para a sessão principal não “inchada” com tudo o que já foi decidido.
+OXE é **enxuto**: não há dezenas de slash commands. Há **um CLI** que deixa o repositório **só com `.oxe/`** (layout por defeito) ou **`oxe/` + `.oxe/`** com **`--global`**, e instala integrações em **`~/.cursor`**, **`~/.copilot`** e **`~/.claude`** — **workflows em Markdown** e **estado em disco** para a sessão não “inchada” com tudo o que já foi decidido.
 
 ---
 
@@ -39,11 +39,13 @@ Na **raiz do repositório** do teu projeto:
 npx oxe-cc@latest
 ```
 
-Isto copia, entre outros: **`oxe/`** (workflows + templates), **`.cursor/`** (slash commands), **`.github/`** (instruções Copilot + prompt files), **`commands/oxe/`** (atalhos estilo `oxe:*` para outros clientes), **`AGENTS.md`**, e cria um **`.oxe/`** mínimo (`STATE.md`, `config.json` a partir de template, pasta `codebase/`) — salvo flags como `--no-init-oxe`.
+Em **terminal interativo**, o instalador pergunta em dois passos (à la **GSD**): (1) **que integrações** queres (Cursor, Copilot, núcleo só workflows + `.oxe/`, etc.); (2) **layout no repositório** — **clássico** (`oxe/` na raiz + `.oxe/`, com opcional `commands/oxe/`, `AGENTS.md`) ou **mínimo** (**só `.oxe/`**, com **`.oxe/workflows/`** e templates lá dentro). **Cursor, Copilot e Claude** usam **sempre** as pastas do utilizador (`~/.cursor`, `~/.copilot`, `~/.claude`); **não** são criados `.cursor` / `.github` / `.claude` dentro do repo. Com layout clássico e **`--vscode`**, **`.vscode/`** continua no projeto.
 
-Em **terminal interativo**, no fim pergunta se queres instalar o **`oxe-cc` globalmente** (`npm install -g`) ou continuar só com **`npx`**. Em CI ou scripts usa **`--no-global-cli`** / **`-l`**, ou define **`OXE_NO_PROMPT=1`**. Para instalar o CLI sem pergunta: **`--global-cli`** / **`-g`**.
+Sem TTY (CI), o **layout mínimo** (só `.oxe/`) e integrações no **HOME** são o padrão. Usa **`--global`** para também ter **`oxe/`** na raiz. Flags: **`--cursor`**, **`--copilot`**, **`--oxe-only`**, **`OXE_NO_PROMPT=1`**, etc.
 
-**GitHub Copilot CLI (experimental):** para testar slash commands no terminal, instala com **`--copilot-cli`** — copia **`.cursor/commands/*.md`** para **`.claude/commands/`** (ficheiros `oxe-scan.md`, etc., sem `prompt` no nome). Usa na raiz do repo: `npx oxe-cc@latest --force --copilot --copilot-cli`. Depois, na sessão do Copilot CLI, experimenta **`/oxe-scan`**. O suporte depende da versão do CLI; vê [discussão no copilot-cli](https://github.com/github/copilot-cli/issues/1113).
+No fim, em interativo, pergunta se queres instalar o **`oxe-cc` globalmente** (`npm install -g`) ou continuar só com **`npx`**. Em CI ou scripts usa **`--no-global-cli`** / **`-l`**, ou define **`OXE_NO_PROMPT=1`**. Para instalar o CLI sem pergunta: **`--global-cli`** / **`-g`**.
+
+**GitHub Copilot CLI (experimental):** **`--copilot-cli`** copia comandos para **`~/.claude/commands/`** (não para a pasta do projeto). Usa na raiz do repo: `npx oxe-cc@latest --force --copilot --copilot-cli`. Depois experimenta **`/oxe-scan`** na sessão do CLI. O suporte depende da versão; vê [discussão no copilot-cli](https://github.com/github/copilot-cli/issues/1113).
 
 **Confirmar instalação no agente**
 
@@ -52,7 +54,7 @@ Em **terminal interativo**, no fim pergunta se queres instalar o **`oxe-cc` glob
 | **Cursor** | `/oxe-help` |
 | **Copilot** (VS Code) | `/oxe-help` no chat, se [prompt files](https://code.visualstudio.com/docs/copilot/customization/prompt-files) estiverem ativos (`"chat.promptFiles": true` — exemplo em [`.vscode/settings.json`](.vscode/settings.json)) |
 
-> **Nota:** O Copilot usa **instruções do repositório** (`.github/copilot-instructions.md`) **e** os ficheiros em `.github/prompts/*.prompt.md`. Sem prompt files, ainda podes pedir em linguagem natural (“executa o workflow OXE scan”) com o repo em contexto.
+> **Nota:** Instruções e prompt files do Copilot ficam em **`~/.copilot/`** (alinhado ao GSD), não em `.github/` no repo. **`oxe-cc doctor`** aceita workflows em **`.oxe/workflows/`** ou **`oxe/workflows/`**. Sem prompt files, ainda podes pedir em linguagem natural com o repo em contexto.
 
 **Sem pacote no npm** (`npm view oxe-cc version` → 404): clone este repo, `npm link` na pasta **oxe-build**, `npm link oxe-cc` no teu projeto, e corre `oxe-cc`. Alternativa: `node /caminho/oxe-build/bin/oxe-cc.js`.
 
@@ -64,12 +66,14 @@ Em **terminal interativo**, no fim pergunta se queres instalar o **`oxe-cc` glob
 | `--force` / `-f` | Sobrescreve ficheiros já existentes (**obrigatório** para atualizar cópias antigas) |
 | `--dry-run` | Lista ações sem escrever |
 | `--cursor` / `--copilot` | Instala só uma das stacks |
-| `--oxe-only` | Só a pasta `oxe/` (workflows) |
-| `--no-init-oxe` | Não cria `.oxe/` no fim |
+| `--oxe-only` | Só workflows + templates dentro de **`.oxe/`** (sem integrações IDE) |
+| `--no-init-oxe` | Não corre o bootstrap de `STATE.md` / `config.json` / `codebase/` (mantém `.oxe/workflows` se copiados) |
+| `--global` | Layout **clássico**: **`oxe/`** na raiz do repo + **`.oxe/`**; IDE em `~/.cursor`, `~/.copilot`, `~/.claude` |
+| `--local` | Layout **mínimo** (predefinido): **só `.oxe/`** com **`.oxe/workflows/`**; IDE nas mesmas pastas do utilizador |
 | `--global-cli` / `-g` | Após copiar: `npm install -g oxe-cc@versão` (sem pergunta) |
 | `--no-global-cli` / `-l` | Não pergunta nem instala o CLI global (útil em CI) |
-| `--copilot-cli` | Copia comandos OXE para `.claude/commands/` (teste com GitHub Copilot CLI) |
-| `--vscode` | Copia `.vscode/settings.json` de exemplo |
+| `--copilot-cli` | Copia comandos OXE para **`~/.claude/commands/`** |
+| `--vscode` | Copia `.vscode/settings.json` (só com layout **`--global`**) |
 | `--no-commands` | Omite `commands/oxe/` |
 | `--no-agents` | Omite `AGENTS.md` |
 | `--dir <pasta>` ou argumento posicional | Destino em vez do diretório atual |

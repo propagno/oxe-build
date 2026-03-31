@@ -9,7 +9,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const readline = require('readline');
+const readlinePromises = require('readline/promises');
 const { spawnSync } = require('child_process');
 
 const PKG_ROOT = path.join(__dirname, '..');
@@ -80,7 +82,7 @@ function printBanner() {
   else console.log('');
 }
 
-/** @typedef {{ help: boolean, version: boolean, cursor: boolean, copilot: boolean, copilotCli: boolean, vscode: boolean, commands: boolean, agents: boolean, force: boolean, dryRun: boolean, dir: string, all: boolean, noInitOxe: boolean, oxeOnly: boolean, globalCli: boolean, noGlobalCli: boolean, parseError: boolean, unknownFlag: string, conflictFlags: string }} InstallOpts */
+/** @typedef {{ help: boolean, version: boolean, cursor: boolean, copilot: boolean, copilotCli: boolean, vscode: boolean, commands: boolean, agents: boolean, force: boolean, dryRun: boolean, dir: string, all: boolean, noInitOxe: boolean, oxeOnly: boolean, globalCli: boolean, noGlobalCli: boolean, installAssetsGlobal: boolean, explicitScope: boolean, integrationsUnset: boolean, parseError: boolean, unknownFlag: string, conflictFlags: string }} InstallOpts */
 
 /**
  * @param {string[]} argv
@@ -105,6 +107,9 @@ function parseInstallArgs(argv) {
     oxeOnly: false,
     globalCli: false,
     noGlobalCli: false,
+    installAssetsGlobal: false,
+    explicitScope: false,
+    integrationsUnset: false,
     parseError: false,
     unknownFlag: '',
     conflictFlags: '',
@@ -114,7 +119,13 @@ function parseInstallArgs(argv) {
     const a = argv[i];
     if (a === '-h' || a === '--help') out.help = true;
     else if (a === '-v' || a === '--version') out.version = true;
-    else if (a === '--cursor') out.cursor = true;
+    else if (a === '--global') {
+      out.installAssetsGlobal = true;
+      out.explicitScope = true;
+    } else if (a === '--local') {
+      out.installAssetsGlobal = false;
+      out.explicitScope = true;
+    } else if (a === '--cursor') out.cursor = true;
     else if (a === '--copilot') out.copilot = true;
     else if (a === '--copilot-cli') out.copilotCli = true;
     else if (a === '--vscode') out.vscode = true;
@@ -139,6 +150,9 @@ function parseInstallArgs(argv) {
   if (out.globalCli && out.noGlobalCli) {
     out.conflictFlags = 'Cannot use both --global-cli (-g) and --no-global-cli (-l)';
   }
+  if (!out.conflictFlags && argv.includes('--global') && argv.includes('--local')) {
+    out.conflictFlags = 'Cannot use both --global and --local';
+  }
   if (out.oxeOnly) {
     out.cursor = false;
     out.copilot = false;
@@ -146,9 +160,15 @@ function parseInstallArgs(argv) {
     out.vscode = false;
     out.commands = false;
     out.agents = false;
-  } else if (out.all || (!out.cursor && !out.copilot && !out.copilotCli)) {
+    out.integrationsUnset = false;
+  } else if (out.all) {
     out.cursor = true;
     out.copilot = true;
+    out.integrationsUnset = false;
+  } else if (!out.cursor && !out.copilot && !out.copilotCli && !out.vscode) {
+    out.integrationsUnset = true;
+  } else {
+    out.integrationsUnset = false;
   }
   if (out.restPositional.length) out.dir = path.resolve(out.restPositional[0]);
   return out;
@@ -187,6 +207,155 @@ function readMinNode() {
   }
 }
 
+/** @param {string} filePath */
+function expandTilde(filePath) {
+  if (filePath && typeof filePath === 'string' && filePath.startsWith('~/')) {
+    return path.join(os.homedir(), filePath.slice(2));
+  }
+  return filePath;
+}
+
+function cursorUserDir() {
+  if (process.env.CURSOR_CONFIG_DIR) return expandTilde(process.env.CURSOR_CONFIG_DIR);
+  return path.join(os.homedir(), '.cursor');
+}
+
+function copilotUserDir() {
+  if (process.env.COPILOT_CONFIG_DIR) return expandTilde(process.env.COPILOT_CONFIG_DIR);
+  return path.join(os.homedir(), '.copilot');
+}
+
+function claudeUserDir() {
+  return path.join(os.homedir(), '.claude');
+}
+
+/** Layout “clássico”: pasta `oxe/` na raiz do repo. Caso contrário: só `.oxe/` (workflows em `.oxe/workflows`). */
+function useFullRepoLayout(opts) {
+  return opts.installAssetsGlobal === true;
+}
+
+/** @param {string} content */
+function adjustWorkflowPathsForNestedLayout(content) {
+  return content
+    .replace(/\boxe\/workflows\//g, '.oxe/workflows/')
+    .replace(/\boxe\/templates\//g, '.oxe/templates/');
+}
+
+function isTextAssetForPathRewrite(fileName) {
+  return (
+    fileName.endsWith('.md') ||
+    fileName.endsWith('.mdc') ||
+    fileName.endsWith('.prompt.md')
+  );
+}
+
+function canInstallPrompt() {
+  return (
+    process.stdin.isTTY === true &&
+    process.stdout.isTTY === true &&
+    process.env.OXE_NO_PROMPT !== '1' &&
+    process.env.OXE_NO_PROMPT !== 'true'
+  );
+}
+
+/** @returns {Promise<{ cursor: boolean, copilot: boolean, copilotCli: boolean, vscode: boolean, commands: boolean, agents: boolean }>} */
+async function promptIntegrationProfile() {
+  const rl = readlinePromises.createInterface({ input: process.stdin, output: process.stdout });
+  const c = useAnsiColors();
+  try {
+    console.log(`  ${c ? yellow : ''}Onde queres integrar o OXE?${c ? reset : ''}
+  ${c ? cyan : ''}1${c ? reset : ''}) ${c ? dim : ''}Cursor + GitHub Copilot${c ? reset : ''} ${c ? dim : ''}(recomendado)${c ? reset : ''}
+  ${c ? cyan : ''}2${c ? reset : ''}) ${c ? dim : ''}Só Cursor${c ? reset : ''}
+  ${c ? cyan : ''}3${c ? reset : ''}) ${c ? dim : ''}Só Copilot${c ? reset : ''} ${c ? dim : ''}(VS Code)${c ? reset : ''}
+  ${c ? cyan : ''}4${c ? reset : ''}) ${c ? dim : ''}Cursor + Copilot + .claude/commands${c ? reset : ''} ${c ? dim : ''}(Copilot CLI / Claude)${c ? reset : ''}
+  ${c ? cyan : ''}5${c ? reset : ''}) ${c ? dim : ''}Só núcleo${c ? reset : ''} ${c ? dim : ''}(só .oxe/ com workflows, sem integrações IDE)${c ? reset : ''}
+`);
+    const answer = await rl.question(`  ${c ? cyan : ''}Escolha${c ? reset : ''} ${c ? dim : ''}[1]${c ? reset : ''}: `);
+    const choice = (answer || '1').trim();
+    if (choice === '5') {
+      return { cursor: false, copilot: false, copilotCli: false, vscode: false, commands: false, agents: false };
+    }
+    if (choice === '2') {
+      return { cursor: true, copilot: false, copilotCli: false, vscode: false, commands: true, agents: true };
+    }
+    if (choice === '3') {
+      return { cursor: false, copilot: true, copilotCli: false, vscode: false, commands: true, agents: true };
+    }
+    if (choice === '4') {
+      return { cursor: true, copilot: true, copilotCli: true, vscode: false, commands: true, agents: true };
+    }
+    return { cursor: true, copilot: true, copilotCli: false, vscode: false, commands: true, agents: true };
+  } finally {
+    rl.close();
+  }
+}
+
+/** @param {InstallOpts} opts */
+async function promptInstallScope(opts) {
+  const hasIde = opts.cursor || opts.copilot || opts.copilotCli;
+  if (!hasIde) return;
+  const rl = readlinePromises.createInterface({ input: process.stdin, output: process.stdout });
+  const c = useAnsiColors();
+  try {
+    console.log(`  ${c ? yellow : ''}Como organizar o OXE no repositório?${c ? reset : ''}
+  ${c ? dim : ''}Cursor, Copilot e Claude instalam-se sempre na tua pasta de utilizador (${c ? cyan : ''}~/.cursor${c ? dim : ''}, ${c ? cyan : ''}~/.copilot${c ? dim : ''}, ${c ? cyan : ''}~/.claude${c ? dim : ''}).${c ? reset : ''}
+
+  ${c ? cyan : ''}1${c ? reset : ''}) ${c ? dim : ''}Clássico${c ? reset : ''} — ${c ? dim : ''}pasta ${c ? cyan : ''}oxe/${c ? dim : ''} na raiz + ${c ? cyan : ''}.oxe/${c ? dim : ''} (e opcionalmente ${c ? cyan : ''}commands/oxe${c ? dim : ''}, ${c ? cyan : ''}AGENTS.md${c ? dim : ''})${c ? reset : ''}
+  ${c ? cyan : ''}2${c ? reset : ''}) ${c ? dim : ''}Só ${c ? cyan : ''}.oxe/${c ? reset : ''} ${c ? dim : ''}— workflows em ${c ? cyan : ''}.oxe/workflows/${c ? dim : ''}; sem ${c ? cyan : ''}oxe/${c ? dim : ''} na raiz nem pastas extra no repo${c ? reset : ''}
+`);
+    const answer = await rl.question(`  ${c ? cyan : ''}Escolha${c ? reset : ''} ${c ? dim : ''}[1]${c ? reset : ''}: `);
+    const choice = (answer || '1').trim();
+    opts.installAssetsGlobal = choice !== '2';
+  } finally {
+    rl.close();
+  }
+}
+
+/** @param {InstallOpts} opts */
+async function resolveInteractiveInstall(opts) {
+  if (opts.dryRun) {
+    if (opts.integrationsUnset) {
+      opts.cursor = true;
+      opts.copilot = true;
+      opts.integrationsUnset = false;
+    }
+    if (!opts.explicitScope && (opts.cursor || opts.copilot || opts.copilotCli)) {
+      opts.installAssetsGlobal = false;
+    }
+    return;
+  }
+
+  const can = canInstallPrompt();
+
+  if (opts.integrationsUnset) {
+    if (can) {
+      const p = await promptIntegrationProfile();
+      Object.assign(opts, p);
+      opts.integrationsUnset = false;
+    } else {
+      opts.cursor = true;
+      opts.copilot = true;
+      opts.integrationsUnset = false;
+      const c = useAnsiColors();
+      console.log(
+        `\n  ${c ? yellow : ''}Terminal não interativo${c ? reset : ''} — layout mínimo: só ${c ? cyan : ''}.oxe/${c ? reset : ''}; IDE em ~/.cursor e ~/.copilot. Para ${c ? cyan : ''}oxe/${c ? reset : ''} na raiz: ${c ? cyan : ''}--global${c ? reset : ''}. Flags: ${c ? cyan : ''}--cursor${c ? reset : ''}, ${c ? cyan : ''}--copilot${c ? reset : ''}, ${c ? cyan : ''}--oxe-only${c ? reset : ''}, ${c ? cyan : ''}OXE_NO_PROMPT=1${c ? reset : ''}.\n`
+      );
+    }
+  }
+
+  const hasIde = opts.cursor || opts.copilot || opts.copilotCli;
+  if (hasIde && !opts.explicitScope) {
+    if (can) await promptInstallScope(opts);
+    else {
+      opts.installAssetsGlobal = false;
+      const c = useAnsiColors();
+      console.log(
+        `\n  ${c ? yellow : ''}Terminal não interativo${c ? reset : ''} — layout repo: só ${c ? cyan : ''}.oxe/${c ? reset : ''} (opção 2). ${c ? cyan : ''}--global${c ? reset : ''} para também criar ${c ? cyan : ''}oxe/${c ? reset : ''} na raiz.\n`
+      );
+    }
+  }
+}
+
 function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
 }
@@ -201,15 +370,44 @@ function copyFile(src, dest, opts) {
   fs.copyFileSync(src, dest);
 }
 
-/** @param {string} srcDir @param {string} destDir @param {{ dryRun: boolean, force: boolean }} opts */
-function copyDir(srcDir, destDir, opts) {
+/**
+ * @param {string} src
+ * @param {string} dest
+ * @param {{ dryRun: boolean, force: boolean }} opts
+ * @param {boolean} pathRewriteNested
+ */
+function copyFileMaybeRewrite(src, dest, opts, pathRewriteNested) {
+  if (opts.dryRun) {
+    console.log(`${dim}file${reset}  ${src} → ${dest}`);
+    return;
+  }
+  if (fs.existsSync(dest) && !opts.force) {
+    console.log(`${dim}skip${reset} ${dest} (exists)`);
+    return;
+  }
+  ensureDir(path.dirname(dest));
+  if (pathRewriteNested && isTextAssetForPathRewrite(path.basename(src))) {
+    const t = adjustWorkflowPathsForNestedLayout(fs.readFileSync(src, 'utf8'));
+    fs.writeFileSync(dest, t, 'utf8');
+  } else {
+    fs.copyFileSync(src, dest);
+  }
+}
+
+/**
+ * @param {string} srcDir
+ * @param {string} destDir
+ * @param {{ dryRun: boolean, force: boolean }} opts
+ * @param {boolean} [pathRewriteNested]
+ */
+function copyDir(srcDir, destDir, opts, pathRewriteNested = false) {
   if (!fs.existsSync(srcDir)) return;
   ensureDir(destDir);
   const entries = fs.readdirSync(srcDir, { withFileTypes: true });
   for (const e of entries) {
     const s = path.join(srcDir, e.name);
     const d = path.join(destDir, e.name);
-    if (e.isDirectory()) copyDir(s, d, opts);
+    if (e.isDirectory()) copyDir(s, d, opts, pathRewriteNested);
     else {
       if (fs.existsSync(d) && !opts.force) {
         console.log(`${dim}skip${reset} ${d} (exists, use --force)`);
@@ -218,7 +416,12 @@ function copyDir(srcDir, destDir, opts) {
       if (opts.dryRun) console.log(`${dim}file${reset}  ${s} → ${d}`);
       else {
         ensureDir(path.dirname(d));
-        fs.copyFileSync(s, d);
+        if (pathRewriteNested && isTextAssetForPathRewrite(e.name)) {
+          const t = adjustWorkflowPathsForNestedLayout(fs.readFileSync(s, 'utf8'));
+          fs.writeFileSync(d, t, 'utf8');
+        } else {
+          fs.copyFileSync(s, d);
+        }
       }
     }
   }
@@ -266,6 +469,15 @@ function bootstrapOxe(target, opts) {
   }
 }
 
+/** @param {string} targetProject */
+function resolveWorkflowsDir(targetProject) {
+  const nested = path.join(targetProject, '.oxe', 'workflows');
+  const root = path.join(targetProject, 'oxe', 'workflows');
+  if (fs.existsSync(nested)) return nested;
+  if (fs.existsSync(root)) return root;
+  return null;
+}
+
 /** @param {string} target */
 function runDoctor(target) {
   printSection('OXE ▸ doctor');
@@ -282,7 +494,7 @@ function runDoctor(target) {
   console.log(`${green}OK${reset} Node.js`);
 
   const wfPkg = path.join(PKG_ROOT, 'oxe', 'workflows');
-  const wfTgt = path.join(target, 'oxe', 'workflows');
+  const wfTgt = resolveWorkflowsDir(target);
   if (!fs.existsSync(wfPkg)) {
     console.log(`${red}FAIL${reset} package workflows missing: ${wfPkg}`);
     process.exit(1);
@@ -292,8 +504,10 @@ function runDoctor(target) {
     .filter((f) => f.endsWith('.md'))
     .sort();
 
-  if (!fs.existsSync(wfTgt)) {
-    console.log(`${yellow}WARN${reset} Target has no oxe/workflows/ — run ${cyan}oxe-cc${reset} to install.`);
+  if (!wfTgt) {
+    console.log(
+      `${yellow}WARN${reset} Target has no oxe/workflows/ or .oxe/workflows/ — run ${cyan}oxe-cc${reset} to install.`
+    );
     process.exit(1);
   }
 
@@ -309,7 +523,8 @@ function runDoctor(target) {
     process.exit(1);
   }
   if (extra.length) console.log(`${dim}Note:${reset} Extra workflows in target (ok for forks): ${extra.join(', ')}`);
-  console.log(`${green}OK${reset} oxe/workflows has all ${expected.length} package files`);
+  const wfLabel = wfTgt.includes(`${path.sep}.oxe${path.sep}`) ? '.oxe/workflows' : 'oxe/workflows';
+  console.log(`${green}OK${reset} ${wfLabel} has all ${expected.length} package files`);
 
   const oxeState = path.join(target, '.oxe', 'STATE.md');
   if (fs.existsSync(oxeState)) console.log(`${green}OK${reset} .oxe/STATE.md present`);
@@ -384,19 +599,20 @@ function installGlobalCliPackage() {
 /**
  * After copying OXE into the project: optionally install the CLI globally (like GSD’s “where to install” choice).
  * @param {InstallOpts} opts
+ * @returns {Promise<void>}
  */
 function maybePromptGlobalCli(opts) {
-  if (opts.oxeOnly) return;
+  if (opts.oxeOnly) return Promise.resolve();
   if (opts.dryRun) {
     if (useAnsiColors()) console.log(`${dim}  (dry-run — pergunta do CLI global ignorada)${reset}`);
-    return;
+    return Promise.resolve();
   }
   if (opts.globalCli) {
     installGlobalCliPackage();
-    return;
+    return Promise.resolve();
   }
-  if (opts.noGlobalCli) return;
-  if (process.env.OXE_NO_PROMPT === '1' || process.env.OXE_NO_PROMPT === 'true') return;
+  if (opts.noGlobalCli) return Promise.resolve();
+  if (process.env.OXE_NO_PROMPT === '1' || process.env.OXE_NO_PROMPT === 'true') return Promise.resolve();
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     const c = useAnsiColors();
     if (c) {
@@ -406,7 +622,7 @@ function maybePromptGlobalCli(opts) {
     } else {
       console.log('\nNon-interactive terminal — skipping global CLI prompt. Use npx oxe-cc@latest or --global-cli.\n');
     }
-    return;
+    return Promise.resolve();
   }
 
   const c = useAnsiColors();
@@ -421,15 +637,18 @@ function maybePromptGlobalCli(opts) {
 `
   );
 
-  rl.question(`  ${c ? cyan : ''}Escolha${c ? reset : ''} ${c ? dim : ''}[1]${c ? reset : ''}: `, (answer) => {
-    rl.close();
-    const choice = (answer || '1').trim();
-    if (choice === '2') installGlobalCliPackage();
-    else {
-      console.log(
-        `\n  ${c ? green : ''}✓${c ? reset : ''} Para atualizar workflows: ${c ? cyan : ''}npx oxe-cc@latest --force${c ? reset : ''} na raiz do projeto.\n`
-      );
-    }
+  return new Promise((resolve) => {
+    rl.question(`  ${c ? cyan : ''}Escolha${c ? reset : ''} ${c ? dim : ''}[1]${c ? reset : ''}: `, (answer) => {
+      rl.close();
+      const choice = (answer || '1').trim();
+      if (choice === '2') installGlobalCliPackage();
+      else {
+        console.log(
+          `\n  ${c ? green : ''}✓${c ? reset : ''} Para atualizar workflows: ${c ? cyan : ''}npx oxe-cc@latest --force${c ? reset : ''} na raiz do projeto.\n`
+        );
+      }
+      resolve();
+    });
   });
 }
 
@@ -453,6 +672,8 @@ ${green}Install options:${reset}
   --no-agents    Skip AGENTS.md
   --no-init-oxe  Do not create .oxe/STATE.md + .oxe/codebase/ after install
   --oxe-only     Only copy oxe/ (skip Cursor, Copilot, commands, AGENTS.md)
+  --global       Classic repo layout: oxe/ at project root + .oxe/; IDE files under ~/.cursor, ~/.copilot, ~/.claude
+  --local        Minimal repo (default): only .oxe/ (.oxe/workflows, templates); same IDE user dirs; no oxe/ at root
   --global-cli, -g   After install: npm install -g oxe-cc@<version> (no prompt)
   --no-global-cli, -l  Skip the interactive “CLI global?” step (default in CI)
   --force, -f    Overwrite existing files
@@ -485,50 +706,74 @@ function runInstall(opts) {
 
   printSection('OXE ▸ Copiar workflows para o projeto');
   const c = useAnsiColors();
+  const fullLayout = useFullRepoLayout(opts);
+  const idePathRewrite = !fullLayout;
+
   console.log(`  ${c ? green : ''}Destino:${c ? reset : ''} ${c ? cyan : ''}${target}${c ? reset : ''}`);
   if (opts.dryRun) console.log(`  ${c ? yellow : ''}(dry-run)${c ? reset : ''}`);
 
+  if (fullLayout) {
+    console.log(
+      `  ${c ? dim : ''}Layout repo:${c ? reset : ''} ${c ? yellow : ''}oxe/${c ? reset : ''} na raiz + ${c ? yellow : ''}.oxe/${c ? reset : ''}`
+    );
+  } else {
+    console.log(
+      `  ${c ? dim : ''}Layout repo:${c ? reset : ''} ${c ? yellow : ''}só .oxe/${c ? reset : ''} ${c ? dim : ''}(${c ? cyan : ''}.oxe/workflows${c ? dim : ''})${c ? reset : ''}`
+    );
+  }
+  const ideAny = opts.cursor || opts.copilot || opts.copilotCli;
+  if (ideAny) {
+    console.log(
+      `  ${c ? dim : ''}Integrações IDE:${c ? reset : ''} ${c ? yellow : ''}~/.cursor${c ? reset : ''}, ${c ? yellow : ''}~/.copilot${c ? reset : ''}, ${c ? yellow : ''}~/.claude${c ? reset : ''} ${c ? dim : ''}(conforme opções)${c ? reset : ''}`
+    );
+  }
+
   const copyOpts = { dryRun: opts.dryRun, force: opts.force };
 
-  copyDir(path.join(PKG_ROOT, 'oxe'), path.join(target, 'oxe'), copyOpts);
+  if (fullLayout) {
+    copyDir(path.join(PKG_ROOT, 'oxe'), path.join(target, 'oxe'), copyOpts, false);
+  } else {
+    const nested = path.join(target, '.oxe');
+    copyDir(path.join(PKG_ROOT, 'oxe', 'workflows'), path.join(nested, 'workflows'), copyOpts, true);
+    copyDir(path.join(PKG_ROOT, 'oxe', 'templates'), path.join(nested, 'templates'), copyOpts, true);
+  }
 
+  const cursorBase = cursorUserDir();
   if (opts.cursor) {
     const cCmd = path.join(PKG_ROOT, '.cursor', 'commands');
     const cRules = path.join(PKG_ROOT, '.cursor', 'rules');
-    if (fs.existsSync(cCmd)) copyDir(cCmd, path.join(target, '.cursor', 'commands'), copyOpts);
-    if (fs.existsSync(cRules)) copyDir(cRules, path.join(target, '.cursor', 'rules'), copyOpts);
+    if (fs.existsSync(cCmd)) copyDir(cCmd, path.join(cursorBase, 'commands'), copyOpts, idePathRewrite);
+    if (fs.existsSync(cRules)) copyDir(cRules, path.join(cursorBase, 'rules'), copyOpts, idePathRewrite);
   }
 
   if (opts.copilotCli) {
     const cCmd = path.join(PKG_ROOT, '.cursor', 'commands');
-    const dest = path.join(target, '.claude', 'commands');
-    const c = useAnsiColors();
+    const dest = path.join(claudeUserDir(), 'commands');
     if (fs.existsSync(cCmd)) {
       console.log(
-        `  ${c ? green : ''}cli${c ? reset : ''}   ${c ? dim : ''}Copilot CLI:${c ? reset : ''} ${c ? cyan : ''}.claude/commands/${c ? reset : ''}${c ? dim : ''} (experimental — teste /oxe-scan na sessão)${c ? reset : ''}`
+        `  ${c ? green : ''}cli${c ? reset : ''}   ${c ? dim : ''}Copilot CLI:${c ? reset : ''} ${c ? cyan : ''}${dest}${c ? reset : ''}${c ? dim : ''} (experimental)${c ? reset : ''}`
       );
-      copyDir(cCmd, dest, copyOpts);
+      copyDir(cCmd, dest, copyOpts, idePathRewrite);
     } else {
       console.warn(`${yellow}warn:${reset} missing ${cCmd} — skip --copilot-cli`);
     }
   }
 
+  const copilotRoot = copilotUserDir();
   if (opts.copilot) {
     const gh = path.join(PKG_ROOT, '.github');
     const inst = path.join(gh, 'copilot-instructions.md');
     const prompts = path.join(gh, 'prompts');
     if (fs.existsSync(inst)) {
-      const dest = path.join(target, '.github', 'copilot-instructions.md');
-      if (opts.dryRun) console.log(`${dim}file${reset}  ${inst} → ${dest}`);
-      else {
-        if (fs.existsSync(dest) && !opts.force) console.log(`${dim}skip${reset} ${dest} (exists)`);
-        else copyFile(inst, dest, copyOpts);
-      }
+      const dest = path.join(copilotRoot, 'copilot-instructions.md');
+      copyFileMaybeRewrite(inst, dest, copyOpts, idePathRewrite);
     }
-    if (fs.existsSync(prompts)) copyDir(prompts, path.join(target, '.github', 'prompts'), copyOpts);
+    if (fs.existsSync(prompts)) {
+      copyDir(prompts, path.join(copilotRoot, 'prompts'), copyOpts, idePathRewrite);
+    }
   }
 
-  if (opts.vscode) {
+  if (opts.vscode && fullLayout) {
     const vs = path.join(PKG_ROOT, '.vscode', 'settings.json');
     if (fs.existsSync(vs)) {
       const dest = path.join(target, '.vscode', 'settings.json');
@@ -540,19 +785,19 @@ function runInstall(opts) {
     }
   }
 
-  if (opts.commands) {
+  if (opts.commands && fullLayout) {
     const cmdSrc = path.join(PKG_ROOT, 'commands', 'oxe');
     const cmdDest = path.join(target, 'commands', 'oxe');
-    if (fs.existsSync(cmdSrc)) copyDir(cmdSrc, cmdDest, copyOpts);
+    if (fs.existsSync(cmdSrc)) copyDir(cmdSrc, cmdDest, copyOpts, idePathRewrite);
   }
 
-  if (opts.agents) {
+  if (opts.agents && fullLayout) {
     const agents = path.join(PKG_ROOT, 'AGENTS.md');
     if (fs.existsSync(agents)) {
       const dest = path.join(target, 'AGENTS.md');
       if (opts.dryRun) console.log(`${dim}file${reset}  ${agents} → ${dest}`);
       else if (fs.existsSync(dest) && !opts.force) console.log(`${dim}skip${reset} ${dest} (exists)`);
-      else copyFile(agents, dest, copyOpts);
+      else copyFileMaybeRewrite(agents, dest, copyOpts, idePathRewrite);
     }
   }
 
@@ -563,7 +808,7 @@ function runInstall(opts) {
   );
 }
 
-function main() {
+async function main() {
   const argv = process.argv.slice(2);
   let command = 'install';
   if (argv[0] === 'doctor' || argv[0] === 'init-oxe') {
@@ -624,8 +869,12 @@ function main() {
     return;
   }
 
+  await resolveInteractiveInstall(opts);
   runInstall(opts);
-  maybePromptGlobalCli(opts);
+  await maybePromptGlobalCli(opts);
 }
 
-main();
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
