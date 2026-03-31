@@ -37,9 +37,9 @@ Rever alterações como num pull request: **URL do GitHub** (`…/pull/<n>`), **
 6. **Opcional em disco** — Se o usuário pedir registro: criar ou atualizar **`.oxe/PR-REVIEW.md`** com data, URL ou refs (base/head), resumo, achados e próximos passos (Markdown legível).
 </process>
 
-<success>
+<success_criteria>
 - [ ] URL da PR ou par base/head está explícito na resposta (ou foi pedida clarificação).
 - [ ] A análise baseia-se no diff (terminal ou colado), não só em suposições.
 - [ ] Há seção de riscos e de testes/verificação sugerida.
 - [ ] Nenhum segredo ou credencial é repetido na análise; redigir se aparecerem no diff.
-</success>
+</success_criteria>

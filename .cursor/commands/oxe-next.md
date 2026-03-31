@@ -1,5 +1,13 @@
 ---
-description: OXE — Indica o próximo passo (lê .oxe/STATE.md)
+description: "Comando OXE"
 ---
 
-Lê e executa **integralmente** o workflow em `oxe/workflows/next.md`.
+---
+name: oxe-next
+agent: agent
+description: OXE — Próximo passo (lê STATE.md)
+---
+
+Executa o workflow **OXE next**. Lê e aplica **integralmente**:
+
+`oxe/workflows/next.md` (na raiz do repositório em contexto)

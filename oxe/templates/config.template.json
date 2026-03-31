@@ -7,5 +7,12 @@
   "scan_focus_globs": [],
   "scan_ignore_globs": [],
   "spec_required_sections": [],
-  "plan_max_tasks_per_wave": 0
+  "plan_max_tasks_per_wave": 0,
+  "install": {
+    "profile": "recommended",
+    "repo_layout": "nested",
+    "vscode": false,
+    "include_commands_dir": true,
+    "include_agents_md": true
+  }
 }

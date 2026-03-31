@@ -23,11 +23,18 @@
   "engines": {
     "node": ">=18.0.0"
   },
+  "main": "lib/sdk/index.cjs",
+  "exports": {
+    ".": "./lib/sdk/index.cjs",
+    "./package.json": "./package.json"
+  },
+  "types": "lib/sdk/index.d.ts",
   "bin": {
     "oxe-cc": "bin/oxe-cc.js"
   },
   "files": [
     "bin",
+    "lib",
     "oxe",
     "assets",
     ".cursor",
@@ -37,8 +44,28 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node --test tests/install.test.cjs tests/oxe-project-health.test.cjs",
+    "sync:cursor": "node scripts/sync-cursor-from-prompts.cjs",
+    "test": "node --test tests/install.test.cjs tests/oxe-project-health.test.cjs tests/oxe-sdk.test.cjs tests/oxe-manifest.test.cjs tests/oxe-agent-install.test.cjs tests/oxe-install-resolve-full.test.cjs tests/oxe-health-extended.test.cjs tests/oxe-workflows-edge.test.cjs tests/oxe-sdk-edge.test.cjs tests/oxe-cli-edge.test.cjs tests/oxe-scripts.test.cjs",
+    "test:coverage": "c8 --check-coverage --lines 82 --functions 90 --branches 58 --statements 82 npm test",
     "scan:assets": "node scripts/oxe-assets-scan.cjs",
-    "prepublishOnly": "node --test tests/install.test.cjs && node scripts/oxe-assets-scan.cjs && node bin/oxe-cc.js --version"
+    "prepublishOnly": "node scripts/sync-cursor-from-prompts.cjs && npm test && npm run scan:assets && node bin/oxe-cc.js --version"
+  },
+  "c8": {
+    "all": true,
+    "include": [
+      "bin/oxe-cc.js",
+      "bin/lib/**/*.cjs",
+      "lib/**/*.cjs",
+      "scripts/**/*.cjs"
+    ],
+    "exclude": [
+      "**/node_modules/**"
+    ],
+    "reporter": [
+      "text-summary"
+    ]
+  },
+  "devDependencies": {
+    "c8": "^11.0.0"
   }
 }

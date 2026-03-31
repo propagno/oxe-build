@@ -27,3 +27,10 @@ Inspecionar `.oxe/STATE.md` e a existência de `SPEC.md`, `PLAN.md`, `QUICK.md`,
 - **Por quê:** uma frase
 - **Artefatos em jogo:** lista curta (máx. 4 itens)
 </process>
+
+<success_criteria>
+- [ ] Foi indicado **exatamente um** próximo passo entre os valores canónicos (`scan`, `spec`, `discuss`, `plan`, `quick`, `execute`, `verify`) ou mensagem explícita de fluxo concluído.
+- [ ] A justificativa é **uma** frase; não há lista equiparável de alternativas como “próximo passo”.
+- [ ] O comando sugerido corresponde ao passo (slash `/oxe-*` ou `npx oxe-cc status` quando aplicável).
+- [ ] **Artefatos em jogo** tem no máximo quatro itens e são caminhos ou nomes reais em `.oxe/`.
+</success_criteria>

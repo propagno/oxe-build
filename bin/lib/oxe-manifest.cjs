@@ -48,7 +48,7 @@ function writeFileManifest(home, files, version) {
 }
 
 /**
- * GSD-style: before overwriting with --force, backup files that diverged from last manifest.
+ * Before overwriting with --force, backup files that diverged from last manifest.
  * @param {string} home
  * @param {Record<string, string>} prevManifest
  * @param {{ dryRun: boolean, force: boolean }} opts

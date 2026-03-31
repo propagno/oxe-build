@@ -1,5 +1,13 @@
 ---
-description: OXE — Ajuda (Cursor, Copilot, fluxo e artefatos)
+description: "Comando OXE"
 ---
 
-Lê e executa **integralmente** o workflow em `oxe/workflows/help.md`.
+---
+name: oxe-help
+agent: agent
+description: OXE — Ajuda (Cursor, Copilot, artefatos)
+---
+
+Executa o workflow **OXE help**. Lê e segue **integralmente**:
+
+`oxe/workflows/help.md` (na raiz do repositório em contexto)
