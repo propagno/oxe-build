@@ -9,6 +9,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
+const { spawnSync } = require('child_process');
 
 const PKG_ROOT = path.join(__dirname, '..');
 
@@ -19,6 +21,9 @@ const dim = '\x1b[2m';
 const red = '\x1b[31m';
 const bold = '\x1b[1m';
 const reset = '\x1b[0m';
+
+/** @type {string} */
+const RULE = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
 
 /** Plain banner if banner.txt is missing (keep in sync with bin/banner.txt style). */
 const DEFAULT_BANNER = `   .============================================.
@@ -32,6 +37,18 @@ function useAnsiColors() {
   if (process.env.NO_COLOR) return false;
   if (process.env.FORCE_COLOR === '0') return false;
   return process.stdout.isTTY === true;
+}
+
+/** Section header (GSD-inspired). */
+function printSection(title) {
+  const c = useAnsiColors();
+  if (!c) {
+    console.log(`\n${title}\n${'─'.repeat(50)}\n`);
+    return;
+  }
+  console.log(`\n${dim}${RULE}${reset}`);
+  console.log(`  ${cyan}${bold}${title}${reset}`);
+  console.log(`${dim}${RULE}${reset}\n`);
 }
 
 /** Print branded header; skip with OXE_NO_BANNER=1. Not used for --version (scripts). */
@@ -49,6 +66,7 @@ function printBanner() {
     }
   }
   const text = raw.replace(/\{version\}/g, ver).replace(/\r\n/g, '\n').trimEnd();
+  if (color) console.log(`${dim}${RULE}${reset}\n`);
   if (!color) {
     console.log(text + '\n');
     return;
@@ -58,10 +76,11 @@ function printBanner() {
     if (line.includes(`v${ver}`)) console.log(`${dim}${line}${reset}`);
     else console.log(`${cyan}${bold}${line}${reset}`);
   }
-  console.log('');
+  if (color) console.log(`\n${dim}${RULE}${reset}\n`);
+  else console.log('');
 }
 
-/** @typedef {{ help: boolean, version: boolean, cursor: boolean, copilot: boolean, vscode: boolean, commands: boolean, agents: boolean, force: boolean, dryRun: boolean, dir: string, all: boolean, noInitOxe: boolean, oxeOnly: boolean, parseError: boolean, unknownFlag: string }} InstallOpts */
+/** @typedef {{ help: boolean, version: boolean, cursor: boolean, copilot: boolean, copilotCli: boolean, vscode: boolean, commands: boolean, agents: boolean, force: boolean, dryRun: boolean, dir: string, all: boolean, noInitOxe: boolean, oxeOnly: boolean, globalCli: boolean, noGlobalCli: boolean, parseError: boolean, unknownFlag: string, conflictFlags: string }} InstallOpts */
 
 /**
  * @param {string[]} argv
@@ -74,6 +93,7 @@ function parseInstallArgs(argv) {
     version: false,
     cursor: false,
     copilot: false,
+    copilotCli: false,
     vscode: false,
     commands: true,
     agents: true,
@@ -83,8 +103,11 @@ function parseInstallArgs(argv) {
     all: false,
     noInitOxe: false,
     oxeOnly: false,
+    globalCli: false,
+    noGlobalCli: false,
     parseError: false,
     unknownFlag: '',
+    conflictFlags: '',
     restPositional: [],
   };
   for (let i = 0; i < argv.length; i++) {
@@ -93,6 +116,7 @@ function parseInstallArgs(argv) {
     else if (a === '-v' || a === '--version') out.version = true;
     else if (a === '--cursor') out.cursor = true;
     else if (a === '--copilot') out.copilot = true;
+    else if (a === '--copilot-cli') out.copilotCli = true;
     else if (a === '--vscode') out.vscode = true;
     else if (a === '--no-commands') out.commands = false;
     else if (a === '--no-agents') out.agents = false;
@@ -101,22 +125,28 @@ function parseInstallArgs(argv) {
     else if (a === '--all' || a === '-a') out.all = true;
     else if (a === '--no-init-oxe') out.noInitOxe = true;
     else if (a === '--oxe-only') out.oxeOnly = true;
+    else if (a === '--global-cli' || a === '-g') out.globalCli = true;
+    else if (a === '--no-global-cli' || a === '-l') out.noGlobalCli = true;
     else if (a === '--dir' && argv[i + 1]) {
       out.dir = path.resolve(argv[++i]);
-    } else if (!a.startsWith('-')) out.restPositional.push(a);
+    }     else if (!a.startsWith('-')) out.restPositional.push(a);
     else {
       out.parseError = true;
       out.unknownFlag = a;
       break;
     }
   }
+  if (out.globalCli && out.noGlobalCli) {
+    out.conflictFlags = 'Cannot use both --global-cli (-g) and --no-global-cli (-l)';
+  }
   if (out.oxeOnly) {
     out.cursor = false;
     out.copilot = false;
+    out.copilotCli = false;
     out.vscode = false;
     out.commands = false;
     out.agents = false;
-  } else if (out.all || (!out.cursor && !out.copilot)) {
+  } else if (out.all || (!out.cursor && !out.copilot && !out.copilotCli)) {
     out.cursor = true;
     out.copilot = true;
   }
@@ -131,6 +161,16 @@ function readPkgVersion() {
     return j.version || '0.0.0';
   } catch {
     return '0.0.0';
+  }
+}
+
+function readPkgName() {
+  try {
+    const p = path.join(PKG_ROOT, 'package.json');
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return typeof j.name === 'string' ? j.name : 'oxe-cc';
+  } catch {
+    return 'oxe-cc';
   }
 }
 
@@ -228,10 +268,12 @@ function bootstrapOxe(target, opts) {
 
 /** @param {string} target */
 function runDoctor(target) {
+  printSection('OXE ▸ doctor');
   const v = process.versions.node;
   const major = parseInt(v.split('.')[0], 10);
   const minNode = readMinNode();
-  console.log(`${cyan}oxe-cc doctor${reset} — ${target}`);
+  const c = useAnsiColors();
+  console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${target}${c ? reset : ''}`);
   console.log(`Node.js ${v} (require >= ${minNode})`);
   if (major < minNode) {
     console.log(`${red}FAIL${reset} Node.js version below package engines`);
@@ -310,6 +352,87 @@ function runDoctor(target) {
   console.log(`\n${green}Doctor finished.${reset}`);
 }
 
+/**
+ * npm install -g oxe-cc@version (same version as this running CLI).
+ * @returns {boolean}
+ */
+function installGlobalCliPackage() {
+  const name = readPkgName();
+  const ver = readPkgVersion();
+  const spec = `${name}@${ver}`;
+  const c = useAnsiColors();
+  const dimOrEmpty = c ? dim : '';
+  const resetOrEmpty = c ? reset : '';
+  console.log(`\n  ${dimOrEmpty}npm install -g ${spec}${resetOrEmpty}\n`);
+  const r = spawnSync('npm', ['install', '-g', spec], {
+    stdio: 'inherit',
+    shell: true,
+    env: process.env,
+  });
+  if (r.status === 0) {
+    console.log(
+      `\n  ${c ? green : ''}✓${c ? reset : ''} ${c ? cyan : ''}oxe-cc${c ? reset : ''} disponível globalmente (corre ${c ? cyan : ''}oxe-cc --help${c ? reset : ''} em qualquer pasta).\n`
+    );
+    return true;
+  }
+  console.log(
+    `\n  ${c ? yellow : ''}⚠${c ? reset : ''} npm install -g falhou. Tenta manualmente: ${c ? cyan : ''}npm install -g ${spec}${c ? reset : ''}\n`
+  );
+  return false;
+}
+
+/**
+ * After copying OXE into the project: optionally install the CLI globally (like GSD’s “where to install” choice).
+ * @param {InstallOpts} opts
+ */
+function maybePromptGlobalCli(opts) {
+  if (opts.oxeOnly) return;
+  if (opts.dryRun) {
+    if (useAnsiColors()) console.log(`${dim}  (dry-run — pergunta do CLI global ignorada)${reset}`);
+    return;
+  }
+  if (opts.globalCli) {
+    installGlobalCliPackage();
+    return;
+  }
+  if (opts.noGlobalCli) return;
+  if (process.env.OXE_NO_PROMPT === '1' || process.env.OXE_NO_PROMPT === 'true') return;
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    const c = useAnsiColors();
+    if (c) {
+      console.log(
+        `\n  ${yellow}Terminal não interativo${reset} — sem pergunta de CLI global. Usa ${cyan}npx oxe-cc@latest${reset} ou ${cyan}--global-cli${reset}.\n`
+      );
+    } else {
+      console.log('\nNon-interactive terminal — skipping global CLI prompt. Use npx oxe-cc@latest or --global-cli.\n');
+    }
+    return;
+  }
+
+  const c = useAnsiColors();
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+  console.log(
+    `  ${c ? yellow : ''}Instalar o comando oxe-cc globalmente?${c ? reset : ''}
+  (Os ficheiros OXE já foram copiados para o projeto.)
+
+  ${c ? cyan : ''}1${c ? reset : ''}) ${c ? dim : ''}Não — uso ${c ? reset : ''}${c ? cyan : ''}npx oxe-cc@latest${c ? reset : ''}${c ? dim : ''} para atualizar (recomendado em CI)${c ? reset : ''}
+  ${c ? cyan : ''}2${c ? reset : ''}) ${c ? dim : ''}Sim — ${c ? reset : ''}${c ? cyan : ''}npm install -g ${readPkgName()}@${readPkgVersion()}${c ? reset : ''}${c ? dim : ''} (${c ? reset : ''}${c ? cyan : ''}oxe-cc${c ? reset : ''}${c ? dim : ''} no PATH)${c ? reset : ''}
+`
+  );
+
+  rl.question(`  ${c ? cyan : ''}Escolha${c ? reset : ''} ${c ? dim : ''}[1]${c ? reset : ''}: `, (answer) => {
+    rl.close();
+    const choice = (answer || '1').trim();
+    if (choice === '2') installGlobalCliPackage();
+    else {
+      console.log(
+        `\n  ${c ? green : ''}✓${c ? reset : ''} Para atualizar workflows: ${c ? cyan : ''}npx oxe-cc@latest --force${c ? reset : ''} na raiz do projeto.\n`
+      );
+    }
+  });
+}
+
 function usage() {
   console.log(`
 ${cyan}oxe-cc${reset} — install OXE workflows (Cursor + GitHub Copilot) into a project
@@ -323,12 +446,15 @@ ${green}Usage:${reset}
 ${green}Install options:${reset}
   --cursor       Install .cursor/commands and .cursor/rules (default with --all)
   --copilot      Install .github/copilot-instructions.md and .github/prompts
+  --copilot-cli  Copy .cursor/commands → .claude/commands (Copilot CLI slash /oxe-* — experimental)
   --vscode       Also copy .vscode/settings.json (chat.promptFiles)
   --all, -a      Cursor + Copilot (default when neither --cursor nor --copilot)
   --no-commands  Skip commands/oxe (Claude-style frontmatter)
   --no-agents    Skip AGENTS.md
   --no-init-oxe  Do not create .oxe/STATE.md + .oxe/codebase/ after install
   --oxe-only     Only copy oxe/ (skip Cursor, Copilot, commands, AGENTS.md)
+  --global-cli, -g   After install: npm install -g oxe-cc@<version> (no prompt)
+  --no-global-cli, -l  Skip the interactive “CLI global?” step (default in CI)
   --force, -f    Overwrite existing files
   --dry-run      Print actions without writing
   --dir <path>   Target directory (default: cwd)
@@ -344,6 +470,7 @@ ${green}Examples:${reset}
   npx oxe-cc@latest
   npx oxe-cc@latest ./my-app
   npx oxe-cc@latest --cursor --dry-run
+  npx oxe-cc@latest --copilot --copilot-cli
   npx oxe-cc doctor
   npx oxe-cc init-oxe --dir ./my-app
 `);
@@ -356,8 +483,10 @@ function runInstall(opts) {
     process.exit(1);
   }
 
-  console.log(`${cyan}OXE${reset} install → ${green}${target}${reset}`);
-  if (opts.dryRun) console.log(`${yellow}(dry-run)${reset}`);
+  printSection('OXE ▸ Copiar workflows para o projeto');
+  const c = useAnsiColors();
+  console.log(`  ${c ? green : ''}Destino:${c ? reset : ''} ${c ? cyan : ''}${target}${c ? reset : ''}`);
+  if (opts.dryRun) console.log(`  ${c ? yellow : ''}(dry-run)${c ? reset : ''}`);
 
   const copyOpts = { dryRun: opts.dryRun, force: opts.force };
 
@@ -368,6 +497,20 @@ function runInstall(opts) {
     const cRules = path.join(PKG_ROOT, '.cursor', 'rules');
     if (fs.existsSync(cCmd)) copyDir(cCmd, path.join(target, '.cursor', 'commands'), copyOpts);
     if (fs.existsSync(cRules)) copyDir(cRules, path.join(target, '.cursor', 'rules'), copyOpts);
+  }
+
+  if (opts.copilotCli) {
+    const cCmd = path.join(PKG_ROOT, '.cursor', 'commands');
+    const dest = path.join(target, '.claude', 'commands');
+    const c = useAnsiColors();
+    if (fs.existsSync(cCmd)) {
+      console.log(
+        `  ${c ? green : ''}cli${c ? reset : ''}   ${c ? dim : ''}Copilot CLI:${c ? reset : ''} ${c ? cyan : ''}.claude/commands/${c ? reset : ''}${c ? dim : ''} (experimental — teste /oxe-scan na sessão)${c ? reset : ''}`
+      );
+      copyDir(cCmd, dest, copyOpts);
+    } else {
+      console.warn(`${yellow}warn:${reset} missing ${cCmd} — skip --copilot-cli`);
+    }
   }
 
   if (opts.copilot) {
@@ -416,7 +559,7 @@ function runInstall(opts) {
   if (!opts.noInitOxe) bootstrapOxe(target, { dryRun: opts.dryRun, force: opts.force });
 
   console.log(
-    `\n${green}Done.${reset} Open the project in Cursor (${cyan}/oxe-scan${reset}) or VS Code + Copilot (prompt ${cyan}/oxe-scan${reset}).`
+    `\n  ${c ? green : ''}✓${c ? reset : ''} Ficheiros OXE instalados. Abre no Cursor (${c ? cyan : ''}/oxe-scan${c ? reset : ''}) ou VS Code + Copilot (prompt ${c ? cyan : ''}/oxe-scan${c ? reset : ''}).`
   );
 }
 
@@ -433,6 +576,13 @@ function main() {
   if (opts.version) {
     console.log(`oxe-cc v${readPkgVersion()}`);
     process.exit(0);
+  }
+
+  if (opts.conflictFlags) {
+    printBanner();
+    console.error(`${red}${opts.conflictFlags}${reset}`);
+    usage();
+    process.exit(1);
   }
 
   if (opts.parseError) {
@@ -465,14 +615,17 @@ function main() {
       console.error(`${yellow}Target directory does not exist: ${target}${reset}`);
       process.exit(1);
     }
-    console.log(`${cyan}OXE${reset} init-oxe → ${green}${target}${reset}`);
-    if (opts.dryRun) console.log(`${yellow}(dry-run)${reset}`);
+    printSection('OXE ▸ init-oxe');
+    const c0 = useAnsiColors();
+    console.log(`  ${c0 ? green : ''}Destino:${c0 ? reset : ''} ${c0 ? cyan : ''}${target}${c0 ? reset : ''}`);
+    if (opts.dryRun) console.log(`  ${c0 ? yellow : ''}(dry-run)${c0 ? reset : ''}`);
     bootstrapOxe(target, { dryRun: opts.dryRun, force: opts.force });
-    console.log(`\n${green}Done.${reset}`);
+    console.log(`\n  ${c0 ? green : ''}✓${c0 ? reset : ''} Concluído.\n`);
     return;
   }
 
   runInstall(opts);
+  maybePromptGlobalCli(opts);
 }
 
 main();

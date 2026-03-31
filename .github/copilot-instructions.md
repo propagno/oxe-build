@@ -31,7 +31,8 @@ Se o utilizador mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear
 ## Cursor vs Copilot
 
 - **Cursor:** slash commands em `.cursor/commands/oxe-*.md` apontam para os mesmos workflows.
-- **Copilot:** prompt files em `.github/prompts/oxe-*.prompt.md`; cada um indica o workflow em `oxe/workflows/<passo>.md` na raiz do repo. **`oxe-review-pr`** existe só como prompt Copilot (não há slash command Cursor correspondente).
+- **Copilot (VS Code Chat):** prompt files em `.github/prompts/oxe-*.prompt.md`; cada um indica o workflow em `oxe/workflows/<passo>.md` na raiz do repo. **`oxe-review-pr`** existe só como prompt Copilot (não há slash command Cursor correspondente).
+- **Copilot CLI (terminal, experimental):** com `oxe-cc --copilot-cli`, os mesmos textos são copiados para **`.claude/commands/oxe-*.md`** — versões recentes do CLI podem expor **`/oxe-scan`**, etc. Isto depende da versão do `copilot`; não faz parte do contrato estável do OXE.
 
 ## Manutenção deste pacote (oxe-build)
 

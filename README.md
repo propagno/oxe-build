@@ -41,6 +41,10 @@ npx oxe-cc@latest
 
 Isto copia, entre outros: **`oxe/`** (workflows + templates), **`.cursor/`** (slash commands), **`.github/`** (instruções Copilot + prompt files), **`commands/oxe/`** (atalhos estilo `oxe:*` para outros clientes), **`AGENTS.md`**, e cria um **`.oxe/`** mínimo (`STATE.md`, `config.json` a partir de template, pasta `codebase/`) — salvo flags como `--no-init-oxe`.
 
+Em **terminal interativo**, no fim pergunta se queres instalar o **`oxe-cc` globalmente** (`npm install -g`) ou continuar só com **`npx`**. Em CI ou scripts usa **`--no-global-cli`** / **`-l`**, ou define **`OXE_NO_PROMPT=1`**. Para instalar o CLI sem pergunta: **`--global-cli`** / **`-g`**.
+
+**GitHub Copilot CLI (experimental):** para testar slash commands no terminal, instala com **`--copilot-cli`** — copia **`.cursor/commands/*.md`** para **`.claude/commands/`** (ficheiros `oxe-scan.md`, etc., sem `prompt` no nome). Usa na raiz do repo: `npx oxe-cc@latest --force --copilot --copilot-cli`. Depois, na sessão do Copilot CLI, experimenta **`/oxe-scan`**. O suporte depende da versão do CLI; vê [discussão no copilot-cli](https://github.com/github/copilot-cli/issues/1113).
+
 **Confirmar instalação no agente**
 
 | Onde | O que correr |
@@ -62,6 +66,9 @@ Isto copia, entre outros: **`oxe/`** (workflows + templates), **`.cursor/`** (sl
 | `--cursor` / `--copilot` | Instala só uma das stacks |
 | `--oxe-only` | Só a pasta `oxe/` (workflows) |
 | `--no-init-oxe` | Não cria `.oxe/` no fim |
+| `--global-cli` / `-g` | Após copiar: `npm install -g oxe-cc@versão` (sem pergunta) |
+| `--no-global-cli` / `-l` | Não pergunta nem instala o CLI global (útil em CI) |
+| `--copilot-cli` | Copia comandos OXE para `.claude/commands/` (teste com GitHub Copilot CLI) |
 | `--vscode` | Copia `.vscode/settings.json` de exemplo |
 | `--no-commands` | Omite `commands/oxe/` |
 | `--no-agents` | Omite `AGENTS.md` |
@@ -199,6 +206,7 @@ Preferências do projeto em **`.oxe/config.json`** (criado no bootstrap a partir
 |----------|----------------|
 | Comandos não aparecem no Cursor | Confirma que `.cursor/commands/` existe; reinicia o Cursor |
 | Prompts `/oxe-*` não aparecem no Copilot | Ativa `"chat.promptFiles": true`; confirma `.github/prompts/*.prompt.md` |
+| Slash `/oxe-*` no **Copilot CLI** | Instala com **`--copilot-cli`** (pasta `.claude/commands/`); atualiza o CLI; comportamento ainda experimental |
 | **`ETARGET`** / versão não encontrada no `npx` | `npm cache clean --force`, `npx clear-npx-cache`, ou fixa versão: `npx oxe-cc@0.3.0`. Verifica `npm config get registry` |
 | **404** no `npm view oxe-cc` | Pacote com outro nome (scope) ou ainda não publicado — usa `npm link` ou `node …/bin/oxe-cc.js` |
 | Ficheiros não atualizam | Reinstala com **`--force`** |
