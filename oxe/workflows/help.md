@@ -49,4 +49,6 @@ Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-ver
 Quando o utilizador disser “oxe scan”, “oxe quick”, “executar onda OXE”, “revisar PR”, “diff entre branches”, etc., seguir o workflow correspondente em `oxe/workflows/*.md`.
 
 **Nota:** **`oxe-review-pr`** não tem homólogo em `.cursor/commands/`; no Cursor podes pedir em linguagem natural seguindo `oxe/workflows/review-pr.md` ou abrir o mesmo ficheiro como contexto.
+
+**Copilot CLI (experimental):** `oxe-cc --copilot-cli` copia os mesmos Markdown de `.cursor/commands/` para **`.claude/commands/`** — para testar **`/oxe-scan`**, etc., conforme a versão do GitHub Copilot CLI.
 </output>

@@ -1,6 +1,6 @@
 {
   "name": "oxe-cc",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "OXE — spec-driven workflows for Cursor and GitHub Copilot (install via npx)",
   "license": "GPL-3.0",
   "author": "",

@@ -77,6 +77,21 @@ describe('oxe-cc CLI', () => {
     assert.ok(!r.stdout.includes('===='), 'banner box should not appear');
   });
 
+  test('--copilot-cli creates .claude/commands from cursor commands', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    const { status } = run(['--copilot-cli', '--no-init-oxe', '--no-global-cli', '-l', dir]);
+    assert.strictEqual(status, 0);
+    assert.ok(fs.existsSync(path.join(dir, '.claude', 'commands', 'oxe-scan.md')));
+    assert.ok(fs.existsSync(path.join(dir, 'oxe', 'workflows', 'scan.md')));
+  });
+
+  test('--global-cli and --no-global-cli together exits 1', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    const r = run(['--global-cli', '--no-global-cli', '--oxe-only', dir]);
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr + r.stdout, /Cannot use both/i);
+  });
+
   test('doctor fails on invalid .oxe/config.json', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
     assert.strictEqual(run(['--oxe-only', dir]).status, 0);
