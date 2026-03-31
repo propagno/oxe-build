@@ -24,7 +24,7 @@ describe('oxe-cc CLI', () => {
   test('unknown flag exits 1', () => {
     const { status, stderr } = run(['--not-a-real-flag']);
     assert.strictEqual(status, 1);
-    assert.match(stderr, /Unknown option/);
+    assert.match(stderr, /Opção desconhecida/);
   });
 
   test('install nests workflows under .oxe and bootstraps (no oxe/ at repo root)', () => {
@@ -52,6 +52,14 @@ describe('oxe-cc CLI', () => {
     assert.strictEqual(run(['--oxe-only', dir]).status, 0);
     const d = run(['doctor', dir]);
     assert.strictEqual(d.status, 0, d.stderr + d.stdout);
+  });
+
+  test('status exits 0 after oxe-only install and mentions próximo passo', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    assert.strictEqual(run(['--oxe-only', dir]).status, 0);
+    const s = run(['status', dir]);
+    assert.strictEqual(s.status, 0, s.stderr + s.stdout);
+    assert.match(s.stdout + s.stderr, /Próximo passo sugerido|próximo passo/i);
   });
 
   test('doctor fails without oxe/workflows', () => {
@@ -84,14 +92,61 @@ describe('oxe-cc CLI', () => {
     const { status, fakeHome } = run(['--copilot-cli', '--no-init-oxe', '--no-global-cli', '-l', dir]);
     assert.strictEqual(status, 0);
     assert.ok(fs.existsSync(path.join(fakeHome, '.claude', 'commands', 'oxe-scan.md')));
+    assert.ok(fs.existsSync(path.join(fakeHome, '.copilot', 'commands', 'oxe-scan.md')));
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'workflows', 'scan.md')));
+  });
+
+  test('uninstall --ide-only removes CLI command dirs but keeps .oxe/workflows', () => {
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-home-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    const env = { ...process.env, OXE_NO_BANNER: '1', HOME: fakeHome, USERPROFILE: fakeHome };
+    assert.strictEqual(
+      spawnSync(process.execPath, [CLI, '--oxe-only', dir], { cwd: REPO_ROOT, env }).status,
+      0
+    );
+    assert.strictEqual(
+      spawnSync(process.execPath, [CLI, '--copilot-cli', '--no-init-oxe', '--no-global-cli', '-l', dir], {
+        cwd: REPO_ROOT,
+        env,
+      }).status,
+      0
+    );
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'workflows', 'scan.md')));
+    assert.ok(fs.existsSync(path.join(fakeHome, '.claude', 'commands', 'oxe-scan.md')));
+    const u = spawnSync(process.execPath, [CLI, 'uninstall', '--ide-only', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(u.status, 0, u.stderr + u.stdout);
+    assert.ok(!fs.existsSync(path.join(fakeHome, '.claude', 'commands', 'oxe-scan.md')));
+    assert.ok(!fs.existsSync(path.join(fakeHome, '.copilot', 'commands', 'oxe-scan.md')));
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'workflows', 'scan.md')));
+  });
+
+  test('uninstall removes nested .oxe/workflows from project', () => {
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-home-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    const env = { ...process.env, OXE_NO_BANNER: '1', HOME: fakeHome, USERPROFILE: fakeHome };
+    assert.strictEqual(
+      spawnSync(process.execPath, [CLI, '--oxe-only', dir], { cwd: REPO_ROOT, env }).status,
+      0
+    );
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'workflows', 'scan.md')));
+    const u = spawnSync(process.execPath, [CLI, 'uninstall', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(u.status, 0, u.stderr + u.stdout);
+    assert.ok(!fs.existsSync(path.join(dir, '.oxe', 'workflows', 'scan.md')));
   });
 
   test('--global-cli and --no-global-cli together exits 1', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
     const r = run(['--global-cli', '--no-global-cli', '--oxe-only', dir]);
     assert.strictEqual(r.status, 1);
-    assert.match(r.stderr + r.stdout, /Cannot use both/i);
+    assert.match(r.stderr + r.stdout, /Não use.*global-cli/i);
   });
 
   test('doctor fails on invalid .oxe/config.json', () => {
@@ -100,14 +155,14 @@ describe('oxe-cc CLI', () => {
     fs.writeFileSync(path.join(dir, '.oxe', 'config.json'), '{ not: json', 'utf8');
     const d = run(['doctor', dir]);
     assert.strictEqual(d.status, 1);
-    assert.match(d.stdout + d.stderr, /invalid JSON/i);
+    assert.match(d.stdout + d.stderr, /JSON inválido/i);
   });
 
   test('--global and --local together exits 1', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
     const r = run(['--global', '--local', '--oxe-only', dir]);
     assert.strictEqual(r.status, 1);
-    assert.match(r.stderr + r.stdout, /both --global and --local/i);
+    assert.match(r.stderr + r.stdout, /Não use --global e --local/i);
   });
 
   test('--global --cursor installs under HOME .cursor and oxe/ at repo root', () => {

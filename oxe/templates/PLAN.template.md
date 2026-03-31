@@ -31,7 +31,7 @@
 - **Verificar:**
   - Comando: `…`
   - Manual: (opcional) …
-- **Aceite vinculado:** 1, 2
+- **Aceite vinculado:** A1, A2 (IDs da tabela de critérios em SPEC.md)
 
 ---
 
