@@ -2,7 +2,7 @@
 
 ## Fase atual
 
-`initial` — defina após primeiro scan: `scan_complete` | `spec_ready` | `plan_ready` | `quick_active` | `executing` | `verify_complete` | `verify_failed`
+`initial` — defina após primeiro scan: `scan_complete` | `spec_ready` | `discuss_complete` | `plan_ready` | `quick_active` | `executing` | `verify_complete` | `verify_failed`
 
 ## Último scan
 
@@ -21,8 +21,8 @@
 
 ## Próximo passo sugerido
 
-- Comando: `oxe:scan` | `oxe:spec` | `oxe:plan` | `oxe:quick` | `oxe:execute` | `oxe:verify`  
-  *(no **Cursor**: `/oxe-scan`, `/oxe-spec`, …; mesmos nomes nos prompt files Copilot: `oxe-scan`, …)*
+- Comando: `oxe:scan` | `oxe:spec` | `oxe:discuss` | `oxe:plan` | `oxe:quick` | `oxe:execute` | `oxe:verify`  
+  *(no **Cursor**: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, …; Copilot prompts: `oxe-scan`, …)*
 - Motivo: (uma linha)
 
 ## Bloqueios

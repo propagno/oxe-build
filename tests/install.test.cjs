@@ -14,7 +14,7 @@ function run(args, cwd = REPO_ROOT) {
   const r = spawnSync(process.execPath, [CLI, ...args], {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env },
+    env: { ...process.env, OXE_NO_BANNER: '1' },
   });
   return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
@@ -33,6 +33,7 @@ describe('oxe-cc CLI', () => {
     assert.ok(fs.existsSync(path.join(dir, 'oxe', 'workflows', 'scan.md')));
     assert.ok(fs.existsSync(path.join(dir, 'oxe', 'workflows', 'quick.md')));
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'STATE.md')));
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'config.json')));
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'codebase')));
   });
 
@@ -62,5 +63,26 @@ describe('oxe-cc CLI', () => {
     const { status } = run(['init-oxe', dir]);
     assert.strictEqual(status, 0);
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'STATE.md')));
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'config.json')));
+  });
+
+  test('--version has no banner (single line)', () => {
+    const r = spawnSync(process.execPath, [CLI, '--version'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env },
+    });
+    assert.strictEqual(r.status, 0);
+    assert.match(r.stdout.trim(), /^oxe-cc v[\d.]+/);
+    assert.ok(!r.stdout.includes('===='), 'banner box should not appear');
+  });
+
+  test('doctor fails on invalid .oxe/config.json', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    assert.strictEqual(run(['--oxe-only', dir]).status, 0);
+    fs.writeFileSync(path.join(dir, '.oxe', 'config.json'), '{ not: json', 'utf8');
+    const d = run(['doctor', dir]);
+    assert.strictEqual(d.status, 1);
+    assert.match(d.stdout + d.stderr, /invalid JSON/i);
   });
 });

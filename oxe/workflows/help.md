@@ -37,7 +37,7 @@ Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-ver
 
 - **`npx oxe-cc`** — instala `oxe/`, Cursor, Copilot, etc.; por omissão cria **`.oxe/`** mínimo (`STATE.md` a partir do template) se ainda não existir.
 - **`oxe-cc doctor`** — verifica Node, workflows, JSON válido em `.oxe/config.json`, mapa codebase após scan (lista o que falta).
-- **`oxe-cc init-oxe`** — só inicializa `.oxe/` (STATE + pasta `codebase/`), sem reinstalar o resto.
+- **`oxe-cc init-oxe`** — só inicializa `.oxe/` (STATE + `config.json` + pasta `codebase/`), sem reinstalar o resto.
 - **`oxe-cc --no-init-oxe`** — instala workflows sem criar `.oxe/`.
 
 ## Artefatos

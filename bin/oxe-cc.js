@@ -17,7 +17,49 @@ const green = '\x1b[32m';
 const yellow = '\x1b[33m';
 const dim = '\x1b[2m';
 const red = '\x1b[31m';
+const bold = '\x1b[1m';
 const reset = '\x1b[0m';
+
+/** Plain banner if banner.txt is missing (keep in sync with bin/banner.txt style). */
+const DEFAULT_BANNER = `   .============================================.
+   |     OXE     ·  spec-driven workflow CLI    |
+   |     Cursor  ·  GitHub Copilot              |
+   '============================================'
+                    v{version}
+`;
+
+function useAnsiColors() {
+  if (process.env.NO_COLOR) return false;
+  if (process.env.FORCE_COLOR === '0') return false;
+  return process.stdout.isTTY === true;
+}
+
+/** Print branded header; skip with OXE_NO_BANNER=1. Not used for --version (scripts). */
+function printBanner() {
+  if (process.env.OXE_NO_BANNER === '1' || process.env.OXE_NO_BANNER === 'true') return;
+  const color = useAnsiColors();
+  const ver = readPkgVersion();
+  const bannerPath = path.join(PKG_ROOT, 'bin', 'banner.txt');
+  let raw = DEFAULT_BANNER;
+  if (fs.existsSync(bannerPath)) {
+    try {
+      raw = fs.readFileSync(bannerPath, 'utf8');
+    } catch {
+      /* keep default */
+    }
+  }
+  const text = raw.replace(/\{version\}/g, ver).replace(/\r\n/g, '\n').trimEnd();
+  if (!color) {
+    console.log(text + '\n');
+    return;
+  }
+  const lines = text.split('\n');
+  for (const line of lines) {
+    if (line.includes(`v${ver}`)) console.log(`${dim}${line}${reset}`);
+    else console.log(`${cyan}${bold}${line}${reset}`);
+  }
+  console.log('');
+}
 
 /** @typedef {{ help: boolean, version: boolean, cursor: boolean, copilot: boolean, vscode: boolean, commands: boolean, agents: boolean, force: boolean, dryRun: boolean, dir: string, all: boolean, noInitOxe: boolean, oxeOnly: boolean, parseError: boolean, unknownFlag: string }} InstallOpts */
 
@@ -152,6 +194,8 @@ function bootstrapOxe(target, opts) {
   const codebaseDir = path.join(oxeDir, 'codebase');
   const stateSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'STATE.md');
   const stateDest = path.join(oxeDir, 'STATE.md');
+  const configSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'config.template.json');
+  const configDest = path.join(oxeDir, 'config.json');
 
   if (!fs.existsSync(stateSrc)) {
     console.error(`${yellow}warn:${reset} template missing: ${stateSrc}`);
@@ -159,19 +203,27 @@ function bootstrapOxe(target, opts) {
   }
 
   if (opts.dryRun) {
-    console.log(`${dim}init${reset}  ${oxeDir}/ (STATE.md + codebase/)`);
+    console.log(`${dim}init${reset}  ${oxeDir}/ (STATE.md, config.json, codebase/)`);
     return;
   }
 
   ensureDir(codebaseDir);
 
-  if (fs.existsSync(stateDest) && !opts.force) {
+  if (!fs.existsSync(stateDest) || opts.force) {
+    copyFile(stateSrc, stateDest, { dryRun: false });
+    console.log(`${green}init${reset}  ${stateDest}`);
+  } else {
     console.log(`${dim}skip${reset} ${stateDest} (exists, use --force to replace)`);
-    return;
   }
 
-  copyFile(stateSrc, stateDest, { dryRun: false });
-  console.log(`${green}init${reset}  ${stateDest}`);
+  if (fs.existsSync(configSrc)) {
+    if (!fs.existsSync(configDest) || opts.force) {
+      copyFile(configSrc, configDest, { dryRun: false });
+      console.log(`${green}init${reset}  ${configDest}`);
+    } else {
+      console.log(`${dim}skip${reset} ${configDest} (exists, use --force to replace)`);
+    }
+  }
 }
 
 /** @param {string} target */
@@ -220,6 +272,40 @@ function runDoctor(target) {
   const oxeState = path.join(target, '.oxe', 'STATE.md');
   if (fs.existsSync(oxeState)) console.log(`${green}OK${reset} .oxe/STATE.md present`);
   else console.log(`${dim}Note:${reset} .oxe/STATE.md absent — run ${cyan}oxe-cc init-oxe${reset} or install without ${cyan}--no-init-oxe${reset}`);
+
+  const cfgPath = path.join(target, '.oxe', 'config.json');
+  if (fs.existsSync(cfgPath)) {
+    try {
+      JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      console.log(`${green}OK${reset} .oxe/config.json (valid JSON)`);
+    } catch (e) {
+      console.log(`${red}FAIL${reset} .oxe/config.json invalid JSON: ${e.message}`);
+      process.exit(1);
+    }
+  } else {
+    console.log(`${dim}Note:${reset} .oxe/config.json absent (optional — see oxe/templates/CONFIG.md)`);
+  }
+
+  const cbDir = path.join(target, '.oxe', 'codebase');
+  const expectedMaps = [
+    'OVERVIEW.md',
+    'STACK.md',
+    'STRUCTURE.md',
+    'TESTING.md',
+    'INTEGRATIONS.md',
+    'CONVENTIONS.md',
+    'CONCERNS.md',
+  ];
+  if (fs.existsSync(cbDir)) {
+    const missingMaps = expectedMaps.filter((f) => !fs.existsSync(path.join(cbDir, f)));
+    if (missingMaps.length) {
+      console.log(
+        `${yellow}Note:${reset} scan incomplete — missing under .oxe/codebase/: ${missingMaps.join(', ')} (run ${cyan}/oxe-scan${reset})`
+      );
+    } else {
+      console.log(`${green}OK${reset} .oxe/codebase/ has all ${expectedMaps.length} map files`);
+    }
+  }
 
   console.log(`\n${green}Doctor finished.${reset}`);
 }
@@ -339,20 +425,25 @@ function main() {
 
   const opts = parseInstallArgs(argv);
 
+  if (opts.version) {
+    console.log(`oxe-cc v${readPkgVersion()}`);
+    process.exit(0);
+  }
+
   if (opts.parseError) {
+    printBanner();
     console.error(`${red}Unknown option:${reset} ${opts.unknownFlag}`);
     usage();
     process.exit(1);
   }
 
   if (opts.help) {
+    printBanner();
     usage();
     process.exit(0);
   }
-  if (opts.version) {
-    console.log(`oxe-cc v${readPkgVersion()}`);
-    process.exit(0);
-  }
+
+  printBanner();
 
   const target = opts.dir;
   if (command === 'doctor') {
