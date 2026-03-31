@@ -38,6 +38,8 @@ cd /caminho/do/teu-projeto
 npx oxe-cc@latest
 ```
 
+Já tens OXE nesse repo e saiu release nova? Vê a secção **Atualizar para a versão mais recente** mais abaixo (resumo: `npx oxe-cc@latest --force` na raiz do projeto).
+
 Página do pacote (quando existir): [npmjs.com/package/oxe-cc](https://www.npmjs.com/package/oxe-cc). Versões: [aba Versions](https://www.npmjs.com/package/oxe-cc?activeTab=versions).
 
 ### C) Erro `npm error 404` / `'oxe-cc@latest' is not in this registry`

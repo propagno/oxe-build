@@ -335,6 +335,11 @@ ${green}Install options:${reset}
   -h, --help
   -v, --version
 
+${green}Upgrade (project already has OXE):${reset}
+  npx oxe-cc@latest --force          # repo root — refresh oxe/, .cursor/, .github/, …
+  npm install -g oxe-cc@latest && oxe-cc --force   # global CLI install
+  npx clear-npx-cache                # if npx keeps an old tarball (npm 7+)
+
 ${green}Examples:${reset}
   npx oxe-cc@latest
   npx oxe-cc@latest ./my-app
