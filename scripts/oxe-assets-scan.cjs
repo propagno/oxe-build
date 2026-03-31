@@ -21,6 +21,7 @@ const DIRS = [
   path.join(ROOT, 'oxe'),
   path.join(ROOT, '.github'),
   path.join(ROOT, 'commands'),
+  path.join(ROOT, 'bin', 'lib'),
 ];
 
 /** @param {string} dir */

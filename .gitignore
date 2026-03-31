@@ -1,5 +1,62 @@
 # Artefatos OXE gerados ao usar este repositório como workspace de desenvolvimento
-.oxe/
+.oxe/*
+!.oxe/SPEC.md
+!.oxe/PLAN.md
+!.oxe/STATE.md
 
-# Dependências Node (npm link / npx local)
+# Cursor local (manter só o que o npm empacota: commands / rules canónicos)
+.cursor/*
+!.cursor/commands/
+!.cursor/commands/**
+!.cursor/rules/
+!.cursor/rules/**
+
+# Copilot / Claude / VS Code no HOME do dev (não fazem parte do pacote)
+.copilot/
+.claude/
+.vscode/*
+
+# Dependências e caches Node
 node_modules/
+.npm/
+.pnpm-store/
+.yarn/
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
+
+# Cobertura e relatórios de teste (não entram em `npm publish` — ver campo `files` em package.json)
+coverage/
+.nyc_output/
+*.lcov
+
+# Pacotes locais / debug npm
+*.tgz
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json.bak
+
+# Ambiente e segredos (nunca commitar)
+.env
+.env.*
+!.env.example
+
+# SO e editores
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+*.swp
+*.swo
+*~
+
+# Pastas de build genéricas (se surgirem)
+dist/
+build/
+out/
+.turbo/
+.eslintcache

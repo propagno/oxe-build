@@ -1,5 +1,16 @@
 ---
-description: OXE — Gera .oxe/PLAN.md com tarefas e verificação por item
+description: "Comando OXE"
 ---
 
-Lê e executa **integralmente** o workflow em `oxe/workflows/plan.md`. Se o utilizador pedir replanejamento, inclui `--replan` na intenção.
+---
+name: oxe-plan
+agent: agent
+description: OXE — Gera .oxe/PLAN.md com verificação por tarefa
+argument-hint: "[opcional: --replan]"
+---
+
+Executa o workflow **OXE plan**. Lê e aplica **integralmente**:
+
+`oxe/workflows/plan.md` (na raiz do repositório em contexto)
+
+Se o utilizador pedir replanejamento, trata como `--replan` conforme o workflow.

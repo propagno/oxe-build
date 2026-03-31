@@ -1,5 +1,16 @@
 ---
-description: OXE — Escaneia o repo e gera .oxe/codebase/ + STATE.md
+description: "Comando OXE"
 ---
 
-Lê e executa **integralmente** o workflow em `oxe/workflows/scan.md` na raiz do workspace. Usa qualquer texto extra do utilizador como foco opcional de área (ex. `api`).
+---
+name: oxe-scan
+agent: agent
+description: OXE — Scan do repositório (.oxe/codebase/)
+argument-hint: "[área opcional, ex. api]"
+---
+
+Executa o workflow **OXE scan** no repositório atual. Lê e aplica **integralmente** o ficheiro:
+
+`oxe/workflows/scan.md` (na raiz do repositório em contexto)
+
+Usa o texto adicional desta mensagem como foco opcional de área (pastas/módulos).

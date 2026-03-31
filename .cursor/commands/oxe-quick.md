@@ -1,5 +1,9 @@
 ---
-description: OXE — Modo rápido (.oxe/QUICK.md + STATE)
+description: "OXE — Modo rápido (.oxe/QUICK.md)"
 ---
 
-Lê e executa **integralmente** o workflow em `oxe/workflows/quick.md` na raiz do workspace. Usa qualquer texto extra do utilizador como objetivo e contexto.
+Executa o workflow **OXE quick** no repositório atual. Lê e aplica **integralmente** o ficheiro no workspace:
+
+`oxe/workflows/quick.md`
+
+Usa o texto adicional desta mensagem como objetivo e contexto.

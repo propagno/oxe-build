@@ -14,7 +14,17 @@ const ALLOWED_CONFIG_KEYS = [
   'scan_ignore_globs',
   'spec_required_sections',
   'plan_max_tasks_per_wave',
+  'install',
 ];
+
+/** Perfis de integração lidos de `.oxe/config.json` → `install.profile` (CLI explícita prevalece). */
+const INSTALL_PROFILES = ['recommended', 'cursor', 'copilot', 'core', 'cli', 'all_agents'];
+
+/** Layout do repositório: `nested` = só `.oxe/`; `classic` = `oxe/` na raiz + `.oxe/`. */
+const INSTALL_REPO_LAYOUTS = ['nested', 'classic'];
+
+/** @type {string[]} */
+const INSTALL_OBJECT_KEYS = ['profile', 'repo_layout', 'vscode', 'include_commands_dir', 'include_agents_md'];
 
 const EXPECTED_CODEBASE_MAPS = [
   'OVERVIEW.md',
@@ -60,6 +70,45 @@ function loadOxeConfigMerged(targetProject) {
 function validateConfigShape(cfg) {
   const unknownKeys = Object.keys(cfg).filter((k) => !ALLOWED_CONFIG_KEYS.includes(k));
   const typeErrors = [];
+  if (cfg.install != null) {
+    if (typeof cfg.install !== 'object' || Array.isArray(cfg.install)) {
+      typeErrors.push('install deve ser um objeto');
+    } else {
+      const inst = /** @type {Record<string, unknown>} */ (cfg.install);
+      for (const k of Object.keys(inst)) {
+        if (!INSTALL_OBJECT_KEYS.includes(k)) {
+          typeErrors.push(`install: chave desconhecida "${k}"`);
+        }
+      }
+      if (inst.profile != null) {
+        if (typeof inst.profile !== 'string') {
+          typeErrors.push('install.profile deve ser string');
+        } else if (!INSTALL_PROFILES.includes(inst.profile)) {
+          typeErrors.push(
+            `install.profile deve ser um de: ${INSTALL_PROFILES.join(', ')}`
+          );
+        }
+      }
+      if (inst.repo_layout != null) {
+        if (typeof inst.repo_layout !== 'string') {
+          typeErrors.push('install.repo_layout deve ser string');
+        } else if (!INSTALL_REPO_LAYOUTS.includes(inst.repo_layout)) {
+          typeErrors.push(
+            `install.repo_layout deve ser "nested" ou "classic"`
+          );
+        }
+      }
+      if (inst.vscode != null && typeof inst.vscode !== 'boolean') {
+        typeErrors.push('install.vscode deve ser boolean');
+      }
+      if (inst.include_commands_dir != null && typeof inst.include_commands_dir !== 'boolean') {
+        typeErrors.push('install.include_commands_dir deve ser boolean');
+      }
+      if (inst.include_agents_md != null && typeof inst.include_agents_md !== 'boolean') {
+        typeErrors.push('install.include_agents_md deve ser boolean');
+      }
+    }
+  }
   if (cfg.scan_max_age_days != null && typeof cfg.scan_max_age_days !== 'number') {
     typeErrors.push('scan_max_age_days deve ser número (use 0 para desligar aviso de scan antigo)');
   }
@@ -396,6 +445,9 @@ function buildHealthReport(target) {
 
 module.exports = {
   ALLOWED_CONFIG_KEYS,
+  INSTALL_PROFILES,
+  INSTALL_REPO_LAYOUTS,
+  INSTALL_OBJECT_KEYS,
   EXPECTED_CODEBASE_MAPS,
   loadOxeConfigMerged,
   validateConfigShape,

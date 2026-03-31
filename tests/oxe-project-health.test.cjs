@@ -9,6 +9,28 @@ const path = require('path');
 const h = require('../bin/lib/oxe-project-health.cjs');
 
 describe('oxe-project-health', () => {
+  test('validateConfigShape flags invalid install.profile', () => {
+    const { unknownKeys, typeErrors } = h.validateConfigShape({
+      discuss_before_plan: false,
+      install: { profile: 'not-a-real-profile', repo_layout: 'nested' },
+    });
+    assert.ok(!unknownKeys.includes('install'));
+    assert.ok(typeErrors.some((t) => /install\.profile/i.test(t)));
+  });
+
+  test('validateConfigShape accepts install object', () => {
+    const { typeErrors } = h.validateConfigShape({
+      install: {
+        profile: 'recommended',
+        repo_layout: 'classic',
+        vscode: false,
+        include_commands_dir: true,
+        include_agents_md: true,
+      },
+    });
+    assert.ok(!typeErrors.length);
+  });
+
   test('parseStatePhase reads first backtick token', () => {
     const t = '## Fase atual\n\n`plan_ready` — notas\n';
     assert.strictEqual(h.parseStatePhase(t), 'plan_ready');
