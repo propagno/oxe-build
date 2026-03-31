@@ -2,5 +2,10 @@
   "discuss_before_plan": false,
   "after_verify_suggest_pr": true,
   "after_verify_draft_commit": true,
-  "default_verify_command": ""
+  "default_verify_command": "",
+  "scan_max_age_days": 0,
+  "scan_focus_globs": [],
+  "scan_ignore_globs": [],
+  "spec_required_sections": [],
+  "plan_max_tasks_per_wave": 0
 }
