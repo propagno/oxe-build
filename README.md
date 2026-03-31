@@ -1,20 +1,54 @@
 # oxe-build
 
+[![npm version](https://img.shields.io/npm/v/oxe-cc.svg)](https://www.npmjs.com/package/oxe-cc)
+[![license](https://img.shields.io/npm/l/oxe-cc.svg)](https://www.npmjs.com/package/oxe-cc)
+
+*(O badge de versão só reflete uma release real depois de `npm publish` concluído com sucesso.)*
+
 Fluxo **spec-driven** enxuto (inspirado em context engineering / GSD), com prefixo **OXE** e artefatos em **`.oxe/`**.
 
 Os alvos **iniciais** são **Cursor** e **GitHub Copilot** (VS Code e IDEs compatíveis). Outros clientes podem usar os mesmos workflows em Markdown.
 
-## Instalação com `npx` (estilo GSD)
+O nome previsto no npm é **`oxe-cc`**. Confirma se já está publicado: `npm view oxe-cc version`. Se responder **404**, o pacote **ainda não existe** no registry — usa uma das opções abaixo até publicares com sucesso.
 
-Precisas de **Node.js 18+**. O pacote npm chama-se **`oxe-cc`** e o executável também é **`oxe-cc`**.
+## Instalação (escolhe uma)
+
+Precisas de **Node.js 18+**. O executável chama-se **`oxe-cc`**.
+
+### A) Repositório local (sem npm registry)
 
 ```bash
-# Na raiz do projeto onde queres OXE (por omissão: Cursor + Copilot + oxe/ + commands/oxe + AGENTS.md)
+cd C:\caminho\para\oxe-build
+npm link
+cd C:\caminho\para\teu-projeto
+npm link oxe-cc
+oxe-cc
+```
+
+Ou, sem `link`, apontando ao script:
+
+```bash
+node C:\caminho\para\oxe-build\bin\oxe-cc.js
+```
+
+### B) Depois de publicado no npm
+
+```bash
 cd /caminho/do/teu-projeto
 npx oxe-cc@latest
 ```
 
-**Nota:** `npx oxe-cc@latest` só resolve depois do pacote estar publicado no npm. Antes disso: `npm link` a partir deste repo, ou `node /caminho/para/oxe-build/bin/oxe-cc.js` (ver secção “Desenvolvimento local” abaixo).
+Página do pacote (quando existir): [npmjs.com/package/oxe-cc](https://www.npmjs.com/package/oxe-cc). Versões: [aba Versions](https://www.npmjs.com/package/oxe-cc?activeTab=versions).
+
+### C) Erro `npm error 404` / `'oxe-cc@latest' is not in this registry`
+
+Significa que **nenhuma versão** de `oxe-cc` foi aceite no `registry.npmjs.org`. Causas frequentes:
+
+1. **`npm publish` falhou** (ex. **403** — conta com **2FA obrigatória** para publicar). Ativa 2FA em [npm → Security](https://www.npmjs.com/settings/~/security) e volta a correr `npm publish --access public` dentro da pasta do repo, já autenticado (`npm login`).
+2. **Nome diferente** — publicaste com **scope** (ex. `@propagno/oxe-cc`). Nesse caso usa `npx @propagno/oxe-cc@latest` (ajusta ao `name` real do `package.json`).
+3. **Outro registry** — confirma: `npm config get registry` → deve ser `https://registry.npmjs.org/` para o público.
+
+Até o 404 desaparecer, usa a opção **A** (`npm link` ou `node …/bin/oxe-cc.js`).
 
 Opções úteis:
 
@@ -43,12 +77,37 @@ Opções úteis:
 
 A pasta **`oxe/`** (workflows + templates) é **sempre** copiada na instalação normal. `--cursor` / `--copilot` apenas controlam se entram ficheiros em `.cursor/` e `.github/`.
 
-Instalação global (opcional): `npm install -g oxe-cc` e depois `oxe-cc` em qualquer pasta.
+Instalação global (só depois do pacote existir no npm): `npm install -g oxe-cc`.
 
-### Publicar o teu fork (para usar `npx oxe-cc@latest` a partir do teu nome)
+### Atualizar para a versão mais recente (depois de um novo `npm publish`)
 
-1. Edita `package.json`: campo **`name`** (ex. `@tua-org/oxe-cc`) e **`repository.url`**.  
-2. `npm login` e, na pasta do repo: **`npm publish --access public`** (scopes `@org/pkg` precisam de `--access public` na primeira vez).
+O **`oxe-cc` não se auto-atualiza** nos teus projetos: copia ficheiros (`oxe/`, `.cursor/`, …) na altura em que corres o comando. Quando há uma release nova no npm:
+
+| Como usas o CLI | O que fazer |
+|-----------------|-------------|
+| **`npx oxe-cc@latest`** no projeto | Volta a correr na **raiz do repo alvo**: `npx oxe-cc@latest` (ou `npx oxe-cc@latest --force` para sobrescrever ficheiros já existentes). O `npx` resolve `@latest` no registry; se parecer “preso” a uma versão antiga, limpa a cache: `npx clear-npx-cache` (npm 7+) e tenta de novo. |
+| **`npm install -g oxe-cc`** | Atualiza o global: `npm install -g oxe-cc@latest` (ou `npm update -g oxe-cc`). Confirma com `oxe-cc --version`. |
+| **`npm link`** ao clone local | Faz `git pull` (ou equivalente) na pasta **`oxe-build`** e volta a correr `oxe-cc` — o link aponta para essa pasta, logo usas o código atual **sem** novo publish. Para alinhar com o que está no npm, publica e usa `npx`/`npm i -g` como acima. |
+
+Ver qual é a última versão publicada:
+
+```bash
+npm view oxe-cc version
+```
+
+Comparar com a tua cópia (ficheiro `oxe/workflows/scan.md` etc.): se faltam workflows novos, corre outra vez o instalador com **`--force`** onde fizer sentido.
+
+### Nova versão no npm (mantenedores)
+
+1. Atualiza **`version`** em `package.json` (semver).  
+2. Garante **`repository`**, **`homepage`** e **`bugs`** corretos para o teu GitHub.  
+3. Conta npm com **2FA** ativa: `npm login`, depois **`npm publish --access public`**.  
+4. O script **`prepublishOnly`** corre testes + `scan:assets` + `--version` antes do upload.
+
+### Fork com outro nome no npm
+
+1. Edita `package.json`: **`name`** (ex. `@tua-org/oxe-cc`) e **`repository.url`**.  
+2. `npm publish --access public` (scopes `@org/...` precisam de `--access public` na primeira publicação).
 
 ### CLI com nome personalizado
 
@@ -135,7 +194,8 @@ Neste repositório, **`.oxe/` está no `.gitignore`** para não versionar scans 
 
 ## Usar noutro projeto
 
-Recomendado: **`npx oxe-cc@latest`** na raiz do repo alvo (ou `npx oxe-cc` após publicares o pacote).
+- Com pacote no npm: **`npx oxe-cc@latest`** na raiz do repo alvo, ou **`npx oxe-cc@<versão>`** (versões na [página do pacote](https://www.npmjs.com/package/oxe-cc?activeTab=versions) quando existir).
+- Sem pacote no npm: **`npm link oxe-cc`** (após `npm link` no clone do `oxe-build`) ou **`node …/oxe-build/bin/oxe-cc.js`**.
 
 Alternativa manual: copia os mesmos caminhos que o instalador usa (`oxe/`, `.cursor/`, `.github/`, `commands/oxe`, `AGENTS.md`, opcionalmente `.vscode/settings.json` ou só `"chat.promptFiles": true` nas definições).
 

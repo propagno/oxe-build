@@ -1,2 +1,5 @@
 # Artefatos OXE gerados ao usar este repositório como workspace de desenvolvimento
 .oxe/
+
+# Dependências Node (npm link / npx local)
+node_modules/

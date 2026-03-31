@@ -4,9 +4,13 @@
   "description": "OXE — spec-driven workflows for Cursor and GitHub Copilot (install via npx)",
   "license": "GPL-3.0",
   "author": "",
+  "homepage": "https://www.npmjs.com/package/oxe-cc",
+  "bugs": {
+    "url": "https://github.com/propagno/oxe-build/issues"
+  },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/YOUR_USER/oxe-build.git"
+    "url": "git+https://github.com/propagno/oxe-build.git"
   },
   "keywords": [
     "cursor",
