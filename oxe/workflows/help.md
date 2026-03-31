@@ -16,7 +16,7 @@ Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-ver
 ## GitHub Copilot (VS Code / IDE)
 
 1. **Instruções do repositório:** `.github/copilot-instructions.md` (ativas no chat quando o repositório está em contexto).
-2. **Prompt files:** no chat, escrever `/` e escolher **`oxe-scan`**, **`oxe-spec`**, **`oxe-discuss`**, **`oxe-plan`**, **`oxe-verify`**, **`oxe-next`**, **`oxe-quick`**, **`oxe-execute`**, **`oxe-help`**. Requer `chat.promptFiles`: true.
+2. **Prompt files:** no chat, escrever `/` e escolher **`oxe-scan`**, **`oxe-spec`**, **`oxe-discuss`**, **`oxe-plan`**, **`oxe-verify`**, **`oxe-next`**, **`oxe-quick`**, **`oxe-execute`**, **`oxe-help`**, **`oxe-review-pr`** (revisão: URL `github.com/.../pull/N`, branches ou SHAs). Requer `chat.promptFiles`: true.
 
 ## Fluxo completo
 
@@ -46,5 +46,7 @@ Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-ver
 
 ## Gatilhos naturais (Copilot / chat)
 
-Quando o utilizador disser “oxe scan”, “oxe quick”, “executar onda OXE”, etc., seguir o workflow correspondente em `oxe/workflows/*.md`.
+Quando o utilizador disser “oxe scan”, “oxe quick”, “executar onda OXE”, “revisar PR”, “diff entre branches”, etc., seguir o workflow correspondente em `oxe/workflows/*.md`.
+
+**Nota:** **`oxe-review-pr`** não tem homólogo em `.cursor/commands/`; no Cursor podes pedir em linguagem natural seguindo `oxe/workflows/review-pr.md` ou abrir o mesmo ficheiro como contexto.
 </output>

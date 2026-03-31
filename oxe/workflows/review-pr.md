@@ -1,0 +1,45 @@
+# OXE — Workflow: review-pr (revisão de diff / PR)
+
+<objective>
+Rever alterações como num pull request: **URL do GitHub** (`…/pull/<n>`), **branches** ou **SHAs**. Cobre diff, risco, convenções do projeto e sugestões acionáveis. **Não** substitui CI nem testes manuais; complementa-os.
+</objective>
+
+<context>
+- **Base** e **head** são nomes de branch, tags ou SHAs (ex.: `main` e `feature/foo`).
+- **URL de PR no GitHub** — O utilizador pode colar o link da PR (ex.: `https://github.com/org/repo/pull/10` ou atalho `org/repo#10`). O número da PR é o segmento depois de `/pull/`.
+- Em Git, o diff “estilo PR” (só o que a branch introduz) usa o **merge base**: `git diff base...head` (três pontos).
+- Diff literal entre pontas: `git diff base..head` (dois pontos) — útil quando o utilizador pede explicitamente.
+- Este passo é **opcional** no fluxo OXE; não atualiza `STATE.md` com fases canónicas, salvo o utilizador pedir registo do resultado em disco.
+</context>
+
+<process>
+1. **Resolver entrada**
+   - **URL ou `#` de PR** — Se a mensagem contiver um URL `github.com/.../pull/<n>` (com ou sem `https://`, com sufixo `/files` ou `/commits`) ou texto `owner/repo#n`, extrair `<n>` (e opcionalmente `owner/repo` para confirmar que o clone local é o mesmo repositório).
+   - **Refs explícitas** — Caso contrário, tratar como base/head: se faltar um dos dois, inferir base = `main` ou `master` (o que existir) e head = branch atual (`git rev-parse --abbrev-ref HEAD`), ou pedir clarificação.
+2. **Obter diff (com URL / número de PR)** — Ordem de preferência quando o cwd é o repositório certo:
+   - **GitHub CLI:** `gh pr diff <n>` (ou `gh pr diff <n> --patch`). Se `gh` não estiver disponível ou falhar auth, tentar Git puro.
+   - **Git fetch ref da PR:** `git fetch origin pull/<n>/head:oxe-pr-<n>` (ajustar `origin` se o remoto tiver outro nome). Descobrir branch base com `gh pr view <n> --json baseRefName -q .baseRefName` ou assumir `main`/`master`; depois `git diff origin/<base>...oxe-pr-<n>` ou `git diff <base>...oxe-pr-<n>` após `fetch` da base.
+   - **Sem terminal / outro repo:** Pedir ao utilizador que cole o diff da aba “Files changed” no GitHub ou o output de `gh pr diff <n>` corrido localmente no repo certo.
+3. **Obter diff (só branches / SHAs)** — Preferir terminal quando disponível:
+   - `git fetch` (se fizer sentido e o ambiente permitir rede).
+   - `git merge-base base head` (opcional, para confirmar ancestral comum).
+   - `git diff base...head` (revisão tipo PR).
+   - `git log base..head --oneline -n 30` (contexto de commits).
+   Se o sandbox bloquear Git, pedir ao utilizador que cole o output de `git diff base...head` ou use o diff da UI do GitHub/GitLab.
+   Se o diff já foi obtido no passo 2 (URL da PR), **não** repetir este passo.
+4. **Ler contexto do projeto** — Se existirem, usar trechos relevantes de `.oxe/codebase/CONVENTIONS.md`, `STACK.md`, `OVERVIEW.md` e, se aplicável, `.oxe/SPEC.md` / `.oxe/PLAN.md` para alinhar expectativas (sem assumir que o PR cobre só OXE).
+5. **Analisar** — Estruturar a resposta com:
+   - **Resumo** — O que muda em 3–6 frases.
+   - **Ficheiros / áreas** — Agrupar por domínio (API, UI, config, etc.).
+   - **Riscos** — Regressões, breaking changes, segurança (inputs, segredos, auth), performance óbvia, migrações.
+   - **Testes** — O que deveria ser coberto ou correr localmente (comandos sugeridos se conhecidos do repo).
+   - **Checklist PR** — Título sugerido, descrição curta, breaking changes, rollback.
+6. **Opcional em disco** — Se o utilizador pedir registo: criar ou atualizar **`.oxe/PR-REVIEW.md`** com data, URL ou refs (base/head), resumo, achados e próximos passos (formato Markdown legível).
+</process>
+
+<success>
+- [ ] URL da PR ou par base/head está explícito na resposta (ou foi pedida clarificação).
+- [ ] A análise baseia-se no diff (terminal ou colado), não só em suposições.
+- [ ] Há secção de riscos e de testes/verificação sugerida.
+- [ ] Nenhum segredo ou credencial é repetido na análise; redigir se aparecerem no diff.
+</success>

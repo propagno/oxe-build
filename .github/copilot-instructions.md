@@ -18,6 +18,7 @@ Se o utilizador mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear
 | Execute | `oxe/workflows/execute.md` | “oxe execute”, “executar onda”, “onda 2 OXE” |
 | Verify | `oxe/workflows/verify.md` | “oxe verify”, “validar plano OXE”, “VERIFY.md” |
 | Next | `oxe/workflows/next.md` | “oxe next”, “próximo passo OXE” |
+| Review PR | `oxe/workflows/review-pr.md` | “revisar PR”, link `…/pull/10`, “diff entre branches”, “code review OXE” *(prompt: `/oxe-review-pr`)* |
 | Help | `oxe/workflows/help.md` | “oxe help”, “como usar OXE” |
 
 **Regra:** lê o Markdown indicado e executa **todos** os passos e critérios de sucesso descritos nesse ficheiro. Não atalhes: cria ou atualiza os ficheiros em `.oxe/` conforme o workflow.
@@ -30,7 +31,7 @@ Se o utilizador mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear
 ## Cursor vs Copilot
 
 - **Cursor:** slash commands em `.cursor/commands/oxe-*.md` apontam para os mesmos workflows.
-- **Copilot:** prompt files em `.github/prompts/oxe-*.prompt.md`; cada um indica o workflow em `oxe/workflows/<passo>.md` na raiz do repo.
+- **Copilot:** prompt files em `.github/prompts/oxe-*.prompt.md`; cada um indica o workflow em `oxe/workflows/<passo>.md` na raiz do repo. **`oxe-review-pr`** existe só como prompt Copilot (não há slash command Cursor correspondente).
 
 ## Manutenção deste pacote (oxe-build)
 

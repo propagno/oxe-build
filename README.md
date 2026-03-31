@@ -175,6 +175,12 @@ Se o trabalho crescer, **promove** para spec + plan completos.
 |---------|-----------|
 | `/oxe-quick` | `.oxe/QUICK.md` — tarefa pontual |
 
+### Revisão de PR / diff entre branches *(só Copilot)*
+
+| Prompt | O que faz |
+|--------|-----------|
+| `/oxe-review-pr` | Segue `oxe/workflows/review-pr.md`: diff estilo PR (`git diff base...head`, `gh pr diff <n>`, ou fetch `pull/<n>/head`), riscos, testes e checklist. Podes colar o **link da PR** (ex. `https://github.com/org/repo/pull/10`) ou indicar `main` e `feature/x`. **Não** há slash command em `.cursor/commands/`; no Cursor podes pedir o mesmo em linguagem natural com o workflow em contexto. |
+
 ### Outros clientes
 
 Em **Claude Code** (ou ferramentas que leem `commands/oxe/`), os mesmos passos expõem nomes **`oxe:scan`**, **`oxe:plan`**, etc. (frontmatter `name:`).
