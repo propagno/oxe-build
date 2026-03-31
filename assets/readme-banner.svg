@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="200" viewBox="0 0 920 200" role="img" aria-label="OXE  spec-driven workflows">
+  <defs>
+    <linearGradient id="oxe-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0d1117"/>
+      <stop offset="50%" style="stop-color:#161b22"/>
+      <stop offset="100%" style="stop-color:#21262d"/>
+    </linearGradient>
+    <linearGradient id="oxe-accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#58a6ff"/>
+      <stop offset="100%" style="stop-color:#79c0ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="920" height="200" rx="16" fill="url(#oxe-bg)"/>
+  <rect x="2" y="2" width="916" height="196" rx="14" fill="none" stroke="url(#oxe-accent)" stroke-width="2" opacity="0.45"/>
+  <text x="460" y="100" text-anchor="middle" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="72" font-weight="800" fill="url(#oxe-accent)" letter-spacing="0.12em">OXE</text>
+  <text x="460" y="138" text-anchor="middle" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="17" fill="#8b949e">Fluxo spec-driven · Cursor &amp; GitHub Copilot · CLI npm</text>
+  <text x="460" y="168" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="13" fill="#6e7681">npx oxe-cc@latest</text>
+</svg>

@@ -29,6 +29,7 @@
   "files": [
     "bin",
     "oxe",
+    "assets",
     ".cursor",
     ".github",
     "commands",
