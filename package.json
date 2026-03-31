@@ -1,0 +1,37 @@
+{
+  "name": "oxe-cc",
+  "version": "0.1.0",
+  "description": "OXE — spec-driven workflows for Cursor and GitHub Copilot (install via npx)",
+  "license": "GPL-3.0",
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YOUR_USER/oxe-build.git"
+  },
+  "keywords": [
+    "cursor",
+    "github-copilot",
+    "copilot",
+    "spec-driven",
+    "context-engineering",
+    "oxe"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "bin": {
+    "oxe-cc": "bin/oxe-cc.js"
+  },
+  "files": [
+    "bin",
+    "oxe",
+    ".cursor",
+    ".github",
+    "commands",
+    "AGENTS.md",
+    "README.md"
+  ],
+  "scripts": {
+    "prepublishOnly": "node bin/oxe-cc.js --version"
+  }
+}
