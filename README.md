@@ -1,330 +1,230 @@
-<p align="center">
-  <img src="assets/readme-banner.svg" alt="OXE — fluxo spec-driven para Cursor e GitHub Copilot" width="920" />
-</p>
+<div align="center">
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/oxe-cc"><img src="https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square" alt="versão npm" /></a>
-  <a href="https://www.npmjs.com/package/oxe-cc"><img src="https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square" alt="licença" /></a>
+  <img src="assets/readme-banner.svg" alt="OXE" width="920" />
 </p>
 
----
+**Fluxo spec-driven e context engineering para [Cursor](https://cursor.com) e [GitHub Copilot](https://github.com/features/copilot) — inspirado na ideia do [GSD](https://github.com/gsd-build/get-shit-done), com **menos comandos** e foco em **`.oxe/`** + **`oxe/workflows/`**.**
 
-## Índice
-
-Lê por ordem na primeira vez; no GitHub abre o **ícone de conteúdos** (canto superior esquerdo do README) para saltar entre secções.
-
-1. Começar em 3 passos  
-2. O que é o OXE?  
-3. Pré-requisitos  
-4. Instalar no teu projeto  
-5. Usar no Cursor e no Copilot  
-6. Fluxo de trabalho (completo e rápido)  
-7. Pastas e ficheiros importantes  
-8. Referência do CLI `oxe-cc`  
-9. Atualizar o OXE  
-10. Problemas comuns  
-11. Manutenção (npm publish)  
-12. Banner no terminal  
-13. Estrutura do repositório  
-14. Licença  
-
----
-
-## 1 · Começar em 3 passos
-
-| Passo | O que fazer |
-|-------|-------------|
-| **1** | Garante [Node.js 18+](https://nodejs.org/) e abre o terminal na **raiz do repositório** do teu projeto. |
-| **2** | Instala os ficheiros OXE no projeto (escolhe [uma forma na secção 4](#sec-instalacao)). O mais comum é: `npx oxe-cc@latest` |
-| **3** | No **Cursor**, usa por exemplo `/oxe-scan`. No **VS Code + Copilot**, escreve `/` no chat e escolhe **`oxe-scan`** (se tiveres [prompt files](https://code.visualstudio.com/docs/copilot/customization/prompt-files) ativos). |
-
-> **Dica:** Se o pacote ainda não existir no npm ou der erro, usa **clone + `npm link`** — está explicado no [cenário B](#cenario-b).
-
----
-
-## 2 · O que é o OXE?
-
-O **OXE** é um fluxo **spec-driven** (especificação antes de código): guias em Markdown que o agente segue para **mapear o projeto**, **escrever spec**, **planear com testes por tarefa** e **verificar** o resultado.
-
-- **Para ti:** menos “contexto perdido” entre sessões — o estado fica em ficheiros sob **`.oxe/`**.  
-- **Para o agente:** comandos no **Cursor** (`/oxe-*`) e **prompts** no **GitHub Copilot** que apontam sempre para a mesma pasta: **`oxe/workflows/`** (fonte única).
-
-O pacote npm chama-se **`oxe-cc`**. Confirma se está publicado:
+[![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
+[![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
 ```bash
-npm view oxe-cc version
-```
-
-Se aparecer **404**, o nome ainda não está no registry público — usa o [cenário B](#cenario-b).
-
----
-
-## 3 · Pré-requisitos
-
-| Requisito | Detalhe |
-|-----------|---------|
-| **Node.js** | Versão **18 ou superior** (`node -v`). |
-| **Cursor** *(opcional)* | Para slash commands em `.cursor/commands/`. |
-| **GitHub Copilot** *(opcional)* | Para instruções em `.github/copilot-instructions.md` e ficheiros em `.github/prompts/`. Ativa `"chat.promptFiles": true` no VS Code se quiseres `/oxe-scan` no chat — este repo inclui [`.vscode/settings.json`](.vscode/settings.json) de exemplo. |
-
----
-
-<a id="sec-instalacao"></a>
-
-## 4 · Instalar no teu projeto
-
-O comando **`oxe-cc`** **copia** ficheiros para a pasta onde estás (por defeito o diretório atual). **Não** substitui automaticamente ficheiros antigos — para isso usa **`--force`**.
-
-### Cenário A · Pacote publicado no npm (uso normal)
-
-Na raiz do teu projeto:
-
-```bash
-cd caminho/do/teu-projeto
 npx oxe-cc@latest
 ```
 
-Isto instala, em geral: pasta **`oxe/`** (workflows + templates), **`.cursor/`**, **`.github/`**, **`commands/oxe/`**, **`AGENTS.md`**, e cria um **`.oxe/`** mínimo (`STATE.md`, `config.json`, pasta `codebase/`) — salvo se usares `--no-init-oxe`.
+**Manter atualizado:** `npx oxe-cc@latest --force` (na raiz do projeto).
 
-**Já tinhas OXE e saiu versão nova?** Vê a [secção 9 · Atualizar](#sec-atualizar).
+[Para quem é](#para-quem-é) · [Começar](#começar) · [Como funciona](#como-funciona) · [Modo rápido](#modo-rápido) · [Porque funciona](#porque-funciona) · [Comandos](#comandos) · [Configuração](#configuração) · [Problemas](#resolução-de-problemas)
 
-<a id="cenario-b"></a>
-
-### Cenário B · Sem pacote no npm (clone local)
-
-Útil enquanto o `npm publish` não está disponível ou para desenvolver o próprio OXE.
-
-```bash
-cd caminho/para/oxe-build
-npm link
-
-cd caminho/para/teu-projeto
-npm link oxe-cc
-oxe-cc
-```
-
-**Sem `link`**, podes chamar o script diretamente:
-
-```bash
-node caminho/para/oxe-build/bin/oxe-cc.js
-```
-
-### O que cada flag faz (resumo)
-
-| Opção | Para que serve |
-|--------|------------------|
-| *(nada)* | Instala **Cursor + Copilot** + `oxe/` + `commands/oxe` + `AGENTS.md` + bootstrap `.oxe/` |
-| `--force` / `-f` | **Sobrescreve** ficheiros que já existem (necessário para atualizar cópias antigas) |
-| `--dry-run` | Mostra o que faria **sem escrever** |
-| `--cursor` | Só ficheiros **Cursor** (`.cursor/`) |
-| `--copilot` | Só **Copilot** (`.github/` instruções + prompts) |
-| `--vscode` | Copia **`.vscode/settings.json`** (`chat.promptFiles`) |
-| `--oxe-only` | Só a pasta **`oxe/`** (sem Cursor, Copilot, commands, AGENTS) |
-| `--no-init-oxe` | Não cria **`.oxe/`** no fim |
-| `--no-commands` | Não copia **`commands/oxe/`** |
-| `--no-agents` | Não copia **`AGENTS.md`** |
-| `--dir <pasta>` | Destino em vez do diretório atual |
-
-**Subcomandos úteis:**
-
-| Comando | Função |
-|---------|--------|
-| `oxe-cc doctor [dir]` | Verifica Node, workflows, `config.json`, mapas em `.oxe/codebase/` |
-| `oxe-cc init-oxe [dir]` | Cria só **`.oxe/`** (STATE, config, codebase) |
-
-**Instalação global** (opcional): `npm install -g oxe-cc` → depois `oxe-cc` em qualquer pasta.
-
-**Ajuda no terminal:** `oxe-cc --help` (inclui bloco **Upgrade**).
-
-### Erro: pacote não está no registry (404)
-
-Se `npx oxe-cc@latest` disser que **não existe** no registry:
-
-1. Confirma o **nome** no npm (`npm view oxe-cc`) — se publicaste com **scope** (`@org/oxe-cc`), usa `npx @org/oxe-cc@latest`.  
-2. Confirma o registry: `npm config get registry` → para o público deve ser `https://registry.npmjs.org/`.  
-3. Até funcionar, usa o [cenário B](#cenario-b).
+</div>
 
 ---
 
-## 5 · Usar no Cursor e no Copilot
+## Para quem é
 
-### Cursor
+Para quem quer **descrever o que quer e ver isso construído de forma consistente** — **sem** simular uma organização enorme de processos em cima do repositório.
 
-Abre o projeto no Cursor. No chat de agente, usa os **slash commands** (definidos em `.cursor/commands/`):
+OXE é **enxuto**: não há dezenas de slash commands nem instalador multi-runtime. Há **um CLI** que copia ficheiros para o projeto, **workflows em Markdown** que o agente segue, e **estado em disco** para a sessão principal não “inchada” com tudo o que já foi decidido.
+
+---
+
+## Começar
+
+**Requisito:** [Node.js 18+](https://nodejs.org/).
+
+Na **raiz do repositório** do teu projeto:
+
+```bash
+npx oxe-cc@latest
+```
+
+Isto copia, entre outros: **`oxe/`** (workflows + templates), **`.cursor/`** (slash commands), **`.github/`** (instruções Copilot + prompt files), **`commands/oxe/`** (atalhos estilo `oxe:*` para outros clientes), **`AGENTS.md`**, e cria um **`.oxe/`** mínimo (`STATE.md`, `config.json` a partir de template, pasta `codebase/`) — salvo flags como `--no-init-oxe`.
+
+**Confirmar instalação no agente**
+
+| Onde | O que correr |
+|------|----------------|
+| **Cursor** | `/oxe-help` |
+| **Copilot** (VS Code) | `/oxe-help` no chat, se [prompt files](https://code.visualstudio.com/docs/copilot/customization/prompt-files) estiverem ativos (`"chat.promptFiles": true` — exemplo em [`.vscode/settings.json`](.vscode/settings.json)) |
+
+> **Nota:** O Copilot usa **instruções do repositório** (`.github/copilot-instructions.md`) **e** os ficheiros em `.github/prompts/*.prompt.md`. Sem prompt files, ainda podes pedir em linguagem natural (“executa o workflow OXE scan”) com o repo em contexto.
+
+**Sem pacote no npm** (`npm view oxe-cc version` → 404): clone este repo, `npm link` na pasta **oxe-build**, `npm link oxe-cc` no teu projeto, e corre `oxe-cc`. Alternativa: `node /caminho/oxe-build/bin/oxe-cc.js`.
+
+<details>
+<summary><strong>Instalação: flags úteis (CI, ou só parte do pacote)</strong></summary>
+
+| Flag | Efeito |
+|------|--------|
+| `--force` / `-f` | Sobrescreve ficheiros já existentes (**obrigatório** para atualizar cópias antigas) |
+| `--dry-run` | Lista ações sem escrever |
+| `--cursor` / `--copilot` | Instala só uma das stacks |
+| `--oxe-only` | Só a pasta `oxe/` (workflows) |
+| `--no-init-oxe` | Não cria `.oxe/` no fim |
+| `--vscode` | Copia `.vscode/settings.json` de exemplo |
+| `--no-commands` | Omite `commands/oxe/` |
+| `--no-agents` | Omite `AGENTS.md` |
+| `--dir <pasta>` ou argumento posicional | Destino em vez do diretório atual |
+
+**Global:** `npm install -g oxe-cc`.
+
+**Subcomandos:** `oxe-cc doctor` (valida Node, workflows, `.oxe/`), `oxe-cc init-oxe` (só bootstrap `.oxe/`).
+
+</details>
+
+<details>
+<summary><strong>Desenvolvimento (clonar o oxe-build)</strong></summary>
+
+```bash
+git clone https://github.com/propagno/oxe-build.git
+cd oxe-build
+npm test
+node bin/oxe-cc.js --help
+```
+
+Para testar no teu app: `npm link` aqui, depois `npm link oxe-cc` no projeto alvo.
+
+</details>
+
+---
+
+## Como funciona
+
+**Já tens código?** Começa por **`/oxe-scan`**. Gera mapas em **`.oxe/codebase/`** (stack, estrutura, testes, convenções, etc.). Assim o **spec** e o **plan** alinham com o repo real — à semelhança de correres *map-codebase* antes do roadmap no GSD.
+
+### 1. Mapear — `/oxe-scan`
+
+Inventaria o projeto e preenche **`.oxe/codebase/*.md`**, atualiza **`.oxe/STATE.md`**. Podes indicar foco opcional (ex. “só API”).
+
+### 2. Especificar — `/oxe-spec`
+
+Produz ou atualiza **`.oxe/SPEC.md`**: objetivo, escopo, critérios de aceite, riscos. Isto é o contrato antes do plano.
+
+### 3. Discutir *(opcional)* — `/oxe-discuss`
+
+Captura decisões de implementação (UI, API, tom, edge cases) em **`.oxe/DISCUSS.md`**, para o plano não “adivinhar” o que preferes. Útil quando `discuss_before_plan` está ativo em `.oxe/config.json`. Saltar = defaults razoáveis; usar = mais próximo da tua visão.
+
+### 4. Planear — `/oxe-plan`
+
+Gera **`.oxe/PLAN.md`**: tarefas **atómicas**, **ondas** (paralelo vs sequencial), e bloco **Verificar** (comando de teste ou checklist) **por tarefa**. Ideia: cada tarefa cabe num contexto de agente focado, com verificação explícita — mesmo espírito dos planos XML pequenos do GSD, em Markdown.
+
+Ondas em resumo: tarefas **independentes** na mesma onda podem correr em paralelo; **dependentes** vão para ondas posteriores (como no diagrama de *waves* do GSD, só que com menos cerimónia).
+
+### 5. Executar — implementação + `/oxe-execute` *(opcional)*
+
+Implementas no editor ou deixas o agente seguir **`/oxe-execute`** sobre o plano (ou QUICK). O OXE não impõe subagentes nem commits atómicos por tarefa como o GSD; isso fica ao teu fluxo Git.
+
+### 6. Verificar — `/oxe-verify`
+
+Cruza **SPEC** + **PLAN** com o código; escreve **`.oxe/VERIFY.md`**. Se algo falhar, corrigis ou replanejas (`/oxe-plan` com lógica de replanejamento descrita no workflow).
+
+### 7. Seguir em frente — `/oxe-next` e ciclo
+
+Para a **próxima** feature ou fase: de novo **spec → plan → …** ou **`/oxe-next`** para sugerir o passo lógico a partir de **STATE.md**.
+
+---
+
+## Modo rápido
+
+Para trabalho **adhoc** sem roadmap completo — equivalente conceptual ao **`/gsd:quick`**:
+
+**`/oxe-quick`** gera **`.oxe/QUICK.md`** com passos curtos e verificação. Depois podes usar **`/oxe-execute`** em cima disso ou implementar direto e fechar com **`/oxe-verify`**.
+
+Se o trabalho crescer, **promove** para spec + plan completos.
+
+---
+
+## Porque funciona
+
+**Context engineering:** o agente não precisa de “lembrar” tudo na janela principal — o que importa está em ficheiros **pequenos e por etapa**.
+
+| Artefato | Função |
+|----------|--------|
+| `.oxe/STATE.md` | Fase, decisões, próximo passo — memória entre sessões |
+| `.oxe/codebase/*.md` | Mapa do repo após scan |
+| `.oxe/SPEC.md` | O que entregar e como saber que está certo |
+| `.oxe/DISCUSS.md` | Preferências antes do plano *(opcional)* |
+| `.oxe/PLAN.md` | Tarefas atómicas + **Verificar** por item |
+| `.oxe/QUICK.md` | Modo rápido |
+| `.oxe/VERIFY.md` | Resultado das verificações |
+| `oxe/workflows/*.md` | **Fonte única** dos passos (Cursor e Copilot só delegam aqui) |
+
+**Formato:** planos em Markdown com secções fixas (incl. verificação), legíveis por humanos e por modelos — sem XML obrigatório, mas com a mesma ideia de *precise instructions + verify*.
+
+---
+
+## Comandos
+
+### Fluxo principal
 
 | Comando | O que faz |
 |---------|-----------|
-| `/oxe-scan` | Mapeia o código → `.oxe/codebase/` |
-| `/oxe-spec` | Escreve/atualiza a especificação |
-| `/oxe-discuss` | Discussão antes do plano (opcional) |
-| `/oxe-plan` | Plano com verificação por tarefa |
-| `/oxe-quick` | Modo rápido (`.oxe/QUICK.md`) |
-| `/oxe-execute` | Execução guiada (opcional) |
-| `/oxe-verify` | Validação e `.oxe/VERIFY.md` |
+| `/oxe-scan` | Mapeia o codebase → `.oxe/codebase/` |
+| `/oxe-spec` | Escreve/atualiza `.oxe/SPEC.md` |
+| `/oxe-discuss` | Decisões antes do plano → `.oxe/DISCUSS.md` |
+| `/oxe-plan` | Pesquisa no repo + plano com ondas e Verificar |
+| `/oxe-execute` | Execução guiada do plano (ou QUICK) |
+| `/oxe-verify` | Validação; `.oxe/VERIFY.md` |
 | `/oxe-next` | Sugere o próximo passo |
 | `/oxe-help` | Ajuda e visão geral |
 
-Cada comando diz ao agente para seguir o ficheiro correspondente em **`oxe/workflows/`**.
+### Modo rápido
 
-### GitHub Copilot (VS Code / IDE compatível)
+| Comando | O que faz |
+|---------|-----------|
+| `/oxe-quick` | `.oxe/QUICK.md` — tarefa pontual |
 
-1. **Instruções do repositório** — [`.github/copilot-instructions.md`](.github/copilot-instructions.md) entram no contexto quando o repo está anexado ([documentação GitHub](https://docs.github.com/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot)).  
-2. **Prompts** — em `.github/prompts/*.prompt.md`: no chat, **`/`** → escolhe **`oxe-scan`**, **`oxe-plan`**, etc.  
-3. **`AGENTS.md`** — resumo para modos que leem instruções de agente no repositório.
+### Outros clientes
 
----
-
-## 6 · Fluxo de trabalho (completo e rápido)
-
-### Fluxo completo (features maiores)
-
-Ordem sugerida:
-
-1. **scan** — gera os mapas em `.oxe/codebase/` (inclui CONVENTIONS, CONCERNS, etc.).  
-2. **spec** — objetivo e critérios de aceite.  
-3. **discuss** — opcional; recomendado se `discuss_before_plan` estiver ativo em `.oxe/config.json`.  
-4. **plan** — tarefas em ondas com **Verificar** (testes/comandos) por item; `--replan` usa secção de replanejamento.  
-5. **execute** — opcional, guia execução do plano.  
-6. **Implementação manual** no editor quando fizer sentido.  
-7. **verify** — confirma spec + plano; pode incluir rascunho de commit / checklist de PR conforme config.  
-8. **next** — retomar ou seguir fase.
-
-### Fluxo rápido (tarefas pequenas)
-
-1. **quick** → `.oxe/QUICK.md` com passos curtos.  
-2. **execute** sobre o QUICK ou implementação direta.  
-3. **verify**.  
-Se o trabalho crescer, passa para **spec** + **plan** completos.
-
-**Configuração opcional:** chaves em **`.oxe/config.json`** — documentação em [`oxe/templates/CONFIG.md`](oxe/templates/CONFIG.md).
+Em **Claude Code** (ou ferramentas que leem `commands/oxe/`), os mesmos passos expõem nomes **`oxe:scan`**, **`oxe:plan`**, etc. (frontmatter `name:`).
 
 ---
 
-## 7 · Pastas e ficheiros importantes
+## Configuração
 
-### No teu projeto (gerados / usados pelo fluxo)
+Preferências do projeto em **`.oxe/config.json`** (criado no bootstrap a partir de `oxe/templates/config.template.json`). Chaves e comportamento: [`oxe/templates/CONFIG.md`](oxe/templates/CONFIG.md) (ex.: `discuss_before_plan`, texto pós-verify, comando de teste por defeito).
+
+---
+
+## Resolução de problemas
+
+| Situação | O que tentar |
+|----------|----------------|
+| Comandos não aparecem no Cursor | Confirma que `.cursor/commands/` existe; reinicia o Cursor |
+| Prompts `/oxe-*` não aparecem no Copilot | Ativa `"chat.promptFiles": true`; confirma `.github/prompts/*.prompt.md` |
+| **`ETARGET`** / versão não encontrada no `npx` | `npm cache clean --force`, `npx clear-npx-cache`, ou fixa versão: `npx oxe-cc@0.3.0`. Verifica `npm config get registry` |
+| **404** no `npm view oxe-cc` | Pacote com outro nome (scope) ou ainda não publicado — usa `npm link` ou `node …/bin/oxe-cc.js` |
+| Ficheiros não atualizam | Reinstala com **`--force`** |
+
+**Ajuda no terminal:** `oxe-cc --help`. **Diagnóstico:** `oxe-cc doctor`.
+
+**Banner no CLI:** [`bin/banner.txt`](bin/banner.txt) (`{version}`). `OXE_NO_BANNER=1` desliga; `NO_COLOR` remove cores.
+
+<details>
+<summary><strong>Publicar no npm (mantenedores)</strong></summary>
+
+Sobe `version` em `package.json`, `npm login` (2FA se exigido), `npm publish --access public`. O `prepublishOnly` corre testes e `scan:assets`.
+
+</details>
+
+<details>
+<summary><strong>Estrutura do repositório</strong></summary>
 
 | Caminho | Função |
 |---------|--------|
-| `.oxe/STATE.md` | Estado: fase, decisões, próximo passo |
-| `.oxe/config.json` | Preferências (opcional; template em `oxe/templates/`) |
-| `.oxe/codebase/*.md` | Mapa do repositório após **scan** |
-| `.oxe/SPEC.md` | Especificação |
-| `.oxe/DISCUSS.md` | Discussão (opcional) |
-| `.oxe/PLAN.md` | Plano com **Verificar** por tarefa |
-| `.oxe/QUICK.md` | Modo rápido |
-| `.oxe/VERIFY.md` | Resultado das verificações |
-| `.oxe/SUMMARY.md` | Resumo para replan (opcional) |
-
-### No pacote (copiados para o projeto)
-
-- **`oxe/workflows/`** — regras detalhadas (fonte única).  
-- **`oxe/templates/`** — modelos (STATE, SPEC, PLAN, CONFIG, …).
-
-**Neste repositório oxe-build**, a pasta `.oxe/` está no `.gitignore` (desenvolvimento do pacote). No **teu** produto podes versionar `.oxe/` se a equipa quiser.
-
----
-
-## 8 · Referência do CLI `oxe-cc`
-
-Tudo o que o instalador faz está no script [`bin/oxe-cc.js`](bin/oxe-cc.js). Os **workflows** não mudam de local: **`oxe/workflows/*.md`**.
-
----
-
-<a id="sec-atualizar"></a>
-
-## 9 · Atualizar o OXE
-
-O OXE **não se atualiza sozinho**: voltas a correr o instalador com a versão nova do pacote.
-
-| Como usas | Comando típico |
-|-----------|----------------|
-| **npx** | Na raiz do projeto: `npx oxe-cc@latest --force` |
-| **global** | `npm install -g oxe-cc@latest` → `oxe-cc --force` |
-| **npm link** | `git pull` no clone do `oxe-build` → `oxe-cc --force` no projeto |
-
-Ver última versão no npm: `npm view oxe-cc version`.
-
-Se o **npx** parecer preso a uma versão antiga: `npx clear-npx-cache` (npm 7+) e tenta de novo.
-
-**Só workflows:** `npx oxe-cc@latest --oxe-only --force` (não toca em `.cursor/` / `.github/`).
-
----
-
-## 10 · Problemas comuns
-
-### `ETARGET` / “No matching version found for oxe-cc@…”
-
-Metadados ou **cache** local desatualizados. Tenta:
-
-```bash
-npm cache clean --force
-npx clear-npx-cache
-npx oxe-cc@latest --force
-```
-
-Ou fixa versão: `npx oxe-cc@0.3.0 --force` (ajusta à versão que `npm view oxe-cc versions` listar). Confirma também `npm config get registry`.
-
-### 404 no `npm view oxe-cc`
-
-O pacote ainda não foi publicado ou o nome é outro (scope). Usa [cenário B](#cenario-b).
-
----
-
-## 11 · Manutenção (npm publish)
-
-Para quem publica o pacote:
-
-1. Sobe a **`version`** em `package.json` (semver).  
-2. Confirma **`repository`**, **`homepage`**, **`bugs`**.  
-3. `npm login` (conta com **2FA** se o npm exigir).  
-4. `npm publish --access public` (obrigatório `--access public` na primeira vez com scope `@org/...`).
-
-O script **`prepublishOnly`** corre testes, `scan:assets` e `--version` antes do upload.
-
-### Fork, scope e nome do comando
-
-- **Outro nome no npm:** edita **`name`** e **`repository.url`** em `package.json`, depois `npm publish --access public`.  
-- **Dois comandos no terminal:** no `bin` do `package.json` podes mapear o mesmo script duas vezes, por exemplo `"meu-oxe": "bin/oxe-cc.js"`. Com **npx**, o pacote identifica-se pelo `name`; binário extra: `npx -p oxe-cc meu-oxe`.
-
-**Testes no clone:** `npm test`. **Scan de segredos em markdown:** `npm run scan:assets`.
-
----
-
-## 12 · Banner no terminal
-
-Ao correr **`oxe-cc`** (instalar, `doctor`, `init-oxe`, `--help`), aparece um **ASCII** definido em [`bin/banner.txt`](bin/banner.txt).
-
-- **`{version}`** — substituído pela versão do pacote.  
-- **`NO_COLOR`** / **`FORCE_COLOR=0`** — sem cores.  
-- **`OXE_NO_BANNER=1`** — desliga o banner (CI).  
-- **`--version`** — só uma linha, sem banner.
-
-O **banner deste README** é o ficheiro SVG em [`assets/readme-banner.svg`](assets/readme-banner.svg) (GitHub / site). O **terminal** usa texto em `banner.txt`.
-
----
-
-## 13 · Estrutura do repositório
-
-| Caminho | Função |
-|---------|--------|
-| [`assets/readme-banner.svg`](assets/readme-banner.svg) | Banner do README |
-| `bin/oxe-cc.js` | CLI |
-| `bin/banner.txt` | Banner ASCII do CLI |
-| `package.json` | npm: `oxe-cc`, `files`, `bin` |
+| `assets/readme-banner.svg` | Banner deste README |
+| `bin/oxe-cc.js`, `bin/banner.txt` | CLI |
 | `oxe/workflows/` | Workflows canónicos |
-| `oxe/templates/` | Modelos e CONFIG.md |
-| `scripts/oxe-assets-scan.cjs` | Scan de padrões sensíveis em markdown |
-| `.github/workflows/ci.yml` | CI: testes + scan |
-| `.cursor/commands/` | Slash Cursor |
-| `.cursor/rules/` | Regras Cursor |
-| `.github/copilot-instructions.md` | Instruções Copilot |
-| `.github/prompts/` | Prompts `*.prompt.md` |
-| `commands/oxe/` | Comandos estilo GSD (frontmatter) |
-| `AGENTS.md` | Resumo para agentes |
+| `oxe/templates/` | Modelos e CONFIG |
+| `.cursor/`, `.github/` | Cursor e Copilot |
+| `commands/oxe/` | `oxe:*` para outros runtimes |
+| `tests/`, `scripts/`, `.github/workflows/` | CI e qualidade |
+
+</details>
 
 ---
 
 ## Licença
 
-[GPL-3.0](LICENSE) — ver ficheiro [LICENSE](LICENSE).
+[GPL-3.0](LICENSE).
