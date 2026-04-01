@@ -1,12 +1,5 @@
 ---
-description: "Comando OXE"
----
-
----
-name: oxe-review-pr
-agent: agent
-description: OXE — Revisão de PR (link GitHub, branches ou SHAs)
-argument-hint: "URL ou refs: https://github.com/org/repo/pull/10 | main feature/foo"
+description: "OXE — Revisão de PR (link GitHub, branches ou SHAs)"
 ---
 
 Executa o workflow **OXE review-pr**. Lê e aplica **integralmente**:

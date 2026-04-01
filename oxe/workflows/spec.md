@@ -16,6 +16,8 @@ Entrada: texto livre na mensagem ou caminho `@arquivo.md` / anexo para incorpora
 Leia `.oxe/STATE.md` e, se existirem, trechos relevantes de `.oxe/codebase/OVERVIEW.md` e `STACK.md` para não contradizer o projeto real.
 
 Use o template **`oxe/templates/SPEC.template.md`**: tabela **Critérios de aceite** com colunas **ID | Critério | Como verificar**.
+
+**Brownfield (COBOL, JCL, copybooks, VB6, SP):** quando o objetivo for documentar ou planear migração, ver **`oxe/workflows/references/legacy-brownfield.md`** — epicos por **trilha** (batch, online, desktop↔SQL), critérios **A*** verificáveis por Grep/leitura/checklist, e secções opcionais alinháveis a `spec_required_sections` em `.oxe/config.json` (ver `oxe/templates/CONFIG.md`).
 </context>
 
 <process>

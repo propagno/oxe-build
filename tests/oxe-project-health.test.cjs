@@ -70,6 +70,37 @@ describe('oxe-project-health', () => {
     assert.ok(w.some((x) => /onda\s*1/i.test(x) && /3\s*tarefas/i.test(x)));
   });
 
+  test('planTaskAceiteWarnings flags Tn without Aceite vinculado', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-'));
+    const plan = path.join(dir, 'PLAN.md');
+    fs.writeFileSync(
+      plan,
+      `## Tarefas\n\n### T1 — ok\n- **Aceite vinculado:** A1\n\n### T2 — sem aceite\n- foo\n`,
+      'utf8'
+    );
+    const w = h.planTaskAceiteWarnings(plan);
+    assert.strictEqual(w.length, 1);
+    assert.ok(/T2/i.test(w[0]));
+    assert.ok(!w[0].includes('T1'));
+  });
+
+  test('buildHealthReport merges planTaskAceiteWarnings into planWarn', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(path.join(oxe, 'codebase'), { recursive: true });
+    for (const f of h.EXPECTED_CODEBASE_MAPS) {
+      fs.writeFileSync(path.join(oxe, 'codebase', f), '# x', 'utf8');
+    }
+    fs.writeFileSync(path.join(oxe, 'STATE.md'), '## Fase atual\n\n`plan_ready`\n', 'utf8');
+    fs.writeFileSync(
+      path.join(oxe, 'PLAN.md'),
+      '## Tarefas\n\n### T1 — x\n- **Onda:** 1\n',
+      'utf8'
+    );
+    const r = h.buildHealthReport(dir);
+    assert.ok(r.planWarn.some((x) => /T1.*Aceite vinculado/i.test(x)));
+  });
+
   test('suggestNextStep scan when no .oxe', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-'));
     const s = h.suggestNextStep(dir, {});

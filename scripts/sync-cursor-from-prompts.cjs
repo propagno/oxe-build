@@ -8,7 +8,10 @@
 const fs = require('fs');
 const path = require('path');
 
-const ROOT = path.join(__dirname, '..');
+/** Raiz do pacote; em testes pode definir-se OXE_SYNC_REPO_ROOT para uma cópia temporária. */
+const ROOT = process.env.OXE_SYNC_REPO_ROOT
+  ? path.resolve(process.env.OXE_SYNC_REPO_ROOT)
+  : path.join(__dirname, '..');
 const PROMPTS = path.join(ROOT, '.github', 'prompts');
 const DEST = path.join(ROOT, '.cursor', 'commands');
 
@@ -18,11 +21,12 @@ function extractDescription(front) {
 }
 
 function stripFrontmatter(raw) {
-  if (!raw.startsWith('---\n')) return { desc: 'Comando OXE', body: raw.trim() };
-  const end = raw.indexOf('\n---\n', 4);
-  if (end === -1) return { desc: 'Comando OXE', body: raw.trim() };
-  const front = raw.slice(4, end);
-  const body = raw.slice(end + 5).trim();
+  const normalized = raw.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
+  if (!normalized.startsWith('---\n')) return { desc: 'Comando OXE', body: normalized.trim() };
+  const end = normalized.indexOf('\n---\n', 4);
+  if (end === -1) return { desc: 'Comando OXE', body: normalized.trim() };
+  const front = normalized.slice(4, end);
+  const body = normalized.slice(end + 5).trim();
   return { desc: extractDescription(front), body };
 }
 

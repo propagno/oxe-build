@@ -1,12 +1,5 @@
 ---
-description: "Comando OXE"
----
-
----
-name: oxe-spec
-agent: agent
-description: OXE — Cria ou atualiza .oxe/SPEC.md
-argument-hint: "[pedido ou contexto da feature]"
+description: "OXE — Cria ou atualiza .oxe/SPEC.md"
 ---
 
 Executa o workflow **OXE spec**. Lê e aplica **integralmente**:

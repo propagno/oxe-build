@@ -1,12 +1,5 @@
 ---
-description: "Comando OXE"
----
-
----
-name: oxe-plan
-agent: agent
-description: OXE — Gera .oxe/PLAN.md com verificação por tarefa
-argument-hint: "[opcional: --replan]"
+description: "OXE — Gera .oxe/PLAN.md com verificação por tarefa"
 ---
 
 Executa o workflow **OXE plan**. Lê e aplica **integralmente**:

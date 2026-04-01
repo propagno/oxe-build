@@ -2,37 +2,37 @@
 
 ## Fase atual
 
-`executing` — cobertura de testes e suíte ampliada (ver `.oxe/PLAN.md` onda 2–3)
+`quick_active` — Documentação referencia **oxe-cc@0.3.6** (próximo publish npm); ver `.oxe/QUICK.md`.
 
 ## Último scan
 
 - **Data:** 2026-03-31
-- **Notas:** Testes e c8 alinhados; `.cursor/commands` gerados por `scripts/sync-cursor-from-prompts.cjs`
+- **Notas:** 2026-03-31 — `npm test` + `npm run test:coverage` verdes (linhas ~82%)
 
 ## Contexto do plano / quick (opcional)
 
-- **Spec / plano:** (revisão informal ou data de `.oxe/SPEC.md` / `.oxe/PLAN.md`)
-- **Última onda executada:** (número ou —)
-- **Tarefas concluídas:** (ex.: T1, T2 ou passos 1–3 do QUICK.md)
+- **Spec / plano:** `.oxe/SPEC.md` cobertura; `.oxe/PLAN.md` (incl. onda 4 T6–T8)
+- **Última onda executada:** 4 (T6–T8)
+- **Tarefas concluídas:** T6–T8 (cobertura `oxe-assets-scan`, limiar 82%, testes SDK/scripts/CLI)
 
 ## Checklist da onda OXE (opcional — workflow execute)
 
-_(O agente pode preencher após cada onda.)_
+**Onda 4 (cobertura A3)**
 
-- [ ] Onda N — pré-requisitos conferidos
-- [ ] Onda N — implementação concluída
-- [ ] Onda N — **Verificar** executado ou agendado
+- [x] Pré-requisitos da onda conferidos (T1–T5 / baseline)
+- [x] Implementação da onda concluída (script + testes + `package.json`)
+- [x] **Verificar:** `npm test` e `npm run test:coverage` executados com sucesso
 
 ## Decisões persistentes
 
-- (bullet: decisão → data)
+- **2026-03-31** — Melhorias de produto genéricas: preferir SPEC + PLAN dedicados; ver `.oxe/DISCUSS.md`.
+- **2026-03-31** — Multi-CLI: vários clientes podem **ler** os mesmos workflows; **escrever** em `.oxe/` em paralelo não é seguro sem processo/Git — ver secção *Multi-CLI* em `.oxe/DISCUSS.md`.
 
 ## Próximo passo sugerido
 
-- Comando: `oxe:scan` | `oxe:spec` | `oxe:discuss` | `oxe:plan` | `oxe:quick` | `oxe:execute` | `oxe:verify`  
-  *(no **Cursor**: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, …; Copilot prompts: `oxe-scan`, …)*
-- Motivo: (uma linha)
+- **Publish:** `npm publish` quando o registo ainda não tiver 0.3.6; até lá `npx oxe-cc@latest` pode apontar para a versão anterior.
+- **Commit:** `README.md`, `.oxe/DISCUSS.md`, `.oxe/QUICK.md`, `STATE.md` conforme política de `.oxe/` no `.gitignore`.
 
 ## Bloqueios
 
-- (nenhum ou lista)
+- Nenhum conhecido após `test:coverage` verde.

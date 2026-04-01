@@ -77,6 +77,18 @@ describe('oxe-manifest', () => {
     );
   });
 
+  test('backupModifiedFromManifest skips path when sha256 throws', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-mf-'));
+    const dirPath = path.join(home, 'is-dir');
+    fs.mkdirSync(dirPath);
+    const prev = { [dirPath]: 'deadbeef' };
+    const colors = { yellow: '', cyan: '', dim: '', reset: '' };
+    assert.deepStrictEqual(
+      manifest.backupModifiedFromManifest(home, prev, { force: true, dryRun: false }, colors),
+      []
+    );
+  });
+
   test('collectFilesRecursive filters', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-mf-'));
     fs.mkdirSync(path.join(dir, 'sub'), { recursive: true });

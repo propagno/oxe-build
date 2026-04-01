@@ -19,12 +19,14 @@ Se **`.oxe/config.json`** tiver `scan_focus_globs` ou `scan_ignore_globs`, **pri
 <process>
 1. Garantir pastas `.oxe/` e `.oxe/codebase/`.
 2. Inventariar o repo (Glob/Grep): linguagens, manifests (`package.json`, `pom.xml`, `go.mod`, etc.), pastas principais — aplicando foco/ignore da config se houver.
+2b. **Legado / brownfield:** se o inventário revelar sinais de mainframe ou desktop legado (ex.: `*.cbl`, `*.jcl`, pastas `jcl/`, `cpy/` ou `copy/`, `*.cpy`, `*.frm` / `*.vbp`, volume de `*.sql` com procedures), aplicar **`oxe/workflows/references/legacy-brownfield.md`** ao preencher STACK, STRUCTURE, INTEGRATIONS, TESTING e CONCERNS — **sem** assumir Node/Java nem omitir TESTING.md quando não houver CI.
+2c. **`docs/` / `src/docs/` com documentação humana:** se existir pasta de documentação com índice (`docs/INDICE-GERAL.md`, `docs/README.md`, `**/00-*INDICE*.md`, ou enciclopédia por camadas), em **OVERVIEW** e **STRUCTURE** resumir o **papel das subpastas** (ex.: `tecnico/`, `negocio/`, `glossary/`, comparativos, baixa plataforma) e linkar o ficheiro índice em backticks. Em **INTEGRATIONS** (e se útil em OVERVIEW), quando o repo for híbrido host + distribuído + externos, incluir bullets **Alta plataforma**, **Baixa plataforma**, **Externo** conforme `legacy-brownfield.md`. Sugerir template opcional `oxe/templates/DOCS_BROWNFIELD_LAYOUT.md` ao utilizador se a árvore `docs/` estiver em crescimento.
 3. Produzir **sete** arquivos em `.oxe/codebase/` (paralelize subagentes quando disponível):
-   - **OVERVIEW.md** — propósito aparente do projeto, módulos de alto nível, fluxo principal (5–15 tópicos).
+   - **OVERVIEW.md** — propósito aparente do projeto, módulos de alto nível, fluxo principal (5–15 tópicos); se houver índice em `docs/`, um tópico deve apontar para ele.
    - **STACK.md** — runtime, frameworks, build, versões relevantes, dependências críticas.
-   - **STRUCTURE.md** — árvore lógica (não listar mil arquivos): entrypoints, `src/` por domínio, onde ficam testes e configs.
+   - **STRUCTURE.md** — árvore lógica (não listar mil arquivos): entrypoints, `src/` por domínio, onde ficam testes e configs; **e** papel de `docs/` ou `src/docs/` quando existirem.
    - **TESTING.md** — como rodar testes/lint/format (comandos exatos), frameworks de teste, pastas `*test*`, CI se houver.
-   - **INTEGRATIONS.md** — APIs externas, bancos, auth, filas, segredos (nomes de env **sem valores**), webhooks. Se não houver integrações, escrever explicitamente *Não detectado* com uma linha de contexto.
+   - **INTEGRATIONS.md** — APIs externas, bancos, auth, filas, segredos (nomes de env **sem valores**), webhooks; em sistemas legado híbridos, taxonomia alta/baixa/externo quando aplicável. Se não houver integrações, escrever explicitamente *Não detectado* com uma linha de contexto.
    - **CONVENTIONS.md** — estilo de código (naming, formatação, imports), padrões de erros/logging, organização de módulos; **prescreve** o que seguir em novas alterações (com paths em backticks).
    - **CONCERNS.md** — dívida técnica, áreas frágeis, riscos de segurança/desempenho, dependências sensíveis; cada item com impacto breve e **arquivos** referenciados.
 4. Atualizar **`.oxe/STATE.md`**: **Data** do scan (ISO), fase sugerida `scan_complete`, próximo passo `oxe:spec` ou `oxe:plan` se já houver SPEC.

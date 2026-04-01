@@ -1,12 +1,5 @@
 ---
-description: "Comando OXE"
----
-
----
-name: oxe-verify
-agent: agent
-description: OXE — Valida implementação (.oxe/VERIFY.md)
-argument-hint: "[opcional: Tn]"
+description: "OXE — Valida implementação (.oxe/VERIFY.md)"
 ---
 
 Executa o workflow **OXE verify**. Lê e aplica **integralmente**:
