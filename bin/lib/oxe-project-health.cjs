@@ -254,6 +254,30 @@ function specSectionWarnings(specPath, requiredHeadings) {
   return out;
 }
 
+/**
+ * Avisos quando uma tarefa `### Tn` em PLAN.md não tem linha **Aceite vinculado:** no seu bloco.
+ * @param {string} planPath
+ * @returns {string[]}
+ */
+function planTaskAceiteWarnings(planPath) {
+  if (!fs.existsSync(planPath)) return [];
+  const raw = fs.readFileSync(planPath, 'utf8');
+  const parts = raw.split(/^###\s+(T\d+)\s+/m);
+  if (parts.length < 3) return [];
+  /** @type {string[]} */
+  const out = [];
+  for (let i = 1; i < parts.length; i += 2) {
+    const taskId = parts[i];
+    const body = parts[i + 1] || '';
+    if (!/\*\*Aceite\s+vinculado:\*\*/i.test(body)) {
+      out.push(
+        `PLAN.md: tarefa ${taskId} sem linha **Aceite vinculado:** — ligue cada Tn aos critérios A* da SPEC (ou declare gap explícito no plano)`
+      );
+    }
+  }
+  return out;
+}
+
 function planWaveWarningsFixed(planPath, maxPerWave) {
   if (!maxPerWave || maxPerWave <= 0 || !fs.existsSync(planPath)) return [];
   const raw = fs.readFileSync(planPath, 'utf8');
@@ -422,7 +446,10 @@ function buildHealthReport(target) {
   const sumWarn = verifyGapsWithoutSummaryWarning(p.verify, p.summary);
   const specReq = Array.isArray(config.spec_required_sections) ? config.spec_required_sections : [];
   const specWarn = specSectionWarnings(p.spec, specReq.map(String));
-  const planWarn = planWaveWarningsFixed(p.plan, Number(config.plan_max_tasks_per_wave) || 0);
+  const planWarn = [
+    ...planWaveWarningsFixed(p.plan, Number(config.plan_max_tasks_per_wave) || 0),
+    ...planTaskAceiteWarnings(p.plan),
+  ];
   const next = suggestNextStep(target, { discuss_before_plan: config.discuss_before_plan });
 
   return {
@@ -458,6 +485,7 @@ module.exports = {
   verifyGapsWithoutSummaryWarning,
   specSectionWarnings,
   planWaveWarningsFixed,
+  planTaskAceiteWarnings,
   suggestNextStep,
   buildHealthReport,
   oxePaths,

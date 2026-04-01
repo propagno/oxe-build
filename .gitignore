@@ -1,15 +1,14 @@
-# Artefatos OXE gerados ao usar este repositório como workspace de desenvolvimento
+# Artefatos OXE — ignorar estado local; manter PLAN/STATE versionáveis neste repo
 .oxe/*
-!.oxe/SPEC.md
 !.oxe/PLAN.md
 !.oxe/STATE.md
 
 # Cursor local (manter só o que o npm empacota: commands / rules canónicos)
 .cursor/*
-!.cursor/commands/
-!.cursor/commands/**
-!.cursor/rules/
-!.cursor/rules/**
+.cursor/commands/
+.cursor/commands/**
+.cursor/rules/
+.cursor/rules/**
 
 # Copilot / Claude / VS Code no HOME do dev (não fazem parte do pacote)
 .copilot/

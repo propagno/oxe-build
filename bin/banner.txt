@@ -11,7 +11,7 @@
         "Do jeito nordestino de fazer software"
 
         ⚙️  Context Engineering
-        🤖  Cursor · Copilot · AI Agents
+        🤖  Multi-IDE · Cursor · Copilot · +CLIs
 
 ══════════════════════════════════════════════════════
 

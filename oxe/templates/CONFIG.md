@@ -29,4 +29,16 @@ Use `npx oxe-cc --no-install-config` para ignorar este bloco numa instalação.
 
 Chaves desconhecidas são listadas como aviso no `doctor` / `status`. Valores em falta usam o mesmo significado que no template (omissões seguras).
 
+### Exemplo: repositório legado (COBOL / JCL / copybooks / VB6 / SQL)
+
+Para **scan** e **spec** orientarem o agente sem assumir Node/Java, use `scan_focus_globs` / `scan_ignore_globs` alinhados ao layout real (nomes `cpy` vs `copy` variam). Opcionalmente reforce secções da SPEC com `spec_required_sections`, por exemplo:
+
+- `"## Contratos de dados"`
+- `"## Fluxos batch"`
+- `"## Integrações desktop-DB"`
+
+Guia completo de análise e verificação nestes repos: [`oxe/workflows/references/legacy-brownfield.md`](../workflows/references/legacy-brownfield.md) (no pacote npm; após `npx oxe-cc`, cópia em `.oxe/workflows/references/`).
+
+**Layout opcional da pasta `docs/`** (índice por intenção, técnico/negócio, glossário, comparativos): [`DOCS_BROWNFIELD_LAYOUT.md`](DOCS_BROWNFIELD_LAYOUT.md).
+
 **Autoria de workflows:** ver [`WORKFLOW_AUTHORING.md`](WORKFLOW_AUTHORING.md) (mantenedores).

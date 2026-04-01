@@ -1,21 +1,23 @@
 # OXE — Workflow: help
 
 <objective>
-Apresentar o fluxo OXE (scan → spec → plan → execução → verify), o modo **quick**, o passo **execute**, e como invocar no **Cursor** e no **GitHub Copilot**. Mencionar o CLI `oxe-cc` (instalar, `doctor`, `status`, `init-oxe`, `uninstall`, `update`) e, em linha, o **SDK** npm (`require('oxe-cc')`) para CI.
+Apresentar o fluxo OXE (scan → spec → plan → execução → verify), o modo **quick**, o passo **execute**, e **como invocar em várias IDEs/CLIs** (Cursor e GitHub Copilot como referência principal; outras stacks na secção multi-agente). Mencionar o CLI `oxe-cc` (instalar, `doctor`, `status`, `init-oxe`, `uninstall`, `update`) e, em linha, o **SDK** npm (`require('oxe-cc')`) para CI.
 </objective>
 
 <context>
-OXE é um fluxo **spec-driven** com artefatos em `.oxe/` no projeto alvo. **Poucos comandos slash** em relação a fluxos de planeamento mais pesados; *context engineering* com arquivos pequenos por etapa. Instruções do Copilot no VS Code ficam em **`~/.copilot/`** após `npx oxe-cc` (bloco mesclado em `copilot-instructions.md` + **prompt files** em `~/.copilot/prompts/`), não em `.github/` dentro do repo alvo.
+OXE é um fluxo **spec-driven** com artefatos em `.oxe/` no projeto alvo — **o núcleo é o mesmo** em Cursor, Copilot, Claude, OpenCode, Gemini, Codex, Windsurf, Antigravity ou outra CLI suportada pelo instalador. **Poucos comandos** por ferramenta em relação a fluxos de planeamento mais pesados; *context engineering* com arquivos pequenos por etapa. **GitHub Copilot (VS Code)** usa **`~/.copilot/`** após `npx oxe-cc` (bloco mesclado em `copilot-instructions.md` + **prompt files** em `~/.copilot/prompts/`), não `.github/` dentro do repo alvo por padrão; outras ferramentas usam os respetivos homes (ver secção **Multi-agente** abaixo).
 
 No **projeto**, os passos canónicos estão em **`.oxe/workflows/*.md`** (layout mínimo) ou **`oxe/workflows/*.md`** (layout clássico com `--global`); no **pacote npm**, os modelos vivem em **`oxe/workflows/*.md`**.
 </context>
 
 <output>
-## Cursor
+## Integrações principais (referência)
 
-Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-verify`, `/oxe-next`, `/oxe-quick`, `/oxe-execute`, `/oxe-help` (instalados em `~/.cursor/commands/` pelo `oxe-cc`). **Review de PR:** no Cursor não há slash dedicado — peça em linguagem natural seguindo `oxe/workflows/review-pr.md` (ou `.oxe/workflows/review-pr.md`) em contexto.
+### Cursor
 
-## GitHub Copilot (VS Code)
+Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-verify`, `/oxe-next`, `/oxe-quick`, `/oxe-execute`, `/oxe-update`, `/oxe-help` (instalados em `~/.cursor/commands/` pelo `oxe-cc`). **Review de PR:** no Cursor não há slash dedicado — peça em linguagem natural seguindo `oxe/workflows/review-pr.md` (ou `.oxe/workflows/review-pr.md`) em contexto.
+
+### GitHub Copilot (VS Code)
 
 1. **Instruções do usuário:** arquivo **`~/.copilot/copilot-instructions.md`** (conteúdo mesclado pelo instalador; contém o bloco OXE entre marcadores).
 2. **Prompt files:** em **`~/.copilot/prompts/`** (ex.: `oxe-scan.prompt.md`). No chat, `/` e escolha **`oxe-scan`**, **`oxe-spec`**, etc. Requer `"chat.promptFiles": true` (exemplo em `.vscode/settings.json` do repo com layout `--global`).
@@ -23,7 +25,7 @@ Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-ver
 
 ## Fluxo completo
 
-1. **scan** — após clonar ou quando o repositório mudar muito.
+1. **scan** — após clonar ou quando o repositório mudar muito. Repositórios **legado** (COBOL, JCL, copybooks, VB6, SQL procedures): o passo **scan** aplica `oxe/workflows/references/legacy-brownfield.md` quando esses sinais existirem — preencha `TESTING.md` com honestidade (sem `npm test` fictício) e use `scan_focus_globs` em `.oxe/config.json` (ver `oxe/templates/CONFIG.md`).
 2. **spec** — descrever o que se quer (critérios com IDs **A1**, **A2**…).
 3. **discuss** (opcional) — decisões antes do plano; recomendado se `discuss_before_plan` em `.oxe/config.json`.
 4. **plan** — plano executável + **Verificar** por tarefa, ligado aos critérios da SPEC.
@@ -41,9 +43,12 @@ Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-ver
 - **`npx oxe-cc`** ou **`npx oxe-cc install`** — mesma instalação (alias explícito).
 - Instala workflows em `.oxe/` (layout mínimo) ou `oxe/` + `.oxe/` com **`--global`**; integrações em `~/.cursor`, `~/.copilot`, `~/.claude` (e mais destinos com **`--copilot-cli`** / **`--all-agents`**).
 - **`oxe-cc doctor`** — Node, workflows do pacote vs projeto, `config.json`, mapas do codebase, **coerência STATE vs arquivos**, scan antigo (`scan_max_age_days`), seções SPEC, ondas do PLAN, **avisos** não bloqueantes sobre estrutura dos `.md` de workflow (ex.: `<objective>`, critérios de sucesso).
-- **`oxe-cc status`** — coerência `.oxe/` + **um** próximo passo (espelha `next.md`).
+- **`oxe-cc status`** — coerência `.oxe/` + **um** próximo passo (espelha `next.md`). Com **`--json`**, uma linha JSON (`nextStep`, `diagnostics`, …) para CI ou scripts.
 - **`oxe-cc init-oxe`** — só bootstrap `.oxe/` (STATE, config, codebase).
 - **`oxe-cc uninstall`** — remove integrações no HOME e, por omissão, pastas de workflows no repo (`--ide-only` só HOME).
+- **`/oxe-update`** (Cursor; noutras ferramentas use o terminal no projeto) — workflow de atualização: verificar npm, correr `oxe-cc update`, `doctor`.
+- **`oxe-cc update --check`** — só comparar versão em execução com a `latest` no npm (sem instalar).
+- **`oxe-cc update --if-newer`** — só executa o `npx oxe-cc@latest` se houver versão mais nova no npm.
 - **`oxe-cc update` / `npx oxe-cc@latest --force`** — atualizar ficheiros OXE no projeto.
 
 **CI / sem perguntas:** `OXE_NO_PROMPT=1` — layout mínimo e integrações padrão no HOME, salvo flags (`--global`, `--cursor`, …). Se existir **`.oxe/config.json`** com bloco **`install`** (perfil, `repo_layout`), aplica-se quando **não** há flags IDE explícitas; para ignorar: **`--no-install-config`**. Detalhes: `oxe/templates/CONFIG.md`.
@@ -62,6 +67,7 @@ Quem integra em pipeline pode usar **`require('oxe-cc')`** (entrada `main` do pa
 |----------|-----|
 | `OXE_NO_PROMPT` | `1` / `true`: sem menus interativos |
 | `OXE_NO_BANNER` | `1` / `true`: sem banner no CLI |
+| `OXE_UPDATE_SKIP_REGISTRY` | `1` / `true`: não consultar npm em `update --check` / `--if-newer` (saída `2` ou skip) |
 | `CURSOR_CONFIG_DIR` | Base Cursor (default `~/.cursor`) |
 | `COPILOT_CONFIG_DIR` / `COPILOT_HOME` | Base Copilot |
 | `CLAUDE_CONFIG_DIR` | Base `~/.claude` |

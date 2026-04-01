@@ -41,3 +41,21 @@ Use **IDs estáveis** (A1, A2, …) para o plano e o verify vincularem cada tare
 ## Referências no código
 
 - Caminhos / módulos: …
+
+---
+
+## Secções opcionais — brownfield / migração legado
+
+> Use quando o projeto for mainframe + desktop legado ou documentação de migração. Podem ser exigidas pelo `doctor` via `spec_required_sections` em `.oxe/config.json`. Ver `oxe/workflows/references/legacy-brownfield.md`.
+
+### Contratos de dados
+
+- Copybooks, tabelas, mensagens, layouts de ficheiro.
+
+### Fluxos batch
+
+- Cadeias JCL / jobs e programas associados.
+
+### Integrações desktop-DB
+
+- Cliente (ex. VB6) ↔ base de dados / stored procedures.

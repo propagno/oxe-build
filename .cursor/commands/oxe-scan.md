@@ -1,12 +1,5 @@
 ---
-description: "Comando OXE"
----
-
----
-name: oxe-scan
-agent: agent
-description: OXE — Scan do repositório (.oxe/codebase/)
-argument-hint: "[área opcional, ex. api]"
+description: "OXE — Scan do repositório (.oxe/codebase/)"
 ---
 
 Executa o workflow **OXE scan** no repositório atual. Lê e aplica **integralmente** o ficheiro:

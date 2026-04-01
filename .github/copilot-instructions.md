@@ -1,6 +1,6 @@
-# OXE — fluxo spec-driven (Cursor + Copilot)
+# OXE — fluxo spec-driven (multi-IDE / multi-CLI)
 
-Este repositório (ou o pacote **oxe-cc** instalado) define o **OXE**: artefatos em **`.oxe/`** na raiz do projeto alvo e workflows em **`oxe/workflows/*.md`** (no pacote) ou **`.oxe/workflows/*.md`** / **`oxe/workflows/*.md`** no projeto, conforme a instalação (layout mínimo vs clássico).
+Este repositório (ou o pacote **oxe-cc** instalado) define o **OXE**: artefatos em **`.oxe/`** na raiz do projeto alvo e workflows em **`oxe/workflows/*.md`** (no pacote) ou **`.oxe/workflows/*.md`** / **`oxe/workflows/*.md`** no projeto, conforme a instalação (layout mínimo vs clássico). O fluxo é **agnóstico de ferramenta**; **Cursor** e **GitHub Copilot** são o caminho padrão mais conhecido, mas o mesmo OXE pode ser instalado em **Claude Code, OpenCode, Gemini CLI, Codex, Windsurf, Antigravity** e outras integrações via `oxe-cc --all-agents` (ou flags por runtime).
 
 ## Quando aplicar
 
@@ -20,11 +20,12 @@ Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o
 | Next | `oxe/workflows/next.md` | “oxe next”, “próximo passo OXE” |
 | Review PR | `oxe/workflows/review-pr.md` | “revisar PR”, link `…/pull/10`, “diff entre branches” *(prompt Copilot: `/oxe-review-pr`)* |
 | Help | `oxe/workflows/help.md` | “oxe help”, “como usar OXE” |
+| Update | `oxe/workflows/update.md` | “oxe update”, “atualizar oxe-cc”, “há versão nova no npm” *(prompt: `/oxe-update`)* |
 | Autoria de workflow | `oxe/workflows/workflow-authoring.md` | “rever workflow OXE”, “revisar `oxe/workflows/foo.md` contra o guia”, alinhar passo ao `WORKFLOW_AUTHORING.md` |
 
 **Regra:** leia o Markdown indicado e execute **todos** os passos e critérios de sucesso descritos nesse arquivo. Não atalhe: crie ou atualize os arquivos em `.oxe/` conforme o workflow.
 
-**Cursor:** há slash `/oxe-*` para scan…help em `~/.cursor/commands/`; **não** há comando slash dedicado a review-pr no Cursor — use linguagem natural + `oxe/workflows/review-pr.md` em contexto.
+**Cursor:** há slash `/oxe-*` para scan…help e **`/oxe-update`** em `~/.cursor/commands/`; **não** há comando slash dedicado a review-pr no Cursor — use linguagem natural + `oxe/workflows/review-pr.md` em contexto.
 
 ## Onde ficam as integrações (após `npx oxe-cc`)
 
@@ -36,6 +37,7 @@ Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o
 ## Configuração do projeto
 
 - **`.oxe/config.json`**: fluxo (`discuss_before_plan`, `scan_max_age_days`, `spec_required_sections`, …) e opcionalmente **`install`** (perfil e layout quando o utilizador corre o instalador **sem** flags IDE explícitas). Referência: `oxe/templates/CONFIG.md`. Para ignorar o bloco `install` numa corrida: **`--no-install-config`**.
+- **Legado / brownfield** (COBOL, JCL, copybooks, VB6, SQL procedures): seguir também `oxe/workflows/references/legacy-brownfield.md` quando o repo ou o pedido indicar mainframe ou desktop legado — scan preenche os sete ficheiros sem assumir Node; plan/verify aceitam evidência por Grep/leitura/checklist.
 - Sem TTY (CI): **`OXE_NO_PROMPT=1`** — padrões de layout/integração; o ficheiro `install` em `config.json` aplica-se se existir e as flags não sobrepuserem.
 
 ## Artefatos
@@ -47,7 +49,7 @@ Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o
 
 - **`npx oxe-cc`** ou **`npx oxe-cc install`** — instalação (equivalentes).
 - **`npx oxe-cc doctor`** — validação completa (Node, workflows do pacote vs projeto, JSON, coerência STATE, regras SPEC/PLAN, **avisos** não bloqueantes sobre estrutura dos `.md` de workflow quando aplicável).
-- **`npx oxe-cc status`** — mais leve: coerência `.oxe/` + **um** próximo passo (não exige o mesmo rigor de workflows que o `doctor`).
+- **`npx oxe-cc status`** — mais leve: coerência `.oxe/` + **um** próximo passo (não exige o mesmo rigor de workflows que o `doctor`). **`status --json`**: saída máquina-legível para CI (`nextStep`, `diagnostics`, …).
 - **`npx oxe-cc init-oxe`**, **`uninstall`**, **`update`** — ver `oxe-cc --help` ou README do pacote.
 - **SDK (Node):** `require('oxe-cc')` expõe `runDoctorChecks`, `health`, `workflows`, `install`, `manifest`, `agents` — útil para CI (`lib/sdk/README.md`, `lib/sdk/index.d.ts`).
 
@@ -55,6 +57,6 @@ Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o
 
 ## Manutenção do pacote oxe-build
 
-Ao alterar comportamento OXE, edite primeiro **`oxe/workflows/*.md`**; mantenha comandos Cursor e prompts Copilot alinhados a essa pasta.
+Ao alterar comportamento OXE, edite primeiro **`oxe/workflows/*.md`**; mantenha prompts em **`.github/prompts/`** e comandos Cursor gerados pelo sync alinhados a essa pasta (e as integrações multi-agente coerentes com `oxe-agent-install.cjs`).
 
 **Autoria de workflows:** guia em **`oxe/templates/WORKFLOW_AUTHORING.md`**. Para rever um `.md` de passo contra o guia, use o workflow **`oxe/workflows/workflow-authoring.md`** (ou `.oxe/workflows/` no projeto alvo).

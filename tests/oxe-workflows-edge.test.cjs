@@ -46,4 +46,15 @@ describe('oxe-workflows edge', () => {
     const r = wf.validateWorkflowShapes(path.join(os.tmpdir(), 'oxe-wf-missing-xyz'));
     assert.strictEqual(r.warnings.length, 0);
   });
+
+  test('validateWorkflowShapes help.md without output warns', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-wf-help-'));
+    fs.writeFileSync(
+      path.join(dir, 'help.md'),
+      '<objective>x</objective>\n<success_criteria></success_criteria>\n',
+      'utf8'
+    );
+    const r = wf.validateWorkflowShapes(dir);
+    assert.ok(r.warnings.some((w) => w.message.includes('output')));
+  });
 });

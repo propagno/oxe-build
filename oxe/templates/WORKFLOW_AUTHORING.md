@@ -32,6 +32,8 @@ Mantenha tags **abertas e fechadas** explicitamente (evita ambiguidade para leit
 - Se um workflow ultrapassar **~400–500 linhas** ou repetir a mesma referência muitas vezes, extraia para:
   - `oxe/workflows/references/<nome>.md` (no pacote), ou
   - trechos reutilizáveis em `oxe/templates/` (ex.: [`SPEC.template.md`](SPEC.template.md), [`CONFIG.md`](CONFIG.md)).
+- Exemplo publicado: [`legacy-brownfield.md`](../workflows/references/legacy-brownfield.md) — COBOL, JCL, copybooks, VB6, SP; consumido por **scan**, **spec**, **plan**, **execute**, **verify**.
+- Template opcional de pasta `docs/` brownfield: [`DOCS_BROWNFIELD_LAYOUT.md`](DOCS_BROWNFIELD_LAYOUT.md) (copiado para `.oxe/templates/` na instalação).
 - O `SKILL.md` principal do passo deve permanecer o **mapa**: objetivo, contexto essencial, sequência, critérios de sucesso.
 
 ## 4. Comandos Cursor e prompts Copilot (frontmatter)

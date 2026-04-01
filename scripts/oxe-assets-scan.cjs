@@ -2,13 +2,18 @@
 /**
  * Lightweight scan for accidental secret-like patterns in OXE-packaged markdown.
  * Run from repo root: node scripts/oxe-assets-scan.cjs
+ *
+ * Tests / tooling: set OXE_ASSETS_SCAN_ROOT to an absolute path to scan that tree
+ * (expects the same layout: oxe/, .github/, commands/, bin/lib/ under that root).
  */
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
 
-const ROOT = path.join(__dirname, '..');
+const ROOT = process.env.OXE_ASSETS_SCAN_ROOT
+  ? path.resolve(process.env.OXE_ASSETS_SCAN_ROOT)
+  : path.join(__dirname, '..');
 const PATTERNS = [
   { name: 'OpenAI-style key', re: /sk-[a-zA-Z0-9]{20,}/g },
   { name: 'Stripe live key', re: /sk_live_[a-zA-Z0-9]+/g },

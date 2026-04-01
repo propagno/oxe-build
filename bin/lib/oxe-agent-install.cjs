@@ -5,6 +5,7 @@
  * Referências: OpenCode (~/.config/opencode/commands), Gemini CLI (~/.gemini/commands/*.toml),
  * Codex (~/.agents/skills + ~/.codex/prompts), Copilot (~/.copilot/skills), Antigravity (~/.gemini/antigravity/skills),
  * Windsurf (~/.codeium/windsurf/global_workflows).
+ * Com `--ide-local`, destinos equivalentes sob a raiz do projeto (ex.: ./.opencode/commands).
  */
 
 const fs = require('fs');
@@ -19,6 +20,50 @@ function expandTilde(p) {
   if (p === '~' || p.startsWith(`~${path.sep}`)) return path.join(os.homedir(), p.slice(2));
   if (p.startsWith('~/') || p.startsWith('~\\')) return path.join(os.homedir(), p.slice(2));
   return p;
+}
+
+/**
+ * @typedef {{
+ *   ideGlobal: boolean,
+ *   opencodeCommandDirs: string[],
+ *   geminiCommandsBase: string,
+ *   windsurfWorkflowsDir: string,
+ *   codexPromptsDir: string,
+ *   codexAgentsSkillsRoot: string,
+ *   antigravitySkillsRoot: string,
+ * }} AgentInstallPaths
+ */
+
+/**
+ * @param {boolean} ideGlobal
+ * @param {string} projectRoot
+ * @returns {AgentInstallPaths}
+ */
+function buildAgentInstallPaths(ideGlobal, projectRoot) {
+  const home = os.homedir();
+  const root = path.resolve(projectRoot);
+  if (ideGlobal) {
+    const xdg = process.env.XDG_CONFIG_HOME || path.join(home, '.config');
+    const codexHome = process.env.CODEX_HOME ? path.resolve(expandTilde(process.env.CODEX_HOME)) : path.join(home, '.codex');
+    return {
+      ideGlobal: true,
+      opencodeCommandDirs: [path.join(xdg, 'opencode', 'commands'), path.join(home, '.opencode', 'commands')],
+      geminiCommandsBase: path.join(home, '.gemini', 'commands'),
+      windsurfWorkflowsDir: path.join(home, '.codeium', 'windsurf', 'global_workflows'),
+      codexPromptsDir: path.join(codexHome, 'prompts'),
+      codexAgentsSkillsRoot: path.join(home, '.agents', 'skills'),
+      antigravitySkillsRoot: path.join(home, '.gemini', 'antigravity', 'skills'),
+    };
+  }
+  return {
+    ideGlobal: false,
+    opencodeCommandDirs: [path.join(root, '.opencode', 'commands')],
+    geminiCommandsBase: path.join(root, '.gemini', 'commands'),
+    windsurfWorkflowsDir: path.join(root, '.windsurf', 'global_workflows'),
+    codexPromptsDir: path.join(root, '.codex', 'prompts'),
+    codexAgentsSkillsRoot: path.join(root, '.agents', 'skills'),
+    antigravitySkillsRoot: path.join(root, '.gemini', 'antigravity', 'skills'),
+  };
 }
 
 /** @param {string} content */
@@ -76,12 +121,11 @@ function buildAgentSkillMarkdown(skillName, description, body) {
  * @returns {string[]}
  */
 function opencodeCommandDirs() {
-  const xdg = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
-  return [path.join(xdg, 'opencode', 'commands'), path.join(os.homedir(), '.opencode', 'commands')];
+  return buildAgentInstallPaths(true, process.cwd()).opencodeCommandDirs;
 }
 
 function windsurfGlobalWorkflowsDir() {
-  return path.join(os.homedir(), '.codeium', 'windsurf', 'global_workflows');
+  return buildAgentInstallPaths(true, process.cwd()).windsurfWorkflowsDir;
 }
 
 function geminiUserDir() {
@@ -89,16 +133,15 @@ function geminiUserDir() {
 }
 
 function codexAgentsSkillsRoot() {
-  return path.join(os.homedir(), '.agents', 'skills');
+  return buildAgentInstallPaths(true, process.cwd()).codexAgentsSkillsRoot;
 }
 
 function codexPromptsDir() {
-  const home = process.env.CODEX_HOME ? path.resolve(expandTilde(process.env.CODEX_HOME)) : path.join(os.homedir(), '.codex');
-  return path.join(home, 'prompts');
+  return buildAgentInstallPaths(true, process.cwd()).codexPromptsDir;
 }
 
 function antigravitySkillsRoot() {
-  return path.join(geminiUserDir(), 'antigravity', 'skills');
+  return buildAgentInstallPaths(true, process.cwd()).antigravitySkillsRoot;
 }
 
 /**
@@ -169,10 +212,11 @@ function installSkillTreeFromCursorCommands(cCmdSrc, skillsRoot, opts, pathRewri
 
 /**
  * Copia .md dos comandos Cursor para pastas OpenCode (markdown nativo).
+ * @param {AgentInstallPaths} paths
  */
-function installOpenCodeCommands(cCmdSrc, opts, pathRewriteNested, logOmitido, logWrite) {
+function installOpenCodeCommands(cCmdSrc, paths, opts, pathRewriteNested, logOmitido, logWrite) {
   if (!fs.existsSync(cCmdSrc)) return;
-  for (const destDir of opencodeCommandDirs()) {
+  for (const destDir of paths.opencodeCommandDirs) {
     for (const name of fs.readdirSync(cCmdSrc)) {
       if (!name.startsWith('oxe-') || !name.endsWith('.md')) continue;
       const src = path.join(cCmdSrc, name);
@@ -195,10 +239,11 @@ function installOpenCodeCommands(cCmdSrc, opts, pathRewriteNested, logOmitido, l
 
 /**
  * ~/.gemini/commands/oxe.toml → /oxe ; oxe/scan.toml → /oxe:scan
+ * @param {AgentInstallPaths} paths
  */
-function installGeminiTomlCommands(cCmdSrc, opts, pathRewriteNested, logOmitido, logWrite) {
+function installGeminiTomlCommands(cCmdSrc, paths, opts, pathRewriteNested, logOmitido, logWrite) {
   if (!fs.existsSync(cCmdSrc)) return;
-  const base = path.join(geminiUserDir(), 'commands');
+  const base = paths.geminiCommandsBase;
 
   const writeToml = (relPath, srcPath, descSuffix) => {
     let raw = fs.readFileSync(srcPath, 'utf8');
@@ -233,11 +278,12 @@ function installGeminiTomlCommands(cCmdSrc, opts, pathRewriteNested, logOmitido,
 }
 
 /**
- * Windsurf Cascade: workflows globais (~/.codeium/windsurf/global_workflows).
+ * Windsurf Cascade: workflows globais ou ./.windsurf/global_workflows (local).
+ * @param {AgentInstallPaths} paths
  */
-function installWindsurfGlobalWorkflows(cCmdSrc, opts, pathRewriteNested, logOmitido, logWrite) {
+function installWindsurfGlobalWorkflows(cCmdSrc, paths, opts, pathRewriteNested, logOmitido, logWrite) {
   if (!fs.existsSync(cCmdSrc)) return;
-  const destDir = windsurfGlobalWorkflowsDir();
+  const destDir = paths.windsurfWorkflowsDir;
   for (const name of fs.readdirSync(cCmdSrc)) {
     if (!name.startsWith('oxe-') || !name.endsWith('.md')) continue;
     const src = path.join(cCmdSrc, name);
@@ -287,11 +333,12 @@ function installWindsurfGlobalWorkflows(cCmdSrc, opts, pathRewriteNested, logOmi
 }
 
 /**
- * Codex: ~/.codex/prompts/oxe-scan.md → /prompts:oxe-scan (deprecado mas ainda suportado).
+ * Codex: prompts em ~/.codex/prompts ou ./.codex/prompts (local).
+ * @param {AgentInstallPaths} paths
  */
-function installCodexPrompts(cCmdSrc, opts, pathRewriteNested, logOmitido, logWrite) {
+function installCodexPrompts(cCmdSrc, paths, opts, pathRewriteNested, logOmitido, logWrite) {
   if (!fs.existsSync(cCmdSrc)) return;
-  const destDir = codexPromptsDir();
+  const destDir = paths.codexPromptsDir;
   for (const name of fs.readdirSync(cCmdSrc)) {
     if (!name.startsWith('oxe-') || !name.endsWith('.md')) continue;
     const src = path.join(cCmdSrc, name);
@@ -322,13 +369,16 @@ function installCodexPrompts(cCmdSrc, opts, pathRewriteNested, logOmitido, logWr
 /**
  * Remove apenas ficheiros/pastas criados pelo oxe-cc (marcadores).
  * @param {{ dryRun: boolean }} u
+ * @param {AgentInstallPaths} [paths] omissão = instalação global (HOME)
  */
-function cleanupMarkedUnifiedArtifacts(u) {
-  const unlinkQuiet = (p) => {
-    if (!fs.existsSync(p)) return;
+function cleanupMarkedUnifiedArtifacts(u, paths) {
+  const p = paths || buildAgentInstallPaths(true, process.cwd());
+
+  const unlinkQuiet = (filePath) => {
+    if (!fs.existsSync(filePath)) return;
     if (u.dryRun) return;
     try {
-      fs.unlinkSync(p);
+      fs.unlinkSync(filePath);
     } catch {
       /* ignore */
     }
@@ -352,22 +402,22 @@ function cleanupMarkedUnifiedArtifacts(u) {
     }
   };
 
-  for (const dir of opencodeCommandDirs()) {
+  for (const dir of p.opencodeCommandDirs) {
     if (!fs.existsSync(dir)) continue;
     for (const name of fs.readdirSync(dir)) {
       if (!name.startsWith('oxe-') || !name.endsWith('.md')) continue;
-      const p = path.join(dir, name);
+      const filePath = path.join(dir, name);
       let txt = '';
       try {
-        txt = fs.readFileSync(p, 'utf8');
+        txt = fs.readFileSync(filePath, 'utf8');
       } catch {
         continue;
       }
-      if (txt.includes(OXE_MANAGED_HTML)) unlinkQuiet(p);
+      if (txt.includes(OXE_MANAGED_HTML)) unlinkQuiet(filePath);
     }
   }
 
-  const gBase = path.join(geminiUserDir(), 'commands');
+  const gBase = p.geminiCommandsBase;
   const oxeToml = path.join(gBase, 'oxe.toml');
   if (fs.existsSync(oxeToml)) {
     try {
@@ -380,9 +430,9 @@ function cleanupMarkedUnifiedArtifacts(u) {
   if (fs.existsSync(oxeSub)) {
     for (const name of fs.readdirSync(oxeSub)) {
       if (!name.endsWith('.toml')) continue;
-      const p = path.join(oxeSub, name);
+      const filePath = path.join(oxeSub, name);
       try {
-        if (fs.readFileSync(p, 'utf8').includes(OXE_MANAGED_TOML)) unlinkQuiet(p);
+        if (fs.readFileSync(filePath, 'utf8').includes(OXE_MANAGED_TOML)) unlinkQuiet(filePath);
       } catch {
         /* ignore */
       }
@@ -394,33 +444,33 @@ function cleanupMarkedUnifiedArtifacts(u) {
     }
   }
 
-  const wfDir = windsurfGlobalWorkflowsDir();
+  const wfDir = p.windsurfWorkflowsDir;
   if (fs.existsSync(wfDir)) {
     for (const name of fs.readdirSync(wfDir)) {
       if (name !== 'oxe.md' && !(name.startsWith('oxe-') && name.endsWith('.md'))) continue;
-      const p = path.join(wfDir, name);
+      const filePath = path.join(wfDir, name);
       try {
-        if (fs.readFileSync(p, 'utf8').includes(OXE_MANAGED_HTML)) unlinkQuiet(p);
+        if (fs.readFileSync(filePath, 'utf8').includes(OXE_MANAGED_HTML)) unlinkQuiet(filePath);
       } catch {
         /* ignore */
       }
     }
   }
 
-  const cpDir = codexPromptsDir();
+  const cpDir = p.codexPromptsDir;
   if (fs.existsSync(cpDir)) {
     for (const name of fs.readdirSync(cpDir)) {
       if (!name.startsWith('oxe-') || !name.endsWith('.md')) continue;
-      const p = path.join(cpDir, name);
+      const filePath = path.join(cpDir, name);
       try {
-        if (fs.readFileSync(p, 'utf8').includes(OXE_MANAGED_HTML)) unlinkQuiet(p);
+        if (fs.readFileSync(filePath, 'utf8').includes(OXE_MANAGED_HTML)) unlinkQuiet(filePath);
       } catch {
         /* ignore */
       }
     }
   }
 
-  const agRoot = antigravitySkillsRoot();
+  const agRoot = p.antigravitySkillsRoot;
   if (fs.existsSync(agRoot)) {
     for (const name of fs.readdirSync(agRoot, { withFileTypes: true })) {
       if (!name.isDirectory()) continue;
@@ -429,7 +479,7 @@ function cleanupMarkedUnifiedArtifacts(u) {
     }
   }
 
-  const cxRoot = codexAgentsSkillsRoot();
+  const cxRoot = p.codexAgentsSkillsRoot;
   if (fs.existsSync(cxRoot)) {
     for (const name of fs.readdirSync(cxRoot, { withFileTypes: true })) {
       if (!name.isDirectory()) continue;
@@ -442,6 +492,7 @@ function cleanupMarkedUnifiedArtifacts(u) {
 module.exports = {
   OXE_MANAGED_HTML,
   OXE_MANAGED_TOML,
+  buildAgentInstallPaths,
   adjustWorkflowPathsForNestedLayout,
   parseCursorCommandFrontmatter,
   buildAgentSkillMarkdown,

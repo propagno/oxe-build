@@ -1,11 +1,5 @@
 ---
-description: "Comando OXE"
----
-
----
-name: oxe-help
-agent: agent
-description: OXE — Ajuda (Cursor, Copilot, artefatos)
+description: "OXE — Ajuda (fluxo .oxe/, várias IDEs e CLIs, artefatos)"
 ---
 
 Executa o workflow **OXE help**. Lê e segue **integralmente**:

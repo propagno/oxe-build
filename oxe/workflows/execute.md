@@ -9,6 +9,7 @@ Se existir apenas **`.oxe/QUICK.md`** (fluxo quick), tratar os **Passos** numera
 <context>
 - Se **PLAN.md** não existir mas **QUICK.md** existir, seguir **QUICK.md** neste workflow (passos = trabalho da sessão).
 - Se nem PLAN nem QUICK existir, recomendar `oxe:plan` ou `oxe:quick` primeiro.
+- **Legado / brownfield:** entregáveis podem ser só documentação (`.md`, diagramas). Exigir pré-requisitos de ambiente (mainframe, IDE VB6) quando a tarefa depender disso — ver **`oxe/workflows/references/legacy-brownfield.md`**.
 </context>
 
 <process>

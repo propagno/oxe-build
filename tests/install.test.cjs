@@ -33,11 +33,14 @@ describe('oxe-cc CLI', () => {
     const { status } = run(['--oxe-only', dir]);
     assert.strictEqual(status, 0);
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'workflows', 'scan.md')));
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'workflows', 'references', 'legacy-brownfield.md')));
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'workflows', 'quick.md')));
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'STATE.md')));
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'config.json')));
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'codebase')));
     assert.ok(!fs.existsSync(path.join(dir, 'oxe')), 'default layout must not create top-level oxe/');
+    const gi = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');
+    assert.match(gi, /\.oxe\/\s*$/m);
   });
 
   test('--no-init-oxe skips .oxe bootstrap but keeps .oxe/workflows', () => {
@@ -46,6 +49,8 @@ describe('oxe-cc CLI', () => {
     assert.strictEqual(status, 0);
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'workflows', 'scan.md')));
     assert.ok(!fs.existsSync(path.join(dir, '.oxe', 'STATE.md')));
+    const gi = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');
+    assert.match(gi, /\.oxe\/\s*$/m);
   });
 
   test('doctor passes after install', () => {
@@ -75,6 +80,17 @@ describe('oxe-cc CLI', () => {
     assert.strictEqual(status, 0);
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'STATE.md')));
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'config.json')));
+    const gi = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');
+    assert.match(gi, /\.oxe\/\s*$/m);
+  });
+
+  test('install does not duplicate .oxe/ rule when .gitignore already ignores .oxe', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    fs.writeFileSync(path.join(dir, '.gitignore'), '# x\n.oxe/\n', 'utf8');
+    assert.strictEqual(run(['--oxe-only', dir]).status, 0);
+    const gi = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');
+    const matches = gi.match(/^\.oxe\/\s*$/gm);
+    assert.strictEqual(matches ? matches.length : 0, 1);
   });
 
   test('--version has no banner (single line)', () => {
@@ -249,5 +265,92 @@ describe('oxe-cc CLI', () => {
     assert.strictEqual(r.status, 0, r.stderr + r.stdout);
     assert.ok(fs.existsSync(path.join(fakeHome, '.cursor', 'commands', 'oxe-scan.md')));
     assert.ok(fs.existsSync(path.join(dir, 'oxe', 'workflows', 'scan.md')));
+  });
+
+  test('--ide-local --cursor installs commands under project .cursor', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    const { status } = run(
+      ['--cursor', '--ide-local', '--no-init-oxe', '--no-global-cli', '-l', dir],
+      REPO_ROOT
+    );
+    assert.strictEqual(status, 0);
+    assert.ok(fs.existsSync(path.join(dir, '.cursor', 'commands', 'oxe-scan.md')));
+  });
+
+  test('--ide-global and --ide-local together exits 1', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    const { status, stderr } = run(['--cursor', '--ide-global', '--ide-local', '--no-global-cli', '-l', dir]);
+    assert.strictEqual(status, 1);
+    assert.match(stderr, /ide-global|ide-local|Não use/i);
+  });
+
+  test('--opencode alone installs only OpenCode paths', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    const { status, fakeHome } = run(
+      ['--opencode', '--no-init-oxe', '--no-global-cli', '-l', dir],
+      REPO_ROOT
+    );
+    assert.strictEqual(status, 0);
+    assert.ok(fs.existsSync(path.join(fakeHome, '.config', 'opencode', 'commands', 'oxe-scan.md')));
+    assert.ok(!fs.existsSync(path.join(fakeHome, '.gemini', 'commands', 'oxe.toml')));
+  });
+
+  test('--ide-local --copilot merges instructions into .github', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    const { status } = run(
+      ['--copilot', '--ide-local', '--no-init-oxe', '--no-global-cli', '-l', dir],
+      REPO_ROOT
+    );
+    assert.strictEqual(status, 0);
+    const inst = path.join(dir, '.github', 'copilot-instructions.md');
+    assert.ok(fs.existsSync(inst));
+    const txt = fs.readFileSync(inst, 'utf8');
+    assert.ok(txt.includes('oxe-cc:install-begin'));
+  });
+
+  test('--gemini alone installs only Gemini TOML', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    const { status, fakeHome } = run(
+      ['--gemini', '--no-init-oxe', '--no-global-cli', '-l', dir],
+      REPO_ROOT
+    );
+    assert.strictEqual(status, 0);
+    assert.ok(fs.existsSync(path.join(fakeHome, '.gemini', 'commands', 'oxe.toml')));
+    assert.ok(!fs.existsSync(path.join(fakeHome, '.config', 'opencode', 'commands', 'oxe-scan.md')));
+  });
+
+  test('install --ide-local with --config-dir exits 1', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-home-'));
+    const r = spawnSync(
+      process.execPath,
+      [CLI, '--cursor', '--ide-local', '--config-dir', fakeHome, '--no-global-cli', '-l', dir],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: isolatedHomeEnv(fakeHome) }
+    );
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr + r.stdout, /ide-local|config-dir/i);
+  });
+
+  test('uninstall --ide-local removes project .cursor OXE commands', () => {
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-home-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    const env = isolatedHomeEnv(fakeHome, { OXE_NO_PROMPT: '1' });
+    assert.strictEqual(
+      spawnSync(process.execPath, [CLI, '--cursor', '--ide-local', '--no-init-oxe', '--no-global-cli', '-l', dir], {
+        cwd: REPO_ROOT,
+        env,
+        encoding: 'utf8',
+      }).status,
+      0
+    );
+    const cmd = path.join(dir, '.cursor', 'commands', 'oxe-scan.md');
+    assert.ok(fs.existsSync(cmd));
+    const u = spawnSync(process.execPath, [CLI, 'uninstall', '--ide-local', '--ide-only', '--dir', dir], {
+      cwd: REPO_ROOT,
+      env,
+      encoding: 'utf8',
+    });
+    assert.strictEqual(u.status, 0, u.stderr + u.stdout);
+    assert.ok(!fs.existsSync(cmd));
   });
 });
