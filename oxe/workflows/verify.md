@@ -14,6 +14,7 @@ Se o usuário indicar uma tarefa (ex.: `T2`), focar só nela; caso contrário, p
 - **Legado:** quando **Comando** for `—` ou inexistente, evidência válida inclui **Read/Grep**, existência de ficheiros referenciados e checklist manual — não marcar critério como passou sem evidência; se o ambiente host/desktop não estiver disponível, registar **não executado aqui** e próximo passo. Ver **`oxe/workflows/references/legacy-brownfield.md`**.
 - **Debug:** investigação técnica de falhas **durante** a implementação segue **`oxe/workflows/debug.md`** (`/oxe-debug`). Resolver um bug com debug **não** dispensa este passo — após correções, **ainda** é necessário **`verify`** para fechar a trilha face à SPEC/PLAN.
 - **UI:** se existirem `.oxe/UI-SPEC.md` / `.oxe/UI-REVIEW.md`, incorporar na evidência quando os critérios **A*** ou tarefas **Tn** tocarem interface.
+- **Pós-verify (opcional):** para auditoria de **cobertura** e gaps de verificabilidade (sem substituir este passo), **`oxe:validate-gaps`** → `.oxe/VALIDATION-GAPS.md` (ver **`oxe/workflows/validate-gaps.md`**).
 </context>
 
 <process>

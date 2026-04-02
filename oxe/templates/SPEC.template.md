@@ -1,3 +1,16 @@
+---
+oxe_doc: spec
+status: draft
+updated: YYYY-MM-DD
+inputs: []
+---
+
+<!--
+  Metadados OXE (retomada após contexto longo). Manter o bloco --- acima ANTES do primeiro #.
+  - status: draft | ready | superseded (guia humano; não validado por schema)
+  - inputs: paths ou URLs que alimentaram a spec (PRD, issues, branches)
+-->
+
 # OXE — Especificação
 
 > Substitua os placeholders. Remova seções vazias se não se aplicarem.

@@ -233,6 +233,8 @@ Slash commands (Cursor: `~/.cursor/commands/` após instalar) e prompt files (Co
 | `/oxe-forensics` | [`forensics.md`](oxe/workflows/forensics.md) |
 | `/oxe-debug` | [`debug.md`](oxe/workflows/debug.md) |
 | `/oxe-route` | [`route.md`](oxe/workflows/route.md) |
+| `/oxe-research` | [`research.md`](oxe/workflows/research.md) |
+| `/oxe-validate-gaps` | [`validate-gaps.md`](oxe/workflows/validate-gaps.md) |
 | `/oxe-ui-spec` | [`ui-spec.md`](oxe/workflows/ui-spec.md) |
 | `/oxe-ui-review` | [`ui-review.md`](oxe/workflows/ui-review.md) |
 | `/oxe-review-pr` *(prompt Copilot; ver nota abaixo)* | [`review-pr.md`](oxe/workflows/review-pr.md) |
@@ -255,6 +257,14 @@ Slash commands (Cursor: `~/.cursor/commands/` após instalar) e prompt files (Co
 - **Quando usar:** Antes de planear qualquer entrega média ou grande; entrada pode ser texto livre ou `@ficheiro.md`.
 - **Limite:** Não implementa código; o plano e o verify é que amarram tarefas aos **A*** .
 - **Workflow:** [`oxe/workflows/spec.md`](oxe/workflows/spec.md)
+
+#### `/oxe-research`
+
+- **O que faz:** Cria uma **nota datada** em `.oxe/research/YYYY-MM-DD-<slug>.md` e atualiza **`.oxe/RESEARCH.md`** (índice/histórico); spikes, mapa de sistema, engenharia reversa, hipóteses de modernização ou qualquer exploração com evidência antes do plano.
+- **Artefatos:** `.oxe/research/*.md`, `.oxe/RESEARCH.md`, `.oxe/STATE.md` se útil.
+- **Quando usar:** Incerteza técnica ou de âmbito; sistemas grandes por progressive disclosure (várias sessões); opcional após **spec** e antes de **plan**.
+- **Limite:** Não substitui SPEC/PLAN; não sobrescreve notas antigas sem pedido explícito.
+- **Workflow:** [`oxe/workflows/research.md`](oxe/workflows/research.md)
 
 #### `/oxe-discuss`
 
@@ -311,6 +321,14 @@ Slash commands (Cursor: `~/.cursor/commands/` após instalar) e prompt files (Co
 - **Quando usar:** Após implementar uma onda ou fechar o plano; pode focar uma tarefa **Tn** se indicares.
 - **Limite:** Sandbox pode impedir comandos — regista “não executado aqui” e deixa o comando para correres localmente.
 - **Workflow:** [`oxe/workflows/verify.md`](oxe/workflows/verify.md)
+
+#### `/oxe-validate-gaps`
+
+- **O que faz:** Auditoria **complementar** pós-verify: cruza PLAN + VERIFY (+ SPEC), lista gaps de cobertura/evidência em **`.oxe/VALIDATION-GAPS.md`** e sugere tarefas em texto (Nyquist-lite).
+- **Artefatos:** `.oxe/VALIDATION-GAPS.md`, opcionalmente `STATE.md`.
+- **Quando usar:** Depois de **`/oxe-verify`** (passou ou falhou), para fechar dívida de testes ou evidência fraca.
+- **Limite:** Não altera `PLAN.md` por defeito nem substitui um novo verify após correções.
+- **Workflow:** [`oxe/workflows/validate-gaps.md`](oxe/workflows/validate-gaps.md)
 
 #### `/oxe-forensics`
 

@@ -9,17 +9,25 @@ Não reescrever `SPEC.md` nem apagar `PLAN.md`; apenas **recomendar** o reingres
 <context>
 - Usar quando: `VERIFY.md` com falhas ou gaps não explicados, `oxe-cc doctor` com **FALHA**, `STATE.md` contradiz ficheiros presentes (ex.: “onda concluída” sem `VERIFY.md`), ou o utilizador indica estar **preso** após várias tentativas de replan.
 - Ler: `.oxe/STATE.md`, `.oxe/VERIFY.md` (se existir), `.oxe/PLAN.md`, `.oxe/SPEC.md` (se existir), `.oxe/QUICK.md` (se existir).
-- Opcional: resumo de `git log --oneline -n 15` e `git status` (ou equivalente fornecido pelo utilizador).
+- **Git é opcional:** em sandbox sem Git ou sem permissão de terminal, **não** falhar o workflow; registar em `FORENSICS.md` que Git não foi avaliado.
 - Opcional: saída resumida de `npx oxe-cc doctor` no diretório do projeto.
+
+**Git (opcional)** — se o agente puder correr terminal **ou** o utilizador colar saída, preferir recolher:
+
+- `git log --oneline -n 30`
+- `git log --format="%H %ai %s" -n 15` (datas para **Linha do tempo**)
+- `git log --name-only --format="" -n 20 | sort | uniq -c | sort -rn | head -20` (ficheiros mais alterados — indica foco ou “loop” de edições)
+- `git status --short`
+- Opcional: `git diff --stat` (se relevante ao sintoma)
 </context>
 
 <process>
 1. Confirmar diretório raiz do projeto e existência de `.oxe/`.
-2. Recolher evidência: STATE, VERIFY, PLAN, SPEC, QUICK (trechos relevantes), Git, doctor.
+2. Recolher evidência: STATE, VERIFY, PLAN, SPEC, QUICK (trechos relevantes), saída de **doctor** se disponível, e **Git (opcional)** conforme bloco no context (se indisponível, seguir sem Git).
 3. Redigir **`.oxe/FORENSICS.md`** com secções fixas:
    - **Data** (ISO) e **Sintoma** (1–3 frases).
-   - **Linha do tempo** — bullets curtos (o que se tentou, ordem aproximada).
-   - **Hipótese de causa** — uma ou duas hipóteses ranqueadas (ex.: plano desalinhado, mapa desatualizado, workflows em falta, implementação incompleta).
+   - **Linha do tempo** — bullets curtos (o que se tentou, ordem aproximada); **incorporar** commits/datas e ficheiros mais tocados quando houver evidência Git; se Git não foi avaliado, linha explícita: *Git não avaliado (ambiente/indisponível)*.
+   - **Hipótese de causa** — uma ou duas hipóteses ranqueadas (ex.: plano desalinhado, mapa desatualizado, workflows em falta, implementação incompleta); usar padrões Git (ficheiros repetidos, working tree suja) quando útil.
    - **Próximo passo OXE recomendado:** **um único** valor entre `scan` | `plan` | `execute` e o **comando** correspondente (`/oxe-scan`, `/oxe-plan`, `/oxe-execute` ou `npx oxe-cc@latest` / `npx oxe-cc doctor` quando a causa for tooling).
    - **Justificativa** — uma frase que liga evidência ao passo escolhido.
 4. Atualizar **`.oxe/STATE.md`** com uma linha opcional sob decisões ou contexto: referência a `FORENSICS.md` e fase sugerida (ex.: `forensics_complete` → próximo conforme passo recomendado).

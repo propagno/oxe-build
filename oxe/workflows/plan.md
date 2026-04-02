@@ -16,6 +16,7 @@ Se o usuário pedir **--replan** (ou replanejamento implícito após `verify_fai
 - Se existir **`.oxe/NOTES.md`**, rever entradas em aberto: incorporar em tarefas (com **Aceite vinculado** quando aplicável) ou registar na secção **Replanejamento** / nota explícita *fora de âmbito desta trilha*.
 - Se existir **`.oxe/UI-SPEC.md`**, as tarefas de UI devem referenciar secções do UI-SPEC no texto de **Implementação** ou **Verificar**.
 - Se existir **`.oxe/DISCUSS.md`**, alinhar tarefas às decisões registradas.
+- Se existir **`.oxe/RESEARCH.md`** e notas em **`.oxe/research/*.md`**, ler o índice e as notas cujo **Tema** cruza o âmbito do plano (ou as mais recentes relevantes). Se o índice marcar **Estado** pendente em tópico bloqueante, pedir nova sessão **research** ou **discuss**, ou registar **suposição explícita** no PLAN antes de ondas que dependam dessa decisão.
 - Se existir **`.oxe/config.json`** com `default_verify_command` não vazio, usar como fallback quando a SPEC não indicar comando.
 - Se existir **`plan_max_tasks_per_wave` > 0** na config, **não** colocar mais tarefas do que esse número na mesma **Onda**; dividir em mais ondas.
 - Tamanho alvo: cada tarefa cabe em **um** contexto de agente focado.
@@ -42,15 +43,31 @@ Cada tarefa em PLAN.md deve seguir:
 **Comparativo host ↔ cliente (migração / paridade):** pode-se dedicar tarefas a produzir ou atualizar uma **matriz Markdown** (classificações: equivalente / implementação diferente / só host / só cliente) com colunas de artefactos reais no repo — ver secção *Molde de comparativo* em **`oxe/workflows/references/legacy-brownfield.md`**. Cada **Tn** deve manter **Aceite vinculado** aos **A*** que essa matriz satisfaz.
 </format_plan>
 
+<plan_quality_gate>
+Antes de finalizar a resposta ao utilizador, o agente **deve** percorrer este gate sobre o `PLAN.md` já escrito; se falhar, **corrigir o PLAN** na mesma sessão.
+
+1. **Depende de:** em cada `### Tn`, apenas IDs `Tk` que existem no mesmo ficheiro, ou `—`.
+2. **Ciclos:** não há cadeia circular óbvia (ex.: T2→T3→T2); se houver, quebrar dependência ou onda.
+3. **Cobertura A*:** todos os IDs da tabela de critérios em `.oxe/SPEC.md` aparecem em **Aceite vinculado:** de alguma tarefa, ou há nota explícita de **gap** no PLAN (fora de âmbito / adiado) por ID.
+4. **Ondas:** cada número de **Onda:** usado tem pelo menos uma tarefa; sem ondas vazias.
+5. **`plan_max_tasks_per_wave`:** se `.oxe/config.json` tiver valor **> 0**, contar tarefas por **Onda**; nenhuma onda excede o limite.
+6. **UI-SPEC:** se existir `.oxe/UI-SPEC.md`, toda tarefa cuja **Implementação** ou **Verificar** toque UI (paths como `*.tsx`, `components/`, ou palavras-chave front, ou pedido explícito do utilizador) deve citar **secção § do UI-SPEC** ou path explícito.
+
+Se após correções estruturais persistir ambiguidade de produto: **uma** frase recomendando `oxe:discuss` ou `oxe:spec`.
+
+Resumo obrigatório no chat: `Gate do plano: OK` ou `Gate do plano: corrigido (N problemas)`.
+</plan_quality_gate>
+
 <process>
 1. Ler `.oxe/SPEC.md` (obrigatório). Se faltar, pedir **spec** primeiro.
 2. Se `.oxe/config.json` tiver `discuss_before_plan: true` e **não** existir `.oxe/DISCUSS.md` com decisões fechadas, pedir **discuss** antes de planejar.
 3. Se existir **`.oxe/NOTES.md`**, consumir ou explicitamente adiar cada bullet relevante (ver **context**).
 4. Ler `.oxe/codebase/*.md` (incl. CONVENTIONS / CONCERNS) e inspecionar pontos de entrada se a spec exigir.
-5. Escrever ou atualizar `.oxe/PLAN.md` usando `oxe/templates/PLAN.template.md` como cabeçalho; em **--replan**, preencher a seção **Replanejamento** (data, motivo, lições de VERIFY/SUMMARY, tarefas removidas/alteradas).
+5. Escrever ou atualizar `.oxe/PLAN.md` usando `oxe/templates/PLAN.template.md` como cabeçalho; **preservar** YAML inicial (`oxe_doc: plan`, `status`, `inputs`) se já existir e **atualizar** `updated:` (ISO); em **--replan**, preencher a seção **Replanejamento** (data, motivo, lições de VERIFY/SUMMARY, tarefas removidas/alteradas).
 6. Definir ondas: onda 1 = tarefas sem dependência entre si; onda seguinte = dependentes; respeitar `plan_max_tasks_per_wave` se configurado.
-7. Atualizar `.oxe/STATE.md`: fase `plan_ready`, próximo passo `oxe:execute` (implementar ondas) e depois `oxe:verify`.
-8. Listar no chat: ondas, contagem de tarefas, comando de teste guarda-chuva se houver.
+7. Aplicar integralmente o bloco **`<plan_quality_gate>`** acima ao `PLAN.md` em disco; corrigir o ficheiro até passar ou documentar gaps explícitos.
+8. Atualizar `.oxe/STATE.md`: fase `plan_ready`, próximo passo `oxe:execute` (implementar ondas) e depois `oxe:verify`.
+9. Listar no chat: resultado do gate (OK ou corrigido), ondas, contagem de tarefas, comando de teste guarda-chuva se houver.
 </process>
 
 <success_criteria>

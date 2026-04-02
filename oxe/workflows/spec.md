@@ -18,11 +18,13 @@ Leia `.oxe/STATE.md` e, se existirem, trechos relevantes de `.oxe/codebase/OVERV
 Use o template **`oxe/templates/SPEC.template.md`**: tabela **Critérios de aceite** com colunas **ID | Critério | Como verificar**.
 
 **Brownfield (COBOL, JCL, copybooks, VB6, SP):** quando o objetivo for documentar ou planear migração, ver **`oxe/workflows/references/legacy-brownfield.md`** — epicos por **trilha** (batch, online, desktop↔SQL), critérios **A*** verificáveis por Grep/leitura/checklist, e secções opcionais alinháveis a `spec_required_sections` em `.oxe/config.json` (ver `oxe/templates/CONFIG.md`).
+
+**Exploratório / sistema grande / reversa / modernização:** quando a tecnologia ou o âmbito for incerto, houver necessidade de **mapear** o sistema, **engenharia reversa** ou **hipóteses de modernização** antes de tarefas executáveis, recomendar **`oxe:research`** (notas datadas em `.oxe/research/` + índice `.oxe/RESEARCH.md`) **antes** de `oxe:plan` — sugestão, não bloqueio obrigatório para specs mínimas.
 </context>
 
 <process>
 1. Resolver entrada: se começar com `@`, ler arquivo; senão usar o texto da conversa.
-2. Criar ou atualizar **`.oxe/SPEC.md`** usando `oxe/templates/SPEC.template.md` como esqueleto.
+2. Criar ou atualizar **`.oxe/SPEC.md`** usando `oxe/templates/SPEC.template.md` como esqueleto. Se o ficheiro já existir com YAML inicial (`---` … `---` antes do primeiro `#`), **preservar** chaves existentes; **atualizar** `updated:` com a data ISO do dia; ajustar `status` (ex. para `ready`) se o utilizador declarar a spec fechada. Se não houver frontmatter, pode adicioná-lo na primeira edição substancial.
 3. Garantir seções:
    - **Objetivo** — uma frase clara.
    - **Escopo** — bullets dentro / fora.
