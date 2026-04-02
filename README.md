@@ -183,9 +183,9 @@ Para a **próxima** feature ou fase: de novo **spec → plan → …** ou **`/ox
 
 Para trabalho **ad hoc** sem roadmap completo:
 
-**`/oxe-quick`** gera **`.oxe/QUICK.md`** com passos curtos e verificação. Depois você pode usar **`/oxe-execute`** em cima disso ou implementar direto e fechar com **`/oxe-verify`**.
+**`/oxe-quick`** gera **`.oxe/QUICK.md`** com passos curtos e verificação. **Perfil fast:** objetivo numa frase, no máximo **10** passos — ver `oxe/workflows/quick.md`. Depois você pode usar **`/oxe-execute`** em cima disso ou implementar direto e fechar com **`/oxe-verify`**.
 
-Se o trabalho crescer, **promova** para spec + plan completos.
+Se o trabalho crescer, **promova** para spec + plan completos (mesmos gatilhos: muitos ficheiros, API pública, segurança, etc.).
 
 ---
 
@@ -201,6 +201,9 @@ Se o trabalho crescer, **promova** para spec + plan completos.
 | `.oxe/DISCUSS.md` | Preferências antes do plano *(opcional)* |
 | `.oxe/PLAN.md` | Tarefas atômicas + **Verificar** por item |
 | `.oxe/QUICK.md` | Modo rápido |
+| `.oxe/NOTES.md` | Fila leve antes de discuss/plan *(opcional)* |
+| `.oxe/FORENSICS.md` / `.oxe/DEBUG.md` | Recuperação e debug *(opcional)* |
+| `.oxe/UI-SPEC.md` / `.oxe/UI-REVIEW.md` | Contrato e revisão UI *(opcional)* |
 | `.oxe/VERIFY.md` | Resultado das verificações |
 | `.oxe/SUMMARY.md` | Resumo para replanejamento *(opcional)* |
 | `oxe/workflows/*.md` ou `.oxe/workflows/*.md` | **Fonte única** dos passos no **projeto** após instalar (no **pacote** npm, os modelos vivem em `oxe/workflows/`) |
@@ -227,6 +230,11 @@ Slash commands (Cursor: `~/.cursor/commands/` após instalar) e prompt files (Co
 | `/oxe-next` | [`next.md`](oxe/workflows/next.md) |
 | `/oxe-help` | [`help.md`](oxe/workflows/help.md) |
 | `/oxe-update` | [`update.md`](oxe/workflows/update.md) |
+| `/oxe-forensics` | [`forensics.md`](oxe/workflows/forensics.md) |
+| `/oxe-debug` | [`debug.md`](oxe/workflows/debug.md) |
+| `/oxe-route` | [`route.md`](oxe/workflows/route.md) |
+| `/oxe-ui-spec` | [`ui-spec.md`](oxe/workflows/ui-spec.md) |
+| `/oxe-ui-review` | [`ui-review.md`](oxe/workflows/ui-review.md) |
 | `/oxe-review-pr` *(prompt Copilot; ver nota abaixo)* | [`review-pr.md`](oxe/workflows/review-pr.md) |
 | *(mantenedores)* `workflow-authoring` em linguagem natural | [`workflow-authoring.md`](oxe/workflows/workflow-authoring.md) |
 
@@ -264,6 +272,14 @@ Slash commands (Cursor: `~/.cursor/commands/` após instalar) e prompt files (Co
 - **Limite:** Não executa as tarefas — isso é **execute** + o teu Git.
 - **Workflow:** [`oxe/workflows/plan.md`](oxe/workflows/plan.md)
 
+#### `/oxe-ui-spec`
+
+- **O que faz:** Gera ou atualiza **`.oxe/UI-SPEC.md`**: contrato de UI/UX derivado da **SPEC** (âmbito, estados, acessibilidade, breakpoints, tokens quando aplicável).
+- **Artefatos:** `.oxe/UI-SPEC.md`, `.oxe/STATE.md` (nota de fase / próximo passo conforme o workflow).
+- **Quando usar:** Depois de **spec** e **antes** (ou em paralelo cognitivo) do **plan**, para entregas com interface; o **plan** pode referenciar secções do UI-SPEC nas tarefas de front.
+- **Limite:** Só faz sentido se houver UI; projetos só API/backend podem ignorar este passo. Não substitui a SPEC.
+- **Workflow:** [`oxe/workflows/ui-spec.md`](oxe/workflows/ui-spec.md)
+
 #### `/oxe-quick`
 
 - **O que faz:** Fluxo curto com `.oxe/QUICK.md` (passos numerados + verificar) para trabalho pontual sem SPEC/PLAN longos.
@@ -280,6 +296,14 @@ Slash commands (Cursor: `~/.cursor/commands/` após instalar) e prompt files (Co
 - **Limite:** Não faz commits nem impõe subagentes — fica a teu critério de equipa.
 - **Workflow:** [`oxe/workflows/execute.md`](oxe/workflows/execute.md)
 
+#### `/oxe-ui-review`
+
+- **O que faz:** Produz **`.oxe/UI-REVIEW.md`**: auditoria da implementação face ao **UI-SPEC** (checklist, bloqueios P0/P1, sugestões), tipicamente após trabalho de front e **antes** ou como entrada para o **verify** global.
+- **Artefatos:** `.oxe/UI-REVIEW.md`, `.oxe/STATE.md` se útil.
+- **Quando usar:** Depois de implementar ecrãs/componentes cobertos pelo UI-SPEC; se não existir `UI-SPEC.md`, o workflow pede **ui-spec** primeiro ou regista revisão *ad hoc* (menos ideal).
+- **Limite:** Não substitui **`/oxe-verify`** — o verify continua a cruzar SPEC, PLAN, evidência técnica e, quando existir, UI-REVIEW.
+- **Workflow:** [`oxe/workflows/ui-review.md`](oxe/workflows/ui-review.md)
+
 #### `/oxe-verify`
 
 - **O que faz:** Corre ou orienta verificação: comandos do PLAN, confronto de **cada** critério **A*** da SPEC com evidência, registo em `.oxe/VERIFY.md`; opcionalmente rascunho de commit e checklist de PR conforme `.oxe/config.json`.
@@ -287,6 +311,30 @@ Slash commands (Cursor: `~/.cursor/commands/` após instalar) e prompt files (Co
 - **Quando usar:** Após implementar uma onda ou fechar o plano; pode focar uma tarefa **Tn** se indicares.
 - **Limite:** Sandbox pode impedir comandos — regista “não executado aqui” e deixa o comando para correres localmente.
 - **Workflow:** [`oxe/workflows/verify.md`](oxe/workflows/verify.md)
+
+#### `/oxe-forensics`
+
+- **O que faz:** Diagnóstico **pós-falha** ou incoerência (verify falhou, `doctor` em erro, STATE vs artefatos); escreve **`.oxe/FORENSICS.md`** com linha do tempo, hipótese de causa e **um** próximo passo canónico: **scan**, **plan** ou **execute** (nunca “fim” sem reentrada na trilha).
+- **Artefatos:** `.oxe/FORENSICS.md`, opcionalmente linha em `STATE.md`.
+- **Quando usar:** Preso após várias tentativas, drift de workflows, PLAN vs VERIFY inconsistente.
+- **Limite:** Recomenda; não apaga SPEC/PLAN sem decisão explícita tua.
+- **Workflow:** [`oxe/workflows/forensics.md`](oxe/workflows/forensics.md)
+
+#### `/oxe-debug`
+
+- **O que faz:** Ciclo **hipótese → experiência → evidência** durante o **execute** (teste vermelho, stack, regressão); regista sessões em **`.oxe/DEBUG.md`**, ligadas a **Tn** quando existir.
+- **Artefatos:** `.oxe/DEBUG.md` (append por sessão datada).
+- **Quando usar:** Dificuldade **técnica** no meio do plano; se o problema for requisito ambíguo, preferir **`/oxe-discuss`** e depois **plan**.
+- **Limite:** Corrigir com debug **não** dispensa **`/oxe-verify`** para fechar a trilha.
+- **Workflow:** [`oxe/workflows/debug.md`](oxe/workflows/debug.md)
+
+#### `/oxe-route`
+
+- **O que faz:** Meta-only: mapeia linguagem natural → **exatamente um** comando/workflow (tabela em **help**); não gera SPEC nem PLAN.
+- **Artefatos:** Nenhum obrigatório.
+- **Quando usar:** “Que comando OXE uso para…?” sem quereres escolher à mão.
+- **Limite:** Só orientação; a execução é o passo apontado (`/oxe-scan`, `/oxe-forensics`, etc.).
+- **Workflow:** [`oxe/workflows/route.md`](oxe/workflows/route.md)
 
 #### `/oxe-next`
 

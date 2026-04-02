@@ -13,6 +13,8 @@ Se o usuário pedir **--replan** (ou replanejamento implícito após `verify_fai
 
 <context>
 - Não inventar APIs inexistentes: cruzar com **STRUCTURE.md**, **INTEGRATIONS.md** e arquivos reais; respeitar **CONCERNS.md** (evitar agravar dívida conhecida sem tarefa explícita).
+- Se existir **`.oxe/NOTES.md`**, rever entradas em aberto: incorporar em tarefas (com **Aceite vinculado** quando aplicável) ou registar na secção **Replanejamento** / nota explícita *fora de âmbito desta trilha*.
+- Se existir **`.oxe/UI-SPEC.md`**, as tarefas de UI devem referenciar secções do UI-SPEC no texto de **Implementação** ou **Verificar**.
 - Se existir **`.oxe/DISCUSS.md`**, alinhar tarefas às decisões registradas.
 - Se existir **`.oxe/config.json`** com `default_verify_command` não vazio, usar como fallback quando a SPEC não indicar comando.
 - Se existir **`plan_max_tasks_per_wave` > 0** na config, **não** colocar mais tarefas do que esse número na mesma **Onda**; dividir em mais ondas.
@@ -43,11 +45,12 @@ Cada tarefa em PLAN.md deve seguir:
 <process>
 1. Ler `.oxe/SPEC.md` (obrigatório). Se faltar, pedir **spec** primeiro.
 2. Se `.oxe/config.json` tiver `discuss_before_plan: true` e **não** existir `.oxe/DISCUSS.md` com decisões fechadas, pedir **discuss** antes de planejar.
-3. Ler `.oxe/codebase/*.md` (incl. CONVENTIONS / CONCERNS) e inspecionar pontos de entrada se a spec exigir.
-4. Escrever ou atualizar `.oxe/PLAN.md` usando `oxe/templates/PLAN.template.md` como cabeçalho; em **--replan**, preencher a seção **Replanejamento** (data, motivo, lições de VERIFY/SUMMARY, tarefas removidas/alteradas).
-5. Definir ondas: onda 1 = tarefas sem dependência entre si; onda seguinte = dependentes; respeitar `plan_max_tasks_per_wave` se configurado.
-6. Atualizar `.oxe/STATE.md`: fase `plan_ready`, próximo passo `oxe:execute` (implementar ondas) e depois `oxe:verify`.
-7. Listar no chat: ondas, contagem de tarefas, comando de teste guarda-chuva se houver.
+3. Se existir **`.oxe/NOTES.md`**, consumir ou explicitamente adiar cada bullet relevante (ver **context**).
+4. Ler `.oxe/codebase/*.md` (incl. CONVENTIONS / CONCERNS) e inspecionar pontos de entrada se a spec exigir.
+5. Escrever ou atualizar `.oxe/PLAN.md` usando `oxe/templates/PLAN.template.md` como cabeçalho; em **--replan**, preencher a seção **Replanejamento** (data, motivo, lições de VERIFY/SUMMARY, tarefas removidas/alteradas).
+6. Definir ondas: onda 1 = tarefas sem dependência entre si; onda seguinte = dependentes; respeitar `plan_max_tasks_per_wave` se configurado.
+7. Atualizar `.oxe/STATE.md`: fase `plan_ready`, próximo passo `oxe:execute` (implementar ondas) e depois `oxe:verify`.
+8. Listar no chat: ondas, contagem de tarefas, comando de teste guarda-chuva se houver.
 </process>
 
 <success_criteria>

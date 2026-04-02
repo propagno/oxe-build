@@ -15,7 +15,7 @@ No **projeto**, os passos canónicos estão em **`.oxe/workflows/*.md`** (layout
 
 ### Cursor
 
-Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-verify`, `/oxe-next`, `/oxe-quick`, `/oxe-execute`, `/oxe-update`, `/oxe-help` (instalados em `~/.cursor/commands/` pelo `oxe-cc`). **Review de PR:** no Cursor não há slash dedicado — peça em linguagem natural seguindo `oxe/workflows/review-pr.md` (ou `.oxe/workflows/review-pr.md`) em contexto.
+Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-verify`, `/oxe-next`, `/oxe-quick`, `/oxe-execute`, `/oxe-update`, `/oxe-help`, `/oxe-forensics`, `/oxe-debug`, `/oxe-route`, `/oxe-ui-spec`, `/oxe-ui-review` (instalados em `~/.cursor/commands/` pelo `oxe-cc` após `npm run sync:cursor` no pacote ou cópia equivalente). **Review de PR:** no Cursor não há slash dedicado — peça em linguagem natural seguindo `oxe/workflows/review-pr.md` (ou `.oxe/workflows/review-pr.md`) em contexto.
 
 ### GitHub Copilot (VS Code)
 
@@ -34,9 +34,20 @@ Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-ver
 7. **verify** — validar tarefas **e** critérios SPEC antes de merge/PR.
 8. **next** — retomar trabalho; no terminal: **`npx oxe-cc status`** sugere um único próximo passo (mais leve que **`doctor`**, que valida também workflows do pacote e regras estritas).
 
+**Recuperação e meta (mesma trilha, outra camada):**
+
+- **`/oxe-forensics`** — após `verify` falhar, `doctor` em falta ou estado incoerente; escreve `.oxe/FORENSICS.md` e recomenda **um** reingresso: `scan`, `plan` ou `execute` (ver `forensics.md`).
+- **`/oxe-debug`** — durante **`execute`**, para sintomas técnicos (teste vermelho, stack); escreve `.oxe/DEBUG.md`; **não** substitui `verify` após corrigir (ver `debug.md`).
+- **`/oxe-route`** — desambigua pedido em linguagem natural → **um** workflow/comando; não gera SPEC/PLAN (ver `route.md` e tabela **Router** abaixo).
+
+**Vertical UI (opcional, mesma trilha):**
+
+- **`/oxe-ui-spec`** — após **spec**, contrato `.oxe/UI-SPEC.md` antes ou para alimentar o **plan** (ver `ui-spec.md`).
+- **`/oxe-ui-review`** — após implementação UI, auditoria `.oxe/UI-REVIEW.md` antes ou como entrada para **verify** (ver `ui-review.md`).
+
 ## Modo rápido (quick)
 
-- **`/oxe-quick`**: cria `.oxe/QUICK.md` (passos curtos + verificar) sem SPEC/PLAN longos. **Promova** para spec/plan se o trabalho crescer (muitos arquivos, API pública, segurança) — ver workflow `quick.md`.
+- **`/oxe-quick`**: cria `.oxe/QUICK.md` (passos curtos + verificar) sem SPEC/PLAN longos. **Perfil fast:** objetivo numa frase, ≤10 passos — ver secção **Perfil fast** em `quick.md`. **Promova** para spec/plan se o trabalho crescer (muitos arquivos, API pública, segurança) — mesmos gatilhos no workflow.
 
 ## CLI (terminal)
 
@@ -57,6 +68,24 @@ Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-ver
 
 **WSL:** usar Node instalado **no** WSL; o instalador recusa Node do Windows dentro do WSL.
 
+## Router (linguagem natural)
+
+Um pedido → **um** destino (sem gerar contrato). O agente aplica `route.md` ou usa esta tabela:
+
+| Se o utilizador disser (exemplos) | Comando / ação |
+|-----------------------------------|----------------|
+| Não sei que passo OXE sou / “o que faço agora?” | `/oxe-next` ou `npx oxe-cc status` |
+| Acabei de clonar / falta OXE no projeto | `npx oxe-cc@latest` (ou `oxe-cc`) na raiz do repo |
+| Verify falhou várias vezes / doctor estranho / artefatos incoerentes | `/oxe-forensics` |
+| Teste ou erro técnico durante o trabalho (stack, flake) | `/oxe-debug` (com **Tn** se houver) |
+| Revisar diff / PR antes do merge | `oxe/workflows/review-pr.md` em contexto *(Copilot: `/oxe-review-pr`)* |
+| O que é OXE / lista de passos | `/oxe-help` |
+| Dúvida entre dois comandos sem contexto claro | `/oxe-route` |
+
+## Notas pré-trilha (opcional)
+
+- Ficheiro **`.oxe/NOTES.md`**: bullets `YYYY-MM-DD — …` como fila leve (**não** substitui SPEC). Em **`/oxe-discuss`** e **`/oxe-plan`**, consumir ou marcar descartado/adiado.
+
 ## SDK (API programática)
 
 Quem integra em pipeline pode usar **`require('oxe-cc')`** (entrada `main` do pacote): por exemplo **`runDoctorChecks({ projectRoot })`** para passo de gate em CI; também `health`, `workflows`, `install.resolveOptionsFromConfig`, `manifest`, `agents`. Ver **`lib/sdk/README.md`** e **`lib/sdk/index.d.ts`**.
@@ -76,7 +105,7 @@ Quem integra em pipeline pode usar **`require('oxe-cc')`** (entrada `main` do pa
 
 ## Artefatos
 
-- `.oxe/STATE.md`, `.oxe/config.json` (opcional), `.oxe/codebase/*`, `.oxe/SPEC.md`, `.oxe/DISCUSS.md` (opcional), `.oxe/PLAN.md`, `.oxe/VERIFY.md`, `.oxe/QUICK.md`, `.oxe/SUMMARY.md` (opcional)
+- `.oxe/STATE.md`, `.oxe/config.json` (opcional), `.oxe/codebase/*`, `.oxe/SPEC.md`, `.oxe/DISCUSS.md` (opcional), `.oxe/PLAN.md`, `.oxe/VERIFY.md`, `.oxe/QUICK.md`, `.oxe/SUMMARY.md` (opcional), `.oxe/NOTES.md` (opcional, fila), `.oxe/FORENSICS.md` (opcional, recuperação), `.oxe/DEBUG.md` (opcional, sessões de debug), `.oxe/UI-SPEC.md` / `.oxe/UI-REVIEW.md` (opcional, front-end)
 - Templates: `oxe/templates/` (ou `.oxe/templates/` em layout aninhado, conforme instalação)
 
 ## Para autores (mantenedores)
@@ -86,7 +115,7 @@ Quem integra em pipeline pode usar **`require('oxe-cc')`** (entrada `main` do pa
 
 ## Gatilhos em linguagem natural
 
-Quando o usuário disser “oxe scan”, “oxe quick”, “executar onda OXE”, “revisar PR”, “rever um workflow OXE” / “alinhar ao guia de autoria”, etc., siga o workflow correspondente em `oxe/workflows/*.md` ou `.oxe/workflows/*.md` (autoria: `workflow-authoring.md`).
+Quando o usuário disser “oxe scan”, “oxe quick”, “executar onda OXE”, “revisar PR”, “forensics”, “debug OXE”, “UI spec”, “roteamento OXE”, “rever um workflow OXE” / “alinhar ao guia de autoria”, etc., siga o workflow correspondente em `oxe/workflows/*.md` ou `.oxe/workflows/*.md` (autoria: `workflow-authoring.md`; meta: `route.md`).
 
 **GitHub Copilot CLI:** com `oxe-cc --copilot-cli`, use **agent skills** em **`~/.copilot/skills/`** — invoque **`/oxe`** (entrada, mesmo conteúdo que help) ou **`/oxe-scan`**, **`/oxe-plan`**, etc. Após instalar ou atualizar: **`/skills reload`** (ou reinicie o `copilot`). A pasta **`~/.copilot/commands/`** é só cópia legado; o CLI oficial não a usa como slash commands.
 

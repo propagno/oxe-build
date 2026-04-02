@@ -12,6 +12,8 @@ Se o usuário indicar uma tarefa (ex.: `T2`), focar só nela; caso contrário, p
 - Ler **`.oxe/config.json`** se existir: `after_verify_draft_commit` e `after_verify_suggest_pr` controlam passos opcionais (se o arquivo não existir, use o mesmo padrão do `config.template.json`).
 - Os critérios na SPEC devem estar na tabela **Critérios de aceite** com colunas **ID** / **Critério** / **Como verificar**; o verify deve **cruzar cada ID** com evidência (arquivo, comando, trecho).
 - **Legado:** quando **Comando** for `—` ou inexistente, evidência válida inclui **Read/Grep**, existência de ficheiros referenciados e checklist manual — não marcar critério como passou sem evidência; se o ambiente host/desktop não estiver disponível, registar **não executado aqui** e próximo passo. Ver **`oxe/workflows/references/legacy-brownfield.md`**.
+- **Debug:** investigação técnica de falhas **durante** a implementação segue **`oxe/workflows/debug.md`** (`/oxe-debug`). Resolver um bug com debug **não** dispensa este passo — após correções, **ainda** é necessário **`verify`** para fechar a trilha face à SPEC/PLAN.
+- **UI:** se existirem `.oxe/UI-SPEC.md` / `.oxe/UI-REVIEW.md`, incorporar na evidência quando os critérios **A*** ou tarefas **Tn** tocarem interface.
 </context>
 
 <process>

@@ -11,6 +11,17 @@ Usar quando: correção pontual, refactor local, uma feature pequena, ou protót
 - Não apagar `SPEC.md` / `PLAN.md` se existirem; este fluxo é paralelo ou temporário.
 </context>
 
+## Perfil fast (modo trivial)
+
+Uso **sem** novo slash: é o mesmo `/oxe-quick` com redação mínima.
+
+- **Objetivo** — uma frase no `.oxe/QUICK.md`.
+- **Passos** — lista numerada, **máximo 10**; cada passo acionável numa linha.
+- **Verificar** — um comando de terminal **ou** checklist manual explícito.
+- **Promover para spec/plan?** — preencher sempre; se qualquer gatilho abaixo for verdadeiro, resposta **sim** e parar de acumular trabalho no QUICK — passar a **`/oxe-spec`** (e depois discuss/plan conforme config).
+
+O perfil fast **não** é uma segunda trilha: continua sujeito à mesma promoção obrigatória quando o trabalho deixa de ser trivial.
+
 ## Quando promover para spec + plan (obrigatório declarar no QUICK.md)
 
 Promova **nesta sessão ou na próxima** se **qualquer** condição for verdadeira:

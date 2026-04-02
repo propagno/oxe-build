@@ -21,11 +21,16 @@ Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o
 | Review PR | `oxe/workflows/review-pr.md` | “revisar PR”, link `…/pull/10`, “diff entre branches” *(prompt Copilot: `/oxe-review-pr`)* |
 | Help | `oxe/workflows/help.md` | “oxe help”, “como usar OXE” |
 | Update | `oxe/workflows/update.md` | “oxe update”, “atualizar oxe-cc”, “há versão nova no npm” *(prompt: `/oxe-update`)* |
+| Forensics | `oxe/workflows/forensics.md` | “oxe forensics”, “preso após verify”, “doctor falhou”, incoerência STATE/VERIFY *(prompt: `/oxe-forensics`)* |
+| Debug | `oxe/workflows/debug.md` | “oxe debug”, teste vermelho, stack trace durante implementação *(prompt: `/oxe-debug`)* |
+| Route | `oxe/workflows/route.md` | “que comando OXE uso”, desambiguar intenção *(prompt: `/oxe-route`)* |
+| UI spec | `oxe/workflows/ui-spec.md` | “UI-SPEC”, contrato de interface após spec *(prompt: `/oxe-ui-spec`)* |
+| UI review | `oxe/workflows/ui-review.md` | “auditoria UI”, UI-REVIEW *(prompt: `/oxe-ui-review`)* |
 | Autoria de workflow | `oxe/workflows/workflow-authoring.md` | “rever workflow OXE”, “revisar `oxe/workflows/foo.md` contra o guia”, alinhar passo ao `WORKFLOW_AUTHORING.md` |
 
 **Regra:** leia o Markdown indicado e execute **todos** os passos e critérios de sucesso descritos nesse arquivo. Não atalhe: crie ou atualize os arquivos em `.oxe/` conforme o workflow.
 
-**Cursor:** há slash `/oxe-*` para scan…help e **`/oxe-update`** em `~/.cursor/commands/`; **não** há comando slash dedicado a review-pr no Cursor — use linguagem natural + `oxe/workflows/review-pr.md` em contexto.
+**Cursor:** há slash `/oxe-*` para scan…help, **`/oxe-update`**, **`/oxe-forensics`**, **`/oxe-debug`**, **`/oxe-route`**, **`/oxe-ui-spec`**, **`/oxe-ui-review`** em `~/.cursor/commands/` (gerados a partir de `.github/prompts/` com `npm run sync:cursor` no pacote); **não** há comando slash dedicado a review-pr no Cursor — use linguagem natural + `oxe/workflows/review-pr.md` em contexto.
 
 ## Onde ficam as integrações (após `npx oxe-cc`)
 
@@ -42,7 +47,7 @@ Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o
 
 ## Artefatos
 
-- `.oxe/STATE.md`, `.oxe/config.json` (opcional), `.oxe/codebase/*.md`, `.oxe/SPEC.md`, `.oxe/DISCUSS.md` (opcional), `.oxe/PLAN.md`, `.oxe/VERIFY.md`, `.oxe/QUICK.md`, `.oxe/SUMMARY.md` (opcional)
+- `.oxe/STATE.md`, `.oxe/config.json` (opcional), `.oxe/codebase/*.md`, `.oxe/SPEC.md`, `.oxe/DISCUSS.md` (opcional), `.oxe/PLAN.md`, `.oxe/VERIFY.md`, `.oxe/QUICK.md`, `.oxe/SUMMARY.md` (opcional), `.oxe/NOTES.md`, `.oxe/FORENSICS.md`, `.oxe/DEBUG.md`, `.oxe/UI-SPEC.md`, `.oxe/UI-REVIEW.md` (opcionais conforme trilha)
 - Templates: `oxe/templates/` (ou `.oxe/templates/` em layout aninhado)
 
 ## CLI e SDK
