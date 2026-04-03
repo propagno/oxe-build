@@ -43,6 +43,24 @@ describe('oxe-project-health', () => {
     assert.strictEqual(d.getFullYear(), 2026);
   });
 
+  test('parseLastCompactDate parses ISO under Último compact section', () => {
+    const t =
+      '## Último compact (codebase + RESUME) (opcional)\n\n- **Data:** 2026-03-20\n- **Notas:** x\n';
+    const d = h.parseLastCompactDate(t);
+    assert.ok(d instanceof Date);
+    assert.strictEqual(d.getUTCMonth(), 2);
+    assert.strictEqual(d.getUTCDate(), 20);
+  });
+
+  test('parseLastCompactDate placeholder paren returns null', () => {
+    assert.strictEqual(
+      h.parseLastCompactDate(
+        '## Último compact (codebase + RESUME)\n\n- **Data:** (**YYYY-MM-DD** — template)\n'
+      ),
+      null
+    );
+  });
+
   test('isStaleScan respects maxAgeDays', () => {
     const old = new Date('2020-01-01');
     assert.strictEqual(h.isStaleScan(old, 30).stale, true);

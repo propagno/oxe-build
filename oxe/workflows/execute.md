@@ -10,6 +10,7 @@ Se existir apenas **`.oxe/QUICK.md`** (fluxo quick), tratar os **Passos** numera
 - Se **PLAN.md** não existir mas **QUICK.md** existir, seguir **QUICK.md** neste workflow (passos = trabalho da sessão).
 - Se nem PLAN nem QUICK existir, recomendar `oxe:plan` ou `oxe:quick` primeiro.
 - **Legado / brownfield:** entregáveis podem ser só documentação (`.md`, diagramas). Exigir pré-requisitos de ambiente (mainframe, IDE VB6) quando a tarefa depender disso — ver **`oxe/workflows/references/legacy-brownfield.md`**.
+- **Rotina compact/checkpoint (opcional):** antes de uma onda **experimental** ou refactor que mude muito o layout, **`/oxe-checkpoint`** com slug (ex.: `antes-refactor-modulo-x`) ajuda a retomar. Depois de ondas que mudem **stack** ou **árvore** do projeto, lembrar **`/oxe-compact`** para não deixar `.oxe/codebase/` desatualizado face ao código — **não** substitui o checklist da onda nem o **Verificar** do PLAN.
 </context>
 
 <process>

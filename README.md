@@ -55,7 +55,7 @@ No fim, em modo interativo, pergunta se você quer instalar o **`oxe-cc` globalm
 
 **GitHub Copilot CLI:** o CLI **não** trata `~/.copilot/commands/` como slash commands (isso é legado estilo Claude/Cursor). Com **`--copilot-cli`**, o OXE instala **agent skills** em **`~/.copilot/skills/`** (ex.: `oxe-scan/SKILL.md`, `oxe/SKILL.md`), invocáveis como **`/oxe-scan`**, **`/oxe`** (entrada = mesmo fluxo que `/oxe-help`), etc. Depois de instalar ou atualizar, use **`/skills reload`** ou reinicie o `copilot`. Mantém-se também cópia para **`~/.claude/commands/`** e **`~/.copilot/commands/`** para ferramentas que ainda leiam essa pasta. Se usar **`COPILOT_HOME`**, o `oxe-cc` grava skills nesse diretório (alinhado ao CLI oficial).
 
-**Multi-agente (`--all-agents`):** instalação **paralela** nos homes canónicos de cada ferramenta — **Cursor** e **Copilot** (como no padrão), **Claude Code** (`~/.claude/commands`), **OpenCode** (`$XDG_CONFIG_HOME/opencode/commands` e `~/.opencode/commands`), **Gemini CLI** (`~/.gemini/commands`: `/oxe`, `/oxe:scan` — depois **`/commands reload`**), **Codex** (`~/.agents/skills` + prompts em **`~/.codex/prompts`** como `/prompts:oxe-*`), **Windsurf** (`~/.codeium/windsurf/global_workflows`, workflows `/oxe-scan`), **Antigravity** (`~/.gemini/antigravity/skills`). No menu interativo, opção **6**. O núcleo do fluxo continua em **`.oxe/`** (SPEC/PLAN/VERIFY); não há `PROJECT.md` nem `research/` impostos pelo OXE.
+**Multi-agente (`--all-agents`):** instalação **paralela** nos homes canónicos de cada ferramenta — **Cursor** e **Copilot** (como no padrão), **Claude Code** (`~/.claude/commands`), **OpenCode** (`$XDG_CONFIG_HOME/opencode/commands` e `~/.opencode/commands`), **Gemini CLI** (`~/.gemini/commands`: `/oxe`, `/oxe:scan` — depois **`/commands reload`**), **Codex** (`~/.agents/skills` + prompts em **`~/.codex/prompts`** como `/prompts:oxe-*`), **Windsurf** (`~/.codeium/windsurf/global_workflows`, workflows `/oxe-scan`), **Antigravity** (`~/.gemini/antigravity/skills`). No menu interativo, opção **6**. O núcleo do fluxo continua em **`.oxe/`** (SPEC/PLAN/VERIFY e artefactos opcionais). O passo **research** (`research.md`, `.oxe/research/`, `RESEARCH.md`) é **opcional** e não faz parte da trilha mínima scan → spec → plan → execute → verify.
 
 **Confirmar instalação no agente**
 
@@ -102,8 +102,8 @@ No fim, em modo interativo, pergunta se você quer instalar o **`oxe-cc` globalm
 | Comando | Função |
 |---------|--------|
 | `oxe-cc` ou `oxe-cc install` | Instalação predefinida (mesmo comportamento; `install` é alias explícito) |
-| `oxe-cc doctor` | Valida Node, workflows do pacote, `.oxe/`, coerência STATE vs arquivos, scan antigo (`scan_max_age_days`), seções da SPEC, ondas do PLAN |
-| `oxe-cc status` | Leve: coerência `.oxe/` + **um** próximo passo sugerido (espelha o workflow `next`; não exige o conjunto completo de workflows como o `doctor`). **`--json`**: uma linha JSON com `nextStep`, `diagnostics`, etc., para CI ou scripts |
+| `oxe-cc doctor` | Valida Node, workflows do pacote, `.oxe/`, coerência STATE vs arquivos, scan/compact antigos (`scan_max_age_days`, `compact_max_age_days`), seções da SPEC, ondas do PLAN |
+| `oxe-cc status` | Leve: coerência `.oxe/` + **um** próximo passo sugerido (espelha o workflow `next`; não exige o conjunto completo de workflows como o `doctor`). **`--json`**: uma linha JSON com `nextStep`, `diagnostics`, `staleCompact`, etc. **`--hints`**: lembretes de rotina (scan/compact por idade). |
 | `oxe-cc init-oxe` | Só o bootstrap `.oxe/` (STATE, config, codebase) |
 | `oxe-cc uninstall` | Remove integrações OXE em `~/.cursor`, `~/.copilot`, `~/.claude` e pastas de workflows no repo (`--ide-only` só no HOME) |
 | `oxe-cc update` | Executa `npx oxe-cc@latest --force` na pasta do projeto; **`--check`** só consulta o npm; **`--if-newer`** evita o npx quando já está na última |
@@ -235,6 +235,8 @@ Slash commands (Cursor: `~/.cursor/commands/` após instalar) e prompt files (Co
 | `/oxe-route` | [`route.md`](oxe/workflows/route.md) |
 | `/oxe-research` | [`research.md`](oxe/workflows/research.md) |
 | `/oxe-validate-gaps` | [`validate-gaps.md`](oxe/workflows/validate-gaps.md) |
+| `/oxe-compact` | [`compact.md`](oxe/workflows/compact.md) |
+| `/oxe-checkpoint` | [`checkpoint.md`](oxe/workflows/checkpoint.md) |
 | `/oxe-ui-spec` | [`ui-spec.md`](oxe/workflows/ui-spec.md) |
 | `/oxe-ui-review` | [`ui-review.md`](oxe/workflows/ui-review.md) |
 | `/oxe-review-pr` *(prompt Copilot; ver nota abaixo)* | [`review-pr.md`](oxe/workflows/review-pr.md) |
@@ -330,6 +332,24 @@ Slash commands (Cursor: `~/.cursor/commands/` após instalar) e prompt files (Co
 - **Limite:** Não altera `PLAN.md` por defeito nem substitui um novo verify após correções.
 - **Workflow:** [`oxe/workflows/validate-gaps.md`](oxe/workflows/validate-gaps.md)
 
+#### `/oxe-compact`
+
+- **O que faz:** **Rotina de projeto inteiro:** compara **`.oxe/codebase/*.md`** ao repositório **atual**, **atualiza** os sete mapas (incrementalmente se já existirem; geração completa alinhada a **`scan.md`** se faltar base), escreve **`.oxe/CODEBASE-DELTA.md`** (o que mudou na documentação face à versão anterior) e **`.oxe/RESUME.md`** (trilha OXE + ligação ao delta). **Independente** de limites de chat ou de qualquer comando de “compact” de IDE.
+- **Artefatos:** `.oxe/codebase/*.md`, `.oxe/CODEBASE-DELTA.md`, `.oxe/RESUME.md`; bloco opcional **Último compact** em `STATE.md`.
+- **Quando usar:** Fim de sprint, após refactors grandes, quando o mapa OXE “cheira” a desatualizado, ou em cadência que a equipa definir — **sem** substituir um **`/oxe-scan`** completo logo após clonar ou quando tudo mudou de raiz.
+- **Limite:** Não substitui SPEC/PLAN/VERIFY. Para **marco de sessão** nomeado, usar **`/oxe-checkpoint`**.
+- **Workflow:** [`oxe/workflows/compact.md`](oxe/workflows/compact.md)
+
+#### `/oxe-checkpoint`
+
+- **O que faz:** **Snapshot de sessão / trilha:** cria **`.oxe/checkpoints/YYYY-MM-DD-HHmm-<slug>.md`** com frontmatter (`linked` para artefactos) e atualiza **`.oxe/CHECKPOINTS.md`** (índice, mais recente primeiro).
+- **Artefatos:** `.oxe/checkpoints/*.md`, `.oxe/CHECKPOINTS.md`.
+- **Quando usar:** Antes de mudanças arriscadas, troca de ramo mental, ou fim de dia — marco **nomeado** sem apagar contratos. Contrasta com **`/oxe-compact`**, que atualiza o **mapa do projeto inteiro** (`codebase/` + delta + RESUME).
+- **Limite:** Não é `git commit`; não altera SPEC/PLAN por defeito; **não** substitui o refresh de `codebase/` do compact.
+- **Workflow:** [`oxe/workflows/checkpoint.md`](oxe/workflows/checkpoint.md)
+
+**Momentos chave (rotina):** antes de spike ou branch longa → checkpoint; após migração de stack ou fim de feature/PR → compact; fim de dia a meio trabalho → checkpoint. Tabela completa e `compact_max_age_days` em [`oxe/workflows/help.md`](oxe/workflows/help.md) (secção *Momentos chave*).
+
 #### `/oxe-forensics`
 
 - **O que faz:** Diagnóstico **pós-falha** ou incoerência (verify falhou, `doctor` em erro, STATE vs artefatos); escreve **`.oxe/FORENSICS.md`** com linha do tempo, hipótese de causa e **um** próximo passo canónico: **scan**, **plan** ou **execute** (nunca “fim” sem reentrada na trilha).
@@ -408,9 +428,10 @@ Comandos no terminal na **raiz do projeto** (ou `--dir`). Útil em CI, scripts e
 | Subcomando | Poder principal |
 |------------|-----------------|
 | `oxe-cc` / `oxe-cc install` | Copia **workflows** e **templates** para `.oxe/` (layout mínimo) ou `oxe/` + `.oxe/` (`--global`), e instala integrações IDE/CLI conforme flags (`--cursor`, `--copilot`, `--all-agents`, …). |
-| `oxe-cc doctor` | Validação **completa**: versão Node, diff workflows **pacote npm ↔ projeto**, parse de `.oxe/config.json`, coerência de **STATE** com arquivos esperados, scan antigo (`scan_max_age_days`), seções obrigatórias da SPEC, ondas do PLAN, avisos de estrutura dos `.md` de workflow, e **planWarn** (inclui tarefas **Tn** sem `**Aceite vinculado:**`). |
+| `oxe-cc doctor` | Validação **completa**: versão Node, diff workflows **pacote npm ↔ projeto**, parse de `.oxe/config.json`, coerência de **STATE** com arquivos esperados, scan/compact antigos (`scan_max_age_days`, `compact_max_age_days`), seções obrigatórias da SPEC, ondas do PLAN, avisos de estrutura dos `.md` de workflow, e **planWarn** (inclui tarefas **Tn** sem `**Aceite vinculado:**`). |
 | `oxe-cc status` | Diagnóstico **mais leve**: mesma leitura de saúde `.oxe/` + config + **um único** próximo passo sugerido (`suggestNextStep`) — não exige o mesmo conjunto de checks pesados do `doctor` sobre o pacote. |
-| `oxe-cc status --json` | Igual ao `status`, mas imprime **uma linha JSON** (`oxeStatusSchema`, `nextStep`, `cursorCmd`, `reason`, `artifacts`, `phase`, `diagnostics.*`) para pipelines e agentes automáticos. Sem banner quando `--json`. |
+| `oxe-cc status --json` | Igual ao `status`, mas imprime **uma linha JSON** (`oxeStatusSchema: 2`, `nextStep`, `cursorCmd`, `reason`, `artifacts`, `phase`, `scanDate`, `staleScan`, `compactDate`, `staleCompact`, `diagnostics.*`) para pipelines e agentes automáticos. Sem banner quando `--json`. |
+| `oxe-cc status --hints` | Agrega lembretes de rotina (idade do scan e do compact quando configurados). Com **`--json --hints`**, inclui o array **`hints`**. |
 | `oxe-cc init-oxe` | Apenas **bootstrap** de `.oxe/STATE.md`, `.oxe/config.json` e pasta `.oxe/codebase/` — sem reinstalar integrações nas tuas pastas home. |
 | `oxe-cc update` | Corre `npx oxe-cc@latest --force` no projeto (ou equivalente) para alinhar workflows/templates; **`--check`** só compara versão no npm; **`--if-newer`** evita o npx se já estiveres na última. |
 | `oxe-cc uninstall` | Por omissão remove integrações em `~/.cursor`, `~/.copilot`, … **e** pastas de workflows no projeto (`.oxe/workflows`, `oxe/`, `commands/oxe`, …). **`--ide-only`** não remove workflows no repo (só integrações no HOME). **`--ide-local`** também remove integrações OXE **dentro** do repositório (`.cursor`, `.github`, `.claude`, `.copilot`, …). |
@@ -421,7 +442,7 @@ Comandos no terminal na **raiz do projeto** (ou `--dir`). Útil em CI, scripts e
 
 ## Configuração
 
-Preferências do projeto em **`.oxe/config.json`** (criado no bootstrap a partir de `oxe/templates/config.template.json`). Inclui opções de fluxo (`discuss_before_plan`, `scan_max_age_days`, `spec_required_sections`, …) e, opcionalmente, o bloco **`install`** (perfil de integração e layout do repo quando corres o instalador sem flags IDE). Referência completa: [`oxe/templates/CONFIG.md`](oxe/templates/CONFIG.md).
+Preferências do projeto em **`.oxe/config.json`** (criado no bootstrap a partir de `oxe/templates/config.template.json`). Inclui opções de fluxo (`discuss_before_plan`, `scan_max_age_days`, `compact_max_age_days`, `spec_required_sections`, …) e, opcionalmente, o bloco **`install`** (perfil de integração e layout do repo quando corres o instalador sem flags IDE). Referência completa: [`oxe/templates/CONFIG.md`](oxe/templates/CONFIG.md). Hooks Git opt-in: [`oxe/templates/GIT_HOOKS_OXE.md`](oxe/templates/GIT_HOOKS_OXE.md).
 
 Repositórios **legado** (COBOL, JCL, copybooks, VB6, stored procedures): os workflows **scan**, **spec**, **plan**, **execute** e **verify** delegam padrões de análise e verificação em [`.oxe/workflows/references/legacy-brownfield.md`](oxe/workflows/references/legacy-brownfield.md) após `npx oxe-cc` (no pacote fonte: [`oxe/workflows/references/legacy-brownfield.md`](oxe/workflows/references/legacy-brownfield.md)).
 

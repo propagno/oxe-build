@@ -136,15 +136,37 @@ describe('oxe-project-health extended', () => {
     assert.strictEqual(rep.stale.stale, true);
   });
 
+  test('buildHealthReport with stale compact', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-'));
+    fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.oxe', 'config.json'),
+      JSON.stringify({ compact_max_age_days: 1 }),
+      'utf8'
+    );
+    const old = new Date();
+    old.setDate(old.getDate() - 10);
+    fs.writeFileSync(
+      path.join(dir, '.oxe', 'STATE.md'),
+      `## Fase atual\n\n\`initial\`\n\n## Último compact (codebase + RESUME)\n\n- **Data:** ${old.toISOString().slice(0, 10)}\n`,
+      'utf8'
+    );
+    const rep = health.buildHealthReport(dir);
+    assert.strictEqual(rep.staleCompact.stale, true);
+    assert.ok(typeof rep.staleCompact.days === 'number');
+  });
+
   test('validateConfigShape many type errors', () => {
     const { typeErrors } = health.validateConfigShape({
       install: [],
       scan_max_age_days: 'x',
+      compact_max_age_days: 'bad',
       plan_max_tasks_per_wave: 'y',
       scan_focus_globs: 'z',
       scan_ignore_globs: 1,
       spec_required_sections: {},
     });
-    assert.ok(typeErrors.length >= 4);
+    assert.ok(typeErrors.length >= 5);
+    assert.ok(typeErrors.some((e) => /compact_max_age_days/i.test(e)));
   });
 });

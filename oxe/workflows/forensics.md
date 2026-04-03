@@ -11,6 +11,7 @@ Não reescrever `SPEC.md` nem apagar `PLAN.md`; apenas **recomendar** o reingres
 - Ler: `.oxe/STATE.md`, `.oxe/VERIFY.md` (se existir), `.oxe/PLAN.md`, `.oxe/SPEC.md` (se existir), `.oxe/QUICK.md` (se existir).
 - **Git é opcional:** em sandbox sem Git ou sem permissão de terminal, **não** falhar o workflow; registar em `FORENSICS.md` que Git não foi avaliado.
 - Opcional: saída resumida de `npx oxe-cc doctor` no diretório do projeto.
+- Se o sintoma for **mapa OXE desatualizado** (ex.: `STACK.md` / estrutura em `.oxe/codebase/` claramente atrás do repo) sem workflows em falta, a **Hipótese de causa** ou a **Justificativa** pode mencionar **`/oxe-compact`** como ação complementar **depois** de escolhido o passo canónico — o próximo passo OXE recomendado continua a ser **um** entre `scan` | `plan` | `execute`.
 
 **Git (opcional)** — se o agente puder correr terminal **ou** o utilizador colar saída, preferir recolher:
 

@@ -15,6 +15,7 @@ Se o usuário indicar uma tarefa (ex.: `T2`), focar só nela; caso contrário, p
 - **Debug:** investigação técnica de falhas **durante** a implementação segue **`oxe/workflows/debug.md`** (`/oxe-debug`). Resolver um bug com debug **não** dispensa este passo — após correções, **ainda** é necessário **`verify`** para fechar a trilha face à SPEC/PLAN.
 - **UI:** se existirem `.oxe/UI-SPEC.md` / `.oxe/UI-REVIEW.md`, incorporar na evidência quando os critérios **A*** ou tarefas **Tn** tocarem interface.
 - **Pós-verify (opcional):** para auditoria de **cobertura** e gaps de verificabilidade (sem substituir este passo), **`oxe:validate-gaps`** → `.oxe/VALIDATION-GAPS.md` (ver **`oxe/workflows/validate-gaps.md`**).
+- **Rotina compact/checkpoint (opcional):** se esta entrega alterou **estrutura**, **stack** ou **pastas** de forma relevante, sugira **`/oxe-compact`** para alinhar `.oxe/codebase/` ao repo (e `CODEBASE-DELTA.md` + `RESUME.md`). Após **verify** com sucesso e antes de abrir nova entrega grande, um **`/oxe-checkpoint`** com slug curto pode marcar estado estável — **não** faz parte dos critérios de sucesso abaixo.
 </context>
 
 <process>

@@ -15,13 +15,37 @@ No **projeto**, os passos canónicos estão em **`.oxe/workflows/*.md`** (layout
 
 ### Cursor
 
-Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-verify`, `/oxe-next`, `/oxe-quick`, `/oxe-execute`, `/oxe-update`, `/oxe-help`, `/oxe-forensics`, `/oxe-debug`, `/oxe-route`, `/oxe-research`, `/oxe-validate-gaps`, `/oxe-ui-spec`, `/oxe-ui-review` (instalados em `~/.cursor/commands/` pelo `oxe-cc` após `npm run sync:cursor` no pacote ou cópia equivalente). **Review de PR:** no Cursor não há slash dedicado — peça em linguagem natural seguindo `oxe/workflows/review-pr.md` (ou `.oxe/workflows/review-pr.md`) em contexto.
+Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-verify`, `/oxe-next`, `/oxe-quick`, `/oxe-execute`, `/oxe-update`, `/oxe-help`, `/oxe-forensics`, `/oxe-debug`, `/oxe-route`, `/oxe-research`, `/oxe-validate-gaps`, `/oxe-compact`, `/oxe-checkpoint`, `/oxe-ui-spec`, `/oxe-ui-review` (instalados em `~/.cursor/commands/` pelo `oxe-cc` após `npm run sync:cursor` no pacote ou cópia equivalente). **Review de PR:** no Cursor não há slash dedicado — peça em linguagem natural seguindo `oxe/workflows/review-pr.md` (ou `.oxe/workflows/review-pr.md`) em contexto.
 
 ### GitHub Copilot (VS Code)
 
 1. **Instruções do usuário:** arquivo **`~/.copilot/copilot-instructions.md`** (conteúdo mesclado pelo instalador; contém o bloco OXE entre marcadores).
 2. **Prompt files:** em **`~/.copilot/prompts/`** (ex.: `oxe-scan.prompt.md`). No chat, `/` e escolha **`oxe-scan`**, **`oxe-spec`**, etc. Requer `"chat.promptFiles": true` (exemplo em `.vscode/settings.json` do repo com layout `--global`).
 3. **`/oxe-review-pr`** — revisão de PR/diff (prompt na pasta do usuário; fluxo em `review-pr.md`).
+
+**Checkpoint vs compact (rotina de contexto em disco):**
+
+| Aspeto | `/oxe-checkpoint` | `/oxe-compact` |
+|--------|-------------------|----------------|
+| Escopo | Sessão / trilha atual | Projeto inteiro |
+| Tempo | Curto prazo | Longo prazo |
+| Foco | Progresso (onde parei) | Conhecimento (como o repo é hoje) |
+| Uso | Pausar / retomar com nome | Evoluir mapa + resumo OXE |
+| Output | Snapshot em `.oxe/checkpoints/` | `.oxe/codebase/*` + `CODEBASE-DELTA.md` + `RESUME.md` |
+
+### Momentos chave (rotina)
+
+Sugestão para integrar **checkpoint** e **compact** no dia a dia (não são obrigatórios do fluxo canónico; ver `compact.md` / `checkpoint.md`):
+
+| Momento | `/oxe-checkpoint` | `/oxe-compact` |
+|---------|-------------------|----------------|
+| Antes de branch longa ou spike arriscado | Sim (slug + nota) | Opcional se o mapa já reflete o repo |
+| Após migração de stack (ex.: Angular 17 → 21) | Opcional | Sim — alinhar `.oxe/codebase/` ao código + `CODEBASE-DELTA.md` |
+| Fim de feature / antes de PR grande | Opcional | Sim — reduzir drift entre doc OXE e implementação |
+| Fim de dia com trabalho a meio | Sim | Não obrigatório |
+| Pós-`verify_complete`, antes de nova entrega | Opcional (estado estável) | Opcional refresh dos mapas |
+
+Com **`compact_max_age_days`** em `.oxe/config.json` (ver `oxe/templates/CONFIG.md`), **`oxe-cc doctor`** / **`status`** podem avisar quando o último compact em `STATE.md` está antigo.
 
 ## Fluxo completo
 
@@ -42,6 +66,11 @@ Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-ver
 - **`/oxe-debug`** — durante **`execute`**, para sintomas técnicos (teste vermelho, stack); escreve `.oxe/DEBUG.md`; **não** substitui `verify` após corrigir (ver `debug.md`).
 - **`/oxe-route`** — desambigua pedido em linguagem natural → **um** workflow/comando; não gera SPEC/PLAN (ver `route.md` e tabela **Router** abaixo).
 
+**Contexto em disco (opcional):**
+
+- **`/oxe-compact`** — **refresh do projeto**: compara **`.oxe/codebase/*.md`** ao repositório atual, **atualiza** os sete mapas (incremental ou bootstrap como `scan.md` se faltar base), escreve **`.oxe/CODEBASE-DELTA.md`** (o que mudou na documentação) e **`.oxe/RESUME.md`** (trilha OXE + ponte para o delta). Rotina de desenvolvimento; **não** está ligado a limites de chat ou a ferramentas específicas (ver `compact.md`). *Exemplo:* scan mapeou **Angular 17**; após migração implementada para **21**, o compact **corrige** `STACK.md`/testes/convenções face ao repo — intenção: **documentação OXE = código atual**, não refazer scan completo só por bump de major.
+- **`/oxe-checkpoint`** — **snapshot de sessão**: **`.oxe/checkpoints/…md`** + **`.oxe/CHECKPOINTS.md`**; marco nomeado sem apagar SPEC/PLAN (ver `checkpoint.md`).
+
 **Vertical UI (opcional, mesma trilha):**
 
 - **`/oxe-ui-spec`** — após **spec**, contrato `.oxe/UI-SPEC.md` antes ou para alimentar o **plan** (ver `ui-spec.md`).
@@ -55,8 +84,8 @@ Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-ver
 
 - **`npx oxe-cc`** ou **`npx oxe-cc install`** — mesma instalação (alias explícito).
 - Instala workflows em `.oxe/` (layout mínimo) ou `oxe/` + `.oxe/` com **`--global`**; integrações em `~/.cursor`, `~/.copilot`, `~/.claude` (e mais destinos com **`--copilot-cli`** / **`--all-agents`**).
-- **`oxe-cc doctor`** — Node, workflows do pacote vs projeto, `config.json`, mapas do codebase, **coerência STATE vs arquivos**, scan antigo (`scan_max_age_days`), seções SPEC, ondas do PLAN, **avisos** não bloqueantes sobre estrutura dos `.md` de workflow (ex.: `<objective>`, critérios de sucesso).
-- **`oxe-cc status`** — coerência `.oxe/` + **um** próximo passo (espelha `next.md`). Com **`--json`**, uma linha JSON (`nextStep`, `diagnostics`, …) para CI ou scripts.
+- **`oxe-cc doctor`** — Node, workflows do pacote vs projeto, `config.json`, mapas do codebase, **coerência STATE vs arquivos**, scan antigo (`scan_max_age_days`), compact antigo (`compact_max_age_days`), seções SPEC, ondas do PLAN, **avisos** não bloqueantes sobre estrutura dos `.md` de workflow (ex.: `<objective>`, critérios de sucesso).
+- **`oxe-cc status`** — coerência `.oxe/` + **um** próximo passo (espelha `next.md`). Com **`--json`**, uma linha JSON com **`oxeStatusSchema: 2`**, `nextStep`, `cursorCmd`, `reason`, `artifacts`, `phase`, `scanDate`, `staleScan`, `compactDate`, `staleCompact`, `diagnostics` (e com **`--json --hints`** também o array **`hints`**). Com **`--hints`** em modo texto, bloco **Lembretes (rotina OXE)** (scan/compact antigos quando `scan_max_age_days` / `compact_max_age_days` estão ativos em `config.json`).
 - **`oxe-cc init-oxe`** — só bootstrap `.oxe/` (STATE, config, codebase).
 - **`oxe-cc uninstall`** — remove integrações no HOME e, por omissão, pastas de workflows no repo (`--ide-only` só HOME).
 - **`/oxe-update`** (Cursor; noutras ferramentas use o terminal no projeto) — workflow de atualização: verificar npm, correr `oxe-cc update`, `doctor`.
@@ -85,6 +114,8 @@ Um pedido → **um** destino (sem gerar contrato). O agente aplica `route.md` ou
 | Dúvida entre dois comandos sem contexto claro | `/oxe-route` |
 | Pesquisa técnica, spike, mapa de sistema grande, engenharia reversa, modernização antes do plano | `/oxe-research` |
 | Gaps de cobertura de verificação / Nyquist-lite após verify | `/oxe-validate-gaps` |
+| Mapa OXE desatualizado / quero sincronizar codebase com o código sem scan completo | `/oxe-compact` |
+| Quero gravar um marco nomeado da sessão (antes de experimento grande) | `/oxe-checkpoint` + slug |
 
 ## Notas pré-trilha (opcional)
 
@@ -109,8 +140,8 @@ Quem integra em pipeline pode usar **`require('oxe-cc')`** (entrada `main` do pa
 
 ## Artefatos
 
-- `.oxe/STATE.md`, `.oxe/config.json` (opcional), `.oxe/codebase/*`, `.oxe/SPEC.md`, `.oxe/DISCUSS.md` (opcional), `.oxe/PLAN.md`, `.oxe/VERIFY.md`, `.oxe/QUICK.md`, `.oxe/SUMMARY.md` (opcional), `.oxe/NOTES.md` (opcional, fila), `.oxe/RESEARCH.md` (opcional, índice de pesquisa), `.oxe/research/*.md` (opcional, notas datadas), `.oxe/VALIDATION-GAPS.md` (opcional, pós-verify), `.oxe/FORENSICS.md` (opcional, recuperação), `.oxe/DEBUG.md` (opcional, sessões de debug), `.oxe/UI-SPEC.md` / `.oxe/UI-REVIEW.md` (opcional, front-end)
-- Templates: `oxe/templates/` (ou `.oxe/templates/` em layout aninhado, conforme instalação)
+- `.oxe/STATE.md`, `.oxe/config.json` (opcional), `.oxe/codebase/*`, `.oxe/SPEC.md`, `.oxe/DISCUSS.md` (opcional), `.oxe/PLAN.md`, `.oxe/VERIFY.md`, `.oxe/QUICK.md`, `.oxe/SUMMARY.md` (opcional), `.oxe/NOTES.md` (opcional, fila), `.oxe/RESUME.md` (opcional, trilha + ponte para delta), `.oxe/CODEBASE-DELTA.md` (opcional, último refresh documentado do codebase), `.oxe/CHECKPOINTS.md` (opcional, índice), `.oxe/checkpoints/*.md` (opcional, marcos de sessão), `.oxe/RESEARCH.md` (opcional, índice de pesquisa), `.oxe/research/*.md` (opcional, notas datadas), `.oxe/VALIDATION-GAPS.md` (opcional, pós-verify), `.oxe/FORENSICS.md` (opcional, recuperação), `.oxe/DEBUG.md` (opcional, sessões de debug), `.oxe/UI-SPEC.md` / `.oxe/UI-REVIEW.md` (opcional, front-end)
+- Templates: `oxe/templates/` (ou `.oxe/templates/` em layout aninhado, conforme instalação). Hooks Git **opt-in** (lembretes não bloqueantes): `oxe/templates/GIT_HOOKS_OXE.md`.
 
 ## Para autores (mantenedores)
 
@@ -119,7 +150,7 @@ Quem integra em pipeline pode usar **`require('oxe-cc')`** (entrada `main` do pa
 
 ## Gatilhos em linguagem natural
 
-Quando o usuário disser “oxe scan”, “oxe quick”, “executar onda OXE”, “revisar PR”, “forensics”, “debug OXE”, “oxe research”, “mapa do sistema”, “engenharia reversa”, “modernização”, “validate gaps”, “Nyquist-lite”, “UI spec”, “roteamento OXE”, “rever um workflow OXE” / “alinhar ao guia de autoria”, etc., siga o workflow correspondente em `oxe/workflows/*.md` ou `.oxe/workflows/*.md` (autoria: `workflow-authoring.md`; meta: `route.md`).
+Quando o usuário disser “oxe scan”, “oxe quick”, “executar onda OXE”, “revisar PR”, “forensics”, “debug OXE”, “oxe research”, “oxe compact”, “refresh codebase”, “sincronizar mapa OXE”, “oxe resume”, “oxe checkpoint”, “mapa do sistema”, “engenharia reversa”, “modernização”, “validate gaps”, “Nyquist-lite”, “UI spec”, “roteamento OXE”, “rever um workflow OXE” / “alinhar ao guia de autoria”, etc., siga o workflow correspondente em `oxe/workflows/*.md` ou `.oxe/workflows/*.md` (autoria: `workflow-authoring.md`; meta: `route.md`).
 
 **GitHub Copilot CLI:** com `oxe-cc --copilot-cli`, use **agent skills** em **`~/.copilot/skills/`** — invoque **`/oxe`** (entrada, mesmo conteúdo que help) ou **`/oxe-scan`**, **`/oxe-plan`**, etc. Após instalar ou atualizar: **`/skills reload`** (ou reinicie o `copilot`). A pasta **`~/.copilot/commands/`** é só cópia legado; o CLI oficial não a usa como slash commands.
 

@@ -32,6 +32,39 @@ export interface WorkflowShapeResult {
   warnings: DoctorIssue[];
 }
 
+/** Idade do scan ou do compact face a `scan_max_age_days` / `compact_max_age_days`. */
+export interface HealthStaleInfo {
+  stale: boolean;
+  days: number | null;
+}
+
+export interface OxeNextSuggestion {
+  step: string;
+  cursorCmd: string;
+  reason: string;
+  artifacts: string[];
+}
+
+/** Relatório retornado por `health.buildHealthReport` e incluído em `runDoctorChecks`.healthReport. */
+export interface OxeHealthReport {
+  configPath: string | null;
+  configParseError: string | null;
+  unknownConfigKeys: string[];
+  typeErrors: string[];
+  phase: string | null;
+  scanDate: Date | null;
+  stale: HealthStaleInfo;
+  compactDate: Date | null;
+  staleCompact: HealthStaleInfo;
+  phaseWarn: string[];
+  summaryGapWarn: string | null;
+  specWarn: string[];
+  planWarn: string[];
+  next: OxeNextSuggestion;
+  scanFocusGlobs?: unknown;
+  scanIgnoreGlobs?: unknown;
+}
+
 export interface DoctorChecksResult {
   ok: boolean;
   errors: DoctorIssue[];
@@ -46,7 +79,7 @@ export interface DoctorChecksResult {
     parseError: string | null;
   };
   validation: { unknownKeys: string[]; typeErrors: string[] };
-  healthReport: Record<string, unknown>;
+  healthReport: OxeHealthReport;
   workflowShape: WorkflowShapeResult | null;
 }
 

@@ -26,13 +26,15 @@ Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o
 | Debug | `oxe/workflows/debug.md` | “oxe debug”, teste vermelho, stack trace durante implementação *(prompt: `/oxe-debug`)* |
 | Route | `oxe/workflows/route.md` | “que comando OXE uso”, desambiguar intenção *(prompt: `/oxe-route`)* |
 | Research | `oxe/workflows/research.md` | “oxe research”, mapa de sistema, spike, engenharia reversa, modernização *(prompt: `/oxe-research`)* |
+| Compact | `oxe/workflows/compact.md` | “oxe compact”, refresh `.oxe/codebase/` vs repo + `CODEBASE-DELTA.md` + `RESUME.md` *(prompt: `/oxe-compact`)* |
+| Checkpoint | `oxe/workflows/checkpoint.md` | “oxe checkpoint”, snapshot de sessão `.oxe/checkpoints/` *(prompt: `/oxe-checkpoint`)* |
 | UI spec | `oxe/workflows/ui-spec.md` | “UI-SPEC”, contrato de interface após spec *(prompt: `/oxe-ui-spec`)* |
 | UI review | `oxe/workflows/ui-review.md` | “auditoria UI”, UI-REVIEW *(prompt: `/oxe-ui-review`)* |
 | Autoria de workflow | `oxe/workflows/workflow-authoring.md` | “rever workflow OXE”, “revisar `oxe/workflows/foo.md` contra o guia”, alinhar passo ao `WORKFLOW_AUTHORING.md` |
 
 **Regra:** leia o Markdown indicado e execute **todos** os passos e critérios de sucesso descritos nesse arquivo. Não atalhe: crie ou atualize os arquivos em `.oxe/` conforme o workflow.
 
-**Cursor:** há slash `/oxe-*` para scan…help, **`/oxe-update`**, **`/oxe-forensics`**, **`/oxe-debug`**, **`/oxe-route`**, **`/oxe-research`**, **`/oxe-validate-gaps`**, **`/oxe-ui-spec`**, **`/oxe-ui-review`** em `~/.cursor/commands/` (gerados a partir de `.github/prompts/` com `npm run sync:cursor` no pacote); **não** há comando slash dedicado a review-pr no Cursor — use linguagem natural + `oxe/workflows/review-pr.md` em contexto.
+**Cursor:** há slash `/oxe-*` para scan…help, **`/oxe-update`**, **`/oxe-forensics`**, **`/oxe-debug`**, **`/oxe-route`**, **`/oxe-research`**, **`/oxe-validate-gaps`**, **`/oxe-compact`**, **`/oxe-checkpoint`**, **`/oxe-ui-spec`**, **`/oxe-ui-review`** em `~/.cursor/commands/` (gerados a partir de `.github/prompts/` com `npm run sync:cursor` no pacote); **não** há comando slash dedicado a review-pr no Cursor — use linguagem natural + `oxe/workflows/review-pr.md` em contexto.
 
 ## Onde ficam as integrações (após `npx oxe-cc`)
 
@@ -43,20 +45,20 @@ Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o
 
 ## Configuração do projeto
 
-- **`.oxe/config.json`**: fluxo (`discuss_before_plan`, `scan_max_age_days`, `spec_required_sections`, …) e opcionalmente **`install`** (perfil e layout quando o utilizador corre o instalador **sem** flags IDE explícitas). Referência: `oxe/templates/CONFIG.md`. Para ignorar o bloco `install` numa corrida: **`--no-install-config`**.
+- **`.oxe/config.json`**: fluxo (`discuss_before_plan`, `scan_max_age_days`, `compact_max_age_days`, `spec_required_sections`, …) e opcionalmente **`install`** (perfil e layout quando o utilizador corre o instalador **sem** flags IDE explícitas). Referência: `oxe/templates/CONFIG.md`. Para ignorar o bloco `install` numa corrida: **`--no-install-config`**.
 - **Legado / brownfield** (COBOL, JCL, copybooks, VB6, SQL procedures): seguir também `oxe/workflows/references/legacy-brownfield.md` quando o repo ou o pedido indicar mainframe ou desktop legado — scan preenche os sete ficheiros sem assumir Node; plan/verify aceitam evidência por Grep/leitura/checklist.
 - Sem TTY (CI): **`OXE_NO_PROMPT=1`** — padrões de layout/integração; o ficheiro `install` em `config.json` aplica-se se existir e as flags não sobrepuserem.
 
 ## Artefatos
 
-- `.oxe/STATE.md`, `.oxe/config.json` (opcional), `.oxe/codebase/*.md`, `.oxe/SPEC.md`, `.oxe/DISCUSS.md` (opcional), `.oxe/PLAN.md`, `.oxe/VERIFY.md`, `.oxe/QUICK.md`, `.oxe/SUMMARY.md` (opcional), `.oxe/NOTES.md`, `.oxe/RESEARCH.md`, `.oxe/research/*.md`, `.oxe/VALIDATION-GAPS.md`, `.oxe/FORENSICS.md`, `.oxe/DEBUG.md`, `.oxe/UI-SPEC.md`, `.oxe/UI-REVIEW.md` (opcionais conforme trilha)
+- `.oxe/STATE.md`, `.oxe/config.json` (opcional), `.oxe/codebase/*.md`, `.oxe/SPEC.md`, `.oxe/DISCUSS.md` (opcional), `.oxe/PLAN.md`, `.oxe/VERIFY.md`, `.oxe/QUICK.md`, `.oxe/SUMMARY.md` (opcional), `.oxe/NOTES.md`, `.oxe/RESUME.md`, `.oxe/CODEBASE-DELTA.md`, `.oxe/CHECKPOINTS.md`, `.oxe/checkpoints/*.md`, `.oxe/RESEARCH.md`, `.oxe/research/*.md`, `.oxe/VALIDATION-GAPS.md`, `.oxe/FORENSICS.md`, `.oxe/DEBUG.md`, `.oxe/UI-SPEC.md`, `.oxe/UI-REVIEW.md` (opcionais conforme trilha)
 - Templates: `oxe/templates/` (ou `.oxe/templates/` em layout aninhado)
 
 ## CLI e SDK
 
 - **`npx oxe-cc`** ou **`npx oxe-cc install`** — instalação (equivalentes).
 - **`npx oxe-cc doctor`** — validação completa (Node, workflows do pacote vs projeto, JSON, coerência STATE, regras SPEC/PLAN, **avisos** não bloqueantes sobre estrutura dos `.md` de workflow quando aplicável).
-- **`npx oxe-cc status`** — mais leve: coerência `.oxe/` + **um** próximo passo (não exige o mesmo rigor de workflows que o `doctor`). **`status --json`**: saída máquina-legível para CI (`nextStep`, `diagnostics`, …).
+- **`npx oxe-cc status`** — mais leve: coerência `.oxe/` + **um** próximo passo (não exige o mesmo rigor de workflows que o `doctor`). **`status --json`**: saída máquina-legível para CI (`nextStep`, `diagnostics`, `staleScan`, `staleCompact`, …). **`status --hints`**: lembretes de rotina (scan/compact antigos quando configurado); com **`--json --hints`** inclui o array **`hints`**.
 - **`npx oxe-cc init-oxe`**, **`uninstall`**, **`update`** — ver `oxe-cc --help` ou README do pacote.
 - **SDK (Node):** `require('oxe-cc')` expõe `runDoctorChecks`, `health`, `workflows`, `install`, `manifest`, `agents` — útil para CI (`lib/sdk/README.md`, `lib/sdk/index.d.ts`).
 

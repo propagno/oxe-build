@@ -9,6 +9,11 @@
 - **Data:** (use **YYYY-MM-DD** para o `oxe-cc doctor` avisar scan antigo com `scan_max_age_days` em `.oxe/config.json`)
 - **Notas:** (opcional)
 
+## Último compact (codebase + RESUME) (opcional)
+
+- **Data:** (**YYYY-MM-DD** — preenchido por **`/oxe-compact`**: refresh incremental dos mapas em `.oxe/codebase/` + `CODEBASE-DELTA.md` + `RESUME.md`)
+- **Notas:** (opcional; ex.: “só STRUCTURE e TESTING”)
+
 ## Contexto do plano / quick (opcional)
 
 - **Spec / plano:** (revisão informal ou data de `.oxe/SPEC.md` / `.oxe/PLAN.md`)

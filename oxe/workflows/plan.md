@@ -17,6 +17,7 @@ Se o usuário pedir **--replan** (ou replanejamento implícito após `verify_fai
 - Se existir **`.oxe/UI-SPEC.md`**, as tarefas de UI devem referenciar secções do UI-SPEC no texto de **Implementação** ou **Verificar**.
 - Se existir **`.oxe/DISCUSS.md`**, alinhar tarefas às decisões registradas.
 - Se existir **`.oxe/RESEARCH.md`** e notas em **`.oxe/research/*.md`**, ler o índice e as notas cujo **Tema** cruza o âmbito do plano (ou as mais recentes relevantes). Se o índice marcar **Estado** pendente em tópico bloqueante, pedir nova sessão **research** ou **discuss**, ou registar **suposição explícita** no PLAN antes de ondas que dependam dessa decisão.
+- Se existirem **`.oxe/CODEBASE-DELTA.md`** e/ou **`.oxe/RESUME.md`** (tipicamente após **`/oxe-compact`**), ler **antes** de detalhar tarefas: o delta resume o que mudou nos mapas face ao código; o RESUME ancora fase e trilha OXE — **não** substituem SPEC nem os sete ficheiros em `codebase/`.
 - Se existir **`.oxe/config.json`** com `default_verify_command` não vazio, usar como fallback quando a SPEC não indicar comando.
 - Se existir **`plan_max_tasks_per_wave` > 0** na config, **não** colocar mais tarefas do que esse número na mesma **Onda**; dividir em mais ondas.
 - Tamanho alvo: cada tarefa cabe em **um** contexto de agente focado.
