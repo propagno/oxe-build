@@ -7,6 +7,7 @@ Inspecionar `.oxe/STATE.md` e a existência de `SPEC.md`, `PLAN.md`, `QUICK.md`,
 <context>
 - O usuário pode rodar **`npx oxe-cc status`** no terminal para a mesma lógica resumida. **`npx oxe-cc status --hints`** (ou **`--json --hints`**) acrescenta lembretes **paralelos** (idade do scan/compact por config) — **não** altera o único passo canónico que este workflow deve devolver.
 - Se houver empate aparente (ex.: poderia ser spec ou quick), preferir **spec** quando já existir mapa de codebase; preferir **quick** só se o usuário deixar explícito que é correção mínima.
+- **Blueprint plan-agent:** se **`.oxe/plan-agents.json`** tiver `lifecycle.status === "invalidated"`, o próximo passo **não** assume papéis desse JSON; continuar a raciocinar só com **PLAN.md** / **QUICK.md** / **VERIFY.md** e **STATE.md**. Se o utilizador quiser de novo agentes + mensagens, indicar **`/oxe-plan-agent`**.
 </context>
 
 <process>

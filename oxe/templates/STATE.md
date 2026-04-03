@@ -20,6 +20,15 @@
 - **Última onda executada:** (número ou —)
 - **Tarefas concluídas:** (ex.: T1, T2 ou passos 1–3 do QUICK.md)
 
+## Blueprint de agentes (sessão) (opcional — `/oxe-plan-agent`)
+
+Espelho do **`.oxe/plan-agents.json`** ativo (schema 2). Atualizar em **`/oxe-plan-agent`**, **`/oxe-execute`**, **`/oxe-verify`**, **`/oxe-quick`** quando o lifecycle mudar.
+
+- **run_id:** (igual a `runId` no JSON; — se não houver blueprint)
+- **lifecycle_status:** `pending_execute` | `executing` | `closed` | `invalidated` | —
+- **Última onda (execute):** (número ou —)
+- **Notas:** (ex.: invalidado por quick; mensagens em `.oxe/plan-agent-messages/`)
+
 ## Checklist da onda OXE (opcional — workflow execute)
 
 _(O agente pode preencher após cada onda.)_

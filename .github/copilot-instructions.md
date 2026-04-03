@@ -14,6 +14,7 @@ Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o
 | Spec | `oxe/workflows/spec.md` | “oxe spec”, “escrever SPEC.md”, “requisitos OXE” |
 | Discuss | `oxe/workflows/discuss.md` | “oxe discuss”, “perguntas antes do plano”, “DISCUSS.md” |
 | Plan | `oxe/workflows/plan.md` | “oxe plan”, “PLAN.md”, “plano com testes por tarefa”, “replan” |
+| Plan (agentes) | `oxe/workflows/plan-agent.md` | “plan agent”, “plan-agents.json”, “subagentes”, “ondas por agente”, blueprint de execução *(prompt: `/oxe-plan-agent`)* |
 | Quick | `oxe/workflows/quick.md` | “oxe quick”, “fix rápido OXE”, “QUICK.md” |
 | Execute | `oxe/workflows/execute.md` | “oxe execute”, “executar onda”, “onda 2 OXE” |
 | Verify | `oxe/workflows/verify.md` | “oxe verify”, “validar plano OXE”, “VERIFY.md” |
@@ -51,7 +52,7 @@ Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o
 
 ## Artefatos
 
-- `.oxe/STATE.md`, `.oxe/config.json` (opcional), `.oxe/codebase/*.md`, `.oxe/SPEC.md`, `.oxe/DISCUSS.md` (opcional), `.oxe/PLAN.md`, `.oxe/VERIFY.md`, `.oxe/QUICK.md`, `.oxe/SUMMARY.md` (opcional), `.oxe/NOTES.md`, `.oxe/RESUME.md`, `.oxe/CODEBASE-DELTA.md`, `.oxe/CHECKPOINTS.md`, `.oxe/checkpoints/*.md`, `.oxe/RESEARCH.md`, `.oxe/research/*.md`, `.oxe/VALIDATION-GAPS.md`, `.oxe/FORENSICS.md`, `.oxe/DEBUG.md`, `.oxe/UI-SPEC.md`, `.oxe/UI-REVIEW.md` (opcionais conforme trilha)
+- `.oxe/STATE.md`, `.oxe/config.json` (opcional), `.oxe/codebase/*.md`, `.oxe/SPEC.md`, `.oxe/DISCUSS.md` (opcional), `.oxe/PLAN.md`, `.oxe/plan-agents.json` (opcional, blueprint plan-agent; schema 2 com `runId` + `lifecycle`; **`/oxe-quick`** invalida), `.oxe/plan-agent-messages/` (opcional, handoffs agente→agente; ver `oxe/workflows/references/plan-agent-chat-protocol.md`), `.oxe/VERIFY.md`, `.oxe/QUICK.md`, `.oxe/SUMMARY.md` (opcional), `.oxe/NOTES.md`, `.oxe/RESUME.md`, `.oxe/CODEBASE-DELTA.md`, `.oxe/CHECKPOINTS.md`, `.oxe/checkpoints/*.md`, `.oxe/RESEARCH.md`, `.oxe/research/*.md`, `.oxe/VALIDATION-GAPS.md`, `.oxe/FORENSICS.md`, `.oxe/DEBUG.md`, `.oxe/UI-SPEC.md`, `.oxe/UI-REVIEW.md` (opcionais conforme trilha)
 - Templates: `oxe/templates/` (ou `.oxe/templates/` em layout aninhado)
 
 ## CLI e SDK

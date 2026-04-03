@@ -165,6 +165,8 @@ Gera **`.oxe/PLAN.md`**: tarefas **atômicas**, **ondas** (paralelo vs sequencia
 
 Ondas em resumo: tarefas **independentes** na mesma onda podem **rodar** em paralelo; **dependentes** vão para ondas posteriores (organização por ondas, com pouca cerimônia).
 
+**Variante plan-agent:** **`/oxe-plan-agent`** gera o mesmo **`.oxe/PLAN.md`** (com **Verificar** e **Aceite** por tarefa) **e** **`.oxe/plan-agents.json`** (schema **2**: `runId`, `lifecycle`): papéis (`role`), âmbito (`scope`), `inputs`/`outputs` sugeridos, dependências entre **agentes** e **`execution.waves`**. Handoffs entre agentes seguem **`oxe/workflows/references/plan-agent-chat-protocol.md`** (ficheiros em **`.oxe/plan-agent-messages/`**). Os papéis do blueprint são **exclusivos** da trilha **execute** desse plano (alinhados ao `runId` no **STATE**); **`/oxe-quick`** **invalida** o blueprint; trabalho fora das tarefas do **PLAN** não deve reutilizar essas personas.
+
 ### 5. Executar — implementação + `/oxe-execute` *(opcional)*
 
 Implemente no editor ou deixe o agente seguir **`/oxe-execute`** sobre o plano (ou QUICK). O OXE não impõe subagentes nem commits atômicos por tarefa; isso fica a cargo do **seu** fluxo com Git.
@@ -183,7 +185,7 @@ Para a **próxima** feature ou fase: de novo **spec → plan → …** ou **`/ox
 
 Para trabalho **ad hoc** sem roadmap completo:
 
-**`/oxe-quick`** gera **`.oxe/QUICK.md`** com passos curtos e verificação. **Perfil fast:** objetivo numa frase, no máximo **10** passos — ver `oxe/workflows/quick.md`. Depois você pode usar **`/oxe-execute`** em cima disso ou implementar direto e fechar com **`/oxe-verify`**.
+**`/oxe-quick`** gera **`.oxe/QUICK.md`** com passos curtos e verificação. **Perfil fast:** objetivo numa frase, no máximo **10** passos — ver `oxe/workflows/quick.md`. Depois você pode usar **`/oxe-execute`** em cima disso ou implementar direto e fechar com **`/oxe-verify`**. Se existir um blueprint **`plan-agents.json`** (schema 2) ainda activo, o quick **invalida** esse blueprint (não reutiliza os agentes definidos para o plano).
 
 Se o trabalho crescer, **promova** para spec + plan completos (mesmos gatilhos: muitos ficheiros, API pública, segurança, etc.).
 
@@ -200,6 +202,7 @@ Se o trabalho crescer, **promova** para spec + plan completos (mesmos gatilhos: 
 | `.oxe/SPEC.md` | O que entregar e como saber que está certo |
 | `.oxe/DISCUSS.md` | Preferências antes do plano *(opcional)* |
 | `.oxe/PLAN.md` | Tarefas atômicas + **Verificar** por item |
+| `.oxe/plan-agents.json` | Blueprint opcional (agentes + ondas) após **`/oxe-plan-agent`** |
 | `.oxe/QUICK.md` | Modo rápido |
 | `.oxe/NOTES.md` | Fila leve antes de discuss/plan *(opcional)* |
 | `.oxe/FORENSICS.md` / `.oxe/DEBUG.md` | Recuperação e debug *(opcional)* |
@@ -224,6 +227,7 @@ Slash commands (Cursor: `~/.cursor/commands/` após instalar) e prompt files (Co
 | `/oxe-spec` | [`spec.md`](oxe/workflows/spec.md) |
 | `/oxe-discuss` | [`discuss.md`](oxe/workflows/discuss.md) |
 | `/oxe-plan` | [`plan.md`](oxe/workflows/plan.md) |
+| `/oxe-plan-agent` | [`plan-agent.md`](oxe/workflows/plan-agent.md) |
 | `/oxe-quick` | [`quick.md`](oxe/workflows/quick.md) |
 | `/oxe-execute` | [`execute.md`](oxe/workflows/execute.md) |
 | `/oxe-verify` | [`verify.md`](oxe/workflows/verify.md) |
@@ -284,6 +288,14 @@ Slash commands (Cursor: `~/.cursor/commands/` após instalar) e prompt files (Co
 - **Limite:** Não executa as tarefas — isso é **execute** + o teu Git.
 - **Workflow:** [`oxe/workflows/plan.md`](oxe/workflows/plan.md)
 
+#### `/oxe-plan-agent`
+
+- **O que faz:** Igual ao plano OXE em **tarefas verificáveis** (`PLAN.md`), mais **`.oxe/plan-agents.json`** (schema **2**: `runId`, `lifecycle`): define **agentes** (papel, âmbito, `taskIds`, dependências, entradas/saídas sugeridas) e **`execution.waves`**. Cria **`.oxe/plan-agent-messages/`** (README + mensagens conforme [`references/plan-agent-chat-protocol.md`](oxe/workflows/references/plan-agent-chat-protocol.md)). Inclui gate de coerência entre JSON e `Tn`.
+- **Artefatos:** `.oxe/PLAN.md`, `.oxe/plan-agents.json`, `.oxe/plan-agent-messages/`, `.oxe/STATE.md` (`plan_ready` + secção blueprint).
+- **Quando usar:** Equipas que querem **roteiro explícito por “subagente”**, handoffs escritos entre ondas, ou ondas paralelas por domínio sem perder **Verificar** por tarefa.
+- **Limite:** Papéis do blueprint são **só** para **`/oxe-execute`** alinhado ao `PLAN.md` e `runId`; **`/oxe-quick`** invalida o blueprint; pedidos fora do plano não devem reutilizar essas personas.
+- **Workflow:** [`oxe/workflows/plan-agent.md`](oxe/workflows/plan-agent.md) · modelo JSON: [`oxe/templates/plan-agents.template.json`](oxe/templates/plan-agents.template.json) · schema: [`oxe/schemas/plan-agents.schema.json`](oxe/schemas/plan-agents.schema.json)
+
 #### `/oxe-ui-spec`
 
 - **O que faz:** Gera ou atualiza **`.oxe/UI-SPEC.md`**: contrato de UI/UX derivado da **SPEC** (âmbito, estados, acessibilidade, breakpoints, tokens quando aplicável).
@@ -302,7 +314,7 @@ Slash commands (Cursor: `~/.cursor/commands/` após instalar) e prompt files (Co
 
 #### `/oxe-execute`
 
-- **O que faz:** Guia a implementação **onda a onda** com base em `PLAN.md` (ou passos de `QUICK.md`), com checklist explícito e atualização de `.oxe/STATE.md` (progresso Tn / ondas).
+- **O que faz:** Guia a implementação **onda a onda** com base em `PLAN.md` (ou passos de `QUICK.md`), com checklist explícito e atualização de `.oxe/STATE.md` (progresso Tn / ondas). Com blueprint **válido** (`lifecycle` + `runId` alinhado ao STATE), aplica papéis do JSON só às tarefas do plano e regista handoffs em **`.oxe/plan-agent-messages/`** quando agentes dependem uns dos outros.
 - **Artefatos:** Código/docs que implementas; `.oxe/STATE.md` (checklist de onda).
 - **Quando usar:** Durante a execução do plano ou do QUICK, para não saltar pré-requisitos nem verificações da onda.
 - **Limite:** Não faz commits nem impõe subagentes — fica a teu critério de equipa.

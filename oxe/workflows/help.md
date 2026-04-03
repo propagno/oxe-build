@@ -15,7 +15,7 @@ No **projeto**, os passos canónicos estão em **`.oxe/workflows/*.md`** (layout
 
 ### Cursor
 
-Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-verify`, `/oxe-next`, `/oxe-quick`, `/oxe-execute`, `/oxe-update`, `/oxe-help`, `/oxe-forensics`, `/oxe-debug`, `/oxe-route`, `/oxe-research`, `/oxe-validate-gaps`, `/oxe-compact`, `/oxe-checkpoint`, `/oxe-ui-spec`, `/oxe-ui-review` (instalados em `~/.cursor/commands/` pelo `oxe-cc` após `npm run sync:cursor` no pacote ou cópia equivalente). **Review de PR:** no Cursor não há slash dedicado — peça em linguagem natural seguindo `oxe/workflows/review-pr.md` (ou `.oxe/workflows/review-pr.md`) em contexto.
+Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-plan-agent`, `/oxe-verify`, `/oxe-next`, `/oxe-quick`, `/oxe-execute`, `/oxe-update`, `/oxe-help`, `/oxe-forensics`, `/oxe-debug`, `/oxe-route`, `/oxe-research`, `/oxe-validate-gaps`, `/oxe-compact`, `/oxe-checkpoint`, `/oxe-ui-spec`, `/oxe-ui-review` (instalados em `~/.cursor/commands/` pelo `oxe-cc` após `npm run sync:cursor` no pacote ou cópia equivalente). **Review de PR:** no Cursor não há slash dedicado — peça em linguagem natural seguindo `oxe/workflows/review-pr.md` (ou `.oxe/workflows/review-pr.md`) em contexto.
 
 ### GitHub Copilot (VS Code)
 
@@ -54,7 +54,8 @@ Com **`compact_max_age_days`** em `.oxe/config.json` (ver `oxe/templates/CONFIG.
 2b. **research** (opcional) — notas datadas em `.oxe/research/` + índice `.oxe/RESEARCH.md`; spikes, mapa de sistema, engenharia reversa, hipóteses de modernização, ou qualquer exploração antes do plano (ver `research.md`).
 3. **discuss** (opcional) — decisões antes do plano; recomendado se `discuss_before_plan` em `.oxe/config.json`.
 4. **plan** — plano executável + **Verificar** por tarefa, ligado aos critérios da SPEC.
-5. **execute** (opcional) — onda a onda com base no PLAN (ou passos do QUICK).
+4b. **plan-agent** (opcional) — igual ao **plan** + **`.oxe/plan-agents.json`** (schema **2**: `runId`, `lifecycle`) e pasta **`.oxe/plan-agent-messages/`** para handoffs entre agentes do blueprint (**`oxe/workflows/references/plan-agent-chat-protocol.md`**). Os papéis (`role` / `scope`) são **exclusivos** da trilha **PLAN + `/oxe-execute`** com esse `runId`; **`/oxe-quick`** invalida o blueprint (`lifecycle.invalidated`).
+5. **execute** (opcional) — onda a onda com base no PLAN (ou passos do QUICK); com blueprint válido, seguir protocolo de mensagens entre ondas/agentes dependentes.
 6. Implementar mudanças no agente/editor.
 7. **verify** — validar tarefas **e** critérios SPEC antes de merge/PR.
 7b. **validate-gaps** (opcional) — após verify, auditoria de cobertura em `.oxe/VALIDATION-GAPS.md` (gaps de teste/evidência; sugestões de tarefas em texto; ver `validate-gaps.md`).
@@ -78,7 +79,7 @@ Com **`compact_max_age_days`** em `.oxe/config.json` (ver `oxe/templates/CONFIG.
 
 ## Modo rápido (quick)
 
-- **`/oxe-quick`**: cria `.oxe/QUICK.md` (passos curtos + verificar) sem SPEC/PLAN longos. **Perfil fast:** objetivo numa frase, ≤10 passos — ver secção **Perfil fast** em `quick.md`. **Promova** para spec/plan se o trabalho crescer (muitos arquivos, API pública, segurança) — mesmos gatilhos no workflow.
+- **`/oxe-quick`**: cria `.oxe/QUICK.md` (passos curtos + verificar) sem SPEC/PLAN longos. **Perfil fast:** objetivo numa frase, ≤10 passos — ver secção **Perfil fast** em `quick.md`. **Promova** para spec/plan se o trabalho crescer (muitos arquivos, API pública, segurança) — mesmos gatilhos no workflow. Se existir **`.oxe/plan-agents.json`** (schema 2) ainda activo, o quick **invalida** o blueprint — não reutilizar esses agentes neste fluxo; para novo roteiro com agentes, **`/oxe-plan-agent`**.
 
 ## CLI (terminal)
 
@@ -116,10 +117,11 @@ Um pedido → **um** destino (sem gerar contrato). O agente aplica `route.md` ou
 | Gaps de cobertura de verificação / Nyquist-lite após verify | `/oxe-validate-gaps` |
 | Mapa OXE desatualizado / quero sincronizar codebase com o código sem scan completo | `/oxe-compact` |
 | Quero gravar um marco nomeado da sessão (antes de experimento grande) | `/oxe-checkpoint` + slug |
+| Plano com **blueprint de agentes** (JSON + mesmo PLAN.md) / subagentes por onda | `/oxe-plan-agent` |
 
 ## Notas pré-trilha (opcional)
 
-- Ficheiro **`.oxe/NOTES.md`**: bullets `YYYY-MM-DD — …` como fila leve (**não** substitui SPEC). Em **`/oxe-discuss`** e **`/oxe-plan`**, consumir ou marcar descartado/adiado.
+- Ficheiro **`.oxe/NOTES.md`**: bullets `YYYY-MM-DD — …` como fila leve (**não** substitui SPEC). Em **`/oxe-discuss`**, **`/oxe-plan`** e **`/oxe-plan-agent`**, consumir ou marcar descartado/adiado.
 
 ## SDK (API programática)
 
