@@ -1,0 +1,28 @@
+{
+  "oxePlanAgentsSchema": 2,
+  "runId": "oxe-YYYY-MM-DD-substituir-por-id-opaco",
+  "lifecycle": {
+    "status": "pending_execute",
+    "since": "YYYY-MM-DDTHH:mm:ssZ"
+  },
+  "goal": "(frase curta alinhada à SPEC)",
+  "specRef": ".oxe/SPEC.md",
+  "agents": [
+    {
+      "id": "agent-example",
+      "role": "Papel legível (ex.: Database)",
+      "scope": [
+        "Primeiro bullet do âmbito",
+        "Segundo bullet"
+      ],
+      "taskIds": ["T1"],
+      "dependencies": [],
+      "inputs": [".oxe/STATE.md", ".oxe/SPEC.md"],
+      "outputs": ["src/example.ts"]
+    }
+  ],
+  "execution": {
+    "strategy": "hybrid",
+    "waves": [["agent-example"]]
+  }
+}

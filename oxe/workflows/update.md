@@ -22,7 +22,7 @@ Alinhar o projeto e integrações OXE à **versão mais recente** do pacote **ox
 <output>
 - Resumo do que foi executado (comandos e códigos de saída relevantes).
 - Se `--check` apenas: não propor `npx` sem confirmação do utilizador quando há versão nova.
-- Próximo passo sugerido: retomar o fluxo OXE (ex.: **`/oxe-scan`** se o projeto mudou muito) ou continuar a tarefa em curso.
+- Próximo passo sugerido: retomar o fluxo OXE (ex.: **`/oxe-scan`** se o projeto mudou muito) ou continuar a tarefa em curso. Se só o **mapa em `.oxe/codebase/`** puder ter ficado defasado face ao código, mencionar **`/oxe-compact`** como opção (não obrigatória).
 </output>
 
 <success_criteria>

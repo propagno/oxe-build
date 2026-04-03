@@ -1,3 +1,15 @@
+---
+oxe_doc: plan
+status: draft
+updated: YYYY-MM-DD
+inputs: []
+---
+
+<!--
+  Metadados OXE. Manter --- antes do primeiro #. Atualize `updated` a cada revisão significativa.
+  inputs: ligações a SPEC, tickets ou branches que orientaram o plano.
+-->
+
 # OXE — Plano
 
 > Gerado a partir de `.oxe/SPEC.md`. Cada tarefa deve ter bloco **Verificar**.

@@ -10,6 +10,7 @@ const ALLOWED_CONFIG_KEYS = [
   'after_verify_draft_commit',
   'default_verify_command',
   'scan_max_age_days',
+  'compact_max_age_days',
   'scan_focus_globs',
   'scan_ignore_globs',
   'spec_required_sections',
@@ -46,6 +47,7 @@ function loadOxeConfigMerged(targetProject) {
     after_verify_draft_commit: true,
     default_verify_command: '',
     scan_max_age_days: 0,
+    compact_max_age_days: 0,
     scan_focus_globs: [],
     scan_ignore_globs: [],
     spec_required_sections: [],
@@ -112,6 +114,9 @@ function validateConfigShape(cfg) {
   if (cfg.scan_max_age_days != null && typeof cfg.scan_max_age_days !== 'number') {
     typeErrors.push('scan_max_age_days deve ser número (use 0 para desligar aviso de scan antigo)');
   }
+  if (cfg.compact_max_age_days != null && typeof cfg.compact_max_age_days !== 'number') {
+    typeErrors.push('compact_max_age_days deve ser número (use 0 para desligar aviso de compact antigo)');
+  }
   if (cfg.plan_max_tasks_per_wave != null && typeof cfg.plan_max_tasks_per_wave !== 'number') {
     typeErrors.push('plan_max_tasks_per_wave deve ser número (use 0 para desligar)');
   }
@@ -147,6 +152,29 @@ function parseLastScanDate(stateText) {
   if (!dm) return null;
   let raw = dm[1].trim();
   if (/^\([^)]*\)$/.test(raw) || /placeholder|legível|ISO/i.test(raw)) return null;
+  if (raw.startsWith('(')) return null;
+  const iso = Date.parse(raw);
+  if (!Number.isNaN(iso)) return new Date(iso);
+  const br = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (br) {
+    const d = new Date(parseInt(br[3], 10), parseInt(br[2], 10) - 1, parseInt(br[1], 10));
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+}
+
+/**
+ * Data do último `/oxe-compact` em STATE.md (secção **Último compact**).
+ * @param {string} stateText
+ * @returns {Date | null}
+ */
+function parseLastCompactDate(stateText) {
+  const sec = stateText.match(/##\s*Último compact[^\n]*\s*([\s\S]*?)(?=\n## |\n#[^\#]|$)/im);
+  if (!sec) return null;
+  const dm = sec[1].match(/\*\*Data:\*\*\s*(.+)/i);
+  if (!dm) return null;
+  let raw = dm[1].trim();
+  if (/^\([^)]*\)$/.test(raw) || /placeholder|legível|YYYY-MM-DD/i.test(raw)) return null;
   if (raw.startsWith('(')) return null;
   const iso = Date.parse(raw);
   if (!Number.isNaN(iso)) return new Date(iso);
@@ -442,6 +470,8 @@ function buildHealthReport(target) {
   const phase = parseStatePhase(stateText);
   const scanDate = parseLastScanDate(stateText);
   const stale = isStaleScan(scanDate, Number(config.scan_max_age_days) || 0);
+  const compactDate = parseLastCompactDate(stateText);
+  const staleCompact = isStaleScan(compactDate, Number(config.compact_max_age_days) || 0);
   const phaseWarn = phase ? phaseCoherenceWarnings(phase, p) : [];
   const sumWarn = verifyGapsWithoutSummaryWarning(p.verify, p.summary);
   const specReq = Array.isArray(config.spec_required_sections) ? config.spec_required_sections : [];
@@ -460,6 +490,8 @@ function buildHealthReport(target) {
     phase,
     scanDate,
     stale,
+    compactDate,
+    staleCompact,
     phaseWarn,
     summaryGapWarn: sumWarn,
     specWarn,
@@ -480,6 +512,7 @@ module.exports = {
   validateConfigShape,
   parseStatePhase,
   parseLastScanDate,
+  parseLastCompactDate,
   isStaleScan,
   phaseCoherenceWarnings,
   verifyGapsWithoutSummaryWarning,

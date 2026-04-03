@@ -21,7 +21,7 @@ Padrão habitual:
 
 **Exceções legítimas no pacote canónico:**
 
-- **`plan.md`** — pode incluir `<format_plan>` entre context e process para o formato do `PLAN.md`.
+- **`plan.md`** — pode incluir `<format_plan>` entre context e process para o formato do `PLAN.md`, e **`<plan_quality_gate>`** entre `format_plan` e `process` (checklist obrigatória antes de fechar o plano).
 - **`help.md`** — usa `<output>` em vez de `<process>` / `<success_criteria>` porque agrega várias secções de documentação para o utilizador.
 - **`review-pr.md`** — foco em análise no chat; critérios de sucesso alinham com o mesmo padrão `<success_criteria>` que os demais.
 
@@ -65,6 +65,8 @@ Evite pedir ao modelo que **valide** estruturas que um script pode validar (JSON
 - Não apagar dados sensíveis do utilizador sem instrução explícita.
 - Respeitar [`CONFIG.md`](CONFIG.md) e `.oxe/config.json` quando mencionar preferências de fluxo.
 - Atualizar **STATE.md** apenas quando o passo for parte do fluxo principal (exceções como `review-pr` estão documentadas no próprio workflow).
+
+**Frontmatter em artefactos (SPEC/PLAN):** os templates `SPEC.template.md` e `PLAN.template.md` podem incluir YAML no topo (`oxe_doc`, `status`, `updated`, `inputs`) para retomada após contexto longo. Isto é **independente** do frontmatter YAML dos **prompts** Cursor/Copilot (secção 4). O `doctor` continua a validar secções `## …` no **corpo** Markdown abaixo do frontmatter.
 
 ## 7. Revisão de um workflow
 

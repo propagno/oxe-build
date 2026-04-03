@@ -12,6 +12,10 @@ Se o usuário indicar uma tarefa (ex.: `T2`), focar só nela; caso contrário, p
 - Ler **`.oxe/config.json`** se existir: `after_verify_draft_commit` e `after_verify_suggest_pr` controlam passos opcionais (se o arquivo não existir, use o mesmo padrão do `config.template.json`).
 - Os critérios na SPEC devem estar na tabela **Critérios de aceite** com colunas **ID** / **Critério** / **Como verificar**; o verify deve **cruzar cada ID** com evidência (arquivo, comando, trecho).
 - **Legado:** quando **Comando** for `—` ou inexistente, evidência válida inclui **Read/Grep**, existência de ficheiros referenciados e checklist manual — não marcar critério como passou sem evidência; se o ambiente host/desktop não estiver disponível, registar **não executado aqui** e próximo passo. Ver **`oxe/workflows/references/legacy-brownfield.md`**.
+- **Debug:** investigação técnica de falhas **durante** a implementação segue **`oxe/workflows/debug.md`** (`/oxe-debug`). Resolver um bug com debug **não** dispensa este passo — após correções, **ainda** é necessário **`verify`** para fechar a trilha face à SPEC/PLAN.
+- **UI:** se existirem `.oxe/UI-SPEC.md` / `.oxe/UI-REVIEW.md`, incorporar na evidência quando os critérios **A*** ou tarefas **Tn** tocarem interface.
+- **Pós-verify (opcional):** para auditoria de **cobertura** e gaps de verificabilidade (sem substituir este passo), **`oxe:validate-gaps`** → `.oxe/VALIDATION-GAPS.md` (ver **`oxe/workflows/validate-gaps.md`**).
+- **Rotina compact/checkpoint (opcional):** se esta entrega alterou **estrutura**, **stack** ou **pastas** de forma relevante, sugira **`/oxe-compact`** para alinhar `.oxe/codebase/` ao repo (e `CODEBASE-DELTA.md` + `RESUME.md`). Após **verify** com sucesso e antes de abrir nova entrega grande, um **`/oxe-checkpoint`** com slug curto pode marcar estado estável — **não** faz parte dos critérios de sucesso abaixo.
 </context>
 
 <process>
@@ -24,6 +28,7 @@ Se o usuário indicar uma tarefa (ex.: `T2`), focar só nela; caso contrário, p
    - **Tabela — Critérios SPEC:** ID (A1…) | Critério (resumo) | Evidência | Passou? | Notas.
    - **Gaps** — o que falhou e sugestão de correção (pode virar novas entradas no PLAN); se não houver, escrever explicitamente `Nenhum gap restante` ou equivalente.
 5. Atualizar **`.oxe/STATE.md`**: `verify_complete` ou `verify_failed` + próximo passo (replan, corrigir ou publicar).
+5b. **Blueprint plan-agent:** se **todas** as verificações relevantes **passaram**, existir **`.oxe/plan-agents.json`** com `oxePlanAgentsSchema === 2` e `lifecycle.status === "executing"` (ou `pending_execute` se ainda não houve execute formal mas a trilha fechou aqui), actualizar o JSON: `lifecycle: { "status": "closed", "since": "<ISO>" }` e espelhar em **`STATE.md`** (**lifecycle_status** → `closed`). Não fechar como `closed` se `verify_failed` ou gaps por resolver.
 6. Acrescentar entrada em **`.oxe/SUMMARY.md`** (sessão): se não existir, criar a partir de **`oxe/templates/SUMMARY.template.md`**. **Obrigatório** quando `verify_failed` ou quando a seção **Gaps** tiver itens — isso alimenta o replanejamento.
 7. **Só se todas as verificações relevantes passarem:** se `after_verify_draft_commit` não for `false`: acrescentar em **VERIFY.md** a seção **Rascunho de commit** — mensagem convencional (ex.: `feat:` / `fix:`) + bullets alinhados aos critérios **A***; **não** incluir segredos.
 8. **Só se passou:** se `after_verify_suggest_pr` não for `false`: acrescentar **Checklist PR** — branch base, título sugerido, screenshots se UI, links a SPEC/PLAN, testes executados.

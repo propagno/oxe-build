@@ -9,11 +9,25 @@
 - **Data:** (use **YYYY-MM-DD** para o `oxe-cc doctor` avisar scan antigo com `scan_max_age_days` em `.oxe/config.json`)
 - **Notas:** (opcional)
 
+## Último compact (codebase + RESUME) (opcional)
+
+- **Data:** (**YYYY-MM-DD** — preenchido por **`/oxe-compact`**: refresh incremental dos mapas em `.oxe/codebase/` + `CODEBASE-DELTA.md` + `RESUME.md`)
+- **Notas:** (opcional; ex.: “só STRUCTURE e TESTING”)
+
 ## Contexto do plano / quick (opcional)
 
 - **Spec / plano:** (revisão informal ou data de `.oxe/SPEC.md` / `.oxe/PLAN.md`)
 - **Última onda executada:** (número ou —)
 - **Tarefas concluídas:** (ex.: T1, T2 ou passos 1–3 do QUICK.md)
+
+## Blueprint de agentes (sessão) (opcional — `/oxe-plan-agent`)
+
+Espelho do **`.oxe/plan-agents.json`** ativo (schema 2). Atualizar em **`/oxe-plan-agent`**, **`/oxe-execute`**, **`/oxe-verify`**, **`/oxe-quick`** quando o lifecycle mudar.
+
+- **run_id:** (igual a `runId` no JSON; — se não houver blueprint)
+- **lifecycle_status:** `pending_execute` | `executing` | `closed` | `invalidated` | —
+- **Última onda (execute):** (número ou —)
+- **Notas:** (ex.: invalidado por quick; mensagens em `.oxe/plan-agent-messages/`)
 
 ## Checklist da onda OXE (opcional — workflow execute)
 

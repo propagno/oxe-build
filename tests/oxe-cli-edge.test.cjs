@@ -85,11 +85,54 @@ describe('oxe-cc CLI edge', () => {
     assert.strictEqual(r.status, 0, r.stderr || r.stdout);
     const line = r.stdout.trim().split(/\r?\n/).filter(Boolean).pop();
     const j = JSON.parse(line);
-    assert.strictEqual(j.oxeStatusSchema, 1);
+    assert.strictEqual(j.oxeStatusSchema, 2);
     assert.ok(typeof j.nextStep === 'string');
     assert.ok(Array.isArray(j.artifacts));
     assert.ok(j.diagnostics && typeof j.diagnostics === 'object');
     assert.ok(Array.isArray(j.diagnostics.planWarnings));
+    assert.ok(j.staleCompact && typeof j.staleCompact.stale === 'boolean');
+  });
+
+  test('status --json --hints includes hints array', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-hints-'));
+    const oxe = path.join(dir, '.oxe');
+    const codebase = path.join(oxe, 'codebase');
+    fs.mkdirSync(codebase, { recursive: true });
+    for (const f of [
+      'OVERVIEW.md',
+      'STACK.md',
+      'STRUCTURE.md',
+      'TESTING.md',
+      'INTEGRATIONS.md',
+      'CONVENTIONS.md',
+      'CONCERNS.md',
+    ]) {
+      fs.writeFileSync(path.join(codebase, f), '# ok\n', 'utf8');
+    }
+    fs.writeFileSync(
+      path.join(oxe, 'config.json'),
+      JSON.stringify({ scan_max_age_days: 1, compact_max_age_days: 1 }),
+      'utf8'
+    );
+    const old = new Date();
+    old.setDate(old.getDate() - 9);
+    const iso = old.toISOString().slice(0, 10);
+    fs.writeFileSync(
+      path.join(oxe, 'STATE.md'),
+      `## Fase atual\n\n\`scan_complete\`\n\n## Último scan\n\n**Data:** ${iso}\n\n## Último compact (codebase + RESUME)\n\n- **Data:** ${iso}\n`,
+      'utf8'
+    );
+    const r = spawnSync(process.execPath, [CLI, 'status', '--json', '--hints', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+    const line = r.stdout.trim().split(/\r?\n/).filter(Boolean).pop();
+    const j = JSON.parse(line);
+    assert.ok(Array.isArray(j.hints));
+    assert.ok(j.hints.length >= 1);
+    assert.ok(j.hints.some((/** @type {string} */ x) => /oxe-scan|oxe-compact/i.test(x)));
   });
 
   test('init-oxe exits 1 when target path does not exist without dry-run', () => {

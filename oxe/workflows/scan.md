@@ -14,6 +14,8 @@ Se **`.oxe/config.json`** tiver `scan_focus_globs` ou `scan_ignore_globs`, **pri
 - Carregar `oxe/templates/STATE.md` (ou `.oxe` relativo aos workflows instalados) como base se `STATE.md` ainda não existir; se existir, preservar histórico útil e atualizar **Último scan** (campo **Data:** em formato ISO **YYYY-MM-DD** quando possível, para o `oxe-cc doctor` calcular scan antigo) e **Fase**.
 - Se existir **`.oxe/config.json`**, respeitar preferências documentadas em `oxe/templates/CONFIG.md`; **não** sobrescrever o arquivo no scan.
 - Não apagar `SPEC.md` / `PLAN.md` se já existirem — apenas atualizar o codebase.
+- Entre scans completos, **`compact.md`** (`/oxe-compact`) pode **atualizar incrementalmente** os mesmos sete ficheiros em `.oxe/codebase/` comparando-os ao repo e registar mudanças em **`CODEBASE-DELTA.md`**. Caso típico: o scan descreveu **Angular 17** (ou outra stack) e o projeto **já foi migrado** na implementação (ex.: **Angular 21**) — o **compact** alinha **`STACK.md`** (e ficheiros relacionados) ao que está **implementado agora**, sem apagar o trabalho útil do scan anterior.
+
 </context>
 
 <process>

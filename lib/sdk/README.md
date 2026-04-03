@@ -52,3 +52,15 @@ const { options, warnings: w } = oxe.install.resolveOptionsFromConfig(dir, {
 | **doctor** | `runDoctorChecks` — resultado estruturado (erros + avisos + diff de workflows + `workflowShape` com lint leve dos `.md`) |
 
 TypeScript: ver `index.d.ts` junto deste ficheiro.
+
+## `health.buildHealthReport` e `parseLastCompactDate`
+
+- **`parseLastCompactDate(stateText)`** — lê a data em **`.oxe/STATE.md`** na secção **Último compact** (mesma convenção que **Último scan**). Devolve `Date | null` se a linha for placeholder ou ilegível.
+- **`buildHealthReport(projectRoot)`** — agrega fase, datas, avisos de SPEC/PLAN/VERIFY e o próximo passo sugerido. Campos usados em CI e em `oxe-cc status --json`:
+  - **`scanDate`**, **`stale`** — último scan e idade face a `scan_max_age_days` (`stale: { stale, days }`).
+  - **`compactDate`**, **`staleCompact`** — último compact e idade face a `compact_max_age_days`.
+  - **`next`** — `{ step, cursorCmd, reason, artifacts }` (espelha a lógica de `suggestNextStep`).
+
+## `runDoctorChecks` e relatório de saúde
+
+O resultado inclui **`healthReport`** com a mesma forma que `buildHealthReport` — útil em pipelines para falhar ou avisar quando `healthReport.stale.stale` ou `healthReport.staleCompact.stale` é verdadeiro (alinhado aos avisos do `oxe-cc doctor`).

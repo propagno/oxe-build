@@ -326,6 +326,8 @@ function parseInstallArgs(argv) {
     ignoreInstallConfig: false,
     /** Saída JSON em `status` (CI / agentes). */
     jsonOutput: false,
+    /** Lembretes agregados scan/compact em `status`. */
+    statusHints: false,
     restPositional: [],
   };
   for (let i = 0; i < argv.length; i++) {
@@ -369,6 +371,7 @@ function parseInstallArgs(argv) {
     else if (a === '--dir' && argv[i + 1]) {
       out.dir = path.resolve(argv[++i]);
     } else if (a === '--json') out.jsonOutput = true;
+    else if (a === '--hints') out.statusHints = true;
     else if (!a.startsWith('-')) out.restPositional.push(a);
     else {
       out.parseError = true;
@@ -669,7 +672,7 @@ function applyInstallFromOxeConfig(opts, targetDir) {
 }
 
 /**
- * Mapa número da lista → chaves de runtime (estilo GSD).
+ * Mapa número da lista → chaves de runtime 
  * @param {string} input
  * @returns {string[]}
  */
@@ -765,7 +768,7 @@ async function promptRuntimeSelection() {
   }
 }
 
-/** Global vs local (pastas do projeto), estilo GSD. */
+/** Global vs local (pastas do projeto) */
 async function promptIdeLocation(opts) {
   const rl = readlinePromises.createInterface({ input: process.stdin, output: process.stdout });
   const c = useAnsiColors();
@@ -1049,11 +1052,46 @@ function bootstrapOxe(target, opts) {
 }
 
 /**
+ * Lembretes de rotina (scan/compact antigos) para `status --hints` ou JSON.
+ * @param {string} target
+ * @param {ReturnType<typeof oxeHealth.buildHealthReport>} r
+ * @param {ReturnType<typeof oxeHealth.loadOxeConfigMerged>['config']} config
+ * @returns {string[]}
+ */
+function collectOxeRoutineHints(target, r, config) {
+  /** @type {string[]} */
+  const out = [];
+  const statePath = path.join(target, '.oxe', 'STATE.md');
+  const hasState = fs.existsSync(statePath);
+  if (config.scan_max_age_days > 0 && r.scanDate && r.stale.stale) {
+    out.push(
+      `Último scan há ~${r.stale.days} dia(s) (limite: ${config.scan_max_age_days}) — considere /oxe-scan`
+    );
+  } else if (config.scan_max_age_days > 0 && !r.scanDate && hasState) {
+    out.push(
+      'Preencha **Data:** em STATE.md (secção Último scan) para o aviso de scan antigo, ou use scan_max_age_days: 0'
+    );
+  }
+  if (config.compact_max_age_days > 0 && r.compactDate && r.staleCompact.stale) {
+    out.push(
+      `Último compact há ~${r.staleCompact.days} dia(s) (limite: ${config.compact_max_age_days}) — considere /oxe-compact se .oxe/codebase/ divergiu do código`
+    );
+  } else if (config.compact_max_age_days > 0 && !r.compactDate && hasState) {
+    out.push(
+      'Preencha **Data:** em STATE.md (secção Último compact) para o aviso de compact antigo, ou use compact_max_age_days: 0'
+    );
+  }
+  return out;
+}
+
+/**
  * Doctor / status: config estendida, fase STATE, scan antigo, SUMMARY, SPEC/PLAN.
  * @param {string} target
  * @param {boolean} c
+ * @param {{ skipScanCompactAgeWarnings?: boolean }} [diagOpts]
  */
-function printOxeHealthDiagnostics(target, c) {
+function printOxeHealthDiagnostics(target, c, diagOpts = {}) {
+  const skipAge = Boolean(diagOpts.skipScanCompactAgeWarnings);
   const r = oxeHealth.buildHealthReport(target);
   const { config } = oxeHealth.loadOxeConfigMerged(target);
 
@@ -1077,14 +1115,30 @@ function printOxeHealthDiagnostics(target, c) {
     console.log(`  ${c ? dim : ''}Fase (STATE.md):${c ? reset : ''} ${r.phase}`);
   }
 
-  if (config.scan_max_age_days > 0 && r.scanDate && r.stale.stale) {
-    console.log(
-      `  ${yellow}AVISO${reset} Último scan há ~${r.stale.days} dia(s) (limite: ${config.scan_max_age_days}) — considere ${cyan}/oxe-scan${reset}`
-    );
-  } else if (config.scan_max_age_days > 0 && !r.scanDate && fs.existsSync(path.join(target, '.oxe', 'STATE.md'))) {
-    console.log(
-      `  ${dim}Obs.:${reset} Preencha **Data:** em STATE.md (secção Último scan) para o aviso de scan antigo, ou use scan_max_age_days: 0`
-    );
+  if (!skipAge) {
+    if (config.scan_max_age_days > 0 && r.scanDate && r.stale.stale) {
+      console.log(
+        `  ${yellow}AVISO${reset} Último scan há ~${r.stale.days} dia(s) (limite: ${config.scan_max_age_days}) — considere ${cyan}/oxe-scan${reset}`
+      );
+    } else if (config.scan_max_age_days > 0 && !r.scanDate && fs.existsSync(path.join(target, '.oxe', 'STATE.md'))) {
+      console.log(
+        `  ${dim}Obs.:${reset} Preencha **Data:** em STATE.md (secção Último scan) para o aviso de scan antigo, ou use scan_max_age_days: 0`
+      );
+    }
+
+    if (config.compact_max_age_days > 0 && r.compactDate && r.staleCompact.stale) {
+      console.log(
+        `  ${yellow}AVISO${reset} Último compact há ~${r.staleCompact.days} dia(s) (limite: ${config.compact_max_age_days}) — considere ${cyan}/oxe-compact${reset} se .oxe/codebase/ estiver desatualizado`
+      );
+    } else if (
+      config.compact_max_age_days > 0 &&
+      !r.compactDate &&
+      fs.existsSync(path.join(target, '.oxe', 'STATE.md'))
+    ) {
+      console.log(
+        `  ${dim}Obs.:${reset} Preencha **Data:** em STATE.md (secção Último compact) para o aviso de compact antigo, ou use compact_max_age_days: 0`
+      );
+    }
   }
 
   if (Array.isArray(config.scan_focus_globs) && config.scan_focus_globs.length) {
@@ -1110,17 +1164,18 @@ function printOxeHealthDiagnostics(target, c) {
 
 /**
  * @param {string} target
- * @param {{ json?: boolean }} [opts]
+ * @param {{ json?: boolean, hints?: boolean }} [opts]
  */
 function runStatus(target, opts = {}) {
   const { config } = oxeHealth.loadOxeConfigMerged(target);
   const next = oxeHealth.suggestNextStep(target, { discuss_before_plan: config.discuss_before_plan });
   const report = oxeHealth.buildHealthReport(target);
+  const routineHints = collectOxeRoutineHints(target, report, config);
 
   if (opts.json) {
     /** @type {Record<string, unknown>} */
     const payload = {
-      oxeStatusSchema: 1,
+      oxeStatusSchema: 2,
       projectRoot: path.resolve(target),
       nextStep: report.next.step,
       cursorCmd: report.next.cursorCmd,
@@ -1129,6 +1184,8 @@ function runStatus(target, opts = {}) {
       phase: report.phase,
       scanDate: report.scanDate,
       staleScan: report.stale,
+      compactDate: report.compactDate,
+      staleCompact: report.staleCompact,
       diagnostics: {
         configParseError: report.configParseError,
         typeErrors: report.typeErrors,
@@ -1139,6 +1196,9 @@ function runStatus(target, opts = {}) {
         planWarnings: report.planWarn,
       },
     };
+    if (opts.hints) {
+      payload.hints = routineHints;
+    }
     console.log(JSON.stringify(payload));
     return;
   }
@@ -1152,7 +1212,18 @@ function runStatus(target, opts = {}) {
     console.log(`  ${yellow}AVISO${reset} Workflows OXE não encontrados — ${cyan}npx oxe-cc@latest${reset}`);
   }
 
-  printOxeHealthDiagnostics(target, c);
+  printOxeHealthDiagnostics(target, c, { skipScanCompactAgeWarnings: Boolean(opts.hints) });
+
+  if (opts.hints) {
+    console.log(`\n  ${c ? cyan : ''}Lembretes (rotina OXE)${reset}`);
+    if (routineHints.length) {
+      for (const h of routineHints) {
+        console.log(`  ${c ? dim : ''}•${c ? reset : ''} ${h}`);
+      }
+    } else {
+      console.log(`  ${c ? dim : ''}•${c ? reset : ''} Nenhum (ajuste scan_max_age_days / compact_max_age_days em .oxe/config.json se quiser lembretes por idade)${reset}`);
+    }
+  }
 
   console.log(`\n  ${c ? yellow : ''}Próximo passo sugerido (único)${reset}`);
   console.log(`  ${c ? dim : ''}Passo:${c ? reset : ''} ${c ? green : ''}${next.step}${reset}`);
@@ -1451,6 +1522,7 @@ ${green}Opções da instalação:${reset}
 ${green}status${reset} (coerência .oxe/ + um próximo passo sugerido; não exige pacote de workflows completo)
   --dir <pasta>   raiz do projeto (padrão: diretório atual)
   --json          imprime um único objeto JSON (próximo passo + diagnósticos) em stdout; adequado a CI
+  --hints         lembretes de rotina (idade scan/compact quando configurado em config.json); com --json inclui array \`hints\`
 
 ${green}Atualizar (projeto já tem OXE):${reset}
   /oxe-update                            no Cursor (outras IDEs: mesmo fluxo pelo terminal)
@@ -2442,7 +2514,7 @@ async function main() {
       console.error(`${yellow}Diretório não encontrado: ${target}${reset}`);
       process.exit(1);
     }
-    runStatus(target, { json: opts.jsonOutput });
+    runStatus(target, { json: opts.jsonOutput, hints: opts.statusHints });
     return;
   }
 
