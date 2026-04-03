@@ -2,6 +2,8 @@
 description: "OXE — Cria ou atualiza .oxe/SPEC.md"
 ---
 
+OXE — Cria ou atualiza .oxe/SPEC.md
+
 Executa o workflow **OXE spec**. Lê e aplica **integralmente**:
 
 `oxe/workflows/spec.md` (na raiz do repositório em contexto)

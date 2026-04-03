@@ -2,6 +2,8 @@
 description: "OXE — Revisão de PR (link GitHub, branches ou SHAs)"
 ---
 
+OXE — Revisão de PR (link GitHub, branches ou SHAs)
+
 Executa o workflow **OXE review-pr**. Lê e aplica **integralmente**:
 
 `oxe/workflows/review-pr.md` (na raiz do repositório em contexto)
