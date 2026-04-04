@@ -42,7 +42,10 @@ function main() {
     const outName = name.replace(/\.prompt\.md$/i, '.md');
     const raw = fs.readFileSync(path.join(PROMPTS, name), 'utf8');
     const { desc, body } = stripFrontmatter(raw);
-    const out = `---\ndescription: ${JSON.stringify(desc)}\n---\n\n${body}\n`;
+    // Cursor (picker) muitas vezes não mostra o campo YAML `description` e usa a 1.ª linha
+    // do ficheiro como resumo — se o corpo começasse logo após `---`, aparecia "---" ao lado do comando.
+    const summaryLine = desc.trim() ? `${desc.trim()}\n\n` : '';
+    const out = `---\ndescription: ${JSON.stringify(desc)}\n---\n\n${summaryLine}${body}\n`;
     fs.writeFileSync(path.join(DEST, outName), out, 'utf8');
     n++;
   }

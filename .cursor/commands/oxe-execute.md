@@ -2,6 +2,8 @@
 description: "OXE — Executar plano (solo ou com agentes): escolha Completo (1 sessão) | Por onda | Por tarefa para controlar requisições"
 ---
 
+OXE — Executar onda do PLAN ou passos do QUICK
+
 Executa o workflow **OXE execute** no repositório atual. Lê e aplica **integralmente** o ficheiro no workspace:
 
 `oxe/workflows/execute.md`

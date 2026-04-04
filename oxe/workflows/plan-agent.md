@@ -10,7 +10,7 @@ O plano **não** é só uma lista de tarefas: cada agente é um **pacote de cont
 
 **Exclusividade:** os papéis definidos no JSON são **efémeros** e **exclusivos** da trilha PLAN + **`/oxe-execute`** com este `runId`. **`/oxe-quick`** ou trabalho fora do `PLAN.md` **não** reutilizam estes agentes (ver **`quick.md`**, **`execute.md`**, referência **`references/plan-agent-chat-protocol.md`**).
 
-Se o utilizador pedir **`--replan`**: aplicar a mesma lógica de replanejamento descrita em **`plan.md`** (VERIFY, SUMMARY, secção Replanejamento) e **atualizar ou recriar** `plan-agents.json` em coerência com o novo `PLAN.md`; gerar **novo** `runId` e repor `lifecycle.status` → `pending_execute` (e limpar ou arquivar `.oxe/plan-agent-messages/` se o utilizador quiser histórico limpo — documentar no chat).
+Se o utilizador pedir **`--replan`**: aplicar a mesma lógica de replanejamento descrita em **`plan.md`** (VERIFY, SUMMARY, secção Replanejamento) e **atualizar ou recriar** `plan-agents.json` em coerência com o novo `PLAN.md`; gerar **novo** `runId` e repor `lifecycle.status` → `pending_execute`. Se ainda existir pasta **`.oxe/plan-agent-messages/`** cheia do **run** anterior e o utilizador não precisar dela na raiz, **arquivar** primeiro em **`.oxe/archive/plan-agent-runs/<runId-antigo>/`** (ver **`references/plan-agent-chat-protocol.md`**) ou pedir confirmação antes de sobrescrever; depois recriar **`.oxe/plan-agent-messages/README.md`** para o novo `runId`.
 </objective>
 
 <context>

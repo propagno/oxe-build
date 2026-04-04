@@ -78,6 +78,20 @@ Opcional: **`taskIds`** — subset das tarefas que esta mensagem cobre.
 - **`/oxe-quick`** invalida o blueprint (`invalidatedBy: quick`); não reutilizar papéis do JSON no fluxo quick.
 - Trabalho **fora** do conjunto de `Tn` do `PLAN.md`: não assumir persona do blueprint; opcionalmente pedir confirmação para invalidar (`invalidatedBy: out_of_scope`).
 
+## Artefactos no repositório após fecho (recomendação OXE)
+
+Durante a trilha ativa, **`plan-agents.json`** e **`.oxe/plan-agent-messages/`** na raiz de `.oxe/` são práticos (caminhos estáveis para **`/oxe-execute`**). Depois de **`lifecycle.closed`** (tipicamente após **`/oxe-verify`** com sucesso), estes ficheiros **deixam de ser necessários** para o dia a dia e **poluem** o explorador e o `git status` se ficarem sempre na raiz.
+
+**Recomendação (equilíbrio entre limpeza e auditoria):**
+
+1. **Arquivar por sessão (`runId`), não apagar** — Move-se o histórico para **`.oxe/archive/plan-agent-runs/<runId>/`**:
+   - **`messages/`** — todo o conteúdo actual de **`.oxe/plan-agent-messages/`** excepto um `README.md` de índice opcional (ou mover também o README antigo para dentro do arquivo).
+   - **`plan-agents.json`** — cópia final do blueprint **no momento do fecho** (o JSON na raiz `.oxe/` pode ser **removido** após cópia, ou substituído por um stub mínimo só se outra ferramenta exigir o path; o normal é remover da raiz após arquivo).
+2. **Não commitar ruído sem querer** — Quem preferir **não** versionar handoffs: adicionar **`.oxe/archive/plan-agent-runs/`** ou **`.oxe/plan-agent-messages/`** ao **`.gitignore`** do projeto (trade-off: perde-se histórico no Git).
+3. **Pastas por sessão desde o primeiro dia** (alternativa maior) — **`.oxe/plan-agent-runs/<runId>/messages/`** + **`plan-agents.json`** dentro da mesma pasta, com um **`plan-agents.active`** ou entrada em **STATE** a apontar o `runId` corrente. Exige alterar todos os workflows e o mental model dos agentes; reserve-se para uma evolução do pacote se a raiz `.oxe/` tiver de ficar sempre mínima.
+
+**Resumo:** para o fluxo OXE actual, **arquivar em `.oxe/archive/plan-agent-runs/<runId>/` após verify OK** é a forma mais simples de “não precisarem mais existir na raiz” sem perder rastreabilidade. Apagar em massa só com **confirmação explícita** do utilizador.
+
 ## Ver também
 
 - [`oxe/workflows/plan-agent.md`](../plan-agent.md)

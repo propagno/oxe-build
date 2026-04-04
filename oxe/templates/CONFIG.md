@@ -45,6 +45,10 @@ Keys explícitas no `config.json` **prevalecem** sobre os valores do profile.
 
 Use `npx oxe-cc --no-install-config` para ignorar este bloco numa instalação.
 
+### Plan-agent, arquivo e Git
+
+**`.oxe/plan-agents.json`** e **`.oxe/plan-agent-messages/`** são artefactos de trabalho durante a trilha **plan → execute → verify**. Após verify com sucesso, o fluxo OXE **recomenda** arquivar em **`.oxe/archive/plan-agent-runs/<runId>/`** (mensagens + cópia do JSON) para limpar a raiz de `.oxe/` — ver **`oxe/workflows/references/plan-agent-chat-protocol.md`**. Não há chave em `config.json` para isto; é passo manual ou proposto pelo agente em **`verify`**. Se não quiser versionar handoffs, pode adicionar **`.oxe/archive/plan-agent-runs/`** ou **`.oxe/plan-agent-messages/`** ao **`.gitignore`** do projeto (perde histórico no Git).
+
 Chaves desconhecidas são listadas como aviso no `doctor` / `status`. Valores em falta usam o mesmo significado que no template (omissões seguras).
 
 ## Exemplo: projeto pequeno (< 50 arquivos)

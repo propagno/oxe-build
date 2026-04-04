@@ -2,6 +2,8 @@
 description: "OXE — Valida implementação (.oxe/VERIFY.md)"
 ---
 
+OXE — Valida implementação (.oxe/VERIFY.md)
+
 Executa o workflow **OXE verify**. Lê e aplica **integralmente**:
 
 `oxe/workflows/verify.md` (na raiz do repositório em contexto)
