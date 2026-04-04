@@ -16,6 +16,22 @@ Não substitui **SPEC** nem **PLAN**; alimenta decisões que depois entram na SP
 - Segurança: não gravar segredos nem valores de variáveis de ambiente.
 </context>
 
+<thinking_depth>
+## Profundidade de Raciocínio
+
+Antes de iniciar a pesquisa, classificar o tipo de investigação e calibrar a profundidade:
+
+| Tipo | Indicadores | Abordagem |
+|------|-------------|-----------|
+| `surface` | Coletar fatos, comparar 2-3 opções conhecidas, confirmar API | Pesquisa padrão — fontes diretas, resposta objetiva |
+| `standard` | Análise de trade-offs, integração de sistemas, avaliação de bibliotecas | Evidências múltiplas, prós/contras explícitos, referências cruzadas |
+| `deep` | Reverse engineering de sistema existente, design de arquitetura nova, migração complexa, brownfield | **Extended thinking recomendado** se o modelo suportar — ativar raciocínio estendido antes de produzir a nota |
+
+Anotar `thinking_depth: surface | standard | deep` no frontmatter da nota de pesquisa gerada.
+
+**Quando `deep`:** instrua o modelo (explicitamente se necessário) a "raciocinar em profundidade antes de escrever a nota" — explorando hipóteses, descartando alternativas, mapeando incertezas antes de consolidar evidências.
+</thinking_depth>
+
 <process>
 1. Garantir pastas `.oxe/` e `.oxe/research/`.
 2. Escolher `YYYY-MM-DD-<slug>.md` único; se colisão, acrescentar sufixo ao slug (ex. `-b`).

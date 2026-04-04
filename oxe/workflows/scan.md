@@ -18,6 +18,20 @@ Se **`.oxe/config.json`** tiver `scan_focus_globs` ou `scan_ignore_globs`, **pri
 
 </context>
 
+<mode_detection>
+## Detecção automática de modo: bootstrap vs refresh
+
+Antes de iniciar, verificar se `.oxe/codebase/` já existe com os sete mapas:
+
+- **Modo bootstrap** (padrão quando codebase/ não existe ou está incompleto): produzir os sete arquivos do zero. Comportamento descrito no `<process>` abaixo.
+- **Modo refresh** (quando codebase/ existe e tem os sete mapas): executar a lógica de `oxe/workflows/compact.md` — comparar mapas existentes ao repo atual, atualizar incrementalmente, produzir `CODEBASE-DELTA.md` e `RESUME.md`. **Não refazer do zero.**
+
+Flag `--full`: forçar modo bootstrap mesmo se codebase/ existir.
+Flag `--refresh`: forçar modo refresh.
+
+**Sem flag:** automático por contexto. Se os mapas existem e o último scan foi há menos de `scan_max_age_days` (config), sugerir refresh mas perguntar ao usuário antes de executar o scan completo.
+</mode_detection>
+
 <process>
 1. Garantir pastas `.oxe/` e `.oxe/codebase/`.
 2. Inventariar o repo (Glob/Grep): linguagens, manifests (`package.json`, `pom.xml`, `go.mod`, etc.), pastas principais — aplicando foco/ignore da config se houver.

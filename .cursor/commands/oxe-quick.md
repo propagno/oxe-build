@@ -2,7 +2,7 @@
 description: "OXE — Modo rápido com Plan-Driven Dynamic Agents lean: objetivo → passos → agentes por domínio (opcional) → verificar"
 ---
 
-OXE — Modo rápido (.oxe/QUICK.md)
+OXE — Modo rápido com Plan-Driven Dynamic Agents lean: objetivo → passos → agentes por domínio (opcional) → verificar
 
 Executa o workflow **OXE quick** no repositório atual. Lê e aplica **integralmente** o ficheiro no workspace:
 

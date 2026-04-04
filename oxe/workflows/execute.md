@@ -72,10 +72,32 @@ Este plano tem [N] tarefas em [X] ondas. Como quer executar?
 **Persistir escolha:** registrar em STATE.md: `execute_mode: completo | por_onda | por_tarefa`. Se STATE já tiver o campo, não perguntar novamente — usar o modo armazenado.
 </execution_mode_selection>
 
+<failure_mode>
+## Modo de falha inline (Verificar falha durante execute)
+
+Quando o comando `**Verificar:**` de uma tarefa `Tn` falha, **não parar silenciosamente**. Executar este ciclo inline sem exigir que o usuário chame `/oxe-debug` separadamente:
+
+1. **Diagnóstico rápido:** listar 2-3 hipóteses de causa baseadas no output de erro.
+2. **Fix mais provável:** aplicar o fix para a hipótese #1.
+3. **Re-verificar:** rodar o `Verificar` novamente.
+4. Se passou: continuar onda normalmente; registrar na onda que houve 1 iteração de fix.
+5. Se falhou novamente (2ª tentativa): aplicar hipótese #2 e tentar 1 vez mais.
+6. Se falhou após 2 tentativas: **pausar** — exibir as hipóteses testadas, evidências coletadas, e sugerir `/oxe-forensics` com contexto completo. Registrar em STATE.md: `execute_blocked: Tn | motivo`.
+
+**Auto-loop no Modo B:** se `execute_mode: por_onda` e `loop_max` > 1 em STATE.md, o ciclo de retry roda automaticamente até `loop_max` tentativas antes de escalar para forensics.
+</failure_mode>
+
 <context>
 **Observações pendentes:** verificar `.oxe/OBSERVATIONS.md` no início de cada onda. Se houver entradas `pendente` com impacto `execute` ou `all`, incorporar no trabalho da onda atual e marcá-las `incorporada → execute (data)`.
 
 **Quick-agents (lean PDDA):** se existir **`.oxe/quick-agents.json`** com `status: active` e a execução for baseada em **`QUICK.md`** (não há PLAN.md), adotar o `role` e `persona` de cada agente para os `steps[]` atribuídos. Ao concluir todos os steps, marcar `quick-agents.json` → `status: done` e sugerir `/oxe-verify`.
+
+**Model hints (blueprint com agentes):** ao apresentar a atribuição de cada agente no início da onda, exibir `model_hint` se presente:
+```
+Agente: agent-auth — "Especialista em JWT"  [modelo: powerful]
+Tarefas: T1, T2
+```
+Se `model_hint` estiver ausente, não exibir a linha. O usuário pode configurar o modelo no IDE antes de iniciar aquele agente.
 
 **Blueprint plan-agent (Modo com Agentes):** adotar `role`/`scope` de **`.oxe/plan-agents.json`** SOMENTE quando:
 1. `lifecycle.status` ∈ `{ pending_execute, executing }` (não usar se `closed` ou `invalidated`).

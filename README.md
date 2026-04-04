@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
-**Versão:** `0.5.0` · [package.json](package.json)
+**Versão:** `0.6.0` · [package.json](package.json)
 
 ```bash
 npx oxe-cc@latest
@@ -25,71 +25,85 @@ OXE é um **framework de desenvolvimento assistido por IA** baseado em três pri
 - **Context engineering** — o estado do trabalho fica em arquivos pequenos dentro de `.oxe/`, não na memória do chat. O agente lê o que precisa, quando precisa — sem sobrecarregar o contexto com decisões já tomadas.
 - **Plan-Driven Dynamic Agents** — quando há múltiplos domínios, o plano cria agentes específicos para *aquela demanda*. Agentes não são reaproveitados entre projetos ou demandas.
 
-O resultado: **menos requisições**, **mais coerência**, e um fluxo de desenvolvimento que funciona do mesmo jeito em qualquer IDE — Cursor, Claude Code, Copilot, Codex ou qualquer outra suportada.
+O resultado: **menos requisições**, **mais coerência**, e um fluxo que funciona do mesmo jeito em qualquer IDE.
+
+---
+
+## Os 8 comandos que você precisa conhecer
+
+```
+/oxe              → onde estou / o que faço / help
+/oxe-obs          → registrei algo importante (incorporado automaticamente)
+/oxe-quick        → tarefa pequena, sem cerimônia
+/oxe-scan         → mapeia o projeto (ou atualiza se já mapeado)
+/oxe-spec         → nova feature: perguntas → requisitos → roteiro
+/oxe-plan         → tarefas por onda (--agents para multi-agente)
+/oxe-execute      → implementar (A: 1 sessão | B: por onda | C: por tarefa)
+/oxe-verify       → validar que está pronto
+```
+
+Tudo o mais é ativado automaticamente por contexto ou existe como escape hatch.
 
 ---
 
 ## A cadeia
 
 ```
-/oxe-obs  ← registrar uma observação a qualquer momento
-     ↓ (incorporada automaticamente no próximo passo)
-
-/oxe-scan → /oxe-spec → /oxe-plan ──────────────────→ /oxe-execute → /oxe-verify
-                ↓              ↓
-           /oxe-discuss   /oxe-plan-agent (com agentes)
-           (decisões)
-                              ↓ atalho para trabalho pequeno
-                         /oxe-quick (spec + plan + agentes, tudo lean)
+/oxe-obs (qualquer momento)
+     ↓
+/oxe-scan → /oxe-spec → /oxe-plan ──────────→ /oxe-execute → /oxe-verify
+                              ↓
+                         /oxe-quick (trabalho pequeno)
 ```
 
 Cada passo lê o anterior como contexto e escreve seu artefato em `.oxe/`. Nenhum passo depende de você re-explicar o que já foi decidido.
 
 ---
 
-## Comandos
+## Como cada comando fica mais inteligente
+
+| Comando | Inteligência embutida |
+|---------|----------------------|
+| `/oxe` | Sem input → próximo passo. Com texto → roteamento. Com "help" → 8 comandos. |
+| `/oxe-scan` | Se `.oxe/codebase/` já existe → modo refresh automático. `--full` força scan completo. |
+| `/oxe-plan` | 3+ domínios → sugere `--agents`. Com `--agents` → gera blueprint com `model_hint` por agente. |
+| `/oxe-execute` | Verificar falha → diagnóstico inline (2-3 hipóteses + fix). Sem precisar chamar `/oxe-debug`. |
+| `/oxe-verify` | `verification_depth: "thorough"` → gaps automático. `security_in_verify: true` → OWASP automático. |
+| `/oxe-project` | `milestone` + `workstream` + `checkpoint` em um único comando. |
+
+---
+
+## Comandos completos
 
 ### Fluxo principal
 
 | Comando | O que faz | Artefato |
 |---------|-----------|----------|
-| `/oxe-scan` | Mapeia o repositório: stack, estrutura, testes, convenções. Base para spec e plan. | `.oxe/codebase/*.md` |
-| `/oxe-spec` | Conduz 5 fases: perguntas → pesquisa → requisitos (v1/v2/fora) → roteiro → aprovação. Produz o contrato da entrega. | `.oxe/SPEC.md` + `.oxe/ROADMAP.md` |
-| `/oxe-discuss` | Registra decisões de implementação com IDs estáveis (D-01, D-02, …) antes de planejar. | `.oxe/DISCUSS.md` |
-| `/oxe-plan` | Gera tarefas atômicas em ondas, cada uma com bloco de verificação e critérios vinculados à SPEC. | `.oxe/PLAN.md` |
-| `/oxe-plan-agent` | Igual ao plan + blueprint de agentes por domínio: roles específicos, ondas paralelas, handoffs. Agentes são novos por demanda. | `.oxe/PLAN.md` + `.oxe/plan-agents.json` |
-| `/oxe-execute` | Executa o plano. Pergunta UMA vez como executar: **Completo** (1 sessão), **Por onda**, ou **Por tarefa**. | `.oxe/STATE.md` |
-| `/oxe-verify` | Validação em 4 camadas: auditoria do PLAN, critérios da SPEC, fidelidade das decisões D-NN, checklist UAT. | `.oxe/VERIFY.md` |
+| `/oxe` | Entrada universal: próximo passo, roteamento ou help | — |
+| `/oxe-scan` | Mapeia o repo (bootstrap) ou atualiza mapas (refresh automático) | `.oxe/codebase/*.md` |
+| `/oxe-spec` | Spec em 5 fases: perguntas → pesquisa → requisitos R-ID → roteiro → aprovação | `.oxe/SPEC.md` + `.oxe/ROADMAP.md` |
+| `/oxe-plan` | Plano por ondas. `--agents` ativa blueprint com `model_hint` por agente | `.oxe/PLAN.md` [+ `plan-agents.json`] |
+| `/oxe-execute` | Execução A/B/C com debug inline automático em falhas | `.oxe/STATE.md` |
+| `/oxe-verify` | Até 6 camadas por config: audit + critérios + decisões + UAT + gaps + segurança | `.oxe/VERIFY.md` |
+| `/oxe-obs` | Registra observação → auto-incorporada nos próximos workflows | `.oxe/OBSERVATIONS.md` |
+| `/oxe-quick` | Lean: objetivo → passos → agentes opcionais → verify | `.oxe/QUICK.md` |
+| `/oxe-project` | Unifica: `milestone`, `workstream`, `checkpoint` | vários |
 
-### Atalhos e suporte
+### Escape hatches (não precisam ser decorados)
 
-| Comando | O que faz |
-|---------|-----------|
-| `/oxe-obs [texto]` | Registra uma observação (restrição, descoberta, preferência) que é incorporada automaticamente no próximo spec/plan/execute — sem re-explicar. |
-| `/oxe-quick` | Fluxo lean para trabalho pequeno: objetivo (minispec) → passos (mini-plano) → agentes por domínio se necessário → verificar. |
-| `/oxe-research` | Cria notas de pesquisa datadas (spike, mapa de sistema, engenharia reversa) antes de planejar. |
-| `/oxe-validate-gaps` | Auditoria de cobertura pós-verify: gaps de teste e evidência fraca. |
-| `/oxe-next` | Sugere o próximo passo lógico a partir do `STATE.md`. |
-| `/oxe-route` | Traduz linguagem natural para o comando OXE correto. |
-| `/oxe-forensics` | Diagnóstico pós-falha: linha do tempo, hipótese de causa, reentrada na trilha. |
-| `/oxe-debug` | Ciclo hipótese → experimento → evidência durante a execução. |
-
-### Contexto e sessão
-
-| Comando | O que faz |
-|---------|-----------|
-| `/oxe-compact` | Atualiza os mapas `.oxe/codebase/` com o estado atual do repo + delta do que mudou. |
-| `/oxe-checkpoint` | Snapshot nomeado da sessão atual. |
-| `/oxe-milestone new\|complete\|status\|audit` | Marcos de entrega (M-01, M-02, …). `complete` arquiva SPEC/PLAN/VERIFY em `.oxe/milestones/M-NN/`. |
-| `/oxe-workstream new\|switch\|list\|close` | Trilhas paralelas de desenvolvimento. Cada trilha tem artefatos independentes em `.oxe/workstreams/<nome>/`. |
-
-### UI e revisão
-
-| Comando | O que faz |
-|---------|-----------|
-| `/oxe-ui-spec` | Contrato de UI/UX derivado da SPEC (estados, acessibilidade, breakpoints). |
-| `/oxe-ui-review` | Auditoria da implementação de UI contra o UI-SPEC. |
-| `/oxe-review-pr` | Revisão de PR/diff: riscos, testes sugeridos, checklist. |
+| Comando | Quando usar |
+|---------|-------------|
+| `/oxe-research` | Spike, mapa de sistema, engenharia reversa |
+| `/oxe-forensics` | Sugerido automaticamente pelo execute/verify em falha persistente |
+| `/oxe-debug` | Diagnóstico técnico standalone (integrado ao execute) |
+| `/oxe-loop` | Retry iterativo de onda standalone (integrado ao Modo B do execute) |
+| `/oxe-security` | Auditoria OWASP standalone (automático no verify via config) |
+| `/oxe-validate-gaps` | Auditoria de cobertura standalone (automático no verify via config) |
+| `/oxe-ui-spec` | Contrato UI/UX derivado da SPEC |
+| `/oxe-ui-review` | Auditoria da implementação UI |
+| `/oxe-review-pr` | Revisão de PR/diff |
+| `/oxe-discuss` | Decisões D-NN (ativado via `discuss_before_plan: true`) |
+| `/oxe-compact` | Refresh explícito do codebase (equivalente a `/oxe-scan` em modo refresh) |
 
 ---
 
@@ -97,62 +111,52 @@ Cada passo lê o anterior como contexto e escreve seu artefato em `.oxe/`. Nenhu
 
 ### Context engineering — estado em disco, não no chat
 
-O problema: agentes perdem contexto entre sessões, e re-explicar tudo em cada sessão é caro. A solução do OXE: cada decisão, requisito e tarefa fica em um arquivo pequeno em `.oxe/`. O agente lê o que precisa, quando precisa.
-
 ```
 .oxe/
 ├── STATE.md          ← fase atual, próximo passo, decisões ativas
-├── SPEC.md           ← o contrato: critérios A1, A2, …
+├── SPEC.md           ← contrato: critérios A1, A2, …
 ├── ROADMAP.md        ← fases de entrega mapeadas a requisitos
-├── DISCUSS.md        ← decisões D-01, D-02, … com rastreabilidade
 ├── PLAN.md           ← tarefas Tn com verificação por item
-├── VERIFY.md         ← resultado da verificação em 4 camadas
-├── OBSERVATIONS.md   ← observações que se incorporam automaticamente
+├── VERIFY.md         ← resultado da verificação em até 6 camadas
+├── OBSERVATIONS.md   ← observações incorporadas automaticamente
 ├── codebase/         ← mapa do repo (stack, estrutura, testes, …)
 ├── milestones/       ← arquivo de entregas M-NN
 └── workstreams/      ← trilhas paralelas de desenvolvimento
 ```
 
-### /oxe-spec — spec em 5 fases, máx 3 rodadas de perguntas
+### `/oxe-spec` — spec em 5 fases, máx 3 rodadas de perguntas
 
-Em vez de 10 idas e vindas para clarificar o que você quer, o spec estrutura a conversa:
+1. **Perguntas** — blocos de 3-5 por rodada, máximo 3 rodadas
+2. **Pesquisa** — proposta inline na Fase 2 (sem sair do spec)
+3. **Requisitos** — tabela R-ID com v1/v2/fora e critérios A*
+4. **Roteiro** — fases de entrega → `.oxe/ROADMAP.md`
+5. **Aprovação** → instrui `/oxe-plan` ou `/oxe-plan --agents`
 
-1. **Perguntas** — blocos de 3-5 perguntas por rodada, máximo 3 rodadas
-2. **Pesquisa** — investigação de domínio antes de escrever requisitos (opcional)
-3. **Requisitos** — tabela R-ID com versão v1 (agora), v2 (depois), fora (nunca)
-4. **Roteiro** — fases de entrega mapeadas a requisitos → `.oxe/ROADMAP.md`
-5. **Aprovação** — você confirma e escolhe: `/oxe-plan` ou `/oxe-plan-agent`
-
-### /oxe-execute — economia de requisições explícita
-
-Quando o plano tem 2+ ondas, o execute pergunta **uma vez**:
+### `/oxe-execute` — economia de requisições com debug automático
 
 ```
-A) Completo   → todas as ondas em 1 sessão  (ideal: Copilot, Claude, Gemini)
+A) Completo   → todas as ondas em 1 sessão  (ideal: Claude, Copilot, Gemini)
 B) Por onda   → onda 1, você verifica, chama de novo  (N sessões)
 C) Por tarefa → máximo controle  (N tarefas = N sessões)
 ```
 
-Modo A é o padrão para quem quer gastar menos requisições. A escolha fica salva no `STATE.md`.
+Se uma tarefa falha: diagnóstico inline automático (2-3 hipóteses → fix → retry). Sem precisar chamar `/oxe-debug` separadamente.
 
-### /oxe-obs — observação sem re-explicar
-
-Percebeu uma restrição durante a execução? Registre em 1 request:
+### `/oxe-obs` — observação sem re-explicar
 
 ```
 /oxe-obs JWT expiration deve ser configurável via env var, não hardcoded
 ```
 
-O próximo `/oxe-plan`, `/oxe-spec` ou `/oxe-execute` lê `.oxe/OBSERVATIONS.md` e incorpora a observação automaticamente — sem você precisar repetir.
+O próximo `/oxe-plan`, `/oxe-spec` ou `/oxe-execute` incorpora automaticamente — sem prompt extra.
 
-### Plan-Driven Dynamic Agents — agentes por demanda, não genéricos
+### Plan-Driven Dynamic Agents — agentes por demanda
 
-Quando você usa `/oxe-plan-agent`, os agentes são criados **para aquele plano específico**:
-- Cada `runId` é único — nunca reutilizado entre demandas
-- O `role` descreve o domínio da demanda: "Especialista em autenticação JWT para este plano", não "Backend Developer"
-- Agentes são invalidados quando o plano termina ou uma nova demanda começa
-
-O `/oxe-quick` tem a versão lean: até 3 agentes derivados dos passos, criados para aquele quick task, sem handoff de mensagens.
+Com `/oxe-plan --agents` (ou sugerido quando 3+ domínios detectados):
+- `runId` único por demanda — nunca reutilizado
+- `role` específico ao domínio desta entrega
+- `model_hint` por agente: `"fast"` / `"balanced"` / `"powerful"`
+- Execute exibe o hint ao iniciar cada agente para o usuário configurar o modelo
 
 ---
 
@@ -161,21 +165,18 @@ O `/oxe-quick` tem a versão lean: até 3 agentes derivados dos passos, criados 
 **Requisito:** Node.js 18+
 
 ```bash
-# Na raiz do seu projeto
 npx oxe-cc@latest
 ```
-
-O instalador interativo pergunta: (1) quais IDEs integrar, (2) layout (mínimo só `.oxe/` ou clássico `oxe/` + `.oxe/`). Ao final mostra o que foi criado e sugere o primeiro passo (`/oxe-scan`).
 
 **Confirmar que funcionou:**
 
 | IDE | Comando |
 |-----|---------|
-| Cursor | `/oxe-help` |
-| Copilot (VS Code) | `/oxe-help` (requer `"chat.promptFiles": true`) |
-| Claude Code | `/oxe-help` ou `oxe:help` |
+| Cursor | `/oxe` |
+| Copilot (VS Code) | `/oxe` (requer `"chat.promptFiles": true`) |
+| Claude Code | `/oxe` ou `oxe` |
 | Gemini CLI | `/oxe` após `/commands reload` |
-| Codex | `/prompts:oxe-help` |
+| Codex | `/prompts:oxe` |
 
 <details>
 <summary><strong>Flags de instalação</strong></summary>
@@ -198,16 +199,9 @@ O instalador interativo pergunta: (1) quais IDEs integrar, (2) layout (mínimo s
 <summary><strong>Atualizar e desinstalar</strong></summary>
 
 ```bash
-# Atualizar workflows no projeto
-npx oxe-cc@latest --force
-# ou via Cursor:
-/oxe-update
-
-# Verificar se há versão nova sem atualizar
-npx oxe-cc update --check
-
-# Desinstalar integrações do HOME (mantém .oxe/ no repo)
-npx oxe-cc uninstall --ide-only
+npx oxe-cc@latest --force   # atualizar workflows
+npx oxe-cc update --check   # verificar versão sem atualizar
+npx oxe-cc uninstall --ide-only  # remove integrações (mantém .oxe/)
 ```
 
 </details>
@@ -222,43 +216,37 @@ npm test          # 144 testes
 node bin/oxe-cc.js --help
 ```
 
-Para testar no seu projeto: `npm link` aqui, depois `npm link oxe-cc` no projeto alvo.
-
 </details>
 
 ---
 
 ## CLI (`oxe-cc`)
 
-Comandos de terminal para usar em CI ou sem chat aberto:
-
 | Comando | O que faz |
 |---------|-----------|
 | `oxe-cc` / `oxe-cc install` | Instala workflows e integrações |
-| `oxe-cc doctor` | Diagnóstico completo: Node, workflows, config, STATE, scan/compact antigos, SPEC, PLAN |
-| `oxe-cc status` | Diagnóstico leve + um único próximo passo sugerido |
-| `oxe-cc status --json` | Mesmo, em JSON (para pipelines e automações) |
-| `oxe-cc update` | Atualiza workflows do projeto para a versão mais recente |
-| `oxe-cc init-oxe` | Só bootstrap do `.oxe/` (STATE, config, codebase/) |
+| `oxe-cc doctor` | Diagnóstico completo: Node, workflows, config, STATE, scan antigo |
+| `oxe-cc status` | Próximo passo sugerido |
+| `oxe-cc status --json` | Mesmo, em JSON (para pipelines) |
+| `oxe-cc update` | Atualiza workflows para a versão mais recente |
+| `oxe-cc init-oxe` | Bootstrap do `.oxe/` (STATE, config, codebase/) |
 | `oxe-cc uninstall` | Remove integrações OXE do HOME e do repo |
 
 ---
 
 ## Configuração
 
-Arquivo `.oxe/config.json` criado no install. Principais opções:
+Arquivo `.oxe/config.json`. Principais opções:
 
 | Chave | Padrão | Descrição |
 |-------|--------|-----------|
-| `profile` | `"balanced"` | `strict` / `balanced` / `fast` / `legacy` — expande em múltiplas opções |
-| `scale_adaptive` | `true` | `/oxe-scan` sugere o profile automaticamente pelo tamanho do projeto |
+| `profile` | `"balanced"` | `strict` / `balanced` / `fast` / `legacy` |
+| `verification_depth` | `"standard"` | `"thorough"` ativa gaps automático no verify (Camada 5) |
+| `security_in_verify` | `false` | `true` ativa OWASP automático no verify (Camada 6) |
 | `discuss_before_plan` | `false` | Exige `/oxe-discuss` antes do `/oxe-plan` |
-| `verification_depth` | `"standard"` | `quick` / `standard` / `thorough` |
-| `after_verify_suggest_uat` | `false` | Gera checklist UAT (Camada 4) ao final do verify |
-| `scan_max_age_days` | — | `doctor` avisa quando o scan estiver velho |
-| `plugins` | — | Habilita hooks de lifecycle em `.oxe/plugins/*.cjs` |
-
-Referência completa: [`oxe/templates/CONFIG.md`](oxe/templates/CONFIG.md)
+| `scale_adaptive` | `true` | Scan sugere o profile pelo tamanho do projeto |
+| `scan_max_age_days` | — | Doctor avisa quando o scan estiver velho |
+| `plugins` | — | Hooks de lifecycle em `.oxe/plugins/*.cjs` |
 
 ---
 
@@ -267,22 +255,15 @@ Referência completa: [`oxe/templates/CONFIG.md`](oxe/templates/CONFIG.md)
 ```js
 const oxe = require('oxe-cc');
 
-// Parsear artefatos
 const plan  = oxe.parsePlan(fs.readFileSync('.oxe/PLAN.md', 'utf8'));
 const spec  = oxe.parseSpec(fs.readFileSync('.oxe/SPEC.md', 'utf8'));
 const state = oxe.parseState(fs.readFileSync('.oxe/STATE.md', 'utf8'));
 
-// Validar que as decisões D-NN foram cobertas no plano
 const fidelity = oxe.validateDecisionFidelity(discussMd, planMd);
-
-// Doctor com verificação de segurança
-const result = oxe.runDoctorChecks({ projectRoot: process.cwd(), includeSecurity: true });
-
-// Profiles e health
+const result   = oxe.runDoctorChecks({ projectRoot: process.cwd() });
 const expanded = oxe.health.expandExecutionProfile('strict');
 ```
 
-Namespaces: `oxe.health`, `oxe.workflows`, `oxe.security`, `oxe.plugins`, `oxe.install`.
 TypeScript: [`lib/sdk/index.d.ts`](lib/sdk/index.d.ts) · Docs: [`lib/sdk/README.md`](lib/sdk/README.md)
 
 ---
@@ -292,10 +273,9 @@ TypeScript: [`lib/sdk/index.d.ts`](lib/sdk/index.d.ts) · Docs: [`lib/sdk/README
 | Situação | O que tentar |
 |----------|-------------|
 | Comandos não aparecem no Cursor | Confirme `~/.cursor/commands/`; reinicie o Cursor |
-| `/oxe-*` não aparecem no Copilot | Ative `"chat.promptFiles": true`; confirme prompts em `~/.copilot/prompts/` |
-| Copilot CLI não reconhece `/oxe` | Use `--copilot-cli` no install e rode `/skills reload` |
+| `/oxe-*` não aparecem no Copilot | Ative `"chat.promptFiles": true`; confirme `~/.copilot/prompts/` |
 | Arquivos não atualizam | Reinstale com `--force` |
-| `ETARGET` / versão não encontrada | `npm cache clean --force` ou `npx oxe-cc@0.5.0` |
+| `ETARGET` / versão não encontrada | `npm cache clean --force` ou `npx oxe-cc@0.6.0` |
 | Erro no WSL sobre Node | Use Node instalado dentro do WSL |
 
 `oxe-cc --help` · `oxe-cc doctor` · `OXE_NO_BANNER=1` desativa o banner

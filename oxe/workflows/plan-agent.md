@@ -22,7 +22,7 @@ Se o utilizador pedir **`--replan`**: aplicar a mesma lógica de replanejamento 
   - **`sequential`** — uma onda por agente (ondas com um único id cada) ou execução estritamente ordenada.
   - **`parallel_per_wave`** — dentro de cada onda, agentes sem dependência mútua podem correr em paralelo; ondas são sequenciais.
   - **`hybrid`** — ondas sequenciais; dentro da onda, paralelo quando `dependencies` já satisfeitas (é o caso mais comum).
-- **Schema:** **`oxePlanAgentsSchema: 2`** obrigatório nas novas gerações; incluir **`runId`** (string opaca única, ex. `oxe-{ISO8601}-{6 hex aleatórios}`) e **`lifecycle`**: `{ "status": "pending_execute", "since": "<ISO>" }`. Blueprints com schema **1** (legado) não aplicam exclusividade estrita até serem regerados.
+- **Schema:** **`oxePlanAgentsSchema: 3`** obrigatório nas novas gerações (schema **2** = sem `model_hint`; schema **1** = legado sem `runId`/`lifecycle`). Incluir **`runId`** (string opaca única, ex. `oxe-{ISO8601}-{6 hex aleatórios}`) e **`lifecycle`**: `{ "status": "pending_execute", "since": "<ISO>" }`. Blueprints com schema **2** continuam válidos; schema **1** não aplica exclusividade estrita até serem regerados.
 - Modelo JSON: ver **`oxe/templates/plan-agents.template.json`** e **`oxe/schemas/plan-agents.schema.json`**.
 </context>
 
@@ -55,6 +55,22 @@ Se já existir `.oxe/plan-agents.json` com status não-terminal (`pending_execut
 Seguir **integralmente** o bloco **`<format_plan>`** e **`<plan_quality_gate>`** do ficheiro **`oxe/workflows/plan.md`** ao escrever `.oxe/PLAN.md` (incluindo gate antes de fechar).
 </format_plan_md>
 
+<model_hints>
+## Model Hints por Agente (schema v3, opcional)
+
+Cada agente pode declarar `model_hint` para orientar qual tier de modelo usar:
+
+| Valor | Quando usar |
+|-------|-------------|
+| `"powerful"` | Agentes de análise, arquitetura, pesquisa, decisões de design |
+| `"balanced"` | Agentes de implementação de features, integração, refactor |
+| `"fast"` | Agentes de review, testes, lint, validação, tarefas repetitivas |
+
+**Regra de uso:** quando o `plan-agents.json` tiver `model_hint`, o **`execute.md`** exibe a sugestão ao apresentar a atribuição do agente — permitindo ao usuário configurar o modelo antes de iniciar aquele agente.
+
+`model_hint` é opcional: omitir significa "sem preferência" (executa com o modelo padrão da sessão).
+</model_hints>
+
 <format_plan_agents_json>
 Raiz do ficheiro **`.oxe/plan-agents.json`**:
 
@@ -80,6 +96,7 @@ Cada **agente**:
 | `dependencies` | não | Lista de **`id`** de outros agentes que devem concluir antes (grafo entre agentes). |
 | `inputs` | não | Caminhos ou nomes de artefactos a carregar no contexto (ex.: `.oxe/STATE.md`, `.oxe/SPEC.md`). |
 | `outputs` | não | Paths ou padrões de ficheiros esperados (orientação; o código real vem do PLAN). |
+| `model_hint` | não | Tier de modelo sugerido: `"fast"` \| `"balanced"` \| `"powerful"`. Ver `<model_hints>`. |
 
 **Personas disponíveis:** `executor`, `planner`, `verifier`, `researcher`, `debugger`, `architect`, `ui-specialist`, `db-specialist`. Ver `oxe/personas/README.md` para descrição de cada uma. Personas customizadas do projeto ficam em `.oxe/personas/`.
 
@@ -89,7 +106,7 @@ Cada **agente**:
 <plan_agent_quality_gate>
 Antes de finalizar, validar **em conjunto** `PLAN.md` + `plan-agents.json`:
 
-1. **Schema:** JSON válido; `oxePlanAgentsSchema === 2`; presentes **`runId`** e **`lifecycle`** com `status: pending_execute` e `since` ISO; todos os `id` de agente únicos.
+1. **Schema:** JSON válido; `oxePlanAgentsSchema ∈ {2, 3}` (3 para novos blueprints); presentes **`runId`** e **`lifecycle`** com `status: pending_execute` e `since` ISO; todos os `id` de agente únicos. Se schema 3: `model_hint` de cada agente é `"fast"`, `"balanced"`, `"powerful"` ou ausente.
 2. **Cobertura de tarefas:** a união dos `taskIds` de todos os agentes é **igual** ao conjunto de `### Tn` presentes no `PLAN.md` (sem tarefa órfã nem tarefa duplicada entre agentes).
 3. **Dependências de agente:** só referenciam `id` existentes; **sem ciclos**; se o agente A depende de B, então **onda(B) < onda(A)** em `execution.waves` (primeira aparição do id define a onda).
 4. **Ondas:** cada `id` em `agents` aparece **exatamente uma vez** no total das `waves`; ordem das ondas reflete dependências e alinha com **Onda:** do `PLAN.md` (tarefas na mesma onda do PLAN podem mapear para agentes na mesma wave se não houver dependência agente-a-agente).
@@ -107,7 +124,7 @@ Resumo obrigatório no chat: `Gate plan-agent: OK` ou `Gate plan-agent: corrigid
 2. Conceber **agentes** e **ondas** (grafo por dependências de domínio); depois derivar **tarefas `Tn`** com o formato habitual do PLAN (uma tarefa continua a ser a unidade de **Verificar** e **Aceite vinculado**).
 3. Escrever **`.oxe/PLAN.md`** (cabeçalho YAML como em `oxe/templates/PLAN.template.md`; em **--replan**, secção Replanejamento).
 4. Gerar **`runId`** novo e **`lifecycle`**: `{ "status": "pending_execute", "since": "<ISO agora>" }`.
-5. Escrever **`.oxe/plan-agents.json`** a partir de **`oxe/templates/plan-agents.template.json`**, com **`oxePlanAgentsSchema: 2`**, `goal`, `agents`, `execution`, `runId`, `lifecycle`.
+5. Escrever **`.oxe/plan-agents.json`** a partir de **`oxe/templates/plan-agents.template.json`**, com **`oxePlanAgentsSchema: 3`**, `goal`, `agents` (incluindo `model_hint` por agente conforme `<model_hints>`), `execution`, `runId`, `lifecycle`.
 6. Criar **`.oxe/plan-agent-messages/`** e **`.oxe/plan-agent-messages/README.md`** a partir de **`oxe/templates/plan-agent-messages-README.template.md`**.
 7. Atualizar **`.oxe/STATE.md`**: fase `plan_ready`, próximo passo `oxe:execute`; preencher **Blueprint de agentes (sessão)** — `run_id` (= `runId`), `lifecycle_status` (= `pending_execute`), **última onda** — (ou `—`).
 8. Aplicar **`<plan_agent_quality_gate>`**; corrigir até passar.

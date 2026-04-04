@@ -11,11 +11,30 @@ No **projeto**, os passos canónicos estão em **`.oxe/workflows/*.md`** (layout
 </context>
 
 <output>
+## Os 8 comandos essenciais
+
+```
+/oxe              → onde estou / o que faço / help (entrada universal)
+/oxe-obs          → registrei algo importante — incorporado automaticamente nos próximos passos
+/oxe-quick        → tarefa pequena, sem cerimônia (com agentes lean quando necessário)
+/oxe-scan         → mapeia o projeto (ou atualiza o mapa se já existir)
+/oxe-spec         → nova feature: perguntas → pesquisa → requisitos → roteiro → aprovação
+/oxe-plan         → tarefas por onda (--agents para blueprint multi-agente)
+/oxe-execute      → implementar (A: 1 sessão | B: por onda | C: por tarefa)
+/oxe-verify       → validar (camadas 5+6 opcionais via config: gaps + segurança)
+```
+
+Tudo o mais é ativado automaticamente por contexto, por config, ou existe como escape hatch.
+
+---
+
 ## Integrações principais (referência)
 
 ### Cursor
 
-Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-plan-agent`, `/oxe-verify`, `/oxe-next`, `/oxe-quick`, `/oxe-execute`, `/oxe-obs`, `/oxe-update`, `/oxe-help`, `/oxe-forensics`, `/oxe-debug`, `/oxe-route`, `/oxe-research`, `/oxe-validate-gaps`, `/oxe-compact`, `/oxe-checkpoint`, `/oxe-ui-spec`, `/oxe-ui-review`, `/oxe-milestone`, `/oxe-workstream` (instalados em `~/.cursor/commands/` pelo `oxe-cc` após `npm run sync:cursor` no pacote ou cópia equivalente). **Review de PR:** no Cursor não há slash dedicado — peça em linguagem natural seguindo `oxe/workflows/review-pr.md` (ou `.oxe/workflows/review-pr.md`) em contexto.
+Slash commands essenciais: `/oxe`, `/oxe-obs`, `/oxe-quick`, `/oxe-scan`, `/oxe-spec`, `/oxe-plan`, `/oxe-execute`, `/oxe-verify`
+
+Slash commands completos: `/oxe-discuss`, `/oxe-plan-agent`, `/oxe-project`, `/oxe-loop`, `/oxe-security`, `/oxe-update`, `/oxe-forensics`, `/oxe-debug`, `/oxe-route`, `/oxe-research`, `/oxe-validate-gaps`, `/oxe-compact`, `/oxe-checkpoint`, `/oxe-ui-spec`, `/oxe-ui-review`, `/oxe-milestone`, `/oxe-workstream`, `/oxe-next`, `/oxe-help` (instalados em `~/.cursor/commands/` pelo `oxe-cc`). **Review de PR:** no Cursor não há slash dedicado — peça em linguagem natural seguindo `oxe/workflows/review-pr.md` em contexto.
 
 ### GitHub Copilot (VS Code)
 
@@ -49,29 +68,26 @@ Com **`compact_max_age_days`** em `.oxe/config.json` (ver `oxe/templates/CONFIG.
 
 ## Fluxo completo
 
-0. **obs** *(qualquer momento)* — `/oxe-obs` registra uma observação contextual em `.oxe/OBSERVATIONS.md`; incorporada automaticamente no próximo spec/plan/execute sem re-explicar (ver seção **Observações** abaixo).
-1. **scan** — após clonar ou quando o repositório mudar muito. Repositórios **legado** (COBOL, JCL, copybooks, VB6, SQL procedures): o passo **scan** aplica `oxe/workflows/references/legacy-brownfield.md` quando esses sinais existirem — preencha `TESTING.md` com honestidade (sem `npm test` fictício) e use `scan_focus_globs` em `.oxe/config.json` (ver `oxe/templates/CONFIG.md`).
-2. **spec** — fluxo em **5 fases**: perguntas (máx 3 rodadas) → pesquisa (opcional) → requisitos R-ID (v1/v2/fora) → roteiro (`.oxe/ROADMAP.md`) → aprovação → instrui plan ou plan-agent.
-2b. **research** (opcional, pode ser proposto pela Fase 2 do spec) — notas datadas em `.oxe/research/` + índice `.oxe/RESEARCH.md`; spikes, mapa de sistema, engenharia reversa, modernização.
-3. **discuss** (opcional) — decisões com IDs D-NN antes do plano; recomendado se `discuss_before_plan` em `.oxe/config.json`. Incorpora OBS pendentes de impacto spec/plan.
-4. **plan** — plano executável + **Verificar** por tarefa, ligado aos critérios A* da SPEC. Incorpora OBS pendentes de impacto plan.
-4b. **plan-agent** (opcional) — igual ao **plan** + **`.oxe/plan-agents.json`** (schema **2**: `runId` **novo** por demanda, `lifecycle`). Agentes criados especificamente para ESTE plano — sem reuso entre demandas. `/oxe-quick` invalida o blueprint.
-5. **execute** — seleção de modo ao iniciar: **A) Completo** (1 sessão/requisição), **B) Por onda** (N sessões), **C) Por tarefa** (controle máximo). Incorpora OBS pendentes de impacto execute.
-6. Implementar mudanças no agente/editor.
-7. **verify** — 4 camadas: auditoria pré-exec, tarefas + critérios A*, fidelidade D-NN, UAT checklist.
-7b. **validate-gaps** (opcional) — após verify, auditoria de cobertura em `.oxe/VALIDATION-GAPS.md`.
-8. **next** — retomar trabalho; no terminal: **`npx oxe-cc status`** sugere um único próximo passo.
+0. **obs** *(qualquer momento)* — `/oxe-obs` registra uma observação contextual; incorporada automaticamente no próximo spec/plan/execute sem re-explicar.
+1. **scan** — após clonar ou quando o codebase mudar. **Inteligente:** se `.oxe/codebase/` já existir, opera em modo refresh (incremental) automaticamente — sem precisar chamar `/oxe-compact` separadamente. Use `--full` para forçar scan completo. Repositórios **legado** (COBOL, JCL, VB6): aplica `legacy-brownfield.md` automaticamente.
+2. **spec** — fluxo em **5 fases**: perguntas (máx 3 rodadas) → pesquisa (proposta inline na Fase 2, sem sair do spec) → requisitos R-ID (v1/v2/fora) → roteiro (`.oxe/ROADMAP.md`) → aprovação. Se `discuss_before_plan: true` na config, o próximo passo após aprovação é `oxe:discuss` antes de plan.
+3. **plan** — plano executável + **Verificar** por tarefa. Se 3+ domínios distintos, **sugere automaticamente** blueprint de agentes (`/oxe-plan --agents`). Sem `--agents`: solo. Com `--agents`: gera também `plan-agents.json` (schema 3 com `model_hint`).
+4. **execute** — modo selecionado 1 vez: **A) Completo** (1 sessão), **B) Por onda**, **C) Por tarefa**. Se Verificar falhar inline: diagnóstico automático (2-3 hipóteses + fix), sem precisar chamar `/oxe-debug` separadamente. Escalação para `/oxe-forensics` só se esgotar tentativas.
+5. **verify** — até **6 camadas** por config: auditoria pré-exec, tarefas + critérios A*, fidelidade D-NN, UAT, **gaps de cobertura** (camada 5 — `verification_depth: "thorough"`), **segurança OWASP** (camada 6 — `security_in_verify: true`). Sem comandos extras.
+6. **→ próximo passo** — `/oxe` sugere automaticamente o que fazer agora (nova feature, milestone, ou revisar gaps).
 
-**Recuperação e meta (mesma trilha, outra camada):**
+**Escape hatches (não precisam ser decorados — aparecem quando necessários):**
 
-- **`/oxe-forensics`** — após `verify` falhar, `doctor` em falta ou estado incoerente; escreve `.oxe/FORENSICS.md` e recomenda **um** reingresso: `scan`, `plan` ou `execute` (ver `forensics.md`).
-- **`/oxe-debug`** — durante **`execute`**, para sintomas técnicos (teste vermelho, stack); escreve `.oxe/DEBUG.md`; **não** substitui `verify` após corrigir (ver `debug.md`).
-- **`/oxe-route`** — desambigua pedido em linguagem natural → **um** workflow/comando; não gera SPEC/PLAN (ver `route.md` e tabela **Router** abaixo).
+- **`/oxe-forensics`** — sugerido automaticamente pelo execute/verify quando falha persiste. Diagnóstico pós-falha + 1 caminho de reentrada.
+- **`/oxe-debug`** — diagnóstico técnico inline durante execute (já integrado ao execute; disponível standalone para controle explícito).
+- **`/oxe-loop`** — iteração até verify passar (disponível standalone; integrado ao Modo B do execute via `loop_max`).
+- **`/oxe-research`** — notas datadas em `.oxe/research/` para spikes, mapas de sistema, engenharia reversa.
+- **`/oxe-route`** — traduz linguagem natural → comando. Equivalente a `/oxe [texto]`.
+- **`/oxe-compact`** — refresh explícito do codebase. Equivalente a `/oxe-scan` sem `--full`.
 
-**Contexto em disco (opcional):**
+**Gestão de projeto (`/oxe-project`):**
 
-- **`/oxe-compact`** — **refresh do projeto**: compara **`.oxe/codebase/*.md`** ao repositório atual, **atualiza** os sete mapas (incremental ou bootstrap como `scan.md` se faltar base), escreve **`.oxe/CODEBASE-DELTA.md`** (o que mudou na documentação) e **`.oxe/RESUME.md`** (trilha OXE + ponte para o delta). Rotina de desenvolvimento; **não** está ligado a limites de chat ou a ferramentas específicas (ver `compact.md`). *Exemplo:* scan mapeou **Angular 17**; após migração implementada para **21**, o compact **corrige** `STACK.md`/testes/convenções face ao repo — intenção: **documentação OXE = código atual**, não refazer scan completo só por bump de major.
-- **`/oxe-checkpoint`** — **snapshot de sessão**: **`.oxe/checkpoints/…md`** + **`.oxe/CHECKPOINTS.md`**; marco nomeado sem apagar SPEC/PLAN (ver `checkpoint.md`).
+Um único comando para: `milestone new|complete|status|audit`, `workstream new|switch|list|close <nome>`, `checkpoint [slug]`. Sem argumento: mostra status atual.
 
 **Vertical UI (opcional, mesma trilha):**
 

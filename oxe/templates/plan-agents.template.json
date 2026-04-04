@@ -1,5 +1,5 @@
 {
-  "oxePlanAgentsSchema": 2,
+  "oxePlanAgentsSchema": 3,
   "runId": "oxe-YYYY-MM-DD-substituir-por-id-opaco",
   "lifecycle": {
     "status": "pending_execute",
@@ -18,7 +18,8 @@
       "taskIds": ["T1"],
       "dependencies": [],
       "inputs": [".oxe/STATE.md", ".oxe/SPEC.md"],
-      "outputs": ["src/example.ts"]
+      "outputs": ["src/example.ts"],
+      "model_hint": "balanced"
     }
   ],
   "execution": {
