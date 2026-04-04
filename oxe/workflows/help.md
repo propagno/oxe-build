@@ -15,7 +15,7 @@ No **projeto**, os passos canónicos estão em **`.oxe/workflows/*.md`** (layout
 
 ### Cursor
 
-Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-plan-agent`, `/oxe-verify`, `/oxe-next`, `/oxe-quick`, `/oxe-execute`, `/oxe-update`, `/oxe-help`, `/oxe-forensics`, `/oxe-debug`, `/oxe-route`, `/oxe-research`, `/oxe-validate-gaps`, `/oxe-compact`, `/oxe-checkpoint`, `/oxe-ui-spec`, `/oxe-ui-review` (instalados em `~/.cursor/commands/` pelo `oxe-cc` após `npm run sync:cursor` no pacote ou cópia equivalente). **Review de PR:** no Cursor não há slash dedicado — peça em linguagem natural seguindo `oxe/workflows/review-pr.md` (ou `.oxe/workflows/review-pr.md`) em contexto.
+Slash commands: `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-plan-agent`, `/oxe-verify`, `/oxe-next`, `/oxe-quick`, `/oxe-execute`, `/oxe-update`, `/oxe-help`, `/oxe-forensics`, `/oxe-debug`, `/oxe-route`, `/oxe-research`, `/oxe-validate-gaps`, `/oxe-compact`, `/oxe-checkpoint`, `/oxe-ui-spec`, `/oxe-ui-review`, `/oxe-milestone`, `/oxe-workstream` (instalados em `~/.cursor/commands/` pelo `oxe-cc` após `npm run sync:cursor` no pacote ou cópia equivalente). **Review de PR:** no Cursor não há slash dedicado — peça em linguagem natural seguindo `oxe/workflows/review-pr.md` (ou `.oxe/workflows/review-pr.md`) em contexto.
 
 ### GitHub Copilot (VS Code)
 
@@ -118,14 +118,49 @@ Um pedido → **um** destino (sem gerar contrato). O agente aplica `route.md` ou
 | Mapa OXE desatualizado / quero sincronizar codebase com o código sem scan completo | `/oxe-compact` |
 | Quero gravar um marco nomeado da sessão (antes de experimento grande) | `/oxe-checkpoint` + slug |
 | Plano com **blueprint de agentes** (JSON + mesmo PLAN.md) / subagentes por onda | `/oxe-plan-agent` |
+| Criar marco de entrega / versão / milestone | `/oxe-milestone new [nome]` |
+| Verificar se o milestone está pronto para fechar | `/oxe-milestone audit` |
+| Trabalho paralelo em trilhas separadas / feature branch OXE | `/oxe-workstream new <nome>` |
+| Alternar entre trilhas de desenvolvimento | `/oxe-workstream switch <nome>` |
 
 ## Notas pré-trilha (opcional)
 
 - Ficheiro **`.oxe/NOTES.md`**: bullets `YYYY-MM-DD — …` como fila leve (**não** substitui SPEC). Em **`/oxe-discuss`**, **`/oxe-plan`** e **`/oxe-plan-agent`**, consumir ou marcar descartado/adiado.
 
+## Milestones e Workstreams
+
+- **`/oxe-milestone new [nome]`** — iniciar marco de entrega (M-01, M-02, …); registrado em `.oxe/MILESTONES.md`.
+- **`/oxe-milestone complete`** — fechar milestone ativo, arquivar artefatos em `.oxe/milestones/M-NN/`.
+- **`/oxe-milestone status`** / **`/oxe-milestone audit`** — progresso e Definition of Done.
+- **`/oxe-workstream new <nome>`** — trilha paralela em `.oxe/workstreams/<nome>/`.
+- **`/oxe-workstream switch <nome>`** — definir workstream ativo; workflows operam nos artefatos dessa trilha.
+- **`/oxe-workstream list`** / **`/oxe-workstream close <nome>`** — gerenciar trilhas.
+
+## Personas de agentes
+
+Arquivos em `oxe/personas/` (ou `.oxe/personas/` após instalação) definem comportamentos de agentes para uso com `/oxe-plan-agent`. Personas builtin: `executor`, `planner`, `verifier`, `researcher`, `debugger`, `architect`, `ui-specialist`, `db-specialist`. Personas customizadas do projeto ficam em `.oxe/personas/`.
+
+## Profiles de execução
+
+O campo `profile` em `.oxe/config.json` expande automaticamente múltiplas keys:
+- **`balanced`** (padrão): cerimônia moderada, verificação standard.
+- **`strict`**: discuss obrigatório, verificação 4 camadas, UAT, aviso de scan antigo.
+- **`fast`**: sem discuss, verificação quick, sem UAT.
+- **`legacy`**: discuss obrigatório, verificação thorough, sem comando de test assumido.
+
 ## SDK (API programática)
 
-Quem integra em pipeline pode usar **`require('oxe-cc')`** (entrada `main` do pacote): por exemplo **`runDoctorChecks({ projectRoot })`** para passo de gate em CI; também `health`, `workflows`, `install.resolveOptionsFromConfig`, `manifest`, `agents`. Ver **`lib/sdk/README.md`** e **`lib/sdk/index.d.ts`**.
+Quem integra em pipeline pode usar **`require('oxe-cc')`** (entrada `main` do pacote):
+- **`runDoctorChecks({ projectRoot })`** — gate em CI.
+- **`parsePlan(planMd)`** — extrai tarefas, ondas, decisões e metadata de PLAN.md.
+- **`parseSpec(specMd)`** — extrai critérios A* e seções obrigatórias.
+- **`parseState(stateMd)`** — extrai fase, scan date, workstreams, milestone ativo.
+- **`validateDecisionFidelity(discussMd, planMd)`** — verifica cobertura de decisões D-NN.
+- **`security.checkPathSafety(path, root)`** — valida caminhos contra path traversal e segredos.
+- **`plugins.loadPlugins(projectRoot)`** / **`plugins.runHook(plugins, hook, ctx)`** — plugin lifecycle.
+- **`health.expandExecutionProfile(profile)`** — expande profile em keys individuais.
+
+Ver **`lib/sdk/README.md`** e **`lib/sdk/index.d.ts`**.
 
 ## Variáveis de ambiente (referência)
 
@@ -142,8 +177,9 @@ Quem integra em pipeline pode usar **`require('oxe-cc')`** (entrada `main` do pa
 
 ## Artefatos
 
-- `.oxe/STATE.md`, `.oxe/config.json` (opcional), `.oxe/codebase/*`, `.oxe/SPEC.md`, `.oxe/DISCUSS.md` (opcional), `.oxe/PLAN.md`, `.oxe/VERIFY.md`, `.oxe/QUICK.md`, `.oxe/SUMMARY.md` (opcional), `.oxe/NOTES.md` (opcional, fila), `.oxe/RESUME.md` (opcional, trilha + ponte para delta), `.oxe/CODEBASE-DELTA.md` (opcional, último refresh documentado do codebase), `.oxe/CHECKPOINTS.md` (opcional, índice), `.oxe/checkpoints/*.md` (opcional, marcos de sessão), `.oxe/RESEARCH.md` (opcional, índice de pesquisa), `.oxe/research/*.md` (opcional, notas datadas), `.oxe/VALIDATION-GAPS.md` (opcional, pós-verify), `.oxe/FORENSICS.md` (opcional, recuperação), `.oxe/DEBUG.md` (opcional, sessões de debug), `.oxe/UI-SPEC.md` / `.oxe/UI-REVIEW.md` (opcional, front-end)
-- Templates: `oxe/templates/` (ou `.oxe/templates/` em layout aninhado, conforme instalação). Hooks Git **opt-in** (lembretes não bloqueantes): `oxe/templates/GIT_HOOKS_OXE.md`.
+- `.oxe/STATE.md`, `.oxe/config.json` (opcional), `.oxe/codebase/*`, `.oxe/SPEC.md`, `.oxe/DISCUSS.md` (opcional, com IDs D-NN), `.oxe/PLAN.md`, `.oxe/VERIFY.md`, `.oxe/QUICK.md`, `.oxe/SUMMARY.md` (opcional), `.oxe/NOTES.md` (opcional, fila), `.oxe/RESUME.md` (opcional, trilha + ponte para delta), `.oxe/CODEBASE-DELTA.md` (opcional, último refresh documentado do codebase), `.oxe/CHECKPOINTS.md` (opcional, índice), `.oxe/checkpoints/*.md` (opcional, marcos de sessão), `.oxe/RESEARCH.md` (opcional, índice de pesquisa), `.oxe/research/*.md` (opcional, notas datadas), `.oxe/VALIDATION-GAPS.md` (opcional, pós-verify), `.oxe/FORENSICS.md` (opcional, recuperação), `.oxe/DEBUG.md` (opcional, sessões de debug), `.oxe/UI-SPEC.md` / `.oxe/UI-REVIEW.md` (opcional, front-end)
+- **Novos artefatos:** `.oxe/MILESTONES.md` (marcos de entrega), `.oxe/milestones/M-NN/` (artefatos arquivados), `.oxe/workstreams/<nome>/` (trilhas paralelas), `.oxe/personas/*.md` (personas de agentes customizadas), `.oxe/plugins/*.cjs` (plugins de lifecycle), `.oxe/memory/*.md` (sidecars de memória por sessão).
+- Templates: `oxe/templates/` (ou `.oxe/templates/` em layout aninhado, conforme instalação). Hooks Git **opt-in** (lembretes não bloqueantes): `oxe/templates/GIT_HOOKS_OXE.md`. Plugin system: `oxe/templates/PLUGINS.md`.
 
 ## Para autores (mantenedores)
 

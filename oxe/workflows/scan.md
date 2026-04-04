@@ -32,7 +32,15 @@ Se **`.oxe/config.json`** tiver `scan_focus_globs` ou `scan_ignore_globs`, **pri
    - **CONVENTIONS.md** — estilo de código (naming, formatação, imports), padrões de erros/logging, organização de módulos; **prescreve** o que seguir em novas alterações (com paths em backticks).
    - **CONCERNS.md** — dívida técnica, áreas frágeis, riscos de segurança/desempenho, dependências sensíveis; cada item com impacto breve e **arquivos** referenciados.
 4. Atualizar **`.oxe/STATE.md`**: **Data** do scan (ISO), fase sugerida `scan_complete`, próximo passo `oxe:spec` ou `oxe:plan` se já houver SPEC.
-5. Resumir em 5–10 linhas no chat: o que foi escrito e o próximo passo sugerido.
+5. **Scale-adaptive** (se `scale_adaptive: true` em `.oxe/config.json` ou não configurado — ativo por padrão):
+   - Contar arquivos de código (excluindo `node_modules`, `dist`, `build`).
+   - Contar dependências diretas (se houver `package.json`, `pom.xml`, `go.mod`, etc.).
+   - Sugerir profile adequado no chat:
+     - **< 50 arquivos, < 10 dependências** → sugerir `profile: "fast"` no config.
+     - **50–500 arquivos** → sugerir `profile: "balanced"` (padrão).
+     - **> 500 arquivos ou sistema legado** → sugerir `profile: "strict"`.
+   - Se já houver `profile` no `.oxe/config.json`, não sugerir mudança — apenas confirmar.
+6. Resumir em 5–10 linhas no chat: o que foi escrito, o próximo passo sugerido, e (se scale-adaptive ativo) o profile recomendado.
 </process>
 
 <success_criteria>

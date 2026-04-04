@@ -1,6 +1,6 @@
 {
   "name": "oxe-cc",
-  "version": "0.3.8",
+  "version": "0.4.0",
   "description": "OXE — spec-driven workflows in .oxe/; integrates with Cursor, GitHub Copilot, Claude, OpenCode, Gemini, Codex, Windsurf, Antigravity (npx)",
   "license": "GPL-3.0",
   "author": "",
@@ -49,7 +49,8 @@
     ".github",
     "commands",
     "AGENTS.md",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "sync:cursor": "node scripts/sync-cursor-from-prompts.cjs",

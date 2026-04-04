@@ -65,6 +65,11 @@ export interface OxeHealthReport {
   scanIgnoreGlobs?: unknown;
 }
 
+export interface SecurityReport {
+  secretFiles: string[];
+  pluginsValid: boolean;
+}
+
 export interface DoctorChecksResult {
   ok: boolean;
   errors: DoctorIssue[];
@@ -81,6 +86,91 @@ export interface DoctorChecksResult {
   validation: { unknownKeys: string[]; typeErrors: string[] };
   healthReport: OxeHealthReport;
   workflowShape: WorkflowShapeResult | null;
+  securityReport: SecurityReport | null;
+}
+
+/** Tarefa parseada de PLAN.md. */
+export interface ParsedTask {
+  id: string;
+  title: string;
+  wave: number | null;
+  dependsOn: string[];
+  files: string[];
+  verifyCommand: string | null;
+  aceite: string[];
+  decisions: string[];
+  done: boolean;
+  meta: Record<string, unknown> | null;
+}
+
+export interface ParsedPlan {
+  tasks: ParsedTask[];
+  waves: Record<number, string[]>;
+  totalTasks: number;
+}
+
+export interface ParsedCriterion {
+  id: string;
+  criterion: string;
+  howToVerify: string;
+}
+
+export interface ParsedSpec {
+  objective: string | null;
+  criteria: ParsedCriterion[];
+  requiredSections: string[];
+}
+
+export interface ParsedState {
+  phase: string | null;
+  lastScanDate: string | null;
+  nextStep: string | null;
+  decisions: string[];
+  activeWorkstreams: string[];
+  activeMilestone: string | null;
+}
+
+export interface DecisionFidelityResult {
+  ok: boolean;
+  gaps: Array<{ decisionId: string; decision: string }>;
+  covered: Array<{ decisionId: string; taskIds: string[] }>;
+}
+
+export interface PathSafetyResult {
+  safe: boolean;
+  reason: string | null;
+}
+
+export interface SecretMatch {
+  line: number;
+  pattern: string;
+  preview: string;
+}
+
+export interface SecretScanResult {
+  hasSecrets: boolean;
+  matches: SecretMatch[];
+}
+
+export interface PlanPathsResult {
+  ok: boolean;
+  issues: Array<{ path: string; reason: string }>;
+}
+
+export interface OxePlugin {
+  name: string;
+  version?: string;
+  hooks: Record<string, (ctx: Record<string, unknown>) => Promise<void> | void>;
+}
+
+export interface PluginLoadResult {
+  plugins: OxePlugin[];
+  errors: Array<{ file: string; error: string }>;
+}
+
+export interface PluginValidationResult {
+  valid: boolean;
+  issues: Array<{ file: string; issue: string }>;
 }
 
 export interface OxeSdk {
@@ -89,7 +179,38 @@ export interface OxeSdk {
   PACKAGE_ROOT: string;
   readPackageMeta: (root?: string) => PackageMeta;
   readMinNode: (packageRoot: string) => number;
-  health: Record<string, unknown>;
+
+  /** Parsing de artefatos OXE. */
+  parsePlan: (planMd: string) => ParsedPlan;
+  parseSpec: (specMd: string) => ParsedSpec;
+  parseState: (stateMd: string) => ParsedState;
+  validateDecisionFidelity: (discussMd: string, planMd: string) => DecisionFidelityResult;
+
+  health: {
+    loadOxeConfigMerged: (targetProject: string) => { config: Record<string, unknown>; path: string | null; parseError: string | null };
+    validateConfigShape: (cfg: Record<string, unknown>) => { unknownKeys: string[]; typeErrors: string[] };
+    buildHealthReport: (target: string) => OxeHealthReport;
+    suggestNextStep: (target: string, cfg?: { discuss_before_plan?: boolean }) => OxeNextSuggestion;
+    oxePaths: (target: string) => Record<string, string>;
+    parseStatePhase: (stateText: string) => string | null;
+    parseLastScanDate: (stateText: string) => Date | null;
+    parseLastCompactDate: (stateText: string) => Date | null;
+    isStaleScan: (scanDate: Date | null, maxAgeDays: number) => HealthStaleInfo;
+    phaseCoherenceWarnings: (phase: string, paths: Record<string, string>) => string[];
+    specSectionWarnings: (specPath: string, requiredHeadings: string[]) => string[];
+    planWaveWarningsFixed: (planPath: string, maxPerWave: number) => string[];
+    planTaskAceiteWarnings: (planPath: string) => string[];
+    verifyGapsWithoutSummaryWarning: (verifyPath: string, summaryPath: string) => string | null;
+    expandExecutionProfile: (profile: string) => Record<string, unknown>;
+    ALLOWED_CONFIG_KEYS: string[];
+    EXECUTION_PROFILES: string[];
+    VERIFICATION_DEPTHS: string[];
+    INSTALL_PROFILES: string[];
+    INSTALL_REPO_LAYOUTS: string[];
+    INSTALL_OBJECT_KEYS: string[];
+    EXPECTED_CODEBASE_MAPS: string[];
+  };
+
   workflows: {
     resolveWorkflowsDir: (targetProject: string) => string | null;
     listWorkflowMdFiles: (workflowsDir: string) => string[];
@@ -101,20 +222,46 @@ export interface OxeSdk {
     DEFAULT_MAX_BYTES_SOFT: number;
     SUCCESS_CRITERIA_EXCEPTIONS: Set<string>;
   };
+
   install: {
     resolveOptionsFromConfig: (
       projectRoot: string,
       optsIn: Record<string, unknown>
     ) => { options: Record<string, unknown>; warnings: string[] };
   };
+
   manifest: Record<string, unknown>;
   agents: Record<string, unknown>;
+
+  security: {
+    checkPathSafety: (filePath: string, projectRoot: string, options?: {
+      allowedRoots?: string[];
+      deniedPatterns?: RegExp[];
+      secretPatterns?: RegExp[];
+    }) => PathSafetyResult;
+    scanFileForSecrets: (filePath: string, options?: { contentPatterns?: RegExp[] }) => SecretScanResult;
+    scanDirForSecretFiles: (dir: string, options?: { secretPatterns?: RegExp[]; maxDepth?: number }) => string[];
+    validatePlanPaths: (filePaths: string[], projectRoot: string) => PlanPathsResult;
+    DEFAULT_SECRET_PATTERNS: RegExp[];
+    DEFAULT_SECRET_CONTENT_PATTERNS: RegExp[];
+    DEFAULT_DENIED_PATH_PATTERNS: RegExp[];
+  };
+
+  /** Plugin system — hooks de ciclo de vida em `.oxe/plugins/*.cjs`. */
+  plugins: {
+    loadPlugins: (projectRoot: string) => PluginLoadResult;
+    runHook: (plugins: OxePlugin[], hookName: string, ctx: Record<string, unknown>) => Promise<Array<{ plugin: string; error: string }>>;
+    validatePlugins: (projectRoot: string) => PluginValidationResult;
+    initPluginsDir: (projectRoot: string) => void;
+  };
+
   runDoctorChecks: (args: {
     projectRoot: string;
     packageRoot?: string;
     nodeMajor?: number;
     includeWorkflowLint?: boolean;
     workflowLintOptions?: { maxBytesSoft?: number };
+    includeSecurity?: boolean;
   }) => DoctorChecksResult;
 }
 

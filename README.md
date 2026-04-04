@@ -9,7 +9,7 @@
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
-**Versão deste repositório / próximo publish npm:** `0.3.6` (fonte: [`package.json`](package.json)). No registo use `npx oxe-cc@latest` ou, para pinar, `npx oxe-cc@0.3.6`.
+**Versão deste repositório / próximo publish npm:** `0.4.0` (fonte: [`package.json`](package.json)). No registo use `npx oxe-cc@latest` ou, para pinar, `npx oxe-cc@0.4.0`.
 
 ```bash
 npx oxe-cc@latest
@@ -19,7 +19,7 @@ npx oxe-cc@latest
 
 **Manter atualizado:** no **Cursor** use **`/oxe-update`**; noutras CLIs siga o mesmo fluxo com o terminal no projeto (`npx oxe-cc update --check`, `npx oxe-cc update` ou `npx oxe-cc@latest --force`). Com **`--force`**, alterações locais em arquivos rastreados geram backup em **`~/.oxe-cc/oxe-local-patches/`**.
 
-[Para quem é](#para-quem-é) · [Começar](#começar) · [Como funciona](#como-funciona) · [Modo rápido](#modo-rápido) · [Porque funciona](#porque-funciona) · [Comandos](#comandos) · [CLI (`oxe-cc`)](#cli-do-pacote-oxe-cc) · [Configuração](#configuração) · [SDK](#sdk-api-programática) · [Problemas](#resolução-de-problemas)
+[Para quem é](#para-quem-é) · [Começar](#começar) · [Como funciona](#como-funciona) · [Novidades v0.4.0](#novidades-v040) · [Modo rápido](#modo-rápido) · [Porque funciona](#porque-funciona) · [Comandos](#comandos) · [CLI (`oxe-cc`)](#cli-do-pacote-oxe-cc) · [Configuração](#configuração) · [SDK](#sdk-api-programática) · [Problemas](#resolução-de-problemas)
 
 </div>
 
@@ -181,6 +181,69 @@ Para a **próxima** feature ou fase: de novo **spec → plan → …** ou **`/ox
 
 ---
 
+## Novidades v0.4.0
+
+### Fidelidade de Decisões (IDs D-NN)
+
+`/oxe-discuss` agora fecha cada decisão com um **ID estável** (`D-01`, `D-02`, …) registado numa tabela em `.oxe/DISCUSS.md`. O PLAN.md referencia esses IDs no campo **Decisão vinculada:** de cada tarefa; o `/oxe-verify` valida na **Camada 3** se todas as decisões fechadas foram cobertas por alguma tarefa. Isso fecha o ciclo discuss → plan → verify sem derivar do que foi acordado.
+
+### Verificação em 4 Camadas
+
+`/oxe-verify` passou de 1-2 checagens para **4 camadas progressivas**:
+
+| Camada | Nome | O que faz |
+|--------|------|-----------|
+| 1 | Auditoria pré-execução | Valida integridade do PLAN antes de executar qualquer tarefa |
+| 2 | Tarefas + critérios | Cruza cada Tn com critérios A* da SPEC |
+| 3 | Fidelidade de decisões | Verifica se cada D-NN foi implementado conforme decidido |
+| 4 | UAT | Gera checklist de aceitação para o utilizador validar manualmente |
+
+### Profiles de Execução
+
+`.oxe/config.json` agora aceita `"profile": "strict" | "balanced" | "fast" | "legacy"`. Um profile expande em múltiplas config keys — não é preciso configurar cada uma manualmente. `strict` ativa verificação mais profunda e UAT; `fast` reduz cerimônia para projetos pequenos; `legacy` adapta o fluxo para sistemas com restrições. Use `scale_adaptive: true` para que o `/oxe-scan` sugira automaticamente o profile com base no tamanho do projeto.
+
+### Personas de Agentes
+
+Diretório `oxe/personas/` (copiado para `.oxe/personas/` no install) com **8 personas especializadas**: `executor`, `planner`, `verifier`, `researcher`, `debugger`, `architect`, `ui-specialist`, `db-specialist`. Cada persona define comportamento, ferramentas preferidas e restrições. Use o campo `persona` nos agentes do `plan-agents.json` para especializar o executor.
+
+### Milestones e Workstreams
+
+- **`/oxe-milestone`** — marcos de entrega com IDs `M-NN`. Subcomandos: `new`, `complete`, `status`, `audit`. O `complete` arquiva SPEC/PLAN/VERIFY/DISCUSS em `.oxe/milestones/M-NN/`.
+- **`/oxe-workstream`** — tracks de desenvolvimento paralelos em `.oxe/workstreams/<nome>/`. Cada workstream tem seus próprios SPEC, PLAN, VERIFY e STATE independentes. Subcomandos: `list`, `new`, `switch`, `status`, `close`.
+
+### Plugin System
+
+Hooks de lifecycle em **`.oxe/plugins/*.cjs`** com **18 eventos**: `onBeforeScan`, `onAfterScan`, `onBeforePlan`, `onAfterPlan`, `onBeforeVerify`, `onVerifyComplete`, `onMilestoneNew`, `onMilestoneComplete`, e mais. Referência: [`oxe/templates/PLUGINS.md`](oxe/templates/PLUGINS.md). Configuração: chave `plugins` em `.oxe/config.json`.
+
+### SDK Expandido
+
+```js
+const oxe = require('oxe-cc');
+
+// Parsear artefatos OXE
+const plan = oxe.parsePlan(fs.readFileSync('.oxe/PLAN.md', 'utf8'));
+const spec = oxe.parseSpec(fs.readFileSync('.oxe/SPEC.md', 'utf8'));
+const state = oxe.parseState(fs.readFileSync('.oxe/STATE.md', 'utf8'));
+
+// Validar fidelidade de decisões
+const fidelity = oxe.validateDecisionFidelity(discussMd, planMd);
+// fidelity.ok, fidelity.gaps, fidelity.covered
+
+// Segurança: paths e secrets
+const safe = oxe.security.checkPathSafety(filePath, projectRoot);
+const secrets = oxe.security.scanFileForSecrets(filePath);
+
+// Plugins
+const { plugins } = oxe.plugins.loadPlugins(projectRoot);
+await oxe.plugins.runHook(plugins, 'onBeforeScan', { target: projectRoot });
+
+// Doctor com segurança
+const result = oxe.runDoctorChecks({ projectRoot, includeSecurity: true });
+// result.securityReport.secretFiles, result.securityReport.pluginsValid
+```
+
+---
+
 ## Modo rápido
 
 Para trabalho **ad hoc** sem roadmap completo:
@@ -197,18 +260,23 @@ Se o trabalho crescer, **promova** para spec + plan completos (mesmos gatilhos: 
 
 | Artefato | Função |
 |----------|--------|
-| `.oxe/STATE.md` | Fase, decisões, próximo passo — memória entre sessões |
+| `.oxe/STATE.md` | Fase, decisões (D-NN), milestone/workstream ativos — memória entre sessões |
 | `.oxe/codebase/*.md` | Mapa do repo após scan |
 | `.oxe/SPEC.md` | O que entregar e como saber que está certo |
-| `.oxe/DISCUSS.md` | Preferências antes do plano *(opcional)* |
-| `.oxe/PLAN.md` | Tarefas atômicas + **Verificar** por item |
-| `.oxe/plan-agents.json` | Blueprint opcional (agentes + ondas) após **`/oxe-plan-agent`** |
+| `.oxe/DISCUSS.md` | Decisões com IDs estáveis D-01, D-02, … *(opcional)* |
+| `.oxe/PLAN.md` | Tarefas atômicas + **Verificar** por item + **Decisão vinculada:** D-NN |
+| `.oxe/plan-agents.json` | Blueprint opcional (agentes + personas + ondas) após **`/oxe-plan-agent`** |
 | `.oxe/QUICK.md` | Modo rápido |
 | `.oxe/NOTES.md` | Fila leve antes de discuss/plan *(opcional)* |
 | `.oxe/FORENSICS.md` / `.oxe/DEBUG.md` | Recuperação e debug *(opcional)* |
 | `.oxe/UI-SPEC.md` / `.oxe/UI-REVIEW.md` | Contrato e revisão UI *(opcional)* |
-| `.oxe/VERIFY.md` | Resultado das verificações |
+| `.oxe/VERIFY.md` | Resultado das verificações (4 camadas) |
 | `.oxe/SUMMARY.md` | Resumo para replanejamento *(opcional)* |
+| `.oxe/MILESTONES.md` + `.oxe/milestones/M-NN/` | Marcos de entrega com arquivo *(opcional)* |
+| `.oxe/workstreams/<nome>/` | Tracks paralelos de desenvolvimento *(opcional)* |
+| `.oxe/personas/` | Definições comportamentais dos agentes *(opcional)* |
+| `.oxe/plugins/*.cjs` | Hooks de lifecycle *(opcional)* |
+| `.oxe/memory/` | Memory sidecars por sessão/agente *(opcional)* |
 | `oxe/workflows/*.md` ou `.oxe/workflows/*.md` | **Fonte única** dos passos no **projeto** após instalar (no **pacote** npm, os modelos vivem em `oxe/workflows/`) |
 
 **Formato:** planos em Markdown com seções fixas (incl. verificação), legíveis por humanos e por modelos — sem XML obrigatório, mas com a mesma ideia de *precise instructions + verify*.
@@ -241,6 +309,8 @@ Slash commands (Cursor: `~/.cursor/commands/` após instalar) e prompt files (Co
 | `/oxe-validate-gaps` | [`validate-gaps.md`](oxe/workflows/validate-gaps.md) |
 | `/oxe-compact` | [`compact.md`](oxe/workflows/compact.md) |
 | `/oxe-checkpoint` | [`checkpoint.md`](oxe/workflows/checkpoint.md) |
+| `/oxe-milestone` | [`milestone.md`](oxe/workflows/milestone.md) |
+| `/oxe-workstream` | [`workstream.md`](oxe/workflows/workstream.md) |
 | `/oxe-ui-spec` | [`ui-spec.md`](oxe/workflows/ui-spec.md) |
 | `/oxe-ui-review` | [`ui-review.md`](oxe/workflows/ui-review.md) |
 | `/oxe-review-pr` *(prompt Copilot; ver nota abaixo)* | [`review-pr.md`](oxe/workflows/review-pr.md) |
@@ -250,7 +320,7 @@ Slash commands (Cursor: `~/.cursor/commands/` após instalar) e prompt files (Co
 
 #### `/oxe-scan`
 
-- **O que faz:** Analisa o repositório e produz **sete** mapas estruturados em `.oxe/codebase/` (overview, stack, estrutura, testes, integrações, convenções, preocupações) e atualiza `.oxe/STATE.md` com data de scan e fase sugerida.
+- **O que faz:** Analisa o repositório e produz **sete** mapas estruturados em `.oxe/codebase/` (overview, stack, estrutura, testes, integrações, convenções, preocupações) e atualiza `.oxe/STATE.md` com data de scan e fase sugerida. Com `scale_adaptive: true` na config, detecta automaticamente o tamanho do projeto e **sugere um profile** (`fast` < 50 ficheiros; `balanced` 50-500; `strict` > 500).
 - **Artefatos:** `.oxe/codebase/*.md`, `.oxe/STATE.md` (não apaga `SPEC.md` / `PLAN.md`).
 - **Quando usar:** Após clonar, quando o repo mudou muito, ou quando quiser foco opcional (pasta/módulo) ou `scan_focus_globs` em `.oxe/config.json`.
 - **Limite:** Não executa testes por si; não substitui leitura do código — condensa para contexto de agente. Repositórios legado: segue também [`references/legacy-brownfield.md`](oxe/workflows/references/legacy-brownfield.md).
@@ -274,15 +344,15 @@ Slash commands (Cursor: `~/.cursor/commands/` após instalar) e prompt files (Co
 
 #### `/oxe-discuss`
 
-- **O que faz:** Regista perguntas, respostas e decisões em `.oxe/DISCUSS.md` (máx. 7 perguntas enxutas) antes do plano, alinhado à SPEC.
-- **Artefatos:** `.oxe/DISCUSS.md`, `.oxe/STATE.md` (`discuss_complete`).
+- **O que faz:** Regista perguntas, respostas e decisões em `.oxe/DISCUSS.md` (máx. 7 perguntas enxutas) antes do plano, alinhado à SPEC. Cada decisão fechada recebe um **ID estável (`D-01`, `D-02`, …)** registado numa tabela com colunas ID / Decisão / Data / Impacto.
+- **Artefatos:** `.oxe/DISCUSS.md` (tabela D-NN), `.oxe/STATE.md` (`discuss_complete`, decisões D-NN).
 - **Quando usar:** Ambiguidade na SPEC, risco técnico, ou `discuss_before_plan: true` em `.oxe/config.json`.
-- **Limite:** Opcional; não substitui a SPEC nem o PLAN.
-- **Workflow:** [`oxe/workflows/discuss.md`](oxe/workflows/discuss.md)
+- **Limite:** Opcional; não substitui a SPEC nem o PLAN. Sem `/oxe-discuss`, o plano usa defaults razoáveis.
+- **Workflow:** [`oxe/workflows/discuss.md`](oxe/workflows/discuss.md) · template: [`oxe/templates/DISCUSS.template.md`](oxe/templates/DISCUSS.template.md)
 
 #### `/oxe-plan`
 
-- **O que faz:** Gera ou atualiza `.oxe/PLAN.md` com tarefas **Tn**, **ondas**, dependências, bloco **Verificar** por tarefa e **Aceite vinculado** aos critérios **A*** da SPEC; suporta `--replan` após `verify_failed` usando `VERIFY.md` / `SUMMARY.md`.
+- **O que faz:** Gera ou atualiza `.oxe/PLAN.md` com tarefas **Tn**, **ondas**, dependências, bloco **Verificar** por tarefa, **Aceite vinculado** aos critérios **A*** da SPEC e campo **Decisão vinculada: D-NN** quando existe `/oxe-discuss` com IDs; suporta `--replan` após `verify_failed` usando `VERIFY.md` / `SUMMARY.md`.
 - **Artefatos:** `.oxe/PLAN.md`, `.oxe/STATE.md` (`plan_ready`).
 - **Quando usar:** SPEC pronta (e discuss, se a config obrigar); base em `.oxe/codebase/*` e código real.
 - **Limite:** Não executa as tarefas — isso é **execute** + o teu Git.
@@ -330,10 +400,10 @@ Slash commands (Cursor: `~/.cursor/commands/` após instalar) e prompt files (Co
 
 #### `/oxe-verify`
 
-- **O que faz:** Corre ou orienta verificação: comandos do PLAN, confronto de **cada** critério **A*** da SPEC com evidência, registo em `.oxe/VERIFY.md`; opcionalmente rascunho de commit e checklist de PR conforme `.oxe/config.json`.
-- **Artefatos:** `.oxe/VERIFY.md`, `.oxe/STATE.md` (`verify_complete` / `verify_failed`), `.oxe/SUMMARY.md` quando há gaps relevantes.
+- **O que faz:** Verificação em **4 camadas progressivas**: (1) auditoria pré-execução do PLAN — integridade, D-NN, tarefas Tn válidas; (2) confronto de **cada** critério **A*** da SPEC com evidência; (3) fidelidade de decisões — verifica se cada D-NN foi implementado conforme decidido; (4) UAT — gera checklist de aceitação para validação manual. Regista tudo em `.oxe/VERIFY.md`; opcionalmente rascunho de commit e checklist de PR conforme `.oxe/config.json`.
+- **Artefatos:** `.oxe/VERIFY.md` (tabelas de auditoria, tarefas, critérios, D-NN, UAT), `.oxe/STATE.md` (`verify_complete` / `verify_failed`), `.oxe/SUMMARY.md` quando há gaps relevantes.
 - **Quando usar:** Após implementar uma onda ou fechar o plano; pode focar uma tarefa **Tn** se indicares.
-- **Limite:** Sandbox pode impedir comandos — regista “não executado aqui” e deixa o comando para correres localmente.
+- **Limite:** Sandbox pode impedir comandos — regista “não executado aqui” e deixa o comando para correres localmente. A Camada 3 só tem efeito se existir DISCUSS.md com D-NN; a Camada 4 exige `after_verify_suggest_uat: true` na config.
 - **Workflow:** [`oxe/workflows/verify.md`](oxe/workflows/verify.md)
 
 #### `/oxe-validate-gaps`
@@ -361,6 +431,22 @@ Slash commands (Cursor: `~/.cursor/commands/` após instalar) e prompt files (Co
 - **Workflow:** [`oxe/workflows/checkpoint.md`](oxe/workflows/checkpoint.md)
 
 **Momentos chave (rotina):** antes de spike ou branch longa → checkpoint; após migração de stack ou fim de feature/PR → compact; fim de dia a meio trabalho → checkpoint. Tabela completa e `compact_max_age_days` em [`oxe/workflows/help.md`](oxe/workflows/help.md) (secção *Momentos chave*).
+
+#### `/oxe-milestone`
+
+- **O que faz:** Gerencia marcos de entrega com IDs sequenciais (`M-01`, `M-02`, …). `new` registra o milestone em `.oxe/MILESTONES.md`; `complete` valida o Definition of Done (verify completo, sem gaps, UAT checkeado) e **arquiva** SPEC/PLAN/VERIFY/DISCUSS em `.oxe/milestones/M-NN/`; `status` lista milestones ativos; `audit` lista todo o histórico.
+- **Artefatos:** `.oxe/MILESTONES.md`, `.oxe/milestones/M-NN/` (arquivo), `.oxe/STATE.md` (milestone ativo).
+- **Quando usar:** Para marcar entregas versionadas, releases ou fases significativas do projeto. Contrasta com `/oxe-checkpoint` (snapshot de sessão sem critérios de "done").
+- **Limite:** `complete` requer que o estado de verificação seja `verify_complete` antes de arquivar.
+- **Workflow:** [`oxe/workflows/milestone.md`](oxe/workflows/milestone.md) · template: [`oxe/templates/MILESTONES.template.md`](oxe/templates/MILESTONES.template.md)
+
+#### `/oxe-workstream`
+
+- **O que faz:** Cria e gerencia **tracks de desenvolvimento paralelos**. Cada workstream (`new`) recebe seu próprio diretório `.oxe/workstreams/<nome>/` com STATE, SPEC, PLAN e VERIFY independentes. `switch` faz os workflows operarem nos artefatos do workstream ativo; `close` arquiva em `.oxe/workstreams/closed/<nome>-YYYY-MM-DD/`.
+- **Artefatos:** `.oxe/workstreams/<nome>/STATE.md`, `SPEC.md`, `PLAN.md`, `VERIFY.md`, `.oxe/STATE.md` (workstream ativo).
+- **Quando usar:** Desenvolvimento paralelo de features independentes, experimentos isolados, ou quando uma trilha linear única cria conflitos de contexto.
+- **Limite:** Cada workstream tem seu próprio estado; não compartilha PLAN.md com o workstream padrão.
+- **Workflow:** [`oxe/workflows/workstream.md`](oxe/workflows/workstream.md)
 
 #### `/oxe-forensics`
 
@@ -456,6 +542,19 @@ Comandos no terminal na **raiz do projeto** (ou `--dir`). Útil em CI, scripts e
 
 Preferências do projeto em **`.oxe/config.json`** (criado no bootstrap a partir de `oxe/templates/config.template.json`). Inclui opções de fluxo (`discuss_before_plan`, `scan_max_age_days`, `compact_max_age_days`, `spec_required_sections`, …) e, opcionalmente, o bloco **`install`** (perfil de integração e layout do repo quando corres o instalador sem flags IDE). Referência completa: [`oxe/templates/CONFIG.md`](oxe/templates/CONFIG.md). Hooks Git opt-in: [`oxe/templates/GIT_HOOKS_OXE.md`](oxe/templates/GIT_HOOKS_OXE.md).
 
+**Profiles de execução (v0.4.0):** a chave `"profile"` expande em múltiplas config keys de uma vez.
+
+| Profile | Para quê |
+|---------|----------|
+| `"strict"` | Projetos críticos — verificação profunda, UAT automático, perfil seguro |
+| `"balanced"` | Padrão — bom equilíbrio entre rigor e velocidade |
+| `"fast"` | Projetos pequenos / spikes — menos cerimônia |
+| `"legacy"` | Sistemas brownfield (COBOL, VB6, stored procs) — verificação adaptada |
+
+**`scale_adaptive: true`** faz o `/oxe-scan` detectar automaticamente o tamanho do projeto e sugerir o profile mais adequado.
+
+**Plugin system (v0.4.0):** a chave `"plugins"` habilita hooks de lifecycle em `.oxe/plugins/*.cjs`. Referência: [`oxe/templates/PLUGINS.md`](oxe/templates/PLUGINS.md).
+
 Repositórios **legado** (COBOL, JCL, copybooks, VB6, stored procedures): os workflows **scan**, **spec**, **plan**, **execute** e **verify** delegam padrões de análise e verificação em [`.oxe/workflows/references/legacy-brownfield.md`](oxe/workflows/references/legacy-brownfield.md) após `npx oxe-cc` (no pacote fonte: [`oxe/workflows/references/legacy-brownfield.md`](oxe/workflows/references/legacy-brownfield.md)).
 
 ---
@@ -466,11 +565,44 @@ O pacote **`oxe-cc`** expõe entrada npm (`main` / `exports`) para scripts e CI:
 
 ```js
 const oxe = require('oxe-cc');
-const result = oxe.runDoctorChecks({ projectRoot: process.cwd() });
-// result.ok, result.errors, result.warnings, result.healthReport, …
+
+// Doctor check completo (com segurança em v0.4.0)
+const result = oxe.runDoctorChecks({
+  projectRoot: process.cwd(),
+  includeSecurity: true,        // v0.4.0: verifica secrets e plugins
+});
+// result.ok, result.errors, result.warnings, result.healthReport
+// result.securityReport.secretFiles, result.securityReport.pluginsValid
+
+// Parsear artefatos OXE (v0.4.0)
+const plan = oxe.parsePlan(fs.readFileSync('.oxe/PLAN.md', 'utf8'));
+// plan.tasks[0].decisions → ['D-01', 'D-02']
+
+const spec = oxe.parseSpec(fs.readFileSync('.oxe/SPEC.md', 'utf8'));
+// spec.criteria[0].id → 'A1'
+
+const state = oxe.parseState(fs.readFileSync('.oxe/STATE.md', 'utf8'));
+// state.phase, state.decisions, state.activeMilestone
+
+// Validar fidelidade de decisões D-NN (v0.4.0)
+const fidelity = oxe.validateDecisionFidelity(discussMd, planMd);
+// fidelity.ok, fidelity.gaps → [{decisionId, decision}]
+
+// Segurança (v0.4.0)
+const safe = oxe.security.checkPathSafety(filePath, projectRoot);
+const secrets = oxe.security.scanFileForSecrets(filePath);
+const issues = oxe.security.validatePlanPaths(filePaths, projectRoot);
+
+// Plugins (v0.4.0)
+const { plugins } = oxe.plugins.loadPlugins(projectRoot);
+await oxe.plugins.runHook(plugins, 'onBeforeScan', { target: projectRoot });
+
+// Profiles (v0.4.0)
+const expanded = oxe.health.expandExecutionProfile('strict');
+// expanded.verification_depth, expanded.after_verify_suggest_uat, …
 ```
 
-Também estão disponíveis `oxe.health`, `oxe.workflows`, `oxe.install.resolveOptionsFromConfig`, `oxe.manifest`, `oxe.agents`. TypeScript: `lib/sdk/index.d.ts`. Documentação: [`lib/sdk/README.md`](lib/sdk/README.md).
+Namespaces disponíveis: `oxe.health`, `oxe.workflows`, `oxe.security`, `oxe.plugins`, `oxe.install`, `oxe.manifest`, `oxe.agents`. TypeScript: `lib/sdk/index.d.ts`. Documentação: [`lib/sdk/README.md`](lib/sdk/README.md).
 
 ---
 
@@ -481,7 +613,7 @@ Também estão disponíveis `oxe.health`, `oxe.workflows`, `oxe.install.resolveO
 | Comandos não aparecem no Cursor | Confirme que `~/.cursor/commands/` (ou a pasta configurada) existe; reinicie o Cursor |
 | Prompts `/oxe-*` não aparecem no Copilot | Ative `"chat.promptFiles": true`; confirme prompts em **`~/.copilot/prompts/`** (o OXE não coloca `.github/` no repo para o Copilot) |
 | **`/oxe` ou `/oxe-*` não aparecem no Copilot CLI** | O CLI usa **skills** em **`~/.copilot/skills/`**, não a pasta `commands`. Rode `npx oxe-cc --copilot-cli` (ou perfil com CLI), depois **`/skills reload`**. Use **`/oxe`** (ajuda) ou **`/oxe-scan`**, etc. |
-| **`ETARGET`** / versão não encontrada no `npx` | `npm cache clean --force`, `npx clear-npx-cache`, ou fixe a versão: `npx oxe-cc@0.3.6`. Verifique `npm config get registry` |
+| **`ETARGET`** / versão não encontrada no `npx` | `npm cache clean --force`, `npx clear-npx-cache`, ou fixe a versão: `npx oxe-cc@0.4.0`. Verifique `npm config get registry` |
 | **404** no `npm view oxe-cc` | Pacote com outro nome (scope) ou ainda não publicado — use `npm link` ou `node …/bin/oxe-cc.js` |
 | Arquivos não atualizam | Reinstale com **`--force`** (com backup local se você tiver editado arquivos rastreados) |
 | Erro no **WSL** sobre Node do Windows | Use **Node instalado dentro do WSL** (o `oxe-cc` recusa `node.exe` do Windows em ambiente WSL para evitar caminhos quebrados) |
@@ -527,10 +659,14 @@ Incremente `version` em `package.json`, rode `npm login` (2FA se exigido) e `npm
 |---------|--------|
 | `assets/readme-banner.svg` | Banner deste README |
 | `bin/oxe-cc.js`, `bin/banner.txt` | CLI |
-| `bin/lib/*.cjs` | Lógica partilhada (health, workflows, manifest, instalação multi-agente, resolução `install` em config) |
-| `lib/sdk/` | SDK npm (`require('oxe-cc')`) |
-| `oxe/workflows/` | Workflows canónicos (fonte no pacote) |
-| `oxe/templates/` | Modelos, `CONFIG.md`, `config.template.json`, **`WORKFLOW_AUTHORING.md`** (guia para editar workflows) |
+| `bin/lib/oxe-project-health.cjs` | Health checks, profiles, config validation |
+| `bin/lib/oxe-security.cjs` | *(v0.4.0)* Path safety, secret scanning, plan path validation |
+| `bin/lib/oxe-plugins.cjs` | *(v0.4.0)* Plugin system — loadPlugins, runHook, validatePlugins |
+| `bin/lib/*.cjs` | Outros módulos (workflows, manifest, instalação multi-agente, resolução `install` em config) |
+| `lib/sdk/` | SDK npm (`require('oxe-cc')`) — `index.cjs` + `index.d.ts` (TypeScript) |
+| `oxe/workflows/` | Workflows canónicos (fonte no pacote) — inclui `milestone.md`, `workstream.md` *(v0.4.0)* |
+| `oxe/personas/` | *(v0.4.0)* 8 personas de agentes (executor, planner, verifier, …) |
+| `oxe/templates/` | Modelos, `CONFIG.md`, `config.template.json`, `PLUGINS.md`, `MEMORY.template.md` *(v0.4.0)* |
 | `.cursor/`, `.github/` | Comandos Cursor, prompts Copilot, CI |
 | `commands/oxe/` | Comandos estilo `oxe:*` (layout clássico no projeto) |
 | `tests/`, `scripts/`, `.github/workflows/` | Testes, `scan:assets`, CI |

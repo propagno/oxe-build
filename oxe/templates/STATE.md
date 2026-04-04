@@ -12,7 +12,7 @@
 ## Último compact (codebase + RESUME) (opcional)
 
 - **Data:** (**YYYY-MM-DD** — preenchido por **`/oxe-compact`**: refresh incremental dos mapas em `.oxe/codebase/` + `CODEBASE-DELTA.md` + `RESUME.md`)
-- **Notas:** (opcional; ex.: “só STRUCTURE e TESTING”)
+- **Notas:** (opcional; ex.: "só STRUCTURE e TESTING")
 
 ## Contexto do plano / quick (opcional)
 
@@ -37,9 +37,36 @@ _(O agente pode preencher após cada onda.)_
 - [ ] Onda N — implementação concluída
 - [ ] Onda N — **Verificar** executado ou agendado
 
+## Milestone ativo (opcional — `/oxe-milestone`)
+
+- **ID:** (ex.: M-01 — ou — se não houver milestone ativo)
+- **Nome:** (ex.: v1.0 — autenticação básica)
+- **Iniciado:** (YYYY-MM-DD)
+- **Progresso:** (N/M critérios verificados)
+
+## Último milestone encerrado (opcional)
+
+- **ID:** —
+- **Data de encerramento:** —
+- **Artefatos:** `.oxe/milestones/M-NN/`
+
+## Workstreams ativos (opcional — `/oxe-workstream`)
+
+- (nenhum ou lista de nomes: ex.: `feature-billing`, `bugfix-auth`)
+
+## Workstream ativo (contexto atual)
+
+- (nome do workstream ativo — ou — para pipeline principal)
+
+## Memory (sidecars de sessão) (opcional — `/oxe-memory`)
+
+Sidecars de memória persistente por agente/sessão. Armazenados em `.oxe/memory/`.
+
+- (nenhum ou lista: ex.: `architect-2025-01-15.md`, `researcher-auth-2025-01-14.md`)
+
 ## Decisões persistentes
 
-- (bullet: decisão → data)
+- (bullet: D-NN: decisão → data)
 
 ## Próximo passo sugerido
 

@@ -8,6 +8,7 @@ const ALLOWED_CONFIG_KEYS = [
   'discuss_before_plan',
   'after_verify_suggest_pr',
   'after_verify_draft_commit',
+  'after_verify_suggest_uat',
   'default_verify_command',
   'scan_max_age_days',
   'compact_max_age_days',
@@ -15,8 +16,25 @@ const ALLOWED_CONFIG_KEYS = [
   'scan_ignore_globs',
   'spec_required_sections',
   'plan_max_tasks_per_wave',
+  'profile',
+  'verification_depth',
   'install',
+  'plugins',
+  'workstreams',
+  'milestones',
+  'scale_adaptive',
 ];
+
+/**
+ * Profiles de execução OXE que controlam rigor do workflow.
+ * Expansão de keys: profile 'strict' liga discuss_before_plan, verification_depth thorough, etc.
+ */
+const EXECUTION_PROFILES = ['strict', 'balanced', 'fast', 'legacy'];
+
+/**
+ * Profundidade de verificação.
+ */
+const VERIFICATION_DEPTHS = ['standard', 'thorough', 'quick'];
 
 /** Perfis de integração lidos de `.oxe/config.json` → `install.profile` (CLI explícita prevalece). */
 const INSTALL_PROFILES = ['recommended', 'cursor', 'copilot', 'core', 'cli', 'all_agents'];
@@ -40,11 +58,64 @@ const EXPECTED_CODEBASE_MAPS = [
 /**
  * @param {string} targetProject
  */
+/**
+ * Expande um profile de execução nas suas keys individuais.
+ * Keys explícitas no config prevalecem sobre o profile.
+ * @param {string} profile
+ * @returns {Record<string, unknown>}
+ */
+function expandExecutionProfile(profile) {
+  const profiles = {
+    strict: {
+      discuss_before_plan: true,
+      verification_depth: 'thorough',
+      after_verify_suggest_uat: true,
+      after_verify_suggest_pr: true,
+      after_verify_draft_commit: true,
+      scan_max_age_days: 14,
+      compact_max_age_days: 30,
+    },
+    balanced: {
+      discuss_before_plan: false,
+      verification_depth: 'standard',
+      after_verify_suggest_uat: false,
+      after_verify_suggest_pr: true,
+      after_verify_draft_commit: true,
+      scan_max_age_days: 0,
+      compact_max_age_days: 0,
+    },
+    fast: {
+      discuss_before_plan: false,
+      verification_depth: 'quick',
+      after_verify_suggest_uat: false,
+      after_verify_suggest_pr: false,
+      after_verify_draft_commit: true,
+      scan_max_age_days: 0,
+      compact_max_age_days: 0,
+    },
+    legacy: {
+      discuss_before_plan: true,
+      verification_depth: 'thorough',
+      after_verify_suggest_uat: true,
+      after_verify_suggest_pr: false,
+      after_verify_draft_commit: false,
+      scan_max_age_days: 0,
+      compact_max_age_days: 0,
+    },
+  };
+  return profiles[profile] || {};
+}
+
+/**
+ * @param {string} targetProject
+ */
 function loadOxeConfigMerged(targetProject) {
   const defaults = {
     discuss_before_plan: false,
     after_verify_suggest_pr: true,
     after_verify_draft_commit: true,
+    after_verify_suggest_uat: false,
+    verification_depth: 'standard',
     default_verify_command: '',
     scan_max_age_days: 0,
     compact_max_age_days: 0,
@@ -59,7 +130,9 @@ function loadOxeConfigMerged(targetProject) {
     const raw = fs.readFileSync(p, 'utf8');
     const j = JSON.parse(raw);
     if (!j || typeof j !== 'object' || Array.isArray(j)) return { config: defaults, path: p, parseError: 'não é um objeto' };
-    return { config: { ...defaults, ...j }, path: p, parseError: null };
+    // Expandir profile antes de mesclar com o config explícito (keys explícitas prevalecem)
+    const profileExpansion = (typeof j.profile === 'string') ? expandExecutionProfile(j.profile) : {};
+    return { config: { ...defaults, ...profileExpansion, ...j }, path: p, parseError: null };
   } catch (e) {
     return { config: defaults, path: p, parseError: e.message };
   }
@@ -128,6 +201,26 @@ function validateConfigShape(cfg) {
   }
   if (cfg.spec_required_sections != null && !Array.isArray(cfg.spec_required_sections)) {
     typeErrors.push('spec_required_sections deve ser array de strings (cabeçalhos ## …)');
+  }
+  if (cfg.profile != null) {
+    if (typeof cfg.profile !== 'string') {
+      typeErrors.push('profile deve ser string');
+    } else if (!EXECUTION_PROFILES.includes(cfg.profile)) {
+      typeErrors.push(`profile deve ser um de: ${EXECUTION_PROFILES.join(', ')}`);
+    }
+  }
+  if (cfg.verification_depth != null) {
+    if (typeof cfg.verification_depth !== 'string') {
+      typeErrors.push('verification_depth deve ser string');
+    } else if (!VERIFICATION_DEPTHS.includes(cfg.verification_depth)) {
+      typeErrors.push(`verification_depth deve ser um de: ${VERIFICATION_DEPTHS.join(', ')}`);
+    }
+  }
+  if (cfg.after_verify_suggest_uat != null && typeof cfg.after_verify_suggest_uat !== 'boolean') {
+    typeErrors.push('after_verify_suggest_uat deve ser boolean');
+  }
+  if (cfg.scale_adaptive != null && typeof cfg.scale_adaptive !== 'boolean') {
+    typeErrors.push('scale_adaptive deve ser boolean');
   }
   return { unknownKeys, typeErrors };
 }
@@ -504,10 +597,13 @@ function buildHealthReport(target) {
 
 module.exports = {
   ALLOWED_CONFIG_KEYS,
+  EXECUTION_PROFILES,
+  VERIFICATION_DEPTHS,
   INSTALL_PROFILES,
   INSTALL_REPO_LAYOUTS,
   INSTALL_OBJECT_KEYS,
   EXPECTED_CODEBASE_MAPS,
+  expandExecutionProfile,
   loadOxeConfigMerged,
   validateConfigShape,
   parseStatePhase,

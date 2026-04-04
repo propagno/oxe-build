@@ -49,11 +49,14 @@ Cada **agente**:
 |-------|-------------|-------------|
 | `id` | sim | Slug único estável (`agent-db`, `agent-backend-auth`). |
 | `role` | sim | Nome legível do papel. |
+| `persona` | não | ID de persona em `oxe/personas/` (ex.: `executor`, `architect`). O workflow `/oxe-execute` carrega a persona para instruir o LLM. Ver `oxe/personas/README.md`. |
 | `scope` | sim | Lista de strings (o que este agente faz, em bullets curtos). |
 | `taskIds` | sim | Lista de IDs **`T1`…`Tn`** que este agente implementa (subconjunto do `PLAN.md`). |
 | `dependencies` | não | Lista de **`id`** de outros agentes que devem concluir antes (grafo entre agentes). |
 | `inputs` | não | Caminhos ou nomes de artefactos a carregar no contexto (ex.: `.oxe/STATE.md`, `.oxe/SPEC.md`). |
 | `outputs` | não | Paths ou padrões de ficheiros esperados (orientação; o código real vem do PLAN). |
+
+**Personas disponíveis:** `executor`, `planner`, `verifier`, `researcher`, `debugger`, `architect`, `ui-specialist`, `db-specialist`. Ver `oxe/personas/README.md` para descrição de cada uma. Personas customizadas do projeto ficam em `.oxe/personas/`.
 
 **Regras de desenho:** preferir **um agente por domínio** (DB, API, UI) e **várias `Tn`** no mesmo agente quando partilham contexto; usar **agentes separados** quando o contexto mínimo diverge forte (evita fugas de foco).
 </format_plan_agents_json>

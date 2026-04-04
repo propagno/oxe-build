@@ -1048,6 +1048,30 @@ function bootstrapOxe(target, opts) {
     }
   }
 
+  // Criar estruturas opcionais: plugins/, workstreams/, memory/
+  const pluginsDir = path.join(oxeDir, 'plugins');
+  if (!fs.existsSync(pluginsDir)) {
+    ensureDir(pluginsDir);
+    const pluginsReadme = path.join(PKG_ROOT, 'oxe', 'templates', 'PLUGINS.md');
+    if (fs.existsSync(pluginsReadme)) {
+      const destPluginsReadme = path.join(pluginsDir, 'README.md');
+      if (!fs.existsSync(destPluginsReadme)) {
+        copyFile(pluginsReadme, destPluginsReadme, { dryRun: false });
+        console.log(`${green}init${reset}  ${destPluginsReadme}`);
+      }
+    }
+  }
+
+  const workstreamsDir = path.join(oxeDir, 'workstreams');
+  if (!fs.existsSync(workstreamsDir)) {
+    ensureDir(workstreamsDir);
+  }
+
+  const memoryDir = path.join(oxeDir, 'memory');
+  if (!fs.existsSync(memoryDir)) {
+    ensureDir(memoryDir);
+  }
+
   ensureGitignoreIgnoresOxeDir(target, { dryRun: false });
 }
 
@@ -1596,6 +1620,11 @@ function runInstall(opts) {
     const nested = path.join(target, '.oxe');
     copyDir(path.join(PKG_ROOT, 'oxe', 'workflows'), path.join(nested, 'workflows'), copyOpts, true);
     copyDir(path.join(PKG_ROOT, 'oxe', 'templates'), path.join(nested, 'templates'), copyOpts, true);
+    // Personas: copiar para .oxe/personas/ (não sobrescreve personalizações do projeto)
+    const personasSrc = path.join(PKG_ROOT, 'oxe', 'personas');
+    if (fs.existsSync(personasSrc)) {
+      copyDir(personasSrc, path.join(nested, 'personas'), copyOpts, false);
+    }
   }
 
   const cursorBase = installCursorBase(opts);
