@@ -1,5 +1,5 @@
 ---
-description: "OXE — Executar onda do PLAN ou passos do QUICK"
+description: "OXE — Executar plano (solo ou com agentes): escolha Completo (1 sessão) | Por onda | Por tarefa para controlar requisições"
 ---
 
 OXE — Executar onda do PLAN ou passos do QUICK

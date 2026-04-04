@@ -1,7 +1,7 @@
 ---
 name: oxe:execute
-description: Executar onda do PLAN.md ou passos do QUICK.md
-argument-hint: "[opcional: onda ou Tn]"
+description: "Executar plano (solo ou com agentes): escolha Completo (1 sessão) | Por onda | Por tarefa — controle explícito de requisições"
+argument-hint: "[A=completo | B=por-onda | C=por-tarefa | onda N | Tn]"
 allowed-tools:
   - Read
   - Bash

@@ -1,8 +1,8 @@
 ---
 name: oxe-execute
 agent: agent
-description: OXE — Executar onda do PLAN ou passos do QUICK
-argument-hint: "[opcional: onda N ou Tn]"
+description: "OXE — Executar plano (solo ou com agentes): escolha Completo (1 sessão) | Por onda | Por tarefa para controlar requisições"
+argument-hint: "[opcional: A/B/C para modo, onda N, ou Tn]"
 ---
 
 Executa o workflow **OXE execute** no repositório atual. Lê e aplica **integralmente** o ficheiro no workspace:

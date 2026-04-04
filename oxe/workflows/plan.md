@@ -12,10 +12,11 @@ Se o usuário pedir **--replan** (ou replanejamento implícito após `verify_fai
 </objective>
 
 <context>
+- Se existir **`.oxe/OBSERVATIONS.md`** com entradas `pendente` de impacto `plan` ou `all`, incorporar nas tarefas relevantes antes de finalizar o plano (ajustar implementação, verificação ou escopo de Tn) e marcar essas entradas como `incorporada → plan (data)`.
 - Não inventar APIs inexistentes: cruzar com **STRUCTURE.md**, **INTEGRATIONS.md** e arquivos reais; respeitar **CONCERNS.md** (evitar agravar dívida conhecida sem tarefa explícita).
 - Se existir **`.oxe/NOTES.md`**, rever entradas em aberto: incorporar em tarefas (com **Aceite vinculado** quando aplicável) ou registar na secção **Replanejamento** / nota explícita *fora de âmbito desta trilha*.
 - Se existir **`.oxe/UI-SPEC.md`**, as tarefas de UI devem referenciar secções do UI-SPEC no texto de **Implementação** ou **Verificar**.
-- Se existir **`.oxe/DISCUSS.md`**, alinhar tarefas às decisões registradas.
+- Se existir **`.oxe/DISCUSS.md`**, alinhar tarefas às decisões registradas. Referenciar IDs **D-NN** no campo **Decisão vinculada:** de cada tarefa impactada — se nenhuma decisão impactar a tarefa, omitir o campo. A rastreabilidade D-NN → Tn → verify é usada pela seção **Fidelidade de decisões** do verify.
 - Se existir **`.oxe/RESEARCH.md`** e notas em **`.oxe/research/*.md`**, ler o índice e as notas cujo **Tema** cruza o âmbito do plano (ou as mais recentes relevantes). Se o índice marcar **Estado** pendente em tópico bloqueante, pedir nova sessão **research** ou **discuss**, ou registar **suposição explícita** no PLAN antes de ondas que dependam dessa decisão.
 - Se existir **`.oxe/plan-agents.json`** (gerado por **`/oxe-plan-agent`**), um **--replan** ou renumerar tarefas deve **atualizar o JSON em conjunto** com o `PLAN.md` (cobertura `taskIds`, ondas e dependências entre agentes) — ver **`oxe/workflows/plan-agent.md`**. Preferir **`/oxe-plan-agent --replan`** para regerar **`runId`**, **`lifecycle`** (`pending_execute`) e alinhar **STATE.md**; se só **`/oxe-plan`** for usado, ou o JSON fica manualmente sincronizado, ou marcar no JSON `lifecycle.invalidatedBy: new_plan` até novo plan-agent.
 - Se existirem **`.oxe/CODEBASE-DELTA.md`** e/ou **`.oxe/RESUME.md`** (tipicamente após **`/oxe-compact`**), ler **antes** de detalhar tarefas: o delta resume o que mudou nos mapas face ao código; o RESUME ancora fase e trilha OXE — **não** substituem SPEC nem os sete ficheiros em `codebase/`.
@@ -38,6 +39,8 @@ Cada tarefa em PLAN.md deve seguir:
   - Comando: `...` (ex.: npm test, pytest, mvn test)
   - Manual: (opcional) passos breves
 - **Aceite vinculado:** A1, A2 (IDs exatos da tabela de critérios da SPEC)
+- **Decisão vinculada:** D-01, D-02 (IDs de `.oxe/DISCUSS.md` — omitir se não houver DISCUSS)
+<!-- oxe-task: {"id":"Tn","wave":1,"type":"feature","files":[],"done":false} -->
 ```
 
 **Projetos sem suíte de testes única (legado):** o bloco **Verificar** pode usar `Comando: —` e **Manual** com Grep, leitura de paths ou checklist — ver exemplos em **`oxe/workflows/references/legacy-brownfield.md`**. Todo critério **A*** da SPEC deve aparecer em **Aceite vinculado** de alguma tarefa ou como gap explícito.
@@ -54,6 +57,7 @@ Antes de finalizar a resposta ao utilizador, o agente **deve** percorrer este ga
 4. **Ondas:** cada número de **Onda:** usado tem pelo menos uma tarefa; sem ondas vazias.
 5. **`plan_max_tasks_per_wave`:** se `.oxe/config.json` tiver valor **> 0**, contar tarefas por **Onda**; nenhuma onda excede o limite.
 6. **UI-SPEC:** se existir `.oxe/UI-SPEC.md`, toda tarefa cuja **Implementação** ou **Verificar** toque UI (paths como `*.tsx`, `components/`, ou palavras-chave front, ou pedido explícito do utilizador) deve citar **secção § do UI-SPEC** ou path explícito.
+7. **Fidelidade de decisões:** se existir `.oxe/DISCUSS.md` com IDs **D-NN**, cada decisão com impacto técnico deve aparecer em **Decisão vinculada:** de alguma tarefa, ou ter nota explícita de gap (fora do escopo desta entrega). Sem cobertura para D-NN técnico = falha do gate.
 
 Se após correções estruturais persistir ambiguidade de produto: **uma** frase recomendando `oxe:discuss` ou `oxe:spec`.
 

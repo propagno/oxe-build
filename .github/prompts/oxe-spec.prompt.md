@@ -1,8 +1,8 @@
 ---
 name: oxe-spec
 agent: agent
-description: OXE — Cria ou atualiza .oxe/SPEC.md
-argument-hint: "[pedido ou contexto da feature]"
+description: "OXE — Spec em 5 fases: perguntas → pesquisa → requisitos (R-ID v1/v2/fora) → roteiro (.oxe/ROADMAP.md) → aprovação → plan"
+argument-hint: "[descrição da feature ou ideia]"
 ---
 
 Executa o workflow **OXE spec**. Lê e aplica **integralmente**:
