@@ -1,7 +1,7 @@
 ---
 name: oxe:spec
-description: Transforma o pedido do usuário em SPEC.md (escopo, aceite, não-objetivos)
-argument-hint: "[texto do pedido ou @arquivo.md]"
+description: "Spec em 5 fases: perguntas → pesquisa → requisitos R-ID (v1/v2/fora) → roteiro ROADMAP.md → aprovação → plan"
+argument-hint: "[descrição da feature, ideia ou @arquivo.md com PRD]"
 allowed-tools:
   - Read
   - Write

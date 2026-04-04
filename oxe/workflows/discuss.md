@@ -8,6 +8,7 @@ Usar quando: SPEC existe mas há ambiguidade, risco técnico, ou `discuss_before
 
 <context>
 - Ler `.oxe/SPEC.md`, `.oxe/STATE.md` e trechos relevantes de `.oxe/codebase/OVERVIEW.md` / `STACK.md`.
+- Se existir **`.oxe/OBSERVATIONS.md`** com entradas `pendente` de impacto `spec`, `plan` ou `all`, carregá-las como contexto adicional para as perguntas e decisões; marcá-las `incorporada → discuss (data)` após uso.
 - Se existir **`.oxe/NOTES.md`**, rever bullets em aberto: promover para perguntas/decisões em `DISCUSS.md` ou marcar como *descartado* / *adiado* com uma linha de justificativa.
 - Se `.oxe/config.json` existir e `discuss_before_plan` for `true`, tratar este passo como **recomendado** antes de `oxe:plan`.
 </context>

@@ -26,6 +26,31 @@ Se o utilizador pedir **`--replan`**: aplicar a mesma lógica de replanejamento 
 - Modelo JSON: ver **`oxe/templates/plan-agents.template.json`** e **`oxe/schemas/plan-agents.schema.json`**.
 </context>
 
+<agent_isolation_rule>
+## Regra de Isolamento de Agentes (Plan-Driven Dynamic Agents)
+
+**Cada `/oxe-plan-agent` cria agentes NOVOS para ESTE plano específico.**
+
+| Regra | Descrição |
+|-------|-----------|
+| **`runId` único** | Gerar `runId` NOVO a cada execução — nunca reutilizar `runId` de `plan-agents.json` anterior |
+| **`role` específico** | Descrever o papel no domínio desta demanda: "Especialista em autenticação JWT para este plano", não "Backend Developer" genérico |
+| **Não há reuso** | Agentes de planos ou demandas anteriores são inválidos para este plano. `lifecycle.status: invalidated` em qualquer blueprint anterior com `invalidatedBy: "new_plan"` |
+| **Lifecycle exclusivo** | Agentes vivem somente enquanto `lifecycle.status ∈ { pending_execute, executing }` e `runId` alinhado ao STATE.md |
+| **Gate de unicidade** | No quality gate: verificar que o `runId` gerado não existe em nenhum `plan-agents.json` anterior no repositório |
+
+**Invalidação de blueprint anterior:**
+Se já existir `.oxe/plan-agents.json` com status não-terminal (`pending_execute` ou `executing`), invalidá-lo antes de criar o novo:
+```json
+"lifecycle": {
+  "status": "invalidated",
+  "since": "<ISO agora>",
+  "invalidatedBy": "new_plan",
+  "invalidatedReason": "Novo /oxe-plan-agent iniciado para nova demanda"
+}
+```
+</agent_isolation_rule>
+
 <format_plan_md>
 Seguir **integralmente** o bloco **`<format_plan>`** e **`<plan_quality_gate>`** do ficheiro **`oxe/workflows/plan.md`** ao escrever `.oxe/PLAN.md` (incluindo gate antes de fechar).
 </format_plan_md>
@@ -71,6 +96,8 @@ Antes de finalizar, validar **em conjunto** `PLAN.md` + `plan-agents.json`:
 5. **Gate do PLAN:** o **`plan.md`** `<plan_quality_gate>` sobre `PLAN.md` continua **obrigatório** (dependências `Tk`, ciclos T*, cobertura A*, limites por onda, UI-SPEC).
 6. **Alinhamento SPEC:** cada `scope` relevante deve ser rastreável a critérios **A*** via `taskIds` → **Aceite vinculado** no PLAN.
 7. **Artefactos de mensagens:** pasta **`.oxe/plan-agent-messages/`** existe e contém **`README.md`** (conteúdo baseado em **`oxe/templates/plan-agent-messages-README.template.md`**).
+
+8. **Isolamento:** `runId` gerado é novo e único; se havia blueprint anterior com status não-terminal, foi invalidado com `invalidatedBy: "new_plan"` antes de criar o novo (ver `<agent_isolation_rule>`).
 
 Resumo obrigatório no chat: `Gate plan-agent: OK` ou `Gate plan-agent: corrigido (N problemas)`.
 </plan_agent_quality_gate>

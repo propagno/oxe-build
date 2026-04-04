@@ -1,0 +1,24 @@
+{
+  "oxeQuickAgentsSchema": 1,
+  "quickId": "quick-YYYY-MM-DD-substituir-por-6hex",
+  "quickRef": ".oxe/QUICK.md",
+  "status": "active",
+  "since": "YYYY-MM-DDTHH:mm:ssZ",
+  "_comment": "Agentes derivados dos passos do QUICK.md. Plan-Driven Dynamic Agents (lean): criados para esta demanda, invalidados ao promover para spec/plan ou iniciar novo quick.",
+  "agents": [
+    {
+      "id": "agent-dominio-a",
+      "role": "Papel específico para ESTA demanda (não genérico)",
+      "persona": "executor",
+      "steps": [1, 2, 3],
+      "focus": "Uma frase sobre o foco deste agente nos steps atribuídos"
+    },
+    {
+      "id": "agent-dominio-b",
+      "role": "Papel específico para ESTA demanda (não genérico)",
+      "persona": "executor",
+      "steps": [4, 5],
+      "focus": "Uma frase sobre o foco deste agente nos steps atribuídos"
+    }
+  ]
+}

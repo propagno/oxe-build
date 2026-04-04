@@ -1,42 +1,191 @@
 # OXE — Workflow: spec
 
 <objective>
-Registrar a intenção do usuário em **`.oxe/SPEC.md`**: escopo, **critérios de aceite com IDs estáveis (A1, A2, …)** e coluna **Como verificar**, não objetivos e suposições. A spec é o contrato antes do plano.
+Conduzir as **5 fases** do processo de especificação e produzir dois artefatos:
 
-Para trabalho **muito pequeno**, o usuário pode preferir **`oxe:quick`** (`.oxe/QUICK.md`) em vez deste fluxo — não bloqueie: se pedirem explicitamente quick, redirecione.
+1. **`.oxe/SPEC.md`** — contrato formal com critérios de aceite estáveis (A1, A2, …) e coluna **Como verificar**.
+2. **`.oxe/ROADMAP.md`** — fases de entrega mapeadas a requisitos (R-ID) e critérios (A*).
 
-Se **`.oxe/config.json`** tiver `discuss_before_plan: true`, mencionar no fim que o próximo passo recomendado é **`oxe:discuss`** antes do plano.
+**Foco em redução de requisições:** as fases são estruturadas para extrair o máximo de informação por rodada — nunca uma pergunta por vez, sempre blocos coesos.
 
-Entrada: texto livre na mensagem ou caminho `@arquivo.md` / anexo para incorporar PRD/notas.
+Para trabalho **muito pequeno** que não justifica spec completa: redirecionar para **`oxe:quick`**.
+
+Se **`.oxe/config.json`** tiver `discuss_before_plan: true`: mencionar no final da Fase 5 que o próximo passo é **`oxe:discuss`** antes do plano.
 </objective>
 
 <context>
-**Pré-requisito:** preferencialmente **scan** já executado. Se não existir scan, mencionar na spec que o mapa está pendente.
+**Pré-requisito preferível:** scan executado. Se não existir, mencionar na spec que o mapa está pendente.
 
-Leia `.oxe/STATE.md` e, se existirem, trechos relevantes de `.oxe/codebase/OVERVIEW.md` e `STACK.md` para não contradizer o projeto real.
+Ler no início:
+- `.oxe/STATE.md` — fase atual, decisões, workstream ativo
+- `.oxe/codebase/OVERVIEW.md` e `STACK.md` se existirem — não contradizer o repo
+- **`.oxe/OBSERVATIONS.md`** — se houver entradas `pendente` com impacto `spec` ou `all`, incorporá-las na Fase 3 (Requisitos) e marcá-las `incorporada → spec (data)` após uso
 
-Use o template **`oxe/templates/SPEC.template.md`**: tabela **Critérios de aceite** com colunas **ID | Critério | Como verificar**.
+**Brownfield (COBOL, JCL, copybooks, VB6, SP):** quando o objetivo for documentar ou planear migração, ver **`oxe/workflows/references/legacy-brownfield.md`** — épicos por trilha, critérios A* verificáveis por Grep/leitura/checklist.
 
-**Brownfield (COBOL, JCL, copybooks, VB6, SP):** quando o objetivo for documentar ou planear migração, ver **`oxe/workflows/references/legacy-brownfield.md`** — epicos por **trilha** (batch, online, desktop↔SQL), critérios **A*** verificáveis por Grep/leitura/checklist, e secções opcionais alinháveis a `spec_required_sections` em `.oxe/config.json` (ver `oxe/templates/CONFIG.md`).
-
-**Exploratório / sistema grande / reversa / modernização:** quando a tecnologia ou o âmbito for incerto, houver necessidade de **mapear** o sistema, **engenharia reversa** ou **hipóteses de modernização** antes de tarefas executáveis, recomendar **`oxe:research`** (notas datadas em `.oxe/research/` + índice `.oxe/RESEARCH.md`) **antes** de `oxe:plan` — sugestão, não bloqueio obrigatório para specs mínimas.
+Usar templates: **`oxe/templates/SPEC.template.md`** e **`oxe/templates/ROADMAP.template.md`**.
 </context>
 
+<fase_1_perguntas>
+## Fase 1 — Perguntas
+
+**Objetivo:** entender completamente a ideia antes de qualquer escrita de artefato.
+
+**Regra de ouro:** nunca uma pergunta por vez — sempre um **bloco coeso** de 3-5 perguntas por rodada. Máximo **3 rodadas**; sinalize quando achar que tem entendimento completo e peça confirmação antes de avançar.
+
+**Blocos de perguntas (adaptar ao contexto):**
+
+*Bloco A — Objetivo e motivação:*
+- Qual o problema central que isso resolve? Quem se beneficia?
+- Há uma solução atual (mesmo que ruim)? O que falha nela?
+- Como o sucesso será medido — qual o indicador mais importante?
+
+*Bloco B — Restrições e tecnologia:*
+- Quais tecnologias ou frameworks são obrigatórios ou proibidos?
+- Há restrições de prazo, orçamento, tamanho do time ou infraestrutura?
+- Quais integrações existentes precisam ser mantidas?
+
+*Bloco C — Casos extremos e escopo:*
+- Quais cenários de erro ou casos extremos são críticos de tratar na v1?
+- O que definitivamente está **fora** do escopo desta entrega?
+- Há comportamento esperado que você sabe que não é óbvio?
+
+**Estratégia de rodadas:**
+- Rodada 1: blocos A + B (entendimento geral)
+- Rodada 2: bloco C + clarificações específicas (se necessário)
+- Rodada 3 (máx): apenas se ainda houver ambiguidade crítica
+- Após rodada 3: avançar para Fase 2 mesmo com suposições explícitas
+
+**Ao final:** "Acho que entendi completamente. Confirma antes de avançarmos para pesquisa/requisitos? [resumo em 3-5 bullets]"
+</fase_1_perguntas>
+
+<fase_2_pesquisa>
+## Fase 2 — Pesquisa (opcional, recomendada)
+
+**Objetivo:** investigar domínios incertos antes de escrever requisitos.
+
+**Proposta ao usuário:** com base na Fase 1, listar 2-4 áreas de investigação sugeridas e perguntar quais investigar. Exemplos:
+- "Há 3 áreas com incerteza técnica: autenticação JWT, integração com Stripe, e deploy em edge. Quer investigar alguma antes de avançar para requisitos?"
+
+**Se aprovado:**
+- Criar notas de pesquisa datadas em `.oxe/research/YYYY-MM-DD-<slug>.md` (usar fluxo de `research.md`)
+- Atualizar `.oxe/RESEARCH.md` com índice
+- Consolidar descobertas relevantes antes de avançar para Fase 3
+
+**Se pulado:** registrar em `SPEC.md` as áreas de incerteza como suposições explícitas.
+
+**Explorações grandes / sistemas legado:** ver **`oxe/workflows/references/legacy-brownfield.md`** — progressive disclosure por área, multiple sessions, epicos por trilha.
+</fase_2_pesquisa>
+
+<fase_3_requisitos>
+## Fase 3 — Requisitos
+
+**Objetivo:** extrair uma tabela clara de requisitos com versionamento (v1/v2/fora).
+
+**Incorporar primeiro:** verificar `.oxe/OBSERVATIONS.md` por entradas `pendente` com impacto `spec` ou `all` — incorporar aqui antes de finalizar a tabela.
+
+**Formato da tabela:**
+
+| R-ID | Requisito | Versão | Critério de aceite |
+|------|-----------|--------|--------------------|
+| R1 | [o que o sistema deve fazer] | v1 | A1 — [como verificar] |
+| R2 | [outro requisito] | v1 | A2 — [como verificar] |
+| R3 | [requisito futuro] | v2 | A3 — [quando implementado] |
+| R4 | [fora do escopo] | fora | — |
+
+**Definições:**
+- **v1** = MVP essencial; entra no próximo `/oxe-plan`
+- **v2** = evolução futura; entra em ciclos seguintes
+- **fora** = explicitamente descartado desta entrega
+
+**Apresentar ao usuário para validação** antes de avançar para Fase 4. Se ajustar: atualizar tabela e repetir até aprovação.
+</fase_3_requisitos>
+
+<fase_4_roteiro>
+## Fase 4 — Roteiro
+
+**Objetivo:** criar fases de entrega mapeadas aos requisitos v1 e escrever `.oxe/ROADMAP.md`.
+
+**Lógica de agrupamento:**
+- Agrupar requisitos v1 em fases por **dependência técnica** e **valor entregável**
+- Cada fase deve ter resultado demonstrável (não apenas código interno)
+- Fase 1 = o que `/oxe-plan` implementará no próximo ciclo
+- Fases 2+ = ciclos futuros de spec→plan→execute→verify
+
+**Escrever `.oxe/ROADMAP.md`** usando `oxe/templates/ROADMAP.template.md`:
+
+```markdown
+---
+oxe_doc: roadmap
+status: draft
+updated: <data>
+spec_ref: .oxe/SPEC.md
+---
+
+## Fase 1 — [Nome]
+**Requisitos:** R1, R3
+**Critérios de aceite:** A1, A2, A3
+**Escopo:** ...
+
+## Fase 2 — [Nome]
+**Requisitos:** R2, R5
+**Critérios de aceite:** A4, A5
+**Escopo:** ...
+
+## Fora do escopo (v2+)
+- R4: [descrição] — motivo
+```
+</fase_4_roteiro>
+
+<fase_5_aprovacao>
+## Fase 5 — Aprovação e próximo passo
+
+**Objetivo:** confirmar o roteiro com o usuário e redirecionar para o plano.
+
+**Apresentar resumo:**
+- Objetivo em 1 frase
+- Requisitos v1 (N itens), v2 (M itens), fora (K itens)
+- Roteiro: Fase 1 → N critérios; Fase 2 → M critérios
+- Critérios de aceite da Fase 1: A1, A2, …
+
+**Perguntar ao usuário:**
+> "Roteiro aprovado? Quer gerar o plano agora ou ajustar algo antes?"
+
+**Se aprovado — oferecer os próximos passos:**
+
+| Opção | Quando usar | Próximo passo |
+|-------|-------------|---------------|
+| Plano simples | Tarefa clara, sem orquestração multi-agente | `/oxe-plan` |
+| Plano com agentes | Time distribuído, domínios distintos, ondas paralelas | `/oxe-plan-agent` |
+| Discutir antes | `discuss_before_plan: true` em config, ou risco técnico | `/oxe-discuss` → `/oxe-plan` |
+
+**Se ajustar:** voltar à fase indicada (Requisitos, Roteiro ou Perguntas) e repetir.
+
+**Ao finalizar:**
+- Marcar `ROADMAP.md` → `status: approved`
+- Atualizar `STATE.md`: `phase: spec_ready`, próximo passo conforme escolha
+</fase_5_aprovacao>
+
 <process>
-1. Resolver entrada: se começar com `@`, ler arquivo; senão usar o texto da conversa.
-2. Criar ou atualizar **`.oxe/SPEC.md`** usando `oxe/templates/SPEC.template.md` como esqueleto. Se o ficheiro já existir com YAML inicial (`---` … `---` antes do primeiro `#`), **preservar** chaves existentes; **atualizar** `updated:` com a data ISO do dia; ajustar `status` (ex. para `ready`) se o utilizador declarar a spec fechada. Se não houver frontmatter, pode adicioná-lo na primeira edição substancial.
-3. Garantir seções:
-   - **Objetivo** — uma frase clara.
-   - **Escopo** — bullets dentro / fora.
-   - **Critérios de aceite** — tabela com IDs **A1**, **A2**, … (testáveis).
-   - **Suposições e riscos**.
-   - **Referências** — paths se conhecidos.
-4. Atualizar **`.oxe/STATE.md`**: fase `spec_ready`, próximo passo `oxe:discuss` ou `oxe:plan` conforme `discuss_before_plan`.
-5. Responder com resumo da spec e no máximo 3 perguntas objetivas se algo crítico estiver ambíguo.
+1. Ler `.oxe/STATE.md`, `OVERVIEW.md`, `STACK.md` e `.oxe/OBSERVATIONS.md` (verificar pendentes).
+2. **Fase 1 — Perguntas:** enviar bloco coeso de 3-5 perguntas; máx 3 rodadas; confirmar entendimento.
+3. **Fase 2 — Pesquisa:** propor áreas de investigação; aguardar aprovação; executar se aprovado.
+4. **Fase 3 — Requisitos:** extrair tabela R-ID com v1/v2/fora e critérios A*; incorporar OBS pendentes; apresentar para validação.
+5. **Fase 4 — Roteiro:** agrupar requisitos v1 em fases; escrever `.oxe/ROADMAP.md`.
+6. Escrever **`.oxe/SPEC.md`** usando `oxe/templates/SPEC.template.md`:
+   - Frontmatter YAML (`oxe_doc: spec`, `status`, `updated`, `inputs`)
+   - Objetivo, Escopo (dentro/fora), Critérios de aceite (tabela A*), Suposições e riscos, Referências
+   - Preservar chaves existentes se SPEC.md já existir; atualizar `updated:`
+7. **Fase 5 — Aprovação:** apresentar resumo, aguardar aprovação do roteiro, redirecionar.
+8. Atualizar **`.oxe/STATE.md`**: `phase: spec_ready`, próximo passo.
+9. Marcar OBS incorporadas em `.oxe/OBSERVATIONS.md` se houver pendentes de impacto `spec`.
 </process>
 
 <success_criteria>
-- [ ] `.oxe/SPEC.md` existe e cada critério tem ID **A*** e forma de verificar.
-- [ ] `STATE.md` atualizado.
-- [ ] Ambiguidades críticas foram perguntas ou registradas como suposição explícita.
+- [ ] `.oxe/SPEC.md` existe com critérios A* e coluna Como verificar; `STATE.md` atualizado.
+- [ ] `.oxe/ROADMAP.md` existe com fases mapeadas a R-IDs e A*, status `approved` (ou `draft` se usuário não confirmou).
+- [ ] Tabela de requisitos R-ID foi apresentada e validada (v1/v2/fora) antes do roteiro.
+- [ ] Usuário foi consultado no gate da Fase 5 e escolheu o próximo passo.
+- [ ] OBS pendentes com impacto `spec` foram incorporadas e marcadas `incorporada`.
+- [ ] Máximo 3 rodadas de perguntas utilizadas — não mais.
 </success_criteria>

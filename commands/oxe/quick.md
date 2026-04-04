@@ -1,7 +1,7 @@
 ---
 name: oxe:quick
-description: Modo rápido — .oxe/QUICK.md + STATE (sem SPEC/PLAN longos)
-argument-hint: "[objetivo]"
+description: "Modo rápido com Plan-Driven Dynamic Agents lean — minispec (objetivo) + mini-plano (passos) + agentes dinâmicos por domínio (opcional) + verificar"
+argument-hint: "[objetivo] [--agents]"
 allowed-tools:
   - Read
   - Bash

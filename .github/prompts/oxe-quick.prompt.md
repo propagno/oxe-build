@@ -1,8 +1,8 @@
 ---
 name: oxe-quick
 agent: agent
-description: OXE — Modo rápido (.oxe/QUICK.md)
-argument-hint: "[objetivo em texto livre]"
+description: "OXE — Modo rápido com Plan-Driven Dynamic Agents lean: objetivo → passos → agentes por domínio (opcional) → verificar"
+argument-hint: "[objetivo em texto livre] [--agents para forçar PDDA]"
 ---
 
 Executa o workflow **OXE quick** no repositório atual. Lê e aplica **integralmente** o ficheiro no workspace:
