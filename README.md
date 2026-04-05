@@ -42,7 +42,7 @@ O resultado: **menos requisições**, **mais coerência**, e um fluxo que funcio
 /oxe-verify       → validar que está pronto
 ```
 
-Tudo o mais é ativado automaticamente por contexto ou existe como escape hatch.
+Tudo o mais é ativado automaticamente por contexto ou chamado só quando necessário.
 
 ---
 
@@ -62,56 +62,47 @@ Cada passo lê o anterior como contexto e escreve seu artefato em `.oxe/`. Nenhu
 
 ---
 
-## Como cada comando fica mais inteligente
+## Como cada comando funciona
 
-| Comando | Inteligência embutida |
-|---------|----------------------|
+| Comando | O que entrega |
+|---------|--------------|
 | `/oxe` | Sem input → próximo passo. Com texto → roteamento. Com "help" → 8 comandos. |
 | `/oxe-scan` | Se `.oxe/codebase/` já existe → modo refresh automático. `--full` força scan completo. |
 | `/oxe-spec` | **Auto-reflexão semântica** antes da aprovação: detecta contradições, critérios vagos, escopo creep e conflitos com stack — sem requisição extra. Lê `LESSONS.md` para não repetir erros do ciclo anterior. |
 | `/oxe-plan` | **Test-first:** `Verificar` vem antes de `Implementar` em cada tarefa. `Complexidade: S/M/L/XL` — tarefas XL bloqueiam o gate sem sub-tarefas. Com `--agents`: `model_hint` por agente orienta qual tier de modelo usar (schema v3). |
-| `/oxe-execute` | Verificar falha → diagnóstico inline (2-3 hipóteses + fix). Sem precisar chamar `/oxe-debug`. Exibe `model_hint` ao iniciar cada agente do blueprint. |
+| `/oxe-execute` | Execução A/B/C. Se uma tarefa falha: **diagnóstico inline automático** (2-3 hipóteses + fix + retry) — sem precisar de comando separado. Exibe `model_hint` ao iniciar cada agente do blueprint. |
 | `/oxe-verify` | Até 6 camadas por config: audit + critérios + decisões + UAT + gaps (`verification_depth: thorough`) + OWASP (`security_in_verify: true`). Sugere `/oxe-retro` ao concluir. |
-| `/oxe-retro` | Sintetiza 3–5 lições prescritivas em `LESSONS.md` — consumidas automaticamente pelo próximo spec/plan. |
-| `/oxe-research` | **Thinking depth:** classifica `surface` / `standard` / `deep` e recomenda raciocínio estendido para reverse engineering e arquitetura complexa. |
-| `/oxe-loop` | Retry iterativo de onda: executa → verifica → diagnostica (2-3 hipóteses) → corrige → repete até `max` tentativas; escala para `/oxe-forensics` se esgotar. |
-| `/oxe-security` | Auditoria OWASP Top 10 filtrada pelo stack. Achados P0/P1/P2 vinculados a tarefas existentes. Integrado ao verify via `security_in_verify: true`. |
+| `/oxe-retro` | Sintetiza 3–5 lições prescritivas em `.oxe/LESSONS.md` — consumidas automaticamente pelo próximo spec/plan. |
+| `/oxe-obs` | Registra observação → propaga automaticamente para R-IDs e Tns afetados no próximo plan/spec/execute. |
+| `/oxe-quick` | Objetivo → passos → agentes opcionais (PDDA lean) → verify. Para correções pontuais e features pequenas. |
 | `/oxe-project` | `milestone` + `workstream` + `checkpoint` em um único comando. |
 
 ---
 
-## Comandos completos
+## Quando usar cada modo do execute
 
-### Fluxo principal
+```
+A) Completo   → todas as ondas em 1 sessão  (ideal: Claude, Copilot, Gemini)
+B) Por onda   → onda 1, você verifica, chama de novo  (N sessões)
+C) Por tarefa → máximo controle  (N tarefas = N sessões)
+```
 
-| Comando | O que faz | Artefato |
-|---------|-----------|----------|
-| `/oxe` | Entrada universal: próximo passo, roteamento ou help | — |
-| `/oxe-scan` | Mapeia o repo (bootstrap) ou atualiza mapas (refresh automático) | `.oxe/codebase/*.md` |
-| `/oxe-spec` | Spec em 5 fases: perguntas → pesquisa → requisitos R-ID → roteiro → aprovação | `.oxe/SPEC.md` + `.oxe/ROADMAP.md` |
-| `/oxe-plan` | Plano por ondas. `--agents` ativa blueprint com `model_hint` por agente | `.oxe/PLAN.md` [+ `plan-agents.json`] |
-| `/oxe-execute` | Execução A/B/C com debug inline automático em falhas | `.oxe/STATE.md` |
-| `/oxe-verify` | Até 6 camadas por config: audit + critérios + decisões + UAT + gaps + segurança | `.oxe/VERIFY.md` |
-| `/oxe-obs` | Registra observação → propaga automaticamente para R-IDs e Tns afetados → auto-incorporada | `.oxe/OBSERVATIONS.md` |
-| `/oxe-quick` | Lean: objetivo → passos → agentes opcionais → verify | `.oxe/QUICK.md` |
-| `/oxe-retro` | Retrospectiva: 3–5 lições prescritivas → alimenta spec/plan do próximo ciclo | `.oxe/LESSONS.md` |
-| `/oxe-project` | Unifica: `milestone`, `workstream`, `checkpoint` | vários |
+Se uma tarefa falha: diagnóstico inline automático (2-3 hipóteses → fix → retry). O Modo B inclui loop iterativo com escalada automática para diagnóstico profundo quando necessário.
 
-### Escape hatches (não precisam ser decorados)
+---
+
+## Comandos especializados
+
+Estes não precisam ser decorados — aparecem quando o contexto pede ou quando a situação específica justifica.
 
 | Comando | Quando usar |
 |---------|-------------|
-| `/oxe-research` | Spike, mapa de sistema, engenharia reversa |
-| `/oxe-forensics` | Sugerido automaticamente pelo execute/verify em falha persistente |
-| `/oxe-debug` | Diagnóstico técnico standalone (integrado ao execute) |
-| `/oxe-loop` | Retry iterativo de onda standalone (integrado ao Modo B do execute) |
-| `/oxe-security` | Auditoria OWASP standalone (automático no verify via config) |
-| `/oxe-validate-gaps` | Auditoria de cobertura standalone (automático no verify via config) |
-| `/oxe-ui-spec` | Contrato UI/UX derivado da SPEC |
-| `/oxe-ui-review` | Auditoria da implementação UI |
-| `/oxe-review-pr` | Revisão de PR/diff |
-| `/oxe-discuss` | Decisões D-NN (ativado via `discuss_before_plan: true`) |
-| `/oxe-compact` | Refresh explícito do codebase (equivalente a `/oxe-scan` em modo refresh) |
+| `/oxe-research` | Spike, mapa de sistema, engenharia reversa — antes de spec ou plano |
+| `/oxe-forensics` | Falha persistente após múltiplas tentativas — diagnóstico profundo |
+| `/oxe-ui-spec` | Contrato UI/UX derivado da SPEC (quando UI é domínio crítico) |
+| `/oxe-ui-review` | Auditoria da implementação UI contra o contrato |
+| `/oxe-review-pr` | Revisão de PR ou diff de branches |
+| `/oxe-checkpoint` | Snapshot nomeado do estado da sessão |
 
 ---
 
@@ -143,24 +134,6 @@ Cada passo lê o anterior como contexto e escreve seu artefato em `.oxe/`. Nenhu
 
 A spec lê `.oxe/LESSONS.md` antes de iniciar — lições do ciclo anterior informam as perguntas e os critérios.
 
-### `/oxe-execute` — economia de requisições com debug automático
-
-```
-A) Completo   → todas as ondas em 1 sessão  (ideal: Claude, Copilot, Gemini)
-B) Por onda   → onda 1, você verifica, chama de novo  (N sessões)
-C) Por tarefa → máximo controle  (N tarefas = N sessões)
-```
-
-Se uma tarefa falha: diagnóstico inline automático (2-3 hipóteses → fix → retry). Sem precisar chamar `/oxe-debug` separadamente.
-
-### `/oxe-obs` — observação sem re-explicar
-
-```
-/oxe-obs JWT expiration deve ser configurável via env var, não hardcoded
-```
-
-O próximo `/oxe-plan`, `/oxe-spec` ou `/oxe-execute` incorpora automaticamente — sem prompt extra.
-
 ### `/oxe-plan` — test-first com complexidade explícita
 
 Cada tarefa usa a ordem **Verificar → Implementar** (test-first):
@@ -170,7 +143,7 @@ Implementar: o mínimo para passar o Verificar
 Complexidade: S | M | L | XL
 ```
 
-Tarefas `XL` bloqueam o gate sem sub-tarefas ou justificativa. `/oxe-obs` propaga automaticamente constraints para os R-IDs e Tns afetados.
+Tarefas `XL` bloqueiam o gate sem sub-tarefas ou justificativa. `/oxe-obs` propaga automaticamente constraints para os R-IDs e Tns afetados.
 
 ### `/oxe-retro` — loop de aprendizado
 
@@ -248,7 +221,7 @@ npx oxe-cc uninstall --ide-only  # remove integrações (mantém .oxe/)
 ```bash
 git clone https://github.com/propagno/oxe-build.git
 cd oxe-build
-npm test          # 144 testes
+npm test          # 165 testes
 node bin/oxe-cc.js --help
 ```
 
@@ -279,10 +252,11 @@ Arquivo `.oxe/config.json`. Principais opções:
 | `profile` | `"balanced"` | `strict` / `balanced` / `fast` / `legacy` |
 | `verification_depth` | `"standard"` | `"thorough"` ativa gaps automático no verify (Camada 5) |
 | `security_in_verify` | `false` | `true` ativa OWASP automático no verify (Camada 6) |
-| `discuss_before_plan` | `false` | Exige `/oxe-discuss` antes do `/oxe-plan` |
+| `discuss_before_plan` | `false` | Exige aprovação de decisões antes do plano |
 | `scale_adaptive` | `true` | Scan sugere o profile pelo tamanho do projeto |
-| `scan_max_age_days` | — | Doctor avisa quando o scan estiver velho |
-| `plugins` | — | Hooks de lifecycle em `.oxe/plugins/*.cjs` |
+| `scan_max_age_days` | `0` | Doctor avisa quando o scan estiver velho |
+| `lessons_max_age_days` | `0` | Doctor avisa quando a última retro estiver velho |
+| `plugins` | `[]` | Hooks de lifecycle em `.oxe/plugins/*.cjs` |
 
 ---
 
@@ -311,7 +285,7 @@ TypeScript: [`lib/sdk/index.d.ts`](lib/sdk/index.d.ts) · Docs: [`lib/sdk/README
 | Comandos não aparecem no Cursor | Confirme `~/.cursor/commands/`; reinicie o Cursor |
 | `/oxe-*` não aparecem no Copilot | Ative `"chat.promptFiles": true`; confirme `~/.copilot/prompts/` |
 | Arquivos não atualizam | Reinstale com `--force` |
-| `ETARGET` / versão não encontrada | `npm cache clean --force` ou `npx oxe-cc@0.6.0` |
+| `ETARGET` / versão não encontrada | `npm cache clean --force` |
 | Erro no WSL sobre Node | Use Node instalado dentro do WSL |
 
 `oxe-cc --help` · `oxe-cc doctor` · `OXE_NO_BANNER=1` desativa o banner
