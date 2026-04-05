@@ -31,6 +31,8 @@ Arquivo: **`.oxe/OBSERVATIONS.md`**
 
 ### OBS-001 — 2026-04-04 | execute/T3
 **Impacto:** spec, plan
+**Afeta (spec):** R3, R5
+**Afeta (plan):** T4, T7
 **Status:** pendente
 
 JWT expiration deve ser configurável via `JWT_EXPIRES_IN` env var, não hardcoded 7d.
@@ -59,6 +61,11 @@ API deve retornar mensagens de erro em português do Brasil.
 1. Ler **`.oxe/STATE.md`**: capturar `phase`, `last_task` ou tarefa ativa na onda, `active_workstream`.
 2. Determinar o **próximo ID** (OBS-NNN): contar entradas existentes em `.oxe/OBSERVATIONS.md` ou começar em OBS-001.
 3. Classificar o **impacto** automaticamente com base no texto; se ambíguo, usar `all`.
+3b. **Propagação automática de constraints:**
+   - Se existir **`.oxe/SPEC.md`**: ler a tabela de requisitos (R-ID) e critérios (A*) e identificar quais são diretamente afetados pelo texto da observação. Registrar em `**Afeta (spec):**`.
+   - Se existir **`.oxe/PLAN.md`**: ler as tarefas (Tn) e identificar quais podem precisar de ajuste no campo `Verificar` ou `Implementar`. Registrar em `**Afeta (plan):**`.
+   - Se nenhum R-ID ou Tn identificável: registrar `**Afeta:** (a cruzar na próxima incorporação)`.
+   - Esta propagação é automática e não requer input do usuário.
 4. Criar ou atualizar **`.oxe/OBSERVATIONS.md`**:
    - Adicionar linha na tabela de índice.
    - Adicionar seção `### OBS-NNN` com contexto, impacto, status e texto.

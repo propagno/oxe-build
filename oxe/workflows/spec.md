@@ -20,6 +20,7 @@ Ler no início:
 - `.oxe/STATE.md` — fase atual, decisões, workstream ativo
 - `.oxe/codebase/OVERVIEW.md` e `STACK.md` se existirem — não contradizer o repo
 - **`.oxe/OBSERVATIONS.md`** — se houver entradas `pendente` com impacto `spec` ou `all`, incorporá-las na Fase 3 (Requisitos) e marcá-las `incorporada → spec (data)` após uso
+- **`.oxe/LESSONS.md`** — se existir, ler entradas com `Aplicar em: spec` e status `ativo`. Usar como restrições explícitas ou alertas durante a Fase 1 (perguntas) e Fase 3 (requisitos). Exemplo: se uma lição diz "perguntar explicitamente sobre integração com X", adicionar essa pergunta no Bloco B da Fase 1.
 
 **Brownfield (COBOL, JCL, copybooks, VB6, SP):** quando o objetivo for documentar ou planear migração, ver **`oxe/workflows/references/legacy-brownfield.md`** — épicos por trilha, critérios A* verificáveis por Grep/leitura/checklist.
 
@@ -137,6 +138,30 @@ spec_ref: .oxe/SPEC.md
 ```
 </fase_4_roteiro>
 
+<auto_reflexao>
+## Auto-reflexão semântica (executa automaticamente antes da Fase 5)
+
+**Objetivo:** o agente critica a própria spec antes de apresentá-la ao usuário. Sem requisição extra — é um passe interno de qualidade semântica.
+
+Percorrer esta lista de verificação:
+
+| # | Verificação | Ação se falhar |
+|---|-------------|----------------|
+| 1 | **Contradições:** algum requisito v1 contradiz diretamente uma resposta da Fase 1? (ex.: usuário disse "sem auth" mas R4 implica sessões) | Voltar à Fase 3 e corrigir o requisito |
+| 2 | **Verificabilidade:** todo critério A* tem "Como verificar" executável sem acesso ao ambiente de produção do usuário? | Refinar para verificação possível no CI/agente ou marcar "verificação manual necessária" |
+| 3 | **Escopo creep:** algum requisito v1 foi adicionado que NÃO emergiu da Fase 1 nem da Fase 2? | Mover para v2 ou justificar inclusão em v1 |
+| 4 | **Conflito com stack:** algum requisito v1 pressupõe tecnologia ou capacidade que `STACK.md` indica ausente? (ex.: requer WebSocket mas stack usa REST puro) | Marcar como suposição explícita ou remover |
+| 5 | **Critérios vagos:** algum A* usa linguagem não-mensurável ("deve ser rápido", "interface amigável") sem métrica? | Refinar: "resposta < 200ms p95", "WCAG 2.1 AA" |
+| 6 | **Dependências implícitas:** algum requisito v1 pressupõe que outro requisito (v2 ou fora) já esteja implementado? | Tornar dependência explícita ou reordenar versioning |
+
+**Resultado obrigatório antes de avançar:**
+- **0 problemas** → avançar para Fase 5 normalmente.
+- **1–2 problemas** → corrigir inline na spec, anotar o que foi ajustado em 1 linha.
+- **3+ problemas** → apresentar lista ao usuário com a Fase 3 revisada (não reiniciar do zero).
+
+O resultado desta reflexão é **invisível ao usuário** — é trabalho interno do agente. Somente os ajustes feitos aparecem na spec final.
+</auto_reflexao>
+
 <fase_5_aprovacao>
 ## Fase 5 — Aprovação e próximo passo
 
@@ -176,6 +201,7 @@ spec_ref: .oxe/SPEC.md
    - Frontmatter YAML (`oxe_doc: spec`, `status`, `updated`, `inputs`)
    - Objetivo, Escopo (dentro/fora), Critérios de aceite (tabela A*), Suposições e riscos, Referências
    - Preservar chaves existentes se SPEC.md já existir; atualizar `updated:`
+6b. **Auto-reflexão:** executar integralmente o bloco `<auto_reflexao>` antes de avançar. Corrigir a spec conforme necessário. Não apresentar a lista de verificação ao usuário — apenas a spec corrigida.
 7. **Fase 5 — Aprovação:** apresentar resumo, aguardar aprovação do roteiro, redirecionar.
 8. Atualizar **`.oxe/STATE.md`**: `phase: spec_ready`, próximo passo.
 9. Marcar OBS incorporadas em `.oxe/OBSERVATIONS.md` se houver pendentes de impacto `spec`.

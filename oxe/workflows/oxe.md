@@ -81,7 +81,7 @@ Apresentar de forma concisa:
 ```
 /oxe-obs (qualquer momento)
      ↓
-/oxe-scan → /oxe-spec → /oxe-plan → /oxe-execute → /oxe-verify
+/oxe-scan → /oxe-spec → /oxe-plan → /oxe-execute → /oxe-verify → /oxe-retro
                                   ↓
                            /oxe-quick (trabalho pequeno)
 ```

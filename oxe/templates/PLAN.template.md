@@ -39,10 +39,11 @@ inputs: []
 - **Arquivos prováveis:** `…`
 - **Depende de:** —
 - **Onda:** 1
-- **Implementação:** …
+- **Complexidade:** S
 - **Verificar:**
   - Comando: `…`
   - Manual: (opcional) …
+- **Implementar:** o mínimo para fazer a verificação acima passar.
 - **Aceite vinculado:** A1, A2 (IDs da tabela de critérios em SPEC.md)
 
 ---

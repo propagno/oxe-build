@@ -76,9 +76,9 @@ Raiz do ficheiro **`.oxe/plan-agents.json`**:
 
 | Campo | Obrigatório | Significado |
 |-------|-------------|-------------|
-| `oxePlanAgentsSchema` | sim | **2** nas gerações atuais ( **1** = legado sem `runId`/`lifecycle` obrigatórios). |
-| `runId` | sim (schema 2) | Identidade da sessão do blueprint; nova em cada plan-agent / replan. |
-| `lifecycle` | sim (schema 2) | `status`: `pending_execute` \| `executing` \| `closed` \| `invalidated`; `since` ISO; opcional `invalidatedReason`, `invalidatedBy` (`quick` \| `out_of_scope` \| `new_plan` \| `manual`). |
+| `oxePlanAgentsSchema` | sim | **3** nas gerações atuais ( **2** = sem `model_hint`; **1** = legado sem `runId`/`lifecycle` obrigatórios). |
+| `runId` | sim (schema ≥ 2) | Identidade da sessão do blueprint; nova em cada plan-agent / replan. |
+| `lifecycle` | sim (schema ≥ 2) | `status`: `pending_execute` \| `executing` \| `closed` \| `invalidated`; `since` ISO; opcional `invalidatedReason`, `invalidatedBy` (`quick` \| `out_of_scope` \| `new_plan` \| `manual`). |
 | `goal` | sim | Frase curta alinhada ao objetivo da entrega (eco da SPEC). |
 | `specRef` | não | Referência livre (ex.: path `.oxe/SPEC.md` ou nota de versão). |
 | `agents` | sim | Lista de objetos agente (ver abaixo). |
@@ -133,7 +133,7 @@ Resumo obrigatório no chat: `Gate plan-agent: OK` ou `Gate plan-agent: corrigid
 
 <success_criteria>
 - [ ] `PLAN.md` existe e passa o gate de **`plan.md`**.
-- [ ] `plan-agents.json` existe com schema **2**, `runId`, `lifecycle`, e passa **`<plan_agent_quality_gate>`**.
+- [ ] `plan-agents.json` existe com schema **3**, `runId`, `lifecycle`, `model_hint` por agente (ou omitido), e passa **`<plan_agent_quality_gate>`**.
 - [ ] Cada tarefa `Tn` aparece em **exatamente um** `taskIds`.
 - [ ] `execution.waves` reflete dependências entre agentes sem ciclos.
 - [ ] `.oxe/plan-agent-messages/README.md` presente.

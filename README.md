@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
-**Versão:** `0.6.0` · [package.json](package.json)
+**Versão:** `0.6.2` · [package.json](package.json)
 
 ```bash
 npx oxe-cc@latest
@@ -51,12 +51,14 @@ Tudo o mais é ativado automaticamente por contexto ou existe como escape hatch.
 ```
 /oxe-obs (qualquer momento)
      ↓
-/oxe-scan → /oxe-spec → /oxe-plan ──────────→ /oxe-execute → /oxe-verify
-                              ↓
-                         /oxe-quick (trabalho pequeno)
+/oxe-scan → /oxe-spec → /oxe-plan ──────────→ /oxe-execute → /oxe-verify → /oxe-retro
+                              ↓                                                  ↓
+                         /oxe-quick (trabalho pequeno)                    .oxe/LESSONS.md
+                                                                               ↓
+                                                                    (alimenta o próximo ciclo)
 ```
 
-Cada passo lê o anterior como contexto e escreve seu artefato em `.oxe/`. Nenhum passo depende de você re-explicar o que já foi decidido.
+Cada passo lê o anterior como contexto e escreve seu artefato em `.oxe/`. Nenhum passo depende de você re-explicar o que já foi decidido. Os erros do ciclo anterior não se repetem.
 
 ---
 
@@ -66,9 +68,14 @@ Cada passo lê o anterior como contexto e escreve seu artefato em `.oxe/`. Nenhu
 |---------|----------------------|
 | `/oxe` | Sem input → próximo passo. Com texto → roteamento. Com "help" → 8 comandos. |
 | `/oxe-scan` | Se `.oxe/codebase/` já existe → modo refresh automático. `--full` força scan completo. |
-| `/oxe-plan` | 3+ domínios → sugere `--agents`. Com `--agents` → gera blueprint com `model_hint` por agente. |
-| `/oxe-execute` | Verificar falha → diagnóstico inline (2-3 hipóteses + fix). Sem precisar chamar `/oxe-debug`. |
-| `/oxe-verify` | `verification_depth: "thorough"` → gaps automático. `security_in_verify: true` → OWASP automático. |
+| `/oxe-spec` | **Auto-reflexão semântica** antes da aprovação: detecta contradições, critérios vagos, escopo creep e conflitos com stack — sem requisição extra. Lê `LESSONS.md` para não repetir erros do ciclo anterior. |
+| `/oxe-plan` | **Test-first:** `Verificar` vem antes de `Implementar` em cada tarefa. `Complexidade: S/M/L/XL` — tarefas XL bloqueiam o gate sem sub-tarefas. Com `--agents`: `model_hint` por agente orienta qual tier de modelo usar (schema v3). |
+| `/oxe-execute` | Verificar falha → diagnóstico inline (2-3 hipóteses + fix). Sem precisar chamar `/oxe-debug`. Exibe `model_hint` ao iniciar cada agente do blueprint. |
+| `/oxe-verify` | Até 6 camadas por config: audit + critérios + decisões + UAT + gaps (`verification_depth: thorough`) + OWASP (`security_in_verify: true`). Sugere `/oxe-retro` ao concluir. |
+| `/oxe-retro` | Sintetiza 3–5 lições prescritivas em `LESSONS.md` — consumidas automaticamente pelo próximo spec/plan. |
+| `/oxe-research` | **Thinking depth:** classifica `surface` / `standard` / `deep` e recomenda raciocínio estendido para reverse engineering e arquitetura complexa. |
+| `/oxe-loop` | Retry iterativo de onda: executa → verifica → diagnostica (2-3 hipóteses) → corrige → repete até `max` tentativas; escala para `/oxe-forensics` se esgotar. |
+| `/oxe-security` | Auditoria OWASP Top 10 filtrada pelo stack. Achados P0/P1/P2 vinculados a tarefas existentes. Integrado ao verify via `security_in_verify: true`. |
 | `/oxe-project` | `milestone` + `workstream` + `checkpoint` em um único comando. |
 
 ---
@@ -85,8 +92,9 @@ Cada passo lê o anterior como contexto e escreve seu artefato em `.oxe/`. Nenhu
 | `/oxe-plan` | Plano por ondas. `--agents` ativa blueprint com `model_hint` por agente | `.oxe/PLAN.md` [+ `plan-agents.json`] |
 | `/oxe-execute` | Execução A/B/C com debug inline automático em falhas | `.oxe/STATE.md` |
 | `/oxe-verify` | Até 6 camadas por config: audit + critérios + decisões + UAT + gaps + segurança | `.oxe/VERIFY.md` |
-| `/oxe-obs` | Registra observação → auto-incorporada nos próximos workflows | `.oxe/OBSERVATIONS.md` |
+| `/oxe-obs` | Registra observação → propaga automaticamente para R-IDs e Tns afetados → auto-incorporada | `.oxe/OBSERVATIONS.md` |
 | `/oxe-quick` | Lean: objetivo → passos → agentes opcionais → verify | `.oxe/QUICK.md` |
+| `/oxe-retro` | Retrospectiva: 3–5 lições prescritivas → alimenta spec/plan do próximo ciclo | `.oxe/LESSONS.md` |
 | `/oxe-project` | Unifica: `milestone`, `workstream`, `checkpoint` | vários |
 
 ### Escape hatches (não precisam ser decorados)
@@ -124,13 +132,16 @@ Cada passo lê o anterior como contexto e escreve seu artefato em `.oxe/`. Nenhu
 └── workstreams/      ← trilhas paralelas de desenvolvimento
 ```
 
-### `/oxe-spec` — spec em 5 fases, máx 3 rodadas de perguntas
+### `/oxe-spec` — spec em 5 fases com auto-reflexão semântica
 
 1. **Perguntas** — blocos de 3-5 por rodada, máximo 3 rodadas
 2. **Pesquisa** — proposta inline na Fase 2 (sem sair do spec)
 3. **Requisitos** — tabela R-ID com v1/v2/fora e critérios A*
 4. **Roteiro** — fases de entrega → `.oxe/ROADMAP.md`
-5. **Aprovação** → instrui `/oxe-plan` ou `/oxe-plan --agents`
+5. **Auto-reflexão** *(automática, sem requisição extra)* — detecta contradições, critérios vagos, escopo creep, conflitos com stack. Corrige antes de apresentar ao usuário.
+6. **Aprovação** → instrui `/oxe-plan` ou `/oxe-plan --agents`
+
+A spec lê `.oxe/LESSONS.md` antes de iniciar — lições do ciclo anterior informam as perguntas e os critérios.
 
 ### `/oxe-execute` — economia de requisições com debug automático
 
@@ -149,6 +160,31 @@ Se uma tarefa falha: diagnóstico inline automático (2-3 hipóteses → fix →
 ```
 
 O próximo `/oxe-plan`, `/oxe-spec` ou `/oxe-execute` incorpora automaticamente — sem prompt extra.
+
+### `/oxe-plan` — test-first com complexidade explícita
+
+Cada tarefa usa a ordem **Verificar → Implementar** (test-first):
+```
+Verificar: como saberei que está pronto?   ← definido PRIMEIRO
+Implementar: o mínimo para passar o Verificar
+Complexidade: S | M | L | XL
+```
+
+Tarefas `XL` bloqueam o gate sem sub-tarefas ou justificativa. `/oxe-obs` propaga automaticamente constraints para os R-IDs e Tns afetados.
+
+### `/oxe-retro` — loop de aprendizado
+
+```
+/oxe-verify completo
+     ↓
+/oxe-retro → 3–5 lições prescritivas → .oxe/LESSONS.md
+                                              ↓
+                              /oxe-spec (próximo ciclo lê LESSONS)
+                              /oxe-plan (próximo ciclo lê LESSONS)
+```
+
+Lições não são diário — são instruções para o próximo ciclo. Exemplo:
+> "Tarefas com integração de terceiros: `Complexidade: L` mínimo + `Verificar` com mock fallback"
 
 ### Plan-Driven Dynamic Agents — agentes por demanda
 

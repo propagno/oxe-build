@@ -74,7 +74,8 @@ Com **`compact_max_age_days`** em `.oxe/config.json` (ver `oxe/templates/CONFIG.
 3. **plan** — plano executável + **Verificar** por tarefa. Se 3+ domínios distintos, **sugere automaticamente** blueprint de agentes (`/oxe-plan --agents`). Sem `--agents`: solo. Com `--agents`: gera também `plan-agents.json` (schema 3 com `model_hint`).
 4. **execute** — modo selecionado 1 vez: **A) Completo** (1 sessão), **B) Por onda**, **C) Por tarefa**. Se Verificar falhar inline: diagnóstico automático (2-3 hipóteses + fix), sem precisar chamar `/oxe-debug` separadamente. Escalação para `/oxe-forensics` só se esgotar tentativas.
 5. **verify** — até **6 camadas** por config: auditoria pré-exec, tarefas + critérios A*, fidelidade D-NN, UAT, **gaps de cobertura** (camada 5 — `verification_depth: "thorough"`), **segurança OWASP** (camada 6 — `security_in_verify: true`). Sem comandos extras.
-6. **→ próximo passo** — `/oxe` sugere automaticamente o que fazer agora (nova feature, milestone, ou revisar gaps).
+6. **retro** *(opcional, recomendado após verify_complete)* — `/oxe-retro` sintetiza 3–5 lições prescritivas em `.oxe/LESSONS.md`. Cada lição diz **o que fazer diferente** no próximo ciclo — consumida automaticamente pelo próximo spec/plan.
+7. **→ próximo ciclo** — spec/plan do próximo ciclo lê LESSONS.md automaticamente. Os erros do ciclo anterior não se repetem.
 
 **Escape hatches (não precisam ser decorados — aparecem quando necessários):**
 

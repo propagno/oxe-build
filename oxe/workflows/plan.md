@@ -13,6 +13,8 @@ Se o usuário pedir **--replan** (ou replanejamento implícito após `verify_fai
 
 <context>
 - Se existir **`.oxe/OBSERVATIONS.md`** com entradas `pendente` de impacto `plan` ou `all`, incorporar nas tarefas relevantes antes de finalizar o plano (ajustar implementação, verificação ou escopo de Tn) e marcar essas entradas como `incorporada → plan (data)`.
+- Se existir **`.oxe/LESSONS.md`**, ler entradas com `Aplicar em: /oxe-plan` e `Status: ativo`. Aplicar como restrições explícitas no planejamento: ajuste de complexidade de tarefas, padrões de verificação, escolha de modo solo vs agentes. Registrar aplicações como comentário no PLAN.md: `<!-- lição C-NN aplicada: ... -->`.
+- **LESSONS + OBS juntos:** se houver tanto LESSONS quanto OBS pendentes, LESSONS orientam o *como planejar* e OBS orientam o *o que incluir*. Não confundir os papéis.
 - Não inventar APIs inexistentes: cruzar com **STRUCTURE.md**, **INTEGRATIONS.md** e arquivos reais; respeitar **CONCERNS.md** (evitar agravar dívida conhecida sem tarefa explícita).
 - Se existir **`.oxe/NOTES.md`**, rever entradas em aberto: incorporar em tarefas (com **Aceite vinculado** quando aplicável) ou registar na secção **Replanejamento** / nota explícita *fora de âmbito desta trilha*.
 - Se existir **`.oxe/UI-SPEC.md`**, as tarefas de UI devem referenciar secções do UI-SPEC no texto de **Implementação** ou **Verificar**.
@@ -27,21 +29,32 @@ Se o usuário pedir **--replan** (ou replanejamento implícito após `verify_fai
 </context>
 
 <format_plan>
-Cada tarefa em PLAN.md deve seguir:
+Cada tarefa em PLAN.md deve seguir a ordem abaixo — **Verificar vem ANTES de Implementar** (test-first):
 
 ```markdown
 ### Tn — título curto
 - **Arquivos prováveis:** `...`
 - **Depende de:** Tk ou —
 - **Onda:** 1 | 2 | …
-- **Implementação:** 1–3 frases do que fazer.
+- **Complexidade:** S | M | L | XL
 - **Verificar:**
   - Comando: `...` (ex.: npm test, pytest, mvn test)
   - Manual: (opcional) passos breves
+- **Implementar:** o mínimo para fazer a verificação acima passar (1–3 frases).
 - **Aceite vinculado:** A1, A2 (IDs exatos da tabela de critérios da SPEC)
 - **Decisão vinculada:** D-01, D-02 (IDs de `.oxe/DISCUSS.md` — omitir se não houver DISCUSS)
-<!-- oxe-task: {"id":"Tn","wave":1,"type":"feature","files":[],"done":false} -->
+<!-- oxe-task: {"id":"Tn","wave":1,"type":"feature","files":[],"done":false,"complexity":"S"} -->
 ```
+
+**Escala de Complexidade:**
+| Valor | Esforço estimado | Sinal de alerta |
+|-------|-----------------|-----------------|
+| `S` | < 30 min, 1–2 arquivos | — |
+| `M` | < 2h, 2–5 arquivos | — |
+| `L` | < 1 dia, múltiplos componentes | Verificar que Verificar é específico |
+| `XL` | > 1 dia, impacto arquitetural | **Gate: deve ser quebrada em sub-tarefas ou ter justificativa** |
+
+**Princípio test-first:** escreva o `Verificar` antes de escrever o `Implementar`. A pergunta é: "Como saberei que está pronto?" — a resposta define o target; `Implementar` é o caminho mínimo até esse target.
 
 **Projetos sem suíte de testes única (legado):** o bloco **Verificar** pode usar `Comando: —` e **Manual** com Grep, leitura de paths ou checklist — ver exemplos em **`oxe/workflows/references/legacy-brownfield.md`**. Todo critério **A*** da SPEC deve aparecer em **Aceite vinculado** de alguma tarefa ou como gap explícito.
 
@@ -56,8 +69,10 @@ Antes de finalizar a resposta ao utilizador, o agente **deve** percorrer este ga
 3. **Cobertura A*:** todos os IDs da tabela de critérios em `.oxe/SPEC.md` aparecem em **Aceite vinculado:** de alguma tarefa, ou há nota explícita de **gap** no PLAN (fora de âmbito / adiado) por ID.
 4. **Ondas:** cada número de **Onda:** usado tem pelo menos uma tarefa; sem ondas vazias.
 5. **`plan_max_tasks_per_wave`:** se `.oxe/config.json` tiver valor **> 0**, contar tarefas por **Onda**; nenhuma onda excede o limite.
-6. **UI-SPEC:** se existir `.oxe/UI-SPEC.md`, toda tarefa cuja **Implementação** ou **Verificar** toque UI (paths como `*.tsx`, `components/`, ou palavras-chave front, ou pedido explícito do utilizador) deve citar **secção § do UI-SPEC** ou path explícito.
-7. **Fidelidade de decisões:** se existir `.oxe/DISCUSS.md` com IDs **D-NN**, cada decisão com impacto técnico deve aparecer em **Decisão vinculada:** de alguma tarefa, ou ter nota explícita de gap (fora do escopo desta entrega). Sem cobertura para D-NN técnico = falha do gate.
+6. **UI-SPEC:** se existir `.oxe/UI-SPEC.md`, toda tarefa cuja **Implementar** ou **Verificar** toque UI deve citar **secção § do UI-SPEC** ou path explícito.
+7. **Fidelidade de decisões:** se existir `.oxe/DISCUSS.md` com IDs **D-NN**, cada decisão com impacto técnico deve aparecer em **Decisão vinculada:** de alguma tarefa, ou ter nota explícita de gap. Sem cobertura para D-NN técnico = falha do gate.
+8. **Complexidade XL:** toda tarefa com `Complexidade: XL` deve ter sub-tarefas explícitas (ex.: T3.1, T3.2 — como bullets dentro da tarefa) **ou** justificativa na tarefa explicando por que não pode ser quebrada. Tarefa XL sem sub-tarefas e sem justificativa = falha do gate.
+9. **Test-first:** em toda tarefa, `Verificar` deve preceder `Implementar` no texto. Se a ordem estiver invertida, corrigir antes de finalizar.
 
 Se após correções estruturais persistir ambiguidade de produto: **uma** frase recomendando `oxe:discuss` ou `oxe:spec`.
 
