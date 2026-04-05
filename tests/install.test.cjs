@@ -39,8 +39,26 @@ describe('oxe-cc CLI', () => {
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'config.json')));
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'codebase')));
     assert.ok(!fs.existsSync(path.join(dir, 'oxe')), 'default layout must not create top-level oxe/');
+    // schemas devem ser copiados para .oxe/schemas/
+    assert.ok(
+      fs.existsSync(path.join(dir, '.oxe', 'schemas', 'plan-agents.schema.json')),
+      '.oxe/schemas/plan-agents.schema.json deve existir após install'
+    );
     const gi = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');
     assert.match(gi, /\.oxe\/\s*$/m);
+  });
+
+  test('commands/oxe/ has review-pr.md and update.md', () => {
+    const path_ = require('path');
+    const cmdsDir = path_.join(__dirname, '..', 'commands', 'oxe');
+    assert.ok(
+      require('fs').existsSync(path_.join(cmdsDir, 'review-pr.md')),
+      'commands/oxe/review-pr.md deve existir'
+    );
+    assert.ok(
+      require('fs').existsSync(path_.join(cmdsDir, 'update.md')),
+      'commands/oxe/update.md deve existir'
+    );
   });
 
   test('--no-init-oxe skips .oxe bootstrap but keeps .oxe/workflows', () => {

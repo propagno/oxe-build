@@ -57,6 +57,7 @@ export interface OxeHealthReport {
   compactDate: Date | null;
   staleCompact: HealthStaleInfo;
   retroDate: Date | null;
+  staleLessons: HealthStaleInfo;
   phaseWarn: string[];
   summaryGapWarn: string | null;
   specWarn: string[];
@@ -130,6 +131,12 @@ export interface ParsedState {
   decisions: string[];
   activeWorkstreams: string[];
   activeMilestone: string | null;
+  /** run_id do blueprint ativo extraído da seção "Blueprint de agentes" em STATE.md. */
+  runId: string | null;
+  /** lifecycle_status do blueprint: pending_execute | executing | closed | invalidated. */
+  lifecycleStatus: string | null;
+  /** loop_status da sessão de loop: retrying | passed | escalated. */
+  loopStatus: string | null;
 }
 
 export interface DecisionFidelityResult {
@@ -173,6 +180,20 @@ export interface PluginLoadResult {
 export interface PluginValidationResult {
   valid: boolean;
   issues: Array<{ file: string; issue: string }>;
+}
+
+export interface ManifestAPI {
+  loadFileManifest: (home: string) => Record<string, unknown>;
+  writeFileManifest: (home: string, manifest: Record<string, unknown>) => void;
+  sha256File: (filePath: string) => string;
+  collectFilesRecursive: (dir: string) => string[];
+  MANIFEST_DIR: string;
+  PATCHES_DIR: string;
+}
+
+export interface AgentsAPI {
+  adjustWorkflowPathsForNestedLayout: (content: string, layout?: string) => string;
+  parseCursorCommandFrontmatter: (mdContent: string) => Record<string, unknown>;
 }
 
 export interface OxeSdk {
@@ -235,8 +256,8 @@ export interface OxeSdk {
     ) => { options: Record<string, unknown>; warnings: string[] };
   };
 
-  manifest: Record<string, unknown>;
-  agents: Record<string, unknown>;
+  manifest: ManifestAPI;
+  agents: AgentsAPI;
 
   security: {
     checkPathSafety: (filePath: string, projectRoot: string, options?: {

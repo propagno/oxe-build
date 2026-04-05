@@ -121,4 +121,48 @@ describe('oxe-sdk', () => {
     const { typeErrors } = sdk.health.validateConfigShape({ install: { profile: 'bad' } });
     assert.ok(typeErrors.length >= 1);
   });
+
+  // parseState — blueprint e loop fields (P1.1)
+  test('parseState extracts runId from STATE.md blueprint section', () => {
+    const state = '## Fase atual\n\n`executing`\n\n## Blueprint de agentes (sessão)\n\n- **run_id:** oxe-test-abc123\n- **lifecycle_status:** executing\n';
+    const parsed = sdk.parseState(state);
+    assert.strictEqual(parsed.runId, 'oxe-test-abc123');
+  });
+
+  test('parseState extracts lifecycleStatus from STATE.md', () => {
+    const state = '## Blueprint de agentes (sessão)\n\n- **run_id:** oxe-run-xyz\n- **lifecycle_status:** closed\n';
+    const parsed = sdk.parseState(state);
+    assert.strictEqual(parsed.lifecycleStatus, 'closed');
+  });
+
+  test('parseState returns null runId/lifecycleStatus when absent', () => {
+    const state = '## Fase atual\n\n`plan_ready`\n';
+    const parsed = sdk.parseState(state);
+    assert.strictEqual(parsed.runId, null);
+    assert.strictEqual(parsed.lifecycleStatus, null);
+  });
+
+  test('parseState extracts loopStatus from STATE.md', () => {
+    const state = '## Loop (sessão)\n\n- **loop_onda:** 2\n- **loop_iteracao:** 2/3\n- **loop_status:** retrying\n';
+    const parsed = sdk.parseState(state);
+    assert.strictEqual(parsed.loopStatus, 'retrying');
+  });
+
+  test('parseState returns null loopStatus when absent', () => {
+    const state = '## Fase atual\n\n`executing`\n';
+    const parsed = sdk.parseState(state);
+    assert.strictEqual(parsed.loopStatus, null);
+  });
+
+  // staleLessons in buildHealthReport (P2.1)
+  test('buildHealthReport returns staleLessons with stale and days fields', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-sdk-lessons-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(oxe, { recursive: true });
+    fs.writeFileSync(path.join(oxe, 'STATE.md'), '## Fase atual\n\n`verify_complete`\n', 'utf8');
+    const report = sdk.health.buildHealthReport(dir);
+    assert.ok(typeof report.staleLessons === 'object', 'staleLessons deve ser objeto');
+    assert.ok(typeof report.staleLessons.stale === 'boolean');
+    assert.ok(report.staleLessons.days === null || typeof report.staleLessons.days === 'number');
+  });
 });
