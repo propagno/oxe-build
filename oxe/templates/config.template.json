@@ -10,6 +10,7 @@
   "default_verify_command": "",
   "scan_max_age_days": 0,
   "compact_max_age_days": 0,
+  "lessons_max_age_days": 0,
   "scale_adaptive": true,
   "scan_focus_globs": [],
   "scan_ignore_globs": [],

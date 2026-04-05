@@ -13,6 +13,7 @@
 
 - **Data:** (**YYYY-MM-DD** — preenchido por **`/oxe-compact`**: refresh incremental dos mapas em `.oxe/codebase/` + `CODEBASE-DELTA.md` + `RESUME.md`)
 - **Notas:** (opcional; ex.: "só STRUCTURE e TESTING")
+- **last_retro:** (YYYY-MM-DD — preenchido por **`/oxe-retro`** ao concluir retrospectiva; lido por `oxe-cc doctor` para rastrear ciclos sem lições)
 
 ## Contexto do plano / quick (opcional)
 
@@ -22,12 +23,29 @@
 
 ## Blueprint de agentes (sessão) (opcional — `/oxe-plan-agent`)
 
-Espelho do **`.oxe/plan-agents.json`** ativo (schema 2). Atualizar em **`/oxe-plan-agent`**, **`/oxe-execute`**, **`/oxe-verify`**, **`/oxe-quick`** quando o lifecycle mudar.
+Espelho do **`.oxe/plan-agents.json`** ativo (schema ≥ 2). Atualizar em **`/oxe-plan-agent`**, **`/oxe-execute`**, **`/oxe-verify`**, **`/oxe-quick`** quando o lifecycle mudar.
 
 - **run_id:** (igual a `runId` no JSON; — se não houver blueprint)
 - **lifecycle_status:** `pending_execute` | `executing` | `closed` | `invalidated` | —
 - **Última onda (execute):** (número ou —)
 - **Notas:** (ex.: invalidado por quick; mensagens em `.oxe/plan-agent-messages/`)
+
+## Quick agents (sessão) (opcional — `/oxe-quick` com PDDA)
+
+Preenchido por **`/oxe-quick`** quando Plan-Driven Dynamic Agents lean estiver ativo.
+
+- **quick_id:** (ex.: `quick-2026-04-05-a1b2c3` — gerado por `/oxe-quick`)
+- **quick_agents_status:** `active` | `done` | `invalidated` | —
+- **Notas:** (ex.: invalidado ao iniciar novo quick ou promover a spec/plan)
+
+## Loop (sessão) (opcional — `/oxe-loop`)
+
+Preenchido por **`/oxe-loop`** durante retry iterativo de onda.
+
+- **loop_onda:** (número da onda em retry, ex.: `2`)
+- **loop_iteracao:** (tentativa atual / máximo, ex.: `2/3`)
+- **loop_status:** `retrying` | `passed` | `escalated` | —
+- **Notas:** (ex.: escalado para `/oxe-forensics` após 3 tentativas)
 
 ## Checklist da onda OXE (opcional — workflow execute)
 

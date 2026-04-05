@@ -16,11 +16,15 @@ Copie `oxe/templates/config.template.json` para **`.oxe/config.json`** no seu pr
 | `default_verify_command` | string | Comando guarda-chuva opcional (ex.: `npm test`) sugerido em **plan**/**verify** quando o projeto não define outro. |
 | `scan_max_age_days` | number | Se **> 0**, `oxe-cc doctor` / `status` avisam quando a **Data** do último scan em `STATE.md` é mais antiga que esse número de dias. Use **0** para desligar. |
 | `compact_max_age_days` | number | Se **> 0**, `oxe-cc doctor` / `status` avisam quando a **Data** em **Último compact** em `STATE.md` é mais antiga que esse número de dias. Use **0** para desligar. |
+| `lessons_max_age_days` | number | Se **> 0**, `oxe-cc doctor` / `status` avisam quando o campo `last_retro` em `STATE.md` é mais antigo que esse número de dias (ciclos sem retrospectiva). Use **0** para desligar (padrão). |
 | `scale_adaptive` | boolean | Se `true` (padrão), o workflow **scan** sugere automaticamente um `profile` baseado no tamanho do projeto. |
 | `scan_focus_globs` | string[] | Padrões (ex.: `src/api/**`) que o workflow **scan** deve priorizar; só orientação para o agente. |
 | `scan_ignore_globs` | string[] | Padrões a tratar como baixa prioridade ou omitir no scan (ex.: `**/dist/**`). |
 | `spec_required_sections` | string[] | Cabeçalhos que **devem** existir em `SPEC.md` (ex.: `"## Critérios de aceite"`). `doctor` / `status` emitem aviso se faltar. |
 | `plan_max_tasks_per_wave` | number | Se **> 0**, `doctor` / `status` avisam se alguma **Onda** no `PLAN.md` tiver mais tarefas `T1…` que esse limite. **0** desliga. |
+| `plugins` | array | Caminhos de plugins customizados em `.oxe/plugins/` (strings relativas). Padrão: `[]`. Ver [`PLUGINS.md`](PLUGINS.md). |
+| `workstreams` | array | Lista de nomes de workstreams ativos (strings). Usado como referência pelo agente em **`/oxe-workstream`**. Padrão: `[]`. |
+| `milestones` | array | Lista de milestones ativos (objetos `{ "id": "M-01", "name": "..." }`). Usado como referência pelo agente em **`/oxe-milestone`**. Padrão: `[]`. |
 | `install` | object | Opcional. Preferências de **instalação** quando corre `npx oxe-cc` **sem** flags de CLI. Ver tabela abaixo. |
 
 ## Profiles de execução (`profile`)

@@ -12,6 +12,7 @@ const ALLOWED_CONFIG_KEYS = [
   'default_verify_command',
   'scan_max_age_days',
   'compact_max_age_days',
+  'lessons_max_age_days',
   'scan_focus_globs',
   'scan_ignore_globs',
   'spec_required_sections',
@@ -639,6 +640,7 @@ function buildHealthReport(target) {
   const compactDate = parseLastCompactDate(stateText);
   const staleCompact = isStaleScan(compactDate, Number(config.compact_max_age_days) || 0);
   const retroDate = parseLastRetroDate(stateText);
+  const staleLessons = isStaleLessons(retroDate, Number(config.lessons_max_age_days) || 0);
   const phaseWarn = phase ? phaseCoherenceWarnings(phase, p) : [];
   const sumWarn = verifyGapsWithoutSummaryWarning(p.verify, p.summary);
   const specReq = Array.isArray(config.spec_required_sections) ? config.spec_required_sections : [];
@@ -661,6 +663,7 @@ function buildHealthReport(target) {
     compactDate,
     staleCompact,
     retroDate,
+    staleLessons,
     phaseWarn,
     summaryGapWarn: sumWarn,
     specWarn,

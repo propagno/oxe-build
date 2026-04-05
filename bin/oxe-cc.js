@@ -1543,6 +1543,13 @@ ${green}Opções da instalação:${reset}
   -h, --help
   -v, --version
 
+${green}doctor${reset} (valida estrutura OXE, config e saúde do projeto)
+  --dir <pasta>   raiz do projeto (padrão: diretório atual)
+
+${green}init-oxe${reset} (bootstrap só de .oxe/ no projeto — STATE.md, codebase/, templates)
+  --dir <pasta>   raiz do projeto (padrão: diretório atual)
+  --force, -f     sobrescreve arquivos existentes
+
 ${green}status${reset} (coerência .oxe/ + um próximo passo sugerido; não exige pacote de workflows completo)
   --dir <pasta>   raiz do projeto (padrão: diretório atual)
   --json          imprime um único objeto JSON (próximo passo + diagnósticos) em stdout; adequado a CI
@@ -1624,6 +1631,11 @@ function runInstall(opts) {
     const personasSrc = path.join(PKG_ROOT, 'oxe', 'personas');
     if (fs.existsSync(personasSrc)) {
       copyDir(personasSrc, path.join(nested, 'personas'), copyOpts, false);
+    }
+    // Schemas: copiar para .oxe/schemas/ (ex.: plan-agents.schema.json para validação local)
+    const schemasSrc = path.join(PKG_ROOT, 'oxe', 'schemas');
+    if (fs.existsSync(schemasSrc)) {
+      copyDir(schemasSrc, path.join(nested, 'schemas'), copyOpts, false);
     }
   }
 
