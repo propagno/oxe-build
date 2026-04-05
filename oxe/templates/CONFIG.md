@@ -8,7 +8,8 @@ Copie `oxe/templates/config.template.json` para **`.oxe/config.json`** no seu pr
 |-------|------|-------------|
 | `profile` | string | Profile de execução: `balanced` (padrão) \| `strict` \| `fast` \| `legacy`. Expande automaticamente outras keys — keys explícitas prevalecem. Ver tabela abaixo. |
 | `discuss_before_plan` | boolean | Se `true`, o fluxo recomenda **`oxe:discuss`** entre spec e plan. |
-| `verification_depth` | string | Profundidade da verificação: `standard` (padrão) \| `thorough` (4 camadas) \| `quick` (skip camadas 3–4 e UAT). |
+| `verification_depth` | string | Profundidade da verificação: `standard` (padrão) \| `thorough` (ativa Camada 5 — validate-gaps automático) \| `quick` (skip camadas 3–4 e UAT). |
+| `security_in_verify` | boolean | Se `true`, executa auditoria OWASP automaticamente no **verify** como **Camada 6** (produz `.oxe/SECURITY.md`). Achados P0 bloqueiam `verify_complete`. Padrão: `false`. |
 | `after_verify_suggest_pr` | boolean | Se `true`, o workflow **verify** inclui checklist de PR no fim. |
 | `after_verify_draft_commit` | boolean | Se `true`, o **verify** propõe rascunho de mensagem de commit alinhado aos critérios de aceite. |
 | `after_verify_suggest_uat` | boolean | Se `true`, o **verify** gera checklist UAT (Camada 4). Ativo automaticamente com `profile: strict`. |

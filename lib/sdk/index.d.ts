@@ -56,6 +56,7 @@ export interface OxeHealthReport {
   stale: HealthStaleInfo;
   compactDate: Date | null;
   staleCompact: HealthStaleInfo;
+  retroDate: Date | null;
   phaseWarn: string[];
   summaryGapWarn: string | null;
   specWarn: string[];
@@ -124,6 +125,7 @@ export interface ParsedSpec {
 export interface ParsedState {
   phase: string | null;
   lastScanDate: string | null;
+  lastRetroDate: string | null;
   nextStep: string | null;
   decisions: string[];
   activeWorkstreams: string[];
@@ -195,7 +197,10 @@ export interface OxeSdk {
     parseStatePhase: (stateText: string) => string | null;
     parseLastScanDate: (stateText: string) => Date | null;
     parseLastCompactDate: (stateText: string) => Date | null;
+    parseLastRetroDate: (stateText: string) => Date | null;
     isStaleScan: (scanDate: Date | null, maxAgeDays: number) => HealthStaleInfo;
+    isStaleLessons: (retroDate: Date | null, maxAgeDays: number) => HealthStaleInfo;
+    planAgentsWarnings: (target: string) => string[];
     phaseCoherenceWarnings: (phase: string, paths: Record<string, string>) => string[];
     specSectionWarnings: (specPath: string, requiredHeadings: string[]) => string[];
     planWaveWarningsFixed: (planPath: string, maxPerWave: number) => string[];

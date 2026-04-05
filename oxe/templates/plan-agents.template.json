@@ -11,6 +11,7 @@
     {
       "id": "agent-example",
       "role": "Papel legível (ex.: Database)",
+      "persona": "executor",
       "scope": [
         "Primeiro bullet do âmbito",
         "Segundo bullet"

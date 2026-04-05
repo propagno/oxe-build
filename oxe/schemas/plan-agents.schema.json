@@ -8,14 +8,15 @@
   "properties": {
     "oxePlanAgentsSchema": {
       "type": "integer",
-      "enum": [1, 2]
+      "enum": [2, 3],
+      "description": "Schema 3 = atual (com model_hint). Schema 2 = aceito (sem model_hint). Schema 1 = legado (não recomendado)."
     },
     "goal": { "type": "string", "minLength": 1 },
     "specRef": { "type": "string" },
     "runId": {
       "type": "string",
       "minLength": 8,
-      "description": "Obrigatório quando oxePlanAgentsSchema === 2"
+      "description": "Obrigatório quando oxePlanAgentsSchema >= 2"
     },
     "lifecycle": {
       "type": "object",
@@ -33,7 +34,7 @@
           "enum": ["quick", "out_of_scope", "new_plan", "manual"]
         }
       },
-      "description": "Obrigatório quando oxePlanAgentsSchema === 2"
+      "description": "Obrigatório quando oxePlanAgentsSchema >= 2"
     },
     "agents": {
       "type": "array",
@@ -48,6 +49,11 @@
             "pattern": "^[a-z0-9][a-z0-9-]*$"
           },
           "role": { "type": "string", "minLength": 1 },
+          "persona": {
+            "type": "string",
+            "minLength": 1,
+            "description": "ID de persona em oxe/personas/ (ex.: executor, architect). Opcional."
+          },
           "scope": {
             "type": "array",
             "items": { "type": "string" },
@@ -72,6 +78,11 @@
           "outputs": {
             "type": "array",
             "items": { "type": "string" }
+          },
+          "model_hint": {
+            "type": "string",
+            "enum": ["fast", "balanced", "powerful"],
+            "description": "Tier de modelo sugerido para este agente (schema v3). Opcional."
           }
         }
       }
@@ -100,7 +111,7 @@
   "allOf": [
     {
       "if": {
-        "properties": { "oxePlanAgentsSchema": { "const": 2 } },
+        "properties": { "oxePlanAgentsSchema": { "enum": [2, 3] } },
         "required": ["oxePlanAgentsSchema"]
       },
       "then": {

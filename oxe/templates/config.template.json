@@ -3,6 +3,7 @@
   "profile": "balanced",
   "discuss_before_plan": false,
   "verification_depth": "standard",
+  "security_in_verify": false,
   "after_verify_suggest_pr": true,
   "after_verify_draft_commit": true,
   "after_verify_suggest_uat": false,

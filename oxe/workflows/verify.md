@@ -104,4 +104,6 @@ O preenchimento da checklist é responsabilidade do **usuário** (não do agente
 - [ ] SUMMARY.md atualizado quando houver falha ou gaps relevantes.
 - [ ] Se passou: seções **Rascunho de commit** e **Checklist PR** presentes em VERIFY.md, salvo se desativadas na config.
 - [ ] Se existiu DISCUSS.md: tabela de Fidelidade de decisões preenchida sem divergências não documentadas.
+- [ ] Se `verification_depth: "thorough"` em config: `.oxe/VALIDATION-GAPS.md` produzido como parte deste verify.
+- [ ] Se `security_in_verify: true` em config: `.oxe/SECURITY.md` produzido; achados P0 resolvidos ou `verify_failed` registrado.
 </success_criteria>

@@ -49,6 +49,16 @@ API deve retornar mensagens de erro em português do Brasil.
 **IDs:** sequenciais `OBS-001`, `OBS-002`, … (continuar do último ID existente no arquivo).
 
 **Impacto:** classificar automaticamente com base no conteúdo:
+
+| Texto menciona | Impacto atribuído |
+|----------------|------------------|
+| Requisitos, critérios A*, escopo, SPEC | `spec` |
+| Tarefas Tn, ondas, verificação, PLAN | `plan` |
+| Implementação, arquivos de código, comportamento técnico | `execute` |
+| Dois ou mais dos acima, ou restrição global | `all` |
+
+Se ambíguo, usar `all` (princípio de maior abrangência).
+
 - `spec` — afeta requisitos, critérios de aceite ou escopo
 - `plan` — afeta tarefas, ondas, dependências ou verificação
 - `execute` — afeta a implementação da tarefa atual ou próxima

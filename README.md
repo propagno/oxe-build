@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
-**Versão:** `0.6.2` · [package.json](package.json)
+**Versão:** `0.6.3` · [package.json](package.json)
 
 ```bash
 npx oxe-cc@latest

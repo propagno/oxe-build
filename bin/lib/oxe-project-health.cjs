@@ -18,6 +18,7 @@ const ALLOWED_CONFIG_KEYS = [
   'plan_max_tasks_per_wave',
   'profile',
   'verification_depth',
+  'security_in_verify',
   'install',
   'plugins',
   'workstreams',
@@ -280,6 +281,18 @@ function parseLastCompactDate(stateText) {
 }
 
 /**
+ * Data do último `/oxe-retro` em STATE.md (campo `last_retro: YYYY-MM-DD`).
+ * @param {string} stateText
+ * @returns {Date | null}
+ */
+function parseLastRetroDate(stateText) {
+  const m = stateText.match(/\blast_retro\s*:\s*(\d{4}-\d{2}-\d{2})/i);
+  if (!m) return null;
+  const iso = Date.parse(m[1]);
+  return Number.isNaN(iso) ? null : new Date(iso);
+}
+
+/**
  * @param {Date | null} scanDate
  * @param {number} maxAgeDays 0 = desligado
  */
@@ -287,6 +300,16 @@ function isStaleScan(scanDate, maxAgeDays) {
   if (!scanDate || !maxAgeDays || maxAgeDays <= 0) return { stale: false, days: null };
   const days = (Date.now() - scanDate.getTime()) / 86400000;
   return { stale: days > maxAgeDays, days: Math.floor(days) };
+}
+
+/**
+ * Alias semântico para verificar se LESSONS.md está desatualizado.
+ * Reutiliza a lógica de isStaleScan.
+ * @param {Date | null} retroDate
+ * @param {number} maxAgeDays 0 = desligado
+ */
+function isStaleLessons(retroDate, maxAgeDays) {
+  return isStaleScan(retroDate, maxAgeDays);
 }
 
 /**
@@ -304,7 +327,43 @@ function oxePaths(target) {
     discuss: path.join(oxe, 'DISCUSS.md'),
     summary: path.join(oxe, 'SUMMARY.md'),
     codebase: path.join(oxe, 'codebase'),
+    lessons: path.join(oxe, 'LESSONS.md'),
+    planAgents: path.join(oxe, 'plan-agents.json'),
   };
+}
+
+/**
+ * Valida o arquivo plan-agents.json (se existir) e retorna avisos.
+ * @param {string} target
+ * @returns {string[]}
+ */
+function planAgentsWarnings(target) {
+  const p = oxePaths(target);
+  if (!fs.existsSync(p.planAgents)) return [];
+  /** @type {string[]} */
+  const warns = [];
+  let json;
+  try {
+    json = JSON.parse(fs.readFileSync(p.planAgents, 'utf8'));
+  } catch {
+    warns.push('plan-agents.json existe mas não é JSON válido');
+    return warns;
+  }
+  const schema = json.oxePlanAgentsSchema;
+  if (schema === 1) {
+    warns.push('plan-agents.json usa schema 1 (legado) — regere com /oxe-plan-agent para schema 3');
+  }
+  if (Array.isArray(json.agents)) {
+    const VALID_HINTS = new Set(['fast', 'balanced', 'powerful']);
+    for (const agent of json.agents) {
+      if (agent.model_hint && !VALID_HINTS.has(agent.model_hint)) {
+        warns.push(
+          `plan-agents.json agente "${agent.id || '?'}": model_hint "${agent.model_hint}" inválido — use fast | balanced | powerful`
+        );
+      }
+    }
+  }
+  return warns;
 }
 
 /**
@@ -537,6 +596,20 @@ function suggestNextStep(target, cfg = {}) {
     };
   }
 
+  // Após verify_complete, sugerir retro se LESSONS.md não existe ou last_retro ausente no STATE
+  if (phaseLow === 'verify_complete' || /\bverify_complete\b/i.test(stateText)) {
+    const lessonsExist = has(path.join(target, '.oxe', 'LESSONS.md'));
+    const hasRetroInState = /\blast_retro\s*:/i.test(stateText);
+    if (!lessonsExist || !hasRetroInState) {
+      return {
+        step: 'retro',
+        cursorCmd: '/oxe-retro',
+        reason: 'Verify completo — capture as lições do ciclo em .oxe/LESSONS.md para orientar o próximo spec/plan',
+        artifacts: ['.oxe/LESSONS.md'],
+      };
+    }
+  }
+
   return {
     step: 'next',
     cursorCmd: '/oxe-next',
@@ -565,6 +638,7 @@ function buildHealthReport(target) {
   const stale = isStaleScan(scanDate, Number(config.scan_max_age_days) || 0);
   const compactDate = parseLastCompactDate(stateText);
   const staleCompact = isStaleScan(compactDate, Number(config.compact_max_age_days) || 0);
+  const retroDate = parseLastRetroDate(stateText);
   const phaseWarn = phase ? phaseCoherenceWarnings(phase, p) : [];
   const sumWarn = verifyGapsWithoutSummaryWarning(p.verify, p.summary);
   const specReq = Array.isArray(config.spec_required_sections) ? config.spec_required_sections : [];
@@ -572,6 +646,7 @@ function buildHealthReport(target) {
   const planWarn = [
     ...planWaveWarningsFixed(p.plan, Number(config.plan_max_tasks_per_wave) || 0),
     ...planTaskAceiteWarnings(p.plan),
+    ...planAgentsWarnings(target),
   ];
   const next = suggestNextStep(target, { discuss_before_plan: config.discuss_before_plan });
 
@@ -585,6 +660,7 @@ function buildHealthReport(target) {
     stale,
     compactDate,
     staleCompact,
+    retroDate,
     phaseWarn,
     summaryGapWarn: sumWarn,
     specWarn,
@@ -609,7 +685,10 @@ module.exports = {
   parseStatePhase,
   parseLastScanDate,
   parseLastCompactDate,
+  parseLastRetroDate,
   isStaleScan,
+  isStaleLessons,
+  planAgentsWarnings,
   phaseCoherenceWarnings,
   verifyGapsWithoutSummaryWarning,
   specSectionWarnings,

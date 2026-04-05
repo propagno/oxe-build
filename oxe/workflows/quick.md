@@ -140,7 +140,7 @@ No final de **`.oxe/QUICK.md`**, mantenha a linha:
 Se **sim**, o próximo passo recomendado no chat é **`/oxe-spec`** (depois discuss/plan conforme config).
 
 <process>
-1. Garantir `.oxe/` (usar template de STATE só se `STATE.md` não existir).
+1. Garantir `.oxe/` (usar template de STATE só se `STATE.md` não existir). Verificar **`.oxe/OBSERVATIONS.md`** — se houver entradas `pendente` com impacto `all`, registrar como restrições nos **Passos** ou no **Contexto** do QUICK.md antes de finalizar; marcar as OBS como `incorporada → quick (data)`.
 2. Avaliar se PDDA lean se aplica (ver `<plan_driven_dynamic_agents_lean>` — domínios distintos, 5+ passos, ou flag `--agents`).
 3. Criar ou substituir **`.oxe/QUICK.md`** com:
    - **Objetivo** — uma frase. *(Esta é a minispec: restringe o escopo de todos os agentes e passos.)*
