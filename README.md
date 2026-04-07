@@ -38,7 +38,7 @@ O resultado: **menos requisições**, **mais coerência**, e um fluxo que funcio
 /oxe-scan         → mapeia o projeto (ou atualiza se já mapeado)
 /oxe-spec         → nova feature: perguntas → requisitos → roteiro
 /oxe-plan         → tarefas por onda (--agents para multi-agente)
-/oxe-execute      → implementar (A: 1 sessão | B: por onda | C: por tarefa)
+/oxe-execute      → implementar (A: completo | B: por onda | C: por tarefa)
 /oxe-verify       → validar que está pronto
 ```
 
@@ -91,6 +91,14 @@ Exemplo de ciclo:
 /oxe-session close
 ```
 
+Com sessão ativa:
+
+- `spec/` contém `SPEC.md`, `ROADMAP.md`, `DISCUSS.md`, `UI-SPEC.md`
+- `plan/` contém `PLAN.md`, `QUICK.md`, `plan-agents.json`, `quick-agents.json`
+- `execution/` contém o `STATE.md` operacional da trilha, `OBSERVATIONS.md`, `DEBUG.md`, `FORENSICS.md`
+- `verification/` contém `VERIFY.md`, `VALIDATION-GAPS.md`, `SECURITY.md`, `UI-REVIEW.md`
+- `LESSONS.md`, `MILESTONES.md`, `codebase/`, `SESSIONS.md` e o `STATE.md` global permanecem fora da sessão
+
 ---
 
 ## A cadeia
@@ -100,12 +108,12 @@ Exemplo de ciclo:
      ↓
 /oxe-scan → /oxe-spec → /oxe-plan ──────────→ /oxe-execute → /oxe-verify → /oxe-retro
                               ↓                                                  ↓
-                         /oxe-quick (trabalho pequeno)                    .oxe/LESSONS.md
+                         /oxe-quick (trabalho pequeno)             .oxe/global/LESSONS.md
                                                                                ↓
                                                                     (alimenta o próximo ciclo)
 ```
 
-Cada passo lê o anterior como contexto e escreve seu artefato em `.oxe/`. Nenhum passo depende de você re-explicar o que já foi decidido. Os erros do ciclo anterior não se repetem.
+Cada passo lê o anterior como contexto e escreve seu artefato no escopo correto: raiz `.oxe/` em modo legado, ou `.oxe/sessions/sNNN-slug/` quando `active_session` está definido. Nenhum passo depende de você re-explicar o que já foi decidido.
 
 ---
 
@@ -115,23 +123,24 @@ Cada passo lê o anterior como contexto e escreve seu artefato em `.oxe/`. Nenhu
 |---------|--------------|
 | `/oxe` | Sem input → próximo passo. Com texto → roteamento. Com "help" → 8 comandos. |
 | `/oxe-scan` | Se `.oxe/codebase/` já existe → modo refresh automático. `--full` força scan completo. |
-| `/oxe-spec` | **Auto-reflexão semântica** antes da aprovação: detecta contradições, critérios vagos, escopo creep e conflitos com stack — sem requisição extra. Lê `LESSONS.md` para não repetir erros do ciclo anterior. |
+| `/oxe-spec` | **Auto-reflexão semântica** antes da aprovação: detecta contradições, critérios vagos, escopo creep e conflitos com stack — sem requisição extra. Lê `.oxe/global/LESSONS.md` para não repetir erros do ciclo anterior. |
 | `/oxe-plan` | **Test-first:** `Verificar` vem antes de `Implementar` em cada tarefa. `Complexidade: S/M/L/XL` — tarefas XL bloqueiam o gate sem sub-tarefas. Com `--agents`: `model_hint` por agente orienta qual tier de modelo usar (schema v3). |
 | `/oxe-execute` | Execução A/B/C. Se uma tarefa falha: **diagnóstico inline automático** (2-3 hipóteses + fix + retry) — sem precisar de comando separado. Exibe `model_hint` ao iniciar cada agente do blueprint. |
 | `/oxe-verify` | Até 6 camadas por config: audit + critérios + decisões + UAT + gaps (`verification_depth: thorough`) + OWASP (`security_in_verify: true`). Sugere `/oxe-retro` ao concluir. |
-| `/oxe-retro` | Sintetiza 3–5 lições prescritivas em `.oxe/LESSONS.md` — consumidas automaticamente pelo próximo spec/plan. |
+| `/oxe-retro` | Sintetiza 3–5 lições prescritivas em `.oxe/global/LESSONS.md` — consumidas automaticamente pelo próximo spec/plan. |
 | `/oxe-obs` | Registra observação → propaga automaticamente para R-IDs e Tns afetados no próximo plan/spec/execute. |
 | `/oxe-quick` | Objetivo → passos → agentes opcionais (PDDA lean) → verify. Para correções pontuais e features pequenas. |
 | `/oxe-project` | `milestone` + `workstream` + `checkpoint` em um único comando. |
+| `/oxe-session` | Cria, alterna, retoma, fecha e migra sessões OXE sem misturar artefatos de ciclos diferentes. |
 
 ---
 
 ## Quando usar cada modo do execute
 
 ```
-A) Completo   → todas as ondas em 1 sessão  (ideal: Claude, Copilot, Gemini)
-B) Por onda   → onda 1, você verifica, chama de novo  (N sessões)
-C) Por tarefa → máximo controle  (N tarefas = N sessões)
+A) Completo   → todas as ondas numa só execução  (ideal: Claude, Copilot, Gemini)
+B) Por onda   → onda 1, você verifica, chama de novo  (1 rodada por onda)
+C) Por tarefa → máximo controle  (1 rodada por tarefa)
 ```
 
 Se uma tarefa falha: diagnóstico inline automático (2-3 hipóteses → fix → retry). O Modo B inclui loop iterativo com escalada automática para diagnóstico profundo quando necessário.
@@ -159,15 +168,21 @@ Estes não precisam ser decorados — aparecem quando o contexto pede ou quando 
 
 ```
 .oxe/
-├── STATE.md          ← fase atual, próximo passo, decisões ativas
-├── SPEC.md           ← contrato: critérios A1, A2, …
-├── ROADMAP.md        ← fases de entrega mapeadas a requisitos
-├── PLAN.md           ← tarefas Tn com verificação por item
-├── VERIFY.md         ← resultado da verificação em até 6 camadas
-├── OBSERVATIONS.md   ← observações incorporadas automaticamente
-├── codebase/         ← mapa do repo (stack, estrutura, testes, …)
-├── milestones/       ← arquivo de entregas M-NN
-└── workstreams/      ← trilhas paralelas de desenvolvimento
+├── STATE.md              ← índice global: fase resumida, sessão ativa, próximo passo
+├── SESSIONS.md           ← índice de sessões
+├── global/
+│   ├── LESSONS.md        ← lições prescritivas cumulativas
+│   └── MILESTONES.md     ← marcos globais de entrega
+├── codebase/             ← mapa do repo (stack, estrutura, testes, …)
+└── sessions/
+    └── sNNN-slug/
+        ├── spec/         ← SPEC.md, ROADMAP.md, DISCUSS.md, UI-SPEC.md
+        ├── plan/         ← PLAN.md, QUICK.md, blueprints de agentes
+        ├── execution/    ← STATE.md local, OBSERVATIONS.md, DEBUG.md, FORENSICS.md
+        ├── verification/ ← VERIFY.md, VALIDATION-GAPS.md, SECURITY.md, UI-REVIEW.md
+        ├── checkpoints/
+        ├── research/
+        └── workstreams/
 ```
 
 ### `/oxe-spec` — spec em 5 fases com auto-reflexão semântica
@@ -179,7 +194,7 @@ Estes não precisam ser decorados — aparecem quando o contexto pede ou quando 
 5. **Auto-reflexão** *(automática, sem requisição extra)* — detecta contradições, critérios vagos, escopo creep, conflitos com stack. Corrige antes de apresentar ao usuário.
 6. **Aprovação** → instrui `/oxe-plan` ou `/oxe-plan --agents`
 
-A spec lê `.oxe/LESSONS.md` antes de iniciar — lições do ciclo anterior informam as perguntas e os critérios.
+A spec lê `.oxe/global/LESSONS.md` antes de iniciar — lições do ciclo anterior informam as perguntas e os critérios.
 
 ### `/oxe-plan` — test-first com complexidade explícita
 
@@ -197,7 +212,7 @@ Tarefas `XL` bloqueiam o gate sem sub-tarefas ou justificativa. `/oxe-obs` propa
 ```
 /oxe-verify completo
      ↓
-/oxe-retro → 3–5 lições prescritivas → .oxe/LESSONS.md
+/oxe-retro → 3–5 lições prescritivas → .oxe/global/LESSONS.md
                                               ↓
                               /oxe-spec (próximo ciclo lê LESSONS)
                               /oxe-plan (próximo ciclo lê LESSONS)
@@ -312,8 +327,8 @@ Arquivo `.oxe/config.json`. Principais opções:
 ```js
 const oxe = require('oxe-cc');
 
-const plan  = oxe.parsePlan(fs.readFileSync('.oxe/PLAN.md', 'utf8'));
-const spec  = oxe.parseSpec(fs.readFileSync('.oxe/SPEC.md', 'utf8'));
+const plan  = oxe.parsePlan(fs.readFileSync('.oxe/PLAN.md', 'utf8')); // ou .oxe/sessions/<id>/plan/PLAN.md
+const spec  = oxe.parseSpec(fs.readFileSync('.oxe/SPEC.md', 'utf8')); // ou .oxe/sessions/<id>/spec/SPEC.md
 const state = oxe.parseState(fs.readFileSync('.oxe/STATE.md', 'utf8'));
 
 const fidelity = oxe.validateDecisionFidelity(discussMd, planMd);
