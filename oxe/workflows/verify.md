@@ -14,13 +14,14 @@ Se o usuário indicar uma tarefa (ex.: `T2`), focar só nela nas camadas 1–2; 
 </objective>
 
 <context>
+- Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, `VERIFY.md`, `VALIDATION-GAPS.md`, `SECURITY.md`, `UI-REVIEW.md` e `SUMMARY.md` vivem no escopo da sessão; `.oxe/STATE.md` continua global.
 - Preferir rodar comandos reais no terminal quando o ambiente permitir; se o sandbox bloquear, marcar como "não executado aqui" e deixar o comando para o usuário.
 - Não destruir `PLAN.md`; registrar achados em `VERIFY.md`.
 - Ler **`.oxe/config.json`** se existir: `after_verify_draft_commit`, `after_verify_suggest_pr`, e `verification_depth` (`"standard"` por padrão; `"thorough"` ativa camadas 3–4 completas; `"quick"` pula camadas 3–4 e UAT).
 - Os critérios na SPEC devem estar na tabela **Critérios de aceite** com colunas **ID** / **Critério** / **Como verificar**; o verify deve **cruzar cada ID** com evidência (arquivo, comando, trecho).
 - **Legado:** quando **Comando** for `—` ou inexistente, evidência válida inclui **Read/Grep**, existência de ficheiros referenciados e checklist manual — não marcar critério como passou sem evidência; se o ambiente host/desktop não estiver disponível, registar **não executado aqui** e próximo passo. Ver **`oxe/workflows/references/legacy-brownfield.md`**.
 - **Debug:** investigação técnica de falhas **durante** a implementação segue **`oxe/workflows/debug.md`** (`/oxe-debug`). Resolver um bug com debug **não** dispensa este passo — após correções, **ainda** é necessário **`verify`** para fechar a trilha face à SPEC/PLAN.
-- **UI:** se existirem `.oxe/UI-SPEC.md` / `.oxe/UI-REVIEW.md`, incorporar na evidência quando os critérios **A*** ou tarefas **Tn** tocarem interface.
+- **UI:** se existirem `UI-SPEC.md` / `UI-REVIEW.md` no escopo resolvido, incorporar na evidência quando os critérios **A*** ou tarefas **Tn** tocarem interface.
 - **Camada 5 — Validate-gaps (automático quando `verification_depth: "thorough"`):** após as 4 camadas, se `verification_depth: "thorough"` em `.oxe/config.json`, executar automaticamente a lógica de `oxe/workflows/validate-gaps.md` e produzir `.oxe/VALIDATION-GAPS.md` como parte deste verify. Não requer comando separado.
 - **Camada 6 — Security (automático quando `security_in_verify: true`):** se `security_in_verify: true` em `.oxe/config.json`, executar automaticamente a lógica de `oxe/workflows/security.md` e produzir `.oxe/SECURITY.md` como parte deste verify. Não requer comando separado.
 - **Rotina compact/checkpoint (opcional):** se esta entrega alterou **estrutura**, **stack** ou **pastas** de forma relevante, `/oxe-scan` em modo refresh alinha `.oxe/codebase/` ao repo. Após **verify** com sucesso, `/oxe-project checkpoint` com slug curto pode marcar estado estável.
@@ -32,7 +33,7 @@ Se o usuário indicar uma tarefa (ex.: `T2`), focar só nela nas camadas 1–2; 
 Verificar que o PLAN.md está apto para verificação:
 1. Toda tarefa `### Tn` tem bloco **Verificar** com pelo menos Comando ou Manual.
 2. Todo **Aceite vinculado** referencia IDs que existem na tabela de SPEC.md (`A1`, `A2`, …).
-3. Se houver `.oxe/DISCUSS.md`, toda decisão técnica com ID **D-NN** aparece em **Decisão vinculada:** de alguma tarefa (ou nota explícita de gap no PLAN).
+3. Se houver `DISCUSS.md` no escopo resolvido, toda decisão técnica com ID **D-NN** aparece em **Decisão vinculada:** de alguma tarefa (ou nota explícita de gap no PLAN).
 4. Não há dependências `Tk` inválidas (ID inexistente no PLAN).
 
 Se auditoria falhar: registrar na seção **Auditoria de pré-execução** do VERIFY.md os itens com problema e **pausar** — pedir correção do PLAN antes de continuar. Se o usuário forçar continuar com `--skip-audit`, documentar e prosseguir com aviso.
@@ -45,7 +46,7 @@ Para cada tarefa relevante, executar **Verificar: Comando** do PLAN (ou subconju
 </camada_2_tarefas_e_criterios>
 
 <camada_3_fidelidade_decisoes>
-**Camada 3 — Fidelidade de decisões** (ativa se existir `.oxe/DISCUSS.md` com IDs D-NN)
+**Camada 3 — Fidelidade de decisões** (ativa se existir `DISCUSS.md` no escopo resolvido com IDs D-NN)
 
 Para cada decisão na tabela de DISCUSS.md:
 1. Localizar a(s) tarefa(s) que referenciam esse ID em **Decisão vinculada:**.
@@ -75,10 +76,10 @@ O preenchimento da checklist é responsabilidade do **usuário** (não do agente
 
 <process>
 1. **Camada 1 — Auditoria de pré-execução:** checar integridade do PLAN.md e DISCUSS.md conforme `<camada_1_pre_exec_audit>`. Documentar resultado.
-2. Ler `.oxe/SPEC.md`, `.oxe/PLAN.md`, `.oxe/STATE.md`.
+2. Ler `SPEC.md`, `PLAN.md` e `DISCUSS.md` do escopo resolvido, além de `.oxe/STATE.md` global.
 3. **Camada 2:** Para cada tarefa relevante, executar **Verificar: Comando** do PLAN (ou subconjunto se foco Tn). Para **cada ID de critério** da SPEC (A1, A2, …), registrar se passou com evidência.
 4. **Camada 3:** Se existir `.oxe/DISCUSS.md` com IDs D-NN, executar **Fidelidade de decisões** conforme `<camada_3_fidelidade_decisoes>`.
-5. Escrever **`.oxe/VERIFY.md`** com:
+5. Escrever **`VERIFY.md`** no escopo resolvido com:
    - Data, ambiente (SO / versão do Node se relevante).
    - **Seção — Auditoria de pré-execução:** resultado da Camada 1.
    - **Tabela — Tarefas:** Tarefa (Tn) | Verificação (comando/checklist) | Passou? | Notas.
@@ -86,9 +87,9 @@ O preenchimento da checklist é responsabilidade do **usuário** (não do agente
    - **Tabela — Fidelidade de decisões** (se DISCUSS.md existir): ID | Decisão | Tarefa(s) | Implementado? | Evidência.
    - **Checklist UAT** (Camada 4).
    - **Gaps** — o que falhou e sugestão de correção; se não houver, escrever `Nenhum gap restante`.
-6. Atualizar **`.oxe/STATE.md`**: `verify_complete` ou `verify_failed` + próximo passo (replan, corrigir ou publicar).
+6. Atualizar **`.oxe/STATE.md`** global: `verify_complete` ou `verify_failed` + próximo passo (replan, corrigir ou publicar).
 6b. **Blueprint plan-agent:** se **todas** as verificações relevantes **passaram**, existir **`.oxe/plan-agents.json`** com `oxePlanAgentsSchema >= 2` e `lifecycle.status === "executing"` (ou `pending_execute`), actualizar o JSON: `lifecycle: { "status": "closed", "since": "<ISO>" }` e espelhar em **`STATE.md`** (**lifecycle_status** → `closed`). Não fechar como `closed` se `verify_failed` ou gaps por resolver.
-7. Acrescentar entrada em **`.oxe/SUMMARY.md`** (sessão): se não existir, criar a partir de **`oxe/templates/SUMMARY.template.md`**. **Obrigatório** quando `verify_failed` ou quando a seção **Gaps** tiver itens.
+7. Acrescentar entrada em **`SUMMARY.md`** do escopo resolvido: se não existir, criar a partir de **`oxe/templates/SUMMARY.template.md`**. **Obrigatório** quando `verify_failed` ou quando a seção **Gaps** tiver itens.
 7b. **Retrospectiva (pós-verify):** se `verify_complete`, sugerir **`/oxe-retro`** para capturar aprendizados do ciclo em `.oxe/LESSONS.md`. Especialmente importante quando: houve replanejamento (`--replan`), houve falhas em execute que precisaram de debug, critérios A* foram ajustados durante o ciclo, ou o ciclo durou mais de 2 ondas. Retro antes do próximo spec garante que lições orientem o próximo ciclo.
 7b. **Camada 5 — Validate-gaps automático:** se `verification_depth: "thorough"` em `.oxe/config.json`, executar a lógica de `oxe/workflows/validate-gaps.md` e adicionar seção **Gaps de Cobertura** ao VERIFY.md (mesmo conteúdo de VALIDATION-GAPS.md). Também escrever `.oxe/VALIDATION-GAPS.md` separado.
 7c. **Camada 6 — Security automático:** se `security_in_verify: true` em `.oxe/config.json`, executar a lógica de `oxe/workflows/security.md` e adicionar seção **Auditoria de Segurança** ao VERIFY.md. Também escrever `.oxe/SECURITY.md` separado. Achados P0 bloqueiam o `verify_complete` — registrar `verify_failed` até P0s serem resolvidos.

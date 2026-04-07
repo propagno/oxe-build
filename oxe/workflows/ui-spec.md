@@ -13,9 +13,9 @@ Produzir **`.oxe/UI-SPEC.md`**: contrato de UI/UX derivado de **`.oxe/SPEC.md`**
 </context>
 
 <process>
-1. Ler `.oxe/SPEC.md` e, se existirem, `OVERVIEW.md` / `CONVENTIONS.md` em `.oxe/codebase/`.
-2. Criar ou atualizar **`.oxe/UI-SPEC.md`** com as secções acima preenchidas de forma verificável (checklist ou critérios numerados **U1**, **U2**… opcionais).
-3. Atualizar **`.oxe/STATE.md`**: nota de fase ou próximo passo `oxe:plan` (se ainda não há PLAN) ou manter `oxe:execute` se o plano já referencia UI.
+1. Resolver `active_session` conforme `session-path-resolution.md`; ler `SPEC.md` do escopo resolvido e, se existirem, `OVERVIEW.md` / `CONVENTIONS.md` em `.oxe/codebase/`.
+2. Criar ou atualizar **`UI-SPEC.md`** em `.oxe/<active_session>/spec/` (ou `.oxe/` legado) com as secções acima preenchidas de forma verificável (checklist ou critérios numerados **U1**, **U2**… opcionais).
+3. Atualizar **`.oxe/STATE.md`** global: nota de fase ou próximo passo `oxe:plan` (se ainda não há PLAN) ou manter `oxe:execute` se o plano já referencia UI.
 4. Resumo no chat: o que ficou no UI-SPEC e como o **`/oxe-plan`** deve citar as secções (ex.: “cumprir UI-SPEC §2”).
 </process>
 

@@ -3,13 +3,13 @@
 <objective>
 Guiar a **implementação** de um plano OXE com dois modos possíveis:
 
-**Modo Solo (padrão):** seguir `.oxe/PLAN.md` onda a onda sem `plan-agents.json`. O agente implementa diretamente cada tarefa Tn da onda atual, roda a verificação e avança. Não exige nenhum artefato além do PLAN.md.
+**Modo Solo (padrão):** seguir `PLAN.md` do escopo resolvido da sessão onda a onda sem `plan-agents.json`. O agente implementa diretamente cada tarefa Tn da onda atual, roda a verificação e avança. Não exige nenhum artefato além do PLAN.md.
 
-**Modo com Agentes (extensão):** quando existe `.oxe/plan-agents.json` válido (schema 2, lifecycle ativo, runId alinhado ao STATE), adotar roles e personas por agente conforme o blueprint.
+**Modo com Agentes (extensão):** quando existe `plan-agents.json` válido no escopo resolvido (schema 2+, lifecycle ativo, runId alinhado ao STATE), adotar roles e personas por agente conforme o blueprint.
 
 **Seleção de execução (redução de requisições):** quando o plano tem 2+ ondas, o usuário escolhe entre Completo (1 sessão), Por onda (N sessões) ou Por tarefa (N tarefas). A escolha é feita **uma vez** no início.
 
-Se existir apenas **`.oxe/QUICK.md`**: tratar passos numerados como onda única (modo sempre Completo).
+Se existir apenas **`QUICK.md`** no escopo resolvido: tratar passos numerados como onda única (modo sempre Completo).
 </objective>
 
 <modo_solo>
@@ -31,6 +31,8 @@ O modo padrão. Funciona sem `plan-agents.json`. O agente lê PLAN.md, segue as 
 
 <execution_mode_selection>
 ## Seleção de Modo de Execução
+
+**Argumento direto:** se o foco/argumento recebido já for `A`, `B` ou `C` (sozinho), usar diretamente como seleção de modo sem apresentar o menu.
 
 **Quando aplicar:** ao início do execute, se PLAN.md tiver **2 ou mais ondas**. Apresentar UMA VEZ e armazenar a escolha em STATE.md para não perguntar novamente nas rodadas seguintes.
 
@@ -88,9 +90,9 @@ Quando o comando `**Verificar:**` de uma tarefa `Tn` falha, **não parar silenci
 </failure_mode>
 
 <context>
-**Observações pendentes:** verificar `.oxe/OBSERVATIONS.md` no início de cada onda. Se houver entradas `pendente` com impacto `execute` ou `all`, incorporar no trabalho da onda atual e marcá-las `incorporada → execute (data)`.
+**Observações pendentes:** verificar `OBSERVATIONS.md` do escopo resolvido no início de cada onda. Se houver entradas `pendente` com impacto `execute` ou `all`, incorporar no trabalho da onda atual e marcá-las `incorporada → execute (data)`.
 
-**Quick-agents (lean PDDA):** se existir **`.oxe/quick-agents.json`** com `status: active` e a execução for baseada em **`QUICK.md`** (não há PLAN.md), adotar o `role` e `persona` de cada agente para os `steps[]` atribuídos. Ao concluir todos os steps, marcar `quick-agents.json` → `status: done` e sugerir `/oxe-verify`.
+**Quick-agents (lean PDDA):** se existir **`quick-agents.json`** do escopo resolvido com `status: active` e a execução for baseada em **`QUICK.md`** (não há PLAN.md), adotar o `role` e `persona` de cada agente para os `steps[]` atribuídos. Ao concluir todos os steps, marcar `quick-agents.json` → `status: done` e sugerir `/oxe-verify`.
 
 **Model hints (blueprint com agentes):** ao apresentar a atribuição de cada agente no início da onda, exibir `model_hint` se presente:
 ```
@@ -99,7 +101,7 @@ Tarefas: T1, T2
 ```
 Se `model_hint` estiver ausente, não exibir a linha. O usuário pode configurar o modelo no IDE antes de iniciar aquele agente.
 
-**Blueprint plan-agent (Modo com Agentes):** adotar `role`/`scope` de **`.oxe/plan-agents.json`** SOMENTE quando:
+**Blueprint plan-agent (Modo com Agentes):** adotar `role`/`scope` de **`plan-agents.json`** do escopo resolvido SOMENTE quando:
 1. `lifecycle.status` ∈ `{ pending_execute, executing }` (não usar se `closed` ou `invalidated`).
 2. **`runId`** no JSON coincide com **`run_id`** no STATE.md (secção Blueprint de agentes).
 3. O pedido mapeia para pelo menos uma tarefa **`Tn`** no **`PLAN.md`**.
@@ -108,7 +110,7 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
 
 **Transição `pending_execute` → `executing`:** na primeira onda com blueprint válido, atualizar `plan-agents.json` → `lifecycle: { "status": "executing", "since": "<ISO>" }` e espelhar em STATE.md.
 
-**Protocolo agente → agente (blueprint):** mensagens em `.oxe/plan-agent-messages/` conforme `oxe/workflows/references/plan-agent-chat-protocol.md`.
+**Protocolo agente → agente (blueprint):** mensagens em `plan-agent-messages/` do escopo resolvido conforme `oxe/workflows/references/plan-agent-chat-protocol.md`.
 
 **Se PLAN.md não existir mas QUICK.md existir:** seguir QUICK.md — passos = onda única, sempre Modo Completo.
 
@@ -120,9 +122,9 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
 </context>
 
 <process>
-1. Ler **`.oxe/STATE.md`**, **`PLAN.md`** (se existir) e **`QUICK.md`** (se PLAN não existir).
-2. Verificar **`.oxe/OBSERVATIONS.md`** — incorporar pendentes de impacto `execute` ou `all` antes de iniciar.
-3. **Seleção de modo** (apenas se PLAN.md com 2+ ondas e `execute_mode` não definido em STATE): apresentar opções A/B/C e aguardar escolha; registrar em STATE.md.
+1. Ler **`.oxe/STATE.md`** global para resolver `active_session`, depois ler **`PLAN.md`** (se existir) e **`QUICK.md`** do escopo resolvido.
+2. Verificar **`OBSERVATIONS.md`** do escopo resolvido — incorporar pendentes de impacto `execute` ou `all` antes de iniciar.
+3. **Seleção de modo** (apenas se PLAN.md com 2+ ondas e `execute_mode` não definido em STATE): se o argumento já for `A`, `B` ou `C`, usá-lo diretamente; senão apresentar opções A/B/C e aguardar escolha; registrar em STATE.md.
 4. Identificar **onda ou bloco atual**: no PLAN, todas as tarefas da mesma onda sem dependências pendentes; no QUICK, passos ainda não marcados como feitos.
 5. Listar no chat: tarefas/passos desta onda, arquivos prováveis, comando **Verificar** de cada tarefa.
 6. **Implementar** conforme o modo escolhido:
@@ -136,8 +138,8 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
    - [ ] Implementação da onda concluída
    - [ ] Comando Verificar de cada tarefa executado (ou agendado)
    ```
-8. Atualizar **`.oxe/STATE.md`**: última onda executada, tarefas concluídas (Tn), próximo passo.
-9. Marcar OBS incorporadas como `incorporada → execute (data)` em `.oxe/OBSERVATIONS.md`.
+8. Atualizar **`.oxe/STATE.md`** global com progresso resumido e, com sessão ativa, escrever o detalhe operacional em `execution/STATE.md`.
+9. Marcar OBS incorporadas como `incorporada → execute (data)` em `OBSERVATIONS.md` do escopo resolvido.
 </process>
 
 <success_criteria>

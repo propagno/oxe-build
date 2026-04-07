@@ -1,11 +1,12 @@
 # OXE — Workflow: next
 
 <objective>
-Inspecionar `.oxe/STATE.md` e a existência de `SPEC.md`, `PLAN.md`, `QUICK.md`, `VERIFY.md` e `.oxe/codebase/` para recomendar **exatamente um** próximo passo OXE e **uma** frase de justificativa — sem lista de alternativas equiparáveis.
+Inspecionar `.oxe/STATE.md` global, a sessão ativa quando existir, e a existência de `SPEC.md`, `PLAN.md`, `QUICK.md`, `VERIFY.md` e `.oxe/codebase/` para recomendar **exatamente um** próximo passo OXE e **uma** frase de justificativa — sem lista de alternativas equiparáveis.
 </objective>
 
 <context>
 - O usuário pode rodar **`npx oxe-cc status`** no terminal para a mesma lógica resumida. **`npx oxe-cc status --hints`** (ou **`--json --hints`**) acrescenta lembretes **paralelos** (idade do scan/compact por config) — **não** altera o único passo canónico que este workflow deve devolver.
+- Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, preferir os artefatos da sessão antes de olhar a raiz legada.
 - Se houver empate aparente (ex.: poderia ser spec ou quick), preferir **spec** quando já existir mapa de codebase; preferir **quick** só se o usuário deixar explícito que é correção mínima.
 - **Blueprint plan-agent:** se **`.oxe/plan-agents.json`** tiver `lifecycle.status === "invalidated"`, o próximo passo **não** assume papéis desse JSON; continuar a raciocinar só com **PLAN.md** / **QUICK.md** / **VERIFY.md** e **STATE.md**. Se o utilizador quiser de novo agentes + mensagens, indicar **`/oxe-plan-agent`**.
 </context>
@@ -13,12 +14,12 @@ Inspecionar `.oxe/STATE.md` e a existência de `SPEC.md`, `PLAN.md`, `QUICK.md`,
 <process>
 1. Se `.oxe/` ou `STATE.md` não existir → **único** passo: **scan** (ou `oxe-cc init-oxe` seguido de scan).
 2. Se não houver `.oxe/codebase/*.md` completos (sete mapas) e o trabalho **não** for só um quick isolado → **scan**.
-3. Se fase `quick_active` ou existir `QUICK.md` **sem** `PLAN.md`:
+3. Se fase `quick_active` ou existir `QUICK.md` no escopo resolvido **sem** `PLAN.md`:
    - Se `QUICK.md` contiver linha `Promover para spec/plan?: sim` → **spec** (promoção declarada pelo autor; ignorar demais heurísticas).
    - Se o `QUICK.md` tiver **mais de 10 passos**, ou o utilizador/descrição indicar **contrato público**, **segurança**, **dados pessoais**, ou **>8 ficheiros** tocados ou previstos → **spec** (promoção obrigatória).
    - Senão → **execute** (há passos curtos a implementar).
-4. Se não houver `SPEC.md` e não for quick intencional declarado → **spec** (passo único).
-5. Se houver SPEC mas não PLAN → se `.oxe/config.json` tiver `discuss_before_plan: true` e faltar **`.oxe/DISCUSS.md`** com decisões → **discuss**; senão → **plan**.
+4. Se não houver `SPEC.md` no escopo resolvido e não for quick intencional declarado → **spec** (passo único).
+5. Se houver SPEC no escopo resolvido mas não PLAN → se `.oxe/config.json` tiver `discuss_before_plan: true` e faltar **`DISCUSS.md`** com decisões → **discuss**; senão → **plan**.
 6. Se PLAN existe, **VERIFY.md** ainda **não** existe ou está claramente antes da implementação atual → **execute** (onda atual).
 7. Se PLAN existe e VERIFY falta após implementação declarada → **verify**.
 8. Se VERIFY indica falha ou gaps não resolvidos → **plan** (replanejamento) como passo único, com referência a `SUMMARY.md`.

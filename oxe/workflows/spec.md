@@ -16,11 +16,17 @@ Se **`.oxe/config.json`** tiver `discuss_before_plan: true`: mencionar no final 
 <context>
 **Pré-requisito preferível:** scan executado. Se não existir, mencionar na spec que o mapa está pendente.
 
+**Resolução de sessão:** antes de ler ou escrever artefatos desta trilha, resolver `active_session` em `.oxe/STATE.md` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa:
+- `SPEC.md`, `ROADMAP.md` e `DISCUSS.md` vivem em `.oxe/<active_session>/spec/`
+- `OBSERVATIONS.md`, `RESEARCH.md` e `research/` seguem o escopo da sessão
+- `LESSONS.md` continua global em `.oxe/global/LESSONS.md`
+- sem sessão ativa, manter o modo legado na raiz `.oxe/`
+
 Ler no início:
 - `.oxe/STATE.md` — fase atual, decisões, workstream ativo
 - `.oxe/codebase/OVERVIEW.md` e `STACK.md` se existirem — não contradizer o repo
-- **`.oxe/OBSERVATIONS.md`** — se houver entradas `pendente` com impacto `spec` ou `all`, incorporá-las na Fase 3 (Requisitos) e marcá-las `incorporada → spec (data)` após uso
-- **`.oxe/LESSONS.md`** — se existir, ler entradas com `Aplicar em: spec` e status `ativo`. Usar como restrições explícitas ou alertas durante a Fase 1 (perguntas) e Fase 3 (requisitos). Exemplo: se uma lição diz "perguntar explicitamente sobre integração com X", adicionar essa pergunta no Bloco B da Fase 1.
+- **OBS do escopo ativo** — se houver entradas `pendente` com impacto `spec` ou `all`, incorporá-las na Fase 3 (Requisitos) e marcá-las `incorporada → spec (data)` após uso
+- **`.oxe/global/LESSONS.md`** — se existir, ler entradas com `Aplicar em: spec` e status `ativo`. Usar como restrições explícitas ou alertas durante a Fase 1 (perguntas) e Fase 3 (requisitos). Exemplo: se uma lição diz "perguntar explicitamente sobre integração com X", adicionar essa pergunta no Bloco B da Fase 1.
 
 **Brownfield (COBOL, JCL, copybooks, VB6, SP):** quando o objetivo for documentar ou planear migração, ver **`oxe/workflows/references/legacy-brownfield.md`** — épicos por trilha, critérios A* verificáveis por Grep/leitura/checklist.
 
@@ -69,8 +75,8 @@ Usar templates: **`oxe/templates/SPEC.template.md`** e **`oxe/templates/ROADMAP.
 - "Há 3 áreas com incerteza técnica: autenticação JWT, integração com Stripe, e deploy em edge. Quer investigar alguma antes de avançar para requisitos?"
 
 **Se aprovado:**
-- Criar notas de pesquisa datadas em `.oxe/research/YYYY-MM-DD-<slug>.md` (usar fluxo de `research.md`)
-- Atualizar `.oxe/RESEARCH.md` com índice
+- Criar notas de pesquisa datadas em `research/YYYY-MM-DD-<slug>.md` no escopo ativo (usar fluxo de `research.md`)
+- Atualizar `RESEARCH.md` no mesmo escopo
 - Consolidar descobertas relevantes antes de avançar para Fase 3
 
 **Se pulado:** registrar em `SPEC.md` as áreas de incerteza como suposições explícitas.
@@ -105,7 +111,7 @@ Usar templates: **`oxe/templates/SPEC.template.md`** e **`oxe/templates/ROADMAP.
 <fase_4_roteiro>
 ## Fase 4 — Roteiro
 
-**Objetivo:** criar fases de entrega mapeadas aos requisitos v1 e escrever `.oxe/ROADMAP.md`.
+**Objetivo:** criar fases de entrega mapeadas aos requisitos v1 e escrever `ROADMAP.md` no escopo ativo da sessão.
 
 **Lógica de agrupamento:**
 - Agrupar requisitos v1 em fases por **dependência técnica** e **valor entregável**
@@ -113,14 +119,14 @@ Usar templates: **`oxe/templates/SPEC.template.md`** e **`oxe/templates/ROADMAP.
 - Fase 1 = o que `/oxe-plan` implementará no próximo ciclo
 - Fases 2+ = ciclos futuros de spec→plan→execute→verify
 
-**Escrever `.oxe/ROADMAP.md`** usando `oxe/templates/ROADMAP.template.md`:
+**Escrever `ROADMAP.md`** usando `oxe/templates/ROADMAP.template.md` no escopo ativo:
 
 ```markdown
 ---
 oxe_doc: roadmap
 status: draft
 updated: <data>
-spec_ref: .oxe/SPEC.md
+spec_ref: SPEC.md
 ---
 
 ## Fase 1 — [Nome]
@@ -192,24 +198,24 @@ O resultado desta reflexão é **invisível ao usuário** — é trabalho intern
 </fase_5_aprovacao>
 
 <process>
-1. Ler `.oxe/STATE.md`, `OVERVIEW.md`, `STACK.md` e `.oxe/OBSERVATIONS.md` (verificar pendentes).
+1. Ler `.oxe/STATE.md`, `OVERVIEW.md`, `STACK.md` e `OBSERVATIONS.md` do escopo ativo (verificar pendentes).
 2. **Fase 1 — Perguntas:** enviar bloco coeso de 3-5 perguntas; máx 3 rodadas; confirmar entendimento.
 3. **Fase 2 — Pesquisa:** propor áreas de investigação; aguardar aprovação; executar se aprovado.
 4. **Fase 3 — Requisitos:** extrair tabela R-ID com v1/v2/fora e critérios A*; incorporar OBS pendentes; apresentar para validação.
-5. **Fase 4 — Roteiro:** agrupar requisitos v1 em fases; escrever `.oxe/ROADMAP.md`.
-6. Escrever **`.oxe/SPEC.md`** usando `oxe/templates/SPEC.template.md`:
+5. **Fase 4 — Roteiro:** agrupar requisitos v1 em fases; escrever `ROADMAP.md` no escopo ativo.
+6. Escrever **`SPEC.md`** usando `oxe/templates/SPEC.template.md` no escopo ativo:
    - Frontmatter YAML (`oxe_doc: spec`, `status`, `updated`, `inputs`)
    - Objetivo, Escopo (dentro/fora), Critérios de aceite (tabela A*), Suposições e riscos, Referências
    - Preservar chaves existentes se SPEC.md já existir; atualizar `updated:`
 6b. **Auto-reflexão:** executar integralmente o bloco `<auto_reflexao>` antes de avançar. Corrigir a spec conforme necessário. Não apresentar a lista de verificação ao usuário — apenas a spec corrigida.
 7. **Fase 5 — Aprovação:** apresentar resumo, aguardar aprovação do roteiro, redirecionar.
-8. Atualizar **`.oxe/STATE.md`**: `phase: spec_ready`, próximo passo.
-9. Marcar OBS incorporadas em `.oxe/OBSERVATIONS.md` se houver pendentes de impacto `spec`.
+8. Atualizar **`.oxe/STATE.md`** global: `phase: spec_ready`, próximo passo e referência curta à sessão ativa quando existir.
+9. Marcar OBS incorporadas em `OBSERVATIONS.md` do escopo ativo se houver pendentes de impacto `spec`.
 </process>
 
 <success_criteria>
-- [ ] `.oxe/SPEC.md` existe com critérios A* e coluna Como verificar; `STATE.md` atualizado.
-- [ ] `.oxe/ROADMAP.md` existe com fases mapeadas a R-IDs e A*, status `approved` (ou `draft` se usuário não confirmou).
+- [ ] `SPEC.md` existe no escopo correto (`spec/` da sessão ou `.oxe/` legado) com critérios A* e coluna Como verificar; `STATE.md` global atualizado.
+- [ ] `ROADMAP.md` existe no mesmo escopo com fases mapeadas a R-IDs e A*, status `approved` (ou `draft` se usuário não confirmou).
 - [ ] Tabela de requisitos R-ID foi apresentada e validada (v1/v2/fora) antes do roteiro.
 - [ ] Usuário foi consultado no gate da Fase 5 e escolheu o próximo passo.
 - [ ] OBS pendentes com impacto `spec` foram incorporadas e marcadas `incorporada`.

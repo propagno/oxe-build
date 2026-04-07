@@ -46,6 +46,53 @@ Tudo o mais é ativado automaticamente por contexto ou chamado só quando necess
 
 ---
 
+## Sessões OXE
+
+Sessões organizam um ciclo completo em `.oxe/sessions/sNNN-slug/` sem misturar artefatos de entregas diferentes na raiz. Nesta versão, o suporte fica no layer de **workflows Markdown**: `spec`, `plan`, `execute`, `verify`, `checkpoint`, `research` e afins passam a respeitar `active_session` em `.oxe/STATE.md`, enquanto `oxe-cc status` e `oxe-cc doctor` continuam legados.
+
+```text
+.oxe/
+├── STATE.md
+├── SESSIONS.md
+├── global/
+│   ├── LESSONS.md
+│   └── MILESTONES.md
+├── codebase/
+└── sessions/
+    └── s001-exemplo/
+        ├── SESSION.md
+        ├── spec/
+        ├── plan/
+        ├── execution/
+        ├── verification/
+        ├── checkpoints/
+        ├── research/
+        └── workstreams/
+```
+
+| Subcomando | O que faz |
+|------------|-----------|
+| `/oxe-session new <nome>` | Cria a sessão e define `active_session` |
+| `/oxe-session list` | Lista sessões em `.oxe/SESSIONS.md` |
+| `/oxe-session switch <id>` | Alterna a sessão ativa |
+| `/oxe-session resume <id>` | Alias de `switch` |
+| `/oxe-session status` | Mostra os metadados da sessão ativa |
+| `/oxe-session close` | Arquiva a sessão ativa |
+| `/oxe-session migrate <nome>` | Cria sessão nova e move artefatos session-scoped da raiz |
+
+Exemplo de ciclo:
+
+```text
+/oxe-session new auth-redesign
+/oxe-spec
+/oxe-plan
+/oxe-execute
+/oxe-verify
+/oxe-session close
+```
+
+---
+
 ## A cadeia
 
 ```

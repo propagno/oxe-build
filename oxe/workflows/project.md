@@ -14,7 +14,7 @@ Detecta a operação pelo primeiro token do input e delega ao workflow canônico
 - Este workflow é um **dispatcher**: lê o input, identifica a operação e executa o workflow correto.
 - Workflows canônicos: `oxe/workflows/milestone.md`, `oxe/workflows/workstream.md`, `oxe/workflows/checkpoint.md`.
 - Se o input for ambíguo, apresentar as 3 operações disponíveis e pedir escolha.
-- Sem input: mostrar o estado atual de milestones e workstreams ativos lendo `STATE.md`, `MILESTONES.md` e `CHECKPOINTS.md`.
+- Sem input: mostrar o estado atual de milestones e workstreams ativos lendo `STATE.md`, `.oxe/global/MILESTONES.md` e `CHECKPOINTS.md` do escopo atual da sessão.
 </context>
 
 <dispatch_table>

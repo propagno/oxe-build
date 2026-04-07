@@ -48,7 +48,7 @@ describe('oxe-cc CLI', () => {
     assert.match(gi, /\.oxe\/\s*$/m);
   });
 
-  test('commands/oxe/ has review-pr.md and update.md', () => {
+  test('commands/oxe/ has review-pr.md, update.md and session.md', () => {
     const path_ = require('path');
     const cmdsDir = path_.join(__dirname, '..', 'commands', 'oxe');
     assert.ok(
@@ -58,6 +58,10 @@ describe('oxe-cc CLI', () => {
     assert.ok(
       require('fs').existsSync(path_.join(cmdsDir, 'update.md')),
       'commands/oxe/update.md deve existir'
+    );
+    assert.ok(
+      require('fs').existsSync(path_.join(cmdsDir, 'session.md')),
+      'commands/oxe/session.md deve existir'
     );
   });
 

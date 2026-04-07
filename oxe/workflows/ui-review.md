@@ -13,9 +13,9 @@ Não substitui **`verify`**: cruza contrato UI; o verify global continua a amarr
 </context>
 
 <process>
-1. Ler `.oxe/UI-SPEC.md`, `.oxe/SPEC.md` e inspecionar ficheiros de UI relevantes (paths do PLAN ou indicados pelo utilizador).
-2. Escrever **`.oxe/UI-REVIEW.md`** com: **Data**, **Âmbito revisto**, **Checklist** (passou / falhou / N/A), **Bloqueios**, **Sugestões**.
-3. Atualizar **`.oxe/STATE.md`** se útil (referência a UI-REVIEW pendente de verify).
+1. Resolver `active_session` conforme `session-path-resolution.md`; ler `UI-SPEC.md` e `SPEC.md` do escopo resolvido e inspecionar ficheiros de UI relevantes (paths do PLAN ou indicados pelo utilizador).
+2. Escrever **`UI-REVIEW.md`** no escopo de `verification/` da sessão ativa (ou `.oxe/` legado) com: **Data**, **Âmbito revisto**, **Checklist** (passou / falhou / N/A), **Bloqueios**, **Sugestões**.
+3. Atualizar **`.oxe/STATE.md`** global se útil (referência a UI-REVIEW pendente de verify).
 4. Indicar no chat: se há P0 → próximo passo típico **`/oxe-execute`** (correções); senão **`/oxe-verify`** para fecho global.
 </process>
 

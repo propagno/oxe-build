@@ -7,8 +7,9 @@ Usar quando: SPEC existe mas há ambiguidade, risco técnico, ou `discuss_before
 </objective>
 
 <context>
-- Ler `.oxe/SPEC.md`, `.oxe/STATE.md` e trechos relevantes de `.oxe/codebase/OVERVIEW.md` / `STACK.md`.
-- Se existir **`.oxe/OBSERVATIONS.md`** com entradas `pendente` de impacto `spec`, `plan` ou `all`, carregá-las como contexto adicional para as perguntas e decisões; marcá-las `incorporada → discuss (data)` após uso.
+- Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, usar `.oxe/<active_session>/spec/` para `SPEC.md` e `DISCUSS.md`; sem sessão ativa, manter `.oxe/`.
+- Ler `SPEC.md` do escopo resolvido, `.oxe/STATE.md` e trechos relevantes de `.oxe/codebase/OVERVIEW.md` / `STACK.md`.
+- Se existir `OBSERVATIONS.md` do escopo resolvido com entradas `pendente` de impacto `spec`, `plan` ou `all`, carregá-las como contexto adicional para as perguntas e decisões; marcá-las `incorporada → discuss (data)` após uso.
 - Se existir **`.oxe/NOTES.md`**, rever bullets em aberto: promover para perguntas/decisões em `DISCUSS.md` ou marcar como *descartado* / *adiado* com uma linha de justificativa.
 - Se `.oxe/config.json` existir e `discuss_before_plan` for `true`, tratar este passo como **recomendado** antes de `oxe:plan`.
 </context>
@@ -25,16 +26,16 @@ Regras:
 </decision_ids>
 
 <process>
-1. Se não existir `.oxe/SPEC.md`, pedir **spec** primeiro (ou **quick** se for trabalho trivial).
+1. Se não existir `SPEC.md` no escopo resolvido, pedir **spec** primeiro (ou **quick** se for trabalho trivial).
 2. Se existir **`.oxe/NOTES.md`**, rever bullets em aberto e decidir o que entra em **Perguntas** ou **Decisões** (ou marcar *descartado* / *adiado* com justificativa curta).
 3. Identificar **lacunas** (escopo, dados, UX, edge cases, compatibilidade) — no máximo **7** perguntas objetivas.
-4. Criar ou atualizar **`.oxe/DISCUSS.md`** com estrutura fixa:
+4. Criar ou atualizar **`DISCUSS.md`** no escopo resolvido com estrutura fixa:
    - **Contexto** — 2–4 bullets do que já se sabe da SPEC.
    - **Perguntas** — numeradas; para cada uma: resposta (se o usuário já respondeu na mensagem) ou `_(pendente)_`.
    - **Decisões** — tabela com colunas **ID** / **Decisão** / **Data** / **Impacto no plano** (só as já fechadas). Atribuir IDs **D-01**, **D-02**, … em sequência.
    - **Implicações para o plano** — bullets (ex.: "migrations necessárias", "feature flag").
 5. Se ainda houver perguntas **pendentes** críticas, listá-las no chat (máx. 7) e parar até resposta; depois atualizar DISCUSS.md.
-6. Atualizar **`.oxe/STATE.md`**: fase `discuss_complete`, próximo passo `oxe:plan`. Registrar os IDs de decisão na seção **Decisões persistentes** do STATE (ex.: `D-01: escolheu JWT — 2025-01-15`).
+6. Atualizar **`.oxe/STATE.md`** global: fase `discuss_complete`, próximo passo `oxe:plan`. Registrar os IDs de decisão na seção **Decisões persistentes** do STATE (ex.: `D-01: escolheu JWT — 2025-01-15`).
 7. Resumo no chat em ≤8 linhas, listando decisões com seus IDs.
 </process>
 
@@ -69,7 +70,7 @@ updated: YYYY-MM-DD
 </discuss_md_format>
 
 <success_criteria>
-- [ ] `.oxe/DISCUSS.md` existe com perguntas e decisões alinhadas à SPEC.
+- [ ] `DISCUSS.md` existe no escopo correto com perguntas e decisões alinhadas à SPEC.
 - [ ] Cada decisão fechada tem ID único **D-NN** na tabela de Decisões.
 - [ ] Se existir `.oxe/NOTES.md`, as entradas relevantes foram tratadas (promovidas, descartadas ou adiadas com nota).
 - [ ] Nenhuma ambiguidade crítica ficou sem registro (como pendente ou suposição explícita na SPEC).

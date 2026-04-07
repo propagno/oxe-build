@@ -9,6 +9,7 @@ Usar quando: correção pontual, refactor local, feature pequena ou protótipo q
 </objective>
 
 <context>
+- Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, `QUICK.md` e `quick-agents.json` vivem em `.oxe/<active_session>/plan/`; sem sessão ativa, manter `.oxe/`.
 - Ler `.oxe/STATE.md` e, se existirem, `OVERVIEW.md` e `STACK.md` em `.oxe/codebase/` para não contradizer o repo.
 - Não apagar `SPEC.md` / `PLAN.md` se existirem; este fluxo é paralelo ou temporário.
 - **Blueprint plan-agent:** este fluxo **não** reutiliza papéis (`role` / `scope`) de **`.oxe/plan-agents.json`**. Se existir `plan-agents.json` com **`oxePlanAgentsSchema: 2`** e `lifecycle.status` **não** for já `invalidated`, **invalidar** o blueprint após criar/substituir **`QUICK.md`**: `lifecycle: { "status": "invalidated", "since": "<ISO>", "invalidatedBy": "quick", "invalidatedReason": "oxe-quick substitui trilha focada do blueprint" }`. Actualizar **`.oxe/STATE.md`** — secção **Blueprint de agentes (sessão)**: **lifecycle_status** → `invalidated`, nota "invalidado por quick". Não escrever novas mensagens em **`.oxe/plan-agent-messages/`** para o `runId` invalidado.
@@ -140,16 +141,16 @@ No final de **`.oxe/QUICK.md`**, mantenha a linha:
 Se **sim**, o próximo passo recomendado no chat é **`/oxe-spec`** (depois discuss/plan conforme config).
 
 <process>
-1. Garantir `.oxe/` (usar template de STATE só se `STATE.md` não existir). Verificar **`.oxe/OBSERVATIONS.md`** — se houver entradas `pendente` com impacto `all`, registrar como restrições nos **Passos** ou no **Contexto** do QUICK.md antes de finalizar; marcar as OBS como `incorporada → quick (data)`.
+1. Garantir `.oxe/` (usar template de STATE só se `STATE.md` não existir). Verificar `OBSERVATIONS.md` do escopo resolvido — se houver entradas `pendente` com impacto `all`, registrar como restrições nos **Passos** ou no **Contexto** do QUICK.md antes de finalizar; marcar as OBS como `incorporada → quick (data)`.
 2. Avaliar se PDDA lean se aplica (ver `<plan_driven_dynamic_agents_lean>` — domínios distintos, 5+ passos, ou flag `--agents`).
-3. Criar ou substituir **`.oxe/QUICK.md`** com:
+3. Criar ou substituir **`QUICK.md`** no escopo resolvido com:
    - **Objetivo** — uma frase. *(Esta é a minispec: restringe o escopo de todos os agentes e passos.)*
    - **Contexto** — 2–5 bullets (arquivos/pastas já vistos).
    - **Passos** — lista numerada, **máximo 10** passos acionáveis; se PDDA ativo, anotar `<!-- agente: id -->` em cada passo.
    - **Agentes dinâmicos** *(somente se PDDA ativo)* — tabela com ID, papel, steps, persona.
    - **Verificar** — pelo menos um: comando de terminal (ex.: `npm test`) **ou** checklist manual explícito. *(Este é o critério de aceite da minispec.)*
    - **Promover para spec/plan?** — conforme seção acima.
-4. Se PDDA ativo, criar **`.oxe/quick-agents.json`** usando `oxe/templates/quick-agents.template.json`:
+4. Se PDDA ativo, criar **`quick-agents.json`** no escopo resolvido usando `oxe/templates/quick-agents.template.json`:
    - Gerar `quickId` novo (`quick-<YYYY-MM-DD>-<6hex>`).
    - `status: "active"`, `since: "<ISO agora>"`.
    - Preencher `agents[]` derivando de cada grupo de passos do QUICK.md.

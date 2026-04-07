@@ -8,13 +8,14 @@ Diferente de **`verify`**, que audita **aceite** contra SPEC/PLAN. Depois de est
 
 <context>
 - Pré-requisito: sintoma reproduzível ou descrição clara (mensagem de erro, Tn em falha).
-- Preferir ancorar ao identificador de tarefa **`Tn`** do `.oxe/PLAN.md` quando existir.
-- Artefato: **`.oxe/DEBUG.md`** — ficheiro único com **sessões** datadas (append); não dispersar em vários ficheiros sem convenção.
+- Preferir ancorar ao identificador de tarefa **`Tn`** do `PLAN.md` do escopo resolvido quando existir.
+- Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, usar `.oxe/<active_session>/execution/DEBUG.md`; sem sessão ativa, usar `.oxe/DEBUG.md`.
+- Artefato: **`DEBUG.md`** no escopo correto — ficheiro único com **sessões** datadas (append); não dispersar em vários ficheiros sem convenção.
 </context>
 
 <process>
-1. Ler `.oxe/PLAN.md` e `.oxe/STATE.md`; se o foco for uma tarefa, localizar **Tn** e o bloco **Verificar**.
-2. Registar em **`.oxe/DEBUG.md`** uma nova sessão:
+1. Ler `PLAN.md` do escopo resolvido e `.oxe/STATE.md`; se o foco for uma tarefa, localizar **Tn** e o bloco **Verificar**.
+2. Registar em **`DEBUG.md`** do escopo resolvido uma nova sessão:
    - **Data** / **Sintoma** (com stack ou comando que falhou).
    - **Hipóteses** (ordenadas por plausibilidade).
    - **Experiências** — o que foi tentado e resultado (uma linha cada).
@@ -25,7 +26,7 @@ Diferente de **`verify`**, que audita **aceite** contra SPEC/PLAN. Depois de est
 </process>
 
 <success_criteria>
-- [ ] `.oxe/DEBUG.md` contém sessão datada com sintoma e **Próximo passo** explícito.
+- [ ] `DEBUG.md` no escopo correto contém sessão datada com sintoma e **Próximo passo** explícito.
 - [ ] Quando aplicável, a sessão referencia **Tn** do PLAN.
 - [ ] Não se confunde com verify: não se declara “entrega aprovada” só com debug.
 </success_criteria>

@@ -13,11 +13,12 @@ Entrada: texto livre com a observação (restrição, descoberta técnica, prefe
 - Não interrompe o fluxo em curso — a observação é armazenada e incorporada na próxima oportunidade.
 - Se chamado **durante execute** (fase `executing` no STATE) com impacto `execute` ou `all`: oferecer opção de aplicar agora (pausar onda atual) ou continuar e aplicar na próxima rodada.
 - Ler **`.oxe/STATE.md`** para capturar o contexto automático (fase atual, tarefa ativa, workstream ativo).
+- Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, `OBSERVATIONS.md` vive em `.oxe/<active_session>/execution/`; sem sessão ativa, manter `.oxe/`.
 - Usar `oxe/templates/OBSERVATIONS.template.md` para criar o arquivo se ainda não existir.
 </context>
 
 <format_observations_md>
-Arquivo: **`.oxe/OBSERVATIONS.md`**
+Arquivo: **`OBSERVATIONS.md`** no escopo resolvido da sessão
 
 ```markdown
 # Observações OXE
@@ -69,14 +70,14 @@ Se ambíguo, usar `all` (princípio de maior abrangência).
 
 <process>
 1. Ler **`.oxe/STATE.md`**: capturar `phase`, `last_task` ou tarefa ativa na onda, `active_workstream`.
-2. Determinar o **próximo ID** (OBS-NNN): contar entradas existentes em `.oxe/OBSERVATIONS.md` ou começar em OBS-001.
+2. Determinar o **próximo ID** (OBS-NNN): contar entradas existentes em `OBSERVATIONS.md` do escopo resolvido ou começar em OBS-001.
 3. Classificar o **impacto** automaticamente com base no texto; se ambíguo, usar `all`.
 3b. **Propagação automática de constraints:**
    - Se existir **`.oxe/SPEC.md`**: ler a tabela de requisitos (R-ID) e critérios (A*) e identificar quais são diretamente afetados pelo texto da observação. Registrar em `**Afeta (spec):**`.
    - Se existir **`.oxe/PLAN.md`**: ler as tarefas (Tn) e identificar quais podem precisar de ajuste no campo `Verificar` ou `Implementar`. Registrar em `**Afeta (plan):**`.
    - Se nenhum R-ID ou Tn identificável: registrar `**Afeta:** (a cruzar na próxima incorporação)`.
    - Esta propagação é automática e não requer input do usuário.
-4. Criar ou atualizar **`.oxe/OBSERVATIONS.md`**:
+4. Criar ou atualizar **`OBSERVATIONS.md`** no escopo resolvido:
    - Adicionar linha na tabela de índice.
    - Adicionar seção `### OBS-NNN` com contexto, impacto, status e texto.
 5. Avaliar **urgência**:

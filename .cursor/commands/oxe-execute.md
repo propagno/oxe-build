@@ -8,4 +8,4 @@ Executa o workflow **OXE execute** no repositório atual. Lê e aplica **integra
 
 `oxe/workflows/execute.md`
 
-Usa o texto adicional desta mensagem como foco (onda, tarefa Tn, ou confirmação de progresso).
+Usa o texto adicional desta mensagem como foco: `A` (Completo), `B` (Por onda), `C` (Por tarefa), `onda N`, `Tn`, ou confirmação de progresso. Lê `oxe/workflows/execute.md` na raiz do projeto atual (CWD).

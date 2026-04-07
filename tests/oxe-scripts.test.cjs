@@ -49,6 +49,8 @@ describe('scripts', () => {
       encoding: 'utf8',
     });
     assert.strictEqual(r.status, 0, r.stderr);
+    const out = fs.readFileSync(path.join(REPO_ROOT, '.cursor', 'commands', 'oxe-session.md'), 'utf8');
+    assert.match(out, /Gerir sessões|Gerir sessoes|OXE — Gerir sessões/i);
   });
 
   test('sync-cursor-from-prompts fails without .github/prompts', () => {

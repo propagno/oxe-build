@@ -12,7 +12,8 @@ Subcomandos:
 
 <context>
 - Milestone ≠ Checkpoint. **Checkpoint** (`/oxe-checkpoint`) é um snapshot de sessão — restaurável a qualquer momento. **Milestone** é uma entrega — marcador de versão com artefatos arquivados e critérios de pronto validados.
-- Milestones são rastreados em **`.oxe/MILESTONES.md`** (índice) e cada entrega tem uma entrada com status, data e links aos artefatos.
+- Nesta versão, milestones são **globais**: usar `.oxe/global/MILESTONES.md` e `.oxe/global/milestones/`, ignorando `active_session` para escrita do índice global.
+- Milestones são rastreados em **`.oxe/global/MILESTONES.md`** (índice) e cada entrega tem uma entrada com status, data e links aos artefatos.
 - O milestone ativo é registrado no **STATE.md** na seção **Milestone ativo**.
 - Um milestone é considerado **pronto** quando:
   1. Todos os critérios A* da SPEC estão com `verify_complete` no STATE.
@@ -26,7 +27,7 @@ Subcomandos:
 
 1. Verificar se há milestone ativo em STATE.md. Se houver, alertar e pedir confirmação antes de criar novo.
 2. Gerar ID sequencial: **M-01**, **M-02**, …
-3. Criar entrada em **`.oxe/MILESTONES.md`**:
+3. Criar entrada em **`.oxe/global/MILESTONES.md`**:
    ```markdown
    ## M-01 — [nome] (ativo)
    - **Status:** ativo
@@ -51,12 +52,10 @@ Se pré-requisitos não forem satisfeitos: listar os que faltam e pausar. Com `-
 
 Passos:
 1. Arquivar artefatos do milestone:
-   - Copiar `.oxe/SPEC.md` → `.oxe/milestones/M-NN/SPEC.md`
-   - Copiar `.oxe/PLAN.md` → `.oxe/milestones/M-NN/PLAN.md`
-   - Copiar `.oxe/VERIFY.md` → `.oxe/milestones/M-NN/VERIFY.md`
-   - Copiar `.oxe/DISCUSS.md` → `.oxe/milestones/M-NN/DISCUSS.md` (se existir)
-   - Criar `.oxe/milestones/M-NN/MILESTONE.md` com resumo da entrega.
-2. Atualizar **`.oxe/MILESTONES.md`**: marcar milestone como `entregue`, adicionar data de encerramento e links aos artefatos arquivados.
+   - Copiar os artefatos do escopo ativo da sessão, se houver, para `.oxe/global/milestones/M-NN/`
+   - Sem sessão ativa, copiar da raiz `.oxe/`
+   - Criar `.oxe/global/milestones/M-NN/MILESTONE.md` com resumo da entrega.
+2. Atualizar **`.oxe/global/MILESTONES.md`**: marcar milestone como `entregue`, adicionar data de encerramento e links aos artefatos arquivados.
 3. Atualizar **STATE.md**: limpar seção **Milestone ativo**, registrar **Último milestone** com ID e data.
 4. Sugerir próximo milestone ou nova spec: `Milestone M-NN concluído. Próximos passos: /oxe-milestone new v2 | /oxe-spec | /oxe-checkpoint`.
 </process_complete>
@@ -65,7 +64,7 @@ Passos:
 **`/oxe-milestone status`**
 
 1. Ler STATE.md para identificar milestone ativo (ID e nome).
-2. Ler MILESTONES.md para detalhes.
+2. Ler `.oxe/global/MILESTONES.md` para detalhes.
 3. Ler SPEC.md para listar critérios A* e seu status (verificado / pendente).
 4. Ler VERIFY.md (se existir) para gaps abertos.
 5. Exibir no chat:
@@ -89,7 +88,7 @@ Resultado: `Milestone M-NN: PRONTO` ou lista de itens pendentes.
 </process_audit>
 
 <success_criteria>
-- [ ] `.oxe/MILESTONES.md` existe e tem entrada para o milestone ativo.
+- [ ] `.oxe/global/MILESTONES.md` existe e tem entrada para o milestone ativo.
 - [ ] STATE.md indica milestone ativo (ID e nome).
 - [ ] Ao completar: artefatos arquivados em `.oxe/milestones/M-NN/`.
 - [ ] Ao completar: MILESTONES.md atualizado com status `entregue` e data.

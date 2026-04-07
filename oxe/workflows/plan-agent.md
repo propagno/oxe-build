@@ -14,6 +14,7 @@ Se o utilizador pedir **`--replan`**: aplicar a mesma lógica de replanejamento 
 </objective>
 
 <context>
+- Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, `PLAN.md`, `plan-agents.json` e `plan-agent-messages/` vivem em `.oxe/<active_session>/plan/`; sem sessão ativa, manter `.oxe/`.
 - **Pré-requisitos** iguais a **`plan.md`**: `.oxe/SPEC.md` obrigatória; `discuss_before_plan` + `DISCUSS.md` quando configurado; consumir **NOTES**, **UI-SPEC**, **DISCUSS**, **RESEARCH**, **CODEBASE-DELTA** / **RESUME**, **config.json** (`plan_max_tasks_per_wave`, `default_verify_command`) como em **`plan.md`**.
 - **Fonte de verdade das tarefas:** `PLAN.md`. O JSON referencia tarefas via **`taskIds`** em cada agente — **não** duplicar o texto de **Verificar** no JSON; copiar só paths/resumo curto em **`outputs`** quando útil para routing.
 - **Agentes ≠ ferramentas externas fixas:** `role` e `scope` descrevem o **comportamento esperado** de um contexto focado (ex.: “Backend Auth Specialist”), não um binário. Quem executa pode ser um único modelo com instruções diferentes por onda.
@@ -125,7 +126,7 @@ Resumo obrigatório no chat: `Gate plan-agent: OK` ou `Gate plan-agent: corrigid
 3. Escrever **`.oxe/PLAN.md`** (cabeçalho YAML como em `oxe/templates/PLAN.template.md`; em **--replan**, secção Replanejamento).
 4. Gerar **`runId`** novo e **`lifecycle`**: `{ "status": "pending_execute", "since": "<ISO agora>" }`.
 5. Escrever **`.oxe/plan-agents.json`** a partir de **`oxe/templates/plan-agents.template.json`**, com **`oxePlanAgentsSchema: 3`**, `goal`, `agents` (incluindo `model_hint` por agente conforme `<model_hints>`), `execution`, `runId`, `lifecycle`.
-6. Criar **`.oxe/plan-agent-messages/`** e **`.oxe/plan-agent-messages/README.md`** a partir de **`oxe/templates/plan-agent-messages-README.template.md`**.
+6. Criar `plan-agent-messages/` e `plan-agent-messages/README.md` no escopo resolvido a partir de **`oxe/templates/plan-agent-messages-README.template.md`**.
 7. Atualizar **`.oxe/STATE.md`**: fase `plan_ready`, próximo passo `oxe:execute`; preencher **Blueprint de agentes (sessão)** — `run_id` (= `runId`), `lifecycle_status` (= `pending_execute`), **última onda** — (ou `—`).
 8. Aplicar **`<plan_agent_quality_gate>`**; corrigir até passar.
 9. No chat: resumo do gate plan-agent, `runId`, número de agentes, ondas, tarefas, referência ao protocolo em **`references/plan-agent-chat-protocol.md`**.

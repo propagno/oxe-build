@@ -4,6 +4,11 @@
 
 `initial` — defina após primeiro scan: `scan_complete` | `spec_ready` | `discuss_complete` | `plan_ready` | `quick_active` | `executing` | `verify_complete` | `verify_failed`
 
+## Sessão ativa (opcional — `/oxe-session`)
+
+- **active_session:** (path relativo a `.oxe/` — ex.: `sessions/s001-auth-redesign` — ou — se nenhuma)
+- **session_id:** (ex.: `s001` — ou —)
+
 ## Último scan
 
 - **Data:** (use **YYYY-MM-DD** para o `oxe-cc doctor` avisar scan antigo com `scan_max_age_days` em `.oxe/config.json`)

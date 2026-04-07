@@ -17,6 +17,7 @@ No **projeto**, os passos canónicos estão em **`.oxe/workflows/*.md`** (layout
 /oxe              → onde estou / o que faço / help (entrada universal)
 /oxe-obs          → registrei algo importante — incorporado automaticamente nos próximos passos
 /oxe-quick        → tarefa pequena, sem cerimônia (com agentes lean quando necessário)
+/oxe-session      → criar, alternar, retomar, fechar ou migrar sessões OXE
 /oxe-scan         → mapeia o projeto (ou atualiza o mapa se já existir)
 /oxe-spec         → nova feature: perguntas → pesquisa → requisitos → roteiro → aprovação
 /oxe-plan         → tarefas por onda (--agents para blueprint multi-agente)
@@ -27,6 +28,22 @@ No **projeto**, os passos canónicos estão em **`.oxe/workflows/*.md`** (layout
 Tudo o mais é ativado automaticamente por contexto, por config, ou existe como escape hatch.
 
 ---
+
+## Sessões OXE
+
+- `active_session` em `.oxe/STATE.md` define a sessão ativa com path relativo completo (`sessions/sNNN-slug`).
+- Com sessão ativa, workflows de spec/plan/execute/verify e suportes ligados à trilha escrevem em `.oxe/<active_session>/...`.
+- Permanecem globais: `.oxe/STATE.md`, `.oxe/config.json`, `.oxe/codebase/`, `.oxe/SESSIONS.md`, `.oxe/global/LESSONS.md`, `.oxe/global/MILESTONES.md`.
+- Nesta versão, o suporte é **workflows only**: `oxe-cc status` / `doctor` ainda não são session-aware.
+
+### `/oxe-session`
+
+- `new <nome>` — cria `.oxe/sessions/sNNN-slug/` e ativa a sessão
+- `list` — mostra `.oxe/SESSIONS.md`
+- `switch <id>` / `resume <id>` — alterna a sessão ativa
+- `status` — mostra o manifesto `SESSION.md`
+- `close` — arquiva a sessão ativa
+- `migrate <nome>` — move artefatos session-scoped da raiz para uma nova sessão
 
 ## Integrações principais (referência)
 
