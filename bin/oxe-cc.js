@@ -1015,6 +1015,9 @@ function ensureGitignoreIgnoresOxeDir(projectRoot, opts = {}) {
 function bootstrapOxe(target, opts) {
   const oxeDir = path.join(target, '.oxe');
   const codebaseDir = path.join(oxeDir, 'codebase');
+  const capabilitiesDir = path.join(oxeDir, 'capabilities');
+  const investigationsDir = path.join(oxeDir, 'investigations');
+  const dashboardDir = path.join(oxeDir, 'dashboard');
   const stateSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'STATE.md');
   const stateDest = path.join(oxeDir, 'STATE.md');
   const configSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'config.template.json');
@@ -1026,12 +1029,15 @@ function bootstrapOxe(target, opts) {
   }
 
   if (opts.dryRun) {
-    console.log(`${dim}init${reset}  ${oxeDir}/ (STATE.md, config.json, codebase/)`);
+    console.log(`${dim}init${reset}  ${oxeDir}/ (STATE.md, config.json, codebase/, capabilities/, investigations/, dashboard/)`);
     ensureGitignoreIgnoresOxeDir(target, { dryRun: true });
     return;
   }
 
   ensureDir(codebaseDir);
+  ensureDir(capabilitiesDir);
+  ensureDir(investigationsDir);
+  ensureDir(dashboardDir);
 
   if (!fs.existsSync(stateDest) || opts.force) {
     copyFile(stateSrc, stateDest, { dryRun: false });
@@ -1100,6 +1106,37 @@ function bootstrapOxe(target, opts) {
   const memoryDir = path.join(oxeDir, 'memory');
   if (!fs.existsSync(memoryDir)) {
     ensureDir(memoryDir);
+  }
+
+  const runtimeSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'EXECUTION-RUNTIME.template.md');
+  const runtimeDest = path.join(oxeDir, 'EXECUTION-RUNTIME.md');
+  if (fs.existsSync(runtimeSrc) && !fs.existsSync(runtimeDest)) {
+    copyFile(runtimeSrc, runtimeDest, { dryRun: false });
+    console.log(`${green}init${reset}  ${runtimeDest}`);
+  }
+
+  const checkpointsSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'CHECKPOINTS.template.md');
+  const checkpointsDest = path.join(oxeDir, 'CHECKPOINTS.md');
+  if (fs.existsSync(checkpointsSrc) && !fs.existsSync(checkpointsDest)) {
+    copyFile(checkpointsSrc, checkpointsDest, { dryRun: false });
+    console.log(`${green}init${reset}  ${checkpointsDest}`);
+  }
+
+  const capabilitiesSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'CAPABILITIES.template.md');
+  const capabilitiesDest = path.join(oxeDir, 'CAPABILITIES.md');
+  if (fs.existsSync(capabilitiesSrc) && !fs.existsSync(capabilitiesDest)) {
+    copyFile(capabilitiesSrc, capabilitiesDest, { dryRun: false });
+    console.log(`${green}init${reset}  ${capabilitiesDest}`);
+  }
+
+  const investigationsIndexDest = path.join(oxeDir, 'INVESTIGATIONS.md');
+  if (!fs.existsSync(investigationsIndexDest)) {
+    fs.writeFileSync(
+      investigationsIndexDest,
+      '# OXE — Investigações\n\n| Data | Ficheiro | Objetivo | Modo | Estado |\n|------|----------|----------|------|--------|\n',
+      'utf8'
+    );
+    console.log(`${green}init${reset}  ${investigationsIndexDest}`);
   }
 
   ensureGitignoreIgnoresOxeDir(target, { dryRun: false });
@@ -1215,6 +1252,15 @@ function printOxeHealthDiagnostics(target, c, diagOpts = {}) {
   for (const w of r.phaseWarn) {
     console.log(`  ${yellow}AVISO${reset} ${w}`);
   }
+  for (const w of r.runtimeWarn) {
+    console.log(`  ${yellow}AVISO${reset} ${w}`);
+  }
+  for (const w of r.capabilityWarn) {
+    console.log(`  ${yellow}AVISO${reset} ${w}`);
+  }
+  for (const w of r.investigationWarn) {
+    console.log(`  ${yellow}AVISO${reset} ${w}`);
+  }
   for (const w of r.sessionWarn) {
     console.log(`  ${yellow}AVISO${reset} ${w}`);
   }
@@ -1264,6 +1310,9 @@ function runStatus(target, opts = {}) {
         typeErrors: report.typeErrors,
         unknownConfigKeys: report.unknownConfigKeys,
         phaseWarnings: report.phaseWarn,
+        runtimeWarnings: report.runtimeWarn,
+        capabilityWarnings: report.capabilityWarn,
+        investigationWarnings: report.investigationWarn,
         sessionWarnings: report.sessionWarn,
         installWarnings: report.installWarn,
         summaryGapWarning: report.summaryGapWarn,
@@ -1646,6 +1695,7 @@ ${green}Uso:${reset}
   npx oxe-cc doctor [opções] [pasta-do-projeto]
   npx oxe-cc status [opções] [pasta-do-projeto]
   npx oxe-cc init-oxe [opções] [pasta-do-projeto]
+  npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
   npx oxe-cc uninstall [opções] [pasta-do-projeto]
   npx oxe-cc update [opções] [argumentos extras…]
 
@@ -1705,6 +1755,13 @@ ${green}status${reset} (coerência .oxe/ + um próximo passo sugerido; não exig
   --dir <pasta>   raiz do projeto (padrão: diretório atual)
   --json          imprime um único objeto JSON (próximo passo + diagnósticos) em stdout; adequado a CI
   --hints         lembretes de rotina (idade scan/compact quando configurado em config.json); com --json inclui array \`hints\`
+
+${green}capabilities${reset} (catálogo nativo de extensões do projeto)
+  list                               lista capabilities instaladas em .oxe/capabilities/
+  install <id>                       cria capability local a partir do template nativo
+  remove <id>                        remove capability do catálogo local
+  update                             regera .oxe/CAPABILITIES.md a partir dos manifestos locais
+  --dir <pasta>                      raiz do projeto (padrão: diretório atual)
 
 ${green}Atualizar (projeto já tem OXE):${reset}
   /oxe-update                            no Cursor (outras IDEs: mesmo fluxo pelo terminal)
@@ -2616,6 +2673,143 @@ function runUpdate(u) {
   console.log(`  ${c ? green : ''}✓${c ? reset : ''} Atualização concluída com sucesso.\n`);
 }
 
+/**
+ * @typedef {{ help: boolean, dir: string, action: string, id: string, parseError: boolean, unknownFlag: string }} CapabilityOpts
+ */
+
+/**
+ * @param {string[]} argv
+ * @returns {CapabilityOpts}
+ */
+function parseCapabilitiesArgs(argv) {
+  /** @type {CapabilityOpts} */
+  const out = {
+    help: false,
+    dir: process.cwd(),
+    action: 'list',
+    id: '',
+    parseError: false,
+    unknownFlag: '',
+  };
+  const positionals = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '-h' || a === '--help') out.help = true;
+    else if (a === '--dir' && argv[i + 1]) out.dir = path.resolve(argv[++i]);
+    else if (!a.startsWith('-')) positionals.push(a);
+    else {
+      out.parseError = true;
+      out.unknownFlag = a;
+      break;
+    }
+  }
+  if (positionals.length) {
+    out.action = positionals[0];
+    out.id = positionals[1] || '';
+  }
+  return out;
+}
+
+function capabilityManifestPath(target, id) {
+  return path.join(target, '.oxe', 'capabilities', id, 'CAPABILITY.md');
+}
+
+function listLocalCapabilities(target) {
+  const dir = path.join(target, '.oxe', 'capabilities');
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && fs.existsSync(path.join(dir, e.name, 'CAPABILITY.md')))
+    .map((e) => e.name)
+    .sort();
+}
+
+function renderCapabilitiesIndex(target) {
+  const template = ['# OXE — Capabilities Instaladas', '', '> Catálogo local de capabilities do projeto. Cada capability vive em `.oxe/capabilities/<id>/`.', '', '| ID | Tipo | Status | Escopo | Requer env | Resumo |', '|----|------|--------|--------|------------|--------|'];
+  const ids = listLocalCapabilities(target);
+  if (!ids.length) {
+    template.push('| (vazio) | — | — | — | — | Nenhuma capability instalada |');
+    return template.join('\n') + '\n';
+  }
+  for (const id of ids) {
+    const raw = fs.readFileSync(capabilityManifestPath(target, id), 'utf8');
+    const type = raw.match(/^type:\s*(.+)$/m)?.[1]?.trim() || 'local';
+    const status = raw.match(/^status:\s*(.+)$/m)?.[1]?.trim() || 'active';
+    const scope = raw.match(/^scope:\s*(.+)$/m)?.[1]?.trim() || 'mixed';
+    const requiresEnv = raw.match(/^requires_env:\s*\[(.*)\]$/m)?.[1]?.trim() || '';
+    const summary =
+      raw.match(/## Objetivo[\s\S]*?-\s+(.+?)(?:\n|$)/m)?.[1]?.trim() || 'Capability local do projeto';
+    template.push(`| ${id} | ${type} | ${status} | ${scope} | ${requiresEnv || '—'} | ${summary} |`);
+  }
+  return template.join('\n') + '\n';
+}
+
+function writeCapabilitiesIndex(target) {
+  const dest = path.join(target, '.oxe', 'CAPABILITIES.md');
+  fs.writeFileSync(dest, renderCapabilitiesIndex(target), 'utf8');
+}
+
+/**
+ * @param {CapabilityOpts} opts
+ */
+function runCapabilities(opts) {
+  const c = useAnsiColors();
+  printSection('OXE ▸ capabilities');
+  if (!fs.existsSync(opts.dir)) {
+    console.error(`${yellow}Diretório não encontrado: ${opts.dir}${reset}`);
+    process.exit(1);
+  }
+  bootstrapOxe(opts.dir, { dryRun: false, force: false });
+  const capsDir = path.join(opts.dir, '.oxe', 'capabilities');
+  ensureDir(capsDir);
+  if (opts.action === 'list') {
+    const ids = listLocalCapabilities(opts.dir);
+    console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
+    if (!ids.length) {
+      console.log(`  ${yellow}Nenhuma capability instalada.${reset}`);
+    } else {
+      for (const id of ids) console.log(`  ${c ? dim : ''}•${c ? reset : ''} ${id}`);
+    }
+    return;
+  }
+  if (!opts.id && (opts.action === 'install' || opts.action === 'remove')) {
+    console.error(`${red}Informe o ID da capability.${reset}`);
+    process.exit(1);
+  }
+  if (opts.action === 'install') {
+    const safeId = opts.id.trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(safeId)) {
+      console.error(`${red}ID inválido para capability:${reset} ${opts.id}`);
+      process.exit(1);
+    }
+    const dir = path.join(capsDir, safeId);
+    ensureDir(dir);
+    const manifest = capabilityManifestPath(opts.dir, safeId);
+    if (!fs.existsSync(manifest)) {
+      const src = path.join(PKG_ROOT, 'oxe', 'templates', 'CAPABILITY.template.md');
+      let raw = fs.readFileSync(src, 'utf8');
+      raw = raw.replace(/^id:\s*sample-capability$/m, `id: ${safeId}`);
+      fs.writeFileSync(manifest, raw, 'utf8');
+    }
+    writeCapabilitiesIndex(opts.dir);
+    console.log(`  ${c ? green : ''}✓${c ? reset : ''} Capability instalada: ${safeId}`);
+    return;
+  }
+  if (opts.action === 'remove') {
+    fs.rmSync(path.join(capsDir, opts.id), { recursive: true, force: true });
+    writeCapabilitiesIndex(opts.dir);
+    console.log(`  ${c ? green : ''}✓${c ? reset : ''} Capability removida: ${opts.id}`);
+    return;
+  }
+  if (opts.action === 'update') {
+    writeCapabilitiesIndex(opts.dir);
+    console.log(`  ${c ? green : ''}✓${c ? reset : ''} Índice de capabilities atualizado.`);
+    return;
+  }
+  console.error(`${red}Ação desconhecida:${reset} ${opts.action}`);
+  process.exit(1);
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   let command = 'install';
@@ -2625,6 +2819,7 @@ async function main() {
     argv[0] === 'init-oxe' ||
     argv[0] === 'uninstall' ||
     argv[0] === 'update' ||
+    argv[0] === 'capabilities' ||
     argv[0] === 'install'
   ) {
     command = argv[0];
@@ -2688,6 +2883,28 @@ async function main() {
       process.exit(1);
     }
     runUpdate(u);
+    return;
+  }
+
+  if (command === 'capabilities') {
+    const cap = parseCapabilitiesArgs(argv);
+    if (cap.help) {
+      printBanner();
+      usage();
+      process.exit(0);
+    }
+    if (cap.parseError) {
+      printBanner();
+      console.error(`${red}Opção desconhecida:${reset} ${cap.unknownFlag}`);
+      usage();
+      process.exit(1);
+    }
+    printBanner();
+    if (!fs.existsSync(cap.dir)) {
+      console.error(`${yellow}Diretório não encontrado: ${cap.dir}${reset}`);
+      process.exit(1);
+    }
+    runCapabilities(cap);
     return;
   }
 

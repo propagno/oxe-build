@@ -92,6 +92,12 @@ Quando o comando `**Verificar:**` de uma tarefa `Tn` falha, **não parar silenci
 <context>
 **Contrato de robustez:** seguir `oxe/workflows/references/flow-robustness-contract.md`. Antes de executar, validar os artefatos obrigatórios e o gate do plano.
 
+**Runtime operacional:** usar `EXECUTION-RUNTIME.md` do escopo resolvido como artefato tático da execução. Ele deve refletir agentes ativos, onda atual, handoffs, evidências, retries, checkpoints pendentes e tarefas bloqueadas. O `PLAN.md` continua estratégico; o runtime regista a operação do ciclo.
+
+**Checkpoints de aprovação:** usar `CHECKPOINTS.md` do escopo resolvido para gates humanos explícitos. Estados válidos: `pending_approval`, `approved`, `rejected`, `overridden`. Se houver checkpoint pendente antes de uma onda de risco, side effect externo ou fecho sensível, a execução deve pausar até resolução explícita.
+
+**Capabilities nativas:** ler `.oxe/CAPABILITIES.md` e capabilities locais relevantes antes de propor automações, pesquisa extra, publicação ou conectores. Só sugerir capabilities que existam no projeto ou estejam claramente ausentes.
+
 **Observações pendentes:** verificar `OBSERVATIONS.md` do escopo resolvido no início de cada onda. Se houver entradas `pendente` com impacto `execute` ou `all`, incorporar no trabalho da onda atual e marcá-las `incorporada → execute (data)`.
 
 **Quick-agents (lean PDDA):** se existir **`quick-agents.json`** do escopo resolvido com `status: active` e a execução for baseada em **`QUICK.md`** (não há PLAN.md), adotar o `role` e `persona` de cada agente para os `steps[]` atribuídos. Ao concluir todos os steps, marcar `quick-agents.json` → `status: done` e sugerir `/oxe-verify`.
@@ -130,23 +136,28 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
    - `Confiança` deve existir em `0–100%`;
    - se `.oxe/config.json` definir `plan_confidence_threshold`, usar esse limiar; senão, usar `70%`;
    - se a confiança estiver abaixo do limiar, **não executar**. Registrar o bloqueio e orientar redução de incerteza (`/oxe-discuss`, `/oxe-research` ou `/oxe-plan --replan`).
-3. Verificar **`OBSERVATIONS.md`** do escopo resolvido — incorporar pendentes de impacto `execute` ou `all` antes de iniciar.
-4. **Seleção de modo** (apenas se PLAN.md com 2+ ondas e `execute_mode` não definido em STATE): se o argumento já for `A`, `B` ou `C`, usá-lo diretamente; senão apresentar opções A/B/C e aguardar escolha; registrar em STATE.md.
-5. Identificar **onda ou bloco atual**: no PLAN, todas as tarefas da mesma onda sem dependências pendentes; no QUICK, passos ainda não marcados como feitos.
-6. Listar no chat: tarefas/passos desta onda, arquivos prováveis, comando **Verificar** de cada tarefa.
-7. **Implementar** conforme o modo escolhido:
+3. Antes da primeira mudança, verificar `CHECKPOINTS.md` e `EXECUTION-RUNTIME.md` do escopo resolvido:
+   - se houver checkpoint `pending_approval` que se aplique à onda atual, **não avançar**;
+   - inicializar ou atualizar o runtime com onda atual, status, agentes ativos, handoffs e evidências esperadas.
+4. Verificar **`OBSERVATIONS.md`** do escopo resolvido — incorporar pendentes de impacto `execute` ou `all` antes de iniciar.
+5. **Seleção de modo** (apenas se PLAN.md com 2+ ondas e `execute_mode` não definido em STATE): se o argumento já for `A`, `B` ou `C`, usá-lo diretamente; senão apresentar opções A/B/C e aguardar escolha; registrar em STATE.md.
+6. Identificar **onda ou bloco atual**: no PLAN, todas as tarefas da mesma onda sem dependências pendentes; no QUICK, passos ainda não marcados como feitos.
+7. Listar no chat: tarefas/passos desta onda, arquivos prováveis, comando **Verificar** de cada tarefa.
+8. **Implementar** conforme o modo escolhido:
    - **Modo Completo:** executar todas as ondas em sequência com verificação inline entre ondas; sumarizar ao final.
    - **Modo Por onda:** executar onda atual, apresentar checklist, parar.
    - **Modo Por tarefa:** executar próxima tarefa pendente, parar.
-8. Após cada onda concluída, incluir checklist:
+   - Em qualquer modo: atualizar `EXECUTION-RUNTIME.md` a cada mudança de onda, bloqueio, retry, handoff ou checkpoint.
+9. Após cada onda concluída, incluir checklist:
    ```markdown
    ## Checklist — Onda N (OXE)
    - [ ] Pré-requisitos da onda conferidos (dependências Tk atendidas)
    - [ ] Implementação da onda concluída
    - [ ] Comando Verificar de cada tarefa executado (ou agendado)
    ```
-9. Atualizar **`.oxe/STATE.md`** global com progresso resumido e, com sessão ativa, escrever o detalhe operacional em `execution/STATE.md`.
-10. Marcar OBS incorporadas como `incorporada → execute (data)` em `OBSERVATIONS.md` do escopo resolvido.
+10. Atualizar **`.oxe/STATE.md`** global com progresso resumido e, com sessão ativa, escrever o detalhe operacional em `execution/STATE.md`.
+11. Atualizar ou criar `CHECKPOINTS.md` quando surgir gate humano explícito; refletir o status resumido no `STATE.md` global (`checkpoint_status`) e no runtime (`runtime_status`).
+12. Marcar OBS incorporadas como `incorporada → execute (data)` em `OBSERVATIONS.md` do escopo resolvido.
 </process>
 
 <success_criteria>

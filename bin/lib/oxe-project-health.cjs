@@ -339,6 +339,13 @@ function oxePaths(target) {
   return {
     oxe,
     state: path.join(oxe, 'STATE.md'),
+    runtime: path.join(oxe, 'EXECUTION-RUNTIME.md'),
+    checkpoints: path.join(oxe, 'CHECKPOINTS.md'),
+    capabilitiesIndex: path.join(oxe, 'CAPABILITIES.md'),
+    capabilitiesDir: path.join(oxe, 'capabilities'),
+    investigationsIndex: path.join(oxe, 'INVESTIGATIONS.md'),
+    investigationsDir: path.join(oxe, 'investigations'),
+    dashboardDir: path.join(oxe, 'dashboard'),
     sessionsIndex: path.join(oxe, 'SESSIONS.md'),
     globalDir: path.join(oxe, 'global'),
     globalLessons: path.join(oxe, 'global', 'LESSONS.md'),
@@ -371,6 +378,10 @@ function scopedOxePaths(target, activeSession) {
     scopedRoot: sessionRoot,
     sessionRoot,
     sessionManifest: path.join(sessionRoot, 'SESSION.md'),
+    runtime: path.join(sessionRoot, 'execution', 'EXECUTION-RUNTIME.md'),
+    checkpoints: path.join(sessionRoot, 'execution', 'CHECKPOINTS.md'),
+    investigationsIndex: path.join(sessionRoot, 'research', 'INVESTIGATIONS.md'),
+    investigationsDir: path.join(sessionRoot, 'research', 'investigations'),
     spec: path.join(sessionRoot, 'spec', 'SPEC.md'),
     discuss: path.join(sessionRoot, 'spec', 'DISCUSS.md'),
     plan: path.join(sessionRoot, 'plan', 'PLAN.md'),
@@ -637,6 +648,62 @@ function installationCompletenessWarnings(target) {
   if (!fs.existsSync(p.globalMilestones)) warns.push('.oxe/global/MILESTONES.md ausente');
   if (!fs.existsSync(p.globalMilestonesDir)) warns.push('.oxe/global/milestones/ ausente');
   if (!fs.existsSync(p.sessionsDir)) warns.push('.oxe/sessions/ ausente');
+  if (!fs.existsSync(p.capabilitiesDir)) warns.push('.oxe/capabilities/ ausente');
+  if (!fs.existsSync(p.capabilitiesIndex)) warns.push('.oxe/CAPABILITIES.md ausente');
+  if (!fs.existsSync(p.investigationsDir)) warns.push('.oxe/investigations/ ausente');
+  if (!fs.existsSync(p.investigationsIndex)) warns.push('.oxe/INVESTIGATIONS.md ausente');
+  if (!fs.existsSync(p.runtime)) warns.push('.oxe/EXECUTION-RUNTIME.md ausente');
+  if (!fs.existsSync(p.checkpoints)) warns.push('.oxe/CHECKPOINTS.md ausente');
+  return warns;
+}
+
+/**
+ * @param {string} stateText
+ * @param {ReturnType<typeof scopedOxePaths>} p
+ * @returns {string[]}
+ */
+function runtimeWarnings(stateText, p) {
+  /** @type {string[]} */
+  const warns = [];
+  const checkpointPending = /\*\*checkpoint_status:\*\*\s*`?pending_approval`?/i.test(stateText);
+  const runtimeBlocked = /\*\*runtime_status:\*\*\s*`?blocked`?/i.test(stateText);
+  if (checkpointPending && !fs.existsSync(p.checkpoints)) {
+    warns.push('STATE.md indica checkpoint pendente, mas o índice de checkpoints não existe');
+  }
+  if (runtimeBlocked && !fs.existsSync(p.runtime)) {
+    warns.push('STATE.md indica runtime bloqueado, mas EXECUTION-RUNTIME.md não existe');
+  }
+  if (fs.existsSync(p.runtime)) {
+    const raw = fs.readFileSync(p.runtime, 'utf8');
+    if (!/##\s*Checkpoints/i.test(raw)) warns.push('EXECUTION-RUNTIME.md sem seção "Checkpoints"');
+    if (!/##\s*Agentes ativos/i.test(raw)) warns.push('EXECUTION-RUNTIME.md sem seção "Agentes ativos"');
+  }
+  return warns;
+}
+
+/**
+ * @param {ReturnType<typeof scopedOxePaths>} p
+ * @returns {string[]}
+ */
+function capabilityWarnings(p) {
+  /** @type {string[]} */
+  const warns = [];
+  if (fs.existsSync(p.capabilitiesDir) && !fs.existsSync(p.capabilitiesIndex)) {
+    warns.push('Existem capabilities em .oxe/capabilities/, mas .oxe/CAPABILITIES.md não existe');
+  }
+  return warns;
+}
+
+/**
+ * @param {ReturnType<typeof scopedOxePaths>} p
+ * @returns {string[]}
+ */
+function investigationWarnings(p) {
+  /** @type {string[]} */
+  const warns = [];
+  if (fs.existsSync(p.investigationsDir) && !fs.existsSync(p.investigationsIndex)) {
+    warns.push('Existe pasta de investigações, mas falta o índice INVESTIGATIONS.md');
+  }
   return warns;
 }
 
@@ -717,6 +784,15 @@ function suggestNextStep(target, cfg = {}) {
       cursorCmd: '/oxe-plan --replan',
       reason: `O plano atual ainda não atingiu confiança executável (limiar ${threshold}%)`,
       artifacts: ['.oxe/PLAN.md', '.oxe/STATE.md'],
+    };
+  }
+
+  if (/\*\*checkpoint_status:\*\*\s*`?pending_approval`?/i.test(stateText)) {
+    return {
+      step: 'execute',
+      cursorCmd: '/oxe-execute',
+      reason: 'Há checkpoint pendente de aprovação — resolva a aprovação antes de avançar a execução',
+      artifacts: ['.oxe/CHECKPOINTS.md', '.oxe/STATE.md'],
     };
   }
 
@@ -813,10 +889,13 @@ function buildHealthReport(target) {
   const retroDate = parseLastRetroDate(stateText);
   const staleLessons = isStaleLessons(retroDate, Number(config.lessons_max_age_days) || 0);
   const phaseWarn = phase ? phaseCoherenceWarnings(phase, p) : [];
+  const runtimeWarn = runtimeWarnings(stateText, p);
   const sumWarn = verifyGapsWithoutSummaryWarning(p.verify, p.summary);
   const specReq = Array.isArray(config.spec_required_sections) ? config.spec_required_sections : [];
   const specWarn = specSectionWarnings(p.spec, specReq.map(String));
   const threshold = Number(config.plan_confidence_threshold) || 70;
+  const capabilityWarn = capabilityWarnings(p);
+  const investigationWarn = investigationWarnings(p);
   const planWarn = [
     ...planWaveWarningsFixed(p.plan, Number(config.plan_max_tasks_per_wave) || 0),
     ...planTaskAceiteWarnings(p.plan),
@@ -832,7 +911,15 @@ function buildHealthReport(target) {
   });
   const hardFailure = Boolean(parseError) || sessionWarn.some((w) => /não existe|sem SESSION\.md/i.test(w));
   const warningCount =
-    phaseWarn.length + specWarn.length + planWarn.length + sessionWarn.length + installWarn.length + (sumWarn ? 1 : 0);
+    phaseWarn.length +
+    runtimeWarn.length +
+    specWarn.length +
+    planWarn.length +
+    capabilityWarn.length +
+    investigationWarn.length +
+    sessionWarn.length +
+    installWarn.length +
+    (sumWarn ? 1 : 0);
   const healthStatus = hardFailure ? 'broken' : warningCount > 0 ? 'warning' : 'healthy';
 
   return {
@@ -849,6 +936,9 @@ function buildHealthReport(target) {
     retroDate,
     staleLessons,
     phaseWarn,
+    runtimeWarn,
+    capabilityWarn,
+    investigationWarn,
     sessionWarn,
     installWarn,
     summaryGapWarn: sumWarn,
@@ -884,6 +974,9 @@ module.exports = {
   installationCompletenessWarnings,
   parsePlanSelfEvaluation,
   planSelfEvaluationWarnings,
+  runtimeWarnings,
+  capabilityWarnings,
+  investigationWarnings,
   phaseCoherenceWarnings,
   verifyGapsWithoutSummaryWarning,
   specSectionWarnings,

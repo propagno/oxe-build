@@ -10,6 +10,7 @@ Responder perguntas sobre a situação atual do trabalho OXE com máxima robuste
 - Com sessão ativa, priorizar artefatos em `.oxe/<active_session>/...` antes do modo legado.
 - Usar `.oxe/codebase/` como mapa do repositório, não como substituto dos artefatos da trilha.
 - Se a pergunta estiver ambígua, responder em modo “situação atual + próximos riscos + melhor próxima ação”.
+- Aplicar discovery adaptativo leve: classificar se a pergunta é sobre estado atual, bloqueio, estratégia, execução, verificação, instalação ou investigação antes de decidir o conjunto de artefatos prioritários.
 </context>
 
 <process>
@@ -18,13 +19,17 @@ Responder perguntas sobre a situação atual do trabalho OXE com máxima robuste
    - `SESSION.md`
    - `spec/SPEC.md`, `spec/ROADMAP.md`, `spec/DISCUSS.md`, `spec/UI-SPEC.md` se existirem
    - `plan/PLAN.md`, `plan/QUICK.md`, `plan/plan-agents.json`, `plan/quick-agents.json` se existirem
-   - `execution/STATE.md`, `execution/OBSERVATIONS.md`, `execution/DEBUG.md`, `execution/FORENSICS.md`, `execution/SUMMARY.md` se existirem
+   - `execution/STATE.md`, `execution/EXECUTION-RUNTIME.md`, `execution/CHECKPOINTS.md`, `execution/OBSERVATIONS.md`, `execution/DEBUG.md`, `execution/FORENSICS.md`, `execution/SUMMARY.md` se existirem
+   - `research/INVESTIGATIONS.md`, `research/RESEARCH.md`, `research/investigations/` se existirem
    - `verification/VERIFY.md`, `verification/VALIDATION-GAPS.md`, `verification/SECURITY.md`, `verification/UI-REVIEW.md` se existirem
 3. Sem sessão ativa, ler o equivalente legado na raiz `.oxe/`.
 4. Em ambos os casos, ler também:
    - `.oxe/codebase/OVERVIEW.md`
    - `.oxe/codebase/STACK.md`
    - `.oxe/codebase/CONCERNS.md`
+   - `.oxe/CAPABILITIES.md` e `.oxe/capabilities/` se a pergunta tocar execução, pesquisa, automação ou integrações
+   - `.oxe/INVESTIGATIONS.md` se a pergunta tocar incertezas, descoberta ou evidência
+   - `.oxe/memory/` se existir memória persistente relevante ao assunto
    - `.oxe/global/LESSONS.md` se existir, com fallback para `.oxe/LESSONS.md`
    - `.oxe/SESSIONS.md` se a pergunta mencionar sessões, histórico ou retomada
 5. Responder à pergunta do utilizador com base em evidência explícita dos artefatos lidos.
@@ -44,6 +49,8 @@ Se o utilizador só disser algo genérico como “o que está acontecendo?”, �
 
 - Não assumir que `doctor` ou `status` sejam session-aware; eles não substituem a leitura direta dos artefatos da sessão.
 - Se houver conflito entre `.oxe/STATE.md` global e `execution/STATE.md` da sessão, explicitar o conflito.
+- Se houver `CHECKPOINTS.md` com itens `pending_approval`, isso tem precedência operacional sobre o “próximo passo” implícito.
+- Se `EXECUTION-RUNTIME.md` ou `INVESTIGATIONS.md` existirem, tratá-los como evidência tática complementar para explicar bloqueios, handoffs, riscos e lacunas.
 - Se `VERIFY.md` existir e contradizer o estado declarado, priorizar a evidência do `VERIFY.md` e mencionar a incoerência.
 - Se o mapa `.oxe/codebase/` estiver ausente ou incompleto, dizer isso explicitamente antes de extrapolar sobre o repositório.
 </process>

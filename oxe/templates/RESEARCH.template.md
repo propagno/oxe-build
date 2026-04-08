@@ -11,6 +11,13 @@
 
 1. … (critério para considerar “fechado”)
 
+## Investigação estruturada
+
+- **Objetivo:** …
+- **Modo:** `surface` | `standard` | `deep`
+- **Fontes:** …
+- **Profundidade:** …
+
 ## Evidência
 
 - Paths lidos, comandos (grep, etc.); diagramas ASCII opcionais. **Não** colar segredos ou valores de env.

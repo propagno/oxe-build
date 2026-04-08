@@ -48,7 +48,7 @@ describe('oxe-cc CLI', () => {
     assert.match(gi, /\.oxe\/\s*$/m);
   });
 
-  test('commands/oxe/ has review-pr.md, update.md, session.md and ask.md', () => {
+  test('commands/oxe/ has review-pr.md, update.md, session.md, ask.md, capabilities.md and dashboard.md', () => {
     const path_ = require('path');
     const cmdsDir = path_.join(__dirname, '..', 'commands', 'oxe');
     assert.ok(
@@ -66,6 +66,14 @@ describe('oxe-cc CLI', () => {
     assert.ok(
       require('fs').existsSync(path_.join(cmdsDir, 'ask.md')),
       'commands/oxe/ask.md deve existir'
+    );
+    assert.ok(
+      require('fs').existsSync(path_.join(cmdsDir, 'capabilities.md')),
+      'commands/oxe/capabilities.md deve existir'
+    );
+    assert.ok(
+      require('fs').existsSync(path_.join(cmdsDir, 'dashboard.md')),
+      'commands/oxe/dashboard.md deve existir'
     );
   });
 
@@ -110,6 +118,13 @@ describe('oxe-cc CLI', () => {
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'global', 'MILESTONES.md')));
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'global', 'milestones')));
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'sessions')));
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'EXECUTION-RUNTIME.md')));
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'CHECKPOINTS.md')));
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'CAPABILITIES.md')));
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'INVESTIGATIONS.md')));
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'capabilities')));
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'investigations')));
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'dashboard')));
     const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'config.json'), 'utf8'));
     assert.strictEqual(cfg.plan_confidence_threshold, 70);
     const gi = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');

@@ -53,6 +53,15 @@ describe('oxe-cc CLI edge', () => {
     assert.match(r.stdout + r.stderr, /--global-cli/);
   });
 
+  test('capabilities help exits 0', () => {
+    const r = spawnSync(process.execPath, [CLI, 'capabilities', '--help'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r.status, 0);
+  });
+
   test('doctor missing dir exits 1', () => {
     const r = spawnSync(process.execPath, [CLI, 'doctor', path.join(os.tmpdir(), 'oxe-nope-xyz')], {
       cwd: REPO_ROOT,
@@ -368,5 +377,42 @@ process.exit(1);
       env: isolatedHomeEnv(fakeHome),
     });
     assert.strictEqual(r.status, 0);
+  });
+
+  test('capabilities install/list/update/remove manage local capability catalog', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cap-'));
+    let r = spawnSync(process.execPath, [CLI, 'capabilities', 'install', 'sample-http', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: isolatedHomeEnv(fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cap-home-'))),
+    });
+    assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'capabilities', 'sample-http', 'CAPABILITY.md')));
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'CAPABILITIES.md')));
+    const indexText = fs.readFileSync(path.join(dir, '.oxe', 'CAPABILITIES.md'), 'utf8');
+    assert.match(indexText, /sample-http/);
+
+    r = spawnSync(process.execPath, [CLI, 'capabilities', 'list', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+    assert.match(r.stdout + r.stderr, /sample-http/);
+
+    r = spawnSync(process.execPath, [CLI, 'capabilities', 'update', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+
+    r = spawnSync(process.execPath, [CLI, 'capabilities', 'remove', 'sample-http', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+    assert.ok(!fs.existsSync(path.join(dir, '.oxe', 'capabilities', 'sample-http')));
   });
 });

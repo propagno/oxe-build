@@ -9,6 +9,8 @@
 
 **Versão:** `0.6.4` · [package.json](package.json)
 
+**Framework OXE — Orchestrated eXperience Engineering**
+
 ```bash
 npx oxe-cc@latest
 ```
@@ -19,13 +21,15 @@ npx oxe-cc@latest
 
 ## O que é o OXE
 
-OXE é um **framework de desenvolvimento assistido por IA** baseado em três princípios:
+OXE é o **Framework OXE — Orchestrated eXperience Engineering**: um framework de desenvolvimento assistido por IA orientado por artefatos, contexto em disco e execução verificável.
+
+Ele se apoia em três princípios:
 
 - **Spec-driven design** — antes de escrever código, você define *o que* construir e *como saber que está pronto*. Essa especificação restringe e guia tudo o que vem depois.
 - **Context engineering** — o estado do trabalho fica em arquivos pequenos dentro de `.oxe/`, não na memória do chat. O agente lê o que precisa, quando precisa — sem sobrecarregar o contexto com decisões já tomadas.
 - **Plan-Driven Dynamic Agents** — quando há múltiplos domínios, o plano cria agentes específicos para *aquela demanda*. Agentes não são reaproveitados entre projetos ou demandas.
 
-O resultado: **menos requisições**, **mais coerência**, e um fluxo que funciona do mesmo jeito em qualquer IDE.
+O resultado: **menos requisições**, **mais coerência**, e uma experiência de engenharia orquestrada que funciona do mesmo jeito em qualquer IDE.
 
 ---
 
@@ -34,6 +38,7 @@ O resultado: **menos requisições**, **mais coerência**, e um fluxo que funcio
 ```
 /oxe              → onde estou / o que faço / help
 /oxe-ask          → entender a situação atual com leitura robusta de STATE + sessão + artefatos
+/oxe-capabilities → listar, instalar, remover ou atualizar capabilities nativas do projeto
 /oxe-obs          → registrei algo importante (incorporado automaticamente)
 /oxe-quick        → tarefa pequena, sem cerimônia
 /oxe-scan         → mapeia o projeto (ou atualiza se já mapeado)
@@ -41,6 +46,7 @@ O resultado: **menos requisições**, **mais coerência**, e um fluxo que funcio
 /oxe-plan         → tarefas por onda (--agents para multi-agente)
 /oxe-execute      → implementar (A: completo | B: por onda | C: por tarefa)
 /oxe-verify       → validar que está pronto
+/oxe-dashboard    → visualizar runtime, ondas, checkpoints e estado operacional
 ```
 
 Tudo o mais é ativado automaticamente por contexto ou chamado só quando necessário.
@@ -96,9 +102,10 @@ Com sessão ativa:
 
 - `spec/` contém `SPEC.md`, `ROADMAP.md`, `DISCUSS.md`, `UI-SPEC.md`
 - `plan/` contém `PLAN.md`, `QUICK.md`, `plan-agents.json`, `quick-agents.json`
-- `execution/` contém o `STATE.md` operacional da trilha, `OBSERVATIONS.md`, `DEBUG.md`, `FORENSICS.md`
+- `execution/` contém o `STATE.md` operacional da trilha, `EXECUTION-RUNTIME.md`, `CHECKPOINTS.md`, `OBSERVATIONS.md`, `DEBUG.md`, `FORENSICS.md`
+- `research/` também pode conter `INVESTIGATIONS.md` e `investigations/` para evidência estruturada
 - `verification/` contém `VERIFY.md`, `VALIDATION-GAPS.md`, `SECURITY.md`, `UI-REVIEW.md`
-- `LESSONS.md`, `MILESTONES.md`, `codebase/`, `SESSIONS.md` e o `STATE.md` global permanecem fora da sessão
+- `LESSONS.md`, `MILESTONES.md`, `codebase/`, `SESSIONS.md`, `CAPABILITIES.md`, `capabilities/` e o `STATE.md` global permanecem fora da sessão
 
 ---
 
@@ -124,16 +131,18 @@ Cada passo lê o anterior como contexto e escreve seu artefato no escopo correto
 |---------|--------------|
 | `/oxe` | Sem input → próximo passo. Com texto → roteamento. Com "help" → 8 comandos. |
 | `/oxe-scan` | Se `.oxe/codebase/` já existe → modo refresh automático. `--full` força scan completo. |
-| `/oxe-spec` | **Auto-reflexão semântica** antes da aprovação: detecta contradições, critérios vagos, escopo creep e conflitos com stack — sem requisição extra. Lê `.oxe/global/LESSONS.md` para não repetir erros do ciclo anterior. |
-| `/oxe-plan` | **Test-first:** `Verificar` vem antes de `Implementar` em cada tarefa. Agora o `PLAN.md` também exige `## Autoavaliação do Plano` com rubrica fixa, `Melhor plano atual` e percentual de confiança determinístico. Com `--agents`: `model_hint` por agente orienta qual tier de modelo usar (schema v3). |
-| `/oxe-execute` | Execução A/B/C. Antes de implementar, valida a autoavaliação do plano e bloqueia execução abaixo do limiar de confiança. Se uma tarefa falha: **diagnóstico inline automático** (2-3 hipóteses + fix + retry). |
-| `/oxe-verify` | Até 6 camadas por config: audit + critérios + decisões + **calibração do plano** + UAT + gaps (`verification_depth: thorough`) + OWASP (`security_in_verify: true`). Sugere `/oxe-retro` ao concluir. |
+| `/oxe-spec` | **Auto-reflexão semântica** antes da aprovação: detecta contradições, critérios vagos, escopo creep e conflitos com stack — sem requisição extra. Também aplica discovery adaptativo: classifica a demanda, limita rodadas e regista incertezas estruturadas para alimentar a confiança do plano. |
+| `/oxe-plan` | **Test-first:** `Verificar` vem antes de `Implementar` em cada tarefa. Agora o `PLAN.md` também exige `## Autoavaliação do Plano` com rubrica fixa, `Melhor plano atual` e percentual de confiança determinístico. Usa investigações e capabilities conhecidas como evidência de apoio. |
+| `/oxe-execute` | Execução A/B/C. Antes de implementar, valida a autoavaliação do plano e bloqueia execução abaixo do limiar de confiança. Usa `EXECUTION-RUNTIME.md` para runtime tático e `CHECKPOINTS.md` para gates humanos formais. |
+| `/oxe-verify` | Até 6 camadas por config: audit + critérios + decisões + **coerência operacional** (runtime/checkpoints) + **calibração do plano** + UAT + gaps (`verification_depth: thorough`) + OWASP (`security_in_verify: true`). Sugere `/oxe-retro` ao concluir. |
 | `/oxe-retro` | Sintetiza 3–5 lições prescritivas em `.oxe/global/LESSONS.md` — consumidas automaticamente pelo próximo spec/plan. |
 | `/oxe-obs` | Registra observação → propaga automaticamente para R-IDs e Tns afetados no próximo plan/spec/execute. |
 | `/oxe-quick` | Objetivo → passos → agentes opcionais (PDDA lean) → verify. Para correções pontuais e features pequenas. |
 | `/oxe-project` | `milestone` + `workstream` + `checkpoint` em um único comando. |
 | `/oxe-session` | Cria, alterna, retoma, fecha e migra sessões OXE sem misturar artefatos de ciclos diferentes. |
 | `/oxe-ask` | Lê `STATE`, resolve a sessão ativa e responde perguntas situacionais com base nos artefatos reais. |
+| `/oxe-capabilities` | Gera e mantém o catálogo nativo de capabilities do projeto em `.oxe/CAPABILITIES.md` e `.oxe/capabilities/`. |
+| `/oxe-dashboard` | Consolida a leitura de `STATE`, blueprint, runtime e verify numa visão operacional. |
 
 ---
 
@@ -172,9 +181,16 @@ Estes não precisam ser decorados — aparecem quando o contexto pede ou quando 
 .oxe/
 ├── STATE.md              ← índice global: fase resumida, sessão ativa, próximo passo
 ├── SESSIONS.md           ← índice de sessões
+├── CAPABILITIES.md       ← catálogo nativo de capabilities instaladas
+├── INVESTIGATIONS.md     ← índice global de investigações estruturadas
+├── EXECUTION-RUNTIME.md  ← runtime operacional legado / fallback global
+├── CHECKPOINTS.md        ← índice de aprovações e gates
 ├── global/
 │   ├── LESSONS.md        ← lições prescritivas cumulativas
 │   └── MILESTONES.md     ← marcos globais de entrega
+├── capabilities/
+├── investigations/
+├── dashboard/
 ├── codebase/             ← mapa do repo (stack, estrutura, testes, …)
 └── sessions/
     └── sNNN-slug/
@@ -187,13 +203,13 @@ Estes não precisam ser decorados — aparecem quando o contexto pede ou quando 
         └── workstreams/
 ```
 
-### `/oxe-spec` — spec em 5 fases com auto-reflexão semântica
+### `/oxe-spec` — spec em 5 fases com discovery adaptativo e auto-reflexão semântica
 
 1. **Perguntas** — blocos de 3-5 por rodada, máximo 3 rodadas
-2. **Pesquisa** — proposta inline na Fase 2 (sem sair do spec)
+2. **Pesquisa** — proposta inline na Fase 2 (sem sair do spec), com investigações estruturadas quando houver incerteza relevante
 3. **Requisitos** — tabela R-ID com v1/v2/fora e critérios A*
 4. **Roteiro** — fases de entrega → `.oxe/ROADMAP.md`
-5. **Auto-reflexão** *(automática, sem requisição extra)* — detecta contradições, critérios vagos, escopo creep, conflitos com stack. Corrige antes de apresentar ao usuário.
+5. **Auto-reflexão** *(automática, sem requisição extra)* — detecta contradições, critérios vagos, escopo creep, conflitos com stack e lacunas de evidência. Corrige antes de apresentar ao usuário.
 6. **Aprovação** → instrui `/oxe-plan` ou `/oxe-plan --agents`
 
 A spec lê `.oxe/global/LESSONS.md` antes de iniciar — lições do ciclo anterior informam as perguntas e os critérios.
@@ -208,6 +224,13 @@ Complexidade: S | M | L | XL
 ```
 
 Tarefas `XL` bloqueiam o gate sem sub-tarefas ou justificativa. `/oxe-obs` propaga automaticamente constraints para os R-IDs e Tns afetados.
+
+### Runtime operacional e checkpoints
+
+- `PLAN.md` continua estratégico.
+- `EXECUTION-RUNTIME.md` regista a operação real: onda atual, agentes ativos, handoffs, evidências, retries e bloqueios.
+- `CHECKPOINTS.md` formaliza gates humanos com status `pending_approval`, `approved`, `rejected` e `overridden`.
+- `status`, `doctor` e `verify` usam esses artefatos para auditar se a execução real continua coerente com o plano.
 
 ### `/oxe-retro` — loop de aprendizado
 
@@ -303,6 +326,7 @@ node bin/oxe-cc.js --help
 | `oxe-cc status --json` | Mesmo, em JSON, com `healthStatus`, `activeSession` e `planSelfEvaluation` |
 | `oxe-cc update` | Atualiza workflows para a versão mais recente |
 | `oxe-cc init-oxe` | Bootstrap do `.oxe/` (STATE, config, codebase/) |
+| `oxe-cc capabilities <list\|install\|remove\|update>` | Mantém o catálogo nativo de capabilities em `.oxe/` |
 | `oxe-cc uninstall` | Remove integrações OXE do HOME e do repo |
 | `oxe-cc uninstall --global-cli` | Também remove o pacote npm global do PATH |
 

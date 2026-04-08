@@ -14,6 +14,7 @@ Se o usuário pedir **--replan** (ou replanejamento implícito após `verify_fai
 <context>
 - Seguir `oxe/workflows/references/flow-robustness-contract.md` como contrato canónico de robustez. A ordem obrigatória é: ler artefatos, resolver sessão/paths, validar pré-condições, escrever o plano, autoavaliar o plano, registrar próximo passo único.
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, o plano vive em `.oxe/<active_session>/plan/` e lê a spec em `.oxe/<active_session>/spec/`.
+- Quando existirem, ler `INVESTIGATIONS.md`, `RESEARCH.md`, `CAPABILITIES.md`, `memory/` do projeto e `CHECKPOINTS.md` para calibrar dependências, riscos, automações disponíveis e gates humanos necessários.
 - Se existir `OBSERVATIONS.md` do escopo resolvido com entradas `pendente` de impacto `plan` ou `all`, incorporar nas tarefas relevantes antes de finalizar o plano (ajustar implementação, verificação ou escopo de Tn) e marcar essas entradas como `incorporada → plan (data)`.
 - Se existir **`.oxe/global/LESSONS.md`**, ler entradas com `Aplicar em: /oxe-plan` e `Status: ativo`. Aplicar como restrições explícitas no planejamento: ajuste de complexidade de tarefas, padrões de verificação, escolha de modo solo vs agentes. Registrar aplicações como comentário no PLAN.md: `<!-- lição C-NN aplicada: ... -->`.
 - **LESSONS + OBS juntos:** se houver tanto LESSONS quanto OBS pendentes, LESSONS orientam o *como planejar* e OBS orientam o *o que incluir*. Não confundir os papéis.
@@ -81,6 +82,10 @@ Depois do resumo e antes das tarefas, o `PLAN.md` deve conter também:
 - `70–84%` → executável com risco controlado
 - `50–69%` → precisa refino antes de execução
 - `<50%` → não executar
+
+**Entradas obrigatórias da confiança:**
+- usar as incertezas estruturadas da SPEC e as investigações concluídas como base direta da rubrica;
+- se o plano depender de capability nativa, investigação ainda não feita ou checkpoint humano antes de side effect crítico, isso deve aparecer explicitamente em tarefas, riscos e autoavaliação.
 
 **Escala de Complexidade:**
 | Valor | Esforço estimado | Sinal de alerta |
