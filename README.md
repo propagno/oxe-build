@@ -9,6 +9,8 @@
 
 **Versão:** `0.6.4` · [package.json](package.json)
 
+**Framework OXE — Orchestrated eXperience Engineering**
+
 ```bash
 npx oxe-cc@latest
 ```
@@ -19,13 +21,15 @@ npx oxe-cc@latest
 
 ## O que é o OXE
 
-OXE é um **framework de desenvolvimento assistido por IA** baseado em três princípios:
+OXE é o **Framework OXE — Orchestrated eXperience Engineering**: um framework de desenvolvimento assistido por IA orientado por artefatos, contexto em disco e execução verificável.
+
+Ele se apoia em três princípios:
 
 - **Spec-driven design** — antes de escrever código, você define *o que* construir e *como saber que está pronto*. Essa especificação restringe e guia tudo o que vem depois.
 - **Context engineering** — o estado do trabalho fica em arquivos pequenos dentro de `.oxe/`, não na memória do chat. O agente lê o que precisa, quando precisa — sem sobrecarregar o contexto com decisões já tomadas.
 - **Plan-Driven Dynamic Agents** — quando há múltiplos domínios, o plano cria agentes específicos para *aquela demanda*. Agentes não são reaproveitados entre projetos ou demandas.
 
-O resultado: **menos requisições**, **mais coerência**, e um fluxo que funciona do mesmo jeito em qualquer IDE.
+O resultado: **menos requisições**, **mais coerência**, e uma experiência de engenharia orquestrada que funciona do mesmo jeito em qualquer IDE.
 
 ---
 
