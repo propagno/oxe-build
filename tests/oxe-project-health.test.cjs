@@ -119,6 +119,31 @@ describe('oxe-project-health', () => {
     assert.ok(r.planWarn.some((x) => /T1.*Aceite vinculado/i.test(x)));
   });
 
+  test('runtimeWarnings flag missing runtime and checkpoints artifacts referenced by state', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(oxe, { recursive: true });
+    const stateText =
+      '# OXE\n\n**checkpoint_status:** pending_approval\n\n**runtime_status:** blocked\n';
+    const warns = h.runtimeWarnings(stateText, h.scopedOxePaths(dir, null));
+    assert.ok(warns.some((x) => /checkpoint pendente/i.test(x)));
+    assert.ok(warns.some((x) => /runtime bloqueado/i.test(x)));
+  });
+
+  test('capabilityWarnings flag missing capability index when dir exists', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-'));
+    fs.mkdirSync(path.join(dir, '.oxe', 'capabilities'), { recursive: true });
+    const warns = h.capabilityWarnings(h.scopedOxePaths(dir, null));
+    assert.ok(warns.some((x) => /CAPABILITIES\.md/i.test(x)));
+  });
+
+  test('investigationWarnings flag missing investigations index when dir exists', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-'));
+    fs.mkdirSync(path.join(dir, '.oxe', 'investigations'), { recursive: true });
+    const warns = h.investigationWarnings(h.scopedOxePaths(dir, null));
+    assert.ok(warns.some((x) => /INVESTIGATIONS\.md/i.test(x)));
+  });
+
   test('suggestNextStep scan when no .oxe', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-'));
     const s = h.suggestNextStep(dir, {});
@@ -137,5 +162,28 @@ describe('oxe-project-health', () => {
     fs.writeFileSync(path.join(oxe, 'PLAN.md'), '### T1\n- **Onda:** 1\n', 'utf8');
     const s = h.suggestNextStep(dir, { discuss_before_plan: false });
     assert.strictEqual(s.step, 'execute');
+  });
+
+  test('suggestNextStep respects pending checkpoint approval', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(path.join(oxe, 'codebase'), { recursive: true });
+    for (const f of h.EXPECTED_CODEBASE_MAPS) {
+      fs.writeFileSync(path.join(oxe, 'codebase', f), '# x', 'utf8');
+    }
+    fs.writeFileSync(
+      path.join(oxe, 'STATE.md'),
+      '## Fase atual\n\n`plan_ready`\n\n**checkpoint_status:** pending_approval\n',
+      'utf8'
+    );
+    fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# S\n## Critérios de aceite\n| A1 | x | y |\n', 'utf8');
+    fs.writeFileSync(
+      path.join(oxe, 'PLAN.md'),
+      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 80%\n- **Base da confiança:**\n  - Completude dos requisitos: 20/25\n  - Dependências conhecidas: 12/15\n  - Risco técnico: 12/20\n  - Impacto no código existente: 10/15\n  - Clareza da validação / testes: 10/15\n  - Lacunas externas / decisões pendentes: 8/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n',
+      'utf8'
+    );
+    const s = h.suggestNextStep(dir, { discuss_before_plan: false });
+    assert.strictEqual(s.step, 'execute');
+    assert.match(s.reason, /checkpoint pendente/i);
   });
 });

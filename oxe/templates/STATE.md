@@ -26,6 +26,18 @@
 - **Última onda executada:** (número ou —)
 - **Tarefas concluídas:** (ex.: T1, T2 ou passos 1–3 do QUICK.md)
 
+## Checkpoints de aprovação (opcional)
+
+- **checkpoint_status:** `pending_approval` | `approved` | `rejected` | `overridden` | —
+- **checkpoint_ref:** `.oxe/CHECKPOINTS.md` ou artefato de sessão correspondente
+- **Notas:** (ex.: aguardando aprovação para Onda 2)
+
+## Runtime operacional (opcional)
+
+- **runtime_status:** `pending` | `running` | `blocked` | `done` | —
+- **runtime_ref:** `.oxe/EXECUTION-RUNTIME.md` ou artefato de sessão correspondente
+- **Notas:** (agentes ativos, bloqueio principal, handoff pendente)
+
 ## Blueprint de agentes (sessão) (opcional — `/oxe-plan-agent`)
 
 Espelho do **`.oxe/plan-agents.json`** ativo (schema ≥ 2). Atualizar em **`/oxe-plan-agent`**, **`/oxe-execute`**, **`/oxe-verify`**, **`/oxe-quick`** quando o lifecycle mudar.
@@ -86,6 +98,16 @@ _(O agente pode preencher após cada onda.)_
 Sidecars de memória persistente por agente/sessão. Armazenados em `.oxe/memory/`.
 
 - (nenhum ou lista: ex.: `architect-2025-01-15.md`, `researcher-auth-2025-01-14.md`)
+
+## Capabilities nativas (opcional)
+
+- **capabilities_ref:** `.oxe/CAPABILITIES.md`
+- **Capabilities ativas:** (IDs ou —)
+
+## Investigações estruturadas (opcional)
+
+- **investigations_ref:** `.oxe/INVESTIGATIONS.md` ou índice de sessão
+- **Última investigação:** (path ou —)
 
 ## Decisões persistentes
 

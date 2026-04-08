@@ -18,6 +18,8 @@ Se **`.oxe/config.json`** tiver `discuss_before_plan: true`: mencionar no final 
 
 **Contrato de robustez:** seguir `oxe/workflows/references/flow-robustness-contract.md`. Antes de escrever, resolver artefatos obrigatórios, validar pré-condições e só então produzir a spec. O output desta fase deve deixar evidência estruturada suficiente para o `plan` decidir se o plano é realmente o melhor disponível.
 
+**Discovery adaptativo:** antes da primeira pergunta, aplicar `oxe/workflows/references/adaptive-discovery.md`. Classificar a demanda, modular os blocos de perguntas conforme o domínio, limitar rodadas e consolidar incertezas estruturadas que depois alimentarão a confiança do plano.
+
 **Resolução de sessão:** antes de ler ou escrever artefatos desta trilha, resolver `active_session` em `.oxe/STATE.md` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa:
 - `SPEC.md`, `ROADMAP.md` e `DISCUSS.md` vivem em `.oxe/<active_session>/spec/`
 - `OBSERVATIONS.md`, `RESEARCH.md` e `research/` seguem o escopo da sessão
@@ -26,9 +28,11 @@ Se **`.oxe/config.json`** tiver `discuss_before_plan: true`: mencionar no final 
 
 Ler no início:
 - `.oxe/STATE.md` — fase atual, decisões, workstream ativo
+- `EXECUTION-RUNTIME.md`, `CHECKPOINTS.md` e `memory/` do escopo ativo se existirem — usar como contexto auxiliar, nunca como substituto da SPEC
 - `.oxe/codebase/OVERVIEW.md` e `STACK.md` se existirem — não contradizer o repo
 - **OBS do escopo ativo** — se houver entradas `pendente` com impacto `spec` ou `all`, incorporá-las na Fase 3 (Requisitos) e marcá-las `incorporada → spec (data)` após uso
 - **`.oxe/global/LESSONS.md`** — se existir, ler entradas com `Aplicar em: spec` e status `ativo`. Usar como restrições explícitas ou alertas durante a Fase 1 (perguntas) e Fase 3 (requisitos). Exemplo: se uma lição diz "perguntar explicitamente sobre integração com X", adicionar essa pergunta no Bloco B da Fase 1.
+- `.oxe/CAPABILITIES.md` e `.oxe/INVESTIGATIONS.md` — usar para sugerir capacidades e pesquisas já existentes antes de abrir novas lacunas
 
 **Brownfield (COBOL, JCL, copybooks, VB6, SP):** quando o objetivo for documentar ou planear migração, ver **`oxe/workflows/references/legacy-brownfield.md`** — épicos por trilha, critérios A* verificáveis por Grep/leitura/checklist.
 
@@ -39,6 +43,8 @@ Usar templates: **`oxe/templates/SPEC.template.md`** e **`oxe/templates/ROADMAP.
 ## Fase 1 — Perguntas
 
 **Objetivo:** entender completamente a ideia antes de qualquer escrita de artefato.
+
+**Classificar a demanda no início:** antes do primeiro bloco, rotular a trilha com um tipo dominante (`feature`, `bugfix`, `refactor`, `investigação`, `migração`, `integração`, `infra`, `dados`, `ui`, `segurança`). Registar esse tipo na seção de contexto da SPEC.
 
 **Regra de ouro:** nunca uma pergunta por vez — sempre um **bloco coeso** de 3-5 perguntas por rodada. Máximo **3 rodadas**; sinalize quando achar que tem entendimento completo e peça confirmação antes de avançar.
 
@@ -66,6 +72,12 @@ Usar templates: **`oxe/templates/SPEC.template.md`** e **`oxe/templates/ROADMAP.
 - Após rodada 3: avançar para Fase 2 mesmo com suposições explícitas
 
 **Ao final:** "Acho que entendi completamente. Confirma antes de avançarmos para pesquisa/requisitos? [resumo em 3-5 bullets]"
+
+**Registar incertezas estruturadas:** ao fim de cada rodada, consolidar:
+- o que já está estável;
+- o que segue ambíguo;
+- quais evidências faltam;
+- quais riscos podem reduzir a confiança do plano.
 </fase_1_perguntas>
 
 <fase_2_pesquisa>
@@ -79,6 +91,7 @@ Usar templates: **`oxe/templates/SPEC.template.md`** e **`oxe/templates/ROADMAP.
 **Se aprovado:**
 - Criar notas de pesquisa datadas em `research/YYYY-MM-DD-<slug>.md` no escopo ativo (usar fluxo de `research.md`)
 - Atualizar `RESEARCH.md` no mesmo escopo
+- Atualizar `INVESTIGATIONS.md` com objetivo, fontes, profundidade, resultado e impacto na trilha
 - Consolidar descobertas relevantes antes de avançar para Fase 3
 
 **Se pulado:** registrar em `SPEC.md` as áreas de incerteza como suposições explícitas.
@@ -207,18 +220,20 @@ O resultado desta reflexão é **invisível ao usuário** — é trabalho intern
 
 <process>
 1. Ler `.oxe/STATE.md`, `OVERVIEW.md`, `STACK.md` e `OBSERVATIONS.md` do escopo ativo (verificar pendentes).
-2. **Fase 1 — Perguntas:** enviar bloco coeso de 3-5 perguntas; máx 3 rodadas; confirmar entendimento.
-3. **Fase 2 — Pesquisa:** propor áreas de investigação; aguardar aprovação; executar se aprovado.
-4. **Fase 3 — Requisitos:** extrair tabela R-ID com v1/v2/fora e critérios A*; incorporar OBS pendentes; apresentar para validação.
-5. **Fase 4 — Roteiro:** agrupar requisitos v1 em fases; escrever `ROADMAP.md` no escopo ativo.
-6. Escrever **`SPEC.md`** usando `oxe/templates/SPEC.template.md` no escopo ativo:
+2. Aplicar `adaptive-discovery.md`: classificar a demanda, verificar se há capabilities úteis e se investigações anteriores reduzem incerteza.
+3. **Fase 1 — Perguntas:** enviar bloco coeso de 3-5 perguntas; máx 3 rodadas; confirmar entendimento.
+4. **Fase 2 — Pesquisa:** propor áreas de investigação; aguardar aprovação; executar se aprovado.
+5. **Fase 3 — Requisitos:** extrair tabela R-ID com v1/v2/fora e critérios A*; incorporar OBS pendentes; apresentar para validação.
+6. **Fase 4 — Roteiro:** agrupar requisitos v1 em fases; escrever `ROADMAP.md` no escopo ativo.
+7. Escrever **`SPEC.md`** usando `oxe/templates/SPEC.template.md` no escopo ativo:
    - Frontmatter YAML (`oxe_doc: spec`, `status`, `updated`, `inputs`)
    - Objetivo, Escopo (dentro/fora), Critérios de aceite (tabela A*), Suposições e riscos, Referências
+   - Preencher explicitamente `Tipo de demanda` e `Incertezas estruturadas`
    - Preservar chaves existentes se SPEC.md já existir; atualizar `updated:`
-6b. **Auto-reflexão:** executar integralmente o bloco `<auto_reflexao>` antes de avançar. Corrigir a spec conforme necessário. Não apresentar a lista de verificação ao usuário — apenas a spec corrigida.
-7. **Fase 5 — Aprovação:** apresentar resumo, aguardar aprovação do roteiro, redirecionar.
-8. Atualizar **`.oxe/STATE.md`** global: `phase: spec_ready`, próximo passo e referência curta à sessão ativa quando existir.
-9. Marcar OBS incorporadas em `OBSERVATIONS.md` do escopo ativo se houver pendentes de impacto `spec`.
+7b. **Auto-reflexão:** executar integralmente o bloco `<auto_reflexao>` antes de avançar. Corrigir a spec conforme necessário. Não apresentar a lista de verificação ao usuário — apenas a spec corrigida.
+8. **Fase 5 — Aprovação:** apresentar resumo, aguardar aprovação do roteiro, redirecionar.
+9. Atualizar **`.oxe/STATE.md`** global: `phase: spec_ready`, próximo passo e referência curta à sessão ativa quando existir.
+10. Marcar OBS incorporadas em `OBSERVATIONS.md` do escopo ativo se houver pendentes de impacto `spec`.
 </process>
 
 <success_criteria>

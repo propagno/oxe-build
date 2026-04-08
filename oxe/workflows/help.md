@@ -18,12 +18,14 @@ No **projeto**, os passos canónicos estão em **`.oxe/workflows/*.md`** (layout
 /oxe-ask          → entender a situação atual com leitura robusta de STATE + sessão + artefatos
 /oxe-obs          → registrei algo importante — incorporado automaticamente nos próximos passos
 /oxe-quick        → tarefa pequena, sem cerimônia (com agentes lean quando necessário)
+/oxe-capabilities → listar, instalar, remover ou atualizar capabilities nativas do projeto
 /oxe-session      → criar, alternar, retomar, fechar ou migrar sessões OXE
 /oxe-scan         → mapeia o projeto (ou atualiza o mapa se já existir)
 /oxe-spec         → nova feature: perguntas → pesquisa → requisitos → roteiro → aprovação
 /oxe-plan         → tarefas por onda (--agents para blueprint multi-agente)
 /oxe-execute      → implementar (A: 1 sessão | B: por onda | C: por tarefa)
 /oxe-verify       → validar (camadas 5+6 opcionais via config: gaps + segurança)
+/oxe-dashboard    → visualizar runtime, ondas, checkpoints e estado operacional
 ```
 
 Tudo o mais é ativado automaticamente por contexto, por config, ou existe como escape hatch.
@@ -36,6 +38,7 @@ Tudo o mais é ativado automaticamente por contexto, por config, ou existe como 
 - Com sessão ativa, workflows de spec/plan/execute/verify e suportes ligados à trilha escrevem em `.oxe/<active_session>/...`.
 - Permanecem globais: `.oxe/STATE.md`, `.oxe/config.json`, `.oxe/codebase/`, `.oxe/SESSIONS.md`, `.oxe/global/LESSONS.md`, `.oxe/global/MILESTONES.md`.
 - `oxe-cc status` / `doctor` devem refletir a sessão ativa, a autoavaliação do plano e a saúde lógica do fluxo.
+- O escopo ativo também pode ter `EXECUTION-RUNTIME.md`, `CHECKPOINTS.md` e `INVESTIGATIONS.md` para operação, approvals e evidência.
 
 ### `/oxe-session`
 
@@ -91,7 +94,7 @@ Com **`compact_max_age_days`** em `.oxe/config.json` (ver `oxe/templates/CONFIG.
 2. **spec** — fluxo em **5 fases**: perguntas (máx 3 rodadas) → pesquisa (proposta inline na Fase 2, sem sair do spec) → requisitos R-ID (v1/v2/fora) → roteiro (`.oxe/ROADMAP.md`) → aprovação. Se `discuss_before_plan: true` na config, o próximo passo após aprovação é `oxe:discuss` antes de plan.
 3. **plan** — plano executável + **Verificar** por tarefa. Se 3+ domínios distintos, **sugere automaticamente** blueprint de agentes (`/oxe-plan --agents`). Sem `--agents`: solo. Com `--agents`: gera também `plan-agents.json` (schema 3 com `model_hint`).
 4. **execute** — modo selecionado 1 vez: **A) Completo** (1 sessão), **B) Por onda**, **C) Por tarefa**. Antes de executar, validar a **Autoavaliação do Plano**: se `Melhor plano atual: não` ou a confiança estiver abaixo do limiar, o fluxo deve replanear em vez de implementar. Se Verificar falhar inline: diagnóstico automático (2-3 hipóteses + fix), sem precisar chamar `/oxe-debug` separadamente. Escalação para `/oxe-forensics` só se esgotar tentativas.
-5. **verify** — até **6 camadas** por config: auditoria pré-exec, tarefas + critérios A*, fidelidade D-NN, **calibração do plano**, UAT, **gaps de cobertura** (camada 5 — `verification_depth: "thorough"`), **segurança OWASP** (camada 6 — `security_in_verify: true`). Sem comandos extras.
+5. **verify** — até **6 camadas** por config: auditoria pré-exec, tarefas + critérios A*, fidelidade D-NN, **coerência operacional** (runtime + checkpoints), **calibração do plano**, UAT, **gaps de cobertura** (camada 5 — `verification_depth: "thorough"`), **segurança OWASP** (camada 6 — `security_in_verify: true`). Sem comandos extras.
 6. **retro** *(opcional, recomendado após verify_complete)* — `/oxe-retro` sintetiza 3–5 lições prescritivas em `.oxe/LESSONS.md`. Cada lição diz **o que fazer diferente** no próximo ciclo — consumida automaticamente pelo próximo spec/plan.
 7. **→ próximo ciclo** — spec/plan do próximo ciclo lê LESSONS.md automaticamente. Os erros do ciclo anterior não se repetem.
 
@@ -101,6 +104,8 @@ Com **`compact_max_age_days`** em `.oxe/config.json` (ver `oxe/templates/CONFIG.
 - **`/oxe-debug`** — diagnóstico técnico inline durante execute (já integrado ao execute; disponível standalone para controle explícito).
 - **`/oxe-loop`** — iteração até verify passar (disponível standalone; integrado ao Modo B do execute via `loop_max`).
 - **`/oxe-research`** — notas datadas em `.oxe/research/` para spikes, mapas de sistema, engenharia reversa.
+- **`/oxe-capabilities`** — catálogo nativo de capabilities locais, por script ou conector, com metadata e diagnóstico.
+- **`/oxe-dashboard`** — leitura visual/operacional do runtime, checkpoints e ondas ativas.
 - **`/oxe-route`** — traduz linguagem natural → comando. Equivalente a `/oxe [texto]`.
 - **`/oxe-compact`** — refresh explícito do codebase. Equivalente a `/oxe-scan` sem `--full`.
 
@@ -244,7 +249,7 @@ Ver **`lib/sdk/README.md`** e **`lib/sdk/index.d.ts`**.
 ## Artefatos
 
 - `.oxe/STATE.md`, `.oxe/config.json` (opcional), `.oxe/codebase/*`, `.oxe/SPEC.md`, `.oxe/DISCUSS.md` (opcional, com IDs D-NN), `.oxe/PLAN.md`, `.oxe/VERIFY.md`, `.oxe/QUICK.md`, `.oxe/SUMMARY.md` (opcional), `.oxe/NOTES.md` (opcional, fila), `.oxe/RESUME.md` (opcional, trilha + ponte para delta), `.oxe/CODEBASE-DELTA.md` (opcional, último refresh documentado do codebase), `.oxe/CHECKPOINTS.md` (opcional, índice), `.oxe/checkpoints/*.md` (opcional, marcos de sessão), `.oxe/RESEARCH.md` (opcional, índice de pesquisa), `.oxe/research/*.md` (opcional, notas datadas), `.oxe/VALIDATION-GAPS.md` (opcional, pós-verify), `.oxe/FORENSICS.md` (opcional, recuperação), `.oxe/DEBUG.md` (opcional, sessões de debug), `.oxe/UI-SPEC.md` / `.oxe/UI-REVIEW.md` (opcional, front-end)
-- **Novos artefatos:** `.oxe/MILESTONES.md` (marcos de entrega), `.oxe/milestones/M-NN/` (artefatos arquivados), `.oxe/workstreams/<nome>/` (trilhas paralelas), `.oxe/personas/*.md` (personas de agentes customizadas), `.oxe/plugins/*.cjs` (plugins de lifecycle), `.oxe/memory/*.md` (sidecars de memória por sessão).
+- **Novos artefatos:** `.oxe/MILESTONES.md` (marcos de entrega), `.oxe/milestones/M-NN/` (artefatos arquivados), `.oxe/workstreams/<nome>/` (trilhas paralelas), `.oxe/personas/*.md` (personas de agentes customizadas), `.oxe/plugins/*.cjs` (plugins de lifecycle), `.oxe/memory/*.md` (sidecars de memória por sessão), `.oxe/EXECUTION-RUNTIME.md` (runtime operacional), `.oxe/CAPABILITIES.md` + `.oxe/capabilities/` (catálogo nativo), `.oxe/INVESTIGATIONS.md` + `.oxe/investigations/` (investigações estruturadas), `.oxe/dashboard/` (camada visual opcional).
 - Templates: `oxe/templates/` (ou `.oxe/templates/` em layout aninhado, conforme instalação). Hooks Git **opt-in** (lembretes não bloqueantes): `oxe/templates/GIT_HOOKS_OXE.md`. Plugin system: `oxe/templates/PLUGINS.md`.
 
 ## Para autores (mantenedores)

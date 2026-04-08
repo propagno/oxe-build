@@ -16,6 +16,7 @@ Se o usuário indicar uma tarefa (ex.: `T2`), focar só nela nas camadas 1–2; 
 <context>
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, `VERIFY.md`, `VALIDATION-GAPS.md`, `SECURITY.md`, `UI-REVIEW.md` e `SUMMARY.md` vivem no escopo da sessão; `.oxe/STATE.md` continua global.
 - Seguir `oxe/workflows/references/flow-robustness-contract.md`. O verify não valida só se passou; valida também se o plano estava bem calibrado para começar.
+- Ler `EXECUTION-RUNTIME.md` e `CHECKPOINTS.md` do escopo resolvido quando existirem. Eles são evidência tática para saber o que realmente foi executado, bloqueado, aprovado ou desviado.
 - Preferir rodar comandos reais no terminal quando o ambiente permitir; se o sandbox bloquear, marcar como "não executado aqui" e deixar o comando para o usuário.
 - Não destruir `PLAN.md`; registrar achados em `VERIFY.md`.
 - Ler **`.oxe/config.json`** se existir: `after_verify_draft_commit`, `after_verify_suggest_pr`, e `verification_depth` (`"standard"` por padrão; `"thorough"` ativa camadas 3–4 completas; `"quick"` pula camadas 3–4 e UAT).
@@ -88,17 +89,28 @@ Ler a `## Autoavaliação do Plano` e comparar com o resultado real:
 Registrar em `VERIFY.md`: `Resultado de calibração | Confiança declarada | Resultado observado | Notas`.
 </calibracao_do_plano>
 
+<runtime_e_checkpoints>
+**Coerência do runtime e checkpoints** (obrigatória quando `EXECUTION-RUNTIME.md` ou `CHECKPOINTS.md` existirem)
+
+1. Verificar se a onda/tarefa que o runtime marca como concluída bate com a evidência real nos arquivos e nos comandos executados.
+2. Verificar se checkpoints `pending_approval` foram respeitados, e se `approved`, `rejected` ou `overridden` têm evidência e nota curta.
+3. Se runtime ou checkpoints contradisserem `STATE.md`, `PLAN.md` ou `VERIFY.md`, registrar a incoerência explicitamente.
+4. Usar esses artefatos como apoio para a seção de gaps e para a calibração do plano.
+</runtime_e_checkpoints>
+
 <process>
 1. **Camada 1 — Auditoria de pré-execução:** checar integridade do PLAN.md e DISCUSS.md conforme `<camada_1_pre_exec_audit>`. Documentar resultado.
 2. Ler `SPEC.md`, `PLAN.md` e `DISCUSS.md` do escopo resolvido, além de `.oxe/STATE.md` global.
 3. **Camada 2:** Para cada tarefa relevante, executar **Verificar: Comando** do PLAN (ou subconjunto se foco Tn). Para **cada ID de critério** da SPEC (A1, A2, …), registrar se passou com evidência.
 4. **Camada 3:** Se existir `.oxe/DISCUSS.md` com IDs D-NN, executar **Fidelidade de decisões** conforme `<camada_3_fidelidade_decisoes>`.
-5. Escrever **`VERIFY.md`** no escopo resolvido com:
+5. Executar a verificação de coerência do runtime e checkpoints conforme `<runtime_e_checkpoints>`.
+6. Escrever **`VERIFY.md`** no escopo resolvido com:
    - Data, ambiente (SO / versão do Node se relevante).
    - **Seção — Auditoria de pré-execução:** resultado da Camada 1.
    - **Tabela — Tarefas:** Tarefa (Tn) | Verificação (comando/checklist) | Passou? | Notas.
    - **Tabela — Critérios SPEC:** ID (A1…) | Critério (resumo) | Evidência | Passou? | Notas.
    - **Tabela — Fidelidade de decisões** (se DISCUSS.md existir): ID | Decisão | Tarefa(s) | Implementado? | Evidência.
+   - **Seção — Coerência operacional:** runtime, checkpoints, bloqueios, handoffs e divergências.
    - **Seção — Calibração do plano:** resultado conforme `<calibracao_do_plano>`.
    - **Checklist UAT** (Camada 4).
    - **Gaps** — o que falhou e sugestão de correção; se não houver, escrever `Nenhum gap restante`.
