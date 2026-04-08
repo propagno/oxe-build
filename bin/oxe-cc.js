@@ -259,6 +259,7 @@ function buildUninstallFooter(u) {
       `${p}${rm} integrações OXE no repositório (.cursor, .github, .claude, .copilot, .opencode, … conforme flags).`
     );
   }
+  if (u.globalCli) bullets.push(`${p}${rm} também o pacote npm global oxe-cc do PATH.`);
   if (!u.noProject) {
     bullets.push(
       `${p}${u.dryRun ? 'Seriam removidas' : 'Removidas'} no repositório: .oxe/workflows, .oxe/templates, oxe/ e commands/oxe (o que existir).`
@@ -1067,6 +1068,35 @@ function bootstrapOxe(target, opts) {
     ensureDir(workstreamsDir);
   }
 
+  const sessionsDir = path.join(oxeDir, 'sessions');
+  if (!fs.existsSync(sessionsDir)) {
+    ensureDir(sessionsDir);
+  }
+
+  const globalDir = path.join(oxeDir, 'global');
+  if (!fs.existsSync(globalDir)) {
+    ensureDir(globalDir);
+  }
+
+  const globalMilestonesDir = path.join(globalDir, 'milestones');
+  if (!fs.existsSync(globalMilestonesDir)) {
+    ensureDir(globalMilestonesDir);
+  }
+
+  const lessonsSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'LESSONS.template.md');
+  const lessonsDest = path.join(globalDir, 'LESSONS.md');
+  if (fs.existsSync(lessonsSrc) && !fs.existsSync(lessonsDest)) {
+    copyFile(lessonsSrc, lessonsDest, { dryRun: false });
+    console.log(`${green}init${reset}  ${lessonsDest}`);
+  }
+
+  const milestonesSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'MILESTONES.template.md');
+  const milestonesDest = path.join(globalDir, 'MILESTONES.md');
+  if (fs.existsSync(milestonesSrc) && !fs.existsSync(milestonesDest)) {
+    copyFile(milestonesSrc, milestonesDest, { dryRun: false });
+    console.log(`${green}init${reset}  ${milestonesDest}`);
+  }
+
   const memoryDir = path.join(oxeDir, 'memory');
   if (!fs.existsSync(memoryDir)) {
     ensureDir(memoryDir);
@@ -1120,6 +1150,7 @@ function printOxeHealthDiagnostics(target, c, diagOpts = {}) {
   const { config } = oxeHealth.loadOxeConfigMerged(target);
 
   console.log(`\n  ${c ? cyan : ''}▸ Coerência .oxe/ e config${reset}`);
+  console.log(`  ${c ? dim : ''}Saúde lógica:${c ? reset : ''} ${r.healthStatus}`);
 
   if (r.configParseError) {
     console.log(`  ${red}FALHA${reset} config.json: ${r.configParseError}`);
@@ -1137,6 +1168,15 @@ function printOxeHealthDiagnostics(target, c, diagOpts = {}) {
 
   if (r.phase) {
     console.log(`  ${c ? dim : ''}Fase (STATE.md):${c ? reset : ''} ${r.phase}`);
+  }
+  if (r.activeSession) {
+    console.log(`  ${c ? dim : ''}Sessão ativa:${c ? reset : ''} ${r.activeSession}`);
+  }
+  if (r.planSelfEvaluation && r.planSelfEvaluation.hasSection) {
+    const best = r.planSelfEvaluation.bestPlan || '—';
+    const conf =
+      typeof r.planSelfEvaluation.confidence === 'number' ? `${r.planSelfEvaluation.confidence}%` : '—';
+    console.log(`  ${c ? dim : ''}Plano (autoavaliação):${c ? reset : ''} melhor=${best} | confiança=${conf}`);
   }
 
   if (!skipAge) {
@@ -1175,6 +1215,12 @@ function printOxeHealthDiagnostics(target, c, diagOpts = {}) {
   for (const w of r.phaseWarn) {
     console.log(`  ${yellow}AVISO${reset} ${w}`);
   }
+  for (const w of r.sessionWarn) {
+    console.log(`  ${yellow}AVISO${reset} ${w}`);
+  }
+  for (const w of r.installWarn) {
+    console.log(`  ${yellow}AVISO${reset} ${w}`);
+  }
   if (r.summaryGapWarn) {
     console.log(`  ${yellow}AVISO${reset} ${r.summaryGapWarn}`);
   }
@@ -1206,15 +1252,20 @@ function runStatus(target, opts = {}) {
       reason: report.next.reason,
       artifacts: report.next.artifacts,
       phase: report.phase,
+      healthStatus: report.healthStatus,
+      activeSession: report.activeSession,
       scanDate: report.scanDate,
       staleScan: report.stale,
       compactDate: report.compactDate,
       staleCompact: report.staleCompact,
+      planSelfEvaluation: report.planSelfEvaluation,
       diagnostics: {
         configParseError: report.configParseError,
         typeErrors: report.typeErrors,
         unknownConfigKeys: report.unknownConfigKeys,
         phaseWarnings: report.phaseWarn,
+        sessionWarnings: report.sessionWarn,
+        installWarnings: report.installWarn,
         summaryGapWarning: report.summaryGapWarn,
         specWarnings: report.specWarn,
         planWarnings: report.planWarn,
@@ -1255,7 +1306,10 @@ function runStatus(target, opts = {}) {
   console.log(`  ${c ? dim : ''}Motivo:${c ? reset : ''} ${next.reason}`);
 
   printSummaryAndNextSteps(c, {
-    bullets: [`Artefatos em jogo: ${next.artifacts.join(', ')}`],
+    bullets: [
+      `Saúde lógica: ${report.healthStatus}`,
+      `Artefatos em jogo: ${next.artifacts.join(', ')}`,
+    ],
     nextSteps: [
       { desc: 'Diagnóstico completo (inclui pacote de workflows):', cmd: 'npx oxe-cc doctor' },
       { desc: 'Ação sugerida no agente:', cmd: next.cursorCmd },
@@ -1367,13 +1421,17 @@ function runDoctor(target) {
   }
 
   printOxeHealthDiagnostics(target, c);
-
-  console.log(`\n  ${green}Diagnóstico OK — nenhum bloqueio crítico encontrado.${reset}`);
+  const report = oxeHealth.buildHealthReport(target);
+  const statusColor = report.healthStatus === 'healthy' ? green : report.healthStatus === 'warning' ? yellow : red;
+  console.log(`\n  ${statusColor}Diagnóstico ${report.healthStatus}${reset}`);
+  if (report.healthStatus === 'broken') {
+    process.exitCode = 1;
+  }
   printSummaryAndNextSteps(c, {
     bullets: [
       `Projeto em ${target}`,
       `Workflows conferidos em ${wfLabel}`,
-      'Node.js e (quando existir) config.json validados',
+      `Saúde lógica: ${report.healthStatus}`,
     ],
     nextSteps: [
       { desc: 'Mapear ou atualizar o codebase no agente:', cmd: '/oxe-scan' },
@@ -1411,6 +1469,98 @@ function installGlobalCliPackage() {
     `\n  ${c ? yellow : ''}⚠${c ? reset : ''} npm install -g falhou. Tente manualmente: ${c ? cyan : ''}npm install -g ${spec}${c ? reset : ''}\n`
   );
   return false;
+}
+
+/**
+ * `npm uninstall -g oxe-cc` com a mesma semântica cross-platform do instalador.
+ * @returns {boolean}
+ */
+function uninstallGlobalCliPackage() {
+  const name = readPkgName();
+  const c = useAnsiColors();
+  const dimOrEmpty = c ? dim : '';
+  const resetOrEmpty = c ? reset : '';
+  console.log(`\n  ${dimOrEmpty}npm uninstall -g ${name}${resetOrEmpty}\n`);
+  const r = spawnSync('npm', ['uninstall', '-g', name], {
+    stdio: 'inherit',
+    shell: true,
+    env: process.env,
+  });
+  if (r.status === 0) {
+    console.log(
+      `\n  ${c ? green : ''}✓${c ? reset : ''} pacote global ${c ? cyan : ''}${name}${c ? reset : ''} removido do npm global.\n`
+    );
+    return true;
+  }
+  console.log(
+    `\n  ${c ? yellow : ''}⚠${c ? reset : ''} npm uninstall -g falhou. Remova manualmente: ${c ? cyan : ''}npm uninstall -g ${name}${c ? reset : ''}\n`
+  );
+  return false;
+}
+
+/**
+ * Best-effort: detecta se esta execução vem de uma instalação global do npm.
+ * Usa `npm root -g` para evitar confundir execução local do repositório com pacote global.
+ * @returns {boolean}
+ */
+function isRunningFromGlobalNpmInstall() {
+  try {
+    const r = spawnSync('npm', ['root', '-g'], {
+      encoding: 'utf8',
+      shell: true,
+      env: process.env,
+    });
+    if (r.status !== 0) return false;
+    const root = String(r.stdout || '').trim();
+    if (!root) return false;
+    const rel = path.relative(path.resolve(root), PKG_ROOT);
+    return rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+  } catch {
+    return false;
+  }
+}
+
+/** @returns {string[]} */
+function updateForwardedInstallFlags() {
+  return [
+    '--cursor',
+    '--copilot',
+    '--copilot-cli',
+    '--all-agents',
+    '--opencode',
+    '--gemini',
+    '--codex',
+    '--windsurf',
+    '--antigravity',
+    '--vscode',
+    '--no-commands',
+    '--no-agents',
+    '--no-init-oxe',
+    '--oxe-only',
+    '--global',
+    '--local',
+    '--ide-global',
+    '--ide-local',
+    '--global-cli',
+    '-g',
+    '--no-global-cli',
+    '-l',
+    '--no-install-config',
+    '--force',
+    '-f',
+    '--all',
+    '-a',
+    '--config-dir',
+    '-c',
+  ];
+}
+
+/**
+ * @param {string[]} rest
+ * @returns {boolean}
+ */
+function updateArgsExplicitlyControlGlobalCli(rest) {
+  return rest.includes('--global-cli') || rest.includes('-g') || rest.includes('--no-global-cli') || rest.includes('-l');
 }
 
 /**
@@ -1504,6 +1654,7 @@ ${green}uninstall${reset} (remove OXE da pasta do usuário + pastas de workflows
   --all-agents                           também remove ficheiros multi-plataforma (com --copilot-cli implícito)
   --ide-local                            remove integrações IDE neste repositório (.cursor, .github, .claude, .copilot, …)
   --ide-only                             não apagar .oxe/workflows, oxe/, etc. no projeto
+  --global-cli, -g                       também executa npm uninstall -g oxe-cc
   --config-dir <caminho>                 com exatamente uma flag IDE acima (não combina com --ide-local)
   --dry-run
   --dir <pasta>                          raiz do projeto (padrão: diretório atual)
@@ -1513,7 +1664,7 @@ ${green}update${reset} (executa npx oxe-cc@latest --force na pasta do projeto)
   --if-newer                             só executa o npx se existir versão mais nova no npm (falha de rede/registry: saída 2, sem npx)
   --dir <pasta>                          pasta em que o npx roda (padrão: atual; ignorada com --check)
   --dry-run                              mostra o comando sem executar
-  [argumentos extras…]                   repassados ao oxe-cc (ex.: --cursor --global)
+  [argumentos extras…]                   repassados ao oxe-cc (ex.: --cursor --global, --ide-local, --global-cli)
   ${dim}CI / sem rede:${reset} OXE_UPDATE_SKIP_REGISTRY=1 desativa consultas (--check sai 2; --if-newer sai 2 sem npx)
 
 ${green}Opções da instalação:${reset}
@@ -1856,7 +2007,7 @@ function runInstall(opts) {
   console.log(`  ${c ? green : ''}✓${c ? reset : ''} Instalação concluída com sucesso.\n`);
 }
 
-/** @typedef {{ help: boolean, dryRun: boolean, cursor: boolean, copilot: boolean, copilotCli: boolean, allAgents: boolean, ideLocal: boolean, ideExplicit: boolean, noProject: boolean, dir: string, explicitConfigDir: string | null, parseError: boolean, unknownFlag: string, conflictFlags: string }} UninstallOpts */
+/** @typedef {{ help: boolean, dryRun: boolean, cursor: boolean, copilot: boolean, copilotCli: boolean, allAgents: boolean, globalCli: boolean, ideLocal: boolean, ideExplicit: boolean, noProject: boolean, dir: string, explicitConfigDir: string | null, parseError: boolean, unknownFlag: string, conflictFlags: string }} UninstallOpts */
 
 /**
  * @param {UninstallOpts} u
@@ -1965,6 +2116,7 @@ function parseUninstallArgs(argv) {
     copilot: false,
     copilotCli: false,
     allAgents: false,
+    globalCli: false,
     ideLocal: false,
     ideExplicit: false,
     noProject: false,
@@ -1994,6 +2146,8 @@ function parseUninstallArgs(argv) {
       out.allAgents = true;
       out.copilotCli = true;
       out.ideExplicit = true;
+    } else if (a === '--global-cli' || a === '-g') {
+      out.globalCli = true;
     } else if (a === '--ide-local') out.ideLocal = true;
     else if (a === '--ide-only') out.noProject = true;
     else if (a === '--dir' && argv[i + 1]) out.dir = path.resolve(argv[++i]);
@@ -2252,7 +2406,18 @@ function runUninstall(u) {
     oxeManifest.writeFileManifest(home, next, readPkgVersion());
   }
 
+  if (u.globalCli && !u.dryRun) {
+    uninstallGlobalCliPackage();
+  } else if (u.globalCli && u.dryRun) {
+    console.log(`${dim}npm${reset}    npm uninstall -g ${readPkgName()}`);
+  }
+
   printSummaryAndNextSteps(c, buildUninstallFooter(u));
+  if (!u.globalCli) {
+    console.log(
+      `  ${c ? yellow : ''}Nota:${c ? reset : ''} o pacote npm global ${c ? cyan : ''}${readPkgName()}${c ? reset : ''} não é removido por padrão. Use ${c ? cyan : ''}oxe-cc uninstall --global-cli${c ? reset : ''} ou ${c ? cyan : ''}npm uninstall -g ${readPkgName()}${c ? reset : ''}.\n`
+    );
+  }
   console.log(`  ${c ? green : ''}✓${c ? reset : ''} Desinstalação concluída com sucesso.\n`);
 }
 
@@ -2277,6 +2442,7 @@ function parseUpdateArgs(argv) {
   };
   let dirExplicit = false;
   let firstPositionalConsumed = false;
+  const passthroughFlags = new Set(updateForwardedInstallFlags());
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-h' || a === '--help') out.help = true;
@@ -2291,6 +2457,11 @@ function parseUpdateArgs(argv) {
         out.dir = path.resolve(a);
         firstPositionalConsumed = true;
       } else out.rest.push(a);
+    } else if (passthroughFlags.has(a)) {
+      out.rest.push(a);
+      if ((a === '--config-dir' || a === '-c') && argv[i + 1]) {
+        out.rest.push(argv[++i]);
+      }
     } else {
       out.parseError = true;
       out.unknownFlag = a;
@@ -2359,7 +2530,11 @@ function runUpdate(u) {
       );
     }
     console.log(`  ${dim}Comando que seria executado (instalação):${reset}`);
-    console.log(`  ${cyan}npx -y oxe-cc@latest --force --no-global-cli -l${reset} ${u.rest.join(' ')}`);
+    const dryRunArgs = ['-y', 'oxe-cc@latest', '--force'];
+    if (updateArgsExplicitlyControlGlobalCli(u.rest)) dryRunArgs.push(...u.rest);
+    else if (isRunningFromGlobalNpmInstall()) dryRunArgs.push('--global-cli');
+    else dryRunArgs.push('--no-global-cli', '-l');
+    console.log(`  ${cyan}npx ${dryRunArgs.join(' ')}${reset}`);
     console.log(`  ${dim}Diretório:${reset} ${u.dir}`);
     printSummaryAndNextSteps(c, {
       bullets: [
@@ -2408,7 +2583,14 @@ function runUpdate(u) {
   }
 
   printSection('OXE ▸ update');
-  const args = ['-y', 'oxe-cc@latest', '--force', '--no-global-cli', '-l', ...u.rest];
+  const args = ['-y', 'oxe-cc@latest', '--force'];
+  if (updateArgsExplicitlyControlGlobalCli(u.rest)) {
+    args.push(...u.rest);
+  } else if (isRunningFromGlobalNpmInstall()) {
+    args.push('--global-cli', ...u.rest);
+  } else {
+    args.push('--no-global-cli', '-l', ...u.rest);
+  }
   const r = spawnSync('npx', args, {
     cwd: u.dir,
     stdio: 'inherit',

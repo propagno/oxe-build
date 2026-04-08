@@ -15,6 +15,7 @@ Se o usuário indicar uma tarefa (ex.: `T2`), focar só nela nas camadas 1–2; 
 
 <context>
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, `VERIFY.md`, `VALIDATION-GAPS.md`, `SECURITY.md`, `UI-REVIEW.md` e `SUMMARY.md` vivem no escopo da sessão; `.oxe/STATE.md` continua global.
+- Seguir `oxe/workflows/references/flow-robustness-contract.md`. O verify não valida só se passou; valida também se o plano estava bem calibrado para começar.
 - Preferir rodar comandos reais no terminal quando o ambiente permitir; se o sandbox bloquear, marcar como "não executado aqui" e deixar o comando para o usuário.
 - Não destruir `PLAN.md`; registrar achados em `VERIFY.md`.
 - Ler **`.oxe/config.json`** se existir: `after_verify_draft_commit`, `after_verify_suggest_pr`, e `verification_depth` (`"standard"` por padrão; `"thorough"` ativa camadas 3–4 completas; `"quick"` pula camadas 3–4 e UAT).
@@ -35,6 +36,7 @@ Verificar que o PLAN.md está apto para verificação:
 2. Todo **Aceite vinculado** referencia IDs que existem na tabela de SPEC.md (`A1`, `A2`, …).
 3. Se houver `DISCUSS.md` no escopo resolvido, toda decisão técnica com ID **D-NN** aparece em **Decisão vinculada:** de alguma tarefa (ou nota explícita de gap no PLAN).
 4. Não há dependências `Tk` inválidas (ID inexistente no PLAN).
+5. `PLAN.md` contém a seção **Autoavaliação do Plano** com `Melhor plano atual`, `Confiança` e rubrica preenchida.
 
 Se auditoria falhar: registrar na seção **Auditoria de pré-execução** do VERIFY.md os itens com problema e **pausar** — pedir correção do PLAN antes de continuar. Se o usuário forçar continuar com `--skip-audit`, documentar e prosseguir com aviso.
 </camada_1_pre_exec_audit>
@@ -74,6 +76,18 @@ Para cada critério da SPEC que exige validação manual:
 O preenchimento da checklist é responsabilidade do **usuário** (não do agente de IA).
 </camada_4_uat>
 
+<calibracao_do_plano>
+**Calibração do plano** (obrigatória quando existir `PLAN.md`)
+
+Ler a `## Autoavaliação do Plano` e comparar com o resultado real:
+1. Se `Confiança >= 85%` e houver falha precoce em critérios centrais ou tarefas iniciais, marcar **erro de calibração do plano**.
+2. Se `Confiança < 70%` e as falhas ocorrerem nas incertezas previstas, marcar **autoavaliação aderente**.
+3. Se `Confiança >= 70%` e os critérios/tarefas passarem de forma consistente, marcar **plano calibrado**.
+4. Se `Confiança < 70%` e o ciclo passar amplamente, marcar **plano conservador demais**.
+
+Registrar em `VERIFY.md`: `Resultado de calibração | Confiança declarada | Resultado observado | Notas`.
+</calibracao_do_plano>
+
 <process>
 1. **Camada 1 — Auditoria de pré-execução:** checar integridade do PLAN.md e DISCUSS.md conforme `<camada_1_pre_exec_audit>`. Documentar resultado.
 2. Ler `SPEC.md`, `PLAN.md` e `DISCUSS.md` do escopo resolvido, além de `.oxe/STATE.md` global.
@@ -85,6 +99,7 @@ O preenchimento da checklist é responsabilidade do **usuário** (não do agente
    - **Tabela — Tarefas:** Tarefa (Tn) | Verificação (comando/checklist) | Passou? | Notas.
    - **Tabela — Critérios SPEC:** ID (A1…) | Critério (resumo) | Evidência | Passou? | Notas.
    - **Tabela — Fidelidade de decisões** (se DISCUSS.md existir): ID | Decisão | Tarefa(s) | Implementado? | Evidência.
+   - **Seção — Calibração do plano:** resultado conforme `<calibracao_do_plano>`.
    - **Checklist UAT** (Camada 4).
    - **Gaps** — o que falhou e sugestão de correção; se não houver, escrever `Nenhum gap restante`.
 6. Atualizar **`.oxe/STATE.md`** global: `verify_complete` ou `verify_failed` + próximo passo (replan, corrigir ou publicar).

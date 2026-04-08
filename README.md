@@ -29,10 +29,11 @@ O resultado: **menos requisições**, **mais coerência**, e um fluxo que funcio
 
 ---
 
-## Os 8 comandos que você precisa conhecer
+## Comandos principais
 
 ```
 /oxe              → onde estou / o que faço / help
+/oxe-ask          → entender a situação atual com leitura robusta de STATE + sessão + artefatos
 /oxe-obs          → registrei algo importante (incorporado automaticamente)
 /oxe-quick        → tarefa pequena, sem cerimônia
 /oxe-scan         → mapeia o projeto (ou atualiza se já mapeado)
@@ -48,7 +49,7 @@ Tudo o mais é ativado automaticamente por contexto ou chamado só quando necess
 
 ## Sessões OXE
 
-Sessões organizam um ciclo completo em `.oxe/sessions/sNNN-slug/` sem misturar artefatos de entregas diferentes na raiz. Nesta versão, o suporte fica no layer de **workflows Markdown**: `spec`, `plan`, `execute`, `verify`, `checkpoint`, `research` e afins passam a respeitar `active_session` em `.oxe/STATE.md`, enquanto `oxe-cc status` e `oxe-cc doctor` continuam legados.
+Sessões organizam um ciclo completo em `.oxe/sessions/sNNN-slug/` sem misturar artefatos de entregas diferentes na raiz. `spec`, `plan`, `execute`, `verify`, `checkpoint`, `research` e afins respeitam `active_session` em `.oxe/STATE.md`. `oxe-cc status` e `oxe-cc doctor` também devem refletir a sessão ativa, a autoavaliação do plano e a saúde lógica do fluxo.
 
 ```text
 .oxe/
@@ -124,14 +125,15 @@ Cada passo lê o anterior como contexto e escreve seu artefato no escopo correto
 | `/oxe` | Sem input → próximo passo. Com texto → roteamento. Com "help" → 8 comandos. |
 | `/oxe-scan` | Se `.oxe/codebase/` já existe → modo refresh automático. `--full` força scan completo. |
 | `/oxe-spec` | **Auto-reflexão semântica** antes da aprovação: detecta contradições, critérios vagos, escopo creep e conflitos com stack — sem requisição extra. Lê `.oxe/global/LESSONS.md` para não repetir erros do ciclo anterior. |
-| `/oxe-plan` | **Test-first:** `Verificar` vem antes de `Implementar` em cada tarefa. `Complexidade: S/M/L/XL` — tarefas XL bloqueiam o gate sem sub-tarefas. Com `--agents`: `model_hint` por agente orienta qual tier de modelo usar (schema v3). |
-| `/oxe-execute` | Execução A/B/C. Se uma tarefa falha: **diagnóstico inline automático** (2-3 hipóteses + fix + retry) — sem precisar de comando separado. Exibe `model_hint` ao iniciar cada agente do blueprint. |
-| `/oxe-verify` | Até 6 camadas por config: audit + critérios + decisões + UAT + gaps (`verification_depth: thorough`) + OWASP (`security_in_verify: true`). Sugere `/oxe-retro` ao concluir. |
+| `/oxe-plan` | **Test-first:** `Verificar` vem antes de `Implementar` em cada tarefa. Agora o `PLAN.md` também exige `## Autoavaliação do Plano` com rubrica fixa, `Melhor plano atual` e percentual de confiança determinístico. Com `--agents`: `model_hint` por agente orienta qual tier de modelo usar (schema v3). |
+| `/oxe-execute` | Execução A/B/C. Antes de implementar, valida a autoavaliação do plano e bloqueia execução abaixo do limiar de confiança. Se uma tarefa falha: **diagnóstico inline automático** (2-3 hipóteses + fix + retry). |
+| `/oxe-verify` | Até 6 camadas por config: audit + critérios + decisões + **calibração do plano** + UAT + gaps (`verification_depth: thorough`) + OWASP (`security_in_verify: true`). Sugere `/oxe-retro` ao concluir. |
 | `/oxe-retro` | Sintetiza 3–5 lições prescritivas em `.oxe/global/LESSONS.md` — consumidas automaticamente pelo próximo spec/plan. |
 | `/oxe-obs` | Registra observação → propaga automaticamente para R-IDs e Tns afetados no próximo plan/spec/execute. |
 | `/oxe-quick` | Objetivo → passos → agentes opcionais (PDDA lean) → verify. Para correções pontuais e features pequenas. |
 | `/oxe-project` | `milestone` + `workstream` + `checkpoint` em um único comando. |
 | `/oxe-session` | Cria, alterna, retoma, fecha e migra sessões OXE sem misturar artefatos de ciclos diferentes. |
+| `/oxe-ask` | Lê `STATE`, resolve a sessão ativa e responde perguntas situacionais com base nos artefatos reais. |
 
 ---
 
@@ -296,12 +298,13 @@ node bin/oxe-cc.js --help
 | Comando | O que faz |
 |---------|-----------|
 | `oxe-cc` / `oxe-cc install` | Instala workflows e integrações |
-| `oxe-cc doctor` | Diagnóstico completo: Node, workflows, config, STATE, scan antigo |
-| `oxe-cc status` | Próximo passo sugerido |
-| `oxe-cc status --json` | Mesmo, em JSON (para pipelines) |
+| `oxe-cc doctor` | Diagnóstico completo: Node, workflows, config, bootstrap `.oxe/`, sessão ativa, autoavaliação do plano e saúde lógica (`healthy` \| `warning` \| `broken`) |
+| `oxe-cc status` | Próximo passo sugerido + saúde lógica do fluxo |
+| `oxe-cc status --json` | Mesmo, em JSON, com `healthStatus`, `activeSession` e `planSelfEvaluation` |
 | `oxe-cc update` | Atualiza workflows para a versão mais recente |
 | `oxe-cc init-oxe` | Bootstrap do `.oxe/` (STATE, config, codebase/) |
 | `oxe-cc uninstall` | Remove integrações OXE do HOME e do repo |
+| `oxe-cc uninstall --global-cli` | Também remove o pacote npm global do PATH |
 
 ---
 
@@ -313,6 +316,7 @@ Arquivo `.oxe/config.json`. Principais opções:
 |-------|--------|-----------|
 | `profile` | `"balanced"` | `strict` / `balanced` / `fast` / `legacy` |
 | `verification_depth` | `"standard"` | `"thorough"` ativa gaps automático no verify (Camada 5) |
+| `plan_confidence_threshold` | `70` | Limiar mínimo para `execute` aceitar um `PLAN.md` |
 | `security_in_verify` | `false` | `true` ativa OWASP automático no verify (Camada 6) |
 | `discuss_before_plan` | `false` | Exige aprovação de decisões antes do plano |
 | `scale_adaptive` | `true` | Scan sugere o profile pelo tamanho do projeto |

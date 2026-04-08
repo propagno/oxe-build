@@ -16,6 +16,8 @@ Se **`.oxe/config.json`** tiver `discuss_before_plan: true`: mencionar no final 
 <context>
 **Pré-requisito preferível:** scan executado. Se não existir, mencionar na spec que o mapa está pendente.
 
+**Contrato de robustez:** seguir `oxe/workflows/references/flow-robustness-contract.md`. Antes de escrever, resolver artefatos obrigatórios, validar pré-condições e só então produzir a spec. O output desta fase deve deixar evidência estruturada suficiente para o `plan` decidir se o plano é realmente o melhor disponível.
+
 **Resolução de sessão:** antes de ler ou escrever artefatos desta trilha, resolver `active_session` em `.oxe/STATE.md` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa:
 - `SPEC.md`, `ROADMAP.md` e `DISCUSS.md` vivem em `.oxe/<active_session>/spec/`
 - `OBSERVATIONS.md`, `RESEARCH.md` e `research/` seguem o escopo da sessão
@@ -166,6 +168,12 @@ Percorrer esta lista de verificação:
 - **3+ problemas** → apresentar lista ao usuário com a Fase 3 revisada (não reiniciar do zero).
 
 O resultado desta reflexão é **invisível ao usuário** — é trabalho interno do agente. Somente os ajustes feitos aparecem na spec final.
+
+**Saída estruturada obrigatória para o plan:** após esta reflexão, a SPEC final deve deixar explícitos:
+- requisitos estáveis;
+- ambiguidades restantes;
+- conflitos resolvidos ou ainda abertos;
+- evidências faltantes que podem reduzir a confiança do plano.
 </auto_reflexao>
 
 <fase_5_aprovacao>

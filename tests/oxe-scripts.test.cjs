@@ -51,6 +51,8 @@ describe('scripts', () => {
     assert.strictEqual(r.status, 0, r.stderr);
     const out = fs.readFileSync(path.join(REPO_ROOT, '.cursor', 'commands', 'oxe-session.md'), 'utf8');
     assert.match(out, /Gerir sessões|Gerir sessoes|OXE — Gerir sessões/i);
+    const ask = fs.readFileSync(path.join(REPO_ROOT, '.cursor', 'commands', 'oxe-ask.md'), 'utf8');
+    assert.match(ask, /Perguntar ao OXE|situação atual|sessão ativa/i);
   });
 
   test('sync-cursor-from-prompts fails without .github/prompts', () => {

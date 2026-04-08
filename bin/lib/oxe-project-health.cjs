@@ -19,6 +19,7 @@ const ALLOWED_CONFIG_KEYS = [
   'plan_max_tasks_per_wave',
   'profile',
   'verification_depth',
+  'plan_confidence_threshold',
   'security_in_verify',
   'install',
   'plugins',
@@ -118,6 +119,7 @@ function loadOxeConfigMerged(targetProject) {
     after_verify_draft_commit: true,
     after_verify_suggest_uat: false,
     verification_depth: 'standard',
+    plan_confidence_threshold: 70,
     default_verify_command: '',
     scan_max_age_days: 0,
     compact_max_age_days: 0,
@@ -218,6 +220,9 @@ function validateConfigShape(cfg) {
       typeErrors.push(`verification_depth deve ser um de: ${VERIFICATION_DEPTHS.join(', ')}`);
     }
   }
+  if (cfg.plan_confidence_threshold != null && typeof cfg.plan_confidence_threshold !== 'number') {
+    typeErrors.push('plan_confidence_threshold deve ser número (percentual de 0 a 100)');
+  }
   if (cfg.after_verify_suggest_uat != null && typeof cfg.after_verify_suggest_uat !== 'boolean') {
     typeErrors.push('after_verify_suggest_uat deve ser boolean');
   }
@@ -294,6 +299,19 @@ function parseLastRetroDate(stateText) {
 }
 
 /**
+ * @param {string} stateText
+ * @returns {string | null}
+ */
+function parseActiveSession(stateText) {
+  if (!stateText) return null;
+  const m = stateText.match(/\*\*active_session:\*\*\s*`?([^\n`]+?)`?\s*(?:\n|$)/i);
+  if (!m) return null;
+  const raw = m[1].trim();
+  if (!raw || raw === '—' || /^none$/i.test(raw)) return null;
+  return raw.replace(/\\/g, '/');
+}
+
+/**
  * @param {Date | null} scanDate
  * @param {number} maxAgeDays 0 = desligado
  */
@@ -321,6 +339,12 @@ function oxePaths(target) {
   return {
     oxe,
     state: path.join(oxe, 'STATE.md'),
+    sessionsIndex: path.join(oxe, 'SESSIONS.md'),
+    globalDir: path.join(oxe, 'global'),
+    globalLessons: path.join(oxe, 'global', 'LESSONS.md'),
+    globalMilestones: path.join(oxe, 'global', 'MILESTONES.md'),
+    globalMilestonesDir: path.join(oxe, 'global', 'milestones'),
+    sessionsDir: path.join(oxe, 'sessions'),
     spec: path.join(oxe, 'SPEC.md'),
     plan: path.join(oxe, 'PLAN.md'),
     quick: path.join(oxe, 'QUICK.md'),
@@ -330,6 +354,30 @@ function oxePaths(target) {
     codebase: path.join(oxe, 'codebase'),
     lessons: path.join(oxe, 'LESSONS.md'),
     planAgents: path.join(oxe, 'plan-agents.json'),
+  };
+}
+
+/**
+ * @param {string} target
+ * @param {string | null} activeSession
+ */
+function scopedOxePaths(target, activeSession) {
+  const base = oxePaths(target);
+  if (!activeSession) return { ...base, activeSession: null, scopedRoot: base.oxe };
+  const sessionRoot = path.join(base.oxe, ...activeSession.split('/'));
+  return {
+    ...base,
+    activeSession,
+    scopedRoot: sessionRoot,
+    sessionRoot,
+    sessionManifest: path.join(sessionRoot, 'SESSION.md'),
+    spec: path.join(sessionRoot, 'spec', 'SPEC.md'),
+    discuss: path.join(sessionRoot, 'spec', 'DISCUSS.md'),
+    plan: path.join(sessionRoot, 'plan', 'PLAN.md'),
+    quick: path.join(sessionRoot, 'plan', 'QUICK.md'),
+    verify: path.join(sessionRoot, 'verification', 'VERIFY.md'),
+    summary: path.join(sessionRoot, 'verification', 'SUMMARY.md'),
+    executionState: path.join(sessionRoot, 'execution', 'STATE.md'),
   };
 }
 
@@ -484,13 +532,125 @@ function planWaveWarningsFixed(planPath, maxPerWave) {
 }
 
 /**
+ * @param {string} planPath
+ * @returns {{
+ *   hasSection: boolean,
+ *   bestPlan: string | null,
+ *   confidence: number | null,
+ *   warnings: string[],
+ * }}
+ */
+function parsePlanSelfEvaluation(planPath) {
+  const empty = { hasSection: false, bestPlan: null, confidence: null, warnings: [] };
+  if (!fs.existsSync(planPath)) return empty;
+  const raw = fs.readFileSync(planPath, 'utf8');
+  const m = raw.match(/##\s*Autoavaliação do Plano\s*([\s\S]*?)(?=\n## |\n#[^\#]|$)/i);
+  if (!m) {
+    return {
+      ...empty,
+      warnings: ['PLAN.md sem a seção obrigatória "## Autoavaliação do Plano"'],
+    };
+  }
+  const body = m[1];
+  const best = body.match(/\*\*Melhor plano atual:\*\*\s*(sim|não|nao)/i);
+  const confidence = body.match(/\*\*Confiança:\*\*\s*(\d{1,3})\s*%/i);
+  /** @type {string[]} */
+  const warnings = [];
+  const rubricLabels = [
+    'Completude dos requisitos',
+    'Dependências conhecidas',
+    'Risco técnico',
+    'Impacto no código existente',
+    'Clareza da validação / testes',
+    'Lacunas externas / decisões pendentes',
+  ];
+  if (!best) warnings.push('PLAN.md: autoavaliação sem "Melhor plano atual: sim|não"');
+  if (!confidence) warnings.push('PLAN.md: autoavaliação sem "Confiança: NN%"');
+  if (!/\*\*Principais incertezas:\*\*/i.test(body)) warnings.push('PLAN.md: autoavaliação sem "Principais incertezas"');
+  if (!/\*\*Alternativas descartadas:\*\*/i.test(body)) warnings.push('PLAN.md: autoavaliação sem "Alternativas descartadas"');
+  if (!/\*\*Condição para replanejar:\*\*/i.test(body)) warnings.push('PLAN.md: autoavaliação sem "Condição para replanejar"');
+  for (const label of rubricLabels) {
+    if (!body.includes(label)) warnings.push(`PLAN.md: rubrica sem "${label}"`);
+  }
+  const parsedConfidence = confidence ? Number(confidence[1]) : null;
+  if (parsedConfidence != null && (parsedConfidence < 0 || parsedConfidence > 100)) {
+    warnings.push('PLAN.md: confiança fora do intervalo 0–100%');
+  }
+  return {
+    hasSection: true,
+    bestPlan: best ? best[1].toLowerCase().replace('nao', 'não') : null,
+    confidence: parsedConfidence,
+    warnings,
+  };
+}
+
+/**
+ * @param {string} planPath
+ * @param {number} threshold
+ * @returns {string[]}
+ */
+function planSelfEvaluationWarnings(planPath, threshold) {
+  const info = parsePlanSelfEvaluation(planPath);
+  const warns = [...info.warnings];
+  if (!fs.existsSync(planPath)) return warns;
+  if (info.bestPlan === 'não') warns.push('PLAN.md: autoavaliação declara que este não é o melhor plano atual');
+  if (info.confidence != null && info.confidence < threshold) {
+    warns.push(`PLAN.md: confiança ${info.confidence}% abaixo do limiar executável (${threshold}%)`);
+  }
+  return warns;
+}
+
+/**
+ * @param {string} target
+ * @param {string | null} activeSession
+ * @returns {string[]}
+ */
+function sessionWarnings(target, activeSession) {
+  if (!activeSession) return [];
+  const base = oxePaths(target);
+  const scoped = scopedOxePaths(target, activeSession);
+  /** @type {string[]} */
+  const warns = [];
+  if (!/^sessions\/s\d{3}-/.test(activeSession)) {
+    warns.push(`active_session "${activeSession}" não segue o formato sessions/sNNN-slug`);
+  }
+  if (!fs.existsSync(scoped.sessionRoot)) {
+    warns.push(`active_session aponta para ${activeSession}, mas a pasta da sessão não existe em .oxe/`);
+    return warns;
+  }
+  if (!fs.existsSync(scoped.sessionManifest)) warns.push(`Sessão ativa ${activeSession} sem SESSION.md`);
+  if (!fs.existsSync(base.sessionsIndex)) warns.push('Sessão ativa definida, mas .oxe/SESSIONS.md não existe');
+  return warns;
+}
+
+/**
+ * @param {string} target
+ * @returns {string[]}
+ */
+function installationCompletenessWarnings(target) {
+  const p = oxePaths(target);
+  /** @type {string[]} */
+  const warns = [];
+  if (!fs.existsSync(p.oxe)) return warns;
+  if (!fs.existsSync(p.globalDir)) warns.push('.oxe/global/ ausente');
+  if (!fs.existsSync(p.globalLessons)) warns.push('.oxe/global/LESSONS.md ausente');
+  if (!fs.existsSync(p.globalMilestones)) warns.push('.oxe/global/MILESTONES.md ausente');
+  if (!fs.existsSync(p.globalMilestonesDir)) warns.push('.oxe/global/milestones/ ausente');
+  if (!fs.existsSync(p.sessionsDir)) warns.push('.oxe/sessions/ ausente');
+  return warns;
+}
+
+/**
  * Próximo passo único (espelha o workflow next.md).
  * @param {string} target
  * @param {{ discuss_before_plan?: boolean }} cfg
  */
 function suggestNextStep(target, cfg = {}) {
-  const p = oxePaths(target);
+  const base = oxePaths(target);
+  const stateText = fs.existsSync(base.state) ? fs.readFileSync(base.state, 'utf8') : '';
+  const p = scopedOxePaths(target, parseActiveSession(stateText));
   const discussBefore = Boolean(cfg.discuss_before_plan);
+  const threshold = Number(cfg.plan_confidence_threshold) || 70;
   const has = (/** @type {string} */ f) => fs.existsSync(f);
   const mapsComplete = EXPECTED_CODEBASE_MAPS.every((f) => has(path.join(p.codebase, f)));
 
@@ -503,7 +663,6 @@ function suggestNextStep(target, cfg = {}) {
     };
   }
 
-  const stateText = fs.readFileSync(p.state, 'utf8');
   const phase = parseStatePhase(stateText);
 
   if (!mapsComplete && !has(p.quick)) {
@@ -548,6 +707,16 @@ function suggestNextStep(target, cfg = {}) {
       cursorCmd: '/oxe-plan',
       reason: 'SPEC existe mas PLAN.md não — gere o plano com verificação por tarefa',
       artifacts: ['.oxe/PLAN.md'],
+    };
+  }
+
+  const selfEval = parsePlanSelfEvaluation(p.plan);
+  if (selfEval.bestPlan === 'não' || (selfEval.confidence != null && selfEval.confidence < threshold)) {
+    return {
+      step: 'plan',
+      cursorCmd: '/oxe-plan --replan',
+      reason: `O plano atual ainda não atingiu confiança executável (limiar ${threshold}%)`,
+      artifacts: ['.oxe/PLAN.md', '.oxe/STATE.md'],
     };
   }
 
@@ -625,15 +794,17 @@ function suggestNextStep(target, cfg = {}) {
 function buildHealthReport(target) {
   const { config, path: cfgPath, parseError } = loadOxeConfigMerged(target);
   const shape = validateConfigShape(config);
-  const p = oxePaths(target);
+  const base = oxePaths(target);
   let stateText = '';
-  if (fs.existsSync(p.state)) {
+  if (fs.existsSync(base.state)) {
     try {
-      stateText = fs.readFileSync(p.state, 'utf8');
+      stateText = fs.readFileSync(base.state, 'utf8');
     } catch {
       stateText = '';
     }
   }
+  const activeSession = parseActiveSession(stateText);
+  const p = scopedOxePaths(target, activeSession);
   const phase = parseStatePhase(stateText);
   const scanDate = parseLastScanDate(stateText);
   const stale = isStaleScan(scanDate, Number(config.scan_max_age_days) || 0);
@@ -645,12 +816,24 @@ function buildHealthReport(target) {
   const sumWarn = verifyGapsWithoutSummaryWarning(p.verify, p.summary);
   const specReq = Array.isArray(config.spec_required_sections) ? config.spec_required_sections : [];
   const specWarn = specSectionWarnings(p.spec, specReq.map(String));
+  const threshold = Number(config.plan_confidence_threshold) || 70;
   const planWarn = [
     ...planWaveWarningsFixed(p.plan, Number(config.plan_max_tasks_per_wave) || 0),
     ...planTaskAceiteWarnings(p.plan),
+    ...planSelfEvaluationWarnings(p.plan, threshold),
     ...planAgentsWarnings(target),
   ];
-  const next = suggestNextStep(target, { discuss_before_plan: config.discuss_before_plan });
+  const sessionWarn = sessionWarnings(target, activeSession);
+  const installWarn = installationCompletenessWarnings(target);
+  const planSelfEvaluation = parsePlanSelfEvaluation(p.plan);
+  const next = suggestNextStep(target, {
+    discuss_before_plan: config.discuss_before_plan,
+    plan_confidence_threshold: threshold,
+  });
+  const hardFailure = Boolean(parseError) || sessionWarn.some((w) => /não existe|sem SESSION\.md/i.test(w));
+  const warningCount =
+    phaseWarn.length + specWarn.length + planWarn.length + sessionWarn.length + installWarn.length + (sumWarn ? 1 : 0);
+  const healthStatus = hardFailure ? 'broken' : warningCount > 0 ? 'warning' : 'healthy';
 
   return {
     configPath: cfgPath,
@@ -658,6 +841,7 @@ function buildHealthReport(target) {
     unknownConfigKeys: shape.unknownKeys,
     typeErrors: shape.typeErrors,
     phase,
+    activeSession,
     scanDate,
     stale,
     compactDate,
@@ -665,9 +849,13 @@ function buildHealthReport(target) {
     retroDate,
     staleLessons,
     phaseWarn,
+    sessionWarn,
+    installWarn,
     summaryGapWarn: sumWarn,
     specWarn,
     planWarn,
+    planSelfEvaluation,
+    healthStatus,
     next,
     scanFocusGlobs: config.scan_focus_globs,
     scanIgnoreGlobs: config.scan_ignore_globs,
@@ -689,9 +877,13 @@ module.exports = {
   parseLastScanDate,
   parseLastCompactDate,
   parseLastRetroDate,
+  parseActiveSession,
   isStaleScan,
   isStaleLessons,
   planAgentsWarnings,
+  installationCompletenessWarnings,
+  parsePlanSelfEvaluation,
+  planSelfEvaluationWarnings,
   phaseCoherenceWarnings,
   verifyGapsWithoutSummaryWarning,
   specSectionWarnings,
@@ -700,4 +892,5 @@ module.exports = {
   suggestNextStep,
   buildHealthReport,
   oxePaths,
+  scopedOxePaths,
 };

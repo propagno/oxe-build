@@ -1,0 +1,62 @@
+# OXE — Workflow: ask
+
+<objective>
+Responder perguntas sobre a situação atual do trabalho OXE com máxima robustez, usando o contexto real do repositório, a sessão ativa quando existir, e os artefatos mais recentes da trilha.
+</objective>
+
+<context>
+- Resolver `active_session` via `oxe/workflows/references/session-path-resolution.md`.
+- Ler sempre `.oxe/STATE.md` global primeiro.
+- Com sessão ativa, priorizar artefatos em `.oxe/<active_session>/...` antes do modo legado.
+- Usar `.oxe/codebase/` como mapa do repositório, não como substituto dos artefatos da trilha.
+- Se a pergunta estiver ambígua, responder em modo “situação atual + próximos riscos + melhor próxima ação”.
+</context>
+
+<process>
+1. Ler `.oxe/STATE.md` global e determinar se há `active_session`.
+2. Se houver sessão ativa, ler nesta ordem:
+   - `SESSION.md`
+   - `spec/SPEC.md`, `spec/ROADMAP.md`, `spec/DISCUSS.md`, `spec/UI-SPEC.md` se existirem
+   - `plan/PLAN.md`, `plan/QUICK.md`, `plan/plan-agents.json`, `plan/quick-agents.json` se existirem
+   - `execution/STATE.md`, `execution/OBSERVATIONS.md`, `execution/DEBUG.md`, `execution/FORENSICS.md`, `execution/SUMMARY.md` se existirem
+   - `verification/VERIFY.md`, `verification/VALIDATION-GAPS.md`, `verification/SECURITY.md`, `verification/UI-REVIEW.md` se existirem
+3. Sem sessão ativa, ler o equivalente legado na raiz `.oxe/`.
+4. Em ambos os casos, ler também:
+   - `.oxe/codebase/OVERVIEW.md`
+   - `.oxe/codebase/STACK.md`
+   - `.oxe/codebase/CONCERNS.md`
+   - `.oxe/global/LESSONS.md` se existir, com fallback para `.oxe/LESSONS.md`
+   - `.oxe/SESSIONS.md` se a pergunta mencionar sessões, histórico ou retomada
+5. Responder à pergunta do utilizador com base em evidência explícita dos artefatos lidos.
+6. Se faltar artefato crítico para responder com segurança, dizer exatamente o que falta e qual comando OXE fecha essa lacuna.
+
+## Modo diagnóstico padrão
+
+Se o utilizador só disser algo genérico como “o que está acontecendo?”, “qual a situação?” ou “me contextualize”, responder com:
+
+- **Situação atual**
+- **Escopo ativo**
+- **Artefatos relevantes**
+- **Riscos ou lacunas**
+- **Próximo passo recomendado**
+
+## Regras de robustez
+
+- Não assumir que `doctor` ou `status` sejam session-aware; eles não substituem a leitura direta dos artefatos da sessão.
+- Se houver conflito entre `.oxe/STATE.md` global e `execution/STATE.md` da sessão, explicitar o conflito.
+- Se `VERIFY.md` existir e contradizer o estado declarado, priorizar a evidência do `VERIFY.md` e mencionar a incoerência.
+- Se o mapa `.oxe/codebase/` estiver ausente ou incompleto, dizer isso explicitamente antes de extrapolar sobre o repositório.
+</process>
+
+<output>
+- Resposta direta à pergunta do utilizador
+- Referência curta aos artefatos usados
+- Quando necessário, um único próximo passo OXE
+</output>
+
+<success_criteria>
+- [ ] A resposta parte de `.oxe/STATE.md` global e resolve corretamente a sessão ativa quando existir.
+- [ ] O contexto da sessão ativa tem precedência sobre artefatos legados.
+- [ ] Conflitos ou lacunas entre artefatos são explicitados.
+- [ ] A saída responde à pergunta sem inventar estado que não esteja nos arquivos.
+</success_criteria>

@@ -9,6 +9,7 @@ Inspecionar `.oxe/STATE.md` global, a sessão ativa quando existir, e a existên
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, preferir os artefatos da sessão antes de olhar a raiz legada.
 - Se houver empate aparente (ex.: poderia ser spec ou quick), preferir **spec** quando já existir mapa de codebase; preferir **quick** só se o usuário deixar explícito que é correção mínima.
 - **Blueprint plan-agent:** se **`.oxe/plan-agents.json`** tiver `lifecycle.status === "invalidated"`, o próximo passo **não** assume papéis desse JSON; continuar a raciocinar só com **PLAN.md** / **QUICK.md** / **VERIFY.md** e **STATE.md**. Se o utilizador quiser de novo agentes + mensagens, indicar **`/oxe-plan-agent`**.
+- Priorizar sempre o passo que **reduz incerteza primeiro**. Se o plano existente não for o melhor plano atual ou estiver abaixo do limiar de confiança, o próximo passo não pode ser `execute`.
 </context>
 
 <process>
@@ -20,10 +21,11 @@ Inspecionar `.oxe/STATE.md` global, a sessão ativa quando existir, e a existên
    - Senão → **execute** (há passos curtos a implementar).
 4. Se não houver `SPEC.md` no escopo resolvido e não for quick intencional declarado → **spec** (passo único).
 5. Se houver SPEC no escopo resolvido mas não PLAN → se `.oxe/config.json` tiver `discuss_before_plan: true` e faltar **`DISCUSS.md`** com decisões → **discuss**; senão → **plan**.
-6. Se PLAN existe, **VERIFY.md** ainda **não** existe ou está claramente antes da implementação atual → **execute** (onda atual).
-7. Se PLAN existe e VERIFY falta após implementação declarada → **verify**.
-8. Se VERIFY indica falha ou gaps não resolvidos → **plan** (replanejamento) como passo único, com referência a `SUMMARY.md`.
-9. Se VERIFY OK e estado coerente → **spec** ou **quick** para **próxima** entrega, ou mensagem “fluxo da feature atual concluído”.
+6. Se PLAN existe mas a seção **Autoavaliação do Plano** disser `Melhor plano atual: não`, ou a `Confiança` estiver abaixo do limiar configurado (padrão 70%), o próximo passo deve ser **plan** (replanejar) ou **discuss/research** se a própria autoavaliação indicar isso.
+7. Se PLAN existe, **VERIFY.md** ainda **não** existe ou está claramente antes da implementação atual → **execute** (onda atual).
+8. Se PLAN existe e VERIFY falta após implementação declarada → **verify**.
+9. Se VERIFY indica falha ou gaps não resolvidos → **plan** (replanejamento) como passo único, com referência a `SUMMARY.md`.
+10. Se VERIFY OK e estado coerente → **spec** ou **quick** para **próxima** entrega, ou mensagem “fluxo da feature atual concluído”.
 
 **Saída obrigatória (só isto, nesta ordem):**
 

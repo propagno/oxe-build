@@ -11,10 +11,11 @@ No **projeto**, os passos canónicos estão em **`.oxe/workflows/*.md`** (layout
 </context>
 
 <output>
-## Os 8 comandos essenciais
+## Comandos principais
 
 ```
 /oxe              → onde estou / o que faço / help (entrada universal)
+/oxe-ask          → entender a situação atual com leitura robusta de STATE + sessão + artefatos
 /oxe-obs          → registrei algo importante — incorporado automaticamente nos próximos passos
 /oxe-quick        → tarefa pequena, sem cerimônia (com agentes lean quando necessário)
 /oxe-session      → criar, alternar, retomar, fechar ou migrar sessões OXE
@@ -34,7 +35,7 @@ Tudo o mais é ativado automaticamente por contexto, por config, ou existe como 
 - `active_session` em `.oxe/STATE.md` define a sessão ativa com path relativo completo (`sessions/sNNN-slug`).
 - Com sessão ativa, workflows de spec/plan/execute/verify e suportes ligados à trilha escrevem em `.oxe/<active_session>/...`.
 - Permanecem globais: `.oxe/STATE.md`, `.oxe/config.json`, `.oxe/codebase/`, `.oxe/SESSIONS.md`, `.oxe/global/LESSONS.md`, `.oxe/global/MILESTONES.md`.
-- Nesta versão, o suporte é **workflows only**: `oxe-cc status` / `doctor` ainda não são session-aware.
+- `oxe-cc status` / `doctor` devem refletir a sessão ativa, a autoavaliação do plano e a saúde lógica do fluxo.
 
 ### `/oxe-session`
 
@@ -89,8 +90,8 @@ Com **`compact_max_age_days`** em `.oxe/config.json` (ver `oxe/templates/CONFIG.
 1. **scan** — após clonar ou quando o codebase mudar. **Inteligente:** se `.oxe/codebase/` já existir, opera em modo refresh (incremental) automaticamente — sem precisar chamar `/oxe-compact` separadamente. Use `--full` para forçar scan completo. Repositórios **legado** (COBOL, JCL, VB6): aplica `legacy-brownfield.md` automaticamente.
 2. **spec** — fluxo em **5 fases**: perguntas (máx 3 rodadas) → pesquisa (proposta inline na Fase 2, sem sair do spec) → requisitos R-ID (v1/v2/fora) → roteiro (`.oxe/ROADMAP.md`) → aprovação. Se `discuss_before_plan: true` na config, o próximo passo após aprovação é `oxe:discuss` antes de plan.
 3. **plan** — plano executável + **Verificar** por tarefa. Se 3+ domínios distintos, **sugere automaticamente** blueprint de agentes (`/oxe-plan --agents`). Sem `--agents`: solo. Com `--agents`: gera também `plan-agents.json` (schema 3 com `model_hint`).
-4. **execute** — modo selecionado 1 vez: **A) Completo** (1 sessão), **B) Por onda**, **C) Por tarefa**. Se Verificar falhar inline: diagnóstico automático (2-3 hipóteses + fix), sem precisar chamar `/oxe-debug` separadamente. Escalação para `/oxe-forensics` só se esgotar tentativas.
-5. **verify** — até **6 camadas** por config: auditoria pré-exec, tarefas + critérios A*, fidelidade D-NN, UAT, **gaps de cobertura** (camada 5 — `verification_depth: "thorough"`), **segurança OWASP** (camada 6 — `security_in_verify: true`). Sem comandos extras.
+4. **execute** — modo selecionado 1 vez: **A) Completo** (1 sessão), **B) Por onda**, **C) Por tarefa**. Antes de executar, validar a **Autoavaliação do Plano**: se `Melhor plano atual: não` ou a confiança estiver abaixo do limiar, o fluxo deve replanear em vez de implementar. Se Verificar falhar inline: diagnóstico automático (2-3 hipóteses + fix), sem precisar chamar `/oxe-debug` separadamente. Escalação para `/oxe-forensics` só se esgotar tentativas.
+5. **verify** — até **6 camadas** por config: auditoria pré-exec, tarefas + critérios A*, fidelidade D-NN, **calibração do plano**, UAT, **gaps de cobertura** (camada 5 — `verification_depth: "thorough"`), **segurança OWASP** (camada 6 — `security_in_verify: true`). Sem comandos extras.
 6. **retro** *(opcional, recomendado após verify_complete)* — `/oxe-retro` sintetiza 3–5 lições prescritivas em `.oxe/LESSONS.md`. Cada lição diz **o que fazer diferente** no próximo ciclo — consumida automaticamente pelo próximo spec/plan.
 7. **→ próximo ciclo** — spec/plan do próximo ciclo lê LESSONS.md automaticamente. Os erros do ciclo anterior não se repetem.
 
@@ -132,14 +133,15 @@ Um único comando para: `milestone new|complete|status|audit`, `workstream new|s
 
 - **`npx oxe-cc`** ou **`npx oxe-cc install`** — mesma instalação (alias explícito).
 - Instala workflows em `.oxe/` (layout mínimo) ou `oxe/` + `.oxe/` com **`--global`**; integrações em `~/.cursor`, `~/.copilot`, `~/.claude` (e mais destinos com **`--copilot-cli`** / **`--all-agents`**).
-- **`oxe-cc doctor`** — Node, workflows do pacote vs projeto, `config.json`, mapas do codebase, **coerência STATE vs arquivos**, scan antigo (`scan_max_age_days`), compact antigo (`compact_max_age_days`), seções SPEC, ondas do PLAN, **avisos** não bloqueantes sobre estrutura dos `.md` de workflow (ex.: `<objective>`, critérios de sucesso).
-- **`oxe-cc status`** — coerência `.oxe/` + **um** próximo passo (espelha `next.md`). Com **`--json`**, uma linha JSON com **`oxeStatusSchema: 2`**, `nextStep`, `cursorCmd`, `reason`, `artifacts`, `phase`, `scanDate`, `staleScan`, `compactDate`, `staleCompact`, `diagnostics` (e com **`--json --hints`** também o array **`hints`**). Com **`--hints`** em modo texto, bloco **Lembretes (rotina OXE)** (scan/compact antigos quando `scan_max_age_days` / `compact_max_age_days` estão ativos em `config.json`).
+- **`oxe-cc doctor`** — Node, workflows do pacote vs projeto, `config.json`, bootstrap mínimo de `.oxe/`, mapas do codebase, **coerência STATE vs arquivos**, sessão ativa, autoavaliação do plano, scan antigo (`scan_max_age_days`), compact antigo (`compact_max_age_days`), seções SPEC, ondas do PLAN e **saúde lógica** (`healthy` | `warning` | `broken`).
+- **`oxe-cc status`** — coerência `.oxe/` + **um** próximo passo (espelha `next.md`). Com **`--json`**, uma linha JSON com `healthStatus`, `activeSession`, `planSelfEvaluation` e `diagnostics` completos além do próximo passo. Com **`--hints`** em modo texto, bloco **Lembretes (rotina OXE)** (scan/compact antigos quando `scan_max_age_days` / `compact_max_age_days` estão ativos em `config.json`).
 - **`oxe-cc init-oxe`** — só bootstrap `.oxe/` (STATE, config, codebase).
 - **`oxe-cc uninstall`** — remove integrações no HOME e, por omissão, pastas de workflows no repo (`--ide-only` só HOME).
+- **`oxe-cc uninstall --global-cli`** — além da limpeza dos artefatos OXE, executa `npm uninstall -g oxe-cc` para remover o binário global do PATH.
 - **`/oxe-update`** (Cursor; noutras ferramentas use o terminal no projeto) — workflow de atualização: verificar npm, correr `oxe-cc update`, `doctor`.
 - **`oxe-cc update --check`** — só comparar versão em execução com a `latest` no npm (sem instalar).
 - **`oxe-cc update --if-newer`** — só executa o `npx oxe-cc@latest` se houver versão mais nova no npm.
-- **`oxe-cc update` / `npx oxe-cc@latest --force`** — atualizar ficheiros OXE no projeto.
+- **`oxe-cc update` / `npx oxe-cc@latest --force`** — atualizar ficheiros OXE no projeto. Aceita flags extras como `--ide-local`, `--cursor`, `--copilot-cli`, `--global`, `--global-cli`.
 
 **CI / sem perguntas:** `OXE_NO_PROMPT=1` — layout mínimo e integrações padrão no HOME, salvo flags (`--global`, `--cursor`, …). Se existir **`.oxe/config.json`** com bloco **`install`** (perfil, `repo_layout`), aplica-se quando **não** há flags IDE explícitas; para ignorar: **`--no-install-config`**. Detalhes: `oxe/templates/CONFIG.md`.
 
@@ -154,6 +156,7 @@ Um pedido → **um** destino (sem gerar contrato). O agente aplica `route.md` ou
 | Se o utilizador disser (exemplos) | Comando / ação |
 |-----------------------------------|----------------|
 | Não sei que passo OXE sou / “o que faço agora?” | `/oxe-next` ou `npx oxe-cc status` |
+| Quero entender rapidamente a situação real da trilha atual | `/oxe-ask [pergunta]` |
 | Acabei de clonar / falta OXE no projeto | `npx oxe-cc@latest` (ou `oxe-cc`) na raiz do repo |
 | Verify falhou várias vezes / doctor estranho / artefatos incoerentes | `/oxe-forensics` |
 | Teste ou erro técnico durante o trabalho (stack, flake) | `/oxe-debug` (com **Tn** se houver) |

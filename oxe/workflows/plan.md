@@ -12,6 +12,7 @@ Se o usuário pedir **--replan** (ou replanejamento implícito após `verify_fai
 </objective>
 
 <context>
+- Seguir `oxe/workflows/references/flow-robustness-contract.md` como contrato canónico de robustez. A ordem obrigatória é: ler artefatos, resolver sessão/paths, validar pré-condições, escrever o plano, autoavaliar o plano, registrar próximo passo único.
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, o plano vive em `.oxe/<active_session>/plan/` e lê a spec em `.oxe/<active_session>/spec/`.
 - Se existir `OBSERVATIONS.md` do escopo resolvido com entradas `pendente` de impacto `plan` ou `all`, incorporar nas tarefas relevantes antes de finalizar o plano (ajustar implementação, verificação ou escopo de Tn) e marcar essas entradas como `incorporada → plan (data)`.
 - Se existir **`.oxe/global/LESSONS.md`**, ler entradas com `Aplicar em: /oxe-plan` e `Status: ativo`. Aplicar como restrições explícitas no planejamento: ajuste de complexidade de tarefas, padrões de verificação, escolha de modo solo vs agentes. Registrar aplicações como comentário no PLAN.md: `<!-- lição C-NN aplicada: ... -->`.
@@ -47,6 +48,40 @@ Cada tarefa em PLAN.md deve seguir a ordem abaixo — **Verificar vem ANTES de I
 <!-- oxe-task: {"id":"Tn","wave":1,"type":"feature","files":[],"done":false,"complexity":"S"} -->
 ```
 
+Depois do resumo e antes das tarefas, o `PLAN.md` deve conter também:
+
+```markdown
+## Autoavaliação do Plano
+- **Melhor plano atual:** sim | não
+- **Confiança:** 0–100%
+- **Base da confiança:**
+  - Completude dos requisitos: NN/25
+  - Dependências conhecidas: NN/15
+  - Risco técnico: NN/20
+  - Impacto no código existente: NN/15
+  - Clareza da validação / testes: NN/15
+  - Lacunas externas / decisões pendentes: NN/10
+- **Principais incertezas:** ...
+- **Alternativas descartadas:** ...
+- **Condição para replanejar:** ...
+```
+
+**Rubrica fixa de confiança (determinística):**
+| Dimensão | Peso |
+|----------|------|
+| Completude dos requisitos | 25 |
+| Dependências conhecidas | 15 |
+| Risco técnico | 20 |
+| Impacto no código existente | 15 |
+| Clareza da validação / testes | 15 |
+| Lacunas externas / decisões pendentes | 10 |
+
+**Faixas semânticas obrigatórias:**
+- `85–100%` → pronto para executar
+- `70–84%` → executável com risco controlado
+- `50–69%` → precisa refino antes de execução
+- `<50%` → não executar
+
 **Escala de Complexidade:**
 | Valor | Esforço estimado | Sinal de alerta |
 |-------|-----------------|-----------------|
@@ -74,6 +109,10 @@ Antes de finalizar a resposta ao utilizador, o agente **deve** percorrer este ga
 7. **Fidelidade de decisões:** se existir `DISCUSS.md` com IDs **D-NN** no escopo resolvido, cada decisão com impacto técnico deve aparecer em **Decisão vinculada:** de alguma tarefa, ou ter nota explícita de gap. Sem cobertura para D-NN técnico = falha do gate.
 8. **Complexidade XL:** toda tarefa com `Complexidade: XL` deve ter sub-tarefas explícitas (ex.: T3.1, T3.2 — como bullets dentro da tarefa) **ou** justificativa na tarefa explicando por que não pode ser quebrada. Tarefa XL sem sub-tarefas e sem justificativa = falha do gate.
 9. **Test-first:** em toda tarefa, `Verificar` deve preceder `Implementar` no texto. Se a ordem estiver invertida, corrigir antes de finalizar.
+10. **Autoavaliação presente:** o `PLAN.md` contém `## Autoavaliação do Plano`, `Melhor plano atual`, `Confiança`, rubrica completa e `Condição para replanejar`.
+11. **Calibração de execução:** se `Melhor plano atual: não` ou `Confiança < limiar configurado`, o plano não pode recomendar execução direta; deve recomendar refino, discuss ou research.
+12. **Rastreabilidade de evidência:** cada tarefa deve ter entrada observável de origem na SPEC, no codebase, em DISCUSS, OBS, RESEARCH ou LESSONS; tarefa sem evidência de entrada explícita = falha do gate.
+13. **Mudanças de risco:** tarefas com risco relevante (migração, auth, schema, contrato público, segurança) devem incluir contenção, rollback, fallback ou verificação reforçada.
 
 Se após correções estruturais persistir ambiguidade de produto: **uma** frase recomendando `oxe:discuss` ou `oxe:spec`.
 
@@ -87,10 +126,11 @@ Resumo obrigatório no chat: `Gate do plano: OK` ou `Gate do plano: corrigido (N
 4. Ler `.oxe/codebase/*.md` (incl. CONVENTIONS / CONCERNS) e inspecionar pontos de entrada se a spec exigir.
 5. Escrever ou atualizar `PLAN.md` no escopo resolvido usando `oxe/templates/PLAN.template.md` como cabeçalho; **preservar** YAML inicial (`oxe_doc: plan`, `status`, `inputs`) se já existir e **atualizar** `updated:` (ISO); em **--replan**, preencher a seção **Replanejamento** (data, motivo, lições de VERIFY/SUMMARY, tarefas removidas/alteradas).
 6. Definir ondas: onda 1 = tarefas sem dependência entre si; onda seguinte = dependentes; respeitar `plan_max_tasks_per_wave` se configurado.
-7. Aplicar integralmente o bloco **`<plan_quality_gate>`** acima ao `PLAN.md` em disco; corrigir o ficheiro até passar ou documentar gaps explícitos.
-8. Atualizar `.oxe/STATE.md` global: fase `plan_ready`, próximo passo `oxe:execute` (implementar ondas) e depois `oxe:verify`.
-9. **Sugestão de agentes (inteligente):** após o gate passar, verificar se o plano tem 3+ domínios distintos (ex.: backend + frontend + DB, ou auth + notificações + UI). Se sim, sugerir proativamente: "Este plano tem N domínios distintos. Quer gerar um blueprint de agentes com `/oxe-plan --agents`?" — não executar automaticamente, apenas oferecer. Se o usuário incluiu `--agents` no input original, executar imediatamente a lógica de `oxe/workflows/plan-agent.md`.
-10. Listar no chat: resultado do gate (OK ou corrigido), ondas, contagem de tarefas, comando de teste guarda-chuva se houver.
+7. Preencher `## Autoavaliação do Plano` com a rubrica fixa. A confiança é a soma ponderada das seis dimensões; não inventar percentagem sem justificar os pontos.
+8. Aplicar integralmente o bloco **`<plan_quality_gate>`** acima ao `PLAN.md` em disco; corrigir o ficheiro até passar ou documentar gaps explícitos.
+9. Atualizar `.oxe/STATE.md` global: fase `plan_ready`, próximo passo `oxe:execute` apenas se `Melhor plano atual: sim` e a confiança estiver no limiar executável; caso contrário, próximo passo deve reduzir incerteza (`oxe:discuss`, `oxe:research` ou replanejamento).
+10. **Sugestão de agentes (inteligente):** após o gate passar, verificar se o plano tem 3+ domínios distintos (ex.: backend + frontend + DB, ou auth + notificações + UI). Se sim, sugerir proativamente: "Este plano tem N domínios distintos. Quer gerar um blueprint de agentes com `/oxe-plan --agents`?" — não executar automaticamente, apenas oferecer. Se o usuário incluiu `--agents` no input original, executar imediatamente a lógica de `oxe/workflows/plan-agent.md`.
+11. Listar no chat: resultado do gate (OK ou corrigido), ondas, contagem de tarefas, comando de teste guarda-chuva se houver, melhor-plano-atual e confiança.
 </process>
 
 <success_criteria>

@@ -20,6 +20,21 @@ inputs: []
 - **Ondas:** (número)
 - **Tarefas:** (número)
 
+## Autoavaliação do Plano
+
+- **Melhor plano atual:** sim
+- **Confiança:** 80%
+- **Base da confiança:**
+  - Completude dos requisitos: 20/25
+  - Dependências conhecidas: 12/15
+  - Risco técnico: 15/20
+  - Impacto no código existente: 12/15
+  - Clareza da validação / testes: 13/15
+  - Lacunas externas / decisões pendentes: 8/10
+- **Principais incertezas:** (0–3 bullets)
+- **Alternativas descartadas:** (1–2 linhas)
+- **Condição para replanejar:** (critério objetivo)
+
 ## Dependências globais
 
 - (ex.: branch base, feature flags, migrations)

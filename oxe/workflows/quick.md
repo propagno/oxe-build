@@ -9,6 +9,7 @@ Usar quando: correção pontual, refactor local, feature pequena ou protótipo q
 </objective>
 
 <context>
+- Seguir `oxe/workflows/references/flow-robustness-contract.md`. Quick continua leve, mas não pode fingir que existe plano formal quando ele não existe.
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, `QUICK.md` e `quick-agents.json` vivem em `.oxe/<active_session>/plan/`; sem sessão ativa, manter `.oxe/`.
 - Ler `.oxe/STATE.md` e, se existirem, `OVERVIEW.md` e `STACK.md` em `.oxe/codebase/` para não contradizer o repo.
 - Não apagar `SPEC.md` / `PLAN.md` se existirem; este fluxo é paralelo ou temporário.
@@ -121,6 +122,7 @@ Uso **sem** novo slash: é o mesmo `/oxe-quick` com redação mínima.
 - **Verificar** — um comando de terminal **ou** checklist manual explícito.
 - **Agentes dinâmicos** — seção opcional quando PDDA estiver ativo (ver acima).
 - **Promover para spec/plan?** — preencher sempre; se qualquer gatilho abaixo for verdadeiro, resposta **sim** e parar de acumular trabalho no QUICK — passar a **`/oxe-spec`** (e depois discuss/plan conforme config).
+- **Confiança formal do plano:** se ainda não houver `PLAN.md`, declarar explicitamente no QUICK que **não houve plano formal**; não inventar percentagem de confiança aqui.
 
 O perfil fast **não** é uma segunda trilha: continua sujeito à mesma promoção obrigatória quando o trabalho deixa de ser trivial.
 
@@ -150,6 +152,7 @@ Se **sim**, o próximo passo recomendado no chat é **`/oxe-spec`** (depois disc
    - **Agentes dinâmicos** *(somente se PDDA ativo)* — tabela com ID, papel, steps, persona.
    - **Verificar** — pelo menos um: comando de terminal (ex.: `npm test`) **ou** checklist manual explícito. *(Este é o critério de aceite da minispec.)*
    - **Promover para spec/plan?** — conforme seção acima.
+   - **Plano formal existente?** — `não`; usar `sim` apenas se este quick estiver ancorado a um `PLAN.md` já aprovado no mesmo escopo.
 4. Se PDDA ativo, criar **`quick-agents.json`** no escopo resolvido usando `oxe/templates/quick-agents.template.json`:
    - Gerar `quickId` novo (`quick-<YYYY-MM-DD>-<6hex>`).
    - `status: "active"`, `since: "<ISO agora>"`.

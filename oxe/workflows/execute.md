@@ -90,6 +90,8 @@ Quando o comando `**Verificar:**` de uma tarefa `Tn` falha, **não parar silenci
 </failure_mode>
 
 <context>
+**Contrato de robustez:** seguir `oxe/workflows/references/flow-robustness-contract.md`. Antes de executar, validar os artefatos obrigatórios e o gate do plano.
+
 **Observações pendentes:** verificar `OBSERVATIONS.md` do escopo resolvido no início de cada onda. Se houver entradas `pendente` com impacto `execute` ou `all`, incorporar no trabalho da onda atual e marcá-las `incorporada → execute (data)`.
 
 **Quick-agents (lean PDDA):** se existir **`quick-agents.json`** do escopo resolvido com `status: active` e a execução for baseada em **`QUICK.md`** (não há PLAN.md), adotar o `role` e `persona` de cada agente para os `steps[]` atribuídos. Ao concluir todos os steps, marcar `quick-agents.json` → `status: done` e sugerir `/oxe-verify`.
@@ -123,23 +125,28 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
 
 <process>
 1. Ler **`.oxe/STATE.md`** global para resolver `active_session`, depois ler **`PLAN.md`** (se existir) e **`QUICK.md`** do escopo resolvido.
-2. Verificar **`OBSERVATIONS.md`** do escopo resolvido — incorporar pendentes de impacto `execute` ou `all` antes de iniciar.
-3. **Seleção de modo** (apenas se PLAN.md com 2+ ondas e `execute_mode` não definido em STATE): se o argumento já for `A`, `B` ou `C`, usá-lo diretamente; senão apresentar opções A/B/C e aguardar escolha; registrar em STATE.md.
-4. Identificar **onda ou bloco atual**: no PLAN, todas as tarefas da mesma onda sem dependências pendentes; no QUICK, passos ainda não marcados como feitos.
-5. Listar no chat: tarefas/passos desta onda, arquivos prováveis, comando **Verificar** de cada tarefa.
-6. **Implementar** conforme o modo escolhido:
+2. Se existir `PLAN.md`, validar a seção `## Autoavaliação do Plano` antes de qualquer implementação:
+   - `Melhor plano atual` deve ser `sim`;
+   - `Confiança` deve existir em `0–100%`;
+   - se `.oxe/config.json` definir `plan_confidence_threshold`, usar esse limiar; senão, usar `70%`;
+   - se a confiança estiver abaixo do limiar, **não executar**. Registrar o bloqueio e orientar redução de incerteza (`/oxe-discuss`, `/oxe-research` ou `/oxe-plan --replan`).
+3. Verificar **`OBSERVATIONS.md`** do escopo resolvido — incorporar pendentes de impacto `execute` ou `all` antes de iniciar.
+4. **Seleção de modo** (apenas se PLAN.md com 2+ ondas e `execute_mode` não definido em STATE): se o argumento já for `A`, `B` ou `C`, usá-lo diretamente; senão apresentar opções A/B/C e aguardar escolha; registrar em STATE.md.
+5. Identificar **onda ou bloco atual**: no PLAN, todas as tarefas da mesma onda sem dependências pendentes; no QUICK, passos ainda não marcados como feitos.
+6. Listar no chat: tarefas/passos desta onda, arquivos prováveis, comando **Verificar** de cada tarefa.
+7. **Implementar** conforme o modo escolhido:
    - **Modo Completo:** executar todas as ondas em sequência com verificação inline entre ondas; sumarizar ao final.
    - **Modo Por onda:** executar onda atual, apresentar checklist, parar.
    - **Modo Por tarefa:** executar próxima tarefa pendente, parar.
-7. Após cada onda concluída, incluir checklist:
+8. Após cada onda concluída, incluir checklist:
    ```markdown
    ## Checklist — Onda N (OXE)
    - [ ] Pré-requisitos da onda conferidos (dependências Tk atendidas)
    - [ ] Implementação da onda concluída
    - [ ] Comando Verificar de cada tarefa executado (ou agendado)
    ```
-8. Atualizar **`.oxe/STATE.md`** global com progresso resumido e, com sessão ativa, escrever o detalhe operacional em `execution/STATE.md`.
-9. Marcar OBS incorporadas como `incorporada → execute (data)` em `OBSERVATIONS.md` do escopo resolvido.
+9. Atualizar **`.oxe/STATE.md`** global com progresso resumido e, com sessão ativa, escrever o detalhe operacional em `execution/STATE.md`.
+10. Marcar OBS incorporadas como `incorporada → execute (data)` em `OBSERVATIONS.md` do escopo resolvido.
 </process>
 
 <success_criteria>

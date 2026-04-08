@@ -41,6 +41,18 @@ describe('oxe-cc CLI edge', () => {
     assert.match(r.stdout + r.stderr, /simulação|npx/i);
   });
 
+  test('update --dry-run forwards install flags', () => {
+    const r = spawnSync(process.execPath, [CLI, 'update', '--dry-run', '--cursor', '--ide-local', '--global-cli'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+    assert.match(r.stdout + r.stderr, /--cursor/);
+    assert.match(r.stdout + r.stderr, /--ide-local/);
+    assert.match(r.stdout + r.stderr, /--global-cli/);
+  });
+
   test('doctor missing dir exits 1', () => {
     const r = spawnSync(process.execPath, [CLI, 'doctor', path.join(os.tmpdir(), 'oxe-nope-xyz')], {
       cwd: REPO_ROOT,
@@ -86,11 +98,62 @@ describe('oxe-cc CLI edge', () => {
     const line = r.stdout.trim().split(/\r?\n/).filter(Boolean).pop();
     const j = JSON.parse(line);
     assert.strictEqual(j.oxeStatusSchema, 2);
+    assert.ok(typeof j.healthStatus === 'string');
     assert.ok(typeof j.nextStep === 'string');
     assert.ok(Array.isArray(j.artifacts));
     assert.ok(j.diagnostics && typeof j.diagnostics === 'object');
     assert.ok(Array.isArray(j.diagnostics.planWarnings));
     assert.ok(j.staleCompact && typeof j.staleCompact.stale === 'boolean');
+  });
+
+  test('status warns when PLAN.md misses autoavaliação and suggests replan on low confidence', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-plan-'));
+    const oxe = path.join(dir, '.oxe');
+    const codebase = path.join(oxe, 'codebase');
+    fs.mkdirSync(codebase, { recursive: true });
+    for (const f of [
+      'OVERVIEW.md',
+      'STACK.md',
+      'STRUCTURE.md',
+      'TESTING.md',
+      'INTEGRATIONS.md',
+      'CONVENTIONS.md',
+      'CONCERNS.md',
+    ]) {
+      fs.writeFileSync(path.join(codebase, f), '# ok\n', 'utf8');
+    }
+    fs.writeFileSync(
+      path.join(oxe, 'STATE.md'),
+      '# OXE — Estado\n\n## Fase atual\n\n`plan_ready`\n',
+      'utf8'
+    );
+    fs.writeFileSync(path.join(oxe, 'SPEC.md'), '## Critérios de aceite\n\n| ID | Critério | Como verificar |\n', 'utf8');
+    fs.writeFileSync(path.join(oxe, 'PLAN.md'), '## Tarefas\n\n### T1 — Demo\n- **Aceite vinculado:** A1\n', 'utf8');
+    const r = spawnSync(process.execPath, [CLI, 'status', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+    const j = JSON.parse(r.stdout.trim().split(/\r?\n/).filter(Boolean).pop());
+    assert.strictEqual(j.healthStatus, 'warning');
+    assert.ok(j.diagnostics.planWarnings.some((x) => /Autoavaliação do Plano/i.test(x)));
+
+    fs.writeFileSync(
+      path.join(oxe, 'PLAN.md'),
+      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 60%\n- **Base da confiança:**\n  - Completude dos requisitos: 20/25\n  - Dependências conhecidas: 12/15\n  - Risco técnico: 8/20\n  - Impacto no código existente: 10/15\n  - Clareza da validação / testes: 7/15\n  - Lacunas externas / decisões pendentes: 3/10\n- **Principais incertezas:** integração\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n## Tarefas\n\n### T1 — Demo\n- **Aceite vinculado:** A1\n',
+      'utf8'
+    );
+    const r2 = spawnSync(process.execPath, [CLI, 'status', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r2.status, 0, r2.stderr || r2.stdout);
+    const j2 = JSON.parse(r2.stdout.trim().split(/\r?\n/).filter(Boolean).pop());
+    assert.strictEqual(j2.nextStep, 'plan');
+    assert.strictEqual(j2.planSelfEvaluation.confidence, 60);
+    assert.ok(j2.diagnostics.planWarnings.some((x) => /abaixo do limiar executável/i.test(x)));
   });
 
   test('status --json --hints includes hints array', () => {
@@ -187,6 +250,34 @@ describe('oxe-cc CLI edge', () => {
       env: { ...process.env, OXE_NO_BANNER: '1' },
     });
     assert.strictEqual(r.status, 1);
+  });
+
+  test('uninstall --global-cli calls npm uninstall -g', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-uninst-g-'));
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-hg-'));
+    const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-npm-g-'));
+    const marker = path.join(fakeBin, 'npm-global-uninstall.txt');
+    const npmCli = path.join(fakeBin, 'npm-cli.js');
+    fs.writeFileSync(
+      npmCli,
+      `'use strict';\nconst fs = require('fs');\nconst path = require('path');\nif (process.argv[2] === 'uninstall' && process.argv[3] === '-g') { fs.writeFileSync(${JSON.stringify(marker)}, process.argv.slice(2).join(' '), 'utf8'); process.exit(0); }\nif (process.argv[2] === 'root' && process.argv[3] === '-g') { console.log(path.join(process.cwd(), 'fake-global-root')); process.exit(0); }\nprocess.exit(0);\n`,
+      'utf8'
+    );
+    if (process.platform === 'win32') {
+      fs.writeFileSync(path.join(fakeBin, 'npm.cmd'), `@node "${npmCli.replace(/\\/g, '\\\\')}" %*\r\n`, 'utf8');
+    } else {
+      const npmBin = path.join(fakeBin, 'npm');
+      fs.writeFileSync(npmBin, `#!/usr/bin/env node\nrequire(${JSON.stringify(npmCli.replace(/\\/g, '\\\\'))});\n`, 'utf8');
+      fs.chmodSync(npmBin, 0o755);
+    }
+    const r = spawnSync(process.execPath, [CLI, 'uninstall', '--global-cli', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...isolatedHomeEnv(fakeHome), PATH: fakeBin + path.delimiter + process.env.PATH },
+    });
+    assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+    assert.ok(fs.existsSync(marker), 'npm uninstall -g deveria ter sido chamado');
+    assert.match(fs.readFileSync(marker, 'utf8'), /uninstall -g oxe-cc/);
   });
 
   test('update unknown flag exits 1', () => {

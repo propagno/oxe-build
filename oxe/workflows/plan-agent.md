@@ -3,7 +3,7 @@
 <objective>
 Produzir **dois artefactos alinhados**:
 
-1. **`.oxe/PLAN.md`** — mesmo contrato que o workflow **`plan.md`** (tarefas `Tn`, **Onda**, **Depende de**, **Verificar**, **Aceite vinculado**), para **`/oxe-execute`**, **`/oxe-verify`** e gates OXE existentes.
+1. **`.oxe/PLAN.md`** — mesmo contrato que o workflow **`plan.md`** (tarefas `Tn`, **Onda**, **Depende de**, **Verificar**, **Aceite vinculado**, **Autoavaliação do Plano** com rubrica e confiança determinística), para **`/oxe-execute`**, **`/oxe-verify`** e gates OXE existentes.
 2. **`.oxe/plan-agents.json`** — **blueprint de execução**: objetivo, **agentes** (papéis, âmbito, entradas/saídas esperadas, dependências entre agentes), **estratégia em ondas** (`execution.waves`), **`runId`** e **`lifecycle`** (schema **2**).
 
 O plano **não** é só uma lista de tarefas: cada agente é um **pacote de contexto** (o que ler, o que produzir, que `Tn` cobre). A execução real continua a ser feita pelo utilizador ou por subagentes da IDE, guiados por este blueprint e pelo `PLAN.md`.
@@ -15,6 +15,7 @@ Se o utilizador pedir **`--replan`**: aplicar a mesma lógica de replanejamento 
 
 <context>
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, `PLAN.md`, `plan-agents.json` e `plan-agent-messages/` vivem em `.oxe/<active_session>/plan/`; sem sessão ativa, manter `.oxe/`.
+- O `plan-agent` herda integralmente o contrato `oxe/workflows/references/flow-robustness-contract.md`. Não pode emitir percentuais concorrentes por agente; a confiança final do plano é única e visível no `PLAN.md`.
 - **Pré-requisitos** iguais a **`plan.md`**: `.oxe/SPEC.md` obrigatória; `discuss_before_plan` + `DISCUSS.md` quando configurado; consumir **NOTES**, **UI-SPEC**, **DISCUSS**, **RESEARCH**, **CODEBASE-DELTA** / **RESUME**, **config.json** (`plan_max_tasks_per_wave`, `default_verify_command`) como em **`plan.md`**.
 - **Fonte de verdade das tarefas:** `PLAN.md`. O JSON referencia tarefas via **`taskIds`** em cada agente — **não** duplicar o texto de **Verificar** no JSON; copiar só paths/resumo curto em **`outputs`** quando útil para routing.
 - **Agentes ≠ ferramentas externas fixas:** `role` e `scope` descrevem o **comportamento esperado** de um contexto focado (ex.: “Backend Auth Specialist”), não um binário. Quem executa pode ser um único modelo com instruções diferentes por onda.
