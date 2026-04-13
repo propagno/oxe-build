@@ -165,4 +165,21 @@ describe('oxe-sdk', () => {
     assert.ok(typeof report.staleLessons.stale === 'boolean');
     assert.ok(report.staleLessons.days === null || typeof report.staleLessons.days === 'number');
   });
+
+  test('operational SDK exports run state and memory helpers', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-sdk-op-'));
+    fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
+    sdk.operational.applyRuntimeAction(dir, null, { action: 'start', run_id: 'oxe-run-sdk', wave: 1, task: 'T1' });
+    const run = sdk.operational.readRunState(dir, null);
+    assert.strictEqual(run.run_id, 'oxe-run-sdk');
+    const layers = sdk.operational.buildMemoryLayers(dir, null);
+    assert.ok(Array.isArray(layers.readOrder));
+    assert.ok(Array.isArray(sdk.operational.buildOperationalGraph(run).nodes));
+  });
+
+  test('azure SDK namespace is exposed', () => {
+    assert.ok(sdk.azure);
+    assert.strictEqual(typeof sdk.azure.azurePaths, 'function');
+    assert.strictEqual(typeof sdk.azure.azureDoctor, 'function');
+  });
 });

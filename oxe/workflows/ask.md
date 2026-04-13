@@ -32,6 +32,7 @@ Responder perguntas sobre a situação atual do trabalho OXE com máxima robuste
    - `.oxe/memory/` se existir memória persistente relevante ao assunto
    - `.oxe/global/LESSONS.md` se existir, com fallback para `.oxe/LESSONS.md`
    - `.oxe/SESSIONS.md` se a pergunta mencionar sessões, histórico ou retomada
+   - `.oxe/cloud/azure/INVENTORY.md`, `SERVICEBUS.md`, `EVENTGRID.md`, `SQL.md` e `auth-status.json` se a pergunta tocar Azure, cloud, infraestrutura, mensageria, integração ou banco gerido
 5. Responder à pergunta do utilizador com base em evidência explícita dos artefatos lidos.
 6. Se faltar artefato crítico para responder com segurança, dizer exatamente o que falta e qual comando OXE fecha essa lacuna.
 
@@ -52,6 +53,7 @@ Se o utilizador só disser algo genérico como “o que está acontecendo?”, �
 - Se houver `CHECKPOINTS.md` com itens `pending_approval`, isso tem precedência operacional sobre o “próximo passo” implícito.
 - Se `EXECUTION-RUNTIME.md` ou `INVESTIGATIONS.md` existirem, tratá-los como evidência tática complementar para explicar bloqueios, handoffs, riscos e lacunas.
 - Se `VERIFY.md` existir e contradizer o estado declarado, priorizar a evidência do `VERIFY.md` e mencionar a incoerência.
+- Se existir inventário Azure materializado, priorizar esse inventário sobre suposições sobre recursos cloud.
 - Se o mapa `.oxe/codebase/` estiver ausente ou incompleto, dizer isso explicitamente antes de extrapolar sobre o repositório.
 </process>
 

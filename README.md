@@ -21,15 +21,47 @@ npx oxe-cc@latest
 
 ## O que é o OXE
 
-OXE é o **Framework OXE — Orchestrated eXperience Engineering**: um framework de desenvolvimento assistido por IA orientado por artefatos, contexto em disco e execução verificável.
+> **OXE é a camada de disciplina entre você e seu agente de IA. Qualquer agente, qualquer IDE, qualquer projeto — o mesmo ciclo estruturado, com histórico persistente que melhora a cada entrega.**
+
+OXE é o **Framework OXE — Orchestrated eXperience Engineering**: um framework de desenvolvimento assistido por IA orientado por artefatos, contexto em disco e execução verificável. Funciona identicamente em Cursor, GitHub Copilot, Claude Code, Gemini CLI, Windsurf e qualquer outro agente — o estado fica em `.oxe/` no seu projeto, não preso a nenhuma IDE.
 
 Ele se apoia em três princípios:
 
 - **Spec-driven design** — antes de escrever código, você define *o que* construir e *como saber que está pronto*. Essa especificação restringe e guia tudo o que vem depois.
 - **Context engineering** — o estado do trabalho fica em arquivos pequenos dentro de `.oxe/`, não na memória do chat. O agente lê o que precisa, quando precisa — sem sobrecarregar o contexto com decisões já tomadas.
+- **Lessons loop** — ao fim de cada ciclo, `/oxe-retro` extrai 3–5 lições prescritivas que o próximo spec/plan lê automaticamente. Depois de alguns ciclos, os planos ficam dramaticamente melhores porque os erros anteriores não se repetem.
 - **Plan-Driven Dynamic Agents** — quando há múltiplos domínios, o plano cria agentes específicos para *aquela demanda*. Agentes não são reaproveitados entre projetos ou demandas.
 
 O resultado: **menos requisições**, **mais coerência**, e uma experiência de engenharia orquestrada que funciona do mesmo jeito em qualquer IDE.
+
+---
+
+## Modos de uso
+
+Escolha a complexidade certa para sua tarefa. Você sempre começa simples e adiciona estrutura quando precisar.
+
+### Nano — 1 comando
+Para tarefas pequenas e pontuais, sem overhead:
+```
+/oxe-quick → objetivo → passos → verify
+```
+
+### Standard — ciclo completo
+Para features, refatorações ou qualquer trabalho com múltiplos arquivos:
+```
+/oxe-scan → /oxe-spec → /oxe-plan → /oxe-execute → /oxe-verify → /oxe-retro
+```
+
+### Full — orquestração avançada
+Para projetos longos, multi-domínio, múltiplos agentes ou times:
+```
+/oxe-session new <nome>   ← isola o ciclo numa sessão
+/oxe-plan --agents        ← blueprint multi-agente
+/oxe-execute              ← com runtime tracking, checkpoints e eventos
+/oxe-dashboard            ← visão web opcional para revisão de equipe
+```
+
+> O README apresenta o modo Standard na maior parte da documentação. O modo Full está descrito em detalhes em cada seção específica.
 
 ---
 
@@ -39,6 +71,7 @@ O resultado: **menos requisições**, **mais coerência**, e uma experiência de
 /oxe              → onde estou / o que faço / help
 /oxe-ask          → entender a situação atual com leitura robusta de STATE + sessão + artefatos
 /oxe-capabilities → listar, instalar, remover ou atualizar capabilities nativas do projeto
+/oxe-cc azure     → autenticar, sincronizar inventário e operar Azure com checkpoint formal
 /oxe-obs          → registrei algo importante (incorporado automaticamente)
 /oxe-quick        → tarefa pequena, sem cerimônia
 /oxe-scan         → mapeia o projeto (ou atualiza se já mapeado)
@@ -46,7 +79,7 @@ O resultado: **menos requisições**, **mais coerência**, e uma experiência de
 /oxe-plan         → tarefas por onda (--agents para multi-agente)
 /oxe-execute      → implementar (A: completo | B: por onda | C: por tarefa)
 /oxe-verify       → validar que está pronto
-/oxe-dashboard    → visualizar runtime, ondas, checkpoints e estado operacional
+/oxe-dashboard    → visualizar runtime, active run, tracing, ondas, checkpoints e estado operacional
 ```
 
 Tudo o mais é ativado automaticamente por contexto ou chamado só quando necessário.
@@ -102,7 +135,7 @@ Com sessão ativa:
 
 - `spec/` contém `SPEC.md`, `ROADMAP.md`, `DISCUSS.md`, `UI-SPEC.md`
 - `plan/` contém `PLAN.md`, `QUICK.md`, `plan-agents.json`, `quick-agents.json`
-- `execution/` contém o `STATE.md` operacional da trilha, `EXECUTION-RUNTIME.md`, `CHECKPOINTS.md`, `OBSERVATIONS.md`, `DEBUG.md`, `FORENSICS.md`
+- `execution/` contém o `STATE.md` operacional da trilha, `EXECUTION-RUNTIME.md`, `CHECKPOINTS.md`, `ACTIVE-RUN.json`, `OXE-EVENTS.ndjson`, `runs/`, `OBSERVATIONS.md`, `DEBUG.md`, `FORENSICS.md`
 - `research/` também pode conter `INVESTIGATIONS.md` e `investigations/` para evidência estruturada
 - `verification/` contém `VERIFY.md`, `VALIDATION-GAPS.md`, `SECURITY.md`, `UI-REVIEW.md`
 - `LESSONS.md`, `MILESTONES.md`, `codebase/`, `SESSIONS.md`, `CAPABILITIES.md`, `capabilities/` e o `STATE.md` global permanecem fora da sessão
@@ -133,7 +166,7 @@ Cada passo lê o anterior como contexto e escreve seu artefato no escopo correto
 | `/oxe-scan` | Se `.oxe/codebase/` já existe → modo refresh automático. `--full` força scan completo. |
 | `/oxe-spec` | **Auto-reflexão semântica** antes da aprovação: detecta contradições, critérios vagos, escopo creep e conflitos com stack — sem requisição extra. Também aplica discovery adaptativo: classifica a demanda, limita rodadas e regista incertezas estruturadas para alimentar a confiança do plano. |
 | `/oxe-plan` | **Test-first:** `Verificar` vem antes de `Implementar` em cada tarefa. Agora o `PLAN.md` também exige `## Autoavaliação do Plano` com rubrica fixa, `Melhor plano atual` e percentual de confiança determinístico. Usa investigações e capabilities conhecidas como evidência de apoio. |
-| `/oxe-execute` | Execução A/B/C. Antes de implementar, valida a autoavaliação do plano e bloqueia execução abaixo do limiar de confiança. Usa `EXECUTION-RUNTIME.md` para runtime tático e `CHECKPOINTS.md` para gates humanos formais. |
+| `/oxe-execute` | Execução A/B/C. Antes de implementar, valida a autoavaliação do plano e bloqueia execução abaixo do limiar de confiança. Usa `EXECUTION-RUNTIME.md`, `ACTIVE-RUN.json`, `OXE-EVENTS.ndjson` e `CHECKPOINTS.md` para runtime tático, tracing e gates humanos formais. |
 | `/oxe-verify` | Até 6 camadas por config: audit + critérios + decisões + **coerência operacional** (runtime/checkpoints) + **calibração do plano** + UAT + gaps (`verification_depth: thorough`) + OWASP (`security_in_verify: true`). Sugere `/oxe-retro` ao concluir. |
 | `/oxe-retro` | Sintetiza 3–5 lições prescritivas em `.oxe/global/LESSONS.md` — consumidas automaticamente pelo próximo spec/plan. |
 | `/oxe-obs` | Registra observação → propaga automaticamente para R-IDs e Tns afetados no próximo plan/spec/execute. |
@@ -141,8 +174,9 @@ Cada passo lê o anterior como contexto e escreve seu artefato no escopo correto
 | `/oxe-project` | `milestone` + `workstream` + `checkpoint` em um único comando. |
 | `/oxe-session` | Cria, alterna, retoma, fecha e migra sessões OXE sem misturar artefatos de ciclos diferentes. |
 | `/oxe-ask` | Lê `STATE`, resolve a sessão ativa e responde perguntas situacionais com base nos artefatos reais. |
-| `/oxe-capabilities` | Gera e mantém o catálogo nativo de capabilities do projeto em `.oxe/CAPABILITIES.md` e `.oxe/capabilities/`. |
-| `/oxe-dashboard` | Consolida a leitura de `STATE`, blueprint, runtime e verify numa visão operacional. |
+| `/oxe-capabilities` | Gera e mantém o catálogo nativo de capabilities do projeto em `.oxe/CAPABILITIES.md` e `.oxe/capabilities/`, com política, side effects e evidência esperada. |
+| `oxe-cc azure` | Provider Azure nativo via Azure CLI: autenticação corporativa com MFA, inventário via Resource Graph e operações guiadas para Service Bus, Event Grid e Azure SQL, sempre com evidência em `.oxe/cloud/azure/`. |
+| `/oxe-dashboard` | Consolida `STATE`, `PLAN`, `ACTIVE-RUN`, trace log, runtime, checkpoints e verify numa visão visual de ciclo, artefatos, ondas, handoffs e aprovação antes do execute. |
 
 ---
 
@@ -173,6 +207,57 @@ Estes não precisam ser decorados — aparecem quando o contexto pede ou quando 
 
 ---
 
+## Azure no OXE
+
+O OXE agora tem um provider Azure nativo, local-first, orientado a Azure CLI no Windows. Ele não guarda segredos no repositório: usa a sessão oficial da Azure CLI, materializa contexto em `.oxe/cloud/azure/` e integra esse contexto com `ask`, `spec`, `plan`, `execute`, `verify`, `status`, `doctor`, runtime e dashboard.
+
+Artefatos principais:
+
+- `.oxe/cloud/azure/profile.json`
+- `.oxe/cloud/azure/auth-status.json`
+- `.oxe/cloud/azure/inventory.json`
+- `.oxe/cloud/azure/INVENTORY.md`
+- `.oxe/cloud/azure/SERVICEBUS.md`
+- `.oxe/cloud/azure/EVENTGRID.md`
+- `.oxe/cloud/azure/SQL.md`
+- `.oxe/cloud/azure/operations/`
+
+Comandos principais:
+
+```bash
+# Autenticação (Entra ID corporativo: use --tenant)
+npx oxe-cc azure auth login [--tenant <entra-tenant-id>]
+npx oxe-cc azure auth set-subscription --subscription "<dev-sub-id>"
+npx oxe-cc azure auth whoami
+
+# Diagnóstico e estado compacto
+npx oxe-cc azure doctor
+npx oxe-cc azure status
+
+# Inventário
+npx oxe-cc azure sync [--diff]
+npx oxe-cc azure find servicebus [--type servicebus] [--filter-rg rg-app]
+
+# Histórico de operações
+npx oxe-cc azure operations list
+
+# Service Bus, Event Grid e Azure SQL
+npx oxe-cc azure servicebus plan --kind namespace --name sb-core --resource-group rg-app --location brazilsouth
+npx oxe-cc azure servicebus apply --kind namespace --name sb-core --resource-group rg-app --location brazilsouth --approve
+npx oxe-cc azure servicebus apply --kind namespace --name sb-preview --resource-group rg-app --dry-run
+```
+
+Princípios:
+
+- opt-in: ativado apenas quando a SPEC ou o codebase menciona Azure explicitamente
+- discovery via Azure Resource Graph, não heurística por serviço
+- mutação só com checkpoint formal
+- `--dry-run` em qualquer apply: pré-visualiza o comando `az` sem executar
+- `--vpn-confirmed` para projetos com `vpn_required: true` na config
+- evidência operacional persistida e redacted em `.oxe/cloud/azure/operations/`
+
+---
+
 ## Conceitos-chave
 
 ### Context engineering — estado em disco, não no chat
@@ -184,6 +269,9 @@ Estes não precisam ser decorados — aparecem quando o contexto pede ou quando 
 ├── CAPABILITIES.md       ← catálogo nativo de capabilities instaladas
 ├── INVESTIGATIONS.md     ← índice global de investigações estruturadas
 ├── EXECUTION-RUNTIME.md  ← runtime operacional legado / fallback global
+├── ACTIVE-RUN.json       ← cursor e estado durável do run atual
+├── OXE-EVENTS.ndjson     ← tracing append-only local-first
+├── cloud/azure/          ← profile, auth-status, inventory e operações Azure
 ├── CHECKPOINTS.md        ← índice de aprovações e gates
 ├── global/
 │   ├── LESSONS.md        ← lições prescritivas cumulativas
@@ -229,8 +317,29 @@ Tarefas `XL` bloqueiam o gate sem sub-tarefas ou justificativa. `/oxe-obs` propa
 
 - `PLAN.md` continua estratégico.
 - `EXECUTION-RUNTIME.md` regista a operação real: onda atual, agentes ativos, handoffs, evidências, retries e bloqueios.
-- `CHECKPOINTS.md` formaliza gates humanos com status `pending_approval`, `approved`, `rejected` e `overridden`.
+- `ACTIVE-RUN.json` formaliza o run atual: `run_id`, cursor, estado, retries, checkpoints pendentes, evidências e grafo operacional.
+- `OXE-EVENTS.ndjson` regista tracing append-only por evento, local-first.
+- `CHECKPOINTS.md` formaliza gates humanos com política, status `pending_approval`, `approved`, `rejected` e `overridden`.
 - `status`, `doctor` e `verify` usam esses artefatos para auditar se a execução real continua coerente com o plano.
+
+### Runtime tracking e inspeção no terminal
+
+O caminho padrão de inspeção é CLI-first:
+
+```bash
+oxe-cc status --full    # health + coverage matrix + readiness gate no terminal
+oxe-cc runtime status   # run ativo, cursor, onda atual
+```
+
+O `status --full` mostra em ANSI: se SPEC.md, PLAN.md, VERIFY.md e LESSONS.md existem; se o projeto está pronto para executar; autoavaliação do plano; e o próximo passo.
+
+### Dashboard web — opt-in para revisões de equipe
+
+- `oxe-cc dashboard` sobe uma interface web local em `localhost` para revisar o plano antes da execução — indicado para apresentações ou revisões em equipe, não para uso diário.
+- A UI lê os artefatos OXE reais; ela não substitui `PLAN.md`, `STATE.md` ou `VERIFY.md`.
+- A visão inclui ciclo principal, mapa de artefatos, active run, trace log, trilha de ondas, handoffs, checkpoints, agentes, evidências e bloqueios sem criar uma segunda fonte de verdade.
+- `oxe-cc runtime <start|pause|resume|replay|status>` controla explicitamente `ACTIVE-RUN.json`, `runs/` e `OXE-EVENTS.ndjson` no mesmo contrato consumido pelo dashboard.
+- A aprovação visual persiste em `plan_review_status` no `STATE.md`, em `PLAN-REVIEW.md` e em `plan-review-comments.json`.
 
 ### `/oxe-retro` — loop de aprendizado
 
@@ -323,9 +432,12 @@ node bin/oxe-cc.js --help
 | `oxe-cc` / `oxe-cc install` | Instala workflows e integrações |
 | `oxe-cc doctor` | Diagnóstico completo: Node, workflows, config, bootstrap `.oxe/`, sessão ativa, autoavaliação do plano e saúde lógica (`healthy` \| `warning` \| `broken`) |
 | `oxe-cc status` | Próximo passo sugerido + saúde lógica do fluxo |
+| `oxe-cc status --full` | Coverage matrix + readiness gate + active run no terminal (ANSI) |
 | `oxe-cc status --json` | Mesmo, em JSON, com `healthStatus`, `activeSession` e `planSelfEvaluation` |
 | `oxe-cc update` | Atualiza workflows para a versão mais recente |
 | `oxe-cc init-oxe` | Bootstrap do `.oxe/` (STATE, config, codebase/) |
+| `oxe-cc dashboard` | Interface web local para revisão, comentários e aprovação do plano |
+| `oxe-cc runtime <status\|start\|pause\|resume\|replay>` | Controla o run ativo, cursor, replay e tracing operacional |
 | `oxe-cc capabilities <list\|install\|remove\|update>` | Mantém o catálogo nativo de capabilities em `.oxe/` |
 | `oxe-cc uninstall` | Remove integrações OXE do HOME e do repo |
 | `oxe-cc uninstall --global-cli` | Também remove o pacote npm global do PATH |

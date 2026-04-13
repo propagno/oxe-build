@@ -39,12 +39,13 @@ describe('oxe-install-resolve full', () => {
     assert.strictEqual(warnings.length, 0);
   });
 
-  test('parseError in config skips install block', () => {
+  test('parseError in config emits warning and skips install block', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-ir-'));
     fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
     fs.writeFileSync(path.join(dir, '.oxe', 'config.json'), '{', 'utf8');
     const { options, warnings } = resolve.resolveInstallOptionsFromConfig(dir, baseOpts());
-    assert.strictEqual(warnings.length, 0);
+    assert.strictEqual(warnings.length, 1);
+    assert.ok(/config\.json ignorado.*parse error/i.test(warnings[0]));
     assert.strictEqual(options.cursor, false);
   });
 

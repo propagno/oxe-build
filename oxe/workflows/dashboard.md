@@ -7,6 +7,7 @@ Gerar ou atualizar uma camada visual opcional para acompanhar execução, agente
 <context>
 - A visualização é opcional e não substitui `.oxe/STATE.md`, `PLAN.md`, runtime operacional nem `VERIFY.md`.
 - A dashboard deve refletir o estado atual, nunca inventar progresso.
+- Quando criar `PLAN-REVIEW.md`, usar `oxe/templates/PLAN-REVIEW.template.md` como estrutura inicial.
 </context>
 
 <process>
