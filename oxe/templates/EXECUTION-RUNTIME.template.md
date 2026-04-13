@@ -12,13 +12,16 @@ updated: YYYY-MM-DD
 
 - **Sessão / escopo:** …
 - **Plano vinculado:** `PLAN.md`
+- **Run ID:** `oxe-run-YYYYMMDD-001`
+- **Active run:** `.oxe/ACTIVE-RUN.json` ou artefato equivalente de sessão
+- **Trace log:** `.oxe/OXE-EVENTS.ndjson` ou artefato equivalente de sessão
 - **Autoavaliação do plano:** melhor=`sim|não` | confiança=`NN%`
 - **Limiar de execução:** `70%`
 
 ## Onda atual
 
 - **Onda:** —
-- **Estado:** pending | running | blocked | done
+- **Estado:** planned | running | paused | waiting_approval | failed | completed | replaying | aborted
 - **Tarefas ativas:** —
 - **Última atualização:** YYYY-MM-DD
 
@@ -30,13 +33,18 @@ updated: YYYY-MM-DD
 
 ## Checkpoints
 
-| ID | Tipo | Escopo | Estado | Decisão | Evidência |
-|----|------|--------|--------|---------|-----------|
-| CP-01 | approval | Onda 1 | pending_approval | — | — |
+| ID | Tipo | Escopo | Estado | Política | Decisão | Evidência |
+|----|------|--------|--------|----------|---------|-----------|
+| CP-01 | approval | Onda 1 | pending_approval | require_approval | — | — |
 
 ## Handoffs
 
 - W1 · `agent-a -> agent-b`: …
+
+## Grafo operacional
+
+- **Nós:** agent-a, capability-x, checkpoint-CP-01
+- **Arestas:** handoff, dependency, blocked_by
 
 ## Evidências produzidas
 
@@ -49,6 +57,10 @@ updated: YYYY-MM-DD
 ## Iterações / retries
 
 - Tarefa/onda | Tentativa | Resultado | Nota
+
+## Tracing operacional
+
+- `run_started` → `phase_entered` → `handoff` → `checkpoint_opened` → `checkpoint_resolved` → `verification_completed`
 
 ## Próximo movimento operacional
 

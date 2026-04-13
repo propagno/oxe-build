@@ -62,6 +62,35 @@ describe('oxe-cc CLI edge', () => {
     assert.strictEqual(r.status, 0);
   });
 
+  test('dashboard help exits 0', () => {
+    const r = spawnSync(process.execPath, [CLI, 'dashboard', '--help'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r.status, 0);
+  });
+
+  test('runtime help exits 0', () => {
+    const r = spawnSync(process.execPath, [CLI, 'runtime', '--help'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r.status, 0);
+    assert.match(r.stdout + r.stderr, /runtime/i);
+  });
+
+  test('azure help exits 0', () => {
+    const r = spawnSync(process.execPath, [CLI, 'azure', '--help'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r.status, 0);
+    assert.match(r.stdout + r.stderr, /azure/i);
+  });
+
   test('doctor missing dir exits 1', () => {
     const r = spawnSync(process.execPath, [CLI, 'doctor', path.join(os.tmpdir(), 'oxe-nope-xyz')], {
       cwd: REPO_ROOT,
@@ -165,6 +194,41 @@ describe('oxe-cc CLI edge', () => {
     assert.ok(j2.diagnostics.planWarnings.some((x) => /abaixo do limiar executável/i.test(x)));
   });
 
+  test('status suggests dashboard when plan is executable but review is missing', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-dash-'));
+    const oxe = path.join(dir, '.oxe');
+    const codebase = path.join(oxe, 'codebase');
+    fs.mkdirSync(codebase, { recursive: true });
+    for (const f of [
+      'OVERVIEW.md',
+      'STACK.md',
+      'STRUCTURE.md',
+      'TESTING.md',
+      'INTEGRATIONS.md',
+      'CONVENTIONS.md',
+      'CONCERNS.md',
+    ]) {
+      fs.writeFileSync(path.join(codebase, f), '# ok\n', 'utf8');
+    }
+    fs.writeFileSync(path.join(oxe, 'STATE.md'), '# OXE — Estado\n\n## Fase atual\n\n`plan_ready`\n', 'utf8');
+    fs.writeFileSync(path.join(oxe, 'SPEC.md'), '## Critérios de aceite\n\n| ID | Critério | Como verificar |\n| A1 | x | y |\n', 'utf8');
+    fs.writeFileSync(
+      path.join(oxe, 'PLAN.md'),
+      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 82%\n- **Base da confiança:**\n  - Completude dos requisitos: 20/25\n  - Dependências conhecidas: 12/15\n  - Risco técnico: 12/20\n  - Impacto no código existente: 10/15\n  - Clareza da validação / testes: 10/15\n  - Lacunas externas / decisões pendentes: 8/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n## Tarefas\n\n### T1 — Demo\n- **Aceite vinculado:** A1\n',
+      'utf8'
+    );
+    const r = spawnSync(process.execPath, [CLI, 'status', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+    const j = JSON.parse(r.stdout.trim().split(/\r?\n/).filter(Boolean).pop());
+    assert.strictEqual(j.nextStep, 'dashboard');
+    assert.strictEqual(j.cursorCmd, '/oxe-dashboard');
+    assert.ok(j.diagnostics.reviewWarnings.some((x) => /plan_review_status/i.test(x)));
+  });
+
   test('status --json --hints includes hints array', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-hints-'));
     const oxe = path.join(dir, '.oxe');
@@ -207,6 +271,64 @@ describe('oxe-cc CLI edge', () => {
     assert.ok(j.hints.some((/** @type {string} */ x) => /oxe-scan|oxe-compact/i.test(x)));
   });
 
+  test('runtime lifecycle commands persist ACTIVE-RUN and trace events', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-runtime-'));
+    const env = { ...process.env, OXE_NO_BANNER: '1', OXE_NO_PROMPT: '1' };
+
+    const start = spawnSync(process.execPath, [CLI, 'runtime', 'start', '--dir', dir, '--wave', '2', '--task', 'T3', '--reason', 'iniciar onda 2'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(start.status, 0, start.stderr + start.stdout);
+    assert.match(start.stdout, /Runtime atualizado/i);
+
+    const activeRunRef = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'ACTIVE-RUN.json'), 'utf8'));
+    const runFile = path.join(dir, '.oxe', 'runs', `${activeRunRef.run_id}.json`);
+    let runState = JSON.parse(fs.readFileSync(runFile, 'utf8'));
+    assert.strictEqual(runState.status, 'running');
+    assert.strictEqual(runState.current_wave, 2);
+    assert.strictEqual(runState.cursor.task, 'T3');
+
+    const pause = spawnSync(process.execPath, [CLI, 'runtime', 'pause', '--dir', dir, '--reason', 'aguardando aprovação'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(pause.status, 0, pause.stderr + pause.stdout);
+    runState = JSON.parse(fs.readFileSync(runFile, 'utf8'));
+    assert.strictEqual(runState.status, 'paused');
+
+    const resume = spawnSync(process.execPath, [CLI, 'runtime', 'resume', '--dir', dir, '--reason', 'aprovação recebida'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(resume.status, 0, resume.stderr + resume.stdout);
+    runState = JSON.parse(fs.readFileSync(runFile, 'utf8'));
+    assert.strictEqual(runState.status, 'running');
+
+    const replay = spawnSync(process.execPath, [CLI, 'runtime', 'replay', '--dir', dir, '--wave', '3', '--task', 'T7', '--reason', 'reprocessar onda 3'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(replay.status, 0, replay.stderr + replay.stdout);
+    runState = JSON.parse(fs.readFileSync(runFile, 'utf8'));
+    assert.strictEqual(runState.status, 'replaying');
+    assert.strictEqual(runState.current_wave, 3);
+    assert.strictEqual(runState.cursor.task, 'T7');
+    assert.ok(Array.isArray(runState.graph.nodes));
+    assert.ok(Array.isArray(runState.graph.edges));
+
+    const eventsPath = path.join(dir, '.oxe', 'OXE-EVENTS.ndjson');
+    const events = fs.readFileSync(eventsPath, 'utf8').trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    assert.ok(events.some((event) => event.type === 'run_started'));
+    assert.ok(events.some((event) => event.type === 'run_paused'));
+    assert.ok(events.some((event) => event.type === 'run_resumed'));
+    assert.ok(events.some((event) => event.type === 'run_replay_requested'));
+  });
+
   test('init-oxe exits 1 when target path does not exist without dry-run', () => {
     const missing = path.join(os.tmpdir(), `oxe-init-miss-${Date.now()}`);
     assert.ok(!fs.existsSync(missing));
@@ -227,6 +349,19 @@ describe('oxe-cc CLI edge', () => {
       env: { ...process.env, OXE_NO_BANNER: '1' },
     });
     assert.strictEqual(r.status, 0);
+  });
+
+  test('init-oxe bootstraps active run and trace artifacts', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-init-op-'));
+    const r = spawnSync(process.execPath, [CLI, 'init-oxe', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1', OXE_NO_PROMPT: '1' },
+    });
+    assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'ACTIVE-RUN.json')));
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'OXE-EVENTS.ndjson')));
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'runs')));
   });
 
   test('--config-dir with --all-agents exits 1', () => {

@@ -17,6 +17,8 @@ Se o usuário indicar uma tarefa (ex.: `T2`), focar só nela nas camadas 1–2; 
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, `VERIFY.md`, `VALIDATION-GAPS.md`, `SECURITY.md`, `UI-REVIEW.md` e `SUMMARY.md` vivem no escopo da sessão; `.oxe/STATE.md` continua global.
 - Seguir `oxe/workflows/references/flow-robustness-contract.md`. O verify não valida só se passou; valida também se o plano estava bem calibrado para começar.
 - Ler `EXECUTION-RUNTIME.md` e `CHECKPOINTS.md` do escopo resolvido quando existirem. Eles são evidência tática para saber o que realmente foi executado, bloqueado, aprovado ou desviado.
+- Se a trilha tocar Azure, ler `.oxe/cloud/azure/INVENTORY.md`, `SERVICEBUS.md`, `EVENTGRID.md`, `SQL.md` e `operations/*.md|json` para confirmar recursos reais, checkpoints e mutações aplicadas.
+- **Observações CI como evidência:** se `OBSERVATIONS.md` do escopo resolvido tiver obs do tipo `ci_failure` com `CI-evidência` preenchida, usar como evidência adicional para critérios A* de qualidade (ex.: cobertura, build verde). Se obs tiver `ci_run_url`, referenciar na coluna **Evidência** da tabela de critérios. Se obs estiver `pendente` e critério A* de qualidade existir, marcar o critério como `evidence_pending_ci` — não como passou — até o CI ser resolvido.
 - Preferir rodar comandos reais no terminal quando o ambiente permitir; se o sandbox bloquear, marcar como "não executado aqui" e deixar o comando para o usuário.
 - Não destruir `PLAN.md`; registrar achados em `VERIFY.md`.
 - Ler **`.oxe/config.json`** se existir: `after_verify_draft_commit`, `after_verify_suggest_pr`, e `verification_depth` (`"standard"` por padrão; `"thorough"` ativa camadas 3–4 completas; `"quick"` pula camadas 3–4 e UAT).
@@ -104,6 +106,7 @@ Registrar em `VERIFY.md`: `Resultado de calibração | Confiança declarada | Re
 3. **Camada 2:** Para cada tarefa relevante, executar **Verificar: Comando** do PLAN (ou subconjunto se foco Tn). Para **cada ID de critério** da SPEC (A1, A2, …), registrar se passou com evidência.
 4. **Camada 3:** Se existir `.oxe/DISCUSS.md` com IDs D-NN, executar **Fidelidade de decisões** conforme `<camada_3_fidelidade_decisoes>`.
 5. Executar a verificação de coerência do runtime e checkpoints conforme `<runtime_e_checkpoints>`.
+5a. Para operações Azure, confirmar o estado final com inventário/saída real do provider Azure; não considerar mutação aprovada sem evidência em `.oxe/cloud/azure/operations/`.
 6. Escrever **`VERIFY.md`** no escopo resolvido com:
    - Data, ambiente (SO / versão do Node se relevante).
    - **Seção — Auditoria de pré-execução:** resultado da Camada 1.

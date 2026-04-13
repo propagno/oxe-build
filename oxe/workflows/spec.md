@@ -31,8 +31,9 @@ Ler no início:
 - `EXECUTION-RUNTIME.md`, `CHECKPOINTS.md` e `memory/` do escopo ativo se existirem — usar como contexto auxiliar, nunca como substituto da SPEC
 - `.oxe/codebase/OVERVIEW.md` e `STACK.md` se existirem — não contradizer o repo
 - **OBS do escopo ativo** — se houver entradas `pendente` com impacto `spec` ou `all`, incorporá-las na Fase 3 (Requisitos) e marcá-las `incorporada → spec (data)` após uso
-- **`.oxe/global/LESSONS.md`** — se existir, ler entradas com `Aplicar em: spec` e status `ativo`. Usar como restrições explícitas ou alertas durante a Fase 1 (perguntas) e Fase 3 (requisitos). Exemplo: se uma lição diz "perguntar explicitamente sobre integração com X", adicionar essa pergunta no Bloco B da Fase 1.
+- **`.oxe/global/LESSONS.md`** — se existir, ler entradas com `Aplicar em: spec` e status `ativo`. **Priorizar entradas com `Frequência >= 2` ou `Impacto: alto`** — aplicar como restrições explícitas. Entradas com `Frequência: 1` e `Impacto: baixo` são contexto secundário. Usar durante a Fase 1 (perguntas) e Fase 3 (requisitos). Exemplo: se uma lição diz "perguntar explicitamente sobre integração com X", adicionar essa pergunta no Bloco B da Fase 1.
 - `.oxe/CAPABILITIES.md` e `.oxe/INVESTIGATIONS.md` — usar para sugerir capacidades e pesquisas já existentes antes de abrir novas lacunas
+- Se o problema tocar Azure, ler `.oxe/cloud/azure/profile.json`, `auth-status.json` e `INVENTORY.md` antes de fechar requisitos; se o inventário estiver ausente ou stale, exigir discovery via `oxe-cc azure sync` antes de consolidar a spec
 
 **Brownfield (COBOL, JCL, copybooks, VB6, SP):** quando o objetivo for documentar ou planear migração, ver **`oxe/workflows/references/legacy-brownfield.md`** — épicos por trilha, critérios A* verificáveis por Grep/leitura/checklist.
 
@@ -87,6 +88,7 @@ Usar templates: **`oxe/templates/SPEC.template.md`** e **`oxe/templates/ROADMAP.
 
 **Proposta ao usuário:** com base na Fase 1, listar 2-4 áreas de investigação sugeridas e perguntar quais investigar. Exemplos:
 - "Há 3 áreas com incerteza técnica: autenticação JWT, integração com Stripe, e deploy em edge. Quer investigar alguma antes de avançar para requisitos?"
+- "A trilha depende de Azure e o inventário está incompleto. Quer sincronizar recursos reais antes de congelar os requisitos?"
 
 **Se aprovado:**
 - Criar notas de pesquisa datadas em `research/YYYY-MM-DD-<slug>.md` no escopo ativo (usar fluxo de `research.md`)

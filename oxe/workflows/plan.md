@@ -15,11 +15,12 @@ Se o usuário pedir **--replan** (ou replanejamento implícito após `verify_fai
 - Seguir `oxe/workflows/references/flow-robustness-contract.md` como contrato canónico de robustez. A ordem obrigatória é: ler artefatos, resolver sessão/paths, validar pré-condições, escrever o plano, autoavaliar o plano, registrar próximo passo único.
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, o plano vive em `.oxe/<active_session>/plan/` e lê a spec em `.oxe/<active_session>/spec/`.
 - Quando existirem, ler `INVESTIGATIONS.md`, `RESEARCH.md`, `CAPABILITIES.md`, `memory/` do projeto e `CHECKPOINTS.md` para calibrar dependências, riscos, automações disponíveis e gates humanos necessários.
+- Se a SPEC ou artefatos do projeto mencionarem **Azure explicitamente** (Azure Service Bus, Azure SQL, Azure Event Grid, az CLI, ARM, subscription Azure, ou `.oxe/cloud/azure/` existir no projeto), **antes de detalhar tarefas**: (1) verificar `auth-status.json` — se `login_active: false` ou `subscription_id` ausente, registrar como **pré-condição bloqueante** no PLAN.md e sugerir `oxe-cc azure status` / `oxe-cc azure auth login`; (2) verificar staleness do inventário via `inventory.synced_at` — se stale além de `inventory_max_age_hours`, sugerir `oxe-cc azure sync` antes de executar; (3) se `vpn_required: true` no config, registrar como restrição explícita nas tarefas de mutação Azure. O plano deve vincular tarefas a recursos existentes em INVENTORY.md, SERVICEBUS.md, EVENTGRID.md ou SQL.md, ou declarar explicitamente os recursos Azure a criar com `oxe-cc azure <domínio> plan`. **SQL genérico, bancos on-prem ou outras nuvens não acionam este bloco.**
 - Se existir `OBSERVATIONS.md` do escopo resolvido com entradas `pendente` de impacto `plan` ou `all`, incorporar nas tarefas relevantes antes de finalizar o plano (ajustar implementação, verificação ou escopo de Tn) e marcar essas entradas como `incorporada → plan (data)`.
-- Se existir **`.oxe/global/LESSONS.md`**, ler entradas com `Aplicar em: /oxe-plan` e `Status: ativo`. Aplicar como restrições explícitas no planejamento: ajuste de complexidade de tarefas, padrões de verificação, escolha de modo solo vs agentes. Registrar aplicações como comentário no PLAN.md: `<!-- lição C-NN aplicada: ... -->`.
+- Se existir **`.oxe/global/LESSONS.md`**, ler entradas com `Aplicar em: /oxe-plan` e `Status: ativo`. **Priorizar entradas com `Frequência >= 2` ou `Impacto: alto`** — aplicar como restrições explícitas no planejamento: ajuste de complexidade de tarefas, padrões de verificação, escolha de modo solo vs agentes. Lições com `Frequência: 1` e `Impacto: baixo` são contexto secundário. Registrar aplicações como comentário no PLAN.md: `<!-- lição C-NN aplicada: ... -->`.
 - **LESSONS + OBS juntos:** se houver tanto LESSONS quanto OBS pendentes, LESSONS orientam o *como planejar* e OBS orientam o *o que incluir*. Não confundir os papéis.
 - Não inventar APIs inexistentes: cruzar com **STRUCTURE.md**, **INTEGRATIONS.md** e arquivos reais; respeitar **CONCERNS.md** (evitar agravar dívida conhecida sem tarefa explícita).
-- Se existir **`.oxe/NOTES.md`**, rever entradas em aberto: incorporar em tarefas (com **Aceite vinculado** quando aplicável) ou registar na secção **Replanejamento** / nota explícita *fora de âmbito desta trilha*.
+- Se existir **`.oxe/NOTES.md`**, rever entradas em aberto: incorporar em tarefas (com **Aceite vinculado** quando aplicável) ou registar na secção **Replanejamento** / nota explícita *fora de âmbito desta trilha*. Se não existir e houver necessidade de registrar notas, criar a partir de `oxe/templates/NOTES.template.md`.
 - Se existir `UI-SPEC.md` no escopo resolvido, as tarefas de UI devem referenciar secções do UI-SPEC no texto de **Implementação** ou **Verificar**.
 - Se existir `DISCUSS.md` no escopo resolvido, alinhar tarefas às decisões registradas. Referenciar IDs **D-NN** no campo **Decisão vinculada:** de cada tarefa impactada — se nenhuma decisão impactar a tarefa, omitir o campo. A rastreabilidade D-NN → Tn → verify é usada pela seção **Fidelidade de decisões** do verify.
 - Se existir `RESEARCH.md` e notas em `research/*.md` do escopo resolvido, ler o índice e as notas cujo **Tema** cruza o âmbito do plano (ou as mais recentes relevantes). Se o índice marcar **Estado** pendente em tópico bloqueante, pedir nova sessão **research** ou **discuss**, ou registar **suposição explícita** no PLAN antes de ondas que dependam dessa decisão.
@@ -86,6 +87,7 @@ Depois do resumo e antes das tarefas, o `PLAN.md` deve conter também:
 **Entradas obrigatórias da confiança:**
 - usar as incertezas estruturadas da SPEC e as investigações concluídas como base direta da rubrica;
 - se o plano depender de capability nativa, investigação ainda não feita ou checkpoint humano antes de side effect crítico, isso deve aparecer explicitamente em tarefas, riscos e autoavaliação.
+- se o plano depender de mutação Azure, incluir checkpoint formal antes de `apply`, mencionar a capability Azure correspondente e ligar a evidência esperada em `.oxe/cloud/azure/operations/`.
 
 **Escala de Complexidade:**
 | Valor | Esforço estimado | Sinal de alerta |
@@ -118,6 +120,7 @@ Antes de finalizar a resposta ao utilizador, o agente **deve** percorrer este ga
 11. **Calibração de execução:** se `Melhor plano atual: não` ou `Confiança < limiar configurado`, o plano não pode recomendar execução direta; deve recomendar refino, discuss ou research.
 12. **Rastreabilidade de evidência:** cada tarefa deve ter entrada observável de origem na SPEC, no codebase, em DISCUSS, OBS, RESEARCH ou LESSONS; tarefa sem evidência de entrada explícita = falha do gate.
 13. **Mudanças de risco:** tarefas com risco relevante (migração, auth, schema, contrato público, segurança) devem incluir contenção, rollback, fallback ou verificação reforçada.
+14. **Cobertura R-ID:** se `SPEC.md` contiver tabela de requisitos com IDs `R-NN` e status `v1`/`v2`, cada R-ID em escopo deve ter ao menos um critério A* mapeado em **Aceite vinculado:** de alguma tarefa — rastrear `R-NN → A* → Tn`. R-IDs com `v1`/`v2` sem nenhuma tarefa associada = falha do gate; documentar como gap explícito quando intencional (ex.: `<!-- R-03: adiado para próximo ciclo -->`).
 
 Se após correções estruturais persistir ambiguidade de produto: **uma** frase recomendando `oxe:discuss` ou `oxe:spec`.
 
@@ -142,4 +145,5 @@ Resumo obrigatório no chat: `Gate do plano: OK` ou `Gate do plano: corrigido (N
 - [ ] Cada tarefa tem seção **Verificar** com comando ou checklist explícito.
 - [ ] Dependências entre tarefas estão explícitas.
 - [ ] Cada critério da SPEC (IDs **A***) está mapeado em **Aceite vinculado** de alguma tarefa ou explicitamente marcado como gap no plano.
+- [ ] Cada R-ID `v1`/`v2` do SPEC tem ao menos um A* coberto por alguma tarefa, ou gap documentado (gate 14).
 </success_criteria>

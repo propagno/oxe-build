@@ -98,7 +98,14 @@ Quando o comando `**Verificar:**` de uma tarefa `Tn` falha, **não parar silenci
 
 **Capabilities nativas:** ler `.oxe/CAPABILITIES.md` e capabilities locais relevantes antes de propor automações, pesquisa extra, publicação ou conectores. Só sugerir capabilities que existam no projeto ou estejam claramente ausentes.
 
-**Observações pendentes:** verificar `OBSERVATIONS.md` do escopo resolvido no início de cada onda. Se houver entradas `pendente` com impacto `execute` ou `all`, incorporar no trabalho da onda atual e marcá-las `incorporada → execute (data)`.
+**Provider Azure:** quando a tarefa tocar Azure, usar os artefatos em `.oxe/cloud/azure/` como contexto real e tratar `oxe-cc azure ...` como capability operacional nativa. Operações `plan` e `apply` devem entrar no runtime, abrir checkpoint antes de mutação e registrar evidência em `.oxe/cloud/azure/operations/`.
+
+**Observações pendentes:** verificar `OBSERVATIONS.md` do escopo resolvido no início de cada onda. Processar por severidade antes de executar qualquer tarefa:
+- **`Severidade: blocking`** — não avançar para nenhuma tarefa da onda sem resolver. Apresentar o bloqueio ao usuário com contexto da onda atual e as opções A/B/C (ver `obs.md` passo 5). A onda só avança após o usuário escolher e o bloqueio ser tratado.
+- **`Severidade: adjustment`** — incorporar como restrição nas tarefas afetadas desta onda antes de executar; não bloqueia o avanço.
+- **`Severidade: info`** (ou sem campo Severidade — formato legado) — incorporar normalmente se impacto `execute` ou `all`.
+
+Após incorporar: marcar `incorporada → execute (data)` em `OBSERVATIONS.md`.
 
 **Quick-agents (lean PDDA):** se existir **`quick-agents.json`** do escopo resolvido com `status: active` e a execução for baseada em **`QUICK.md`** (não há PLAN.md), adotar o `role` e `persona` de cada agente para os `steps[]` atribuídos. Ao concluir todos os steps, marcar `quick-agents.json` → `status: done` e sugerir `/oxe-verify`.
 
@@ -139,7 +146,11 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
 3. Antes da primeira mudança, verificar `CHECKPOINTS.md` e `EXECUTION-RUNTIME.md` do escopo resolvido:
    - se houver checkpoint `pending_approval` que se aplique à onda atual, **não avançar**;
    - inicializar ou atualizar o runtime com onda atual, status, agentes ativos, handoffs e evidências esperadas.
-4. Verificar **`OBSERVATIONS.md`** do escopo resolvido — incorporar pendentes de impacto `execute` ou `all` antes de iniciar.
+4. Verificar **`OBSERVATIONS.md`** do escopo resolvido antes de iniciar cada onda:
+   - Se houver obs com `Status: pendente` e `Severidade: blocking`: **não avançar** para nenhuma tarefa da onda — apresentar ao usuário o bloqueio com contexto da onda e opções A/B/C de resolução
+   - Se houver obs com `Status: pendente` e `Severidade: adjustment`: incorporar como restrição nas tarefas afetadas desta onda antes de executar
+   - Se houver obs sem campo Severidade (formato legado) ou `Severidade: info` com impacto `execute` ou `all`: incorporar normalmente
+   - Após incorporar: marcar `incorporada → execute (data)` em `OBSERVATIONS.md`
 5. **Seleção de modo** (apenas se PLAN.md com 2+ ondas e `execute_mode` não definido em STATE): se o argumento já for `A`, `B` ou `C`, usá-lo diretamente; senão apresentar opções A/B/C e aguardar escolha; registrar em STATE.md.
 6. Identificar **onda ou bloco atual**: no PLAN, todas as tarefas da mesma onda sem dependências pendentes; no QUICK, passos ainda não marcados como feitos.
 7. Listar no chat: tarefas/passos desta onda, arquivos prováveis, comando **Verificar** de cada tarefa.
@@ -166,7 +177,7 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
 - [ ] Checklist da onda apresentado ou refletido no STATE.md.
 - [ ] STATE.md registra progresso (Tn ou passos) e próximo passo.
 - [ ] Verificação alinhada ao bloco **Verificar** do PLAN ou QUICK.
-- [ ] OBS pendentes de impacto `execute` incorporadas no início da onda.
+- [ ] OBS pendentes verificadas antes de cada onda: `blocking` resolvidos antes de avançar, `adjustment` incorporados como restrições, `info`/legado incorporados normalmente.
 - [ ] Com quick-agents ativos: cada agente trabalha só em seus `steps[]`; ao concluir, `quick-agents.json` → `done`.
 - [ ] Com blueprint schema 2 válido: não adotar persona para pedidos fora das `Tn`; `runId` alinhado entre JSON e STATE; handoffs escritos quando protocolo exige.
 </success_criteria>

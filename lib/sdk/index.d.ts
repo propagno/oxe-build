@@ -45,6 +45,27 @@ export interface OxeNextSuggestion {
   artifacts: string[];
 }
 
+export interface AzureInventorySummary {
+  total: number;
+  servicebus: number;
+  eventgrid: number;
+  sql: number;
+  other: number;
+}
+
+export interface AzureHealthContext {
+  profile: Record<string, unknown> | null;
+  authStatus: Record<string, unknown> | null;
+  inventorySummary: AzureInventorySummary | null;
+  inventoryPath: string;
+  operationsPath: string;
+  inventorySyncedAt: string | null;
+  inventoryStale: { stale: boolean; hours: number | null };
+  pendingOperations: number;
+  lastOperation: Record<string, unknown> | null;
+  warnings: string[];
+}
+
 /** Relatório retornado por `health.buildHealthReport` e incluído em `runDoctorChecks`.healthReport. */
 export interface OxeHealthReport {
   configPath: string | null;
@@ -63,6 +84,8 @@ export interface OxeHealthReport {
   specWarn: string[];
   planWarn: string[];
   next: OxeNextSuggestion;
+  azureActive?: boolean;
+  azure?: AzureHealthContext | null;
   scanFocusGlobs?: unknown;
   scanIgnoreGlobs?: unknown;
 }
@@ -279,6 +302,56 @@ export interface OxeSdk {
     runHook: (plugins: OxePlugin[], hookName: string, ctx: Record<string, unknown>) => Promise<Array<{ plugin: string; error: string }>>;
     validatePlugins: (projectRoot: string) => PluginValidationResult;
     initPluginsDir: (projectRoot: string) => void;
+  };
+
+  dashboard: {
+    loadDashboardContext: (projectRoot: string, opts?: { activeSession?: string | null }) => Record<string, unknown>;
+    savePlanReviewStatus: (projectRoot: string, input?: Record<string, unknown>) => Record<string, unknown>;
+    addPlanReviewComment: (projectRoot: string, input?: Record<string, unknown>) => Record<string, unknown>;
+    updatePlanReviewCommentStatus: (projectRoot: string, input?: Record<string, unknown>) => Record<string, unknown> | null;
+  };
+
+  operational: {
+    operationalPaths: (projectRoot: string, activeSession: string | null) => Record<string, string | null>;
+    appendEvent: (projectRoot: string, activeSession: string | null, event?: Record<string, unknown>) => Record<string, unknown>;
+    readEvents: (projectRoot: string, activeSession: string | null) => Array<Record<string, unknown>>;
+    summarizeEvents: (events: Array<Record<string, unknown>>) => Record<string, unknown>;
+    writeRunState: (projectRoot: string, activeSession: string | null, runState?: Record<string, unknown>) => Record<string, unknown>;
+    readRunState: (projectRoot: string, activeSession: string | null) => Record<string, unknown> | null;
+    buildOperationalGraph: (runState?: Record<string, unknown>) => { nodes: Array<Record<string, unknown>>; edges: Array<Record<string, unknown>> };
+    applyRuntimeAction: (projectRoot: string, activeSession: string | null, input?: Record<string, unknown>) => Record<string, unknown>;
+    parseCapabilityManifest: (text: string) => Record<string, unknown>;
+    readCapabilityCatalog: (projectRoot: string) => Array<Record<string, unknown>>;
+    buildMemoryLayers: (projectRoot: string, activeSession: string | null) => Record<string, unknown>;
+  };
+
+  azure: {
+    MIN_AZURE_CLI_MAJOR: number;
+    AZURE_CAPABILITY_IDS: string[];
+    RESOURCE_GRAPH_QUERY: string;
+    DEFAULT_AZURE_PROFILE: Record<string, unknown>;
+    azurePaths: (projectRoot: string) => Record<string, string>;
+    ensureAzureArtifacts: (projectRoot: string) => Record<string, string>;
+    isAzureContextEnabled: (projectRoot: string, config?: Record<string, unknown>) => boolean;
+    detectAzureCli: (projectRoot: string, options?: Record<string, unknown>) => Record<string, unknown>;
+    loadAzureProfile: (projectRoot: string) => Record<string, unknown>;
+    loadAzureAuthStatus: (projectRoot: string) => Record<string, unknown> | null;
+    loadAzureInventory: (projectRoot: string) => Record<string, unknown> | null;
+    listAzureOperations: (projectRoot: string) => Array<Record<string, unknown>>;
+    summarizeInventory: (items: Array<Record<string, unknown>>) => AzureInventorySummary;
+    searchAzureInventory: (projectRoot: string, query: string, filters?: { type?: string; resourceGroup?: string }) => Array<Record<string, unknown>>;
+    diffInventory: (previousItems: Array<Record<string, unknown>>, currentItems: Array<Record<string, unknown>>) => { added: Array<Record<string, unknown>>; removed: Array<Record<string, unknown>>; unchanged: number };
+    statusAzure: (projectRoot: string, config?: Record<string, unknown>, options?: Record<string, unknown>) => Record<string, unknown>;
+    ensureAzureCapabilities: (projectRoot: string) => string[];
+    getAzureContext: (projectRoot: string, options?: Record<string, unknown>) => Record<string, unknown>;
+    loginAzure: (projectRoot: string, options?: Record<string, unknown>) => Record<string, unknown>;
+    setAzureSubscription: (projectRoot: string, subscription: string, options?: Record<string, unknown>) => Record<string, unknown>;
+    syncAzureInventory: (projectRoot: string, options?: Record<string, unknown>) => Record<string, unknown>;
+    executeAzureRead: (projectRoot: string, activeSession: string | null, domain: string, verb: string, input: Record<string, unknown>, options?: Record<string, unknown>) => unknown;
+    planAzureOperation: (projectRoot: string, activeSession: string | null, domain: string, input: Record<string, unknown>, options?: Record<string, unknown>) => Record<string, unknown>;
+    applyAzureOperation: (projectRoot: string, activeSession: string | null, domain: string, input: Record<string, unknown>, options?: Record<string, unknown>) => Record<string, unknown>;
+    azureDoctor: (projectRoot: string, config?: Record<string, unknown>, options?: Record<string, unknown>) => Record<string, unknown>;
+    redactObject: (value: unknown) => unknown;
   };
 
   runDoctorChecks: (args: {

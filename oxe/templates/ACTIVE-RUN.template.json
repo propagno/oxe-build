@@ -1,0 +1,32 @@
+{
+  "run_id": "oxe-run-YYYYMMDD-001",
+  "status": "planned",
+  "created_at": "YYYY-MM-DDTHH:mm:ssZ",
+  "updated_at": "YYYY-MM-DDTHH:mm:ssZ",
+  "plan_ref": "PLAN.md",
+  "session_id": null,
+  "current_wave": null,
+  "cursor": {
+    "wave": null,
+    "task": null,
+    "mode": null
+  },
+  "active_tasks": [],
+  "pending_checkpoints": [],
+  "retries": [],
+  "failures": [],
+  "evidence": [],
+  "provider_context": {
+    "azure": null
+  },
+  "graph": {
+    "nodes": [],
+    "edges": []
+  },
+  "metrics": {
+    "predicted_confidence": null,
+    "coverage_ratio": null,
+    "retry_count": 0,
+    "checkpoint_count": 0
+  }
+}

@@ -11,6 +11,27 @@ No **projeto**, os passos canónicos estão em **`.oxe/workflows/*.md`** (layout
 </context>
 
 <output>
+## Modos de uso
+
+Escolha a complexidade certa. Comece simples e adicione estrutura quando precisar.
+
+**Nano** — 1 comando, zero overhead:
+```
+/oxe-quick
+```
+
+**Standard** — ciclo completo para features e refatorações:
+```
+/oxe-scan → /oxe-spec → /oxe-plan → /oxe-execute → /oxe-verify → /oxe-retro
+```
+
+**Full** — sessões, multi-agente, dashboard, capabilities:
+```
+/oxe-session new <nome> → /oxe-plan --agents → /oxe-execute → /oxe-dashboard (opt-in)
+```
+
+---
+
 ## Comandos principais
 
 ```
@@ -20,12 +41,13 @@ No **projeto**, os passos canónicos estão em **`.oxe/workflows/*.md`** (layout
 /oxe-quick        → tarefa pequena, sem cerimônia (com agentes lean quando necessário)
 /oxe-capabilities → listar, instalar, remover ou atualizar capabilities nativas do projeto
 /oxe-session      → criar, alternar, retomar, fechar ou migrar sessões OXE
+/oxe-cc azure     → autenticar, sincronizar inventário e operar Azure Service Bus, Event Grid e Azure SQL com checkpoint
 /oxe-scan         → mapeia o projeto (ou atualiza o mapa se já existir)
 /oxe-spec         → nova feature: perguntas → pesquisa → requisitos → roteiro → aprovação
 /oxe-plan         → tarefas por onda (--agents para blueprint multi-agente)
 /oxe-execute      → implementar (A: 1 sessão | B: por onda | C: por tarefa)
 /oxe-verify       → validar (camadas 5+6 opcionais via config: gaps + segurança)
-/oxe-dashboard    → visualizar runtime, ondas, checkpoints e estado operacional
+/oxe-dashboard    → visão web opt-in para revisão de equipe e aprovação do plano
 ```
 
 Tudo o mais é ativado automaticamente por contexto, por config, ou existe como escape hatch.
@@ -39,6 +61,7 @@ Tudo o mais é ativado automaticamente por contexto, por config, ou existe como 
 - Permanecem globais: `.oxe/STATE.md`, `.oxe/config.json`, `.oxe/codebase/`, `.oxe/SESSIONS.md`, `.oxe/global/LESSONS.md`, `.oxe/global/MILESTONES.md`.
 - `oxe-cc status` / `doctor` devem refletir a sessão ativa, a autoavaliação do plano e a saúde lógica do fluxo.
 - O escopo ativo também pode ter `EXECUTION-RUNTIME.md`, `CHECKPOINTS.md` e `INVESTIGATIONS.md` para operação, approvals e evidência.
+- Quando o projeto usa Azure, o provider nativo materializa `.oxe/cloud/azure/profile.json`, `auth-status.json`, `inventory.json` e `INVENTORY.md`; estes artefatos alimentam `ask`, `spec`, `plan`, `execute`, `verify`, `status`, `doctor` e o dashboard.
 
 ### `/oxe-session`
 
@@ -139,7 +162,10 @@ Um único comando para: `milestone new|complete|status|audit`, `workstream new|s
 - **`npx oxe-cc`** ou **`npx oxe-cc install`** — mesma instalação (alias explícito).
 - Instala workflows em `.oxe/` (layout mínimo) ou `oxe/` + `.oxe/` com **`--global`**; integrações em `~/.cursor`, `~/.copilot`, `~/.claude` (e mais destinos com **`--copilot-cli`** / **`--all-agents`**).
 - **`oxe-cc doctor`** — Node, workflows do pacote vs projeto, `config.json`, bootstrap mínimo de `.oxe/`, mapas do codebase, **coerência STATE vs arquivos**, sessão ativa, autoavaliação do plano, scan antigo (`scan_max_age_days`), compact antigo (`compact_max_age_days`), seções SPEC, ondas do PLAN e **saúde lógica** (`healthy` | `warning` | `broken`).
-- **`oxe-cc status`** — coerência `.oxe/` + **um** próximo passo (espelha `next.md`). Com **`--json`**, uma linha JSON com `healthStatus`, `activeSession`, `planSelfEvaluation` e `diagnostics` completos além do próximo passo. Com **`--hints`** em modo texto, bloco **Lembretes (rotina OXE)** (scan/compact antigos quando `scan_max_age_days` / `compact_max_age_days` estão ativos em `config.json`).
+- **`oxe-cc status`** — coerência `.oxe/` + **um** próximo passo (espelha `next.md`). Com **`--full`**, visão ANSI extendida: coverage matrix (SPEC/PLAN/VERIFY/LESSONS), readiness gate e active run — caminho padrão de inspeção no terminal. Com **`--json`**, uma linha JSON com `healthStatus`, `activeSession`, `planSelfEvaluation` e `diagnostics` completos. Com **`--hints`**, bloco **Lembretes (rotina OXE)**.
+- **`oxe-cc dashboard`** — UI web opt-in em `localhost` para revisão de equipe e aprovação do plano; use `oxe-cc status --full` para inspeção diária no terminal. Fonte de verdade: apenas artefatos OXE reais, incluindo `ACTIVE-RUN.json` e `OXE-EVENTS.ndjson`.
+- **`oxe-cc runtime`** — controla explicitamente `ACTIVE-RUN.json`, `runs/` e `OXE-EVENTS.ndjson` com ações `start`, `pause`, `resume`, `replay` e `status`.
+- **`oxe-cc azure`** — provider Azure local-first via Azure CLI (opt-in, apenas quando o projeto usa Azure): `status`, `doctor`, `auth login [--tenant <id>]`, `auth set-subscription --subscription <id>`, `sync [--diff]`, `find [--type] [--filter-rg]`, `servicebus`, `eventgrid`, `sql`, `operations list`. Flags: `--dry-run`, `--vpn-confirmed`. **Fluxo corporativo Entra ID:** `auth login --tenant <tenant-id>` → `auth set-subscription --subscription <dev-sub-id>`.
 - **`oxe-cc init-oxe`** — só bootstrap `.oxe/` (STATE, config, codebase).
 - **`oxe-cc uninstall`** — remove integrações no HOME e, por omissão, pastas de workflows no repo (`--ide-only` só HOME).
 - **`oxe-cc uninstall --global-cli`** — além da limpeza dos artefatos OXE, executa `npm uninstall -g oxe-cc` para remover o binário global do PATH.

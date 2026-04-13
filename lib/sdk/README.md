@@ -49,6 +49,7 @@ const { options, warnings: w } = oxe.install.resolveOptionsFromConfig(dir, {
 | **install** | `resolveOptionsFromConfig` |
 | **manifest** | `loadFileManifest`, `writeFileManifest`, `sha256File`, `collectFilesRecursive` |
 | **agents** | `adjustWorkflowPathsForNestedLayout`, `parseCursorCommandFrontmatter` |
+| **azure** | `azurePaths`, `detectAzureCli`, `loadAzureProfile`, `syncAzureInventory`, `planAzureOperation`, `applyAzureOperation`, `azureDoctor` |
 | **doctor** | `runDoctorChecks` — resultado estruturado (erros + avisos + diff de workflows + `workflowShape` com lint leve dos `.md`) |
 
 TypeScript: ver `index.d.ts` junto deste ficheiro.
@@ -59,6 +60,7 @@ TypeScript: ver `index.d.ts` junto deste ficheiro.
 - **`buildHealthReport(projectRoot)`** — agrega fase, datas, avisos de SPEC/PLAN/VERIFY e o próximo passo sugerido. Campos usados em CI e em `oxe-cc status --json`:
   - **`scanDate`**, **`stale`** — último scan e idade face a `scan_max_age_days` (`stale: { stale, days }`).
   - **`compactDate`**, **`staleCompact`** — último compact e idade face a `compact_max_age_days`.
+  - **`azureActive`**, **`azure`** — contexto Azure resolvido, inventário materializado, warnings e pendências do provider.
   - **`next`** — `{ step, cursorCmd, reason, artifacts }` (espelha a lógica de `suggestNextStep`).
 
 ## `runDoctorChecks` e relatório de saúde

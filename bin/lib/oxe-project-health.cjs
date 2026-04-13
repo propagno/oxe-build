@@ -2,6 +2,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const operational = require('./oxe-operational.cjs');
+const azure = require('./oxe-azure.cjs');
 
 /** @type {string[]} */
 const ALLOWED_CONFIG_KEYS = [
@@ -26,6 +28,7 @@ const ALLOWED_CONFIG_KEYS = [
   'workstreams',
   'milestones',
   'scale_adaptive',
+  'azure',
 ];
 
 /**
@@ -127,6 +130,14 @@ function loadOxeConfigMerged(targetProject) {
     scan_ignore_globs: [],
     spec_required_sections: [],
     plan_max_tasks_per_wave: 0,
+    azure: {
+      enabled: false,
+      default_resource_group: '',
+      preferred_locations: [],
+      inventory_max_age_hours: 24,
+      resource_graph_auto_install: true,
+      vpn_required: false,
+    },
   };
   const p = path.join(targetProject, '.oxe', 'config.json');
   if (!fs.existsSync(p)) return { config: defaults, path: null, parseError: null };
@@ -229,6 +240,44 @@ function validateConfigShape(cfg) {
   if (cfg.scale_adaptive != null && typeof cfg.scale_adaptive !== 'boolean') {
     typeErrors.push('scale_adaptive deve ser boolean');
   }
+  if (cfg.azure != null) {
+    if (typeof cfg.azure !== 'object' || Array.isArray(cfg.azure)) {
+      typeErrors.push('azure deve ser um objeto');
+    } else {
+      const azureCfg = /** @type {Record<string, unknown>} */ (cfg.azure);
+      const allowedAzureKeys = [
+        'enabled',
+        'default_resource_group',
+        'preferred_locations',
+        'inventory_max_age_hours',
+        'resource_graph_auto_install',
+        'vpn_required',
+      ];
+      for (const key of Object.keys(azureCfg)) {
+        if (!allowedAzureKeys.includes(key)) {
+          typeErrors.push(`azure: chave desconhecida "${key}"`);
+        }
+      }
+      if (azureCfg.enabled != null && typeof azureCfg.enabled !== 'boolean') {
+        typeErrors.push('azure.enabled deve ser boolean');
+      }
+      if (azureCfg.default_resource_group != null && typeof azureCfg.default_resource_group !== 'string') {
+        typeErrors.push('azure.default_resource_group deve ser string');
+      }
+      if (azureCfg.preferred_locations != null && !Array.isArray(azureCfg.preferred_locations)) {
+        typeErrors.push('azure.preferred_locations deve ser array de strings');
+      }
+      if (azureCfg.inventory_max_age_hours != null && typeof azureCfg.inventory_max_age_hours !== 'number') {
+        typeErrors.push('azure.inventory_max_age_hours deve ser número');
+      }
+      if (azureCfg.resource_graph_auto_install != null && typeof azureCfg.resource_graph_auto_install !== 'boolean') {
+        typeErrors.push('azure.resource_graph_auto_install deve ser boolean');
+      }
+      if (azureCfg.vpn_required != null && typeof azureCfg.vpn_required !== 'boolean') {
+        typeErrors.push('azure.vpn_required deve ser boolean');
+      }
+    }
+  }
   return { unknownKeys, typeErrors };
 }
 
@@ -312,6 +361,19 @@ function parseActiveSession(stateText) {
 }
 
 /**
+ * @param {string} stateText
+ * @returns {string | null}
+ */
+function parsePlanReviewStatus(stateText) {
+  if (!stateText) return null;
+  const m = stateText.match(/\*\*plan_review_status:\*\*\s*`?([^\n`]+?)`?\s*(?:\n|$)/i);
+  if (!m) return null;
+  const raw = m[1].trim();
+  if (!raw || raw === '—' || /^none$/i.test(raw)) return null;
+  return raw;
+}
+
+/**
  * @param {Date | null} scanDate
  * @param {number} maxAgeDays 0 = desligado
  */
@@ -352,6 +414,11 @@ function oxePaths(target) {
     globalMilestones: path.join(oxe, 'global', 'MILESTONES.md'),
     globalMilestonesDir: path.join(oxe, 'global', 'milestones'),
     sessionsDir: path.join(oxe, 'sessions'),
+    planReview: path.join(oxe, 'PLAN-REVIEW.md'),
+    planReviewComments: path.join(oxe, 'plan-review-comments.json'),
+    activeRun: path.join(oxe, 'ACTIVE-RUN.json'),
+    runsDir: path.join(oxe, 'runs'),
+    events: path.join(oxe, 'OXE-EVENTS.ndjson'),
     spec: path.join(oxe, 'SPEC.md'),
     plan: path.join(oxe, 'PLAN.md'),
     quick: path.join(oxe, 'QUICK.md'),
@@ -378,8 +445,13 @@ function scopedOxePaths(target, activeSession) {
     scopedRoot: sessionRoot,
     sessionRoot,
     sessionManifest: path.join(sessionRoot, 'SESSION.md'),
+    planReview: path.join(sessionRoot, 'plan', 'PLAN-REVIEW.md'),
+    planReviewComments: path.join(sessionRoot, 'plan', 'plan-review-comments.json'),
     runtime: path.join(sessionRoot, 'execution', 'EXECUTION-RUNTIME.md'),
     checkpoints: path.join(sessionRoot, 'execution', 'CHECKPOINTS.md'),
+    activeRun: path.join(sessionRoot, 'execution', 'ACTIVE-RUN.json'),
+    runsDir: path.join(sessionRoot, 'execution', 'runs'),
+    events: path.join(sessionRoot, 'execution', 'OXE-EVENTS.ndjson'),
     investigationsIndex: path.join(sessionRoot, 'research', 'INVESTIGATIONS.md'),
     investigationsDir: path.join(sessionRoot, 'research', 'investigations'),
     spec: path.join(sessionRoot, 'spec', 'SPEC.md'),
@@ -654,6 +726,16 @@ function installationCompletenessWarnings(target) {
   if (!fs.existsSync(p.investigationsIndex)) warns.push('.oxe/INVESTIGATIONS.md ausente');
   if (!fs.existsSync(p.runtime)) warns.push('.oxe/EXECUTION-RUNTIME.md ausente');
   if (!fs.existsSync(p.checkpoints)) warns.push('.oxe/CHECKPOINTS.md ausente');
+  if (!fs.existsSync(p.activeRun)) warns.push('.oxe/ACTIVE-RUN.json ausente');
+  if (!fs.existsSync(p.runsDir)) warns.push('.oxe/runs/ ausente');
+  if (!fs.existsSync(p.events)) warns.push('.oxe/OXE-EVENTS.ndjson ausente');
+  if (azure.isAzureContextEnabled(target)) {
+    const azurePaths = azure.azurePaths(target);
+    if (!fs.existsSync(azurePaths.root)) warns.push('.oxe/cloud/azure/ ausente');
+    if (!fs.existsSync(azurePaths.operationsDir)) warns.push('.oxe/cloud/azure/operations/ ausente');
+    if (!fs.existsSync(azurePaths.profile)) warns.push('.oxe/cloud/azure/profile.json ausente');
+    if (!fs.existsSync(azurePaths.authStatus)) warns.push('.oxe/cloud/azure/auth-status.json ausente');
+  }
   return warns;
 }
 
@@ -666,7 +748,7 @@ function runtimeWarnings(stateText, p) {
   /** @type {string[]} */
   const warns = [];
   const checkpointPending = /\*\*checkpoint_status:\*\*\s*`?pending_approval`?/i.test(stateText);
-  const runtimeBlocked = /\*\*runtime_status:\*\*\s*`?blocked`?/i.test(stateText);
+  const runtimeBlocked = /\*\*runtime_status:\*\*\s*`?(blocked|waiting_approval|failed)`?/i.test(stateText);
   if (checkpointPending && !fs.existsSync(p.checkpoints)) {
     warns.push('STATE.md indica checkpoint pendente, mas o índice de checkpoints não existe');
   }
@@ -677,7 +759,26 @@ function runtimeWarnings(stateText, p) {
     const raw = fs.readFileSync(p.runtime, 'utf8');
     if (!/##\s*Checkpoints/i.test(raw)) warns.push('EXECUTION-RUNTIME.md sem seção "Checkpoints"');
     if (!/##\s*Agentes ativos/i.test(raw)) warns.push('EXECUTION-RUNTIME.md sem seção "Agentes ativos"');
+    if (!/Run ID/i.test(raw)) warns.push('EXECUTION-RUNTIME.md sem referência explícita de Run ID');
+    if (!/Tracing operacional/i.test(raw)) warns.push('EXECUTION-RUNTIME.md sem seção "Tracing operacional"');
   }
+  if (!fs.existsSync(p.activeRun)) {
+    warns.push('ACTIVE-RUN.json não existe para o escopo atual');
+  }
+  if (!fs.existsSync(p.events)) {
+    warns.push('OXE-EVENTS.ndjson não existe para o escopo atual');
+  }
+  const runState = operational.readRunState(path.dirname(p.oxe), p.activeSession || null);
+  const checkpointRows = [];
+  if (fs.existsSync(p.checkpoints)) {
+    const checkpointText = fs.readFileSync(p.checkpoints, 'utf8');
+    for (const line of checkpointText.split('\n')) {
+      const match = line.match(/^\|\s*(CP-[^|]+)\|\s*[^|]*\|\s*[^|]*\|\s*[^|]*\|\s*([^|]+)\|/i);
+      if (!match) continue;
+      checkpointRows.push({ id: match[1].trim(), status: match[2].trim() });
+    }
+  }
+  for (const warn of operational.runtimeStateWarnings(runState, checkpointRows)) warns.push(warn);
   return warns;
 }
 
@@ -691,6 +792,7 @@ function capabilityWarnings(p) {
   if (fs.existsSync(p.capabilitiesDir) && !fs.existsSync(p.capabilitiesIndex)) {
     warns.push('Existem capabilities em .oxe/capabilities/, mas .oxe/CAPABILITIES.md não existe');
   }
+  for (const warn of operational.capabilityCatalogWarnings(path.dirname(p.oxe))) warns.push(warn);
   return warns;
 }
 
@@ -708,6 +810,27 @@ function investigationWarnings(p) {
 }
 
 /**
+ * @param {string} stateText
+ * @param {ReturnType<typeof scopedOxePaths>} p
+ * @returns {string[]}
+ */
+function planReviewWarnings(stateText, p) {
+  /** @type {string[]} */
+  const warns = [];
+  const reviewStatus = parsePlanReviewStatus(stateText);
+  if (fs.existsSync(p.plan) && !reviewStatus) {
+    warns.push('PLAN.md existe, mas STATE.md não declara plan_review_status');
+  }
+  if (reviewStatus && !fs.existsSync(p.planReview)) {
+    warns.push('STATE.md declara revisão do plano, mas PLAN-REVIEW.md não existe');
+  }
+  if (reviewStatus === 'needs_revision' || reviewStatus === 'rejected') {
+    warns.push(`Plano em estado ${reviewStatus} — revisão adicional necessária antes de executar`);
+  }
+  return warns;
+}
+
+/**
  * Próximo passo único (espelha o workflow next.md).
  * @param {string} target
  * @param {{ discuss_before_plan?: boolean }} cfg
@@ -720,6 +843,7 @@ function suggestNextStep(target, cfg = {}) {
   const threshold = Number(cfg.plan_confidence_threshold) || 70;
   const has = (/** @type {string} */ f) => fs.existsSync(f);
   const mapsComplete = EXPECTED_CODEBASE_MAPS.every((f) => has(path.join(p.codebase, f)));
+  const azureActive = azure.isAzureContextEnabled(target, cfg);
 
   if (!has(p.oxe) || !has(p.state)) {
     return {
@@ -739,6 +863,44 @@ function suggestNextStep(target, cfg = {}) {
       reason: 'Mapas do codebase incompletos e sem QUICK.md — atualize o contexto com scan',
       artifacts: ['.oxe/codebase/'],
     };
+  }
+
+  if (azureActive) {
+    const azureHealth = azure.azureDoctor(target, cfg, {
+      autoInstall: false,
+      write: false,
+    });
+    if (!azureHealth.authStatus || !azureHealth.authStatus.login_active) {
+      return {
+        step: 'azure-auth',
+        cursorCmd: 'npx oxe-cc azure auth login',
+        reason: 'Contexto Azure ativo, mas sem sessão Azure CLI autenticada',
+        artifacts: ['.oxe/cloud/azure/profile.json', '.oxe/cloud/azure/auth-status.json'],
+      };
+    }
+    if (!azureHealth.profile || !azureHealth.profile.subscription_id) {
+      return {
+        step: 'azure-auth',
+        cursorCmd: 'npx oxe-cc azure auth set-subscription --subscription <id-ou-nome>',
+        reason: 'Contexto Azure ativo, mas a subscription operacional ainda não está definida',
+        artifacts: ['.oxe/cloud/azure/profile.json', '.oxe/cloud/azure/auth-status.json'],
+      };
+    }
+    const maxAgeHours = cfg.azure && cfg.azure.inventory_max_age_hours != null
+      ? Number(cfg.azure.inventory_max_age_hours)
+      : 24;
+    const syncedAt = Date.parse(String(azureHealth.inventory && azureHealth.inventory.synced_at || ''));
+    const staleInventory =
+      !azureHealth.inventory ||
+      (maxAgeHours > 0 && !Number.isNaN(syncedAt) && ((Date.now() - syncedAt) / (1000 * 60 * 60)) > maxAgeHours);
+    if (staleInventory) {
+      return {
+        step: 'azure-sync',
+        cursorCmd: 'npx oxe-cc azure sync',
+        reason: 'Contexto Azure ativo, mas o inventário está ausente ou stale',
+        artifacts: ['.oxe/cloud/azure/inventory.json', '.oxe/cloud/azure/INVENTORY.md'],
+      };
+    }
   }
 
   if (phase === 'quick_active' || (has(p.quick) && !has(p.plan))) {
@@ -784,6 +946,42 @@ function suggestNextStep(target, cfg = {}) {
       cursorCmd: '/oxe-plan --replan',
       reason: `O plano atual ainda não atingiu confiança executável (limiar ${threshold}%)`,
       artifacts: ['.oxe/PLAN.md', '.oxe/STATE.md'],
+    };
+  }
+
+  const reviewStatus = parsePlanReviewStatus(stateText);
+  if (phase === 'plan_ready' && (reviewStatus === 'needs_revision' || reviewStatus === 'rejected')) {
+    return {
+      step: 'plan',
+      cursorCmd: '/oxe-plan --replan',
+      reason: `Revisão do plano em estado ${reviewStatus} — ajuste o plano antes de executar`,
+      artifacts: ['.oxe/PLAN.md', '.oxe/PLAN-REVIEW.md', '.oxe/STATE.md'],
+    };
+  }
+  if (phase === 'plan_ready' && (!reviewStatus || reviewStatus === 'draft' || reviewStatus === 'in_review')) {
+    return {
+      step: 'dashboard',
+      cursorCmd: '/oxe-dashboard',
+      reason: 'Plano pronto, mas ainda não passou por revisão/aprovação visual',
+      artifacts: ['.oxe/PLAN.md', '.oxe/PLAN-REVIEW.md', '.oxe/STATE.md'],
+    };
+  }
+
+  const activeRun = operational.readRunState(target, parseActiveSession(stateText));
+  if (activeRun && activeRun.status === 'waiting_approval') {
+    return {
+      step: 'dashboard',
+      cursorCmd: '/oxe-dashboard',
+      reason: 'ACTIVE-RUN está aguardando aprovação formal antes de continuar',
+      artifacts: ['.oxe/ACTIVE-RUN.json', '.oxe/CHECKPOINTS.md', '.oxe/OXE-EVENTS.ndjson'],
+    };
+  }
+  if (activeRun && activeRun.status === 'paused') {
+    return {
+      step: 'execute',
+      cursorCmd: '/oxe-execute',
+      reason: 'ACTIVE-RUN está pausado — retome a execução a partir do cursor atual',
+      artifacts: ['.oxe/ACTIVE-RUN.json', '.oxe/EXECUTION-RUNTIME.md'],
     };
   }
 
@@ -904,21 +1102,52 @@ function buildHealthReport(target) {
   ];
   const sessionWarn = sessionWarnings(target, activeSession);
   const installWarn = installationCompletenessWarnings(target);
+  const reviewWarn = planReviewWarnings(stateText, p);
   const planSelfEvaluation = parsePlanSelfEvaluation(p.plan);
+  const activeRun = operational.readRunState(target, activeSession);
+  const eventsSummary = operational.summarizeEvents(operational.readEvents(target, activeSession));
+  const memoryLayers = operational.buildMemoryLayers(target, activeSession);
+  const azureActive = azure.isAzureContextEnabled(target, config);
+  const azureReport = azureActive
+    ? azure.azureDoctor(target, config, {
+        autoInstall: false,
+        write: false,
+      })
+    : null;
+  const azureInventorySyncedAt = azureReport && azureReport.inventory ? azureReport.inventory.synced_at || null : null;
+  const azureInventoryMaxAgeHours = config.azure && config.azure.inventory_max_age_hours != null
+    ? Number(config.azure.inventory_max_age_hours)
+    : 24;
+  let azureInventoryStale = { stale: false, hours: null };
+  if (azureInventorySyncedAt) {
+    const syncedAt = Date.parse(String(azureInventorySyncedAt));
+    if (!Number.isNaN(syncedAt)) {
+      const ageHours = Math.floor((Date.now() - syncedAt) / (1000 * 60 * 60));
+      azureInventoryStale = {
+        stale: azureInventoryMaxAgeHours > 0 ? ageHours > azureInventoryMaxAgeHours : false,
+        hours: ageHours,
+      };
+    }
+  } else if (azureActive) {
+    azureInventoryStale = { stale: true, hours: null };
+  }
   const next = suggestNextStep(target, {
     discuss_before_plan: config.discuss_before_plan,
     plan_confidence_threshold: threshold,
+    azure: config.azure,
   });
   const hardFailure = Boolean(parseError) || sessionWarn.some((w) => /não existe|sem SESSION\.md/i.test(w));
   const warningCount =
     phaseWarn.length +
     runtimeWarn.length +
+    reviewWarn.length +
     specWarn.length +
     planWarn.length +
     capabilityWarn.length +
     investigationWarn.length +
     sessionWarn.length +
     installWarn.length +
+    (azureReport ? azureReport.warnings.length : 0) +
     (sumWarn ? 1 : 0);
   const healthStatus = hardFailure ? 'broken' : warningCount > 0 ? 'warning' : 'healthy';
 
@@ -937,6 +1166,7 @@ function buildHealthReport(target) {
     staleLessons,
     phaseWarn,
     runtimeWarn,
+    reviewWarn,
     capabilityWarn,
     investigationWarn,
     sessionWarn,
@@ -945,6 +1175,25 @@ function buildHealthReport(target) {
     specWarn,
     planWarn,
     planSelfEvaluation,
+    planReviewStatus: parsePlanReviewStatus(stateText),
+    activeRun,
+    eventsSummary,
+    memoryLayers,
+    azureActive,
+    azure: azureReport
+      ? {
+          profile: azureReport.profile,
+          authStatus: azureReport.authStatus,
+          inventorySummary: azureReport.inventorySummary,
+          inventoryPath: azureReport.paths.inventory,
+          operationsPath: azureReport.paths.operationsDir,
+          inventorySyncedAt: azureInventorySyncedAt,
+          inventoryStale: azureInventoryStale,
+          pendingOperations: azure.listAzureOperations(target).filter((operation) => operation.phase === 'waiting_approval').length,
+          lastOperation: azure.listAzureOperations(target)[0] || null,
+          warnings: azureReport.warnings,
+        }
+      : null,
     healthStatus,
     next,
     scanFocusGlobs: config.scan_focus_globs,
@@ -968,6 +1217,7 @@ module.exports = {
   parseLastCompactDate,
   parseLastRetroDate,
   parseActiveSession,
+  parsePlanReviewStatus,
   isStaleScan,
   isStaleLessons,
   planAgentsWarnings,
@@ -975,6 +1225,7 @@ module.exports = {
   parsePlanSelfEvaluation,
   planSelfEvaluationWarnings,
   runtimeWarnings,
+  planReviewWarnings,
   capabilityWarnings,
   investigationWarnings,
   phaseCoherenceWarnings,

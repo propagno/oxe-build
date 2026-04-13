@@ -20,7 +20,10 @@ function resolveInstallOptionsFromConfig(projectRoot, optsIn) {
   if (!fs.existsSync(projectRoot)) return { options: opts, warnings };
 
   const { config, parseError } = health.loadOxeConfigMerged(projectRoot);
-  if (parseError) return { options: opts, warnings };
+  if (parseError) {
+    warnings.push(`config.json ignorado (parse error): ${parseError}`);
+    return { options: opts, warnings };
+  }
 
   const inst = config.install;
   if (!inst || typeof inst !== 'object' || Array.isArray(inst)) return { options: opts, warnings };

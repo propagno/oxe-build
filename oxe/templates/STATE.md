@@ -34,9 +34,18 @@
 
 ## Runtime operacional (opcional)
 
-- **runtime_status:** `pending` | `running` | `blocked` | `done` | —
+- **runtime_status:** `planned` | `running` | `paused` | `waiting_approval` | `failed` | `completed` | `replaying` | `aborted` | —
 - **runtime_ref:** `.oxe/EXECUTION-RUNTIME.md` ou artefato de sessão correspondente
+- **active_run_ref:** `.oxe/ACTIVE-RUN.json` ou artefato de sessão correspondente
+- **events_ref:** `.oxe/OXE-EVENTS.ndjson` ou artefato de sessão correspondente
 - **Notas:** (agentes ativos, bloqueio principal, handoff pendente)
+
+## Revisão do plano (opcional — dashboard / aprovação)
+
+- **plan_review_status:** `draft` | `in_review` | `approved` | `rejected` | `needs_revision` | —
+- **plan_review_updated:** (ISO legível — ex.: `2026-04-10T14:22:00-03:00`)
+- **plan_review_ref:** `.oxe/PLAN-REVIEW.md` ou artefato de sessão correspondente
+- **Notas:** (ex.: aprovado para execute; revisão pendente da onda 2)
 
 ## Blueprint de agentes (sessão) (opcional — `/oxe-plan-agent`)
 
@@ -98,6 +107,13 @@ _(O agente pode preencher após cada onda.)_
 Sidecars de memória persistente por agente/sessão. Armazenados em `.oxe/memory/`.
 
 - (nenhum ou lista: ex.: `architect-2025-01-15.md`, `researcher-auth-2025-01-14.md`)
+
+## Camadas de memória (contrato)
+
+- **memory_read_order:** `runtime_state -> session_memory -> project_memory -> evidence`
+- **session_memory_ref:** `SESSION.md` ou —
+- **project_memory_ref:** `.oxe/global/LESSONS.md`
+- **evidence_ref:** `INVESTIGATIONS.md`, `VERIFY.md` e derivados
 
 ## Capabilities nativas (opcional)
 

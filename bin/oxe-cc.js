@@ -18,6 +18,9 @@ const oxeAgentInstall = require(path.join(__dirname, 'lib', 'oxe-agent-install.c
 const oxeWorkflows = require(path.join(__dirname, 'lib', 'oxe-workflows.cjs'));
 const oxeInstallResolve = require(path.join(__dirname, 'lib', 'oxe-install-resolve.cjs'));
 const oxeNpmVersion = require(path.join(__dirname, 'lib', 'oxe-npm-version.cjs'));
+const oxeDashboard = require(path.join(__dirname, 'lib', 'oxe-dashboard.cjs'));
+const oxeOperational = require(path.join(__dirname, 'lib', 'oxe-operational.cjs'));
+const oxeAzure = require(path.join(__dirname, 'lib', 'oxe-azure.cjs'));
 
 /** Merge markers for ~/.copilot/copilot-instructions.md (bloco OXE). */
 const OXE_INST_BEGIN = '<!-- oxe-cc:install-begin -->';
@@ -329,6 +332,8 @@ function parseInstallArgs(argv) {
     jsonOutput: false,
     /** Lembretes agregados scan/compact em `status`. */
     statusHints: false,
+    /** Visão extendida CLI-first: coverage matrix + readiness gate no terminal. */
+    statusFull: false,
     restPositional: [],
   };
   for (let i = 0; i < argv.length; i++) {
@@ -373,6 +378,7 @@ function parseInstallArgs(argv) {
       out.dir = path.resolve(argv[++i]);
     } else if (a === '--json') out.jsonOutput = true;
     else if (a === '--hints') out.statusHints = true;
+    else if (a === '--full') out.statusFull = true;
     else if (!a.startsWith('-')) out.restPositional.push(a);
     else {
       out.parseError = true;
@@ -1029,7 +1035,7 @@ function bootstrapOxe(target, opts) {
   }
 
   if (opts.dryRun) {
-    console.log(`${dim}init${reset}  ${oxeDir}/ (STATE.md, config.json, codebase/, capabilities/, investigations/, dashboard/)`);
+    console.log(`${dim}init${reset}  ${oxeDir}/ (STATE.md, config.json, codebase/, capabilities/, investigations/, dashboard/, runs/, OXE-EVENTS.ndjson, ACTIVE-RUN.json)`);
     ensureGitignoreIgnoresOxeDir(target, { dryRun: true });
     return;
   }
@@ -1108,11 +1114,29 @@ function bootstrapOxe(target, opts) {
     ensureDir(memoryDir);
   }
 
+  const runsDir = path.join(oxeDir, 'runs');
+  if (!fs.existsSync(runsDir)) {
+    ensureDir(runsDir);
+  }
+
   const runtimeSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'EXECUTION-RUNTIME.template.md');
   const runtimeDest = path.join(oxeDir, 'EXECUTION-RUNTIME.md');
   if (fs.existsSync(runtimeSrc) && !fs.existsSync(runtimeDest)) {
     copyFile(runtimeSrc, runtimeDest, { dryRun: false });
     console.log(`${green}init${reset}  ${runtimeDest}`);
+  }
+
+  const activeRunSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'ACTIVE-RUN.template.json');
+  const activeRunDest = path.join(oxeDir, 'ACTIVE-RUN.json');
+  if (fs.existsSync(activeRunSrc) && !fs.existsSync(activeRunDest)) {
+    copyFile(activeRunSrc, activeRunDest, { dryRun: false });
+    console.log(`${green}init${reset}  ${activeRunDest}`);
+  }
+
+  const eventsDest = path.join(oxeDir, 'OXE-EVENTS.ndjson');
+  if (!fs.existsSync(eventsDest)) {
+    fs.writeFileSync(eventsDest, '', 'utf8');
+    console.log(`${green}init${reset}  ${eventsDest}`);
   }
 
   const checkpointsSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'CHECKPOINTS.template.md');
@@ -1140,6 +1164,21 @@ function bootstrapOxe(target, opts) {
   }
 
   ensureGitignoreIgnoresOxeDir(target, { dryRun: false });
+}
+
+/**
+ * @param {string} url
+ */
+function openUrlInBrowser(url) {
+  if (process.platform === 'win32') {
+    spawnSync('cmd', ['/c', 'start', '', url], { stdio: 'ignore', detached: true, shell: false });
+    return;
+  }
+  if (process.platform === 'darwin') {
+    spawnSync('open', [url], { stdio: 'ignore', detached: true, shell: false });
+    return;
+  }
+  spawnSync('xdg-open', [url], { stdio: 'ignore', detached: true, shell: false });
 }
 
 /**
@@ -1209,11 +1248,30 @@ function printOxeHealthDiagnostics(target, c, diagOpts = {}) {
   if (r.activeSession) {
     console.log(`  ${c ? dim : ''}Sessão ativa:${c ? reset : ''} ${r.activeSession}`);
   }
+    if (r.planReviewStatus) {
+      console.log(`  ${c ? dim : ''}Revisão do plano:${c ? reset : ''} ${r.planReviewStatus}`);
+    }
+    if (r.activeRun && r.activeRun.run_id) {
+      console.log(`  ${c ? dim : ''}Run ativo:${c ? reset : ''} ${r.activeRun.run_id} (${r.activeRun.status || 'planned'})`);
+    }
+    if (r.eventsSummary) {
+      console.log(`  ${c ? dim : ''}Tracing:${c ? reset : ''} ${r.eventsSummary.total} evento(s)`);
+    }
   if (r.planSelfEvaluation && r.planSelfEvaluation.hasSection) {
     const best = r.planSelfEvaluation.bestPlan || '—';
     const conf =
       typeof r.planSelfEvaluation.confidence === 'number' ? `${r.planSelfEvaluation.confidence}%` : '—';
     console.log(`  ${c ? dim : ''}Plano (autoavaliação):${c ? reset : ''} melhor=${best} | confiança=${conf}`);
+  }
+  if (r.azureActive && r.azure) {
+    console.log(`  ${c ? dim : ''}Azure:${c ? reset : ''} ${r.azure.authStatus && r.azure.authStatus.login_active ? 'login ativo' : 'sem login'} | subscription=${r.azure.profile && (r.azure.profile.subscription_name || r.azure.profile.subscription_id) || '—'}`);
+    console.log(`  ${c ? dim : ''}Azure inventory:${c ? reset : ''} total=${r.azure.inventorySummary ? r.azure.inventorySummary.total : 0} | pendências=${r.azure.pendingOperations || 0}`);
+    if (r.azure.inventoryStale && r.azure.inventoryStale.stale) {
+      console.log(`  ${yellow}AVISO${reset} Inventário Azure stale — rode ${cyan}npx oxe-cc azure sync${reset}`);
+    }
+    for (const warning of r.azure.warnings || []) {
+      console.log(`  ${yellow}AVISO${reset} ${warning}`);
+    }
   }
 
   if (!skipAge) {
@@ -1255,6 +1313,9 @@ function printOxeHealthDiagnostics(target, c, diagOpts = {}) {
   for (const w of r.runtimeWarn) {
     console.log(`  ${yellow}AVISO${reset} ${w}`);
   }
+  for (const w of r.reviewWarn) {
+    console.log(`  ${yellow}AVISO${reset} ${w}`);
+  }
   for (const w of r.capabilityWarn) {
     console.log(`  ${yellow}AVISO${reset} ${w}`);
   }
@@ -1279,14 +1340,99 @@ function printOxeHealthDiagnostics(target, c, diagOpts = {}) {
 }
 
 /**
+ * Imprime uma célula de coverage com cor ANSI.
+ * @param {boolean} exists
+ * @param {string} label
+ */
+function coverageCell(exists, label) {
+  const c = useAnsiColors();
+  return exists ? `${c ? green : ''}✓ ${label}${c ? reset : ''}` : `${c ? dim : ''}✗ ${label}${c ? reset : ''}`;
+}
+
+/**
+ * Visão CLI-first: health + coverage matrix + readiness gate no terminal.
  * @param {string} target
- * @param {{ json?: boolean, hints?: boolean }} [opts]
+ */
+function runStatusFull(target) {
+  const c = useAnsiColors();
+  const report = oxeHealth.buildHealthReport(target);
+  const p = oxeHealth.oxePaths(target);
+  const activeSession = report.activeSession || null;
+  let sp = p;
+  if (activeSession) {
+    sp = oxeHealth.scopedOxePaths(target, activeSession);
+  }
+
+  printSection('OXE ▸ status --full');
+  console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${target}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Fase:${c ? reset : ''} ${report.phase || '—'}`);
+
+  const healthColor = report.healthStatus === 'healthy' ? green : report.healthStatus === 'warning' ? yellow : red;
+  console.log(`  ${c ? green : ''}Saúde:${c ? reset : ''} ${c ? healthColor : ''}${report.healthStatus}${c ? reset : ''}`);
+
+  // Coverage matrix
+  const specPath = activeSession && sp.spec ? sp.spec : p.spec;
+  const planPath = activeSession && sp.plan ? sp.plan : p.plan;
+  const verifyPath = activeSession && sp.verify ? sp.verify : p.verify;
+  const specExists = fs.existsSync(specPath);
+  const planExists = fs.existsSync(planPath);
+  const verifyExists = fs.existsSync(verifyPath);
+  const lessonsExists = fs.existsSync(p.globalLessons || p.lessons);
+  const codebaseExists = fs.existsSync(p.codebase);
+
+  console.log(`\n  ${c ? yellow : ''}Coverage matrix${c ? reset : ''}`);
+  console.log(`  ${coverageCell(codebaseExists, 'codebase scan')}   ${coverageCell(specExists, 'SPEC.md')}   ${coverageCell(planExists, 'PLAN.md')}   ${coverageCell(verifyExists, 'VERIFY.md')}   ${coverageCell(lessonsExists, 'LESSONS.md')}`);
+
+  // Readiness gate
+  const ready = specExists && planExists && !report.planWarn.length && !report.runtimeWarn.length;
+  const gateColor = ready ? green : yellow;
+  console.log(`\n  ${c ? yellow : ''}Readiness gate${c ? reset : ''}`);
+  console.log(`  ${c ? gateColor : ''}${ready ? '✓ Pronto para executar' : '✗ Não pronto para executar'}${c ? reset : ''}`);
+  if (!specExists) console.log(`  ${c ? dim : ''}  • SPEC.md ausente — rode /oxe-spec${c ? reset : ''}`);
+  if (!planExists) console.log(`  ${c ? dim : ''}  • PLAN.md ausente — rode /oxe-plan${c ? reset : ''}`);
+  if (report.planWarn.length) {
+    for (const w of report.planWarn) {
+      console.log(`  ${c ? yellow : ''}  • ${w}${c ? reset : ''}`);
+    }
+  }
+
+  // Active run summary
+  if (report.activeRun) {
+    const ar = report.activeRun;
+    console.log(`\n  ${c ? yellow : ''}Active run${c ? reset : ''}`);
+    console.log(`  ${c ? dim : ''}Run:${c ? reset : ''} ${ar.run_id || '—'}   ${c ? dim : ''}Estado:${c ? reset : ''} ${ar.status || '—'}   ${c ? dim : ''}Onda:${c ? reset : ''} ${ar.current_wave != null ? ar.current_wave : '—'}`);
+  }
+
+  // Plan self-evaluation
+  if (report.planSelfEvaluation) {
+    const pse = report.planSelfEvaluation;
+    console.log(`\n  ${c ? yellow : ''}Autoavaliação do plano${c ? reset : ''}`);
+    if (pse.best_plan_current != null) {
+      const bestColor = pse.best_plan_current ? green : red;
+      console.log(`  ${c ? dim : ''}Melhor plano atual:${c ? reset : ''} ${c ? bestColor : ''}${pse.best_plan_current ? 'sim' : 'não'}${c ? reset : ''}`);
+    }
+    if (pse.confidence != null) {
+      const confColor = Number(pse.confidence) >= 70 ? green : Number(pse.confidence) >= 50 ? yellow : red;
+      console.log(`  ${c ? dim : ''}Confiança:${c ? reset : ''} ${c ? confColor : ''}${pse.confidence}%${c ? reset : ''}`);
+    }
+  }
+
+  console.log(`\n  ${c ? dim : ''}Próximo passo:${c ? reset : ''} ${c ? cyan : ''}${report.next && report.next.cursorCmd ? report.next.cursorCmd : '—'}${c ? reset : ''}`);
+  console.log(`  ${c ? dim : ''}Motivo:${c ? reset : ''} ${report.next && report.next.reason ? report.next.reason : '—'}`);
+  console.log(`\n  ${c ? dim : ''}Para visão operacional completa (web): ${cyan}oxe-cc dashboard${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}✓${c ? reset : ''} status --full concluído.\n`);
+}
+
+/**
+ * @param {string} target
+ * @param {{ json?: boolean, hints?: boolean, full?: boolean }} [opts]
  */
 function runStatus(target, opts = {}) {
   const { config } = oxeHealth.loadOxeConfigMerged(target);
-  const next = oxeHealth.suggestNextStep(target, { discuss_before_plan: config.discuss_before_plan });
   const report = oxeHealth.buildHealthReport(target);
   const routineHints = collectOxeRoutineHints(target, report, config);
+  const next = report.next;
 
   if (opts.json) {
     /** @type {Record<string, unknown>} */
@@ -1303,14 +1449,21 @@ function runStatus(target, opts = {}) {
       scanDate: report.scanDate,
       staleScan: report.stale,
       compactDate: report.compactDate,
-      staleCompact: report.staleCompact,
-      planSelfEvaluation: report.planSelfEvaluation,
-      diagnostics: {
+        staleCompact: report.staleCompact,
+        planSelfEvaluation: report.planSelfEvaluation,
+        planReviewStatus: report.planReviewStatus,
+        activeRun: report.activeRun,
+        eventsSummary: report.eventsSummary,
+        memoryLayers: report.memoryLayers,
+        azureActive: report.azureActive,
+        azure: report.azure,
+        diagnostics: {
         configParseError: report.configParseError,
         typeErrors: report.typeErrors,
         unknownConfigKeys: report.unknownConfigKeys,
         phaseWarnings: report.phaseWarn,
         runtimeWarnings: report.runtimeWarn,
+        reviewWarnings: report.reviewWarn,
         capabilityWarnings: report.capabilityWarn,
         investigationWarnings: report.investigationWarn,
         sessionWarnings: report.sessionWarn,
@@ -1695,6 +1848,9 @@ ${green}Uso:${reset}
   npx oxe-cc doctor [opções] [pasta-do-projeto]
   npx oxe-cc status [opções] [pasta-do-projeto]
   npx oxe-cc init-oxe [opções] [pasta-do-projeto]
+  npx oxe-cc dashboard [opções] [pasta-do-projeto]
+  npx oxe-cc runtime <status|start|pause|resume|replay> [opções] [pasta-do-projeto]
+  npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
   npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
   npx oxe-cc uninstall [opções] [pasta-do-projeto]
   npx oxe-cc update [opções] [argumentos extras…]
@@ -1716,6 +1872,67 @@ ${green}update${reset} (executa npx oxe-cc@latest --force na pasta do projeto)
   --dry-run                              mostra o comando sem executar
   [argumentos extras…]                   repassados ao oxe-cc (ex.: --cursor --global, --ide-local, --global-cli)
   ${dim}CI / sem rede:${reset} OXE_UPDATE_SKIP_REGISTRY=1 desativa consultas (--check sai 2; --if-newer sai 2 sem npx)
+
+${green}dashboard${reset} (interface web local para revisão e aprovação do plano)
+  --port <número>                        porta local (padrão: 4173)
+  --no-open                              não abre o browser automaticamente
+  --session <sessions/sNNN-slug>         força visualização de uma sessão específica
+  --dump-context                         imprime JSON consolidado e sai
+  --dir <pasta>                          raiz do projeto (padrão: diretório atual)
+
+${green}runtime${reset} (controle operacional explícito do ACTIVE-RUN)
+  status                                 mostra o run ativo resolvido para a sessão atual
+  start                                  cria um novo run com tracing inicial
+  pause                                  pausa o run ativo e preserva o cursor
+  resume                                 retoma o run ativo
+  replay                                 marca replay parcial por onda ou tarefa
+  --session <sessions/sNNN-slug>         força sessão específica
+  --wave <número>                        fixa onda atual/cursor
+  --task <Tn>                            fixa tarefa atual/cursor
+  --mode <complete|wave|task>            modo operacional do cursor
+  --reason <texto>                       motivo explícito da transição
+  --dir <pasta>                          raiz do projeto (padrão: diretório atual)
+
+${green}azure${reset} (provider Azure nativo via Azure CLI no Windows)
+  status                                 estado compacto: CLI, login, subscription, inventário, pendências
+  doctor                                 valida Azure CLI, login, subscription e inventário
+  auth login [--tenant <id>]             login interativo via Azure CLI (Entra ID: use --tenant <tenant-id>)
+  auth whoami                            mostra identidade, tenant, subscription e cloud
+  auth set-subscription --subscription <id|nome>
+                                         fixa a subscription operacional do projeto
+  Fluxo corporativo: auth login --tenant <tenant-id> → auth set-subscription --subscription <dev-sub-id>
+  sync                                   sincroniza inventário via Azure Resource Graph
+  sync --diff                            sincroniza e mostra recursos adicionados/removidos
+  find <texto>                           busca recursos no inventário local materializado
+  find <texto> --type <tipo>             filtra por tipo de serviço (ex.: servicebus, eventgrid, sql)
+  find <texto> --filter-rg <rg>          filtra por resource group
+  servicebus <list|show|plan|apply>      namespace, queue, topic, subscription
+  eventgrid <list|show|plan|apply>       topic, system-topic, event-subscription
+  sql <list|show|plan|apply>             server, database, firewall-rule
+  operations list                        histórico de operações planejadas/aplicadas/pendentes
+  --kind <tipo>                          ex.: namespace, queue, topic, system-topic, database
+  --resource-group <rg>                  resource group alvo
+  --name <nome>                          nome principal do recurso
+  --namespace <nome>                     namespace Service Bus
+  --topic-name <nome>                    topic Service Bus
+  --subscription-name <nome>             subscription de topic Service Bus
+  --source-resource-id <id>              origem de event subscription
+  --endpoint <url|id>                    endpoint de Event Grid
+  --server <nome> / --database <nome>    recursos Azure SQL
+  --location <região>                    localização alvo
+  --admin-user <user>                    admin do SQL server (plan/apply)
+  --admin-password-env <ENV>             variável de ambiente com password do SQL admin
+  --start-ip-address / --end-ip-address  faixa de firewall rule para Azure SQL
+  --approve                              aplica mutação já planejada após checkpoint formal
+  --dry-run                              pré-visualiza comando sem executar nem criar artefatos
+  --diff                                 (sync) exibe diff de recursos adicionados/removidos
+  --type <tipo>                          (find) filtra por família de serviço
+  --filter-rg <rg>                       (find) filtra por resource group
+  --tenant <id>                          (auth login) tenant Entra ID para contas corporativas
+  --vpn-confirmed                        confirma conexão VPN quando vpn_required está configurado
+  --override-policy                      override explícito para policy deny_unless_overridden
+  --session <sessions/sNNN-slug>         associa a operação ao runtime da sessão ativa
+  --dir <pasta>                          raiz do projeto (padrão: diretório atual)
 
 ${green}Opções da instalação:${reset}
   --cursor       Copia comandos e regras para ~/.cursor (padrão com --all)
@@ -2710,6 +2927,528 @@ function parseCapabilitiesArgs(argv) {
   return out;
 }
 
+/**
+ * @typedef {{ help: boolean, dir: string, port: number, noOpen: boolean, readOnly: boolean, dumpContext: boolean, activeSession: string|null, parseError: boolean, unknownFlag: string }} DashboardOpts
+ */
+
+/**
+ * @typedef {{ help: boolean, dir: string, action: string, activeSession: string|null, wave: number|null, task: string, mode: string, reason: string, parseError: boolean, unknownFlag: string }} RuntimeOpts
+ */
+
+/**
+ * @typedef {{
+ *   help: boolean,
+ *   dir: string,
+ *   scope: string,
+ *   action: string,
+ *   query: string,
+ *   activeSession: string|null,
+ *   subscription: string,
+ *   kind: string,
+ *   resourceGroup: string,
+ *   name: string,
+ *   namespace: string,
+ *   topicName: string,
+ *   subscriptionName: string,
+ *   sourceResourceId: string,
+ *   endpoint: string,
+ *   location: string,
+ *   server: string,
+ *   database: string,
+ *   adminUser: string,
+ *   adminPasswordEnv: string,
+ *   startIpAddress: string,
+ *   endIpAddress: string,
+ *   approve: boolean,
+ *   overridePolicy: boolean,
+ *   dryRun: boolean,
+ *   diff: boolean,
+ *   filterType: string,
+ *   filterRg: string,
+ *   vpnConfirmed: boolean,
+ *   tenant: string,
+ *   parseError: boolean,
+ *   unknownFlag: string
+ * }} AzureOpts
+ */
+
+/**
+ * @param {string[]} argv
+ * @returns {DashboardOpts}
+ */
+function parseDashboardArgs(argv) {
+  /** @type {DashboardOpts} */
+  const out = {
+    help: false,
+    dir: process.cwd(),
+    port: 4173,
+    noOpen: false,
+    readOnly: false,
+    dumpContext: false,
+    activeSession: null,
+    parseError: false,
+    unknownFlag: '',
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '-h' || a === '--help') out.help = true;
+    else if (a === '--dir' && argv[i + 1]) out.dir = path.resolve(argv[++i]);
+    else if (a === '--port' && argv[i + 1]) out.port = Number(argv[++i]) || 4173;
+    else if (a === '--no-open') out.noOpen = true;
+    else if (a === '--read-only') out.readOnly = true;
+    else if (a === '--dump-context') out.dumpContext = true;
+    else if (a === '--session' && argv[i + 1]) out.activeSession = String(argv[++i]).replace(/\\/g, '/');
+    else if (!a.startsWith('-') && i === 0) out.dir = path.resolve(a);
+    else {
+      out.parseError = true;
+      out.unknownFlag = a;
+      break;
+    }
+  }
+  return out;
+}
+
+/**
+ * @param {string[]} argv
+ * @returns {RuntimeOpts}
+ */
+function parseRuntimeArgs(argv) {
+  /** @type {RuntimeOpts} */
+  const out = {
+    help: false,
+    dir: process.cwd(),
+    action: 'status',
+    activeSession: null,
+    wave: null,
+    task: '',
+    mode: '',
+    reason: '',
+    parseError: false,
+    unknownFlag: '',
+  };
+  const positionals = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '-h' || a === '--help') out.help = true;
+    else if (a === '--dir' && argv[i + 1]) out.dir = path.resolve(argv[++i]);
+    else if (a === '--session' && argv[i + 1]) out.activeSession = String(argv[++i]).replace(/\\/g, '/');
+    else if (a === '--wave' && argv[i + 1]) out.wave = Number(argv[++i]);
+    else if (a === '--task' && argv[i + 1]) out.task = String(argv[++i]);
+    else if (a === '--mode' && argv[i + 1]) out.mode = String(argv[++i]);
+    else if (a === '--reason' && argv[i + 1]) out.reason = String(argv[++i]);
+    else if (!a.startsWith('-')) positionals.push(a);
+    else {
+      out.parseError = true;
+      out.unknownFlag = a;
+      break;
+    }
+  }
+  if (positionals[0]) out.action = positionals[0];
+  if (positionals[1]) out.dir = path.resolve(positionals[1]);
+  if (Number.isNaN(out.wave)) out.wave = null;
+  return out;
+}
+
+/**
+ * @param {string[]} argv
+ * @returns {AzureOpts}
+ */
+function parseAzureArgs(argv) {
+  /** @type {AzureOpts} */
+  const out = {
+    help: false,
+    dir: process.cwd(),
+    scope: 'doctor',
+    action: '',
+    query: '',
+    activeSession: null,
+    subscription: '',
+    kind: '',
+    resourceGroup: '',
+    name: '',
+    namespace: '',
+    topicName: '',
+    subscriptionName: '',
+    sourceResourceId: '',
+    endpoint: '',
+    location: '',
+    server: '',
+    database: '',
+    adminUser: '',
+    adminPasswordEnv: '',
+    startIpAddress: '',
+    endIpAddress: '',
+    approve: false,
+    overridePolicy: false,
+    dryRun: false,
+    diff: false,
+    filterType: '',
+    filterRg: '',
+    vpnConfirmed: false,
+    tenant: '',
+    parseError: false,
+    unknownFlag: '',
+  };
+  const positionals = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '-h' || a === '--help') out.help = true;
+    else if (a === '--dir' && argv[i + 1]) out.dir = path.resolve(argv[++i]);
+    else if (a === '--session' && argv[i + 1]) out.activeSession = String(argv[++i]).replace(/\\/g, '/');
+    else if (a === '--subscription' && argv[i + 1]) out.subscription = String(argv[++i]);
+    else if (a === '--kind' && argv[i + 1]) out.kind = String(argv[++i]);
+    else if (a === '--resource-group' && argv[i + 1]) out.resourceGroup = String(argv[++i]);
+    else if (a === '--name' && argv[i + 1]) out.name = String(argv[++i]);
+    else if (a === '--namespace' && argv[i + 1]) out.namespace = String(argv[++i]);
+    else if (a === '--topic-name' && argv[i + 1]) out.topicName = String(argv[++i]);
+    else if (a === '--subscription-name' && argv[i + 1]) out.subscriptionName = String(argv[++i]);
+    else if (a === '--source-resource-id' && argv[i + 1]) out.sourceResourceId = String(argv[++i]);
+    else if (a === '--endpoint' && argv[i + 1]) out.endpoint = String(argv[++i]);
+    else if (a === '--location' && argv[i + 1]) out.location = String(argv[++i]);
+    else if (a === '--server' && argv[i + 1]) out.server = String(argv[++i]);
+    else if (a === '--database' && argv[i + 1]) out.database = String(argv[++i]);
+    else if (a === '--admin-user' && argv[i + 1]) out.adminUser = String(argv[++i]);
+    else if (a === '--admin-password-env' && argv[i + 1]) out.adminPasswordEnv = String(argv[++i]);
+    else if (a === '--start-ip-address' && argv[i + 1]) out.startIpAddress = String(argv[++i]);
+    else if (a === '--end-ip-address' && argv[i + 1]) out.endIpAddress = String(argv[++i]);
+    else if (a === '--approve') out.approve = true;
+    else if (a === '--override-policy') out.overridePolicy = true;
+    else if (a === '--dry-run') out.dryRun = true;
+    else if (a === '--diff') out.diff = true;
+    else if (a === '--type' && argv[i + 1]) out.filterType = String(argv[++i]);
+    else if (a === '--filter-rg' && argv[i + 1]) out.filterRg = String(argv[++i]);
+    else if (a === '--vpn-confirmed') out.vpnConfirmed = true;
+    else if (a === '--tenant' && argv[i + 1]) out.tenant = String(argv[++i]);
+    else if (!a.startsWith('-')) positionals.push(a);
+    else {
+      out.parseError = true;
+      out.unknownFlag = a;
+      break;
+    }
+  }
+  if (positionals[0]) out.scope = String(positionals[0]);
+  if (positionals[1]) out.action = String(positionals[1]);
+  if (out.scope === 'find') {
+    out.query = positionals.slice(1).join(' ').trim();
+  } else if (!out.action && positionals[2]) {
+    out.query = positionals.slice(2).join(' ').trim();
+  } else if (positionals[2]) {
+    out.query = positionals.slice(2).join(' ').trim();
+  }
+  return out;
+}
+
+/**
+ * @param {DashboardOpts} opts
+ */
+async function runDashboard(opts) {
+  assertNotWslWindowsNode();
+  if (!fs.existsSync(opts.dir)) {
+    console.error(`${yellow}Diretório não encontrado: ${opts.dir}${reset}`);
+    process.exit(1);
+  }
+  const target = opts.dir;
+  if (opts.dumpContext) {
+    console.log(JSON.stringify(oxeDashboard.loadDashboardContext(target, { activeSession: opts.activeSession }), null, 2));
+    return;
+  }
+  const c = useAnsiColors();
+  printSection('OXE ▸ dashboard');
+  const server = oxeDashboard.createDashboardServer(target, { activeSession: opts.activeSession });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(opts.port, '127.0.0.1', () => resolve());
+  });
+  const address = server.address();
+  const port = address && typeof address === 'object' ? address.port : opts.port;
+  const url = `http://127.0.0.1:${port}/`;
+  console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${target}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}URL:${c ? reset : ''} ${c ? cyan : ''}${url}${c ? reset : ''}`);
+  if (opts.readOnly) {
+    console.log(`  ${c ? yellow : ''}Modo:${c ? reset : ''} read-only (UI visual; persistência deve ser evitada no uso desta flag)`);
+  }
+  if (!opts.noOpen) {
+    try {
+      openUrlInBrowser(url);
+      console.log(`  ${c ? green : ''}✓${c ? reset : ''} Browser aberto.`);
+    } catch {
+      console.log(`  ${yellow}Não foi possível abrir o browser automaticamente.${reset}`);
+    }
+  }
+  console.log(`  ${dim}Pressione Ctrl+C para encerrar o servidor local.${reset}\n`);
+  await new Promise(() => {});
+}
+
+/**
+ * @param {RuntimeOpts} opts
+ */
+function runRuntime(opts) {
+  const c = useAnsiColors();
+  printSection('OXE ▸ runtime');
+  if (!fs.existsSync(opts.dir)) {
+    console.error(`${yellow}Diretório não encontrado: ${opts.dir}${reset}`);
+    process.exit(1);
+  }
+  bootstrapOxe(opts.dir, { dryRun: false, force: false });
+  const statePath = oxeHealth.oxePaths(opts.dir).state;
+  const stateText = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : '';
+  const activeSession = opts.activeSession || oxeHealth.parseActiveSession(stateText) || null;
+  const p = oxeOperational.operationalPaths(opts.dir, activeSession);
+  console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+
+  if (opts.action === 'status') {
+    const current = oxeOperational.readRunState(opts.dir, activeSession);
+    if (!current) {
+      console.log(`  ${yellow}Nenhum ACTIVE-RUN encontrado.${reset}`);
+      return;
+    }
+    console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${current.run_id}`);
+    console.log(`  ${c ? green : ''}Estado:${c ? reset : ''} ${current.status}`);
+    console.log(`  ${c ? green : ''}Cursor:${c ? reset : ''} onda=${current.cursor && current.cursor.wave != null ? current.cursor.wave : '—'} tarefa=${current.cursor && current.cursor.task ? current.cursor.task : '—'} modo=${current.cursor && current.cursor.mode ? current.cursor.mode : '—'}`);
+    console.log(`  ${c ? green : ''}Arquivo:${c ? reset : ''} ${path.join(p.runsDir, `${current.run_id}.json`)}`);
+    return;
+  }
+
+  try {
+    const next = oxeOperational.applyRuntimeAction(opts.dir, activeSession, {
+      action: opts.action,
+      wave: opts.wave,
+      task: opts.task || null,
+      mode: opts.mode || null,
+      reason: opts.reason || '',
+    });
+    console.log(`  ${c ? green : ''}✓${c ? reset : ''} Runtime atualizado.`);
+    console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${next.run_id}`);
+    console.log(`  ${c ? green : ''}Estado:${c ? reset : ''} ${next.status}`);
+    console.log(`  ${c ? green : ''}Cursor:${c ? reset : ''} onda=${next.cursor && next.cursor.wave != null ? next.cursor.wave : '—'} tarefa=${next.cursor && next.cursor.task ? next.cursor.task : '—'} modo=${next.cursor && next.cursor.mode ? next.cursor.mode : '—'}`);
+    console.log(`  ${c ? green : ''}Trace:${c ? reset : ''} ${p.events}`);
+  } catch (err) {
+    console.error(`${red}${err && err.message ? err.message : 'Falha ao atualizar runtime.'}${reset}`);
+    process.exit(1);
+  }
+}
+
+/**
+ * @param {AzureOpts} opts
+ */
+function runAzure(opts) {
+  const c = useAnsiColors();
+  printSection('OXE ▸ azure');
+  if (!fs.existsSync(opts.dir)) {
+    console.error(`${yellow}Diretório não encontrado: ${opts.dir}${reset}`);
+    process.exit(1);
+  }
+  bootstrapOxe(opts.dir, { dryRun: false, force: false });
+  oxeAzure.ensureAzureArtifacts(opts.dir);
+  oxeAzure.ensureAzureCapabilities(opts.dir);
+  writeCapabilitiesIndex(opts.dir);
+  const { config } = oxeHealth.loadOxeConfigMerged(opts.dir);
+  const statePath = oxeHealth.oxePaths(opts.dir).state;
+  const stateText = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : '';
+  const activeSession = opts.activeSession || oxeHealth.parseActiveSession(stateText) || null;
+  const azureCfg = config.azure && typeof config.azure === 'object' ? config.azure : {};
+  const preferredLocation = Array.isArray(azureCfg.preferred_locations) && azureCfg.preferred_locations.length
+    ? String(azureCfg.preferred_locations[0])
+    : '';
+  const input = {
+    kind: opts.kind,
+    resourceGroup: opts.resourceGroup || String(azureCfg.default_resource_group || ''),
+    name: opts.name || opts.server,
+    namespace: opts.namespace,
+    topicName: opts.topicName,
+    subscriptionName: opts.subscriptionName,
+    sourceResourceId: opts.sourceResourceId,
+    endpoint: opts.endpoint,
+    location: opts.location || preferredLocation,
+    server: opts.server,
+    database: opts.database,
+    adminUser: opts.adminUser,
+    adminPasswordEnv: opts.adminPasswordEnv || 'AZURE_SQL_ADMIN_PASSWORD',
+    startIpAddress: opts.startIpAddress,
+    endIpAddress: opts.endIpAddress,
+    env: process.env,
+  };
+
+  console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+
+  try {
+    if (opts.scope === 'status') {
+      const st = oxeAzure.statusAzure(opts.dir, config);
+      const loginColor = st.loginActive ? green : red;
+      const invColor = st.inventoryPresent && !st.inventoryStale ? green : yellow;
+      console.log(`  ${c ? (st.cliInstalled ? green : red) : ''}CLI:${c ? reset : ''}       ${st.cliInstalled ? `Azure CLI ${st.cliVersion || 'detectada'}` : 'não instalada'}`);
+      console.log(`  ${c ? loginColor : ''}Login:${c ? reset : ''}     ${st.loginActive ? 'ativo' : 'ausente'}`);
+      console.log(`  ${c ? green : ''}Sub:${c ? reset : ''}       ${st.subscription || '—'}`);
+      console.log(`  ${c ? invColor : ''}Inventário:${c ? reset : ''} ${st.inventoryPresent ? `${st.inventoryAgeHours !== null ? `${st.inventoryAgeHours}h atrás` : 'presente'}${st.inventoryStale ? ' (stale)' : ''}` : 'ausente'}`);
+      if (st.inventorySummary) {
+        console.log(`  ${c ? green : ''}Recursos:${c ? reset : ''}  total=${st.inventorySummary.total} sb=${st.inventorySummary.servicebus} eg=${st.inventorySummary.eventgrid} sql=${st.inventorySummary.sql}`);
+      }
+      if (st.pendingOperations > 0) {
+        console.log(`  ${yellow}Ops pendentes:${reset} ${st.pendingOperations} (${st.pendingOperationIds.join(', ')})`);
+      }
+      if (st.vpnRequired) {
+        console.log(`  ${yellow}VPN:${reset}       requerida pela configuração do projeto`);
+      }
+      return;
+    }
+
+    if (opts.scope === 'operations') {
+      const ops = oxeAzure.listAzureOperations(opts.dir);
+      if (!ops.length) {
+        console.log(`  ${c ? dim : ''}Nenhuma operação registrada.${c ? reset : ''}`);
+        return;
+      }
+      for (const op of ops) {
+        const phaseColor = op.phase === 'applied' ? green : op.phase === 'waiting_approval' ? yellow : op.phase === 'failed' ? red : dim;
+        console.log(`  ${c ? phaseColor : ''}${op.phase}${c ? reset : ''} · ${op.operation_id} · ${op.domain}/${op.kind} · ${op.summary || '—'}`);
+      }
+      return;
+    }
+
+    if (opts.scope === 'doctor') {
+      const report = oxeAzure.azureDoctor(opts.dir, config, {
+        autoInstall: Boolean(azureCfg.resource_graph_auto_install !== false),
+      });
+      console.log(`  ${c ? green : ''}CLI:${c ? reset : ''} ${report.authStatus.installed ? `Azure CLI ${report.authStatus.version || 'detectada'}` : 'não instalada'}`);
+      console.log(`  ${c ? green : ''}Login:${c ? reset : ''} ${report.authStatus.login_active ? 'ativo' : 'ausente'}`);
+      console.log(`  ${c ? green : ''}Subscription:${c ? reset : ''} ${report.profile.subscription_name || report.profile.subscription_id || '—'}`);
+      console.log(`  ${c ? green : ''}Inventário:${c ? reset : ''} ${report.inventory && report.inventory.synced_at ? `sync em ${report.inventory.synced_at}` : 'ausente'}`);
+      if (report.warnings.length) {
+        for (const warning of report.warnings) {
+          console.log(`  ${yellow}AVISO${reset} ${warning}`);
+        }
+      } else {
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} Contexto Azure saudável.`);
+      }
+      if (!report.authStatus.installed || !report.authStatus.login_active || !report.profile.subscription_id) {
+        process.exit(1);
+      }
+      return;
+    }
+
+    if (opts.scope === 'auth') {
+      if (opts.action === 'login') {
+        const context = oxeAzure.loginAzure(opts.dir, { inherit: true, tenant: opts.tenant || undefined });
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} Login Azure concluído.`);
+        console.log(`  ${c ? green : ''}Conta:${c ? reset : ''} ${context.authStatus.user || '—'}`);
+        console.log(`  ${c ? green : ''}Subscription:${c ? reset : ''} ${context.profile.subscription_name || context.profile.subscription_id || '—'}`);
+        return;
+      }
+      if (opts.action === 'whoami' || !opts.action) {
+        const context = oxeAzure.getAzureContext(opts.dir);
+        console.log(`  ${c ? green : ''}Cloud:${c ? reset : ''} ${context.profile.cloud || '—'}`);
+        console.log(`  ${c ? green : ''}Conta:${c ? reset : ''} ${context.authStatus.user || '—'}`);
+        console.log(`  ${c ? green : ''}Tipo:${c ? reset : ''} ${context.authStatus.user_type || context.profile.auth_mode || '—'}`);
+        console.log(`  ${c ? green : ''}Tenant:${c ? reset : ''} ${context.profile.tenant_id || '—'}`);
+        console.log(`  ${c ? green : ''}Subscription:${c ? reset : ''} ${context.profile.subscription_name || context.profile.subscription_id || '—'}`);
+        console.log(`  ${c ? green : ''}Resource Graph:${c ? reset : ''} ${context.authStatus.resource_graph_enabled ? 'habilitado' : 'ausente'}`);
+        return;
+      }
+      if (opts.action === 'set-subscription') {
+        if (!opts.subscription) {
+          console.error(`${red}Informe --subscription <id|nome>.${reset}`);
+          process.exit(1);
+        }
+        const context = oxeAzure.setAzureSubscription(opts.dir, opts.subscription);
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} Subscription selecionada.`);
+        console.log(`  ${c ? green : ''}Subscription:${c ? reset : ''} ${context.profile.subscription_name || context.profile.subscription_id || '—'}`);
+        return;
+      }
+      throw new Error(`Subcomando Azure auth desconhecido: ${opts.action || '—'}`);
+    }
+
+    if (opts.scope === 'sync') {
+      const synced = oxeAzure.syncAzureInventory(opts.dir, {
+        autoInstall: Boolean(azureCfg.resource_graph_auto_install !== false),
+        diff: opts.diff,
+      });
+      console.log(`  ${c ? green : ''}✓${c ? reset : ''} Inventário Azure sincronizado.`);
+      console.log(`  ${c ? green : ''}Subscription:${c ? reset : ''} ${synced.profile.subscription_name || synced.profile.subscription_id || '—'}`);
+      console.log(`  ${c ? green : ''}Resumo:${c ? reset : ''} total=${synced.inventory.summary.total} servicebus=${synced.inventory.summary.servicebus} eventgrid=${synced.inventory.summary.eventgrid} sql=${synced.inventory.summary.sql}`);
+      console.log(`  ${c ? green : ''}Artefato:${c ? reset : ''} ${synced.paths.inventory}`);
+      if (synced.diff) {
+        const d = synced.diff;
+        console.log(`  ${c ? green : ''}Diff:${c ? reset : ''} +${d.added.length} adicionados · -${d.removed.length} removidos · ${d.unchanged} inalterados`);
+        for (const item of d.added) console.log(`    ${c ? green : ''}+${c ? reset : ''} ${item.name} · ${item.type} · ${item.resourceGroup || '—'}`);
+        for (const item of d.removed) console.log(`    ${c ? red : ''}-${c ? reset : ''} ${item.name} · ${item.type} · ${item.resourceGroup || '—'}`);
+      }
+      return;
+    }
+
+    if (opts.scope === 'find') {
+      const filters = {};
+      if (opts.filterType) filters.type = opts.filterType;
+      if (opts.filterRg) filters.resourceGroup = opts.filterRg;
+      const matches = oxeAzure.searchAzureInventory(opts.dir, opts.query, filters);
+      if (!matches.length) {
+        console.log(`  ${yellow}Nenhum recurso encontrado no inventário local.${reset}`);
+        return;
+      }
+      for (const item of matches) {
+        console.log(`  ${c ? dim : ''}•${c ? reset : ''} ${item.name} · ${item.type} · ${item.resourceGroup || '—'} · ${item.location || '—'}`);
+      }
+      return;
+    }
+
+    if (!['servicebus', 'eventgrid', 'sql'].includes(opts.scope)) {
+      throw new Error(`Escopo Azure desconhecido: ${opts.scope}. Use: doctor | status | auth | sync | find | operations | servicebus | eventgrid | sql`);
+    }
+    if (!opts.action) {
+      throw new Error(`Informe a ação para ${opts.scope}: list | show | plan | apply`);
+    }
+
+    if (opts.action === 'list' || opts.action === 'show') {
+      const result = oxeAzure.executeAzureRead(opts.dir, activeSession, opts.scope, opts.action, input);
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    if (opts.action === 'plan') {
+      const planned = oxeAzure.planAzureOperation(opts.dir, activeSession, opts.scope, input);
+      console.log(`  ${c ? green : ''}✓${c ? reset : ''} Operação Azure planejada.`);
+      console.log(`  ${c ? green : ''}Operation ID:${c ? reset : ''} ${planned.operation.operation_id}`);
+      console.log(`  ${c ? green : ''}Checkpoint:${c ? reset : ''} ${planned.operation.checkpoint_id}`);
+      console.log(`  ${c ? green : ''}Comando:${c ? reset : ''} ${planned.operation.command_display_redacted}`);
+      console.log(`  ${c ? green : ''}Resumo:${c ? reset : ''} ${planned.operation.summary}`);
+      console.log(`  ${c ? green : ''}Artefatos:${c ? reset : ''} ${planned.files.jsonPath} · ${planned.files.mdPath}`);
+      return;
+    }
+    if (opts.action === 'apply') {
+      const applied = oxeAzure.applyAzureOperation(opts.dir, activeSession, opts.scope, input, {
+        approve: opts.approve,
+        overridePolicy: opts.overridePolicy,
+        dryRun: opts.dryRun,
+        vpnRequired: Boolean(azureCfg.vpn_required),
+        vpnConfirmed: opts.vpnConfirmed,
+      });
+      if (applied.dryRun) {
+        console.log(`  ${yellow}[dry-run]${reset} Validação OK — nenhuma alteração foi feita.`);
+        console.log(`  ${c ? green : ''}Comando:${c ? reset : ''} ${applied.commandPreview}`);
+        console.log(`  ${c ? green : ''}Resumo:${c ? reset : ''} ${applied.operation.summary}`);
+        return;
+      }
+      if (!applied.approved) {
+        console.log(`  ${yellow}Checkpoint aberto antes da mutação.${reset}`);
+        console.log(`  ${c ? green : ''}Operation ID:${c ? reset : ''} ${applied.operation.operation_id}`);
+        console.log(`  ${c ? green : ''}Checkpoint:${c ? reset : ''} ${applied.checkpoint_id}`);
+        console.log(`  ${c ? green : ''}Resumo:${c ? reset : ''} ${applied.operation.summary}`);
+        console.log(`  ${c ? green : ''}Reexecute:${c ? reset : ''} npx oxe-cc azure ${opts.scope} apply --approve --kind ${applied.operation.kind} --resource-group ${applied.operation.resource_group}`);
+        return;
+      }
+      console.log(`  ${c ? green : ''}✓${c ? reset : ''} Operação Azure aplicada.`);
+      console.log(`  ${c ? green : ''}Operation ID:${c ? reset : ''} ${applied.operation.operation_id}`);
+      console.log(`  ${c ? green : ''}Artefatos:${c ? reset : ''} ${applied.files.jsonPath} · ${applied.files.mdPath}`);
+      return;
+    }
+
+    throw new Error(`Ação Azure desconhecida: ${opts.action}`);
+  } catch (err) {
+    console.error(`${red}${err && err.message ? err.message : 'Falha no provider Azure.'}${reset}`);
+    process.exit(1);
+  }
+}
+
 function capabilityManifestPath(target, id) {
   return path.join(target, '.oxe', 'capabilities', id, 'CAPABILITY.md');
 }
@@ -2725,21 +3464,14 @@ function listLocalCapabilities(target) {
 }
 
 function renderCapabilitiesIndex(target) {
-  const template = ['# OXE — Capabilities Instaladas', '', '> Catálogo local de capabilities do projeto. Cada capability vive em `.oxe/capabilities/<id>/`.', '', '| ID | Tipo | Status | Escopo | Requer env | Resumo |', '|----|------|--------|--------|------------|--------|'];
-  const ids = listLocalCapabilities(target);
-  if (!ids.length) {
-    template.push('| (vazio) | — | — | — | — | Nenhuma capability instalada |');
+  const template = ['# OXE — Capabilities Instaladas', '', '> Catálogo local de capabilities do projeto. Cada capability vive em `.oxe/capabilities/<id>/`.', '', '| ID | Tipo | Status | Escopo | Política | Side effects | Requer env | Evidência | Resumo |', '|----|------|--------|--------|-----------|--------------|------------|-----------|--------|'];
+  const catalog = oxeOperational.readCapabilityCatalog(target);
+  if (!catalog.length) {
+    template.push('| (vazio) | — | — | — | — | — | — | — | Nenhuma capability instalada |');
     return template.join('\n') + '\n';
   }
-  for (const id of ids) {
-    const raw = fs.readFileSync(capabilityManifestPath(target, id), 'utf8');
-    const type = raw.match(/^type:\s*(.+)$/m)?.[1]?.trim() || 'local';
-    const status = raw.match(/^status:\s*(.+)$/m)?.[1]?.trim() || 'active';
-    const scope = raw.match(/^scope:\s*(.+)$/m)?.[1]?.trim() || 'mixed';
-    const requiresEnv = raw.match(/^requires_env:\s*\[(.*)\]$/m)?.[1]?.trim() || '';
-    const summary =
-      raw.match(/## Objetivo[\s\S]*?-\s+(.+?)(?:\n|$)/m)?.[1]?.trim() || 'Capability local do projeto';
-    template.push(`| ${id} | ${type} | ${status} | ${scope} | ${requiresEnv || '—'} | ${summary} |`);
+  for (const cap of catalog) {
+    template.push(`| ${cap.id} | ${cap.type} | ${cap.status} | ${cap.scope} | ${cap.approvalPolicy || '—'} | ${(cap.sideEffects || []).join(', ') || '—'} | ${(cap.requiresEnv || []).join(', ') || '—'} | ${(cap.evidenceOutputs || []).join(', ') || '—'} | ${cap.description} |`);
   }
   return template.join('\n') + '\n';
 }
@@ -2792,22 +3524,187 @@ function runCapabilities(opts) {
       fs.writeFileSync(manifest, raw, 'utf8');
     }
     writeCapabilitiesIndex(opts.dir);
+    oxeOperational.appendEvent(opts.dir, null, { type: 'capability_installed', payload: { capability_id: safeId } });
     console.log(`  ${c ? green : ''}✓${c ? reset : ''} Capability instalada: ${safeId}`);
     return;
   }
   if (opts.action === 'remove') {
     fs.rmSync(path.join(capsDir, opts.id), { recursive: true, force: true });
     writeCapabilitiesIndex(opts.dir);
+    oxeOperational.appendEvent(opts.dir, null, { type: 'capability_removed', payload: { capability_id: opts.id } });
     console.log(`  ${c ? green : ''}✓${c ? reset : ''} Capability removida: ${opts.id}`);
     return;
   }
   if (opts.action === 'update') {
     writeCapabilitiesIndex(opts.dir);
+    oxeOperational.appendEvent(opts.dir, null, { type: 'capability_index_refreshed' });
     console.log(`  ${c ? green : ''}✓${c ? reset : ''} Índice de capabilities atualizado.`);
     return;
   }
   console.error(`${red}Ação desconhecida:${reset} ${opts.action}`);
   process.exit(1);
+}
+
+/**
+ * @param {string[]} argv
+ * @returns {{ help: boolean, dir: string, visual: boolean, activeSession: string|null, parseError: boolean, unknownFlag: string }}
+ */
+function parsePlanArgs(argv) {
+  const out = { help: false, dir: process.cwd(), visual: false, activeSession: null, parseError: false, unknownFlag: '' };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '-h' || a === '--help') out.help = true;
+    else if (a === '--visual') out.visual = true;
+    else if (a === '--dir' && argv[i + 1]) out.dir = path.resolve(argv[++i]);
+    else if (a === '--session' && argv[i + 1]) out.activeSession = String(argv[++i]).replace(/\\/g, '/');
+    else if (!a.startsWith('-') && i === 0) out.dir = path.resolve(a);
+    else { out.parseError = true; out.unknownFlag = a; break; }
+  }
+  return out;
+}
+
+/**
+ * @param {string[]} argv
+ * @returns {{ help: boolean, dir: string, matrix: boolean, activeSession: string|null, parseError: boolean, unknownFlag: string }}
+ */
+function parseVerifyArgs(argv) {
+  const out = { help: false, dir: process.cwd(), matrix: false, activeSession: null, parseError: false, unknownFlag: '' };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '-h' || a === '--help') out.help = true;
+    else if (a === '--matrix') out.matrix = true;
+    else if (a === '--dir' && argv[i + 1]) out.dir = path.resolve(argv[++i]);
+    else if (a === '--session' && argv[i + 1]) out.activeSession = String(argv[++i]).replace(/\\/g, '/');
+    else if (!a.startsWith('-') && i === 0) out.dir = path.resolve(a);
+    else { out.parseError = true; out.unknownFlag = a; break; }
+  }
+  return out;
+}
+
+/**
+ * Imprime grafo ASCII de ondas e tarefas lido do PLAN.md.
+ * @param {{ dir: string, activeSession: string|null }} opts
+ */
+function runPlanVisual(opts) {
+  const c = useAnsiColors();
+  printSection('OXE ▸ plan --visual');
+  const statePath = oxeHealth.oxePaths(opts.dir).state;
+  const stateText = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : '';
+  const activeSession = opts.activeSession || oxeHealth.parseActiveSession(stateText) || null;
+  const sp = oxeHealth.scopedOxePaths(opts.dir, activeSession);
+  const planPath = sp.plan || oxeHealth.oxePaths(opts.dir).plan;
+
+  console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+
+  if (!fs.existsSync(planPath)) {
+    console.log(`\n  ${yellow}PLAN.md não encontrado em ${planPath}${reset}`);
+    console.log(`  ${dim}Rode /oxe-plan para criar o plano.${reset}\n`);
+    return;
+  }
+
+  const planMd = fs.readFileSync(planPath, 'utf8');
+  const plan = oxeDashboard.parsePlan(planMd);
+
+  if (!plan.waves.length) {
+    console.log(`\n  ${yellow}Nenhuma onda encontrada no PLAN.md.${reset}\n`);
+    return;
+  }
+
+  console.log('');
+  for (const wave of plan.waves) {
+    const waveLabel = `  ${c ? yellow : ''}Onda ${wave.wave}${c ? reset : ''}`;
+    for (let i = 0; i < wave.tasks.length; i++) {
+      const task = wave.tasks[i];
+      const deps = task.dependsOn.length ? ` ${c ? dim : ''}← ${task.dependsOn.join(', ')}${c ? reset : ''}` : '';
+      const complexity = task.complexity ? ` ${c ? dim : ''}[${task.complexity}]${c ? reset : ''}` : '';
+      if (i === 0) {
+        console.log(`${waveLabel}   ${c ? cyan : ''}${task.id}${c ? reset : ''} — ${task.title}${complexity}${deps}`);
+      } else {
+        console.log(`${''.padEnd(waveLabel.replace(/\x1b\[[0-9;]*m/g, '').length + 3)}${c ? cyan : ''}${task.id}${c ? reset : ''} — ${task.title}${complexity}${deps}`);
+      }
+    }
+    console.log('');
+  }
+
+  const total = plan.totalTasks;
+  const waveCount = plan.waves.length;
+  console.log(`  ${c ? dim : ''}${total} tarefa${total !== 1 ? 's' : ''} · ${waveCount} onda${waveCount !== 1 ? 's' : ''}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}✓${c ? reset : ''} plan --visual concluído.\n`);
+}
+
+/**
+ * Imprime tabela ANSI spec → plan → verify (coverage matrix).
+ * @param {{ dir: string, activeSession: string|null }} opts
+ */
+function runVerifyMatrix(opts) {
+  const c = useAnsiColors();
+  printSection('OXE ▸ verify --matrix');
+  const statePath = oxeHealth.oxePaths(opts.dir).state;
+  const stateText = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : '';
+  const activeSession = opts.activeSession || oxeHealth.parseActiveSession(stateText) || null;
+  const sp = oxeHealth.scopedOxePaths(opts.dir, activeSession);
+  const specPath = sp.spec || oxeHealth.oxePaths(opts.dir).spec;
+  const planPath = sp.plan || oxeHealth.oxePaths(opts.dir).plan;
+  const verifyPath = sp.verify || oxeHealth.oxePaths(opts.dir).verify;
+
+  console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+
+  const specMd = fs.existsSync(specPath) ? fs.readFileSync(specPath, 'utf8') : '';
+  const planMd = fs.existsSync(planPath) ? fs.readFileSync(planPath, 'utf8') : '';
+  const verifyMd = fs.existsSync(verifyPath) ? fs.readFileSync(verifyPath, 'utf8') : '';
+
+  const spec = oxeDashboard.parseSpec(specMd);
+  const plan = oxeDashboard.parsePlan(planMd);
+  const verify = oxeDashboard.parseVerify(verifyMd);
+  const matrix = oxeDashboard.buildCoverageMatrix(spec, plan, verify);
+
+  if (!matrix.length) {
+    if (!spec.criteria.length) {
+      console.log(`\n  ${yellow}Nenhum critério A* encontrado no SPEC.md.${reset}`);
+      console.log(`  ${dim}Rode /oxe-spec para criar a especificação.${reset}\n`);
+    } else {
+      console.log(`\n  ${yellow}Nenhum dado disponível para a matriz.${reset}\n`);
+    }
+    return;
+  }
+
+  const statusSymbol = (s) => {
+    if (s === 'passed') return c ? `${green}✓${reset}` : '✓';
+    if (s === 'failed') return c ? `${red}✗${reset}` : '✗';
+    return c ? `${dim}—${reset}` : '—';
+  };
+  const planSymbol = (covered) => covered ? (c ? `${green}✓${reset}` : '✓') : (c ? `${dim}✗${reset}` : '✗');
+
+  // Compute column widths
+  const colId = Math.max(9, ...matrix.map((r) => r.id.length)) + 2;
+  const colTasks = Math.max(12, ...matrix.map((r) => (r.tasks.join(', ') || '—').length)) + 2;
+
+  const sep = `  ${'─'.repeat(colId)}┼${'─'.repeat(colTasks)}┼──────────┼──────────`;
+  const header = `  ${' Critério'.padEnd(colId)}│${'  Tarefas'.padEnd(colTasks)}│  PLAN    │  VERIFY`;
+
+  console.log('');
+  console.log(c ? `${dim}${header}${reset}` : header);
+  console.log(sep);
+
+  let covered = 0;
+  let verified = 0;
+  for (const row of matrix) {
+    const tasks = row.tasks.length ? row.tasks.join(', ') : '—';
+    const planCell = planSymbol(row.planCovered);
+    const verifyCell = statusSymbol(row.verifyStatus);
+    const label = `  ${row.id}`.padEnd(colId);
+    const taskCell = `  ${tasks}`.padEnd(colTasks);
+    console.log(`${label}│${taskCell}│  ${planCell}       │  ${verifyCell}`);
+    if (row.planCovered) covered++;
+    if (row.verifyStatus === 'passed') verified++;
+  }
+
+  console.log(sep);
+  const total = matrix.length;
+  console.log(`\n  ${c ? dim : ''}${covered}/${total} critérios cobertos pelo plano · ${verified}/${total} aprovados no verify${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}✓${c ? reset : ''} verify --matrix concluído.\n`);
 }
 
 async function main() {
@@ -2817,9 +3714,14 @@ async function main() {
     argv[0] === 'doctor' ||
     argv[0] === 'status' ||
     argv[0] === 'init-oxe' ||
+    argv[0] === 'dashboard' ||
+    argv[0] === 'runtime' ||
+    argv[0] === 'azure' ||
     argv[0] === 'uninstall' ||
     argv[0] === 'update' ||
     argv[0] === 'capabilities' ||
+    argv[0] === 'plan' ||
+    argv[0] === 'verify' ||
     argv[0] === 'install'
   ) {
     command = argv[0];
@@ -2908,6 +3810,86 @@ async function main() {
     return;
   }
 
+  if (command === 'dashboard') {
+    const d = parseDashboardArgs(argv);
+    if (d.help) {
+      printBanner();
+      usage();
+      process.exit(0);
+    }
+    if (d.parseError) {
+      printBanner();
+      console.error(`${red}Opção desconhecida:${reset} ${d.unknownFlag}`);
+      usage();
+      process.exit(1);
+    }
+    printBanner();
+    await runDashboard(d);
+    return;
+  }
+
+  if (command === 'runtime') {
+    const runtime = parseRuntimeArgs(argv);
+    if (runtime.help) {
+      printBanner();
+      usage();
+      process.exit(0);
+    }
+    if (runtime.parseError) {
+      printBanner();
+      console.error(`${red}Opção desconhecida:${reset} ${runtime.unknownFlag}`);
+      usage();
+      process.exit(1);
+    }
+    printBanner();
+    if (!fs.existsSync(runtime.dir)) {
+      console.error(`${yellow}Diretório não encontrado: ${runtime.dir}${reset}`);
+      process.exit(1);
+    }
+    runRuntime(runtime);
+    return;
+  }
+
+  if (command === 'azure') {
+    const azure = parseAzureArgs(argv);
+    if (azure.help) {
+      printBanner();
+      usage();
+      process.exit(0);
+    }
+    if (azure.parseError) {
+      printBanner();
+      console.error(`${red}Opção desconhecida:${reset} ${azure.unknownFlag}`);
+      usage();
+      process.exit(1);
+    }
+    printBanner();
+    runAzure(azure);
+    return;
+  }
+
+  if (command === 'plan') {
+    const planOpts = parsePlanArgs(argv);
+    if (planOpts.help) { printBanner(); usage(); process.exit(0); }
+    if (planOpts.parseError) { printBanner(); console.error(`${red}Opção desconhecida:${reset} ${planOpts.unknownFlag}`); usage(); process.exit(1); }
+    if (!planOpts.visual) { printBanner(); console.error(`${yellow}Use oxe-cc plan --visual${reset}`); process.exit(1); }
+    printBanner();
+    if (!fs.existsSync(planOpts.dir)) { console.error(`${yellow}Diretório não encontrado: ${planOpts.dir}${reset}`); process.exit(1); }
+    runPlanVisual(planOpts);
+    return;
+  }
+
+  if (command === 'verify') {
+    const verifyOpts = parseVerifyArgs(argv);
+    if (verifyOpts.help) { printBanner(); usage(); process.exit(0); }
+    if (verifyOpts.parseError) { printBanner(); console.error(`${red}Opção desconhecida:${reset} ${verifyOpts.unknownFlag}`); usage(); process.exit(1); }
+    if (!verifyOpts.matrix) { printBanner(); console.error(`${yellow}Use oxe-cc verify --matrix${reset}`); process.exit(1); }
+    printBanner();
+    if (!fs.existsSync(verifyOpts.dir)) { console.error(`${yellow}Diretório não encontrado: ${verifyOpts.dir}${reset}`); process.exit(1); }
+    runVerifyMatrix(verifyOpts);
+    return;
+  }
+
   const opts = parseInstallArgs(argv);
 
   if (opts.version) {
@@ -2954,7 +3936,11 @@ async function main() {
       console.error(`${yellow}Diretório não encontrado: ${target}${reset}`);
       process.exit(1);
     }
-    runStatus(target, { json: opts.jsonOutput, hints: opts.statusHints });
+    if (opts.statusFull) {
+      runStatusFull(target);
+    } else {
+      runStatus(target, { json: opts.jsonOutput, hints: opts.statusHints });
+    }
     return;
   }
 
@@ -2970,8 +3956,8 @@ async function main() {
     bootstrapOxe(target, { dryRun: opts.dryRun, force: opts.force });
     printSummaryAndNextSteps(c0, {
       bullets: opts.dryRun
-        ? ['[simulação] Seriam criados ou atualizados .oxe/STATE.md, .oxe/config.json e .oxe/codebase/']
-        : ['.oxe/STATE.md, .oxe/config.json e pasta .oxe/codebase/ (criados ou atualizados conforme --force)'],
+        ? ['[simulação] Seriam criados ou atualizados .oxe/STATE.md, .oxe/config.json, .oxe/codebase/, .oxe/ACTIVE-RUN.json e .oxe/OXE-EVENTS.ndjson']
+        : ['.oxe/STATE.md, .oxe/config.json, .oxe/codebase/, .oxe/ACTIVE-RUN.json e .oxe/OXE-EVENTS.ndjson (criados ou atualizados conforme --force)'],
       nextSteps: [
         { desc: 'Validar o projeto:', cmd: 'npx oxe-cc doctor' },
         { desc: 'Instalar integrações IDE/CLI (se ainda não fez):', cmd: 'npx oxe-cc@latest' },
@@ -2989,6 +3975,8 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(err);
+  const msg = err && err.message ? err.message : String(err);
+  console.error(`${red}Erro:${reset} ${msg}`);
+  if (process.env.OXE_DEBUG === '1') console.error(err);
   process.exit(1);
 });

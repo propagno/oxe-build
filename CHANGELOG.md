@@ -4,6 +4,39 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [0.7.0] — 2026-04-13
+
+### Adicionado
+
+**Provider Azure nativo (`oxe-cc azure`)**
+- `azure status` — estado compacto read-only: CLI, login, subscription, inventário, pendências, alerta VPN
+- `azure operations list` — histórico colorido de operações (planned/applied/pending)
+- `azure find --type <serviço>` — filtro por família de serviço (servicebus, eventgrid, sql)
+- `azure find --filter-rg <rg>` — filtro por resource group
+- `azure sync --diff` — mostra recursos adicionados/removidos em relação ao snapshot anterior
+- `azure apply --dry-run` — pré-visualiza comando `az` sem executar nem criar artefatos
+- `azure auth login --tenant <id>` — suporte a Entra ID corporativo; passa `--tenant` ao `az login`
+- `azure apply --vpn-confirmed` — confirma conexão VPN quando `vpn_required: true` está configurado
+
+**SDK**
+- `azure.diffInventory(previousItems, currentItems)` — compara snapshots de inventário (adicionados/removidos/unchanged)
+- `azure.statusAzure(projectRoot, config?, options?)` — status compacto sem writes
+
+**Workflows (guardrails)**
+- `scan.md`: detecção Azure é informativa — não altera fluxo canônico OXE nem aciona steps Azure automaticamente
+- `plan.md`: pré-check Azure só ativa quando Azure é mencionado **explicitamente** na SPEC ou `.oxe/cloud/azure/` existe
+- `discuss.md`: perguntas Azure só ativam quando SPEC menciona Azure explicitamente — SQL genérico (PostgreSQL, MySQL, on-prem) não aciona o bloco
+
+### Corrigido
+- `loginAzure()` com `inherit: true` não passava mais `inherit` para `getAzureContext`, evitando crash ao tentar ler `account.id` de stdout null
+
+### Tipos TypeScript
+- `azure.searchAzureInventory` inclui parâmetro opcional `filters?: { type?, resourceGroup? }`
+- `azure.diffInventory` declarado
+- `azure.statusAzure` declarado
+
+---
+
 ## [0.6.3] — 2026-04-04
 
 ### Corrigido
