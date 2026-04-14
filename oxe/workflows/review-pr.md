@@ -42,4 +42,5 @@ Rever alterações como num pull request: **URL do GitHub** (`…/pull/<n>`), **
 - [ ] A análise baseia-se no diff (terminal ou colado), não só em suposições.
 - [ ] Há seção de riscos e de testes/verificação sugerida.
 - [ ] Nenhum segredo ou credencial é repetido na análise; redigir se aparecerem no diff.
+- [ ] Se `.oxe/PR-REVIEW.md` foi criado (passo 6), a resposta menciona o caminho do artefato gerado.
 </success_criteria>

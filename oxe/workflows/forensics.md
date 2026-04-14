@@ -24,7 +24,7 @@ Não reescrever `SPEC.md` nem apagar `PLAN.md`; apenas **recomendar** o reingres
 
 <process>
 1. Confirmar diretório raiz do projeto e existência de `.oxe/`.
-2. Recolher evidência: STATE, VERIFY, PLAN, SPEC, QUICK (trechos relevantes), saída de **doctor** se disponível, e **Git (opcional)** conforme bloco no context (se indisponível, seguir sem Git).
+2. Recolher evidência: STATE, VERIFY, PLAN, SPEC, QUICK (trechos relevantes), saída de **doctor** se disponível, e **Git (opcional)** conforme bloco no context (se indisponível, seguir sem Git). Se `OXE-EVENTS.ndjson` existir no escopo resolvido, correr `npx oxe-cc runtime replay --write` para gerar **`REPLAY-SESSION.md`** — timeline completa da execução com deltas entre eventos; incluir achados relevantes na seção **Linha do tempo** do `FORENSICS.md`.
 3. Redigir **`FORENSICS.md`** no escopo resolvido com secções fixas:
    - **Data** (ISO) e **Sintoma** (1–3 frases).
    - **Linha do tempo** — bullets curtos (o que se tentou, ordem aproximada); **incorporar** commits/datas e ficheiros mais tocados quando houver evidência Git; se Git não foi avaliado, linha explícita: *Git não avaliado (ambiente/indisponível)*.

@@ -144,6 +144,45 @@ describe('oxe-cc CLI edge', () => {
     assert.ok(j.staleCompact && typeof j.staleCompact.stale === 'boolean');
   });
 
+  test('status --json exposes Copilot workspace-vs-legacy diagnostics', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-copilot-'));
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-copilot-home-'));
+    const env = isolatedHomeEnv(fakeHome);
+    const oxe = path.join(dir, '.oxe');
+    const codebase = path.join(oxe, 'codebase');
+    fs.mkdirSync(codebase, { recursive: true });
+    for (const f of [
+      'OVERVIEW.md',
+      'STACK.md',
+      'STRUCTURE.md',
+      'TESTING.md',
+      'INTEGRATIONS.md',
+      'CONVENTIONS.md',
+      'CONCERNS.md',
+    ]) {
+      fs.writeFileSync(path.join(codebase, f), '# ok\n', 'utf8');
+    }
+    fs.writeFileSync(path.join(oxe, 'STATE.md'), '## Fase atual\n\n`scan_complete`\n', 'utf8');
+    fs.mkdirSync(path.join(fakeHome, '.copilot', 'prompts'), { recursive: true });
+    fs.writeFileSync(path.join(fakeHome, '.copilot', 'prompts', 'oxe-scan.prompt.md'), 'legacy\n', 'utf8');
+    fs.writeFileSync(
+      path.join(fakeHome, '.copilot', 'copilot-instructions.md'),
+      '<!-- oxe-cc:install-begin -->\nlegacy\n<!-- oxe-cc:install-end -->\n',
+      'utf8'
+    );
+
+    const r = spawnSync(process.execPath, [CLI, 'status', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+    const j = JSON.parse(r.stdout.trim().split(/\r?\n/).filter(Boolean).pop());
+    assert.strictEqual(j.copilot.promptSource, 'legacy_global');
+    assert.ok(Array.isArray(j.diagnostics.copilotWarnings));
+    assert.ok(j.diagnostics.copilotWarnings.some((x) => /legado global/i.test(x)));
+  });
+
   test('status warns when PLAN.md misses autoavaliação and suggests replan on low confidence', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-plan-'));
     const oxe = path.join(dir, '.oxe');

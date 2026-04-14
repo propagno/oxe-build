@@ -8,6 +8,8 @@
 - **Criada:** YYYY-MM-DD
 - **Última atividade:** YYYY-MM-DD
 - **Resumo:** <uma linha>
+- **Forked from:** —
+- **Forked at:** —
 
 ## Índice de artefatos
 

@@ -122,6 +122,12 @@ describe('oxe-sdk', () => {
     assert.ok(typeErrors.length >= 1);
   });
 
+  test('health re-exports Copilot integration helpers', () => {
+    assert.strictEqual(typeof sdk.health.copilotWorkspacePaths, 'function');
+    assert.strictEqual(typeof sdk.health.copilotLegacyPaths, 'function');
+    assert.strictEqual(typeof sdk.health.copilotIntegrationReport, 'function');
+  });
+
   // parseState — blueprint e loop fields (P1.1)
   test('parseState extracts runId from STATE.md blueprint section', () => {
     const state = '## Fase atual\n\n`executing`\n\n## Blueprint de agentes (sessão)\n\n- **run_id:** oxe-test-abc123\n- **lifecycle_status:** executing\n';

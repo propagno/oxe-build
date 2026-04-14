@@ -342,17 +342,27 @@ describe('oxe-cc CLI', () => {
     assert.ok(!fs.existsSync(path.join(fakeHome, '.gemini', 'commands', 'oxe.toml')));
   });
 
-  test('--ide-local --copilot merges instructions into .github', () => {
+  test('--copilot installs workspace prompts and manifest without writing legacy ~/.copilot/prompts', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
-    const { status } = run(
-      ['--copilot', '--ide-local', '--no-init-oxe', '--no-global-cli', '-l', dir],
+    const { status, fakeHome } = run(
+      ['--copilot', '--no-init-oxe', '--no-global-cli', '-l', dir],
       REPO_ROOT
     );
     assert.strictEqual(status, 0);
     const inst = path.join(dir, '.github', 'copilot-instructions.md');
+    const prompt = path.join(dir, '.github', 'prompts', 'oxe-scan.prompt.md');
+    const manifest = path.join(dir, '.oxe', 'install', 'copilot-vscode.json');
     assert.ok(fs.existsSync(inst));
+    assert.ok(fs.existsSync(prompt));
+    assert.ok(fs.existsSync(manifest));
     const txt = fs.readFileSync(inst, 'utf8');
+    const promptText = fs.readFileSync(prompt, 'utf8');
+    const manifestJson = JSON.parse(fs.readFileSync(manifest, 'utf8'));
     assert.ok(txt.includes('oxe-cc:install-begin'));
+    assert.ok(promptText.includes('.oxe/workflows/'));
+    assert.ok(Array.isArray(manifestJson.prompt_files));
+    assert.ok(manifestJson.prompt_files.includes('oxe-scan.prompt.md'));
+    assert.ok(!fs.existsSync(path.join(fakeHome, '.copilot', 'prompts', 'oxe-scan.prompt.md')));
   });
 
   test('--gemini alone installs only Gemini TOML', () => {
@@ -378,6 +388,18 @@ describe('oxe-cc CLI', () => {
     assert.match(r.stderr + r.stdout, /ide-local|config-dir/i);
   });
 
+  test('install --copilot with --config-dir exits 1', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-home-'));
+    const r = spawnSync(
+      process.execPath,
+      [CLI, '--copilot', '--config-dir', fakeHome, '--no-global-cli', '-l', dir],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: isolatedHomeEnv(fakeHome) }
+    );
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr + r.stdout, /copilot|config-dir|workspace/i);
+  });
+
   test('uninstall --ide-local removes project .cursor OXE commands', () => {
     const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-home-'));
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
@@ -399,5 +421,60 @@ describe('oxe-cc CLI', () => {
     });
     assert.strictEqual(u.status, 0, u.stderr + u.stdout);
     assert.ok(!fs.existsSync(cmd));
+  });
+
+  test('uninstall --copilot removes workspace assets and leaves legacy global until explicit clean', () => {
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-home-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    const env = isolatedHomeEnv(fakeHome, { OXE_NO_PROMPT: '1' });
+
+    assert.strictEqual(
+      spawnSync(process.execPath, [CLI, '--copilot', '--no-init-oxe', '--no-global-cli', '-l', dir], {
+        cwd: REPO_ROOT,
+        env,
+        encoding: 'utf8',
+      }).status,
+      0
+    );
+
+    const legacyPromptsDir = path.join(fakeHome, '.copilot', 'prompts');
+    fs.mkdirSync(legacyPromptsDir, { recursive: true });
+    fs.writeFileSync(path.join(legacyPromptsDir, 'oxe-scan.prompt.md'), 'legacy', 'utf8');
+    const legacyInstructions = path.join(fakeHome, '.copilot', 'copilot-instructions.md');
+    fs.mkdirSync(path.dirname(legacyInstructions), { recursive: true });
+    fs.writeFileSync(
+      legacyInstructions,
+      '<!-- oxe-cc:install-begin -->\nlegacy\n<!-- oxe-cc:install-end -->\n',
+      'utf8'
+    );
+
+    const workspaceInstructions = path.join(dir, '.github', 'copilot-instructions.md');
+    const workspacePrompt = path.join(dir, '.github', 'prompts', 'oxe-scan.prompt.md');
+    const workspaceManifest = path.join(dir, '.oxe', 'install', 'copilot-vscode.json');
+    assert.ok(fs.existsSync(workspaceInstructions));
+    assert.ok(fs.existsSync(workspacePrompt));
+    assert.ok(fs.existsSync(workspaceManifest));
+
+    const uninstallWorkspace = spawnSync(
+      process.execPath,
+      [CLI, 'uninstall', '--copilot', '--ide-only', '--dir', dir],
+      { cwd: REPO_ROOT, env, encoding: 'utf8' }
+    );
+    assert.strictEqual(uninstallWorkspace.status, 0, uninstallWorkspace.stderr + uninstallWorkspace.stdout);
+    assert.ok(!fs.existsSync(workspacePrompt));
+    assert.ok(!fs.existsSync(workspaceManifest));
+    const strippedWorkspaceInstructions = fs.readFileSync(workspaceInstructions, 'utf8');
+    assert.ok(!strippedWorkspaceInstructions.includes('oxe-cc:install-begin'));
+    assert.ok(fs.existsSync(path.join(legacyPromptsDir, 'oxe-scan.prompt.md')));
+    assert.match(fs.readFileSync(legacyInstructions, 'utf8'), /oxe-cc:install-begin/);
+
+    const uninstallLegacy = spawnSync(
+      process.execPath,
+      [CLI, 'uninstall', '--copilot-legacy-clean', '--ide-only', '--dir', dir],
+      { cwd: REPO_ROOT, env, encoding: 'utf8' }
+    );
+    assert.strictEqual(uninstallLegacy.status, 0, uninstallLegacy.stderr + uninstallLegacy.stdout);
+    assert.ok(!fs.existsSync(path.join(legacyPromptsDir, 'oxe-scan.prompt.md')));
+    assert.ok(!fs.readFileSync(legacyInstructions, 'utf8').includes('oxe-cc:install-begin'));
   });
 });

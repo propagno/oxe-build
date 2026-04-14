@@ -9,6 +9,94 @@ const path = require('path');
 const h = require('../bin/lib/oxe-project-health.cjs');
 
 describe('oxe-project-health', () => {
+  test('copilotIntegrationReport is healthy when workspace prompts and instructions are aligned', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-copilot-'));
+    const fakeCopilotHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-copilot-home-'));
+    const prevCopilotHome = process.env.COPILOT_HOME;
+    process.env.COPILOT_HOME = fakeCopilotHome;
+    try {
+      fs.mkdirSync(path.join(dir, '.github', 'prompts'), { recursive: true });
+      fs.mkdirSync(path.join(dir, '.oxe', 'install'), { recursive: true });
+      fs.mkdirSync(path.join(dir, '.oxe', 'workflows'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.oxe', 'workflows', 'scan.md'), '# scan\n', 'utf8');
+      fs.writeFileSync(
+        path.join(dir, '.github', 'prompts', 'oxe-scan.prompt.md'),
+        'Veja `.oxe/workflows/scan.md`.\n',
+        'utf8'
+      );
+      fs.writeFileSync(
+        path.join(dir, '.github', 'copilot-instructions.md'),
+        '<!-- oxe-cc:install-begin -->\nworkspace\n<!-- oxe-cc:install-end -->\n',
+        'utf8'
+      );
+      fs.writeFileSync(
+        path.join(dir, '.oxe', 'install', 'copilot-vscode.json'),
+        JSON.stringify({ prompt_files: ['oxe-scan.prompt.md'] }),
+        'utf8'
+      );
+      const report = h.copilotIntegrationReport(dir);
+      assert.strictEqual(report.status, 'healthy');
+      assert.strictEqual(report.promptSource, 'workspace');
+      assert.deepStrictEqual(report.warnings, []);
+    } finally {
+      if (prevCopilotHome == null) delete process.env.COPILOT_HOME;
+      else process.env.COPILOT_HOME = prevCopilotHome;
+    }
+  });
+
+  test('copilotIntegrationReport warns when only legacy global install exists', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-copilot-legacy-'));
+    const fakeCopilotHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-copilot-home-'));
+    const prevCopilotHome = process.env.COPILOT_HOME;
+    process.env.COPILOT_HOME = fakeCopilotHome;
+    try {
+      const legacyPrompts = path.join(fakeCopilotHome, 'prompts');
+      fs.mkdirSync(legacyPrompts, { recursive: true });
+      fs.writeFileSync(path.join(legacyPrompts, 'oxe-plan.prompt.md'), 'legacy\n', 'utf8');
+      fs.writeFileSync(
+        path.join(fakeCopilotHome, 'copilot-instructions.md'),
+        '<!-- oxe-cc:install-begin -->\nlegacy\n<!-- oxe-cc:install-end -->\n<!-- gsd managed -->\n',
+        'utf8'
+      );
+      const report = h.copilotIntegrationReport(dir);
+      assert.strictEqual(report.promptSource, 'legacy_global');
+      assert.strictEqual(report.status, 'warning');
+      assert.ok(report.warnings.some((w) => /apenas no legado global/i.test(w)));
+      assert.ok(report.warnings.some((w) => /outro framework/i.test(w)));
+    } finally {
+      if (prevCopilotHome == null) delete process.env.COPILOT_HOME;
+      else process.env.COPILOT_HOME = prevCopilotHome;
+    }
+  });
+
+  test('copilotIntegrationReport flags prompt path mismatch for nested layout', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-copilot-path-'));
+    const fakeCopilotHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-copilot-home-'));
+    const prevCopilotHome = process.env.COPILOT_HOME;
+    process.env.COPILOT_HOME = fakeCopilotHome;
+    try {
+      fs.mkdirSync(path.join(dir, '.github', 'prompts'), { recursive: true });
+      fs.mkdirSync(path.join(dir, '.oxe', 'workflows'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.oxe', 'workflows', 'scan.md'), '# scan\n', 'utf8');
+      fs.writeFileSync(
+        path.join(dir, '.github', 'prompts', 'oxe-scan.prompt.md'),
+        'Veja `oxe/workflows/scan.md`.\n',
+        'utf8'
+      );
+      fs.writeFileSync(
+        path.join(dir, '.github', 'copilot-instructions.md'),
+        '<!-- oxe-cc:install-begin -->\nlegacy\n<!-- oxe-cc:install-end -->\n',
+        'utf8'
+      );
+      const report = h.copilotIntegrationReport(dir);
+      assert.strictEqual(report.status, 'broken');
+      assert.ok(report.warnings.some((w) => /aponta para oxe\/workflows/i.test(w)));
+    } finally {
+      if (prevCopilotHome == null) delete process.env.COPILOT_HOME;
+      else process.env.COPILOT_HOME = prevCopilotHome;
+    }
+  });
+
   test('validateConfigShape flags invalid install.profile', () => {
     const { unknownKeys, typeErrors } = h.validateConfigShape({
       discuss_before_plan: false,
@@ -295,5 +383,90 @@ describe('oxe-project-health', () => {
     assert.strictEqual(report.activeRun.run_id, 'oxe-run-health');
     assert.strictEqual(report.eventsSummary.total, 1);
     assert.ok(report.memoryLayers.readOrder.includes('evidence'));
+  });
+
+  // F3 — Permissions validation
+  test('permissions array com regra válida aceita', () => {
+    const { typeErrors } = h.validateConfigShape({
+      permissions: [{ pattern: '*.env', action: 'deny', scope: 'execute' }],
+    });
+    assert.strictEqual(typeErrors.filter((e) => e.includes('permissions')).length, 0);
+  });
+
+  test('permissions regra com action inválido rejeitada', () => {
+    const { typeErrors } = h.validateConfigShape({
+      permissions: [{ pattern: '*.env', action: 'block' }],
+    });
+    assert.ok(typeErrors.some((e) => e.includes('permissions[0].action')));
+  });
+
+  test('permissions regra sem pattern rejeitada', () => {
+    const { typeErrors } = h.validateConfigShape({
+      permissions: [{ action: 'deny' }],
+    });
+    assert.ok(typeErrors.some((e) => e.includes('permissions[0].pattern')));
+  });
+
+  test('permissions scope inválido rejeitado', () => {
+    const { typeErrors } = h.validateConfigShape({
+      permissions: [{ pattern: '*.env', action: 'deny', scope: 'build' }],
+    });
+    assert.ok(typeErrors.some((e) => e.includes('permissions[0].scope')));
+  });
+
+  test('permissions não-array rejeitado', () => {
+    const { typeErrors } = h.validateConfigShape({
+      permissions: 'deny-all',
+    });
+    assert.ok(typeErrors.some((e) => e.includes('permissions')));
+  });
+
+  // F4 — Config hierarchy sources field
+  test('loadOxeConfigMerged retorna sources com campos system/user/project', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cfg-'));
+    const result = h.loadOxeConfigMerged(dir);
+    assert.ok('sources' in result);
+    assert.ok('system' in result.sources);
+    assert.ok('user' in result.sources);
+    assert.ok('project' in result.sources);
+  });
+
+  test('loadOxeConfigMerged project source aponta para .oxe/config.json quando existe', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cfg-'));
+    const oxeDir = path.join(dir, '.oxe');
+    fs.mkdirSync(oxeDir, { recursive: true });
+    fs.writeFileSync(path.join(oxeDir, 'config.json'), JSON.stringify({ discuss_before_plan: true }), 'utf8');
+    const result = h.loadOxeConfigMerged(dir);
+    assert.strictEqual(result.sources.project, path.join(oxeDir, 'config.json'));
+    assert.strictEqual(result.config.discuss_before_plan, true);
+  });
+
+  // F6 — Plugins array validation
+  test('plugins array com source objects aceita', () => {
+    const { typeErrors } = h.validateConfigShape({
+      plugins: [{ source: 'npm:oxe-plugin-foo' }],
+    });
+    assert.strictEqual(typeErrors.filter((e) => e.includes('plugins')).length, 0);
+  });
+
+  test('plugins array com strings legado aceita', () => {
+    const { typeErrors } = h.validateConfigShape({
+      plugins: ['my-plugin.cjs'],
+    });
+    assert.strictEqual(typeErrors.filter((e) => e.includes('plugins')).length, 0);
+  });
+
+  test('plugins source vazia rejeitada', () => {
+    const { typeErrors } = h.validateConfigShape({
+      plugins: [{ source: '' }],
+    });
+    assert.ok(typeErrors.some((e) => e.includes('plugins[0].source')));
+  });
+
+  test('plugins não-array rejeitado', () => {
+    const { typeErrors } = h.validateConfigShape({
+      plugins: 'my-plugin.cjs',
+    });
+    assert.ok(typeErrors.some((e) => e.includes('plugins')));
   });
 });

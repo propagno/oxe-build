@@ -17,6 +17,7 @@
   "scan_ignore_globs": [],
   "spec_required_sections": [],
   "plan_max_tasks_per_wave": 0,
+  "permissions": [],
   "azure": {
     "enabled": false,
     "default_resource_group": "",

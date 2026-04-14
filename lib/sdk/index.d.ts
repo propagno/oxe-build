@@ -66,6 +66,40 @@ export interface AzureHealthContext {
   warnings: string[];
 }
 
+export type CopilotPromptSource = 'workspace' | 'legacy_global' | 'missing';
+
+export interface CopilotWorkspaceIntegration {
+  root: string;
+  promptsDir: string;
+  instructions: string;
+  manifest: string;
+  promptFiles: string[];
+  hasInstructions: boolean;
+  hasOxeBlock: boolean;
+}
+
+export interface CopilotLegacyIntegration {
+  root: string;
+  promptsDir: string;
+  instructions: string;
+  promptFiles: string[];
+  hasInstructions: boolean;
+  hasOxeBlock: boolean;
+  hasOtherManagedBlocks: boolean;
+  detected: boolean;
+}
+
+export interface CopilotIntegrationReport {
+  status: 'healthy' | 'warning' | 'broken' | 'not_installed';
+  detected: boolean;
+  target: 'workspace';
+  promptSource: CopilotPromptSource;
+  workspace: CopilotWorkspaceIntegration;
+  legacy: CopilotLegacyIntegration;
+  manifest: Record<string, unknown> | null;
+  warnings: string[];
+}
+
 /** Relatório retornado por `health.buildHealthReport` e incluído em `runDoctorChecks`.healthReport. */
 export interface OxeHealthReport {
   configPath: string | null;
@@ -80,9 +114,22 @@ export interface OxeHealthReport {
   retroDate: Date | null;
   staleLessons: HealthStaleInfo;
   phaseWarn: string[];
+  runtimeWarn?: string[];
+  reviewWarn?: string[];
+  capabilityWarn?: string[];
+  investigationWarn?: string[];
+  sessionWarn?: string[];
+  installWarn?: string[];
+  copilotWarn?: string[];
+  copilot?: CopilotIntegrationReport | null;
   summaryGapWarn: string | null;
   specWarn: string[];
   planWarn: string[];
+  planSelfEvaluation?: Record<string, unknown> | null;
+  planReviewStatus?: string | null;
+  activeRun?: Record<string, unknown> | null;
+  eventsSummary?: Record<string, unknown> | null;
+  memoryLayers?: Record<string, unknown> | null;
   next: OxeNextSuggestion;
   azureActive?: boolean;
   azure?: AzureHealthContext | null;
@@ -189,6 +236,35 @@ export interface PlanPathsResult {
   issues: Array<{ path: string; reason: string }>;
 }
 
+export interface OxePermissionRule {
+  pattern: string;
+  action: 'allow' | 'deny' | 'ask';
+  scope?: 'execute' | 'apply' | 'all';
+}
+
+export interface PermissionCheckResult {
+  denied: string[];
+  needsApproval: string[];
+  allowed: string[];
+}
+
+export interface ReplayReport {
+  events: Array<Record<string, unknown>>;
+  totalEvents: number;
+  duration_ms: number | null;
+  runId: string | null;
+  waveIds: number[];
+  taskSequence: string[];
+  checkpointSequence: string[];
+  failureEvents: Array<Record<string, unknown>>;
+  _reportPath?: string;
+}
+
+export interface PluginSource {
+  source: string;
+  version?: string;
+}
+
 export interface OxePlugin {
   name: string;
   version?: string;
@@ -233,7 +309,7 @@ export interface OxeSdk {
   validateDecisionFidelity: (discussMd: string, planMd: string) => DecisionFidelityResult;
 
   health: {
-    loadOxeConfigMerged: (targetProject: string) => { config: Record<string, unknown>; path: string | null; parseError: string | null };
+    loadOxeConfigMerged: (targetProject: string) => { config: Record<string, unknown>; path: string | null; parseError: string | null; sources: { system: string | null; user: string | null; project: string | null } };
     validateConfigShape: (cfg: Record<string, unknown>) => { unknownKeys: string[]; typeErrors: string[] };
     buildHealthReport: (target: string) => OxeHealthReport;
     suggestNextStep: (target: string, cfg?: { discuss_before_plan?: boolean }) => OxeNextSuggestion;
@@ -244,6 +320,9 @@ export interface OxeSdk {
     parseLastRetroDate: (stateText: string) => Date | null;
     isStaleScan: (scanDate: Date | null, maxAgeDays: number) => HealthStaleInfo;
     isStaleLessons: (retroDate: Date | null, maxAgeDays: number) => HealthStaleInfo;
+    copilotWorkspacePaths: (target: string) => { root: string; promptsDir: string; instructions: string; manifest: string };
+    copilotLegacyPaths: () => { root: string; promptsDir: string; instructions: string };
+    copilotIntegrationReport: (target: string) => CopilotIntegrationReport;
     planAgentsWarnings: (target: string) => string[];
     phaseCoherenceWarnings: (phase: string, paths: Record<string, string>) => string[];
     specSectionWarnings: (specPath: string, requiredHeadings: string[]) => string[];
@@ -291,6 +370,9 @@ export interface OxeSdk {
     scanFileForSecrets: (filePath: string, options?: { contentPatterns?: RegExp[] }) => SecretScanResult;
     scanDirForSecretFiles: (dir: string, options?: { secretPatterns?: RegExp[]; maxDepth?: number }) => string[];
     validatePlanPaths: (filePaths: string[], projectRoot: string) => PlanPathsResult;
+    checkFilePermission: (filePath: string, permissions: OxePermissionRule[], currentScope?: string) => { action: string; rule: OxePermissionRule | null };
+    checkPermissions: (fileList: string[], permissions: OxePermissionRule[], scope?: string) => PermissionCheckResult;
+    globToRegex: (glob: string) => RegExp;
     DEFAULT_SECRET_PATTERNS: RegExp[];
     DEFAULT_SECRET_CONTENT_PATTERNS: RegExp[];
     DEFAULT_DENIED_PATH_PATTERNS: RegExp[];
@@ -302,6 +384,8 @@ export interface OxeSdk {
     runHook: (plugins: OxePlugin[], hookName: string, ctx: Record<string, unknown>) => Promise<Array<{ plugin: string; error: string }>>;
     validatePlugins: (projectRoot: string) => PluginValidationResult;
     initPluginsDir: (projectRoot: string) => void;
+    resolvePluginSources: (projectRoot: string, pluginsSources: Array<string | PluginSource>) => { resolved: string[]; errors: Array<{ source: string; error: string }> };
+    installNpmPlugin: (projectRoot: string, pkgName: string, version?: string) => { ok: boolean; path: string; error: string };
   };
 
   dashboard: {
@@ -323,6 +407,13 @@ export interface OxeSdk {
     parseCapabilityManifest: (text: string) => Record<string, unknown>;
     readCapabilityCatalog: (projectRoot: string) => Array<Record<string, unknown>>;
     buildMemoryLayers: (projectRoot: string, activeSession: string | null) => Record<string, unknown>;
+    replayEvents: (projectRoot: string, activeSession: string | null, options?: {
+      fromEventId?: string;
+      runId?: string;
+      waveId?: number;
+      limit?: number;
+      writeReport?: boolean;
+    }) => ReplayReport;
   };
 
   azure: {

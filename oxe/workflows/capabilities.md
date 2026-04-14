@@ -15,9 +15,11 @@ Gerir capabilities nativas do OXE: listar, explicar, instalar, remover e diagnos
 2. Se o pedido for `list` ou genérico, responder com capabilities instaladas, escopo e riscos.
 3. Se o pedido for instalar ou remover, orientar o utilizador a usar `oxe-cc capabilities ...` ou o workflow equivalente aprovado pelo projeto.
 4. Se o pedido for diagnóstico, apontar drift entre índice, manifestos e artefatos esperados.
+5. Após qualquer operação de install ou remove bem-sucedida, atualizar **`.oxe/STATE.md`**: linha `capabilities_updated: YYYY-MM-DD` ou nota na secção Decisões registando a capability adicionada/removida.
 </process>
 
 <success_criteria>
 - [ ] O estado do catálogo foi lido a partir dos artefatos reais.
 - [ ] A resposta deixa claro o que é capability nativa e o que é núcleo do OXE.
+- [ ] `.oxe/STATE.md` foi atualizado quando houve install ou remove (passo 5).
 </success_criteria>

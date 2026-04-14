@@ -175,6 +175,7 @@ Cada passo lê o anterior como contexto e escreve seu artefato no escopo correto
 | `/oxe-session` | Cria, alterna, retoma, fecha e migra sessões OXE sem misturar artefatos de ciclos diferentes. |
 | `/oxe-ask` | Lê `STATE`, resolve a sessão ativa e responde perguntas situacionais com base nos artefatos reais. |
 | `/oxe-capabilities` | Gera e mantém o catálogo nativo de capabilities do projeto em `.oxe/CAPABILITIES.md` e `.oxe/capabilities/`, com política, side effects e evidência esperada. |
+| `/oxe-skill` | Descobrir, invocar e gerenciar skills OXE — unificação de personas e capabilities via `@<skill-id>`. Subcomandos: `list`, `explain <id>`, `new <id>`, invocação `@<id>` inline. |
 | `oxe-cc azure` | Provider Azure nativo via Azure CLI: autenticação corporativa com MFA, inventário via Resource Graph e operações guiadas para Service Bus, Event Grid e Azure SQL, sempre com evidência em `.oxe/cloud/azure/`. |
 | `/oxe-dashboard` | Consolida `STATE`, `PLAN`, `ACTIVE-RUN`, trace log, runtime, checkpoints e verify numa visão visual de ciclo, artefatos, ondas, handoffs e aprovação antes do execute. |
 
@@ -392,7 +393,8 @@ npx oxe-cc@latest
 
 | Flag | Efeito |
 |------|--------|
-| `--cursor` / `--copilot` | Só uma das stacks |
+| `--cursor` / `--copilot` | Só uma das stacks da IDE |
+| `--copilot-cli` | Skills globais do Copilot CLI em `~/.copilot/skills/` |
 | `--all-agents` | Cursor + Copilot + Claude + OpenCode + Gemini + Codex + Windsurf + Antigravity |
 | `--global` | Layout clássico: `oxe/` na raiz + `.oxe/` |
 | `--local` | Layout mínimo: só `.oxe/` (padrão) |
@@ -403,6 +405,8 @@ npx oxe-cc@latest
 | `OXE_NO_PROMPT=1` | Modo não-interativo (CI) |
 
 </details>
+
+GitHub Copilot no VS Code é **workspace-first**: o OXE instala prompt files em `.github/prompts/*.prompt.md` e mescla instruções em `.github/copilot-instructions.md`. `~/.copilot/` fica reservado ao legado detectável e ao runtime do Copilot CLI.
 
 <details>
 <summary><strong>Atualizar e desinstalar</strong></summary>
@@ -442,7 +446,9 @@ node bin/oxe-cc.js --help
 | `oxe-cc init-oxe` | Bootstrap do `.oxe/` (STATE, config, codebase/) |
 | `oxe-cc dashboard` | Interface web local para revisão, comentários e aprovação do plano |
 | `oxe-cc runtime <status\|start\|pause\|resume\|replay>` | Controla o run ativo, cursor, replay e tracing operacional |
+| `oxe-cc runtime replay [--run <id>] [--from <event-id>] [--wave <n>] [--write]` | Timeline de eventos com deltas; `--write` gera `REPLAY-SESSION.md` |
 | `oxe-cc capabilities <list\|install\|remove\|update>` | Mantém o catálogo nativo de capabilities em `.oxe/` |
+| `oxe-cc plugins <list\|install\|remove>` | Gerencia plugins de lifecycle; `install npm:<pkg>` instala em `.oxe/plugins/_npm/` |
 | `oxe-cc uninstall` | Remove integrações OXE do HOME e do repo |
 | `oxe-cc uninstall --global-cli` | Também remove o pacote npm global do PATH |
 
@@ -462,7 +468,8 @@ Arquivo `.oxe/config.json`. Principais opções:
 | `scale_adaptive` | `true` | Scan sugere o profile pelo tamanho do projeto |
 | `scan_max_age_days` | `0` | Doctor avisa quando o scan estiver velho |
 | `lessons_max_age_days` | `0` | Doctor avisa quando a última retro estiver velho |
-| `plugins` | `[]` | Hooks de lifecycle em `.oxe/plugins/*.cjs` |
+| `plugins` | `[]` | Hooks de lifecycle em `.oxe/plugins/*.cjs`; aceita `{ source: "npm:<pkg>" }` e `{ source: "path:./file.cjs" }` |
+| `permissions` | `[]` | Regras glob+ação para gate de arquivos em execute/apply — `{ pattern, action: allow\|deny\|ask, scope?: execute\|apply\|all }` |
 
 ---
 
@@ -489,7 +496,8 @@ TypeScript: [`lib/sdk/index.d.ts`](lib/sdk/index.d.ts) · Docs: [`lib/sdk/README
 | Situação | O que tentar |
 |----------|-------------|
 | Comandos não aparecem no Cursor | Confirme `~/.cursor/commands/`; reinicie o Cursor |
-| `/oxe-*` não aparecem no Copilot | Ative `"chat.promptFiles": true`; confirme `~/.copilot/prompts/` |
+| `/oxe-*` não aparecem no Copilot | Ative `"chat.promptFiles": true`; confirme `.github/prompts/` e `.github/copilot-instructions.md`; se existir legado em `~/.copilot/`, rode `npx oxe-cc uninstall --copilot-legacy-clean` |
+| Copilot responde fora do workflow OXE | Rode `npx oxe-cc doctor`; confirme que o prompt veio de `.github/prompts/` e não do legado em `~/.copilot/`; se houver blocos mistos de outros frameworks no global, limpe o legado |
 | Arquivos não atualizam | Reinstale com `--force` |
 | `ETARGET` / versão não encontrada | `npm cache clean --force` |
 | Erro no WSL sobre Node | Use Node instalado dentro do WSL |

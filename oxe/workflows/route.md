@@ -18,7 +18,7 @@ Este passo é **meta**: só orientação. A execução real pertence ao workflow
    - **Comando:** …
    - **Workflow:** `oxe/workflows/<nome>.md`
    - **Por quê:** (uma frase)
-4. Não criar ficheiros em `.oxe/` salvo o utilizador pedir explícito registo; opcional: uma linha em `STATE.md` (“última orientação route: …”) se o utilizador quiser rastreio.
+4. Não criar ficheiros em `.oxe/` salvo o utilizador pedir explícito registo; se o utilizador pedir rastreio: acrescentar uma linha em **`.oxe/STATE.md`** (ex.: `last_route: /oxe-scan — YYYY-MM-DD`).
 </process>
 
 <success_criteria>

@@ -72,7 +72,7 @@ Blueprints em `.oxe/plan-agents.json` (schema 3). Protocolo inter-agente: `oxe/w
 ## Integrações IDE
 
 - **Cursor:** slash commands em `~/.cursor/commands/` (gerados por `npm run sync:cursor`)
-- **GitHub Copilot (VS Code):** prompt files em `~/.copilot/prompts/` + `copilot-instructions.md`
+- **GitHub Copilot (VS Code):** prompt files em `.github/prompts/` + `.github/copilot-instructions.md`
 - **Claude Code:** commands em `~/.claude/commands/`
 - **OpenCode / Gemini / Codex / Windsurf / Antigravity:** via `oxe-cc --all-agents`
 

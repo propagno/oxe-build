@@ -151,24 +151,31 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
    - Se houver obs com `Status: pendente` e `Severidade: adjustment`: incorporar como restrição nas tarefas afetadas desta onda antes de executar
    - Se houver obs sem campo Severidade (formato legado) ou `Severidade: info` com impacto `execute` ou `all`: incorporar normalmente
    - Após incorporar: marcar `incorporada → execute (data)` em `OBSERVATIONS.md`
-5. **Seleção de modo** (apenas se PLAN.md com 2+ ondas e `execute_mode` não definido em STATE): se o argumento já for `A`, `B` ou `C`, usá-lo diretamente; senão apresentar opções A/B/C e aguardar escolha; registrar em STATE.md.
-6. Identificar **onda ou bloco atual**: no PLAN, todas as tarefas da mesma onda sem dependências pendentes; no QUICK, passos ainda não marcados como feitos.
-7. Listar no chat: tarefas/passos desta onda, arquivos prováveis, comando **Verificar** de cada tarefa.
-8. **Implementar** conforme o modo escolhido:
+5. **Gate de permissões:** se `.oxe/config.json` define `permissions[]` (array não-vazio):
+   - Para cada tarefa da onda, coletar os caminhos listados em **Arquivos prováveis:** do PLAN.md
+   - Avaliar cada caminho contra as regras em ordem (first-match wins):
+     - `action: deny` → **bloquear** a onda. Listar arquivos bloqueados e a regra que disparou. Não avançar sem que o utilizador remova a regra ou altere o plano.
+     - `action: ask` → **pausar** e apresentar: "Os seguintes arquivos requerem confirmação: [lista]. Regra: `pattern`. Confirma execução? (s/n)". Avançar só após confirmação explícita.
+     - `action: allow` ou nenhuma regra matchou → avançar normalmente
+   - O mesmo gate aplica-se em Azure `apply` quando `scope: apply` ou `all`
+6. **Seleção de modo** (apenas se PLAN.md com 2+ ondas e `execute_mode` não definido em STATE): se o argumento já for `A`, `B` ou `C`, usá-lo diretamente; senão apresentar opções A/B/C e aguardar escolha; registrar em STATE.md.
+7. Identificar **onda ou bloco atual**: no PLAN, todas as tarefas da mesma onda sem dependências pendentes; no QUICK, passos ainda não marcados como feitos.
+8. Listar no chat: tarefas/passos desta onda, arquivos prováveis, comando **Verificar** de cada tarefa.
+9. **Implementar** conforme o modo escolhido:
    - **Modo Completo:** executar todas as ondas em sequência com verificação inline entre ondas; sumarizar ao final.
    - **Modo Por onda:** executar onda atual, apresentar checklist, parar.
    - **Modo Por tarefa:** executar próxima tarefa pendente, parar.
    - Em qualquer modo: atualizar `EXECUTION-RUNTIME.md` a cada mudança de onda, bloqueio, retry, handoff ou checkpoint.
-9. Após cada onda concluída, incluir checklist:
+10. Após cada onda concluída, incluir checklist:
    ```markdown
    ## Checklist — Onda N (OXE)
    - [ ] Pré-requisitos da onda conferidos (dependências Tk atendidas)
    - [ ] Implementação da onda concluída
    - [ ] Comando Verificar de cada tarefa executado (ou agendado)
    ```
-10. Atualizar **`.oxe/STATE.md`** global com progresso resumido e, com sessão ativa, escrever o detalhe operacional em `execution/STATE.md`.
-11. Atualizar ou criar `CHECKPOINTS.md` quando surgir gate humano explícito; refletir o status resumido no `STATE.md` global (`checkpoint_status`) e no runtime (`runtime_status`).
-12. Marcar OBS incorporadas como `incorporada → execute (data)` em `OBSERVATIONS.md` do escopo resolvido.
+11. Atualizar **`.oxe/STATE.md`** global com progresso resumido e, com sessão ativa, escrever o detalhe operacional em `execution/STATE.md`.
+12. Atualizar ou criar `CHECKPOINTS.md` quando surgir gate humano explícito; refletir o status resumido no `STATE.md` global (`checkpoint_status`) e no runtime (`runtime_status`).
+13. Marcar OBS incorporadas como `incorporada → execute (data)` em `OBSERVATIONS.md` do escopo resolvido.
 </process>
 
 <success_criteria>

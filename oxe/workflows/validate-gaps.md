@@ -24,12 +24,13 @@ Não substitui **`verify`**: não reescreve a evidência em `VERIFY.md`; adicion
    - **Data** (ISO) e **Contexto** (verify passou / falhou; ambiente se relevante).
    - **Gaps** — tabela: **ID ou Tn** | **Tipo de gap** | **Severidade sugerida** (P0/P1/P2) | **Nota**.
    - **Sugestões de tarefas** — rascunhos `T_new` ou bullets para incorporar no próximo `oxe:plan --replan`; **apenas texto**.
-4. Atualizar **`.oxe/STATE.md`** se útil (referência a VALIDATION-GAPS pendente de ação).
+4. Atualizar **`.oxe/STATE.md`**: quando existirem gaps com severidade **P0 ou P1**, registar referência a `VALIDATION-GAPS.md` pendente de ação (campo `next_step` ou secção Decisões). Para gaps apenas P2 ou puramente informativos, a atualização é opcional.
 5. Responder no chat: resumo dos gaps críticos, próximo passo lógico (`oxe:plan --replan`, `oxe:execute`, ou “nenhuma ação” se só informativo).
 </process>
 
 <success_criteria>
 - [ ] `VALIDATION-GAPS.md` reflete análise cruzada PLAN + VERIFY (+ SPEC quando existir).
 - [ ] `PLAN.md` não foi alterado sem pedido explícito do utilizador.
+- [ ] `.oxe/STATE.md` foi atualizado quando existiam gaps P0/P1 (passo 4).
 - [ ] Fica claro que este passo **não** substitui um novo **`verify`** quando houver correções implementadas.
 </success_criteria>
