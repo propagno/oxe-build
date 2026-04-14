@@ -198,12 +198,16 @@ Estes não precisam ser decorados — aparecem quando o contexto pede ou quando 
 
 | Comando | Quando usar |
 |---------|-------------|
+| `/oxe-debug` | Diagnóstico técnico inline durante execute — stack trace, teste vermelho, flake |
 | `/oxe-research` | Spike, mapa de sistema, engenharia reversa — antes de spec ou plano |
 | `/oxe-forensics` | Falha persistente após múltiplas tentativas — diagnóstico profundo |
+| `/oxe-validate-gaps` | Gaps de cobertura pós-verify (Nyquist-lite) |
+| `/oxe-security` | Auditoria OWASP P0/P1/P2 vinculada ao stack |
 | `/oxe-ui-spec` | Contrato UI/UX derivado da SPEC (quando UI é domínio crítico) |
 | `/oxe-ui-review` | Auditoria da implementação UI contra o contrato |
 | `/oxe-review-pr` | Revisão de PR ou diff de branches |
 | `/oxe-checkpoint` | Snapshot nomeado do estado da sessão |
+| `/oxe-loop` | Iteração automática até verify passar (integrado ao Modo B do execute) |
 
 ---
 
