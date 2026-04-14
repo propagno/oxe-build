@@ -90,6 +90,8 @@ Quando o comando `**Verificar:**` de uma tarefa `Tn` falha, **não parar silenci
 </failure_mode>
 
 <context>
+**Contrato de raciocínio:** aplicar `oxe/workflows/references/reasoning-execution.md`. Antes de mutar, fazer reconhecimento curto; durante a execução, operar no menor write set viável e validar após cada fatia relevante.
+
 **Contrato de robustez:** seguir `oxe/workflows/references/flow-robustness-contract.md`. Antes de executar, validar os artefatos obrigatórios e o gate do plano.
 
 **Runtime operacional:** usar `EXECUTION-RUNTIME.md` do escopo resolvido como artefato tático da execução. Ele deve refletir agentes ativos, onda atual, handoffs, evidências, retries, checkpoints pendentes e tarefas bloqueadas. O `PLAN.md` continua estratégico; o runtime regista a operação do ciclo.
@@ -138,6 +140,7 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
 
 <process>
 1. Ler **`.oxe/STATE.md`** global para resolver `active_session`, depois ler **`PLAN.md`** (se existir) e **`QUICK.md`** do escopo resolvido.
+1a. Fazer reconhecimento curto dos artefatos e arquivos prováveis da onda atual antes da primeira mudança. Se a tarefa depender de hipótese crítica ainda não verificada, pausar e explicitar o bloqueio antes de editar.
 2. Se existir `PLAN.md`, validar a seção `## Autoavaliação do Plano` antes de qualquer implementação:
    - `Melhor plano atual` deve ser `sim`;
    - `Confiança` deve existir em `0–100%`;
@@ -161,6 +164,10 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
 6. **Seleção de modo** (apenas se PLAN.md com 2+ ondas e `execute_mode` não definido em STATE): se o argumento já for `A`, `B` ou `C`, usá-lo diretamente; senão apresentar opções A/B/C e aguardar escolha; registrar em STATE.md.
 7. Identificar **onda ou bloco atual**: no PLAN, todas as tarefas da mesma onda sem dependências pendentes; no QUICK, passos ainda não marcados como feitos.
 8. Listar no chat: tarefas/passos desta onda, arquivos prováveis, comando **Verificar** de cada tarefa.
+8a. Antes de implementar, explicitar no chat:
+   - **Contexto lido**
+   - **Alvo da mudança**
+   - **Validação prevista**
 9. **Implementar** conforme o modo escolhido:
    - **Modo Completo:** executar todas as ondas em sequência com verificação inline entre ondas; sumarizar ao final.
    - **Modo Por onda:** executar onda atual, apresentar checklist, parar.
@@ -176,6 +183,7 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
 11. Atualizar **`.oxe/STATE.md`** global com progresso resumido e, com sessão ativa, escrever o detalhe operacional em `execution/STATE.md`.
 12. Atualizar ou criar `CHECKPOINTS.md` quando surgir gate humano explícito; refletir o status resumido no `STATE.md` global (`checkpoint_status`) e no runtime (`runtime_status`).
 13. Marcar OBS incorporadas como `incorporada → execute (data)` em `OBSERVATIONS.md` do escopo resolvido.
+14. Se a execução parar por hipótese crítica não verificada, conflito estrutural ou falta de evidência operacional, terminar com bloqueio explícito e um único próximo passo.
 </process>
 
 <success_criteria>

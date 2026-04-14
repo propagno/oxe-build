@@ -7,6 +7,7 @@ Não substitui **`verify`**: não reescreve a evidência em `VERIFY.md`; adicion
 </objective>
 
 <context>
+- Aplicar `oxe/workflows/references/reasoning-review.md`. Este passo deve apresentar gaps e achados antes de qualquer resumo.
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, `VERIFY.md`, `PLAN.md`, `SPEC.md` e `VALIDATION-GAPS.md` vivem no escopo da sessão; sem sessão ativa, manter `.oxe/`.
 - **Pré-requisitos:** `VERIFY.md` e `PLAN.md` existem no escopo resolvido. `SPEC.md` altamente recomendado para cruzar IDs **A***.
 - **Quando usar:** equipas que querem fechar dívida de testes, evidência fraca ou desalinhamento após um verify (passou ou falhou).
@@ -25,7 +26,11 @@ Não substitui **`verify`**: não reescreve a evidência em `VERIFY.md`; adicion
    - **Gaps** — tabela: **ID ou Tn** | **Tipo de gap** | **Severidade sugerida** (P0/P1/P2) | **Nota**.
    - **Sugestões de tarefas** — rascunhos `T_new` ou bullets para incorporar no próximo `oxe:plan --replan`; **apenas texto**.
 4. Atualizar **`.oxe/STATE.md`**: quando existirem gaps com severidade **P0 ou P1**, registar referência a `VALIDATION-GAPS.md` pendente de ação (campo `next_step` ou secção Decisões). Para gaps apenas P2 ou puramente informativos, a atualização é opcional.
-5. Responder no chat: resumo dos gaps críticos, próximo passo lógico (`oxe:plan --replan`, `oxe:execute`, ou “nenhuma ação” se só informativo).
+5. Responder no chat nesta ordem:
+   - **Findings** — gaps críticos primeiro
+   - **Perguntas abertas**
+   - **Riscos residuais**
+   - **Resumo** — próximo passo lógico (`oxe:plan --replan`, `oxe:execute`, ou “nenhuma ação” se só informativo)
 </process>
 
 <success_criteria>

@@ -5,6 +5,7 @@ Rever alterações como num pull request: **URL do GitHub** (`…/pull/<n>`), **
 </objective>
 
 <context>
+- Aplicar `oxe/workflows/references/reasoning-review.md`. A revisão deve ser findings-first, com severidade e evidência antes de qualquer resumo.
 - **Base** e **head** são nomes de branch, tags ou SHAs (ex.: `main` e `feature/foo`).
 - **URL de PR no GitHub** — O usuário pode colar o link (ex.: `https://github.com/org/repo/pull/10` ou atalho `org/repo#10`). O número da PR é o segmento depois de `/pull/`.
 - Em Git, o diff “estilo PR” (só o que a branch introduz) usa o **merge base**: `git diff base...head` (três pontos).
@@ -29,10 +30,12 @@ Rever alterações como num pull request: **URL do GitHub** (`…/pull/<n>`), **
    Se o diff já foi obtido no passo 2 (URL da PR), **não** repetir este passo.
 4. **Ler contexto do projeto** — Se existirem, usar trechos relevantes de `.oxe/codebase/CONVENTIONS.md`, `STACK.md`, `OVERVIEW.md` e, se aplicável, `.oxe/SPEC.md` / `.oxe/PLAN.md` para alinhar expectativas (sem assumir que o PR cobre só OXE).
 5. **Analisar** — Estruturar a resposta com:
-   - **Resumo** — O que muda em 3–6 frases.
+   - **Findings** — achados ordenados por severidade, com arquivo/área afetada e evidência.
    - **Arquivos / áreas** — Agrupar por domínio (API, UI, config, etc.).
    - **Riscos** — Regressões, breaking changes, segurança (inputs, segredos, auth), desempenho óbvio, migrações.
    - **Testes** — O que deveria ser coberto ou rodar localmente (comandos sugeridos se conhecidos do repo).
+   - **Perguntas abertas** — pontos que impedem confiança alta na revisão.
+   - **Resumo** — O que muda em 3–6 frases, apenas depois dos achados.
    - **Checklist PR** — Título sugerido, descrição curta, breaking changes, rollback.
 6. **Opcional em disco** — Se o usuário pedir registro: criar ou atualizar **`.oxe/PR-REVIEW.md`** com data, URL ou refs (base/head), resumo, achados e próximos passos (Markdown legível).
 </process>

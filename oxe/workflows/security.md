@@ -9,6 +9,7 @@ Não substitui ferramentas de análise estática (SAST) — identifica padrões 
 </objective>
 
 <context>
+- Aplicar `oxe/workflows/references/reasoning-review.md`. O resumo em chat deve começar por achados, não por panorama narrativo.
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. O relatório de segurança segue a sessão ativa em `verification/`, mas continua a ler `codebase/` global.
 - **Fonte de stack:** `.oxe/codebase/STACK.md` determina quais categorias OWASP são pertinentes (ex.: app sem DB descarta A03:Injection-SQL; API sem auth descarta A07:Authentication).
 - **Fontes de código:** `.oxe/codebase/STRUCTURE.md`, `.oxe/codebase/CONCERNS.md`, `.oxe/codebase/INTEGRATIONS.md` orientam quais arquivos focar.
@@ -49,7 +50,7 @@ Antes de auditar, determinar quais categorias se aplicam lendo `STACK.md` e `INT
 4. Ler `PLAN.md` do escopo resolvido se existir — vincular achados P0/P1 a tarefas `Tn` existentes quando possível, ou criar sugestão `T_new`.
 5. Escrever `SECURITY.md` no escopo resolvido a partir de `oxe/templates/SECURITY.template.md`.
 6. Atualizar `.oxe/STATE.md`: nota de segurança (ex.: `security_audit: YYYY-MM-DD | P0:N | P1:N | P2:N`).
-7. Responder no chat: total de achados por severidade, arquivos mais críticos identificados, próximo passo (P0 presentes → bloquear deploy; apenas P2 → ação opcional).
+7. Responder no chat nesta ordem: **Findings**, **Perguntas abertas**, **Riscos residuais**, **Resumo**. P0 presentes → bloquear deploy; apenas P2 → ação opcional.
 </process>
 
 <success_criteria>

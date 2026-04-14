@@ -11,6 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const runtimeSemantics = require('./oxe-runtime-semantics.cjs');
 
 const OXE_MANAGED_HTML = '<!-- oxe-cc managed -->';
 const OXE_MANAGED_TOML = '# oxe-cc managed';
@@ -75,42 +76,50 @@ function adjustWorkflowPathsForNestedLayout(content) {
 
 /**
  * @param {string} text
- * @returns {{ description: string, body: string }}
+ * @returns {{ description: string, body: string, frontmatter: Record<string, string> }}
  */
 function parseCursorCommandFrontmatter(text) {
   const normalized = text.replace(/\r\n/g, '\n');
   if (!normalized.startsWith('---\n')) {
-    return { description: '', body: normalized.trim() };
+    return { description: '', body: normalized.trim(), frontmatter: {} };
   }
   const end = normalized.indexOf('\n---\n', 4);
   if (end === -1) {
-    return { description: '', body: normalized.trim() };
+    return { description: '', body: normalized.trim(), frontmatter: {} };
   }
   const yamlBlock = normalized.slice(4, end);
+  const frontmatter = {};
   let description = '';
   for (const line of yamlBlock.split('\n')) {
     const m = line.match(/^description:\s*(.+)$/);
     if (m) {
       description = m[1].trim().replace(/^["']|["']$/g, '');
-      break;
     }
+    const kv = line.match(/^([A-Za-z0-9_-]+):\s*(.+)$/);
+    if (kv) frontmatter[kv[1]] = kv[2].trim().replace(/^["']|["']$/g, '');
   }
   const body = normalized.slice(end + 5).trim();
-  return { description, body };
+  return { description, body, frontmatter };
 }
 
 /**
  * @param {string} skillName
  * @param {string} description
  * @param {string} body
+ * @param {Record<string, string>} [metadata]
  */
-function buildAgentSkillMarkdown(skillName, description, body) {
+function buildAgentSkillMarkdown(skillName, description, body, metadata) {
   const desc = description.trim() || `Comando OXE — ${skillName}`;
+  const meta = metadata ? runtimeSemantics.pickRuntimeMetadata(metadata) : {};
+  const metaLines = Object.keys(meta).length
+    ? `${runtimeSemantics.renderRuntimeMetadataLines(meta).join('\n')}\n`
+    : '';
   return (
     `---\n` +
     `name: ${skillName}\n` +
     `description: ${JSON.stringify(desc)}\n` +
     `user-invocable: true\n` +
+    metaLines +
     `---\n\n` +
     `${OXE_MANAGED_HTML}\n\n` +
     `${body}\n`
@@ -181,9 +190,9 @@ function installSkillTreeFromCursorCommands(cCmdSrc, skillsRoot, opts, pathRewri
   const writeOne = (skillName, srcPath, descSuffix) => {
     let raw = fs.readFileSync(srcPath, 'utf8');
     if (pathRewriteNested) raw = adjustWorkflowPathsForNestedLayout(raw);
-    const { description, body } = parseCursorCommandFrontmatter(raw);
+    const { description, body, frontmatter } = parseCursorCommandFrontmatter(raw);
     const desc = descSuffix ? `${description.trim()} ${descSuffix}`.trim() : description.trim();
-    const md = buildAgentSkillMarkdown(skillName, desc, body);
+    const md = buildAgentSkillMarkdown(skillName, desc, body, frontmatter);
     const destDir = path.join(skillsRoot, skillName);
     const dest = path.join(destDir, 'SKILL.md');
     if (opts.dryRun) {
@@ -353,11 +362,16 @@ function installCodexPrompts(cCmdSrc, paths, opts, pathRewriteNested, logOmitido
     }
     let raw = fs.readFileSync(src, 'utf8');
     if (pathRewriteNested) raw = adjustWorkflowPathsForNestedLayout(raw);
-    const { description, body } = parseCursorCommandFrontmatter(raw);
+    const { description, body, frontmatter } = parseCursorCommandFrontmatter(raw);
+    const meta = runtimeSemantics.pickRuntimeMetadata(frontmatter);
+    const metaLines = Object.keys(meta).length
+      ? `${runtimeSemantics.renderRuntimeMetadataLines(meta).join('\n')}\n`
+      : '';
     const out =
       `---\n` +
       `description: ${JSON.stringify(description || 'OXE')}\n` +
       `argument-hint: [texto livre opcional]\n` +
+      metaLines +
       `---\n\n` +
       `${OXE_MANAGED_HTML}\n\n` +
       `${body}\n`;

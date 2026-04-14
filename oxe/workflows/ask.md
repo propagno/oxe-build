@@ -5,6 +5,7 @@ Responder perguntas sobre a situação atual do trabalho OXE com máxima robuste
 </objective>
 
 <context>
+- Aplicar `oxe/workflows/references/reasoning-discovery.md` como postura cognitiva deste passo.
 - Resolver `active_session` via `oxe/workflows/references/session-path-resolution.md`.
 - Ler sempre `.oxe/STATE.md` global primeiro.
 - Com sessão ativa, priorizar artefatos em `.oxe/<active_session>/...` antes do modo legado.
@@ -35,6 +36,11 @@ Responder perguntas sobre a situação atual do trabalho OXE com máxima robuste
    - `.oxe/cloud/azure/INVENTORY.md`, `SERVICEBUS.md`, `EVENTGRID.md`, `SQL.md` e `auth-status.json` se a pergunta tocar Azure, cloud, infraestrutura, mensageria, integração ou banco gerido
 5. Responder à pergunta do utilizador com base em evidência explícita dos artefatos lidos.
 6. Se faltar artefato crítico para responder com segurança, dizer exatamente o que falta e qual comando OXE fecha essa lacuna.
+7. Estruturar a resposta conforme o contrato de saída:
+   - **Fatos** — o que os artefatos confirmam sem ambiguidade
+   - **Inferências** — conclusões derivadas dos artefatos
+   - **Lacunas** — o que não pode ser afirmado com segurança
+   - **Próximo passo** — apenas quando fizer sentido operacional
 
 ## Modo diagnóstico padrão
 
@@ -58,9 +64,11 @@ Se o utilizador só disser algo genérico como “o que está acontecendo?”, �
 </process>
 
 <output>
-- Resposta direta à pergunta do utilizador
+- **Fatos**
+- **Inferências**
+- **Lacunas**
+- **Próximo passo** (quando necessário)
 - Referência curta aos artefatos usados
-- Quando necessário, um único próximo passo OXE
 </output>
 
 <success_criteria>

@@ -7,6 +7,7 @@ Usar quando: SPEC existe mas há ambiguidade, risco técnico, ou `discuss_before
 </objective>
 
 <context>
+- Aplicar `oxe/workflows/references/reasoning-discovery.md`. Antes de perguntar, explorar SPEC, STATE, codebase e notas para reduzir perguntas desnecessárias.
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, usar `.oxe/<active_session>/spec/` para `SPEC.md` e `DISCUSS.md`; sem sessão ativa, manter `.oxe/`.
 - Ler `SPEC.md` do escopo resolvido, `.oxe/STATE.md` e trechos relevantes de `.oxe/codebase/OVERVIEW.md` / `STACK.md`.
 - Se a SPEC mencionar **Azure explicitamente** (Azure Service Bus, Azure Event Grid, Azure SQL, Azure CLI, ARM, subscription Azure): verificar `auth-status.json` e, se ativo, ler `.oxe/cloud/azure/INVENTORY.md` para contextualizar recursos existentes. Sugerir até 3 perguntas padrão quando o contexto for novo: (1) região/location preferida e resource group existente ou a criar; (2) tier/SKU necessário (ex.: Standard vs Premium para Service Bus); (3) se a operação exige VPN ou service principal dedicado. Referenciar recursos existentes no inventário pelo nome em vez de criar novos quando possível. **Nota:** SQL genérico (PostgreSQL, MySQL, SQL Server on-prem, SQLite) não aciona este bloco — somente quando a SPEC qualificar explicitamente com "Azure".
@@ -38,7 +39,12 @@ Regras:
    - **Implicações para o plano** — bullets (ex.: "migrations necessárias", "feature flag").
 5. Se ainda houver perguntas **pendentes** críticas, listá-las no chat (máx. 7) e parar até resposta; depois atualizar DISCUSS.md.
 6. Atualizar **`.oxe/STATE.md`** global: fase `discuss_complete`, próximo passo `oxe:plan`. Registrar os IDs de decisão na seção **Decisões persistentes** do STATE (ex.: `D-01: escolheu JWT — 2025-01-15`).
-7. Resumo no chat em ≤8 linhas, listando decisões com seus IDs.
+7. Resumo no chat em ≤8 linhas, nesta ordem:
+   - **Fatos**
+   - **Inferências**
+   - **Lacunas**
+   - **Próximo passo**
+   Listar decisões com seus IDs sempre que existirem.
 </process>
 
 <discuss_md_format>

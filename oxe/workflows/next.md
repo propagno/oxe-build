@@ -5,6 +5,7 @@ Inspecionar `.oxe/STATE.md` global, a sessão ativa quando existir, e a existên
 </objective>
 
 <context>
+- Aplicar `oxe/workflows/references/reasoning-status.md`. O passo devolve leitura curta, recomendação única e motivo.
 - O usuário pode rodar **`npx oxe-cc status`** no terminal para a mesma lógica resumida. **`npx oxe-cc status --hints`** (ou **`--json --hints`**) acrescenta lembretes **paralelos** (idade do scan/compact por config) — **não** altera o único passo canónico que este workflow deve devolver.
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, preferir os artefatos da sessão antes de olhar a raiz legada.
 - Se houver empate aparente (ex.: poderia ser spec ou quick), preferir **spec** quando já existir mapa de codebase; preferir **quick** só se o usuário deixar explícito que é correção mínima.
@@ -32,6 +33,7 @@ Inspecionar `.oxe/STATE.md` global, a sessão ativa quando existir, e a existên
 - **Próximo passo:** um único entre `scan` | `spec` | `discuss` | `plan` | `quick` | `execute` | `verify`
 - **Comando:** o slash correspondente (ex.: `/oxe-scan`) **ou** `npx oxe-cc status` para conferir de novo
 - **Por quê:** uma frase
+- **Confiança / lacuna:** só quando o estado estiver incompleto ou ambíguo
 - **Artefatos em jogo:** lista curta (máx. 4 itens)
 </process>
 

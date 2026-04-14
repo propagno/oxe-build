@@ -79,3 +79,5 @@ Blueprints em `.oxe/plan-agents.json` (schema 3). Protocolo inter-agente: `oxe/w
 ## Instruções para agentes de IA
 
 Quando o utilizador pedir uma etapa OXE por linguagem natural, seguir o ficheiro `oxe/workflows/<passo>.md` correspondente **sem atalhar passos**. Ler os artefatos em `.oxe/` antes de qualquer ação — nunca partir de suposições sobre o estado do projeto.
+
+Os wrappers por runtime podem carregar metadata cognitiva (`oxe_reasoning_mode`, `oxe_question_policy`, `oxe_output_contract`, `oxe_tool_profile`, `oxe_confidence_policy`), mas o comportamento canónico continua no workflow. Use essa metadata para adaptar a postura do agente sem bifurcar a lógica do OXE por ferramenta.

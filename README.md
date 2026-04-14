@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
-**Versão:** `0.6.4` · [package.json](package.json)
+**Versão:** `0.8.0` · [package.json](package.json)
 
 **Framework OXE — Orchestrated eXperience Engineering**
 
@@ -31,8 +31,23 @@ Ele se apoia em três princípios:
 - **Context engineering** — o estado do trabalho fica em arquivos pequenos dentro de `.oxe/`, não na memória do chat. O agente lê o que precisa, quando precisa — sem sobrecarregar o contexto com decisões já tomadas.
 - **Lessons loop** — ao fim de cada ciclo, `/oxe-retro` extrai 3–5 lições prescritivas que o próximo spec/plan lê automaticamente. Depois de alguns ciclos, os planos ficam dramaticamente melhores porque os erros anteriores não se repetem.
 - **Plan-Driven Dynamic Agents** — quando há múltiplos domínios, o plano cria agentes específicos para *aquela demanda*. Agentes não são reaproveitados entre projetos ou demandas.
+- **Semântica de raciocínio multi-runtime** — discovery, planning, execution, review e status seguem contratos cognitivos explícitos. O mesmo workflow OXE deve gerar respostas exploratórias, decision-complete e auditáveis em Copilot, Cursor, Claude, Codex e demais runtimes suportados.
 
 O resultado: **menos requisições**, **mais coerência**, e uma experiência de engenharia orquestrada que funciona do mesmo jeito em qualquer IDE.
+
+---
+
+## Semântica de raciocínio do OXE
+
+O OXE agora distingue cinco famílias de raciocínio:
+
+- `discovery` — explorar antes de perguntar; separar fatos, inferências e lacunas
+- `planning` — produzir plano decision-complete, com riscos, validação e confidence gate
+- `execution` — reconhecimento curto antes de mutar; menor write set viável; validação por fatia
+- `review` — findings primeiro, severidade, evidência e risco residual
+- `status` — leitura curta do estado, recomendação única e motivo
+
+Essas regras vivem no núcleo canónico em `oxe/workflows/references/reasoning-*.md`, sobem para os workflows em `oxe/workflows/` e são renderizadas para cada runtime em `.github/prompts/`, `.cursor/commands/`, `commands/oxe/`, `.codex/prompts/` e skills multiagente.
 
 ---
 
@@ -498,6 +513,7 @@ TypeScript: [`lib/sdk/index.d.ts`](lib/sdk/index.d.ts) · Docs: [`lib/sdk/README
 | Comandos não aparecem no Cursor | Confirme `~/.cursor/commands/`; reinicie o Cursor |
 | `/oxe-*` não aparecem no Copilot | Ative `"chat.promptFiles": true`; confirme `.github/prompts/` e `.github/copilot-instructions.md`; se existir legado em `~/.copilot/`, rode `npx oxe-cc uninstall --copilot-legacy-clean` |
 | Copilot responde fora do workflow OXE | Rode `npx oxe-cc doctor`; confirme que o prompt veio de `.github/prompts/` e não do legado em `~/.copilot/`; se houver blocos mistos de outros frameworks no global, limpe o legado |
+| Um runtime responde sem a nova disciplina de raciocínio | Verifique drift entre `oxe/workflows/`, `.github/prompts/`, `commands/oxe/` e os prompts instalados; rode `npm run sync:runtime-metadata` e `npm run sync:cursor` no repo do pacote |
 | Arquivos não atualizam | Reinstale com `--force` |
 | `ETARGET` / versão não encontrada | `npm cache clean --force` |
 | Erro no WSL sobre Node | Use Node instalado dentro do WSL |

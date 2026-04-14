@@ -14,6 +14,7 @@ Se o usuário indicar uma tarefa (ex.: `T2`), focar só nela nas camadas 1–2; 
 </objective>
 
 <context>
+- Aplicar `oxe/workflows/references/reasoning-review.md` como contrato deste passo. A resposta no chat deve começar por achados, não por resumo.
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, `VERIFY.md`, `VALIDATION-GAPS.md`, `SECURITY.md`, `UI-REVIEW.md` e `SUMMARY.md` vivem no escopo da sessão; `.oxe/STATE.md` continua global.
 - Seguir `oxe/workflows/references/flow-robustness-contract.md`. O verify não valida só se passou; valida também se o plano estava bem calibrado para começar.
 - Ler `EXECUTION-RUNTIME.md` e `CHECKPOINTS.md` do escopo resolvido quando existirem. Eles são evidência tática para saber o que realmente foi executado, bloqueado, aprovado ou desviado.
@@ -125,6 +126,11 @@ Registrar em `VERIFY.md`: `Resultado de calibração | Confiança declarada | Re
 7c. **Camada 6 — Security automático:** se `security_in_verify: true` em `.oxe/config.json`, executar a lógica de `oxe/workflows/security.md` e adicionar seção **Auditoria de Segurança** ao VERIFY.md. Também escrever `.oxe/SECURITY.md` separado. Achados P0 bloqueiam o `verify_complete` — registrar `verify_failed` até P0s serem resolvidos.
 8. **Só se todas as verificações relevantes passarem:** se `after_verify_draft_commit` não for `false`: acrescentar em **VERIFY.md** a seção **Rascunho de commit** — mensagem convencional (ex.: `feat:` / `fix:`) + bullets alinhados aos critérios **A*** e decisões **D-NN**; **não** incluir segredos.
 9. **Só se passou:** se `after_verify_suggest_pr` não for `false`: acrescentar **Checklist PR** — branch base, título sugerido, screenshots se UI, links a SPEC/PLAN/DISCUSS, testes executados.
+10. No chat, responder nesta ordem:
+   - **Findings**
+   - **Perguntas abertas**
+   - **Riscos residuais**
+   - **Resumo**
 </process>
 
 <success_criteria>

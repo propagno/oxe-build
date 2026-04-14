@@ -14,6 +14,8 @@ Se **`.oxe/config.json`** tiver `discuss_before_plan: true`: mencionar no final 
 </objective>
 
 <context>
+**Contrato de raciocínio:** aplicar `oxe/workflows/references/reasoning-discovery.md`. Antes de perguntar, explorar o que o repo e os artefatos já respondem; separar fatos, inferências e lacunas.
+
 **Pré-requisito preferível:** scan executado. Se não existir, mencionar na spec que o mapa está pendente.
 
 **Contrato de robustez:** seguir `oxe/workflows/references/flow-robustness-contract.md`. Antes de escrever, resolver artefatos obrigatórios, validar pré-condições e só então produzir a spec. O output desta fase deve deixar evidência estruturada suficiente para o `plan` decidir se o plano é realmente o melhor disponível.
@@ -222,20 +224,21 @@ O resultado desta reflexão é **invisível ao usuário** — é trabalho intern
 
 <process>
 1. Ler `.oxe/STATE.md`, `OVERVIEW.md`, `STACK.md` e `OBSERVATIONS.md` do escopo ativo (verificar pendentes).
-2. Aplicar `adaptive-discovery.md`: classificar a demanda, verificar se há capabilities úteis e se investigações anteriores reduzem incerteza.
-3. **Fase 1 — Perguntas:** enviar bloco coeso de 3-5 perguntas; máx 3 rodadas; confirmar entendimento.
-4. **Fase 2 — Pesquisa:** propor áreas de investigação; aguardar aprovação; executar se aprovado.
-5. **Fase 3 — Requisitos:** extrair tabela R-ID com v1/v2/fora e critérios A*; incorporar OBS pendentes; apresentar para validação.
-6. **Fase 4 — Roteiro:** agrupar requisitos v1 em fases; escrever `ROADMAP.md` no escopo ativo.
-7. Escrever **`SPEC.md`** usando `oxe/templates/SPEC.template.md` no escopo ativo:
+2. Fazer uma exploração inicial do repo e dos artefatos antes da primeira rodada de perguntas. Consolidar internamente: fatos confirmados, inferências e lacunas.
+3. Aplicar `adaptive-discovery.md`: classificar a demanda, verificar se há capabilities úteis e se investigações anteriores reduzem incerteza.
+4. **Fase 1 — Perguntas:** enviar bloco coeso de 3-5 perguntas; máx 3 rodadas; confirmar entendimento.
+5. **Fase 2 — Pesquisa:** propor áreas de investigação; aguardar aprovação; executar se aprovado.
+6. **Fase 3 — Requisitos:** extrair tabela R-ID com v1/v2/fora e critérios A*; incorporar OBS pendentes; apresentar para validação.
+7. **Fase 4 — Roteiro:** agrupar requisitos v1 em fases; escrever `ROADMAP.md` no escopo ativo.
+8. Escrever **`SPEC.md`** usando `oxe/templates/SPEC.template.md` no escopo ativo:
    - Frontmatter YAML (`oxe_doc: spec`, `status`, `updated`, `inputs`)
    - Objetivo, Escopo (dentro/fora), Critérios de aceite (tabela A*), Suposições e riscos, Referências
    - Preencher explicitamente `Tipo de demanda` e `Incertezas estruturadas`
    - Preservar chaves existentes se SPEC.md já existir; atualizar `updated:`
-7b. **Auto-reflexão:** executar integralmente o bloco `<auto_reflexao>` antes de avançar. Corrigir a spec conforme necessário. Não apresentar a lista de verificação ao usuário — apenas a spec corrigida.
-8. **Fase 5 — Aprovação:** apresentar resumo, aguardar aprovação do roteiro, redirecionar.
-9. Atualizar **`.oxe/STATE.md`** global: `phase: spec_ready`, próximo passo e referência curta à sessão ativa quando existir.
-10. Marcar OBS incorporadas em `OBSERVATIONS.md` do escopo ativo se houver pendentes de impacto `spec`.
+8b. **Auto-reflexão:** executar integralmente o bloco `<auto_reflexao>` antes de avançar. Corrigir a spec conforme necessário. Não apresentar a lista de verificação ao usuário — apenas a spec corrigida.
+9. **Fase 5 — Aprovação:** apresentar resumo, aguardar aprovação do roteiro, redirecionar.
+10. Atualizar **`.oxe/STATE.md`** global: `phase: spec_ready`, próximo passo e referência curta à sessão ativa quando existir.
+11. Marcar OBS incorporadas em `OBSERVATIONS.md` do escopo ativo se houver pendentes de impacto `spec`.
 </process>
 
 <success_criteria>

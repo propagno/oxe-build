@@ -2,6 +2,8 @@
 
 Este repositório (ou o pacote **oxe-cc** instalado) define o **OXE**: artefatos em **`.oxe/`** na raiz do projeto alvo e workflows em **`oxe/workflows/*.md`** (no pacote) ou **`.oxe/workflows/*.md`** / **`oxe/workflows/*.md`** no projeto, conforme a instalação (layout mínimo vs clássico). O fluxo é **agnóstico de ferramenta**; **Cursor** e **GitHub Copilot** são o caminho padrão mais conhecido, mas o mesmo OXE pode ser instalado em **Claude Code, OpenCode, Gemini CLI, Codex, Windsurf, Antigravity** e outras integrações via `oxe-cc --all-agents` (ou flags por runtime).
 
+Os prompts OXE carregam metadata cognitiva comum (`oxe_reasoning_mode`, `oxe_question_policy`, `oxe_output_contract`, `oxe_tool_profile`, `oxe_confidence_policy`). Essa metadata não substitui o workflow canónico; ela alinha a postura de raciocínio entre runtimes para discovery, planning, execution, review e status.
+
 ## Quando aplicar
 
 Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o projeto”, “criar spec OXE”, “plano OXE com testes”, “verificar OXE”, trate como fluxo OXE e siga o arquivo de workflow correspondente abaixo.
@@ -80,6 +82,6 @@ Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o
 
 ## Manutenção do pacote oxe-build
 
-Ao alterar comportamento OXE, edite primeiro **`oxe/workflows/*.md`**; mantenha prompts em **`.github/prompts/`** e comandos Cursor gerados pelo sync alinhados a essa pasta (e as integrações multi-agente coerentes com `oxe-agent-install.cjs`).
+Ao alterar comportamento OXE, edite primeiro **`oxe/workflows/*.md`**; mantenha prompts em **`.github/prompts/`**, wrappers em **`commands/oxe/`** e comandos Cursor gerados pelo sync alinhados à mesma semântica. Quando alterar metadata cognitiva ou contratos de raciocínio, rode `npm run sync:runtime-metadata` e `npm run sync:cursor`.
 
 **Autoria de workflows:** guia em **`oxe/templates/WORKFLOW_AUTHORING.md`**. Para rever um `.md` de passo contra o guia, use o workflow **`oxe/workflows/workflow-authoring.md`** (ou `.oxe/workflows/` no projeto alvo).

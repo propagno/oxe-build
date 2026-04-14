@@ -12,6 +12,7 @@ Se o usuário pedir **--replan** (ou replanejamento implícito após `verify_fai
 </objective>
 
 <context>
+- Aplicar `oxe/workflows/references/reasoning-planning.md` como contrato deste passo. O `PLAN.md` deve sair decision-complete e não deixar decisões relevantes para a execução.
 - Seguir `oxe/workflows/references/flow-robustness-contract.md` como contrato canónico de robustez. A ordem obrigatória é: ler artefatos, resolver sessão/paths, validar pré-condições, escrever o plano, autoavaliar o plano, registrar próximo passo único.
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, o plano vive em `.oxe/<active_session>/plan/` e lê a spec em `.oxe/<active_session>/spec/`.
 - Quando existirem, ler `INVESTIGATIONS.md`, `RESEARCH.md`, `CAPABILITIES.md`, `memory/` do projeto e `CHECKPOINTS.md` para calibrar dependências, riscos, automações disponíveis e gates humanos necessários.
@@ -139,6 +140,11 @@ Resumo obrigatório no chat: `Gate do plano: OK` ou `Gate do plano: corrigido (N
 9. Atualizar `.oxe/STATE.md` global: fase `plan_ready`, próximo passo `oxe:execute` apenas se `Melhor plano atual: sim` e a confiança estiver no limiar executável; caso contrário, próximo passo deve reduzir incerteza (`oxe:discuss`, `oxe:research` ou replanejamento).
 10. **Sugestão de agentes (inteligente):** após o gate passar, verificar se o plano tem 3+ domínios distintos (ex.: backend + frontend + DB, ou auth + notificações + UI). Se sim, sugerir proativamente: "Este plano tem N domínios distintos. Quer gerar um blueprint de agentes com `/oxe-plan --agents`?" — não executar automaticamente, apenas oferecer. Se o usuário incluiu `--agents` no input original, executar imediatamente a lógica de `oxe/workflows/plan-agent.md`.
 11. Listar no chat: resultado do gate (OK ou corrigido), ondas, contagem de tarefas, comando de teste guarda-chuva se houver, melhor-plano-atual e confiança.
+12. No resumo em chat, deixar explícitos:
+   - objetivo e escopo do plano;
+   - principais riscos e contenções;
+   - assumptions relevantes;
+   - comando único recomendado para o próximo passo.
 </process>
 
 <success_criteria>

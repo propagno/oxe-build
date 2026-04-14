@@ -1,14 +1,20 @@
 ---
-description: "OXE — Executar plano (solo ou com agentes): escolha Completo (1 sessão) | Por onda | Por tarefa para controlar requisições"
-argument-hint: "[opcional: A/B/C para modo, onda N, ou Tn]"
+name: oxe:skill
+description: "Descobrir, invocar e gerenciar skills (@executor, @researcher, etc.)"
+argument-hint: "[list | explain <id> | new <id> | @<skill-id>]"
+allowed-tools:
+  - Read
+  - Bash
+  - Glob
+  - Grep
+  - Write
+  - Task
 oxe_reasoning_mode: execution
 oxe_question_policy: ask_high_impact_only
 oxe_output_contract: execution
 oxe_tool_profile: write_bounded
 oxe_confidence_policy: explicit
 ---
-
-OXE — Executar plano (solo ou com agentes): escolha Completo (1 sessão) | Por onda | Por tarefa para controlar requisições
 
 <!-- oxe-reasoning-contract:start -->
 
@@ -25,8 +31,6 @@ OXE — Executar plano (solo ou com agentes): escolha Completo (1 sessão) | Por
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE execute** no repositório atual. Lê e aplica **integralmente** o ficheiro no workspace:
+**Workflow canónico:** `oxe/workflows/skill.md`
 
-`oxe/workflows/execute.md`
-
-Usa o texto adicional desta mensagem como foco: `A` (Completo), `B` (Por onda), `C` (Por tarefa), `onda N`, `Tn`, ou confirmação de progresso. Lê `oxe/workflows/execute.md` na raiz do projeto atual (CWD).
+Execute integralmente esse ficheiro na raiz do repositório em que estás a trabalhar. Usa `$ARGUMENTS` como subcomando ou invocação de skill.

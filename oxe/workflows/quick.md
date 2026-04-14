@@ -9,6 +9,7 @@ Usar quando: correção pontual, refactor local, feature pequena ou protótipo q
 </objective>
 
 <context>
+- Aplicar `oxe/workflows/references/reasoning-planning.md` em modo lean. Mesmo sem plano formal completo, o quick deve explicitar objetivo, validação, riscos e condição de promoção.
 - Seguir `oxe/workflows/references/flow-robustness-contract.md`. Quick continua leve, mas não pode fingir que existe plano formal quando ele não existe.
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, `QUICK.md` e `quick-agents.json` vivem em `.oxe/<active_session>/plan/`; sem sessão ativa, manter `.oxe/`.
 - Ler `.oxe/STATE.md` e, se existirem, `OVERVIEW.md` e `STACK.md` em `.oxe/codebase/` para não contradizer o repo.
@@ -162,7 +163,13 @@ Se **sim**, o próximo passo recomendado no chat é **`/oxe-spec`** (depois disc
 5. Se existir **`.oxe/plan-agents.json`** com schema 2 e lifecycle ainda não `invalidated`, aplicar a invalidação descrita em **context** (actualizar JSON + **STATE.md** — blueprint de agentes).
 6. Se existir **`.oxe/quick-agents.json`** anterior com `status` não-terminal, invalidá-lo (ver **context**).
 7. Atualizar **`.oxe/STATE.md`**: fase `quick_active`, próximo passo `oxe:execute` ou implementação manual + `oxe:verify`; se PDDA ativo, registrar `quick_agents_status: active` e `quick_id: <quickId>`.
-8. Responder no chat com resumo em ≤10 linhas: objetivo, passos, agentes (se PDDA ativo), verificação; se promover = sim, destacar **`/oxe-spec`** como próximo passo lógico; se blueprint plan-agent foi invalidado, mencionar **`/oxe-plan-agent`** para novo roteiro.
+8. Responder no chat com resumo em ≤10 linhas, nesta ordem:
+   - **Objetivo**
+   - **Plano**
+   - **Validação**
+   - **Riscos / assumptions**
+   - **Próximo passo**
+   Se promover = sim, destacar **`/oxe-spec`** como próximo passo lógico; se blueprint plan-agent foi invalidado, mencionar **`/oxe-plan-agent`** para novo roteiro.
 9. **Sugestão de commit (pós-verify bem-sucedido):** após o bloco **Verificar** passar, sugerir ao usuário: *"Quick concluído. Commitar? `git add -p && git commit -m 'quick: <objetivo em uma linha>'`"* — apenas sugerir, não executar automaticamente.
 </process>
 

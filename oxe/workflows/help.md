@@ -5,7 +5,11 @@ Apresentar o fluxo OXE (scan → spec → research opcional → plan → execuç
 </objective>
 
 <context>
+Aplicar `oxe/workflows/references/reasoning-status.md`. A ajuda deve ser curta, orientada a decisão e explícita sobre o próximo passo recomendado.
+
 OXE é um fluxo **spec-driven** com artefatos em `.oxe/` no projeto alvo — **o núcleo é o mesmo** em Cursor, Copilot, Claude, OpenCode, Gemini, Codex, Windsurf, Antigravity ou outra CLI suportada pelo instalador. **Poucos comandos** por ferramenta em relação a fluxos de planeamento mais pesados; *context engineering* com arquivos pequenos por etapa. **GitHub Copilot (VS Code)** é **workspace-first**: o `oxe-cc` escreve `.github/copilot-instructions.md` e `.github/prompts/` no projeto. `~/.copilot/` fica para o runtime do **Copilot CLI** e para limpeza de legado detectável, não como fonte primária da IDE.
+
+O OXE distingue cinco famílias de raciocínio multi-runtime: `discovery`, `planning`, `execution`, `review` e `status`. Essa semântica nasce em `oxe/workflows/references/reasoning-*.md`, entra nos workflows canónicos e é renderizada nos prompts/skills de cada runtime. A mesma etapa deve produzir respostas mais exploratórias, decision-complete e auditáveis em qualquer agente suportado.
 
 No **projeto**, os passos canónicos estão em **`.oxe/workflows/*.md`** (layout mínimo) ou **`oxe/workflows/*.md`** (layout clássico com `--global`); no **pacote npm**, os modelos vivem em **`oxe/workflows/*.md`**.
 </context>
