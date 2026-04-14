@@ -32,10 +32,22 @@ Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o
 | UI spec | `oxe/workflows/ui-spec.md` | “UI-SPEC”, contrato de interface após spec *(prompt: `/oxe-ui-spec`)* |
 | UI review | `oxe/workflows/ui-review.md` | “auditoria UI”, UI-REVIEW *(prompt: `/oxe-ui-review`)* |
 | Autoria de workflow | `oxe/workflows/workflow-authoring.md` | “rever workflow OXE”, “revisar `oxe/workflows/foo.md` contra o guia”, alinhar passo ao `WORKFLOW_AUTHORING.md` |
+| Ask | `oxe/workflows/ask.md` | “oxe ask”, “situação atual OXE”, “o que está acontecendo”, “ler STATE” *(prompt: `/oxe-ask`)* |
+| Obs | `oxe/workflows/obs.md` | “oxe obs”, “registrar observação”, “anotar descoberta”, “restrição encontrada” *(prompt: `/oxe-obs`)* |
+| Session | `oxe/workflows/session.md` | “oxe session”, “nova sessão”, “alternar sessão”, “retomar sessão”, “fechar sessão” *(prompt: `/oxe-session`)* |
+| Retro | `oxe/workflows/retro.md` | “oxe retro”, “retrospectiva”, “lições do ciclo”, “LESSONS.md” *(prompt: `/oxe-retro`)* |
+| Dashboard | `oxe/workflows/dashboard.md` | “oxe dashboard”, “visualizar runtime”, “ondas ativas”, “status visual” *(prompt: `/oxe-dashboard`)* |
+| Loop | `oxe/workflows/loop.md` | “oxe loop”, “iterar até passar”, “loop de verify” *(prompt: `/oxe-loop`)* |
+| Security | `oxe/workflows/security.md` | “oxe security”, “auditoria OWASP”, “P0/P1 de segurança” *(prompt: `/oxe-security`)* |
+| Milestone | `oxe/workflows/milestone.md` | “oxe milestone”, “marco de entrega”, “M-01”, “fechar milestone” *(prompt: `/oxe-milestone`)* |
+| Workstream | `oxe/workflows/workstream.md` | “oxe workstream”, “trilha paralela”, “alternar workstream” *(prompt: `/oxe-workstream`)* |
+| Capabilities | `oxe/workflows/capabilities.md` | “oxe capabilities”, “listar capabilities”, “instalar capability” *(prompt: `/oxe-capabilities`)* |
+| Project | `oxe/workflows/project.md` | “oxe project”, “gestão de projeto OXE”, “milestone + workstream + checkpoint” *(prompt: `/oxe-project`)* |
+| Router | `oxe/workflows/oxe.md` | “oxe”, “que comando usar”, entrada universal *(prompt: `/oxe`)* |
 
 **Regra:** leia o Markdown indicado e execute **todos** os passos e critérios de sucesso descritos nesse arquivo. Não atalhe: crie ou atualize os arquivos em `.oxe/` conforme o workflow.
 
-**Cursor:** há slash `/oxe-*` para scan…help, **`/oxe-update`**, **`/oxe-forensics`**, **`/oxe-debug`**, **`/oxe-route`**, **`/oxe-research`**, **`/oxe-validate-gaps`**, **`/oxe-compact`**, **`/oxe-checkpoint`**, **`/oxe-ui-spec`**, **`/oxe-ui-review`** em `~/.cursor/commands/` (gerados a partir de `.github/prompts/` com `npm run sync:cursor` no pacote); **não** há comando slash dedicado a review-pr no Cursor — use linguagem natural + `oxe/workflows/review-pr.md` em contexto.
+**Cursor / Copilot / Claude:** slash `/oxe-*` disponíveis: `/oxe`, `/oxe-ask`, `/oxe-obs`, `/oxe-quick`, `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-plan-agent`, `/oxe-execute`, `/oxe-verify`, `/oxe-validate-gaps`, `/oxe-retro`, `/oxe-session`, `/oxe-milestone`, `/oxe-workstream`, `/oxe-project`, `/oxe-checkpoint`, `/oxe-dashboard`, `/oxe-loop`, `/oxe-security`, `/oxe-capabilities`, `/oxe-next`, `/oxe-update`, `/oxe-forensics`, `/oxe-debug`, `/oxe-route`, `/oxe-research`, `/oxe-compact`, `/oxe-ui-spec`, `/oxe-ui-review` — em `~/.cursor/commands/` (gerados de `.github/prompts/` via `npm run sync:cursor`). **Não** há comando slash dedicado a review-pr — use linguagem natural + `oxe/workflows/review-pr.md` em contexto.
 
 ## Onde ficam as integrações (após `npx oxe-cc`)
 

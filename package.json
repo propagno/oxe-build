@@ -1,6 +1,6 @@
 {
   "name": "oxe-cc",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "OXE — spec-driven workflows in .oxe/; integrates with Cursor, GitHub Copilot, Claude, OpenCode, Gemini, Codex, Windsurf, Antigravity (npx)",
   "license": "GPL-3.0",
   "author": "",
