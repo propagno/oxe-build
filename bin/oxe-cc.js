@@ -22,6 +22,8 @@ const oxeDashboard = require(path.join(__dirname, 'lib', 'oxe-dashboard.cjs'));
 const oxeOperational = require(path.join(__dirname, 'lib', 'oxe-operational.cjs'));
 const oxeAzure = require(path.join(__dirname, 'lib', 'oxe-azure.cjs'));
 const oxePlugins = require(path.join(__dirname, 'lib', 'oxe-plugins.cjs'));
+const oxeContext = require(path.join(__dirname, 'lib', 'oxe-context-engine.cjs'));
+const oxeRuntimeSemantics = require(path.join(__dirname, 'lib', 'oxe-runtime-semantics.cjs'));
 
 /** Merge markers for ~/.copilot/copilot-instructions.md (bloco OXE). */
 const OXE_INST_BEGIN = '<!-- oxe-cc:install-begin -->';
@@ -583,6 +585,11 @@ function copilotWorkspaceManifestPath(opts) {
   return path.join(path.resolve(opts.dir), '.oxe', 'install', 'copilot-vscode.json');
 }
 
+/** Artefato de auditoria da semântica multi-runtime. */
+function runtimeSemanticsManifestPath(opts) {
+  return path.join(path.resolve(opts.dir), '.oxe', 'install', 'runtime-semantics.json');
+}
+
 /** Integração legado do Copilot VS Code em ~/.copilot/. */
 function copilotLegacyPromptDir(opts) {
   return path.join(copilotUserDir(opts), 'prompts');
@@ -705,6 +712,78 @@ function writeCopilotVsCodeManifest(opts, info) {
     const rel = path.posix.join('.github', 'prompts', name);
     payload.hashes[rel] = oxeManifest.sha256File(path.join(promptsDir, name));
   }
+  ensureDir(path.dirname(manifestPath));
+  fs.writeFileSync(manifestPath, JSON.stringify(payload, null, 2) + '\n', 'utf8');
+}
+
+/**
+ * @param {InstallOpts} opts
+ * @param {{ layout: 'nested' | 'classic' }} info
+ */
+function writeRuntimeSemanticsManifest(opts, info) {
+  const target = path.resolve(opts.dir);
+  const manifestPath = runtimeSemanticsManifestPath(opts);
+  const audit = oxeRuntimeSemantics.auditRuntimeTargets(target);
+  const wrappers = {};
+  const collectWrapper = (name, root, nameFilter) => {
+    if (!fs.existsSync(root)) return;
+    const files = oxeManifest.collectFilesRecursive(root, nameFilter);
+    wrappers[name] = {
+      path: path.relative(target, root).replace(/\\/g, '/'),
+      files: files
+        .map((filePath) => ({
+          path: path.relative(target, filePath).replace(/\\/g, '/'),
+          hash: oxeManifest.sha256File(filePath),
+        }))
+        .sort((a, b) => a.path.localeCompare(b.path)),
+    };
+  };
+  collectWrapper('commands', path.join(target, 'commands', 'oxe'), (name) => name.endsWith('.md'));
+  collectWrapper(
+    'copilot_prompts',
+    path.join(target, '.github', 'prompts'),
+    (name) => (name === 'oxe.prompt.md' || name.startsWith('oxe-')) && name.endsWith('.prompt.md')
+  );
+  collectWrapper(
+    'cursor_commands',
+    path.join(target, '.cursor', 'commands'),
+    (name) => (name === 'oxe.md' || name.startsWith('oxe-')) && name.endsWith('.md')
+  );
+  const payload = {
+    schema_version: 1,
+    target: 'runtime-semantics',
+    synced_at: new Date().toISOString(),
+    oxe_version: readPkgVersion(),
+    contract_version: oxeRuntimeSemantics.CONTRACT_VERSION,
+    layout: info.layout,
+    installed_runtimes: {
+      cursor: Boolean(opts.cursor),
+      copilot_vscode: Boolean(opts.copilot),
+      copilot_cli: Boolean(opts.copilotCli || opts.allAgents),
+      opencode: Boolean(opts.agentOpenCode || opts.allAgents),
+      gemini: Boolean(opts.agentGemini || opts.allAgents),
+      codex: Boolean(opts.agentCodex || opts.allAgents),
+      windsurf: Boolean(opts.agentWindsurf || opts.allAgents),
+      antigravity: Boolean(opts.agentAntigravity || opts.allAgents),
+    },
+    semantics_hashes: Object.fromEntries(
+      oxeRuntimeSemantics.getAllWorkflowContracts().map((contract) => [
+        contract.workflow_slug,
+        oxeRuntimeSemantics.computeSemanticsHash(contract.workflow_slug),
+      ])
+    ),
+    wrappers,
+    audit: {
+      ok: audit.ok,
+      warnings: audit.warnings,
+      mismatches: audit.mismatches.map((entry) => ({
+        target: entry.target,
+        slug: entry.slug,
+        file: path.relative(target, entry.file).replace(/\\/g, '/'),
+        issues: entry.issues,
+      })),
+    },
+  };
   ensureDir(path.dirname(manifestPath));
   fs.writeFileSync(manifestPath, JSON.stringify(payload, null, 2) + '\n', 'utf8');
 }
@@ -1078,6 +1157,10 @@ function bootstrapOxe(target, opts) {
   const capabilitiesDir = path.join(oxeDir, 'capabilities');
   const investigationsDir = path.join(oxeDir, 'investigations');
   const dashboardDir = path.join(oxeDir, 'dashboard');
+  const contextDir = path.join(oxeDir, 'context');
+  const contextPacksDir = path.join(contextDir, 'packs');
+  const contextSummariesDir = path.join(contextDir, 'summaries');
+  const installDir = path.join(oxeDir, 'install');
   const stateSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'STATE.md');
   const stateDest = path.join(oxeDir, 'STATE.md');
   const configSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'config.template.json');
@@ -1089,7 +1172,7 @@ function bootstrapOxe(target, opts) {
   }
 
   if (opts.dryRun) {
-    console.log(`${dim}init${reset}  ${oxeDir}/ (STATE.md, config.json, codebase/, capabilities/, investigations/, dashboard/, runs/, OXE-EVENTS.ndjson, ACTIVE-RUN.json)`);
+    console.log(`${dim}init${reset}  ${oxeDir}/ (STATE.md, config.json, codebase/, capabilities/, investigations/, dashboard/, context/, install/, runs/, OXE-EVENTS.ndjson, ACTIVE-RUN.json)`);
     ensureGitignoreIgnoresOxeDir(target, { dryRun: true });
     return;
   }
@@ -1098,6 +1181,9 @@ function bootstrapOxe(target, opts) {
   ensureDir(capabilitiesDir);
   ensureDir(investigationsDir);
   ensureDir(dashboardDir);
+  ensureDir(contextPacksDir);
+  ensureDir(contextSummariesDir);
+  ensureDir(installDir);
 
   if (!fs.existsSync(stateDest) || opts.force) {
     copyFile(stateSrc, stateDest, { dryRun: false });
@@ -1317,6 +1403,14 @@ function printOxeHealthDiagnostics(target, c, diagOpts = {}) {
       typeof r.planSelfEvaluation.confidence === 'number' ? `${r.planSelfEvaluation.confidence}%` : '—';
     console.log(`  ${c ? dim : ''}Plano (autoavaliação):${c ? reset : ''} melhor=${best} | confiança=${conf}`);
   }
+  if (r.contextQuality) {
+    console.log(
+      `  ${c ? dim : ''}Contexto:${c ? reset : ''} score=${r.contextQuality.primaryScore != null ? r.contextQuality.primaryScore : '—'} | workflow=${r.contextQuality.primaryWorkflow || '—'} | status=${r.contextQuality.primaryStatus || '—'}`
+    );
+  }
+  if (r.semanticsDrift) {
+    console.log(`  ${c ? dim : ''}Semântica multi-runtime:${c ? reset : ''} ${r.semanticsDrift.ok ? 'alinhada' : 'com drift'}`);
+  }
   if (r.copilot && (r.copilot.detected || r.copilot.warnings.length)) {
     const promptSource =
       r.copilot.promptSource === 'workspace'
@@ -1396,6 +1490,12 @@ function printOxeHealthDiagnostics(target, c, diagOpts = {}) {
     console.log(`  ${yellow}AVISO${reset} ${w}`);
   }
   for (const w of r.copilotWarn) {
+    console.log(`  ${yellow}AVISO${reset} ${w}`);
+  }
+  for (const w of r.contextWarn || []) {
+    console.log(`  ${yellow}AVISO${reset} ${w}`);
+  }
+  for (const w of r.semanticsWarn || []) {
     console.log(`  ${yellow}AVISO${reset} ${w}`);
   }
   if (r.summaryGapWarn) {
@@ -1485,6 +1585,18 @@ function runStatusFull(target) {
     console.log(`  ${c ? dim : ''}Run:${c ? reset : ''} ${ar.run_id || '—'}   ${c ? dim : ''}Estado:${c ? reset : ''} ${ar.status || '—'}   ${c ? dim : ''}Onda:${c ? reset : ''} ${ar.current_wave != null ? ar.current_wave : '—'}`);
   }
 
+  if (report.contextQuality || report.semanticsDrift) {
+    const primaryWorkflow = report.contextQuality && report.contextQuality.primaryWorkflow ? report.contextQuality.primaryWorkflow : 'dashboard';
+    const primaryScore = report.contextQuality && report.contextQuality.primaryScore != null ? report.contextQuality.primaryScore : null;
+    const primaryStatus = report.contextQuality && report.contextQuality.primaryStatus ? report.contextQuality.primaryStatus : '—';
+    const freshness = report.packFreshness && report.packFreshness[primaryWorkflow] ? report.packFreshness[primaryWorkflow] : null;
+    console.log(`\n  ${c ? yellow : ''}Contexto e semântica${c ? reset : ''}`);
+    console.log(`  ${c ? dim : ''}Pack primário:${c ? reset : ''} ${primaryWorkflow}`);
+    console.log(`  ${c ? dim : ''}Qualidade:${c ? reset : ''} ${primaryScore != null ? `${primaryScore} (${primaryStatus})` : '—'}`);
+    console.log(`  ${c ? dim : ''}Freshness:${c ? reset : ''} ${freshness ? `${freshness.reason}${freshness.pack_age_hours != null ? ` · ${freshness.pack_age_hours}h` : ''}` : '—'}`);
+    console.log(`  ${c ? dim : ''}Drift semântico:${c ? reset : ''} ${report.semanticsDrift && report.semanticsDrift.ok ? 'não detectado' : 'detectado'}`);
+  }
+
   // Plan self-evaluation
   if (report.planSelfEvaluation) {
     const pse = report.planSelfEvaluation;
@@ -1518,7 +1630,7 @@ function runStatus(target, opts = {}) {
   if (opts.json) {
     /** @type {Record<string, unknown>} */
     const payload = {
-      oxeStatusSchema: 2,
+      oxeStatusSchema: 3,
       projectRoot: path.resolve(target),
       nextStep: report.next.step,
       cursorCmd: report.next.cursorCmd,
@@ -1539,6 +1651,11 @@ function runStatus(target, opts = {}) {
       azureActive: report.azureActive,
       azure: report.azure,
       copilot: report.copilot,
+      contextPacks: report.contextPacks,
+      contextQuality: report.contextQuality,
+      semanticsDrift: report.semanticsDrift,
+      packFreshness: report.packFreshness,
+      activeSummaryRefs: report.activeSummaryRefs,
         diagnostics: {
         configParseError: report.configParseError,
         typeErrors: report.typeErrors,
@@ -1551,6 +1668,8 @@ function runStatus(target, opts = {}) {
         sessionWarnings: report.sessionWarn,
         installWarnings: report.installWarn,
         copilotWarnings: report.copilotWarn,
+        contextWarnings: report.contextWarn,
+        semanticsWarnings: report.semanticsWarn,
         summaryGapWarning: report.summaryGapWarn,
         specWarnings: report.specWarn,
         planWarnings: report.planWarn,
@@ -1661,6 +1780,20 @@ function runDoctor(target) {
     for (const w of shape.warnings) {
       console.log(`${yellow}Obs. (workflow):${reset} ${w.message}`);
     }
+  }
+
+  // Verificar workflows sem contrato no registry de semântica
+  const allContractSlugs = new Set(oxeRuntimeSemantics.getAllWorkflowContracts().map((ct) => ct.workflow_slug));
+  const workflowMdFiles = fs.readdirSync(wfTgt).filter((f) => f.endsWith('.md'));
+  const orphanedWorkflows = workflowMdFiles
+    .map((f) => f.replace(/\.md$/, ''))
+    .filter((slug) => !allContractSlugs.has(slug));
+  if (orphanedWorkflows.length) {
+    for (const slug of orphanedWorkflows) {
+      console.log(`${yellow}AVISO${reset} Workflow sem contrato semântico no registry: ${slug}.md — adicione em workflow-runtime-contracts.json ou rode \`npx oxe-cc update\`.`);
+    }
+  } else {
+    console.log(`${green}OK${reset} Todos os workflows têm contrato semântico registado`);
   }
 
   const oxeState = path.join(target, '.oxe', 'STATE.md');
@@ -1932,6 +2065,7 @@ ${green}Uso:${reset}
   npx oxe-cc doctor [opções] [pasta-do-projeto]
   npx oxe-cc status [opções] [pasta-do-projeto]
   npx oxe-cc init-oxe [opções] [pasta-do-projeto]
+  npx oxe-cc context <build|inspect> [opções] [pasta-do-projeto]
   npx oxe-cc dashboard [opções] [pasta-do-projeto]
   npx oxe-cc runtime <status|start|pause|resume|replay> [opções] [pasta-do-projeto]
   npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
@@ -1964,6 +2098,15 @@ ${green}dashboard${reset} (interface web local para revisão e aprovação do pl
   --no-open                              não abre o browser automaticamente
   --session <sessions/sNNN-slug>         força visualização de uma sessão específica
   --dump-context                         imprime JSON consolidado e sai
+  --dir <pasta>                          raiz do projeto (padrão: diretório atual)
+
+${green}context${reset} (Context Engine V2: seleção, compressão e inspeção determinística)
+  build [--workflow <slug>]              gera pack(s) em .oxe/context/packs/
+  inspect [--workflow <slug>]            lê um pack existente ou resolve sob demanda
+  --workflow <slug>                      workflow alvo (omissão: build=todos; inspect=dashboard)
+  --tier <minimal|standard|full>         tier de contexto (padrão: standard)
+  --session <sessions/sNNN-slug>         força sessão específica
+  --json                                 saída estruturada em JSON
   --dir <pasta>                          raiz do projeto (padrão: diretório atual)
 
 ${green}runtime${reset} (controle operacional explícito do ACTIVE-RUN)
@@ -2273,6 +2416,10 @@ function runInstall(opts) {
   if (!opts.noInitOxe) bootstrapOxe(target, { dryRun: opts.dryRun, force: opts.force });
   else ensureGitignoreIgnoresOxeDir(target, { dryRun: opts.dryRun });
 
+  if (!opts.dryRun) {
+    writeRuntimeSemanticsManifest(opts, { layout: fullLayout ? 'classic' : 'nested' });
+  }
+
   if (!opts.dryRun && (opts.cursor || opts.copilot || opts.copilotCli || opts.allAgents || anyGranularAgent(opts))) {
     const nextFiles = {};
     const addTracked = (root, nameFilter) => {
@@ -2311,6 +2458,7 @@ function runInstall(opts) {
       addTracked(copilotPromptsDirPath(opts), (n) => n.startsWith('oxe-'));
       trackFile(copilotWorkspaceManifestPath(opts));
     }
+    trackFile(runtimeSemanticsManifestPath(opts));
     if (opts.copilotCli || opts.allAgents) {
       addTracked(path.join(installClaudeBase(opts), 'commands'), (n) => n.startsWith('oxe-') && n.endsWith('.md'));
       addTracked(path.join(cpCliHome, 'commands'), (n) => n.startsWith('oxe-') && n.endsWith('.md'));
@@ -2489,6 +2637,12 @@ function uninstallLocalIdeFromProject(u, removedPaths) {
     } else {
       console.log(`${dim}agents${reset}  (dry-run) limparia marcadores oxe-cc em pastas locais do projeto (OpenCode, Gemini, …)`);
     }
+  }
+
+  if (u.cursor || u.copilot || u.copilotCli || u.allAgents) {
+    const runtimeManifest = path.join(proj, '.oxe', 'install', 'runtime-semantics.json');
+    unlinkQuiet(runtimeManifest, u);
+    track(runtimeManifest);
   }
 }
 
@@ -3081,6 +3235,10 @@ function parseCapabilitiesArgs(argv) {
  */
 
 /**
+ * @typedef {{ help: boolean, dir: string, action: 'build'|'inspect', workflow: string, tier: 'minimal'|'standard'|'full', activeSession: string|null, json: boolean, parseError: boolean, unknownFlag: string }} ContextOpts
+ */
+
+/**
  * @typedef {{ help: boolean, dir: string, action: string, activeSession: string|null, wave: number|null, task: string, mode: string, reason: string, parseError: boolean, unknownFlag: string }} RuntimeOpts
  */
 
@@ -3154,6 +3312,49 @@ function parseDashboardArgs(argv) {
       break;
     }
   }
+  return out;
+}
+
+/**
+ * @param {string[]} argv
+ * @returns {ContextOpts}
+ */
+function parseContextArgs(argv) {
+  /** @type {ContextOpts} */
+  const out = {
+    help: false,
+    dir: process.cwd(),
+    action: 'build',
+    workflow: '',
+    tier: 'standard',
+    activeSession: null,
+    json: false,
+    parseError: false,
+    unknownFlag: '',
+  };
+  const positionals = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '-h' || a === '--help') out.help = true;
+    else if (a === '--dir' && argv[i + 1]) out.dir = path.resolve(argv[++i]);
+    else if (a === '--workflow' && argv[i + 1]) out.workflow = String(argv[++i]);
+    else if (a === '--tier' && argv[i + 1]) {
+      const tier = String(argv[++i]);
+      out.tier = ['minimal', 'standard', 'full'].includes(tier) ? /** @type {'minimal'|'standard'|'full'} */ (tier) : 'standard';
+    }
+    else if (a === '--session' && argv[i + 1]) out.activeSession = String(argv[++i]).replace(/\\/g, '/');
+    else if (a === '--json') out.json = true;
+    else if (!a.startsWith('-')) positionals.push(a);
+    else {
+      out.parseError = true;
+      out.unknownFlag = a;
+      break;
+    }
+  }
+  if (positionals[0] === 'build' || positionals[0] === 'inspect') {
+    out.action = /** @type {'build'|'inspect'} */ (positionals[0]);
+  }
+  if (!out.workflow && positionals[1]) out.workflow = String(positionals[1]);
   return out;
 }
 
@@ -3291,6 +3492,114 @@ function parseAzureArgs(argv) {
     out.query = positionals.slice(2).join(' ').trim();
   }
   return out;
+}
+
+/**
+ * @param {ContextOpts} opts
+ */
+function runContext(opts) {
+  const c = useAnsiColors();
+  printSection('OXE ▸ context');
+  if (!fs.existsSync(opts.dir)) {
+    console.error(`${yellow}Diretório não encontrado: ${opts.dir}${reset}`);
+    process.exit(1);
+  }
+  const statePath = oxeHealth.oxePaths(opts.dir).state;
+  const stateText = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : '';
+  const activeSession = opts.activeSession || oxeHealth.parseActiveSession(stateText) || null;
+  const workflow = opts.workflow || '';
+
+  if (opts.action === 'inspect') {
+    const selectedWorkflow = workflow || 'dashboard';
+    let pack;
+    try {
+      pack = oxeContext.inspectContextPack(opts.dir, {
+        workflow: selectedWorkflow,
+        tier: opts.tier,
+        activeSession,
+      });
+    } catch (err) {
+      console.error(`${red}Erro ao inspecionar context pack para "${selectedWorkflow}": ${err instanceof Error ? err.message : String(err)}${reset}`);
+      process.exit(1);
+    }
+    if (opts.json) {
+      console.log(JSON.stringify(pack, null, 2));
+      return;
+    }
+    console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
+    console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+    console.log(`  ${c ? green : ''}Workflow:${c ? reset : ''} ${selectedWorkflow}`);
+    console.log(`  ${c ? green : ''}Tier:${c ? reset : ''} ${pack.context_tier}`);
+    console.log(`  ${c ? green : ''}Quality:${c ? reset : ''} ${pack.context_quality.score} (${pack.context_quality.status})`);
+    if (pack.context_quality.score < 30 || pack.context_quality.status === 'critical') {
+      console.log(`  ${yellow}AVISO${reset} Contexto crítico — artefatos obrigatórios ausentes. Use \`oxe-cc context build --workflow ${selectedWorkflow}\` para regenerar.`);
+    }
+    console.log(`  ${c ? green : ''}Freshness:${c ? reset : ''} ${pack.freshness.reason}${pack.freshness.pack_age_hours != null ? ` · ${pack.freshness.pack_age_hours}h` : ''}`);
+    console.log(`  ${c ? green : ''}Pack:${c ? reset : ''} ${pack.path || '—'}`);
+    console.log(`  ${c ? green : ''}Artefatos:${c ? reset : ''} ${(pack.read_order || []).join(', ') || '—'}`);
+    if ((pack.gaps || []).length) {
+      for (const gap of pack.gaps) {
+        console.log(`  ${gap.severity === 'critical' ? red : yellow}${gap.severity.toUpperCase()}${reset} ${gap.alias}: ${gap.reason}`);
+      }
+    }
+    if ((pack.conflicts || []).length) {
+      for (const conflict of pack.conflicts) {
+        console.log(`  ${yellow}CONFLICT${reset} ${conflict.alias}: ${conflict.reason}`);
+      }
+    }
+    return;
+  }
+
+  if (workflow) {
+    bootstrapOxe(opts.dir, { dryRun: false, force: false });
+    let pack;
+    try {
+      pack = oxeContext.buildContextPack(opts.dir, {
+        workflow,
+        tier: opts.tier,
+        activeSession,
+        write: true,
+      });
+    } catch (err) {
+      console.error(`${red}Erro ao gerar context pack para "${workflow}": ${err instanceof Error ? err.message : String(err)}${reset}`);
+      process.exit(1);
+    }
+    if (opts.json) {
+      console.log(JSON.stringify(pack, null, 2));
+      return;
+    }
+    console.log(`  ${c ? green : ''}✓${c ? reset : ''} Context pack gerado para ${workflow}.`);
+    console.log(`  ${c ? green : ''}Quality:${c ? reset : ''} ${pack.context_quality.score} (${pack.context_quality.status})`);
+    if (pack.context_quality.score < 30 || pack.context_quality.status === 'critical') {
+      console.log(`  ${yellow}AVISO${reset} Contexto crítico — artefatos obrigatórios ausentes. Verifique o STATE e os artefatos do workflow.`);
+    }
+    console.log(`  ${c ? green : ''}Pack:${c ? reset : ''} ${oxeContext.resolvePackFile(opts.dir, workflow, activeSession)}`);
+    return;
+  }
+
+  bootstrapOxe(opts.dir, { dryRun: false, force: false });
+  let packs;
+  try {
+    packs = oxeContext.buildAllContextPacks(opts.dir, {
+      tier: opts.tier,
+      activeSession,
+      write: true,
+    });
+  } catch (err) {
+    console.error(`${red}Erro ao gerar context packs: ${err instanceof Error ? err.message : String(err)}${reset}`);
+    process.exit(1);
+  }
+  if (opts.json) {
+    console.log(JSON.stringify(packs, null, 2));
+    return;
+  }
+  console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Packs:${c ? reset : ''} ${packs.length}`);
+  for (const pack of packs) {
+    const qualityFlag = (pack.context_quality.score < 30 || pack.context_quality.status === 'critical') ? ` ${yellow}[CRÍTICO]${reset}` : '';
+    console.log(`  ${c ? dim : ''}•${c ? reset : ''} ${pack.workflow} · ${pack.context_quality.score} (${pack.context_quality.status}) · ${pack.freshness.reason}${qualityFlag}`);
+  }
 }
 
 /**
@@ -3905,6 +4214,7 @@ async function main() {
     argv[0] === 'doctor' ||
     argv[0] === 'status' ||
     argv[0] === 'init-oxe' ||
+    argv[0] === 'context' ||
     argv[0] === 'dashboard' ||
     argv[0] === 'runtime' ||
     argv[0] === 'azure' ||
@@ -4017,6 +4327,24 @@ async function main() {
     }
     printBanner();
     await runDashboard(d);
+    return;
+  }
+
+  if (command === 'context') {
+    const contextOpts = parseContextArgs(argv);
+    if (contextOpts.help) {
+      printBanner();
+      usage();
+      process.exit(0);
+    }
+    if (contextOpts.parseError) {
+      printBanner();
+      console.error(`${red}Opção desconhecida:${reset} ${contextOpts.unknownFlag}`);
+      usage();
+      process.exit(1);
+    }
+    printBanner();
+    runContext(contextOpts);
     return;
   }
 
@@ -4198,7 +4526,7 @@ async function main() {
     printSummaryAndNextSteps(c0, {
       bullets: opts.dryRun
         ? ['[simulação] Seriam criados ou atualizados .oxe/STATE.md, .oxe/config.json, .oxe/codebase/, .oxe/ACTIVE-RUN.json e .oxe/OXE-EVENTS.ndjson']
-        : ['.oxe/STATE.md, .oxe/config.json, .oxe/codebase/, .oxe/ACTIVE-RUN.json e .oxe/OXE-EVENTS.ndjson (criados ou atualizados conforme --force)'],
+        : ['.oxe/STATE.md, .oxe/config.json, .oxe/codebase/, .oxe/context/, .oxe/ACTIVE-RUN.json e .oxe/OXE-EVENTS.ndjson (criados ou atualizados conforme --force)'],
       nextSteps: [
         { desc: 'Validar o projeto:', cmd: 'npx oxe-cc doctor' },
         { desc: 'Instalar integrações IDE/CLI (se ainda não fez):', cmd: 'npx oxe-cc@latest' },

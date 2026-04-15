@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 
 const health = require('../bin/lib/oxe-project-health.cjs');
+const contextEngine = require('../bin/lib/oxe-context-engine.cjs');
 
 function writeState(dir, phase, scanLine = '') {
   fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
@@ -168,5 +169,24 @@ describe('oxe-project-health extended', () => {
     });
     assert.ok(typeErrors.length >= 5);
     assert.ok(typeErrors.some((e) => /compact_max_age_days/i.test(e)));
+  });
+
+  test('buildHealthReport exposes context and semantics summaries', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-context-'));
+    const oxe = path.join(dir, '.oxe');
+    const codebase = path.join(oxe, 'codebase');
+    fs.mkdirSync(codebase, { recursive: true });
+    for (const mapName of health.EXPECTED_CODEBASE_MAPS) {
+      fs.writeFileSync(path.join(codebase, mapName), '# ok\n', 'utf8');
+    }
+    fs.writeFileSync(path.join(oxe, 'STATE.md'), '## Fase atual\n\n`planning`\n', 'utf8');
+    fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# SPEC\n\n## Objetivo\n\nPlanejar.\n', 'utf8');
+    contextEngine.buildContextPack(dir, { workflow: 'dashboard', write: true });
+    const report = health.buildHealthReport(dir);
+    assert.ok(report.contextQuality);
+    assert.strictEqual(report.contextQuality.primaryWorkflow, 'dashboard');
+    assert.ok(report.packFreshness && report.packFreshness.dashboard);
+    assert.ok(report.activeSummaryRefs && /context[\\/]summaries[\\/]project\.json$/i.test(report.activeSummaryRefs.project));
+    assert.ok(report.semanticsDrift && typeof report.semanticsDrift.ok === 'boolean');
   });
 });

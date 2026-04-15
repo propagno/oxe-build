@@ -1,0 +1,879 @@
+{
+  "contract_version": "2.0.0",
+  "mode_references": {
+    "discovery": "oxe/workflows/references/reasoning-discovery.md",
+    "planning": "oxe/workflows/references/reasoning-planning.md",
+    "execution": "oxe/workflows/references/reasoning-execution.md",
+    "review": "oxe/workflows/references/reasoning-review.md",
+    "status": "oxe/workflows/references/reasoning-status.md"
+  },
+  "mode_guidance": {
+    "discovery": [
+      "Explorar o repositório e os artefatos antes de perguntar.",
+      "Separar fatos confirmados, inferências e lacunas.",
+      "Perguntar apenas ambiguidades que mudem a decisão ou o artefato final."
+    ],
+    "planning": [
+      "Fechar interfaces, validação, riscos, rollback e assumptions relevantes.",
+      "Não deixar decisões importantes para quem implementar depois.",
+      "Explicitar confiança e condição objetiva para replanejar."
+    ],
+    "execution": [
+      "Fazer reconhecimento curto antes de editar ou executar mutações.",
+      "Trabalhar no menor write set viável e validar após cada fatia relevante.",
+      "Parar e explicitar o bloqueio quando houver hipótese crítica não verificada."
+    ],
+    "review": [
+      "Apresentar findings primeiro, ordenados por severidade e evidência.",
+      "Separar bug, risco, regressão e lacuna de teste.",
+      "Se não houver findings, declarar isso explicitamente e listar riscos residuais."
+    ],
+    "status": [
+      "Responder com leitura curta e orientada a decisão.",
+      "Dar uma recomendação única e justificar o motivo.",
+      "Explicitar a confiança quando o estado estiver incompleto ou ambíguo."
+    ]
+  },
+  "mode_defaults": {
+    "discovery": {
+      "question_policy": "explore_first",
+      "output_contract": "situational",
+      "tool_profile": "read_heavy",
+      "confidence_policy": "explicit",
+      "output_sections": [
+        "Fatos",
+        "Inferências",
+        "Lacunas",
+        "Próximo passo"
+      ],
+      "freshness_policy": {
+        "pack_max_age_hours": 12,
+        "artifact_max_age_hours": 168
+      },
+      "fallback_policy": "read_direct_with_warning",
+      "blocking_conditions": [
+        "missing:state"
+      ]
+    },
+    "planning": {
+      "question_policy": "ask_high_impact_only",
+      "output_contract": "plan",
+      "tool_profile": "mixed",
+      "confidence_policy": "rubric",
+      "output_sections": [
+        "Objetivo",
+        "Plano",
+        "Validação",
+        "Riscos",
+        "Assumptions",
+        "Confiança"
+      ],
+      "freshness_policy": {
+        "pack_max_age_hours": 8,
+        "artifact_max_age_hours": 120
+      },
+      "fallback_policy": "read_direct_with_warning",
+      "blocking_conditions": [
+        "missing:state",
+        "missing:spec"
+      ]
+    },
+    "execution": {
+      "question_policy": "ask_high_impact_only",
+      "output_contract": "execution",
+      "tool_profile": "write_bounded",
+      "confidence_policy": "explicit",
+      "output_sections": [
+        "Contexto lido",
+        "Alvo da mudança",
+        "Validação executada",
+        "Resultado",
+        "Próximo passo"
+      ],
+      "freshness_policy": {
+        "pack_max_age_hours": 4,
+        "artifact_max_age_hours": 72
+      },
+      "fallback_policy": "read_direct_with_warning",
+      "blocking_conditions": [
+        "missing:state",
+        "missing:plan"
+      ]
+    },
+    "review": {
+      "question_policy": "none",
+      "output_contract": "findings",
+      "tool_profile": "review_heavy",
+      "confidence_policy": "explicit",
+      "output_sections": [
+        "Findings",
+        "Perguntas abertas",
+        "Riscos residuais",
+        "Resumo"
+      ],
+      "freshness_policy": {
+        "pack_max_age_hours": 6,
+        "artifact_max_age_hours": 120
+      },
+      "fallback_policy": "read_direct_with_warning",
+      "blocking_conditions": [
+        "missing:state"
+      ]
+    },
+    "status": {
+      "question_policy": "none",
+      "output_contract": "routing",
+      "tool_profile": "read_heavy",
+      "confidence_policy": "explicit",
+      "output_sections": [
+        "Leitura atual",
+        "Recomendação",
+        "Motivo",
+        "Confiança"
+      ],
+      "freshness_policy": {
+        "pack_max_age_hours": 6,
+        "artifact_max_age_hours": 168
+      },
+      "fallback_policy": "read_direct_with_warning",
+      "blocking_conditions": [
+        "missing:state"
+      ]
+    }
+  },
+  "workflows": {
+    "ask": {
+      "reasoning_mode": "discovery",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "session_manifest",
+        "spec",
+        "plan",
+        "quick",
+        "runtime",
+        "checkpoints",
+        "verify",
+        "summary",
+        "investigations_index",
+        "project_summary",
+        "session_summary",
+        "phase_summary",
+        "codebase_overview",
+        "codebase_stack",
+        "global_lessons",
+        "sessions_index",
+        "azure_inventory"
+      ],
+      "context_tiers": {
+        "minimal": [
+          "state",
+          "session_summary",
+          "phase_summary"
+        ],
+        "standard": [
+          "state",
+          "session_summary",
+          "phase_summary",
+          "spec",
+          "plan",
+          "quick",
+          "runtime",
+          "checkpoints",
+          "verify",
+          "summary"
+        ],
+        "full": [
+          "state",
+          "session_manifest",
+          "spec",
+          "plan",
+          "quick",
+          "runtime",
+          "checkpoints",
+          "verify",
+          "summary",
+          "investigations_index",
+          "project_summary",
+          "session_summary",
+          "phase_summary",
+          "codebase_overview",
+          "codebase_stack",
+          "global_lessons",
+          "sessions_index",
+          "azure_inventory"
+        ]
+      },
+      "extraction_intent": "status_read"
+    },
+    "capabilities": {
+      "reasoning_mode": "execution",
+      "tool_profile": "mixed",
+      "required_artifacts": [
+        "state",
+        "capabilities_index"
+      ],
+      "optional_artifacts": [
+        "project_summary",
+        "session_summary",
+        "runtime",
+        "active_run"
+      ],
+      "extraction_intent": "execution_input"
+    },
+    "checkpoint": {
+      "reasoning_mode": "execution",
+      "required_artifacts": [
+        "state",
+        "checkpoints"
+      ],
+      "optional_artifacts": [
+        "runtime",
+        "active_run",
+        "session_manifest",
+        "phase_summary"
+      ],
+      "extraction_intent": "execution_input"
+    },
+    "compact": {
+      "reasoning_mode": "discovery",
+      "output_contract": "execution",
+      "tool_profile": "mixed",
+      "required_artifacts": [
+        "state",
+        "codebase_overview",
+        "codebase_structure",
+        "codebase_stack"
+      ],
+      "optional_artifacts": [
+        "codebase_testing",
+        "codebase_integrations",
+        "codebase_concerns",
+        "project_summary"
+      ],
+      "extraction_intent": "status_read"
+    },
+    "dashboard": {
+      "reasoning_mode": "status",
+      "output_contract": "situational",
+      "required_artifacts": [
+        "state",
+        "phase_summary",
+        "project_summary"
+      ],
+      "optional_artifacts": [
+        "session_summary",
+        "plan",
+        "runtime",
+        "verify",
+        "active_run",
+        "events",
+        "context_pack_dashboard"
+      ],
+      "extraction_intent": "critical_check"
+    },
+    "debug": {
+      "reasoning_mode": "execution",
+      "required_artifacts": [
+        "state",
+        "plan",
+        "runtime"
+      ],
+      "optional_artifacts": [
+        "verify",
+        "events",
+        "active_run",
+        "project_summary",
+        "session_summary",
+        "phase_summary"
+      ],
+      "extraction_intent": "execution_input"
+    },
+    "discuss": {
+      "reasoning_mode": "discovery",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "discuss",
+        "spec",
+        "project_summary",
+        "session_summary",
+        "phase_summary",
+        "investigations_index",
+        "codebase_overview"
+      ],
+      "extraction_intent": "status_read"
+    },
+    "execute": {
+      "reasoning_mode": "execution",
+      "required_artifacts": [
+        "state",
+        "runtime",
+        "checkpoints"
+      ],
+      "optional_artifacts": [
+        "plan",
+        "quick",
+        "active_run",
+        "events",
+        "verify",
+        "summary",
+        "session_summary",
+        "phase_summary",
+        "project_summary",
+        "capabilities_index",
+        "azure_inventory"
+      ],
+      "context_tiers": {
+        "minimal": [
+          "state",
+          "runtime",
+          "checkpoints",
+          "plan",
+          "quick",
+          "phase_summary"
+        ],
+        "standard": [
+          "state",
+          "runtime",
+          "checkpoints",
+          "plan",
+          "quick",
+          "phase_summary",
+          "session_summary",
+          "active_run",
+          "events",
+          "verify",
+          "summary"
+        ],
+        "full": [
+          "state",
+          "runtime",
+          "checkpoints",
+          "plan",
+          "quick",
+          "active_run",
+          "events",
+          "verify",
+          "summary",
+          "session_summary",
+          "phase_summary",
+          "project_summary",
+          "capabilities_index",
+          "azure_inventory"
+        ]
+      },
+      "blocking_conditions": [
+        "missing:state",
+        "missing:plan_or_quick"
+      ],
+      "extraction_intent": "execution_input"
+    },
+    "forensics": {
+      "reasoning_mode": "execution",
+      "required_artifacts": [
+        "state",
+        "runtime",
+        "events"
+      ],
+      "optional_artifacts": [
+        "plan",
+        "verify",
+        "summary",
+        "active_run",
+        "session_summary",
+        "phase_summary",
+        "project_summary"
+      ],
+      "extraction_intent": "execution_input"
+    },
+    "help": {
+      "reasoning_mode": "status",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "phase_summary",
+        "project_summary",
+        "session_summary",
+        "plan",
+        "runtime"
+      ],
+      "extraction_intent": "critical_check"
+    },
+    "loop": {
+      "reasoning_mode": "execution",
+      "required_artifacts": [
+        "state",
+        "plan",
+        "runtime",
+        "active_run"
+      ],
+      "optional_artifacts": [
+        "events",
+        "checkpoints",
+        "verify",
+        "phase_summary",
+        "session_summary"
+      ],
+      "extraction_intent": "execution_input"
+    },
+    "milestone": {
+      "reasoning_mode": "planning",
+      "output_contract": "execution",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "project_summary",
+        "global_lessons",
+        "session_summary",
+        "phase_summary"
+      ],
+      "extraction_intent": "planning_input"
+    },
+    "next": {
+      "reasoning_mode": "status",
+      "required_artifacts": [
+        "state",
+        "phase_summary"
+      ],
+      "optional_artifacts": [
+        "project_summary",
+        "session_summary",
+        "plan",
+        "runtime",
+        "verify"
+      ],
+      "extraction_intent": "critical_check"
+    },
+    "obs": {
+      "reasoning_mode": "execution",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "project_summary",
+        "session_summary",
+        "phase_summary",
+        "plan",
+        "runtime"
+      ],
+      "extraction_intent": "execution_input"
+    },
+    "oxe": {
+      "reasoning_mode": "status",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "phase_summary",
+        "project_summary",
+        "session_summary",
+        "plan",
+        "runtime"
+      ],
+      "extraction_intent": "critical_check"
+    },
+    "plan-agent": {
+      "reasoning_mode": "planning",
+      "required_artifacts": [
+        "state",
+        "spec"
+      ],
+      "optional_artifacts": [
+        "discuss",
+        "plan_agents",
+        "investigations_index",
+        "project_summary",
+        "session_summary",
+        "phase_summary",
+        "capabilities_index"
+      ],
+      "extraction_intent": "planning_input"
+    },
+    "plan": {
+      "reasoning_mode": "planning",
+      "required_artifacts": [
+        "state",
+        "spec"
+      ],
+      "optional_artifacts": [
+        "discuss",
+        "investigations_index",
+        "project_summary",
+        "session_summary",
+        "phase_summary",
+        "global_lessons",
+        "capabilities_index",
+        "azure_inventory",
+        "checkpoints",
+        "calibration"
+      ],
+      "context_tiers": {
+        "minimal": [
+          "state",
+          "spec",
+          "session_summary",
+          "phase_summary"
+        ],
+        "standard": [
+          "state",
+          "spec",
+          "session_summary",
+          "phase_summary",
+          "discuss",
+          "investigations_index",
+          "project_summary",
+          "global_lessons",
+          "capabilities_index",
+          "checkpoints"
+        ],
+        "full": [
+          "state",
+          "spec",
+          "discuss",
+          "investigations_index",
+          "project_summary",
+          "session_summary",
+          "phase_summary",
+          "global_lessons",
+          "capabilities_index",
+          "azure_inventory",
+          "checkpoints",
+          "calibration"
+        ]
+      },
+      "extraction_intent": "planning_input"
+    },
+    "project": {
+      "reasoning_mode": "planning",
+      "output_contract": "routing",
+      "required_artifacts": [
+        "state",
+        "project_summary"
+      ],
+      "optional_artifacts": [
+        "session_summary",
+        "phase_summary",
+        "global_lessons"
+      ],
+      "extraction_intent": "planning_input"
+    },
+    "quick": {
+      "reasoning_mode": "planning",
+      "required_artifacts": [
+        "state",
+        "spec"
+      ],
+      "optional_artifacts": [
+        "plan",
+        "project_summary",
+        "session_summary",
+        "phase_summary",
+        "capabilities_index"
+      ],
+      "extraction_intent": "planning_input"
+    },
+    "research": {
+      "reasoning_mode": "discovery",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "investigations_index",
+        "spec",
+        "plan",
+        "project_summary",
+        "session_summary",
+        "phase_summary",
+        "codebase_overview",
+        "codebase_integrations",
+        "azure_inventory"
+      ],
+      "extraction_intent": "status_read"
+    },
+    "retro": {
+      "reasoning_mode": "review",
+      "required_artifacts": [
+        "state",
+        "verify"
+      ],
+      "optional_artifacts": [
+        "summary",
+        "global_lessons",
+        "project_summary",
+        "session_summary",
+        "phase_summary"
+      ],
+      "extraction_intent": "verification"
+    },
+    "review-pr": {
+      "reasoning_mode": "review",
+      "required_artifacts": [
+        "state",
+        "plan"
+      ],
+      "optional_artifacts": [
+        "verify",
+        "summary",
+        "phase_summary",
+        "session_summary",
+        "project_summary",
+        "codebase_testing",
+        "codebase_concerns"
+      ],
+      "extraction_intent": "verification"
+    },
+    "route": {
+      "reasoning_mode": "status",
+      "required_artifacts": [
+        "state",
+        "phase_summary"
+      ],
+      "optional_artifacts": [
+        "project_summary",
+        "session_summary",
+        "plan",
+        "runtime",
+        "verify"
+      ],
+      "extraction_intent": "critical_check"
+    },
+    "scan": {
+      "reasoning_mode": "discovery",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "codebase_overview",
+        "codebase_stack",
+        "codebase_structure",
+        "codebase_testing",
+        "codebase_integrations",
+        "codebase_concerns",
+        "project_summary"
+      ],
+      "extraction_intent": "status_read"
+    },
+    "security": {
+      "reasoning_mode": "review",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "plan",
+        "verify",
+        "codebase_stack",
+        "codebase_integrations",
+        "codebase_concerns",
+        "project_summary",
+        "session_summary"
+      ],
+      "extraction_intent": "verification"
+    },
+    "session": {
+      "reasoning_mode": "execution",
+      "required_artifacts": [
+        "state",
+        "sessions_index"
+      ],
+      "optional_artifacts": [
+        "session_manifest",
+        "project_summary",
+        "phase_summary"
+      ],
+      "extraction_intent": "execution_input"
+    },
+    "skill": {
+      "reasoning_mode": "execution",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "capabilities_index",
+        "project_summary",
+        "session_summary",
+        "phase_summary"
+      ],
+      "extraction_intent": "execution_input"
+    },
+    "spec": {
+      "reasoning_mode": "discovery",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "discuss",
+        "spec",
+        "investigations_index",
+        "project_summary",
+        "session_summary",
+        "phase_summary",
+        "codebase_overview",
+        "codebase_integrations",
+        "global_lessons",
+        "azure_inventory"
+      ],
+      "extraction_intent": "planning_input"
+    },
+    "ui-review": {
+      "reasoning_mode": "review",
+      "required_artifacts": [
+        "state",
+        "spec",
+        "verify"
+      ],
+      "optional_artifacts": [
+        "plan",
+        "summary",
+        "project_summary",
+        "session_summary",
+        "phase_summary"
+      ],
+      "extraction_intent": "verification"
+    },
+    "ui-spec": {
+      "reasoning_mode": "planning",
+      "required_artifacts": [
+        "state",
+        "spec"
+      ],
+      "optional_artifacts": [
+        "plan",
+        "project_summary",
+        "session_summary",
+        "phase_summary"
+      ],
+      "extraction_intent": "planning_input"
+    },
+    "update": {
+      "reasoning_mode": "execution",
+      "required_artifacts": [
+        "state",
+        "project_summary"
+      ],
+      "optional_artifacts": [
+        "runtime_semantics_manifest",
+        "copilot_manifest",
+        "phase_summary"
+      ],
+      "extraction_intent": "execution_input"
+    },
+    "validate-gaps": {
+      "reasoning_mode": "review",
+      "required_artifacts": [
+        "state",
+        "plan",
+        "verify"
+      ],
+      "optional_artifacts": [
+        "summary",
+        "codebase_testing",
+        "project_summary",
+        "phase_summary"
+      ],
+      "extraction_intent": "verification"
+    },
+    "verify": {
+      "reasoning_mode": "review",
+      "required_artifacts": [
+        "state",
+        "plan",
+        "runtime",
+        "verify"
+      ],
+      "optional_artifacts": [
+        "quick",
+        "active_run",
+        "events",
+        "summary",
+        "investigations_index",
+        "project_summary",
+        "session_summary",
+        "phase_summary",
+        "codebase_testing",
+        "checkpoints",
+        "azure_inventory",
+        "calibration"
+      ],
+      "context_tiers": {
+        "minimal": [
+          "state",
+          "plan",
+          "runtime",
+          "verify",
+          "phase_summary"
+        ],
+        "standard": [
+          "state",
+          "plan",
+          "runtime",
+          "verify",
+          "phase_summary",
+          "session_summary",
+          "active_run",
+          "events",
+          "summary",
+          "checkpoints"
+        ],
+        "full": [
+          "state",
+          "plan",
+          "runtime",
+          "verify",
+          "quick",
+          "active_run",
+          "events",
+          "summary",
+          "investigations_index",
+          "project_summary",
+          "session_summary",
+          "phase_summary",
+          "codebase_testing",
+          "checkpoints",
+          "azure_inventory",
+          "calibration"
+        ]
+      },
+      "extraction_intent": "verification",
+      "auditor_artifacts": [
+        "state",
+        "spec",
+        "verify"
+      ],
+      "auditor_excluded": [
+        "runtime",
+        "plan"
+      ]
+    },
+    "workflow-authoring": {
+      "reasoning_mode": "review",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "spec",
+        "plan",
+        "project_summary",
+        "codebase_overview",
+        "codebase_stack"
+      ],
+      "extraction_intent": "verification"
+    },
+    "workstream": {
+      "reasoning_mode": "execution",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "project_summary",
+        "session_summary",
+        "phase_summary"
+      ],
+      "extraction_intent": "execution_input"
+    }
+  }
+}

@@ -68,6 +68,46 @@ function syncOne(fullPath, slug) {
   fs.writeFileSync(fullPath, next, 'utf8');
 }
 
+function writeRuntimeSemanticsManifest(root) {
+  const audit = runtimeSemantics.auditRuntimeTargets(root);
+  const manifestPath = path.join(root, '.oxe', 'install', 'runtime-semantics.json');
+  const wrappers = {};
+  for (const target of TARGETS) {
+    if (!fs.existsSync(target.dir)) continue;
+    wrappers[path.relative(root, target.dir).replace(/\\/g, '/')] = fs
+      .readdirSync(target.dir)
+      .filter((name) => target.filter(name))
+      .sort()
+      .map((name) => {
+        const filePath = path.join(target.dir, name);
+        return {
+          path: path.relative(root, filePath).replace(/\\/g, '/'),
+          hash: require('../bin/lib/oxe-manifest.cjs').sha256File(filePath),
+        };
+      });
+  }
+  const payload = {
+    schema_version: 1,
+    target: 'runtime-semantics',
+    synced_at: new Date().toISOString(),
+    contract_version: runtimeSemantics.CONTRACT_VERSION,
+    semantics_hashes: Object.fromEntries(
+      runtimeSemantics.getAllWorkflowContracts().map((contract) => [
+        contract.workflow_slug,
+        runtimeSemantics.computeSemanticsHash(contract.workflow_slug),
+      ])
+    ),
+    wrappers,
+    audit: {
+      ok: audit.ok,
+      warnings: audit.warnings,
+      mismatchCount: audit.mismatches.length,
+    },
+  };
+  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+  fs.writeFileSync(manifestPath, JSON.stringify(payload, null, 2) + '\n', 'utf8');
+}
+
 function main() {
   let count = 0;
   for (const target of TARGETS) {
@@ -78,6 +118,7 @@ function main() {
       count++;
     }
   }
+  writeRuntimeSemanticsManifest(ROOT);
   console.log(`sync-runtime-metadata: ${count} ficheiro(s) atualizados`);
 }
 

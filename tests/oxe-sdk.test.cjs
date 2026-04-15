@@ -188,4 +188,13 @@ describe('oxe-sdk', () => {
     assert.strictEqual(typeof sdk.azure.azurePaths, 'function');
     assert.strictEqual(typeof sdk.azure.azureDoctor, 'function');
   });
+
+  test('context and runtime semantics SDK namespaces are exposed', () => {
+    assert.ok(sdk.context);
+    assert.strictEqual(typeof sdk.context.buildContextPack, 'function');
+    assert.strictEqual(typeof sdk.context.inspectContextPack, 'function');
+    assert.ok(sdk.runtimeSemantics);
+    assert.strictEqual(typeof sdk.runtimeSemantics.getWorkflowContract, 'function');
+    assert.strictEqual(typeof sdk.runtimeSemantics.auditRuntimeTargets, 'function');
+  });
 });

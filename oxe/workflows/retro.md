@@ -72,8 +72,13 @@ Ao ler `LESSONS.md`, priorizar entradas com **`Frequência >= 2`** ou **`Impacto
    - Apenas entradas genuinamente novas recebem uma nova linha na tabela de índice (mais recente primeiro).
    - Adicionar seção `### C-NN` com as lições novas do ciclo (ou referência às entradas incrementadas).
    - **Nunca apagar** entradas anteriores — só mudar `Status: resolvido` se a lição foi definitivamente superada.
-8. Atualizar **`.oxe/STATE.md`**: campo `last_retro: YYYY-MM-DD`.
-9. Responder no chat: ID do ciclo (C-NN), número de lições registradas, lição mais crítica em 1 frase, sugestão do próximo ciclo (`/oxe-scan` ou `/oxe-spec`).
+8. **Atualizar `.oxe/lessons-metrics.json`** (se existir) ou criar se LESSONS.md já tiver entradas:
+   - Para cada lição nova ou incrementada neste ciclo, verificar se já existe entrada em `lessons-metrics.json` com o mesmo `id` (L-NN).
+   - Se existe: chamar `updateLessonMetric` com `{ cycle: "C-NN", verify_status: "<verify_complete|verify_failed>", saved_hours: <estimativa ou 0> }`.
+   - Se não existe: criar nova entrada com `applied_cycles: ["C-NN"]`, `outcomes: [...]`, `success_rate: 1.0` (ou `0.0` se falhou), `status: "active"`, `deprecation_threshold: 0.5`.
+   - Lições com `success_rate < 0.5` e ≥ 3 observações → marcar `status: "deprecated"` e registrar aviso no chat.
+9. Atualizar **`.oxe/STATE.md`**: campo `last_retro: YYYY-MM-DD`.
+10. Responder no chat: ID do ciclo (C-NN), número de lições registradas, lição mais crítica em 1 frase, lições depreciadas (se houver), sugestão do próximo ciclo (`/oxe-scan` ou `/oxe-spec`).
 </process>
 
 <success_criteria>

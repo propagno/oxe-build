@@ -67,6 +67,8 @@ describe('oxe-agent-install', () => {
       const skillText = fs.readFileSync(skillPath, 'utf8');
       assert.match(skillText, /oxe_reasoning_mode:\s*discovery/);
       assert.match(skillText, /oxe-reasoning-contract:start/);
+      assert.match(skillText, /\.oxe\/context\/packs\/scan\.md/);
+      assert.match(skillText, /Regra pack-first/);
     });
   });
 
@@ -138,6 +140,8 @@ describe('oxe-agent-install', () => {
       const promptText = fs.readFileSync(p, 'utf8');
       assert.match(promptText, /oxe_reasoning_mode:\s*discovery/);
       assert.match(promptText, /oxe-reasoning-contract:start/);
+      assert.match(promptText, /\.oxe\/context\/packs\/scan\.json/);
+      assert.match(promptText, /Regra pack-first/);
     });
   });
 

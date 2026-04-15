@@ -139,5 +139,12 @@ describe('scripts', () => {
     assert.match(commandOut, /oxe_output_contract:\s*routing/);
     assert.match(promptOut, /oxe-reasoning-contract:start/);
     assert.match(commandOut, /Referência canónica/);
+    const manifestPath = path.join(dir, '.oxe', 'install', 'runtime-semantics.json');
+    assert.strictEqual(fs.existsSync(manifestPath), true);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    assert.strictEqual(manifest.target, 'runtime-semantics');
+    assert.ok(manifest.contract_version);
+    assert.ok(manifest.wrappers['.github/prompts']);
+    assert.ok(manifest.wrappers['commands/oxe']);
   });
 });

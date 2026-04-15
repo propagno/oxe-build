@@ -8,6 +8,9 @@ Responder perguntas sobre a situação atual do trabalho OXE com máxima robuste
 - Aplicar `oxe/workflows/references/reasoning-discovery.md` como postura cognitiva deste passo.
 - Resolver `active_session` via `oxe/workflows/references/session-path-resolution.md`.
 - Ler sempre `.oxe/STATE.md` global primeiro.
+- Antes de abrir o conjunto amplo de artefatos, tentar o contexto resolvido em `.oxe/context/packs/ask.md` e `.oxe/context/packs/ask.json` como entrada prioritária.
+- Se o pack existir e estiver fresco/coerente, ler primeiro o resumo do pack e depois inspecionar apenas os artefatos listados em `read_order` / `selected_artifacts` antes de expandir a leitura.
+- Se o pack estiver ausente, stale ou com lacunas críticas, fazer fallback explícito para leitura direta e declarar esse fallback na resposta.
 - Com sessão ativa, priorizar artefatos em `.oxe/<active_session>/...` antes do modo legado.
 - Usar `.oxe/codebase/` como mapa do repositório, não como substituto dos artefatos da trilha.
 - Se a pergunta estiver ambígua, responder em modo “situação atual + próximos riscos + melhor próxima ação”.
@@ -16,15 +19,23 @@ Responder perguntas sobre a situação atual do trabalho OXE com máxima robuste
 
 <process>
 1. Ler `.oxe/STATE.md` global e determinar se há `active_session`.
-2. Se houver sessão ativa, ler nesta ordem:
+2. Resolver o contexto estruturado primeiro:
+   - tentar `.oxe/context/packs/ask.md` / `.oxe/context/packs/ask.json` (ou `oxe-cc context inspect --workflow ask --json`) para obter `read_order`, `selected_artifacts`, `gaps`, `conflicts` e `freshness`;
+   - se o pack estiver fresco e sem lacunas críticas, usá-lo como mapa primário de leitura;
+   - se o pack estiver stale, incompleto ou ausente, declarar `fallback para leitura direta` antes de abrir os artefatos brutos.
+3. Se houver pack válido, ler primeiro:
+   - o resumo humano do pack (`.md`);
+   - os artefatos de `read_order`;
+   - quaisquer artefatos adicionais de `selected_artifacts` necessários para responder com evidência.
+4. Se houver sessão ativa e o pack não bastar, ler nesta ordem:
    - `SESSION.md`
    - `spec/SPEC.md`, `spec/ROADMAP.md`, `spec/DISCUSS.md`, `spec/UI-SPEC.md` se existirem
    - `plan/PLAN.md`, `plan/QUICK.md`, `plan/plan-agents.json`, `plan/quick-agents.json` se existirem
    - `execution/STATE.md`, `execution/EXECUTION-RUNTIME.md`, `execution/CHECKPOINTS.md`, `execution/OBSERVATIONS.md`, `execution/DEBUG.md`, `execution/FORENSICS.md`, `execution/SUMMARY.md` se existirem
    - `research/INVESTIGATIONS.md`, `research/RESEARCH.md`, `research/investigations/` se existirem
    - `verification/VERIFY.md`, `verification/VALIDATION-GAPS.md`, `verification/SECURITY.md`, `verification/UI-REVIEW.md` se existirem
-3. Sem sessão ativa, ler o equivalente legado na raiz `.oxe/`.
-4. Em ambos os casos, ler também:
+5. Sem sessão ativa e se o pack não bastar, ler o equivalente legado na raiz `.oxe/`.
+6. Em ambos os casos, ler também:
    - `.oxe/codebase/OVERVIEW.md`
    - `.oxe/codebase/STACK.md`
    - `.oxe/codebase/CONCERNS.md`
@@ -34,9 +45,10 @@ Responder perguntas sobre a situação atual do trabalho OXE com máxima robuste
    - `.oxe/global/LESSONS.md` se existir, com fallback para `.oxe/LESSONS.md`
    - `.oxe/SESSIONS.md` se a pergunta mencionar sessões, histórico ou retomada
    - `.oxe/cloud/azure/INVENTORY.md`, `SERVICEBUS.md`, `EVENTGRID.md`, `SQL.md` e `auth-status.json` se a pergunta tocar Azure, cloud, infraestrutura, mensageria, integração ou banco gerido
-5. Responder à pergunta do utilizador com base em evidência explícita dos artefatos lidos.
-6. Se faltar artefato crítico para responder com segurança, dizer exatamente o que falta e qual comando OXE fecha essa lacuna.
-7. Estruturar a resposta conforme o contrato de saída:
+7. Se a pergunta exigir evidência fora do pack, expandir a leitura apenas para os artefatos adicionais estritamente necessários e mencionar a expansão na resposta.
+8. Responder à pergunta do utilizador com base em evidência explícita dos artefatos lidos.
+9. Se faltar artefato crítico para responder com segurança, dizer exatamente o que falta e qual comando OXE fecha essa lacuna.
+10. Estruturar a resposta conforme o contrato de saída:
    - **Fatos** — o que os artefatos confirmam sem ambiguidade
    - **Inferências** — conclusões derivadas dos artefatos
    - **Lacunas** — o que não pode ser afirmado com segurança
@@ -55,6 +67,7 @@ Se o utilizador só disser algo genérico como “o que está acontecendo?”, �
 ## Regras de robustez
 
 - Não assumir que `doctor` ou `status` sejam session-aware; eles não substituem a leitura direta dos artefatos da sessão.
+- O context pack acelera e comprime a leitura, mas não substitui a evidência. Se ele estiver stale ou insuficiente, o fallback deve ser explícito.
 - Se houver conflito entre `.oxe/STATE.md` global e `execution/STATE.md` da sessão, explicitar o conflito.
 - Se houver `CHECKPOINTS.md` com itens `pending_approval`, isso tem precedência operacional sobre o “próximo passo” implícito.
 - Se `EXECUTION-RUNTIME.md` ou `INVESTIGATIONS.md` existirem, tratá-los como evidência tática complementar para explicar bloqueios, handoffs, riscos e lacunas.

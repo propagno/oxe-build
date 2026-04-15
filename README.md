@@ -453,13 +453,15 @@ node bin/oxe-cc.js --help
 | Comando | O que faz |
 |---------|-----------|
 | `oxe-cc` / `oxe-cc install` | Instala workflows e integrações |
-| `oxe-cc doctor` | Diagnóstico completo: Node, workflows, config, bootstrap `.oxe/`, sessão ativa, autoavaliação do plano e saúde lógica (`healthy` \| `warning` \| `broken`) |
+| `oxe-cc doctor` | Diagnóstico completo: Node, workflows, config, bootstrap `.oxe/`, sessão ativa, autoavaliação do plano, saúde lógica (`healthy` \| `warning` \| `broken`), drift semântico multi-runtime e workflows sem contrato no registry |
 | `oxe-cc status` | Próximo passo sugerido + saúde lógica do fluxo |
 | `oxe-cc status --full` | Coverage matrix + readiness gate + active run no terminal (ANSI) |
-| `oxe-cc status --json` | Mesmo, em JSON, com `healthStatus`, `activeSession` e `planSelfEvaluation` |
+| `oxe-cc status --json` | Mesmo, em JSON (schema v3), com `healthStatus`, `activeSession`, `planSelfEvaluation`, `contextPacks`, `contextQuality` e `semanticsDrift` |
+| `oxe-cc context build [--workflow <slug>] [--tier <minimal\|standard\|full>]` | Gera context pack(s) em `.oxe/context/packs/` — seleção determinística de artefatos por contrato de workflow |
+| `oxe-cc context inspect [--workflow <slug>]` | Inspeciona um context pack existente ou resolve sob demanda (sem escrita); útil para diagnóstico antes de iniciar um passo |
 | `oxe-cc update` | Atualiza workflows para a versão mais recente |
-| `oxe-cc init-oxe` | Bootstrap do `.oxe/` (STATE, config, codebase/) |
-| `oxe-cc dashboard` | Interface web local para revisão, comentários e aprovação do plano |
+| `oxe-cc init-oxe` | Bootstrap do `.oxe/` (STATE, config, codebase/, context/, install/) |
+| `oxe-cc dashboard` | Interface web local para revisão, comentários e aprovação do plano (inclui aba Context com quality score e drift semântico) |
 | `oxe-cc runtime <status\|start\|pause\|resume\|replay>` | Controla o run ativo, cursor, replay e tracing operacional |
 | `oxe-cc runtime replay [--run <id>] [--from <event-id>] [--wave <n>] [--write]` | Timeline de eventos com deltas; `--write` gera `REPLAY-SESSION.md` |
 | `oxe-cc capabilities <list\|install\|remove\|update>` | Mantém o catálogo nativo de capabilities em `.oxe/` |

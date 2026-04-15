@@ -506,6 +506,10 @@ function oxePaths(target) {
   return {
     oxe,
     installDir: path.join(oxe, 'install'),
+    contextDir: path.join(oxe, 'context'),
+    contextIndex: path.join(oxe, 'context', 'index.json'),
+    contextPacksDir: path.join(oxe, 'context', 'packs'),
+    contextSummariesDir: path.join(oxe, 'context', 'summaries'),
     state: path.join(oxe, 'STATE.md'),
     runtime: path.join(oxe, 'EXECUTION-RUNTIME.md'),
     checkpoints: path.join(oxe, 'CHECKPOINTS.md'),
@@ -526,6 +530,7 @@ function oxePaths(target) {
     runsDir: path.join(oxe, 'runs'),
     events: path.join(oxe, 'OXE-EVENTS.ndjson'),
     copilotManifest: path.join(oxe, 'install', 'copilot-vscode.json'),
+    runtimeSemanticsManifest: path.join(oxe, 'install', 'runtime-semantics.json'),
     spec: path.join(oxe, 'SPEC.md'),
     plan: path.join(oxe, 'PLAN.md'),
     quick: path.join(oxe, 'QUICK.md'),
@@ -1379,6 +1384,8 @@ function suggestNextStep(target, cfg = {}) {
  * @param {string} target
  */
 function buildHealthReport(target) {
+  const contextEngine = require('./oxe-context-engine.cjs');
+  const runtimeSemantics = require('./oxe-runtime-semantics.cjs');
   const { config, path: cfgPath, parseError } = loadOxeConfigMerged(target);
   const shape = validateConfigShape(config);
   const base = oxePaths(target);
@@ -1451,6 +1458,142 @@ function buildHealthReport(target) {
     plan_confidence_threshold: threshold,
     azure: config.azure,
   });
+  /** @type {string[]} */
+  const contextWarn = [];
+  /** @type {Record<string, unknown>} */
+  const contextPacks = {};
+  /** @type {Record<string, unknown>} */
+  const packFreshness = {};
+  /** @type {{ project: string | null, session: string | null, phase: string | null }} */
+  let activeSummaryRefs = { project: null, session: null, phase: null };
+  /** @type {{ primaryWorkflow: string | null, primaryScore: number | null, primaryStatus: string | null, byWorkflow: Record<string, unknown> }} */
+  let contextQuality = {
+    primaryWorkflow: null,
+    primaryScore: null,
+    primaryStatus: null,
+    byWorkflow: {},
+  };
+  // Bloco A — resolução de paths e refs de summaries
+  try {
+    const ctxPaths = contextEngine.contextPaths(target, activeSession);
+    activeSummaryRefs = {
+      project: ctxPaths.projectSummaryJson,
+      session: ctxPaths.sessionSummaryJson,
+      phase: ctxPaths.phaseSummaryJson,
+    };
+  } catch (err) {
+    contextWarn.push(`Contexto — falha ao resolver paths (contextPaths): ${err instanceof Error ? err.message : String(err)}`);
+  }
+  // Bloco B — inspeção de context packs por workflow
+  try {
+    const contextMaterialized = fs.existsSync(base.contextIndex);
+    const candidateWorkflows = Array.from(
+      new Set(
+        ['dashboard', next.step, phase === 'planning' ? 'plan' : null, phase === 'executing' ? 'execute' : null, phase === 'verifying' ? 'verify' : null]
+          .filter(Boolean)
+          .map(String)
+      )
+    ).filter((workflow) => Boolean(runtimeSemantics.getWorkflowContract(workflow)));
+    for (const workflow of candidateWorkflows) {
+      let pack;
+      try {
+        pack = contextEngine.inspectContextPack(target, { workflow, activeSession });
+      } catch (err) {
+        contextWarn.push(`Context pack ${workflow} — falha na inspeção: ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
+      contextPacks[workflow] = {
+        path: pack.path || contextEngine.resolvePackFile(target, workflow, activeSession),
+        context_tier: pack.context_tier,
+        semantics_hash: pack.semantics_hash,
+        read_order: pack.read_order,
+        selected_artifacts: (pack.selected_artifacts || []).map((artifact) => ({
+          alias: artifact.alias,
+          path: artifact.path,
+          exists: artifact.exists,
+          required: artifact.required,
+          using_fallback: artifact.using_fallback,
+          scope: artifact.scope,
+          summary: artifact.summary,
+        })),
+        gaps: pack.gaps,
+        conflicts: pack.conflicts,
+        fallback_required: pack.fallback_required,
+        freshness: pack.freshness,
+        context_quality: pack.context_quality,
+      };
+      packFreshness[workflow] = pack.freshness;
+      contextQuality.byWorkflow[workflow] = pack.context_quality;
+      if (contextMaterialized && pack.fallback_required) {
+        contextWarn.push(`Context pack ${workflow} exige fallback explícito para leitura direta.`);
+      }
+      if (contextMaterialized && pack.freshness && pack.freshness.stale) {
+        contextWarn.push(`Context pack ${workflow} stale (${pack.freshness.reason}).`);
+      }
+    }
+    if (contextPacks.dashboard) {
+      contextQuality.primaryWorkflow = 'dashboard';
+      contextQuality.primaryScore = contextPacks.dashboard.context_quality.score;
+      contextQuality.primaryStatus = contextPacks.dashboard.context_quality.status;
+    } else {
+      const firstWorkflow = Object.keys(contextPacks)[0] || null;
+      if (firstWorkflow) {
+        contextQuality.primaryWorkflow = firstWorkflow;
+        contextQuality.primaryScore = contextPacks[firstWorkflow].context_quality.score;
+        contextQuality.primaryStatus = contextPacks[firstWorkflow].context_quality.status;
+      }
+    }
+  } catch (err) {
+    contextWarn.push(`Contexto — falha ao inspecionar context packs: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const semanticsManifest = readJsonFileSafe(base.runtimeSemanticsManifest);
+  const semanticsAudit = runtimeSemantics.auditRuntimeTargets(target);
+  /** @type {string[]} */
+  const semanticsWarn = [];
+  const semanticTargetsPresent = [
+    path.join(target, '.github', 'prompts'),
+    path.join(target, 'commands', 'oxe'),
+    path.join(target, '.cursor', 'commands'),
+  ].some((dirPath) => fs.existsSync(dirPath));
+  if (semanticTargetsPresent && !semanticsManifest.ok) {
+    semanticsWarn.push('runtime-semantics.json ausente ou inválido — rode `npx oxe-cc update` para sincronizar o manifest semântico.');
+  }
+  if (semanticsManifest.error) {
+    semanticsWarn.push(`runtime-semantics.json inválido: ${semanticsManifest.error}`);
+  }
+  if (semanticsManifest.data && semanticsManifest.data.contract_version && semanticsManifest.data.contract_version !== runtimeSemantics.CONTRACT_VERSION) {
+    semanticsWarn.push(
+      `Manifest semântico em versão ${semanticsManifest.data.contract_version}; esperado ${runtimeSemantics.CONTRACT_VERSION}.`
+    );
+  }
+  if (semanticsAudit.registryIssues.length) {
+    semanticsWarn.push(...semanticsAudit.registryIssues);
+  }
+  if (semanticsAudit.mismatches.length) {
+    semanticsWarn.push(`${semanticsAudit.mismatches.length} wrapper(s) com drift semântico detectado.`);
+  }
+  const semanticsDrift = {
+    ok: semanticsWarn.length === 0 && semanticsAudit.ok,
+    contractVersion: runtimeSemantics.CONTRACT_VERSION,
+    manifestPath: base.runtimeSemanticsManifest,
+    manifest: semanticsManifest.data,
+    audit: {
+      ok: semanticsAudit.ok,
+      warnings: semanticsAudit.warnings,
+      mismatchCount: semanticsAudit.mismatches.length,
+      mismatches: semanticsAudit.mismatches,
+      targets: Object.fromEntries(
+        Object.entries(semanticsAudit.targets || {}).map(([name, value]) => [
+          name,
+          {
+            path: value.path,
+            checked: value.checked,
+            missing: value.missing,
+          },
+        ])
+      ),
+    },
+  };
   const hardFailure = Boolean(parseError) || sessionWarn.some((w) => /não existe|sem SESSION\.md/i.test(w));
   const warningCount =
     phaseWarn.length +
@@ -1463,6 +1606,8 @@ function buildHealthReport(target) {
     sessionWarn.length +
     installWarn.length +
     copilotWarn.length +
+    contextWarn.length +
+    semanticsWarn.length +
     (azureReport ? azureReport.warnings.length : 0) +
     (sumWarn ? 1 : 0);
   const healthStatus = hardFailure ? 'broken' : warningCount > 0 ? 'warning' : 'healthy';
@@ -1488,6 +1633,8 @@ function buildHealthReport(target) {
     sessionWarn,
     installWarn,
     copilotWarn,
+    contextWarn,
+    semanticsWarn,
     copilot,
     summaryGapWarn: sumWarn,
     specWarn,
@@ -1512,6 +1659,11 @@ function buildHealthReport(target) {
           warnings: azureReport.warnings,
         }
       : null,
+    contextPacks,
+    contextQuality,
+    semanticsDrift,
+    packFreshness,
+    activeSummaryRefs,
     healthStatus,
     next,
     scanFocusGlobs: config.scan_focus_globs,

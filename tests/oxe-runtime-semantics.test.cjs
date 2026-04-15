@@ -59,6 +59,22 @@ describe('runtime semantics metadata', () => {
         command.text.includes('<!-- oxe-reasoning-contract:start -->'),
         `${commandName} deve incluir bloco de contrato`
       );
+      assert.ok(
+        prompt.text.includes(`.oxe/context/packs/${slug}.md`),
+        `${promptName} deve expor o context pack prioritário`
+      );
+      assert.ok(
+        command.text.includes(`.oxe/context/packs/${slug}.json`),
+        `${commandName} deve expor o context pack estruturado`
+      );
+      assert.ok(
+        prompt.text.includes('Regra pack-first'),
+        `${promptName} deve declarar a regra pack-first`
+      );
+      assert.ok(
+        command.text.includes('Regra pack-first'),
+        `${commandName} deve declarar a regra pack-first`
+      );
     }
   });
 });
