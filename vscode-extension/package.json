@@ -1,0 +1,138 @@
+{
+  "name": "oxe-agents",
+  "displayName": "OXE Agents",
+  "description": "Agentes OXE para GitHub Copilot Chat — cada fase do ciclo como um @agente no VS Code",
+  "version": "0.9.0",
+  "publisher": "oxe-cc",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "oxe",
+    "copilot",
+    "chat",
+    "agent",
+    "workflow",
+    "spec-driven"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "oxe.router",
+        "name": "oxe",
+        "fullName": "OXE",
+        "description": "Router universal — lê STATE.md e sugere o próximo passo do ciclo OXE",
+        "isSticky": false
+      },
+      {
+        "id": "oxe.ask",
+        "name": "oxe-ask",
+        "fullName": "OXE Ask",
+        "description": "Situational awareness — responde perguntas sobre o estado atual do projeto com evidência explícita",
+        "isSticky": false
+      },
+      {
+        "id": "oxe.scan",
+        "name": "oxe-scan",
+        "fullName": "OXE Scan",
+        "description": "Mapeamento do codebase — reconstrói .oxe/codebase/ e contextualiza o projeto para um novo ciclo",
+        "isSticky": false
+      },
+      {
+        "id": "oxe.spec",
+        "name": "oxe-spec",
+        "fullName": "OXE Spec",
+        "description": "Especificação — gera SPEC.md com critérios de aceite verificáveis a partir de requisitos",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "discuss",
+            "description": "Abrir discussão estruturada antes de gerar a spec"
+          }
+        ]
+      },
+      {
+        "id": "oxe.plan",
+        "name": "oxe-plan",
+        "fullName": "OXE Plan",
+        "description": "Planejamento — gera PLAN.md com ondas, tarefas, hipóteses críticas e confidence vector",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "replan",
+            "description": "Replanejar ciclo atual com motivo e lições aplicadas"
+          },
+          {
+            "name": "agents",
+            "description": "Gerar blueprint multi-agente para planos com múltiplos domínios"
+          }
+        ]
+      },
+      {
+        "id": "oxe.quick",
+        "name": "oxe-quick",
+        "fullName": "OXE Quick",
+        "description": "Plano rápido — para tarefas S/M sem SPEC formal; objetivo → passos → verify",
+        "isSticky": true
+      },
+      {
+        "id": "oxe.execute",
+        "name": "oxe-execute",
+        "fullName": "OXE Execute",
+        "description": "Execução — implementa a onda atual validando hipóteses antes de qualquer mutação",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "wave",
+            "description": "Executar uma onda específica (ex: /wave 2)"
+          },
+          {
+            "name": "task",
+            "description": "Executar uma tarefa específica (ex: /task T3)"
+          }
+        ]
+      },
+      {
+        "id": "oxe.debug",
+        "name": "oxe-debug",
+        "fullName": "OXE Debug",
+        "description": "Debug — diagnóstico orientado a hipóteses durante execução travada ou falha inline",
+        "isSticky": false
+      },
+      {
+        "id": "oxe.verify",
+        "name": "oxe-verify",
+        "fullName": "OXE Verify",
+        "description": "Verificação — valida critérios A* do SPEC contra evidências reais produzidas pelo executor",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "audit",
+            "description": "Auditoria adversarial: sem acesso ao PLAN, apenas SPEC + evidências"
+          }
+        ]
+      },
+      {
+        "id": "oxe.review",
+        "name": "oxe-review",
+        "fullName": "OXE Review",
+        "description": "Revisão de código — auditor adversarial de PR e mudanças, findings por severidade",
+        "isSticky": false
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oxe-cc/oxe-cc"
+  }
+}
