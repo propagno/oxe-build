@@ -2,6 +2,8 @@
 
 Este repositório (ou o pacote **oxe-cc** instalado) define o **OXE**: artefatos em **`.oxe/`** na raiz do projeto alvo e workflows em **`oxe/workflows/*.md`** (no pacote) ou **`.oxe/workflows/*.md`** / **`oxe/workflows/*.md`** no projeto, conforme a instalação (layout mínimo vs clássico). O fluxo é **agnóstico de ferramenta**; **Cursor** e **GitHub Copilot** são o caminho padrão mais conhecido, mas o mesmo OXE pode ser instalado em **Claude Code, OpenCode, Gemini CLI, Codex, Windsurf, Antigravity** e outras integrações via `oxe-cc --all-agents` (ou flags por runtime).
 
+Os prompts OXE carregam metadata cognitiva comum (`oxe_reasoning_mode`, `oxe_question_policy`, `oxe_output_contract`, `oxe_tool_profile`, `oxe_confidence_policy`). Essa metadata não substitui o workflow canónico; ela alinha a postura de raciocínio entre runtimes para discovery, planning, execution, review e status.
+
 ## Quando aplicar
 
 Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o projeto”, “criar spec OXE”, “plano OXE com testes”, “verificar OXE”, trate como fluxo OXE e siga o arquivo de workflow correspondente abaixo.
@@ -44,16 +46,17 @@ Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o
 | Capabilities | `oxe/workflows/capabilities.md` | “oxe capabilities”, “listar capabilities”, “instalar capability” *(prompt: `/oxe-capabilities`)* |
 | Project | `oxe/workflows/project.md` | “oxe project”, “gestão de projeto OXE”, “milestone + workstream + checkpoint” *(prompt: `/oxe-project`)* |
 | Router | `oxe/workflows/oxe.md` | “oxe”, “que comando usar”, entrada universal *(prompt: `/oxe`)* |
+| Skill | `oxe/workflows/skill.md` | “oxe skill”, “@executor”, “@researcher”, “listar skills”, “novo skill” *(prompt: `/oxe-skill`)* |
 
 **Regra:** leia o Markdown indicado e execute **todos** os passos e critérios de sucesso descritos nesse arquivo. Não atalhe: crie ou atualize os arquivos em `.oxe/` conforme o workflow.
 
-**Cursor / Copilot / Claude:** slash `/oxe-*` disponíveis: `/oxe`, `/oxe-ask`, `/oxe-obs`, `/oxe-quick`, `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-plan-agent`, `/oxe-execute`, `/oxe-verify`, `/oxe-validate-gaps`, `/oxe-retro`, `/oxe-session`, `/oxe-milestone`, `/oxe-workstream`, `/oxe-project`, `/oxe-checkpoint`, `/oxe-dashboard`, `/oxe-loop`, `/oxe-security`, `/oxe-capabilities`, `/oxe-next`, `/oxe-update`, `/oxe-forensics`, `/oxe-debug`, `/oxe-route`, `/oxe-research`, `/oxe-compact`, `/oxe-ui-spec`, `/oxe-ui-review` — em `~/.cursor/commands/` (gerados de `.github/prompts/` via `npm run sync:cursor`). **Não** há comando slash dedicado a review-pr — use linguagem natural + `oxe/workflows/review-pr.md` em contexto.
+**Cursor / Copilot / Claude:** slash `/oxe-*` disponíveis: `/oxe`, `/oxe-ask`, `/oxe-obs`, `/oxe-quick`, `/oxe-scan`, `/oxe-spec`, `/oxe-discuss`, `/oxe-plan`, `/oxe-plan-agent`, `/oxe-execute`, `/oxe-verify`, `/oxe-validate-gaps`, `/oxe-retro`, `/oxe-session`, `/oxe-milestone`, `/oxe-workstream`, `/oxe-project`, `/oxe-checkpoint`, `/oxe-dashboard`, `/oxe-loop`, `/oxe-security`, `/oxe-capabilities`, `/oxe-skill`, `/oxe-next`, `/oxe-update`, `/oxe-forensics`, `/oxe-debug`, `/oxe-route`, `/oxe-research`, `/oxe-compact`, `/oxe-ui-spec`, `/oxe-ui-review` — em `~/.cursor/commands/` (gerados de `.github/prompts/` via `npm run sync:cursor`). **Não** há comando slash dedicado a review-pr — use linguagem natural + `oxe/workflows/review-pr.md` em contexto.
 
 ## Onde ficam as integrações (após `npx oxe-cc`)
 
 - **Cursor:** comandos em **`~/.cursor/commands/`** (slash `/oxe-*`). Diretório alternativo: variável **`CURSOR_CONFIG_DIR`**.
-- **GitHub Copilot (VS Code):** instruções mescladas em **`~/.copilot/copilot-instructions.md`** (bloco OXE) e **prompt files** em **`~/.copilot/prompts/`** (`oxe-*.prompt.md`). **Não** espere `.github/prompts/` no repositório do projeto para o Copilot — o instalador usa **`~/.copilot/`** (`COPILOT_CONFIG_DIR` / `COPILOT_HOME` se definidos).
-- **Copilot CLI:** com `oxe-cc --copilot-cli`, use **agent skills** em **`~/.copilot/skills/`** (`/oxe`, `/oxe-scan`, …). Depois de instalar: **`/skills reload`**. Pastas **`~/.claude/commands/`** e **`~/.copilot/commands/`** são cópia legado; **`CLAUDE_CONFIG_DIR`** altera o home Claude.
+- **GitHub Copilot (VS Code):** integração **workspace-first**: instruções em **`.github/copilot-instructions.md`** e **prompt files** em **`.github/prompts/`** (`oxe-*.prompt.md`). Se existir conteúdo em `~/.copilot/prompts/`, trate como **legado detectável**, não como fonte primária da IDE.
+- **Copilot CLI:** com `oxe-cc --copilot-cli`, use **agent skills** em **`~/.copilot/skills/`** (`/oxe`, `/oxe-scan`, …). Depois de instalar: **`/skills reload`**. Pastas **`~/.claude/commands/`** e **`~/.copilot/commands/`** são cópia legado; **`CLAUDE_CONFIG_DIR`**, **`COPILOT_CONFIG_DIR`** e **`COPILOT_HOME`** alteram os homes CLI.
 - **Multi-agente:** `oxe-cc --all-agents` (menu **6**) replica fluxos para **OpenCode**, **Gemini CLI** (`/commands reload`), **Codex**, **Windsurf**, **Antigravity**, além de Cursor/Copilot/Claude. **`XDG_CONFIG_HOME`** / **`CODEX_HOME`** afetam caminhos canónicos desses destinos. O núcleo no repo continua **`.oxe/`** (SPEC/PLAN/VERIFY em Markdown).
 
 ## Configuração do projeto
@@ -79,6 +82,6 @@ Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o
 
 ## Manutenção do pacote oxe-build
 
-Ao alterar comportamento OXE, edite primeiro **`oxe/workflows/*.md`**; mantenha prompts em **`.github/prompts/`** e comandos Cursor gerados pelo sync alinhados a essa pasta (e as integrações multi-agente coerentes com `oxe-agent-install.cjs`).
+Ao alterar comportamento OXE, edite primeiro **`oxe/workflows/*.md`**; mantenha prompts em **`.github/prompts/`**, wrappers em **`commands/oxe/`** e comandos Cursor gerados pelo sync alinhados à mesma semântica. Quando alterar metadata cognitiva ou contratos de raciocínio, rode `npm run sync:runtime-metadata` e `npm run sync:cursor`.
 
 **Autoria de workflows:** guia em **`oxe/templates/WORKFLOW_AUTHORING.md`**. Para rever um `.md` de passo contra o guia, use o workflow **`oxe/workflows/workflow-authoring.md`** (ou `.oxe/workflows/` no projeto alvo).

@@ -647,6 +647,110 @@ function applyRuntimeAction(projectRoot, activeSession, input = {}) {
   return saved;
 }
 
+/**
+ * Reconstrói a timeline de eventos de OXE-EVENTS.ndjson com deltas entre transições.
+ * @param {string} projectRoot
+ * @param {string|null} activeSession
+ * @param {{ fromEventId?: string, runId?: string, waveId?: number, limit?: number, writeReport?: boolean }} [options]
+ */
+function replayEvents(projectRoot, activeSession, options = {}) {
+  let events = readEvents(projectRoot, activeSession);
+
+  if (options.runId) {
+    events = events.filter((e) => e.run_id === options.runId);
+  }
+  if (options.fromEventId) {
+    const idx = events.findIndex((e) => e.event_id === options.fromEventId);
+    if (idx >= 0) events = events.slice(idx);
+  }
+  if (options.waveId != null) {
+    const waveTag = `wave-${options.waveId}`;
+    events = events.filter((e) => e.wave_id === waveTag || String(e.wave_id) === String(options.waveId));
+  }
+  if (options.limit && options.limit > 0) {
+    events = events.slice(0, options.limit);
+  }
+
+  // Ordenar por timestamp
+  events.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+  // Calcular deltas
+  for (let i = 0; i < events.length; i++) {
+    if (i === 0) {
+      events[i]._delta_ms = 0;
+    } else {
+      const prev = new Date(events[i - 1].timestamp).getTime();
+      const curr = new Date(events[i].timestamp).getTime();
+      events[i]._delta_ms = curr - prev;
+    }
+  }
+
+  const firstTs = events.length ? new Date(events[0].timestamp).getTime() : null;
+  const lastTs = events.length ? new Date(events[events.length - 1].timestamp).getTime() : null;
+  const duration_ms = firstTs != null && lastTs != null ? lastTs - firstTs : null;
+
+  const waveIds = [...new Set(
+    events
+      .filter((e) => e.wave_id != null)
+      .map((e) => {
+        const m = String(e.wave_id).match(/^wave-(\d+)$/);
+        return m ? Number(m[1]) : null;
+      })
+      .filter((n) => n != null)
+  )].sort((a, b) => a - b);
+
+  const taskSequence = [...new Set(events.filter((e) => e.task_id).map((e) => e.task_id))];
+  const checkpointSequence = events
+    .filter((e) => String(e.type).includes('checkpoint'))
+    .map((e) => e.event_id);
+  const failureEvents = events.filter((e) =>
+    String(e.type).includes('fail') || String(e.type).includes('error')
+  );
+
+  const report = {
+    events,
+    totalEvents: events.length,
+    duration_ms,
+    runId: options.runId || (events.length ? events[0].run_id : null),
+    waveIds,
+    taskSequence,
+    checkpointSequence,
+    failureEvents,
+  };
+
+  if (options.writeReport) {
+    const p = operationalPaths(projectRoot, activeSession);
+    const scopeRoot = path.dirname(p.events);
+    const reportPath = path.join(scopeRoot, 'REPLAY-SESSION.md');
+    const lines = [
+      '# OXE — Replay Session',
+      '',
+      `- **Data:** ${new Date().toISOString().slice(0, 10)}`,
+      `- **Run:** ${report.runId || '—'}`,
+      `- **Total eventos:** ${report.totalEvents}`,
+      `- **Duração:** ${report.duration_ms != null ? `${(report.duration_ms / 1000).toFixed(1)}s` : '—'}`,
+      `- **Ondas:** ${report.waveIds.join(', ') || '—'}`,
+      `- **Tarefas:** ${report.taskSequence.join(', ') || '—'}`,
+      `- **Falhas:** ${report.failureEvents.length}`,
+      '',
+      '## Timeline',
+      '',
+      '| # | Tipo | Wave | Task | Delta | Timestamp |',
+      '|---|------|------|------|-------|-----------|',
+    ];
+    for (let i = 0; i < events.length; i++) {
+      const e = events[i];
+      const delta = i > 0 ? `+${(e._delta_ms / 1000).toFixed(1)}s` : '—';
+      lines.push(`| ${i + 1} | ${e.type} | ${e.wave_id || '—'} | ${e.task_id || '—'} | ${delta} | ${e.timestamp} |`);
+    }
+    ensureDirForFile(reportPath);
+    fs.writeFileSync(reportPath, lines.join('\n') + '\n', 'utf8');
+    report._reportPath = reportPath;
+  }
+
+  return report;
+}
+
 module.exports = {
   VALID_RUN_STATUSES,
   VALID_APPROVAL_POLICIES,
@@ -667,4 +771,5 @@ module.exports = {
   buildMemoryLayers,
   buildOperationalGraph,
   applyRuntimeAction,
+  replayEvents,
 };

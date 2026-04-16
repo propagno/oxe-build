@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
-**Versão:** `0.6.4` · [package.json](package.json)
+**Versão:** `0.8.0` · [package.json](package.json)
 
 **Framework OXE — Orchestrated eXperience Engineering**
 
@@ -31,8 +31,23 @@ Ele se apoia em três princípios:
 - **Context engineering** — o estado do trabalho fica em arquivos pequenos dentro de `.oxe/`, não na memória do chat. O agente lê o que precisa, quando precisa — sem sobrecarregar o contexto com decisões já tomadas.
 - **Lessons loop** — ao fim de cada ciclo, `/oxe-retro` extrai 3–5 lições prescritivas que o próximo spec/plan lê automaticamente. Depois de alguns ciclos, os planos ficam dramaticamente melhores porque os erros anteriores não se repetem.
 - **Plan-Driven Dynamic Agents** — quando há múltiplos domínios, o plano cria agentes específicos para *aquela demanda*. Agentes não são reaproveitados entre projetos ou demandas.
+- **Semântica de raciocínio multi-runtime** — discovery, planning, execution, review e status seguem contratos cognitivos explícitos. O mesmo workflow OXE deve gerar respostas exploratórias, decision-complete e auditáveis em Copilot, Cursor, Claude, Codex e demais runtimes suportados.
 
 O resultado: **menos requisições**, **mais coerência**, e uma experiência de engenharia orquestrada que funciona do mesmo jeito em qualquer IDE.
+
+---
+
+## Semântica de raciocínio do OXE
+
+O OXE agora distingue cinco famílias de raciocínio:
+
+- `discovery` — explorar antes de perguntar; separar fatos, inferências e lacunas
+- `planning` — produzir plano decision-complete, com riscos, validação e confidence gate
+- `execution` — reconhecimento curto antes de mutar; menor write set viável; validação por fatia
+- `review` — findings primeiro, severidade, evidência e risco residual
+- `status` — leitura curta do estado, recomendação única e motivo
+
+Essas regras vivem no núcleo canónico em `oxe/workflows/references/reasoning-*.md`, sobem para os workflows em `oxe/workflows/` e são renderizadas para cada runtime em `.github/prompts/`, `.cursor/commands/`, `commands/oxe/`, `.codex/prompts/` e skills multiagente.
 
 ---
 
@@ -175,6 +190,7 @@ Cada passo lê o anterior como contexto e escreve seu artefato no escopo correto
 | `/oxe-session` | Cria, alterna, retoma, fecha e migra sessões OXE sem misturar artefatos de ciclos diferentes. |
 | `/oxe-ask` | Lê `STATE`, resolve a sessão ativa e responde perguntas situacionais com base nos artefatos reais. |
 | `/oxe-capabilities` | Gera e mantém o catálogo nativo de capabilities do projeto em `.oxe/CAPABILITIES.md` e `.oxe/capabilities/`, com política, side effects e evidência esperada. |
+| `/oxe-skill` | Descobrir, invocar e gerenciar skills OXE — unificação de personas e capabilities via `@<skill-id>`. Subcomandos: `list`, `explain <id>`, `new <id>`, invocação `@<id>` inline. |
 | `oxe-cc azure` | Provider Azure nativo via Azure CLI: autenticação corporativa com MFA, inventário via Resource Graph e operações guiadas para Service Bus, Event Grid e Azure SQL, sempre com evidência em `.oxe/cloud/azure/`. |
 | `/oxe-dashboard` | Consolida `STATE`, `PLAN`, `ACTIVE-RUN`, trace log, runtime, checkpoints e verify numa visão visual de ciclo, artefatos, ondas, handoffs e aprovação antes do execute. |
 
@@ -392,7 +408,8 @@ npx oxe-cc@latest
 
 | Flag | Efeito |
 |------|--------|
-| `--cursor` / `--copilot` | Só uma das stacks |
+| `--cursor` / `--copilot` | Só uma das stacks da IDE |
+| `--copilot-cli` | Skills globais do Copilot CLI em `~/.copilot/skills/` |
 | `--all-agents` | Cursor + Copilot + Claude + OpenCode + Gemini + Codex + Windsurf + Antigravity |
 | `--global` | Layout clássico: `oxe/` na raiz + `.oxe/` |
 | `--local` | Layout mínimo: só `.oxe/` (padrão) |
@@ -403,6 +420,8 @@ npx oxe-cc@latest
 | `OXE_NO_PROMPT=1` | Modo não-interativo (CI) |
 
 </details>
+
+GitHub Copilot no VS Code é **workspace-first**: o OXE instala prompt files em `.github/prompts/*.prompt.md` e mescla instruções em `.github/copilot-instructions.md`. `~/.copilot/` fica reservado ao legado detectável e ao runtime do Copilot CLI.
 
 <details>
 <summary><strong>Atualizar e desinstalar</strong></summary>
@@ -434,15 +453,19 @@ node bin/oxe-cc.js --help
 | Comando | O que faz |
 |---------|-----------|
 | `oxe-cc` / `oxe-cc install` | Instala workflows e integrações |
-| `oxe-cc doctor` | Diagnóstico completo: Node, workflows, config, bootstrap `.oxe/`, sessão ativa, autoavaliação do plano e saúde lógica (`healthy` \| `warning` \| `broken`) |
+| `oxe-cc doctor` | Diagnóstico completo: Node, workflows, config, bootstrap `.oxe/`, sessão ativa, autoavaliação do plano, saúde lógica (`healthy` \| `warning` \| `broken`), drift semântico multi-runtime e workflows sem contrato no registry |
 | `oxe-cc status` | Próximo passo sugerido + saúde lógica do fluxo |
 | `oxe-cc status --full` | Coverage matrix + readiness gate + active run no terminal (ANSI) |
-| `oxe-cc status --json` | Mesmo, em JSON, com `healthStatus`, `activeSession` e `planSelfEvaluation` |
+| `oxe-cc status --json` | Mesmo, em JSON (schema v3), com `healthStatus`, `activeSession`, `planSelfEvaluation`, `contextPacks`, `contextQuality` e `semanticsDrift` |
+| `oxe-cc context build [--workflow <slug>] [--tier <minimal\|standard\|full>]` | Gera context pack(s) em `.oxe/context/packs/` — seleção determinística de artefatos por contrato de workflow |
+| `oxe-cc context inspect [--workflow <slug>]` | Inspeciona um context pack existente ou resolve sob demanda (sem escrita); útil para diagnóstico antes de iniciar um passo |
 | `oxe-cc update` | Atualiza workflows para a versão mais recente |
-| `oxe-cc init-oxe` | Bootstrap do `.oxe/` (STATE, config, codebase/) |
-| `oxe-cc dashboard` | Interface web local para revisão, comentários e aprovação do plano |
+| `oxe-cc init-oxe` | Bootstrap do `.oxe/` (STATE, config, codebase/, context/, install/) |
+| `oxe-cc dashboard` | Interface web local para revisão, comentários e aprovação do plano (inclui aba Context com quality score e drift semântico) |
 | `oxe-cc runtime <status\|start\|pause\|resume\|replay>` | Controla o run ativo, cursor, replay e tracing operacional |
+| `oxe-cc runtime replay [--run <id>] [--from <event-id>] [--wave <n>] [--write]` | Timeline de eventos com deltas; `--write` gera `REPLAY-SESSION.md` |
 | `oxe-cc capabilities <list\|install\|remove\|update>` | Mantém o catálogo nativo de capabilities em `.oxe/` |
+| `oxe-cc plugins <list\|install\|remove>` | Gerencia plugins de lifecycle; `install npm:<pkg>` instala em `.oxe/plugins/_npm/` |
 | `oxe-cc uninstall` | Remove integrações OXE do HOME e do repo |
 | `oxe-cc uninstall --global-cli` | Também remove o pacote npm global do PATH |
 
@@ -462,7 +485,8 @@ Arquivo `.oxe/config.json`. Principais opções:
 | `scale_adaptive` | `true` | Scan sugere o profile pelo tamanho do projeto |
 | `scan_max_age_days` | `0` | Doctor avisa quando o scan estiver velho |
 | `lessons_max_age_days` | `0` | Doctor avisa quando a última retro estiver velho |
-| `plugins` | `[]` | Hooks de lifecycle em `.oxe/plugins/*.cjs` |
+| `plugins` | `[]` | Hooks de lifecycle em `.oxe/plugins/*.cjs`; aceita `{ source: "npm:<pkg>" }` e `{ source: "path:./file.cjs" }` |
+| `permissions` | `[]` | Regras glob+ação para gate de arquivos em execute/apply — `{ pattern, action: allow\|deny\|ask, scope?: execute\|apply\|all }` |
 
 ---
 
@@ -489,7 +513,9 @@ TypeScript: [`lib/sdk/index.d.ts`](lib/sdk/index.d.ts) · Docs: [`lib/sdk/README
 | Situação | O que tentar |
 |----------|-------------|
 | Comandos não aparecem no Cursor | Confirme `~/.cursor/commands/`; reinicie o Cursor |
-| `/oxe-*` não aparecem no Copilot | Ative `"chat.promptFiles": true`; confirme `~/.copilot/prompts/` |
+| `/oxe-*` não aparecem no Copilot | Ative `"chat.promptFiles": true`; confirme `.github/prompts/` e `.github/copilot-instructions.md`; se existir legado em `~/.copilot/`, rode `npx oxe-cc uninstall --copilot-legacy-clean` |
+| Copilot responde fora do workflow OXE | Rode `npx oxe-cc doctor`; confirme que o prompt veio de `.github/prompts/` e não do legado em `~/.copilot/`; se houver blocos mistos de outros frameworks no global, limpe o legado |
+| Um runtime responde sem a nova disciplina de raciocínio | Verifique drift entre `oxe/workflows/`, `.github/prompts/`, `commands/oxe/` e os prompts instalados; rode `npm run sync:runtime-metadata` e `npm run sync:cursor` no repo do pacote |
 | Arquivos não atualizam | Reinstale com `--force` |
 | `ETARGET` / versão não encontrada | `npm cache clean --force` |
 | Erro no WSL sobre Node | Use Node instalado dentro do WSL |

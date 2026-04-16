@@ -14,8 +14,11 @@ Se o usuário indicar uma tarefa (ex.: `T2`), focar só nela nas camadas 1–2; 
 </objective>
 
 <context>
+- Aplicar `oxe/workflows/references/reasoning-review.md` como contrato deste passo. A resposta no chat deve começar por achados, não por resumo.
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, `VERIFY.md`, `VALIDATION-GAPS.md`, `SECURITY.md`, `UI-REVIEW.md` e `SUMMARY.md` vivem no escopo da sessão; `.oxe/STATE.md` continua global.
 - Seguir `oxe/workflows/references/flow-robustness-contract.md`. O verify não valida só se passou; valida também se o plano estava bem calibrado para começar.
+- Antes da leitura ampla, resolver `.oxe/context/packs/verify.md` e `.oxe/context/packs/verify.json` como entrada prioritária do passo.
+- Se o pack estiver fresco e coerente, usar `read_order`, `selected_artifacts`, `gaps` e `conflicts` como mapa primário da evidência. Se estiver stale, ausente ou com lacunas críticas, fazer fallback explícito para leitura direta e registar isso em `VERIFY.md`.
 - Ler `EXECUTION-RUNTIME.md` e `CHECKPOINTS.md` do escopo resolvido quando existirem. Eles são evidência tática para saber o que realmente foi executado, bloqueado, aprovado ou desviado.
 - Se a trilha tocar Azure, ler `.oxe/cloud/azure/INVENTORY.md`, `SERVICEBUS.md`, `EVENTGRID.md`, `SQL.md` e `operations/*.md|json` para confirmar recursos reais, checkpoints e mutações aplicadas.
 - **Observações CI como evidência:** se `OBSERVATIONS.md` do escopo resolvido tiver obs do tipo `ci_failure` com `CI-evidência` preenchida, usar como evidência adicional para critérios A* de qualidade (ex.: cobertura, build verde). Se obs tiver `ci_run_url`, referenciar na coluna **Evidência** da tabela de critérios. Se obs estiver `pendente` e critério A* de qualidade existir, marcar o critério como `evidence_pending_ci` — não como passou — até o CI ser resolvido.
@@ -102,13 +105,18 @@ Registrar em `VERIFY.md`: `Resultado de calibração | Confiança declarada | Re
 
 <process>
 1. **Camada 1 — Auditoria de pré-execução:** checar integridade do PLAN.md e DISCUSS.md conforme `<camada_1_pre_exec_audit>`. Documentar resultado.
-2. Ler `SPEC.md`, `PLAN.md` e `DISCUSS.md` do escopo resolvido, além de `.oxe/STATE.md` global.
-3. **Camada 2:** Para cada tarefa relevante, executar **Verificar: Comando** do PLAN (ou subconjunto se foco Tn). Para **cada ID de critério** da SPEC (A1, A2, …), registrar se passou com evidência.
-4. **Camada 3:** Se existir `.oxe/DISCUSS.md` com IDs D-NN, executar **Fidelidade de decisões** conforme `<camada_3_fidelidade_decisoes>`.
-5. Executar a verificação de coerência do runtime e checkpoints conforme `<runtime_e_checkpoints>`.
-5a. Para operações Azure, confirmar o estado final com inventário/saída real do provider Azure; não considerar mutação aprovada sem evidência em `.oxe/cloud/azure/operations/`.
-6. Escrever **`VERIFY.md`** no escopo resolvido com:
+2. Resolver o context pack `verify` primeiro:
+   - ler `.oxe/context/packs/verify.md|json` (ou `oxe-cc context inspect --workflow verify --json`);
+   - se estiver fresco e coerente, usar o pack como mapa primário da verificação;
+   - se estiver stale, incompleto ou ausente, registar `fallback para leitura direta` antes de ampliar a leitura.
+3. Ler `SPEC.md`, `PLAN.md` e `DISCUSS.md` do escopo resolvido, além de `.oxe/STATE.md` global. Com pack válido, começar pelos artefatos de `read_order`; só expandir a leitura quando faltar evidência para um critério, tarefa, decisão ou checkpoint.
+4. **Camada 2:** Para cada tarefa relevante, executar **Verificar: Comando** do PLAN (ou subconjunto se foco Tn). Para **cada ID de critério** da SPEC (A1, A2, …), registrar se passou com evidência.
+5. **Camada 3:** Se existir `.oxe/DISCUSS.md` com IDs D-NN, executar **Fidelidade de decisões** conforme `<camada_3_fidelidade_decisoes>`.
+6. Executar a verificação de coerência do runtime e checkpoints conforme `<runtime_e_checkpoints>`.
+6a. Para operações Azure, confirmar o estado final com inventário/saída real do provider Azure; não considerar mutação aprovada sem evidência em `.oxe/cloud/azure/operations/`.
+6b. Escrever **`VERIFY.md`** no escopo resolvido com:
    - Data, ambiente (SO / versão do Node se relevante).
+   - **Seção — Contexto consumido:** pack usado, freshness, fallback acionado (ou não) e artefatos adicionais lidos fora do pack.
    - **Seção — Auditoria de pré-execução:** resultado da Camada 1.
    - **Tabela — Tarefas:** Tarefa (Tn) | Verificação (comando/checklist) | Passou? | Notas.
    - **Tabela — Critérios SPEC:** ID (A1…) | Critério (resumo) | Evidência | Passou? | Notas.
@@ -117,14 +125,30 @@ Registrar em `VERIFY.md`: `Resultado de calibração | Confiança declarada | Re
    - **Seção — Calibração do plano:** resultado conforme `<calibracao_do_plano>`.
    - **Checklist UAT** (Camada 4).
    - **Gaps** — o que falhou e sugestão de correção; se não houver, escrever `Nenhum gap restante`.
-6. Atualizar **`.oxe/STATE.md`** global: `verify_complete` ou `verify_failed` + próximo passo (replan, corrigir ou publicar).
-6b. **Blueprint plan-agent:** se **todas** as verificações relevantes **passaram**, existir **`.oxe/plan-agents.json`** com `oxePlanAgentsSchema >= 2` e `lifecycle.status === "executing"` (ou `pending_execute`), actualizar o JSON: `lifecycle: { "status": "closed", "since": "<ISO>" }` e espelhar em **`STATE.md`** (**lifecycle_status** → `closed`). Não fechar como `closed` se `verify_failed` ou gaps por resolver.
-7. Acrescentar entrada em **`SUMMARY.md`** do escopo resolvido: se não existir, criar a partir de **`oxe/templates/SUMMARY.template.md`**. **Obrigatório** quando `verify_failed` ou quando a seção **Gaps** tiver itens.
-7b. **Retrospectiva (pós-verify):** se `verify_complete`, sugerir **`/oxe-retro`** para capturar aprendizados do ciclo em `.oxe/LESSONS.md`. Especialmente importante quando: houve replanejamento (`--replan`), houve falhas em execute que precisaram de debug, critérios A* foram ajustados durante o ciclo, ou o ciclo durou mais de 2 ondas. Retro antes do próximo spec garante que lições orientem o próximo ciclo.
-7b. **Camada 5 — Validate-gaps automático:** se `verification_depth: "thorough"` em `.oxe/config.json`, executar a lógica de `oxe/workflows/validate-gaps.md` e adicionar seção **Gaps de Cobertura** ao VERIFY.md (mesmo conteúdo de VALIDATION-GAPS.md). Também escrever `.oxe/VALIDATION-GAPS.md` separado.
-7c. **Camada 6 — Security automático:** se `security_in_verify: true` em `.oxe/config.json`, executar a lógica de `oxe/workflows/security.md` e adicionar seção **Auditoria de Segurança** ao VERIFY.md. Também escrever `.oxe/SECURITY.md` separado. Achados P0 bloqueiam o `verify_complete` — registrar `verify_failed` até P0s serem resolvidos.
-8. **Só se todas as verificações relevantes passarem:** se `after_verify_draft_commit` não for `false`: acrescentar em **VERIFY.md** a seção **Rascunho de commit** — mensagem convencional (ex.: `feat:` / `fix:`) + bullets alinhados aos critérios **A*** e decisões **D-NN**; **não** incluir segredos.
-9. **Só se passou:** se `after_verify_suggest_pr` não for `false`: acrescentar **Checklist PR** — branch base, título sugerido, screenshots se UI, links a SPEC/PLAN/DISCUSS, testes executados.
+7. Atualizar **`.oxe/STATE.md`** global: `verify_complete` ou `verify_failed` + próximo passo (replan, corrigir ou publicar).
+7a. **Registro de calibração:** após escrever `STATE.md`, se `PLAN.md` contiver bloco `<confidence_vector>` — extrair o vetor e comparar com o resultado real. Criar ou atualizar `.oxe/calibration.json` com um novo record no formato:
+```json
+{ "cycle": "C-NN", "plan_global_confidence": 0.74, "plan_dimensions": { "technical_risk": 0.45 }, "outcome": { "verify_status": "complete", "actual_waves": 3, "estimated_waves": 2 }, "calibration_error": { "technical_risk": 0.35 } }
+```
+O `calibration_error` de cada dimensão = `|score declarado - resultado observado|`. Para `technical_risk` e `dependencies`, o resultado observado é estimado por: `1.0` se sem bloqueios nessa dimensão, `0.5` se houve 1 bloqueio, `0.0` se houve 2+ bloqueios. Omitir o registro se PLAN.md não tiver `<confidence_vector>`.
+7b. **Camada 4a — Auditoria Adversarial (opcional):** se `adversarial_verify: true` em `.oxe/config.json` (padrão: `false`):
+   - Abrir novo contexto com pack no modo auditor: `oxe-cc context inspect --workflow verify --mode auditor --json` (inclui apenas `state`, `spec`, `verify` — exclui `plan`, `runtime`).
+   - Executar `oxe/workflows/verify-audit.md` com esse contexto restrito.
+   - O auditor não vê PLAN.md nem EXECUTION-RUNTIME.md — restrição intencional.
+   - Incorporar a seção `## Auditoria Adversarial` no VERIFY.md.
+   - Se o resultado for `REPROVADO`, registrar `verify_failed` e não avançar para SUMMARY/commit.
+7c. **Blueprint plan-agent:** se **todas** as verificações relevantes **passaram**, existir **`.oxe/plan-agents.json`** com `oxePlanAgentsSchema >= 2` e `lifecycle.status === "executing"` (ou `pending_execute`), actualizar o JSON: `lifecycle: { "status": "closed", "since": "<ISO>" }` e espelhar em **`STATE.md`** (**lifecycle_status** → `closed`). Não fechar como `closed` se `verify_failed` ou gaps por resolver.
+8. Acrescentar entrada em **`SUMMARY.md`** do escopo resolvido: se não existir, criar a partir de **`oxe/templates/SUMMARY.template.md`**. **Obrigatório** quando `verify_failed` ou quando a seção **Gaps** tiver itens.
+8b. **Retrospectiva (pós-verify):** se `verify_complete`, sugerir **`/oxe-retro`** para capturar aprendizados do ciclo em `.oxe/LESSONS.md`. Especialmente importante quando: houve replanejamento (`--replan`), houve falhas em execute que precisaram de debug, critérios A* foram ajustados durante o ciclo, ou o ciclo durou mais de 2 ondas. Retro antes do próximo spec garante que lições orientem o próximo ciclo.
+8c. **Camada 5 — Validate-gaps automático:** se `verification_depth: "thorough"` em `.oxe/config.json`, executar a lógica de `oxe/workflows/validate-gaps.md` e adicionar seção **Gaps de Cobertura** ao VERIFY.md (mesmo conteúdo de VALIDATION-GAPS.md). Também escrever `.oxe/VALIDATION-GAPS.md` separado.
+8d. **Camada 6 — Security automático:** se `security_in_verify: true` em `.oxe/config.json`, executar a lógica de `oxe/workflows/security.md` e adicionar seção **Auditoria de Segurança** ao VERIFY.md. Também escrever `.oxe/SECURITY.md` separado. Achados P0 bloqueiam o `verify_complete` — registrar `verify_failed` até P0s serem resolvidos.
+9. **Só se todas as verificações relevantes passarem:** se `after_verify_draft_commit` não for `false`: acrescentar em **VERIFY.md** a seção **Rascunho de commit** — mensagem convencional (ex.: `feat:` / `fix:`) + bullets alinhados aos critérios **A*** e decisões **D-NN**; **não** incluir segredos.
+10. **Só se passou:** se `after_verify_suggest_pr` não for `false`: acrescentar **Checklist PR** — branch base, título sugerido, screenshots se UI, links a SPEC/PLAN/DISCUSS, testes executados.
+11. No chat, responder nesta ordem:
+   - **Findings**
+   - **Perguntas abertas**
+   - **Riscos residuais**
+   - **Resumo**
 </process>
 
 <success_criteria>

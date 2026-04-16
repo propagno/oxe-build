@@ -216,4 +216,73 @@ describe('oxe-operational', () => {
     assert.strictEqual(replaying.current_wave, 2);
     assert.ok(replaying.graph.nodes.some((node) => node.id === 'task:T4'));
   });
+
+  // F5 — Event replay
+  test('replayEvents com arquivo vazio retorna report vazio', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-op-'));
+    fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
+    const report = operational.replayEvents(dir, null);
+    assert.strictEqual(report.totalEvents, 0);
+    assert.strictEqual(report.duration_ms, null);
+    assert.deepStrictEqual(report.waveIds, []);
+    assert.deepStrictEqual(report.taskSequence, []);
+    assert.deepStrictEqual(report.failureEvents, []);
+  });
+
+  test('replayEvents com eventos retorna report completo', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-op-'));
+    fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
+    operational.appendEvent(dir, null, { type: 'run_started', run_id: 'test-run', wave_id: 'wave-1' });
+    operational.appendEvent(dir, null, { type: 'task_completed', run_id: 'test-run', wave_id: 'wave-1', task_id: 'T1' });
+    operational.appendEvent(dir, null, { type: 'run_completed', run_id: 'test-run', wave_id: 'wave-2' });
+
+    const report = operational.replayEvents(dir, null);
+    assert.strictEqual(report.totalEvents, 3);
+    assert.ok(report.duration_ms != null);
+    assert.deepStrictEqual(report.waveIds, [1, 2]);
+    assert.deepStrictEqual(report.taskSequence, ['T1']);
+  });
+
+  test('replayEvents filtra por runId', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-op-'));
+    fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
+    operational.appendEvent(dir, null, { type: 'a', run_id: 'run-A' });
+    operational.appendEvent(dir, null, { type: 'b', run_id: 'run-B' });
+
+    const report = operational.replayEvents(dir, null, { runId: 'run-A' });
+    assert.strictEqual(report.totalEvents, 1);
+    assert.strictEqual(report.events[0].type, 'a');
+  });
+
+  test('replayEvents filtra por waveId', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-op-'));
+    fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
+    operational.appendEvent(dir, null, { type: 'x', wave_id: 'wave-1' });
+    operational.appendEvent(dir, null, { type: 'y', wave_id: 'wave-2' });
+
+    const report = operational.replayEvents(dir, null, { waveId: 1 });
+    assert.strictEqual(report.totalEvents, 1);
+    assert.strictEqual(report.events[0].type, 'x');
+  });
+
+  test('replayEvents registra runId do primeiro evento', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-op-'));
+    fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
+    operational.appendEvent(dir, null, { type: 'run_started', run_id: 'main-run' });
+
+    const report = operational.replayEvents(dir, null);
+    assert.strictEqual(report.runId, 'main-run');
+  });
+
+  test('replayEvents escreve REPLAY-SESSION.md com writeReport', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-op-'));
+    fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
+    operational.appendEvent(dir, null, { type: 'run_started', run_id: 'rpt-run' });
+
+    const report = operational.replayEvents(dir, null, { writeReport: true });
+    assert.ok(report._reportPath);
+    assert.ok(fs.existsSync(report._reportPath));
+    const content = fs.readFileSync(report._reportPath, 'utf8');
+    assert.ok(content.includes('OXE — Replay Session'));
+  });
 });

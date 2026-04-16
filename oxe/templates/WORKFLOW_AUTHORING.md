@@ -51,6 +51,22 @@ description: Resumo de 5–8 palavras. Use quando o utilizador pedir X, Y ou Z.
 
 O corpo do ficheiro deve **apontar** para o workflow em `oxe/workflows/<passo>.md` (ou `.oxe/workflows/`) sem duplicar a lógica por completo.
 
+### Metadata cognitiva multi-runtime
+
+Prompts e wrappers OXE podem carregar metadata adicional para sincronizar a postura de raciocínio entre runtimes:
+
+```yaml
+oxe_reasoning_mode: discovery | planning | execution | review | status
+oxe_question_policy: explore_first | ask_high_impact_only | none
+oxe_output_contract: situational | plan | execution | findings | routing
+oxe_tool_profile: read_heavy | write_bounded | review_heavy | mixed
+oxe_confidence_policy: explicit | rubric | optional
+```
+
+- Use a mesma metadata em `.github/prompts/` e `commands/oxe/`.
+- O corpo do wrapper deve incluir um bloco curto de **Contrato de raciocínio OXE deste comando** consistente com essa metadata.
+- Cursor, Codex e CLIs derivados devem preservar essa semântica; não manter regras cognitivas importantes só numa integração.
+
 ## 5. Script vs agente
 
 | Cabeça | Onde vive |

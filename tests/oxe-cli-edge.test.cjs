@@ -10,6 +10,42 @@ const { spawnSync } = require('child_process');
 const REPO_ROOT = path.join(__dirname, '..');
 const CLI = path.join(REPO_ROOT, 'bin', 'oxe-cc.js');
 const { isolatedHomeEnv } = require('./isolated-home-env.cjs');
+const CODEBASE_MAPS = [
+  'OVERVIEW.md',
+  'STACK.md',
+  'STRUCTURE.md',
+  'TESTING.md',
+  'INTEGRATIONS.md',
+  'CONVENTIONS.md',
+  'CONCERNS.md',
+];
+
+function parseJsonFromCli(stdout) {
+  const text = String(stdout || '').trim();
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((line) => {
+    const trimmed = line.trim();
+    return trimmed.startsWith('{') || trimmed.startsWith('[');
+  });
+  assert.notStrictEqual(start, -1, `Saída sem JSON: ${text}`);
+  return JSON.parse(lines.slice(start).join('\n'));
+}
+
+function seedContextProject(dir, options = {}) {
+  const phase = options.phase || 'scan_complete';
+  const oxe = path.join(dir, '.oxe');
+  const codebase = path.join(oxe, 'codebase');
+  fs.mkdirSync(codebase, { recursive: true });
+  for (const fileName of CODEBASE_MAPS) {
+    fs.writeFileSync(path.join(codebase, fileName), `# ${fileName}\n\nok\n`, 'utf8');
+  }
+  fs.writeFileSync(path.join(oxe, 'STATE.md'), `## Fase atual\n\n\`${phase}\`\n`, 'utf8');
+  if (options.spec) fs.writeFileSync(path.join(oxe, 'SPEC.md'), options.spec, 'utf8');
+  if (options.plan) fs.writeFileSync(path.join(oxe, 'PLAN.md'), options.plan, 'utf8');
+  if (options.runtime) fs.writeFileSync(path.join(oxe, 'EXECUTION-RUNTIME.md'), options.runtime, 'utf8');
+  if (options.verify) fs.writeFileSync(path.join(oxe, 'VERIFY.md'), options.verify, 'utf8');
+  return { oxe, codebase };
+}
 
 describe('oxe-cc CLI edge', () => {
   test('install --help exits 0', () => {
@@ -111,22 +147,7 @@ describe('oxe-cc CLI edge', () => {
 
   test('status --json prints valid JSON with nextStep', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-json-'));
-    const oxe = path.join(dir, '.oxe');
-    const codebase = path.join(oxe, 'codebase');
-    fs.mkdirSync(codebase, { recursive: true });
-    const maps = [
-      'OVERVIEW.md',
-      'STACK.md',
-      'STRUCTURE.md',
-      'TESTING.md',
-      'INTEGRATIONS.md',
-      'CONVENTIONS.md',
-      'CONCERNS.md',
-    ];
-    for (const f of maps) {
-      fs.writeFileSync(path.join(codebase, f), '# ok\n', 'utf8');
-    }
-    fs.writeFileSync(path.join(oxe, 'STATE.md'), '## Fase atual\n\n`scan_complete`\n', 'utf8');
+    seedContextProject(dir, { phase: 'scan_complete' });
     const r = spawnSync(process.execPath, [CLI, 'status', '--json', '--dir', dir], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
@@ -135,13 +156,105 @@ describe('oxe-cc CLI edge', () => {
     assert.strictEqual(r.status, 0, r.stderr || r.stdout);
     const line = r.stdout.trim().split(/\r?\n/).filter(Boolean).pop();
     const j = JSON.parse(line);
-    assert.strictEqual(j.oxeStatusSchema, 2);
+    assert.strictEqual(j.oxeStatusSchema, 3);
     assert.ok(typeof j.healthStatus === 'string');
     assert.ok(typeof j.nextStep === 'string');
     assert.ok(Array.isArray(j.artifacts));
+    assert.ok(j.contextPacks && typeof j.contextPacks === 'object');
+    assert.ok(j.contextQuality && typeof j.contextQuality === 'object');
+    assert.ok(j.semanticsDrift && typeof j.semanticsDrift === 'object');
+    assert.ok(j.packFreshness && typeof j.packFreshness === 'object');
+    assert.ok(j.activeSummaryRefs && typeof j.activeSummaryRefs === 'object');
     assert.ok(j.diagnostics && typeof j.diagnostics === 'object');
     assert.ok(Array.isArray(j.diagnostics.planWarnings));
     assert.ok(j.staleCompact && typeof j.staleCompact.stale === 'boolean');
+  });
+
+  test('context inspect resolves on demand without materializing pack files', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-context-inspect-'));
+    const { oxe } = seedContextProject(dir, {
+      phase: 'planning',
+      spec: '# SPEC\n\n## Objetivo\n\nPlanejar mudança.\n',
+    });
+    const packPath = path.join(oxe, 'context', 'packs', 'plan.json');
+    const r = spawnSync(process.execPath, [CLI, 'context', 'inspect', '--workflow', 'plan', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+    const pack = parseJsonFromCli(r.stdout);
+    assert.strictEqual(pack.workflow, 'plan');
+    assert.strictEqual(pack.context_tier, 'standard');
+    assert.ok(pack.contract && pack.contract.workflow_slug === 'plan');
+    assert.ok(pack.context_quality && typeof pack.context_quality.score === 'number');
+    assert.strictEqual(fs.existsSync(packPath), false, 'inspect não deve materializar pack por padrão');
+  });
+
+  test('context build materializes structured pack files', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-context-build-'));
+    const { oxe } = seedContextProject(dir, {
+      phase: 'planning',
+      spec: '# SPEC\n\n## Objetivo\n\nPlanejar mudança.\n',
+      plan: '# PLAN\n\n## Objetivo\n\nExecutar mudança.\n',
+      runtime: '# EXECUTION-RUNTIME\n\n- estado inicial\n',
+    });
+    const r = spawnSync(process.execPath, [CLI, 'context', 'build', '--workflow', 'execute', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+    const pack = parseJsonFromCli(r.stdout);
+    assert.strictEqual(pack.workflow, 'execute');
+    const packPath = path.join(oxe, 'context', 'packs', 'execute.json');
+    const packMdPath = path.join(oxe, 'context', 'packs', 'execute.md');
+    assert.strictEqual(fs.existsSync(packPath), true);
+    assert.strictEqual(fs.existsSync(packMdPath), true);
+    const stored = JSON.parse(fs.readFileSync(packPath, 'utf8'));
+    assert.strictEqual(stored.workflow, 'execute');
+    assert.ok(Array.isArray(stored.read_order));
+    assert.ok(stored.selected_artifacts.some((artifact) => artifact.alias === 'state'));
+    assert.ok(stored.selected_artifacts.some((artifact) => artifact.alias === 'plan'));
+  });
+
+  test('status --json exposes Copilot workspace-vs-legacy diagnostics', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-copilot-'));
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-copilot-home-'));
+    const env = isolatedHomeEnv(fakeHome);
+    const oxe = path.join(dir, '.oxe');
+    const codebase = path.join(oxe, 'codebase');
+    fs.mkdirSync(codebase, { recursive: true });
+    for (const f of [
+      'OVERVIEW.md',
+      'STACK.md',
+      'STRUCTURE.md',
+      'TESTING.md',
+      'INTEGRATIONS.md',
+      'CONVENTIONS.md',
+      'CONCERNS.md',
+    ]) {
+      fs.writeFileSync(path.join(codebase, f), '# ok\n', 'utf8');
+    }
+    fs.writeFileSync(path.join(oxe, 'STATE.md'), '## Fase atual\n\n`scan_complete`\n', 'utf8');
+    fs.mkdirSync(path.join(fakeHome, '.copilot', 'prompts'), { recursive: true });
+    fs.writeFileSync(path.join(fakeHome, '.copilot', 'prompts', 'oxe-scan.prompt.md'), 'legacy\n', 'utf8');
+    fs.writeFileSync(
+      path.join(fakeHome, '.copilot', 'copilot-instructions.md'),
+      '<!-- oxe-cc:install-begin -->\nlegacy\n<!-- oxe-cc:install-end -->\n',
+      'utf8'
+    );
+
+    const r = spawnSync(process.execPath, [CLI, 'status', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+    const j = JSON.parse(r.stdout.trim().split(/\r?\n/).filter(Boolean).pop());
+    assert.strictEqual(j.copilot.promptSource, 'legacy_global');
+    assert.ok(Array.isArray(j.diagnostics.copilotWarnings));
+    assert.ok(j.diagnostics.copilotWarnings.some((x) => /legado global/i.test(x)));
   });
 
   test('status warns when PLAN.md misses autoavaliação and suggests replan on low confidence', () => {

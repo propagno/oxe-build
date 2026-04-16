@@ -7,6 +7,7 @@ Quando verify falha, não interrompe — diagnostica (2-3 hipóteses), corrige, 
 </objective>
 
 <context>
+- Aplicar `oxe/workflows/references/reasoning-execution.md`. Cada iteração deve deixar explícitos o contexto lido, a hipótese testada e a validação executada.
 - **Pré-requisito:** `.oxe/PLAN.md` existente com pelo menos 1 onda; `STATE.md` com fase ≥ `plan_ready`.
 - **Máximo de iterações:** padrão = 3; configurável via argumento `max:<N>` (ex.: `/oxe-loop onda 2 max:5`). Nunca exceder 10.
 - **Artefato:** não cria novos arquivos — atualiza `STATE.md` com campos `loop_*` e registra cada iteração como bloco inline no chat.
@@ -45,6 +46,11 @@ Limpar campos `loop_*` ao concluir com `passed` (ou manter `escalated` se escalo
    - Registrar `loop_status: escalated` em STATE.md.
    - Exibir no chat: tentativas realizadas, hipóteses testadas, evidência de cada falha.
    - Sugerir `/oxe-forensics` com contexto: "onda N falhou após <max> tentativas — hipóteses testadas: H1, H2, H3".
+5. Em toda resposta ao utilizador, manter a ordem:
+   - **Contexto lido**
+   - **Validação executada**
+   - **Resultado**
+   - **Próximo passo**
 </process>
 
 <success_criteria>

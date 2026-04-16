@@ -66,6 +66,40 @@ export interface AzureHealthContext {
   warnings: string[];
 }
 
+export type CopilotPromptSource = 'workspace' | 'legacy_global' | 'missing';
+
+export interface CopilotWorkspaceIntegration {
+  root: string;
+  promptsDir: string;
+  instructions: string;
+  manifest: string;
+  promptFiles: string[];
+  hasInstructions: boolean;
+  hasOxeBlock: boolean;
+}
+
+export interface CopilotLegacyIntegration {
+  root: string;
+  promptsDir: string;
+  instructions: string;
+  promptFiles: string[];
+  hasInstructions: boolean;
+  hasOxeBlock: boolean;
+  hasOtherManagedBlocks: boolean;
+  detected: boolean;
+}
+
+export interface CopilotIntegrationReport {
+  status: 'healthy' | 'warning' | 'broken' | 'not_installed';
+  detected: boolean;
+  target: 'workspace';
+  promptSource: CopilotPromptSource;
+  workspace: CopilotWorkspaceIntegration;
+  legacy: CopilotLegacyIntegration;
+  manifest: Record<string, unknown> | null;
+  warnings: string[];
+}
+
 /** Relatório retornado por `health.buildHealthReport` e incluído em `runDoctorChecks`.healthReport. */
 export interface OxeHealthReport {
   configPath: string | null;
@@ -80,12 +114,32 @@ export interface OxeHealthReport {
   retroDate: Date | null;
   staleLessons: HealthStaleInfo;
   phaseWarn: string[];
+  runtimeWarn?: string[];
+  reviewWarn?: string[];
+  capabilityWarn?: string[];
+  investigationWarn?: string[];
+  sessionWarn?: string[];
+  installWarn?: string[];
+  copilotWarn?: string[];
+  copilot?: CopilotIntegrationReport | null;
   summaryGapWarn: string | null;
   specWarn: string[];
   planWarn: string[];
+  planSelfEvaluation?: Record<string, unknown> | null;
+  planReviewStatus?: string | null;
+  activeRun?: Record<string, unknown> | null;
+  eventsSummary?: Record<string, unknown> | null;
+  memoryLayers?: Record<string, unknown> | null;
   next: OxeNextSuggestion;
   azureActive?: boolean;
   azure?: AzureHealthContext | null;
+  contextWarn?: string[];
+  semanticsWarn?: string[];
+  contextPacks?: Record<string, ContextPackSummary>;
+  contextQuality?: ContextQualitySummary;
+  semanticsDrift?: SemanticsDriftSummary;
+  packFreshness?: Record<string, PackFreshness>;
+  activeSummaryRefs?: { project: string | null; session: string | null; phase: string | null };
   scanFocusGlobs?: unknown;
   scanIgnoreGlobs?: unknown;
 }
@@ -126,6 +180,49 @@ export interface ParsedTask {
   decisions: string[];
   done: boolean;
   meta: Record<string, unknown> | null;
+}
+
+export type ContextPackMode = 'standard' | 'auditor';
+
+export interface LessonOutcome {
+  cycle: string;
+  verify_status: string;
+  saved_hours?: number;
+  failure_condition?: string;
+}
+
+export interface LessonMetric {
+  id: string;
+  rule: string;
+  type: string;
+  applied_cycles: string[];
+  outcomes: LessonOutcome[];
+  success_rate: number;
+  status: 'active' | 'deprecated' | 'conditional';
+  deprecation_threshold: number;
+}
+
+export interface ConfidenceDimension {
+  name: string;
+  score: number;
+  weight: number;
+  note: string;
+}
+
+export interface ConfidenceVector {
+  cycle: string | null;
+  generated_at: string | null;
+  dimensions: ConfidenceDimension[];
+  global: { score: number; gate: string };
+}
+
+export interface CriticalHypothesis {
+  id: string;
+  condition: string;
+  validation: string;
+  on_failure: string;
+  checkpoint: string | null;
+  status: 'pending' | 'validated' | 'refuted' | 'skipped';
 }
 
 export interface ParsedPlan {
@@ -189,6 +286,110 @@ export interface PlanPathsResult {
   issues: Array<{ path: string; reason: string }>;
 }
 
+export interface OxePermissionRule {
+  pattern: string;
+  action: 'allow' | 'deny' | 'ask';
+  scope?: 'execute' | 'apply' | 'all';
+}
+
+export interface PermissionCheckResult {
+  denied: string[];
+  needsApproval: string[];
+  allowed: string[];
+}
+
+export interface ReplayReport {
+  events: Array<Record<string, unknown>>;
+  totalEvents: number;
+  duration_ms: number | null;
+  runId: string | null;
+  waveIds: number[];
+  taskSequence: string[];
+  checkpointSequence: string[];
+  failureEvents: Array<Record<string, unknown>>;
+  _reportPath?: string;
+}
+
+export interface ContextArtifactSelection {
+  alias: string;
+  path: string | null;
+  exists: boolean;
+  required: boolean;
+  using_fallback: boolean;
+  scope: string;
+  summary: string;
+}
+
+export interface ContextGap {
+  alias: string;
+  severity: 'critical' | 'warning';
+  reason: string;
+}
+
+export interface ContextConflict {
+  alias: string;
+  reason: string;
+  primary_path: string | null;
+  fallback_path: string | null;
+}
+
+export interface PackFreshness {
+  generated_at: string | null;
+  latest_source_at: string | null;
+  pack_age_hours: number | null;
+  max_pack_age_hours: number;
+  stale: boolean;
+  reason: 'fresh' | 'pack_age_exceeded' | 'source_newer_than_pack' | 'fallback_required';
+}
+
+export interface ContextQualityScore {
+  score: number;
+  status: 'excellent' | 'good' | 'fragile' | 'critical';
+  requiredMissing: number;
+  optionalMissing: number;
+  conflicts: number;
+  fallbackCount: number;
+}
+
+export interface ContextPackSummary {
+  path?: string;
+  context_tier: string;
+  semantics_hash: string | null;
+  read_order: string[];
+  selected_artifacts: ContextArtifactSelection[];
+  gaps: ContextGap[];
+  conflicts: ContextConflict[];
+  fallback_required: boolean;
+  freshness: PackFreshness;
+  context_quality: ContextQualityScore;
+}
+
+export interface ContextQualitySummary {
+  primaryWorkflow: string | null;
+  primaryScore: number | null;
+  primaryStatus: string | null;
+  byWorkflow: Record<string, Record<string, unknown>>;
+}
+
+export interface SemanticsDriftSummary {
+  ok: boolean;
+  contractVersion: string;
+  manifestPath: string;
+  manifest: Record<string, unknown> | null;
+  audit: {
+    ok: boolean;
+    warnings: string[];
+    mismatchCount: number;
+    mismatches: Array<Record<string, unknown>>;
+    targets: Record<string, { path: string; checked: number; missing: boolean }>;
+  };
+}
+
+export interface PluginSource {
+  source: string;
+  version?: string;
+}
+
 export interface OxePlugin {
   name: string;
   version?: string;
@@ -219,6 +420,47 @@ export interface AgentsAPI {
   parseCursorCommandFrontmatter: (mdContent: string) => Record<string, unknown>;
 }
 
+export interface ContextAPI {
+  contextPaths: (projectRoot: string, activeSession?: string | null) => Record<string, unknown>;
+  resolveArtifactCandidates: (projectRoot: string, activeSession?: string | null) => Record<string, unknown>;
+  buildProjectSummary: (projectRoot: string, activeSession?: string | null, options?: Record<string, unknown>) => Record<string, unknown>;
+  buildSessionSummary: (projectRoot: string, activeSession?: string | null, options?: Record<string, unknown>) => Record<string, unknown> | null;
+  buildPhaseSummary: (projectRoot: string, activeSession?: string | null, options?: Record<string, unknown>) => Record<string, unknown>;
+  buildContextIndex: (projectRoot: string, activeSession?: string | null, options?: Record<string, unknown>) => Record<string, unknown>;
+  buildContextPack: (projectRoot: string, input?: Record<string, unknown>) => Record<string, unknown>;
+  inspectContextPack: (projectRoot: string, input?: Record<string, unknown>) => Record<string, unknown>;
+  buildAllContextPacks: (projectRoot: string, input?: Record<string, unknown>) => Array<Record<string, unknown>>;
+  computeContextQuality: (pack: Record<string, unknown>) => Record<string, unknown>;
+  computePackFreshness: (pack: Record<string, unknown>, contract?: Record<string, unknown>) => Record<string, unknown>;
+  resolvePackFile: (projectRoot: string, workflow: string, activeSession?: string | null) => string;
+  summarizeText: (text: string, maxChars?: number, maxLines?: number) => string;
+  extractSemanticFragment: (text: string, options?: { intent?: string; maxChars?: number; preserveMarkers?: string[] }) => string;
+  parseHypotheses: (planText: string) => CriticalHypothesis[];
+  parseConfidenceVector: (planText: string) => ConfidenceVector | null;
+}
+
+export interface RuntimeSemanticsAPI {
+  CONTRACT_VERSION: string;
+  CONTRACTS_PATH: string;
+  CONTRACTS_REGISTRY: Record<string, unknown>;
+  REQUIRED_CONTRACT_FIELDS: string[];
+  RUNTIME_METADATA_KEYS: string[];
+  validateWorkflowContractsRegistry: (registry?: Record<string, unknown>) => string[];
+  getWorkflowContract: (slug: string) => Record<string, unknown> | null;
+  getAllWorkflowContracts: () => Array<Record<string, unknown>>;
+  computeSemanticsHash: (slug: string) => string | null;
+  getRuntimeMetadataForSlug: (slug: string, options?: Record<string, unknown>) => Record<string, string>;
+  renderRuntimeMetadataLines: (meta: Record<string, string>) => string[];
+  buildReasoningContractBlock: (meta: Record<string, string>, options?: Record<string, unknown>) => string;
+  pickRuntimeMetadata: (frontmatter: Record<string, string>) => Record<string, string>;
+  splitFrontmatter: (raw: string) => { frontmatter: string; body: string };
+  parseFrontmatterMap: (raw: string) => Record<string, string>;
+  slugFromPromptFilename: (name: string) => string;
+  slugFromCommandFilename: (name: string) => string;
+  auditWrapperText: (slug: string, raw: string) => Record<string, unknown>;
+  auditRuntimeTargets: (projectRoot: string) => Record<string, unknown>;
+}
+
 export interface OxeSdk {
   version: string;
   name: string;
@@ -228,12 +470,17 @@ export interface OxeSdk {
 
   /** Parsing de artefatos OXE. */
   parsePlan: (planMd: string) => ParsedPlan;
+  parseHypotheses: (planText: string) => CriticalHypothesis[];
+  parseConfidenceVector: (planText: string) => ConfidenceVector | null;
   parseSpec: (specMd: string) => ParsedSpec;
   parseState: (stateMd: string) => ParsedState;
   validateDecisionFidelity: (discussMd: string, planMd: string) => DecisionFidelityResult;
+  parseLessonsMetrics: (metricsJson: string) => LessonMetric[];
+  updateLessonMetric: (metrics: LessonMetric[], lessonId: string, outcome: LessonOutcome) => LessonMetric[];
+  deprecateLowEffectiveness: (metrics: LessonMetric[], threshold?: number, minObservations?: number) => LessonMetric[];
 
   health: {
-    loadOxeConfigMerged: (targetProject: string) => { config: Record<string, unknown>; path: string | null; parseError: string | null };
+    loadOxeConfigMerged: (targetProject: string) => { config: Record<string, unknown>; path: string | null; parseError: string | null; sources: { system: string | null; user: string | null; project: string | null } };
     validateConfigShape: (cfg: Record<string, unknown>) => { unknownKeys: string[]; typeErrors: string[] };
     buildHealthReport: (target: string) => OxeHealthReport;
     suggestNextStep: (target: string, cfg?: { discuss_before_plan?: boolean }) => OxeNextSuggestion;
@@ -244,6 +491,9 @@ export interface OxeSdk {
     parseLastRetroDate: (stateText: string) => Date | null;
     isStaleScan: (scanDate: Date | null, maxAgeDays: number) => HealthStaleInfo;
     isStaleLessons: (retroDate: Date | null, maxAgeDays: number) => HealthStaleInfo;
+    copilotWorkspacePaths: (target: string) => { root: string; promptsDir: string; instructions: string; manifest: string };
+    copilotLegacyPaths: () => { root: string; promptsDir: string; instructions: string };
+    copilotIntegrationReport: (target: string) => CopilotIntegrationReport;
     planAgentsWarnings: (target: string) => string[];
     phaseCoherenceWarnings: (phase: string, paths: Record<string, string>) => string[];
     specSectionWarnings: (specPath: string, requiredHeadings: string[]) => string[];
@@ -291,6 +541,9 @@ export interface OxeSdk {
     scanFileForSecrets: (filePath: string, options?: { contentPatterns?: RegExp[] }) => SecretScanResult;
     scanDirForSecretFiles: (dir: string, options?: { secretPatterns?: RegExp[]; maxDepth?: number }) => string[];
     validatePlanPaths: (filePaths: string[], projectRoot: string) => PlanPathsResult;
+    checkFilePermission: (filePath: string, permissions: OxePermissionRule[], currentScope?: string) => { action: string; rule: OxePermissionRule | null };
+    checkPermissions: (fileList: string[], permissions: OxePermissionRule[], scope?: string) => PermissionCheckResult;
+    globToRegex: (glob: string) => RegExp;
     DEFAULT_SECRET_PATTERNS: RegExp[];
     DEFAULT_SECRET_CONTENT_PATTERNS: RegExp[];
     DEFAULT_DENIED_PATH_PATTERNS: RegExp[];
@@ -302,6 +555,8 @@ export interface OxeSdk {
     runHook: (plugins: OxePlugin[], hookName: string, ctx: Record<string, unknown>) => Promise<Array<{ plugin: string; error: string }>>;
     validatePlugins: (projectRoot: string) => PluginValidationResult;
     initPluginsDir: (projectRoot: string) => void;
+    resolvePluginSources: (projectRoot: string, pluginsSources: Array<string | PluginSource>) => { resolved: string[]; errors: Array<{ source: string; error: string }> };
+    installNpmPlugin: (projectRoot: string, pkgName: string, version?: string) => { ok: boolean; path: string; error: string };
   };
 
   dashboard: {
@@ -310,6 +565,9 @@ export interface OxeSdk {
     addPlanReviewComment: (projectRoot: string, input?: Record<string, unknown>) => Record<string, unknown>;
     updatePlanReviewCommentStatus: (projectRoot: string, input?: Record<string, unknown>) => Record<string, unknown> | null;
   };
+
+  context: ContextAPI;
+  runtimeSemantics: RuntimeSemanticsAPI;
 
   operational: {
     operationalPaths: (projectRoot: string, activeSession: string | null) => Record<string, string | null>;
@@ -323,6 +581,13 @@ export interface OxeSdk {
     parseCapabilityManifest: (text: string) => Record<string, unknown>;
     readCapabilityCatalog: (projectRoot: string) => Array<Record<string, unknown>>;
     buildMemoryLayers: (projectRoot: string, activeSession: string | null) => Record<string, unknown>;
+    replayEvents: (projectRoot: string, activeSession: string | null, options?: {
+      fromEventId?: string;
+      runId?: string;
+      waveId?: number;
+      limit?: number;
+      writeReport?: boolean;
+    }) => ReplayReport;
   };
 
   azure: {

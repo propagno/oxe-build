@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 
 const wf = require('../bin/lib/oxe-workflows.cjs');
+const REPO_ROOT = path.join(__dirname, '..');
 
 describe('oxe-workflows edge', () => {
   test('validateWorkflowShapes read failure via directory named .md', () => {
@@ -56,5 +57,14 @@ describe('oxe-workflows edge', () => {
     );
     const r = wf.validateWorkflowShapes(dir);
     assert.ok(r.warnings.some((w) => w.message.includes('output')));
+  });
+
+  test('core workflows declare pack-first context consumption', () => {
+    for (const slug of ['ask', 'plan', 'execute', 'verify']) {
+      const text = fs.readFileSync(path.join(REPO_ROOT, 'oxe', 'workflows', `${slug}.md`), 'utf8');
+      assert.match(text, new RegExp(`\\.oxe/context/packs/${slug}\\.(md|json)`), `${slug}.md deve citar o context pack`);
+      assert.match(text, /pack/i, `${slug}.md deve mencionar o pack explicitamente`);
+      assert.match(text, /fallback explícito|fallback para leitura direta/i, `${slug}.md deve declarar fallback explícito`);
+    }
   });
 });

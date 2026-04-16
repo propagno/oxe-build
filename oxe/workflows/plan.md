@@ -12,12 +12,21 @@ Se o usuário pedir **--replan** (ou replanejamento implícito após `verify_fai
 </objective>
 
 <context>
+- Aplicar `oxe/workflows/references/reasoning-planning.md` como contrato deste passo. O `PLAN.md` deve sair decision-complete e não deixar decisões relevantes para a execução.
 - Seguir `oxe/workflows/references/flow-robustness-contract.md` como contrato canónico de robustez. A ordem obrigatória é: ler artefatos, resolver sessão/paths, validar pré-condições, escrever o plano, autoavaliar o plano, registrar próximo passo único.
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, o plano vive em `.oxe/<active_session>/plan/` e lê a spec em `.oxe/<active_session>/spec/`.
+- Antes do scan amplo, carregar `.oxe/context/packs/plan.md` e `.oxe/context/packs/plan.json` como entrada prioritária do contexto do passo.
+- Se o pack existir e estiver fresco/coerente, usar `read_order`, `selected_artifacts`, `gaps` e `conflicts` como mapa primário de leitura e como insumo direto da autoavaliação.
+- Se o pack estiver stale, ausente ou incompleto, fazer fallback explícito para leitura direta e, quando viável, regenerar ou inspecionar o contexto com `oxe-cc context inspect --workflow plan --json`.
 - Quando existirem, ler `INVESTIGATIONS.md`, `RESEARCH.md`, `CAPABILITIES.md`, `memory/` do projeto e `CHECKPOINTS.md` para calibrar dependências, riscos, automações disponíveis e gates humanos necessários.
 - Se a SPEC ou artefatos do projeto mencionarem **Azure explicitamente** (Azure Service Bus, Azure SQL, Azure Event Grid, az CLI, ARM, subscription Azure, ou `.oxe/cloud/azure/` existir no projeto), **antes de detalhar tarefas**: (1) verificar `auth-status.json` — se `login_active: false` ou `subscription_id` ausente, registrar como **pré-condição bloqueante** no PLAN.md e sugerir `oxe-cc azure status` / `oxe-cc azure auth login`; (2) verificar staleness do inventário via `inventory.synced_at` — se stale além de `inventory_max_age_hours`, sugerir `oxe-cc azure sync` antes de executar; (3) se `vpn_required: true` no config, registrar como restrição explícita nas tarefas de mutação Azure. O plano deve vincular tarefas a recursos existentes em INVENTORY.md, SERVICEBUS.md, EVENTGRID.md ou SQL.md, ou declarar explicitamente os recursos Azure a criar com `oxe-cc azure <domínio> plan`. **SQL genérico, bancos on-prem ou outras nuvens não acionam este bloco.**
 - Se existir `OBSERVATIONS.md` do escopo resolvido com entradas `pendente` de impacto `plan` ou `all`, incorporar nas tarefas relevantes antes de finalizar o plano (ajustar implementação, verificação ou escopo de Tn) e marcar essas entradas como `incorporada → plan (data)`.
-- Se existir **`.oxe/global/LESSONS.md`**, ler entradas com `Aplicar em: /oxe-plan` e `Status: ativo`. **Priorizar entradas com `Frequência >= 2` ou `Impacto: alto`** — aplicar como restrições explícitas no planejamento: ajuste de complexidade de tarefas, padrões de verificação, escolha de modo solo vs agentes. Lições com `Frequência: 1` e `Impacto: baixo` são contexto secundário. Registrar aplicações como comentário no PLAN.md: `<!-- lição C-NN aplicada: ... -->`.
+- Se existir **`.oxe/global/LESSONS.md`**, ler entradas com `Aplicar em: /oxe-plan` e `Status: ativo`. **Priorizar entradas com `Frequência >= 2` ou `Impacto: alto`** — aplicar como restrições explícitas no planejamento. Lições com `Frequência: 1` e `Impacto: baixo` são contexto secundário. Registrar aplicações como comentário no PLAN.md: `<!-- lição C-NN aplicada: ... -->`.
+- **Filtro de efetividade:** se `.oxe/lessons-metrics.json` existir, antes de aplicar cada lição verificar seu `status` e `success_rate`:
+  - `status: "deprecated"` → informar que a lição foi depreciada por baixa efetividade; não aplicar como restrição.
+  - `success_rate < 0.7` e `applied_cycles.length >= 2` → aplicar com ressalva explícita: `<!-- lição C-NN aplicada com ressalva: success_rate=X.X -->`.
+  - `applied_cycles.length === 1` → aplicar com nota: `<!-- lição C-NN: 1 observação, evidência limitada -->`.
+  - `success_rate >= 0.7` e `applied_cycles.length >= 2` → aplicar com alta confiança sem ressalva.
 - **LESSONS + OBS juntos:** se houver tanto LESSONS quanto OBS pendentes, LESSONS orientam o *como planejar* e OBS orientam o *o que incluir*. Não confundir os papéis.
 - Não inventar APIs inexistentes: cruzar com **STRUCTURE.md**, **INTEGRATIONS.md** e arquivos reais; respeitar **CONCERNS.md** (evitar agravar dívida conhecida sem tarefa explícita).
 - Se existir **`.oxe/NOTES.md`**, rever entradas em aberto: incorporar em tarefas (com **Aceite vinculado** quando aplicável) ou registar na secção **Replanejamento** / nota explícita *fora de âmbito desta trilha*. Se não existir e houver necessidade de registrar notas, criar a partir de `oxe/templates/NOTES.template.md`.
@@ -121,6 +130,7 @@ Antes de finalizar a resposta ao utilizador, o agente **deve** percorrer este ga
 12. **Rastreabilidade de evidência:** cada tarefa deve ter entrada observável de origem na SPEC, no codebase, em DISCUSS, OBS, RESEARCH ou LESSONS; tarefa sem evidência de entrada explícita = falha do gate.
 13. **Mudanças de risco:** tarefas com risco relevante (migração, auth, schema, contrato público, segurança) devem incluir contenção, rollback, fallback ou verificação reforçada.
 14. **Cobertura R-ID:** se `SPEC.md` contiver tabela de requisitos com IDs `R-NN` e status `v1`/`v2`, cada R-ID em escopo deve ter ao menos um critério A* mapeado em **Aceite vinculado:** de alguma tarefa — rastrear `R-NN → A* → Tn`. R-IDs com `v1`/`v2` sem nenhuma tarefa associada = falha do gate; documentar como gap explícito quando intencional (ex.: `<!-- R-03: adiado para próximo ciclo -->`).
+15. **Contexto estruturado:** se houver pack do workflow `plan`, as lacunas e conflitos críticos do pack aparecem na autoavaliação do plano ou são explicitamente dados como resolvidos durante a leitura direta.
 
 Se após correções estruturais persistir ambiguidade de produto: **uma** frase recomendando `oxe:discuss` ou `oxe:spec`.
 
@@ -129,16 +139,29 @@ Resumo obrigatório no chat: `Gate do plano: OK` ou `Gate do plano: corrigido (N
 
 <process>
 1. Resolver `active_session` e ler `SPEC.md` do escopo correto (obrigatório). Se faltar, pedir **spec** primeiro.
+1a. Resolver o context pack `plan` primeiro:
+   - ler `.oxe/context/packs/plan.md|json` (ou `oxe-cc context inspect --workflow plan --json`);
+   - se estiver fresco e coerente, usar o pack como mapa primário;
+   - se estiver stale, incompleto ou ausente, registar `fallback para leitura direta` e seguir com leitura bruta.
+1b. Com pack válido, ler primeiro o resumo do pack e os artefatos de `read_order`; só abrir outros artefatos quando faltarem evidências para fechar tarefas, riscos ou autoavaliação.
 2. Se `.oxe/config.json` tiver `discuss_before_plan: true` e **não** existir `DISCUSS.md` no escopo resolvido com decisões fechadas, pedir **discuss** antes de planejar.
 3. Se existir **`.oxe/NOTES.md`**, consumir ou explicitamente adiar cada bullet relevante (ver **context**).
-4. Ler `.oxe/codebase/*.md` (incl. CONVENTIONS / CONCERNS) e inspecionar pontos de entrada se a spec exigir.
+4. Ler `.oxe/codebase/*.md` (incl. CONVENTIONS / CONCERNS) e inspecionar pontos de entrada se a spec exigir. Se o pack não bastar, expandir a leitura apenas para os artefatos adicionais necessários e registar essa expansão.
 5. Escrever ou atualizar `PLAN.md` no escopo resolvido usando `oxe/templates/PLAN.template.md` como cabeçalho; **preservar** YAML inicial (`oxe_doc: plan`, `status`, `inputs`) se já existir e **atualizar** `updated:` (ISO); em **--replan**, preencher a seção **Replanejamento** (data, motivo, lições de VERIFY/SUMMARY, tarefas removidas/alteradas).
 6. Definir ondas: onda 1 = tarefas sem dependência entre si; onda seguinte = dependentes; respeitar `plan_max_tasks_per_wave` se configurado.
-7. Preencher `## Autoavaliação do Plano` com a rubrica fixa. A confiança é a soma ponderada das seis dimensões; não inventar percentagem sem justificar os pontos.
+6a. **Calibração histórica:** se `.oxe/calibration.json` existir e tiver ≥ 2 registros, ler as últimas 3 entradas antes de preencher a autoavaliação. Para cada dimensão com `calibration_error > 0.25` em 2+ ciclos consecutivos, adicionar `[⚠ historicamente subestimado]` na nota da dimensão e reduzir o score em 0.10 ou justificar explicitamente por que o ciclo atual é diferente.
+7. Preencher `## Autoavaliação do Plano` com a rubrica fixa. A confiança é a soma ponderada das seis dimensões; não inventar percentagem sem justificar os pontos. As lacunas, conflitos e freshness do pack devem aparecer nessa autoavaliação quando forem relevantes. **Incluir o bloco `<confidence_vector>`** com as 6 dimensões usando o template em `oxe/templates/PLAN.template.md`.
+7a. **Hipóteses Críticas:** ao criar tarefas `L` ou `XL` ou qualquer tarefa que dependa de lib externa, API de terceiros ou serviço de infra não testado ainda — adicionar seção `## Hipóteses Críticas` com pelo menos uma `<hypothesis>` por dependência crítica. Usar `oxe/templates/HYPOTHESES.template.md` como referência. Omitir a seção se todas as tarefas forem `S`/`M` e sem dependências externas não verificadas.
 8. Aplicar integralmente o bloco **`<plan_quality_gate>`** acima ao `PLAN.md` em disco; corrigir o ficheiro até passar ou documentar gaps explícitos.
 9. Atualizar `.oxe/STATE.md` global: fase `plan_ready`, próximo passo `oxe:execute` apenas se `Melhor plano atual: sim` e a confiança estiver no limiar executável; caso contrário, próximo passo deve reduzir incerteza (`oxe:discuss`, `oxe:research` ou replanejamento).
 10. **Sugestão de agentes (inteligente):** após o gate passar, verificar se o plano tem 3+ domínios distintos (ex.: backend + frontend + DB, ou auth + notificações + UI). Se sim, sugerir proativamente: "Este plano tem N domínios distintos. Quer gerar um blueprint de agentes com `/oxe-plan --agents`?" — não executar automaticamente, apenas oferecer. Se o usuário incluiu `--agents` no input original, executar imediatamente a lógica de `oxe/workflows/plan-agent.md`.
 11. Listar no chat: resultado do gate (OK ou corrigido), ondas, contagem de tarefas, comando de teste guarda-chuva se houver, melhor-plano-atual e confiança.
+12. No resumo em chat, deixar explícitos:
+   - objetivo e escopo do plano;
+   - principais riscos e contenções;
+   - assumptions relevantes;
+   - se o plano foi produzido com pack fresco ou com fallback explícito;
+   - comando único recomendado para o próximo passo.
 </process>
 
 <success_criteria>

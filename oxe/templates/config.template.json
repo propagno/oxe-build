@@ -5,6 +5,7 @@
   "verification_depth": "standard",
   "plan_confidence_threshold": 70,
   "security_in_verify": false,
+  "adversarial_verify": false,
   "after_verify_suggest_pr": true,
   "after_verify_draft_commit": true,
   "after_verify_suggest_uat": false,
@@ -17,6 +18,7 @@
   "scan_ignore_globs": [],
   "spec_required_sections": [],
   "plan_max_tasks_per_wave": 0,
+  "permissions": [],
   "azure": {
     "enabled": false,
     "default_resource_group": "",

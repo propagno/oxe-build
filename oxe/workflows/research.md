@@ -7,6 +7,7 @@ Não substitui **SPEC** nem **PLAN**; alimenta decisões que depois entram na SP
 </objective>
 
 <context>
+- Aplicar `oxe/workflows/references/reasoning-discovery.md`. A investigação deve separar fatos, inferências e lacunas antes de consolidar conclusões.
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, research vive em `.oxe/<active_session>/research/`; sem sessão ativa, usar `.oxe/research/`.
 - Tratar pesquisa como **investigação estruturada**, não como nota solta. Cada investigação deve ter objetivo, fontes, modo, profundidade, conclusões e impacto na trilha.
 - **Uma sessão = um ficheiro novo** em `research/`; não sobrescrever notas antigas salvo correção explícita do utilizador.
@@ -45,7 +46,12 @@ Anotar `thinking_depth: surface | standard | deep` no frontmatter da nota de pes
 6. Atualizar `INVESTIGATIONS.md` do escopo resolvido com objetivo, fontes, modo, profundidade, conclusão e impacto na trilha. Se não existir, criá-lo.
 7. Ler **`.oxe/SPEC.md`**, **`.oxe/codebase/*`** e código alvo (Glob/Grep/Read) conforme âmbito.
 8. Atualizar **`.oxe/STATE.md`**: nota de fase / próximo passo típico `oxe:plan`, ou `oxe:spec` se faltar contrato, ou `oxe:ui-spec` se o foco for UI antes do plano.
-9. Responder no chat em 5–10 linhas: caminho da nota nova, confirmação de atualização do índice, próximo passo OXE.
+9. Responder no chat em 5–10 linhas, nesta ordem:
+   - **Fatos**
+   - **Inferências**
+   - **Lacunas**
+   - **Próximo passo**
+   Incluir o caminho da nota nova e a confirmação de atualização do índice.
 </process>
 
 <success_criteria>

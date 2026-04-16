@@ -14,6 +14,7 @@ Se o utilizador pedir **`--replan`**: aplicar a mesma lógica de replanejamento 
 </objective>
 
 <context>
+- Aplicar `oxe/workflows/references/reasoning-planning.md`. O blueprint e o PLAN devem sair decision-complete; não deixar decisões relevantes implícitas para a execução dos agentes.
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, `PLAN.md`, `plan-agents.json` e `plan-agent-messages/` vivem em `.oxe/<active_session>/plan/`; sem sessão ativa, manter `.oxe/`.
 - O `plan-agent` herda integralmente o contrato `oxe/workflows/references/flow-robustness-contract.md`. Não pode emitir percentuais concorrentes por agente; a confiança final do plano é única e visível no `PLAN.md`.
 - **Pré-requisitos** iguais a **`plan.md`**: `.oxe/SPEC.md` obrigatória; `discuss_before_plan` + `DISCUSS.md` quando configurado; consumir **NOTES**, **UI-SPEC**, **DISCUSS**, **RESEARCH**, **CODEBASE-DELTA** / **RESUME**, **config.json** (`plan_max_tasks_per_wave`, `default_verify_command`) como em **`plan.md`**.
@@ -130,7 +131,7 @@ Resumo obrigatório no chat: `Gate plan-agent: OK` ou `Gate plan-agent: corrigid
 6. Criar `plan-agent-messages/` e `plan-agent-messages/README.md` no escopo resolvido a partir de **`oxe/templates/plan-agent-messages-README.template.md`**.
 7. Atualizar **`.oxe/STATE.md`**: fase `plan_ready`, próximo passo `oxe:execute`; preencher **Blueprint de agentes (sessão)** — `run_id` (= `runId`), `lifecycle_status` (= `pending_execute`), **última onda** — (ou `—`).
 8. Aplicar **`<plan_agent_quality_gate>`**; corrigir até passar.
-9. No chat: resumo do gate plan-agent, `runId`, número de agentes, ondas, tarefas, referência ao protocolo em **`references/plan-agent-chat-protocol.md`**.
+9. No chat: resumo do gate plan-agent, `runId`, número de agentes, ondas, tarefas, riscos e assumptions relevantes, e referência ao protocolo em **`references/plan-agent-chat-protocol.md`**.
 </process>
 
 <success_criteria>

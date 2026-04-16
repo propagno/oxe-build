@@ -99,6 +99,35 @@ function loadPlugins(projectRoot) {
     }
   }
 
+  // Carregar plugins de sources externas (config.json → plugins[])
+  const configPath = path.join(projectRoot, '.oxe', 'config.json');
+  if (fs.existsSync(configPath)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      if (Array.isArray(cfg.plugins)) {
+        const { resolved, errors: srcErrors } = resolvePluginSources(projectRoot, cfg.plugins);
+        for (const se of srcErrors) {
+          errors.push({ file: se.source, error: se.error });
+        }
+        for (const absPath of resolved) {
+          try {
+            // eslint-disable-next-line no-undef
+            const mod = require(absPath);
+            if (mod && typeof mod === 'object' && typeof mod.name === 'string' && mod.hooks && typeof mod.hooks === 'object') {
+              if (!plugins.some((existing) => existing.name === mod.name)) {
+                plugins.push(mod);
+              }
+            } else {
+              errors.push({ file: absPath, error: 'Plugin externo não tem name (string) ou hooks (objeto) válidos' });
+            }
+          } catch (e) {
+            errors.push({ file: absPath, error: String(e) });
+          }
+        }
+      }
+    } catch { /* ignore config parse errors — validados em outro lugar */ }
+  }
+
   return { plugins, errors };
 }
 
@@ -218,9 +247,95 @@ Ver documentação completa: \`oxe/templates/PLUGINS.md\` (no pacote npm).
   }
 }
 
+/**
+ * Resolve sources de plugins definidas no config.json.
+ * Suporta: "path:./file.cjs", "./relative.cjs" (atalho), "npm:<pkg>".
+ * @param {string} projectRoot
+ * @param {Array<string | { source: string, version?: string }>} pluginsSources
+ * @returns {{ resolved: string[], errors: Array<{ source: string, error: string }> }}
+ */
+function resolvePluginSources(projectRoot, pluginsSources) {
+  const resolved = [];
+  const errors = [];
+  if (!Array.isArray(pluginsSources)) return { resolved, errors };
+
+  for (const entry of pluginsSources) {
+    // Legado: string simples (nome de arquivo local)
+    if (typeof entry === 'string') {
+      const abs = path.resolve(projectRoot, '.oxe', 'plugins', entry);
+      if (fs.existsSync(abs)) {
+        resolved.push(abs);
+      } else {
+        errors.push({ source: entry, error: `arquivo não encontrado: ${abs}` });
+      }
+      continue;
+    }
+    if (!entry || typeof entry !== 'object' || !entry.source) {
+      errors.push({ source: String(entry), error: 'entrada inválida — esperado { source: string }' });
+      continue;
+    }
+    const src = String(entry.source);
+
+    if (src.startsWith('path:') || src.startsWith('./') || src.startsWith('../')) {
+      const rel = src.startsWith('path:') ? src.slice(5) : src;
+      const abs = path.resolve(projectRoot, rel);
+      if (!fs.existsSync(abs)) {
+        errors.push({ source: src, error: `arquivo não encontrado: ${abs}` });
+      } else {
+        resolved.push(abs);
+      }
+    } else if (src.startsWith('npm:')) {
+      const pkg = src.slice(4);
+      const npmDir = path.join(projectRoot, '.oxe', 'plugins', '_npm', 'node_modules', pkg);
+      if (!fs.existsSync(npmDir)) {
+        errors.push({
+          source: src,
+          error: `pacote não instalado. Execute: npx oxe-cc plugins install ${src}`,
+        });
+      } else {
+        try {
+          const pkgJsonPath = path.join(npmDir, 'package.json');
+          const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+          const main = pkgJson.main || 'index.js';
+          resolved.push(path.join(npmDir, main));
+        } catch (e) {
+          errors.push({ source: src, error: `falha ao resolver main do pacote: ${e.message}` });
+        }
+      }
+    } else {
+      errors.push({ source: src, error: 'prefixo desconhecido — use "path:" ou "npm:"' });
+    }
+  }
+  return { resolved, errors };
+}
+
+/**
+ * Instala um plugin npm em .oxe/plugins/_npm/.
+ * @param {string} projectRoot
+ * @param {string} pkgName
+ * @param {string} [version]
+ * @returns {{ ok: boolean, path: string, error: string }}
+ */
+function installNpmPlugin(projectRoot, pkgName, version) {
+  const npmDir = path.join(projectRoot, '.oxe', 'plugins', '_npm');
+  try {
+    if (!fs.existsSync(npmDir)) {
+      fs.mkdirSync(npmDir, { recursive: true });
+    }
+    const spec = version ? `${pkgName}@${version}` : pkgName;
+    const { execSync } = require('child_process');
+    execSync(`npm install --prefix "${npmDir}" ${spec}`, { stdio: 'pipe', timeout: 60000 });
+    return { ok: true, path: path.join(npmDir, 'node_modules', pkgName), error: '' };
+  } catch (e) {
+    return { ok: false, path: '', error: e.message || String(e) };
+  }
+}
+
 module.exports = {
   loadPlugins,
   runHook,
   validatePlugins,
   initPluginsDir,
+  resolvePluginSources,
+  installNpmPlugin,
 };

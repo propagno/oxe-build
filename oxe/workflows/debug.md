@@ -7,6 +7,7 @@ Diferente de **`verify`**, que audita **aceite** contra SPEC/PLAN. Depois de est
 </objective>
 
 <context>
+- Aplicar `oxe/workflows/references/reasoning-execution.md`. O debug deve partir de evidência real, testar hipóteses pequenas e fechar com próximo passo único.
 - Pré-requisito: sintoma reproduzível ou descrição clara (mensagem de erro, Tn em falha).
 - Preferir ancorar ao identificador de tarefa **`Tn`** do `PLAN.md` do escopo resolvido quando existir.
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, usar `.oxe/<active_session>/execution/DEBUG.md`; sem sessão ativa, usar `.oxe/DEBUG.md`.
@@ -22,7 +23,11 @@ Diferente de **`verify`**, que audita **aceite** contra SPEC/PLAN. Depois de est
    - **Evidência atual** — ficheiros, linhas, conclusão parcial.
    - **Próximo passo:** `execute` (continuar correção) | `discuss` (decisão técnica em grupo) | `spec` ou `plan` (requisito ambíguo ou impossível como escrito).
 3. Se a causa for **requisito errado**, documentar em DEBUG e recomendar **`/oxe-spec`** ou **`/oxe-plan`** (e opcionalmente **`/oxe-discuss`**).
-4. Resumo no chat em ≤8 linhas: hipótese principal e próximo comando OXE.
+4. Resumo no chat em ≤8 linhas, nesta ordem:
+   - **Contexto lido**
+   - **Hipótese principal**
+   - **Evidência atual**
+   - **Próximo passo**
 </process>
 
 <success_criteria>

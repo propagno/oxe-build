@@ -214,11 +214,75 @@ function validatePlanPaths(filePaths, projectRoot) {
   return { ok: issues.length === 0, issues };
 }
 
+/**
+ * Converte glob simples em RegExp.
+ * Suporta: `*` (qualquer segmento sem separador), `**` (qualquer profundidade), `?` (um char).
+ * @param {string} glob
+ * @returns {RegExp}
+ */
+function globToRegex(glob) {
+  const re = glob
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')   // escape specials (exceto * e ?)
+    .replace(/\*\*/g, '\u0000')              // placeholder para **
+    .replace(/\*/g, '[^/\\\\]*')             // * = qualquer coisa exceto separador
+    .replace(/\?/g, '[^/\\\\]')              // ? = um char exceto separador
+    .replace(/\u0000\//g, '(.+\\/)?')        // **/ = prefixo de diretório opcional (zero ou mais níveis)
+    .replace(/\u0000/g, '.*');               // ** isolado = qualquer profundidade
+  return new RegExp(`^${re}$`, 'i');
+}
+
+/**
+ * Verifica um filepath contra uma lista de regras de permissão (first-match wins).
+ * @param {string} filePath — caminho relativo ao projeto (ex.: `src/app.ts`, `.env`)
+ * @param {Array<{ pattern: string, action: string, scope?: string }>} permissions
+ * @param {string} [currentScope='execute']
+ * @returns {{ action: string, rule: object | null }}
+ */
+function checkFilePermission(filePath, permissions, currentScope = 'execute') {
+  if (!Array.isArray(permissions) || permissions.length === 0) {
+    return { action: 'allow', rule: null };
+  }
+  const normalized = filePath.replace(/\\/g, '/');
+  const basename = normalized.split('/').pop() || '';
+  for (const rule of permissions) {
+    const ruleScope = rule.scope || 'all';
+    if (ruleScope !== 'all' && ruleScope !== currentScope) continue;
+    const regex = globToRegex(rule.pattern);
+    if (regex.test(normalized) || regex.test(basename)) {
+      return { action: String(rule.action || 'allow'), rule };
+    }
+  }
+  return { action: 'allow', rule: null };
+}
+
+/**
+ * Verifica uma lista de filepaths contra regras de permissão.
+ * @param {string[]} fileList
+ * @param {Array<{ pattern: string, action: string, scope?: string }>} permissions
+ * @param {string} [scope='execute']
+ * @returns {{ denied: string[], needsApproval: string[], allowed: string[] }}
+ */
+function checkPermissions(fileList, permissions, scope = 'execute') {
+  const denied = [];
+  const needsApproval = [];
+  const allowed = [];
+  for (const f of fileList) {
+    const result = checkFilePermission(f, permissions, scope);
+    if (result.action === 'deny') denied.push(f);
+    else if (result.action === 'ask') needsApproval.push(f);
+    else allowed.push(f);
+  }
+  return { denied, needsApproval, allowed };
+}
+
 module.exports = {
   checkPathSafety,
   scanFileForSecrets,
   scanDirForSecretFiles,
   validatePlanPaths,
+  checkFilePermission,
+  checkPermissions,
+  globToRegex,
   DEFAULT_SECRET_PATTERNS,
   DEFAULT_SECRET_CONTENT_PATTERNS,
   DEFAULT_DENIED_PATH_PATTERNS,

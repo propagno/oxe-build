@@ -4,6 +4,51 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [0.8.0] — 2026-04-14
+
+### Adicionado
+
+**Session forking + revert**
+- `session fork [nome]` — bifurca a sessão ativa, copiando todos os artefatos para uma nova sessão; rastreia `forked_from` na SESSION.md
+- `session revert <checkpoint-slug>` — restaura STATE.md ao snapshot de um checkpoint, sem apagar artefatos atuais
+
+**Skill system**
+- `/oxe-skill` — workflow para descobrir, invocar e gerenciar skills (unificação de personas e capabilities)
+- `@<skill-id>` no chat resolve persona OU capability OU composite como ponto de entrada único
+- Template `SKILL.template.md` para criação de skills de projeto em `.oxe/skills/`
+- Resolução em 3 camadas: project → capabilities → global (personas do pacote)
+
+**Sistema de permissões com wildcard**
+- `permissions[]` em `.oxe/config.json` — regras glob+ação que controlam acesso a arquivos durante execute e apply
+- Ações: `allow`, `deny`, `ask` — avaliação first-match wins
+- Scopes: `execute`, `apply`, `all`
+- Gate automático no workflow execute antes de cada onda
+
+**Config hierárquico (system → user → project)**
+- `loadOxeConfigMerged()` agora lê 3 níveis: system (`OXE_SYSTEM_CONFIG` ou path OS-default) < user (`~/.oxe/config.json`) < project (`.oxe/config.json`)
+- `status --full` exibe fontes de cada nível de configuração
+- Campo `sources` no retorno do SDK
+
+**Event sourcing com replay**
+- `replayEvents()` no SDK — reconstrói timeline de `OXE-EVENTS.ndjson` com deltas, filtros por run/wave/event
+- `oxe-cc runtime replay [--run <id>] [--from <event-id>] [--wave <n>] [--write]` — visualização de timeline no terminal ou `REPLAY-SESSION.md` em disco
+- Integração com `/oxe-forensics` — replay como ferramenta de investigação
+
+**Plugin system com carregamento remoto**
+- `plugins[]` em `config.json` aceita `{ source: "npm:<pkg>" }` e `{ source: "path:./file.cjs" }`
+- `oxe-cc plugins list` — lista plugins carregados (local + externos)
+- `oxe-cc plugins install npm:<pkg>` — instala plugin npm em `.oxe/plugins/_npm/`
+- `resolvePluginSources()` e `installNpmPlugin()` expostos no SDK
+
+### Tipos TypeScript
+- `OxePermissionRule`, `PermissionCheckResult`, `ReplayReport`, `PluginSource` adicionados
+- `security.checkFilePermission`, `security.checkPermissions`, `security.globToRegex` declarados
+- `operational.replayEvents` declarado
+- `plugins.resolvePluginSources`, `plugins.installNpmPlugin` declarados
+- `health.loadOxeConfigMerged` retorna `sources: { system, user, project }`
+
+---
+
 ## [0.7.0] — 2026-04-13
 
 ### Adicionado

@@ -11,6 +11,8 @@ Subcomandos:
 - `status`
 - `close`
 - `migrate <nome>`
+- `fork [nome-opcional]`
+- `revert <checkpoint-slug>`
 </objective>
 
 <context>
@@ -137,6 +139,45 @@ Subcomandos:
    - ignorados por inexistência
 </process_migrate>
 
+<process_fork>
+## `fork [nome-opcional]`
+
+1. Verificar que existe `active_session` em `.oxe/STATE.md`. Se não houver, informar e sair.
+2. Ler `SESSION.md` da sessão ativa; anotar ID de origem (`sNNN`).
+3. Calcular próximo ID `sMMM` a partir de `.oxe/SESSIONS.md`.
+4. Se nome não fornecido, usar `fork-<slug-original>`.
+5. Criar `.oxe/sessions/sMMM-<slug>/` com as mesmas subpastas: `spec/`, `plan/`, `execution/`, `verification/`, `checkpoints/`, `research/`, `artifacts/`, `workstreams/`.
+6. **Copiar** (não mover) todos os arquivos da sessão ativa para a nova sessão, preservando estrutura de diretórios. Não copiar diretórios vazios.
+7. Criar `SESSION.md` na nova sessão a partir de `SESSION.template.md`, com:
+   - `forked_from: sNNN`
+   - `forked_at: YYYY-MM-DD`
+   - `Status: active`
+   - `Resumo: Fork de sNNN — <slug-original>`
+8. Atualizar `.oxe/SESSIONS.md`:
+   - Adicionar linha da nova sessão (topo, status `active`)
+   - **Não** alterar status da sessão original
+9. Atualizar `.oxe/STATE.md`:
+   - `active_session: sessions/sMMM-<slug>`
+   - `session_id: sMMM`
+10. Registar evento no Histórico da SESSION.md original: `YYYY-MM-DD | Forked → sMMM`
+11. Responder no chat: ID novo, path, contagem de artefatos copiados, e lembrar que a sessão original permanece intacta.
+</process_fork>
+
+<process_revert>
+## `revert <checkpoint-slug>`
+
+1. Verificar que existe sessão ativa ou operar na raiz `.oxe/`.
+2. Resolver o checkpoint: procurar em `checkpoints/` (do escopo resolvido) arquivo cujo slug corresponda ao argumento. Se não encontrar, listar checkpoints disponíveis e pedir escolha.
+3. Ler o conteúdo do checkpoint (seção `## Snapshot`):
+   - Extrair campos de STATE: `phase`, `next_step` (campo `Comando:`), `execute_mode`, `Última onda executada`, `Tarefas concluídas`
+4. Atualizar `.oxe/STATE.md` com os valores do snapshot:
+   - Sobrescrever os campos extraídos do snapshot
+   - **Não apagar** campos ausentes no snapshot (preservar `active_session`, `session_id`, config refs, etc.)
+5. Registar no Histórico da SESSION.md (se sessão ativa): `YYYY-MM-DD | Revertido para checkpoint <slug>`
+6. Registar evento em `EXECUTION-RUNTIME.md` se existir: `Revert to checkpoint <slug>`
+7. Responder no chat: quais campos foram restaurados, quais permaneceram intactos, e próximo passo sugerido baseado no STATE restaurado.
+</process_revert>
+
 <process_default>
 ## Sem subcomando
 
@@ -150,4 +191,7 @@ Subcomandos:
 - [ ] `.oxe/SESSIONS.md` usa as colunas mínimas `ID | Nome | Status | Criada | Última atividade | Resumo | Path`.
 - [ ] `close` arquiva sem apagar artefatos.
 - [ ] `migrate` move só artefatos session-scoped e preserva os globais.
+- [ ] `fork` cria sessão nova com cópia dos artefatos sem modificar a sessão de origem.
+- [ ] `fork` registra `forked_from` na SESSION.md da sessão derivada.
+- [ ] `revert` restaura STATE.md a partir do snapshot do checkpoint, sem apagar campos ausentes.
 </success_criteria>
