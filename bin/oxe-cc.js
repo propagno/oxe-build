@@ -590,6 +590,64 @@ function runtimeSemanticsManifestPath(opts) {
   return path.join(path.resolve(opts.dir), '.oxe', 'install', 'runtime-semantics.json');
 }
 
+/**
+ * Instala a extensão VS Code OXE Agents via `code --install-extension`.
+ * Não falha a instalação global se o VS Code CLI não estiver disponível.
+ * @param {{ dryRun?: boolean, force?: boolean }} opts
+ */
+function installVscodeExtension(opts) {
+  const c = useAnsiColors();
+  const extDir = path.join(PKG_ROOT, 'vscode-extension');
+
+  // Encontrar o VSIX mais recente na pasta da extensão
+  let vsixPath = null;
+  if (fs.existsSync(extDir)) {
+    const vsixFiles = fs.readdirSync(extDir)
+      .filter((f) => f.startsWith('oxe-agents') && f.endsWith('.vsix'))
+      .sort()
+      .reverse();
+    if (vsixFiles.length > 0) vsixPath = path.join(extDir, vsixFiles[0]);
+  }
+
+  if (!vsixPath) {
+    console.log(`  ${c ? dim : ''}VS Code extension${c ? reset : ''}  VSIX não encontrado — pulando.`);
+    return;
+  }
+
+  if (opts.dryRun) {
+    console.log(`${dim}vscode${reset}  (dry-run) code --install-extension "${vsixPath}"`);
+    return;
+  }
+
+  // Candidatos ao CLI do VS Code (Windows precisa do .cmd)
+  const codeCandidates = process.platform === 'win32'
+    ? ['code.cmd', 'code', 'code-insiders.cmd', 'code-insiders']
+    : ['code', 'code-insiders'];
+
+  const { spawnSync } = require('child_process');
+  for (const codeBin of codeCandidates) {
+    try {
+      const result = spawnSync(
+        codeBin,
+        ['--install-extension', vsixPath, '--force'],
+        { encoding: 'utf8', timeout: 30000, shell: process.platform === 'win32' }
+      );
+      if (result.status === 0) {
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} VS Code extension instalada: ${c ? cyan : ''}OXE Agents${c ? reset : ''} (${path.basename(vsixPath)})`);
+        return;
+      }
+    } catch {
+      /* tenta próximo candidato */
+    }
+  }
+
+  // code CLI não encontrado no PATH — instrução manual
+  console.log(
+    `  ${c ? dim : ''}VS Code extension${c ? reset : ''}  ${c ? yellow : ''}(instalação manual necessária)${c ? reset : ''}\n` +
+    `    ${c ? cyan : ''}code --install-extension "${vsixPath}"${c ? reset : ''}`
+  );
+}
+
 /** Integração legado do Copilot VS Code em ~/.copilot/. */
 function copilotLegacyPromptDir(opts) {
   return path.join(copilotUserDir(opts), 'prompts');
@@ -2522,6 +2580,9 @@ function runInstall(opts) {
     const mergedManifest = { ...prevManifest, ...nextFiles };
     oxeManifest.writeFileManifest(home, mergedManifest, readPkgVersion());
   }
+
+  // Instalar extensão VS Code OXE Agents (sempre tenta, falha graciosamente)
+  installVscodeExtension(opts);
 
   printSummaryAndNextSteps(c, buildInstallSummary(opts, fullLayout));
   if (opts.copilot) {

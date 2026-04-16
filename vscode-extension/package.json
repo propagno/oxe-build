@@ -2,7 +2,7 @@
   "name": "oxe-agents",
   "displayName": "OXE Agents",
   "description": "Agentes OXE para GitHub Copilot Chat — cada fase do ciclo como um @agente no VS Code",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "publisher": "oxe-cc",
   "license": "MIT",
   "engines": {
@@ -21,6 +21,9 @@
     "workflow",
     "spec-driven"
   ],
+  "extensionDependencies": [
+    "GitHub.copilot-chat"
+  ],
   "activationEvents": [
     "onStartupFinished"
   ],
@@ -32,21 +35,24 @@
         "name": "oxe",
         "fullName": "OXE",
         "description": "Router universal — lê STATE.md e sugere o próximo passo do ciclo OXE",
-        "isSticky": false
+        "isSticky": false,
+        "sampleRequest": "Qual é a situação atual do projeto e o próximo passo recomendado?"
       },
       {
         "id": "oxe.ask",
         "name": "oxe-ask",
         "fullName": "OXE Ask",
         "description": "Situational awareness — responde perguntas sobre o estado atual do projeto com evidência explícita",
-        "isSticky": false
+        "isSticky": false,
+        "sampleRequest": "Qual é a fase atual e o que foi implementado até agora?"
       },
       {
         "id": "oxe.scan",
         "name": "oxe-scan",
         "fullName": "OXE Scan",
         "description": "Mapeamento do codebase — reconstrói .oxe/codebase/ e contextualiza o projeto para um novo ciclo",
-        "isSticky": false
+        "isSticky": false,
+        "sampleRequest": "Mapeie o codebase e atualize o contexto do projeto."
       },
       {
         "id": "oxe.spec",
@@ -54,6 +60,7 @@
         "fullName": "OXE Spec",
         "description": "Especificação — gera SPEC.md com critérios de aceite verificáveis a partir de requisitos",
         "isSticky": true,
+        "sampleRequest": "Preciso adicionar autenticação JWT ao sistema. Gere a especificação.",
         "commands": [
           {
             "name": "discuss",
@@ -67,6 +74,7 @@
         "fullName": "OXE Plan",
         "description": "Planejamento — gera PLAN.md com ondas, tarefas, hipóteses críticas e confidence vector",
         "isSticky": true,
+        "sampleRequest": "Gere o plano de implementação para o SPEC atual.",
         "commands": [
           {
             "name": "replan",
@@ -83,14 +91,16 @@
         "name": "oxe-quick",
         "fullName": "OXE Quick",
         "description": "Plano rápido — para tarefas S/M sem SPEC formal; objetivo → passos → verify",
-        "isSticky": true
+        "isSticky": true,
+        "sampleRequest": "Preciso renomear a função processPayment para handlePayment em todos os arquivos."
       },
       {
         "id": "oxe.execute",
         "name": "oxe-execute",
         "fullName": "OXE Execute",
-        "description": "Execução — implementa a onda atual validando hipóteses antes de qualquer mutação",
+        "description": "Execução — implementa a onda atual do PLAN validando hipóteses antes de mutar",
         "isSticky": true,
+        "sampleRequest": "Execute a onda atual do plano.",
         "commands": [
           {
             "name": "wave",
@@ -107,7 +117,8 @@
         "name": "oxe-debug",
         "fullName": "OXE Debug",
         "description": "Debug — diagnóstico orientado a hipóteses durante execução travada ou falha inline",
-        "isSticky": false
+        "isSticky": false,
+        "sampleRequest": "A tarefa T3 está falhando com erro de timeout. Ajude a diagnosticar."
       },
       {
         "id": "oxe.verify",
@@ -115,6 +126,7 @@
         "fullName": "OXE Verify",
         "description": "Verificação — valida critérios A* do SPEC contra evidências reais produzidas pelo executor",
         "isSticky": true,
+        "sampleRequest": "Verifique se a implementação atende todos os critérios do SPEC.",
         "commands": [
           {
             "name": "audit",
@@ -127,7 +139,42 @@
         "name": "oxe-review",
         "fullName": "OXE Review",
         "description": "Revisão de código — auditor adversarial de PR e mudanças, findings por severidade",
-        "isSticky": false
+        "isSticky": false,
+        "sampleRequest": "Revise as mudanças desta branch e liste os findings por severidade."
+      },
+      {
+        "id": "oxe.capabilities",
+        "name": "oxe-capabilities",
+        "fullName": "OXE Capabilities",
+        "description": "Capabilities — lista, instala, remove e atualiza capabilities nativas do projeto em .oxe/",
+        "isSticky": false,
+        "sampleRequest": "Liste as capabilities disponíveis neste projeto.",
+        "commands": [
+          {
+            "name": "list",
+            "description": "Listar capabilities instaladas"
+          },
+          {
+            "name": "install",
+            "description": "Instalar uma capability"
+          }
+        ]
+      },
+      {
+        "id": "oxe.skill",
+        "name": "oxe-skill",
+        "fullName": "OXE Skill",
+        "description": "Skills — gerencia skills e habilidades registradas no framework OXE do projeto",
+        "isSticky": false,
+        "sampleRequest": "Quais skills estão disponíveis neste projeto OXE?"
+      },
+      {
+        "id": "oxe.dashboard",
+        "name": "oxe-dashboard",
+        "fullName": "OXE Dashboard",
+        "description": "Dashboard — exibe status operacional: runtime, ondas, checkpoints e saúde do ciclo",
+        "isSticky": false,
+        "sampleRequest": "Mostre o status do dashboard: fase, active run e próximo passo."
       }
     ]
   },
