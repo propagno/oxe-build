@@ -1,6 +1,6 @@
 {
 	"name": "oxe-cc",
-	"version": "0.9.1",
+	"version": "0.9.2",
 	"description": "OXE — spec-driven workflows in .oxe/; integrates with Cursor, GitHub Copilot, Claude, OpenCode, Gemini, Codex, Windsurf, Antigravity (npx)",
 	"license": "GPL-3.0",
 	"author": "",
@@ -48,6 +48,7 @@
 		".cursor",
 		".github",
 		"commands",
+		"vscode-extension",
 		"AGENTS.md",
 		"README.md",
 		"CHANGELOG.md"
@@ -58,7 +59,8 @@
 		"test": "node --test tests/install.test.cjs tests/oxe-project-health.test.cjs tests/oxe-dashboard.test.cjs tests/oxe-operational.test.cjs tests/oxe-azure.test.cjs tests/oxe-sdk.test.cjs tests/oxe-manifest.test.cjs tests/oxe-agent-install.test.cjs tests/oxe-install-resolve-full.test.cjs tests/oxe-health-extended.test.cjs tests/oxe-workflows-edge.test.cjs tests/oxe-sdk-edge.test.cjs tests/oxe-cli-edge.test.cjs tests/oxe-npm-version.test.cjs tests/oxe-scripts.test.cjs tests/oxe-retro-health.test.cjs tests/oxe-security-permissions.test.cjs tests/oxe-runtime-semantics.test.cjs",
 		"test:coverage": "c8 --check-coverage --lines 82 --functions 85 --branches 58 --statements 82 npm test",
 		"scan:assets": "node scripts/oxe-assets-scan.cjs",
-		"prepublishOnly": "node scripts/sync-runtime-metadata.cjs && node scripts/sync-cursor-from-prompts.cjs && npm test && npm run scan:assets && node bin/oxe-cc.js --version"
+		"build:vscode-ext": "cd vscode-extension && npx @vscode/vsce package --no-yarn --allow-missing-repository",
+		"prepublishOnly": "npm run build:vscode-ext && node scripts/sync-runtime-metadata.cjs && node scripts/sync-cursor-from-prompts.cjs && npm test && npm run scan:assets && node bin/oxe-cc.js --version"
 	},
 	"c8": {
 		"all": true,
