@@ -70,6 +70,544 @@ function parseArrayField(value) {
   return raw.split(',').map((item) => item.trim()).filter(Boolean);
 }
 
+function loadRuntimeModule() {
+  try {
+    return require('../../lib/runtime/index.js');
+  } catch {
+    return null;
+  }
+}
+
+function loadSdkParsers() {
+  try {
+    const sdk = require('../../lib/sdk/index.cjs');
+    if (sdk && typeof sdk.parsePlan === 'function' && typeof sdk.parseSpec === 'function') {
+      return { parsePlan: sdk.parsePlan, parseSpec: sdk.parseSpec };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function loadProjectHealth() {
+  try {
+    return require('./oxe-project-health.cjs');
+  } catch {
+    return null;
+  }
+}
+
+function readJsonIfExists(filePath) {
+  const raw = readTextIfExists(filePath);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function preferExistingPath(primaryPath, fallbackPath) {
+  if (primaryPath && fs.existsSync(primaryPath)) return primaryPath;
+  return fallbackPath || primaryPath || null;
+}
+
+function resolveRuntimeArtifactPaths(projectRoot, activeSession) {
+  const health = loadProjectHealth();
+  if (!health || typeof health.oxePaths !== 'function' || typeof health.scopedOxePaths !== 'function') {
+    const oxeDir = path.join(projectRoot, '.oxe');
+    if (!activeSession) {
+      return {
+        state: path.join(oxeDir, 'STATE.md'),
+        spec: path.join(oxeDir, 'SPEC.md'),
+        plan: path.join(oxeDir, 'PLAN.md'),
+        verify: path.join(oxeDir, 'VERIFY.md'),
+      };
+    }
+    const sessionRoot = path.join(oxeDir, ...String(activeSession).split('/'));
+    return {
+      state: path.join(oxeDir, 'STATE.md'),
+      spec: preferExistingPath(path.join(sessionRoot, 'spec', 'SPEC.md'), path.join(oxeDir, 'SPEC.md')),
+      plan: preferExistingPath(path.join(sessionRoot, 'plan', 'PLAN.md'), path.join(oxeDir, 'PLAN.md')),
+      verify: preferExistingPath(path.join(sessionRoot, 'verification', 'VERIFY.md'), path.join(oxeDir, 'VERIFY.md')),
+    };
+  }
+  const base = health.oxePaths(projectRoot);
+  const scoped = health.scopedOxePaths(projectRoot, activeSession || null);
+  return {
+    state: base.state,
+    spec: preferExistingPath(scoped.spec, base.spec),
+    plan: preferExistingPath(scoped.plan, base.plan),
+    verify: preferExistingPath(scoped.verify, base.verify),
+  };
+}
+
+function normalizeRuntimeEventType(type) {
+  const raw = String(type || '').trim();
+  if (!raw) return 'RunStarted';
+  const directMap = {
+    SessionCreated: 'SessionCreated',
+    RunStarted: 'RunStarted',
+    GraphCompiled: 'GraphCompiled',
+    WorkItemReady: 'WorkItemReady',
+    WorkspaceAllocated: 'WorkspaceAllocated',
+    AttemptStarted: 'AttemptStarted',
+    ToolInvoked: 'ToolInvoked',
+    ToolCompleted: 'ToolCompleted',
+    ToolFailed: 'ToolFailed',
+    EvidenceCollected: 'EvidenceCollected',
+    PolicyEvaluated: 'PolicyEvaluated',
+    GateRequested: 'GateRequested',
+    GateResolved: 'GateResolved',
+    VerificationStarted: 'VerificationStarted',
+    VerificationCompleted: 'VerificationCompleted',
+    RetryScheduled: 'RetryScheduled',
+    WorkItemCompleted: 'WorkItemCompleted',
+    WorkItemBlocked: 'WorkItemBlocked',
+    RunCompleted: 'RunCompleted',
+    RetroPublished: 'RetroPublished',
+    LessonPromoted: 'LessonPromoted',
+  };
+  if (directMap[raw]) return directMap[raw];
+  const lower = raw.toLowerCase();
+  const legacyMap = {
+    session_created: 'SessionCreated',
+    run_started: 'RunStarted',
+    graph_compiled: 'GraphCompiled',
+    work_item_ready: 'WorkItemReady',
+    task_ready: 'WorkItemReady',
+    workspace_allocated: 'WorkspaceAllocated',
+    attempt_started: 'AttemptStarted',
+    tool_invoked: 'ToolInvoked',
+    tool_completed: 'ToolCompleted',
+    tool_failed: 'ToolFailed',
+    evidence_collected: 'EvidenceCollected',
+    policy_evaluated: 'PolicyEvaluated',
+    gate_requested: 'GateRequested',
+    gate_resolved: 'GateResolved',
+    checkpoint_opened: 'GateRequested',
+    checkpoint_resolved: 'GateResolved',
+    verification_started: 'VerificationStarted',
+    verification_completed: 'VerificationCompleted',
+    verify_complete: 'VerificationCompleted',
+    retry_scheduled: 'RetryScheduled',
+    work_item_completed: 'WorkItemCompleted',
+    task_completed: 'WorkItemCompleted',
+    work_item_blocked: 'WorkItemBlocked',
+    task_blocked: 'WorkItemBlocked',
+    run_completed: 'RunCompleted',
+    retro_published: 'RetroPublished',
+    lesson_promoted: 'LessonPromoted',
+  };
+  return legacyMap[lower] || raw;
+}
+
+function toRuntimeEventEnvelope(event = {}, activeSession) {
+  const type = normalizeRuntimeEventType(event.type);
+  const payload = event.payload && typeof event.payload === 'object' ? { ...event.payload } : {};
+  const workItemId = event.work_item_id || event.task_id || payload.work_item_id || payload.task_id || null;
+  const attemptId = event.attempt_id || payload.attempt_id || null;
+  if (type === 'RunStarted') {
+    payload.run_id = payload.run_id || event.run_id || null;
+    payload.session_id = payload.session_id || activeSession || event.session_id || null;
+    payload.graph_version = payload.graph_version || 'legacy';
+    payload.started_at = payload.started_at || event.timestamp || new Date().toISOString();
+    payload.ended_at = payload.ended_at == null ? null : payload.ended_at;
+    payload.status = payload.status || 'running';
+    payload.initiator = payload.initiator || 'scheduler';
+    payload.mode = payload.mode || 'por_onda';
+  } else if (type === 'RunCompleted') {
+    payload.run_id = payload.run_id || event.run_id || null;
+    payload.status = payload.status || 'completed';
+  } else if (type === 'WorkItemReady') {
+    payload.work_item_id = payload.work_item_id || workItemId;
+    payload.title = payload.title || workItemId || 'work-item';
+    payload.type = payload.type || 'task';
+    payload.depends_on = Array.isArray(payload.depends_on) ? payload.depends_on : [];
+    payload.mutation_scope = Array.isArray(payload.mutation_scope) ? payload.mutation_scope : [];
+    payload.policy_ref = payload.policy_ref || null;
+    payload.verify_ref = Array.isArray(payload.verify_ref) ? payload.verify_ref : [];
+    payload.status = payload.status || 'pending';
+    payload.workspace_strategy = payload.workspace_strategy || 'inplace';
+    payload.run_id = payload.run_id || event.run_id || null;
+  } else if (type === 'AttemptStarted') {
+    payload.attempt_number = payload.attempt_number || 1;
+  } else if (type === 'WorkspaceAllocated') {
+    payload.workspace_id = payload.workspace_id || `ws-${workItemId || 'runtime'}`;
+    payload.strategy = payload.strategy || payload.workspace_strategy || 'inplace';
+    payload.root_path = payload.root_path || null;
+    payload.base_commit = payload.base_commit || null;
+    payload.branch = payload.branch || null;
+    payload.container_ref = payload.container_ref || null;
+    payload.status = payload.status || 'ready';
+  }
+  return {
+    id: String(event.event_id || ''),
+    type,
+    timestamp: event.timestamp || new Date().toISOString(),
+    session_id: activeSession || event.session_id || null,
+    run_id: event.run_id || payload.run_id || null,
+    work_item_id: workItemId,
+    attempt_id: attemptId,
+    causation_id: event.causation_id || payload.causation_id || null,
+    correlation_id: event.correlation_id || payload.correlation_id || null,
+    payload,
+  };
+}
+
+function serializeCanonicalState(state) {
+  if (!state || typeof state !== 'object') return null;
+  return {
+    run: state.run || null,
+    workItems: Array.from((state.workItems && state.workItems.values()) || []),
+    attempts: Object.fromEntries(Array.from((state.attempts && state.attempts.entries()) || [])),
+    workspaces: Array.from((state.workspaces && state.workspaces.values()) || []),
+    completedWorkItems: Array.from(state.completedWorkItems || []),
+    failedWorkItems: Array.from(state.failedWorkItems || []),
+    blockedWorkItems: Array.from(state.blockedWorkItems || []),
+    summary: {
+      work_item_count: state.workItems instanceof Map ? state.workItems.size : 0,
+      attempt_count: state.attempts instanceof Map
+        ? Array.from(state.attempts.values()).reduce((acc, list) => acc + (Array.isArray(list) ? list.length : 0), 0)
+        : 0,
+      workspace_count: state.workspaces instanceof Map ? state.workspaces.size : 0,
+      completed: state.completedWorkItems instanceof Set ? state.completedWorkItems.size : 0,
+      failed: state.failedWorkItems instanceof Set ? state.failedWorkItems.size : 0,
+      blocked: state.blockedWorkItems instanceof Set ? state.blockedWorkItems.size : 0,
+    },
+  };
+}
+
+function hydrateCanonicalState(serialized) {
+  const safe = serialized && typeof serialized === 'object' ? serialized : {};
+  return {
+    run: safe.run || null,
+    workItems: new Map(
+      Array.isArray(safe.workItems)
+        ? safe.workItems
+            .filter((item) => item && item.work_item_id)
+            .map((item) => [item.work_item_id, item])
+        : []
+    ),
+    attempts: new Map(Object.entries(safe.attempts && typeof safe.attempts === 'object' ? safe.attempts : {})),
+    workspaces: new Map(
+      Array.isArray(safe.workspaces)
+        ? safe.workspaces
+            .filter((item) => item && item.workspace_id)
+            .map((item) => [item.workspace_id, item])
+        : []
+    ),
+    completedWorkItems: new Set(Array.isArray(safe.completedWorkItems) ? safe.completedWorkItems : []),
+    failedWorkItems: new Set(Array.isArray(safe.failedWorkItems) ? safe.failedWorkItems : []),
+    blockedWorkItems: new Set(Array.isArray(safe.blockedWorkItems) ? safe.blockedWorkItems : []),
+  };
+}
+
+function mergeCanonicalStateWithRunState(serializedState, runState = {}, activeSession, compiledGraph) {
+  const live = hydrateCanonicalState(serializedState);
+  const runId = runState.run_id || (live.run && live.run.run_id) || null;
+  if (!live.run && runId) {
+    live.run = {
+      run_id: runId,
+      session_id: activeSession || null,
+      graph_version: (compiledGraph && compiledGraph.metadata && compiledGraph.metadata.plan_hash) || 'legacy',
+      started_at: runState.created_at || new Date().toISOString(),
+      ended_at: /completed|failed|aborted|cancelled/.test(String(runState.status || '')) ? (runState.updated_at || null) : null,
+      status: runState.status || 'planned',
+      initiator: 'scheduler',
+      mode: runState.cursor && runState.cursor.mode === 'task'
+        ? 'por_tarefa'
+        : runState.cursor && runState.cursor.mode === 'wave'
+          ? 'por_onda'
+          : 'completo',
+    };
+  }
+
+  const compiledNodes = compiledGraph && compiledGraph.nodes && typeof compiledGraph.nodes === 'object'
+    ? Object.values(compiledGraph.nodes)
+    : [];
+  for (const node of compiledNodes) {
+    if (!node || !node.id || live.workItems.has(node.id)) continue;
+    live.workItems.set(node.id, {
+      work_item_id: node.id,
+      run_id: runId,
+      title: node.title || node.id,
+      type: 'task',
+      depends_on: Array.isArray(node.depends_on) ? node.depends_on : [],
+      mutation_scope: Array.isArray(node.mutation_scope) ? node.mutation_scope : [],
+      policy_ref: node.policy && node.policy.requires_human_approval ? 'human_approval' : null,
+      verify_ref: node.verify && Array.isArray(node.verify.acceptance_refs) ? node.verify.acceptance_refs : [],
+      status: 'pending',
+      workspace_strategy: node.workspace_strategy || 'inplace',
+    });
+  }
+
+  const activeTasks = Array.isArray(runState.active_tasks) ? runState.active_tasks.map(String) : [];
+  for (const taskId of activeTasks) {
+    const currentItem = live.workItems.get(taskId) || {
+      work_item_id: taskId,
+      run_id: runId,
+      title: taskId,
+      type: 'task',
+      depends_on: [],
+      mutation_scope: [],
+      policy_ref: null,
+      verify_ref: [],
+      status: 'pending',
+      workspace_strategy: 'inplace',
+    };
+    live.workItems.set(taskId, { ...currentItem, status: 'running' });
+  }
+
+  for (const blockedId of Array.isArray(runState.pending_checkpoints) ? runState.pending_checkpoints.map(String) : []) {
+    if (!live.blockedWorkItems.has(blockedId)) live.blockedWorkItems.add(blockedId);
+  }
+
+  if (Array.isArray(runState.failures)) {
+    for (const failure of runState.failures) {
+      const ref = failure && typeof failure === 'object'
+        ? String(failure.work_item_id || failure.task_id || failure.id || '')
+        : '';
+      if (ref) {
+        live.failedWorkItems.add(ref);
+        const item = live.workItems.get(ref);
+        if (item) live.workItems.set(ref, { ...item, status: 'failed' });
+      }
+    }
+  }
+
+  if (Array.isArray(runState.evidence) && runState.evidence.length && live.run) {
+    live.run = { ...live.run, evidence_count: runState.evidence.length };
+  }
+
+  for (const completedId of live.completedWorkItems) {
+    const item = live.workItems.get(completedId);
+    if (item) live.workItems.set(completedId, { ...item, status: 'completed' });
+  }
+  for (const failedId of live.failedWorkItems) {
+    const item = live.workItems.get(failedId);
+    if (item) live.workItems.set(failedId, { ...item, status: 'failed' });
+  }
+  for (const blockedId of live.blockedWorkItems) {
+    const item = live.workItems.get(blockedId);
+    if (item) live.workItems.set(blockedId, { ...item, status: 'blocked' });
+  }
+  return live;
+}
+
+function reduceCanonicalRunStateLive(projectRoot, activeSession, options = {}) {
+  const runtime = loadRuntimeModule();
+  if (!runtime || typeof runtime.reduce !== 'function') return null;
+  const currentRun = options.runState || readRunState(projectRoot, activeSession) || null;
+  const runId = options.runId || (currentRun && currentRun.run_id) || null;
+  let events = readEvents(projectRoot, activeSession);
+  if (runId) events = events.filter((event) => !event.run_id || event.run_id === runId);
+  const reduced = runtime.reduce(events.map((event) => toRuntimeEventEnvelope(event, activeSession)));
+  return mergeCanonicalStateWithRunState(
+    serializeCanonicalState(reduced),
+    currentRun || {},
+    activeSession,
+    currentRun && currentRun.compiled_graph ? currentRun.compiled_graph : null
+  );
+}
+
+function reduceCanonicalRunState(projectRoot, activeSession, options = {}) {
+  return serializeCanonicalState(reduceCanonicalRunStateLive(projectRoot, activeSession, options));
+}
+
+function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options = {}) {
+  const runtime = loadRuntimeModule();
+  const parsers = loadSdkParsers();
+  if (!runtime || typeof runtime.compile !== 'function' || typeof runtime.toSerializable !== 'function') {
+    throw new Error('Runtime package não está disponível. Rode npm run build:runtime.');
+  }
+  if (!parsers) {
+    throw new Error('Parsers do SDK indisponíveis para compilar o grafo.');
+  }
+  const artifactPaths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const specText = readTextIfExists(artifactPaths.spec);
+  const planText = readTextIfExists(artifactPaths.plan);
+  if (!specText) throw new Error(`SPEC.md ausente em ${artifactPaths.spec}`);
+  if (!planText) throw new Error(`PLAN.md ausente em ${artifactPaths.plan}`);
+  const parsedSpec = parsers.parseSpec(specText);
+  const parsedPlan = parsers.parsePlan(planText);
+  const graph = runtime.compile(parsedPlan, parsedSpec, options.compilerOptions || {});
+  const validationErrors = typeof runtime.validateGraph === 'function' ? runtime.validateGraph(graph) : [];
+  const compiledGraph = runtime.toSerializable(graph);
+  const current = options.runState || readRunState(projectRoot, activeSession) || {};
+  const runId = current.run_id || makeRunId();
+  const next = writeRunState(projectRoot, activeSession, {
+    ...current,
+    run_id: runId,
+    status: current.status || 'planned',
+    compiled_graph: compiledGraph,
+    graph_version: compiledGraph.metadata && compiledGraph.metadata.plan_hash ? compiledGraph.metadata.plan_hash : 'compiled',
+    canonical_state: serializeCanonicalState(
+      mergeCanonicalStateWithRunState(
+        reduceCanonicalRunState(projectRoot, activeSession, { runState: { ...current, run_id: runId } }),
+        { ...current, run_id: runId },
+        activeSession,
+        compiledGraph
+      )
+    ),
+    projections: current.projections || {},
+  });
+  appendEvent(projectRoot, activeSession, {
+    type: 'GraphCompiled',
+    run_id: next.run_id,
+    payload: {
+      node_count: compiledGraph.metadata && compiledGraph.metadata.node_count || 0,
+      wave_count: compiledGraph.metadata && compiledGraph.metadata.wave_count || 0,
+      plan_hash: compiledGraph.metadata && compiledGraph.metadata.plan_hash || null,
+      spec_hash: compiledGraph.metadata && compiledGraph.metadata.spec_hash || null,
+    },
+  });
+  return {
+    run: next,
+    graph: compiledGraph,
+    validationErrors,
+    parsedPlan,
+    parsedSpec,
+    paths: artifactPaths,
+  };
+}
+
+function compileVerificationSuiteFromArtifacts(projectRoot, activeSession, options = {}) {
+  const runtime = loadRuntimeModule();
+  const parsers = loadSdkParsers();
+  if (!runtime || typeof runtime.compileVerification !== 'function') {
+    throw new Error('Runtime package não está disponível. Rode npm run build:runtime.');
+  }
+  if (!parsers) {
+    throw new Error('Parsers do SDK indisponíveis para compilar verification suite.');
+  }
+  const artifactPaths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const specText = readTextIfExists(artifactPaths.spec);
+  const planText = readTextIfExists(artifactPaths.plan);
+  if (!specText || !planText) {
+    throw new Error('SPEC.md e PLAN.md são obrigatórios para compilar a suite de verificação.');
+  }
+  const suite = runtime.compileVerification(parsers.parseSpec(specText), parsers.parsePlan(planText), options.compilerOptions || {});
+  const current = options.runState || readRunState(projectRoot, activeSession) || {};
+  const runId = current.run_id || makeRunId();
+  const next = writeRunState(projectRoot, activeSession, {
+    ...current,
+    run_id: runId,
+    status: current.status || 'planned',
+    verification_suite: suite,
+  });
+  appendEvent(projectRoot, activeSession, {
+    type: 'verification_suite_compiled',
+    run_id: next.run_id,
+    payload: {
+      total_checks: Array.isArray(suite.checks) ? suite.checks.length : 0,
+      spec_hash: suite.spec_hash || null,
+      plan_hash: suite.plan_hash || null,
+    },
+  });
+  return { run: next, suite, paths: artifactPaths };
+}
+
+function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
+  const runtime = loadRuntimeModule();
+  if (!runtime || typeof runtime.ProjectionEngine !== 'function' || typeof runtime.fromSerializable !== 'function') {
+    throw new Error('Runtime package não está disponível. Rode npm run build:runtime.');
+  }
+  let current = options.runState || readRunState(projectRoot, activeSession);
+  if (!current) {
+    current = writeRunState(projectRoot, activeSession, {});
+  }
+  if (!current.compiled_graph) {
+    current = compileExecutionGraphFromArtifacts(projectRoot, activeSession, { runState: current }).run;
+  }
+  const graph = runtime.fromSerializable(current.compiled_graph);
+  const canonicalLive = current.canonical_state
+    ? mergeCanonicalStateWithRunState(current.canonical_state, current, activeSession, current.compiled_graph)
+    : reduceCanonicalRunStateLive(projectRoot, activeSession, { runState: current });
+  if (!canonicalLive) {
+    throw new Error('Não foi possível reconstruir o estado canônico da run.');
+  }
+  const canonicalState = serializeCanonicalState(canonicalLive);
+  const projector = new runtime.ProjectionEngine();
+  const verificationResults = Array.isArray(current.verification_results) ? current.verification_results : [];
+  const verificationCheckResults = Array.isArray(current.verification_check_results) ? current.verification_check_results : [];
+  const projections = {
+    plan: projector.projectPlan(canonicalLive, graph),
+    verify: projector.projectVerify(canonicalLive, verificationResults, verificationCheckResults),
+    state: projector.projectState(canonicalLive),
+    runSummary: projector.projectRunSummary(canonicalLive),
+    prSummary: projector.projectPRSummary(canonicalLive, graph),
+  };
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const op = operationalPaths(projectRoot, activeSession);
+  const projectionRefs = {
+    plan_ref: path.relative(projectRoot, paths.plan).replace(/\\/g, '/'),
+    verify_ref: path.relative(projectRoot, paths.verify).replace(/\\/g, '/'),
+    state_ref: path.relative(projectRoot, paths.state).replace(/\\/g, '/'),
+    run_summary_ref: path.relative(projectRoot, path.join(op.executionRoot, 'RUN-SUMMARY.md')).replace(/\\/g, '/'),
+    pr_summary_ref: path.relative(projectRoot, path.join(op.executionRoot, 'PR-SUMMARY.md')).replace(/\\/g, '/'),
+    generated_at: new Date().toISOString(),
+  };
+  if (options.write !== false) {
+    ensureDirForFile(paths.plan);
+    ensureDirForFile(paths.verify);
+    ensureDirForFile(paths.state);
+    fs.writeFileSync(paths.plan, projections.plan + '\n', 'utf8');
+    fs.writeFileSync(paths.verify, projections.verify + '\n', 'utf8');
+    fs.writeFileSync(paths.state, projections.state + '\n', 'utf8');
+    fs.writeFileSync(path.join(op.executionRoot, 'RUN-SUMMARY.md'), projections.runSummary + '\n', 'utf8');
+    fs.writeFileSync(path.join(op.executionRoot, 'PR-SUMMARY.md'), projections.prSummary + '\n', 'utf8');
+  }
+  const next = writeRunState(projectRoot, activeSession, {
+    ...current,
+    canonical_state: canonicalState,
+    projections: projectionRefs,
+  });
+  return { run: next, projections, paths: { ...paths, runSummary: path.join(op.executionRoot, 'RUN-SUMMARY.md'), prSummary: path.join(op.executionRoot, 'PR-SUMMARY.md') } };
+}
+
+async function runRuntimeCiChecks(projectRoot, activeSession, options = {}) {
+  const runtime = loadRuntimeModule();
+  if (!runtime || typeof runtime.runCIChecks !== 'function' || typeof runtime.summarizeCIResults !== 'function') {
+    throw new Error('Runtime package não está disponível. Rode npm run build:runtime.');
+  }
+  let current = options.runState || readRunState(projectRoot, activeSession);
+  if (!current) {
+    current = compileExecutionGraphFromArtifacts(projectRoot, activeSession).run;
+  }
+  const runId = options.runId || (current && current.run_id) || null;
+  const results = await runtime.runCIChecks({
+    projectRoot,
+    sessionId: activeSession || null,
+    runId,
+  });
+  const summary = runtime.summarizeCIResults(results);
+  const next = writeRunState(projectRoot, activeSession, {
+    ...(current || {}),
+    run_id: runId || makeRunId(),
+    status: current && current.status ? current.status : 'planned',
+    ci_checks: {
+      generated_at: new Date().toISOString(),
+      summary,
+      results,
+    },
+  });
+  appendEvent(projectRoot, activeSession, {
+    type: 'runtime_ci_completed',
+    run_id: next.run_id,
+    payload: {
+      total: summary.total,
+      pass: summary.pass,
+      fail: summary.fail,
+      skip: summary.skip,
+      error: summary.error,
+      allPassed: summary.allPassed,
+    },
+  });
+  return { run: next, runId: next.run_id, results, summary };
+}
+
 function operationalPaths(projectRoot, activeSession) {
   const oxeDir = path.join(projectRoot, '.oxe');
   const scopeRoot = activeSession ? path.join(oxeDir, ...String(activeSession).split('/')) : oxeDir;
@@ -284,10 +822,14 @@ function appendEvent(projectRoot, activeSession, event = {}) {
     type: String(event.type || 'custom'),
     timestamp: event.timestamp || new Date().toISOString(),
     run_id: event.run_id || null,
-    session_id: activeSession || null,
+    session_id: activeSession || event.session_id || null,
     wave_id: event.wave_id || null,
-    task_id: event.task_id || null,
+    task_id: event.task_id || event.work_item_id || null,
+    work_item_id: event.work_item_id || event.task_id || null,
+    attempt_id: event.attempt_id || null,
     agent_id: event.agent_id || null,
+    causation_id: event.causation_id || null,
+    correlation_id: event.correlation_id || null,
     payload: event.payload && typeof event.payload === 'object' ? event.payload : {},
   };
   fs.appendFileSync(p.events, `${JSON.stringify(entry)}\n`, 'utf8');
@@ -327,6 +869,7 @@ function summarizeEvents(events) {
 function writeRunState(projectRoot, activeSession, runState = {}) {
   const p = operationalPaths(projectRoot, activeSession);
   const runId = String(runState.run_id || makeRunId());
+  const canonicalState = runState.canonical_state ? serializeCanonicalState(hydrateCanonicalState(runState.canonical_state)) : null;
   const payload = {
     run_id: runId,
     status: VALID_RUN_STATUSES.has(String(runState.status || 'planned')) ? String(runState.status || 'planned') : 'planned',
@@ -354,6 +897,18 @@ function writeRunState(projectRoot, activeSession, runState = {}) {
           edges: Array.isArray(runState.graph.edges) ? runState.graph.edges : [],
         }
       : { nodes: [], edges: [] },
+    compiled_graph: runState.compiled_graph && typeof runState.compiled_graph === 'object'
+      ? runState.compiled_graph
+      : null,
+    graph_version: runState.graph_version || null,
+    canonical_state: canonicalState,
+    verification_suite: runState.verification_suite && typeof runState.verification_suite === 'object'
+      ? runState.verification_suite
+      : null,
+    verification_results: Array.isArray(runState.verification_results) ? runState.verification_results : [],
+    verification_check_results: Array.isArray(runState.verification_check_results) ? runState.verification_check_results : [],
+    ci_checks: runState.ci_checks && typeof runState.ci_checks === 'object' ? runState.ci_checks : null,
+    projections: runState.projections && typeof runState.projections === 'object' ? runState.projections : {},
     metrics: runState.metrics && typeof runState.metrics === 'object' ? runState.metrics : {},
   };
   payload.graph = buildOperationalGraph(payload);
@@ -369,6 +924,9 @@ function writeRunState(projectRoot, activeSession, runState = {}) {
         current_wave: payload.current_wave,
         cursor: payload.cursor,
         provider_context: payload.provider_context,
+        canonical_state: payload.canonical_state,
+        compiled_graph: payload.compiled_graph,
+        graph_version: payload.graph_version,
       },
       null,
       2
@@ -699,7 +1257,7 @@ function replayEvents(projectRoot, activeSession, options = {}) {
       .filter((n) => n != null)
   )].sort((a, b) => a - b);
 
-  const taskSequence = [...new Set(events.filter((e) => e.task_id).map((e) => e.task_id))];
+  const taskSequence = [...new Set(events.filter((e) => e.task_id || e.work_item_id).map((e) => e.task_id || e.work_item_id))];
   const checkpointSequence = events
     .filter((e) => String(e.type).includes('checkpoint'))
     .map((e) => e.event_id);
@@ -741,7 +1299,7 @@ function replayEvents(projectRoot, activeSession, options = {}) {
     for (let i = 0; i < events.length; i++) {
       const e = events[i];
       const delta = i > 0 ? `+${(e._delta_ms / 1000).toFixed(1)}s` : '—';
-      lines.push(`| ${i + 1} | ${e.type} | ${e.wave_id || '—'} | ${e.task_id || '—'} | ${delta} | ${e.timestamp} |`);
+      lines.push(`| ${i + 1} | ${e.type} | ${e.wave_id || '—'} | ${e.task_id || e.work_item_id || '—'} | ${delta} | ${e.timestamp} |`);
     }
     ensureDirForFile(reportPath);
     fs.writeFileSync(reportPath, lines.join('\n') + '\n', 'utf8');
@@ -770,6 +1328,13 @@ module.exports = {
   capabilityCatalogWarnings,
   buildMemoryLayers,
   buildOperationalGraph,
+  serializeCanonicalState,
+  hydrateCanonicalState,
+  reduceCanonicalRunState,
+  compileExecutionGraphFromArtifacts,
+  compileVerificationSuiteFromArtifacts,
+  projectRuntimeArtifacts,
+  runRuntimeCiChecks,
   applyRuntimeAction,
   replayEvents,
 };

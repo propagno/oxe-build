@@ -183,6 +183,16 @@ describe('oxe-sdk', () => {
     assert.ok(Array.isArray(sdk.operational.buildOperationalGraph(run).nodes));
   });
 
+  test('operational SDK exposes canonical runtime bridge helpers', () => {
+    assert.strictEqual(typeof sdk.operational.serializeCanonicalState, 'function');
+    assert.strictEqual(typeof sdk.operational.hydrateCanonicalState, 'function');
+    assert.strictEqual(typeof sdk.operational.reduceCanonicalRunState, 'function');
+    assert.strictEqual(typeof sdk.operational.compileExecutionGraphFromArtifacts, 'function');
+    assert.strictEqual(typeof sdk.operational.compileVerificationSuiteFromArtifacts, 'function');
+    assert.strictEqual(typeof sdk.operational.projectRuntimeArtifacts, 'function');
+    assert.strictEqual(typeof sdk.operational.runRuntimeCiChecks, 'function');
+  });
+
   test('azure SDK namespace is exposed', () => {
     assert.ok(sdk.azure);
     assert.strictEqual(typeof sdk.azure.azurePaths, 'function');

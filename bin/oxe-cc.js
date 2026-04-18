@@ -2125,7 +2125,7 @@ ${green}Uso:${reset}
   npx oxe-cc init-oxe [opções] [pasta-do-projeto]
   npx oxe-cc context <build|inspect> [opções] [pasta-do-projeto]
   npx oxe-cc dashboard [opções] [pasta-do-projeto]
-  npx oxe-cc runtime <status|start|pause|resume|replay> [opções] [pasta-do-projeto]
+  npx oxe-cc runtime <status|start|pause|resume|replay|compile|project|ci> [opções] [pasta-do-projeto]
   npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
   npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
   npx oxe-cc uninstall [opções] [pasta-do-projeto]
@@ -2173,11 +2173,17 @@ ${green}runtime${reset} (controle operacional explícito do ACTIVE-RUN)
   pause                                  pausa o run ativo e preserva o cursor
   resume                                 retoma o run ativo
   replay                                 marca replay parcial por onda ou tarefa
+  compile                                compila PLAN/SPEC em ExecutionGraph formal + verification suite
+  project                                projeta markdowns derivados do estado canônico
+  ci                                     executa checks do runtime e persiste o resultado na run
   --session <sessions/sNNN-slug>         força sessão específica
   --wave <número>                        fixa onda atual/cursor
   --task <Tn>                            fixa tarefa atual/cursor
   --mode <complete|wave|task>            modo operacional do cursor
   --reason <texto>                       motivo explícito da transição
+  --run <run_id>                         (replay|ci) filtra um run específico
+  --from <event_id>                      (replay) começa em um event_id específico
+  --write                                (replay) gera REPLAY-SESSION.md
   --dir <pasta>                          raiz do projeto (padrão: diretório atual)
 
 ${green}azure${reset} (provider Azure nativo via Azure CLI no Windows)
@@ -3707,7 +3713,7 @@ async function runDashboard(opts) {
 /**
  * @param {RuntimeOpts} opts
  */
-function runRuntime(opts) {
+async function runRuntime(opts) {
   const c = useAnsiColors();
   printSection('OXE ▸ runtime');
   if (!fs.existsSync(opts.dir)) {
@@ -3732,6 +3738,18 @@ function runRuntime(opts) {
     console.log(`  ${c ? green : ''}Estado:${c ? reset : ''} ${current.status}`);
     console.log(`  ${c ? green : ''}Cursor:${c ? reset : ''} onda=${current.cursor && current.cursor.wave != null ? current.cursor.wave : '—'} tarefa=${current.cursor && current.cursor.task ? current.cursor.task : '—'} modo=${current.cursor && current.cursor.mode ? current.cursor.mode : '—'}`);
     console.log(`  ${c ? green : ''}Arquivo:${c ? reset : ''} ${path.join(p.runsDir, `${current.run_id}.json`)}`);
+    if (current.compiled_graph && current.compiled_graph.metadata) {
+      console.log(`  ${c ? green : ''}Graph:${c ? reset : ''} ${current.compiled_graph.metadata.node_count || 0} nós · ${current.compiled_graph.metadata.wave_count || 0} ondas`);
+    }
+    if (current.canonical_state && current.canonical_state.summary) {
+      console.log(`  ${c ? green : ''}Canonical:${c ? reset : ''} work_items=${current.canonical_state.summary.work_item_count || 0} · attempts=${current.canonical_state.summary.attempt_count || 0}`);
+    }
+    if (current.ci_checks && current.ci_checks.summary) {
+      console.log(`  ${c ? green : ''}CI:${c ? reset : ''} pass=${current.ci_checks.summary.pass || 0} fail=${current.ci_checks.summary.fail || 0} skip=${current.ci_checks.summary.skip || 0} error=${current.ci_checks.summary.error || 0}`);
+    }
+    if (current.projections && current.projections.generated_at) {
+      console.log(`  ${c ? green : ''}Projection:${c ? reset : ''} ${current.projections.generated_at}`);
+    }
     return;
   }
 
@@ -3757,7 +3775,7 @@ function runRuntime(opts) {
         const num = String(i + 1).padStart(3);
         const type = String(e.type).padEnd(22).slice(0, 22);
         const wave = String(e.wave_id || '—').padEnd(7).slice(0, 7);
-        const task = String(e.task_id || '—').padEnd(7).slice(0, 7);
+        const task = String(e.task_id || e.work_item_id || '—').padEnd(7).slice(0, 7);
         const deltaStr = delta.padStart(10);
         console.log(`  ${num} ${type} ${wave} ${task} ${deltaStr}  ${e.timestamp}`);
       }
@@ -3769,6 +3787,69 @@ function runRuntime(opts) {
       console.log(`\n  ${c ? green : ''}Relatório:${c ? reset : ''} ${report._reportPath}`);
     }
     return;
+  }
+
+  if (opts.action === 'compile') {
+    try {
+      const compiled = oxeOperational.compileExecutionGraphFromArtifacts(opts.dir, activeSession);
+      const suite = oxeOperational.compileVerificationSuiteFromArtifacts(opts.dir, activeSession, {
+        runState: compiled.run,
+      });
+      console.log(`  ${c ? green : ''}✓${c ? reset : ''} Runtime compilado.`);
+      console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${compiled.run.run_id}`);
+      console.log(`  ${c ? green : ''}Graph:${c ? reset : ''} ${compiled.graph.metadata.node_count} nó(s) · ${compiled.graph.metadata.wave_count} onda(s)`);
+      console.log(`  ${c ? green : ''}Checks:${c ? reset : ''} ${Array.isArray(suite.suite.checks) ? suite.suite.checks.length : 0}`);
+      if (compiled.validationErrors.length) {
+        console.log(`  ${yellow}Validation:${reset} ${compiled.validationErrors.join(' | ')}`);
+      }
+      console.log(`  ${c ? green : ''}Arquivo:${c ? reset : ''} ${path.join(p.runsDir, `${compiled.run.run_id}.json`)}`);
+      return;
+    } catch (err) {
+      console.error(`${red}${err && err.message ? err.message : 'Falha ao compilar o runtime.'}${reset}`);
+      process.exit(1);
+    }
+  }
+
+  if (opts.action === 'project') {
+    try {
+      const projected = oxeOperational.projectRuntimeArtifacts(opts.dir, activeSession, { write: true });
+      console.log(`  ${c ? green : ''}✓${c ? reset : ''} Projeções geradas a partir do estado canônico.`);
+      console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${projected.run.run_id}`);
+      console.log(`  ${c ? green : ''}STATE:${c ? reset : ''} ${projected.paths.state}`);
+      console.log(`  ${c ? green : ''}PLAN:${c ? reset : ''} ${projected.paths.plan}`);
+      console.log(`  ${c ? green : ''}VERIFY:${c ? reset : ''} ${projected.paths.verify}`);
+      console.log(`  ${c ? green : ''}RUN-SUMMARY:${c ? reset : ''} ${projected.paths.runSummary}`);
+      console.log(`  ${c ? green : ''}PR-SUMMARY:${c ? reset : ''} ${projected.paths.prSummary}`);
+      return;
+    } catch (err) {
+      console.error(`${red}${err && err.message ? err.message : 'Falha ao projetar artefatos do runtime.'}${reset}`);
+      process.exit(1);
+    }
+  }
+
+  if (opts.action === 'ci') {
+    try {
+      const report = await oxeOperational.runRuntimeCiChecks(opts.dir, activeSession, {
+        runId: opts.runId || undefined,
+      });
+      console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${report.runId || '—'}`);
+      for (const result of report.results) {
+        const color = result.status === 'pass'
+          ? green
+          : result.status === 'skip'
+            ? dim
+            : red;
+        console.log(`  ${c ? color : ''}${result.status.toUpperCase()}${c ? reset : ''} ${result.check} · ${result.message}`);
+      }
+      console.log(`  ${c ? green : ''}Resumo:${c ? reset : ''} pass=${report.summary.pass} fail=${report.summary.fail} skip=${report.summary.skip} error=${report.summary.error}`);
+      if (!report.summary.allPassed) {
+        process.exitCode = 1;
+      }
+      return;
+    } catch (err) {
+      console.error(`${red}${err && err.message ? err.message : 'Falha ao executar checks do runtime.'}${reset}`);
+      process.exit(1);
+    }
   }
 
   try {
@@ -4427,7 +4508,10 @@ async function main() {
       console.error(`${yellow}Diretório não encontrado: ${runtime.dir}${reset}`);
       process.exit(1);
     }
-    runRuntime(runtime);
+    runRuntime(runtime).catch((err) => {
+      console.error(`${red}${err && err.message ? err.message : 'Falha ao executar runtime.'}${reset}`);
+      process.exit(1);
+    });
     return;
   }
 

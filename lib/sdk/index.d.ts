@@ -577,6 +577,13 @@ export interface OxeSdk {
     writeRunState: (projectRoot: string, activeSession: string | null, runState?: Record<string, unknown>) => Record<string, unknown>;
     readRunState: (projectRoot: string, activeSession: string | null) => Record<string, unknown> | null;
     buildOperationalGraph: (runState?: Record<string, unknown>) => { nodes: Array<Record<string, unknown>>; edges: Array<Record<string, unknown>> };
+    serializeCanonicalState: (state: unknown) => Record<string, unknown> | null;
+    hydrateCanonicalState: (serialized: unknown) => Record<string, unknown>;
+    reduceCanonicalRunState: (projectRoot: string, activeSession: string | null, options?: Record<string, unknown>) => Record<string, unknown> | null;
+    compileExecutionGraphFromArtifacts: (projectRoot: string, activeSession: string | null, options?: Record<string, unknown>) => Record<string, unknown>;
+    compileVerificationSuiteFromArtifacts: (projectRoot: string, activeSession: string | null, options?: Record<string, unknown>) => Record<string, unknown>;
+    projectRuntimeArtifacts: (projectRoot: string, activeSession: string | null, options?: Record<string, unknown>) => Record<string, unknown>;
+    runRuntimeCiChecks: (projectRoot: string, activeSession: string | null, options?: Record<string, unknown>) => Promise<Record<string, unknown>>;
     applyRuntimeAction: (projectRoot: string, activeSession: string | null, input?: Record<string, unknown>) => Record<string, unknown>;
     parseCapabilityManifest: (text: string) => Record<string, unknown>;
     readCapabilityCatalog: (projectRoot: string) => Array<Record<string, unknown>>;
@@ -631,3 +638,6 @@ export interface OxeSdk {
 
 declare const sdk: OxeSdk;
 export = sdk;
+
+// Re-exports from @oxe/runtime (R1 — Runtime Foundation)
+export * from '../runtime/index';
