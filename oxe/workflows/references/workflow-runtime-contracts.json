@@ -606,9 +606,12 @@
         "global_lessons",
         "project_summary",
         "session_summary",
-        "phase_summary"
+        "phase_summary",
+        "lessons_metrics",
+        "spec"
       ],
-      "extraction_intent": "verification"
+      "extraction_intent": "verification",
+      "quality_contract_aware": true
     },
     "review-pr": {
       "reasoning_mode": "review",
@@ -715,9 +718,11 @@
         "codebase_overview",
         "codebase_integrations",
         "global_lessons",
-        "azure_inventory"
+        "azure_inventory",
+        "lessons_metrics"
       ],
-      "extraction_intent": "planning_input"
+      "extraction_intent": "planning_input",
+      "quality_contract_aware": true
     },
     "ui-review": {
       "reasoning_mode": "review",
@@ -776,6 +781,29 @@
         "phase_summary"
       ],
       "extraction_intent": "verification"
+    },
+    "verify-audit": {
+      "reasoning_mode": "review",
+      "question_policy": "none",
+      "output_contract": "findings",
+      "tool_profile": "review_heavy",
+      "confidence_policy": "explicit",
+      "required_artifacts": [
+        "state",
+        "spec",
+        "verify"
+      ],
+      "optional_artifacts": [
+        "session_summary",
+        "phase_summary"
+      ],
+      "extraction_intent": "verification",
+      "auditor_excluded": [
+        "plan",
+        "runtime",
+        "active_run",
+        "events"
+      ]
     },
     "verify": {
       "reasoning_mode": "review",

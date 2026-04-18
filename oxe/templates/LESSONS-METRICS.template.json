@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0.0",
+  "updated": "{{date}}",
+  "lessons": [],
+  "quality_contracts": [],
+  "summary": {
+    "total_lessons": 0,
+    "active": 0,
+    "deprecated": 0,
+    "high_impact": 0,
+    "avg_success_rate": null
+  }
+}

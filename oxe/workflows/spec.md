@@ -127,6 +127,27 @@ Usar templates: **`oxe/templates/SPEC.template.md`** e **`oxe/templates/ROADMAP.
 **Apresentar ao usuário para validação** antes de avançar para Fase 4. Se ajustar: atualizar tabela e repetir até aprovação.
 </fase_3_requisitos>
 
+<fase_35_elevacao_robustez>
+## Fase 3.5 — Elevação de Robustez (automática)
+
+**Objetivo:** propor proativamente critérios de hardening baseados no stack detectado, antes de criar o roteiro. Garante que segurança e robustez entrem na spec — e portanto no plan, nos testes e no verify — em vez de ficarem como auditoria pós-hoc.
+
+**Referência:** `oxe/workflows/references/robustness-elevation.md`
+
+**Execução:**
+
+1. **Detectar domínios** presentes: AUTH, API, DB, FRONTEND, FILE — conforme tabela de detecção do arquivo de referência.
+2. **Para cada domínio detectado**, percorrer o checklist correspondente e filtrar critérios já cobertos por A* existentes.
+3. **Propor** os critérios restantes como R-RB-NN com prioridade sugerida (v1 / v2 / fora).
+4. **Apresentar ao usuário** em bloco único — domínios detectados, critérios propostos com justificativa breve para v1 críticos.
+5. **Aguardar decisão** — usuário confirma, ajusta versão ou descarta cada critério.
+6. **Incorporar aprovados** na tabela da Fase 3; registrar descartados com justificativa na seção "Suposições e riscos" da SPEC.
+
+**Regra:** nunca forçar inclusão. Se o usuário descartar um v1, registrar o motivo explicitamente.
+
+**Pulável apenas se:** stack não se encaixa em nenhum domínio detectável (ex.: script CLI puro sem auth, sem HTTP, sem DB).
+</fase_35_elevacao_robustez>
+
 <fase_4_roteiro>
 ## Fase 4 — Roteiro
 
@@ -178,6 +199,7 @@ Percorrer esta lista de verificação:
 | 4 | **Conflito com stack:** algum requisito v1 pressupõe tecnologia ou capacidade que `STACK.md` indica ausente? (ex.: requer WebSocket mas stack usa REST puro) | Marcar como suposição explícita ou remover |
 | 5 | **Critérios vagos:** algum A* usa linguagem não-mensurável ("deve ser rápido", "interface amigável") sem métrica? | Refinar: "resposta < 200ms p95", "WCAG 2.1 AA" |
 | 6 | **Dependências implícitas:** algum requisito v1 pressupõe que outro requisito (v2 ou fora) já esteja implementado? | Tornar dependência explícita ou reordenar versioning |
+| 7 | **Elevação de robustez:** todos os domínios detectados (AUTH, API, DB, FRONTEND, FILE) tiveram R-RB-NN propostos ou explicitamente descartados com justificativa? | Se Fase 3.5 foi pulada sem justificativa, executar agora ou registrar como risco em "Suposições e riscos" |
 
 **Resultado obrigatório antes de avançar:**
 - **0 problemas** → avançar para Fase 5 normalmente.
@@ -229,7 +251,8 @@ O resultado desta reflexão é **invisível ao usuário** — é trabalho intern
 4. **Fase 1 — Perguntas:** enviar bloco coeso de 3-5 perguntas; máx 3 rodadas; confirmar entendimento.
 5. **Fase 2 — Pesquisa:** propor áreas de investigação; aguardar aprovação; executar se aprovado.
 6. **Fase 3 — Requisitos:** extrair tabela R-ID com v1/v2/fora e critérios A*; incorporar OBS pendentes; apresentar para validação.
-7. **Fase 4 — Roteiro:** agrupar requisitos v1 em fases; escrever `ROADMAP.md` no escopo ativo.
+6.5. **Fase 3.5 — Elevação de Robustez:** detectar domínios (AUTH/API/DB/FRONTEND/FILE); propor R-RB-NN não cobertos; aguardar decisão; incorporar aprovados na tabela antes de avançar.
+7. **Fase 4 — Roteiro:** agrupar requisitos v1 em fases (incluindo R-RB aprovados); escrever `ROADMAP.md` no escopo ativo.
 8. Escrever **`SPEC.md`** usando `oxe/templates/SPEC.template.md` no escopo ativo:
    - Frontmatter YAML (`oxe_doc: spec`, `status`, `updated`, `inputs`)
    - Objetivo, Escopo (dentro/fora), Critérios de aceite (tabela A*), Suposições e riscos, Referências
@@ -248,4 +271,5 @@ O resultado desta reflexão é **invisível ao usuário** — é trabalho intern
 - [ ] Usuário foi consultado no gate da Fase 5 e escolheu o próximo passo.
 - [ ] OBS pendentes com impacto `spec` foram incorporadas e marcadas `incorporada`.
 - [ ] Máximo 3 rodadas de perguntas utilizadas — não mais.
+- [ ] Fase 3.5 executada: domínios detectados tiveram R-RB-NN propostos, aprovados ou descartados com justificativa.
 </success_criteria>
