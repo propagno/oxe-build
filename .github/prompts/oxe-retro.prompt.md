@@ -34,12 +34,12 @@ oxe_semantics_hash: 8f2925a220ed9bc2
 - Se não houver findings, declarar isso explicitamente e listar riscos residuais.
 - **Seções esperadas:** Findings · Perguntas abertas · Riscos residuais · Resumo
 - **Bloqueios formais:** missing:state
-- **Referência canónica:** `oxe/workflows/references/reasoning-review.md`
+- **Referência canónica:** `.oxe/workflows/references/reasoning-review.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 Executa o workflow **OXE retro** no repositório atual. Lê e aplica **integralmente**:
 
-`oxe/workflows/retro.md`
+`.oxe/workflows/retro.md`
 
 Lê VERIFY.md, FORENSICS.md, SUMMARY.md. `$ARGUMENTS` = contexto extra opcional.

@@ -34,12 +34,12 @@ oxe_semantics_hash: 1e12e0a92c7d0079
 - Se não houver findings, declarar isso explicitamente e listar riscos residuais.
 - **Seções esperadas:** Findings · Perguntas abertas · Riscos residuais · Resumo
 - **Bloqueios formais:** missing:state
-- **Referência canónica:** `oxe/workflows/references/reasoning-review.md`
+- **Referência canónica:** `.oxe/workflows/references/reasoning-review.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 Executa o workflow **OXE review-pr**. Lê e aplica **integralmente**:
 
-`oxe/workflows/review-pr.md` (na raiz do repositório em contexto)
+`.oxe/workflows/review-pr.md` (na raiz do repositório em contexto)
 
 **Exemplos de entrada:** cola o URL da PR (`https://github.com/org/repo/pull/10`, com ou sem `/files`); ou `org/repo#10`; ou **base** e **head** (branches/tags/SHAs). Sem refs, o agente infere (ex.: `main` vs branch atual).

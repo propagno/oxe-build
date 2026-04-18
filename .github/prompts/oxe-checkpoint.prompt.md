@@ -34,12 +34,12 @@ oxe_semantics_hash: 09b26a7ca32729b5
 - Parar e explicitar o bloqueio quando houver hipótese crítica não verificada.
 - **Seções esperadas:** Contexto lido · Alvo da mudança · Validação executada · Resultado · Próximo passo
 - **Bloqueios formais:** missing:state · missing:plan
-- **Referência canónica:** `oxe/workflows/references/reasoning-execution.md`
+- **Referência canónica:** `.oxe/workflows/references/reasoning-execution.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 Executa o workflow **OXE checkpoint** no repositório atual. Lê e aplica **integralmente**:
 
-`oxe/workflows/checkpoint.md`
+`.oxe/workflows/checkpoint.md`
 
 O **primeiro** argumento deve ser o **slug** (ex. `pre-migracao-api`); o resto é nota livre.

@@ -442,6 +442,61 @@ describe('oxe-cc CLI edge', () => {
     assert.ok(events.some((event) => event.type === 'run_replay_requested'));
   });
 
+  test('runtime compile, project and ci integrate the TypeScript runtime package', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-runtime-compile-'));
+    const env = { ...process.env, OXE_NO_BANNER: '1', OXE_NO_PROMPT: '1' };
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(oxe, { recursive: true });
+    fs.writeFileSync(
+      path.join(oxe, 'SPEC.md'),
+      '# OXE — Spec\n\n## Objetivo\n\nCompilar runtime.\n\n## Critérios de aceite\n\n| ID | Critério | Como verificar |\n|----|----------|----------------|\n| A1 | Runtime compilado | node --test |\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(oxe, 'PLAN.md'),
+      '## Tarefas\n\n### T1 — Demo\n**Onda:** 1\n**Depende de:** —\n**Verificar:**\n- Comando: `node --test`\n**Aceite vinculado:** A1\n',
+      'utf8'
+    );
+
+    const compiled = spawnSync(process.execPath, [CLI, 'runtime', 'compile', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(compiled.status, 0, compiled.stderr + compiled.stdout);
+    assert.match(compiled.stdout, /Runtime compilado/i);
+
+    const activeRunRef = JSON.parse(fs.readFileSync(path.join(oxe, 'ACTIVE-RUN.json'), 'utf8'));
+    const runFile = path.join(oxe, 'runs', `${activeRunRef.run_id}.json`);
+    let runState = JSON.parse(fs.readFileSync(runFile, 'utf8'));
+    assert.ok(runState.compiled_graph);
+    assert.ok(runState.verification_suite);
+    assert.ok(runState.canonical_state);
+
+    const projected = spawnSync(process.execPath, [CLI, 'runtime', 'project', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(projected.status, 0, projected.stderr + projected.stdout);
+    assert.match(projected.stdout, /Projeções geradas/i);
+    assert.ok(fs.existsSync(path.join(oxe, 'STATE.md')));
+    assert.ok(fs.existsSync(path.join(oxe, 'VERIFY.md')));
+    assert.ok(fs.existsSync(path.join(oxe, 'RUN-SUMMARY.md')));
+    assert.ok(fs.existsSync(path.join(oxe, 'PR-SUMMARY.md')));
+
+    const ci = spawnSync(process.execPath, [CLI, 'runtime', 'ci', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(ci.status, 0, ci.stderr + ci.stdout);
+    assert.match(ci.stdout, /oxe-plan-consistency/i);
+    runState = JSON.parse(fs.readFileSync(runFile, 'utf8'));
+    assert.ok(runState.ci_checks);
+    assert.ok(runState.ci_checks.summary.total >= 1);
+  });
+
   test('init-oxe exits 1 when target path does not exist without dry-run', () => {
     const missing = path.join(os.tmpdir(), `oxe-init-miss-${Date.now()}`);
     assert.ok(!fs.existsSync(missing));

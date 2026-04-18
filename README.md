@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
-**Versão:** `0.9.3` · [package.json](package.json)
+**Versão:** `1.0.0` · [package.json](package.json)
 
 **Framework OXE — Orchestrated eXperience Engineering**
 

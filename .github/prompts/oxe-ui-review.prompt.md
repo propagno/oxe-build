@@ -34,12 +34,12 @@ oxe_semantics_hash: 94c1695de8d9ec7d
 - Se não houver findings, declarar isso explicitamente e listar riscos residuais.
 - **Seções esperadas:** Findings · Perguntas abertas · Riscos residuais · Resumo
 - **Bloqueios formais:** missing:state
-- **Referência canónica:** `oxe/workflows/references/reasoning-review.md`
+- **Referência canónica:** `.oxe/workflows/references/reasoning-review.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 Executa o workflow **OXE ui-review** no repositório atual. Lê e aplica **integralmente**:
 
-`oxe/workflows/ui-review.md`
+`.oxe/workflows/ui-review.md`
 
 Usa o texto adicional desta mensagem como ficheiros ou tarefas a rever.

@@ -40,6 +40,27 @@ describe('oxe-operational', () => {
     assert.strictEqual(summary.byType.checkpoint_opened, 1);
   });
 
+  test('appendEvent persists runtime envelope fields without breaking legacy trace', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-op-'));
+    fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
+    const entry = operational.appendEvent(dir, null, {
+      type: 'AttemptStarted',
+      run_id: 'oxe-run-b',
+      work_item_id: 'T9',
+      attempt_id: 'T9-a1',
+      causation_id: 'evt-parent',
+      correlation_id: 'corr-1',
+      payload: { attempt_number: 1 },
+    });
+    assert.strictEqual(entry.work_item_id, 'T9');
+    assert.strictEqual(entry.task_id, 'T9');
+    assert.strictEqual(entry.attempt_id, 'T9-a1');
+    assert.strictEqual(entry.causation_id, 'evt-parent');
+    const events = operational.readEvents(dir, null);
+    assert.strictEqual(events[0].work_item_id, 'T9');
+    assert.strictEqual(events[0].attempt_id, 'T9-a1');
+  });
+
   test('parseCapabilityManifest reads approval policy and evidence outputs', () => {
     const raw = `---\nid: cap-a\ntype: script\nstatus: active\nscope: execute\nrequires_env: [API_KEY]\nentrypoint: scripts/run.js\napproval_policy: require_approval\nevidence_outputs: [logs/out.txt]\nside_effects: [network]\nsession_compatibility: [session]\n---\n\n# OXE — Capability\n\n## Objetivo\n\n- Faz algo importante.\n`;
     const cap = operational.parseCapabilityManifest(raw);
@@ -284,5 +305,79 @@ describe('oxe-operational', () => {
     assert.ok(fs.existsSync(report._reportPath));
     const content = fs.readFileSync(report._reportPath, 'utf8');
     assert.ok(content.includes('OXE — Replay Session'));
+  });
+
+  test('compileExecutionGraphFromArtifacts persists compiled graph and canonical state', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-op-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(oxe, { recursive: true });
+    fs.writeFileSync(
+      path.join(oxe, 'SPEC.md'),
+      '# OXE — Spec\n\n## Objetivo\n\nCompilar runtime.\n\n## Critérios de aceite\n\n| ID | Critério | Como verificar |\n|----|----------|----------------|\n| A1 | Plano compilado | node --test |\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(oxe, 'PLAN.md'),
+      '## Tarefas\n\n### T1 — Demo\n**Onda:** 1\n**Depende de:** —\n**Verificar:**\n- Comando: `node --test`\n**Aceite vinculado:** A1\n',
+      'utf8'
+    );
+
+    const compiled = operational.compileExecutionGraphFromArtifacts(dir, null);
+    assert.strictEqual(compiled.graph.metadata.node_count, 1);
+    assert.strictEqual(compiled.graph.metadata.wave_count, 1);
+
+    const saved = operational.readRunState(dir, null);
+    assert.ok(saved.compiled_graph);
+    assert.ok(saved.canonical_state);
+    assert.strictEqual(saved.canonical_state.summary.work_item_count, 1);
+  });
+
+  test('projectRuntimeArtifacts writes derived markdowns from canonical state', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-op-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(oxe, { recursive: true });
+    fs.writeFileSync(
+      path.join(oxe, 'SPEC.md'),
+      '# OXE — Spec\n\n## Objetivo\n\nProjetar runtime.\n\n## Critérios de aceite\n\n| ID | Critério | Como verificar |\n|----|----------|----------------|\n| A1 | Plano compilado | node --test |\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(oxe, 'PLAN.md'),
+      '## Tarefas\n\n### T1 — Demo\n**Onda:** 1\n**Depende de:** —\n**Verificar:**\n- Comando: `node --test`\n**Aceite vinculado:** A1\n',
+      'utf8'
+    );
+
+    operational.compileExecutionGraphFromArtifacts(dir, null);
+    const projected = operational.projectRuntimeArtifacts(dir, null, { write: true });
+    assert.ok(fs.existsSync(path.join(oxe, 'STATE.md')));
+    assert.ok(fs.existsSync(path.join(oxe, 'PLAN.md')));
+    assert.ok(fs.existsSync(path.join(oxe, 'VERIFY.md')));
+    assert.ok(fs.existsSync(path.join(oxe, 'RUN-SUMMARY.md')));
+    assert.ok(fs.existsSync(path.join(oxe, 'PR-SUMMARY.md')));
+    assert.match(fs.readFileSync(path.join(oxe, 'VERIFY.md'), 'utf8'), /Gerado automaticamente pelo Projection Engine/i);
+    assert.ok(projected.run.projections.plan_ref);
+  });
+
+  test('runRuntimeCiChecks persists CI results on the active run', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-op-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(oxe, { recursive: true });
+    fs.writeFileSync(
+      path.join(oxe, 'SPEC.md'),
+      '# OXE — Spec\n\n## Objetivo\n\nExecutar CI.\n\n## Critérios de aceite\n\n| ID | Critério | Como verificar |\n|----|----------|----------------|\n| A1 | Plano compilado | node --test |\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(oxe, 'PLAN.md'),
+      '## Tarefas\n\n### T1 — Demo\n**Onda:** 1\n**Depende de:** —\n**Verificar:**\n- Comando: `node --test`\n**Aceite vinculado:** A1\n',
+      'utf8'
+    );
+
+    operational.compileExecutionGraphFromArtifacts(dir, null);
+    const ci = await operational.runRuntimeCiChecks(dir, null);
+    assert.ok(ci.summary.total >= 1);
+    const saved = operational.readRunState(dir, null);
+    assert.ok(saved.ci_checks);
+    assert.strictEqual(saved.ci_checks.summary.total, ci.summary.total);
   });
 });

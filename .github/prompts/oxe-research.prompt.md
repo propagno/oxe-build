@@ -34,12 +34,12 @@ oxe_semantics_hash: b697e0409d229d47
 - Perguntar apenas ambiguidades que mudem a decisão ou o artefato final.
 - **Seções esperadas:** Fatos · Inferências · Lacunas · Próximo passo
 - **Bloqueios formais:** missing:state
-- **Referência canónica:** `oxe/workflows/references/reasoning-discovery.md`
+- **Referência canónica:** `.oxe/workflows/references/reasoning-discovery.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 Executa o workflow **OXE research** no repositório atual. Lê e aplica **integralmente**:
 
-`oxe/workflows/research.md`
+`.oxe/workflows/research.md`
 
 Usa o texto adicional desta mensagem como âmbito (paths, perguntas, spike, mapa de sistema, engenharia reversa ou modernização).

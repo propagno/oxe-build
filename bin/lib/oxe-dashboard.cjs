@@ -356,6 +356,8 @@ function loadDashboardContext(projectRoot, opts = {}) {
     plan: { path: p.plan, raw: planText, tasks: plan.tasks, waves: plan.waves, totalTasks: plan.totalTasks, selfEvaluation: report.planSelfEvaluation },
     runtime: { path: p.runtime, raw: runtimeText, summary: summarizeText(runtimeText, 800), parsed: runtime },
     activeRun: activeRunState,
+    runtimeCanonical: activeRunState && activeRunState.canonical_state ? activeRunState.canonical_state : null,
+    compiledGraph: activeRunState && activeRunState.compiled_graph ? activeRunState.compiled_graph : null,
     tracing: { path: operational.operationalPaths(projectRoot, activeSession || null).events, events: traceEvents, summary: traceSummary },
     checkpoints: { path: p.checkpoints, raw: checkpointsText, parsed: checkpoints },
     verify: { path: p.verify, raw: verifyText, summary: summarizeText(verifyText, 800), parsed: verify },

@@ -34,12 +34,12 @@ oxe_semantics_hash: a33b293fc6a29a70
 - Parar e explicitar o bloqueio quando houver hipótese crítica não verificada.
 - **Seções esperadas:** Contexto lido · Alvo da mudança · Validação executada · Resultado · Próximo passo
 - **Bloqueios formais:** missing:state · missing:plan_or_quick
-- **Referência canónica:** `oxe/workflows/references/reasoning-execution.md`
+- **Referência canónica:** `.oxe/workflows/references/reasoning-execution.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 Executa o workflow **OXE execute** no repositório atual. Lê e aplica **integralmente** o ficheiro no workspace:
 
-`oxe/workflows/execute.md`
+`.oxe/workflows/execute.md`
 
-Usa o texto adicional desta mensagem como foco: `A` (Completo), `B` (Por onda), `C` (Por tarefa), `onda N`, `Tn`, ou confirmação de progresso. Lê `oxe/workflows/execute.md` na raiz do projeto atual (CWD).
+Usa o texto adicional desta mensagem como foco: `A` (Completo), `B` (Por onda), `C` (Por tarefa), `onda N`, `Tn`, ou confirmação de progresso. Lê `.oxe/workflows/execute.md` na raiz do projeto atual (CWD).

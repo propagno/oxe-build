@@ -34,12 +34,12 @@ oxe_semantics_hash: 6c54f2a6320ba0e1
 - Parar e explicitar o bloqueio quando houver hipótese crítica não verificada.
 - **Seções esperadas:** Contexto lido · Alvo da mudança · Validação executada · Resultado · Próximo passo
 - **Bloqueios formais:** missing:state · missing:plan
-- **Referência canónica:** `oxe/workflows/references/reasoning-execution.md`
+- **Referência canónica:** `.oxe/workflows/references/reasoning-execution.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 Executa o workflow **OXE forensics** no repositório atual. Lê e aplica **integralmente**:
 
-`oxe/workflows/forensics.md`
+`.oxe/workflows/forensics.md`
 
 Usa o texto adicional desta mensagem como contexto do sintoma (falha de verify, doctor, estado incoerente).

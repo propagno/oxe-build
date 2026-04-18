@@ -10,6 +10,7 @@ const { spawnSync } = require('child_process');
 
 const dashboard = require('../bin/lib/oxe-dashboard.cjs');
 const health = require('../bin/lib/oxe-project-health.cjs');
+const operational = require('../bin/lib/oxe-operational.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const CLI = path.join(REPO_ROOT, 'bin', 'oxe-cc.js');
@@ -134,6 +135,37 @@ describe('oxe-dashboard', () => {
       '# OXE — Estado\n\n## Fase atual\n\n`plan_ready`\n\n- **active_session:** `sessions/s001-demo`\n',
       'utf8'
     );
+    operational.writeRunState(dir, 'sessions/s001-demo', {
+      run_id: 'oxe-runtime-demo',
+      status: 'running',
+      compiled_graph: {
+        nodes: {
+          T1: {
+            id: 'T1',
+            title: 'Demo',
+            wave: 1,
+            depends_on: [],
+            workspace_strategy: 'inplace',
+            mutation_scope: [],
+            actions: [],
+            verify: { must_pass: [], acceptance_refs: ['A1'], command: null },
+            policy: { requires_human_approval: false, max_retries: 1 },
+          },
+        },
+        edges: [],
+        waves: [{ wave_number: 1, node_ids: ['T1'] }],
+        metadata: { compiled_at: new Date().toISOString(), plan_hash: 'plan12345678', spec_hash: 'spec12345678', node_count: 1, wave_count: 1 },
+      },
+      canonical_state: {
+        run: { run_id: 'oxe-runtime-demo', session_id: null, graph_version: 'plan12345678', started_at: new Date().toISOString(), ended_at: null, status: 'running', initiator: 'scheduler', mode: 'por_onda' },
+        workItems: [{ work_item_id: 'T1', run_id: 'oxe-runtime-demo', title: 'Demo', type: 'task', depends_on: [], mutation_scope: [], policy_ref: null, verify_ref: ['A1'], status: 'running', workspace_strategy: 'inplace' }],
+        attempts: {},
+        workspaces: [],
+        completedWorkItems: [],
+        failedWorkItems: [],
+        blockedWorkItems: [],
+      },
+    });
     dashboard.savePlanReviewStatus(dir, { status: 'in_review', note: 'Revisão em curso', author: 'test' });
 
     const ctx = dashboard.loadDashboardContext(dir);
@@ -152,6 +184,8 @@ describe('oxe-dashboard', () => {
     assert.strictEqual(ctx.sessions.current.tags[0], 'backend');
     assert.ok(ctx.tracing.summary.total >= 1);
     assert.ok(ctx.memoryLayers.readOrder.includes('project_memory'));
+    assert.ok(ctx.runtimeCanonical);
+    assert.ok(ctx.compiledGraph);
   });
 
   test('dashboard dump-context prints json', () => {

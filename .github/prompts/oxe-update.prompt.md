@@ -33,12 +33,12 @@ oxe_semantics_hash: 49332cbd409f2ac6
 - Parar e explicitar o bloqueio quando houver hipótese crítica não verificada.
 - **Seções esperadas:** Contexto lido · Alvo da mudança · Validação executada · Resultado · Próximo passo
 - **Bloqueios formais:** missing:state · missing:plan
-- **Referência canónica:** `oxe/workflows/references/reasoning-execution.md`
+- **Referência canónica:** `.oxe/workflows/references/reasoning-execution.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 Executa o workflow **OXE update**. Lê e segue **integralmente**:
 
-`oxe/workflows/update.md` (na raiz do repositório em contexto; ou `.oxe/workflows/update.md` se a instalação aninhou os workflows)
+`.oxe/workflows/update.md` (na raiz do repositório em contexto; ou `..oxe/workflows/update.md` se a instalação aninhou os workflows)
 
 Na prática: na raiz do projeto, correr **`npx oxe-cc update --check`**, depois (se aplicável) **`npx oxe-cc update`** ou **`npx oxe-cc update --if-newer`**, e por fim **`npx oxe-cc doctor`**.

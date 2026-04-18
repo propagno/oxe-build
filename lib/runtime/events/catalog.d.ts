@@ -1,0 +1,3 @@
+export declare const EVENT_TYPES: readonly ["SessionCreated", "RunStarted", "GraphCompiled", "WorkItemReady", "WorkspaceAllocated", "AttemptStarted", "ToolInvoked", "ToolCompleted", "ToolFailed", "EvidenceCollected", "PolicyEvaluated", "GateRequested", "GateResolved", "VerificationStarted", "VerificationCompleted", "RetryScheduled", "WorkItemCompleted", "WorkItemBlocked", "RunCompleted", "RetroPublished", "LessonPromoted"];
+export type EventType = (typeof EVENT_TYPES)[number];
+export declare function isValidEventType(type: string): type is EventType;
