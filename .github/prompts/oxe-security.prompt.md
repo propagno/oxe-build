@@ -34,12 +34,12 @@ oxe_semantics_hash: 27ebaddfc7191f76
 - Se não houver findings, declarar isso explicitamente e listar riscos residuais.
 - **Seções esperadas:** Findings · Perguntas abertas · Riscos residuais · Resumo
 - **Bloqueios formais:** missing:state
-- **Referência canónica:** `oxe/workflows/references/reasoning-review.md`
+- **Referência canónica:** `.oxe/workflows/references/reasoning-review.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 Executa o workflow **OXE security** no repositório atual. Lê e aplica **integralmente**:
 
-`oxe/workflows/security.md`
+`.oxe/workflows/security.md`
 
 Lê `.oxe/codebase/STACK.md` para determinar categorias OWASP aplicáveis. `$ARGUMENTS` = foco opcional.

@@ -34,12 +34,12 @@ oxe_semantics_hash: 1e1f50e7621c55dd
 - Explicitar confiança e condição objetiva para replanejar.
 - **Seções esperadas:** Objetivo · Plano · Validação · Riscos · Assumptions · Confiança
 - **Bloqueios formais:** missing:state · missing:spec
-- **Referência canónica:** `oxe/workflows/references/reasoning-planning.md`
+- **Referência canónica:** `.oxe/workflows/references/reasoning-planning.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 Executa o workflow **OXE milestone** no repositório atual. Lê e aplica **integralmente** o ficheiro no workspace:
 
-`oxe/workflows/milestone.md`
+`.oxe/workflows/milestone.md`
 
 Usa o texto adicional desta mensagem como subcomando e contexto.

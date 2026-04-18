@@ -33,10 +33,10 @@ oxe_semantics_hash: 6c91889eba921d36
 - Explicitar a confiança quando o estado estiver incompleto ou ambíguo.
 - **Seções esperadas:** Leitura atual · Recomendação · Motivo · Confiança
 - **Bloqueios formais:** missing:state
-- **Referência canónica:** `oxe/workflows/references/reasoning-status.md`
+- **Referência canónica:** `.oxe/workflows/references/reasoning-status.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 Executa o workflow **OXE next**. Lê e aplica **integralmente**:
 
-`oxe/workflows/next.md` (na raiz do repositório em contexto)
+`.oxe/workflows/next.md` (na raiz do repositório em contexto)

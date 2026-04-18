@@ -34,12 +34,12 @@ oxe_semantics_hash: 76ba6d1e0e2f02e6
 - Explicitar confiança e condição objetiva para replanejar.
 - **Seções esperadas:** Objetivo · Plano · Validação · Riscos · Assumptions · Confiança
 - **Bloqueios formais:** missing:state · missing:spec
-- **Referência canónica:** `oxe/workflows/references/reasoning-planning.md`
+- **Referência canónica:** `.oxe/workflows/references/reasoning-planning.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 Executa o workflow **OXE ui-spec** no repositório atual. Lê e aplica **integralmente**:
 
-`oxe/workflows/ui-spec.md`
+`.oxe/workflows/ui-spec.md`
 
 Usa o texto adicional desta mensagem como foco de ecrãs ou componentes, se houver.

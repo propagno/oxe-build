@@ -60,3 +60,4 @@ out/
 .turbo/
 .eslintcache
 .oxe/*
+.github/*

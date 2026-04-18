@@ -34,12 +34,12 @@ oxe_semantics_hash: 88b279f22bfd77ae
 - Explicitar confiança e condição objetiva para replanejar.
 - **Seções esperadas:** Objetivo · Plano · Validação · Riscos · Assumptions · Confiança
 - **Bloqueios formais:** missing:state · missing:spec
-- **Referência canónica:** `oxe/workflows/references/reasoning-planning.md`
+- **Referência canónica:** `.oxe/workflows/references/reasoning-planning.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 Executa o workflow **OXE project** no repositório atual. Lê e aplica **integralmente**:
 
-`oxe/workflows/project.md`
+`.oxe/workflows/project.md`
 
 `$ARGUMENTS` = subcomando: `milestone new|complete|status|audit`, `workstream new|switch|list|close <nome>`, `checkpoint [slug]`, ou vazio para status atual.

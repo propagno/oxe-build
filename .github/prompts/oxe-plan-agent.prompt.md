@@ -32,12 +32,12 @@ oxe_semantics_hash: 0b2f34a325711ad6
 - Explicitar confiança e condição objetiva para replanejar.
 - **Seções esperadas:** Objetivo · Plano · Validação · Riscos · Assumptions · Confiança
 - **Bloqueios formais:** missing:state · missing:spec
-- **Referência canónica:** `oxe/workflows/references/reasoning-planning.md`
+- **Referência canónica:** `.oxe/workflows/references/reasoning-planning.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 Executa o workflow **OXE plan-agent**. Lê e aplica **integralmente**:
 
-`oxe/workflows/plan-agent.md` (na raiz do repositório em contexto)
+`.oxe/workflows/plan-agent.md` (na raiz do repositório em contexto)
 
 Se o utilizador pedir replanejamento, trata como **`--replan`** conforme o workflow.
