@@ -77,6 +77,26 @@ Ao ler `LESSONS.md`, priorizar entradas com **`Frequência >= 2`** ou **`Impacto
    - Se existe: chamar `updateLessonMetric` com `{ cycle: "C-NN", verify_status: "<verify_complete|verify_failed>", saved_hours: <estimativa ou 0> }`.
    - Se não existe: criar nova entrada com `applied_cycles: ["C-NN"]`, `outcomes: [...]`, `success_rate: 1.0` (ou `0.0` se falhou), `status: "active"`, `deprecation_threshold: 0.5`.
    - Lições com `success_rate < 0.5` e ≥ 3 observações → marcar `status: "deprecated"` e registrar aviso no chat.
+8a. **Captura do Contrato de Qualidade** (se VERIFY.md contiver seção **Contrato de Qualidade**):
+    - Extrair Quality Score comprometido (da SPEC) e Quality Score realizado (do VERIFY).
+    - Extrair itens R-RB declined do Accepted Risk Registry da SPEC.
+    - Registrar em `lessons-metrics.json` na seção `quality_contracts` (criar arquivo se não existir, usando `oxe/templates/LESSONS-METRICS.template.json`):
+      ```json
+      {
+        "session": "<active_session ou 'default'>",
+        "cycle": "C-NN",
+        "date": "<YYYY-MM-DD>",
+        "quality_score_committed": <QS comprometido ou null>,
+        "quality_score_realized": <QS realizado>,
+        "floor_complete": <true|false>,
+        "approved_items": ["RB-SEC-A1", "..."],
+        "declined_items": [{ "id": "RB-X", "tier": "...", "reason": "..." }],
+        "gaps_p0": ["RB-SEC-A2"],
+        "verify_status": "<verify_complete|verify_failed>"
+      }
+      ```
+    - Se algum item R-RB Piso foi declined na spec E o verify registrou gap relacionado: criar lição com tipo `quality-contract`, Impacto: alto, instrução prescritiva sobre o critério específico.
+    - Se Quality Score realizado < comprometido em ≥ 10 pontos: criar lição com tipo `quality-contract` descrevendo o padrão de implementação não seguido.
 9. Atualizar **`.oxe/STATE.md`**: campo `last_retro: YYYY-MM-DD`.
 10. Responder no chat: ID do ciclo (C-NN), número de lições registradas, lição mais crítica em 1 frase, lições depreciadas (se houver), sugestão do próximo ciclo (`/oxe-scan` ou `/oxe-spec`).
 </process>
@@ -89,4 +109,5 @@ Ao ler `LESSONS.md`, priorizar entradas com **`Frequência >= 2`** ou **`Impacto
 - [ ] Lições com raiz e tipo iguais a entradas anteriores têm `Frequência` incrementada, não duplicadas.
 - [ ] `STATE.md` tem `last_retro` atualizado.
 - [ ] Entradas anteriores preservadas; apenas `Status` pode mudar para `resolvido`.
+- [ ] Se VERIFY.md contiver seção Contrato de Qualidade: `lessons-metrics.json` atualizado com entrada na seção `quality_contracts`.
 </success_criteria>

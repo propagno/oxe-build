@@ -256,6 +256,7 @@ function resolveArtifactCandidates(projectRoot, activeSession) {
     phase_summary: withFallback('phase_summary', 'summary', ctx.phaseSummaryJson, null, 'project'),
     context_pack_dashboard: withFallback('context_pack_dashboard', 'context_pack', ctx.defaultPackJson('dashboard'), null, 'project'),
     calibration: withFallback('calibration', 'calibration', path.join(base.oxe, 'calibration.json'), null, 'project'),
+    lessons_metrics: withFallback('lessons_metrics', 'metrics', path.join(base.oxe, 'lessons-metrics.json'), null, 'project'),
   };
 }
 

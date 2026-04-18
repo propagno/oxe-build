@@ -31,6 +31,7 @@ Se o usuário indicar uma tarefa (ex.: `T2`), focar só nela nas camadas 1–2; 
 - **UI:** se existirem `UI-SPEC.md` / `UI-REVIEW.md` no escopo resolvido, incorporar na evidência quando os critérios **A*** ou tarefas **Tn** tocarem interface.
 - **Camada 5 — Validate-gaps (automático quando `verification_depth: "thorough"`):** após as 4 camadas, se `verification_depth: "thorough"` em `.oxe/config.json`, executar automaticamente a lógica de `oxe/workflows/validate-gaps.md` e produzir `.oxe/VALIDATION-GAPS.md` como parte deste verify. Não requer comando separado.
 - **Camada 6 — Security (automático quando `security_in_verify: true`):** se `security_in_verify: true` em `.oxe/config.json`, executar automaticamente a lógica de `oxe/workflows/security.md` e produzir `.oxe/SECURITY.md` como parte deste verify. Não requer comando separado.
+- **Camada QC — Quality Contract (automático quando SPEC.md contiver critérios R-RB):** se a SPEC.md do escopo resolvido contiver requisitos com ID `R-RB-NN` (gerados pela Fase 3.5 — Elevação de Robustez), executar a Camada QC conforme `<camada_qc_quality_contract>`. Não requer comando separado.
 - **Rotina compact/checkpoint (opcional):** se esta entrega alterou **estrutura**, **stack** ou **pastas** de forma relevante, `/oxe-scan` em modo refresh alinha `.oxe/codebase/` ao repo. Após **verify** com sucesso, `/oxe-project checkpoint` com slug curto pode marcar estado estável.
 </context>
 
@@ -103,6 +104,39 @@ Registrar em `VERIFY.md`: `Resultado de calibração | Confiança declarada | Re
 4. Usar esses artefatos como apoio para a seção de gaps e para a calibração do plano.
 </runtime_e_checkpoints>
 
+<camada_qc_quality_contract>
+**Camada QC — Contrato de Qualidade** (ativa quando SPEC.md contiver requisitos R-RB da Fase 3.5)
+
+**Objetivo:** verificar que os critérios de qualidade comprometidos na spec (R-RB aprovados como v1) foram efetivamente implementados — com o mesmo rigor de evidência aplicado aos critérios A*.
+
+**Execução:**
+
+1. Ler SPEC.md procurando requisitos com ID `R-RB-NN` e versão `v1` na tabela de requisitos.
+2. Localizar o **Accepted Risk Registry** da SPEC (seção "Suposições e riscos" ou "Riscos Aceitos") — anotar itens R-RB declinados.
+3. Para cada R-RB aprovado como v1, verificar implementação com evidência (Grep, Read, teste):
+
+   | ID R-RB | Critério (resumo) | Tier | Evidência | Implementado? |
+   |---------|-------------------|------|-----------|---------------|
+   | RB-SEC-A1 | Bcrypt salt≥10 | Piso | `grep bcrypt src/` → linha X | ✓ / ✗ |
+
+4. Calcular **Quality Score realizado:**
+   ```
+   QS_realizado = (Piso_implementados / Piso_aprovados × 60) + (Base_implementados / Base_aprovados × 40)
+   ```
+5. Comparar com Quality Score comprometido na spec (se registrado).
+6. Registrar na seção **Contrato de Qualidade** do VERIFY.md:
+   - Tabela de critérios R-RB (acima)
+   - Quality Score comprometido vs realizado
+   - Gap: itens aprovados como v1 mas não implementados
+
+**Severidade dos gaps:**
+- R-RB **Piso** não implementado → gap P0 → bloqueia `verify_complete` (mesma regra do security P0)
+- R-RB **Base** não implementado → gap P1 → registrar, não bloqueia
+- R-RB **Excelência** não implementado → informativo (estava em v2, não esperado)
+
+**Pulável apenas se:** SPEC.md não contiver nenhum R-RB-NN com versão v1.
+</camada_qc_quality_contract>
+
 <process>
 1. **Camada 1 — Auditoria de pré-execução:** checar integridade do PLAN.md e DISCUSS.md conforme `<camada_1_pre_exec_audit>`. Documentar resultado.
 2. Resolver o context pack `verify` primeiro:
@@ -142,6 +176,7 @@ O `calibration_error` de cada dimensão = `|score declarado - resultado observad
 8b. **Retrospectiva (pós-verify):** se `verify_complete`, sugerir **`/oxe-retro`** para capturar aprendizados do ciclo em `.oxe/LESSONS.md`. Especialmente importante quando: houve replanejamento (`--replan`), houve falhas em execute que precisaram de debug, critérios A* foram ajustados durante o ciclo, ou o ciclo durou mais de 2 ondas. Retro antes do próximo spec garante que lições orientem o próximo ciclo.
 8c. **Camada 5 — Validate-gaps automático:** se `verification_depth: "thorough"` em `.oxe/config.json`, executar a lógica de `oxe/workflows/validate-gaps.md` e adicionar seção **Gaps de Cobertura** ao VERIFY.md (mesmo conteúdo de VALIDATION-GAPS.md). Também escrever `.oxe/VALIDATION-GAPS.md` separado.
 8d. **Camada 6 — Security automático:** se `security_in_verify: true` em `.oxe/config.json`, executar a lógica de `oxe/workflows/security.md` e adicionar seção **Auditoria de Segurança** ao VERIFY.md. Também escrever `.oxe/SECURITY.md` separado. Achados P0 bloqueiam o `verify_complete` — registrar `verify_failed` até P0s serem resolvidos.
+8e. **Camada QC — Quality Contract automático:** se SPEC.md contiver requisitos `R-RB-NN` com versão `v1`, executar o bloco `<camada_qc_quality_contract>` e adicionar seção **Contrato de Qualidade** ao VERIFY.md. R-RB Piso não implementados bloqueiam `verify_complete` — registrar `verify_failed` até serem resolvidos ou explicitamente aceitos como risco P0.
 9. **Só se todas as verificações relevantes passarem:** se `after_verify_draft_commit` não for `false`: acrescentar em **VERIFY.md** a seção **Rascunho de commit** — mensagem convencional (ex.: `feat:` / `fix:`) + bullets alinhados aos critérios **A*** e decisões **D-NN**; **não** incluir segredos.
 10. **Só se passou:** se `after_verify_suggest_pr` não for `false`: acrescentar **Checklist PR** — branch base, título sugerido, screenshots se UI, links a SPEC/PLAN/DISCUSS, testes executados.
 11. No chat, responder nesta ordem:
@@ -161,4 +196,5 @@ O `calibration_error` de cada dimensão = `|score declarado - resultado observad
 - [ ] Se existiu DISCUSS.md: tabela de Fidelidade de decisões preenchida sem divergências não documentadas.
 - [ ] Se `verification_depth: "thorough"` em config: `.oxe/VALIDATION-GAPS.md` produzido como parte deste verify.
 - [ ] Se `security_in_verify: true` em config: `.oxe/SECURITY.md` produzido; achados P0 resolvidos ou `verify_failed` registrado.
+- [ ] Se SPEC.md contiver R-RB v1: seção **Contrato de Qualidade** presente em VERIFY.md com Quality Score realizado; R-RB Piso não implementados tratados como gaps P0.
 </success_criteria>
