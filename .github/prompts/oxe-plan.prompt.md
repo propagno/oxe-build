@@ -34,7 +34,7 @@ oxe_semantics_hash: db8d30e9106386d1
 - Explicitar confiança e condição objetiva para replanejar.
 - **Seções esperadas:** Objetivo · Plano · Validação · Riscos · Assumptions · Confiança
 - **Bloqueios formais:** missing:state · missing:spec
-- **Referência canónica:** `.oxe/workflows/references/reasoning-planning.md`
+- **Referência canónica:** `oxe/workflows/references/reasoning-planning.md`
 
 <!-- oxe-reasoning-contract:end -->
 

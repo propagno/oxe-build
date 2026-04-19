@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
-**Versão:** `1.2.0` · [package.json](package.json)
+**Versão:** `1.2.1` · [package.json](package.json)
 
 **Framework OXE — Orchestrated eXperience Engineering**
 
@@ -245,7 +245,7 @@ Estes comportamentos continuam existindo, mas agora são ativados como flags dos
 | Revisão de PR ou diff de branches | `/oxe-verify --pr` ou `--diff branchA...branchB` |
 | Retrospectiva (lições do ciclo) | automática ao fechar `/oxe-verify` (desativar: `--skip-retro`) |
 
-**Compatibilidade:** os comandos legados (`/oxe-debug`, `/oxe-forensics`, `/oxe-research`, `/oxe-security`, `/oxe-validate-gaps`, `/oxe-ui-spec`, `/oxe-ui-review`, `/oxe-review-pr`, `/oxe-checkpoint`, `/oxe-loop`, `/oxe-obs`, `/oxe-ask`, `/oxe-scan`, `/oxe-retro`, `/oxe-project`) continuam funcionando em v1.1.0 e exibem um aviso sugerindo o novo destino.
+**Compatibilidade:** os comandos legados (`/oxe-debug`, `/oxe-forensics`, `/oxe-research`, `/oxe-security`, `/oxe-validate-gaps`, `/oxe-ui-spec`, `/oxe-ui-review`, `/oxe-review-pr`, `/oxe-checkpoint`, `/oxe-loop`, `/oxe-obs`, `/oxe-ask`, `/oxe-scan`, `/oxe-retro`, `/oxe-project`) continuam funcionando desde v1.1.0 e exibem um aviso sugerindo o novo destino.
 
 ---
 

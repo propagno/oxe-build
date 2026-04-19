@@ -690,6 +690,29 @@
       ],
       "extraction_intent": "execution_input"
     },
+    "ship": {
+      "reasoning_mode": "execution",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "spec",
+        "quick",
+        "plan",
+        "verify",
+        "summary",
+        "runtime",
+        "active_run",
+        "phase_summary",
+        "session_summary",
+        "project_summary"
+      ],
+      "blocking_conditions": [
+        "missing:verify_without_override",
+        "missing:tracked_changes"
+      ],
+      "extraction_intent": "execution_input"
+    },
     "skill": {
       "reasoning_mode": "execution",
       "required_artifacts": [

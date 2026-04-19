@@ -55,7 +55,7 @@ describe('oxe-project-health', () => {
       fs.writeFileSync(path.join(legacyPrompts, 'oxe-plan.prompt.md'), 'legacy\n', 'utf8');
       fs.writeFileSync(
         path.join(fakeCopilotHome, 'copilot-instructions.md'),
-        '<!-- oxe-cc:install-begin -->\nlegacy\n<!-- oxe-cc:install-end -->\n<!-- gsd managed -->\n',
+        '<!-- oxe-cc:install-begin -->\nlegacy\n<!-- oxe-cc:install-end -->\n<!-- legacy managed -->\n',
         'utf8'
       );
       const report = h.copilotIntegrationReport(dir);

@@ -34,7 +34,7 @@ oxe_semantics_hash: 27d51ac144da4c1c
 - Se não houver findings, declarar isso explicitamente e listar riscos residuais.
 - **Seções esperadas:** Findings · Perguntas abertas · Riscos residuais · Resumo
 - **Bloqueios formais:** missing:state
-- **Referência canónica:** `.oxe/workflows/references/reasoning-review.md`
+- **Referência canónica:** `oxe/workflows/references/reasoning-review.md`
 
 <!-- oxe-reasoning-contract:end -->
 
