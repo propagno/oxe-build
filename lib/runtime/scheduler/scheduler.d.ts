@@ -2,6 +2,7 @@ import type { OxeEvent } from '../events/envelope';
 import type { ExecutionGraph, GraphNode } from '../compiler/graph-compiler';
 import type { WorkspaceManager } from '../workspace/workspace-manager';
 import type { WorkspaceLease } from '../models/workspace';
+import type { RunJournal } from './run-journal';
 export interface TaskResult {
     success: boolean;
     failure_class: 'env' | 'policy' | 'test' | 'timeout' | null;
@@ -21,7 +22,7 @@ export interface SchedulerContext {
 }
 export interface RunResult {
     run_id: string;
-    status: 'completed' | 'failed' | 'cancelled';
+    status: 'completed' | 'failed' | 'cancelled' | 'paused';
     completed: string[];
     failed: string[];
     blocked: string[];
@@ -29,11 +30,20 @@ export interface RunResult {
 export declare class Scheduler {
     private cancelled;
     private paused;
+    private journal;
+    private ctx;
     run(graph: ExecutionGraph, ctx: SchedulerContext): Promise<RunResult>;
+    /**
+     * Recover a previously paused run by loading its journal and re-running
+     * only the work items that haven't completed yet.
+     */
+    recover(runId: string, ctx: SchedulerContext, graph: ExecutionGraph): Promise<RunResult | null>;
     private runWave;
     private runNode;
     pause(): void;
     resume(): void;
     cancel(): void;
+    getJournal(): RunJournal | null;
+    static loadJournal(projectRoot: string, runId: string): RunJournal | null;
     private emit;
 }

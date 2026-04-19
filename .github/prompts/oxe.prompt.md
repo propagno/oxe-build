@@ -1,7 +1,7 @@
 ---
 name: oxe
 agent: agent
-description: OXE — Entrada universal: próximo passo / roteamento / help dos 8 comandos essenciais
+description: OXE — Entrada universal: próximo passo / roteamento / help da trilha OXE
 argument-hint: "[contexto em linguagem natural | 'help' | vazio para próximo passo]"
 oxe_workflow_slug: oxe
 oxe_reasoning_mode: status
@@ -34,7 +34,7 @@ oxe_semantics_hash: d7f65cd3f77b0abc
 - Explicitar a confiança quando o estado estiver incompleto ou ambíguo.
 - **Seções esperadas:** Leitura atual · Recomendação · Motivo · Confiança
 - **Bloqueios formais:** missing:state
-- **Referência canónica:** `.oxe/workflows/references/reasoning-status.md`
+- **Referência canónica:** `oxe/workflows/references/reasoning-status.md`
 
 <!-- oxe-reasoning-contract:end -->
 
@@ -42,4 +42,4 @@ Executa o workflow **OXE** (entrada universal) no repositório atual. Lê e apli
 
 `.oxe/workflows/oxe.md`
 
-`$ARGUMENTS`: vazio → próximo passo; texto → roteamento; "help" → 8 comandos essenciais.
+`$ARGUMENTS`: vazio → próximo passo; texto → roteamento; "help" → trilha principal + trilha avançada.

@@ -34,7 +34,7 @@ OXE — Scan do repositório (.oxe/codebase/)
 - Perguntar apenas ambiguidades que mudem a decisão ou o artefato final.
 - **Seções esperadas:** Fatos · Inferências · Lacunas · Próximo passo
 - **Bloqueios formais:** missing:state
-- **Referência canónica:** `.oxe/workflows/references/reasoning-discovery.md`
+- **Referência canónica:** `oxe/workflows/references/reasoning-discovery.md`
 
 <!-- oxe-reasoning-contract:end -->
 

@@ -4,6 +4,20 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.2.1] — 2026-04-18
+
+### Branding, Semântica e Empacotamento
+
+- remove referências remanescentes ao framework legado dos workflows e do diagnóstico de integração Copilot
+- alinha `package.json`, `package-lock.json`, banner CLI e README para `1.2.1`
+- corrige deriva semântica do workflow `ship`, registrando-o no contrato canônico multi-runtime
+- adiciona prompt files de `ship` para Copilot/Cursor
+- remove o comando `auto` da superfície pública do OXE
+- remove o comando `intel` da superfície pública do OXE
+- reposiciona `ship` para fechar o ciclo com commit local guiado por `SPEC.md`, `PLAN.md` e `VERIFY.md`
+
+---
+
 ## [1.2.0] — 2026-04-18
 
 ### Runtime Hardening & Robustez (Fases 1–9)

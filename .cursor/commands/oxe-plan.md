@@ -34,7 +34,7 @@ OXE — Gera .oxe/PLAN.md com verificação por tarefa
 - Explicitar confiança e condição objetiva para replanejar.
 - **Seções esperadas:** Objetivo · Plano · Validação · Riscos · Assumptions · Confiança
 - **Bloqueios formais:** missing:state · missing:spec
-- **Referência canónica:** `.oxe/workflows/references/reasoning-planning.md`
+- **Referência canónica:** `oxe/workflows/references/reasoning-planning.md`
 
 <!-- oxe-reasoning-contract:end -->
 

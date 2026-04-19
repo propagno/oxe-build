@@ -34,7 +34,7 @@ OXE — Executar plano (solo ou com agentes): escolha Completo (1 sessão) | Por
 - Parar e explicitar o bloqueio quando houver hipótese crítica não verificada.
 - **Seções esperadas:** Contexto lido · Alvo da mudança · Validação executada · Resultado · Próximo passo
 - **Bloqueios formais:** missing:state · missing:plan_or_quick
-- **Referência canónica:** `.oxe/workflows/references/reasoning-execution.md`
+- **Referência canónica:** `oxe/workflows/references/reasoning-execution.md`
 
 <!-- oxe-reasoning-contract:end -->
 

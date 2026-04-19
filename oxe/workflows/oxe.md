@@ -5,7 +5,7 @@ Ponto de entrada inteligente do OXE. Faz uma de três coisas dependendo do input
 
 1. **Sem input / "o que faço agora?"** → lê `STATE.md` e recomenda exatamente 1 próximo passo (lógica de `next.md`).
 2. **Input em linguagem natural** (ex.: "quero adicionar login", "preciso revisar um PR") → traduz para o comando OXE correto e executa ou orienta (lógica de `route.md`).
-3. **"help", "o que é OXE" ou "comandos"** → apresenta o fluxo dos 8 comandos essenciais e a cadeia canônica.
+3. **"help", "o que é OXE" ou "comandos"** → apresenta a trilha principal, a trilha avançada e a cadeia canônica.
 
 **Princípio:** o usuário não precisa decorar o nome do comando — `/oxe [contexto]` resolve.
 </objective>
@@ -55,11 +55,15 @@ Mapear o input para o workflow correto e executar ou orientar:
 | Se o usuário disser | Executar |
 |---------------------|----------|
 | "quero [feature / tarefa / entrega]" | Verificar estado → **spec** ou **quick** |
-| "analisa / mapeia o projeto" | **`/oxe-spec --refresh`** (ou `--full` para scan completo) |
+| "analisa / mapeia o projeto" | **`/oxe-spec --refresh`** (incremental) ou **`/oxe-scan`** (scan completo) |
+| "o que faz esse módulo / o que usa esse projeto" | **`/oxe "pergunta"`** com base nos artefatos existentes |
 | "pesquisa / spike / quero entender X" | **`/oxe-spec --research`** |
+| "executa tudo / faz tudo / modo automático" | **`/oxe-execute`** |
+| "executa sem parar / autônomo" | **`/oxe-execute`** |
 | "revisa PR / diff" | **`/oxe-verify --pr`** |
 | "auditoria de segurança" | **`/oxe-verify --security`** |
 | "valida / verifica" | **verify** |
+| "commita / entrega / ship" | **`/oxe-ship`** |
 | "milestone / release / versão" | **`/oxe-session milestone`** |
 | "trilha paralela / workstream" | **`/oxe-session workstream`** |
 | "snapshot / checkpoint" | **`/oxe-execute --checkpoint "<nome>"`** |

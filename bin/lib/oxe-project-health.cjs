@@ -649,7 +649,7 @@ function hasOtherManagedInstructionBlocks(filePath) {
     .replace(/<!-- oxe-cc:install-begin -->[\s\S]*?<!-- oxe-cc:install-end -->/g, '')
     .trim();
   if (!withoutOxe) return false;
-  return /<!--[^>]*(managed|configuration|install-begin|install-end|get-shit-done|gsd)[^>]*-->/i.test(withoutOxe);
+  return /<!--[^>]*(managed|configuration|install-begin|install-end)[^>]*-->/i.test(withoutOxe);
 }
 
 /**

@@ -1,6 +1,7 @@
 import type { ExecutionGraph } from '../compiler/graph-compiler';
 import type { WorkspaceManager } from '../workspace/workspace-manager';
 import type { TaskExecutor, SchedulerContext } from './scheduler';
+import type { CooperativeHandoff } from './agent-roles';
 export type CoordinationMode = 'parallel' | 'competitive' | 'cooperative';
 export interface AgentSpec {
     id: string;
@@ -28,6 +29,7 @@ export interface CoordinationResult {
         completed: string[];
         failed: string[];
     }>;
+    handoffs?: CooperativeHandoff[];
 }
 export declare class MultiAgentCoordinator {
     run(graph: ExecutionGraph, opts: CoordinationOptions): Promise<CoordinationResult>;
