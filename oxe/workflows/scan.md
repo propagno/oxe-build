@@ -1,5 +1,9 @@
 # OXE — Workflow: scan
 
+> **[DEPRECATED v1.1.0]** Este comando foi incorporado por `/oxe-spec`.
+> Use: `/oxe-spec --refresh` (atualização incremental) ou `/oxe-spec --full` (scan completo).
+> Este alias continuará funcionando nesta versão por compatibilidade.
+
 <objective>
 Analisar o codebase e produzir documentação **estruturada e enxuta** em `.oxe/codebase/`, atualizando `.oxe/STATE.md`. Cada documento deve ser navegável por humanos e por agentes sem carregar o repositório inteiro no contexto.
 

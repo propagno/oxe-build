@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -9,6 +42,7 @@ const os_1 = __importDefault(require("os"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const scheduler_1 = require("../src/scheduler/scheduler");
+const run_journal_1 = require("../src/scheduler/run-journal");
 const graph_compiler_1 = require("../src/compiler/graph-compiler");
 const inplace_1 = require("../src/workspace/strategies/inplace");
 const SPEC = { objective: 'Test', criteria: [] };
@@ -170,6 +204,116 @@ function alwaysFail(failureClass = 'test') {
         strict_1.default.ok(types.includes('WorkspaceAllocated'));
         strict_1.default.ok(types.includes('WorkItemCompleted'));
         strict_1.default.ok(types.includes('RunCompleted'));
+    });
+    (0, node_test_1.test)('journal is created and updated during run', async () => {
+        const runId = `r-journal-${Date.now()}`;
+        const plan = makePlan([
+            { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false },
+        ]);
+        const graph = (0, graph_compiler_1.compile)(plan, SPEC, { default_workspace_strategy: 'inplace' });
+        const scheduler = new scheduler_1.Scheduler();
+        const ctx = { ...makeCtx(tmpDir, alwaysSucceed()), runId };
+        const result = await scheduler.run(graph, ctx);
+        strict_1.default.equal(result.status, 'completed');
+        // Journal should exist and reflect completed state
+        const journal = (0, run_journal_1.loadJournal)(tmpDir, runId);
+        strict_1.default.ok(journal !== null);
+        strict_1.default.equal(journal.scheduler_state, 'completed');
+        strict_1.default.ok(journal.completed_work_items.includes('T1'));
+    });
+    (0, node_test_1.test)('cancel writes cancelled state to journal', async () => {
+        const runId = `r-cancel-${Date.now()}`;
+        const scheduler = new scheduler_1.Scheduler();
+        const executor = {
+            async execute() {
+                scheduler.cancel();
+                return { success: true, failure_class: null, evidence: [], output: 'ok' };
+            },
+        };
+        const plan = makePlan([
+            { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false },
+            { id: 'T2', title: 'T2', wave: 2, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false },
+        ]);
+        const graph = (0, graph_compiler_1.compile)(plan, SPEC, { default_workspace_strategy: 'inplace' });
+        const ctx = { ...makeCtx(tmpDir, executor), runId };
+        const result = await scheduler.run(graph, ctx);
+        strict_1.default.equal(result.status, 'cancelled');
+        const journal = (0, run_journal_1.loadJournal)(tmpDir, runId);
+        strict_1.default.ok(journal !== null);
+        strict_1.default.equal(journal.cancelled, true);
+        strict_1.default.equal(journal.scheduler_state, 'cancelled');
+    });
+    (0, node_test_1.test)('recover skips already-completed nodes', async () => {
+        const runId = `r-recover-${Date.now()}`;
+        const executedNodes = [];
+        const plan = makePlan([
+            { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false },
+            { id: 'T2', title: 'T2', wave: 2, dependsOn: ['T1'], files: [], verifyCommand: null, aceite: [], done: false },
+        ]);
+        const graph = (0, graph_compiler_1.compile)(plan, SPEC, { default_workspace_strategy: 'inplace' });
+        // Simulate a paused journal with T1 already done
+        const { saveJournal } = await Promise.resolve().then(() => __importStar(require('../src/scheduler/run-journal')));
+        saveJournal(tmpDir, runId, {
+            run_id: runId,
+            paused_at: new Date().toISOString(),
+            cancelled: false,
+            eligible_work_items: [],
+            completed_work_items: ['T1'],
+            failed_work_items: [],
+            blocked_work_items: [],
+            pending_gates: [],
+            replay_cursor: null,
+            scheduler_state: 'paused',
+            partial_result: null,
+        });
+        const executor = {
+            async execute(node) {
+                executedNodes.push(node.id);
+                return { success: true, failure_class: null, evidence: [], output: 'ok' };
+            },
+        };
+        const scheduler = new scheduler_1.Scheduler();
+        const ctx = { ...makeCtx(tmpDir, executor), runId };
+        const result = await scheduler.recover(runId, ctx, graph);
+        strict_1.default.ok(result !== null);
+        strict_1.default.equal(result.status, 'completed');
+        // T1 was already done — only T2 should run
+        strict_1.default.ok(!executedNodes.includes('T1'));
+        strict_1.default.ok(executedNodes.includes('T2'));
+    });
+    (0, node_test_1.test)('recover returns null when no journal exists', async () => {
+        const scheduler = new scheduler_1.Scheduler();
+        const plan = makePlan([
+            { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false },
+        ]);
+        const graph = (0, graph_compiler_1.compile)(plan, SPEC, { default_workspace_strategy: 'inplace' });
+        const ctx = makeCtx(tmpDir, alwaysSucceed());
+        const result = await scheduler.recover('no-such-run', ctx, graph);
+        strict_1.default.equal(result, null);
+    });
+    (0, node_test_1.test)('RetryScheduled events are emitted on retry', async () => {
+        let callCount = 0;
+        const events = [];
+        const executor = {
+            async execute() {
+                callCount++;
+                return callCount < 3
+                    ? { success: false, failure_class: 'env', evidence: [], output: 'env error' }
+                    : { success: true, failure_class: null, evidence: [], output: 'ok' };
+            },
+        };
+        const plan = makePlan([
+            { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false },
+        ]);
+        const graph = (0, graph_compiler_1.compile)(plan, SPEC, { default_workspace_strategy: 'inplace', default_max_retries: 2 });
+        const scheduler = new scheduler_1.Scheduler();
+        const ctx = {
+            ...makeCtx(tmpDir, executor),
+            onEvent: (e) => events.push(e),
+        };
+        await scheduler.run(graph, ctx);
+        const retryEvents = events.filter((e) => e.type === 'RetryScheduled');
+        strict_1.default.equal(retryEvents.length, 2);
     });
     (0, node_test_1.test)('cleanup', () => {
         fs_1.default.rmSync(tmpDir, { recursive: true, force: true });

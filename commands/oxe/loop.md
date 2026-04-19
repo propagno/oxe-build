@@ -1,6 +1,6 @@
 ---
 name: oxe:loop
-description: OXE — Execução iterativa de onda com retries automáticos e diagnóstico inline
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe-execute. Use: /oxe-execute --iterative"
 argument-hint: "onda <N> [max:<tentativas>]"
 allowed-tools:
   - Read

@@ -1,6 +1,6 @@
 ---
 name: oxe:checkpoint
-description: OXE — Marco em .oxe/checkpoints/ + CHECKPOINTS.md
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe-execute. Use: /oxe-execute --checkpoint '<nome>'"
 argument-hint: "<slug> [nota]"
 allowed-tools:
   - Read

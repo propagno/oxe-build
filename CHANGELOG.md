@@ -4,6 +4,150 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.2.0] — 2026-04-18
+
+### Runtime Hardening & Robustez (Fases 1–9)
+
+**Fase 1 — Runtime Hardening**
+
+- `RunJournal` persistido em `.oxe/runs/{runId}/journal.json`: gravado a cada onda, atualizado no pause/cancel
+- `Scheduler.pause()` agora grava journal e retorna `status: 'paused'` em vez de apenas setar flag in-memory
+- `Scheduler.recover(runId, ctx, graph)` — retoma run pausado pelo journal; pula nós já completados
+- `Scheduler.getJournal()` e `Scheduler.loadJournal(projectRoot, runId)` para inspeção
+- `RunState` expandido: `retryCounts`, `policyDecisions`, `pendingGates`, `resolvedGates`, `verificationStatus`, `evidenceRefs`, `toolFailures`
+- Reducer: handlers para `RetryScheduled`, `PolicyEvaluated`, `GateRequested`, `GateResolved`, `VerificationStarted`, `VerificationCompleted`, `ToolFailed`, `EvidenceCollected`
+- Helpers: `getRetryCount`, `getPolicyDecision`, `getVerificationStatus`, `getEvidenceRefs`, `getToolFailures`
+
+**Fase 2 — Policy, Side Effects e Security**
+
+- `SideEffectClass` enum: `read_fs|write_fs|spawn_process|network_call|git_mutation|db_change|secret_access|infra_operation`
+- `AutonomyTier` type: `L0|L1|L2|L3` — tier controla quais side effects são permitidos automaticamente
+- `NodePolicyConfig` com `mutation_budget` e `autonomy_tier`
+- `EnvironmentGuardrail` com `protected_paths`, `protected_branches`, `require_human_gate_on`
+- Guardrails default: paths `.env`, `package.json`, `.oxe/config.json`; gate automático para `infra_operation`, `db_change`, `secret_access`
+- `PolicyEngine.withGuardrail(g)` para customizar guardrails por projeto
+- `side_effect_class` e `autonomy_tier` em `PolicyWhenClause` para regras direcionadas
+
+**Fase 3 — Verify Operational**
+
+- `VerificationManifest` formal: persistido em `.oxe/runs/{runId}/verification-manifest.json`
+- `VerificationProfile`: `quick|standard|critical` — controla quais `FailureClass` geram riscos residuais
+- `FailureClass` taxonomy: `deterministic|flaky|timeout|env_setup|policy_failure|evidence_missing`
+- `classifyFailure(result)` — classifica automaticamente cada `CheckResult`
+- `buildManifest(runId, results, options)` — compila manifest por work item, onda ou run
+- `ResidualRiskLedger` persistido em `.oxe/runs/{runId}/residual-risks.json`
+- `buildRiskLedger(runId, manifest)` — gera ledger de riscos residuais a partir do manifest
+
+**Fase 4 — Delivery Native**
+
+- `MergeGateEvaluator.evaluate(runResult, manifest, ledger)` — avalia se run está pronto para merge
+- Bloqueios: tarefas failed/blocked, verificação falha, riscos `high`/`critical`
+- `PromotionPipeline.promote(runResult, manifest, ledger, opts)` — cria PR draft via `gh`, persiste `RunPRLink`
+- `PromotionPipeline.buildPRBody(...)` — corpo do PR com resumo, verificação e riscos residuais
+- `RunPRLink` persistido em `.oxe/runs/{runId}/pr-link.json`
+
+**Fase 5 — Context Engineering Avançado**
+
+- `ContextPackStore`: `savePack`, `loadPack`, `markStale`, `isStale`, `listPackMeta` — packs persistidos em `.oxe/runs/{runId}/context-pack-{workItemId}.json`
+- `ContextPackMeta` com `estimated_tokens`, `stale`, `stale_reason`
+- `diffPacks(before, after)` — detecta added/removed/score_changed entre versões de pack
+- Índice global por run em `context-packs.index.json`
+
+**Fase 6 — Decision Engine / Seniority**
+
+- `DecisionEngine.evaluate(input)` — avalia policy, gate, retry budget, risk, lesson match e retorna `DecisionRecord` com `type`, `seniority`, `confidence` e `rationale`
+- Tipos de decisão: `proceed|retry|escalate_gate|skip|abort|promote_lesson`
+- `SeniorityLevel`: `junior|standard|senior|expert` derivado da confidence
+- `appendDecision`, `loadDecisionLog`, `queryDecisions` — log persistido em `.oxe/runs/{runId}/decisions.json`
+
+**Fase 7 — Multi-Agent Robusto**
+
+- `AgentRegistry` com heartbeat tracking por agente
+- `registry.beat(id, currentTask)` — atualiza last_seen e status
+- `registry.isAlive(id)` — detecta timeout configurável por instância
+- `registry.timedOut()` / `registry.liveAgents()` — filtragem por liveness
+- `registry.failover(fallbackAgentId)` — reassigna tasks de agentes expirados para fallback
+- `registry.setStatus(id, status)` — transições manuais de estado
+
+**Fase 8 — ABI Estável de Plugins**
+
+- `PluginManifest` com `abi_version`, `capabilities`, declared providers
+- `extractManifest(plugin)` — extrai manifest de qualquer `OxePlugin`
+- `validatePlugin(plugin)` — retorna `{ valid, errors, warnings }` com checagem de nome, semver, providers
+- `isAbiCompatible(version)` — garante compatibilidade de major version
+- `sandboxInvoke(fn, timeoutMs)` — execução com timeout e isolamento de erro para plugins
+
+**Fase 9 — Enterprise Operations**
+
+- `AuditTrail` — registro imutável NDJSON em `.oxe/AUDIT-TRAIL.ndjson`
+- 14 tipos de ação auditáveis: `run_started`, `secret_accessed`, `infra_mutation`, `merge_approved`, etc.
+- Severity automática por ação (`info|warn|critical`)
+- `AuditTrail.query(filter)` — filtra por action/severity/runId/since
+- `RunQuota` — `createQuota`, `consumeQuota`, `checkQuota` para limitar work_items, mutations e retries por run
+
+### Testes
+
+- Runtime: **266 testes** (↑ de 145 pré-robustez)
+- Root: 321 testes (sem regressões)
+- Total: **587 testes** passando
+
+---
+
+## [1.1.0] — 2026-04-18
+
+### Mudança de superfície (simplificação estratégica de produto)
+
+**Trilha principal reduzida a 6 comandos**
+
+O OXE agora se comporta como um framework guiado por etapas. A superfície pública foi reorganizada em três níveis:
+
+**Trilha principal (6 comandos):**
+- `/oxe` — entrada universal (absorve ask, next, route, help)
+- `/oxe-quick` — modo nano sem cerimônia
+- `/oxe-spec` — spec com flags: `--refresh`, `--full`, `--research`, `--ui`
+- `/oxe-plan` — planejamento test-first
+- `/oxe-execute` — implementação com flags: `--note`, `--debug`, `--deep-diagnosis`, `--checkpoint`, `--iterative`
+- `/oxe-verify` — validação e fechamento com flags: `--gaps`, `--security`, `--ui`, `--pr`, `--diff`, `--skip-retro`
+
+**Trilha avançada:** `/oxe-session` (absorve project, milestone, workstream), `/oxe-dashboard`
+
+**Administrativa:** `/oxe-capabilities`, `/oxe-skill`, `oxe-cc azure`
+
+### Depreciado (v1.1.0)
+
+Os seguintes comandos foram incorporados por estágios principais e continuam funcionando com aviso de migração:
+
+| Comando | Novo destino |
+|---------|-------------|
+| `/oxe-ask` | `/oxe "pergunta"` |
+| `/oxe-scan` | `/oxe-spec --refresh` |
+| `/oxe-research` | `/oxe-spec --research` |
+| `/oxe-ui-spec` | `/oxe-spec --ui` |
+| `/oxe-obs` | `/oxe-execute --note` |
+| `/oxe-debug` | `/oxe-execute --debug` |
+| `/oxe-forensics` | `/oxe-execute --deep-diagnosis` |
+| `/oxe-checkpoint` | `/oxe-execute --checkpoint` |
+| `/oxe-loop` | `/oxe-execute --iterative` |
+| `/oxe-validate-gaps` | `/oxe-verify --gaps` |
+| `/oxe-security` | `/oxe-verify --security` |
+| `/oxe-ui-review` | `/oxe-verify --ui` |
+| `/oxe-review-pr` | `/oxe-verify --pr` |
+| `/oxe-retro` | `/oxe-verify` (retro automática) |
+| `/oxe-project` | `/oxe-session milestone\|workstream` |
+| `/oxe-compact` | `/oxe-spec --refresh` |
+| `/oxe-next` | `/oxe` (sem argumento) |
+| `/oxe-route` | `/oxe "intenção"` |
+| `/oxe-milestone` | `/oxe-session milestone` |
+| `/oxe-workstream` | `/oxe-session workstream` |
+
+### Novos comportamentos
+
+- **Retro automática:** `/oxe-verify` executa automaticamente retrospectiva ao fechar (`--skip-retro` para desativar)
+- **Pergunta situacional inline:** `/oxe "pergunta"` substitui `/oxe-ask`
+- `/oxe-session` agora suporta `milestone` e `workstream` como subcomandos
+
+---
+
 ## [0.8.0] — 2026-04-14
 
 ### Adicionado

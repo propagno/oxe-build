@@ -4,6 +4,19 @@ import type { WorkItem } from '../models/work-item';
 import type { Attempt } from '../models/attempt';
 import type { Workspace } from '../models/workspace';
 
+export interface PolicyDecisionRecord {
+  allowed: boolean;
+  gate_required: boolean;
+  reason: string;
+  rule_id: string | null;
+}
+
+export interface ToolFailureRecord {
+  tool: string;
+  error: string;
+  timestamp: string;
+}
+
 export interface RunState {
   run: Run | null;
   workItems: Map<string, WorkItem>;
@@ -12,6 +25,14 @@ export interface RunState {
   completedWorkItems: Set<string>;
   failedWorkItems: Set<string>;
   blockedWorkItems: Set<string>;
+  // Phase 1 extensions
+  retryCounts: Map<string, number>;
+  policyDecisions: Map<string, PolicyDecisionRecord>;
+  pendingGates: Set<string>;
+  resolvedGates: Map<string, { decision: string; actor?: string }>;
+  verificationStatus: Map<string, 'started' | 'completed' | 'failed'>;
+  evidenceRefs: Map<string, string[]>;
+  toolFailures: Map<string, ToolFailureRecord[]>;
 }
 
 export function createEmptyRunState(): RunState {
@@ -23,6 +44,13 @@ export function createEmptyRunState(): RunState {
     completedWorkItems: new Set(),
     failedWorkItems: new Set(),
     blockedWorkItems: new Set(),
+    retryCounts: new Map(),
+    policyDecisions: new Map(),
+    pendingGates: new Set(),
+    resolvedGates: new Map(),
+    verificationStatus: new Map(),
+    evidenceRefs: new Map(),
+    toolFailures: new Map(),
   };
 }
 
@@ -56,7 +84,6 @@ function applyEvent(state: RunState, event: OxeEvent): RunState {
       if (existing) {
         workItems.set(event.work_item_id, { ...existing, status: 'ready' });
       } else {
-        // First time we see this work item — create from payload
         const item = event.payload as unknown as WorkItem;
         workItems.set(event.work_item_id, { ...item, work_item_id: event.work_item_id, status: 'ready' });
       }
@@ -97,6 +124,14 @@ function applyEvent(state: RunState, event: OxeEvent): RunState {
       if (item) workItems.set(event.work_item_id, { ...item, status: 'completed' });
       const completedWorkItems = new Set(state.completedWorkItems);
       completedWorkItems.add(event.work_item_id);
+      // Collect evidence refs from payload
+      const evidence = (event.payload as { evidence?: string[] }).evidence ?? [];
+      if (evidence.length > 0) {
+        const evidenceRefs = new Map(state.evidenceRefs);
+        const existing = evidenceRefs.get(event.work_item_id) ?? [];
+        evidenceRefs.set(event.work_item_id, [...existing, ...evidence]);
+        return { ...state, workItems, completedWorkItems, evidenceRefs };
+      }
       return { ...state, workItems, completedWorkItems };
     }
 
@@ -108,6 +143,93 @@ function applyEvent(state: RunState, event: OxeEvent): RunState {
       const blockedWorkItems = new Set(state.blockedWorkItems);
       blockedWorkItems.add(event.work_item_id);
       return { ...state, workItems, blockedWorkItems };
+    }
+
+    case 'RetryScheduled': {
+      if (!event.work_item_id) return state;
+      const retryCounts = new Map(state.retryCounts);
+      const current = retryCounts.get(event.work_item_id) ?? 0;
+      retryCounts.set(event.work_item_id, current + 1);
+      return { ...state, retryCounts };
+    }
+
+    case 'PolicyEvaluated': {
+      const p = event.payload as {
+        work_item_id?: string;
+        allowed?: boolean;
+        gate_required?: boolean;
+        reason?: string;
+        rule_id?: string | null;
+      };
+      const key = p.work_item_id ?? event.work_item_id;
+      if (!key) return state;
+      const policyDecisions = new Map(state.policyDecisions);
+      policyDecisions.set(key, {
+        allowed: p.allowed ?? true,
+        gate_required: p.gate_required ?? false,
+        reason: p.reason ?? '',
+        rule_id: p.rule_id ?? null,
+      });
+      return { ...state, policyDecisions };
+    }
+
+    case 'GateRequested': {
+      const gateId = (event.payload as { gate_id?: string }).gate_id;
+      if (!gateId) return state;
+      const pendingGates = new Set(state.pendingGates);
+      pendingGates.add(gateId);
+      return { ...state, pendingGates };
+    }
+
+    case 'GateResolved': {
+      const p = event.payload as { gate_id?: string; decision?: string; actor?: string };
+      if (!p.gate_id) return state;
+      const pendingGates = new Set(state.pendingGates);
+      pendingGates.delete(p.gate_id);
+      const resolvedGates = new Map(state.resolvedGates);
+      resolvedGates.set(p.gate_id, { decision: p.decision ?? 'approved', actor: p.actor });
+      return { ...state, pendingGates, resolvedGates };
+    }
+
+    case 'VerificationStarted': {
+      const key = event.work_item_id ?? (event.payload as { work_item_id?: string }).work_item_id;
+      if (!key) return state;
+      const verificationStatus = new Map(state.verificationStatus);
+      verificationStatus.set(key, 'started');
+      return { ...state, verificationStatus };
+    }
+
+    case 'VerificationCompleted': {
+      const p = event.payload as { work_item_id?: string; status?: 'completed' | 'failed' };
+      const key = event.work_item_id ?? p.work_item_id;
+      if (!key) return state;
+      const verificationStatus = new Map(state.verificationStatus);
+      verificationStatus.set(key, p.status ?? 'completed');
+      return { ...state, verificationStatus };
+    }
+
+    case 'ToolFailed': {
+      if (!event.work_item_id) return state;
+      const p = event.payload as { tool?: string; error?: string };
+      const toolFailures = new Map(state.toolFailures);
+      const existing = toolFailures.get(event.work_item_id) ?? [];
+      toolFailures.set(event.work_item_id, [
+        ...existing,
+        { tool: p.tool ?? 'unknown', error: p.error ?? '', timestamp: event.timestamp },
+      ]);
+      return { ...state, toolFailures };
+    }
+
+    case 'EvidenceCollected': {
+      const p = event.payload as { work_item_id?: string; refs?: string[]; ref?: string };
+      const key = event.work_item_id ?? p.work_item_id;
+      if (!key) return state;
+      const refs = p.refs ?? (p.ref ? [p.ref] : []);
+      if (refs.length === 0) return state;
+      const evidenceRefs = new Map(state.evidenceRefs);
+      const existing = evidenceRefs.get(key) ?? [];
+      evidenceRefs.set(key, [...existing, ...refs]);
+      return { ...state, evidenceRefs };
     }
 
     default:
@@ -124,4 +246,24 @@ export function getWorkItemStatus(
 
 export function getAttemptCount(state: RunState, workItemId: string): number {
   return state.attempts.get(workItemId)?.length ?? 0;
+}
+
+export function getRetryCount(state: RunState, workItemId: string): number {
+  return state.retryCounts.get(workItemId) ?? 0;
+}
+
+export function getPolicyDecision(state: RunState, workItemId: string): PolicyDecisionRecord | null {
+  return state.policyDecisions.get(workItemId) ?? null;
+}
+
+export function getVerificationStatus(state: RunState, workItemId: string): 'started' | 'completed' | 'failed' | null {
+  return state.verificationStatus.get(workItemId) ?? null;
+}
+
+export function getEvidenceRefs(state: RunState, workItemId: string): string[] {
+  return state.evidenceRefs.get(workItemId) ?? [];
+}
+
+export function getToolFailures(state: RunState, workItemId: string): ToolFailureRecord[] {
+  return state.toolFailures.get(workItemId) ?? [];
 }

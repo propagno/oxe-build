@@ -1,6 +1,6 @@
 ---
 name: oxe:research
-description: OXE — Pesquisa exploratória (notas datadas em .oxe/research/ + RESEARCH.md)
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe-spec. Use: /oxe-spec --research ou /oxe-spec --deep"
 argument-hint: "[âmbito: spike, mapa sistema, reversa, modernização, …]"
 allowed-tools:
   - Read

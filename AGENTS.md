@@ -9,38 +9,53 @@ Este repositório empacota o fluxo **OXE** (spec-driven, artefatos em `.oxe/`). 
 
 ---
 
-## Os 8 comandos essenciais
+## Trilha principal (6 comandos)
 
 ```
-/oxe              → onde estou / o que faço / help
-/oxe-obs          → registrei algo importante (incorporado automaticamente)
+/oxe              → onde estou / o que faço / help / perguntas situacionais
 /oxe-quick        → tarefa pequena, sem cerimônia
-/oxe-scan         → mapeia o projeto (ou atualiza se já mapeado)
 /oxe-spec         → nova feature: perguntas → requisitos → roteiro
+                    flags: --refresh, --full, --research, --deep, --ui
 /oxe-plan         → tarefas por onda (--agents para multi-agente)
 /oxe-execute      → implementar (A: 1 sessão | B: por onda | C: por tarefa)
-/oxe-verify       → validar (camadas 5+6 opcionais via config)
+                    flags: --note, --debug, --deep-diagnosis, --checkpoint, --iterative
+/oxe-verify       → validar e fechar o ciclo (retro automática)
+                    flags: --gaps, --security, --ui, --pr, --diff, --skip-retro
 ```
 
-## Escape hatches (aparecem quando necessários)
+## Trilha avançada
 
 ```
-/oxe-retro        → retrospectiva: 3–5 lições → .oxe/LESSONS.md
-/oxe-forensics    → diagnóstico de falha persistente ou estado corrompido
-/oxe-debug        → diagnóstico técnico inline (integrado ao execute)
-/oxe-loop         → retry iterativo de onda até verify passar
-/oxe-security     → auditoria OWASP Top 10 filtrada pelo stack
-/oxe-research     → spike, mapa de sistema, engenharia reversa
-/oxe-validate-gaps → auditoria de cobertura de testes
-/oxe-discuss      → decisões D-NN antes do plano (discuss_before_plan: true)
-/oxe-route        → traduz linguagem natural → comando OXE
-/oxe-compact      → refresh do mapa de codebase
-/oxe-checkpoint   → snapshot nomeado de sessão
-/oxe-ui-spec      → contrato UI/UX derivado da SPEC
-/oxe-ui-review    → auditoria de implementação UI
-/oxe-review-pr    → revisão de PR/diff
-/oxe-project      → milestone + workstream + checkpoint em um comando
-/oxe-update       → atualiza workflows para a versão mais recente
+/oxe-session      → criar, alternar, retomar, fechar ou migrar sessões OXE
+/oxe-dashboard    → visão web para revisão de equipe e aprovação do plano
+```
+
+## Administrativa / plataforma
+
+```
+/oxe-capabilities → catálogo nativo de capabilities
+/oxe-skill        → skills OXE via @<id>
+oxe-cc azure      → provider Azure local-first
+```
+
+## Comandos legados (v1.1.0 — funcionam com aviso de migração)
+
+```
+/oxe-ask          → incorporado por /oxe "pergunta"
+/oxe-scan         → incorporado por /oxe-spec --refresh / --full
+/oxe-research     → incorporado por /oxe-spec --research
+/oxe-ui-spec      → incorporado por /oxe-spec --ui
+/oxe-obs          → incorporado por /oxe-execute --note
+/oxe-debug        → incorporado por /oxe-execute --debug
+/oxe-forensics    → incorporado por /oxe-execute --deep-diagnosis
+/oxe-checkpoint   → incorporado por /oxe-execute --checkpoint
+/oxe-loop         → incorporado por /oxe-execute --iterative
+/oxe-validate-gaps → incorporado por /oxe-verify --gaps
+/oxe-security     → incorporado por /oxe-verify --security
+/oxe-ui-review    → incorporado por /oxe-verify --ui
+/oxe-review-pr    → incorporado por /oxe-verify --pr
+/oxe-retro        → incorporado por /oxe-verify (retro automática)
+/oxe-project      → incorporado por /oxe-session milestone|workstream
 ```
 
 ## Profiles de execução (`profile` em `.oxe/config.json`)

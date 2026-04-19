@@ -1,6 +1,6 @@
 ---
 name: oxe:validate-gaps
-description: OXE — Auditoria Nyquist-lite (.oxe/VALIDATION-GAPS.md) após verify
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe-verify. Use: /oxe-verify --gaps"
 argument-hint: "[opcional: Tn ou A*]"
 allowed-tools:
   - Read

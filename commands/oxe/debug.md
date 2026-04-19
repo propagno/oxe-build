@@ -1,6 +1,6 @@
 ---
 name: oxe:debug
-description: OXE — Debug técnico durante execute (.oxe/DEBUG.md)
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe-execute. Use: /oxe-execute --debug"
 argument-hint: "[Tn ou erro/stack]"
 allowed-tools:
   - Read

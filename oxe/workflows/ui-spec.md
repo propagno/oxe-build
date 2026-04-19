@@ -1,5 +1,9 @@
 # OXE — Workflow: ui-spec
 
+> **[DEPRECATED v1.1.0]** Este comando foi incorporado por `/oxe-spec`.
+> Use: `/oxe-spec --ui` para gerar o contrato UI/UX ao final da spec.
+> Este alias continuará funcionando nesta versão por compatibilidade.
+
 <objective>
 Produzir **`.oxe/UI-SPEC.md`**: contrato de UI/UX derivado de **`.oxe/SPEC.md`** (e mapas em `.oxe/codebase/` quando útil), para **planear e verificar** trabalho front-end na mesma trilha OXE.
 

@@ -1,5 +1,10 @@
 # OXE — Workflow: project (gestão de projeto)
 
+> **[DEPRECATED v1.1.0]** Este comando foi incorporado por `/oxe-session`.
+> Use: `/oxe-session milestone <ação>` ou `/oxe-session workstream <ação>`.
+> Checkpoints agora via `/oxe-execute --checkpoint "<nome>"`.
+> Este alias continuará funcionando nesta versão por compatibilidade.
+
 <objective>
 Ponto de entrada unificado para as três operações de gestão de projeto OXE:
 

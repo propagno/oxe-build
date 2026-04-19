@@ -8,6 +8,7 @@ exports.globalRegistry = globalRegistry;
 exports.resetGlobalRegistry = resetGlobalRegistry;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const plugin_manifest_1 = require("./plugin-manifest");
 class PluginRegistry {
     constructor() {
         this.plugins = [];
@@ -15,6 +16,10 @@ class PluginRegistry {
     register(plugin) {
         if (this.plugins.some((p) => p.name === plugin.name)) {
             throw new Error(`Plugin "${plugin.name}" is already registered`);
+        }
+        const validation = (0, plugin_manifest_1.validatePlugin)(plugin);
+        if (!validation.valid && validation.errors.length > 0) {
+            throw new Error(`Plugin "${plugin.name}" failed validation: ${validation.errors.join('; ')}`);
         }
         this.plugins.push(plugin);
     }

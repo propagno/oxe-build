@@ -1,5 +1,9 @@
 # OXE — Workflow: ui-review
 
+> **[DEPRECATED v1.1.0]** Este comando foi incorporado por `/oxe-verify`.
+> Use: `/oxe-verify --ui` para incluir auditoria de implementação UI.
+> Este alias continuará funcionando nesta versão por compatibilidade.
+
 <objective>
 Produzir **`.oxe/UI-REVIEW.md`**: auditoria da implementação UI face a **`.oxe/UI-SPEC.md`** (e critérios **A*** da SPEC quando tocarem UI), tipicamente **após** trabalho de implementação e **antes** ou **como entrada** para **`verify`**.
 

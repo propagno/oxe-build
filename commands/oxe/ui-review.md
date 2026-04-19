@@ -1,6 +1,6 @@
 ---
 name: oxe:ui-review
-description: OXE — Auditoria UI (.oxe/UI-REVIEW.md)
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe-verify. Use: /oxe-verify --ui"
 argument-hint: "[paths ou Tn opcional]"
 allowed-tools:
   - Read

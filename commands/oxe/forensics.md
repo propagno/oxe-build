@@ -1,6 +1,6 @@
 ---
 name: oxe:forensics
-description: OXE — Forensics pós-falha (.oxe/FORENSICS.md + próximo passo scan/plan/execute)
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe-execute. Use: /oxe-execute --deep-diagnosis"
 argument-hint: "[sintoma opcional]"
 allowed-tools:
   - Read

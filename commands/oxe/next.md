@@ -1,6 +1,6 @@
 ---
 name: oxe:next
-description: Lê STATE.md e indica o próximo comando OXE lógico
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe. Use: /oxe (sem argumento) para o próximo passo"
 argument-hint: ""
 allowed-tools:
   - Read

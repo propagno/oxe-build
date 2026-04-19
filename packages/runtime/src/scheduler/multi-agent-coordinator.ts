@@ -4,6 +4,8 @@ import type { WorkspaceManager } from '../workspace/workspace-manager';
 import type { TaskExecutor, TaskResult, SchedulerContext } from './scheduler';
 import { Scheduler } from './scheduler';
 import type { WorkspaceLease } from '../models/workspace';
+import { buildHandoff } from './agent-roles';
+import type { CooperativeHandoff } from './agent-roles';
 
 export type CoordinationMode = 'parallel' | 'competitive' | 'cooperative';
 
@@ -31,6 +33,7 @@ export interface CoordinationResult {
   failed: string[];
   blocked: string[];
   agent_results: Array<{ agent_id: string; completed: string[]; failed: string[] }>;
+  handoffs?: CooperativeHandoff[];
 }
 
 // ─── Parallel mode ───────────────────────────────────────────────────────────
@@ -194,6 +197,108 @@ async function competeTwoAgents(
   return winner;
 }
 
+// ─── Cooperative mode ────────────────────────────────────────────────────────
+// planner (agent[0]) does a dry-run to collect context, then hands off to
+// executor (agent[1]) which performs the real run. Handoffs are recorded.
+
+async function runCooperative(
+  graph: ExecutionGraph,
+  opts: CoordinationOptions
+): Promise<CoordinationResult> {
+  if (opts.agents.length < 2) {
+    throw new Error('Cooperative mode requires at least 2 agents');
+  }
+  const [planner, executor] = opts.agents;
+  const { projectRoot, sessionId, runId } = opts;
+  const handoffs: CooperativeHandoff[] = [];
+
+  appendEvent(projectRoot, sessionId, {
+    type: 'RunStarted',
+    run_id: runId,
+    payload: { mode: 'cooperative', planner: planner.id, executor: executor.id },
+  });
+
+  const completed: string[] = [];
+  const failed: string[] = [];
+
+  for (const wave of graph.waves) {
+    for (const nodeId of wave.node_ids) {
+      const node = graph.nodes.get(nodeId)!;
+
+      // Phase 1: planner allocates workspace + signals readiness (no output used)
+      const planAlloc = await planner.workspaceManager.allocate({
+        work_item_id: nodeId,
+        attempt_number: 1,
+        strategy: node.workspace_strategy,
+        mutation_scope: node.mutation_scope,
+      });
+      await planner.workspaceManager.dispose(planAlloc.workspace_id).catch(() => {});
+
+      const handoff = buildHandoff({
+        from_agent_id: planner.id,
+        to_agent_id: executor.id,
+        from_role: 'planner',
+        to_role: 'executor',
+        work_item_id: nodeId,
+        context_pack_ref: null,
+      });
+      handoffs.push(handoff);
+
+      appendEvent(projectRoot, sessionId, {
+        type: 'AttemptStarted',
+        run_id: runId,
+        work_item_id: nodeId,
+        payload: { mode: 'cooperative', handoff_id: handoff.handoff_id },
+      });
+
+      // Phase 2: executor performs the real task
+      const execAlloc = await executor.workspaceManager.allocate({
+        work_item_id: nodeId,
+        attempt_number: 1,
+        strategy: node.workspace_strategy,
+        mutation_scope: node.mutation_scope,
+      });
+
+      let result: TaskResult;
+      try {
+        result = await executor.executor.execute(node, execAlloc, runId, 1);
+      } catch (e) {
+        result = { success: false, failure_class: 'env', evidence: [], output: String(e) };
+      }
+      await executor.workspaceManager.dispose(execAlloc.workspace_id).catch(() => {});
+
+      if (result.success) {
+        completed.push(nodeId);
+        appendEvent(projectRoot, sessionId, { type: 'WorkItemCompleted', run_id: runId, work_item_id: nodeId, payload: { mode: 'cooperative' } });
+      } else {
+        failed.push(nodeId);
+        appendEvent(projectRoot, sessionId, { type: 'WorkItemBlocked', run_id: runId, work_item_id: nodeId, payload: { mode: 'cooperative', failure_class: result.failure_class } });
+        break;
+      }
+    }
+    if (failed.length > 0) break;
+  }
+
+  appendEvent(projectRoot, sessionId, {
+    type: 'RunCompleted',
+    run_id: runId,
+    payload: { mode: 'cooperative', completed: completed.length, failed: failed.length },
+  });
+
+  return {
+    mode: 'cooperative',
+    run_id: runId,
+    completed,
+    failed,
+    blocked: [],
+    agent_results: [
+      { agent_id: planner.id, completed: [], failed: [] },
+      { agent_id: executor.id, completed, failed },
+    ],
+    handoffs,
+  };
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 export class MultiAgentCoordinator {
@@ -201,10 +306,7 @@ export class MultiAgentCoordinator {
     switch (opts.mode) {
       case 'parallel': return runParallel(graph, opts);
       case 'competitive': return runCompetitive(graph, opts);
-      case 'cooperative':
-        // Cooperative mode: planner (agent[0]) prepares context,
-        // executor (agent[1]) implements. For R3, delegate to sequential parallel.
-        return runParallel(graph, { ...opts, mode: 'parallel' });
+      case 'cooperative': return runCooperative(graph, opts);
       default:
         throw new Error(`Unknown coordination mode: ${opts.mode}`);
     }

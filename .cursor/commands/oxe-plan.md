@@ -34,12 +34,12 @@ OXE — Gera .oxe/PLAN.md com verificação por tarefa
 - Explicitar confiança e condição objetiva para replanejar.
 - **Seções esperadas:** Objetivo · Plano · Validação · Riscos · Assumptions · Confiança
 - **Bloqueios formais:** missing:state · missing:spec
-- **Referência canónica:** `oxe/workflows/references/reasoning-planning.md`
+- **Referência canónica:** `.oxe/workflows/references/reasoning-planning.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 Executa o workflow **OXE plan**. Lê e aplica **integralmente**:
 
-`oxe/workflows/plan.md` (na raiz do repositório em contexto)
+`.oxe/workflows/plan.md` (na raiz do repositório em contexto)
 
 Se o utilizador pedir replanejamento, trata como `--replan` conforme o workflow.

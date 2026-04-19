@@ -1,6 +1,33 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ContextPackBuilder = void 0;
+exports.scorePackQuality = scorePackQuality;
+function scorePackQuality(pack, profile) {
+    const expectedKinds = Object.keys(profile.artifact_kind_weights);
+    const presentKinds = new Set(pack.artifacts.map((a) => a.kind));
+    const completeness = expectedKinds.length > 0
+        ? expectedKinds.filter((k) => presentKinds.has(k)).length / expectedKinds.length
+        : 0;
+    const relevance_mean = pack.artifacts.length > 0
+        ? pack.artifacts.reduce((sum, a) => sum + a.relevanceScore, 0) / pack.artifacts.length
+        : 0;
+    const total = pack.total_artifacts_considered;
+    const redundancy = total > 0 ? 1 - (pack.artifacts.length / total) : 0;
+    const ageMs = Date.now() - new Date(pack.built_at).getTime();
+    const maxAgeMs = 24 * 60 * 60 * 1000;
+    const recency_score = Math.max(0, 1 - ageMs / maxAgeMs);
+    const overall = Math.min(1, 0.3 * completeness +
+        0.35 * relevance_mean +
+        0.1 * (1 - redundancy) +
+        0.25 * recency_score);
+    return {
+        completeness: Math.round(completeness * 100) / 100,
+        relevance_mean: Math.round(relevance_mean * 100) / 100,
+        redundancy: Math.round(redundancy * 100) / 100,
+        recency_score: Math.round(recency_score * 100) / 100,
+        overall: Math.round(overall * 100) / 100,
+    };
+}
 // ─── Relevance scoring ────────────────────────────────────────────────────────
 function scoreEvidenceRelevance(evidence, workItem) {
     let score = 0.5;
@@ -131,6 +158,21 @@ class ContextPackBuilder {
     /** Convenience: build with no evidence, just lessons and state summary */
     buildLightweight(workItem, state, lessons) {
         return this.build(workItem, state, [], new Map(), lessons);
+    }
+    /**
+     * Filter artifacts to those whose path-like tags are within mutation_scope.
+     * L0/L1 tiers apply the filter; L2/L3 skip it (full access).
+     */
+    filterByMutationScope(artifacts, mutationScope, autonomyTier) {
+        if (autonomyTier === 'L2' || autonomyTier === 'L3')
+            return artifacts;
+        const scope = mutationScope.map((s) => s.toLowerCase());
+        return artifacts.filter((a) => {
+            const pathTags = a.tags.filter((t) => t.includes('/') || t.includes('\\'));
+            if (pathTags.length === 0)
+                return true;
+            return pathTags.some((tag) => scope.some((s) => tag.toLowerCase().includes(s) || s.includes(tag.toLowerCase())));
+        });
     }
 }
 exports.ContextPackBuilder = ContextPackBuilder;

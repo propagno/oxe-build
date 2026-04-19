@@ -1,6 +1,6 @@
 ---
 name: oxe:workstream
-description: "Trilhas paralelas — list, new <nome>, switch <nome>, status, close <nome> — artefatos independentes em .oxe/workstreams/<nome>/"
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe-session. Use: /oxe-session workstream list|new|switch|close"
 argument-hint: "list | new <nome> | switch <nome> | status | close <nome>"
 allowed-tools:
   - Read

@@ -1,6 +1,6 @@
 ---
 name: oxe:compact
-description: OXE — refresh codebase vs repo + CODEBASE-DELTA + RESUME (rotina de projeto)
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe-spec. Use: /oxe-spec --refresh para refresh incremental do codebase"
 oxe_workflow_slug: compact
 oxe_reasoning_mode: discovery
 oxe_question_policy: explore_first

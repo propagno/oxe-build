@@ -1,5 +1,9 @@
 # OXE — Workflow: validate-gaps
 
+> **[DEPRECATED v1.1.0]** Este comando foi incorporado por `/oxe-verify`.
+> Use: `/oxe-verify --gaps` para ativar auditoria de cobertura explicitamente.
+> Este alias continuará funcionando nesta versão por compatibilidade.
+
 <objective>
 Após **`verify`**, produzir ou atualizar **`.oxe/VALIDATION-GAPS.md`**: auditoria **complementar** de cobertura e verificabilidade (critérios **A***, tarefas **Tn**, alinhamento PLAN↔VERIFY), com **sugestões de novas tarefas em texto** — **sem** alterar `.oxe/PLAN.md` por defeito.
 

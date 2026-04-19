@@ -34,12 +34,12 @@ OXE — Valida implementação (.oxe/VERIFY.md)
 - Se não houver findings, declarar isso explicitamente e listar riscos residuais.
 - **Seções esperadas:** Findings · Perguntas abertas · Riscos residuais · Resumo
 - **Bloqueios formais:** missing:state
-- **Referência canónica:** `oxe/workflows/references/reasoning-review.md`
+- **Referência canónica:** `.oxe/workflows/references/reasoning-review.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 Executa o workflow **OXE verify**. Lê e aplica **integralmente**:
 
-`oxe/workflows/verify.md` (na raiz do repositório em contexto)
+`.oxe/workflows/verify.md` (na raiz do repositório em contexto)
 
 Se o utilizador indicar uma tarefa `Tn`, restringe a verificação a essa tarefa.

@@ -3,7 +3,7 @@
 <objective>
 Gerenciar **sessões OXE** em `.oxe/sessions/` para isolar artefatos por ciclo de trabalho, mantendo **`.oxe/STATE.md`** como índice global e preservando o **modo legado** quando não houver sessão ativa.
 
-Subcomandos:
+Subcomandos de sessão:
 - `new <nome>`
 - `list`
 - `switch <id-ou-nome>`
@@ -13,6 +13,22 @@ Subcomandos:
 - `migrate <nome>`
 - `fork [nome-opcional]`
 - `revert <checkpoint-slug>`
+
+Subcomandos de milestone (absorvidos de `/oxe-project` e `/oxe-milestone`):
+- `milestone new [nome]` — iniciar marco de entrega (M-01, M-02, …)
+- `milestone complete` — fechar milestone ativo, arquivar em `.oxe/milestones/M-NN/`
+- `milestone status` — progresso do milestone ativo
+- `milestone audit` — Definition of Done do milestone
+
+Subcomandos de workstream (absorvidos de `/oxe-project` e `/oxe-workstream`):
+- `workstream new <nome>` — trilha paralela em `.oxe/workstreams/<nome>/`
+- `workstream switch <nome>` — definir workstream ativo
+- `workstream list` — listar trilhas
+- `workstream close <nome>` — fechar trilha
+
+Sem argumento: mostrar status atual (sessão ativa, milestone, workstream ativo).
+
+**Nota de compatibilidade v1.1.0:** `/oxe-project`, `/oxe-milestone` e `/oxe-workstream` foram incorporados por este comando. Esses comandos legados continuam funcionando mas exibem aviso de migração.
 </objective>
 
 <context>
