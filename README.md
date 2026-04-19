@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
-**Versão:** `1.0.0` · [package.json](package.json)
+**Versão:** `1.1.0` · [package.json](package.json)
 
 **Framework OXE — Orchestrated eXperience Engineering**
 
@@ -64,8 +64,11 @@ Para tarefas pequenas e pontuais, sem overhead:
 ### Standard — ciclo completo
 Para features, refatorações ou qualquer trabalho com múltiplos arquivos:
 ```
-/oxe-scan → /oxe-spec → /oxe-plan → /oxe-execute → /oxe-verify → /oxe-retro
+/oxe → /oxe-spec → /oxe-plan → /oxe-execute → /oxe-verify
 ```
+
+> scan, research, debug, retro e validações especializadas são acionados automaticamente
+> pelos estágios corretos ou por flags explícitas (ex.: `--research`, `--debug`, `--security`).
 
 ### Full — orquestração avançada
 Para projetos longos, multi-domínio, múltiplos agentes ou times:
@@ -80,24 +83,36 @@ Para projetos longos, multi-domínio, múltiplos agentes ou times:
 
 ---
 
-## Comandos principais
+## Trilha principal
 
 ```
-/oxe              → onde estou / o que faço / help
-/oxe-ask          → entender a situação atual com leitura robusta de STATE + sessão + artefatos
-/oxe-capabilities → listar, instalar, remover ou atualizar capabilities nativas do projeto
-/oxe-cc azure     → autenticar, sincronizar inventário e operar Azure com checkpoint formal
-/oxe-obs          → registrei algo importante (incorporado automaticamente)
+/oxe              → onde estou / o que faço / help / perguntas situacionais
 /oxe-quick        → tarefa pequena, sem cerimônia
-/oxe-scan         → mapeia o projeto (ou atualiza se já mapeado)
 /oxe-spec         → nova feature: perguntas → requisitos → roteiro
+                    (absorve scan, research e ui-spec via flags)
 /oxe-plan         → tarefas por onda (--agents para multi-agente)
 /oxe-execute      → implementar (A: completo | B: por onda | C: por tarefa)
-/oxe-verify       → validar que está pronto
-/oxe-dashboard    → visualizar runtime, active run, tracing, ondas, checkpoints e estado operacional
+                    (absorve obs, debug, forensics, checkpoint, loop via flags)
+/oxe-verify       → validar e fechar o ciclo (retro automática)
+                    (absorve gaps, security, ui-review, review-pr via flags)
 ```
 
-Tudo o mais é ativado automaticamente por contexto ou chamado só quando necessário.
+## Trilha avançada
+
+```
+/oxe-session      → criar, alternar, retomar, fechar ou migrar sessões OXE
+/oxe-dashboard    → visualizar runtime, ondas, checkpoints e estado operacional
+```
+
+## Comandos administrativos
+
+```
+/oxe-capabilities → catálogo nativo de capabilities
+/oxe-skill        → skills OXE via @<id>
+oxe-cc azure      → autenticar, sincronizar inventário e operar Azure com checkpoint formal
+```
+
+Tudo o mais é ativado automaticamente por contexto, por config, ou existe como flag dos estágios principais.
 
 ---
 
@@ -160,14 +175,21 @@ Com sessão ativa:
 ## A cadeia
 
 ```
-/oxe-obs (qualquer momento)
-     ↓
-/oxe-scan → /oxe-spec → /oxe-plan ──────────→ /oxe-execute → /oxe-verify → /oxe-retro
-                              ↓                                                  ↓
-                         /oxe-quick (trabalho pequeno)             .oxe/global/LESSONS.md
-                                                                               ↓
-                                                                    (alimenta o próximo ciclo)
+/oxe → /oxe-spec → /oxe-plan ──────────→ /oxe-execute → /oxe-verify
+                       ↓                                      ↓
+                  /oxe-quick (trabalho pequeno)     .oxe/global/LESSONS.md
+                                                               ↓
+                                                    (alimenta o próximo ciclo)
 ```
+
+**Comportamentos absorvidos por cada estágio:**
+
+| Estágio | Absorve (via flags ou automático) |
+|---------|-----------------------------------|
+| `/oxe` | ask (perguntas situacionais inline) |
+| `/oxe-spec` | scan (`--refresh`/`--full`), research (`--research`), ui-spec (`--ui`) |
+| `/oxe-execute` | obs (`--note`), debug (`--debug`), forensics (`--deep-diagnosis`), checkpoint (`--checkpoint`), loop (`--iterative`) |
+| `/oxe-verify` | gaps (`--gaps`), security (`--security`), ui-review (`--ui`), review-pr (`--pr`), retro (automática) |
 
 Cada passo lê o anterior como contexto e escreve seu artefato no escopo correto: raiz `.oxe/` em modo legado, ou `.oxe/sessions/sNNN-slug/` quando `active_session` está definido. Nenhum passo depende de você re-explicar o que já foi decidido.
 
@@ -177,22 +199,17 @@ Cada passo lê o anterior como contexto e escreve seu artefato no escopo correto
 
 | Comando | O que entrega |
 |---------|--------------|
-| `/oxe` | Sem input → próximo passo. Com texto → roteamento. Com "help" → 8 comandos. |
-| `/oxe-scan` | Se `.oxe/codebase/` já existe → modo refresh automático. `--full` força scan completo. |
-| `/oxe-spec` | **Auto-reflexão semântica** antes da aprovação: detecta contradições, critérios vagos, escopo creep e conflitos com stack — sem requisição extra. Também aplica discovery adaptativo: classifica a demanda, limita rodadas e regista incertezas estruturadas para alimentar a confiança do plano. |
-| `/oxe-plan` | **Test-first:** `Verificar` vem antes de `Implementar` em cada tarefa. Agora o `PLAN.md` também exige `## Autoavaliação do Plano` com rubrica fixa, `Melhor plano atual` e percentual de confiança determinístico. Usa investigações e capabilities conhecidas como evidência de apoio. |
-| `/oxe-execute` | Execução A/B/C. Antes de implementar, valida a autoavaliação do plano e bloqueia execução abaixo do limiar de confiança. Usa `EXECUTION-RUNTIME.md`, `ACTIVE-RUN.json`, `OXE-EVENTS.ndjson` e `CHECKPOINTS.md` para runtime tático, tracing e gates humanos formais. |
-| `/oxe-verify` | Até 6 camadas por config: audit + critérios + decisões + **coerência operacional** (runtime/checkpoints) + **calibração do plano** + UAT + gaps (`verification_depth: thorough`) + OWASP (`security_in_verify: true`). Sugere `/oxe-retro` ao concluir. |
-| `/oxe-retro` | Sintetiza 3–5 lições prescritivas em `.oxe/global/LESSONS.md` — consumidas automaticamente pelo próximo spec/plan. |
-| `/oxe-obs` | Registra observação → propaga automaticamente para R-IDs e Tns afetados no próximo plan/spec/execute. |
+| `/oxe` | Sem input → próximo passo. Com pergunta → situação atual (artefatos reais). Com "help" → trilha principal. |
+| `/oxe-spec` | **5 fases**: perguntas → pesquisa → requisitos R-ID → roteiro → aprovação. `--refresh` / `--full` fazem scan antes. `--research` ativa spike explícito. `--ui` gera UI-SPEC ao final. **Auto-reflexão semântica** automática antes da aprovação. |
+| `/oxe-plan` | **Test-first:** `Verificar` vem antes de `Implementar` em cada tarefa. `PLAN.md` com `## Autoavaliação do Plano` (rubrica fixa + confiança determinística). Usa investigações e capabilities como evidência. |
+| `/oxe-execute` | Execução A/B/C. Valida autoavaliação antes de implementar. `--note` registra observação. `--debug` aciona diagnóstico inline. `--deep-diagnosis` escalona para forensics. `--checkpoint "<nome>"` cria snapshot. `--iterative` ativa loop de retry. Usa `EXECUTION-RUNTIME.md`, `ACTIVE-RUN.json`, `OXE-EVENTS.ndjson`. |
+| `/oxe-verify` | Até 6 camadas: audit + critérios + decisões + coerência operacional + calibração + UAT. `--gaps` ativa Camada 5 (cobertura). `--security` ativa Camada 6 (OWASP). `--ui` inclui UI-REVIEW. `--pr` / `--diff` incluem revisão de PR. Retro automática ao fechar (`--skip-retro` para desativar). |
 | `/oxe-quick` | Objetivo → passos → agentes opcionais (PDDA lean) → verify. Para correções pontuais e features pequenas. |
-| `/oxe-project` | `milestone` + `workstream` + `checkpoint` em um único comando. |
-| `/oxe-session` | Cria, alterna, retoma, fecha e migra sessões OXE sem misturar artefatos de ciclos diferentes. |
-| `/oxe-ask` | Lê `STATE`, resolve a sessão ativa e responde perguntas situacionais com base nos artefatos reais. |
-| `/oxe-capabilities` | Gera e mantém o catálogo nativo de capabilities do projeto em `.oxe/CAPABILITIES.md` e `.oxe/capabilities/`, com política, side effects e evidência esperada. |
-| `/oxe-skill` | Descobrir, invocar e gerenciar skills OXE — unificação de personas e capabilities via `@<skill-id>`. Subcomandos: `list`, `explain <id>`, `new <id>`, invocação `@<id>` inline. |
-| `oxe-cc azure` | Provider Azure nativo via Azure CLI: autenticação corporativa com MFA, inventário via Resource Graph e operações guiadas para Service Bus, Event Grid e Azure SQL, sempre com evidência em `.oxe/cloud/azure/`. |
-| `/oxe-dashboard` | Consolida `STATE`, `PLAN`, `ACTIVE-RUN`, trace log, runtime, checkpoints e verify numa visão visual de ciclo, artefatos, ondas, handoffs e aprovação antes do execute. |
+| `/oxe-session` | Cria, alterna, retoma, fecha e migra sessões OXE. Subcomandos: `new`, `list`, `switch`, `resume`, `status`, `close`, `migrate`, `milestone`, `workstream`. |
+| `/oxe-dashboard` | Consolida `STATE`, `PLAN`, `ACTIVE-RUN`, trace log, runtime, checkpoints e verify numa visão visual de ciclo, ondas, handoffs e aprovação. |
+| `/oxe-capabilities` | Gera e mantém o catálogo nativo de capabilities em `.oxe/CAPABILITIES.md` e `.oxe/capabilities/`, com política, side effects e evidência esperada. |
+| `/oxe-skill` | Descobrir, invocar e gerenciar skills OXE via `@<skill-id>`. Subcomandos: `list`, `explain <id>`, `new <id>`. |
+| `oxe-cc azure` | Provider Azure nativo via Azure CLI: autenticação corporativa com MFA, inventário via Resource Graph e operações guiadas para Service Bus, Event Grid e Azure SQL. |
 
 ---
 
@@ -208,22 +225,27 @@ Se uma tarefa falha: diagnóstico inline automático (2-3 hipóteses → fix →
 
 ---
 
-## Comandos especializados
+## Comportamentos especializados (via flags)
 
-Estes não precisam ser decorados — aparecem quando o contexto pede ou quando a situação específica justifica.
+Estes comportamentos continuam existindo, mas agora são ativados como flags dos estágios principais ou automaticamente por contexto. Você não precisa decorar comandos separados.
 
-| Comando | Quando usar |
-|---------|-------------|
-| `/oxe-debug` | Diagnóstico técnico inline durante execute — stack trace, teste vermelho, flake |
-| `/oxe-research` | Spike, mapa de sistema, engenharia reversa — antes de spec ou plano |
-| `/oxe-forensics` | Falha persistente após múltiplas tentativas — diagnóstico profundo |
-| `/oxe-validate-gaps` | Gaps de cobertura pós-verify (Nyquist-lite) |
-| `/oxe-security` | Auditoria OWASP P0/P1/P2 vinculada ao stack |
-| `/oxe-ui-spec` | Contrato UI/UX derivado da SPEC (quando UI é domínio crítico) |
-| `/oxe-ui-review` | Auditoria da implementação UI contra o contrato |
-| `/oxe-review-pr` | Revisão de PR ou diff de branches |
-| `/oxe-checkpoint` | Snapshot nomeado do estado da sessão |
-| `/oxe-loop` | Iteração automática até verify passar (integrado ao Modo B do execute) |
+| Comportamento | Como ativar |
+|---------------|-------------|
+| Scan / refresh do codebase | `/oxe-spec --refresh` (incremental) ou `--full` (completo) |
+| Research / spike / engenharia reversa | `/oxe-spec --research` |
+| Contrato UI/UX | `/oxe-spec --ui` |
+| Registrar observação durante execução | `/oxe-execute --note "texto"` |
+| Diagnóstico técnico inline | `/oxe-execute --debug` |
+| Diagnóstico pós-falha persistente | `/oxe-execute --deep-diagnosis` |
+| Snapshot nomeado de sessão | `/oxe-execute --checkpoint "<nome>"` |
+| Loop de retry até verify passar | `/oxe-execute --iterative` |
+| Auditoria de cobertura pós-verify | `/oxe-verify --gaps` |
+| Auditoria OWASP P0/P1/P2 | `/oxe-verify --security` |
+| Auditoria de implementação UI | `/oxe-verify --ui` |
+| Revisão de PR ou diff de branches | `/oxe-verify --pr` ou `--diff branchA...branchB` |
+| Retrospectiva (lições do ciclo) | automática ao fechar `/oxe-verify` (desativar: `--skip-retro`) |
+
+**Compatibilidade:** os comandos legados (`/oxe-debug`, `/oxe-forensics`, `/oxe-research`, `/oxe-security`, `/oxe-validate-gaps`, `/oxe-ui-spec`, `/oxe-ui-review`, `/oxe-review-pr`, `/oxe-checkpoint`, `/oxe-loop`, `/oxe-obs`, `/oxe-ask`, `/oxe-scan`, `/oxe-retro`, `/oxe-project`) continuam funcionando em v1.1.0 e exibem um aviso sugerindo o novo destino.
 
 ---
 

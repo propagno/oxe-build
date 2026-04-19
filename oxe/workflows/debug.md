@@ -1,5 +1,9 @@
 # OXE — Workflow: debug
 
+> **[DEPRECATED v1.1.0]** Este comando foi incorporado por `/oxe-execute`.
+> Use: `/oxe-execute --debug` para ativar diagnóstico técnico explícito.
+> Este alias continuará funcionando nesta versão por compatibilidade.
+
 <objective>
 Orientar **investigação técnica** de um sintoma (teste a falhar, erro em runtime, flake, regressão) **durante** a execução de tarefas do `PLAN.md` ou passos do `QUICK.md`: ciclo **hipótese → experiência mínima → evidência → próximo passo**.
 

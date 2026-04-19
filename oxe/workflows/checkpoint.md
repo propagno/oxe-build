@@ -1,5 +1,9 @@
 # OXE — Workflow: checkpoint
 
+> **[DEPRECATED v1.1.0]** Este comando foi incorporado por `/oxe-execute`.
+> Use: `/oxe-execute --checkpoint "<nome>"` para criar snapshot nomeado da sessão.
+> Este alias continuará funcionando nesta versão por compatibilidade.
+
 <objective>
 Criar um **marco nomeado em disco** em `checkpoints/YYYY-MM-DD-HHmm-<slug>.md` do escopo resolvido e atualizar `CHECKPOINTS.md` correspondente (índice): **snapshot da sessão / trilha corrente** para pausar e retomar sem apagar SPEC/PLAN.
 

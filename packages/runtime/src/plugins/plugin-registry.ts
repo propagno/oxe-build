@@ -7,6 +7,7 @@ import type {
   VerifierProvider,
   ContextProvider,
 } from './plugin-abi';
+import { validatePlugin } from './plugin-manifest';
 
 export class PluginRegistry {
   private plugins: OxePlugin[] = [];
@@ -14,6 +15,10 @@ export class PluginRegistry {
   register(plugin: OxePlugin): void {
     if (this.plugins.some((p) => p.name === plugin.name)) {
       throw new Error(`Plugin "${plugin.name}" is already registered`);
+    }
+    const validation = validatePlugin(plugin);
+    if (!validation.valid && validation.errors.length > 0) {
+      throw new Error(`Plugin "${plugin.name}" failed validation: ${validation.errors.join('; ')}`);
     }
     this.plugins.push(plugin);
   }

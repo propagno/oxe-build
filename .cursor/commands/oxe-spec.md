@@ -34,12 +34,12 @@ OXE — Spec em 5 fases: perguntas → pesquisa → requisitos (R-ID v1/v2/fora)
 - Perguntar apenas ambiguidades que mudem a decisão ou o artefato final.
 - **Seções esperadas:** Fatos · Inferências · Lacunas · Próximo passo
 - **Bloqueios formais:** missing:state
-- **Referência canónica:** `oxe/workflows/references/reasoning-discovery.md`
+- **Referência canónica:** `.oxe/workflows/references/reasoning-discovery.md`
 
 <!-- oxe-reasoning-contract:end -->
 
 Executa o workflow **OXE spec**. Lê e aplica **integralmente**:
 
-`oxe/workflows/spec.md` (na raiz do repositório em contexto)
+`.oxe/workflows/spec.md` (na raiz do repositório em contexto)
 
 Usa o resto desta mensagem e ficheiros anexados como entrada do utilizador.

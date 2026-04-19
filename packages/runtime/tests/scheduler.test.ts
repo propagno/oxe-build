@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs';
 import { Scheduler } from '../src/scheduler/scheduler';
+import { loadJournal } from '../src/scheduler/run-journal';
 import { compile } from '../src/compiler/graph-compiler';
 import { InplaceWorkspaceManager } from '../src/workspace/strategies/inplace';
 import type { ParsedPlan, ParsedSpec, GraphNode } from '../src/compiler/graph-compiler';
@@ -184,6 +185,124 @@ describe('Scheduler', () => {
     assert.ok(types.includes('WorkspaceAllocated'));
     assert.ok(types.includes('WorkItemCompleted'));
     assert.ok(types.includes('RunCompleted'));
+  });
+
+  test('journal is created and updated during run', async () => {
+    const runId = `r-journal-${Date.now()}`;
+    const plan = makePlan([
+      { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false },
+    ]);
+    const graph = compile(plan, SPEC, { default_workspace_strategy: 'inplace' });
+    const scheduler = new Scheduler();
+    const ctx: SchedulerContext = { ...makeCtx(tmpDir, alwaysSucceed()), runId };
+    const result = await scheduler.run(graph, ctx);
+    assert.equal(result.status, 'completed');
+    // Journal should exist and reflect completed state
+    const journal = loadJournal(tmpDir, runId);
+    assert.ok(journal !== null);
+    assert.equal(journal!.scheduler_state, 'completed');
+    assert.ok(journal!.completed_work_items.includes('T1'));
+  });
+
+  test('cancel writes cancelled state to journal', async () => {
+    const runId = `r-cancel-${Date.now()}`;
+    const scheduler = new Scheduler();
+    const executor: TaskExecutor = {
+      async execute(): Promise<TaskResult> {
+        scheduler.cancel();
+        return { success: true, failure_class: null, evidence: [], output: 'ok' };
+      },
+    };
+    const plan = makePlan([
+      { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false },
+      { id: 'T2', title: 'T2', wave: 2, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false },
+    ]);
+    const graph = compile(plan, SPEC, { default_workspace_strategy: 'inplace' });
+    const ctx: SchedulerContext = { ...makeCtx(tmpDir, executor), runId };
+    const result = await scheduler.run(graph, ctx);
+    assert.equal(result.status, 'cancelled');
+    const journal = loadJournal(tmpDir, runId);
+    assert.ok(journal !== null);
+    assert.equal(journal!.cancelled, true);
+    assert.equal(journal!.scheduler_state, 'cancelled');
+  });
+
+  test('recover skips already-completed nodes', async () => {
+    const runId = `r-recover-${Date.now()}`;
+    const executedNodes: string[] = [];
+    const plan = makePlan([
+      { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false },
+      { id: 'T2', title: 'T2', wave: 2, dependsOn: ['T1'], files: [], verifyCommand: null, aceite: [], done: false },
+    ]);
+    const graph = compile(plan, SPEC, { default_workspace_strategy: 'inplace' });
+
+    // Simulate a paused journal with T1 already done
+    const { saveJournal } = await import('../src/scheduler/run-journal');
+    saveJournal(tmpDir, runId, {
+      run_id: runId,
+      paused_at: new Date().toISOString(),
+      cancelled: false,
+      eligible_work_items: [],
+      completed_work_items: ['T1'],
+      failed_work_items: [],
+      blocked_work_items: [],
+      pending_gates: [],
+      replay_cursor: null,
+      scheduler_state: 'paused',
+      partial_result: null,
+    });
+
+    const executor: TaskExecutor = {
+      async execute(node: GraphNode): Promise<TaskResult> {
+        executedNodes.push(node.id);
+        return { success: true, failure_class: null, evidence: [], output: 'ok' };
+      },
+    };
+
+    const scheduler = new Scheduler();
+    const ctx: SchedulerContext = { ...makeCtx(tmpDir, executor), runId };
+    const result = await scheduler.recover(runId, ctx, graph);
+    assert.ok(result !== null);
+    assert.equal(result!.status, 'completed');
+    // T1 was already done — only T2 should run
+    assert.ok(!executedNodes.includes('T1'));
+    assert.ok(executedNodes.includes('T2'));
+  });
+
+  test('recover returns null when no journal exists', async () => {
+    const scheduler = new Scheduler();
+    const plan = makePlan([
+      { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false },
+    ]);
+    const graph = compile(plan, SPEC, { default_workspace_strategy: 'inplace' });
+    const ctx: SchedulerContext = makeCtx(tmpDir, alwaysSucceed());
+    const result = await scheduler.recover('no-such-run', ctx, graph);
+    assert.equal(result, null);
+  });
+
+  test('RetryScheduled events are emitted on retry', async () => {
+    let callCount = 0;
+    const events: OxeEvent[] = [];
+    const executor: TaskExecutor = {
+      async execute(): Promise<TaskResult> {
+        callCount++;
+        return callCount < 3
+          ? { success: false, failure_class: 'env', evidence: [], output: 'env error' }
+          : { success: true, failure_class: null, evidence: [], output: 'ok' };
+      },
+    };
+    const plan = makePlan([
+      { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false },
+    ]);
+    const graph = compile(plan, SPEC, { default_workspace_strategy: 'inplace', default_max_retries: 2 });
+    const scheduler = new Scheduler();
+    const ctx: SchedulerContext = {
+      ...makeCtx(tmpDir, executor),
+      onEvent: (e) => events.push(e),
+    };
+    await scheduler.run(graph, ctx);
+    const retryEvents = events.filter((e) => e.type === 'RetryScheduled');
+    assert.equal(retryEvents.length, 2);
   });
 
   test('cleanup', () => {

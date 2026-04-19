@@ -1,5 +1,9 @@
 # OXE — Workflow: ask
 
+> **[DEPRECATED v1.1.0]** Este comando foi incorporado por `/oxe`.
+> Use: `/oxe "sua pergunta"` ou simplesmente `/oxe` para o próximo passo.
+> Este alias continuará funcionando nesta versão por compatibilidade.
+
 <objective>
 Responder perguntas sobre a situação atual do trabalho OXE com máxima robustez, usando o contexto real do repositório, a sessão ativa quando existir, e os artefatos mais recentes da trilha.
 </objective>

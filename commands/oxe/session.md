@@ -1,7 +1,7 @@
 ---
 name: oxe:session
-description: "Gerir sessões OXE: new, list, switch, resume, status, close, migrate"
-argument-hint: "[new <nome> | list | switch <id> | resume <id> | status | close | migrate <nome>]"
+description: "Gerir sessões, milestones e workstreams OXE (absorve /oxe-project, /oxe-milestone, /oxe-workstream)"
+argument-hint: "[new <nome> | list | switch <id> | close | migrate <nome> | milestone new|status|audit | workstream new|switch|list]"
 allowed-tools:
   - Read
   - Bash

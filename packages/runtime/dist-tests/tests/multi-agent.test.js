@@ -160,18 +160,63 @@ function makeTmpProjectRoot() {
     });
 });
 (0, node_test_1.describe)('MultiAgentCoordinator — cooperative mode', () => {
-    (0, node_test_1.it)('runs as parallel (R3 implementation)', async () => {
+    (0, node_test_1.it)('planner/executor handoff completes all tasks', async () => {
         const root = makeTmpProjectRoot();
         const graph = makeGraph(['t1', 't2']);
         const opts = {
             mode: 'cooperative',
-            agents: [makeAgent('a1', makeSuccessExecutor()), makeAgent('a2', makeSuccessExecutor())],
+            agents: [makeAgent('planner', makeSuccessExecutor()), makeAgent('executor', makeSuccessExecutor())],
             projectRoot: root,
             sessionId: null,
             runId: 'r-cooperative-001',
         };
         const coordinator = new multi_agent_coordinator_1.MultiAgentCoordinator();
         const result = await coordinator.run(graph, opts);
-        strict_1.default.equal(result.completed.length + result.failed.length, 2);
+        strict_1.default.equal(result.mode, 'cooperative');
+        strict_1.default.equal(result.completed.length, 2);
+        strict_1.default.equal(result.failed.length, 0);
+    });
+    (0, node_test_1.it)('records one handoff per task', async () => {
+        const root = makeTmpProjectRoot();
+        const graph = makeGraph(['t1', 't2', 't3']);
+        const opts = {
+            mode: 'cooperative',
+            agents: [makeAgent('planner', makeSuccessExecutor()), makeAgent('executor', makeSuccessExecutor())],
+            projectRoot: root,
+            sessionId: null,
+            runId: 'r-cooperative-002',
+        };
+        const coordinator = new multi_agent_coordinator_1.MultiAgentCoordinator();
+        const result = await coordinator.run(graph, opts);
+        strict_1.default.equal(result.handoffs?.length, 3);
+        strict_1.default.ok(result.handoffs.every((h) => h.from_role === 'planner' && h.to_role === 'executor'));
+    });
+    (0, node_test_1.it)('stops on first failure', async () => {
+        const root = makeTmpProjectRoot();
+        const graph = makeGraph(['t1', 't2']);
+        const opts = {
+            mode: 'cooperative',
+            agents: [makeAgent('planner', makeSuccessExecutor()), makeAgent('executor', makeFailExecutor())],
+            projectRoot: root,
+            sessionId: null,
+            runId: 'r-cooperative-003',
+        };
+        const coordinator = new multi_agent_coordinator_1.MultiAgentCoordinator();
+        const result = await coordinator.run(graph, opts);
+        strict_1.default.equal(result.failed.length, 1);
+        strict_1.default.equal(result.failed[0], 't1');
+    });
+    (0, node_test_1.it)('throws when less than 2 agents in cooperative mode', async () => {
+        const root = makeTmpProjectRoot();
+        const graph = makeGraph(['t1']);
+        const opts = {
+            mode: 'cooperative',
+            agents: [makeAgent('a1', makeSuccessExecutor())],
+            projectRoot: root,
+            sessionId: null,
+            runId: 'r-cooperative-004',
+        };
+        const coordinator = new multi_agent_coordinator_1.MultiAgentCoordinator();
+        await strict_1.default.rejects(() => coordinator.run(graph, opts), /at least 2 agents/);
     });
 });

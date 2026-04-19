@@ -1,6 +1,6 @@
 ---
 name: oxe:review-pr
-description: OXE — Revisão de diff/PR: analisa alterações, riscos, convenções e sugestões acionáveis
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe-verify. Use: /oxe-verify --pr ou /oxe-verify --diff branchA...branchB"
 argument-hint: "<URL do PR ou branch:base..head>"
 allowed-tools:
   - Read

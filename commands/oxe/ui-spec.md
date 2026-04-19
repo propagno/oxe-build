@@ -1,6 +1,6 @@
 ---
 name: oxe:ui-spec
-description: OXE — Contrato UI (.oxe/UI-SPEC.md) a partir da SPEC
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe-spec. Use: /oxe-spec --ui para gerar contrato UI/UX"
 argument-hint: "[âmbito UI opcional]"
 allowed-tools:
   - Read

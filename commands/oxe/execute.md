@@ -1,7 +1,7 @@
 ---
 name: oxe:execute
-description: "Executar plano (solo ou com agentes): escolha Completo (1 sessão) | Por onda | Por tarefa — controle explícito de requisições"
-argument-hint: "[A=completo | B=por-onda | C=por-tarefa | onda N | Tn]"
+description: "Executar plano A/B/C. Flags: --note (obs), --debug, --deep-diagnosis, --checkpoint '<nome>', --iterative"
+argument-hint: "[A|B|C | --note 'texto' | --debug | --deep-diagnosis | --checkpoint '<nome>' | --iterative]"
 allowed-tools:
   - Read
   - Bash

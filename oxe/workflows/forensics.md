@@ -1,5 +1,9 @@
 # OXE — Workflow: forensics
 
+> **[DEPRECATED v1.1.0]** Este comando foi incorporado por `/oxe-execute`.
+> Use: `/oxe-execute --deep-diagnosis` para diagnóstico pós-falha persistente.
+> Este alias continuará funcionando nesta versão por compatibilidade.
+
 <objective>
 Diagnosticar **incidentes de fluxo** após falha ou incoerência entre artefatos `.oxe/`, Git e saída de `oxe-cc doctor`: produzir **`FORENSICS.md`** no escopo resolvido com linha do tempo, hipótese de causa e **exatamente um** próximo passo canónico OXE (`scan`, `plan` ou `execute` — incluindo ações como reinstalar workflows ou correr verify como parte do movimento **execute**).
 

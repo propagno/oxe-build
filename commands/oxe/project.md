@@ -1,6 +1,6 @@
 ---
 name: oxe:project
-description: OXE — Gestão de projeto: milestone (M-NN), workstream (trilhas paralelas), checkpoint (snapshot)
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe-session. Use: /oxe-session milestone|workstream. Checkpoint via /oxe-execute --checkpoint"
 argument-hint: "milestone new|complete|status|audit | workstream new|switch|list|close <nome> | checkpoint [slug]"
 allowed-tools:
   - Read

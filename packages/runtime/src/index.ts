@@ -21,6 +21,7 @@ export type {
   AcceptanceCheckSuite,
   CheckResult,
 } from './verification/verification-compiler';
+export * from './verification/verification-manifest';
 export * from './policy/index';
 export * from './gate/index';
 export * from './projection/index';
@@ -30,3 +31,7 @@ export * from './plugins/index';
 export * from './delivery/index';
 export * from './context/index';
 export * from './scheduler/multi-agent-coordinator';
+
+// R4 Public ABI — Decision, Audit & Enterprise
+export * from './decision/index';
+export * from './audit/index';

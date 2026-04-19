@@ -1,7 +1,7 @@
 ---
 name: oxe
-description: OXE — Entrada universal: próximo passo, roteamento de linguagem natural ou help dos 8 comandos essenciais
-argument-hint: "[contexto | 'help' | vazio]"
+description: OXE — Entrada universal: próximo passo, perguntas situacionais, roteamento ou help da trilha principal (6 comandos)
+argument-hint: "[contexto | 'help' | 'sua pergunta' | vazio]"
 allowed-tools:
   - Read
   - Bash
@@ -46,4 +46,4 @@ oxe_semantics_hash: d7f65cd3f77b0abc
 
 **Workflow canônico:** `oxe/workflows/oxe.md`
 
-Execute integralmente esse ficheiro. `$ARGUMENTS`: vazio → próximo passo; texto → roteamento inteligente; "help" → 8 comandos essenciais.
+Execute integralmente esse ficheiro. `$ARGUMENTS`: vazio → próximo passo; "help" → trilha principal (6 comandos + 2 avançados); pergunta situacional → situação atual com base nos artefatos; texto de ação → roteamento inteligente para o workflow correto.

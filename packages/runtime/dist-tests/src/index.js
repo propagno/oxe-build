@@ -30,6 +30,7 @@ Object.defineProperty(exports, "compileVerification", { enumerable: true, get: f
 Object.defineProperty(exports, "runCheck", { enumerable: true, get: function () { return verification_compiler_1.runCheck; } });
 Object.defineProperty(exports, "runSuite", { enumerable: true, get: function () { return verification_compiler_1.runSuite; } });
 Object.defineProperty(exports, "summarizeSuite", { enumerable: true, get: function () { return verification_compiler_1.summarizeSuite; } });
+__exportStar(require("./verification/verification-manifest"), exports);
 __exportStar(require("./policy/index"), exports);
 __exportStar(require("./gate/index"), exports);
 __exportStar(require("./projection/index"), exports);
@@ -38,3 +39,6 @@ __exportStar(require("./plugins/index"), exports);
 __exportStar(require("./delivery/index"), exports);
 __exportStar(require("./context/index"), exports);
 __exportStar(require("./scheduler/multi-agent-coordinator"), exports);
+// R4 Public ABI — Decision, Audit & Enterprise
+__exportStar(require("./decision/index"), exports);
+__exportStar(require("./audit/index"), exports);

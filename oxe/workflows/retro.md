@@ -1,5 +1,9 @@
 # OXE — Workflow: retro (retrospectiva de ciclo)
 
+> **[DEPRECATED v1.1.0]** Este comando foi incorporado por `/oxe-verify`.
+> A retrospectiva agora é executada automaticamente ao fechar `/oxe-verify` (use `--skip-retro` para desativar).
+> Este alias continuará funcionando nesta versão por compatibilidade.
+
 <objective>
 Sintetizar os aprendizados de um ciclo completo (spec → verify) em **`.oxe/LESSONS.md`** — um arquivo prescritivo e cumulativo que alimenta automaticamente ciclos futuros.
 

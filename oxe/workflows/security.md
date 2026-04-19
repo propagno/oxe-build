@@ -1,5 +1,9 @@
 # OXE — Workflow: security (auditoria de segurança)
 
+> **[DEPRECATED v1.1.0]** Este comando foi incorporado por `/oxe-verify`.
+> Use: `/oxe-verify --security` para ativar auditoria OWASP explicitamente.
+> Este alias continuará funcionando nesta versão por compatibilidade.
+
 <objective>
 Produzir **`.oxe/SECURITY.md`**: auditoria de segurança do repositório focada nas categorias OWASP Top 10 **relevantes** ao stack do projeto. Complementa **`validate-gaps`** (cobertura de testes) com uma camada de segurança aplicativa.
 

@@ -1,6 +1,6 @@
 ---
 name: oxe:scan
-description: Escaneia o repositório e gera mapa em .oxe/codebase/ + STATE.md
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe-spec. Use: /oxe-spec --refresh (incremental) ou /oxe-spec --full (completo)"
 argument-hint: "[área opcional, ex. auth, api]"
 allowed-tools:
   - Read

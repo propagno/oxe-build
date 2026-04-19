@@ -11,7 +11,39 @@ Executar ou orientar verificação pós-implementação em **quatro camadas prog
 Resultado registrado em **`.oxe/VERIFY.md`** com atualização de **STATE**.
 
 Se o usuário indicar uma tarefa (ex.: `T2`), focar só nela nas camadas 1–2; as camadas 3–4 são sempre de escopo completo.
+
+**Flags suportadas:**
+- `--gaps` — ativar Camada 5 (auditoria de cobertura) explicitamente, independente de `verification_depth` na config (equivalente a `/oxe-validate-gaps`).
+- `--security` — ativar Camada 6 (auditoria OWASP) explicitamente, independente de `security_in_verify` na config (equivalente a `/oxe-security`).
+- `--ui` — incluir auditoria de implementação UI baseada em `UI-SPEC.md` (equivalente a `/oxe-ui-review`). Ativado automaticamente se `UI-SPEC.md` existir no escopo.
+- `--pr` — incluir revisão de PR antes de fechar o verify (equivalente a `/oxe-review-pr`). Usa o diff do branch atual contra o branch base.
+- `--diff branchA...branchB` — revisão de diff específico entre dois branches ou SHAs.
+- `--skip-retro` — pular a retrospectiva automática ao final do verify.
+
+**Retro automática:** ao fechar `verify_complete`, executar automaticamente a lógica de `oxe/workflows/retro.md` para sintetizar 3–5 lições em `.oxe/global/LESSONS.md`. Usar `--skip-retro` para desativar.
+
+**Nota de compatibilidade v1.1.0:** `/oxe-validate-gaps`, `/oxe-security`, `/oxe-ui-review`, `/oxe-review-pr` e `/oxe-retro` foram incorporados por este comando. Esses comandos legados continuam funcionando mas exibem aviso de migração.
 </objective>
+
+<flags_processing>
+## Processamento de flags (executar antes do step 1)
+
+Ao receber qualquer argumento, verificar flags antes de iniciar o fluxo principal:
+
+1. **`--gaps`**: registrar internamente que Camada 5 deve ser executada independentemente de `verification_depth` na config.
+
+2. **`--security`**: registrar internamente que Camada 6 deve ser executada independentemente de `security_in_verify` na config.
+
+3. **`--ui`**: registrar internamente que auditoria UI deve ser executada. Se `UI-SPEC.md` não existir no escopo, avisar e perguntar se deseja executar `/oxe-spec --ui` primeiro.
+
+4. **`--pr`**: após as camadas principais, executar a lógica de `oxe/workflows/review-pr.md` com o diff do branch atual. Incluir achados na seção **Revisão de PR** do VERIFY.md.
+
+5. **`--diff branchA...branchB`**: equivalente a `--pr`, mas com o diff específico informado.
+
+6. **`--skip-retro`**: registrar que a retro automática deve ser pulada ao final.
+
+**Verificação automática de UI:** independente de flags, se `UI-SPEC.md` existir no escopo e houver critérios A* que toquem interface, executar auditoria UI parcial.
+</flags_processing>
 
 <context>
 - Aplicar `oxe/workflows/references/reasoning-review.md` como contrato deste passo. A resposta no chat deve começar por achados, não por resumo.
@@ -173,9 +205,16 @@ O `calibration_error` de cada dimensão = `|score declarado - resultado observad
    - Se o resultado for `REPROVADO`, registrar `verify_failed` e não avançar para SUMMARY/commit.
 7c. **Blueprint plan-agent:** se **todas** as verificações relevantes **passaram**, existir **`.oxe/plan-agents.json`** com `oxePlanAgentsSchema >= 2` e `lifecycle.status === "executing"` (ou `pending_execute`), actualizar o JSON: `lifecycle: { "status": "closed", "since": "<ISO>" }` e espelhar em **`STATE.md`** (**lifecycle_status** → `closed`). Não fechar como `closed` se `verify_failed` ou gaps por resolver.
 8. Acrescentar entrada em **`SUMMARY.md`** do escopo resolvido: se não existir, criar a partir de **`oxe/templates/SUMMARY.template.md`**. **Obrigatório** quando `verify_failed` ou quando a seção **Gaps** tiver itens.
-8b. **Retrospectiva (pós-verify):** se `verify_complete`, sugerir **`/oxe-retro`** para capturar aprendizados do ciclo em `.oxe/LESSONS.md`. Especialmente importante quando: houve replanejamento (`--replan`), houve falhas em execute que precisaram de debug, critérios A* foram ajustados durante o ciclo, ou o ciclo durou mais de 2 ondas. Retro antes do próximo spec garante que lições orientem o próximo ciclo.
-8c. **Camada 5 — Validate-gaps automático:** se `verification_depth: "thorough"` em `.oxe/config.json`, executar a lógica de `oxe/workflows/validate-gaps.md` e adicionar seção **Gaps de Cobertura** ao VERIFY.md (mesmo conteúdo de VALIDATION-GAPS.md). Também escrever `.oxe/VALIDATION-GAPS.md` separado.
-8d. **Camada 6 — Security automático:** se `security_in_verify: true` em `.oxe/config.json`, executar a lógica de `oxe/workflows/security.md` e adicionar seção **Auditoria de Segurança** ao VERIFY.md. Também escrever `.oxe/SECURITY.md` separado. Achados P0 bloqueiam o `verify_complete` — registrar `verify_failed` até P0s serem resolvidos.
+8b. **Retrospectiva automática (pós-verify):** se `verify_complete` e `--skip-retro` não foi passado, executar automaticamente a lógica de `oxe/workflows/retro.md`:
+   - Sintetizar 3–5 lições prescritivas com base nos achados do ciclo atual
+   - Escrever/atualizar `.oxe/global/LESSONS.md` (com fallback para `.oxe/LESSONS.md`)
+   - Incluir seção **Retrospectiva** resumida no VERIFY.md
+   - Especialmente importante quando: houve replanejamento, falhas em execute, critérios A* ajustados, ou ciclo durou mais de 2 ondas
+   - Com `--skip-retro`: pular esta etapa e mencionar que a retrospectiva está disponível via `/oxe-retro` manualmente
+8c. **Camada 5 — Validate-gaps:** se `verification_depth: "thorough"` em `.oxe/config.json` **ou** flag `--gaps` foi recebida, executar a lógica de `oxe/workflows/validate-gaps.md` e adicionar seção **Gaps de Cobertura** ao VERIFY.md (mesmo conteúdo de VALIDATION-GAPS.md). Também escrever `.oxe/VALIDATION-GAPS.md` separado.
+8d. **Camada 6 — Security:** se `security_in_verify: true` em `.oxe/config.json` **ou** flag `--security` foi recebida, executar a lógica de `oxe/workflows/security.md` e adicionar seção **Auditoria de Segurança** ao VERIFY.md. Também escrever `.oxe/SECURITY.md` separado. Achados P0 bloqueiam o `verify_complete` — registrar `verify_failed` até P0s serem resolvidos.
+8d2. **Camada UI — Revisão de implementação:** se `UI-SPEC.md` existir no escopo **ou** flag `--ui` foi recebida, executar a lógica de `oxe/workflows/ui-review.md` e adicionar seção **Auditoria UI** ao VERIFY.md. Também escrever `.oxe/UI-REVIEW.md` separado.
+8d3. **Revisão de PR/diff:** se flag `--pr` ou `--diff` foi recebida, executar a lógica de `oxe/workflows/review-pr.md` com o diff relevante e adicionar seção **Revisão de PR** ao VERIFY.md.
 8e. **Camada QC — Quality Contract automático:** se SPEC.md contiver requisitos `R-RB-NN` com versão `v1`, executar o bloco `<camada_qc_quality_contract>` e adicionar seção **Contrato de Qualidade** ao VERIFY.md. R-RB Piso não implementados bloqueiam `verify_complete` — registrar `verify_failed` até serem resolvidos ou explicitamente aceitos como risco P0.
 9. **Só se todas as verificações relevantes passarem:** se `after_verify_draft_commit` não for `false`: acrescentar em **VERIFY.md** a seção **Rascunho de commit** — mensagem convencional (ex.: `feat:` / `fix:`) + bullets alinhados aos critérios **A*** e decisões **D-NN**; **não** incluir segredos.
 10. **Só se passou:** se `after_verify_suggest_pr` não for `false`: acrescentar **Checklist PR** — branch base, título sugerido, screenshots se UI, links a SPEC/PLAN/DISCUSS, testes executados.

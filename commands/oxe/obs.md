@@ -1,6 +1,6 @@
 ---
 name: oxe:obs
-description: "Observação contextual — registra em .oxe/OBSERVATIONS.md, incorporada automaticamente no próximo spec/plan/execute sem re-explicar"
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe-execute. Use: /oxe-execute --note 'sua observação'"
 argument-hint: "[observação: restrição, descoberta, preferência, risco ou decisão]"
 allowed-tools:
   - Read

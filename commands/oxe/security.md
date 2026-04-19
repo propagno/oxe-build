@@ -1,6 +1,6 @@
 ---
 name: oxe:security
-description: OXE — Auditoria de segurança OWASP (.oxe/SECURITY.md): P0 crítico / P1 alto / P2 médio
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe-verify. Use: /oxe-verify --security"
 argument-hint: "[opcional: categoria OWASP, módulo ou arquivo]"
 allowed-tools:
   - Read

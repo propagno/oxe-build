@@ -1,7 +1,7 @@
 ---
 name: oxe:verify
-description: Valida implementação contra SPEC e PLAN; produz checklist e gaps
-argument-hint: "[Tn opcional — focar uma tarefa]"
+description: "Valida e fecha o ciclo (retro automática). Flags: --gaps, --security, --ui, --pr, --diff, --skip-retro"
+argument-hint: "[Tn | --gaps | --security | --ui | --pr | --diff branchA...branchB | --skip-retro]"
 allowed-tools:
   - Read
   - Write

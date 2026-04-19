@@ -1,6 +1,6 @@
 ---
 name: oxe:ask
-description: "Perguntar ao OXE sobre a situação atual com leitura robusta de STATE, sessão ativa e artefatos da trilha"
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe. Use: /oxe 'sua pergunta' — Perguntar ao OXE sobre a situação atual"
 argument-hint: "[pergunta em texto livre]"
 allowed-tools:
   - Read
@@ -41,6 +41,10 @@ oxe_semantics_hash: b3f89121879267f9
 - **Referência canónica:** `oxe/workflows/references/reasoning-discovery.md`
 
 <!-- oxe-reasoning-contract:end -->
+
+> **[DEPRECATED v1.1.0]** Este comando foi incorporado por `/oxe`.
+> Use: `/oxe "sua pergunta"` para perguntas situacionais.
+> Este alias continuará funcionando nesta versão por compatibilidade.
 
 **Workflow canónico:** `oxe/workflows/ask.md`
 

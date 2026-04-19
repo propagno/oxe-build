@@ -1,5 +1,9 @@
 # OXE — Workflow: research
 
+> **[DEPRECATED v1.1.0]** Este comando foi incorporado por `/oxe-spec`.
+> Use: `/oxe-spec --research` ou `/oxe-spec --deep` para spike/pesquisa explícita.
+> Este alias continuará funcionando nesta versão por compatibilidade.
+
 <objective>
 Produzir **notas de pesquisa rastreáveis** em `research/YYYY-MM-DD-<slug>.md` do escopo resolvido e manter `RESEARCH.md` correspondente como **índice e histórico** (ligações, tipo, estado, resumo). Serve para qualquer incerteza antes de um plano pesado: spikes, comparação de tecnologias, due diligence, requisitos ambíguos, **e** — com profundidade quando pedido — compreensão de **sistemas grandes**, **engenharia reversa / brownfield** e **hipóteses de modernização** (sempre ligadas a evidência ou suposições explícitas).
 

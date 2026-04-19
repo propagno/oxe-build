@@ -1,5 +1,9 @@
 # OXE — Workflow: loop (execução iterativa até verificação passar)
 
+> **[DEPRECATED v1.1.0]** Este comando foi incorporado por `/oxe-execute`.
+> Use: `/oxe-execute --iterative` para ativar loop de retry até verify passar.
+> Este alias continuará funcionando nesta versão por compatibilidade.
+
 <objective>
 Executar uma **onda do PLAN.md** em ciclo iterativo até que a verificação inline passe ou o limite de tentativas seja atingido. Complementa o **Modo B** (por onda) do **`execute.md`** com retries automáticos e diagnóstico inline de falhas.
 

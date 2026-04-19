@@ -26,8 +26,11 @@ Escolha a complexidade certa. Comece simples e adicione estrutura quando precisa
 
 **Standard** — ciclo completo para features e refatorações:
 ```
-/oxe-scan → /oxe-spec → /oxe-plan → /oxe-execute → /oxe-verify → /oxe-retro
+/oxe → /oxe-spec → /oxe-plan → /oxe-execute → /oxe-verify
 ```
+
+> scan, research, debug, retro e validações especializadas são acionados automaticamente
+> dentro dos estágios corretos ou por flags explícitas.
 
 **Full** — sessões, multi-agente, dashboard, capabilities:
 ```
@@ -36,25 +39,40 @@ Escolha a complexidade certa. Comece simples e adicione estrutura quando precisa
 
 ---
 
-## Comandos principais
+## Trilha principal
+
+Estes são os únicos comandos que você precisa conhecer para seguir o framework:
 
 ```
-/oxe              → onde estou / o que faço / help (entrada universal)
-/oxe-ask          → entender a situação atual com leitura robusta de STATE + sessão + artefatos
-/oxe-obs          → registrei algo importante — incorporado automaticamente nos próximos passos
+/oxe              → onde estou / o que faço / help (entrada universal + perguntas situacionais)
 /oxe-quick        → tarefa pequena, sem cerimônia (com agentes lean quando necessário)
-/oxe-capabilities → listar, instalar, remover ou atualizar capabilities nativas do projeto
-/oxe-session      → criar, alternar, retomar, fechar ou migrar sessões OXE
-/oxe-cc azure     → autenticar, sincronizar inventário e operar Azure Service Bus, Event Grid e Azure SQL com checkpoint
-/oxe-scan         → mapeia o projeto (ou atualiza o mapa se já existir)
 /oxe-spec         → nova feature: perguntas → pesquisa → requisitos → roteiro → aprovação
+                    Absorve: scan (--refresh / --full), research (--research / --deep), ui-spec (--ui)
 /oxe-plan         → tarefas por onda (--agents para blueprint multi-agente)
 /oxe-execute      → implementar (A: 1 sessão | B: por onda | C: por tarefa)
-/oxe-verify       → validar (camadas 5+6 opcionais via config: gaps + segurança)
+                    Absorve: obs (--note), debug (--debug), forensics (--deep-diagnosis),
+                             checkpoint (--checkpoint), loop (--iterative)
+/oxe-verify       → validar e fechar o ciclo
+                    Absorve: gaps (--gaps), security (--security), ui-review (--ui),
+                             review-pr (--pr / --diff), retro (automático)
+```
+
+## Trilha avançada
+
+```
+/oxe-session      → criar, alternar, retomar, fechar ou migrar sessões OXE
 /oxe-dashboard    → visão web opt-in para revisão de equipe e aprovação do plano
 ```
 
-Tudo o mais é ativado automaticamente por contexto, por config, ou existe como escape hatch.
+## Comandos administrativos e plataforma
+
+```
+/oxe-capabilities → listar, instalar, remover ou atualizar capabilities nativas do projeto
+/oxe-skill        → descobrir, invocar e gerenciar skills OXE via @<id>
+oxe-cc azure      → autenticar, sincronizar inventário e operar Azure com checkpoint formal
+```
+
+Tudo o mais é ativado automaticamente por contexto, por config, ou existe como flag dos estágios principais.
 
 ---
 
@@ -80,9 +98,13 @@ Tudo o mais é ativado automaticamente por contexto, por config, ou existe como 
 
 ### Cursor
 
-Slash commands essenciais: `/oxe`, `/oxe-obs`, `/oxe-quick`, `/oxe-scan`, `/oxe-spec`, `/oxe-plan`, `/oxe-execute`, `/oxe-verify`
+Slash commands da trilha principal: `/oxe`, `/oxe-quick`, `/oxe-spec`, `/oxe-plan`, `/oxe-execute`, `/oxe-verify`
 
-Slash commands completos: `/oxe-discuss`, `/oxe-plan-agent`, `/oxe-project`, `/oxe-loop`, `/oxe-security`, `/oxe-update`, `/oxe-forensics`, `/oxe-debug`, `/oxe-route`, `/oxe-research`, `/oxe-validate-gaps`, `/oxe-compact`, `/oxe-checkpoint`, `/oxe-ui-spec`, `/oxe-ui-review`, `/oxe-milestone`, `/oxe-workstream`, `/oxe-skill`, `/oxe-next`, `/oxe-help` (instalados em `~/.cursor/commands/` pelo `oxe-cc`). **Review de PR:** no Cursor não há slash dedicado — peça em linguagem natural seguindo `oxe/workflows/review-pr.md` em contexto.
+Slash commands avançados: `/oxe-session`, `/oxe-dashboard`
+
+Slash commands administrativos / plataforma: `/oxe-capabilities`, `/oxe-skill`, `/oxe-update`
+
+Slash commands legados (ainda funcionam, exibem aviso de migração): `/oxe-ask`, `/oxe-obs`, `/oxe-scan`, `/oxe-research`, `/oxe-debug`, `/oxe-forensics`, `/oxe-loop`, `/oxe-checkpoint`, `/oxe-ui-spec`, `/oxe-ui-review`, `/oxe-security`, `/oxe-validate-gaps`, `/oxe-review-pr`, `/oxe-retro`, `/oxe-project`, `/oxe-compact`, `/oxe-route`, `/oxe-next`, `/oxe-discuss`, `/oxe-plan-agent`, `/oxe-milestone`, `/oxe-workstream`, `/oxe-help` (instalados em `~/.cursor/commands/` pelo `oxe-cc`).
 
 ### GitHub Copilot (VS Code)
 
@@ -117,26 +139,29 @@ Com **`compact_max_age_days`** em `.oxe/config.json` (ver `oxe/templates/CONFIG.
 
 ## Fluxo completo
 
-0. **obs** *(qualquer momento)* — `/oxe-obs` registra uma observação contextual; incorporada automaticamente no próximo spec/plan/execute sem re-explicar.
-1. **scan** — após clonar ou quando o codebase mudar. **Inteligente:** se `.oxe/codebase/` já existir, opera em modo refresh (incremental) automaticamente — sem precisar chamar `/oxe-compact` separadamente. Use `--full` para forçar scan completo. Repositórios **legado** (COBOL, JCL, VB6): aplica `legacy-brownfield.md` automaticamente.
-2. **spec** — fluxo em **5 fases**: perguntas (máx 3 rodadas) → pesquisa (proposta inline na Fase 2, sem sair do spec) → requisitos R-ID (v1/v2/fora) → roteiro (`.oxe/ROADMAP.md`) → aprovação. Se `discuss_before_plan: true` na config, o próximo passo após aprovação é `oxe:discuss` antes de plan.
-3. **plan** — plano executável + **Verificar** por tarefa. Se 3+ domínios distintos, **sugere automaticamente** blueprint de agentes (`/oxe-plan --agents`). Sem `--agents`: solo. Com `--agents`: gera também `plan-agents.json` (schema 3 com `model_hint`).
-4. **execute** — modo selecionado 1 vez: **A) Completo** (1 sessão), **B) Por onda**, **C) Por tarefa**. Antes de executar, validar a **Autoavaliação do Plano**: se `Melhor plano atual: não` ou a confiança estiver abaixo do limiar, o fluxo deve replanear em vez de implementar. Se Verificar falhar inline: diagnóstico automático (2-3 hipóteses + fix), sem precisar chamar `/oxe-debug` separadamente. Escalação para `/oxe-forensics` só se esgotar tentativas.
-5. **verify** — até **6 camadas** por config: auditoria pré-exec, tarefas + critérios A*, fidelidade D-NN, **coerência operacional** (runtime + checkpoints), **calibração do plano**, UAT, **gaps de cobertura** (camada 5 — `verification_depth: "thorough"`), **segurança OWASP** (camada 6 — `security_in_verify: true`). Sem comandos extras.
-6. **retro** *(opcional, recomendado após verify_complete)* — `/oxe-retro` sintetiza 3–5 lições prescritivas em `.oxe/LESSONS.md`. Cada lição diz **o que fazer diferente** no próximo ciclo — consumida automaticamente pelo próximo spec/plan.
-7. **→ próximo ciclo** — spec/plan do próximo ciclo lê LESSONS.md automaticamente. Os erros do ciclo anterior não se repetem.
-
-**Escape hatches (não precisam ser decorados — aparecem quando necessários):**
-
-- **`/oxe-forensics`** — sugerido automaticamente pelo execute/verify quando falha persiste. Diagnóstico pós-falha + 1 caminho de reentrada.
-- **`/oxe-debug`** — diagnóstico técnico inline durante execute (já integrado ao execute; disponível standalone para controle explícito).
-- **`/oxe-loop`** — iteração até verify passar (disponível standalone; integrado ao Modo B do execute via `loop_max`).
-- **`/oxe-research`** — notas datadas em `.oxe/research/` para spikes, mapas de sistema, engenharia reversa.
-- **`/oxe-capabilities`** — catálogo nativo de capabilities locais, por script ou conector, com metadata e diagnóstico.
-- **`/oxe-skill`** — descobrir, invocar e gerenciar skills (unificação de personas e capabilities via `@<id>`).
-- **`/oxe-dashboard`** — leitura visual/operacional do runtime, checkpoints e ondas ativas.
-- **`/oxe-route`** — traduz linguagem natural → comando. Equivalente a `/oxe [texto]`.
-- **`/oxe-compact`** — refresh explícito do codebase. Equivalente a `/oxe-scan` sem `--full`.
+0. **situação** — `/oxe "pergunta"` responde com base nos artefatos reais. Sem input: próximo passo.
+1. **spec** — fluxo em **5 fases**: perguntas (máx 3 rodadas) → pesquisa (proposta inline na Fase 2, sem sair do spec) → requisitos R-ID (v1/v2/fora) → roteiro (`.oxe/ROADMAP.md`) → aprovação.
+   - `/oxe-spec --refresh` — atualiza o mapa do codebase antes de spec (modo incremental)
+   - `/oxe-spec --full` — força scan completo antes de spec
+   - `/oxe-spec --research` — ativa pesquisa/spike explícita na Fase 2
+   - `/oxe-spec --ui` — gera contrato UI-SPEC ao final da spec
+   - Se `discuss_before_plan: true` na config, o próximo passo após aprovação é `oxe:discuss` antes de plan.
+2. **plan** — plano executável + **Verificar** por tarefa. Se 3+ domínios distintos, **sugere automaticamente** blueprint de agentes (`/oxe-plan --agents`). Sem `--agents`: solo. Com `--agents`: gera também `plan-agents.json` (schema 3 com `model_hint`).
+3. **execute** — modo selecionado 1 vez: **A) Completo** (1 sessão), **B) Por onda**, **C) Por tarefa**. Antes de executar, valida a **Autoavaliação do Plano**. Se Verificar falhar inline: diagnóstico automático (2-3 hipóteses + fix). Escalação automática para diagnóstico profundo se esgotar tentativas.
+   - `/oxe-execute --note "texto"` — registra observação contextual durante a execução
+   - `/oxe-execute --debug` — ativa diagnóstico técnico explícito (stack trace, teste vermelho)
+   - `/oxe-execute --deep-diagnosis` — diagnóstico pós-falha persistente + caminho de reentrada
+   - `/oxe-execute --checkpoint "nome"` — cria snapshot nomeado do estado da sessão
+   - `/oxe-execute --iterative` — loop de retry até verify passar (Modo B com `loop_max`)
+4. **verify** — até **6 camadas** por config: auditoria pré-exec, tarefas + critérios A*, fidelidade D-NN, **coerência operacional** (runtime + checkpoints), **calibração do plano**, UAT, **gaps de cobertura**, **segurança OWASP**. Sem comandos extras.
+   - `/oxe-verify --gaps` — ativa auditoria de cobertura explicitamente (Camada 5)
+   - `/oxe-verify --security` — ativa auditoria OWASP explicitamente (Camada 6)
+   - `/oxe-verify --ui` — inclui auditoria de implementação UI (exige UI-SPEC.md)
+   - `/oxe-verify --pr` — inclui revisão de PR ou diff de branches
+   - `/oxe-verify --diff branchA...branchB` — revisão de diff específico
+   - `/oxe-verify --skip-retro` — pula a retrospectiva automática ao final
+   - **Retro automática:** ao fechar `verify_complete`, sintetiza 3–5 lições em `.oxe/LESSONS.md` (pode ser desativada com `--skip-retro`).
+5. **→ próximo ciclo** — spec/plan do próximo ciclo lê LESSONS.md automaticamente.
 
 **Gestão de projeto (`/oxe-project`):**
 
@@ -192,26 +217,49 @@ Um pedido → **um** destino (sem gerar contrato). O agente aplica `route.md` ou
 
 | Se o utilizador disser (exemplos) | Comando / ação |
 |-----------------------------------|----------------|
-| Não sei que passo OXE sou / “o que faço agora?” | `/oxe-next` ou `npx oxe-cc status` |
-| Quero entender rapidamente a situação real da trilha atual | `/oxe-ask [pergunta]` |
+| Não sei que passo OXE sou / “o que faço agora?” | `/oxe` ou `npx oxe-cc status` |
+| Quero entender rapidamente a situação real da trilha atual | `/oxe “pergunta”` |
 | Acabei de clonar / falta OXE no projeto | `npx oxe-cc@latest` (ou `oxe-cc`) na raiz do repo |
-| Verify falhou várias vezes / doctor estranho / artefatos incoerentes | `/oxe-forensics` |
-| Teste ou erro técnico durante o trabalho (stack, flake) | `/oxe-debug` (com **Tn** se houver) |
-| Revisar diff / PR antes do merge | `oxe/workflows/review-pr.md` em contexto *(Copilot: `/oxe-review-pr`)* |
-| O que é OXE / lista de passos | `/oxe-help` |
-| Dúvida entre dois comandos sem contexto claro | `/oxe-route` |
-| Pesquisa técnica, spike, mapa de sistema grande, engenharia reversa, modernização antes do plano | `/oxe-research` |
-| Quero registrar uma observação (restrição, descoberta, preferência) durante ou fora de execução | `/oxe-obs [texto]` |
+| Verify falhou várias vezes / doctor estranho / artefatos incoerentes | `/oxe-execute --deep-diagnosis` |
+| Teste ou erro técnico durante o trabalho (stack, flake) | `/oxe-execute --debug` (com **Tn** se houver) |
+| Revisar diff / PR antes do merge | `/oxe-verify --pr` ou `/oxe-verify --diff branchA...branchB` |
+| O que é OXE / lista de passos | `/oxe help` |
+| Pesquisa técnica, spike, mapa de sistema grande, engenharia reversa, modernização antes do plano | `/oxe-spec --research` |
+| Quero registrar uma observação (restrição, descoberta, preferência) durante ou fora de execução | `/oxe-execute --note “texto”` |
 | Quero executar todo o plano de uma vez (1 sessão) | `/oxe-execute` → escolher opção A (Completo) |
 | Quero executar onda por onda com verificação entre ondas | `/oxe-execute` → escolher opção B (Por onda) |
-| Gaps de cobertura de verificação / Nyquist-lite após verify | `/oxe-validate-gaps` |
-| Mapa OXE desatualizado / quero sincronizar codebase com o código sem scan completo | `/oxe-compact` |
-| Quero gravar um marco nomeado da sessão (antes de experimento grande) | `/oxe-checkpoint` + slug |
+| Gaps de cobertura de verificação / Nyquist-lite após verify | `/oxe-verify --gaps` |
+| Mapa OXE desatualizado / quero sincronizar codebase com o código sem scan completo | `/oxe-spec --refresh` |
+| Quero gravar um marco nomeado da sessão (antes de experimento grande) | `/oxe-execute --checkpoint “<nome>”` |
 | Plano com **blueprint de agentes** (JSON + mesmo PLAN.md) / subagentes por onda | `/oxe-plan-agent` |
-| Criar marco de entrega / versão / milestone | `/oxe-milestone new [nome]` |
-| Verificar se o milestone está pronto para fechar | `/oxe-milestone audit` |
-| Trabalho paralelo em trilhas separadas / feature branch OXE | `/oxe-workstream new <nome>` |
-| Alternar entre trilhas de desenvolvimento | `/oxe-workstream switch <nome>` |
+| Criar marco de entrega / versão / milestone | `/oxe-session milestone new [nome]` |
+| Verificar se o milestone está pronto para fechar | `/oxe-session milestone audit` |
+| Trabalho paralelo em trilhas separadas / feature branch OXE | `/oxe-session workstream new <nome>` |
+| Alternar entre trilhas de desenvolvimento | `/oxe-session workstream switch <nome>` |
+
+---
+
+## Compatibilidade (v1.1.0)
+
+Os comandos abaixo continuam funcionando mas foram incorporados pelos estágios principais:
+
+| Comando legado | Novo destino | Aviso exibido |
+|----------------|--------------|---------------|
+| `/oxe-ask` | `/oxe “pergunta”` | sim |
+| `/oxe-scan` | `/oxe-spec --refresh` | sim |
+| `/oxe-research` | `/oxe-spec --research` | sim |
+| `/oxe-ui-spec` | `/oxe-spec --ui` | sim |
+| `/oxe-obs` | `/oxe-execute --note` | sim |
+| `/oxe-debug` | `/oxe-execute --debug` | sim |
+| `/oxe-forensics` | `/oxe-execute --deep-diagnosis` | sim |
+| `/oxe-checkpoint` | `/oxe-execute --checkpoint` | sim |
+| `/oxe-loop` | `/oxe-execute --iterative` | sim |
+| `/oxe-validate-gaps` | `/oxe-verify --gaps` | sim |
+| `/oxe-security` | `/oxe-verify --security` | sim |
+| `/oxe-ui-review` | `/oxe-verify --ui` | sim |
+| `/oxe-review-pr` | `/oxe-verify --pr` | sim |
+| `/oxe-retro` | `/oxe-verify` (retro automática) | sim |
+| `/oxe-project` | `/oxe-session milestone\|workstream` | sim |
 
 ## Observações Contextuais (`/oxe-obs`)
 

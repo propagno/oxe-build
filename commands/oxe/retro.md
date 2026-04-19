@@ -1,6 +1,6 @@
 ---
 name: oxe:retro
-description: OXE — Retrospectiva de ciclo: sintetiza lições prescritivas em .oxe/LESSONS.md (alimenta ciclos futuros automaticamente)
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe-verify (retro automática). Use: /oxe-verify (ou --skip-retro para desativar)"
 argument-hint: "[opcional: contexto sobre o ciclo]"
 allowed-tools:
   - Read

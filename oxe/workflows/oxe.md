@@ -34,25 +34,38 @@ Aplicar a lógica completa de `oxe/workflows/next.md`:
 **Saída:** exatamente 1 passo, 1 comando, 1 frase de justificativa.
 </modo_status>
 
+<modo_pergunta>
+## Modo: Pergunta Situacional (input em linguagem natural — ex.: "onde estou?", "qual o risco?")
+
+Aplicar a lógica de `oxe/workflows/ask.md`:
+
+1. Ler `.oxe/STATE.md` global.
+2. Resolver sessão ativa → ler artefatos do escopo correto.
+3. Responder com: **Fatos** · **Inferências** · **Lacunas** · **Próximo passo**.
+
+Se a pergunta for genérica ("situação?", "o que está acontecendo?"), responder com:
+- Situação atual · Escopo ativo · Artefatos relevantes · Riscos / lacunas · Próximo passo recomendado.
+</modo_pergunta>
+
 <modo_route>
-## Modo: Roteamento de Linguagem Natural (input com contexto)
+## Modo: Roteamento de Linguagem Natural (input com contexto de tarefa/ação)
 
 Mapear o input para o workflow correto e executar ou orientar:
 
 | Se o usuário disser | Executar |
 |---------------------|----------|
 | "quero [feature / tarefa / entrega]" | Verificar estado → **spec** ou **quick** |
-| "analisa / mapeia o projeto" | **scan** (modo refresh se codebase/ existir) |
-| "pesquisa / spike / quero entender X" | **research** |
-| "revisa PR / diff" | **review-pr** |
-| "auditoria de segurança" | **security** |
+| "analisa / mapeia o projeto" | **`/oxe-spec --refresh`** (ou `--full` para scan completo) |
+| "pesquisa / spike / quero entender X" | **`/oxe-spec --research`** |
+| "revisa PR / diff" | **`/oxe-verify --pr`** |
+| "auditoria de segurança" | **`/oxe-verify --security`** |
 | "valida / verifica" | **verify** |
-| "milestone / release / versão" | **project milestone** |
-| "trilha paralela / workstream" | **project workstream** |
-| "snapshot / checkpoint" | **project checkpoint** |
-| "recuperação / erro / algo quebrou" | **forensics** |
-| "debug / teste falhando" | **debug** |
-| "obs / observação / nota" | **obs** |
+| "milestone / release / versão" | **`/oxe-session milestone`** |
+| "trilha paralela / workstream" | **`/oxe-session workstream`** |
+| "snapshot / checkpoint" | **`/oxe-execute --checkpoint "<nome>"`** |
+| "recuperação / erro / algo quebrou" | **`/oxe-execute --deep-diagnosis`** |
+| "debug / teste falhando" | **`/oxe-execute --debug`** |
+| "obs / observação / nota" | **`/oxe-execute --note "..."`** |
 | "atualiza / update OXE" | **update** |
 
 Se o input não mapear claramente → apresentar 2 opções mais prováveis e perguntar.
@@ -63,27 +76,33 @@ Se o input não mapear claramente → apresentar 2 opções mais prováveis e pe
 
 Apresentar de forma concisa:
 
-### Os 8 comandos que você precisa conhecer
+### A trilha principal (6 comandos)
 
 ```
-/oxe              → onde estou / o que faço / help
-/oxe-obs          → registrei algo importante agora
+/oxe              → onde estou / o que faço / help (entrada universal)
 /oxe-quick        → tarefa pequena, sem cerimônia
-/oxe-scan         → mapeia o projeto (ou atualiza o mapa)
-/oxe-spec         → nova feature ou entrega: perguntas → requisitos → roteiro
+/oxe-spec         → nova feature: perguntas → requisitos → roteiro
+                    (absorve scan, research e ui-spec quando necessário)
 /oxe-plan         → detalhar em tarefas (--agents para multi-agente)
-/oxe-execute      → implementar (A: completo | B: por onda | C: por tarefa)
-/oxe-verify       → validar que está pronto
+/oxe-execute      → implementar A/B/C
+                    (absorve obs, debug, forensics, checkpoint, loop)
+/oxe-verify       → validar e fechar o ciclo
+                    (absorve gaps, security, ui-review, review-pr, retro)
 ```
 
 ### A cadeia
 
 ```
-/oxe-obs (qualquer momento)
-     ↓
-/oxe-scan → /oxe-spec → /oxe-plan → /oxe-execute → /oxe-verify → /oxe-retro
-                                  ↓
-                           /oxe-quick (trabalho pequeno)
+/oxe → /oxe-spec → /oxe-plan → /oxe-execute → /oxe-verify
+                       ↓
+                  /oxe-quick (trabalho pequeno)
+```
+
+### Trilha avançada
+
+```
+/oxe-session      → criar, alternar, retomar, fechar ou migrar sessões
+/oxe-dashboard    → visualizar runtime, ondas, checkpoints e estado operacional
 ```
 
 ### Para saber o próximo passo agora
@@ -92,24 +111,34 @@ Apresentar de forma concisa:
 /oxe
 ```
 
-### Escape hatches (não precisa decorar — aparecem quando necessários)
+### Comportamentos especializados (ativados automaticamente ou por flag)
 
-`/oxe-research`, `/oxe-forensics`, `/oxe-debug`, `/oxe-loop`, `/oxe-security`,
-`/oxe-validate-gaps`, `/oxe-ui-spec`, `/oxe-ui-review`, `/oxe-review-pr`,
-`/oxe-project` (milestone, workstream, checkpoint)
+Não precisam ser decorados como comandos separados:
+- scan/refresh → `/oxe-spec --refresh` ou `/oxe-spec --full`
+- research/spike → `/oxe-spec --research`
+- ui-spec → `/oxe-spec --ui`
+- obs/nota → `/oxe-execute --note "..."`
+- debug → `/oxe-execute --debug`
+- forensics → `/oxe-execute --deep-diagnosis`
+- gaps → `/oxe-verify --gaps`
+- security → `/oxe-verify --security`
+- ui-review → `/oxe-verify --ui`
+- review-pr → `/oxe-verify --pr`
 </modo_help>
 
 <process>
 1. Verificar se há input adicional na mensagem:
    - **Sem input ou "next / o que faço / status":** aplicar `<modo_status>`.
    - **"help / comandos / o que é OXE":** aplicar `<modo_help>`.
-   - **Qualquer outra coisa (linguagem natural com contexto):** aplicar `<modo_route>` e, se o workflow for claro, carregar e executar diretamente o `oxe/workflows/<nome>.md` correspondente.
+   - **Pergunta situacional** ("onde estou?", "qual o risco?", "o que está acontecendo?", "me contextualize"): aplicar `<modo_pergunta>`.
+   - **Input de ação/tarefa** (linguagem natural com contexto operacional): aplicar `<modo_route>` e, se o workflow for claro, carregar e executar diretamente o `oxe/workflows/<nome>.md` correspondente.
 2. Nunca produzir listas longas de alternativas. Um passo, um comando, uma frase.
 3. Se o workflow executado diretamente gerar artefatos, reportar no chat conforme esse workflow.
 </process>
 
 <success_criteria>
-- [ ] Usuário recebe exatamente 1 próximo passo (modo status) OU 1 workflow executado (modo route) OU o bloco help compacto (modo help).
+- [ ] Usuário recebe exatamente 1 próximo passo (modo status) OU 1 workflow executado (modo route) OU o bloco help compacto (modo help) OU resposta situacional (modo pergunta).
 - [ ] Nenhum artefato criado por este workflow diretamente (a menos que o workflow delegado o faça).
 - [ ] Nunca lista mais de 2 alternativas ao mesmo tempo.
+- [ ] Help mostra apenas os 6 comandos da trilha principal + 2 avançados; comandos especializados aparecem apenas como flags/comportamentos.
 </success_criteria>

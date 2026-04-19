@@ -1,5 +1,9 @@
 # OXE — Workflow: obs
 
+> **[DEPRECATED v1.1.0]** Este comando foi incorporado por `/oxe-execute`.
+> Use: `/oxe-execute --note "sua observação"` para registrar durante a execução.
+> Este alias continuará funcionando nesta versão por compatibilidade.
+
 <objective>
 Registrar uma **observação contextual** em **`.oxe/OBSERVATIONS.md`** durante ou fora de uma execução. A observação é incorporada automaticamente nos próximos `/oxe-spec`, `/oxe-plan`, `/oxe-discuss` ou `/oxe-execute` sem necessidade de re-explicar.
 

@@ -1,6 +1,6 @@
 ---
 name: oxe:milestone
-description: "Marcos de entrega (M-NN) — new, complete (arquiva SPEC/PLAN/VERIFY em .oxe/milestones/M-NN/), status, audit"
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe-session. Use: /oxe-session milestone new|complete|status|audit"
 argument-hint: "new <nome> | complete | status | audit"
 allowed-tools:
   - Read

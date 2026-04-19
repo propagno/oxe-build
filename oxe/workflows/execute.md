@@ -1,8 +1,36 @@
 # OXE — Workflow: execute
 
 <objective>
-Guiar a **implementação** de um plano OXE com dois modos possíveis:
+Guiar a **implementação** de um plano OXE com dois modos possíveis.
 
+**Flags suportadas:**
+- `--note "texto"` — registrar observação contextual em `OBSERVATIONS.md` antes de iniciar a execução (equivalente a `/oxe-obs`). Pode ser usado com qualquer outro argumento.
+- `--debug` — ativar diagnóstico técnico explícito ao primeiro sinal de falha em vez de esperar 2 tentativas (equivalente a `/oxe-debug`). Fornece stack trace detalhado, hipóteses e fix.
+- `--deep-diagnosis` — iniciar diretamente em modo de diagnóstico pós-falha persistente (equivalente a `/oxe-forensics`). Usar quando a execução já falhou repetidamente e o estado está corrompido ou inconsistente.
+- `--checkpoint "<nome>"` — criar snapshot nomeado do estado da sessão antes de iniciar ou após concluir (equivalente a `/oxe-checkpoint`). Útil antes de experimentos ou ondas arriscadas.
+- `--iterative` — ativar modo B com loop automático até verify passar, com retry controlado por `loop_max` (equivalente a `/oxe-loop`).
+
+**Nota de compatibilidade v1.1.0:** `/oxe-obs`, `/oxe-debug`, `/oxe-forensics`, `/oxe-checkpoint` e `/oxe-loop` foram incorporados por este comando. Esses comandos legados continuam funcionando mas exibem aviso de migração.
+
+</objective>
+
+<flags_processing>
+## Processamento de flags (executar antes do step 1)
+
+Ao receber qualquer argumento, verificar flags antes de iniciar o fluxo principal:
+
+1. **`--note "texto"`**: escrever entrada em `OBSERVATIONS.md` do escopo resolvido com status `pendente`, impacto `execute`, severidade `info`. Marcar como `incorporada → execute (data)` imediatamente após registrar. Continuar com o fluxo normal.
+
+2. **`--checkpoint "<nome>"`**: executar a lógica de `oxe/workflows/checkpoint.md` com o slug fornecido antes de iniciar a onda. Reportar confirmação do snapshot. Continuar.
+
+3. **`--deep-diagnosis`**: saltar diretamente para o fluxo de `oxe/workflows/forensics.md` com o contexto atual do `EXECUTION-RUNTIME.md` e `STATE.md`. Não iniciar nova onda sem resolução explícita.
+
+4. **`--debug`**: ajustar `<failure_mode>` para acionar diagnóstico imediato na primeira falha (sem 2 tentativas antes). Reportar hipóteses, evidências e fix com mais detalhe.
+
+5. **`--iterative`**: registrar em STATE.md: `execute_mode: por_onda` e `loop_max: 3` (ou o valor de config). Informar ao usuário que o modo iterativo está ativo.
+</flags_processing>
+
+<execution_modes>
 **Modo Solo (padrão):** seguir `PLAN.md` do escopo resolvido da sessão onda a onda sem `plan-agents.json`. O agente implementa diretamente cada tarefa Tn da onda atual, roda a verificação e avança. Não exige nenhum artefato além do PLAN.md.
 
 **Modo com Agentes (extensão):** quando existe `plan-agents.json` válido no escopo resolvido (schema 2+, lifecycle ativo, runId alinhado ao STATE), adotar roles e personas por agente conforme o blueprint.
@@ -10,7 +38,7 @@ Guiar a **implementação** de um plano OXE com dois modos possíveis:
 **Seleção de execução (redução de requisições):** quando o plano tem 2+ ondas, o usuário escolhe entre Completo (1 sessão), Por onda (N sessões) ou Por tarefa (N tarefas). A escolha é feita **uma vez** no início.
 
 Se existir apenas **`QUICK.md`** no escopo resolvido: tratar passos numerados como onda única (modo sempre Completo).
-</objective>
+</execution_modes>
 
 <modo_solo>
 ## Modo Solo — Execução direta do PLAN.md

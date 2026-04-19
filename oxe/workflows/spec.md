@@ -11,6 +11,14 @@ Conduzir as **5 fases** do processo de especificação e produzir dois artefatos
 Para trabalho **muito pequeno** que não justifica spec completa: redirecionar para **`oxe:quick`**.
 
 Se **`.oxe/config.json`** tiver `discuss_before_plan: true`: mencionar no final da Fase 5 que o próximo passo é **`oxe:discuss`** antes do plano.
+
+**Flags suportadas:**
+- `--refresh` — antes de iniciar, atualizar `.oxe/codebase/` em modo incremental (equivalente a `scan` modo refresh). Usar quando o codebase mudou desde o último scan.
+- `--full` — antes de iniciar, forçar scan completo do codebase (equivalente a `scan --full`). Usar quando o mapa está obsoleto ou ausente.
+- `--research` / `--deep` — ativar Fase 2 (Pesquisa) de forma explícita, mesmo que a incerteza detectada seja baixa. Útil para spikes, mapas de sistema, engenharia reversa.
+- `--ui` — ao final da Fase 5, gerar contrato UI/UX em `.oxe/UI-SPEC.md` (equivalente a `/oxe-ui-spec`). Ativar automaticamente quando UI for domínio crítico detectado.
+
+**Nota de compatibilidade v1.1.0:** `/oxe-scan`, `/oxe-research` e `/oxe-ui-spec` foram incorporados por este comando. Esses comandos legados continuam funcionando mas exibem aviso de migração.
 </objective>
 
 <context>
@@ -242,9 +250,16 @@ O resultado desta reflexão é **invisível ao usuário** — é trabalho intern
 **Ao finalizar:**
 - Marcar `ROADMAP.md` → `status: approved`
 - Atualizar `STATE.md`: `phase: spec_ready`, próximo passo conforme escolha
+- Se flag `--ui` foi recebida **ou** se UI foi detectada como domínio crítico: executar a lógica de `oxe/workflows/ui-spec.md` e produzir `.oxe/UI-SPEC.md` como extensão desta spec. Mencionar ao usuário que o contrato UI foi gerado.
 </fase_5_aprovacao>
 
 <process>
+0. **Processar flags recebidas:**
+   - `--refresh`: executar a lógica de `oxe/workflows/compact.md` (modo incremental) antes de continuar. Reportar breve resumo das mudanças detectadas.
+   - `--full`: executar a lógica de `oxe/workflows/scan.md` (modo bootstrap completo) antes de continuar. Reportar arquivos-chave mapeados.
+   - `--research` / `--deep`: registrar internamente que a Fase 2 (Pesquisa) deve ser executada de forma explícita, mesmo se incerteza parecer baixa.
+   - `--ui`: registrar internamente que ao final da Fase 5, o contrato UI-SPEC deve ser gerado automaticamente.
+   - Sem flags: verificar se `.oxe/codebase/` existe e está relativamente recente; se não existir, mencionar que scan seria recomendado antes da spec.
 1. Ler `.oxe/STATE.md`, `OVERVIEW.md`, `STACK.md` e `OBSERVATIONS.md` do escopo ativo (verificar pendentes).
 2. Fazer uma exploração inicial do repo e dos artefatos antes da primeira rodada de perguntas. Consolidar internamente: fatos confirmados, inferências e lacunas.
 3. Aplicar `adaptive-discovery.md`: classificar a demanda, verificar se há capabilities úteis e se investigações anteriores reduzem incerteza.

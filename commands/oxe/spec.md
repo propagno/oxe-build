@@ -1,7 +1,7 @@
 ---
 name: oxe:spec
-description: "Spec em 5 fases: perguntas → pesquisa → requisitos R-ID (v1/v2/fora) → roteiro ROADMAP.md → aprovação → plan"
-argument-hint: "[descrição da feature, ideia ou @arquivo.md com PRD]"
+description: "Spec em 5 fases. Flags: --refresh (scan incremental), --full (scan completo), --research (spike), --ui (gera UI-SPEC)"
+argument-hint: "[descrição da feature | --refresh | --full | --research | --ui]"
 allowed-tools:
   - Read
   - Write

@@ -1,6 +1,6 @@
 ---
 name: oxe:route
-description: OXE — Router linguagem natural → um comando/workflow
+description: "[DEPRECATED v1.1.0] Incorporado por /oxe. Use: /oxe 'sua intenção em linguagem natural'"
 argument-hint: "[frase do utilizador]"
 allowed-tools:
   - Read

@@ -1,5 +1,9 @@
 # OXE — Workflow: review-pr (revisão de diff / PR)
 
+> **[DEPRECATED v1.1.0]** Este comando foi incorporado por `/oxe-verify`.
+> Use: `/oxe-verify --pr` (branch atual) ou `/oxe-verify --diff branchA...branchB`.
+> Este alias continuará funcionando nesta versão por compatibilidade.
+
 <objective>
 Rever alterações como num pull request: **URL do GitHub** (`…/pull/<n>`), **branches** ou **SHAs**. Cobre diff, risco, convenções do projeto e sugestões acionáveis. **Não** substitui CI nem testes manuais; complementa-os.
 </objective>
