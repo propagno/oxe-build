@@ -68,6 +68,13 @@ class BranchManager {
         });
         return result.status === 0;
     }
+    push(remote, branchName, setUpstream = false) {
+        const args = ['push'];
+        if (setUpstream)
+            args.push('-u');
+        args.push(remote, branchName);
+        this.git(args);
+    }
     git(args) {
         return (0, child_process_1.execFileSync)('git', args, {
             cwd: this.projectRoot,

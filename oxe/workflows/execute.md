@@ -126,6 +126,12 @@ Quando o comando `**Verificar:**` de uma tarefa `Tn` falha, **não parar silenci
 
 **Runtime operacional:** usar `EXECUTION-RUNTIME.md` do escopo resolvido como artefato tático da execução. Ele deve refletir agentes ativos, onda atual, handoffs, evidências, retries, checkpoints pendentes e tarefas bloqueadas. O `PLAN.md` continua estratégico; o runtime regista a operação do ciclo.
 
+**Runtime enterprise como caminho padrão:** quando `oxe-cc runtime` estiver disponível no ambiente, preferir o caminho formal deste passo:
+- executar `oxe-cc runtime compile --dir <projeto>` antes da primeira mutação para materializar `compiled_graph`, `canonical_state` e `verification_suite`;
+- tratar `ACTIVE-RUN.json` e `.oxe/runs/<run_id>.json` como fonte operacional primária da onda/tarefa atual;
+- executar `oxe-cc runtime project --dir <projeto>` ao fim de cada onda ou bloco concluído para reprojetar `PLAN.md`, `STATE.md`, `VERIFY.md`, `RUN-SUMMARY.md`, `COMMIT-SUMMARY.md` e `PROMOTION-SUMMARY.md`.
+Se o runtime não estiver compilado, falhar por indisponibilidade do pacote ou não puder ser executado no ambiente atual, declarar `fallback legado` explicitamente antes de seguir apenas com os artefatos markdown.
+
 **Checkpoints de aprovação:** usar `CHECKPOINTS.md` do escopo resolvido para gates humanos explícitos. Estados válidos: `pending_approval`, `approved`, `rejected`, `overridden`. Se houver checkpoint pendente antes de uma onda de risco, side effect externo ou fecho sensível, a execução deve pausar até resolução explícita.
 
 **Capabilities nativas:** ler `.oxe/CAPABILITIES.md` e capabilities locais relevantes antes de propor automações, pesquisa extra, publicação ou conectores. Só sugerir capabilities que existam no projeto ou estejam claramente ausentes.
@@ -184,6 +190,11 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
 3. Antes da primeira mudança, verificar `CHECKPOINTS.md` e `EXECUTION-RUNTIME.md` do escopo resolvido:
    - se houver checkpoint `pending_approval` que se aplique à onda atual, **não avançar**;
    - inicializar ou atualizar o runtime com onda atual, status, agentes ativos, handoffs e evidências esperadas.
+3a. **Caminho padrão do runtime enterprise:** se `oxe-cc runtime` estiver disponível:
+   - executar ou solicitar `oxe-cc runtime compile --dir <projeto>` antes da primeira mutação;
+   - se compilar com sucesso, tratar `ACTIVE-RUN.json`, `.oxe/runs/<run_id>.json`, `compiled_graph` e `canonical_state` como estado operacional primário da execução;
+   - se existir gate operacional além dos checkpoints markdown, consultar `oxe-cc runtime gates list --dir <projeto>` antes da onda de mutação;
+   - se falhar apenas por indisponibilidade do runtime, registrar `fallback legado` e continuar com o fluxo markdown.
 4. Verificar **`OBSERVATIONS.md`** do escopo resolvido antes de iniciar cada onda:
    - Se houver obs com `Status: pendente` e `Severidade: blocking`: **não avançar** para nenhuma tarefa da onda — apresentar ao usuário o bloqueio com contexto da onda e opções A/B/C de resolução
    - Se houver obs com `Status: pendente` e `Severidade: adjustment`: incorporar como restrição nas tarefas afetadas desta onda antes de executar
@@ -215,7 +226,9 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
    - [ ] Implementação da onda concluída
    - [ ] Comando Verificar de cada tarefa executado (ou agendado)
    ```
+10a. Quando o runtime enterprise estiver ativo, executar ou solicitar `oxe-cc runtime project --dir <projeto>` após cada onda ou bloco concluído para projetar os markdowns derivados a partir do estado canónico, em vez de depender só de edição manual.
 11. Atualizar **`.oxe/STATE.md`** global com progresso resumido e, com sessão ativa, escrever o detalhe operacional em `execution/STATE.md`.
+11a. Se o runtime enterprise estiver ativo, preferir o `STATE.md`, `PLAN.md`, `VERIFY.md` e summaries projetados por `runtime project` como superfície oficial; complementar manualmente apenas o que o projection engine ainda não cobrir.
 12. Atualizar ou criar `CHECKPOINTS.md` quando surgir gate humano explícito; refletir o status resumido no `STATE.md` global (`checkpoint_status`) e no runtime (`runtime_status`).
 13. Marcar OBS incorporadas como `incorporada → execute (data)` em `OBSERVATIONS.md` do escopo resolvido.
 14. Se a execução parar por hipótese crítica não verificada, conflito estrutural ou falta de evidência operacional, terminar com bloqueio explícito e um único próximo passo. Se o bloqueio tiver vindo de pack stale/incompleto, dizer isso explicitamente.
@@ -230,4 +243,5 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
 - [ ] OBS pendentes verificadas antes de cada onda: `blocking` resolvidos antes de avançar, `adjustment` incorporados como restrições, `info`/legado incorporados normalmente.
 - [ ] Com quick-agents ativos: cada agente trabalha só em seus `steps[]`; ao concluir, `quick-agents.json` → `done`.
 - [ ] Com blueprint schema 2 válido: não adotar persona para pedidos fora das `Tn`; `runId` alinhado entre JSON e STATE; handoffs escritos quando protocolo exige.
+- [ ] Quando `oxe-cc runtime` estiver disponível, `runtime compile` foi tentado antes da primeira mutação e `runtime project` foi usado para reprojetar artefatos após a onda/bloco.
 </success_criteria>

@@ -103,6 +103,11 @@ describe('oxe-dashboard', () => {
       '# OXE — Estado\n\n## Fase atual\n\n`plan_ready`\n',
       'utf8'
     );
+    fs.writeFileSync(
+      path.join(oxe, 'config.json'),
+      JSON.stringify({ runtime: { quotas: { max_work_items_per_run: 1, max_mutations_per_run: 0, max_retries_per_run: 0 } } }),
+      'utf8'
+    );
     fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# OXE — Spec\n\n## Objetivo\n\nTeste\n\n## Critérios de aceite\n| ID | Critério | Como verificar |\n|---|---|---|\n| A1 | x | y |\n', 'utf8');
     fs.writeFileSync(
       path.join(oxe, 'PLAN.md'),
@@ -138,6 +143,29 @@ describe('oxe-dashboard', () => {
     operational.writeRunState(dir, 'sessions/s001-demo', {
       run_id: 'oxe-runtime-demo',
       status: 'running',
+      verification_manifest: {
+        summary: { total: 1, pass: 1, fail: 0, skip: 0, error: 0, all_passed: true },
+        checks: [{ evidence_refs: ['ev-1'] }],
+        profile: 'standard',
+      },
+      residual_risks: {
+        risks: [{ severity: 'high', description: 'Residual high risk' }],
+      },
+      verification_evidence_coverage: {
+        total_checks: 1,
+        checks_with_evidence: 1,
+        total_evidence_refs: 1,
+        coverage_percent: 100,
+      },
+      delivery: {
+        promotion_record: {
+          status: 'blocked',
+          target_kind: 'branch_push',
+          remote: 'origin',
+          reasons: ['pending gate'],
+          coverage_percent: 100,
+        },
+      },
       compiled_graph: {
         nodes: {
           T1: {
@@ -166,6 +194,24 @@ describe('oxe-dashboard', () => {
         blockedWorkItems: [],
       },
     });
+    fs.mkdirSync(path.join(oxe, 'runs', 'oxe-runtime-demo'), { recursive: true });
+    fs.writeFileSync(
+      path.join(oxe, 'runs', 'oxe-runtime-demo', 'multi-agent-state.json'),
+      JSON.stringify({
+        run_id: 'oxe-runtime-demo',
+        mode: 'parallel',
+        workspace_isolation_enforced: true,
+        agent_results: [{ agent_id: 'agent-a', assigned_task_ids: ['T1'], completed: [], failed: [] }],
+        ownership: [{ work_item_id: 'T1', owner_agent_id: 'agent-a' }],
+        orphan_reassignments: [],
+      }, null, 2),
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(oxe, 'AUDIT-TRAIL.ndjson'),
+      `${JSON.stringify({ action: 'gate_requested', severity: 'warn', run_id: 'oxe-runtime-demo', actor: 'runtime', timestamp: '2026-04-10T00:00:00Z' })}\n`,
+      'utf8'
+    );
     dashboard.savePlanReviewStatus(dir, { status: 'in_review', note: 'Revisão em curso', author: 'test' });
 
     const ctx = dashboard.loadDashboardContext(dir);
@@ -186,6 +232,21 @@ describe('oxe-dashboard', () => {
     assert.ok(ctx.memoryLayers.readOrder.includes('project_memory'));
     assert.ok(ctx.runtimeCanonical);
     assert.ok(ctx.compiledGraph);
+    assert.ok(ctx.enterprise);
+    assert.ok(ctx.enterprise.runtimeMode);
+    assert.strictEqual(ctx.enterprise.runtimeMode.runtime_mode, 'enterprise');
+    assert.strictEqual(ctx.enterprise.fallbackMode, 'none');
+    assert.ok(ctx.enterprise.gateQueue);
+    assert.ok(ctx.enterprise.policyCoverage);
+    assert.ok(ctx.enterprise.quotaSummary);
+    assert.ok(ctx.enterprise.auditSummary);
+    assert.ok(ctx.enterprise.promotionSummary);
+    assert.ok(ctx.enterprise.promotionReadiness);
+    assert.ok(ctx.enterprise.recoveryState);
+    assert.ok(ctx.enterprise.multiAgent);
+    assert.strictEqual(ctx.enterprise.multiAgent.mode, 'parallel');
+    assert.ok(ctx.enterprise.providerCatalog);
+    assert.ok(Array.isArray(ctx.diagnostics.enterpriseWarnings));
   });
 
   test('dashboard dump-context prints json', () => {
@@ -238,6 +299,54 @@ describe('oxe-dashboard', () => {
       assert.strictEqual(context.statusCode, 200);
       assert.strictEqual(context.body.activeRun.status, 'running');
       assert.ok(context.body.operationalGraph.nodes.length >= 2);
+    } finally {
+      server.close();
+    }
+  });
+
+  test('dashboard runtime gates resolve API returns updated queue payload', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-dash-gate-api-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(path.join(oxe, 'codebase'), { recursive: true });
+    fs.mkdirSync(path.join(oxe, 'execution'), { recursive: true });
+    for (const f of health.EXPECTED_CODEBASE_MAPS) {
+      fs.writeFileSync(path.join(oxe, 'codebase', f), '# ok\n', 'utf8');
+    }
+    fs.writeFileSync(path.join(oxe, 'STATE.md'), '# OXE — Estado\n\n## Fase atual\n\n`executing`\n', 'utf8');
+    operational.writeRunState(dir, null, { run_id: 'oxe-run-gate-api', status: 'running' });
+    fs.writeFileSync(
+      path.join(oxe, 'execution', 'GATES.json'),
+      JSON.stringify([
+        {
+          gate_id: 'gate-api-1',
+          scope: 'critical_mutation',
+          run_id: 'oxe-run-gate-api',
+          work_item_id: 'T1',
+          action: 'apply_patch',
+          requested_at: new Date().toISOString(),
+          context: { description: 'approve change', evidence_refs: [], risks: ['scope'] },
+          status: 'pending',
+          resolution_history: [],
+        },
+      ], null, 2),
+      'utf8'
+    );
+
+    const server = dashboard.createDashboardServer(dir);
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = /** @type {{port:number}} */ (server.address()).port;
+    try {
+      const resolved = await requestJson(
+        port,
+        'POST',
+        '/api/runtime/gates/resolve',
+        JSON.stringify({ gateId: 'gate-api-1', decision: 'approve', actor: 'qa' })
+      );
+      assert.strictEqual(resolved.statusCode, 200);
+      assert.strictEqual(resolved.body.gate.gate_id, 'gate-api-1');
+      assert.strictEqual(resolved.body.gate.status, 'resolved');
+      assert.ok(resolved.body.queue);
+      assert.strictEqual(resolved.body.impact.pendingRemaining, 0);
     } finally {
       server.close();
     }

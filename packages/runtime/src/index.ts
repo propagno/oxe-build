@@ -13,6 +13,8 @@ export {
   compile as compileVerification,
   runCheck,
   runSuite,
+  executeSuite,
+  verifyRun,
   summarizeSuite,
 } from './verification/verification-compiler';
 export type {
@@ -20,6 +22,8 @@ export type {
   AcceptanceCheck,
   AcceptanceCheckSuite,
   CheckResult,
+  ExecutedVerificationSuite,
+  VerifyRunResult,
 } from './verification/verification-compiler';
 export * from './verification/verification-manifest';
 export * from './policy/index';

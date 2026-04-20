@@ -100,6 +100,111 @@ export interface CopilotIntegrationReport {
   warnings: string[];
 }
 
+export interface VerificationSummary {
+  total: number;
+  pass: number;
+  fail: number;
+  skip: number;
+  error: number;
+  allPassed: boolean;
+  profile: string | null;
+  manifestPath: string;
+}
+
+export interface ResidualRiskSummary {
+  total: number;
+  highOrCritical: number;
+  ledgerPath: string;
+}
+
+export interface EvidenceCoverageSummary {
+  total_checks: number;
+  checks_with_evidence: number;
+  total_evidence_refs: number;
+  coverage_percent: number;
+}
+
+export interface PendingGatesSummary {
+  path: string;
+  total: number;
+  gateSlaHours?: number;
+  staleGateCount?: number;
+  pending: Array<Record<string, unknown>>;
+  stalePending: Array<Record<string, unknown>>;
+}
+
+export interface GateQueueSnapshot {
+  path: string;
+  total: number;
+  gate_sla_hours?: number;
+  staleCount?: number;
+  pending: Array<Record<string, unknown>>;
+  stale_pending?: Array<Record<string, unknown>>;
+  resolved_recent?: Array<Record<string, unknown>>;
+  byRun?: Record<string, number>;
+  byScope?: Record<string, number>;
+  all?: Array<Record<string, unknown>>;
+}
+
+export interface MultiAgentStatusSummary {
+  path: string | null;
+  enabled: boolean;
+  runId: string | null;
+  mode: string | null;
+  workspaceIsolationEnforced: boolean;
+  agents: Array<Record<string, unknown>>;
+  ownership: Array<Record<string, unknown>>;
+  orphanReassignments: Array<Record<string, unknown>>;
+  handoffs: Array<Record<string, unknown>>;
+  arbitrationResults: Array<Record<string, unknown>>;
+}
+
+export interface PolicyDecisionSummary {
+  total: number;
+  denied: number;
+  gated: number;
+  overridesWithoutRationale: number;
+}
+
+export interface QuotaSummary {
+  limits: {
+    maxWorkItemsPerRun: number | null;
+    maxMutationsPerRun: number | null;
+    maxRetriesPerRun: number | null;
+  };
+  consumed: {
+    workItems: number;
+    mutations: number;
+    retries: number;
+  };
+  violations: string[];
+  exceeded: boolean;
+}
+
+export interface AuditSummary {
+  path: string;
+  totalEntries: number;
+  runEntries: number;
+  warn: number;
+  critical: number;
+  oldest: string | null;
+  newest: string | null;
+  actors: string[];
+  actions: Record<string, number>;
+}
+
+export interface PromotionSummary {
+  status: string | null;
+  targetKind: string | null;
+  remote: string | null;
+  targetRef: string | null;
+  prUrl: string | null;
+  prNumber: number | null;
+  coveragePercent: number | null;
+  reasons: string[];
+  path: string;
+}
+
 /** Relatório retornado por `health.buildHealthReport` e incluído em `runDoctorChecks`.healthReport. */
 export interface OxeHealthReport {
   configPath: string | null;
@@ -130,6 +235,16 @@ export interface OxeHealthReport {
   activeRun?: Record<string, unknown> | null;
   eventsSummary?: Record<string, unknown> | null;
   memoryLayers?: Record<string, unknown> | null;
+  verificationSummary?: VerificationSummary | null;
+  residualRiskSummary?: ResidualRiskSummary | null;
+  evidenceCoverage?: EvidenceCoverageSummary | null;
+  pendingGates?: PendingGatesSummary | null;
+  policyDecisionSummary?: PolicyDecisionSummary | null;
+  enterpriseWarn?: string[];
+  quotaSummary?: QuotaSummary | null;
+  auditSummary?: AuditSummary | null;
+  promotionSummary?: PromotionSummary | null;
+  multiAgent?: MultiAgentStatusSummary | null;
   next: OxeNextSuggestion;
   azureActive?: boolean;
   azure?: AzureHealthContext | null;
@@ -478,6 +593,17 @@ export interface OxeSdk {
   parseLessonsMetrics: (metricsJson: string) => LessonMetric[];
   updateLessonMetric: (metrics: LessonMetric[], lessonId: string, outcome: LessonOutcome) => LessonMetric[];
   deprecateLowEffectiveness: (metrics: LessonMetric[], threshold?: number, minObservations?: number) => LessonMetric[];
+  verifyRun?: (input: {
+    projectRoot: string;
+    runId: string;
+    workItemId: string;
+    cwd: string;
+    suite: Record<string, unknown>;
+    pluginRegistry?: Record<string, unknown>;
+    evidenceStore?: Record<string, unknown>;
+    attemptNumber?: number;
+    timeoutMs?: number;
+  }) => Promise<Record<string, unknown>>;
 
   health: {
     loadOxeConfigMerged: (targetProject: string) => { config: Record<string, unknown>; path: string | null; parseError: string | null; sources: { system: string | null; user: string | null; project: string | null } };
@@ -584,6 +710,12 @@ export interface OxeSdk {
     compileVerificationSuiteFromArtifacts: (projectRoot: string, activeSession: string | null, options?: Record<string, unknown>) => Record<string, unknown>;
     projectRuntimeArtifacts: (projectRoot: string, activeSession: string | null, options?: Record<string, unknown>) => Record<string, unknown>;
     runRuntimeCiChecks: (projectRoot: string, activeSession: string | null, options?: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    buildRuntimePluginRegistry: (projectRoot: string) => Record<string, unknown> | null;
+    readRuntimeGates: (projectRoot: string, activeSession: string | null, options?: Record<string, unknown>) => GateQueueSnapshot;
+    resolveRuntimeGate: (projectRoot: string, activeSession: string | null, options?: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    runRuntimeVerify: (projectRoot: string, activeSession: string | null, options?: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    runRuntimePromotion: (projectRoot: string, activeSession: string | null, options?: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    recoverRuntimeState: (projectRoot: string, activeSession: string | null, options?: Record<string, unknown>) => Record<string, unknown>;
     applyRuntimeAction: (projectRoot: string, activeSession: string | null, input?: Record<string, unknown>) => Record<string, unknown>;
     parseCapabilityManifest: (text: string) => Record<string, unknown>;
     readCapabilityCatalog: (projectRoot: string) => Array<Record<string, unknown>>;
@@ -595,6 +727,9 @@ export interface OxeSdk {
       limit?: number;
       writeReport?: boolean;
     }) => ReplayReport;
+    replayRuntimeState: (projectRoot: string, activeSession: string | null, options?: Record<string, unknown>) => Record<string, unknown>;
+    readRuntimeMultiAgentStatus: (projectRoot: string, activeSession: string | null, options?: Record<string, unknown>) => MultiAgentStatusSummary;
+    multiAgentStatus: (projectRoot: string, activeSession: string | null, options?: Record<string, unknown>) => MultiAgentStatusSummary;
   };
 
   azure: {

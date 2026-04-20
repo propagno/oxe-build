@@ -1,26 +1,86 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MultiAgentCoordinator = void 0;
+exports.multiAgentStatePath = multiAgentStatePath;
+exports.loadMultiAgentState = loadMultiAgentState;
+const fs_1 = __importDefault(require("fs"));
+const path_1 = __importDefault(require("path"));
 const bus_1 = require("../events/bus");
 const scheduler_1 = require("./scheduler");
 const agent_roles_1 = require("./agent-roles");
+function ensureRunDir(projectRoot, runId) {
+    const dir = path_1.default.join(projectRoot, '.oxe', 'runs', runId);
+    fs_1.default.mkdirSync(dir, { recursive: true });
+    return dir;
+}
+function persistMultiAgentArtifacts(projectRoot, runId, state, handoffs = [], arbitrationResults = []) {
+    const runDir = ensureRunDir(projectRoot, runId);
+    fs_1.default.writeFileSync(path_1.default.join(runDir, 'multi-agent-state.json'), JSON.stringify(state, null, 2), 'utf8');
+    fs_1.default.writeFileSync(path_1.default.join(runDir, 'handoffs.json'), JSON.stringify(handoffs, null, 2), 'utf8');
+    fs_1.default.writeFileSync(path_1.default.join(runDir, 'arbitration-results.json'), JSON.stringify(arbitrationResults, null, 2), 'utf8');
+}
+function ensureIsolatedAgents(agents) {
+    const shared = agents.filter((agent) => agent.workspaceManager.isolation_level !== 'isolated');
+    if (shared.length === 0)
+        return;
+    const ids = shared.map((agent) => `${agent.id}:${agent.workspaceManager.isolation_level}`).join(', ');
+    throw new Error(`Multi-agent requires isolated workspaces. Invalid agents: ${ids}`);
+}
+function buildOwnership(agents, partitions) {
+    const ownership = [];
+    for (let idx = 0; idx < agents.length; idx += 1) {
+        for (const workItemId of partitions[idx] ?? []) {
+            ownership.push({
+                work_item_id: workItemId,
+                owner_agent_id: agents[idx].id,
+            });
+        }
+    }
+    return ownership;
+}
+function makeState(mode, runId, agents, partitions, agentResults, completed, failed, blocked, orphanReassignments) {
+    return {
+        run_id: runId,
+        mode,
+        workspace_isolation_required: 'isolated',
+        workspace_isolation_enforced: true,
+        agent_count: agents.length,
+        ownership: buildOwnership(agents, partitions),
+        completed,
+        failed,
+        blocked,
+        agent_results: agents.map((agent, idx) => {
+            const result = agentResults.find((entry) => entry.agent_id === agent.id);
+            return {
+                agent_id: agent.id,
+                isolation_level: agent.workspaceManager.isolation_level,
+                assigned_task_ids: partitions[idx] ?? agent.assignedTaskIds ?? [],
+                completed: result?.completed ?? [],
+                failed: result?.failed ?? [],
+            };
+        }),
+        orphan_reassignments: orphanReassignments,
+        updated_at: new Date().toISOString(),
+    };
+}
 // ─── Parallel mode ───────────────────────────────────────────────────────────
-// Tasks are partitioned across agents. Each agent runs its own Scheduler
-// on a sub-graph. Results are merged.
 async function runParallel(graph, opts) {
     const { agents, projectRoot, sessionId, runId } = opts;
-    // Partition tasks across agents (round-robin if assignedTaskIds not set)
-    const partitions = agents.map((a) => a.assignedTaskIds ?? []);
-    if (partitions.every((p) => p.length === 0)) {
+    ensureIsolatedAgents(agents);
+    const partitions = agents.map((agent) => [...(agent.assignedTaskIds ?? [])]);
+    if (partitions.every((partition) => partition.length === 0)) {
         const allIds = [...graph.nodes.keys()];
-        allIds.forEach((id, i) => {
-            partitions[i % agents.length].push(id);
+        allIds.forEach((id, index) => {
+            partitions[index % agents.length].push(id);
         });
     }
     (0, bus_1.appendEvent)(projectRoot, sessionId, {
         type: 'RunStarted',
         run_id: runId,
-        payload: { mode: 'parallel', agent_count: agents.length },
+        payload: { mode: 'parallel', agent_count: agents.length, isolation_level: 'isolated' },
     });
     const agentResults = await Promise.all(agents.map(async (agent, idx) => {
         const subGraph = subGraphFor(graph, partitions[idx]);
@@ -39,35 +99,49 @@ async function runParallel(graph, opts) {
         const result = await scheduler.run(subGraph, ctx);
         return { agent_id: agent.id, completed: result.completed, failed: result.failed };
     }));
-    const completed = agentResults.flatMap((r) => r.completed);
-    const failed = agentResults.flatMap((r) => r.failed);
+    const completed = agentResults.flatMap((result) => result.completed);
+    const failed = agentResults.flatMap((result) => result.failed);
+    const blocked = [];
+    const orphanReassignments = [];
+    const state = makeState('parallel', runId, agents, partitions, agentResults, completed, failed, blocked, orphanReassignments);
+    persistMultiAgentArtifacts(projectRoot, runId, state);
     (0, bus_1.appendEvent)(projectRoot, sessionId, {
         type: 'RunCompleted',
         run_id: runId,
         payload: { mode: 'parallel', completed: completed.length, failed: failed.length },
     });
-    return { mode: 'parallel', run_id: runId, completed, failed, blocked: [], agent_results: agentResults };
+    return {
+        mode: 'parallel',
+        run_id: runId,
+        completed,
+        failed,
+        blocked,
+        agent_results: agentResults,
+        arbitration_results: [],
+        state,
+    };
 }
 // ─── Competitive mode ────────────────────────────────────────────────────────
-// Two agents attempt the same task. First success wins; the loser's workspace
-// is disposed. Requires exactly 2 agents.
 async function runCompetitive(graph, opts) {
     if (opts.agents.length < 2) {
         throw new Error('Competitive mode requires at least 2 agents');
     }
+    ensureIsolatedAgents(opts.agents);
     const [agentA, agentB] = opts.agents;
     const { projectRoot, sessionId, runId } = opts;
     (0, bus_1.appendEvent)(projectRoot, sessionId, {
         type: 'RunStarted',
         run_id: runId,
-        payload: { mode: 'competitive' },
+        payload: { mode: 'competitive', isolation_level: 'isolated' },
     });
     const completed = [];
     const failed = [];
+    const blocked = [];
+    const arbitrationResults = [];
     for (const wave of graph.waves) {
         for (const nodeId of wave.node_ids) {
             const node = graph.nodes.get(nodeId);
-            const result = await competeTwoAgents(nodeId, node, agentA, agentB, opts);
+            const result = await competeTwoAgents(nodeId, node, agentA, agentB, opts, arbitrationResults);
             if (result.success)
                 completed.push(nodeId);
             else
@@ -78,6 +152,12 @@ async function runCompetitive(graph, opts) {
         if (failed.length > 0)
             break;
     }
+    const partitions = [Array.from(graph.nodes.keys()), Array.from(graph.nodes.keys())];
+    const state = makeState('competitive', runId, opts.agents, partitions, [
+        { agent_id: agentA.id, completed, failed },
+        { agent_id: agentB.id, completed: [], failed: [] },
+    ], completed, failed, blocked, []);
+    persistMultiAgentArtifacts(projectRoot, runId, state, [], arbitrationResults);
     (0, bus_1.appendEvent)(projectRoot, sessionId, {
         type: 'RunCompleted',
         run_id: runId,
@@ -88,14 +168,16 @@ async function runCompetitive(graph, opts) {
         run_id: runId,
         completed,
         failed,
-        blocked: [],
+        blocked,
         agent_results: [
             { agent_id: agentA.id, completed, failed },
             { agent_id: agentB.id, completed: [], failed: [] },
         ],
+        arbitration_results: arbitrationResults,
+        state,
     };
 }
-async function competeTwoAgents(nodeId, node, agentA, agentB, opts) {
+async function competeTwoAgents(nodeId, node, agentA, agentB, opts, arbitrationResults) {
     const { projectRoot, sessionId, runId } = opts;
     const allocA = await agentA.workspaceManager.allocate({
         work_item_id: nodeId, attempt_number: 1, strategy: node.workspace_strategy, mutation_scope: node.mutation_scope,
@@ -109,51 +191,58 @@ async function competeTwoAgents(nodeId, node, agentA, agentB, opts) {
         work_item_id: nodeId,
         payload: { mode: 'competitive', agents: [agentA.id, agentB.id] },
     });
-    // Race both agents — first success wins
     const [resultA, resultB] = await Promise.all([
-        agentA.executor.execute(node, allocA, runId, 1).catch((e) => ({
-            success: false, failure_class: 'env', evidence: [], output: String(e),
+        agentA.executor.execute(node, allocA, runId, 1).catch((error) => ({
+            success: false, failure_class: 'env', evidence: [], output: String(error),
         })),
-        agentB.executor.execute(node, allocB, runId, 1).catch((e) => ({
-            success: false, failure_class: 'env', evidence: [], output: String(e),
+        agentB.executor.execute(node, allocB, runId, 1).catch((error) => ({
+            success: false, failure_class: 'env', evidence: [], output: String(error),
         })),
     ]);
-    // Clean up both workspaces
     await Promise.all([
         agentA.workspaceManager.dispose(allocA.workspace_id).catch(() => { }),
         agentB.workspaceManager.dispose(allocB.workspace_id).catch(() => { }),
     ]);
-    // Pick winner: prefer success; if both succeed, prefer A (primary agent)
     const winner = resultA.success ? resultA : resultB.success ? resultB : resultA;
+    const winnerAgentId = resultA.success ? agentA.id : resultB.success ? agentB.id : agentA.id;
+    arbitrationResults.push({
+        work_item_id: nodeId,
+        mode: 'competitive',
+        winner_agent_id: winnerAgentId,
+        participant_agent_ids: [agentA.id, agentB.id],
+        success: winner.success,
+        failure_class: winner.failure_class,
+        evidence_count: winner.evidence.length,
+        recorded_at: new Date().toISOString(),
+    });
     if (winner.success) {
-        (0, bus_1.appendEvent)(projectRoot, sessionId, { type: 'WorkItemCompleted', run_id: runId, work_item_id: nodeId, payload: { mode: 'competitive' } });
+        (0, bus_1.appendEvent)(projectRoot, sessionId, { type: 'WorkItemCompleted', run_id: runId, work_item_id: nodeId, payload: { mode: 'competitive', winner_agent_id: winnerAgentId } });
     }
     else {
-        (0, bus_1.appendEvent)(projectRoot, sessionId, { type: 'WorkItemBlocked', run_id: runId, work_item_id: nodeId, payload: { mode: 'competitive', failure_class: winner.failure_class } });
+        (0, bus_1.appendEvent)(projectRoot, sessionId, { type: 'WorkItemBlocked', run_id: runId, work_item_id: nodeId, payload: { mode: 'competitive', failure_class: winner.failure_class, winner_agent_id: winnerAgentId } });
     }
     return winner;
 }
 // ─── Cooperative mode ────────────────────────────────────────────────────────
-// planner (agent[0]) does a dry-run to collect context, then hands off to
-// executor (agent[1]) which performs the real run. Handoffs are recorded.
 async function runCooperative(graph, opts) {
     if (opts.agents.length < 2) {
         throw new Error('Cooperative mode requires at least 2 agents');
     }
+    ensureIsolatedAgents(opts.agents);
     const [planner, executor] = opts.agents;
     const { projectRoot, sessionId, runId } = opts;
     const handoffs = [];
     (0, bus_1.appendEvent)(projectRoot, sessionId, {
         type: 'RunStarted',
         run_id: runId,
-        payload: { mode: 'cooperative', planner: planner.id, executor: executor.id },
+        payload: { mode: 'cooperative', planner: planner.id, executor: executor.id, isolation_level: 'isolated' },
     });
     const completed = [];
     const failed = [];
+    const blocked = [];
     for (const wave of graph.waves) {
         for (const nodeId of wave.node_ids) {
             const node = graph.nodes.get(nodeId);
-            // Phase 1: planner allocates workspace + signals readiness (no output used)
             const planAlloc = await planner.workspaceManager.allocate({
                 work_item_id: nodeId,
                 attempt_number: 1,
@@ -176,7 +265,6 @@ async function runCooperative(graph, opts) {
                 work_item_id: nodeId,
                 payload: { mode: 'cooperative', handoff_id: handoff.handoff_id },
             });
-            // Phase 2: executor performs the real task
             const execAlloc = await executor.workspaceManager.allocate({
                 work_item_id: nodeId,
                 attempt_number: 1,
@@ -187,8 +275,8 @@ async function runCooperative(graph, opts) {
             try {
                 result = await executor.executor.execute(node, execAlloc, runId, 1);
             }
-            catch (e) {
-                result = { success: false, failure_class: 'env', evidence: [], output: String(e) };
+            catch (error) {
+                result = { success: false, failure_class: 'env', evidence: [], output: String(error) };
             }
             await executor.workspaceManager.dispose(execAlloc.workspace_id).catch(() => { });
             if (result.success) {
@@ -204,6 +292,12 @@ async function runCooperative(graph, opts) {
         if (failed.length > 0)
             break;
     }
+    const partitions = [Array.from(graph.nodes.keys()), Array.from(graph.nodes.keys())];
+    const state = makeState('cooperative', runId, opts.agents, partitions, [
+        { agent_id: planner.id, completed: [], failed: [] },
+        { agent_id: executor.id, completed, failed },
+    ], completed, failed, blocked, []);
+    persistMultiAgentArtifacts(projectRoot, runId, state, handoffs, []);
     (0, bus_1.appendEvent)(projectRoot, sessionId, {
         type: 'RunCompleted',
         run_id: runId,
@@ -214,12 +308,14 @@ async function runCooperative(graph, opts) {
         run_id: runId,
         completed,
         failed,
-        blocked: [],
+        blocked,
         agent_results: [
             { agent_id: planner.id, completed: [], failed: [] },
             { agent_id: executor.id, completed, failed },
         ],
         handoffs,
+        arbitration_results: [],
+        state,
     };
 }
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -235,15 +331,31 @@ class MultiAgentCoordinator {
     }
 }
 exports.MultiAgentCoordinator = MultiAgentCoordinator;
+function multiAgentStatePath(projectRoot, runId) {
+    return path_1.default.join(projectRoot, '.oxe', 'runs', runId, 'multi-agent-state.json');
+}
+function loadMultiAgentState(projectRoot, runId) {
+    const statePath = multiAgentStatePath(projectRoot, runId);
+    if (!fs_1.default.existsSync(statePath))
+        return null;
+    try {
+        return JSON.parse(fs_1.default.readFileSync(statePath, 'utf8'));
+    }
+    catch {
+        return null;
+    }
+}
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function subGraphFor(graph, nodeIds) {
     const ids = new Set(nodeIds);
     const nodes = new Map([...graph.nodes].filter(([id]) => ids.has(id)));
-    const edges = graph.edges.filter((e) => ids.has(e.from) && ids.has(e.to));
-    const waves = graph.waves.map((w) => ({
-        wave_number: w.wave_number,
-        node_ids: w.node_ids.filter((id) => ids.has(id)),
-    })).filter((w) => w.node_ids.length > 0);
+    const edges = graph.edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to));
+    const waves = graph.waves
+        .map((wave) => ({
+        wave_number: wave.wave_number,
+        node_ids: wave.node_ids.filter((id) => ids.has(id)),
+    }))
+        .filter((wave) => wave.node_ids.length > 0);
     return {
         nodes,
         edges,

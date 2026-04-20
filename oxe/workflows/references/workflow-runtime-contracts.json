@@ -308,6 +308,17 @@
     },
     "execute": {
       "reasoning_mode": "execution",
+      "runtime_default_commands": [
+        "oxe-cc runtime compile --dir <projeto>",
+        "oxe-cc runtime project --dir <projeto>"
+      ],
+      "runtime_primary_artifacts": [
+        "ACTIVE-RUN.json",
+        ".oxe/runs/<run_id>.json",
+        "compiled_graph",
+        "canonical_state"
+      ],
+      "runtime_fallback_note": "Se o runtime não estiver compilado ou falhar por indisponibilidade do pacote, declarar fallback explícito para o fluxo legado antes de mutar.",
       "required_artifacts": [
         "state",
         "runtime",
@@ -830,6 +841,17 @@
     },
     "verify": {
       "reasoning_mode": "review",
+      "runtime_default_commands": [
+        "oxe-cc runtime verify --dir <projeto>",
+        "oxe-cc runtime project --dir <projeto>"
+      ],
+      "runtime_primary_artifacts": [
+        ".oxe/runs/<run_id>/verification-manifest.json",
+        ".oxe/runs/<run_id>/residual-risk-ledger.json",
+        ".oxe/runs/<run_id>/evidence-coverage.json",
+        "VERIFY.md projetado"
+      ],
+      "runtime_fallback_note": "Se runtime verify não estiver disponível, declarar fallback explícito para a verificação manual; se retornar partial, usar os gaps explícitos como backlog da revisão.",
       "required_artifacts": [
         "state",
         "plan",

@@ -6,6 +6,7 @@ import type { WorkspaceManager, WorkspaceRequest } from '../workspace-manager';
 import type { WorkspaceLease, SnapshotRef } from '../../models/workspace';
 
 export class GitWorktreeManager implements WorkspaceManager {
+  readonly isolation_level = 'isolated' as const;
   private leases = new Map<string, WorkspaceLease>();
 
   constructor(private readonly projectRoot: string) {}
@@ -25,6 +26,7 @@ export class GitWorktreeManager implements WorkspaceManager {
     const lease: WorkspaceLease = {
       workspace_id: wsId,
       strategy: 'git_worktree',
+      isolation_level: this.isolation_level,
       branch,
       base_commit: baseCommit,
       root_path: worktreePath,

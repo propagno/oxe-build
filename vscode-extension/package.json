@@ -2,7 +2,7 @@
   "name": "oxe-agents",
   "displayName": "OXE Agents",
   "description": "Agentes OXE para GitHub Copilot Chat — cada fase do ciclo como um @agente no VS Code",
-  "version": "1.0.0",
+  "version": "1.4.0",
   "publisher": "oxe-cc",
   "license": "MIT",
   "engines": {

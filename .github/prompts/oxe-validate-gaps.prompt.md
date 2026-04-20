@@ -11,7 +11,7 @@ oxe_tool_profile: review_heavy
 oxe_confidence_policy: explicit
 oxe_context_tier: standard
 oxe_contract_version: 2.0.0
-oxe_semantics_hash: 27d51ac144da4c1c
+oxe_semantics_hash: 69e3f79ec51160e1
 ---
 
 <!-- oxe-reasoning-contract:start -->
@@ -25,7 +25,7 @@ oxe_semantics_hash: 27d51ac144da4c1c
 - **Política de confiança:** explícita
 - **Tier de contexto padrão:** padrão
 - **Versão do contrato:** 2.0.0
-- **Checksum semântico:** `27d51ac144da4c1c`
+- **Checksum semântico:** `69e3f79ec51160e1`
 - **Entrada de contexto prioritária:** `.oxe/context/packs/validate-gaps.md` e `.oxe/context/packs/validate-gaps.json`
 - **Regra pack-first:** ler o context pack primeiro; se estiver stale, incompleto ou ausente, cair para leitura direta com fallback explícito.
 - **Inspeção estruturada:** `oxe-cc context inspect --workflow validate-gaps --json`

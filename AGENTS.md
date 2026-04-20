@@ -4,8 +4,8 @@ Este repositório empacota o fluxo **OXE** (spec-driven, artefatos em `.oxe/`). 
 
 - **npm:** `npx oxe-cc@latest` · pacote `oxe-cc` · [README.md](README.md)
 - **Workflows canónicos:** [oxe/workflows/](oxe/workflows/) — editar aqui primeiro; todas as integrações apontam para estes ficheiros. Referência **legado / brownfield:** [oxe/workflows/references/legacy-brownfield.md](oxe/workflows/references/legacy-brownfield.md).
-- **CLI:** `oxe-cc install | doctor | status | init-oxe | update | uninstall` — ver [README.md](README.md#cli-oxe-cc).
-- **SDK:** `require('oxe-cc')` expõe `runDoctorChecks`, `health`, `workflows`, `install`, `manifest`, `agents` — ver [lib/sdk/README.md](lib/sdk/README.md).
+- **CLI:** `oxe-cc install | doctor | status | init-oxe | update | uninstall` + `oxe-cc runtime <status|compile|verify|gates|replay|recover|ci|promote|agents>` — ver [README.md](README.md#cli-oxe-cc).
+- **SDK:** `require('oxe-cc')` expõe `runDoctorChecks`, `health`, `workflows`, `install`, `manifest`, `agents`, `verifyRun` e bridges `operational.*` do runtime enterprise — ver [lib/sdk/README.md](lib/sdk/README.md).
 
 ---
 
@@ -96,3 +96,5 @@ Blueprints em `.oxe/plan-agents.json` (schema 3). Protocolo inter-agente: `oxe/w
 Quando o utilizador pedir uma etapa OXE por linguagem natural, seguir o ficheiro `oxe/workflows/<passo>.md` correspondente **sem atalhar passos**. Ler os artefatos em `.oxe/` antes de qualquer ação — nunca partir de suposições sobre o estado do projeto.
 
 Os wrappers por runtime podem carregar metadata cognitiva (`oxe_reasoning_mode`, `oxe_question_policy`, `oxe_output_contract`, `oxe_tool_profile`, `oxe_confidence_policy`), mas o comportamento canónico continua no workflow. Use essa metadata para adaptar a postura do agente sem bifurcar a lógica do OXE por ferramenta.
+
+Para `execute` e `verify`, o comportamento atual esperado é **runtime-first**: se `oxe-cc runtime` estiver disponível, preferir `runtime compile/project/verify/gates` e tratar markdown como projeção derivada; se o runtime não puder ser executado, declarar `fallback legado` explicitamente.

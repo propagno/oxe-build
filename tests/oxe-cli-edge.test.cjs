@@ -156,7 +156,7 @@ describe('oxe-cc CLI edge', () => {
     assert.strictEqual(r.status, 0, r.stderr || r.stdout);
     const line = r.stdout.trim().split(/\r?\n/).filter(Boolean).pop();
     const j = JSON.parse(line);
-    assert.strictEqual(j.oxeStatusSchema, 3);
+    assert.strictEqual(j.oxeStatusSchema, 5);
     assert.ok(typeof j.healthStatus === 'string');
     assert.ok(typeof j.nextStep === 'string');
     assert.ok(Array.isArray(j.artifacts));
@@ -165,8 +165,27 @@ describe('oxe-cc CLI edge', () => {
     assert.ok(j.semanticsDrift && typeof j.semanticsDrift === 'object');
     assert.ok(j.packFreshness && typeof j.packFreshness === 'object');
     assert.ok(j.activeSummaryRefs && typeof j.activeSummaryRefs === 'object');
+    assert.ok(j.pendingGates && typeof j.pendingGates === 'object');
+    assert.ok('verificationSummary' in j);
+    assert.ok('residualRiskSummary' in j);
+    assert.ok('evidenceCoverage' in j);
+    assert.ok('policyDecisionSummary' in j);
+    assert.ok('quotaSummary' in j);
+    assert.ok('auditSummary' in j);
+    assert.ok('promotionSummary' in j);
+    assert.ok('runtimeMode' in j);
+    assert.ok('fallbackMode' in j);
+    assert.ok('gateQueue' in j);
+    assert.ok('policyCoverage' in j);
+    assert.ok('promotionReadiness' in j);
+    assert.ok('recoveryState' in j);
+    assert.ok('providerCatalog' in j);
+    assert.ok('gateSla' in j);
+    assert.ok('staleGateCount' in j);
+    assert.ok('multiAgent' in j);
     assert.ok(j.diagnostics && typeof j.diagnostics === 'object');
     assert.ok(Array.isArray(j.diagnostics.planWarnings));
+    assert.ok(Array.isArray(j.diagnostics.enterpriseWarnings));
     assert.ok(j.staleCompact && typeof j.staleCompact.stale === 'boolean');
   });
 
@@ -447,6 +466,7 @@ describe('oxe-cc CLI edge', () => {
     const env = { ...process.env, OXE_NO_BANNER: '1', OXE_NO_PROMPT: '1' };
     const oxe = path.join(dir, '.oxe');
     fs.mkdirSync(oxe, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'README.md'), '# runtime fixture\n', 'utf8');
     fs.writeFileSync(
       path.join(oxe, 'SPEC.md'),
       '# OXE — Spec\n\n## Objetivo\n\nCompilar runtime.\n\n## Critérios de aceite\n\n| ID | Critério | Como verificar |\n|----|----------|----------------|\n| A1 | Runtime compilado | node --test |\n',
@@ -457,6 +477,16 @@ describe('oxe-cc CLI edge', () => {
       '## Tarefas\n\n### T1 — Demo\n**Onda:** 1\n**Depende de:** —\n**Verificar:**\n- Comando: `node --test`\n**Aceite vinculado:** A1\n',
       'utf8'
     );
+    let git = spawnSync('git', ['init'], { cwd: dir, encoding: 'utf8' });
+    assert.strictEqual(git.status, 0, git.stderr + git.stdout);
+    git = spawnSync('git', ['config', 'user.email', 'oxe@test.local'], { cwd: dir, encoding: 'utf8' });
+    assert.strictEqual(git.status, 0, git.stderr + git.stdout);
+    git = spawnSync('git', ['config', 'user.name', 'OXE Test'], { cwd: dir, encoding: 'utf8' });
+    assert.strictEqual(git.status, 0, git.stderr + git.stdout);
+    git = spawnSync('git', ['add', '.'], { cwd: dir, encoding: 'utf8' });
+    assert.strictEqual(git.status, 0, git.stderr + git.stdout);
+    git = spawnSync('git', ['commit', '-m', 'init runtime fixture'], { cwd: dir, encoding: 'utf8' });
+    assert.strictEqual(git.status, 0, git.stderr + git.stdout);
 
     const compiled = spawnSync(process.execPath, [CLI, 'runtime', 'compile', '--dir', dir], {
       cwd: REPO_ROOT,
@@ -473,6 +503,83 @@ describe('oxe-cc CLI edge', () => {
     assert.ok(runState.verification_suite);
     assert.ok(runState.canonical_state);
 
+    const verified = spawnSync(process.execPath, [CLI, 'runtime', 'verify', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(verified.status, 0, verified.stderr + verified.stdout);
+    const verifiedPayload = parseJsonFromCli(verified.stdout);
+    assert.ok(verifiedPayload.manifest || verifiedPayload.summary || verifiedPayload.run);
+    runState = JSON.parse(fs.readFileSync(runFile, 'utf8'));
+    assert.ok(runState.verification_manifest);
+    assert.ok(runState.residual_risks);
+    assert.ok(runState.verification_evidence_coverage);
+    assert.ok(fs.existsSync(path.join(oxe, 'runs', activeRunRef.run_id, 'verification-manifest.json')));
+    assert.ok(fs.existsSync(path.join(oxe, 'runs', activeRunRef.run_id, 'residual-risk-ledger.json')));
+    assert.ok(fs.existsSync(path.join(oxe, 'runs', activeRunRef.run_id, 'evidence-coverage.json')));
+
+    const runtimeStatus = spawnSync(process.execPath, [CLI, 'runtime', 'status', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(runtimeStatus.status, 0, runtimeStatus.stderr + runtimeStatus.stdout);
+    const runtimeStatusPayload = parseJsonFromCli(runtimeStatus.stdout);
+    assert.strictEqual(runtimeStatusPayload.runtimeMode.runtime_mode, 'enterprise');
+    assert.ok(runtimeStatusPayload.gateQueue);
+    assert.ok(runtimeStatusPayload.providerCatalog);
+
+    const gatesDir = path.join(oxe, 'execution');
+    fs.mkdirSync(gatesDir, { recursive: true });
+    const gateId = 'gate-enterprise-1';
+    fs.writeFileSync(
+      path.join(gatesDir, 'GATES.json'),
+      JSON.stringify([
+        {
+          gate_id: gateId,
+          scope: 'critical_mutation',
+          run_id: activeRunRef.run_id,
+          work_item_id: 'T1',
+          action: 'apply_patch',
+          requested_at: new Date().toISOString(),
+          context: { description: 'Approve mutation', evidence_refs: [], risks: ['scope'], rationale: null, policy_decision_id: null },
+          status: 'pending',
+        },
+      ], null, 2),
+      'utf8'
+    );
+    const gatesList = spawnSync(process.execPath, [CLI, 'runtime', 'gates', 'list', '--status', 'pending', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(gatesList.status, 0, gatesList.stderr + gatesList.stdout);
+    const gatesListPayload = parseJsonFromCli(gatesList.stdout);
+    assert.strictEqual(gatesListPayload.pending.length, 1);
+    assert.strictEqual(gatesListPayload.filters.status, 'pending');
+    const gateShow = spawnSync(process.execPath, [CLI, 'runtime', 'gates', 'show', '--gate', gateId, '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(gateShow.status, 0, gateShow.stderr + gateShow.stdout);
+    const gate = parseJsonFromCli(gateShow.stdout);
+    assert.strictEqual(gate.gate_id, gateId);
+    const gateResolve = spawnSync(
+        process.execPath,
+        [CLI, 'runtime', 'gates', 'resolve', '--gate', gateId, '--decision', 'approve', '--actor', 'qa', '--json', '--dir', dir],
+        {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+          env,
+        }
+      );
+    assert.strictEqual(gateResolve.status, 0, gateResolve.stderr + gateResolve.stdout);
+    const gateResolvePayload = parseJsonFromCli(gateResolve.stdout);
+    assert.strictEqual(gateResolvePayload.gate.status, 'resolved');
+    assert.strictEqual(gateResolvePayload.impact.pendingRemaining, 0);
+
     const projected = spawnSync(process.execPath, [CLI, 'runtime', 'project', '--dir', dir], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
@@ -485,16 +592,109 @@ describe('oxe-cc CLI edge', () => {
     assert.ok(fs.existsSync(path.join(oxe, 'RUN-SUMMARY.md')));
     assert.ok(fs.existsSync(path.join(oxe, 'PR-SUMMARY.md')));
 
-    const ci = spawnSync(process.execPath, [CLI, 'runtime', 'ci', '--dir', dir], {
+    const promoted = spawnSync(process.execPath, [CLI, 'runtime', 'promote', '--target', 'pr_draft', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(promoted.status, 0, promoted.stderr + promoted.stdout);
+    const promotionPayload = parseJsonFromCli(promoted.stdout);
+    assert.ok(promotionPayload && typeof promotionPayload === 'object');
+    runState = JSON.parse(fs.readFileSync(runFile, 'utf8'));
+    assert.ok(runState.delivery && runState.delivery.promotion_record);
+    assert.strictEqual(runState.delivery.promotion_record.target_kind, 'pr_draft');
+
+    fs.writeFileSync(
+      path.join(oxe, 'runs', activeRunRef.run_id, 'multi-agent-state.json'),
+      JSON.stringify({
+        run_id: activeRunRef.run_id,
+        mode: 'parallel',
+        workspace_isolation_enforced: true,
+        agent_results: [{ agent_id: 'agent-a', assigned_task_ids: ['T1'], completed: [], failed: [] }],
+        ownership: [{ work_item_id: 'T1', agent_id: 'agent-a' }],
+        orphan_reassignments: [],
+      }, null, 2),
+      'utf8'
+    );
+    fs.writeFileSync(path.join(oxe, 'runs', activeRunRef.run_id, 'handoffs.json'), JSON.stringify([{ handoff_id: 'h1' }], null, 2), 'utf8');
+    fs.writeFileSync(path.join(oxe, 'runs', activeRunRef.run_id, 'arbitration-results.json'), JSON.stringify([{ work_item_id: 'T1' }], null, 2), 'utf8');
+    const agentsStatus = spawnSync(process.execPath, [CLI, 'runtime', 'agents', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(agentsStatus.status, 0, agentsStatus.stderr + agentsStatus.stdout);
+    const agentsPayload = parseJsonFromCli(agentsStatus.stdout);
+    assert.strictEqual(agentsPayload.enabled, true);
+    assert.strictEqual(agentsPayload.mode, 'parallel');
+
+    fs.writeFileSync(
+      path.join(oxe, 'runs', activeRunRef.run_id, 'journal.json'),
+      JSON.stringify({
+        run_id: activeRunRef.run_id,
+        paused_at: new Date().toISOString(),
+        cancelled: false,
+        eligible_work_items: ['T1'],
+        completed_work_items: [],
+        failed_work_items: [],
+        blocked_work_items: [],
+        pending_gates: [],
+        replay_cursor: null,
+        scheduler_state: 'paused',
+        partial_result: { run_id: activeRunRef.run_id, completed: [], failed: [], blocked: [] },
+      }, null, 2),
+      'utf8'
+    );
+    const replayStructured = spawnSync(process.execPath, [CLI, 'runtime', 'replay', '--json', '--run', activeRunRef.run_id, '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(replayStructured.status, 0, replayStructured.stderr + replayStructured.stdout);
+    const replayPayload = parseJsonFromCli(replayStructured.stdout);
+    assert.strictEqual(replayPayload.run_id, activeRunRef.run_id);
+    assert.ok(replayPayload.gateQueue);
+
+    const recovered = spawnSync(process.execPath, [CLI, 'runtime', 'recover', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(recovered.status, 0, recovered.stderr + recovered.stdout);
+    const recoverPayload = parseJsonFromCli(recovered.stdout);
+    assert.ok(recoverPayload.recoverySummary);
+    runState = JSON.parse(fs.readFileSync(runFile, 'utf8'));
+    assert.ok(runState.recovery_summary);
+    assert.ok(fs.existsSync(path.join(oxe, 'RECOVERY-SUMMARY.md')));
+
+    const ci = spawnSync(process.execPath, [CLI, 'runtime', 'ci', '--json', '--dir', dir], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
       env,
     });
     assert.strictEqual(ci.status, 0, ci.stderr + ci.stdout);
-    assert.match(ci.stdout, /oxe-plan-consistency/i);
+    const ciPayload = parseJsonFromCli(ci.stdout);
+    assert.ok(ciPayload.summary.total >= 1);
     runState = JSON.parse(fs.readFileSync(runFile, 'utf8'));
     assert.ok(runState.ci_checks);
     assert.ok(runState.ci_checks.summary.total >= 1);
+
+    const statusJson = spawnSync(process.execPath, [CLI, 'status', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(statusJson.status, 0, statusJson.stderr + statusJson.stdout);
+    const statusPayload = parseJsonFromCli(statusJson.stdout);
+    assert.strictEqual(statusPayload.runtimeMode.runtime_mode, 'enterprise');
+    assert.strictEqual(statusPayload.fallbackMode, 'none');
+    assert.ok(statusPayload.policyCoverage.coveragePercent >= 0);
+    assert.ok(statusPayload.promotionReadiness);
+    assert.ok(statusPayload.recoveryState);
+    assert.ok(statusPayload.providerCatalog);
+    assert.ok('gateSla' in statusPayload);
+    assert.ok('staleGateCount' in statusPayload);
+    assert.ok('multiAgent' in statusPayload);
   });
 
   test('init-oxe exits 1 when target path does not exist without dry-run', () => {

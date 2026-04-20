@@ -9,26 +9,57 @@ exports.addEntry = addEntry;
 const plugin_manifest_1 = require("./plugin-manifest");
 function buildMatrix(registry) {
     const entries = [];
-    for (const plugin of registry.list()) {
-        const providers = plugin.providers ?? [];
-        for (const prov of providers) {
-            let provider_type;
-            if (prov.startsWith('tool:'))
-                provider_type = 'tool';
-            else if (prov.startsWith('workspace:'))
-                provider_type = 'workspace';
-            else if (prov.startsWith('verifier:'))
-                provider_type = 'verifier';
-            else if (prov.startsWith('context:'))
-                provider_type = 'context';
-            else
-                continue;
-            const name = prov.slice(prov.indexOf(':') + 1);
+    for (const plugin of registry.snapshot()) {
+        for (const provider of plugin.toolProviders) {
             entries.push({
-                name,
-                provider_type,
+                plugin: plugin.name,
+                name: provider.name,
+                capability: provider.name,
+                provider_type: 'tool',
                 stability: 'stable',
+                abi_version: plugin.abi_version ?? plugin_manifest_1.CURRENT_ABI_VERSION,
                 since_abi_version: plugin_manifest_1.CURRENT_ABI_VERSION,
+                supported: ['read_code', 'generate_patch', 'run_tests', 'collect_evidence', 'custom'].filter((action) => registry.toolProviderFor(action)?.name === provider.name),
+                fallback_available: true,
+            });
+        }
+        for (const provider of plugin.workspaceProviders) {
+            entries.push({
+                plugin: plugin.name,
+                name: provider.name,
+                capability: provider.name,
+                provider_type: 'workspace',
+                stability: 'stable',
+                abi_version: plugin.abi_version ?? plugin_manifest_1.CURRENT_ABI_VERSION,
+                since_abi_version: plugin_manifest_1.CURRENT_ABI_VERSION,
+                supported: [provider.name],
+                fallback_available: true,
+            });
+        }
+        for (const provider of plugin.verifierProviders) {
+            entries.push({
+                plugin: plugin.name,
+                name: provider.name,
+                capability: provider.name,
+                provider_type: 'verifier',
+                stability: 'stable',
+                abi_version: plugin.abi_version ?? plugin_manifest_1.CURRENT_ABI_VERSION,
+                since_abi_version: plugin_manifest_1.CURRENT_ABI_VERSION,
+                supported: ['unit', 'integration', 'smoke', 'policy', 'security', 'custom'].filter((checkType) => registry.verifierProviderFor(checkType)?.name === provider.name),
+                fallback_available: true,
+            });
+        }
+        for (const provider of plugin.contextProviders) {
+            entries.push({
+                plugin: plugin.name,
+                name: provider.name,
+                capability: provider.name,
+                provider_type: 'context',
+                stability: 'stable',
+                abi_version: plugin.abi_version ?? plugin_manifest_1.CURRENT_ABI_VERSION,
+                since_abi_version: plugin_manifest_1.CURRENT_ABI_VERSION,
+                supported: [provider.name],
+                fallback_available: false,
             });
         }
     }

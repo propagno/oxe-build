@@ -19,12 +19,23 @@ describe('oxe-operational', () => {
       cursor: { wave: 2, task: 'T3', mode: 'wave' },
       active_tasks: ['T3'],
       pending_checkpoints: ['CP-01'],
+      multi_agent: {
+        enabled: true,
+        mode: 'parallel',
+        agents: [{ agent_id: 'agent-a', assigned_task_ids: ['T3'], completed: [], failed: [], isolation_level: 'isolated' }],
+        ownership: [{ work_item_id: 'T3', agent_id: 'agent-a' }],
+        handoffs: [{ handoff_id: 'handoff-1', from_agent_id: 'agent-a', to_agent_id: 'agent-b' }],
+      },
     });
     assert.strictEqual(saved.run_id, 'oxe-run-test');
     const loaded = operational.readRunState(dir, null);
     assert.strictEqual(loaded.run_id, 'oxe-run-test');
     assert.strictEqual(loaded.current_wave, 2);
     assert.strictEqual(loaded.cursor.task, 'T3');
+    assert.ok(loaded.multi_agent);
+    assert.strictEqual(loaded.multi_agent.mode, 'parallel');
+    assert.ok(loaded.graph.nodes.some((node) => node.id === 'agent:agent-a'));
+    assert.ok(loaded.graph.edges.some((edge) => edge.from === 'agent:agent-a' && edge.to === 'task:T3'));
   });
 
   test('appendEvent writes append-only ndjson trace', () => {
@@ -307,6 +318,71 @@ describe('oxe-operational', () => {
     assert.ok(content.includes('OXE — Replay Session'));
   });
 
+  test('replayRuntimeState returns structured summary and writes report when requested', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-op-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(path.join(oxe, 'runs', 'run-replay'), { recursive: true });
+    operational.writeRunState(dir, null, {
+      run_id: 'run-replay',
+      status: 'paused',
+      verification_manifest: {
+        summary: { total: 1, pass: 1, fail: 0, skip: 0, error: 0, all_passed: true },
+        checks: [],
+      },
+    });
+    fs.writeFileSync(
+      path.join(oxe, 'runs', 'run-replay', 'journal.json'),
+      JSON.stringify({ scheduler_state: 'paused', pending_gates: ['T9'] }, null, 2),
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(oxe, 'runs', 'run-replay', 'policy-decisions.json'),
+      JSON.stringify([{ decision_id: 'pd-1', action: 'apply_patch' }], null, 2),
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(oxe, 'runs', 'run-replay', 'promotion-record.json'),
+      JSON.stringify({ target_kind: 'pr_draft', status: 'blocked' }, null, 2),
+      'utf8'
+    );
+    operational.appendEvent(dir, null, { type: 'run_started', run_id: 'run-replay', wave_id: 'wave-1', task_id: 'T1' });
+    const summary = operational.replayRuntimeState(dir, null, { runId: 'run-replay', writeReport: true });
+    assert.strictEqual(summary.run_id, 'run-replay');
+    assert.ok(summary.gateQueue);
+    assert.ok(Array.isArray(summary.policyDecisions));
+    assert.ok(summary.verification);
+    assert.ok(summary.report_path);
+    assert.ok(fs.existsSync(summary.report_path));
+  });
+
+  test('readRuntimeMultiAgentStatus reads persisted runtime artifacts', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-op-'));
+    const runDir = path.join(dir, '.oxe', 'runs', 'run-ma');
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(runDir, 'multi-agent-state.json'),
+      JSON.stringify({
+        run_id: 'run-ma',
+        mode: 'parallel',
+        workspace_isolation_enforced: true,
+        agent_results: [{ agent_id: 'agent-a', assigned_task_ids: ['T1'], completed: ['T1'], failed: [] }],
+        ownership: [{ work_item_id: 'T1', owner_agent_id: 'agent-a' }],
+        orphan_reassignments: [],
+      }, null, 2),
+      'utf8'
+    );
+    fs.writeFileSync(path.join(runDir, 'handoffs.json'), JSON.stringify([{ handoff_id: 'h1' }], null, 2), 'utf8');
+    fs.writeFileSync(path.join(runDir, 'arbitration-results.json'), JSON.stringify([{ work_item_id: 'T1' }], null, 2), 'utf8');
+    operational.writeRunState(dir, null, { run_id: 'run-ma', status: 'running' });
+    const status = operational.readRuntimeMultiAgentStatus(dir, null, {});
+    assert.strictEqual(status.enabled, true);
+    assert.strictEqual(status.mode, 'parallel');
+    assert.strictEqual(status.workspaceIsolationEnforced, true);
+    assert.strictEqual(status.agents.length, 1);
+    assert.strictEqual(status.handoffs.length, 1);
+    assert.strictEqual(status.arbitrationResults.length, 1);
+  });
+
   test('compileExecutionGraphFromArtifacts persists compiled graph and canonical state', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-op-'));
     const oxe = path.join(dir, '.oxe');
@@ -353,9 +429,13 @@ describe('oxe-operational', () => {
     assert.ok(fs.existsSync(path.join(oxe, 'PLAN.md')));
     assert.ok(fs.existsSync(path.join(oxe, 'VERIFY.md')));
     assert.ok(fs.existsSync(path.join(oxe, 'RUN-SUMMARY.md')));
+    assert.ok(fs.existsSync(path.join(oxe, 'COMMIT-SUMMARY.md')));
+    assert.ok(fs.existsSync(path.join(oxe, 'PROMOTION-SUMMARY.md')));
     assert.ok(fs.existsSync(path.join(oxe, 'PR-SUMMARY.md')));
     assert.match(fs.readFileSync(path.join(oxe, 'VERIFY.md'), 'utf8'), /Gerado automaticamente pelo Projection Engine/i);
     assert.ok(projected.run.projections.plan_ref);
+    assert.ok(projected.run.projections.commit_summary_ref);
+    assert.ok(projected.run.projections.promotion_summary_ref);
   });
 
   test('runRuntimeCiChecks persists CI results on the active run', async () => {

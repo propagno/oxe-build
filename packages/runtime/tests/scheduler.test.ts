@@ -7,6 +7,10 @@ import { Scheduler } from '../src/scheduler/scheduler';
 import { loadJournal } from '../src/scheduler/run-journal';
 import { compile } from '../src/compiler/graph-compiler';
 import { InplaceWorkspaceManager } from '../src/workspace/strategies/inplace';
+import { GateManager } from '../src/gate/gate-manager';
+import { PolicyEngine } from '../src/policy/policy-engine';
+import { PluginRegistry } from '../src/plugins/plugin-registry';
+import { createQuota } from '../src/audit/audit-trail';
 import type { ParsedPlan, ParsedSpec, GraphNode } from '../src/compiler/graph-compiler';
 import type { TaskExecutor, TaskResult, SchedulerContext } from '../src/scheduler/scheduler';
 import type { WorkspaceLease } from '../src/models/workspace';
@@ -307,5 +311,81 @@ describe('Scheduler', () => {
 
   test('cleanup', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('policy gate blocks node and persists pending gate', async () => {
+    const runId = `r-gate-${Date.now()}`;
+    const plan = makePlan([
+      { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: ['src/app.ts'], verifyCommand: null, aceite: [], done: false },
+    ]);
+    const graph = compile(plan, SPEC, { default_workspace_strategy: 'inplace' });
+    const scheduler = new Scheduler();
+    const gateManager = new GateManager(tmpDir, null, runId);
+    const ctx: SchedulerContext = {
+      ...makeCtx(tmpDir, alwaysSucceed()),
+      runId,
+      gateManager,
+      policyEngine: new PolicyEngine([
+        {
+          id: 'rule-1',
+          when: { tool: 'generate_patch' },
+          action: 'require_human_gate',
+        },
+      ]),
+    };
+    const result = await scheduler.run(graph, ctx);
+    assert.equal(result.status, 'blocked');
+    assert.ok(result.blocked.includes('T1'));
+    assert.equal(gateManager.listPending().length, 1);
+  });
+
+  test('quota exhaustion blocks mutations before executor runs', async () => {
+    let executed = 0;
+    const plan = makePlan([
+      { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: ['src/app.ts'], verifyCommand: null, aceite: [], done: false },
+    ]);
+    const graph = compile(plan, SPEC, { default_workspace_strategy: 'inplace' });
+    const scheduler = new Scheduler();
+    const ctx: SchedulerContext = {
+      ...makeCtx(tmpDir, {
+        async execute(): Promise<TaskResult> {
+          executed++;
+          return { success: true, failure_class: null, evidence: [], output: 'ok' };
+        },
+      }),
+      quota: createQuota(`r-quota-${Date.now()}`, { max_work_items: 0, max_mutations: 0 }),
+    };
+    const result = await scheduler.run(graph, ctx);
+    assert.equal(result.status, 'blocked');
+    assert.equal(executed, 0);
+  });
+
+  test('plugin tool provider can execute node instead of executor', async () => {
+    const registry = new PluginRegistry();
+    let providerCalls = 0;
+    registry.register({
+      name: 'tool-plugin',
+      toolProviders: [{
+        name: 'generate_patch-provider',
+        kind: 'mutation',
+        idempotent: false,
+        supports: (actionType: string) => actionType === 'generate_patch',
+        invoke: async () => {
+          providerCalls++;
+          return { success: true, output: 'plugin ok', evidence_paths: ['artifact.txt'], side_effects_applied: ['write_fs'] };
+        },
+      }],
+    });
+    const plan = makePlan([
+      { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: ['src/app.ts'], verifyCommand: null, aceite: [], done: false },
+    ]);
+    const graph = compile(plan, SPEC, { default_workspace_strategy: 'inplace' });
+    const scheduler = new Scheduler();
+    const result = await scheduler.run(graph, {
+      ...makeCtx(tmpDir, alwaysFail()),
+      pluginRegistry: registry,
+    });
+    assert.equal(result.status, 'completed');
+    assert.equal(providerCalls, 1);
   });
 });

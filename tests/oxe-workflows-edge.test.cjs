@@ -67,4 +67,19 @@ describe('oxe-workflows edge', () => {
       assert.match(text, /fallback explícito|fallback para leitura direta/i, `${slug}.md deve declarar fallback explícito`);
     }
   });
+
+  test('execute e verify preferem runtime enterprise como caminho padrão', () => {
+    const execute = fs.readFileSync(path.join(REPO_ROOT, 'oxe', 'workflows', 'execute.md'), 'utf8');
+    const verify = fs.readFileSync(path.join(REPO_ROOT, 'oxe', 'workflows', 'verify.md'), 'utf8');
+
+    assert.match(execute, /oxe-cc runtime compile --dir <projeto>/i);
+    assert.match(execute, /oxe-cc runtime project --dir <projeto>/i);
+    assert.match(execute, /fallback legado/i);
+
+    assert.match(verify, /oxe-cc runtime verify --dir <projeto>/i);
+    assert.match(verify, /verification-manifest\.json/i);
+    assert.match(verify, /residual-risk-ledger\.json/i);
+    assert.match(verify, /evidence-coverage\.json/i);
+    assert.match(verify, /fallback legado/i);
+  });
 });

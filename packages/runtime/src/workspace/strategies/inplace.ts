@@ -3,12 +3,15 @@ import type { WorkspaceManager, WorkspaceRequest } from '../workspace-manager';
 import type { WorkspaceLease, SnapshotRef } from '../../models/workspace';
 
 export class InplaceWorkspaceManager implements WorkspaceManager {
+  readonly isolation_level = 'shared' as const;
+
   constructor(private readonly projectRoot: string) {}
 
   async allocate(req: WorkspaceRequest): Promise<WorkspaceLease> {
     return {
       workspace_id: `ws-inplace-${req.work_item_id}-a${req.attempt_number}`,
       strategy: 'inplace',
+      isolation_level: this.isolation_level,
       branch: null,
       base_commit: null,
       root_path: this.projectRoot,

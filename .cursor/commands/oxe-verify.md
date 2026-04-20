@@ -9,7 +9,7 @@ oxe_tool_profile: review_heavy
 oxe_confidence_policy: explicit
 oxe_context_tier: standard
 oxe_contract_version: 2.0.0
-oxe_semantics_hash: 442bb4594208d058
+oxe_semantics_hash: 8b47625394eec62a
 ---
 
 OXE — Valida implementação (.oxe/VERIFY.md)
@@ -25,7 +25,7 @@ OXE — Valida implementação (.oxe/VERIFY.md)
 - **Política de confiança:** explícita
 - **Tier de contexto padrão:** padrão
 - **Versão do contrato:** 2.0.0
-- **Checksum semântico:** `442bb4594208d058`
+- **Checksum semântico:** `8b47625394eec62a`
 - **Entrada de contexto prioritária:** `.oxe/context/packs/verify.md` e `.oxe/context/packs/verify.json`
 - **Regra pack-first:** ler o context pack primeiro; se estiver stale, incompleto ou ausente, cair para leitura direta com fallback explícito.
 - **Inspeção estruturada:** `oxe-cc context inspect --workflow verify --json`
@@ -34,6 +34,9 @@ OXE — Valida implementação (.oxe/VERIFY.md)
 - Se não houver findings, declarar isso explicitamente e listar riscos residuais.
 - **Seções esperadas:** Findings · Perguntas abertas · Riscos residuais · Resumo
 - **Bloqueios formais:** missing:state
+- **Caminho runtime padrão:** `oxe-cc runtime verify --dir <projeto>` → `oxe-cc runtime project --dir <projeto>`
+- **Artefatos canónicos primários:** `.oxe/runs/<run_id>/verification-manifest.json` · `.oxe/runs/<run_id>/residual-risk-ledger.json` · `.oxe/runs/<run_id>/evidence-coverage.json` · `VERIFY.md projetado`
+- **Fallback runtime:** Se runtime verify não estiver disponível, declarar fallback explícito para a verificação manual; se retornar partial, usar os gaps explícitos como backlog da revisão.
 - **Referência canónica:** `oxe/workflows/references/reasoning-review.md`
 
 <!-- oxe-reasoning-contract:end -->

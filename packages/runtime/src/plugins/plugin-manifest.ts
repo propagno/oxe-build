@@ -1,6 +1,6 @@
 import type { OxePlugin } from './plugin-abi';
 
-export const CURRENT_ABI_VERSION = '1.0.0';
+export const CURRENT_ABI_VERSION = '1';
 
 export interface PluginManifest {
   name: string;
@@ -31,7 +31,7 @@ export function extractManifest(plugin: OxePlugin): PluginManifest {
   return {
     name: plugin.name,
     version: plugin.version ?? '0.0.0',
-    abi_version: CURRENT_ABI_VERSION,
+    abi_version: plugin.abi_version ?? CURRENT_ABI_VERSION,
     capabilities,
     tool_action_types: plugin.toolProviders?.flatMap((p) =>
       ['read_code', 'generate_patch', 'run_tests', 'collect_evidence', 'custom'].filter((t) => p.supports(t))
@@ -55,6 +55,11 @@ export function validatePlugin(plugin: OxePlugin): PluginValidationResult {
 
   if (plugin.version && !/^\d+\.\d+\.\d+/.test(plugin.version)) {
     warnings.push(`Plugin version "${plugin.version}" does not follow semver`);
+  }
+
+  const abiVersion = plugin.abi_version ?? CURRENT_ABI_VERSION;
+  if (!isAbiCompatible(abiVersion)) {
+    errors.push(`Plugin ABI "${abiVersion}" is incompatible with runtime ABI "${CURRENT_ABI_VERSION}"`);
   }
 
   if (!plugin.toolProviders?.length &&

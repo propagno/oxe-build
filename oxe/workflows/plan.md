@@ -11,6 +11,31 @@ Se o usuário pedir **--replan** (ou replanejamento implícito após `verify_fai
 - Se **SUMMARY.md** não existir, criar a partir de `oxe/templates/SUMMARY.template.md` para registrar o contexto do replan (ou dar append se já existir).
 </objective>
 
+<plan_iteration_contract>
+## Contrato de iteração do plano
+
+Quando já existir `PLAN.md` no escopo resolvido, a regra do OXE é esta:
+
+1. **Mesmo escopo e mesma spec, mas o usuário quer refinar o plano**:
+   - tratar uma nova chamada de `/oxe-plan` como **replan implícito**, mesmo sem `--replan`;
+   - preservar histórico útil e preencher a seção **Replanejamento**.
+2. **A estratégia técnica mudou** (arquitetura, tradeoff, sequencing, decisão de implementação, boundary entre componentes):
+   - **não** reescrever o plano como se fosse só refinamento;
+   - orientar ou executar `discuss` antes do novo plano;
+   - depois voltar a `plan` em modo de replanejamento.
+3. **O escopo mudou** (requisitos, critérios A*, prioridade, corte de entrega, aceite, roadmap):
+   - **não** tratar como replan simples;
+   - voltar para `spec` antes de gerar novo plano.
+4. **Regra de precedência**:
+   - mudança de escopo → `spec`
+   - mudança de estratégia → `discuss`
+   - mudança de decomposição/ordem/risco/validação mantendo o mesmo escopo → `plan --replan`
+
+Resumo operacional:
+- `/oxe-plan` repetido até o usuário ficar satisfeito é válido, mas, se já houver `PLAN.md`, isso deve ser tratado como **replan implícito** por padrão.
+- O agente só deve continuar refinando o plano na mesma trilha quando os requisitos e critérios da `SPEC.md` permanecerem válidos.
+</plan_iteration_contract>
+
 <context>
 - Aplicar `oxe/workflows/references/reasoning-planning.md` como contrato deste passo. O `PLAN.md` deve sair decision-complete e não deixar decisões relevantes para a execução.
 - Seguir `oxe/workflows/references/flow-robustness-contract.md` como contrato canónico de robustez. A ordem obrigatória é: ler artefatos, resolver sessão/paths, validar pré-condições, escrever o plano, autoavaliar o plano, registrar próximo passo único.
@@ -139,15 +164,20 @@ Resumo obrigatório no chat: `Gate do plano: OK` ou `Gate do plano: corrigido (N
 
 <process>
 1. Resolver `active_session` e ler `SPEC.md` do escopo correto (obrigatório). Se faltar, pedir **spec** primeiro.
-1a. Resolver o context pack `plan` primeiro:
+1a. Se `PLAN.md` já existir no escopo resolvido:
+   - se o pedido atual só refina tarefas, ondas, dependências, riscos, validação ou sequencing, tratar como **replan implícito**;
+   - se o pedido atual mudar estratégia técnica, pedir ou executar `discuss` antes de seguir;
+   - se o pedido atual mudar escopo, critérios, prioridades ou aceite, pedir ou executar `spec` antes de seguir.
+   Registar explicitamente no chat qual dos três caminhos foi adotado.
+1b. Resolver o context pack `plan` primeiro:
    - ler `.oxe/context/packs/plan.md|json` (ou `oxe-cc context inspect --workflow plan --json`);
    - se estiver fresco e coerente, usar o pack como mapa primário;
    - se estiver stale, incompleto ou ausente, registar `fallback para leitura direta` e seguir com leitura bruta.
-1b. Com pack válido, ler primeiro o resumo do pack e os artefatos de `read_order`; só abrir outros artefatos quando faltarem evidências para fechar tarefas, riscos ou autoavaliação.
+1c. Com pack válido, ler primeiro o resumo do pack e os artefatos de `read_order`; só abrir outros artefatos quando faltarem evidências para fechar tarefas, riscos ou autoavaliação.
 2. Se `.oxe/config.json` tiver `discuss_before_plan: true` e **não** existir `DISCUSS.md` no escopo resolvido com decisões fechadas, pedir **discuss** antes de planejar.
 3. Se existir **`.oxe/NOTES.md`**, consumir ou explicitamente adiar cada bullet relevante (ver **context**).
 4. Ler `.oxe/codebase/*.md` (incl. CONVENTIONS / CONCERNS) e inspecionar pontos de entrada se a spec exigir. Se o pack não bastar, expandir a leitura apenas para os artefatos adicionais necessários e registar essa expansão.
-5. Escrever ou atualizar `PLAN.md` no escopo resolvido usando `oxe/templates/PLAN.template.md` como cabeçalho; **preservar** YAML inicial (`oxe_doc: plan`, `status`, `inputs`) se já existir e **atualizar** `updated:` (ISO); em **--replan**, preencher a seção **Replanejamento** (data, motivo, lições de VERIFY/SUMMARY, tarefas removidas/alteradas).
+5. Escrever ou atualizar `PLAN.md` no escopo resolvido usando `oxe/templates/PLAN.template.md` como cabeçalho; **preservar** YAML inicial (`oxe_doc: plan`, `status`, `inputs`) se já existir e **atualizar** `updated:` (ISO); em **--replan** ou **replan implícito**, preencher a seção **Replanejamento** (data, motivo, lições de VERIFY/SUMMARY, tarefas removidas/alteradas).
 6. Definir ondas: onda 1 = tarefas sem dependência entre si; onda seguinte = dependentes; respeitar `plan_max_tasks_per_wave` se configurado.
 6a. **Calibração histórica:** se `.oxe/calibration.json` existir e tiver ≥ 2 registros, ler as últimas 3 entradas antes de preencher a autoavaliação. Para cada dimensão com `calibration_error > 0.25` em 2+ ciclos consecutivos, adicionar `[⚠ historicamente subestimado]` na nota da dimensão e reduzir o score em 0.10 ou justificar explicitamente por que o ciclo atual é diferente.
 7. Preencher `## Autoavaliação do Plano` com a rubrica fixa. A confiança é a soma ponderada das seis dimensões; não inventar percentagem sem justificar os pontos. As lacunas, conflitos e freshness do pack devem aparecer nessa autoavaliação quando forem relevantes. **Incluir o bloco `<confidence_vector>`** com as 6 dimensões usando o template em `oxe/templates/PLAN.template.md`.
@@ -161,6 +191,7 @@ Resumo obrigatório no chat: `Gate do plano: OK` ou `Gate do plano: corrigido (N
    - principais riscos e contenções;
    - assumptions relevantes;
    - se o plano foi produzido com pack fresco ou com fallback explícito;
+   - se a chamada foi tratada como plano novo, replan implícito, ou se foi devolvida para `spec`/`discuss`;
    - comando único recomendado para o próximo passo.
 </process>
 

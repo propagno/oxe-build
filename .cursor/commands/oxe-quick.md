@@ -9,7 +9,7 @@ oxe_tool_profile: mixed
 oxe_confidence_policy: rubric
 oxe_context_tier: standard
 oxe_contract_version: 2.0.0
-oxe_semantics_hash: e3eac1b1bc15a71b
+oxe_semantics_hash: 2193373eb2691e0d
 ---
 
 OXE — Modo rápido com Plan-Driven Dynamic Agents lean: objetivo → passos → agentes por domínio (opcional) → verificar
@@ -25,7 +25,7 @@ OXE — Modo rápido com Plan-Driven Dynamic Agents lean: objetivo → passos �
 - **Política de confiança:** rubrica
 - **Tier de contexto padrão:** padrão
 - **Versão do contrato:** 2.0.0
-- **Checksum semântico:** `e3eac1b1bc15a71b`
+- **Checksum semântico:** `2193373eb2691e0d`
 - **Entrada de contexto prioritária:** `.oxe/context/packs/quick.md` e `.oxe/context/packs/quick.json`
 - **Regra pack-first:** ler o context pack primeiro; se estiver stale, incompleto ou ausente, cair para leitura direta com fallback explícito.
 - **Inspeção estruturada:** `oxe-cc context inspect --workflow quick --json`

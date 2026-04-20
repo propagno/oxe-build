@@ -191,6 +191,17 @@ describe('oxe-sdk', () => {
     assert.strictEqual(typeof sdk.operational.compileVerificationSuiteFromArtifacts, 'function');
     assert.strictEqual(typeof sdk.operational.projectRuntimeArtifacts, 'function');
     assert.strictEqual(typeof sdk.operational.runRuntimeCiChecks, 'function');
+    assert.strictEqual(typeof sdk.operational.buildRuntimePluginRegistry, 'function');
+    assert.strictEqual(typeof sdk.operational.readRuntimeGates, 'function');
+    assert.strictEqual(typeof sdk.operational.resolveRuntimeGate, 'function');
+    assert.strictEqual(typeof sdk.operational.runRuntimeVerify, 'function');
+    assert.strictEqual(typeof sdk.operational.runRuntimePromotion, 'function');
+    assert.strictEqual(typeof sdk.operational.recoverRuntimeState, 'function');
+    assert.strictEqual(typeof sdk.operational.replayRuntimeState, 'function');
+    assert.strictEqual(typeof sdk.operational.readRuntimeMultiAgentStatus, 'function');
+    assert.strictEqual(typeof sdk.operational.multiAgentStatus, 'function');
+    assert.strictEqual(typeof sdk.executeSuite, 'function');
+    assert.strictEqual(typeof sdk.verifyRun, 'function');
   });
 
   test('azure SDK namespace is exposed', () => {

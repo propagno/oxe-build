@@ -62,6 +62,25 @@ export const verifyAcceptanceCheck: CICheck = {
   name: 'oxe-verify-acceptance',
   description: 'Checks that VERIFY.md exists and contains no failed criteria',
   async run(ctx) {
+    const manifestPath = path.join(ctx.projectRoot, '.oxe', 'runs', ctx.runId || '', 'verification-manifest.json');
+    if (ctx.runId && fs.existsSync(manifestPath)) {
+      try {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        const failCount = Number(manifest.summary?.fail || 0);
+        const errorCount = Number(manifest.summary?.error || 0);
+        return failCount === 0 && errorCount === 0
+          ? { check: this.name, status: 'pass', message: `Manifest reports ${manifest.summary.total} checks with no failures` }
+          : {
+              check: this.name,
+              status: 'fail',
+              message: `Manifest reports ${failCount} failed and ${errorCount} errored checks`,
+              details: manifest.summary,
+            };
+      } catch (err) {
+        return { check: this.name, status: 'error', message: `Failed to parse verification manifest: ${String(err)}` };
+      }
+    }
+
     const verifyPath = ctx.sessionId
       ? path.join(ctx.projectRoot, '.oxe', ctx.sessionId, 'verification', 'VERIFY.md')
       : path.join(ctx.projectRoot, '.oxe', 'VERIFY.md');
@@ -114,7 +133,21 @@ export const policyCheck: CICheck = {
           details: pending.map((g) => ({ gate_id: g.gate_id, scope: g.scope })),
         };
       }
-      return { check: this.name, status: 'pass', message: 'All gates resolved' };
+      if (ctx.runId) {
+        const policyPath = path.join(ctx.projectRoot, '.oxe', 'runs', ctx.runId, 'policy-decisions.json');
+        if (fs.existsSync(policyPath)) {
+          const policyDecisions = JSON.parse(fs.readFileSync(policyPath, 'utf8')) as Array<{ override?: boolean; rationale?: string | null }>;
+          const withoutRationale = policyDecisions.filter((decision) => decision.override && !decision.rationale);
+          if (withoutRationale.length > 0) {
+            return {
+              check: this.name,
+              status: 'fail',
+              message: `${withoutRationale.length} policy override(s) without rationale`,
+            };
+          }
+        }
+      }
+      return { check: this.name, status: 'pass', message: 'All gates resolved and policy overrides are justified' };
     } catch (err) {
       return { check: this.name, status: 'error', message: `Failed to read GATES.json: ${String(err)}` };
     }

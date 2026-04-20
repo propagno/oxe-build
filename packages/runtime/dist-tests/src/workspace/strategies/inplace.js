@@ -8,11 +8,13 @@ const crypto_1 = __importDefault(require("crypto"));
 class InplaceWorkspaceManager {
     constructor(projectRoot) {
         this.projectRoot = projectRoot;
+        this.isolation_level = 'shared';
     }
     async allocate(req) {
         return {
             workspace_id: `ws-inplace-${req.work_item_id}-a${req.attempt_number}`,
             strategy: 'inplace',
+            isolation_level: this.isolation_level,
             branch: null,
             base_commit: null,
             root_path: this.projectRoot,

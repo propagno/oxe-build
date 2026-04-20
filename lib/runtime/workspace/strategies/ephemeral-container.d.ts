@@ -14,6 +14,7 @@ export declare class EphemeralContainerManager implements WorkspaceManager {
     private containerIds;
     private useFallback;
     constructor(projectRoot: string, opts?: ContainerOptions);
+    get isolation_level(): 'shared' | 'isolated';
     get usingFallback(): boolean;
     allocate(req: WorkspaceRequest): Promise<WorkspaceLease>;
     snapshot(id: string): Promise<SnapshotRef>;

@@ -47,8 +47,9 @@ describe('PluginRegistry — workspace provider', () => {
     const registry = new PluginRegistry();
     const wp = {
       name: 'my-ws',
+      isolation_level: 'isolated' as const,
       supportsStrategy: (s: string) => s === 'git_worktree',
-      allocate: async () => ({ workspace_id: 'w1', strategy: 'git_worktree' as const, branch: null, base_commit: null, root_path: '/tmp', ttl_minutes: 30 }),
+      allocate: async () => ({ workspace_id: 'w1', strategy: 'git_worktree' as const, isolation_level: 'isolated' as const, branch: null, base_commit: null, root_path: '/tmp', ttl_minutes: 30 }),
       snapshot: async () => ({ snapshot_id: 's1', workspace_id: 'w1', commit: 'abc', created_at: new Date().toISOString() }),
       reset: async () => {},
       dispose: async () => {},

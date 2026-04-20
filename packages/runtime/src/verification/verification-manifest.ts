@@ -60,6 +60,33 @@ export interface ResidualRiskLedger {
   risks: ResidualRisk[];
 }
 
+export interface EvidenceCoverageSummary {
+  total_checks: number;
+  checks_with_evidence: number;
+  total_evidence_refs: number;
+  coverage_percent: number;
+}
+
+function runDir(projectRoot: string, runId: string): string {
+  return path.join(projectRoot, '.oxe', 'runs', runId);
+}
+
+function manifestPath(projectRoot: string, runId: string): string {
+  return path.join(runDir(projectRoot, runId), 'verification-manifest.json');
+}
+
+function riskLedgerPath(projectRoot: string, runId: string): string {
+  return path.join(runDir(projectRoot, runId), 'residual-risk-ledger.json');
+}
+
+function legacyRiskLedgerPath(projectRoot: string, runId: string): string {
+  return path.join(runDir(projectRoot, runId), 'residual-risks.json');
+}
+
+function evidenceCoveragePath(projectRoot: string, runId: string): string {
+  return path.join(runDir(projectRoot, runId), 'evidence-coverage.json');
+}
+
 const PROFILE_REQUIRED_CHECKS: Record<VerificationProfile, FailureClass[]> = {
   quick: ['deterministic'],
   standard: ['deterministic', 'policy_failure'],
@@ -159,14 +186,27 @@ export function buildRiskLedger(
   };
 }
 
+export function summarizeEvidenceCoverage(manifest: VerificationManifest): EvidenceCoverageSummary {
+  const totalChecks = manifest.checks.length;
+  const checksWithEvidence = manifest.checks.filter((check) => check.evidence_refs.length > 0).length;
+  const totalEvidenceRefs = manifest.checks.reduce((sum, check) => sum + check.evidence_refs.length, 0);
+  const coveragePercent = totalChecks === 0 ? 100 : Math.round((checksWithEvidence / totalChecks) * 100);
+  return {
+    total_checks: totalChecks,
+    checks_with_evidence: checksWithEvidence,
+    total_evidence_refs: totalEvidenceRefs,
+    coverage_percent: coveragePercent,
+  };
+}
+
 export function saveManifest(projectRoot: string, runId: string, manifest: VerificationManifest): void {
-  const p = path.join(projectRoot, '.oxe', 'runs', runId, 'verification-manifest.json');
+  const p = manifestPath(projectRoot, runId);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(manifest, null, 2), 'utf8');
 }
 
 export function loadManifest(projectRoot: string, runId: string): VerificationManifest | null {
-  const p = path.join(projectRoot, '.oxe', 'runs', runId, 'verification-manifest.json');
+  const p = manifestPath(projectRoot, runId);
   if (!fs.existsSync(p)) return null;
   try {
     return JSON.parse(fs.readFileSync(p, 'utf8')) as VerificationManifest;
@@ -176,16 +216,36 @@ export function loadManifest(projectRoot: string, runId: string): VerificationMa
 }
 
 export function saveRiskLedger(projectRoot: string, runId: string, ledger: ResidualRiskLedger): void {
-  const p = path.join(projectRoot, '.oxe', 'runs', runId, 'residual-risks.json');
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(ledger, null, 2), 'utf8');
+  const canonical = riskLedgerPath(projectRoot, runId);
+  const legacy = legacyRiskLedgerPath(projectRoot, runId);
+  fs.mkdirSync(path.dirname(canonical), { recursive: true });
+  fs.writeFileSync(canonical, JSON.stringify(ledger, null, 2), 'utf8');
+  fs.writeFileSync(legacy, JSON.stringify(ledger, null, 2), 'utf8');
 }
 
 export function loadRiskLedger(projectRoot: string, runId: string): ResidualRiskLedger | null {
-  const p = path.join(projectRoot, '.oxe', 'runs', runId, 'residual-risks.json');
+  const canonical = riskLedgerPath(projectRoot, runId);
+  const legacy = legacyRiskLedgerPath(projectRoot, runId);
+  const p = fs.existsSync(canonical) ? canonical : legacy;
   if (!fs.existsSync(p)) return null;
   try {
     return JSON.parse(fs.readFileSync(p, 'utf8')) as ResidualRiskLedger;
+  } catch {
+    return null;
+  }
+}
+
+export function saveEvidenceCoverage(projectRoot: string, runId: string, coverage: EvidenceCoverageSummary): void {
+  const p = evidenceCoveragePath(projectRoot, runId);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(coverage, null, 2), 'utf8');
+}
+
+export function loadEvidenceCoverage(projectRoot: string, runId: string): EvidenceCoverageSummary | null {
+  const p = evidenceCoveragePath(projectRoot, runId);
+  if (!fs.existsSync(p)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf8')) as EvidenceCoverageSummary;
   } catch {
     return null;
   }

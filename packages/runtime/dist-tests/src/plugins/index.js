@@ -18,3 +18,4 @@ __exportStar(require("./plugin-abi"), exports);
 __exportStar(require("./plugin-registry"), exports);
 __exportStar(require("./plugin-manifest"), exports);
 __exportStar(require("./capability-matrix"), exports);
+__exportStar(require("./capability-adapter"), exports);

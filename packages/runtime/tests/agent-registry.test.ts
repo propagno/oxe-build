@@ -15,8 +15,17 @@ function makeExecutor(): TaskExecutor {
 
 function makeWsManager(): WorkspaceManager {
   return {
+    isolation_level: 'isolated',
     async allocate(req: WorkspaceRequest): Promise<WorkspaceLease> {
-      return { workspace_id: `ws-${req.work_item_id}`, strategy: 'inplace', root_path: '/tmp', base_commit: null, branch: null, ttl_minutes: 60 };
+      return {
+        workspace_id: `ws-${req.work_item_id}`,
+        strategy: 'git_worktree',
+        isolation_level: 'isolated',
+        root_path: '/tmp',
+        base_commit: null,
+        branch: null,
+        ttl_minutes: 60,
+      };
     },
     async dispose(): Promise<void> {},
     async reset(): Promise<void> {},

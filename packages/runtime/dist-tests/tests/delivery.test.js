@@ -8,6 +8,8 @@ const strict_1 = __importDefault(require("node:assert/strict"));
 const ci_checks_1 = require("../src/delivery/ci-checks");
 const branch_manager_1 = require("../src/delivery/branch-manager");
 const pr_manager_1 = require("../src/delivery/pr-manager");
+const promotion_pipeline_1 = require("../src/delivery/promotion-pipeline");
+const delivery_records_1 = require("../src/delivery/delivery-records");
 const os_1 = __importDefault(require("os"));
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
@@ -155,5 +157,40 @@ function setupOxeDir(root, sessionId = null) {
     (0, node_test_1.it)('isAvailable returns boolean', () => {
         const pm = new pr_manager_1.PRManager(process.cwd());
         strict_1.default.equal(typeof pm.isAvailable(), 'boolean');
+    });
+});
+(0, node_test_1.describe)('PromotionPipeline', () => {
+    function runResult(overrides = {}) {
+        return {
+            run_id: 'run-delivery',
+            status: 'completed',
+            completed: ['T1'],
+            failed: [],
+            blocked: [],
+            ...overrides,
+        };
+    }
+    (0, node_test_1.it)('records local commit separately from promotion', () => {
+        const root = tmpDir();
+        const pipeline = new promotion_pipeline_1.PromotionPipeline(root, new branch_manager_1.BranchManager(process.cwd()), new pr_manager_1.PRManager(process.cwd()));
+        const record = pipeline.recordLocalCommit(runResult(), null, null, {
+            commitMessage: 'feat(runtime): close enterprise loop',
+            commitSha: 'abc123',
+            summaryPath: '.oxe/COMMIT-SUMMARY.md',
+        });
+        strict_1.default.equal(record.status, 'committed');
+        strict_1.default.equal(record.message, 'feat(runtime): close enterprise loop');
+        const stored = (0, delivery_records_1.loadCommitRecord)(root, 'run-delivery');
+        strict_1.default.ok(stored);
+        strict_1.default.equal(stored.commit_sha, 'abc123');
+    });
+    (0, node_test_1.it)('blocks promotion when pending gates exist', async () => {
+        const root = tmpDir();
+        const pipeline = new promotion_pipeline_1.PromotionPipeline(root, new branch_manager_1.BranchManager(process.cwd()), new pr_manager_1.PRManager(process.cwd()), new promotion_pipeline_1.MergeGateEvaluator());
+        const promotion = await pipeline.promote(runResult(), null, null, {}, [{ gate_id: 'gate-1', scope: 'critical_mutation', run_id: 'run-delivery', work_item_id: 'T1', action: 'generate_patch', requested_at: new Date().toISOString(), context: { description: 'Approve', evidence_refs: [], risks: [] }, status: 'pending' }]);
+        strict_1.default.equal(promotion.status, 'blocked');
+        const stored = (0, delivery_records_1.loadPromotionRecord)(root, 'run-delivery');
+        strict_1.default.ok(stored);
+        strict_1.default.equal(stored.status, 'blocked');
     });
 });

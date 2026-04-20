@@ -16,7 +16,7 @@ oxe_tool_profile: mixed
 oxe_confidence_policy: rubric
 oxe_context_tier: standard
 oxe_contract_version: 2.0.0
-oxe_semantics_hash: 0b2f34a325711ad6
+oxe_semantics_hash: a8f516ec17603d26
 ---
 
 <!-- oxe-reasoning-contract:start -->
@@ -30,7 +30,7 @@ oxe_semantics_hash: 0b2f34a325711ad6
 - **Política de confiança:** rubrica
 - **Tier de contexto padrão:** padrão
 - **Versão do contrato:** 2.0.0
-- **Checksum semântico:** `0b2f34a325711ad6`
+- **Checksum semântico:** `a8f516ec17603d26`
 - **Entrada de contexto prioritária:** `.oxe/context/packs/plan-agent.md` e `.oxe/context/packs/plan-agent.json`
 - **Regra pack-first:** ler o context pack primeiro; se estiver stale, incompleto ou ausente, cair para leitura direta com fallback explícito.
 - **Inspeção estruturada:** `oxe-cc context inspect --workflow plan-agent --json`

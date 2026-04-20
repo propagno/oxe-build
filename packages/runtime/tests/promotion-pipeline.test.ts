@@ -100,6 +100,19 @@ describe('MergeGateEvaluator', () => {
     assert.ok(report.blocking_risks[0].includes('CRITICAL'));
   });
 
+  test('blocks when evidence coverage is below threshold', () => {
+    const report = evaluator.evaluate(
+      okRun(),
+      okManifest(),
+      emptyLedger(),
+      [],
+      { total_checks: 2, checks_with_evidence: 1, total_evidence_refs: 1, coverage_percent: 50 },
+      100
+    );
+    assert.equal(report.verdict, 'blocked');
+    assert.ok(report.reasons.some((reason) => reason.includes('Evidence coverage below threshold')));
+  });
+
   test('approves with null manifest and empty ledger', () => {
     const report = evaluator.evaluate(okRun(), null, null);
     assert.equal(report.verdict, 'approved');
@@ -155,6 +168,22 @@ describe('PromotionPipeline', () => {
     const pipeline = new PromotionPipeline(tmpDir, makeBranchManager(), makePRManager(false));
     const link = await pipeline.promote(okRun('run-gh-fail'), okManifest(), emptyLedger());
     assert.equal(link.status, 'blocked');
+  });
+
+  test('promote supports branch_push target', async () => {
+    const branchManager = {
+      currentBranch: () => 'oxe/test-branch',
+      push: () => undefined,
+    } as unknown as BranchManager;
+    const pipeline = new PromotionPipeline(tmpDir, branchManager, makePRManager(true));
+    const link = await pipeline.promote(okRun('run-branch-push'), okManifest(), emptyLedger(), {
+      targetKind: 'branch_push',
+      remote: 'origin',
+    });
+    assert.equal(link.status, 'promoted');
+    assert.equal(link.target_kind, 'branch_push');
+    assert.equal(link.remote, 'origin');
+    assert.equal(link.pr_url, null);
   });
 
   test('savePRLink and loadPRLink round-trip', () => {

@@ -2,6 +2,20 @@ import crypto from 'crypto';
 import { spawnSync } from 'child_process';
 import type { EvidenceType } from '../models/evidence';
 import type { VerificationStatus } from '../models/verification-result';
+import type { VerificationResult } from '../models/verification-result';
+import type { EvidenceStore } from '../evidence/evidence-store';
+import type { PluginRegistry } from '../plugins/plugin-registry';
+import {
+  buildManifest,
+  buildRiskLedger,
+  summarizeEvidenceCoverage,
+  saveManifest,
+  saveRiskLedger,
+  saveEvidenceCoverage,
+  type EvidenceCoverageSummary,
+  type ResidualRiskLedger,
+  type VerificationManifest,
+} from './verification-manifest';
 
 export type CheckType =
   | 'unit'
@@ -39,6 +53,28 @@ export interface CheckResult {
   exit_code: number | null;
   duration_ms: number;
   error: string | null;
+  evidence_refs?: string[];
+}
+
+export interface ExecutedVerificationSuite {
+  results: CheckResult[];
+  verification_results: VerificationResult[];
+  evidence_refs: Map<string, string[]>;
+  manifest: VerificationManifest;
+  risk_ledger: ResidualRiskLedger;
+  evidence_coverage: EvidenceCoverageSummary;
+}
+
+export interface VerifyRunResult {
+  status: 'passed' | 'failed' | 'partial';
+  suite: AcceptanceCheckSuite;
+  executed: ExecutedVerificationSuite | null;
+  gaps: string[];
+  verification_results: VerificationResult[];
+  check_results: CheckResult[];
+  manifest: VerificationManifest | null;
+  risk_ledger: ResidualRiskLedger | null;
+  evidence_coverage: EvidenceCoverageSummary | null;
 }
 
 // Mirror of ParsedSpec/ParsedPlan (same as in graph-compiler to avoid circular deps)
@@ -203,6 +239,94 @@ export async function runSuite(
   return results;
 }
 
+export async function executeSuite(
+  suite: AcceptanceCheckSuite,
+  cwd: string,
+  options: {
+    timeoutMs?: number;
+    runId: string;
+    workItemId: string;
+    attemptNumber?: number;
+    evidenceStore?: EvidenceStore;
+    pluginRegistry?: PluginRegistry;
+  }
+): Promise<ExecutedVerificationSuite> {
+  const results: CheckResult[] = [];
+  const verificationResults: VerificationResult[] = [];
+  const evidenceRefs = new Map<string, string[]>();
+  const timeoutMs = options.timeoutMs ?? 60_000;
+  const attemptNumber = options.attemptNumber ?? 1;
+
+  for (const check of suite.checks) {
+    const provider = options.pluginRegistry?.verifierProviderFor(check.type);
+    let result: CheckResult;
+    let verificationResult: VerificationResult;
+
+    if (provider) {
+      const providerResult = await provider.execute({
+        check_id: check.id,
+        check_type: check.type,
+        command: check.command,
+        work_item_id: options.workItemId,
+        workspace_root: cwd,
+        evidence_dir: '',
+      });
+      result = {
+        check_id: check.id,
+        acceptance_ref: check.acceptance_ref,
+        status: providerResult.status,
+        stdout: providerResult.summary ?? '',
+        stderr: '',
+        exit_code: providerResult.status === 'pass' ? 0 : 1,
+        duration_ms: 0,
+        error: providerResult.status === 'error' ? providerResult.summary ?? 'provider error' : null,
+        evidence_refs: providerResult.evidence_refs,
+      };
+      verificationResult = providerResult;
+    } else {
+      result = await runCheck(check, cwd, timeoutMs);
+      const collectedEvidence = options.evidenceStore
+        ? await collectCheckEvidence(options.evidenceStore, check, result, {
+            run_id: options.runId,
+            work_item_id: options.workItemId,
+            attempt_number: attemptNumber,
+          })
+        : [];
+      result.evidence_refs = collectedEvidence;
+      verificationResult = {
+        verification_id: `vr-${crypto.randomBytes(4).toString('hex')}`,
+        work_item_id: options.workItemId,
+        check_id: check.id,
+        status: result.status,
+        evidence_refs: collectedEvidence,
+        summary: result.error || result.stderr || result.stdout || null,
+      };
+    }
+
+    if (result.evidence_refs && result.evidence_refs.length > 0) {
+      evidenceRefs.set(check.id, result.evidence_refs);
+    }
+    results.push(result);
+    verificationResults.push(verificationResult);
+  }
+
+  const manifest = buildManifest(options.runId, results, {
+    workItemId: options.workItemId,
+    granularity: 'work_item',
+    evidenceRefs,
+  });
+  const riskLedger = buildRiskLedger(options.runId, manifest);
+  const evidenceCoverage = summarizeEvidenceCoverage(manifest);
+  return {
+    results,
+    verification_results: verificationResults,
+    evidence_refs: evidenceRefs,
+    manifest,
+    risk_ledger: riskLedger,
+    evidence_coverage: evidenceCoverage,
+  };
+}
+
 export function summarizeSuite(results: CheckResult[]): {
   total: number;
   pass: number;
@@ -216,10 +340,97 @@ export function summarizeSuite(results: CheckResult[]): {
   return { ...counts, allPassed: counts.fail === 0 && counts.error === 0 };
 }
 
+export async function verifyRun(input: {
+  projectRoot: string;
+  runId: string;
+  workItemId: string;
+  cwd: string;
+  suite: AcceptanceCheckSuite;
+  pluginRegistry?: PluginRegistry;
+  evidenceStore?: EvidenceStore;
+  attemptNumber?: number;
+  timeoutMs?: number;
+}): Promise<VerifyRunResult> {
+  const gaps: string[] = [];
+  if (!input.suite || !Array.isArray(input.suite.checks) || input.suite.checks.length === 0) {
+    gaps.push('Nenhum check executável foi compilado a partir de SPEC/PLAN.');
+    return {
+      status: 'partial',
+      suite: input.suite,
+      executed: null,
+      gaps,
+      verification_results: [],
+      check_results: [],
+      manifest: null,
+      risk_ledger: null,
+      evidence_coverage: null,
+    };
+  }
+
+  const executed = await executeSuite(input.suite, input.cwd, {
+    timeoutMs: input.timeoutMs,
+    runId: input.runId,
+    workItemId: input.workItemId,
+    attemptNumber: input.attemptNumber,
+    evidenceStore: input.evidenceStore,
+    pluginRegistry: input.pluginRegistry,
+  });
+  saveManifest(input.projectRoot, input.runId, executed.manifest);
+  saveRiskLedger(input.projectRoot, input.runId, executed.risk_ledger);
+  saveEvidenceCoverage(input.projectRoot, input.runId, executed.evidence_coverage);
+  const summary = summarizeSuite(executed.results);
+  return {
+    status: summary.total === 0 ? 'partial' : summary.allPassed ? 'passed' : 'failed',
+    suite: input.suite,
+    executed,
+    gaps,
+    verification_results: executed.verification_results,
+    check_results: executed.results,
+    manifest: executed.manifest,
+    risk_ledger: executed.risk_ledger,
+    evidence_coverage: executed.evidence_coverage,
+  };
+}
+
 function hashObject(obj: unknown): string {
   return crypto
     .createHash('sha256')
     .update(JSON.stringify(obj))
     .digest('hex')
     .slice(0, 12);
+}
+
+async function collectCheckEvidence(
+  store: EvidenceStore,
+  check: AcceptanceCheck,
+  result: CheckResult,
+  options: { run_id: string; work_item_id: string; attempt_number: number }
+): Promise<string[]> {
+  const refs: string[] = [];
+  if (result.stdout) {
+    const evidence = await store.collect('stdout', result.stdout, options);
+    refs.push(evidence.evidence_id);
+  }
+  if (result.stderr) {
+    const evidence = await store.collect('stderr', result.stderr, options);
+    refs.push(evidence.evidence_id);
+  }
+  const summaryEvidence = await store.collect(
+    check.evidence_type_expected,
+    JSON.stringify(
+      {
+        check_id: check.id,
+        type: check.type,
+        command: check.command,
+        status: result.status,
+        exit_code: result.exit_code,
+        duration_ms: result.duration_ms,
+      },
+      null,
+      2
+    ),
+    options
+  );
+  refs.push(summaryEvidence.evidence_id);
+  return refs;
 }

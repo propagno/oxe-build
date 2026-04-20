@@ -11,7 +11,7 @@ oxe_tool_profile: write_bounded
 oxe_confidence_policy: explicit
 oxe_context_tier: standard
 oxe_contract_version: 2.0.0
-oxe_semantics_hash: a33b293fc6a29a70
+oxe_semantics_hash: 14ddb483209b28b3
 ---
 
 <!-- oxe-reasoning-contract:start -->
@@ -25,7 +25,7 @@ oxe_semantics_hash: a33b293fc6a29a70
 - **Política de confiança:** explícita
 - **Tier de contexto padrão:** padrão
 - **Versão do contrato:** 2.0.0
-- **Checksum semântico:** `a33b293fc6a29a70`
+- **Checksum semântico:** `14ddb483209b28b3`
 - **Entrada de contexto prioritária:** `.oxe/context/packs/execute.md` e `.oxe/context/packs/execute.json`
 - **Regra pack-first:** ler o context pack primeiro; se estiver stale, incompleto ou ausente, cair para leitura direta com fallback explícito.
 - **Inspeção estruturada:** `oxe-cc context inspect --workflow execute --json`
@@ -34,6 +34,9 @@ oxe_semantics_hash: a33b293fc6a29a70
 - Parar e explicitar o bloqueio quando houver hipótese crítica não verificada.
 - **Seções esperadas:** Contexto lido · Alvo da mudança · Validação executada · Resultado · Próximo passo
 - **Bloqueios formais:** missing:state · missing:plan_or_quick
+- **Caminho runtime padrão:** `oxe-cc runtime compile --dir <projeto>` → `oxe-cc runtime project --dir <projeto>`
+- **Artefatos canónicos primários:** `ACTIVE-RUN.json` · `.oxe/runs/<run_id>.json` · `compiled_graph` · `canonical_state`
+- **Fallback runtime:** Se o runtime não estiver compilado ou falhar por indisponibilidade do pacote, declarar fallback explícito para o fluxo legado antes de mutar.
 - **Referência canónica:** `oxe/workflows/references/reasoning-execution.md`
 
 <!-- oxe-reasoning-contract:end -->

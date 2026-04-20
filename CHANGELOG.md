@@ -4,6 +4,68 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.4.0] — 2026-04-20
+
+### Runtime Publication Stabilization
+
+- `execute` e `verify` passaram a documentar e propagar o contrato `runtime-first`, com fallback legado explícito quando o runtime enterprise não estiver disponível
+- `runtime gates` ganhou superfície operacional estável com `list`, `show`, `resolve`, filtros (`--run`, `--status`, `--scope`, `--task`) e `--json`
+- `status --json` e `runtime status --json` consolidam `runtimeMode`, `fallbackMode`, `gateQueue`, `policyCoverage`, `promotionReadiness`, `recoveryState`, `multiAgent` e `providerCatalog`
+- dashboard web passou a expor cards operacionais para gates, recovery, promotion e multi-agent, incluindo resolução de gates pela UI
+- replay/recovery ficaram orientados a incidente com saída estruturada, reconciliação de run state e summaries derivados
+- `multi-agent` foi endurecido como GA apenas sobre workspaces isolados reais; modos `parallel`, `competitive` e `cooperative` falham explicitamente em `inplace`
+- SDK ampliado com `GateQueueSnapshot`, `replayRuntimeState`, `readRuntimeMultiAgentStatus` e alias `multiAgentStatus`
+
+### Release Preparation
+
+- alinhamento de versão para `1.4.0` em `package.json`, `package-lock.json`, `packages/runtime/package.json`, `vscode-extension/package.json`, banner e README
+- alinhamento de licença da extensão VS Code com o pacote principal e inclusão de `vscode-extension/LICENSE` para empacotamento limpo do VSIX
+- licença do projeto alterada de `GPL-3.0` para `MIT`, com manifests e documentação pública alinhados
+- README atualizado para refletir o momento atual do produto, o contrato estável de publicação e a superfície enterprise do CLI/runtime
+- `lib/sdk/README.md` e `AGENTS.md` atualizados para refletir os bridges do runtime enterprise e o comportamento `runtime-first`
+
+### Validation
+
+- suíte root + runtime continua verde
+- scanner de assets/markdown continua íntegro
+
+---
+
+## [1.3.0] — 2026-04-20
+
+### Reasoning Contracts & Semântica Multi-Runtime
+
+- Contratos de raciocínio v2.0.0 (`oxe_contract_version: 2.0.0`) em todos os workflows e wrappers de runtime
+- Novos campos de metadata: `oxe_reasoning_mode`, `oxe_question_policy`, `oxe_output_contract`, `oxe_tool_profile`, `oxe_confidence_policy`, `oxe_context_tier`
+- `oxe_semantics_hash` (SHA-256 16 chars) para detecção de drift semântico entre IDEs
+- Módulo `bin/lib/oxe-runtime-semantics.cjs` gerencia o contrato canônico: `buildReasoningContractBlock()`, `buildContextTiers()`, `auditRuntimeTargets()`, `computeSemanticsHash()`
+- `auditRuntimeTargets()` varre Copilot prompts, commands e Cursor commands e reporta divergências entre wrappers e o contrato canônico
+- Prompts e commands sincronizados para todos os runtimes: Cursor, GitHub Copilot, Claude Code, OpenCode, Codex, Gemini CLI, Windsurf, Antigravity
+
+### Novos Módulos bin/lib
+
+- **`oxe-dashboard.cjs`** — servidor HTTP local (porta 9000), `loadDashboardContext()`, API REST com `/api/health/status`, `/api/plan/info`, `/api/runtime/gates/{id}/status`, `/api/runtime/gates/resolve`; suporte a PLAN-REVIEW.md com comentários e status de aprovação
+- **`oxe-runtime-semantics.cjs`** — gestão de metadados de workflow e contratos de raciocínio: `getWorkflowContract()`, `getAllWorkflowContracts()`, `validateWorkflowContractsRegistry()`, `buildContextPackPaths()`, `buildReasoningContractBlock()`, `splitFrontmatter()`, `parseFrontmatterMap()`
+- **`oxe-operational.cjs`** expandido — monitoramento de agents, gates, evidências e estado de run com maior granularidade
+- **`oxe-project-health.cjs`** expandido — métricas de saúde: test scores, coverage, violations, integração Copilot
+
+### Comandos e Superfície
+
+- **`oxe-ship`** — cria commit local guiado por `SPEC.md`, `PLAN.md` e `VERIFY.md`; disponível em todos os runtimes suportados
+- **`oxe-skill`** — gestão e composição de skills com roles `@executor` e `@researcher`
+- Contrato de raciocínio declarado em todos os workflows: `discovery`, `planning`, `execution`, `review`, `status`
+- Regra pack-first em todos os wrappers: lê `.oxe/context/packs/<slug>.md` antes de cair para leitura direta
+
+### Testes e Cobertura
+
+- Novos testes unitários para `oxe-runtime-semantics.cjs`: 31 testes cobrindo todas as 19 funções exportadas
+- Novos testes para `oxe-plugins.cjs`: 28 testes para `loadPlugins`, `runHook`, `validatePlugins`, `initPluginsDir`, `resolvePluginSources`
+- Novos testes para `oxe-security.cjs`: `checkPathSafety`, `scanFileForSecrets`, `scanDirForSecretFiles`, `validatePlanPaths`
+- Cobertura de linhas: **80.28% → 82.28%** (superando threshold de 82%)
+- Total: **383 testes** passando (root + runtime)
+
+---
+
 ## [1.2.1] — 2026-04-18
 
 ### Branding, Semântica e Empacotamento
