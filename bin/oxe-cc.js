@@ -1834,6 +1834,39 @@ function runStatus(target, opts = {}) {
 
   printOxeHealthDiagnostics(target, c, { skipScanCompactAgeWarnings: Boolean(opts.hints) });
 
+  // IDE readiness summary
+  const ideStatusLines = [];
+  const _copilotPromptsDir = path.join(target, '.github', 'prompts');
+  const _copilotInstructions = path.join(target, '.github', 'copilot-instructions.md');
+  ideStatusLines.push(`Copilot ${fs.existsSync(_copilotPromptsDir) || fs.existsSync(_copilotInstructions) ? (c ? green + '✓' + reset : '✓') : (c ? dim + '✗' + reset : '✗')}`);
+  ideStatusLines.push(`Cursor ${fs.existsSync(path.join(target, '.cursor', 'commands')) ? (c ? green + '✓' + reset : '✓') : (c ? dim + '✗' + reset : '✗')}`);
+  const _claudeLocal = path.join(target, 'commands', 'oxe');
+  const _claudeGlobal = path.join(require('os').homedir(), '.claude', 'commands');
+  ideStatusLines.push(`Claude Code ${fs.existsSync(_claudeLocal) || fs.existsSync(_claudeGlobal) ? (c ? green + '✓' + reset : '✓') : (c ? dim + '✗' + reset : '✗')}`);
+  console.log(`\n  ${c ? dim : ''}IDEs:${c ? reset : ''} ${ideStatusLines.join('  ')}`);
+
+  // Gates pending in default view
+  const pendingGateCount = report.pendingGates ? (report.pendingGates.pendingCount || 0) : 0;
+  const staleGateCount = report.pendingGates ? (report.pendingGates.staleGateCount || 0) : 0;
+  if (pendingGateCount > 0 || staleGateCount > 0) {
+    const gateMsg = [];
+    if (pendingGateCount > 0) gateMsg.push(`${pendingGateCount} pendente(s)`);
+    if (staleGateCount > 0) gateMsg.push(`${staleGateCount} stale`);
+    console.log(`  ${c ? yellow : ''}⚠ Gates:${c ? reset : ''} ${gateMsg.join(', ')} — ${c ? cyan : ''}npx oxe-cc runtime gates list --dir .${c ? reset : ''}`);
+  }
+
+  // Explicit blockage diagnosis
+  const specMissing = !fs.existsSync(path.join(target, '.oxe', 'SPEC.md'));
+  const planMissing = !fs.existsSync(path.join(target, '.oxe', 'PLAN.md'));
+  const verifyMissing = !fs.existsSync(path.join(target, '.oxe', 'VERIFY.md'));
+  if (specMissing) {
+    console.log(`  ${c ? yellow : ''}⚠ Bloqueio:${c ? reset : ''} SPEC.md ausente — rode ${c ? cyan : ''}/oxe-spec${c ? reset : ''} antes de planejar`);
+  } else if (planMissing) {
+    console.log(`  ${c ? yellow : ''}⚠ Bloqueio:${c ? reset : ''} PLAN.md ausente — rode ${c ? cyan : ''}/oxe-plan${c ? reset : ''}`);
+  } else if (verifyMissing && !planMissing) {
+    console.log(`  ${c ? dim : ''}Obs.:${c ? reset : ''} VERIFY.md ainda não gerado — rode ${c ? cyan : ''}/oxe-verify${c ? reset : ''} após executar`);
+  }
+
   if (opts.hints) {
     console.log(`\n  ${c ? cyan : ''}Lembretes (rotina OXE)${reset}`);
     if (routineHints.length) {
@@ -1979,6 +2012,72 @@ function runDoctor(target) {
     }
   }
 
+  // IDE health gates
+  console.log('');
+  const ideChecks = [];
+  const copilotPromptsDir = path.join(target, '.github', 'prompts');
+  const copilotInstructions = path.join(target, '.github', 'copilot-instructions.md');
+  const copilotReady = fs.existsSync(copilotPromptsDir) || fs.existsSync(copilotInstructions);
+  ideChecks.push({ label: 'Copilot', ready: copilotReady, hint: '.github/prompts/ ou copilot-instructions.md' });
+
+  const cursorDir = path.join(target, '.cursor', 'commands');
+  const cursorReady = fs.existsSync(cursorDir);
+  ideChecks.push({ label: 'Cursor', ready: cursorReady, hint: '.cursor/commands/' });
+
+  const claudeLocalDir = path.join(target, 'commands', 'oxe');
+  const claudeGlobalDir = path.join(require('os').homedir(), '.claude', 'commands');
+  const claudeReady = fs.existsSync(claudeLocalDir) || fs.existsSync(claudeGlobalDir);
+  ideChecks.push({ label: 'Claude Code', ready: claudeReady, hint: 'commands/oxe/ ou ~/.claude/commands/' });
+
+  for (const ide of ideChecks) {
+    if (ide.ready) {
+      console.log(`${c ? green : ''}OK${c ? reset : ''} ${ide.label} pronto (${ide.hint})`);
+    } else {
+      console.log(`${c ? dim : ''}Obs.:${c ? reset : ''} ${ide.label} não detectado — esperado ${ide.hint}`);
+    }
+  }
+
+  // Runtime compilation check
+  const runtimeCompiledPath = path.join(target, 'lib', 'runtime', 'index.js');
+  const runtimeDistPath = path.join(target, 'packages', 'runtime', 'dist-tests');
+  const runtimeCompiled = fs.existsSync(runtimeCompiledPath) || fs.existsSync(runtimeDistPath);
+  if (runtimeCompiled) {
+    console.log(`${c ? green : ''}OK${c ? reset : ''} Runtime compilado detectado — modo enterprise disponível`);
+  } else {
+    console.log(`${c ? dim : ''}Obs.:${c ? reset : ''} Runtime não compilado — operando em modo legado (sem perda de UX)`);
+  }
+
+  // Readiness gate summary
+  const stateFilePath = path.join(target, '.oxe', 'STATE.md');
+  let readinessCmd = '/oxe-scan';
+  let readinessDesc = 'Nenhum STATE.md encontrado';
+  if (fs.existsSync(stateFilePath)) {
+    try {
+      const stateContent = fs.readFileSync(stateFilePath, 'utf8');
+      const phaseMatch = stateContent.match(/fase[:\s]+([a-z_]+)/i) || stateContent.match(/phase[:\s]+([a-z_]+)/i) || stateContent.match(/status[:\s]+([a-z_]+)/i);
+      const phase = phaseMatch ? phaseMatch[1].toLowerCase() : 'init';
+      const phaseMap = {
+        init: { cmd: '/oxe-scan', desc: 'Pronto para /oxe-scan' },
+        scan_complete: { cmd: '/oxe-spec', desc: 'Pronto para /oxe-spec' },
+        spec_complete: { cmd: '/oxe-plan', desc: 'Pronto para /oxe-plan' },
+        plan_complete: { cmd: '/oxe-execute', desc: 'Pronto para /oxe-execute' },
+        execute_complete: { cmd: '/oxe-verify', desc: 'Pronto para /oxe-verify' },
+        verify_complete: { cmd: 'runtime promote --target pr_draft', desc: 'Pronto para promoção' },
+      };
+      const next = phaseMap[phase] || { cmd: '/oxe', desc: `Fase detectada: ${phase}` };
+      readinessCmd = next.cmd;
+      readinessDesc = next.desc;
+    } catch (_) { /* ignore */ }
+  }
+  const specPath = path.join(target, '.oxe', 'SPEC.md');
+  const specExists = fs.existsSync(specPath);
+  console.log('');
+  if (specExists) {
+    console.log(`  ${c ? green : ''}✓ ${readinessDesc}${c ? reset : ''} — próximo: ${c ? cyan : ''}${readinessCmd}${c ? reset : ''}`);
+  } else {
+    console.log(`  ${c ? yellow : ''}⚠ Falta SPEC — rode ${c ? cyan : ''}${readinessCmd}${c ? reset : ''}`);
+  }
+
   printOxeHealthDiagnostics(target, c);
   const report = oxeHealth.buildHealthReport(target);
   const statusColor = report.healthStatus === 'healthy' ? green : report.healthStatus === 'warning' ? yellow : red;
@@ -1986,10 +2085,12 @@ function runDoctor(target) {
   if (report.healthStatus === 'broken') {
     process.exitCode = 1;
   }
+  const ideReadySummary = ideChecks.filter((i) => i.ready).map((i) => i.label).join(', ') || 'nenhuma IDE detectada';
   printSummaryAndNextSteps(c, {
     bullets: [
       `Projeto em ${target}`,
       `Workflows conferidos em ${wfLabel}`,
+      `IDEs prontas: ${ideReadySummary}`,
       `Saúde lógica: ${report.healthStatus}`,
     ],
     nextSteps: [
@@ -3951,15 +4052,24 @@ async function runRuntime(opts) {
         console.log(JSON.stringify(gates, null, 2));
         return;
       }
+      const slaHours = gates.gateSlaHours || 24;
       console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${runId || '—'}`);
-      console.log(`  ${c ? green : ''}Gates:${c ? reset : ''} total=${gates.total} pendentes=${gates.pending.length} stale=${gates.stalePending.length} resolvidos<24h=${gates.resolvedRecent.length} SLA=${gates.gateSlaHours || 24}h`);
+      console.log(`  ${c ? green : ''}Gates:${c ? reset : ''} total=${gates.total} pendentes=${gates.pending.length} stale=${gates.stalePending.length} resolvidos<24h=${gates.resolvedRecent.length} SLA=${slaHours}h`);
       console.log(`  ${c ? green : ''}Filtros:${c ? reset : ''} status=${gates.filters.status || 'all'} scope=${gates.filters.scope || '—'} task=${gates.filters.workItemId || '—'}`);
-      for (const gate of gates.pending) {
+      const allPending = [...gates.pending];
+      for (const gate of allPending) {
         const ageHours = gate.requested_at ? Math.max(0, Math.round((Date.now() - Date.parse(gate.requested_at)) / 36e5)) : null;
-        console.log(`  ${yellow}PENDING${reset} ${gate.gate_id} · ${gate.scope} · ${gate.work_item_id || 'run'} · ${gate.action || '—'}${ageHours != null ? ` · age ${ageHours}h` : ''}`);
+        const isStale = ageHours != null && ageHours > slaHours;
+        const icon = isStale ? `${c ? yellow : ''}⚠ stale (>${slaHours}h)${c ? reset : ''}` : `${c ? yellow : ''}⏳ pending${c ? reset : ''}`;
+        const suggested = gate.action === 'approve' ? 'approve' : 'approve|reject|waive';
+        console.log(`  ${icon}  ${gate.gate_id} · ${gate.scope || '—'} · ${gate.work_item_id || 'run'}${ageHours != null ? ` · ${ageHours}h aberto` : ''}`);
+        console.log(`    ${c ? dim : ''}ação sugerida: --decision ${suggested} · impacto: bloqueia promoção${c ? reset : ''}`);
       }
       for (const gate of gates.resolvedRecent) {
-        console.log(`  ${green}RESOLVED${reset} ${gate.gate_id} · ${gate.scope} · ${gate.decision || '—'} · ${gate.actor || '—'}`);
+        console.log(`  ${c ? green : ''}✓ resolved${c ? reset : ''}  ${gate.gate_id} · ${gate.scope || '—'} · ${gate.decision || '—'} · ${gate.actor || '—'}`);
+      }
+      if (gates.pending.length === 0 && gates.resolvedRecent.length === 0) {
+        console.log(`  ${c ? dim : ''}Nenhum gate pendente.${c ? reset : ''}`);
       }
       return;
     }
@@ -4012,11 +4122,16 @@ async function runRuntime(opts) {
           console.log(JSON.stringify(resolved, null, 2));
           return;
         }
-        console.log(`  ${c ? green : ''}✓${c ? reset : ''} Gate resolvido.`);
-        console.log(`  ${c ? green : ''}Gate:${c ? reset : ''} ${resolved.gate.gate_id}`);
-        console.log(`  ${c ? green : ''}Decisão:${c ? reset : ''} ${resolved.gate.decision}`);
+        const remaining = resolved.impact ? (resolved.impact.pendingRemaining || 0) : 0;
+        const staleRemaining = resolved.impact ? (resolved.impact.staleRemaining || 0) : 0;
+        const canPromote = remaining === 0 && staleRemaining === 0;
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} Gate ${resolved.gate.gate_id} resolvido (${resolved.gate.decision}).`);
         console.log(`  ${c ? green : ''}Ator:${c ? reset : ''} ${resolved.gate.actor}`);
-        console.log(`  ${c ? green : ''}Impacto:${c ? reset : ''} pendentes=${resolved.impact.pendingRemaining} stale=${resolved.impact.staleRemaining}`);
+        if (canPromote) {
+          console.log(`  ${c ? green : ''}✓ Run pode avançar para promoção — nenhum gate restante.${c ? reset : ''}`);
+        } else {
+          console.log(`  ${c ? yellow : ''}⚠ Run ainda bloqueada por ${remaining} gate(s) restante(s)${staleRemaining > 0 ? ` (${staleRemaining} stale)` : ''}.${c ? reset : ''}`);
+        }
         return;
       } catch (err) {
         console.error(`${red}${err && err.message ? err.message : 'Falha ao resolver gate.'}${reset}`);

@@ -83,6 +83,21 @@ Contrato estável desta release:
 - `multi-agent` é GA apenas com isolamento real (`git_worktree`); `inplace` não é backend válido para coordenação paralela
 - `pr_draft` é o alvo remoto estável de promotion nesta publicação
 
+→ [Guia por papel](docs/ROLES.md) — executor, reviewer, operador de gate, mantenedor do pacote
+
+---
+
+## Para times
+
+| Recurso | Link |
+|---------|------|
+| Primeiros 15 minutos | [QUICKSTART.md](QUICKSTART.md) |
+| Guia por papel (executor / reviewer / operador) | [docs/ROLES.md](docs/ROLES.md) |
+| Fluxo recomendado para times | [docs/TEAM-ADOPTION.md](docs/TEAM-ADOPTION.md) |
+| Exemplo completo reproduzível | [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) |
+| Incidentes e gates | [docs/INCIDENT-PLAYBOOK.md](docs/INCIDENT-PLAYBOOK.md) |
+| Suporte por runtime (Cursor, Copilot, Claude Code…) | [docs/RUNTIME-SMOKE-MATRIX.md](docs/RUNTIME-SMOKE-MATRIX.md) |
+
 ---
 
 ## Modos de uso
