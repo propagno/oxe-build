@@ -24,6 +24,22 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 - README atualizado para refletir o momento atual do produto, o contrato estável de publicação e a superfície enterprise do CLI/runtime
 - `lib/sdk/README.md` e `AGENTS.md` atualizados para refletir os bridges do runtime enterprise e o comportamento `runtime-first`
 
+### Adoção em Times (v1.4.0 final)
+
+- `QUICKSTART.md` — guia de onboarding "primeiros 15 minutos": install, primeiro ciclo (6 comandos), runtime-first, validação dos 5 minutos
+- `docs/ROLES.md` — guia por papel: executor, reviewer, operador de gate, mantenedor do pacote; cada papel com o que lê, decide e pode ignorar
+- `docs/TEAM-ADOPTION.md` — fluxo branch/PR recomendado, ship local vs. promote remoto, sessões e workstreams, governança mínima
+- `docs/WALKTHROUGH.md` — walkthrough completo reproduzível: spec → plan → execute → verify → gate → promotion com outputs esperados
+- `docs/INCIDENT-PLAYBOOK.md` — gate stale, run bloqueada, RECOVERY-SUMMARY, dashboard como painel operacional
+- `docs/RUNTIME-SMOKE-MATRIX.md` — matriz 8 runtimes × 6 operações com pressupostos e comportamentos por runtime
+- `oxe-cc doctor` — health gates para IDEs (Copilot, Cursor, Claude Code), detecção de runtime compilado, readiness gate summary com próximo passo derivado da fase atual
+- `oxe-cc status` — IDE readiness summary inline, gates pendentes no modo padrão (sem `--full`), diagnóstico de bloqueio explícito (SPEC/PLAN/VERIFY ausentes)
+- `runtime gates list` — ícones visuais `⏳ pending` / `⚠ stale (>Nh)` / `✓ resolved`, ação sugerida e impacto no ciclo por gate
+- `runtime gates resolve` — mensagem de impacto pós-resolução: "Run pode avançar" ou "N gates restantes"
+- `.github/workflows/release.yml` — pipeline de publicação: validate → publish-npm (com provenance) → build-vsix → create-release com extração automática do CHANGELOG
+- `.github/workflows/ci.yml` — novos jobs `doctor` (gate de qualidade operacional) e `wrapper-audit` (sync entre wrappers e contrato canônico)
+- `README.md` — seção `## Para times` com links para todos os novos docs; link `→ Guia por papel` na seção "Momento atual do produto"
+
 ### Validation
 
 - suíte root + runtime continua verde

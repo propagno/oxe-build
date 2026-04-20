@@ -18,3 +18,39 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run scan:assets
+
+  doctor:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - name: OXE Doctor
+        run: node bin/oxe-cc.js doctor
+
+  wrapper-audit:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - name: Audit runtime wrappers
+        run: |
+          node -e "
+            const rs = require('./bin/lib/oxe-runtime-semantics.cjs');
+            const r = rs.auditRuntimeTargets('.');
+            if (!r.ok) {
+              console.error('Wrapper audit failed:');
+              console.error(JSON.stringify(r.mismatches, null, 2));
+              process.exit(1);
+            }
+            console.log('Wrapper audit passed — all targets in sync');
+          "
