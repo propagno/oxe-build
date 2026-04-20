@@ -40,10 +40,21 @@ export interface PolicyContext {
     node_policy?: NodePolicyConfig;
 }
 export interface PolicyDecision {
+    decision_id: string;
     allowed: boolean;
     gate_required: boolean;
     reason: string;
     rule_id: string | null;
+    timestamp: string;
+}
+export interface PersistedPolicyDecision extends PolicyDecision {
+    run_id: string;
+    work_item_id: string | null;
+    action: string;
+    actor: string;
+    override: boolean;
+    rationale: string | null;
+    context: PolicyContext;
 }
 export declare class PolicyEngine {
     private readonly rules;
@@ -65,3 +76,11 @@ export declare class PolicyEngine {
     static fromConfigFile(configPath: string): PolicyEngine;
     static defaultGuardrail(): EnvironmentGuardrail;
 }
+export declare function savePolicyDecision(projectRoot: string, decision: PersistedPolicyDecision): PersistedPolicyDecision;
+export declare function loadPolicyDecisions(projectRoot: string, runId: string): PersistedPolicyDecision[];
+export declare function summarizePolicyDecisions(decisions: PersistedPolicyDecision[]): {
+    total: number;
+    denied: number;
+    gated: number;
+    overridesWithoutRationale: number;
+};

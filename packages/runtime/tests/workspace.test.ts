@@ -15,6 +15,7 @@ describe('InplaceWorkspaceManager', () => {
     const mgr = new InplaceWorkspaceManager('/tmp/fake-root');
     const lease = await mgr.allocate(baseReq);
     assert.equal(lease.strategy, 'inplace');
+    assert.equal(lease.isolation_level, 'shared');
     assert.equal(lease.root_path, '/tmp/fake-root');
     assert.ok(lease.workspace_id.includes('T1'));
     assert.ok(lease.workspace_id.includes('a1'));

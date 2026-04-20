@@ -375,14 +375,118 @@ describe('oxe-project-health', () => {
       fs.writeFileSync(path.join(oxe, 'codebase', f), '# x', 'utf8');
     }
     fs.mkdirSync(path.join(oxe, 'runs'), { recursive: true });
+    fs.writeFileSync(
+      path.join(oxe, 'config.json'),
+      JSON.stringify({ runtime: { quotas: { max_work_items_per_run: 1, max_mutations_per_run: 0, max_retries_per_run: 0 } } }),
+      'utf8'
+    );
     fs.writeFileSync(path.join(oxe, 'STATE.md'), '## Fase atual\n\n`executing`\n', 'utf8');
     fs.writeFileSync(path.join(oxe, 'ACTIVE-RUN.json'), JSON.stringify({ run_id: 'oxe-run-health', updated_at: '2026-04-11T00:00:00Z' }), 'utf8');
-    fs.writeFileSync(path.join(oxe, 'runs', 'oxe-run-health.json'), JSON.stringify({ run_id: 'oxe-run-health', status: 'running', current_wave: 1, cursor: { wave: 1, task: 'T1' }, graph: { nodes: [], edges: [] } }), 'utf8');
+    fs.writeFileSync(path.join(oxe, 'runs', 'oxe-run-health.json'), JSON.stringify({
+      run_id: 'oxe-run-health',
+      status: 'running',
+      current_wave: 1,
+      cursor: { wave: 1, task: 'T1' },
+      graph: { nodes: [], edges: [] },
+      compiled_graph: {
+        nodes: {
+          T1: { id: 'T1', mutation_scope: ['src/app.ts'], policy: { max_retries: 0 } },
+        },
+        edges: [],
+      },
+      canonical_state: {
+        attempts: {
+          T1: [{ attempt_id: 'a1' }, { attempt_id: 'a2' }],
+        },
+      },
+      delivery: {
+        promotion_record: {
+          status: 'blocked',
+          target_kind: 'branch_push',
+          remote: 'origin',
+          coverage_percent: 100,
+          reasons: ['pending gate'],
+        },
+      },
+    }), 'utf8');
     fs.writeFileSync(path.join(oxe, 'OXE-EVENTS.ndjson'), `${JSON.stringify({ type: 'run_started' })}\n`, 'utf8');
+    fs.writeFileSync(path.join(oxe, 'AUDIT-TRAIL.ndjson'), `${JSON.stringify({ action: 'gate_requested', severity: 'warn', run_id: 'oxe-run-health', actor: 'runtime', timestamp: '2026-04-11T00:00:00Z' })}\n`, 'utf8');
+    fs.mkdirSync(path.join(oxe, 'execution'), { recursive: true });
+    fs.writeFileSync(
+      path.join(oxe, 'execution', 'GATES.json'),
+      JSON.stringify([
+        {
+          gate_id: 'gate-health-1',
+          scope: 'critical_mutation',
+          run_id: 'oxe-run-health',
+          work_item_id: 'T1',
+          action: 'apply_patch',
+          requested_at: '2026-04-10T00:00:00Z',
+          context: { description: 'approve', evidence_refs: [], risks: ['scope'] },
+          status: 'pending',
+        },
+      ], null, 2),
+      'utf8'
+    );
+    fs.mkdirSync(path.join(oxe, 'runs', 'oxe-run-health'), { recursive: true });
+    fs.writeFileSync(
+      path.join(oxe, 'runs', 'oxe-run-health', 'multi-agent-state.json'),
+      JSON.stringify({
+        run_id: 'oxe-run-health',
+        mode: 'parallel',
+        workspace_isolation_enforced: true,
+        agent_results: [{ agent_id: 'agent-a', assigned_task_ids: ['T1'], completed: [], failed: [] }],
+        ownership: [{ work_item_id: 'T1', owner_agent_id: 'agent-a' }],
+        orphan_reassignments: [],
+      }, null, 2),
+      'utf8'
+    );
+    fs.writeFileSync(path.join(oxe, 'runs', 'oxe-run-health', 'verification-manifest.json'), JSON.stringify({
+      summary: { total: 1, pass: 1, fail: 0, skip: 0, error: 0, all_passed: true },
+      checks: [{ evidence_refs: ['ev-1'] }],
+      profile: 'standard',
+    }), 'utf8');
+    fs.writeFileSync(path.join(oxe, 'runs', 'oxe-run-health', 'residual-risk-ledger.json'), JSON.stringify({
+      risks: [{ severity: 'high' }],
+    }), 'utf8');
+    fs.writeFileSync(path.join(oxe, 'runs', 'oxe-run-health', 'evidence-coverage.json'), JSON.stringify({
+      total_checks: 1,
+      checks_with_evidence: 1,
+      total_evidence_refs: 1,
+      coverage_percent: 100,
+    }), 'utf8');
     const report = h.buildHealthReport(dir);
     assert.strictEqual(report.activeRun.run_id, 'oxe-run-health');
     assert.strictEqual(report.eventsSummary.total, 1);
     assert.ok(report.memoryLayers.readOrder.includes('evidence'));
+    assert.ok(report.verificationSummary);
+    assert.strictEqual(report.verificationSummary.total, 1);
+    assert.ok(report.residualRiskSummary);
+    assert.strictEqual(report.residualRiskSummary.highOrCritical, 1);
+    assert.ok(report.evidenceCoverage);
+    assert.strictEqual(report.evidenceCoverage.coverage_percent, 100);
+    assert.ok(report.quotaSummary);
+    assert.strictEqual(report.quotaSummary.exceeded, true);
+    assert.ok(report.auditSummary);
+    assert.strictEqual(report.auditSummary.runEntries, 1);
+    assert.ok(report.promotionSummary);
+    assert.strictEqual(report.promotionSummary.targetKind, 'branch_push');
+    assert.ok(report.runtimeMode);
+    assert.strictEqual(report.runtimeMode.runtime_mode, 'enterprise');
+    assert.strictEqual(report.fallbackMode, 'none');
+    assert.ok(report.gateQueue);
+    assert.ok(report.pendingGates);
+    assert.ok(report.pendingGates.gateSlaHours >= 1);
+    assert.ok(report.pendingGates.staleGateCount >= 0);
+    assert.ok(report.policyCoverage);
+    assert.strictEqual(report.policyCoverage.uncoveredMutations, 1);
+    assert.ok(report.promotionReadiness);
+    assert.strictEqual(report.promotionReadiness.status, 'blocked');
+    assert.ok(report.providerCatalog);
+    assert.ok(report.recoveryState);
+    assert.ok(Array.isArray(report.recoveryState.issues));
+    assert.ok(report.multiAgent);
+    assert.strictEqual(report.multiAgent.mode, 'parallel');
   });
 
   // F3 — Permissions validation

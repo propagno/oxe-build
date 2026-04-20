@@ -43,6 +43,12 @@ export interface ResidualRiskLedger {
     generated_at: string;
     risks: ResidualRisk[];
 }
+export interface EvidenceCoverageSummary {
+    total_checks: number;
+    checks_with_evidence: number;
+    total_evidence_refs: number;
+    coverage_percent: number;
+}
 export declare function classifyFailure(result: CheckResult): FailureClass | null;
 export declare function buildManifest(runId: string, results: CheckResult[], options?: {
     workItemId?: string;
@@ -52,7 +58,10 @@ export declare function buildManifest(runId: string, results: CheckResult[], opt
     evidenceRefs?: Map<string, string[]>;
 }): VerificationManifest;
 export declare function buildRiskLedger(runId: string, manifest: VerificationManifest): ResidualRiskLedger;
+export declare function summarizeEvidenceCoverage(manifest: VerificationManifest): EvidenceCoverageSummary;
 export declare function saveManifest(projectRoot: string, runId: string, manifest: VerificationManifest): void;
 export declare function loadManifest(projectRoot: string, runId: string): VerificationManifest | null;
 export declare function saveRiskLedger(projectRoot: string, runId: string, ledger: ResidualRiskLedger): void;
 export declare function loadRiskLedger(projectRoot: string, runId: string): ResidualRiskLedger | null;
+export declare function saveEvidenceCoverage(projectRoot: string, runId: string, coverage: EvidenceCoverageSummary): void;
+export declare function loadEvidenceCoverage(projectRoot: string, runId: string): EvidenceCoverageSummary | null;

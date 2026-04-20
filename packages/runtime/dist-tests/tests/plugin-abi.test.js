@@ -46,8 +46,9 @@ function makeTool(name) {
         const registry = new plugin_registry_1.PluginRegistry();
         const wp = {
             name: 'my-ws',
+            isolation_level: 'isolated',
             supportsStrategy: (s) => s === 'git_worktree',
-            allocate: async () => ({ workspace_id: 'w1', strategy: 'git_worktree', branch: null, base_commit: null, root_path: '/tmp', ttl_minutes: 30 }),
+            allocate: async () => ({ workspace_id: 'w1', strategy: 'git_worktree', isolation_level: 'isolated', branch: null, base_commit: null, root_path: '/tmp', ttl_minutes: 30 }),
             snapshot: async () => ({ snapshot_id: 's1', workspace_id: 'w1', commit: 'abc', created_at: new Date().toISOString() }),
             reset: async () => { },
             dispose: async () => { },

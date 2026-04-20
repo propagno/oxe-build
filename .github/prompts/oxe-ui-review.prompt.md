@@ -11,7 +11,7 @@ oxe_tool_profile: review_heavy
 oxe_confidence_policy: explicit
 oxe_context_tier: standard
 oxe_contract_version: 2.0.0
-oxe_semantics_hash: 94c1695de8d9ec7d
+oxe_semantics_hash: 262a73b77bf68d6d
 ---
 
 <!-- oxe-reasoning-contract:start -->
@@ -25,7 +25,7 @@ oxe_semantics_hash: 94c1695de8d9ec7d
 - **Política de confiança:** explícita
 - **Tier de contexto padrão:** padrão
 - **Versão do contrato:** 2.0.0
-- **Checksum semântico:** `94c1695de8d9ec7d`
+- **Checksum semântico:** `262a73b77bf68d6d`
 - **Entrada de contexto prioritária:** `.oxe/context/packs/ui-review.md` e `.oxe/context/packs/ui-review.json`
 - **Regra pack-first:** ler o context pack primeiro; se estiver stale, incompleto ou ausente, cair para leitura direta com fallback explícito.
 - **Inspeção estruturada:** `oxe-cc context inspect --workflow ui-review --json`

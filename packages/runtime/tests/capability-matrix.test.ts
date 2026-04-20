@@ -9,6 +9,7 @@ import {
   addEntry,
 } from '../src/plugins/capability-matrix';
 import type { CapabilityMatrix } from '../src/plugins/capability-matrix';
+import type { ProviderCapabilityEntry } from '../src/plugins/capability-matrix';
 import { PluginRegistry } from '../src/plugins/plugin-registry';
 import type { OxePlugin } from '../src/plugins/plugin-abi';
 import { CURRENT_ABI_VERSION } from '../src/plugins/plugin-manifest';
@@ -24,6 +25,24 @@ function makePlugin(name: string, overrides: Partial<OxePlugin> = {}): OxePlugin
       supports: () => true,
       invoke: async () => ({ success: true, output: '', evidence_paths: [], side_effects_applied: [] }),
     }],
+    ...overrides,
+  };
+}
+
+function entry(
+  name: string,
+  overrides: Partial<ProviderCapabilityEntry> = {}
+): ProviderCapabilityEntry {
+  return {
+    plugin: 'test-plugin',
+    name,
+    capability: name,
+    provider_type: 'tool',
+    stability: 'stable',
+    abi_version: CURRENT_ABI_VERSION,
+    since_abi_version: '1.0.0',
+    supported: [],
+    fallback_available: true,
     ...overrides,
   };
 }
@@ -75,9 +94,9 @@ describe('getStableEntries / getExperimentalEntries / getDeprecatedEntries', () 
     matrix = {
       abi_version: CURRENT_ABI_VERSION,
       entries: [
-        { name: 'stable-tool', provider_type: 'tool', stability: 'stable', since_abi_version: '1.0.0' },
-        { name: 'exp-tool', provider_type: 'tool', stability: 'experimental', since_abi_version: '1.0.0' },
-        { name: 'dep-tool', provider_type: 'tool', stability: 'deprecated', since_abi_version: '1.0.0', deprecated_in: '1.1.0' },
+        entry('stable-tool'),
+        entry('exp-tool', { stability: 'experimental' }),
+        entry('dep-tool', { stability: 'deprecated', deprecated_in: '1.1.0' }),
       ],
     };
   });
@@ -106,7 +125,7 @@ describe('markDeprecated', () => {
     const matrix: CapabilityMatrix = {
       abi_version: CURRENT_ABI_VERSION,
       entries: [
-        { name: 'my-tool', provider_type: 'tool', stability: 'stable', since_abi_version: '1.0.0' },
+        entry('my-tool'),
       ],
     };
     const updated = markDeprecated(matrix, 'my-tool', '1.2.0', 'new-tool');
@@ -127,16 +146,16 @@ describe('markDeprecated', () => {
 describe('addEntry', () => {
   test('adds a new entry', () => {
     const matrix: CapabilityMatrix = { abi_version: CURRENT_ABI_VERSION, entries: [] };
-    const updated = addEntry(matrix, { name: 'new-tool', provider_type: 'tool', stability: 'experimental', since_abi_version: '1.0.0' });
+    const updated = addEntry(matrix, entry('new-tool', { stability: 'experimental' }));
     assert.equal(updated.entries.length, 1);
   });
 
   test('does not add duplicate entry', () => {
     const matrix: CapabilityMatrix = {
       abi_version: CURRENT_ABI_VERSION,
-      entries: [{ name: 'tool-a', provider_type: 'tool', stability: 'stable', since_abi_version: '1.0.0' }],
+      entries: [entry('tool-a')],
     };
-    const updated = addEntry(matrix, { name: 'tool-a', provider_type: 'tool', stability: 'stable', since_abi_version: '1.0.0' });
+    const updated = addEntry(matrix, entry('tool-a'));
     assert.equal(updated.entries.length, 1);
   });
 });

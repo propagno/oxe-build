@@ -9,6 +9,7 @@ const VALID_RUN_STATUSES = new Set([
   'running',
   'paused',
   'waiting_approval',
+  'blocked',
   'failed',
   'completed',
   'replaying',
@@ -76,6 +77,20 @@ function loadRuntimeModule() {
   } catch {
     return null;
   }
+}
+
+function buildRuntimePluginRegistry(projectRoot) {
+  const runtime = loadRuntimeModule();
+  if (!runtime || typeof runtime.PluginRegistry !== 'function') return null;
+  const registry = new runtime.PluginRegistry();
+  const pluginDir = path.join(projectRoot, '.oxe', 'plugins');
+  if (fs.existsSync(pluginDir) && typeof registry.loadFromDirectory === 'function') {
+    registry.loadFromDirectory(pluginDir);
+  }
+  if (typeof registry.registerProjectCapabilities === 'function') {
+    registry.registerProjectCapabilities(projectRoot);
+  }
+  return registry;
 }
 
 function loadSdkParsers() {
@@ -313,7 +328,7 @@ function mergeCanonicalStateWithRunState(serializedState, runState = {}, activeS
       session_id: activeSession || null,
       graph_version: (compiledGraph && compiledGraph.metadata && compiledGraph.metadata.plan_hash) || 'legacy',
       started_at: runState.created_at || new Date().toISOString(),
-      ended_at: /completed|failed|aborted|cancelled/.test(String(runState.status || '')) ? (runState.updated_at || null) : null,
+    ended_at: /completed|failed|blocked|aborted|cancelled/.test(String(runState.status || '')) ? (runState.updated_at || null) : null,
       status: runState.status || 'planned',
       initiator: 'scheduler',
       mode: runState.cursor && runState.cursor.mode === 'task'
@@ -509,6 +524,470 @@ function compileVerificationSuiteFromArtifacts(projectRoot, activeSession, optio
   return { run: next, suite, paths: artifactPaths };
 }
 
+function runResultFromRunState(runState) {
+  const canonical = runState && runState.canonical_state && typeof runState.canonical_state === 'object'
+    ? hydrateCanonicalState(runState.canonical_state)
+    : null;
+  return {
+    run_id: runState && runState.run_id ? runState.run_id : makeRunId(),
+    status: String(runState && runState.status || 'planned'),
+    completed: canonical ? Array.from(canonical.completedWorkItems || []) : [],
+    failed: canonical ? Array.from(canonical.failedWorkItems || []) : [],
+    blocked: canonical ? Array.from(canonical.blockedWorkItems || []) : [],
+  };
+}
+
+function gateStoragePath(projectRoot, activeSession) {
+  return activeSession
+    ? path.join(projectRoot, '.oxe', ...String(activeSession).split('/'), 'execution', 'GATES.json')
+    : path.join(projectRoot, '.oxe', 'execution', 'GATES.json');
+}
+
+function readRuntimeGates(projectRoot, activeSession, options = {}) {
+  const gatesPath = gateStoragePath(projectRoot, activeSession);
+  const raw = readJsonIfExists(gatesPath);
+  const gates = Array.isArray(raw) ? raw : [];
+  const runId = options.runId || null;
+  const gateSlaHours = Number(options.gateSlaHours || options.gate_sla_hours || 24);
+  const status = String(options.status || 'all');
+  const scope = options.scope ? String(options.scope) : null;
+  const workItemId = options.task || options.workItemId || null;
+  const action = options.action || null;
+  const filtered = gates.filter((gate) => {
+    if (runId && gate.run_id && gate.run_id !== runId) return false;
+    if (scope && gate.scope !== scope) return false;
+    if (workItemId && gate.work_item_id !== workItemId) return false;
+    if (action && gate.action !== action) return false;
+    if (status !== 'all') {
+      const requestedAt = Date.parse(String(gate.requested_at || ''));
+      const isStale = gate.status === 'pending'
+        && Number.isFinite(requestedAt)
+        && Date.now() - requestedAt > gateSlaHours * 60 * 60 * 1000;
+      if (status === 'stale') return isStale;
+      return gate.status === status;
+    }
+    return true;
+  });
+  const pending = filtered.filter((gate) => gate && gate.status === 'pending');
+  const stalePending = pending.filter((gate) => {
+    const requestedAt = Date.parse(String(gate.requested_at || ''));
+    return Number.isFinite(requestedAt) && Date.now() - requestedAt > gateSlaHours * 60 * 60 * 1000;
+  });
+  const resolvedRecent = filtered.filter((gate) => {
+    if (gate.status !== 'resolved') return false;
+    const resolvedAt = Date.parse(String(gate.resolved_at || ''));
+    return Number.isFinite(resolvedAt) && Date.now() - resolvedAt <= gateSlaHours * 60 * 60 * 1000;
+  });
+  const byRun = {};
+  const byScope = {};
+  for (const gate of filtered) {
+    const runKey = gate.run_id || 'unscoped';
+    const scopeKey = gate.scope || 'unknown';
+    byRun[runKey] = (byRun[runKey] || 0) + 1;
+    byScope[scopeKey] = (byScope[scopeKey] || 0) + 1;
+  }
+  return {
+    path: gatesPath,
+    total: filtered.length,
+    gateSlaHours,
+    pending,
+    stalePending,
+    staleCount: stalePending.length,
+    resolvedRecent,
+    byRun,
+    byScope,
+    all: filtered,
+    filters: { runId, status, scope, workItemId, action },
+  };
+}
+
+async function resolveRuntimeGate(projectRoot, activeSession, options = {}) {
+  const runtime = loadRuntimeModule();
+  if (!runtime || typeof runtime.GateManager !== 'function') {
+    throw new Error('Runtime package não está disponível. Rode npm run build:runtime.');
+  }
+  const current = readRunState(projectRoot, activeSession);
+  const runId = options.runId || (current && current.run_id);
+  if (!runId) throw new Error('Nenhum run ativo para resolver gates.');
+  const manager = new runtime.GateManager(projectRoot, activeSession || null, runId);
+  const gate = manager.get(String(options.gateId || ''));
+  if (!gate) throw new Error(`Gate ${options.gateId} não encontrado.`);
+  const mappedDecision = options.decision === 'approve'
+    ? 'approved'
+    : options.decision === 'reject'
+      ? 'rejected'
+      : 'approved_with_caveats';
+  const resolved = await runtime.resolveGate(manager, gate.gate_id, {
+    decision: mappedDecision,
+    actor: String(options.actor || ''),
+    reason: options.reason ? String(options.reason) : undefined,
+  });
+  const queue = readRuntimeGates(projectRoot, activeSession, {
+    runId,
+    gateSlaHours: options.gateSlaHours || options.gate_sla_hours || 24,
+  });
+  return {
+    gate: resolved,
+    queue,
+    impact: {
+      pendingRemaining: queue.pending.length,
+      staleRemaining: queue.staleCount || 0,
+      runId,
+    },
+  };
+}
+
+function readRuntimeMultiAgentStatus(projectRoot, activeSession, options = {}) {
+  const runtime = loadRuntimeModule();
+  const current = readRunState(projectRoot, activeSession);
+  const runId = options.runId || (current && current.run_id) || null;
+  if (!runId) {
+    return {
+      path: null,
+      enabled: false,
+      runId: null,
+      mode: null,
+      workspaceIsolationEnforced: false,
+      agents: [],
+      ownership: [],
+      orphanReassignments: [],
+      handoffs: [],
+      arbitrationResults: [],
+    };
+  }
+  const runDir = path.join(projectRoot, '.oxe', 'runs', runId);
+  const statePath = path.join(runDir, 'multi-agent-state.json');
+  const handoffsPath = path.join(runDir, 'handoffs.json');
+  const arbitrationPath = path.join(runDir, 'arbitration-results.json');
+  const state = runtime && typeof runtime.loadMultiAgentState === 'function'
+    ? runtime.loadMultiAgentState(projectRoot, runId)
+    : readJsonIfExists(statePath);
+  const handoffs = readJsonIfExists(handoffsPath);
+  const arbitrationResults = readJsonIfExists(arbitrationPath);
+  return {
+    path: statePath,
+    enabled: Boolean(state),
+    runId,
+    mode: state && state.mode ? state.mode : null,
+    workspaceIsolationEnforced: Boolean(state && state.workspace_isolation_enforced),
+    agents: state && Array.isArray(state.agent_results) ? state.agent_results : [],
+    ownership: state && Array.isArray(state.ownership) ? state.ownership : [],
+    orphanReassignments: state && Array.isArray(state.orphan_reassignments) ? state.orphan_reassignments : [],
+    handoffs: Array.isArray(handoffs) ? handoffs : [],
+    arbitrationResults: Array.isArray(arbitrationResults) ? arbitrationResults : [],
+  };
+}
+
+function loadRuntimeVerificationArtifacts(projectRoot, runState) {
+  const runtime = loadRuntimeModule();
+  if (!runtime || !runState || !runState.run_id) {
+    return {
+      manifest: null,
+      residualRisks: null,
+      evidenceCoverage: null,
+    };
+  }
+  const manifest = runState.verification_manifest
+    || (typeof runtime.loadManifest === 'function' ? runtime.loadManifest(projectRoot, runState.run_id) : null)
+    || null;
+  const residualRisks = runState.residual_risks
+    || (typeof runtime.loadRiskLedger === 'function' ? runtime.loadRiskLedger(projectRoot, runState.run_id) : null)
+    || null;
+  const evidenceCoverage = runState.verification_evidence_coverage
+    || (typeof runtime.loadEvidenceCoverage === 'function' ? runtime.loadEvidenceCoverage(projectRoot, runState.run_id) : null)
+    || (manifest && typeof runtime.summarizeEvidenceCoverage === 'function'
+      ? runtime.summarizeEvidenceCoverage(manifest)
+      : null)
+    || null;
+  return { manifest, residualRisks, evidenceCoverage };
+}
+
+function countVerificationEvidenceRefs(runState, verificationArtifacts) {
+  if (verificationArtifacts && verificationArtifacts.manifest && Array.isArray(verificationArtifacts.manifest.checks)) {
+    return verificationArtifacts.manifest.checks.reduce((sum, check) => {
+      return sum + (Array.isArray(check.evidence_refs) ? check.evidence_refs.length : 0);
+    }, 0);
+  }
+  if (Array.isArray(runState && runState.verification_results)) {
+    return runState.verification_results.reduce((sum, result) => {
+      return sum + (Array.isArray(result.evidence_refs) ? result.evidence_refs.length : 0);
+    }, 0);
+  }
+  return 0;
+}
+
+function buildRuntimeModeStatus(runState) {
+  if (!runState) {
+    return {
+      runtime_mode: 'legacy',
+      fallback_mode: 'legacy',
+      source: 'absent',
+      reason: 'Nenhum ACTIVE-RUN encontrado para o escopo atual.',
+      enterprise_available: false,
+      fallback_recorded: true,
+    };
+  }
+  const hasEnterpriseArtifacts = Boolean(
+    runState.compiled_graph
+      || runState.canonical_state
+      || runState.verification_manifest
+      || runState.verification_evidence_coverage
+      || runState.delivery
+      || runState.recovery_summary
+  );
+  return {
+    runtime_mode: hasEnterpriseArtifacts ? 'enterprise' : 'legacy',
+    fallback_mode: hasEnterpriseArtifacts ? 'none' : 'legacy',
+    source: hasEnterpriseArtifacts ? 'canonical_state' : 'legacy_state',
+    reason: hasEnterpriseArtifacts
+      ? 'Run com artefatos canónicos do runtime enterprise persistidos.'
+      : 'Run sem artefatos canónicos do runtime; fluxo degradado para legado.',
+    enterprise_available: hasEnterpriseArtifacts,
+    fallback_recorded: !hasEnterpriseArtifacts,
+  };
+}
+
+function buildRuntimeProviderCatalog(projectRoot) {
+  const runtime = loadRuntimeModule();
+  if (!runtime || typeof runtime.PluginRegistry !== 'function') {
+    return {
+      available: false,
+      plugin_dir: path.join(projectRoot, '.oxe', 'plugins'),
+      loaded_capabilities: [],
+      loaded_plugins: [],
+      load_errors: ['Runtime package não está disponível. Rode npm run build:runtime.'],
+      summary: null,
+      matrix: null,
+    };
+  }
+  const registry = new runtime.PluginRegistry();
+  const pluginDir = path.join(projectRoot, '.oxe', 'plugins');
+  const loadedCapabilities = typeof registry.registerProjectCapabilities === 'function'
+    ? registry.registerProjectCapabilities(projectRoot)
+    : [];
+  const loadedPlugins = typeof registry.loadFromDirectory === 'function'
+    ? registry.loadFromDirectory(pluginDir)
+    : [];
+  const loadErrors = typeof registry.loadErrorsSnapshot === 'function'
+    ? registry.loadErrorsSnapshot()
+    : [];
+  const summary = typeof runtime.registrySummary === 'function'
+    ? runtime.registrySummary(registry)
+    : (typeof registry.summary === 'function' ? registry.summary() : null);
+  const matrix = typeof runtime.resolveCapabilityMatrix === 'function'
+    ? runtime.resolveCapabilityMatrix(registry)
+    : (typeof registry.capabilityMatrix === 'function' ? registry.capabilityMatrix() : null);
+  return {
+    available: true,
+    plugin_dir: pluginDir,
+    loaded_capabilities: loadedCapabilities,
+    loaded_plugins: loadedPlugins,
+    load_errors: loadErrors,
+    summary,
+    matrix,
+  };
+}
+
+function buildRecoveryConsistency(projectRoot, activeSession, runState, journal, verificationArtifacts) {
+  const op = operationalPaths(projectRoot, activeSession);
+  const activeRunRef = readJsonIfExists(op.activeRun);
+  const runFile = runState && runState.run_id ? path.join(op.runsDir, `${runState.run_id}.json`) : null;
+  const runDir = runState && runState.run_id ? path.join(projectRoot, '.oxe', 'runs', runState.run_id) : null;
+  const allEvents = readEvents(projectRoot, activeSession);
+  const runEvents = runState && runState.run_id ? allEvents.filter((event) => event.run_id === runState.run_id) : [];
+  const issues = [];
+  if (!activeRunRef || activeRunRef.run_id !== (runState && runState.run_id)) {
+    issues.push('ACTIVE-RUN.json não referencia o mesmo run persistido em .oxe/runs/.');
+  }
+  if (!runFile || !fs.existsSync(runFile)) {
+    issues.push('Arquivo canónico da run ausente em .oxe/runs/<run>.json.');
+  }
+  if (!journal) {
+    issues.push('Journal ausente para recover/replay.');
+  }
+  if (runEvents.length === 0) {
+    issues.push('Nenhum evento NDJSON encontrado para a run ativa.');
+  }
+  if (!runState || !runState.canonical_state) {
+    issues.push('canonical_state ausente no ACTIVE-RUN.');
+  }
+  const pendingGates = readRuntimeGates(projectRoot, activeSession, { runId: runState && runState.run_id ? runState.run_id : null });
+  const policyDecisionPath = runState && runState.run_id ? path.join(projectRoot, '.oxe', 'runs', runState.run_id, 'policy-decisions.json') : null;
+  const policyDecisions = policyDecisionPath && fs.existsSync(policyDecisionPath)
+    ? (Array.isArray(readJsonIfExists(policyDecisionPath)) ? readJsonIfExists(policyDecisionPath) : [])
+    : [];
+  const promotionRecordPath = runDir ? path.join(runDir, 'promotion-record.json') : null;
+  const promotionRecord = promotionRecordPath ? readJsonIfExists(promotionRecordPath) : null;
+  const attempts = runState && runState.canonical_state && runState.canonical_state.attempts && typeof runState.canonical_state.attempts === 'object'
+    ? runState.canonical_state.attempts
+    : {};
+  const incompleteAttempts = Object.entries(attempts)
+    .flatMap(([workItemId, entries]) => Array.isArray(entries) ? entries.map((entry) => ({ workItemId, entry })) : [])
+    .filter(({ entry }) => {
+      const outcome = entry && typeof entry === 'object' ? String(entry.outcome || '') : '';
+      return !outcome || outcome === 'running' || outcome === 'pending';
+    });
+  if (incompleteAttempts.length > 0) {
+    issues.push(`${incompleteAttempts.length} tentativa(s) incompleta(s) ainda persistida(s) no estado canônico.`);
+  }
+  return {
+    active_run_path: op.activeRun,
+    run_file_path: runFile,
+    run_dir: runDir,
+    journal_path: runDir ? path.join(runDir, 'journal.json') : null,
+    events_path: op.events,
+    gates_path: op.gates,
+    policy_decisions_path: policyDecisionPath,
+    verification_manifest_path: runDir ? path.join(runDir, 'verification-manifest.json') : null,
+    residual_risk_path: runDir ? path.join(runDir, 'residual-risk-ledger.json') : null,
+    evidence_coverage_path: runDir ? path.join(runDir, 'evidence-coverage.json') : null,
+    promotion_record_path: promotionRecordPath,
+    run_id: runState && runState.run_id ? runState.run_id : null,
+    active_run_synced: Boolean(activeRunRef && runState && activeRunRef.run_id === runState.run_id),
+    run_file_exists: Boolean(runFile && fs.existsSync(runFile)),
+    journal_exists: Boolean(journal),
+    event_count: runEvents.length,
+    issues,
+    pending_gates_rehydrated: pendingGates.pending.length,
+    policy_decisions_rehydrated: Array.isArray(policyDecisions) ? policyDecisions.length : 0,
+    evidence_refs_tracked: countVerificationEvidenceRefs(runState, verificationArtifacts),
+    verification_artifacts_present: Boolean(verificationArtifacts && verificationArtifacts.manifest),
+    promotion_attempt_present: Boolean(promotionRecord),
+    promotion_status: promotionRecord && promotionRecord.status ? promotionRecord.status : null,
+    incomplete_attempts: incompleteAttempts.map(({ workItemId, entry }) => ({
+      work_item_id: workItemId,
+      attempt_id: entry && typeof entry === 'object' ? entry.attempt_id || null : null,
+      outcome: entry && typeof entry === 'object' ? entry.outcome || null : null,
+    })),
+  };
+}
+
+function writeRecoverySummaryMarkdown(projectRoot, activeSession, runState, recoverySummary) {
+  const op = operationalPaths(projectRoot, activeSession);
+  const summaryPath = path.join(op.executionRoot, 'RECOVERY-SUMMARY.md');
+  const lines = [
+    '# OXE — Recovery Summary',
+    '',
+    `- **Data:** ${new Date().toISOString()}`,
+    `- **Run:** ${runState && runState.run_id ? runState.run_id : '—'}`,
+    `- **Estado pós-recover:** ${runState && runState.status ? runState.status : '—'}`,
+    `- **Journal:** ${recoverySummary.journal_state || '—'}`,
+    `- **Pending gates reidratados:** ${recoverySummary.consistency && recoverySummary.consistency.pending_gates_rehydrated != null ? recoverySummary.consistency.pending_gates_rehydrated : 0}`,
+    `- **Policy decisions reidratadas:** ${recoverySummary.consistency && recoverySummary.consistency.policy_decisions_rehydrated != null ? recoverySummary.consistency.policy_decisions_rehydrated : 0}`,
+    `- **Evidence refs rastreados:** ${recoverySummary.consistency && recoverySummary.consistency.evidence_refs_tracked != null ? recoverySummary.consistency.evidence_refs_tracked : 0}`,
+    `- **Promotion attempt:** ${recoverySummary.consistency && recoverySummary.consistency.promotion_status ? recoverySummary.consistency.promotion_status : '—'}`,
+    '',
+    '## Work items órfãos',
+    '',
+    ...(Array.isArray(recoverySummary.orphan_work_items) && recoverySummary.orphan_work_items.length
+      ? recoverySummary.orphan_work_items.map((item) => `- ${item}`)
+      : ['- Nenhum']),
+    '',
+    '## Tentativas incompletas',
+    '',
+    ...(recoverySummary.consistency && Array.isArray(recoverySummary.consistency.incomplete_attempts) && recoverySummary.consistency.incomplete_attempts.length
+      ? recoverySummary.consistency.incomplete_attempts.map((item) => `- ${item.work_item_id} · ${item.attempt_id || 'attempt'} · ${item.outcome || 'unknown'}`)
+      : ['- Nenhuma']),
+    '',
+    '## Consistência',
+    '',
+    ...(recoverySummary.consistency && Array.isArray(recoverySummary.consistency.issues) && recoverySummary.consistency.issues.length
+      ? recoverySummary.consistency.issues.map((issue) => `- ${issue}`)
+      : ['- Sem inconsistências críticas detectadas.']),
+  ];
+  ensureDirForFile(summaryPath);
+  fs.writeFileSync(summaryPath, lines.join('\n') + '\n', 'utf8');
+  return summaryPath;
+}
+
+async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
+  const runtime = loadRuntimeModule();
+  const parsers = loadSdkParsers();
+  if (!runtime || typeof runtime.verifyRun !== 'function') {
+    throw new Error('Runtime package não está disponível. Rode npm run build:runtime.');
+  }
+  if (!parsers) {
+    throw new Error('Parsers do SDK indisponíveis para executar verification suite.');
+  }
+  let current = options.runState || readRunState(projectRoot, activeSession);
+  if (!current) {
+    current = compileExecutionGraphFromArtifacts(projectRoot, activeSession).run;
+  }
+  if (!current.verification_suite) {
+    current = compileVerificationSuiteFromArtifacts(projectRoot, activeSession, { runState: current }).run;
+  }
+  const artifactPaths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const specText = readTextIfExists(artifactPaths.spec);
+  const planText = readTextIfExists(artifactPaths.plan);
+  if (!specText || !planText) {
+    throw new Error('SPEC.md e PLAN.md são obrigatórios para runtime verify.');
+  }
+  const parsedSpec = parsers.parseSpec(specText);
+  const parsedPlan = parsers.parsePlan(planText);
+  const suite = current.verification_suite
+    || runtime.compileVerification(parsedSpec, parsedPlan, options.compilerOptions || {});
+  const registry = buildRuntimePluginRegistry(projectRoot);
+  const evidenceStore = new runtime.EvidenceStore(projectRoot);
+  const targetWorkItem = options.workItemId
+    || options.task
+    || (current.cursor && current.cursor.task)
+    || (Array.isArray(current.active_tasks) && current.active_tasks[0])
+    || 'run';
+  appendEvent(projectRoot, activeSession, {
+    type: 'VerificationStarted',
+    run_id: current.run_id,
+    work_item_id: targetWorkItem,
+    payload: {
+      total_checks: Array.isArray(suite.checks) ? suite.checks.length : 0,
+    },
+  });
+  const report = await runtime.verifyRun({
+    projectRoot,
+    runId: current.run_id,
+    workItemId: String(targetWorkItem),
+    cwd: options.cwd || projectRoot,
+    suite,
+    pluginRegistry: registry || undefined,
+    evidenceStore,
+    attemptNumber: options.attemptNumber || 1,
+    timeoutMs: options.timeoutMs,
+  });
+  const nextStatus = report.status === 'passed'
+    ? current.status === 'completed' ? 'completed' : 'running'
+    : report.status === 'failed'
+      ? 'failed'
+      : 'blocked';
+  const next = writeRunState(projectRoot, activeSession, {
+    ...current,
+    status: nextStatus,
+    verification_suite: suite,
+    verification_results: report.verification_results,
+    verification_check_results: report.check_results,
+    verification_manifest: report.manifest,
+    residual_risks: report.risk_ledger,
+    verification_evidence_coverage: report.evidence_coverage,
+    verification_gaps: report.gaps,
+  });
+  appendEvent(projectRoot, activeSession, {
+    type: 'VerificationCompleted',
+    run_id: next.run_id,
+    work_item_id: targetWorkItem,
+    payload: {
+      status: report.status,
+      total_checks: report.manifest && report.manifest.summary ? report.manifest.summary.total : 0,
+      fail: report.manifest && report.manifest.summary ? report.manifest.summary.fail : 0,
+      error: report.manifest && report.manifest.summary ? report.manifest.summary.error : 0,
+      gaps: report.gaps,
+    },
+  });
+  const projected = projectRuntimeArtifacts(projectRoot, activeSession, { runState: next, write: true });
+  return {
+    run: projected.run,
+    report,
+    projected,
+  };
+}
+
 function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
   const runtime = loadRuntimeModule();
   if (!runtime || typeof runtime.ProjectionEngine !== 'function' || typeof runtime.fromSerializable !== 'function') {
@@ -532,11 +1011,25 @@ function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
   const projector = new runtime.ProjectionEngine();
   const verificationResults = Array.isArray(current.verification_results) ? current.verification_results : [];
   const verificationCheckResults = Array.isArray(current.verification_check_results) ? current.verification_check_results : [];
+  const verificationArtifacts = loadRuntimeVerificationArtifacts(projectRoot, current);
   const projections = {
     plan: projector.projectPlan(canonicalLive, graph),
-    verify: projector.projectVerify(canonicalLive, verificationResults, verificationCheckResults),
+    verify: projector.projectVerify(
+      canonicalLive,
+      verificationResults,
+      verificationCheckResults,
+      verificationArtifacts.manifest,
+      verificationArtifacts.residualRisks,
+      verificationArtifacts.evidenceCoverage
+    ),
     state: projector.projectState(canonicalLive),
     runSummary: projector.projectRunSummary(canonicalLive),
+    commitSummary: typeof projector.projectCommitSummary === 'function'
+      ? projector.projectCommitSummary(canonicalLive, graph)
+      : projector.projectRunSummary(canonicalLive),
+    promotionSummary: typeof projector.projectPromotionSummary === 'function'
+      ? projector.projectPromotionSummary(canonicalLive, graph)
+      : projector.projectPRSummary(canonicalLive, graph),
     prSummary: projector.projectPRSummary(canonicalLive, graph),
   };
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
@@ -546,6 +1039,8 @@ function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
     verify_ref: path.relative(projectRoot, paths.verify).replace(/\\/g, '/'),
     state_ref: path.relative(projectRoot, paths.state).replace(/\\/g, '/'),
     run_summary_ref: path.relative(projectRoot, path.join(op.executionRoot, 'RUN-SUMMARY.md')).replace(/\\/g, '/'),
+    commit_summary_ref: path.relative(projectRoot, path.join(op.executionRoot, 'COMMIT-SUMMARY.md')).replace(/\\/g, '/'),
+    promotion_summary_ref: path.relative(projectRoot, path.join(op.executionRoot, 'PROMOTION-SUMMARY.md')).replace(/\\/g, '/'),
     pr_summary_ref: path.relative(projectRoot, path.join(op.executionRoot, 'PR-SUMMARY.md')).replace(/\\/g, '/'),
     generated_at: new Date().toISOString(),
   };
@@ -557,14 +1052,29 @@ function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
     fs.writeFileSync(paths.verify, projections.verify + '\n', 'utf8');
     fs.writeFileSync(paths.state, projections.state + '\n', 'utf8');
     fs.writeFileSync(path.join(op.executionRoot, 'RUN-SUMMARY.md'), projections.runSummary + '\n', 'utf8');
+    fs.writeFileSync(path.join(op.executionRoot, 'COMMIT-SUMMARY.md'), projections.commitSummary + '\n', 'utf8');
+    fs.writeFileSync(path.join(op.executionRoot, 'PROMOTION-SUMMARY.md'), projections.promotionSummary + '\n', 'utf8');
     fs.writeFileSync(path.join(op.executionRoot, 'PR-SUMMARY.md'), projections.prSummary + '\n', 'utf8');
   }
   const next = writeRunState(projectRoot, activeSession, {
     ...current,
     canonical_state: canonicalState,
+    verification_manifest: verificationArtifacts.manifest,
+    residual_risks: verificationArtifacts.residualRisks,
+    verification_evidence_coverage: verificationArtifacts.evidenceCoverage,
     projections: projectionRefs,
   });
-  return { run: next, projections, paths: { ...paths, runSummary: path.join(op.executionRoot, 'RUN-SUMMARY.md'), prSummary: path.join(op.executionRoot, 'PR-SUMMARY.md') } };
+  return {
+    run: next,
+    projections,
+    paths: {
+      ...paths,
+      runSummary: path.join(op.executionRoot, 'RUN-SUMMARY.md'),
+      commitSummary: path.join(op.executionRoot, 'COMMIT-SUMMARY.md'),
+      promotionSummary: path.join(op.executionRoot, 'PROMOTION-SUMMARY.md'),
+      prSummary: path.join(op.executionRoot, 'PR-SUMMARY.md'),
+    },
+  };
 }
 
 async function runRuntimeCiChecks(projectRoot, activeSession, options = {}) {
@@ -583,6 +1093,14 @@ async function runRuntimeCiChecks(projectRoot, activeSession, options = {}) {
     runId,
   });
   const summary = runtime.summarizeCIResults(results);
+  const ciResultsPath = path.join(projectRoot, '.oxe', 'runs', runId || makeRunId(), 'ci-results.json');
+  ensureDirForFile(ciResultsPath);
+  fs.writeFileSync(ciResultsPath, JSON.stringify({
+    run_id: runId,
+    generated_at: new Date().toISOString(),
+    summary,
+    results,
+  }, null, 2), 'utf8');
   const next = writeRunState(projectRoot, activeSession, {
     ...(current || {}),
     run_id: runId || makeRunId(),
@@ -591,6 +1109,7 @@ async function runRuntimeCiChecks(projectRoot, activeSession, options = {}) {
       generated_at: new Date().toISOString(),
       summary,
       results,
+      path: path.relative(projectRoot, ciResultsPath).replace(/\\/g, '/'),
     },
   });
   appendEvent(projectRoot, activeSession, {
@@ -605,7 +1124,165 @@ async function runRuntimeCiChecks(projectRoot, activeSession, options = {}) {
       allPassed: summary.allPassed,
     },
   });
-  return { run: next, runId: next.run_id, results, summary };
+  return { run: next, runId: next.run_id, results, summary, path: ciResultsPath };
+}
+
+async function runRuntimePromotion(projectRoot, activeSession, options = {}) {
+  const runtime = loadRuntimeModule();
+  if (!runtime || typeof runtime.PromotionPipeline !== 'function' || typeof runtime.BranchManager !== 'function' || typeof runtime.PRManager !== 'function') {
+    throw new Error('Runtime package não está disponível. Rode npm run build:runtime.');
+  }
+  let current = options.runState || readRunState(projectRoot, activeSession);
+  if (!current) {
+    throw new Error('Nenhum ACTIVE-RUN disponível para promover.');
+  }
+  const verificationArtifacts = loadRuntimeVerificationArtifacts(projectRoot, current);
+  if (!verificationArtifacts.manifest) {
+    throw new Error('Manifest de verify ausente — execute `oxe-cc runtime verify` antes de promover.');
+  }
+  const branchManager = new runtime.BranchManager(projectRoot);
+  const prManager = new runtime.PRManager(projectRoot);
+  const pipeline = new runtime.PromotionPipeline(projectRoot, branchManager, prManager);
+  const runResult = runResultFromRunState(current);
+  const gates = readRuntimeGates(projectRoot, activeSession, { runId: current.run_id }).all;
+  const commitRecord = pipeline.loadCommitRecord(current.run_id)
+    || pipeline.recordLocalCommit(runResult, verificationArtifacts.manifest, verificationArtifacts.residualRisks, {
+      commitSha: branchManager.currentCommit(),
+      summaryPath: current.projections && current.projections.commit_summary_ref ? current.projections.commit_summary_ref : null,
+    });
+  const promotion = await pipeline.promote(
+    runResult,
+    verificationArtifacts.manifest,
+    verificationArtifacts.residualRisks,
+    {
+      targetKind: options.targetKind || 'pr_draft',
+      remote: options.remote || 'origin',
+      baseBranch: options.baseBranch || 'main',
+      targetRef: options.targetRef || options.baseBranch || 'main',
+      minimumCoverage: options.minimumCoverage == null ? 100 : Number(options.minimumCoverage),
+      draftPR: options.draftPR !== false,
+    },
+    gates,
+    verificationArtifacts.evidenceCoverage
+  );
+  const health = loadProjectHealth();
+  const healthReport = health && typeof health.buildHealthReport === 'function'
+    ? health.buildHealthReport(projectRoot)
+    : null;
+  const promotionReadiness = healthReport && healthReport.promotionReadiness ? healthReport.promotionReadiness : null;
+  const readinessPath = path.join(projectRoot, '.oxe', 'runs', current.run_id, 'promotion-readiness.json');
+  ensureDirForFile(readinessPath);
+  fs.writeFileSync(readinessPath, JSON.stringify({
+    run_id: current.run_id,
+    generated_at: new Date().toISOString(),
+    readiness: promotionReadiness,
+    promotion,
+  }, null, 2), 'utf8');
+  const next = writeRunState(projectRoot, activeSession, {
+    ...current,
+    delivery: {
+      commit_record: commitRecord,
+      promotion_record: promotion,
+      promotion_readiness_ref: path.relative(projectRoot, readinessPath).replace(/\\/g, '/'),
+    },
+  });
+  appendEvent(projectRoot, activeSession, {
+    type: promotion.status === 'blocked' ? 'GateRequested' : 'ToolCompleted',
+    run_id: next.run_id,
+    payload: {
+      promotion_target: promotion.target_kind,
+      promotion_status: promotion.status,
+      remote: promotion.remote,
+      target_ref: promotion.target_ref,
+      pr_url: promotion.pr_url,
+    },
+  });
+  const projected = projectRuntimeArtifacts(projectRoot, activeSession, { runState: next, write: true });
+  return {
+    run: projected.run,
+    commitRecord,
+    promotion,
+    promotionReadiness,
+    projected,
+  };
+}
+
+function recoverRuntimeState(projectRoot, activeSession, options = {}) {
+  const runtime = loadRuntimeModule();
+  if (!runtime || typeof runtime.loadJournal !== 'function') {
+    throw new Error('Runtime package não está disponível. Rode npm run build:runtime.');
+  }
+  const current = options.runState || readRunState(projectRoot, activeSession);
+  if (!current || !current.run_id) {
+    throw new Error('Nenhum ACTIVE-RUN disponível para recover.');
+  }
+  const journal = runtime.loadJournal(projectRoot, current.run_id);
+  if (!journal) {
+    throw new Error(`Journal ausente para run ${current.run_id}.`);
+  }
+  const canonicalLive = reduceCanonicalRunStateLive(projectRoot, activeSession, {
+    runId: current.run_id,
+    runState: current,
+  }) || mergeCanonicalStateWithRunState(current.canonical_state, current, activeSession, current.compiled_graph);
+  const graphNodes = current.compiled_graph && current.compiled_graph.nodes && typeof current.compiled_graph.nodes === 'object'
+    ? new Set(Object.keys(current.compiled_graph.nodes))
+    : new Set();
+  const orphanWorkItems = Array.from(new Set([
+    ...((journal.pending_gates || []).filter((id) => id && !graphNodes.has(String(id)))),
+    ...((current.active_tasks || []).filter((id) => id && !graphNodes.has(String(id)))),
+  ]));
+  const nextStatus = journal.scheduler_state === 'paused'
+    ? 'paused'
+    : journal.scheduler_state === 'blocked'
+      ? 'blocked'
+      : current.status || 'planned';
+  const verificationArtifacts = loadRuntimeVerificationArtifacts(projectRoot, current);
+  const consistency = buildRecoveryConsistency(
+    projectRoot,
+    activeSession,
+    current,
+    journal,
+    verificationArtifacts
+  );
+  const recoverySummary = {
+    recovered_at: new Date().toISOString(),
+    journal_state: journal.scheduler_state,
+    orphan_work_items: orphanWorkItems,
+    pending_gates: readRuntimeGates(projectRoot, activeSession, { runId: current.run_id }).pending.map((gate) => gate.gate_id),
+    consistency,
+  };
+  const runDir = path.join(projectRoot, '.oxe', 'runs', current.run_id);
+  ensureDir(runDir);
+  const recoverySummaryPath = path.join(runDir, 'recovery-summary.json');
+  fs.writeFileSync(recoverySummaryPath, JSON.stringify(recoverySummary, null, 2), 'utf8');
+  const summaryPath = writeRecoverySummaryMarkdown(projectRoot, activeSession, current, recoverySummary);
+  recoverySummary.json_ref = path.relative(projectRoot, recoverySummaryPath).replace(/\\/g, '/');
+  recoverySummary.markdown_ref = path.relative(projectRoot, summaryPath).replace(/\\/g, '/');
+  const next = writeRunState(projectRoot, activeSession, {
+    ...current,
+    status: nextStatus,
+    canonical_state: serializeCanonicalState(canonicalLive),
+    recovery_summary: recoverySummary,
+    metrics: {
+      ...(current.metrics || {}),
+      recover_count: Number((current.metrics || {}).recover_count || 0) + 1,
+      last_action: 'recover',
+    },
+  });
+  appendEvent(projectRoot, activeSession, {
+    type: 'RunStarted',
+    run_id: next.run_id,
+    payload: {
+      recovered: true,
+      orphan_work_items: orphanWorkItems,
+      journal_state: journal.scheduler_state,
+    },
+  });
+  return {
+    run: next,
+    journal,
+    recoverySummary,
+  };
 }
 
 function operationalPaths(projectRoot, activeSession) {
@@ -627,6 +1304,8 @@ function operationalPaths(projectRoot, activeSession) {
     capabilitiesDir: path.join(oxeDir, 'capabilities'),
     capabilitiesIndex: path.join(oxeDir, 'CAPABILITIES.md'),
     checkpoints: activeSession ? path.join(scopeRoot, 'execution', 'CHECKPOINTS.md') : path.join(oxeDir, 'CHECKPOINTS.md'),
+    gates: gateStoragePath(projectRoot, activeSession),
+    auditTrail: path.join(oxeDir, 'AUDIT-TRAIL.ndjson'),
   };
 }
 
@@ -657,6 +1336,9 @@ function buildOperationalGraph(runState = {}) {
   const currentWave = runState.current_wave == null ? null : Number(runState.current_wave);
   const activeTasks = Array.isArray(runState.active_tasks) ? runState.active_tasks.map(String) : [];
   const pendingCheckpoints = Array.isArray(runState.pending_checkpoints) ? runState.pending_checkpoints.map(String) : [];
+  const multiAgent = runState.multi_agent && typeof runState.multi_agent === 'object'
+    ? runState.multi_agent
+    : null;
   const azureContext = runState.provider_context && runState.provider_context.azure && typeof runState.provider_context.azure === 'object'
     ? runState.provider_context.azure
     : null;
@@ -732,6 +1414,59 @@ function buildOperationalGraph(runState = {}) {
       status: 'blocked',
       reason: 'checkpoint pendente',
     });
+  }
+  if (multiAgent && multiAgent.enabled) {
+    const ownership = Array.isArray(multiAgent.ownership) ? multiAgent.ownership : [];
+    const handoffs = Array.isArray(multiAgent.handoffs) ? multiAgent.handoffs : [];
+    const agents = Array.isArray(multiAgent.agents) ? multiAgent.agents : [];
+    for (const agent of agents) {
+      const agentId = String(agent.agent_id || agent.id || 'agent');
+      generatedNodes.push({
+        id: `agent:${agentId}`,
+        label: agentId,
+        kind: 'agent',
+        status: String(agent.status || agent.outcome || 'active'),
+        detail: agent.role || agent.profile || multiAgent.mode || 'multi-agent',
+      });
+      generatedEdges.push({
+        from: `run:${runState.run_id || 'active'}`,
+        to: `agent:${agentId}`,
+        type: 'handoff',
+        status: String(agent.status || 'active'),
+        reason: 'coordenação multi-agent',
+      });
+    }
+    for (const item of ownership) {
+      const taskId = String(item.work_item_id || item.task_id || '');
+      const agentId = String(item.agent_id || '');
+      if (!taskId || !agentId) continue;
+      generatedNodes.push({
+        id: `task:${taskId}`,
+        label: taskId,
+        kind: 'task',
+        status: String(item.status || 'assigned'),
+        detail: `owner ${agentId}`,
+      });
+      generatedEdges.push({
+        from: `agent:${agentId}`,
+        to: `task:${taskId}`,
+        type: 'owns',
+        status: String(item.status || 'assigned'),
+        reason: 'ownership canónica',
+      });
+    }
+    for (const handoff of handoffs) {
+      const fromAgent = String(handoff.from_agent_id || handoff.from || '');
+      const toAgent = String(handoff.to_agent_id || handoff.to || '');
+      if (!fromAgent || !toAgent) continue;
+      generatedEdges.push({
+        from: `agent:${fromAgent}`,
+        to: `agent:${toAgent}`,
+        type: 'handoff',
+        status: String(handoff.status || 'completed'),
+        reason: handoff.reason || handoff.work_item_id || 'handoff cooperativo',
+      });
+    }
   }
   if (azureContext) {
     const azureStatus = azureContext.login_active
@@ -907,7 +1642,20 @@ function writeRunState(projectRoot, activeSession, runState = {}) {
       : null,
     verification_results: Array.isArray(runState.verification_results) ? runState.verification_results : [],
     verification_check_results: Array.isArray(runState.verification_check_results) ? runState.verification_check_results : [],
+    verification_manifest: runState.verification_manifest && typeof runState.verification_manifest === 'object'
+      ? runState.verification_manifest
+      : null,
+    residual_risks: runState.residual_risks && typeof runState.residual_risks === 'object'
+      ? runState.residual_risks
+      : null,
+    verification_evidence_coverage: runState.verification_evidence_coverage && typeof runState.verification_evidence_coverage === 'object'
+      ? runState.verification_evidence_coverage
+      : null,
+    verification_gaps: Array.isArray(runState.verification_gaps) ? runState.verification_gaps.map(String) : [],
     ci_checks: runState.ci_checks && typeof runState.ci_checks === 'object' ? runState.ci_checks : null,
+    delivery: runState.delivery && typeof runState.delivery === 'object' ? runState.delivery : null,
+    recovery_summary: runState.recovery_summary && typeof runState.recovery_summary === 'object' ? runState.recovery_summary : null,
+    multi_agent: runState.multi_agent && typeof runState.multi_agent === 'object' ? runState.multi_agent : null,
     projections: runState.projections && typeof runState.projections === 'object' ? runState.projections : {},
     metrics: runState.metrics && typeof runState.metrics === 'object' ? runState.metrics : {},
   };
@@ -927,6 +1675,7 @@ function writeRunState(projectRoot, activeSession, runState = {}) {
         canonical_state: payload.canonical_state,
         compiled_graph: payload.compiled_graph,
         graph_version: payload.graph_version,
+        multi_agent: payload.multi_agent,
       },
       null,
       2
@@ -1309,6 +2058,50 @@ function replayEvents(projectRoot, activeSession, options = {}) {
   return report;
 }
 
+function replayRuntimeState(projectRoot, activeSession, options = {}) {
+  const current = options.runState || readRunState(projectRoot, activeSession);
+  const runId = options.runId || (current && current.run_id) || null;
+  const replay = replayEvents(projectRoot, activeSession, {
+    runId: runId || undefined,
+    fromEventId: options.fromEventId || undefined,
+    waveId: options.waveId != null ? options.waveId : options.wave,
+    limit: options.limit,
+    writeReport: options.writeReport || false,
+  });
+  const journalPath = runId ? path.join(projectRoot, '.oxe', 'runs', runId, 'journal.json') : null;
+  const journal = journalPath ? readJsonIfExists(journalPath) : null;
+  const verificationArtifacts = current ? loadRuntimeVerificationArtifacts(projectRoot, current) : {
+    manifest: null,
+    residualRisks: null,
+    evidenceCoverage: null,
+  };
+  const consistency = current && journal
+    ? buildRecoveryConsistency(projectRoot, activeSession, current, journal, verificationArtifacts)
+    : null;
+  const gateQueue = readRuntimeGates(projectRoot, activeSession, { runId });
+  const policyDecisionsPath = runId ? path.join(projectRoot, '.oxe', 'runs', runId, 'policy-decisions.json') : null;
+  const policyDecisions = policyDecisionsPath ? readJsonIfExists(policyDecisionsPath) : null;
+  const promotionRecordPath = runId ? path.join(projectRoot, '.oxe', 'runs', runId, 'promotion-record.json') : null;
+  const promotionRecord = promotionRecordPath ? readJsonIfExists(promotionRecordPath) : null;
+  const summary = {
+    run_id: runId,
+    generated_at: new Date().toISOString(),
+    replay,
+    gateQueue,
+    policyDecisions: Array.isArray(policyDecisions) ? policyDecisions : [],
+    verification: verificationArtifacts,
+    promotion: promotionRecord || null,
+    consistency,
+  };
+  if (options.writeReport && runId) {
+    const reportPath = path.join(projectRoot, '.oxe', 'runs', runId, 'replay-report.json');
+    ensureDirForFile(reportPath);
+    fs.writeFileSync(reportPath, JSON.stringify(summary, null, 2), 'utf8');
+    summary.report_path = reportPath;
+  }
+  return summary;
+}
+
 module.exports = {
   VALID_RUN_STATUSES,
   VALID_APPROVAL_POLICIES,
@@ -1333,8 +2126,19 @@ module.exports = {
   reduceCanonicalRunState,
   compileExecutionGraphFromArtifacts,
   compileVerificationSuiteFromArtifacts,
+  buildRuntimePluginRegistry,
+  buildRuntimeModeStatus,
+  buildRuntimeProviderCatalog,
+  buildRecoveryConsistency,
+  readRuntimeGates,
+  resolveRuntimeGate,
+  runRuntimeVerify,
   projectRuntimeArtifacts,
   runRuntimeCiChecks,
+  runRuntimePromotion,
+  recoverRuntimeState,
   applyRuntimeAction,
   replayEvents,
+  replayRuntimeState,
+  readRuntimeMultiAgentStatus,
 };

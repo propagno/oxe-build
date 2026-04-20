@@ -114,6 +114,20 @@ function makeCheck(overrides) {
         // deterministic should appear (fallback for generic failures)
         strict_1.default.equal(ledger.risks.length, 1);
     });
+    (0, node_test_1.test)('summarizeEvidenceCoverage computes percentage from manifest refs', () => {
+        const manifest = (0, verification_manifest_1.buildManifest)('run-coverage', [
+            makeCheck({ check_id: 'c1', status: 'pass', evidence_refs: ['ev-1'] }),
+            makeCheck({ check_id: 'c2', status: 'fail' }),
+        ], {
+            evidenceRefs: new Map([
+                ['c1', ['ev-1']],
+            ]),
+        });
+        const coverage = (0, verification_manifest_1.summarizeEvidenceCoverage)(manifest);
+        strict_1.default.equal(coverage.total_checks, 2);
+        strict_1.default.equal(coverage.checks_with_evidence, 1);
+        strict_1.default.equal(coverage.coverage_percent, 50);
+    });
     (0, node_test_1.test)('saveManifest and loadManifest round-trip', () => {
         const results = [makeCheck({ check_id: 'c1', status: 'pass' })];
         const manifest = (0, verification_manifest_1.buildManifest)('run-persist', results);

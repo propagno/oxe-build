@@ -30,6 +30,9 @@ class EphemeralContainerManager {
             }
         }
     }
+    get isolation_level() {
+        return this.useFallback ? this.fallbackManager.isolation_level : 'isolated';
+    }
     get usingFallback() { return this.useFallback; }
     async allocate(req) {
         if (this.useFallback)
@@ -56,6 +59,7 @@ class EphemeralContainerManager {
         return {
             workspace_id: wsId,
             strategy: 'ephemeral_container',
+            isolation_level: this.isolation_level,
             branch: null,
             base_commit: null,
             root_path: `docker:${containerId}:${this.opts.mountPath}`,

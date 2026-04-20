@@ -65,7 +65,8 @@ function makePlugin(overrides = {}) {
         const result = (0, plugin_manifest_1.validatePlugin)(plugin);
         strict_1.default.ok(result.errors.some((e) => e.includes('supports()')));
     });
-    (0, node_test_1.test)('isAbiCompatible returns true for same major version', () => {
+    (0, node_test_1.test)('isAbiCompatible returns true for ABI version 1 variants', () => {
+        strict_1.default.equal((0, plugin_manifest_1.isAbiCompatible)('1'), true);
         strict_1.default.equal((0, plugin_manifest_1.isAbiCompatible)('1.0.0'), true);
         strict_1.default.equal((0, plugin_manifest_1.isAbiCompatible)('1.5.3'), true);
         strict_1.default.equal((0, plugin_manifest_1.isAbiCompatible)('1.99.0'), true);
@@ -73,6 +74,11 @@ function makePlugin(overrides = {}) {
     (0, node_test_1.test)('isAbiCompatible returns false for different major version', () => {
         strict_1.default.equal((0, plugin_manifest_1.isAbiCompatible)('2.0.0'), false);
         strict_1.default.equal((0, plugin_manifest_1.isAbiCompatible)('0.9.0'), false);
+    });
+    (0, node_test_1.test)('validatePlugin errors on incompatible ABI version', () => {
+        const result = (0, plugin_manifest_1.validatePlugin)(makePlugin({ abi_version: '2' }));
+        strict_1.default.equal(result.valid, false);
+        strict_1.default.ok(result.errors.some((error) => error.includes('incompatible')));
     });
     (0, node_test_1.test)('sandboxInvoke resolves successfully', async () => {
         const result = await (0, plugin_manifest_1.sandboxInvoke)(() => Promise.resolve(42));

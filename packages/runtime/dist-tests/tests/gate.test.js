@@ -21,6 +21,9 @@ function tmpDir() {
     (0, node_test_1.test)('request creates a pending gate', async () => {
         const mgr = new gate_manager_1.GateManager(dir, null, 'r001');
         const token = await mgr.request('plan_approval', {
+            run_id: 'r001',
+            work_item_id: 'T1',
+            action: 'run_tests',
             description: 'Approve plan before execution',
             evidence_refs: [],
             risks: ['high complexity'],
@@ -28,6 +31,9 @@ function tmpDir() {
         strict_1.default.ok(token.gate_id.startsWith('gate-'));
         strict_1.default.equal(token.scope, 'plan_approval');
         strict_1.default.equal(token.status, 'pending');
+        strict_1.default.equal(token.run_id, 'r001');
+        strict_1.default.equal(token.work_item_id, 'T1');
+        strict_1.default.equal(token.action, 'run_tests');
     });
     (0, node_test_1.test)('isPending returns true for pending gate of same scope', async () => {
         const mgr = new gate_manager_1.GateManager(dir, null, 'r002');
@@ -62,6 +68,8 @@ function tmpDir() {
         strict_1.default.equal(resolved.actor, 'lead-eng');
         strict_1.default.equal(resolved.reason, 'LGTM');
         strict_1.default.ok(resolved.resolved_at);
+        strict_1.default.equal(Array.isArray(resolved.resolution_history), true);
+        strict_1.default.equal(resolved.resolution_history?.length, 1);
         fs_1.default.rmSync(dir3, { recursive: true, force: true });
     });
     (0, node_test_1.test)('get retrieves gate by ID', async () => {
@@ -89,4 +97,64 @@ function tmpDir() {
         fs_1.default.rmSync(dir4, { recursive: true, force: true });
     });
     (0, node_test_1.test)('cleanup', () => { fs_1.default.rmSync(dir, { recursive: true, force: true }); });
+    (0, node_test_1.test)('listPendingByRun and stalePending expose operational queue state', async () => {
+        const dir5 = tmpDir();
+        fs_1.default.mkdirSync(path_1.default.join(dir5, '.oxe'), { recursive: true });
+        const mgr = new gate_manager_1.GateManager(dir5, null, 'r008');
+        const token = await mgr.request('plan_approval', {
+            run_id: 'r008',
+            work_item_id: 'T4',
+            description: 'Queue test',
+            evidence_refs: [],
+            risks: [],
+        });
+        const gatesPath = path_1.default.join(dir5, '.oxe', 'execution', 'GATES.json');
+        const gates = JSON.parse(fs_1.default.readFileSync(gatesPath, 'utf8'));
+        gates[0].requested_at = '2025-01-01T00:00:00.000Z';
+        fs_1.default.writeFileSync(gatesPath, JSON.stringify(gates, null, 2));
+        strict_1.default.equal(mgr.listPendingByRun('r008').length, 1);
+        strict_1.default.equal(mgr.listPendingForWorkItem('T4')[0].gate_id, token.gate_id);
+        strict_1.default.equal(mgr.stalePending(1).length, 1);
+        fs_1.default.rmSync(dir5, { recursive: true, force: true });
+    });
+    (0, node_test_1.test)('snapshot summarizes total, pending and stale gates', async () => {
+        const dir6 = tmpDir();
+        fs_1.default.mkdirSync(path_1.default.join(dir6, '.oxe'), { recursive: true });
+        const mgr = new gate_manager_1.GateManager(dir6, null, 'r009');
+        await mgr.request('plan_approval', { run_id: 'r009', description: 'Snapshot gate', evidence_refs: [], risks: [] });
+        const snapshot = mgr.snapshot(999);
+        strict_1.default.equal(snapshot.total, 1);
+        strict_1.default.equal(snapshot.gate_sla_hours, 999);
+        strict_1.default.equal(snapshot.pending.length, 1);
+        strict_1.default.equal(snapshot.stale_pending.length, 0);
+        strict_1.default.equal(snapshot.staleCount, 0);
+        strict_1.default.equal(snapshot.byRun.r009, 1);
+        strict_1.default.equal(snapshot.byScope.plan_approval, 1);
+        fs_1.default.rmSync(dir6, { recursive: true, force: true });
+    });
+    (0, node_test_1.test)('listPendingGates helper filters by run', async () => {
+        const dir7 = tmpDir();
+        fs_1.default.mkdirSync(path_1.default.join(dir7, '.oxe'), { recursive: true });
+        const mgr = new gate_manager_1.GateManager(dir7, null, 'r010');
+        await mgr.request('plan_approval', { run_id: 'r010', description: 'Gate A', evidence_refs: [], risks: [] });
+        await mgr.request('security', { run_id: 'r011', description: 'Gate B', evidence_refs: [], risks: [] });
+        const snapshot = (0, gate_manager_1.listPendingGates)(mgr, 'r010');
+        strict_1.default.equal(snapshot.pending.length, 1);
+        strict_1.default.equal(snapshot.pending[0].run_id, 'r010');
+        fs_1.default.rmSync(dir7, { recursive: true, force: true });
+    });
+    (0, node_test_1.test)('resolveGate helper resolves a gate by id', async () => {
+        const dir8 = tmpDir();
+        fs_1.default.mkdirSync(path_1.default.join(dir8, '.oxe'), { recursive: true });
+        const mgr = new gate_manager_1.GateManager(dir8, null, 'r012');
+        const token = await mgr.request('merge', { run_id: 'r012', description: 'Resolve helper', evidence_refs: [], risks: [] });
+        const resolved = await (0, gate_manager_1.resolveGate)(mgr, token.gate_id, {
+            decision: 'approved',
+            actor: 'qa',
+            reason: 'validated',
+        });
+        strict_1.default.equal(resolved.status, 'resolved');
+        strict_1.default.equal(resolved.actor, 'qa');
+        fs_1.default.rmSync(dir8, { recursive: true, force: true });
+    });
 });

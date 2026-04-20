@@ -4,6 +4,41 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.3.0] — 2026-04-20
+
+### Reasoning Contracts & Semântica Multi-Runtime
+
+- Contratos de raciocínio v2.0.0 (`oxe_contract_version: 2.0.0`) em todos os workflows e wrappers de runtime
+- Novos campos de metadata: `oxe_reasoning_mode`, `oxe_question_policy`, `oxe_output_contract`, `oxe_tool_profile`, `oxe_confidence_policy`, `oxe_context_tier`
+- `oxe_semantics_hash` (SHA-256 16 chars) para detecção de drift semântico entre IDEs
+- Módulo `bin/lib/oxe-runtime-semantics.cjs` gerencia o contrato canônico: `buildReasoningContractBlock()`, `buildContextTiers()`, `auditRuntimeTargets()`, `computeSemanticsHash()`
+- `auditRuntimeTargets()` varre Copilot prompts, commands e Cursor commands e reporta divergências entre wrappers e o contrato canônico
+- Prompts e commands sincronizados para todos os runtimes: Cursor, GitHub Copilot, Claude Code, OpenCode, Codex, Gemini CLI, Windsurf, Antigravity
+
+### Novos Módulos bin/lib
+
+- **`oxe-dashboard.cjs`** — servidor HTTP local (porta 9000), `loadDashboardContext()`, API REST com `/api/health/status`, `/api/plan/info`, `/api/runtime/gates/{id}/status`, `/api/runtime/gates/resolve`; suporte a PLAN-REVIEW.md com comentários e status de aprovação
+- **`oxe-runtime-semantics.cjs`** — gestão de metadados de workflow e contratos de raciocínio: `getWorkflowContract()`, `getAllWorkflowContracts()`, `validateWorkflowContractsRegistry()`, `buildContextPackPaths()`, `buildReasoningContractBlock()`, `splitFrontmatter()`, `parseFrontmatterMap()`
+- **`oxe-operational.cjs`** expandido — monitoramento de agents, gates, evidências e estado de run com maior granularidade
+- **`oxe-project-health.cjs`** expandido — métricas de saúde: test scores, coverage, violations, integração Copilot
+
+### Comandos e Superfície
+
+- **`oxe-ship`** — cria commit local guiado por `SPEC.md`, `PLAN.md` e `VERIFY.md`; disponível em todos os runtimes suportados
+- **`oxe-skill`** — gestão e composição de skills com roles `@executor` e `@researcher`
+- Contrato de raciocínio declarado em todos os workflows: `discovery`, `planning`, `execution`, `review`, `status`
+- Regra pack-first em todos os wrappers: lê `.oxe/context/packs/<slug>.md` antes de cair para leitura direta
+
+### Testes e Cobertura
+
+- Novos testes unitários para `oxe-runtime-semantics.cjs`: 31 testes cobrindo todas as 19 funções exportadas
+- Novos testes para `oxe-plugins.cjs`: 28 testes para `loadPlugins`, `runHook`, `validatePlugins`, `initPluginsDir`, `resolvePluginSources`
+- Novos testes para `oxe-security.cjs`: `checkPathSafety`, `scanFileForSecrets`, `scanDirForSecretFiles`, `validatePlanPaths`
+- Cobertura de linhas: **80.28% → 82.28%** (superando threshold de 82%)
+- Total: **383 testes** passando (root + runtime)
+
+---
+
 ## [1.2.1] — 2026-04-18
 
 ### Branding, Semântica e Empacotamento

@@ -7,6 +7,7 @@ import {
   buildManifest,
   buildRiskLedger,
   classifyFailure,
+  summarizeEvidenceCoverage,
   saveManifest,
   loadManifest,
   saveRiskLedger,
@@ -132,6 +133,21 @@ describe('VerificationManifest', () => {
     const ledger = buildRiskLedger('run-6', manifest);
     // deterministic should appear (fallback for generic failures)
     assert.equal(ledger.risks.length, 1);
+  });
+
+  test('summarizeEvidenceCoverage computes percentage from manifest refs', () => {
+    const manifest = buildManifest('run-coverage', [
+      makeCheck({ check_id: 'c1', status: 'pass', evidence_refs: ['ev-1'] }),
+      makeCheck({ check_id: 'c2', status: 'fail' }),
+    ], {
+      evidenceRefs: new Map([
+        ['c1', ['ev-1']],
+      ]),
+    });
+    const coverage = summarizeEvidenceCoverage(manifest);
+    assert.equal(coverage.total_checks, 2);
+    assert.equal(coverage.checks_with_evidence, 1);
+    assert.equal(coverage.coverage_percent, 50);
   });
 
   test('saveManifest and loadManifest round-trip', () => {

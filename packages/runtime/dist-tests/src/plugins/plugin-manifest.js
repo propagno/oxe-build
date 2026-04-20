@@ -5,7 +5,7 @@ exports.extractManifest = extractManifest;
 exports.validatePlugin = validatePlugin;
 exports.isAbiCompatible = isAbiCompatible;
 exports.sandboxInvoke = sandboxInvoke;
-exports.CURRENT_ABI_VERSION = '1.0.0';
+exports.CURRENT_ABI_VERSION = '1';
 function extractManifest(plugin) {
     const capabilities = [];
     if (plugin.toolProviders?.length)
@@ -21,7 +21,7 @@ function extractManifest(plugin) {
     return {
         name: plugin.name,
         version: plugin.version ?? '0.0.0',
-        abi_version: exports.CURRENT_ABI_VERSION,
+        abi_version: plugin.abi_version ?? exports.CURRENT_ABI_VERSION,
         capabilities,
         tool_action_types: plugin.toolProviders?.flatMap((p) => ['read_code', 'generate_patch', 'run_tests', 'collect_evidence', 'custom'].filter((t) => p.supports(t))) ?? [],
         workspace_strategies: plugin.workspaceProviders?.map((p) => p.name) ?? [],
@@ -38,6 +38,10 @@ function validatePlugin(plugin) {
     }
     if (plugin.version && !/^\d+\.\d+\.\d+/.test(plugin.version)) {
         warnings.push(`Plugin version "${plugin.version}" does not follow semver`);
+    }
+    const abiVersion = plugin.abi_version ?? exports.CURRENT_ABI_VERSION;
+    if (!isAbiCompatible(abiVersion)) {
+        errors.push(`Plugin ABI "${abiVersion}" is incompatible with runtime ABI "${exports.CURRENT_ABI_VERSION}"`);
     }
     if (!plugin.toolProviders?.length &&
         !plugin.workspaceProviders?.length &&

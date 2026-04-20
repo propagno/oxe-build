@@ -31,6 +31,7 @@ const ALLOWED_CONFIG_KEYS = [
   'scale_adaptive',
   'permissions',
   'azure',
+  'runtime',
 ];
 
 /**
@@ -158,6 +159,13 @@ function loadOxeConfigMerged(targetProject) {
       inventory_max_age_hours: 24,
       resource_graph_auto_install: true,
       vpn_required: false,
+    },
+    runtime: {
+      quotas: {
+        max_work_items_per_run: null,
+        max_mutations_per_run: null,
+        max_retries_per_run: null,
+      },
     },
   };
 
@@ -379,6 +387,25 @@ function validateConfigShape(cfg) {
           typeErrors.push(`plugins[${i}] deve ser string ou objeto { source: string }`);
         } else if (typeof p.source !== 'string' || p.source.length === 0) {
           typeErrors.push(`plugins[${i}].source deve ser string não-vazia`);
+        }
+      }
+    }
+  }
+  if (cfg.runtime != null) {
+    if (typeof cfg.runtime !== 'object' || Array.isArray(cfg.runtime)) {
+      typeErrors.push('runtime deve ser um objeto');
+    } else {
+      const runtimeCfg = /** @type {Record<string, unknown>} */ (cfg.runtime);
+      if (runtimeCfg.quotas != null) {
+        if (typeof runtimeCfg.quotas !== 'object' || Array.isArray(runtimeCfg.quotas)) {
+          typeErrors.push('runtime.quotas deve ser um objeto');
+        } else {
+          for (const key of ['max_work_items_per_run', 'max_mutations_per_run', 'max_retries_per_run']) {
+            const value = runtimeCfg.quotas[key];
+            if (value != null && (typeof value !== 'number' || Number.isNaN(value))) {
+              typeErrors.push(`runtime.quotas.${key} deve ser número ou null`);
+            }
+          }
         }
       }
     }
@@ -613,6 +640,442 @@ function readJsonFileSafe(filePath) {
   } catch (error) {
     return { ok: false, data: null, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+function readExecutionGates(target, activeSession) {
+  const gatesPath = activeSession
+    ? path.join(target, '.oxe', ...String(activeSession).split('/'), 'execution', 'GATES.json')
+    : path.join(target, '.oxe', 'execution', 'GATES.json');
+  const raw = readJsonFileSafe(gatesPath);
+  const gates = raw.ok && Array.isArray(raw.data) ? raw.data : [];
+  const pending = gates.filter((gate) => gate && gate.status === 'pending');
+  const stalePending = pending.filter((gate) => {
+    const requestedAt = Date.parse(String(gate.requested_at || ''));
+    return Number.isFinite(requestedAt) && Date.now() - requestedAt > 24 * 60 * 60 * 1000;
+  });
+  return {
+    path: gatesPath,
+    gateSlaHours: 24,
+    total: gates.length,
+    pending,
+    stalePending,
+    staleGateCount: stalePending.length,
+  };
+}
+
+function parseAuditTrailFile(filePath) {
+  if (!fs.existsSync(filePath)) return [];
+  try {
+    return fs.readFileSync(filePath, 'utf8')
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((entry) => entry && typeof entry === 'object');
+  } catch {
+    return [];
+  }
+}
+
+function toNullableNumber(value) {
+  if (value == null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function summarizeAuditTrail(target, runId) {
+  const auditPath = path.join(target, '.oxe', 'AUDIT-TRAIL.ndjson');
+  const entries = parseAuditTrailFile(auditPath);
+  const scoped = runId ? entries.filter((entry) => entry.run_id === runId) : entries;
+  const actions = {};
+  const actors = new Set();
+  let oldest = null;
+  let newest = null;
+  let warn = 0;
+  let critical = 0;
+  for (const entry of scoped) {
+    const action = String(entry.action || 'unknown');
+    actions[action] = (actions[action] || 0) + 1;
+    if (entry.actor) actors.add(String(entry.actor));
+    if (entry.severity === 'warn') warn += 1;
+    if (entry.severity === 'critical') critical += 1;
+    if (!oldest || String(entry.timestamp || '') < oldest) oldest = String(entry.timestamp || '');
+    if (!newest || String(entry.timestamp || '') > newest) newest = String(entry.timestamp || '');
+  }
+  return {
+    path: auditPath,
+    totalEntries: entries.length,
+    runEntries: scoped.length,
+    warn,
+    critical,
+    oldest,
+    newest,
+    actors: Array.from(actors),
+    actions,
+  };
+}
+
+function countRetryConsumption(attemptEntries) {
+  if (!attemptEntries || typeof attemptEntries !== 'object') return 0;
+  if (Array.isArray(attemptEntries)) {
+    const grouped = new Map();
+    for (const attempt of attemptEntries) {
+      const key = attempt && typeof attempt === 'object'
+        ? String(attempt.work_item_id || attempt.workItemId || attempt.node_id || attempt.nodeId || 'unknown')
+        : 'unknown';
+      grouped.set(key, (grouped.get(key) || 0) + 1);
+    }
+    return Array.from(grouped.values()).reduce((sum, count) => sum + Math.max(0, count - 1), 0);
+  }
+  return Object.values(attemptEntries).reduce((sum, attempts) => {
+    if (Array.isArray(attempts)) return sum + Math.max(0, attempts.length - 1);
+    return sum;
+  }, 0);
+}
+
+function summarizeQuota(config, activeRun, graphNodes, attemptEntries) {
+  const runtimeConfig = config && config.runtime && typeof config.runtime === 'object' ? config.runtime : {};
+  const quotaConfig = runtimeConfig.quotas && typeof runtimeConfig.quotas === 'object' ? runtimeConfig.quotas : {};
+  const workItems = Array.isArray(activeRun && activeRun.canonical_state && activeRun.canonical_state.workItems)
+    ? activeRun.canonical_state.workItems
+    : [];
+  const workItemsConsumed = graphNodes.length > 0 ? graphNodes.length : workItems.length;
+  const mutationsConsumed = graphNodes.length > 0
+    ? graphNodes.filter((node) => Array.isArray(node.mutation_scope) && node.mutation_scope.length > 0).length
+    : workItems.filter((item) => Array.isArray(item.mutation_scope) && item.mutation_scope.length > 0).length;
+  const retriesConsumed = countRetryConsumption(attemptEntries);
+  const limits = {
+    maxWorkItemsPerRun: toNullableNumber(quotaConfig.max_work_items_per_run),
+    maxMutationsPerRun: toNullableNumber(quotaConfig.max_mutations_per_run),
+    maxRetriesPerRun: toNullableNumber(quotaConfig.max_retries_per_run),
+  };
+  const violations = [];
+  if (limits.maxWorkItemsPerRun != null && workItemsConsumed > limits.maxWorkItemsPerRun) {
+    violations.push(`work_items ${workItemsConsumed}/${limits.maxWorkItemsPerRun}`);
+  }
+  if (limits.maxMutationsPerRun != null && mutationsConsumed > limits.maxMutationsPerRun) {
+    violations.push(`mutations ${mutationsConsumed}/${limits.maxMutationsPerRun}`);
+  }
+  if (limits.maxRetriesPerRun != null && retriesConsumed > limits.maxRetriesPerRun) {
+    violations.push(`retries ${retriesConsumed}/${limits.maxRetriesPerRun}`);
+  }
+  return {
+    limits,
+    consumed: {
+      workItems: workItemsConsumed,
+      mutations: mutationsConsumed,
+      retries: retriesConsumed,
+    },
+    violations,
+    exceeded: violations.length > 0,
+  };
+}
+
+function summarizePromotion(runDir, activeRun) {
+  const record = activeRun && activeRun.delivery && activeRun.delivery.promotion_record
+    ? activeRun.delivery.promotion_record
+    : readJsonFileSafe(path.join(runDir, 'promotion-record.json')).data;
+  if (!record) return null;
+  return {
+    status: record.status || null,
+    targetKind: record.target_kind || null,
+    remote: record.remote || null,
+    targetRef: record.target_ref || null,
+    prUrl: record.pr_url || null,
+    prNumber: record.pr_number != null ? Number(record.pr_number) : null,
+    coveragePercent: record.coverage_percent != null ? Number(record.coverage_percent) : null,
+    reasons: Array.isArray(record.reasons) ? record.reasons : [],
+    path: path.join(runDir, 'promotion-record.json'),
+  };
+}
+
+function summarizePolicyCoverage(runDir, mutationNodes, policyDecisions) {
+  const coveredMutationIds = new Set(
+    policyDecisions
+      .map((decision) => decision && decision.work_item_id ? String(decision.work_item_id) : null)
+      .filter(Boolean)
+  );
+  const mutationIds = mutationNodes
+    .map((node) => node && node.id ? String(node.id) : null)
+    .filter(Boolean);
+  const uncoveredMutationIds = mutationIds.filter((id) => !coveredMutationIds.has(id));
+  const coveragePercent = mutationIds.length > 0
+    ? Math.round(((mutationIds.length - uncoveredMutationIds.length) / mutationIds.length) * 100)
+    : 100;
+  return {
+    path: path.join(runDir, 'policy-decisions.json'),
+    totalDecisions: policyDecisions.length,
+    mutationNodes: mutationIds.length,
+    coveredMutations: mutationIds.length - uncoveredMutationIds.length,
+    uncoveredMutations: uncoveredMutationIds.length,
+    uncoveredMutationIds,
+    coveragePercent,
+  };
+}
+
+function summarizePromotionReadiness(verificationSummary, residualRiskSummary, evidenceCoverage, pendingGates, policyCoverage, promotionSummary, quotaSummary) {
+  const blockers = [];
+  const minimumCoverage = 100;
+  if (!verificationSummary) {
+    blockers.push('verification_manifest ausente');
+  } else if (!verificationSummary.allPassed || verificationSummary.fail > 0 || verificationSummary.error > 0) {
+    blockers.push('verify_failed');
+  }
+  if (pendingGates && Array.isArray(pendingGates.pending) && pendingGates.pending.length > 0) {
+    blockers.push('pending_gates');
+  }
+  if (residualRiskSummary && residualRiskSummary.highOrCritical > 0) {
+    blockers.push('high_or_critical_risks');
+  }
+  if (evidenceCoverage && Number(evidenceCoverage.coverage_percent || 0) < minimumCoverage) {
+    blockers.push('coverage_below_threshold');
+  }
+  if (policyCoverage && policyCoverage.uncoveredMutations > 0) {
+    blockers.push('policy_uncovered_mutations');
+  }
+  if (quotaSummary && quotaSummary.exceeded) {
+    blockers.push('quota_exceeded');
+  }
+  return {
+    status: blockers.length > 0 ? 'blocked' : 'ready',
+    blockers,
+    targetKind: promotionSummary && promotionSummary.targetKind ? promotionSummary.targetKind : 'pr_draft',
+    minimumCoverage,
+    coveragePercent: evidenceCoverage && evidenceCoverage.coverage_percent != null ? Number(evidenceCoverage.coverage_percent) : null,
+    pendingGateCount: pendingGates && Array.isArray(pendingGates.pending) ? pendingGates.pending.length : 0,
+    highOrCriticalRisks: residualRiskSummary ? residualRiskSummary.highOrCritical : 0,
+    uncoveredMutationCount: policyCoverage ? policyCoverage.uncoveredMutations : 0,
+    quotaExceeded: Boolean(quotaSummary && quotaSummary.exceeded),
+  };
+}
+
+function summarizeRecoveryState(target, activeSession, activeRun, verificationArtifacts) {
+  if (!activeRun || !activeRun.run_id) {
+    return {
+      status: 'not_started',
+      recoverCount: 0,
+      journalState: null,
+      markdownPath: null,
+      issues: [],
+    };
+  }
+  const journalPath = path.join(target, '.oxe', 'runs', activeRun.run_id, 'journal.json');
+  const journal = readJsonFileSafe(journalPath).data;
+  const consistency = operational.buildRecoveryConsistency(
+    target,
+    activeSession,
+    activeRun,
+    journal,
+    verificationArtifacts
+  );
+  const recoverySummary = activeRun.recovery_summary && typeof activeRun.recovery_summary === 'object'
+    ? activeRun.recovery_summary
+    : null;
+  const issues = Array.isArray(consistency.issues) ? consistency.issues : [];
+  const recoverCount = Number(activeRun.metrics && activeRun.metrics.recover_count || 0);
+  const summaryPath = recoverySummary && recoverySummary.markdown_ref
+    ? path.join(target, recoverySummary.markdown_ref)
+    : (activeSession
+      ? path.join(target, '.oxe', ...String(activeSession).split('/'), 'execution', 'RECOVERY-SUMMARY.md')
+      : path.join(target, '.oxe', 'RECOVERY-SUMMARY.md'));
+  const status = issues.length > 0
+    ? 'warning'
+    : activeRun.status === 'paused'
+      ? 'recoverable'
+      : recoverySummary
+        ? 'recovered'
+        : 'clean';
+  return {
+    status,
+    recoverCount,
+    recoveredAt: recoverySummary ? recoverySummary.recovered_at || null : null,
+    journalState: recoverySummary ? recoverySummary.journal_state || null : (journal && journal.scheduler_state ? journal.scheduler_state : null),
+    markdownPath: summaryPath,
+    orphanWorkItems: recoverySummary && Array.isArray(recoverySummary.orphan_work_items) ? recoverySummary.orphan_work_items : [],
+    pendingGatesRehydrated: consistency.pending_gates_rehydrated,
+    policyDecisionsRehydrated: consistency.policy_decisions_rehydrated,
+    evidenceRefsTracked: consistency.evidence_refs_tracked,
+    consistency,
+    issues,
+  };
+}
+
+function summarizeEnterpriseRuntime(target, activeRun, activeSession, config) {
+  const pendingGates = readExecutionGates(target, activeSession);
+  const auditSummary = summarizeAuditTrail(target, activeRun && activeRun.run_id ? activeRun.run_id : null);
+  const runtimeMode = operational.buildRuntimeModeStatus(activeRun);
+  const providerCatalog = operational.buildRuntimeProviderCatalog(target);
+  if (!activeRun || !activeRun.run_id) {
+    return {
+      runtimeMode,
+      fallbackMode: runtimeMode.fallback_mode,
+      verificationSummary: null,
+      residualRiskSummary: null,
+      evidenceCoverage: null,
+      pendingGates,
+      gateQueue: pendingGates,
+      policyDecisionSummary: { total: 0, denied: 0, gated: 0, overridesWithoutRationale: 0 },
+      policyCoverage: {
+        path: null,
+        totalDecisions: 0,
+        mutationNodes: 0,
+        coveredMutations: 0,
+        uncoveredMutations: 0,
+        uncoveredMutationIds: [],
+        coveragePercent: 100,
+      },
+      quotaSummary: summarizeQuota(config, null, [], {}),
+      auditSummary,
+      promotionSummary: null,
+      promotionReadiness: {
+        status: 'blocked',
+        blockers: ['verification_manifest ausente'],
+        targetKind: 'pr_draft',
+        minimumCoverage: 100,
+        coveragePercent: null,
+        pendingGateCount: pendingGates.pending.length,
+        highOrCriticalRisks: 0,
+        uncoveredMutationCount: 0,
+      },
+      recoveryState: {
+        status: 'not_started',
+        recoverCount: 0,
+        journalState: null,
+        markdownPath: null,
+        issues: [],
+      },
+      multiAgent: null,
+      providerCatalog,
+      enterpriseWarnings: providerCatalog.load_errors ? [...providerCatalog.load_errors] : [],
+    };
+  }
+
+  const runDir = path.join(target, '.oxe', 'runs', activeRun.run_id);
+  const manifest = activeRun.verification_manifest || readJsonFileSafe(path.join(runDir, 'verification-manifest.json')).data;
+  const risks = activeRun.residual_risks || readJsonFileSafe(path.join(runDir, 'residual-risk-ledger.json')).data || readJsonFileSafe(path.join(runDir, 'residual-risks.json')).data;
+  const evidenceCoverage = activeRun.verification_evidence_coverage || readJsonFileSafe(path.join(runDir, 'evidence-coverage.json')).data || (
+    manifest && manifest.summary
+      ? {
+          total_checks: Array.isArray(manifest.checks) ? manifest.checks.length : Number(manifest.summary.total || 0),
+          checks_with_evidence: Array.isArray(manifest.checks) ? manifest.checks.filter((check) => Array.isArray(check.evidence_refs) && check.evidence_refs.length > 0).length : 0,
+          total_evidence_refs: Array.isArray(manifest.checks) ? manifest.checks.reduce((sum, check) => sum + (Array.isArray(check.evidence_refs) ? check.evidence_refs.length : 0), 0) : 0,
+          coverage_percent: Array.isArray(manifest.checks) && manifest.checks.length > 0
+            ? Math.round((manifest.checks.filter((check) => Array.isArray(check.evidence_refs) && check.evidence_refs.length > 0).length / manifest.checks.length) * 100)
+            : 100,
+        }
+      : null
+  );
+  const policyDecisionsRaw = readJsonFileSafe(path.join(runDir, 'policy-decisions.json'));
+  const policyDecisions = Array.isArray(policyDecisionsRaw.data) ? policyDecisionsRaw.data : [];
+  const allGraphNodes = activeRun.compiled_graph && activeRun.compiled_graph.nodes && typeof activeRun.compiled_graph.nodes === 'object'
+    ? Object.values(activeRun.compiled_graph.nodes)
+    : [];
+  const mutationNodes = allGraphNodes.filter((node) => Array.isArray(node.mutation_scope) && node.mutation_scope.length > 0);
+  const attemptEntries = activeRun.canonical_state && activeRun.canonical_state.attempts && typeof activeRun.canonical_state.attempts === 'object'
+    ? activeRun.canonical_state.attempts
+    : {};
+  const retryExceeded = mutationNodes
+    .map((node) => {
+      const attempts = Array.isArray(attemptEntries[node.id]) ? attemptEntries[node.id].length : 0;
+      const maxRetries = node.policy && typeof node.policy.max_retries === 'number' ? node.policy.max_retries : null;
+      return maxRetries != null && attempts > maxRetries + 1 ? { nodeId: node.id, attempts, maxRetries } : null;
+    })
+    .filter(Boolean);
+  const quotaSummary = summarizeQuota(config, activeRun, allGraphNodes, attemptEntries);
+  const promotionSummary = summarizePromotion(runDir, activeRun);
+  const multiAgent = operational.readRuntimeMultiAgentStatus
+    ? operational.readRuntimeMultiAgentStatus(target, activeSession, { runId: activeRun.run_id })
+    : null;
+  const policyCoverage = summarizePolicyCoverage(runDir, mutationNodes, policyDecisions);
+  const residualRiskSummary = risks
+    ? {
+        total: Array.isArray(risks.risks) ? risks.risks.length : 0,
+        highOrCritical: Array.isArray(risks.risks)
+          ? risks.risks.filter((risk) => risk.severity === 'high' || risk.severity === 'critical').length
+          : 0,
+        ledgerPath: path.join(runDir, 'residual-risk-ledger.json'),
+      }
+    : null;
+  const verificationSummary = manifest
+    ? {
+        total: Number(manifest.summary && manifest.summary.total || 0),
+        pass: Number(manifest.summary && manifest.summary.pass || 0),
+        fail: Number(manifest.summary && manifest.summary.fail || 0),
+        skip: Number(manifest.summary && manifest.summary.skip || 0),
+        error: Number(manifest.summary && manifest.summary.error || 0),
+        allPassed: Boolean(manifest.summary && manifest.summary.all_passed),
+        profile: manifest.profile || null,
+        manifestPath: path.join(runDir, 'verification-manifest.json'),
+      }
+    : null;
+  const promotionReadiness = summarizePromotionReadiness(
+    verificationSummary,
+    residualRiskSummary,
+    evidenceCoverage,
+    pendingGates,
+    policyCoverage,
+    promotionSummary,
+    quotaSummary
+  );
+  const recoveryState = summarizeRecoveryState(
+    target,
+    activeSession,
+    activeRun,
+    { manifest, residualRisks: risks, evidenceCoverage }
+  );
+  const enterpriseWarnings = [];
+  if (pendingGates.stalePending.length > 0) {
+    enterpriseWarnings.push(`${pendingGates.stalePending.length} gate(s) pendente(s) há mais de 24h.`);
+  }
+  if (mutationNodes.length > 0 && policyDecisions.length === 0) {
+    enterpriseWarnings.push('Há mutações no grafo compilado sem decisões de policy persistidas para a run ativa.');
+  }
+  const overridesWithoutRationale = policyDecisions.filter((decision) => decision.override && !(decision.rationale || decision.reason));
+  if (overridesWithoutRationale.length > 0) {
+    enterpriseWarnings.push(`${overridesWithoutRationale.length} override(s) de policy sem justificativa persistida.`);
+  }
+  if (retryExceeded.length > 0) {
+    enterpriseWarnings.push(`${retryExceeded.length} work item(s) ultrapassaram o budget de retry configurado.`);
+  }
+  if (quotaSummary.exceeded) {
+    enterpriseWarnings.push(`Runtime enterprise excedeu quotas configuradas: ${quotaSummary.violations.join(', ')}.`);
+  }
+  if (auditSummary.critical > 0) {
+    enterpriseWarnings.push(`${auditSummary.critical} entrada(s) críticas no audit trail da run ativa.`);
+  }
+  if (policyCoverage.uncoveredMutations > 0) {
+    enterpriseWarnings.push(`${policyCoverage.uncoveredMutations} mutation scope(s) ainda sem coverage de policy persistida.`);
+  }
+  if (providerCatalog.load_errors && providerCatalog.load_errors.length > 0) {
+    enterpriseWarnings.push(...providerCatalog.load_errors);
+  }
+  if (recoveryState.issues.length > 0) {
+    enterpriseWarnings.push(...recoveryState.issues);
+  }
+
+  return {
+    runtimeMode,
+    fallbackMode: runtimeMode.fallback_mode,
+    verificationSummary,
+    residualRiskSummary,
+    evidenceCoverage,
+    pendingGates,
+    gateQueue: pendingGates,
+    policyDecisionSummary: {
+      total: policyDecisions.length,
+      denied: policyDecisions.filter((decision) => decision.allowed === false).length,
+      gated: policyDecisions.filter((decision) => decision.gate_required === true).length,
+      overridesWithoutRationale: overridesWithoutRationale.length,
+    },
+    policyCoverage,
+    quotaSummary,
+    auditSummary,
+    promotionSummary,
+    promotionReadiness,
+    recoveryState,
+    multiAgent,
+    providerCatalog,
+    enterpriseWarnings,
+  };
 }
 
 /**
@@ -1429,6 +1892,7 @@ function buildHealthReport(target) {
   const activeRun = operational.readRunState(target, activeSession);
   const eventsSummary = operational.summarizeEvents(operational.readEvents(target, activeSession));
   const memoryLayers = operational.buildMemoryLayers(target, activeSession);
+  const enterpriseRuntime = summarizeEnterpriseRuntime(target, activeRun, activeSession, config);
   const azureActive = azure.isAzureContextEnabled(target, config);
   const azureReport = azureActive
     ? azure.azureDoctor(target, config, {
@@ -1599,6 +2063,7 @@ function buildHealthReport(target) {
     phaseWarn.length +
     runtimeWarn.length +
     reviewWarn.length +
+    enterpriseRuntime.enterpriseWarnings.length +
     specWarn.length +
     planWarn.length +
     capabilityWarn.length +
@@ -1644,6 +2109,23 @@ function buildHealthReport(target) {
     activeRun,
     eventsSummary,
     memoryLayers,
+    runtimeMode: enterpriseRuntime.runtimeMode,
+    fallbackMode: enterpriseRuntime.fallbackMode,
+    verificationSummary: enterpriseRuntime.verificationSummary,
+    residualRiskSummary: enterpriseRuntime.residualRiskSummary,
+    evidenceCoverage: enterpriseRuntime.evidenceCoverage,
+    pendingGates: enterpriseRuntime.pendingGates,
+    gateQueue: enterpriseRuntime.gateQueue,
+    policyDecisionSummary: enterpriseRuntime.policyDecisionSummary,
+    policyCoverage: enterpriseRuntime.policyCoverage,
+    quotaSummary: enterpriseRuntime.quotaSummary,
+    auditSummary: enterpriseRuntime.auditSummary,
+    promotionSummary: enterpriseRuntime.promotionSummary,
+    promotionReadiness: enterpriseRuntime.promotionReadiness,
+    recoveryState: enterpriseRuntime.recoveryState,
+    multiAgent: enterpriseRuntime.multiAgent,
+    providerCatalog: enterpriseRuntime.providerCatalog,
+    enterpriseWarn: enterpriseRuntime.enterpriseWarnings,
     azureActive,
     azure: azureReport
       ? {

@@ -4,10 +4,15 @@ import { CURRENT_ABI_VERSION } from './plugin-manifest';
 export type ApiStability = 'stable' | 'experimental' | 'deprecated';
 
 export interface ProviderCapabilityEntry {
+  plugin: string;
   name: string;
+  capability: string;
   provider_type: 'tool' | 'workspace' | 'verifier' | 'context';
   stability: ApiStability;
+  abi_version: string;
   since_abi_version: string;
+  supported: string[];
+  fallback_available: boolean;
   deprecated_in?: string;
   replacement?: string;
 }
@@ -20,23 +25,61 @@ export interface CapabilityMatrix {
 export function buildMatrix(registry: PluginRegistry): CapabilityMatrix {
   const entries: ProviderCapabilityEntry[] = [];
 
-  for (const plugin of registry.list()) {
-    const providers = plugin.providers ?? [];
-
-    for (const prov of providers) {
-      let provider_type: ProviderCapabilityEntry['provider_type'];
-      if (prov.startsWith('tool:')) provider_type = 'tool';
-      else if (prov.startsWith('workspace:')) provider_type = 'workspace';
-      else if (prov.startsWith('verifier:')) provider_type = 'verifier';
-      else if (prov.startsWith('context:')) provider_type = 'context';
-      else continue;
-
-      const name = prov.slice(prov.indexOf(':') + 1);
+  for (const plugin of registry.snapshot()) {
+    for (const provider of plugin.toolProviders) {
       entries.push({
-        name,
-        provider_type,
+        plugin: plugin.name,
+        name: provider.name,
+        capability: provider.name,
+        provider_type: 'tool',
         stability: 'stable',
+        abi_version: plugin.abi_version ?? CURRENT_ABI_VERSION,
         since_abi_version: CURRENT_ABI_VERSION,
+        supported: ['read_code', 'generate_patch', 'run_tests', 'collect_evidence', 'custom'].filter((action) =>
+          registry.toolProviderFor(action)?.name === provider.name
+        ),
+        fallback_available: true,
+      });
+    }
+    for (const provider of plugin.workspaceProviders) {
+      entries.push({
+        plugin: plugin.name,
+        name: provider.name,
+        capability: provider.name,
+        provider_type: 'workspace',
+        stability: 'stable',
+        abi_version: plugin.abi_version ?? CURRENT_ABI_VERSION,
+        since_abi_version: CURRENT_ABI_VERSION,
+        supported: [provider.name],
+        fallback_available: true,
+      });
+    }
+    for (const provider of plugin.verifierProviders) {
+      entries.push({
+        plugin: plugin.name,
+        name: provider.name,
+        capability: provider.name,
+        provider_type: 'verifier',
+        stability: 'stable',
+        abi_version: plugin.abi_version ?? CURRENT_ABI_VERSION,
+        since_abi_version: CURRENT_ABI_VERSION,
+        supported: ['unit', 'integration', 'smoke', 'policy', 'security', 'custom'].filter((checkType) =>
+          registry.verifierProviderFor(checkType)?.name === provider.name
+        ),
+        fallback_available: true,
+      });
+    }
+    for (const provider of plugin.contextProviders) {
+      entries.push({
+        plugin: plugin.name,
+        name: provider.name,
+        capability: provider.name,
+        provider_type: 'context',
+        stability: 'stable',
+        abi_version: plugin.abi_version ?? CURRENT_ABI_VERSION,
+        since_abi_version: CURRENT_ABI_VERSION,
+        supported: [provider.name],
+        fallback_available: false,
       });
     }
   }

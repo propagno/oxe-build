@@ -85,6 +85,11 @@ function makePRManager(success, url = 'https://github.com/owner/repo/pull/42') {
         strict_1.default.ok(report.blocking_risks.length > 0);
         strict_1.default.ok(report.blocking_risks[0].includes('CRITICAL'));
     });
+    (0, node_test_1.test)('blocks when evidence coverage is below threshold', () => {
+        const report = evaluator.evaluate(okRun(), okManifest(), emptyLedger(), [], { total_checks: 2, checks_with_evidence: 1, total_evidence_refs: 1, coverage_percent: 50 }, 100);
+        strict_1.default.equal(report.verdict, 'blocked');
+        strict_1.default.ok(report.reasons.some((reason) => reason.includes('Evidence coverage below threshold')));
+    });
     (0, node_test_1.test)('approves with null manifest and empty ledger', () => {
         const report = evaluator.evaluate(okRun(), null, null);
         strict_1.default.equal(report.verdict, 'approved');
@@ -132,6 +137,21 @@ function makePRManager(success, url = 'https://github.com/owner/repo/pull/42') {
         const pipeline = new promotion_pipeline_1.PromotionPipeline(tmpDir, makeBranchManager(), makePRManager(false));
         const link = await pipeline.promote(okRun('run-gh-fail'), okManifest(), emptyLedger());
         strict_1.default.equal(link.status, 'blocked');
+    });
+    (0, node_test_1.test)('promote supports branch_push target', async () => {
+        const branchManager = {
+            currentBranch: () => 'oxe/test-branch',
+            push: () => undefined,
+        };
+        const pipeline = new promotion_pipeline_1.PromotionPipeline(tmpDir, branchManager, makePRManager(true));
+        const link = await pipeline.promote(okRun('run-branch-push'), okManifest(), emptyLedger(), {
+            targetKind: 'branch_push',
+            remote: 'origin',
+        });
+        strict_1.default.equal(link.status, 'promoted');
+        strict_1.default.equal(link.target_kind, 'branch_push');
+        strict_1.default.equal(link.remote, 'origin');
+        strict_1.default.equal(link.pr_url, null);
     });
     (0, node_test_1.test)('savePRLink and loadPRLink round-trip', () => {
         const pipeline = new promotion_pipeline_1.PromotionPipeline(tmpDir, makeBranchManager(), makePRManager(true));

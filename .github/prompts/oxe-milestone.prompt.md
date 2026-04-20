@@ -11,7 +11,7 @@ oxe_tool_profile: mixed
 oxe_confidence_policy: rubric
 oxe_context_tier: standard
 oxe_contract_version: 2.0.0
-oxe_semantics_hash: 1e1f50e7621c55dd
+oxe_semantics_hash: 8a7c3e675d6a4e36
 ---
 
 <!-- oxe-reasoning-contract:start -->
@@ -25,7 +25,7 @@ oxe_semantics_hash: 1e1f50e7621c55dd
 - **Política de confiança:** rubrica
 - **Tier de contexto padrão:** padrão
 - **Versão do contrato:** 2.0.0
-- **Checksum semântico:** `1e1f50e7621c55dd`
+- **Checksum semântico:** `8a7c3e675d6a4e36`
 - **Entrada de contexto prioritária:** `.oxe/context/packs/milestone.md` e `.oxe/context/packs/milestone.json`
 - **Regra pack-first:** ler o context pack primeiro; se estiver stale, incompleto ou ausente, cair para leitura direta com fallback explícito.
 - **Inspeção estruturada:** `oxe-cc context inspect --workflow milestone --json`

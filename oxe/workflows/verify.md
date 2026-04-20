@@ -51,6 +51,9 @@ Ao receber qualquer argumento, verificar flags antes de iniciar o fluxo principa
 - Seguir `oxe/workflows/references/flow-robustness-contract.md`. O verify não valida só se passou; valida também se o plano estava bem calibrado para começar.
 - Antes da leitura ampla, resolver `.oxe/context/packs/verify.md` e `.oxe/context/packs/verify.json` como entrada prioritária do passo.
 - Se o pack estiver fresco e coerente, usar `read_order`, `selected_artifacts`, `gaps` e `conflicts` como mapa primário da evidência. Se estiver stale, ausente ou com lacunas críticas, fazer fallback explícito para leitura direta e registar isso em `VERIFY.md`.
+- **Runtime enterprise como caminho padrão:** quando `oxe-cc runtime` estiver disponível, executar ou solicitar `oxe-cc runtime verify --dir <projeto>` como caminho primário deste passo. Tratar `verification-manifest.json`, `residual-risk-ledger.json` e `evidence-coverage.json` da run ativa como fonte primária de evidência técnica, e o `VERIFY.md` projetado pelo runtime como base do artefato final.
+- Se `runtime verify` retornar `partial`, continuar com as camadas manuais usando os gaps explícitos do runtime como backlog obrigatório da revisão; não cair silenciosamente para narrativa solta.
+- Se o runtime não estiver compilado, indisponível ou não puder ser executado no ambiente atual, declarar `fallback legado` explicitamente antes de seguir com a verificação manual baseada em markdown e comandos locais.
 - Ler `EXECUTION-RUNTIME.md` e `CHECKPOINTS.md` do escopo resolvido quando existirem. Eles são evidência tática para saber o que realmente foi executado, bloqueado, aprovado ou desviado.
 - Se a trilha tocar Azure, ler `.oxe/cloud/azure/INVENTORY.md`, `SERVICEBUS.md`, `EVENTGRID.md`, `SQL.md` e `operations/*.md|json` para confirmar recursos reais, checkpoints e mutações aplicadas.
 - **Observações CI como evidência:** se `OBSERVATIONS.md` do escopo resolvido tiver obs do tipo `ci_failure` com `CI-evidência` preenchida, usar como evidência adicional para critérios A* de qualidade (ex.: cobertura, build verde). Se obs tiver `ci_run_url`, referenciar na coluna **Evidência** da tabela de critérios. Se obs estiver `pendente` e critério A* de qualidade existir, marcar o critério como `evidence_pending_ci` — não como passou — até o CI ser resolvido.
@@ -176,6 +179,11 @@ Registrar em `VERIFY.md`: `Resultado de calibração | Confiança declarada | Re
    - se estiver fresco e coerente, usar o pack como mapa primário da verificação;
    - se estiver stale, incompleto ou ausente, registar `fallback para leitura direta` antes de ampliar a leitura.
 3. Ler `SPEC.md`, `PLAN.md` e `DISCUSS.md` do escopo resolvido, além de `.oxe/STATE.md` global. Com pack válido, começar pelos artefatos de `read_order`; só expandir a leitura quando faltar evidência para um critério, tarefa, decisão ou checkpoint.
+3a. **Caminho padrão do runtime enterprise:** se `oxe-cc runtime` estiver disponível:
+   - executar ou solicitar `oxe-cc runtime verify --dir <projeto>` antes das camadas manuais;
+   - usar `verification-manifest.json`, `residual-risk-ledger.json`, `evidence-coverage.json` e a projeção de `VERIFY.md` como base primária da verificação;
+   - se o resultado vier como `partial`, tratar os gaps explícitos como backlog obrigatório das camadas manuais;
+   - se o runtime não puder ser executado por indisponibilidade do pacote, registar `fallback legado`.
 4. **Camada 2:** Para cada tarefa relevante, executar **Verificar: Comando** do PLAN (ou subconjunto se foco Tn). Para **cada ID de critério** da SPEC (A1, A2, …), registrar se passou com evidência.
 5. **Camada 3:** Se existir `.oxe/DISCUSS.md` com IDs D-NN, executar **Fidelidade de decisões** conforme `<camada_3_fidelidade_decisoes>`.
 6. Executar a verificação de coerência do runtime e checkpoints conforme `<runtime_e_checkpoints>`.
@@ -191,6 +199,7 @@ Registrar em `VERIFY.md`: `Resultado de calibração | Confiança declarada | Re
    - **Seção — Calibração do plano:** resultado conforme `<calibracao_do_plano>`.
    - **Checklist UAT** (Camada 4).
    - **Gaps** — o que falhou e sugestão de correção; se não houver, escrever `Nenhum gap restante`.
+   Quando `runtime verify` já tiver projetado `VERIFY.md`, usar essa projeção como base e complementar manualmente apenas as seções ou evidências que o runtime ainda não cobrir.
 7. Atualizar **`.oxe/STATE.md`** global: `verify_complete` ou `verify_failed` + próximo passo (replan, corrigir ou publicar).
 7a. **Registro de calibração:** após escrever `STATE.md`, se `PLAN.md` contiver bloco `<confidence_vector>` — extrair o vetor e comparar com o resultado real. Criar ou atualizar `.oxe/calibration.json` com um novo record no formato:
 ```json
@@ -236,4 +245,5 @@ O `calibration_error` de cada dimensão = `|score declarado - resultado observad
 - [ ] Se `verification_depth: "thorough"` em config: `.oxe/VALIDATION-GAPS.md` produzido como parte deste verify.
 - [ ] Se `security_in_verify: true` em config: `.oxe/SECURITY.md` produzido; achados P0 resolvidos ou `verify_failed` registrado.
 - [ ] Se SPEC.md contiver R-RB v1: seção **Contrato de Qualidade** presente em VERIFY.md com Quality Score realizado; R-RB Piso não implementados tratados como gaps P0.
+- [ ] Quando `oxe-cc runtime` estiver disponível, `runtime verify` foi tentado como caminho primário; se o resultado foi `partial`, os gaps explícitos do runtime foram cobertos ou documentados.
 </success_criteria>

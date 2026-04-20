@@ -9,7 +9,7 @@ export interface RunJournal {
     blocked_work_items: string[];
     pending_gates: string[];
     replay_cursor: string | null;
-    scheduler_state: 'running' | 'paused' | 'cancelled' | 'completed';
+    scheduler_state: 'running' | 'paused' | 'cancelled' | 'completed' | 'blocked';
     partial_result: Omit<RunResult, 'status'> | null;
 }
 export declare function saveJournal(projectRoot: string, runId: string, journal: RunJournal): void;

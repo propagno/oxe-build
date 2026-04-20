@@ -77,7 +77,8 @@ describe('PluginManifest', () => {
     assert.ok(result.errors.some((e) => e.includes('supports()')));
   });
 
-  test('isAbiCompatible returns true for same major version', () => {
+  test('isAbiCompatible returns true for ABI version 1 variants', () => {
+    assert.equal(isAbiCompatible('1'), true);
     assert.equal(isAbiCompatible('1.0.0'), true);
     assert.equal(isAbiCompatible('1.5.3'), true);
     assert.equal(isAbiCompatible('1.99.0'), true);
@@ -86,6 +87,12 @@ describe('PluginManifest', () => {
   test('isAbiCompatible returns false for different major version', () => {
     assert.equal(isAbiCompatible('2.0.0'), false);
     assert.equal(isAbiCompatible('0.9.0'), false);
+  });
+
+  test('validatePlugin errors on incompatible ABI version', () => {
+    const result = validatePlugin(makePlugin({ abi_version: '2' }));
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some((error) => error.includes('incompatible')));
   });
 
   test('sandboxInvoke resolves successfully', async () => {

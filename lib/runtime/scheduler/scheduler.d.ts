@@ -2,6 +2,11 @@ import type { OxeEvent } from '../events/envelope';
 import type { ExecutionGraph, GraphNode } from '../compiler/graph-compiler';
 import type { WorkspaceManager } from '../workspace/workspace-manager';
 import type { WorkspaceLease } from '../models/workspace';
+import type { GateManager } from '../gate/gate-manager';
+import type { PolicyEngine } from '../policy/policy-engine';
+import type { PluginRegistry } from '../plugins/plugin-registry';
+import type { AuditTrail } from '../audit/audit-trail';
+import type { RunQuota } from '../audit/audit-trail';
 import type { RunJournal } from './run-journal';
 export interface TaskResult {
     success: boolean;
@@ -18,14 +23,21 @@ export interface SchedulerContext {
     runId: string;
     executor: TaskExecutor;
     workspaceManager: WorkspaceManager;
+    gateManager?: GateManager;
+    policyEngine?: PolicyEngine;
+    pluginRegistry?: PluginRegistry;
+    auditTrail?: AuditTrail;
+    quota?: RunQuota;
+    policyActor?: string;
     onEvent?: (event: OxeEvent) => void;
 }
 export interface RunResult {
     run_id: string;
-    status: 'completed' | 'failed' | 'cancelled' | 'paused';
+    status: 'completed' | 'failed' | 'blocked' | 'cancelled' | 'paused';
     completed: string[];
     failed: string[];
     blocked: string[];
+    pending_gates?: string[];
 }
 export declare class Scheduler {
     private cancelled;
@@ -45,5 +57,11 @@ export declare class Scheduler {
     cancel(): void;
     getJournal(): RunJournal | null;
     static loadJournal(projectRoot: string, runId: string): RunJournal | null;
+    private executeNode;
+    private evaluatePolicyForNode;
+    private requestGateForNode;
+    private blockNode;
+    private consumeQuotaForNode;
+    private consumeRetryQuota;
     private emit;
 }

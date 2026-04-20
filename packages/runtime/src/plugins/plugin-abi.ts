@@ -33,6 +33,7 @@ export interface ToolProvider {
 
 export interface WorkspaceProvider extends WorkspaceManager {
   readonly name: string;
+  readonly isolation_level: 'shared' | 'isolated';
   supportsStrategy(strategy: string): boolean;
 }
 
@@ -86,6 +87,7 @@ export interface ContextProvider {
 export interface OxePlugin {
   readonly name: string;
   readonly version?: string;
+  readonly abi_version?: string;
   toolProviders?: ToolProvider[];
   workspaceProviders?: WorkspaceProvider[];
   verifierProviders?: VerifierProvider[];

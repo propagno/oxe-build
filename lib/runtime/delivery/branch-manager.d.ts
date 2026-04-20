@@ -15,5 +15,6 @@ export declare class BranchManager {
     listOxeBranches(): BranchInfo[];
     mergeWorktreeBranch(worktreeBranch: string, targetBranch: string): void;
     branchExists(name: string): boolean;
+    push(remote: string, branchName: string, setUpstream?: boolean): void;
     private git;
 }

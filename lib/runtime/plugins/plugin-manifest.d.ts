@@ -1,5 +1,5 @@
 import type { OxePlugin } from './plugin-abi';
-export declare const CURRENT_ABI_VERSION = "1.0.0";
+export declare const CURRENT_ABI_VERSION = "1";
 export interface PluginManifest {
     name: string;
     version: string;

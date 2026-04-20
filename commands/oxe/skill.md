@@ -17,7 +17,7 @@ oxe_tool_profile: write_bounded
 oxe_confidence_policy: explicit
 oxe_context_tier: standard
 oxe_contract_version: 2.0.0
-oxe_semantics_hash: 64cec6f03fc7cfe6
+oxe_semantics_hash: 3cfb16d4930b8a59
 ---
 
 <!-- oxe-reasoning-contract:start -->
@@ -31,7 +31,7 @@ oxe_semantics_hash: 64cec6f03fc7cfe6
 - **Política de confiança:** explícita
 - **Tier de contexto padrão:** padrão
 - **Versão do contrato:** 2.0.0
-- **Checksum semântico:** `64cec6f03fc7cfe6`
+- **Checksum semântico:** `3cfb16d4930b8a59`
 - **Entrada de contexto prioritária:** `.oxe/context/packs/skill.md` e `.oxe/context/packs/skill.json`
 - **Regra pack-first:** ler o context pack primeiro; se estiver stale, incompleto ou ausente, cair para leitura direta com fallback explícito.
 - **Inspeção estruturada:** `oxe-cc context inspect --workflow skill --json`

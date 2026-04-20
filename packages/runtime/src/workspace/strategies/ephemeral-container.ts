@@ -39,6 +39,10 @@ export class EphemeralContainerManager implements WorkspaceManager {
     }
   }
 
+  get isolation_level(): 'shared' | 'isolated' {
+    return this.useFallback ? this.fallbackManager.isolation_level : 'isolated';
+  }
+
   get usingFallback(): boolean { return this.useFallback; }
 
   async allocate(req: WorkspaceRequest): Promise<WorkspaceLease> {
@@ -70,6 +74,7 @@ export class EphemeralContainerManager implements WorkspaceManager {
     return {
       workspace_id: wsId,
       strategy: 'ephemeral_container',
+      isolation_level: this.isolation_level,
       branch: null,
       base_commit: null,
       root_path: `docker:${containerId}:${this.opts.mountPath}`,

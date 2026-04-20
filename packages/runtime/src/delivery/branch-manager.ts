@@ -75,6 +75,13 @@ export class BranchManager {
     return result.status === 0;
   }
 
+  push(remote: string, branchName: string, setUpstream = false): void {
+    const args = ['push'];
+    if (setUpstream) args.push('-u');
+    args.push(remote, branchName);
+    this.git(args);
+  }
+
   private git(args: string[]): string {
     return execFileSync('git', args, {
       cwd: this.projectRoot,

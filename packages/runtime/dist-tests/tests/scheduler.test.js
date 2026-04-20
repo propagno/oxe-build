@@ -45,6 +45,10 @@ const scheduler_1 = require("../src/scheduler/scheduler");
 const run_journal_1 = require("../src/scheduler/run-journal");
 const graph_compiler_1 = require("../src/compiler/graph-compiler");
 const inplace_1 = require("../src/workspace/strategies/inplace");
+const gate_manager_1 = require("../src/gate/gate-manager");
+const policy_engine_1 = require("../src/policy/policy-engine");
+const plugin_registry_1 = require("../src/plugins/plugin-registry");
+const audit_trail_1 = require("../src/audit/audit-trail");
 const SPEC = { objective: 'Test', criteria: [] };
 function makePlan(tasks) {
     const waves = {};
@@ -317,5 +321,78 @@ function alwaysFail(failureClass = 'test') {
     });
     (0, node_test_1.test)('cleanup', () => {
         fs_1.default.rmSync(tmpDir, { recursive: true, force: true });
+    });
+    (0, node_test_1.test)('policy gate blocks node and persists pending gate', async () => {
+        const runId = `r-gate-${Date.now()}`;
+        const plan = makePlan([
+            { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: ['src/app.ts'], verifyCommand: null, aceite: [], done: false },
+        ]);
+        const graph = (0, graph_compiler_1.compile)(plan, SPEC, { default_workspace_strategy: 'inplace' });
+        const scheduler = new scheduler_1.Scheduler();
+        const gateManager = new gate_manager_1.GateManager(tmpDir, null, runId);
+        const ctx = {
+            ...makeCtx(tmpDir, alwaysSucceed()),
+            runId,
+            gateManager,
+            policyEngine: new policy_engine_1.PolicyEngine([
+                {
+                    id: 'rule-1',
+                    when: { tool: 'generate_patch' },
+                    action: 'require_human_gate',
+                },
+            ]),
+        };
+        const result = await scheduler.run(graph, ctx);
+        strict_1.default.equal(result.status, 'blocked');
+        strict_1.default.ok(result.blocked.includes('T1'));
+        strict_1.default.equal(gateManager.listPending().length, 1);
+    });
+    (0, node_test_1.test)('quota exhaustion blocks mutations before executor runs', async () => {
+        let executed = 0;
+        const plan = makePlan([
+            { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: ['src/app.ts'], verifyCommand: null, aceite: [], done: false },
+        ]);
+        const graph = (0, graph_compiler_1.compile)(plan, SPEC, { default_workspace_strategy: 'inplace' });
+        const scheduler = new scheduler_1.Scheduler();
+        const ctx = {
+            ...makeCtx(tmpDir, {
+                async execute() {
+                    executed++;
+                    return { success: true, failure_class: null, evidence: [], output: 'ok' };
+                },
+            }),
+            quota: (0, audit_trail_1.createQuota)(`r-quota-${Date.now()}`, { max_work_items: 0, max_mutations: 0 }),
+        };
+        const result = await scheduler.run(graph, ctx);
+        strict_1.default.equal(result.status, 'blocked');
+        strict_1.default.equal(executed, 0);
+    });
+    (0, node_test_1.test)('plugin tool provider can execute node instead of executor', async () => {
+        const registry = new plugin_registry_1.PluginRegistry();
+        let providerCalls = 0;
+        registry.register({
+            name: 'tool-plugin',
+            toolProviders: [{
+                    name: 'generate_patch-provider',
+                    kind: 'mutation',
+                    idempotent: false,
+                    supports: (actionType) => actionType === 'generate_patch',
+                    invoke: async () => {
+                        providerCalls++;
+                        return { success: true, output: 'plugin ok', evidence_paths: ['artifact.txt'], side_effects_applied: ['write_fs'] };
+                    },
+                }],
+        });
+        const plan = makePlan([
+            { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: ['src/app.ts'], verifyCommand: null, aceite: [], done: false },
+        ]);
+        const graph = (0, graph_compiler_1.compile)(plan, SPEC, { default_workspace_strategy: 'inplace' });
+        const scheduler = new scheduler_1.Scheduler();
+        const result = await scheduler.run(graph, {
+            ...makeCtx(tmpDir, alwaysFail()),
+            pluginRegistry: registry,
+        });
+        strict_1.default.equal(result.status, 'completed');
+        strict_1.default.equal(providerCalls, 1);
     });
 });

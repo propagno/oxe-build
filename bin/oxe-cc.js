@@ -1643,6 +1643,70 @@ function runStatusFull(target) {
     console.log(`  ${c ? dim : ''}Run:${c ? reset : ''} ${ar.run_id || '—'}   ${c ? dim : ''}Estado:${c ? reset : ''} ${ar.status || '—'}   ${c ? dim : ''}Onda:${c ? reset : ''} ${ar.current_wave != null ? ar.current_wave : '—'}`);
   }
 
+  if (
+    report.runtimeMode ||
+    report.providerCatalog ||
+    (report.activeRun && (report.verificationSummary || report.pendingGates || report.quotaSummary || report.auditSummary || report.promotionSummary || report.policyDecisionSummary)) ||
+    (report.pendingGates && report.pendingGates.total > 0)
+  ) {
+    console.log(`\n  ${c ? yellow : ''}Runtime enterprise${c ? reset : ''}`);
+    if (report.runtimeMode) {
+      console.log(`  ${c ? dim : ''}Runtime mode:${c ? reset : ''} ${report.runtimeMode.runtime_mode || 'legacy'}${report.runtimeMode.enterprise_available === false ? ' (engine indisponível)' : ''}`);
+    }
+    if (report.fallbackMode) {
+      console.log(`  ${c ? dim : ''}Fallback:${c ? reset : ''} ${report.fallbackMode}${report.runtimeMode && report.runtimeMode.reason ? ` · ${report.runtimeMode.reason}` : ''}`);
+    }
+    if (report.verificationSummary) {
+      console.log(`  ${c ? dim : ''}Verification:${c ? reset : ''} total ${report.verificationSummary.total} · pass ${report.verificationSummary.pass} · fail ${report.verificationSummary.fail} · error ${report.verificationSummary.error}`);
+    }
+    if (report.residualRiskSummary) {
+      console.log(`  ${c ? dim : ''}Residual risks:${c ? reset : ''} total ${report.residualRiskSummary.total} · high/critical ${report.residualRiskSummary.highOrCritical}`);
+    }
+    if (report.evidenceCoverage) {
+      console.log(`  ${c ? dim : ''}Evidence coverage:${c ? reset : ''} ${report.evidenceCoverage.coverage_percent}% (${report.evidenceCoverage.checks_with_evidence}/${report.evidenceCoverage.total_checks})`);
+    }
+    if (report.pendingGates) {
+      console.log(`  ${c ? dim : ''}Pending gates:${c ? reset : ''} ${report.pendingGates.pending.length} (stale ${report.pendingGates.stalePending.length}) · SLA ${report.pendingGates.gateSlaHours || 24}h`);
+    }
+    if (report.policyDecisionSummary) {
+      console.log(`  ${c ? dim : ''}Policy decisions:${c ? reset : ''} total ${report.policyDecisionSummary.total} · denied ${report.policyDecisionSummary.denied} · gated ${report.policyDecisionSummary.gated} · override sem razão ${report.policyDecisionSummary.overridesWithoutRationale}`);
+    }
+    if (report.policyCoverage) {
+      console.log(`  ${c ? dim : ''}Policy coverage:${c ? reset : ''} ${report.policyCoverage.coveragePercent}% · mutations ${report.policyCoverage.coveredMutations}/${report.policyCoverage.mutationNodes}`);
+    }
+    if (report.quotaSummary) {
+      const consumed = report.quotaSummary.consumed || {};
+      const limits = report.quotaSummary.limits || {};
+      console.log(`  ${c ? dim : ''}Quotas:${c ? reset : ''} work items ${consumed.workItems ?? 0}/${limits.maxWorkItemsPerRun ?? '∞'} · mutations ${consumed.mutations ?? 0}/${limits.maxMutationsPerRun ?? '∞'} · retries ${consumed.retries ?? 0}/${limits.maxRetriesPerRun ?? '∞'}`);
+    }
+    if (report.auditSummary) {
+      console.log(`  ${c ? dim : ''}Audit trail:${c ? reset : ''} run ${report.auditSummary.runEntries} · warn ${report.auditSummary.warn} · critical ${report.auditSummary.critical}`);
+    }
+    if (report.promotionSummary) {
+      console.log(`  ${c ? dim : ''}Promotion:${c ? reset : ''} ${report.promotionSummary.status || '—'} · target ${report.promotionSummary.targetKind || '—'} · remote ${report.promotionSummary.remote || '—'}`);
+    }
+    if (report.promotionReadiness) {
+      console.log(`  ${c ? dim : ''}Promotion readiness:${c ? reset : ''} ${report.promotionReadiness.status || 'unknown'}${Array.isArray(report.promotionReadiness.blockers) && report.promotionReadiness.blockers.length ? ` · blockers ${report.promotionReadiness.blockers.join(', ')}` : ''}`);
+    }
+    if (report.recoveryState) {
+      console.log(`  ${c ? dim : ''}Recovery:${c ? reset : ''} ${report.recoveryState.status || 'unknown'} · recoveries ${report.recoveryState.recoverCount ?? 0} · issues ${Array.isArray(report.recoveryState.issues) ? report.recoveryState.issues.length : 0}`);
+    }
+    if (report.multiAgent) {
+      const agents = Array.isArray(report.multiAgent.agents) ? report.multiAgent.agents.length : 0;
+      const handoffs = Array.isArray(report.multiAgent.handoffs) ? report.multiAgent.handoffs.length : 0;
+      const ownership = Array.isArray(report.multiAgent.ownership) ? report.multiAgent.ownership.length : 0;
+      console.log(`  ${c ? dim : ''}Multi-agent:${c ? reset : ''} ${report.multiAgent.enabled ? (report.multiAgent.mode || 'active') : 'disabled'} · agentes ${agents} · ownership ${ownership} · handoffs ${handoffs}`);
+    }
+    if (report.providerCatalog) {
+      const summary = report.providerCatalog.summary || {};
+      const pluginsCount = summary.pluginsCount ?? summary.total_plugins ?? (Array.isArray(summary.plugins) ? summary.plugins.length : 0);
+      const toolProviders = summary.toolProviders ?? summary.tool_providers ?? 0;
+      const verifierProviders = summary.verifierProviders ?? summary.verifier_providers ?? 0;
+      const loadErrors = summary.loadErrors ?? summary.load_errors ?? (Array.isArray(report.providerCatalog.load_errors) ? report.providerCatalog.load_errors.length : 0);
+      console.log(`  ${c ? dim : ''}Provider catalog:${c ? reset : ''} plugins ${pluginsCount} · tools ${toolProviders} · verifiers ${verifierProviders} · load errors ${loadErrors}`);
+    }
+  }
+
   if (report.contextQuality || report.semanticsDrift) {
     const primaryWorkflow = report.contextQuality && report.contextQuality.primaryWorkflow ? report.contextQuality.primaryWorkflow : 'dashboard';
     const primaryScore = report.contextQuality && report.contextQuality.primaryScore != null ? report.contextQuality.primaryScore : null;
@@ -1688,7 +1752,7 @@ function runStatus(target, opts = {}) {
   if (opts.json) {
     /** @type {Record<string, unknown>} */
     const payload = {
-      oxeStatusSchema: 3,
+      oxeStatusSchema: 5,
       projectRoot: path.resolve(target),
       nextStep: report.next.step,
       cursorCmd: report.next.cursorCmd,
@@ -1703,8 +1767,26 @@ function runStatus(target, opts = {}) {
         staleCompact: report.staleCompact,
         planSelfEvaluation: report.planSelfEvaluation,
         planReviewStatus: report.planReviewStatus,
-        activeRun: report.activeRun,
-        eventsSummary: report.eventsSummary,
+      activeRun: report.activeRun,
+      eventsSummary: report.eventsSummary,
+      runtimeMode: report.runtimeMode,
+      fallbackMode: report.fallbackMode,
+      gateSla: report.pendingGates ? report.pendingGates.gateSlaHours || 24 : 24,
+      staleGateCount: report.pendingGates ? report.pendingGates.staleGateCount || 0 : 0,
+      verificationSummary: report.verificationSummary,
+      residualRiskSummary: report.residualRiskSummary,
+      evidenceCoverage: report.evidenceCoverage,
+      pendingGates: report.pendingGates,
+      gateQueue: report.gateQueue,
+      policyDecisionSummary: report.policyDecisionSummary,
+      policyCoverage: report.policyCoverage,
+      quotaSummary: report.quotaSummary,
+      auditSummary: report.auditSummary,
+      promotionSummary: report.promotionSummary,
+      promotionReadiness: report.promotionReadiness,
+      recoveryState: report.recoveryState,
+      multiAgent: report.multiAgent || null,
+      providerCatalog: report.providerCatalog,
       memoryLayers: report.memoryLayers,
       azureActive: report.azureActive,
       azure: report.azure,
@@ -1721,6 +1803,7 @@ function runStatus(target, opts = {}) {
         phaseWarnings: report.phaseWarn,
         runtimeWarnings: report.runtimeWarn,
         reviewWarnings: report.reviewWarn,
+        enterpriseWarnings: report.enterpriseWarn,
         capabilityWarnings: report.capabilityWarn,
         investigationWarnings: report.investigationWarn,
         sessionWarnings: report.sessionWarn,
@@ -2125,7 +2208,7 @@ ${green}Uso:${reset}
   npx oxe-cc init-oxe [opções] [pasta-do-projeto]
   npx oxe-cc context <build|inspect> [opções] [pasta-do-projeto]
   npx oxe-cc dashboard [opções] [pasta-do-projeto]
-  npx oxe-cc runtime <status|start|pause|resume|replay|compile|project|ci> [opções] [pasta-do-projeto]
+  npx oxe-cc runtime <status|start|pause|resume|replay|compile|verify|project|ci|promote|recover|gates> [opções] [pasta-do-projeto]
   npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
   npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
   npx oxe-cc uninstall [opções] [pasta-do-projeto]
@@ -2174,8 +2257,12 @@ ${green}runtime${reset} (controle operacional explícito do ACTIVE-RUN)
   resume                                 retoma o run ativo
   replay                                 marca replay parcial por onda ou tarefa
   compile                                compila PLAN/SPEC em ExecutionGraph formal + verification suite
+  verify                                 executa a suite enterprise, coleta evidência e projeta VERIFY.md
   project                                projeta markdowns derivados do estado canônico
   ci                                     executa checks do runtime e persiste o resultado na run
+  promote                                promove remotamente a run ativa (pr_draft|branch_push)
+  recover                                reidrata estado canônico/journal/gates/policy da run ativa
+  gates <list|show|resolve>              fila operacional de gates pendentes e resoluções auditáveis
   --session <sessions/sNNN-slug>         força sessão específica
   --wave <número>                        fixa onda atual/cursor
   --task <Tn>                            fixa tarefa atual/cursor
@@ -2184,6 +2271,14 @@ ${green}runtime${reset} (controle operacional explícito do ACTIVE-RUN)
   --run <run_id>                         (replay|ci) filtra um run específico
   --from <event_id>                      (replay) começa em um event_id específico
   --write                                (replay) gera REPLAY-SESSION.md
+  --gate <gate_id>                       (gates show|resolve) gate alvo
+  --decision <approve|reject|waive>      (gates resolve) decisão aplicada
+  --actor <id>                           (gates resolve) ator responsável
+  --target <pr_draft|branch_push>        (promote) alvo remoto; padrão pr_draft
+  --remote <nome>                        (promote) remote git; padrão origin
+  --base <branch>                        (promote) branch/ref base; padrão main
+  --minimum-coverage <0-100>             (promote) cobertura mínima exigida; padrão 100
+  --timeout <ms>                         (verify) timeout por check
   --dir <pasta>                          raiz do projeto (padrão: diretório atual)
 
 ${green}azure${reset} (provider Azure nativo via Azure CLI no Windows)
@@ -3306,7 +3401,7 @@ function parseCapabilitiesArgs(argv) {
  */
 
 /**
- * @typedef {{ help: boolean, dir: string, action: string, activeSession: string|null, wave: number|null, task: string, mode: string, reason: string, parseError: boolean, unknownFlag: string }} RuntimeOpts
+ * @typedef {{ help: boolean, dir: string, action: string, subAction: string, activeSession: string|null, wave: number|null, task: string, mode: string, reason: string, runId: string, fromEventId: string, writeReport: boolean, gateId: string, decision: string, actor: string, targetKind: string, remote: string, baseBranch: string, minimumCoverage: number|null, timeoutMs: number|null, jsonOutput: boolean, gateStatus: string, gateScope: string, parseError: boolean, unknownFlag: string }} RuntimeOpts
  */
 
 /**
@@ -3435,6 +3530,7 @@ function parseRuntimeArgs(argv) {
     help: false,
     dir: process.cwd(),
     action: 'status',
+    subAction: '',
     activeSession: null,
     wave: null,
     task: '',
@@ -3443,6 +3539,17 @@ function parseRuntimeArgs(argv) {
     runId: '',
     fromEventId: '',
     writeReport: false,
+    gateId: '',
+    decision: '',
+    actor: '',
+    targetKind: '',
+    remote: '',
+    baseBranch: '',
+    minimumCoverage: null,
+    timeoutMs: null,
+    jsonOutput: false,
+    gateStatus: '',
+    gateScope: '',
     parseError: false,
     unknownFlag: '',
   };
@@ -3459,6 +3566,17 @@ function parseRuntimeArgs(argv) {
     else if (a === '--run' && argv[i + 1]) out.runId = String(argv[++i]);
     else if (a === '--from' && argv[i + 1]) out.fromEventId = String(argv[++i]);
     else if (a === '--write') out.writeReport = true;
+    else if (a === '--gate' && argv[i + 1]) out.gateId = String(argv[++i]);
+    else if (a === '--decision' && argv[i + 1]) out.decision = String(argv[++i]);
+    else if (a === '--actor' && argv[i + 1]) out.actor = String(argv[++i]);
+    else if (a === '--target' && argv[i + 1]) out.targetKind = String(argv[++i]);
+    else if (a === '--remote' && argv[i + 1]) out.remote = String(argv[++i]);
+    else if (a === '--base' && argv[i + 1]) out.baseBranch = String(argv[++i]);
+    else if (a === '--minimum-coverage' && argv[i + 1]) out.minimumCoverage = Number(argv[++i]);
+    else if (a === '--timeout' && argv[i + 1]) out.timeoutMs = Number(argv[++i]);
+    else if (a === '--status' && argv[i + 1]) out.gateStatus = String(argv[++i]);
+    else if (a === '--scope' && argv[i + 1]) out.gateScope = String(argv[++i]);
+    else if (a === '--json') out.jsonOutput = true;
     else if (!a.startsWith('-')) positionals.push(a);
     else {
       out.parseError = true;
@@ -3467,8 +3585,15 @@ function parseRuntimeArgs(argv) {
     }
   }
   if (positionals[0]) out.action = positionals[0];
-  if (positionals[1]) out.dir = path.resolve(positionals[1]);
+  if (out.action === 'gates') {
+    if (positionals[1]) out.subAction = positionals[1];
+    if (positionals[2]) out.dir = path.resolve(positionals[2]);
+  } else {
+    if (positionals[1]) out.dir = path.resolve(positionals[1]);
+  }
   if (Number.isNaN(out.wave)) out.wave = null;
+  if (Number.isNaN(out.minimumCoverage)) out.minimumCoverage = null;
+  if (Number.isNaN(out.timeoutMs)) out.timeoutMs = null;
   return out;
 }
 
@@ -3731,7 +3856,39 @@ async function runRuntime(opts) {
   if (opts.action === 'status') {
     const current = oxeOperational.readRunState(opts.dir, activeSession);
     if (!current) {
-      console.log(`  ${yellow}Nenhum ACTIVE-RUN encontrado.${reset}`);
+      if (opts.jsonOutput) console.log(JSON.stringify({ run: null, status: 'absent' }, null, 2));
+      else console.log(`  ${yellow}Nenhum ACTIVE-RUN encontrado.${reset}`);
+      return;
+    }
+    const report = oxeHealth.buildHealthReport(opts.dir);
+    const gates = oxeOperational.readRuntimeGates
+      ? oxeOperational.readRuntimeGates(opts.dir, activeSession, { runId: current.run_id })
+      : null;
+    const runtimeMode = oxeOperational.buildRuntimeModeStatus
+      ? oxeOperational.buildRuntimeModeStatus(current)
+      : null;
+    const multiAgent = oxeOperational.readRuntimeMultiAgentStatus
+      ? oxeOperational.readRuntimeMultiAgentStatus(opts.dir, activeSession, { runId: current.run_id })
+      : null;
+    if (opts.jsonOutput) {
+      console.log(
+        JSON.stringify(
+          {
+            run: current,
+            runtimeMode,
+            gateQueue: gates,
+            gateSla: gates ? gates.gateSlaHours || 24 : 24,
+            staleGateCount: gates ? gates.staleCount || 0 : 0,
+            policyCoverage: report.policyCoverage || null,
+            promotionReadiness: report.promotionReadiness || null,
+            recoveryState: report.recoveryState || null,
+            providerCatalog: report.providerCatalog || null,
+            multiAgent: multiAgent || null,
+          },
+          null,
+          2
+        )
+      );
       return;
     }
     console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${current.run_id}`);
@@ -3750,16 +3907,144 @@ async function runRuntime(opts) {
     if (current.projections && current.projections.generated_at) {
       console.log(`  ${c ? green : ''}Projection:${c ? reset : ''} ${current.projections.generated_at}`);
     }
+    if (gates) {
+      console.log(`  ${c ? green : ''}Gates:${c ? reset : ''} ${gates.pending.length} pendente(s) · stale ${gates.stalePending.length} · SLA ${gates.gateSlaHours || 24}h`);
+    }
+    if (runtimeMode) {
+      console.log(`  ${c ? green : ''}Runtime:${c ? reset : ''} ${runtimeMode.runtime_mode || 'legacy'} · fallback=${runtimeMode.fallback_mode || 'none'}`);
+    }
+    if (report.policyCoverage) {
+      console.log(`  ${c ? green : ''}Policy coverage:${c ? reset : ''} ${report.policyCoverage.coveragePercent}% · uncovered=${report.policyCoverage.uncoveredMutations}`);
+    }
+    if (report.promotionReadiness) {
+      console.log(`  ${c ? green : ''}Promotion readiness:${c ? reset : ''} ${report.promotionReadiness.status}${Array.isArray(report.promotionReadiness.blockers) && report.promotionReadiness.blockers.length ? ` · ${report.promotionReadiness.blockers.join(', ')}` : ''}`);
+    }
+    if (report.recoveryState) {
+      console.log(`  ${c ? green : ''}Recovery:${c ? reset : ''} ${report.recoveryState.status} · recoveries=${report.recoveryState.recoverCount ?? 0} · issues=${Array.isArray(report.recoveryState.issues) ? report.recoveryState.issues.length : 0}`);
+    }
+    if (multiAgent) {
+      console.log(`  ${c ? green : ''}Multi-agent:${c ? reset : ''} ${multiAgent.enabled ? (multiAgent.mode || 'active') : 'disabled'} · agentes=${Array.isArray(multiAgent.agents) ? multiAgent.agents.length : 0} · ownership=${Array.isArray(multiAgent.ownership) ? multiAgent.ownership.length : 0}`);
+    }
+    if (report.providerCatalog && report.providerCatalog.summary) {
+      const summary = report.providerCatalog.summary;
+      const pluginsCount = summary.pluginsCount ?? summary.total_plugins ?? (Array.isArray(summary.plugins) ? summary.plugins.length : 0);
+      const toolProviders = summary.toolProviders ?? summary.tool_providers ?? 0;
+      const verifierProviders = summary.verifierProviders ?? summary.verifier_providers ?? 0;
+      const loadErrors = summary.loadErrors ?? summary.load_errors ?? (Array.isArray(report.providerCatalog.load_errors) ? report.providerCatalog.load_errors.length : 0);
+      console.log(`  ${c ? green : ''}Providers:${c ? reset : ''} plugins=${pluginsCount} tools=${toolProviders} verifiers=${verifierProviders} load_errors=${loadErrors}`);
+    }
     return;
   }
 
+  if (opts.action === 'gates') {
+    const sub = opts.subAction || 'list';
+    const current = oxeOperational.readRunState(opts.dir, activeSession);
+    const runId = opts.runId || (current && current.run_id) || '';
+    if (sub === 'list') {
+      const gates = oxeOperational.readRuntimeGates(opts.dir, activeSession, {
+        runId: runId || null,
+        status: opts.gateStatus || 'all',
+        scope: opts.gateScope || null,
+        task: opts.task || null,
+      });
+      if (opts.jsonOutput) {
+        console.log(JSON.stringify(gates, null, 2));
+        return;
+      }
+      console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${runId || '—'}`);
+      console.log(`  ${c ? green : ''}Gates:${c ? reset : ''} total=${gates.total} pendentes=${gates.pending.length} stale=${gates.stalePending.length} resolvidos<24h=${gates.resolvedRecent.length} SLA=${gates.gateSlaHours || 24}h`);
+      console.log(`  ${c ? green : ''}Filtros:${c ? reset : ''} status=${gates.filters.status || 'all'} scope=${gates.filters.scope || '—'} task=${gates.filters.workItemId || '—'}`);
+      for (const gate of gates.pending) {
+        const ageHours = gate.requested_at ? Math.max(0, Math.round((Date.now() - Date.parse(gate.requested_at)) / 36e5)) : null;
+        console.log(`  ${yellow}PENDING${reset} ${gate.gate_id} · ${gate.scope} · ${gate.work_item_id || 'run'} · ${gate.action || '—'}${ageHours != null ? ` · age ${ageHours}h` : ''}`);
+      }
+      for (const gate of gates.resolvedRecent) {
+        console.log(`  ${green}RESOLVED${reset} ${gate.gate_id} · ${gate.scope} · ${gate.decision || '—'} · ${gate.actor || '—'}`);
+      }
+      return;
+    }
+    if (sub === 'show') {
+      if (!opts.gateId) {
+        console.error(`${red}Use --gate <gate_id> com runtime gates show${reset}`);
+        process.exit(1);
+      }
+      const gates = oxeOperational.readRuntimeGates(opts.dir, activeSession, { runId: runId || null });
+      const gate = gates.all.find((entry) => entry.gate_id === opts.gateId);
+      if (!gate) {
+        console.error(`${red}Gate não encontrado: ${opts.gateId}${reset}`);
+        process.exit(1);
+      }
+      if (opts.jsonOutput) {
+        console.log(JSON.stringify(gate, null, 2));
+        return;
+      }
+      console.log(`  ${c ? green : ''}Gate:${c ? reset : ''} ${gate.gate_id}`);
+      console.log(`  ${c ? green : ''}Status:${c ? reset : ''} ${gate.status || 'pending'}`);
+      console.log(`  ${c ? green : ''}Escopo:${c ? reset : ''} ${gate.scope || '—'} · action=${gate.action || '—'} · work_item=${gate.work_item_id || 'run'}`);
+      console.log(`  ${c ? green : ''}Ator:${c ? reset : ''} ${gate.actor || '—'} · decisão=${gate.decision || '—'}`);
+      console.log(`  ${c ? green : ''}Motivo:${c ? reset : ''} ${gate.reason || gate.context && gate.context.description || '—'}`);
+      if (Array.isArray(gate.resolution_history) && gate.resolution_history.length) {
+        console.log(`  ${c ? green : ''}Histórico:${c ? reset : ''}`);
+        for (const item of gate.resolution_history) {
+          console.log(`    • ${item.timestamp || '—'} · ${item.actor || '—'} · ${item.decision || '—'}${item.reason ? ` · ${item.reason}` : ''}`);
+        }
+      }
+      return;
+    }
+    if (sub === 'resolve') {
+      if (!opts.gateId || !opts.decision || !opts.actor) {
+        console.error(`${red}Use --gate, --decision e --actor com runtime gates resolve${reset}`);
+        process.exit(1);
+      }
+      if ((opts.decision === 'reject' || opts.decision === 'waive') && !opts.reason) {
+        console.error(`${red}Reject/waive exigem --reason explícito.${reset}`);
+        process.exit(1);
+      }
+      try {
+        const resolved = await oxeOperational.resolveRuntimeGate(opts.dir, activeSession, {
+          runId: runId || null,
+          gateId: opts.gateId,
+          decision: opts.decision,
+          actor: opts.actor,
+          reason: opts.reason || '',
+        });
+        if (opts.jsonOutput) {
+          console.log(JSON.stringify(resolved, null, 2));
+          return;
+        }
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} Gate resolvido.`);
+        console.log(`  ${c ? green : ''}Gate:${c ? reset : ''} ${resolved.gate.gate_id}`);
+        console.log(`  ${c ? green : ''}Decisão:${c ? reset : ''} ${resolved.gate.decision}`);
+        console.log(`  ${c ? green : ''}Ator:${c ? reset : ''} ${resolved.gate.actor}`);
+        console.log(`  ${c ? green : ''}Impacto:${c ? reset : ''} pendentes=${resolved.impact.pendingRemaining} stale=${resolved.impact.staleRemaining}`);
+        return;
+      } catch (err) {
+        console.error(`${red}${err && err.message ? err.message : 'Falha ao resolver gate.'}${reset}`);
+        process.exit(1);
+      }
+    }
+    console.error(`${red}Subcomando runtime gates desconhecido: ${sub}${reset}`);
+    process.exit(1);
+  }
+
   if (opts.action === 'replay' && !opts.task) {
-    const report = oxeOperational.replayEvents(opts.dir, activeSession, {
-      runId: opts.runId || undefined,
-      fromEventId: opts.fromEventId || undefined,
-      waveId: opts.wave != null ? opts.wave : undefined,
-      writeReport: opts.writeReport || false,
-    });
+    const report = opts.jsonOutput
+      ? oxeOperational.replayRuntimeState(opts.dir, activeSession, {
+          runId: opts.runId || undefined,
+          fromEventId: opts.fromEventId || undefined,
+          waveId: opts.wave != null ? opts.wave : undefined,
+          writeReport: opts.writeReport || false,
+        })
+      : oxeOperational.replayEvents(opts.dir, activeSession, {
+          runId: opts.runId || undefined,
+          fromEventId: opts.fromEventId || undefined,
+          waveId: opts.wave != null ? opts.wave : undefined,
+          writeReport: opts.writeReport || false,
+        });
+    if (opts.jsonOutput) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
     console.log(`  ${c ? green : ''}Total eventos:${c ? reset : ''} ${report.totalEvents}`);
     console.log(`  ${c ? green : ''}Duração:${c ? reset : ''} ${report.duration_ms != null ? `${(report.duration_ms / 1000).toFixed(1)}s` : '—'}`);
     console.log(`  ${c ? green : ''}Ondas:${c ? reset : ''} ${report.waveIds.join(', ') || '—'}`);
@@ -3810,6 +4095,40 @@ async function runRuntime(opts) {
     }
   }
 
+  if (opts.action === 'verify') {
+    try {
+      const verified = await oxeOperational.runRuntimeVerify(opts.dir, activeSession, {
+        runId: opts.runId || undefined,
+        task: opts.task || undefined,
+        workItemId: opts.task || undefined,
+        timeoutMs: opts.timeoutMs || undefined,
+      });
+      if (opts.jsonOutput) {
+        console.log(JSON.stringify(verified, null, 2));
+        return;
+      }
+      console.log(`  ${c ? green : ''}✓${c ? reset : ''} Runtime verify executado.`);
+      console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${verified.run.run_id}`);
+      console.log(`  ${c ? green : ''}Status:${c ? reset : ''} ${verified.report.status}`);
+      if (verified.report.manifest && verified.report.manifest.summary) {
+        console.log(`  ${c ? green : ''}Checks:${c ? reset : ''} total=${verified.report.manifest.summary.total} pass=${verified.report.manifest.summary.pass} fail=${verified.report.manifest.summary.fail} error=${verified.report.manifest.summary.error}`);
+      }
+      if (verified.report.evidence_coverage) {
+        console.log(`  ${c ? green : ''}Coverage:${c ? reset : ''} ${verified.report.evidence_coverage.coverage_percent}%`);
+      }
+      if (verified.report.gaps.length) {
+        for (const gap of verified.report.gaps) {
+          console.log(`  ${yellow}GAP${reset} ${gap}`);
+        }
+      }
+      console.log(`  ${c ? green : ''}VERIFY:${c ? reset : ''} ${verified.projected.paths.verify}`);
+      return;
+    } catch (err) {
+      console.error(`${red}${err && err.message ? err.message : 'Falha ao executar runtime verify.'}${reset}`);
+      process.exit(1);
+    }
+  }
+
   if (opts.action === 'project') {
     try {
       const projected = oxeOperational.projectRuntimeArtifacts(opts.dir, activeSession, { write: true });
@@ -3832,6 +4151,11 @@ async function runRuntime(opts) {
       const report = await oxeOperational.runRuntimeCiChecks(opts.dir, activeSession, {
         runId: opts.runId || undefined,
       });
+      if (opts.jsonOutput) {
+        console.log(JSON.stringify(report, null, 2));
+        if (!report.summary.allPassed) process.exitCode = 1;
+        return;
+      }
       console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${report.runId || '—'}`);
       for (const result of report.results) {
         const color = result.status === 'pass'
@@ -3850,6 +4174,84 @@ async function runRuntime(opts) {
       console.error(`${red}${err && err.message ? err.message : 'Falha ao executar checks do runtime.'}${reset}`);
       process.exit(1);
     }
+  }
+
+  if (opts.action === 'promote') {
+    try {
+      const promoted = await oxeOperational.runRuntimePromotion(opts.dir, activeSession, {
+        runId: opts.runId || undefined,
+        targetKind: opts.targetKind || 'pr_draft',
+        remote: opts.remote || 'origin',
+        baseBranch: opts.baseBranch || 'main',
+        minimumCoverage: opts.minimumCoverage == null ? 100 : opts.minimumCoverage,
+      });
+      if (opts.jsonOutput) {
+        console.log(JSON.stringify(promoted, null, 2));
+        return;
+      }
+      console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${promoted.run.run_id}`);
+      console.log(`  ${c ? green : ''}Commit:${c ? reset : ''} ${promoted.commitRecord.commit_sha || '—'} · ${promoted.commitRecord.status}`);
+      console.log(`  ${c ? green : ''}Promotion:${c ? reset : ''} ${promoted.promotion.target_kind} · ${promoted.promotion.status}`);
+      if (promoted.promotion.pr_url) {
+        console.log(`  ${c ? green : ''}PR:${c ? reset : ''} ${promoted.promotion.pr_url}`);
+      }
+      if (Array.isArray(promoted.promotion.reasons) && promoted.promotion.reasons.length) {
+        for (const reason of promoted.promotion.reasons) {
+          console.log(`  ${yellow}BLOCKER${reset} ${reason}`);
+        }
+      }
+      return;
+    } catch (err) {
+      console.error(`${red}${err && err.message ? err.message : 'Falha ao promover a run.'}${reset}`);
+      process.exit(1);
+    }
+  }
+
+  if (opts.action === 'recover') {
+    try {
+      const recovered = oxeOperational.recoverRuntimeState(opts.dir, activeSession, {
+        runId: opts.runId || undefined,
+      });
+      if (opts.jsonOutput) {
+        console.log(JSON.stringify(recovered, null, 2));
+        return;
+      }
+      console.log(`  ${c ? green : ''}✓${c ? reset : ''} Runtime recover concluído.`);
+      console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${recovered.run.run_id}`);
+      console.log(`  ${c ? green : ''}Estado:${c ? reset : ''} ${recovered.run.status}`);
+      console.log(`  ${c ? green : ''}Journal:${c ? reset : ''} ${recovered.journal.scheduler_state}`);
+      console.log(`  ${c ? green : ''}Órfãos:${c ? reset : ''} ${(recovered.recoverySummary.orphan_work_items || []).join(', ') || '—'}`);
+      return;
+    } catch (err) {
+      console.error(`${red}${err && err.message ? err.message : 'Falha ao executar recover.'}${reset}`);
+      process.exit(1);
+    }
+  }
+
+  if (opts.action === 'agents') {
+    const sub = opts.subAction || 'status';
+    if (sub !== 'status') {
+      console.error(`${red}Subcomando runtime agents desconhecido: ${sub}${reset}`);
+      process.exit(1);
+    }
+    const current = oxeOperational.readRunState(opts.dir, activeSession);
+    const runId = opts.runId || (current && current.run_id) || '';
+    const multiAgent = oxeOperational.readRuntimeMultiAgentStatus
+      ? oxeOperational.readRuntimeMultiAgentStatus(opts.dir, activeSession, { runId: runId || null })
+      : null;
+    if (opts.jsonOutput) {
+      console.log(JSON.stringify(multiAgent, null, 2));
+      return;
+    }
+    if (!multiAgent) {
+      console.log(`  ${yellow}Multi-agent indisponível para o escopo atual.${reset}`);
+      return;
+    }
+    console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${multiAgent.runId || '—'}`);
+    console.log(`  ${c ? green : ''}Modo:${c ? reset : ''} ${multiAgent.enabled ? (multiAgent.mode || 'active') : 'disabled'}`);
+    console.log(`  ${c ? green : ''}Isolamento:${c ? reset : ''} ${multiAgent.workspaceIsolationEnforced ? 'enforced' : 'shared/disabled'}`);
+    console.log(`  ${c ? green : ''}Agentes:${c ? reset : ''} ${Array.isArray(multiAgent.agents) ? multiAgent.agents.length : 0} · ownership=${Array.isArray(multiAgent.ownership) ? multiAgent.ownership.length : 0} · handoffs=${Array.isArray(multiAgent.handoffs) ? multiAgent.handoffs.length : 0}`);
+    return;
   }
 
   try {

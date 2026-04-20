@@ -22,6 +22,20 @@ function makePlugin(name, overrides = {}) {
         ...overrides,
     };
 }
+function entry(name, overrides = {}) {
+    return {
+        plugin: 'test-plugin',
+        name,
+        capability: name,
+        provider_type: 'tool',
+        stability: 'stable',
+        abi_version: plugin_manifest_1.CURRENT_ABI_VERSION,
+        since_abi_version: '1.0.0',
+        supported: [],
+        fallback_available: true,
+        ...overrides,
+    };
+}
 (0, node_test_1.describe)('buildMatrix', () => {
     (0, node_test_1.test)('empty registry produces empty matrix', () => {
         const registry = new plugin_registry_1.PluginRegistry();
@@ -64,9 +78,9 @@ function makePlugin(name, overrides = {}) {
         matrix = {
             abi_version: plugin_manifest_1.CURRENT_ABI_VERSION,
             entries: [
-                { name: 'stable-tool', provider_type: 'tool', stability: 'stable', since_abi_version: '1.0.0' },
-                { name: 'exp-tool', provider_type: 'tool', stability: 'experimental', since_abi_version: '1.0.0' },
-                { name: 'dep-tool', provider_type: 'tool', stability: 'deprecated', since_abi_version: '1.0.0', deprecated_in: '1.1.0' },
+                entry('stable-tool'),
+                entry('exp-tool', { stability: 'experimental' }),
+                entry('dep-tool', { stability: 'deprecated', deprecated_in: '1.1.0' }),
             ],
         };
     });
@@ -91,7 +105,7 @@ function makePlugin(name, overrides = {}) {
         const matrix = {
             abi_version: plugin_manifest_1.CURRENT_ABI_VERSION,
             entries: [
-                { name: 'my-tool', provider_type: 'tool', stability: 'stable', since_abi_version: '1.0.0' },
+                entry('my-tool'),
             ],
         };
         const updated = (0, capability_matrix_1.markDeprecated)(matrix, 'my-tool', '1.2.0', 'new-tool');
@@ -110,15 +124,15 @@ function makePlugin(name, overrides = {}) {
 (0, node_test_1.describe)('addEntry', () => {
     (0, node_test_1.test)('adds a new entry', () => {
         const matrix = { abi_version: plugin_manifest_1.CURRENT_ABI_VERSION, entries: [] };
-        const updated = (0, capability_matrix_1.addEntry)(matrix, { name: 'new-tool', provider_type: 'tool', stability: 'experimental', since_abi_version: '1.0.0' });
+        const updated = (0, capability_matrix_1.addEntry)(matrix, entry('new-tool', { stability: 'experimental' }));
         strict_1.default.equal(updated.entries.length, 1);
     });
     (0, node_test_1.test)('does not add duplicate entry', () => {
         const matrix = {
             abi_version: plugin_manifest_1.CURRENT_ABI_VERSION,
-            entries: [{ name: 'tool-a', provider_type: 'tool', stability: 'stable', since_abi_version: '1.0.0' }],
+            entries: [entry('tool-a')],
         };
-        const updated = (0, capability_matrix_1.addEntry)(matrix, { name: 'tool-a', provider_type: 'tool', stability: 'stable', since_abi_version: '1.0.0' });
+        const updated = (0, capability_matrix_1.addEntry)(matrix, entry('tool-a'));
         strict_1.default.equal(updated.entries.length, 1);
     });
 });

@@ -12,9 +12,12 @@ import {
 } from '../src/delivery/ci-checks';
 import { BranchManager } from '../src/delivery/branch-manager';
 import { PRManager } from '../src/delivery/pr-manager';
+import { PromotionPipeline, MergeGateEvaluator } from '../src/delivery/promotion-pipeline';
+import { loadCommitRecord, loadPromotionRecord } from '../src/delivery/delivery-records';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
+import type { RunResult } from '../src/scheduler/scheduler';
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-delivery-'));
@@ -181,5 +184,49 @@ describe('PRManager', () => {
   it('isAvailable returns boolean', () => {
     const pm = new PRManager(process.cwd());
     assert.equal(typeof pm.isAvailable(), 'boolean');
+  });
+});
+
+describe('PromotionPipeline', () => {
+  function runResult(overrides: Partial<RunResult> = {}): RunResult {
+    return {
+      run_id: 'run-delivery',
+      status: 'completed',
+      completed: ['T1'],
+      failed: [],
+      blocked: [],
+      ...overrides,
+    };
+  }
+
+  it('records local commit separately from promotion', () => {
+    const root = tmpDir();
+    const pipeline = new PromotionPipeline(root, new BranchManager(process.cwd()), new PRManager(process.cwd()));
+    const record = pipeline.recordLocalCommit(runResult(), null, null, {
+      commitMessage: 'feat(runtime): close enterprise loop',
+      commitSha: 'abc123',
+      summaryPath: '.oxe/COMMIT-SUMMARY.md',
+    });
+    assert.equal(record.status, 'committed');
+    assert.equal(record.message, 'feat(runtime): close enterprise loop');
+    const stored = loadCommitRecord(root, 'run-delivery');
+    assert.ok(stored);
+    assert.equal(stored!.commit_sha, 'abc123');
+  });
+
+  it('blocks promotion when pending gates exist', async () => {
+    const root = tmpDir();
+    const pipeline = new PromotionPipeline(root, new BranchManager(process.cwd()), new PRManager(process.cwd()), new MergeGateEvaluator());
+    const promotion = await pipeline.promote(
+      runResult(),
+      null,
+      null,
+      {},
+      [{ gate_id: 'gate-1', scope: 'critical_mutation', run_id: 'run-delivery', work_item_id: 'T1', action: 'generate_patch', requested_at: new Date().toISOString(), context: { description: 'Approve', evidence_refs: [], risks: [] }, status: 'pending' }]
+    );
+    assert.equal(promotion.status, 'blocked');
+    const stored = loadPromotionRecord(root, 'run-delivery');
+    assert.ok(stored);
+    assert.equal(stored!.status, 'blocked');
   });
 });

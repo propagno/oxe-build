@@ -17,4 +17,5 @@ Object.defineProperty(exports, "__esModule", { value: true });
 __exportStar(require("./branch-manager"), exports);
 __exportStar(require("./pr-manager"), exports);
 __exportStar(require("./ci-checks"), exports);
+__exportStar(require("./delivery-records"), exports);
 __exportStar(require("./promotion-pipeline"), exports);

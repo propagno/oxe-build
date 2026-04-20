@@ -9,7 +9,7 @@ oxe_tool_profile: review_heavy
 oxe_confidence_policy: explicit
 oxe_context_tier: standard
 oxe_contract_version: 2.0.0
-oxe_semantics_hash: 1e12e0a92c7d0079
+oxe_semantics_hash: 836780b0831671b7
 ---
 
 OXE — Revisão de PR (link GitHub, branches ou SHAs)
@@ -25,7 +25,7 @@ OXE — Revisão de PR (link GitHub, branches ou SHAs)
 - **Política de confiança:** explícita
 - **Tier de contexto padrão:** padrão
 - **Versão do contrato:** 2.0.0
-- **Checksum semântico:** `1e12e0a92c7d0079`
+- **Checksum semântico:** `836780b0831671b7`
 - **Entrada de contexto prioritária:** `.oxe/context/packs/review-pr.md` e `.oxe/context/packs/review-pr.json`
 - **Regra pack-first:** ler o context pack primeiro; se estiver stale, incompleto ou ausente, cair para leitura direta com fallback explícito.
 - **Inspeção estruturada:** `oxe-cc context inspect --workflow review-pr --json`

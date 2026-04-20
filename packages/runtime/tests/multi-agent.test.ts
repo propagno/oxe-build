@@ -10,13 +10,22 @@ import os from 'os';
 import fs from 'fs';
 import path from 'path';
 
-function makeLease(id: string): WorkspaceLease {
-  return { workspace_id: id, strategy: 'inplace', branch: null, base_commit: null, root_path: '/tmp', ttl_minutes: 30 };
+function makeLease(id: string, isolationLevel: 'shared' | 'isolated' = 'isolated'): WorkspaceLease {
+  return {
+    workspace_id: id,
+    strategy: isolationLevel === 'isolated' ? 'git_worktree' : 'inplace',
+    isolation_level: isolationLevel,
+    branch: null,
+    base_commit: null,
+    root_path: '/tmp',
+    ttl_minutes: 30,
+  };
 }
 
-function makeWorkspaceManager(id: string): WorkspaceManager {
+function makeWorkspaceManager(id: string, isolationLevel: 'shared' | 'isolated' = 'isolated'): WorkspaceManager {
   return {
-    allocate: async (_req: WorkspaceRequest) => makeLease(`ws-${id}-${_req.work_item_id}`),
+    isolation_level: isolationLevel,
+    allocate: async (_req: WorkspaceRequest) => makeLease(`ws-${id}-${_req.work_item_id}`, isolationLevel),
     snapshot: async (_id: string): Promise<SnapshotRef> => ({ snapshot_id: 'snap', workspace_id: _id, commit: 'abc', created_at: new Date().toISOString() }),
     reset: async () => {},
     dispose: async () => {},
@@ -39,7 +48,7 @@ function makeFailExecutor(): TaskExecutor {
   };
 }
 
-function makeGraph(nodeIds: string[]): ExecutionGraph {
+function makeGraph(nodeIds: string[], workspaceStrategy: GraphNode['workspace_strategy'] = 'git_worktree'): ExecutionGraph {
   const nodes = new Map<string, GraphNode>();
   for (const id of nodeIds) {
     nodes.set(id, {
@@ -47,7 +56,7 @@ function makeGraph(nodeIds: string[]): ExecutionGraph {
       title: `Task ${id}`,
       wave: 0,
       depends_on: [],
-      workspace_strategy: 'inplace',
+      workspace_strategy: workspaceStrategy,
       mutation_scope: [],
       actions: [],
       verify: { must_pass: [], acceptance_refs: [], command: null },
@@ -63,8 +72,13 @@ function makeGraph(nodeIds: string[]): ExecutionGraph {
   };
 }
 
-function makeAgent(id: string, executor: TaskExecutor, assignedTaskIds?: string[]): AgentSpec {
-  return { id, executor, workspaceManager: makeWorkspaceManager(id), assignedTaskIds };
+function makeAgent(
+  id: string,
+  executor: TaskExecutor,
+  assignedTaskIds?: string[],
+  isolationLevel: 'shared' | 'isolated' = 'isolated'
+): AgentSpec {
+  return { id, executor, workspaceManager: makeWorkspaceManager(id, isolationLevel), assignedTaskIds };
 }
 
 function makeTmpProjectRoot(): string {
@@ -74,6 +88,22 @@ function makeTmpProjectRoot(): string {
 }
 
 describe('MultiAgentCoordinator — parallel mode', () => {
+  it('fails explicitly when workspace isolation is shared', async () => {
+    const root = makeTmpProjectRoot();
+    const graph = makeGraph(['t1', 't2'], 'inplace');
+    const coordinator = new MultiAgentCoordinator();
+    await assert.rejects(
+      () => coordinator.run(graph, {
+        mode: 'parallel',
+        agents: [makeAgent('a1', makeSuccessExecutor(), undefined, 'shared'), makeAgent('a2', makeSuccessExecutor(), undefined, 'shared')],
+        projectRoot: root,
+        sessionId: null,
+        runId: 'r-parallel-shared',
+      }),
+      /isolated workspaces/i
+    );
+  });
+
   it('completes all tasks with two agents', async () => {
     const root = makeTmpProjectRoot();
     const graph = makeGraph(['t1', 't2', 't3', 't4']);
@@ -88,6 +118,9 @@ describe('MultiAgentCoordinator — parallel mode', () => {
     const result = await coordinator.run(graph, opts);
     assert.equal(result.mode, 'parallel');
     assert.equal(result.completed.length + result.failed.length, 4);
+    assert.ok(fs.existsSync(path.join(root, '.oxe', 'runs', 'r-parallel-001', 'multi-agent-state.json')));
+    assert.ok(fs.existsSync(path.join(root, '.oxe', 'runs', 'r-parallel-001', 'handoffs.json')));
+    assert.ok(fs.existsSync(path.join(root, '.oxe', 'runs', 'r-parallel-001', 'arbitration-results.json')));
   });
 
   it('distributes tasks round-robin when no assignedTaskIds', async () => {
@@ -127,6 +160,22 @@ describe('MultiAgentCoordinator — parallel mode', () => {
 });
 
 describe('MultiAgentCoordinator — competitive mode', () => {
+  it('fails explicitly when workspace isolation is shared', async () => {
+    const root = makeTmpProjectRoot();
+    const graph = makeGraph(['t1'], 'inplace');
+    const coordinator = new MultiAgentCoordinator();
+    await assert.rejects(
+      () => coordinator.run(graph, {
+        mode: 'competitive',
+        agents: [makeAgent('agentA', makeSuccessExecutor(), undefined, 'shared'), makeAgent('agentB', makeSuccessExecutor(), undefined, 'shared')],
+        projectRoot: root,
+        sessionId: null,
+        runId: 'r-competitive-shared',
+      }),
+      /isolated workspaces/i
+    );
+  });
+
   it('picks winner when both succeed (prefers A)', async () => {
     const root = makeTmpProjectRoot();
     const graph = makeGraph(['t1']);
@@ -141,6 +190,8 @@ describe('MultiAgentCoordinator — competitive mode', () => {
     const result = await coordinator.run(graph, opts);
     assert.equal(result.mode, 'competitive');
     assert.ok(result.completed.includes('t1') || result.failed.includes('t1'));
+    assert.ok(Array.isArray(result.arbitration_results));
+    assert.equal(result.arbitration_results?.length, 1);
   });
 
   it('picks B when A fails', async () => {
@@ -174,6 +225,22 @@ describe('MultiAgentCoordinator — competitive mode', () => {
 });
 
 describe('MultiAgentCoordinator — cooperative mode', () => {
+  it('fails explicitly when workspace isolation is shared', async () => {
+    const root = makeTmpProjectRoot();
+    const graph = makeGraph(['t1'], 'inplace');
+    const coordinator = new MultiAgentCoordinator();
+    await assert.rejects(
+      () => coordinator.run(graph, {
+        mode: 'cooperative',
+        agents: [makeAgent('planner', makeSuccessExecutor(), undefined, 'shared'), makeAgent('executor', makeSuccessExecutor(), undefined, 'shared')],
+        projectRoot: root,
+        sessionId: null,
+        runId: 'r-cooperative-shared',
+      }),
+      /isolated workspaces/i
+    );
+  });
+
   it('planner/executor handoff completes all tasks', async () => {
     const root = makeTmpProjectRoot();
     const graph = makeGraph(['t1', 't2']);
@@ -189,6 +256,7 @@ describe('MultiAgentCoordinator — cooperative mode', () => {
     assert.equal(result.mode, 'cooperative');
     assert.equal(result.completed.length, 2);
     assert.equal(result.failed.length, 0);
+    assert.ok(fs.existsSync(path.join(root, '.oxe', 'runs', 'r-cooperative-001', 'handoffs.json')));
   });
 
   it('records one handoff per task', async () => {

@@ -119,6 +119,9 @@ function getWorkflowContract(slug) {
     blocking_conditions: uniqueStrings(workflow.blocking_conditions || modeDefaults.blocking_conditions || []),
     output_sections: uniqueStrings(workflow.output_sections || modeDefaults.output_sections || []),
     extraction_intent: String(workflow.extraction_intent || 'status_read'),
+    runtime_default_commands: Array.isArray(workflow.runtime_default_commands) ? workflow.runtime_default_commands.slice() : [],
+    runtime_primary_artifacts: Array.isArray(workflow.runtime_primary_artifacts) ? workflow.runtime_primary_artifacts.slice() : [],
+    runtime_fallback_note: workflow.runtime_fallback_note ? String(workflow.runtime_fallback_note) : '',
     auditor_artifacts: Array.isArray(workflow.auditor_artifacts) ? workflow.auditor_artifacts.slice() : [],
     auditor_excluded: Array.isArray(workflow.auditor_excluded) ? workflow.auditor_excluded.slice() : [],
     reference: MODE_REFERENCES[mode] || null,
@@ -290,6 +293,15 @@ function buildReasoningContractBlock(meta, options = {}) {
   }
   if (blocking.length) {
     lines.push(`- **Bloqueios formais:** ${blocking.join(' · ')}`);
+  }
+  if (Array.isArray(contract.runtime_default_commands) && contract.runtime_default_commands.length) {
+    lines.push(`- **Caminho runtime padrão:** ${contract.runtime_default_commands.map((cmd) => `\`${cmd}\``).join(' → ')}`);
+  }
+  if (Array.isArray(contract.runtime_primary_artifacts) && contract.runtime_primary_artifacts.length) {
+    lines.push(`- **Artefatos canónicos primários:** ${contract.runtime_primary_artifacts.map((artifact) => `\`${artifact}\``).join(' · ')}`);
+  }
+  if (contract.runtime_fallback_note) {
+    lines.push(`- **Fallback runtime:** ${contract.runtime_fallback_note}`);
   }
   if (includeReference && MODE_REFERENCES[mode]) {
     lines.push(`- **Referência canónica:** \`${MODE_REFERENCES[mode]}\``);

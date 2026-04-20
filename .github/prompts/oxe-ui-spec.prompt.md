@@ -11,7 +11,7 @@ oxe_tool_profile: mixed
 oxe_confidence_policy: rubric
 oxe_context_tier: standard
 oxe_contract_version: 2.0.0
-oxe_semantics_hash: 76ba6d1e0e2f02e6
+oxe_semantics_hash: 5c8a7668f0a9fca1
 ---
 
 <!-- oxe-reasoning-contract:start -->
@@ -25,7 +25,7 @@ oxe_semantics_hash: 76ba6d1e0e2f02e6
 - **Política de confiança:** rubrica
 - **Tier de contexto padrão:** padrão
 - **Versão do contrato:** 2.0.0
-- **Checksum semântico:** `76ba6d1e0e2f02e6`
+- **Checksum semântico:** `5c8a7668f0a9fca1`
 - **Entrada de contexto prioritária:** `.oxe/context/packs/ui-spec.md` e `.oxe/context/packs/ui-spec.json`
 - **Regra pack-first:** ler o context pack primeiro; se estiver stale, incompleto ou ausente, cair para leitura direta com fallback explícito.
 - **Inspeção estruturada:** `oxe-cc context inspect --workflow ui-spec --json`

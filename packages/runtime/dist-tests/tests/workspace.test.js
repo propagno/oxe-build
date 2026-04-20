@@ -17,6 +17,7 @@ const baseReq = {
         const mgr = new inplace_1.InplaceWorkspaceManager('/tmp/fake-root');
         const lease = await mgr.allocate(baseReq);
         strict_1.default.equal(lease.strategy, 'inplace');
+        strict_1.default.equal(lease.isolation_level, 'shared');
         strict_1.default.equal(lease.root_path, '/tmp/fake-root');
         strict_1.default.ok(lease.workspace_id.includes('T1'));
         strict_1.default.ok(lease.workspace_id.includes('a1'));

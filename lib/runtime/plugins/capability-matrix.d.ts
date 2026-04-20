@@ -1,10 +1,15 @@
 import type { PluginRegistry } from './plugin-registry';
 export type ApiStability = 'stable' | 'experimental' | 'deprecated';
 export interface ProviderCapabilityEntry {
+    plugin: string;
     name: string;
+    capability: string;
     provider_type: 'tool' | 'workspace' | 'verifier' | 'context';
     stability: ApiStability;
+    abi_version: string;
     since_abi_version: string;
+    supported: string[];
+    fallback_available: boolean;
     deprecated_in?: string;
     replacement?: string;
 }

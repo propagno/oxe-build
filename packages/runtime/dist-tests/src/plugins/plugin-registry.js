@@ -6,12 +6,17 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PluginRegistry = void 0;
 exports.globalRegistry = globalRegistry;
 exports.resetGlobalRegistry = resetGlobalRegistry;
+exports.registrySummary = registrySummary;
+exports.resolveCapabilityMatrix = resolveCapabilityMatrix;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const plugin_manifest_1 = require("./plugin-manifest");
+const capability_matrix_1 = require("./capability-matrix");
+const capability_adapter_1 = require("./capability-adapter");
 class PluginRegistry {
     constructor() {
         this.plugins = [];
+        this.loadErrors = [];
     }
     register(plugin) {
         if (this.plugins.some((p) => p.name === plugin.name)) {
@@ -43,8 +48,8 @@ class PluginRegistry {
                     loaded.push(plugin.name);
                 }
             }
-            catch {
-                // skip invalid plugin files
+            catch (error) {
+                this.loadErrors.push(`Plugin ${fullPath} falhou ao carregar: ${error instanceof Error ? error.message : String(error)}`);
             }
         }
         return loaded;
@@ -106,6 +111,72 @@ class PluginRegistry {
             ],
         }));
     }
+    registerProjectCapabilities(projectRoot) {
+        const loaded = [];
+        for (const plugin of (0, capability_adapter_1.loadCapabilityPlugins)(projectRoot)) {
+            try {
+                this.register(plugin);
+                loaded.push(plugin.name);
+            }
+            catch (error) {
+                this.loadErrors.push(`Capability plugin ${plugin.name} falhou ao registrar: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
+        return loaded;
+    }
+    loadErrorsSnapshot() {
+        return [...this.loadErrors];
+    }
+    clearLoadErrors() {
+        this.loadErrors = [];
+    }
+    snapshot() {
+        return this.plugins.map((plugin) => ({
+            name: plugin.name,
+            version: plugin.version,
+            abi_version: plugin.abi_version,
+            toolProviders: (plugin.toolProviders ?? []).map((provider) => ({
+                name: provider.name,
+                kind: provider.kind,
+                idempotent: provider.idempotent,
+            })),
+            workspaceProviders: (plugin.workspaceProviders ?? []).map((provider) => ({
+                name: provider.name,
+            })),
+            verifierProviders: (plugin.verifierProviders ?? []).map((provider) => ({
+                name: provider.name,
+            })),
+            contextProviders: (plugin.contextProviders ?? []).map((provider) => ({
+                name: provider.name,
+            })),
+        }));
+    }
+    summary() {
+        const plugins = this.list();
+        const toolProviders = plugins.reduce((sum, plugin) => sum + plugin.providers.filter((provider) => provider.startsWith('tool:')).length, 0);
+        const workspaceProviders = plugins.reduce((sum, plugin) => sum + plugin.providers.filter((provider) => provider.startsWith('workspace:')).length, 0);
+        const verifierProviders = plugins.reduce((sum, plugin) => sum + plugin.providers.filter((provider) => provider.startsWith('verifier:')).length, 0);
+        const contextProviders = plugins.reduce((sum, plugin) => sum + plugin.providers.filter((provider) => provider.startsWith('context:')).length, 0);
+        const loadErrors = this.loadErrors.length;
+        return {
+            total_plugins: plugins.length,
+            tool_providers: toolProviders,
+            workspace_providers: workspaceProviders,
+            verifier_providers: verifierProviders,
+            context_providers: contextProviders,
+            load_errors: loadErrors,
+            pluginsCount: plugins.length,
+            toolProviders,
+            workspaceProviders,
+            verifierProviders,
+            contextProviders,
+            loadErrors,
+            plugins,
+        };
+    }
+    capabilityMatrix() {
+        return (0, capability_matrix_1.buildMatrix)(this);
+    }
 }
 exports.PluginRegistry = PluginRegistry;
 let _globalRegistry = null;
@@ -116,4 +187,10 @@ function globalRegistry() {
 }
 function resetGlobalRegistry() {
     _globalRegistry = null;
+}
+function registrySummary(registry) {
+    return registry.summary();
+}
+function resolveCapabilityMatrix(registry) {
+    return registry.capabilityMatrix();
 }
