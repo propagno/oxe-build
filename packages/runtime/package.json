@@ -1,8 +1,9 @@
 {
   "name": "@oxe/runtime",
-  "version": "0.1.0",
+  "version": "1.4.0",
   "private": true,
-  "description": "OXE agentic execution engine — Runtime Foundation (R1)",
+  "license": "MIT",
+  "description": "OXE agentic execution engine — enterprise runtime core",
   "main": "../../lib/runtime/index.js",
   "types": "../../lib/runtime/index.d.ts",
   "scripts": {

@@ -1,8 +1,8 @@
 {
 	"name": "oxe-cc",
-	"version": "1.3.0",
-	"description": "OXE — spec-driven workflows in .oxe/; integrates with Cursor, GitHub Copilot, Claude, OpenCode, Gemini, Codex, Windsurf, Antigravity (npx)",
-	"license": "GPL-3.0",
+	"version": "1.4.0",
+	"description": "OXE — spec-driven workflows in .oxe/ with runtime enterprise, evidence-first verification and multi-runtime integrations (npx)",
+	"license": "MIT",
 	"author": "",
 	"homepage": "https://www.npmjs.com/package/oxe-cc",
 	"bugs": {

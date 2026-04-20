@@ -4,6 +4,33 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.4.0] — 2026-04-20
+
+### Runtime Publication Stabilization
+
+- `execute` e `verify` passaram a documentar e propagar o contrato `runtime-first`, com fallback legado explícito quando o runtime enterprise não estiver disponível
+- `runtime gates` ganhou superfície operacional estável com `list`, `show`, `resolve`, filtros (`--run`, `--status`, `--scope`, `--task`) e `--json`
+- `status --json` e `runtime status --json` consolidam `runtimeMode`, `fallbackMode`, `gateQueue`, `policyCoverage`, `promotionReadiness`, `recoveryState`, `multiAgent` e `providerCatalog`
+- dashboard web passou a expor cards operacionais para gates, recovery, promotion e multi-agent, incluindo resolução de gates pela UI
+- replay/recovery ficaram orientados a incidente com saída estruturada, reconciliação de run state e summaries derivados
+- `multi-agent` foi endurecido como GA apenas sobre workspaces isolados reais; modos `parallel`, `competitive` e `cooperative` falham explicitamente em `inplace`
+- SDK ampliado com `GateQueueSnapshot`, `replayRuntimeState`, `readRuntimeMultiAgentStatus` e alias `multiAgentStatus`
+
+### Release Preparation
+
+- alinhamento de versão para `1.4.0` em `package.json`, `package-lock.json`, `packages/runtime/package.json`, `vscode-extension/package.json`, banner e README
+- alinhamento de licença da extensão VS Code com o pacote principal e inclusão de `vscode-extension/LICENSE` para empacotamento limpo do VSIX
+- licença do projeto alterada de `GPL-3.0` para `MIT`, com manifests e documentação pública alinhados
+- README atualizado para refletir o momento atual do produto, o contrato estável de publicação e a superfície enterprise do CLI/runtime
+- `lib/sdk/README.md` e `AGENTS.md` atualizados para refletir os bridges do runtime enterprise e o comportamento `runtime-first`
+
+### Validation
+
+- suíte root + runtime continua verde
+- scanner de assets/markdown continua íntegro
+
+---
+
 ## [1.3.0] — 2026-04-20
 
 ### Reasoning Contracts & Semântica Multi-Runtime

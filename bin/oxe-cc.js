@@ -2260,7 +2260,7 @@ ${green}runtime${reset} (controle operacional explícito do ACTIVE-RUN)
   verify                                 executa a suite enterprise, coleta evidência e projeta VERIFY.md
   project                                projeta markdowns derivados do estado canônico
   ci                                     executa checks do runtime e persiste o resultado na run
-  promote                                promove remotamente a run ativa (pr_draft|branch_push)
+  promote                                promove remotamente a run ativa (estável: pr_draft)
   recover                                reidrata estado canônico/journal/gates/policy da run ativa
   gates <list|show|resolve>              fila operacional de gates pendentes e resoluções auditáveis
   --session <sessions/sNNN-slug>         força sessão específica
@@ -2274,7 +2274,7 @@ ${green}runtime${reset} (controle operacional explícito do ACTIVE-RUN)
   --gate <gate_id>                       (gates show|resolve) gate alvo
   --decision <approve|reject|waive>      (gates resolve) decisão aplicada
   --actor <id>                           (gates resolve) ator responsável
-  --target <pr_draft|branch_push>        (promote) alvo remoto; padrão pr_draft
+  --target <pr_draft|branch_push>        (promote) alvo remoto; padrão pr_draft, branch_push é avançado
   --remote <nome>                        (promote) remote git; padrão origin
   --base <branch>                        (promote) branch/ref base; padrão main
   --minimum-coverage <0-100>             (promote) cobertura mínima exigida; padrão 100

@@ -1,6 +1,6 @@
 # OXE SDK (`oxe-cc`)
 
-API programática estável para scripts, CI e integrações. O binário `oxe-cc` usa os mesmos módulos em `bin/lib/`.
+API programática estável para scripts, CI e integrações. O binário `oxe-cc` usa os mesmos módulos em `bin/lib/` e reexporta bridges do runtime enterprise.
 
 ## Instalação
 
@@ -50,6 +50,7 @@ const { options, warnings: w } = oxe.install.resolveOptionsFromConfig(dir, {
 | **manifest** | `loadFileManifest`, `writeFileManifest`, `sha256File`, `collectFilesRecursive` |
 | **agents** | `adjustWorkflowPathsForNestedLayout`, `parseCursorCommandFrontmatter` |
 | **azure** | `azurePaths`, `detectAzureCli`, `loadAzureProfile`, `syncAzureInventory`, `planAzureOperation`, `applyAzureOperation`, `azureDoctor` |
+| **runtime / operational** | `buildRuntimePluginRegistry`, `readRuntimeGates`, `resolveRuntimeGate`, `runRuntimeVerify`, `runRuntimePromotion`, `recoverRuntimeState`, `replayRuntimeState`, `readRuntimeMultiAgentStatus`, `multiAgentStatus` |
 | **doctor** | `runDoctorChecks` — resultado estruturado (erros + avisos + diff de workflows + `workflowShape` com lint leve dos `.md`) |
 
 TypeScript: ver `index.d.ts` junto deste ficheiro.
@@ -66,3 +67,14 @@ TypeScript: ver `index.d.ts` junto deste ficheiro.
 ## `runDoctorChecks` e relatório de saúde
 
 O resultado inclui **`healthReport`** com a mesma forma que `buildHealthReport` — útil em pipelines para falhar ou avisar quando `healthReport.stale.stale` ou `healthReport.staleCompact.stale` é verdadeiro (alinhado aos avisos do `oxe-cc doctor`).
+
+## Helpers enterprise de release
+
+O SDK já expõe os helpers usados pela operação enterprise do OXE:
+
+- `verifyRun(...)` — verify executável com evidence store, manifest e residual risk
+- `operational.readRuntimeGates(...)` / `operational.resolveRuntimeGate(...)`
+- `operational.recoverRuntimeState(...)` / `operational.replayRuntimeState(...)`
+- `operational.readRuntimeMultiAgentStatus(...)` / `operational.multiAgentStatus(...)`
+
+Use esses helpers quando quiser integrar gates, verify, recovery e multi-agent a scripts de CI, automações internas ou observabilidade.

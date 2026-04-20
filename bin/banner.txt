@@ -7,11 +7,11 @@
 
 ══════════════════════════════════════════════════════
 
-        🌵 OXE CLI · Spec-driven workflow
-        "Do jeito nordestino de fazer software"
+        🌵 OXE CLI · Runtime Enterprise
+        "Spec-driven workflow com estado canónico"
 
-        ⚙️  Context Engineering
-        🤖  Multi-IDE · Cursor · Copilot · +CLIs
+        ⚙️  Context Engineering · Evidence-first Verify
+        🤖  Multi-IDE · Copilot · Cursor · +CLIs
 
 ══════════════════════════════════════════════════════
 

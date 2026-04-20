@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
-**Versão:** `1.3.0` · [package.json](package.json)
+**Versão:** `1.4.0` · [package.json](package.json)
 
 **Framework OXE — Orchestrated eXperience Engineering**
 
@@ -25,10 +25,10 @@ npx oxe-cc@latest
 
 OXE é o **Framework OXE — Orchestrated eXperience Engineering**: um framework de desenvolvimento assistido por IA orientado por artefatos, contexto em disco e execução verificável. Funciona identicamente em Cursor, GitHub Copilot, Claude Code, Gemini CLI, Windsurf e qualquer outro agente — o estado fica em `.oxe/` no seu projeto, não preso a nenhuma IDE.
 
-No momento atual, o OXE já opera em duas camadas complementares:
+No momento atual, o OXE opera em duas camadas complementares já prontas para publicação:
 
 - **framework de método** — `spec -> plan -> execute -> verify`, sessões, workstreams, lessons loop e contratos de raciocínio multi-runtime
-- **runtime enterprise incremental** — `ExecutionGraph`, `canonical_state`, context packs, evidence store, verification manifest, gates, policy, promotion e auditoria operacional
+- **runtime enterprise** — `ExecutionGraph`, `canonical_state`, context packs, evidence store, verification manifest, gates, policy, promotion, recovery e auditoria operacional
 
 Ele se apoia em três princípios:
 
@@ -75,6 +75,13 @@ Em termos práticos, o estado operacional real agora passa por:
 - `.oxe/runs/<run_id>/evidence-coverage.json`
 - `.oxe/execution/GATES.json`
 - `OXE-EVENTS.ndjson`
+
+Contrato estável desta release:
+
+- `execute` e `verify` são `runtime-first` quando `oxe-cc runtime` está disponível
+- `status`, `doctor`, dashboard e CLI de runtime leem o mesmo estado canónico
+- `multi-agent` é GA apenas com isolamento real (`git_worktree`); `inplace` não é backend válido para coordenação paralela
+- `pr_draft` é o alvo remoto estável de promotion nesta publicação
 
 ---
 
@@ -382,6 +389,22 @@ Complexidade: S | M | L | XL
 
 Tarefas `XL` bloqueiam o gate sem sub-tarefas ou justificativa. `/oxe-obs` propaga automaticamente constraints para os R-IDs e Tns afetados.
 
+#### Iteração correta do plano
+
+Se o usuário quiser chamar `/oxe-plan` várias vezes até ficar satisfeito, o fluxo esperado é este:
+
+- **Mesmo escopo e mesma `SPEC.md`, mas quer refinar tarefas, ondas, dependências, riscos ou validação**: usar `/oxe-plan --replan`
+- **Mudou a estratégia técnica**: voltar para `/oxe-discuss` e depois `/oxe-plan --replan`
+- **Mudou requisitos, critérios, prioridades ou aceite**: voltar para `/oxe-spec` e depois `/oxe-plan`
+
+Regra prática:
+
+- `spec` muda o **que** será entregue
+- `discuss` muda o **como** ou o **porquê** da estratégia
+- `plan --replan` muda **como quebrar e executar** a mesma entrega
+
+Se já existir `PLAN.md` no escopo atual e o usuário chamar `/oxe-plan` de novo sem alterar a spec, o OXE deve tratar isso como **replan implícito**, preservando a seção **Replanejamento** e o histórico útil do plano anterior.
+
 ### Runtime operacional e checkpoints
 
 - `PLAN.md` continua estratégico.
@@ -402,18 +425,31 @@ oxe-cc status --full    # health + coverage matrix + readiness gate no terminal
 oxe-cc runtime status   # run ativo, cursor, onda atual
 oxe-cc runtime verify   # verify enterprise: suite + evidence + manifest + risk ledger
 oxe-cc runtime gates list
+oxe-cc runtime agents --json
 oxe-cc runtime promote --target pr_draft
 ```
 
-O `status --full` mostra em ANSI: readiness do ciclo, autoavaliação do plano, health lógico, contexto, gates pendentes, verify enterprise, quotas, audit trail e promotion state.
+O `status --full` mostra em ANSI: readiness do ciclo, autoavaliação do plano, health lógico, contexto, gates pendentes, verify enterprise, quotas, audit trail, recovery state, multi-agent e promotion state.
 
 ### Dashboard web — opt-in para revisões de equipe
 
-- `oxe-cc dashboard` sobe uma interface web local em `localhost` para revisar o plano antes da execução — indicado para apresentações ou revisões em equipe, não para uso diário.
+- `oxe-cc dashboard` sobe uma interface web local em `localhost` para revisar o plano antes da execução — indicado para apresentações, operação de gates e revisões em equipe, não para substituir o terminal no dia a dia.
 - A UI lê os artefatos OXE reais; ela não substitui `PLAN.md`, `STATE.md` ou `VERIFY.md`.
-- A visão inclui ciclo principal, mapa de artefatos, active run, trace log, trilha de ondas, handoffs, checkpoints, agentes, evidências, gates, quotas, audit summary e promotion state sem criar uma segunda fonte de verdade.
-- `oxe-cc runtime <start|pause|resume|replay|status|compile|verify|project|ci|promote|recover|gates>` controla explicitamente `ACTIVE-RUN.json`, `runs/`, `GATES.json`, manifests de verify e `OXE-EVENTS.ndjson` no mesmo contrato consumido pelo dashboard.
+- A visão inclui ciclo principal, mapa de artefatos, active run, trace log, trilha de ondas, handoffs, checkpoints, agentes, evidências, gates, quotas, audit summary, recovery state e promotion state sem criar uma segunda fonte de verdade.
+- `oxe-cc runtime <start|pause|resume|replay|status|compile|verify|project|ci|promote|recover|gates|agents>` controla explicitamente `ACTIVE-RUN.json`, `runs/`, `GATES.json`, manifests de verify, artefatos de recovery, `multi-agent-state.json` e `OXE-EVENTS.ndjson` no mesmo contrato consumido pelo dashboard.
 - A aprovação visual persiste em `plan_review_status` no `STATE.md`, em `PLAN-REVIEW.md` e em `plan-review-comments.json`.
+
+### Critérios de publicação desta release
+
+O pacote está pronto para uma publicação robusta quando estes sinais estiverem verdes no repositório da release:
+
+- `npm test`
+- `npm run scan:assets`
+- `npm run build:vscode-ext`
+- `node bin/oxe-cc.js doctor`
+- `node bin/oxe-cc.js status --full`
+
+Não há outro bloqueador funcional do plano runtime core para esta publicação. O que sobra depois dela é evolução de ergonomia e expansão de targets, não correção estrutural do contrato atual.
 
 ### `/oxe-retro` — loop de aprendizado
 
@@ -511,18 +547,19 @@ node bin/oxe-cc.js --help
 | `oxe-cc doctor` | Diagnóstico completo: Node, workflows, config, bootstrap `.oxe/`, sessão ativa, autoavaliação do plano, saúde lógica (`healthy` \| `warning` \| `broken`), drift semântico multi-runtime e workflows sem contrato no registry |
 | `oxe-cc status` | Próximo passo sugerido + saúde lógica do fluxo |
 | `oxe-cc status --full` | Coverage matrix + readiness gate + active run no terminal (ANSI) |
-| `oxe-cc status --json` | Mesmo, em JSON (schema v5), com `healthStatus`, `activeSession`, `planSelfEvaluation`, `contextPacks`, `contextQuality`, `semanticsDrift`, `verificationSummary`, `residualRiskSummary`, `evidenceCoverage`, `pendingGates`, `policyDecisionSummary`, `quotaSummary`, `auditSummary` e `promotionSummary` |
+| `oxe-cc status --json` | Mesmo, em JSON (schema v5), com `healthStatus`, `activeSession`, `planSelfEvaluation`, `contextPacks`, `contextQuality`, `semanticsDrift`, `verificationSummary`, `residualRiskSummary`, `evidenceCoverage`, `pendingGates`, `policyDecisionSummary`, `quotaSummary`, `auditSummary`, `promotionSummary`, `runtimeMode`, `fallbackMode`, `gateQueue`, `policyCoverage`, `promotionReadiness`, `recoveryState`, `multiAgent` e `providerCatalog` |
 | `oxe-cc context build [--workflow <slug>] [--tier <minimal\|standard\|full>]` | Gera context pack(s) em `.oxe/context/packs/` — seleção determinística de artefatos por contrato de workflow |
 | `oxe-cc context inspect [--workflow <slug>]` | Inspeciona um context pack existente ou resolve sob demanda (sem escrita); útil para diagnóstico antes de iniciar um passo |
 | `oxe-cc update` | Atualiza workflows para a versão mais recente |
 | `oxe-cc init-oxe` | Bootstrap do `.oxe/` (STATE, config, codebase/, context/, install/) |
 | `oxe-cc dashboard` | Interface web local para revisão, comentários e aprovação do plano (inclui aba Context com quality score e drift semântico) |
-| `oxe-cc runtime <status\|start\|pause\|resume\|replay\|compile\|verify\|project\|ci\|promote\|recover\|gates>` | Controla o runtime enterprise: run ativo, grafo compilado, verify executável, gates, promoção remota, recovery e tracing operacional |
-| `oxe-cc runtime replay [--run <id>] [--from <event-id>] [--wave <n>] [--write]` | Timeline de eventos com deltas; `--write` gera `REPLAY-SESSION.md` |
+| `oxe-cc runtime <status\|start\|pause\|resume\|replay\|compile\|verify\|project\|ci\|promote\|recover\|gates\|agents>` | Controla o runtime enterprise: run ativo, grafo compilado, verify executável, gates, promoção remota, recovery, multi-agent e tracing operacional |
+| `oxe-cc runtime replay [--run <id>] [--from <event-id>] [--wave <n>] [--write] [--json]` | Timeline operacional estruturada; `--write` gera `REPLAY-SESSION.md` com divergências e deltas |
 | `oxe-cc runtime verify` | Executa `compileVerification + executeSuite + EvidenceStore + manifest + residual risk + projections` para a run ativa |
-| `oxe-cc runtime gates <list\|show\|resolve>` | Lista, inspeciona e resolve gates operacionais persistidos |
-| `oxe-cc runtime promote --target <pr_draft\|branch_push>` | Promoção remota explícita, separada de `ship`, governada por verify, gates, risk e coverage |
-| `oxe-cc runtime recover` | Reidrata journal, gates, policy decisions, evidence refs e estado canónico da run ativa |
+| `oxe-cc runtime gates <list\|show\|resolve>` | Lista, inspeciona e resolve gates operacionais persistidos; `list` aceita `--run`, `--status`, `--scope`, `--task` e `--json` |
+| `oxe-cc runtime agents status [--run <id>] [--json]` | Inspeciona ownership, handoffs, heartbeats, timeouts e failover multi-agent |
+| `oxe-cc runtime promote --target pr_draft` | Promoção remota explícita, separada de `ship`, governada por verify, gates, risk e coverage; `pr_draft` é o alvo estável desta release |
+| `oxe-cc runtime recover [--run <id>] [--json]` | Reidrata journal, gates, policy decisions, evidence refs, verification artifacts e estado canónico da run |
 | `oxe-cc capabilities <list\|install\|remove\|update>` | Mantém o catálogo nativo de capabilities em `.oxe/` |
 | `oxe-cc plugins <list\|install\|remove>` | Gerencia plugins de lifecycle; `install npm:<pkg>` instala em `.oxe/plugins/_npm/` |
 | `oxe-cc uninstall` | Remove integrações OXE do HOME e do repo |
@@ -607,4 +644,4 @@ TypeScript: [`lib/sdk/index.d.ts`](lib/sdk/index.d.ts) · Docs: [`lib/sdk/README
 
 ## Licença
 
-[GPL-3.0](LICENSE)
+[MIT](LICENSE)
