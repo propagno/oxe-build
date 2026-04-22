@@ -126,7 +126,7 @@ describe('oxe-cc CLI', () => {
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'investigations')));
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'dashboard')));
     const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'config.json'), 'utf8'));
-    assert.strictEqual(cfg.plan_confidence_threshold, 70);
+    assert.strictEqual(cfg.plan_confidence_threshold, 90);
     const gi = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');
     assert.match(gi, /\.oxe\/\s*$/m);
   });

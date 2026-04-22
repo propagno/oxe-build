@@ -237,6 +237,51 @@ export interface PromotionSummary {
   path: string;
 }
 
+export interface ExecutionImplementationPackSummary {
+  path: string | null;
+  exists: boolean;
+  parseError: string | null;
+  ready: boolean;
+  tasks: Array<Record<string, unknown>>;
+  taskCount: number;
+  mutatingTasks: number;
+  criticalGaps: string[];
+}
+
+export interface ExecutionReferenceAnchorsSummary {
+  path: string | null;
+  exists: boolean;
+  ready: boolean;
+  anchors: Array<Record<string, unknown>>;
+  missingCriticalCount: number;
+  staleCount: number;
+  criticalGaps: string[];
+}
+
+export interface ExecutionFixturePackSummary {
+  path: string | null;
+  exists: boolean;
+  parseError: string | null;
+  ready: boolean;
+  fixtures: Array<Record<string, unknown>>;
+  fixtureCount: number;
+  criticalGaps: string[];
+}
+
+export interface ExecutionRationalitySummary {
+  applicable: boolean;
+  planTaskCount: number;
+  externalReferenceCount: number;
+  implementationPackReady: boolean;
+  referenceAnchorsReady: boolean;
+  fixturePackReady: boolean;
+  executionRationalityReady: boolean;
+  criticalExecutionGaps: string[];
+  implementationPack: ExecutionImplementationPackSummary;
+  referenceAnchors: ExecutionReferenceAnchorsSummary;
+  fixturePack: ExecutionFixturePackSummary;
+}
+
 /** Relatório retornado por `health.buildHealthReport` e incluído em `runDoctorChecks`.healthReport. */
 export interface OxeHealthReport {
   configPath: string | null;
@@ -263,6 +308,12 @@ export interface OxeHealthReport {
   specWarn: string[];
   planWarn: string[];
   planSelfEvaluation?: Record<string, unknown> | null;
+  implementationPackReady?: boolean;
+  referenceAnchorsReady?: boolean;
+  fixturePackReady?: boolean;
+  executionRationalityReady?: boolean;
+  criticalExecutionGaps?: string[];
+  executionRationality?: ExecutionRationalitySummary | null;
   planReviewStatus?: string | null;
   activeRun?: Record<string, unknown> | null;
   eventsSummary?: Record<string, unknown> | null;
@@ -619,6 +670,7 @@ export interface OxeSdk {
   parsePlan: (planMd: string) => ParsedPlan;
   parseHypotheses: (planText: string) => CriticalHypothesis[];
   parseConfidenceVector: (planText: string) => ConfidenceVector | null;
+  parseExecutionPlanTasks: (planPath: string | null) => Array<Record<string, unknown>>;
   parseSpec: (specMd: string) => ParsedSpec;
   parseState: (stateMd: string) => ParsedState;
   validateDecisionFidelity: (discussMd: string, planMd: string) => DecisionFidelityResult;
@@ -657,6 +709,8 @@ export interface OxeSdk {
     specSectionWarnings: (specPath: string, requiredHeadings: string[]) => string[];
     planWaveWarningsFixed: (planPath: string, maxPerWave: number) => string[];
     planTaskAceiteWarnings: (planPath: string) => string[];
+    buildExecutionRationality: (paths?: Record<string, string | null | undefined>) => ExecutionRationalitySummary;
+    executionRationalityWarningsFromSummary: (summary: ExecutionRationalitySummary) => string[];
     verifyGapsWithoutSummaryWarning: (verifyPath: string, summaryPath: string) => string | null;
     expandExecutionProfile: (profile: string) => Record<string, unknown>;
     ALLOWED_CONFIG_KEYS: string[];

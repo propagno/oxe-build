@@ -3,6 +3,15 @@
 <objective>
 Produzir **`.oxe/PLAN.md`**: tarefas **pequenas**, **ondas** (paralelizáveis vs sequenciais), e **cada tarefa com bloco de verificação** (comando de teste e/ou checklist manual).
 
+Além do `PLAN.md`, este passo deve gerar no mesmo escopo resolvido da sessão os artefatos racionais de execução:
+- `.oxe/IMPLEMENTATION-PACK.md`
+- `.oxe/IMPLEMENTATION-PACK.json`
+- `.oxe/REFERENCE-ANCHORS.md`
+- `.oxe/FIXTURE-PACK.md`
+- `.oxe/FIXTURE-PACK.json`
+
+Esses artefatos são obrigatórios para considerar o plano executável. Quando algo não se aplicar, marcar explicitamente `not_applicable`; nunca omitir o arquivo.
+
 Base: `SPEC.md` do escopo resolvido da sessão (critérios com IDs **A1**, **A2**, …) + `.oxe/codebase/*` + código quando necessário (Grep/Read pontual).
 
 Se o usuário pedir **--replan** (ou replanejamento implícito após `verify_failed`):
@@ -10,6 +19,37 @@ Se o usuário pedir **--replan** (ou replanejamento implícito após `verify_fai
 - Preservar tarefas já concluídas ou renumerar com nota em **Replanejamento**; não apagar histórico útil — deslocar para a seção **Replanejamento** e reescrever **Tarefas** conforme necessário.
 - Se **SUMMARY.md** não existir, criar a partir de `oxe/templates/SUMMARY.template.md` para registrar o contexto do replan (ou dar append se já existir).
 </objective>
+
+<execution_rational_artifacts>
+## Artefatos racionais obrigatórios
+
+### IMPLEMENTATION-PACK
+Contrato de implementação por tarefa `Tn`, com:
+- caminhos exatos dos arquivos alvo, sem `...` e sem "arquivos prováveis" vagos;
+- symbols alvo (classe, função, método, listener, builder, config, migration);
+- assinatura/shape de entrada e saída;
+- dependências, invariantes, `not_allowed`, `write_set`, `expected_checks` e `requires_fixture`;
+- snippets somente quando ancorados em evidência local ou materializada.
+
+### REFERENCE-ANCHORS
+Materializa referências críticas que hoje ficam frouxas no plano:
+- predecessor, layout, contrato externo ou `external-ref`;
+- origem local ou materializada em `.oxe/investigations/externals/`;
+- `source_ref`, `path`, `relevance`, `action`, `summary`, `status`;
+- estados válidos: `resolved`, `missing`, `stale`, `conflicting`, `not_applicable`.
+
+### FIXTURE-PACK
+Fixtures mínimos por fluxo/tarefa de risco:
+- payloads, arquivos exemplo, trechos significativos, offsets/campos críticos;
+- expected outputs ou checks parciais/completos;
+- queries/checks de validação e smoke commands.
+
+Regra de readiness:
+- `IMPLEMENTATION-PACK` precisa estar `ready`;
+- `REFERENCE-ANCHORS` não pode ter âncora crítica em `missing|stale|conflicting`;
+- `FIXTURE-PACK` é obrigatório para tarefas mutáveis com parser/layout/integração/transformação/fila/migração/builder;
+- qualquer `critical_gap` aberto derruba a prontidão executável do plano.
+</execution_rational_artifacts>
 
 <plan_iteration_contract>
 ## Contrato de iteração do plano
@@ -113,9 +153,9 @@ Depois do resumo e antes das tarefas, o `PLAN.md` deve conter também:
 | Lacunas externas / decisões pendentes | 10 |
 
 **Faixas semânticas obrigatórias:**
-- `85–100%` → pronto para executar
-- `70–84%` → executável com risco controlado
-- `50–69%` → precisa refino antes de execução
+- `91–100%` → pronto para executar
+- `80–90%` → plano racional, mas ainda não executável
+- `50–79%` → precisa refino antes de execução
 - `<50%` → não executar
 
 **Entradas obrigatórias da confiança:**
@@ -132,6 +172,8 @@ Depois do resumo e antes das tarefas, o `PLAN.md` deve conter também:
 | `XL` | > 1 dia, impacto arquitetural | **Gate: deve ser quebrada em sub-tarefas ou ter justificativa** |
 
 **Princípio test-first:** escreva o `Verificar` antes de escrever o `Implementar`. A pergunta é: "Como saberei que está pronto?" — a resposta define o target; `Implementar` é o caminho mínimo até esse target.
+
+**Contrato racional por tarefa:** se a tarefa for mutável ou tecnicamente relevante, o `PLAN.md` sozinho não basta. O `IMPLEMENTATION-PACK` deve fechar o write-set, os symbols e os checks; o `REFERENCE-ANCHORS` deve materializar evidência externa; o `FIXTURE-PACK` deve reduzir improviso em parsing/integração/transformação.
 
 **Projetos sem suíte de testes única (legado):** o bloco **Verificar** pode usar `Comando: —` e **Manual** com Grep, leitura de paths ou checklist — ver exemplos em **`oxe/workflows/references/legacy-brownfield.md`**. Todo critério **A*** da SPEC deve aparecer em **Aceite vinculado** de alguma tarefa ou como gap explícito.
 
@@ -150,12 +192,16 @@ Antes de finalizar a resposta ao utilizador, o agente **deve** percorrer este ga
 7. **Fidelidade de decisões:** se existir `DISCUSS.md` com IDs **D-NN** no escopo resolvido, cada decisão com impacto técnico deve aparecer em **Decisão vinculada:** de alguma tarefa, ou ter nota explícita de gap. Sem cobertura para D-NN técnico = falha do gate.
 8. **Complexidade XL:** toda tarefa com `Complexidade: XL` deve ter sub-tarefas explícitas (ex.: T3.1, T3.2 — como bullets dentro da tarefa) **ou** justificativa na tarefa explicando por que não pode ser quebrada. Tarefa XL sem sub-tarefas e sem justificativa = falha do gate.
 9. **Test-first:** em toda tarefa, `Verificar` deve preceder `Implementar` no texto. Se a ordem estiver invertida, corrigir antes de finalizar.
-10. **Autoavaliação presente:** o `PLAN.md` contém `## Autoavaliação do Plano`, `Melhor plano atual`, `Confiança`, rubrica completa e `Condição para replanejar`.
-11. **Calibração de execução:** se `Melhor plano atual: não` ou `Confiança < limiar configurado`, o plano não pode recomendar execução direta; deve recomendar refino, discuss ou research.
+10. **Autoavaliação presente:** o `PLAN.md` contém `## Autoavaliação do Plano`, `Melhor plano atual`, `Confiança`, rubrica completa, bloco `<confidence_vector>` coerente e `Condição para replanejar`.
+11. **Calibração de execução:** se `Melhor plano atual: não`, se a autoavaliação estiver estruturalmente incompleta, ou se `Confiança <= limiar configurado`, o plano não pode recomendar execução direta; deve recomendar refino, discuss ou research.
 12. **Rastreabilidade de evidência:** cada tarefa deve ter entrada observável de origem na SPEC, no codebase, em DISCUSS, OBS, RESEARCH ou LESSONS; tarefa sem evidência de entrada explícita = falha do gate.
 13. **Mudanças de risco:** tarefas com risco relevante (migração, auth, schema, contrato público, segurança) devem incluir contenção, rollback, fallback ou verificação reforçada.
 14. **Cobertura R-ID:** se `SPEC.md` contiver tabela de requisitos com IDs `R-NN` e status `v1`/`v2`, cada R-ID em escopo deve ter ao menos um critério A* mapeado em **Aceite vinculado:** de alguma tarefa — rastrear `R-NN → A* → Tn`. R-IDs com `v1`/`v2` sem nenhuma tarefa associada = falha do gate; documentar como gap explícito quando intencional (ex.: `<!-- R-03: adiado para próximo ciclo -->`).
 15. **Contexto estruturado:** se houver pack do workflow `plan`, as lacunas e conflitos críticos do pack aparecem na autoavaliação do plano ou são explicitamente dados como resolvidos durante a leitura direta.
+16. **Implementation contract:** toda tarefa mutável deve aparecer em `IMPLEMENTATION-PACK.json` com `exact_paths`, `symbols`, `contracts`, `write_set: "closed"`, `expected_checks` e `ready: true`. Path com `...`, símbolo indefinido ou contrato ausente = falha do gate.
+17. **Reference anchors:** toda referência `external-ref`, "copiar do predecessor", "usar layout X" ou equivalente deve aparecer em `REFERENCE-ANCHORS.md` com `status: resolved`. Âncora crítica em `missing|stale|conflicting` = falha do gate.
+18. **Fixture coverage:** toda tarefa de parser/layout/integração/transformação/fila/migração/builder deve ter fixture `ready` em `FIXTURE-PACK.json`, salvo `not_applicable` explicitamente justificado. Ausência de fixture em tarefa de risco = falha do gate.
+19. **Confiança > 90 de verdade:** `Confiança > 90%` só é válida se `IMPLEMENTATION-PACK`, `REFERENCE-ANCHORS` e `FIXTURE-PACK` estiverem íntegros e sem `critical_gap` aberto. Caso contrário, reduzir a confiança para `<= 90%` e recomendar refino.
 
 Se após correções estruturais persistir ambiguidade de produto: **uma** frase recomendando `oxe:discuss` ou `oxe:spec`.
 
@@ -178,12 +224,22 @@ Resumo obrigatório no chat: `Gate do plano: OK` ou `Gate do plano: corrigido (N
 3. Se existir **`.oxe/NOTES.md`**, consumir ou explicitamente adiar cada bullet relevante (ver **context**).
 4. Ler `.oxe/codebase/*.md` (incl. CONVENTIONS / CONCERNS) e inspecionar pontos de entrada se a spec exigir. Se o pack não bastar, expandir a leitura apenas para os artefatos adicionais necessários e registar essa expansão.
 5. Escrever ou atualizar `PLAN.md` no escopo resolvido usando `oxe/templates/PLAN.template.md` como cabeçalho; **preservar** YAML inicial (`oxe_doc: plan`, `status`, `inputs`) se já existir e **atualizar** `updated:` (ISO); em **--replan** ou **replan implícito**, preencher a seção **Replanejamento** (data, motivo, lições de VERIFY/SUMMARY, tarefas removidas/alteradas).
+5a. Gerar junto os artefatos racionais:
+   - `IMPLEMENTATION-PACK.md` e `IMPLEMENTATION-PACK.json` a partir de `oxe/templates/IMPLEMENTATION-PACK.template.*`
+   - `REFERENCE-ANCHORS.md` a partir de `oxe/templates/REFERENCE-ANCHORS.template.md`
+   - `FIXTURE-PACK.md` e `FIXTURE-PACK.json` a partir de `oxe/templates/FIXTURE-PACK.template.*`
+   Todos no mesmo escopo resolvido da sessão do `PLAN.md`.
 6. Definir ondas: onda 1 = tarefas sem dependência entre si; onda seguinte = dependentes; respeitar `plan_max_tasks_per_wave` se configurado.
 6a. **Calibração histórica:** se `.oxe/calibration.json` existir e tiver ≥ 2 registros, ler as últimas 3 entradas antes de preencher a autoavaliação. Para cada dimensão com `calibration_error > 0.25` em 2+ ciclos consecutivos, adicionar `[⚠ historicamente subestimado]` na nota da dimensão e reduzir o score em 0.10 ou justificar explicitamente por que o ciclo atual é diferente.
 7. Preencher `## Autoavaliação do Plano` com a rubrica fixa. A confiança é a soma ponderada das seis dimensões; não inventar percentagem sem justificar os pontos. As lacunas, conflitos e freshness do pack devem aparecer nessa autoavaliação quando forem relevantes. **Incluir o bloco `<confidence_vector>`** com as 6 dimensões usando o template em `oxe/templates/PLAN.template.md`.
+7b. Antes de declarar `Confiança > 90%`, validar os artefatos racionais:
+   - `IMPLEMENTATION-PACK` sem write-set aberto e sem paths `...`;
+   - `REFERENCE-ANCHORS` com âncoras críticas resolvidas;
+   - `FIXTURE-PACK` cobrindo tarefas de risco.
+   Se algo falhar, a confiança deve cair para `<= 90%` e o próximo passo não pode ser `execute`.
 7a. **Hipóteses Críticas:** ao criar tarefas `L` ou `XL` ou qualquer tarefa que dependa de lib externa, API de terceiros ou serviço de infra não testado ainda — adicionar seção `## Hipóteses Críticas` com pelo menos uma `<hypothesis>` por dependência crítica. Usar `oxe/templates/HYPOTHESES.template.md` como referência. Omitir a seção se todas as tarefas forem `S`/`M` e sem dependências externas não verificadas.
 8. Aplicar integralmente o bloco **`<plan_quality_gate>`** acima ao `PLAN.md` em disco; corrigir o ficheiro até passar ou documentar gaps explícitos.
-9. Atualizar `.oxe/STATE.md` global: fase `plan_ready`, próximo passo `oxe:execute` apenas se `Melhor plano atual: sim` e a confiança estiver no limiar executável; caso contrário, próximo passo deve reduzir incerteza (`oxe:discuss`, `oxe:research` ou replanejamento).
+9. Atualizar `.oxe/STATE.md` global: fase `plan_ready`, próximo passo `oxe:execute` apenas se `Melhor plano atual: sim`, a autoavaliação estiver estruturalmente íntegra e a confiança superar o limiar executável; caso contrário, próximo passo deve reduzir incerteza (`oxe:discuss`, `oxe:research` ou replanejamento).
 10. **Sugestão de agentes (inteligente):** após o gate passar, verificar se o plano tem 3+ domínios distintos (ex.: backend + frontend + DB, ou auth + notificações + UI). Se sim, sugerir proativamente: "Este plano tem N domínios distintos. Quer gerar um blueprint de agentes com `/oxe-plan --agents`?" — não executar automaticamente, apenas oferecer. Se o usuário incluiu `--agents` no input original, executar imediatamente a lógica de `oxe/workflows/plan-agent.md`.
 11. Listar no chat: resultado do gate (OK ou corrigido), ondas, contagem de tarefas, comando de teste guarda-chuva se houver, melhor-plano-atual e confiança.
 12. No resumo em chat, deixar explícitos:
@@ -200,4 +256,6 @@ Resumo obrigatório no chat: `Gate do plano: OK` ou `Gate do plano: corrigido (N
 - [ ] Dependências entre tarefas estão explícitas.
 - [ ] Cada critério da SPEC (IDs **A***) está mapeado em **Aceite vinculado** de alguma tarefa ou explicitamente marcado como gap no plano.
 - [ ] Cada R-ID `v1`/`v2` do SPEC tem ao menos um A* coberto por alguma tarefa, ou gap documentado (gate 14).
+- [ ] `IMPLEMENTATION-PACK`, `REFERENCE-ANCHORS` e `FIXTURE-PACK` existem no escopo resolvido e não ficaram em branco.
+- [ ] Não há `critical_gap` aberto nos artefatos racionais quando a confiança declarada é `> 90%`.
 </success_criteria>

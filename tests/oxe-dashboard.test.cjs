@@ -15,6 +15,37 @@ const operational = require('../bin/lib/oxe-operational.cjs');
 const REPO_ROOT = path.join(__dirname, '..');
 const CLI = path.join(REPO_ROOT, 'bin', 'oxe-cc.js');
 
+function writeRationalityPacks(oxeDir, taskIds = ['T1']) {
+  fs.writeFileSync(path.join(oxeDir, 'IMPLEMENTATION-PACK.md'), '# implementation\n', 'utf8');
+  fs.writeFileSync(
+    path.join(oxeDir, 'IMPLEMENTATION-PACK.json'),
+    JSON.stringify({
+      schema_version: '1',
+      generated_at: '2026-04-22T12:00:00Z',
+      ready: true,
+      critical_gaps: [],
+      tasks: taskIds.map((taskId) => ({
+        id: taskId,
+        title: taskId,
+        mode: 'mutating',
+        ready: true,
+        exact_paths: [`src/${taskId.toLowerCase()}.ts`],
+        write_set: 'closed',
+        symbols: [{ kind: 'function', name: `${taskId.toLowerCase()}Handler`, path: `src/${taskId.toLowerCase()}.ts`, signature: '() => void' }],
+        contracts: [{ name: `${taskId}-contract`, input_shape: 'void', output_shape: 'void', invariants: ['none'], not_allowed: ['none'] }],
+        snippets: [],
+        expected_checks: ['npm test'],
+        requires_fixture: false,
+        critical_gaps: [],
+      })),
+    }, null, 2),
+    'utf8'
+  );
+  fs.writeFileSync(path.join(oxeDir, 'REFERENCE-ANCHORS.md'), '<reference_anchors version="1" ready="true" status="not_applicable"></reference_anchors>\n', 'utf8');
+  fs.writeFileSync(path.join(oxeDir, 'FIXTURE-PACK.md'), '# fixture\n', 'utf8');
+  fs.writeFileSync(path.join(oxeDir, 'FIXTURE-PACK.json'), JSON.stringify({ schema_version: '1', generated_at: '2026-04-22T12:00:00Z', ready: true, critical_gaps: [], fixtures: [] }, null, 2), 'utf8');
+}
+
 function requestJson(port, method, pathname, body) {
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -111,9 +142,10 @@ describe('oxe-dashboard', () => {
     fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# OXE — Spec\n\n## Objetivo\n\nTeste\n\n## Critérios de aceite\n| ID | Critério | Como verificar |\n|---|---|---|\n| A1 | x | y |\n', 'utf8');
     fs.writeFileSync(
       path.join(oxe, 'PLAN.md'),
-      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 80%\n- **Base da confiança:**\n  - Completude dos requisitos: 20/25\n  - Dependências conhecidas: 12/15\n  - Risco técnico: 12/20\n  - Impacto no código existente: 10/15\n  - Clareza da validação / testes: 10/15\n  - Lacunas externas / decisões pendentes: 8/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n### T1 — Demo\n- **Depende de:** —\n- **Onda:** 1\n- **Verificar:**\n  - Comando: `npm test`\n- **Implementar:** x\n- **Aceite vinculado:** A1\n',
+      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 91%\n- **Base da confiança:**\n  - Completude dos requisitos: 23/25\n  - Dependências conhecidas: 14/15\n  - Risco técnico: 18/20\n  - Impacto no código existente: 14/15\n  - Clareza da validação / testes: 13/15\n  - Lacunas externas / decisões pendentes: 9/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n<confidence_vector cycle=\"C-01\" generated_at=\"2026-04-22T12:00:00Z\">\n  <dim name=\"requirements\" score=\"0.92\" weight=\"25\" note=\"ok\" />\n  <dim name=\"dependencies\" score=\"0.93\" weight=\"15\" note=\"ok\" />\n  <dim name=\"technical_risk\" score=\"0.90\" weight=\"20\" note=\"controlado\" />\n  <dim name=\"code_impact\" score=\"0.93\" weight=\"15\" note=\"claro\" />\n  <dim name=\"validation\" score=\"0.87\" weight=\"15\" note=\"bom\" />\n  <dim name=\"open_gaps\" score=\"0.90\" weight=\"10\" note=\"sem gaps\" />\n  <global score=\"0.91\" gate=\"proceed\" />\n</confidence_vector>\n\n### T1 — Demo\n- **Depende de:** —\n- **Onda:** 1\n- **Verificar:**\n  - Comando: `npm test`\n- **Implementar:** x\n- **Aceite vinculado:** A1\n',
       'utf8'
     );
+    writeRationalityPacks(oxe, ['T1']);
     fs.writeFileSync(
       path.join(oxe, 'EXECUTION-RUNTIME.md'),
       '## Onda atual\n\n- **Onda:** 1\n- **Estado:** running\n- **Tarefas ativas:** T1\n\n## Agentes ativos\n\n| ID | Papel | Tarefas | Estado | Último handoff |\n|----|-------|---------|--------|----------------|\n| agent-a | executor | T1 | active | — |\n\n## Checkpoints\n\n| ID | Tipo | Escopo | Estado | Decisão | Evidência |\n|----|------|--------|--------|---------|-----------|\n| CP-01 | approval | Onda 1 | pending_approval | — | — |\n\n## Evidências produzidas\n\n- logs/test.txt: teste da onda 1\n\n## Bloqueios\n\n- aguardando aprovação humana\n\n## Próximo movimento operacional\n\n- **Ação:** aguardar aprovação\n- **Motivo:** gate humano antes da execução externa\n',
@@ -225,6 +257,9 @@ describe('oxe-dashboard', () => {
     assert.strictEqual(ctx.visual.flow.nodes.length, 8);
     assert.ok(ctx.visual.artifactGraph.some((node) => node.id === 'runtime'));
     assert.ok(ctx.visual.artifactGraph.some((node) => node.id === 'active-run'));
+    assert.ok(ctx.visual.artifactGraph.some((node) => node.id === 'implementation-pack'));
+    assert.ok(ctx.visual.artifactGraph.some((node) => node.id === 'reference-anchors'));
+    assert.ok(ctx.visual.artifactGraph.some((node) => node.id === 'fixture-pack'));
     assert.strictEqual(ctx.sessions.items.length, 1);
     assert.strictEqual(ctx.sessions.current.id, 's001');
     assert.strictEqual(ctx.sessions.current.tags[0], 'backend');
@@ -246,6 +281,8 @@ describe('oxe-dashboard', () => {
     assert.ok(ctx.enterprise.multiAgent);
     assert.strictEqual(ctx.enterprise.multiAgent.mode, 'parallel');
     assert.ok(ctx.enterprise.providerCatalog);
+    assert.ok(ctx.executionRationality);
+    assert.strictEqual(ctx.executionRationality.executionRationalityReady, true);
     assert.ok(Array.isArray(ctx.diagnostics.enterpriseWarnings));
   });
 
@@ -258,7 +295,8 @@ describe('oxe-dashboard', () => {
     }
     fs.writeFileSync(path.join(oxe, 'STATE.md'), '# OXE — Estado\n\n## Fase atual\n\n`plan_ready`\n', 'utf8');
     fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# S\n## Objetivo\nx\n## Critérios de aceite\n| ID | Critério | Como verificar |\n|---|---|---|\n| A1 | x | y |\n', 'utf8');
-    fs.writeFileSync(path.join(oxe, 'PLAN.md'), '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 80%\n- **Base da confiança:**\n  - Completude dos requisitos: 20/25\n  - Dependências conhecidas: 12/15\n  - Risco técnico: 12/20\n  - Impacto no código existente: 10/15\n  - Clareza da validação / testes: 10/15\n  - Lacunas externas / decisões pendentes: 8/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n', 'utf8');
+    fs.writeFileSync(path.join(oxe, 'PLAN.md'), '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 91%\n- **Base da confiança:**\n  - Completude dos requisitos: 23/25\n  - Dependências conhecidas: 14/15\n  - Risco técnico: 18/20\n  - Impacto no código existente: 14/15\n  - Clareza da validação / testes: 13/15\n  - Lacunas externas / decisões pendentes: 9/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n<confidence_vector cycle=\"C-01\" generated_at=\"2026-04-22T12:00:00Z\">\n  <dim name=\"requirements\" score=\"0.92\" weight=\"25\" note=\"ok\" />\n  <dim name=\"dependencies\" score=\"0.93\" weight=\"15\" note=\"ok\" />\n  <dim name=\"technical_risk\" score=\"0.90\" weight=\"20\" note=\"controlado\" />\n  <dim name=\"code_impact\" score=\"0.93\" weight=\"15\" note=\"claro\" />\n  <dim name=\"validation\" score=\"0.87\" weight=\"15\" note=\"bom\" />\n  <dim name=\"open_gaps\" score=\"0.90\" weight=\"10\" note=\"sem gaps\" />\n  <global score=\"0.91\" gate=\"proceed\" />\n</confidence_vector>\n', 'utf8');
+    writeRationalityPacks(oxe, ['T1']);
 
     const r = spawnSync(process.execPath, [CLI, 'dashboard', '--dump-context', '--dir', dir], {
       cwd: REPO_ROOT,
@@ -280,7 +318,8 @@ describe('oxe-dashboard', () => {
     }
     fs.writeFileSync(path.join(oxe, 'STATE.md'), '# OXE — Estado\n\n## Fase atual\n\n`plan_ready`\n', 'utf8');
     fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# S\n## Objetivo\nx\n## Critérios de aceite\n| ID | Critério | Como verificar |\n|---|---|---|\n| A1 | x | y |\n', 'utf8');
-    fs.writeFileSync(path.join(oxe, 'PLAN.md'), '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 80%\n- **Base da confiança:**\n  - Completude dos requisitos: 20/25\n  - Dependências conhecidas: 12/15\n  - Risco técnico: 12/20\n  - Impacto no código existente: 10/15\n  - Clareza da validação / testes: 10/15\n  - Lacunas externas / decisões pendentes: 8/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n', 'utf8');
+    fs.writeFileSync(path.join(oxe, 'PLAN.md'), '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 91%\n- **Base da confiança:**\n  - Completude dos requisitos: 23/25\n  - Dependências conhecidas: 14/15\n  - Risco técnico: 18/20\n  - Impacto no código existente: 14/15\n  - Clareza da validação / testes: 13/15\n  - Lacunas externas / decisões pendentes: 9/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n<confidence_vector cycle=\"C-01\" generated_at=\"2026-04-22T12:00:00Z\">\n  <dim name=\"requirements\" score=\"0.92\" weight=\"25\" note=\"ok\" />\n  <dim name=\"dependencies\" score=\"0.93\" weight=\"15\" note=\"ok\" />\n  <dim name=\"technical_risk\" score=\"0.90\" weight=\"20\" note=\"controlado\" />\n  <dim name=\"code_impact\" score=\"0.93\" weight=\"15\" note=\"claro\" />\n  <dim name=\"validation\" score=\"0.87\" weight=\"15\" note=\"bom\" />\n  <dim name=\"open_gaps\" score=\"0.90\" weight=\"10\" note=\"sem gaps\" />\n  <global score=\"0.91\" gate=\"proceed\" />\n</confidence_vector>\n', 'utf8');
+    writeRationalityPacks(oxe, ['T1']);
 
     const server = dashboard.createDashboardServer(dir);
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));

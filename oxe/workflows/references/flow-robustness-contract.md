@@ -57,9 +57,9 @@ Todo `PLAN.md` deve conter uma seção visível `## Autoavaliação do Plano` co
 
 ### Faixas semânticas
 
-- `85–100%` → pronto para executar
-- `70–84%` → executável com risco controlado
-- `50–69%` → precisa refino antes de execução
+- `91–100%` → pronto para executar
+- `80–90%` → plano racional, mas ainda não executável
+- `50–79%` → precisa refino antes de execução
 - `<50%` → não executar
 
 ## Calibração pós-execução

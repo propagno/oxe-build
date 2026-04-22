@@ -1,0 +1,52 @@
+{
+  "schema_version": "1",
+  "generated_at": "YYYY-MM-DDTHH:MM:SSZ",
+  "ready": false,
+  "critical_gaps": [],
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "substituir pelo título da tarefa",
+      "mode": "mutating",
+      "ready": false,
+      "exact_paths": [
+        "src/example.ts"
+      ],
+      "write_set": "closed",
+      "symbols": [
+        {
+          "kind": "function",
+          "name": "exampleHandler",
+          "path": "src/example.ts",
+          "signature": "(input: ExampleInput) => ExampleOutput"
+        }
+      ],
+      "contracts": [
+        {
+          "name": "example-contract",
+          "input_shape": "ExampleInput",
+          "output_shape": "ExampleOutput",
+          "invariants": [
+            "não perder campos obrigatórios"
+          ],
+          "not_allowed": [
+            "mutar schema fora do write set"
+          ]
+        }
+      ],
+      "snippets": [
+        {
+          "source_ref": "not_applicable",
+          "path": "not_applicable",
+          "summary": "not_applicable",
+          "status": "not_applicable"
+        }
+      ],
+      "expected_checks": [
+        "npm test -- example"
+      ],
+      "requires_fixture": false,
+      "critical_gaps": []
+    }
+  ]
+}

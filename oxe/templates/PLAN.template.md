@@ -19,30 +19,31 @@ inputs: []
 - **Spec vinculada:** (data ou versão informal)
 - **Ondas:** (número)
 - **Tarefas:** (número)
+- **Artefatos racionais:** `IMPLEMENTATION-PACK`, `REFERENCE-ANCHORS`, `FIXTURE-PACK`
 
 ## Autoavaliação do Plano
 
 - **Melhor plano atual:** sim
-- **Confiança:** 80%
+- **Confiança:** 92%
 - **Base da confiança:**
-  - Completude dos requisitos: 20/25
-  - Dependências conhecidas: 12/15
-  - Risco técnico: 15/20
-  - Impacto no código existente: 12/15
-  - Clareza da validação / testes: 13/15
-  - Lacunas externas / decisões pendentes: 8/10
+  - Completude dos requisitos: 23/25
+  - Dependências conhecidas: 14/15
+  - Risco técnico: 18/20
+  - Impacto no código existente: 14/15
+  - Clareza da validação / testes: 14/15
+  - Lacunas externas / decisões pendentes: 9/10
 - **Principais incertezas:** (0–3 bullets)
 - **Alternativas descartadas:** (1–2 linhas)
 - **Condição para replanejar:** (critério objetivo)
 
 <confidence_vector cycle="C-NN" generated_at="YYYY-MM-DDTHH:MM:SSZ">
-  <dim name="requirements"   score="0.80" weight="25" note="completude dos requisitos" />
-  <dim name="dependencies"   score="0.80" weight="15" note="dependências conhecidas" />
-  <dim name="technical_risk" score="0.75" weight="20" note="risco técnico — ajustar se H* pendentes" />
-  <dim name="code_impact"    score="0.80" weight="15" note="impacto no código existente" />
-  <dim name="validation"     score="0.87" weight="15" note="clareza da validação / testes" />
-  <dim name="open_gaps"      score="0.80" weight="10" note="lacunas externas / decisões pendentes" />
-  <global score="0.80" gate="proceed_with_risk" />
+  <dim name="requirements"   score="0.92" weight="25" note="completude dos requisitos" />
+  <dim name="dependencies"   score="0.93" weight="15" note="dependências conhecidas" />
+  <dim name="technical_risk" score="0.90" weight="20" note="risco técnico — ajustar se H* pendentes" />
+  <dim name="code_impact"    score="0.93" weight="15" note="impacto no código existente" />
+  <dim name="validation"     score="0.93" weight="15" note="clareza da validação / testes" />
+  <dim name="open_gaps"      score="0.90" weight="10" note="lacunas externas / decisões pendentes" />
+  <global score="0.92" gate="proceed" />
 </confidence_vector>
 
 <!--
@@ -70,6 +71,13 @@ inputs: []
 
 - (ex.: branch base, feature flags, migrations)
 
+## Artefatos racionais de execução
+
+- **IMPLEMENTATION-PACK:** `ready | not_ready | not_applicable`
+- **REFERENCE-ANCHORS:** `ready | not_ready | not_applicable`
+- **FIXTURE-PACK:** `ready | not_ready | not_applicable`
+- **Critical gaps abertos:** (nenhum | listar IDs/causas)
+
 ## Replanejamento
 
 > Preencher apenas em **--replan** ou após verify falhado. Manter histórico legível.
@@ -91,6 +99,7 @@ inputs: []
   - Manual: (opcional) …
 - **Implementar:** o mínimo para fazer a verificação acima passar.
 - **Aceite vinculado:** A1, A2 (IDs da tabela de critérios em SPEC.md)
+- **Contrato racional:** ver `IMPLEMENTATION-PACK.json` (task `T1`)
 
 ---
 

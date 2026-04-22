@@ -3,7 +3,7 @@
   "profile": "balanced",
   "discuss_before_plan": false,
   "verification_depth": "standard",
-  "plan_confidence_threshold": 70,
+  "plan_confidence_threshold": 90,
   "security_in_verify": false,
   "adversarial_verify": false,
   "after_verify_suggest_pr": true,

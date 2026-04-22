@@ -124,6 +124,13 @@ Quando o comando `**Verificar:**` de uma tarefa `Tn` falha, **não parar silenci
 
 **Context pack prioritário:** antes de abrir o conjunto amplo de artefatos, resolver `.oxe/context/packs/execute.md` e `.oxe/context/packs/execute.json` como entrada principal do passo. Se o pack estiver fresco/coerente, usar `read_order` e `selected_artifacts` para limitar o reconhecimento inicial à onda/tarefa atual. Se estiver stale, ausente ou com lacunas críticas, fazer fallback explícito para leitura direta e registrar isso no runtime ou no resumo da execução.
 
+**Artefatos racionais obrigatórios:** quando a execução vier de `PLAN.md`, ler antes da primeira mutação:
+- `IMPLEMENTATION-PACK.md` / `IMPLEMENTATION-PACK.json`
+- `REFERENCE-ANCHORS.md`
+- `FIXTURE-PACK.md` / `FIXTURE-PACK.json`
+
+O `execute` é **pack-first**, não apenas `plan-first`. Esses artefatos existem para impedir improviso de paths, interfaces, referências externas e fixtures. Se estiverem ausentes, inconsistentes ou com `critical_gap`, a execução deve bloquear e devolver para replanejamento.
+
 **Runtime operacional:** usar `EXECUTION-RUNTIME.md` do escopo resolvido como artefato tático da execução. Ele deve refletir agentes ativos, onda atual, handoffs, evidências, retries, checkpoints pendentes e tarefas bloqueadas. O `PLAN.md` continua estratégico; o runtime regista a operação do ciclo.
 
 **Runtime enterprise como caminho padrão:** quando `oxe-cc runtime` estiver disponível no ambiente, preferir o caminho formal deste passo:
@@ -185,8 +192,14 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
 2. Se existir `PLAN.md`, validar a seção `## Autoavaliação do Plano` antes de qualquer implementação:
    - `Melhor plano atual` deve ser `sim`;
    - `Confiança` deve existir em `0–100%`;
-   - se `.oxe/config.json` definir `plan_confidence_threshold`, usar esse limiar; senão, usar `70%`;
-   - se a confiança estiver abaixo do limiar, **não executar**. Registrar o bloqueio e orientar redução de incerteza (`/oxe-discuss`, `/oxe-research` ou `/oxe-plan --replan`).
+   - o bloco `<confidence_vector>` deve existir e ser coerente com a confiança declarada;
+   - se `.oxe/config.json` definir `plan_confidence_threshold`, usar esse limiar respeitando o piso canónico de `90%`; senão, usar `90%`;
+   - se a confiança não superar o limiar (`<=`) ou se a autoavaliação estiver incompleta, **não executar**. Registrar o bloqueio e orientar redução de incerteza (`/oxe-discuss`, `/oxe-research` ou `/oxe-plan --replan`).
+2a. Antes da primeira mutação, validar os artefatos racionais do plano:
+   - `IMPLEMENTATION-PACK.json` deve existir, estar `ready`, cobrir cada `Tn` mutável e usar `exact_paths` sem `...`, `symbols`, `contracts`, `write_set: "closed"` e `expected_checks`;
+   - `REFERENCE-ANCHORS.md` deve existir e manter todas as âncoras críticas em `status: resolved`;
+   - `FIXTURE-PACK.json` deve existir, estar `ready` e cobrir tarefas de parser/layout/integração/transformação/fila/migração/builder;
+   - se algum pack tiver `critical_gap`, **não executar**. Registrar o bloqueio explicitamente em `EXECUTION-RUNTIME.md` / `STATE.md` e recomendar um único próximo passo: normalmente `/oxe-plan --replan`.
 3. Antes da primeira mudança, verificar `CHECKPOINTS.md` e `EXECUTION-RUNTIME.md` do escopo resolvido:
    - se houver checkpoint `pending_approval` que se aplique à onda atual, **não avançar**;
    - inicializar ou atualizar o runtime com onda atual, status, agentes ativos, handoffs e evidências esperadas.
@@ -212,6 +225,7 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
 8. Listar no chat: tarefas/passos desta onda, arquivos prováveis, comando **Verificar** de cada tarefa.
 8a. Antes de implementar, explicitar no chat:
    - **Contexto lido** (incluindo se veio de pack fresco ou de fallback)
+   - **Artefatos racionais lidos** (implementation/anchors/fixtures e eventuais gaps)
    - **Alvo da mudança**
    - **Validação prevista**
 9. **Implementar** conforme o modo escolhido:
@@ -240,6 +254,8 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
 - [ ] Checklist da onda apresentado ou refletido no STATE.md.
 - [ ] STATE.md registra progresso (Tn ou passos) e próximo passo.
 - [ ] Verificação alinhada ao bloco **Verificar** do PLAN ou QUICK.
+- [ ] Com `PLAN.md`, `IMPLEMENTATION-PACK`, `REFERENCE-ANCHORS` e `FIXTURE-PACK` foram lidos e validados antes da primeira mutação.
+- [ ] Se qualquer artefato racional estiver ausente ou inconsistente, a execução bloqueia explicitamente e recomenda `/oxe-plan --replan`.
 - [ ] OBS pendentes verificadas antes de cada onda: `blocking` resolvidos antes de avançar, `adjustment` incorporados como restrições, `info`/legado incorporados normalmente.
 - [ ] Com quick-agents ativos: cada agente trabalha só em seus `steps[]`; ao concluir, `quick-agents.json` → `done`.
 - [ ] Com blueprint schema 2 válido: não adotar persona para pedidos fora das `Tn`; `runId` alinhado entre JSON e STATE; handoffs escritos quando protocolo exige.

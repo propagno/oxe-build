@@ -1533,6 +1533,11 @@ function printOxeHealthDiagnostics(target, c, diagOpts = {}) {
       typeof r.planSelfEvaluation.confidence === 'number' ? `${r.planSelfEvaluation.confidence}%` : '—';
     console.log(`  ${c ? dim : ''}Plano (autoavaliação):${c ? reset : ''} melhor=${best} | confiança=${conf}`);
   }
+  if (typeof r.executionRationalityReady === 'boolean') {
+    console.log(
+      `  ${c ? dim : ''}Prontidão racional:${c ? reset : ''} implementation=${r.implementationPackReady ? 'ok' : 'pendente'} | anchors=${r.referenceAnchorsReady ? 'ok' : 'pendente'} | fixtures=${r.fixturePackReady ? 'ok' : 'pendente'}`
+    );
+  }
   if (r.contextQuality) {
     console.log(
       `  ${c ? dim : ''}Contexto:${c ? reset : ''} score=${r.contextQuality.primaryScore != null ? r.contextQuality.primaryScore : '—'} | workflow=${r.contextQuality.primaryWorkflow || '—'} | status=${r.contextQuality.primaryStatus || '—'}`
@@ -1696,7 +1701,11 @@ function runStatusFull(target) {
   console.log(`  ${coverageCell(codebaseExists, 'codebase scan')}   ${coverageCell(specExists, 'SPEC.md')}   ${coverageCell(planExists, 'PLAN.md')}   ${coverageCell(verifyExists, 'VERIFY.md')}   ${coverageCell(lessonsExists, 'LESSONS.md')}`);
 
   // Readiness gate
-  const ready = specExists && planExists && !report.planWarn.length && !report.runtimeWarn.length;
+  const ready = specExists
+    && planExists
+    && report.executionRationalityReady
+    && !report.planWarn.length
+    && !report.runtimeWarn.length;
   const gateColor = ready ? green : yellow;
   console.log(`\n  ${c ? yellow : ''}Readiness gate${c ? reset : ''}`);
   console.log(`  ${c ? gateColor : ''}${ready ? '✓ Pronto para executar' : '✗ Não pronto para executar'}${c ? reset : ''}`);
@@ -1706,6 +1715,9 @@ function runStatusFull(target) {
     for (const w of report.planWarn) {
       console.log(`  ${c ? yellow : ''}  • ${w}${c ? reset : ''}`);
     }
+  }
+  if (planExists) {
+    console.log(`  ${c ? dim : ''}  • Artefatos racionais:${c ? reset : ''} implementation=${report.implementationPackReady ? 'ok' : 'pendente'} · anchors=${report.referenceAnchorsReady ? 'ok' : 'pendente'} · fixtures=${report.fixturePackReady ? 'ok' : 'pendente'}`);
   }
 
   // Active run summary
@@ -1794,14 +1806,20 @@ function runStatusFull(target) {
   // Plan self-evaluation
   if (report.planSelfEvaluation) {
     const pse = report.planSelfEvaluation;
+    const threshold = report.planConfidenceThreshold || 90;
     console.log(`\n  ${c ? yellow : ''}Autoavaliação do plano${c ? reset : ''}`);
     if (pse.best_plan_current != null) {
       const bestColor = pse.best_plan_current ? green : red;
       console.log(`  ${c ? dim : ''}Melhor plano atual:${c ? reset : ''} ${c ? bestColor : ''}${pse.best_plan_current ? 'sim' : 'não'}${c ? reset : ''}`);
     }
     if (pse.confidence != null) {
-      const confColor = Number(pse.confidence) >= 70 ? green : Number(pse.confidence) >= 50 ? yellow : red;
+      const confColor = report.planConfidenceExecutable
+        ? green
+        : Number(pse.confidence) >= Math.max(80, threshold - 10)
+          ? yellow
+          : red;
       console.log(`  ${c ? dim : ''}Confiança:${c ? reset : ''} ${c ? confColor : ''}${pse.confidence}%${c ? reset : ''}`);
+      console.log(`  ${c ? dim : ''}Gate executável:${c ? reset : ''} > ${threshold}%${pse.executable ? ' (atingido)' : ' (ainda não atingido)'}`);
     }
   }
 
@@ -1836,9 +1854,17 @@ function runStatus(target, opts = {}) {
       scanDate: report.scanDate,
       staleScan: report.stale,
       compactDate: report.compactDate,
-        staleCompact: report.staleCompact,
-        planSelfEvaluation: report.planSelfEvaluation,
-        planReviewStatus: report.planReviewStatus,
+      staleCompact: report.staleCompact,
+      planSelfEvaluation: report.planSelfEvaluation,
+      planConfidenceThreshold: report.planConfidenceThreshold,
+      planConfidenceExecutable: report.planConfidenceExecutable,
+      implementationPackReady: report.implementationPackReady,
+      referenceAnchorsReady: report.referenceAnchorsReady,
+      fixturePackReady: report.fixturePackReady,
+      executionRationalityReady: report.executionRationalityReady,
+      criticalExecutionGaps: report.criticalExecutionGaps,
+      executionRationality: report.executionRationality,
+      planReviewStatus: report.planReviewStatus,
       activeRun: report.activeRun,
       eventsSummary: report.eventsSummary,
       runtimeMode: report.runtimeMode,

@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
-**Versão:** `1.5.0` · [package.json](package.json)
+**Versão:** `1.5.1` · [package.json](package.json)
 
 **Framework OXE — Orchestrated eXperience Engineering**
 
@@ -599,7 +599,7 @@ Arquivo `.oxe/config.json`. Principais opções:
 |-------|--------|-----------|
 | `profile` | `"balanced"` | `strict` / `balanced` / `fast` / `legacy` |
 | `verification_depth` | `"standard"` | `"thorough"` ativa gaps automático no verify (Camada 5) |
-| `plan_confidence_threshold` | `70` | Limiar mínimo para `execute` aceitar um `PLAN.md` |
+| `plan_confidence_threshold` | `90` | Limiar canónico para `execute` aceitar um `PLAN.md`; a confiança precisa ser **maior que** esse valor |
 | `security_in_verify` | `false` | `true` ativa OWASP automático no verify (Camada 6) |
 | `discuss_before_plan` | `false` | Exige aprovação de decisões antes do plano |
 | `scale_adaptive` | `true` | Scan sugere o profile pelo tamanho do projeto |
