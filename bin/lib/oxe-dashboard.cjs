@@ -153,29 +153,49 @@ function parseVerify(md) {
 }
 
 function confidenceBand(confidence, threshold) {
+  const normalizedThreshold = health.normalizePlanConfidenceThreshold(threshold);
   if (confidence == null) return 'unknown';
-  if (confidence >= 85) return 'ready';
-  if (confidence >= threshold) return 'controlled';
+  if (health.isExecutablePlanConfidence(confidence, normalizedThreshold)) return 'ready';
+  if (confidence >= Math.max(80, normalizedThreshold - 10)) return 'rational_but_not_ready';
   if (confidence >= 50) return 'needs_refinement';
   return 'do_not_execute';
 }
 
 function computeReadiness(ctx, threshold) {
+  const normalizedThreshold = health.normalizePlanConfidenceThreshold(threshold);
   const blockers = [];
   const warnings = [...ctx.diagnostics.reviewWarnings, ...ctx.diagnostics.runtimeWarnings, ...ctx.diagnostics.planWarnings];
+  if (!ctx.plan.selfEvaluation || !ctx.plan.selfEvaluation.hasSection) blockers.push('self_evaluation:missing');
+  if (ctx.plan.selfEvaluation && Array.isArray(ctx.plan.selfEvaluation.warnings) && ctx.plan.selfEvaluation.warnings.length) {
+    blockers.push(`self_evaluation:warnings:${ctx.plan.selfEvaluation.warnings.length}`);
+  }
   if (ctx.planReviewStatus !== 'approved') blockers.push(`review_status:${ctx.planReviewStatus || 'draft'}`);
   if (ctx.plan.selfEvaluation.bestPlan === 'não') blockers.push('best_plan:no');
   if (ctx.plan.selfEvaluation.confidence == null) blockers.push('confidence:missing');
-  else if (ctx.plan.selfEvaluation.confidence < threshold) blockers.push(`confidence:${ctx.plan.selfEvaluation.confidence}%<${threshold}%`);
+  else if (!health.isExecutablePlanConfidence(ctx.plan.selfEvaluation.confidence, normalizedThreshold)) {
+    blockers.push(`confidence:${ctx.plan.selfEvaluation.confidence}%<=${normalizedThreshold}%`);
+  }
+  if (!ctx.executionRationality || !ctx.executionRationality.implementationPackReady) {
+    blockers.push('implementation_pack:not_ready');
+  }
+  if (!ctx.executionRationality || !ctx.executionRationality.referenceAnchorsReady) {
+    blockers.push('reference_anchors:not_ready');
+  }
+  if (!ctx.executionRationality || !ctx.executionRationality.fixturePackReady) {
+    blockers.push('fixture_pack:not_ready');
+  }
   if (ctx.checkpoints.parsed.some((x) => /pending_approval/i.test(x.status))) blockers.push('checkpoint:pending_approval');
   if (ctx.runtime.parsed.status === 'blocked') blockers.push('runtime:blocked');
   if (ctx.spec.uncoveredCriteria.length) warnings.push(`${ctx.spec.uncoveredCriteria.length} critérios sem cobertura no plano`);
+  if (ctx.executionRationality && Array.isArray(ctx.executionRationality.criticalExecutionGaps)) {
+    warnings.push(...ctx.executionRationality.criticalExecutionGaps);
+  }
   return {
     go: blockers.length === 0,
     decision: blockers.length === 0 ? 'go' : 'no-go',
-    threshold,
+    threshold: normalizedThreshold,
     confidence: ctx.plan.selfEvaluation.confidence,
-    confidenceBand: confidenceBand(ctx.plan.selfEvaluation.confidence, threshold),
+    confidenceBand: confidenceBand(ctx.plan.selfEvaluation.confidence, normalizedThreshold),
     checkpointPending: blockers.includes('checkpoint:pending_approval'),
     blockers,
     warnings,
@@ -202,16 +222,25 @@ function buildCoverageMatrix(spec, plan, verify) {
   }));
 }
 
-function computeCalibration(phase, confidence, verify) {
+function computeCalibration(phase, confidence, verify, threshold) {
+  const normalizedThreshold = health.normalizePlanConfidenceThreshold(threshold);
   if (confidence == null) return { status: 'pending', summary: 'Calibração indisponível antes do verify.' };
   const low = String(phase || '').toLowerCase();
   const completed = low === 'verify_complete' || verify.passed;
   const failed = low === 'verify_failed' || verify.failed;
   if (!completed && !failed) return { status: 'pending', summary: 'Calibração só fecha após verify.' };
-  if (confidence >= 85 && failed) return { status: 'overconfident', summary: `Confiança ${confidence}% alta, mas o verify falhou.` };
-  if (confidence < 70 && failed) return { status: 'calibrated-risk', summary: `O plano já sinalizava risco (${confidence}%) e o verify confirmou a fragilidade.` };
-  if (confidence < 70 && completed) return { status: 'underconfident', summary: `O resultado final foi melhor que a confiança inicial (${confidence}%).` };
-  if (confidence >= 85 && completed) return { status: 'well-calibrated', summary: `Alta confiança (${confidence}%) e verify coerente com a expectativa.` };
+  if (health.isExecutablePlanConfidence(confidence, normalizedThreshold) && failed) {
+    return { status: 'overconfident', summary: `Confiança ${confidence}% acima do gate executável, mas o verify falhou.` };
+  }
+  if (!health.isExecutablePlanConfidence(confidence, normalizedThreshold) && failed) {
+    return { status: 'calibrated-risk', summary: `O plano já sinalizava risco (${confidence}%) abaixo do gate executável e o verify confirmou a fragilidade.` };
+  }
+  if (!health.isExecutablePlanConfidence(confidence, normalizedThreshold) && completed) {
+    return { status: 'underconfident', summary: `O resultado final foi melhor que a confiança inicial (${confidence}%), mas o plano ainda não superava o gate executável.` };
+  }
+  if (health.isExecutablePlanConfidence(confidence, normalizedThreshold) && completed) {
+    return { status: 'well-calibrated', summary: `Alta confiança executável (${confidence}%) e verify coerente com a expectativa.` };
+  }
   return { status: 'acceptable', summary: `Confiança ${confidence}% e verify dentro da faixa esperada.` };
 }
 
@@ -354,6 +383,7 @@ function loadDashboardContext(projectRoot, opts = {}) {
     state: { path: globalPaths.state, raw: stateText, parsed: { phase: health.parseStatePhase(stateText), activeSession, runtimeStatus: firstMatch(stateText, /\*\*runtime_status:\*\*\s*([^\n]+)/i) } },
     spec: { path: p.spec, raw: specText, objective: spec.objective, criteria: spec.criteria, uncoveredCriteria: spec.criteria.filter((c) => !plan.tasks.some((t) => (t.aceite || []).includes(c.id))) },
     plan: { path: p.plan, raw: planText, tasks: plan.tasks, waves: plan.waves, totalTasks: plan.totalTasks, selfEvaluation: report.planSelfEvaluation },
+    executionRationality: report.executionRationality || null,
     runtime: { path: p.runtime, raw: runtimeText, summary: summarizeText(runtimeText, 800), parsed: runtime },
     activeRun: activeRunState,
     runtimeCanonical: activeRunState && activeRunState.canonical_state ? activeRunState.canonical_state : null,
@@ -375,6 +405,11 @@ function loadDashboardContext(projectRoot, opts = {}) {
       recoveryState: report.recoveryState || null,
       multiAgent: report.multiAgent || null,
       providerCatalog: report.providerCatalog || null,
+      implementationPackReady: report.implementationPackReady,
+      referenceAnchorsReady: report.referenceAnchorsReady,
+      fixturePackReady: report.fixturePackReady,
+      executionRationalityReady: report.executionRationalityReady,
+      criticalExecutionGaps: report.criticalExecutionGaps || [],
       warnings: report.enterpriseWarn || [],
     },
     tracing: { path: operational.operationalPaths(projectRoot, activeSession || null).events, events: traceEvents, summary: traceSummary },
@@ -422,12 +457,43 @@ function loadDashboardContext(projectRoot, opts = {}) {
       summary: `login=${ctx.azure.authStatus && ctx.azure.authStatus.login_active ? 'ativo' : 'ausente'} · subscription=${ctx.azure.profile && (ctx.azure.profile.subscription_name || ctx.azure.profile.subscription_id) || '—'} · total=${inventorySummary.total} · sb=${inventorySummary.servicebus || 0} · eg=${inventorySummary.eventgrid || 0} · sql=${inventorySummary.sql || 0}`,
     };
   }
-  ctx.readiness = computeReadiness(ctx, 70);
+  ctx.readiness = computeReadiness(ctx, report.planConfidenceThreshold || 90);
   ctx.coverage = buildCoverageMatrix(ctx.spec, ctx.plan, verify);
-  ctx.calibration = computeCalibration(ctx.phase, ctx.plan.selfEvaluation.confidence, verify);
+  ctx.calibration = computeCalibration(ctx.phase, ctx.plan.selfEvaluation.confidence, verify, ctx.readiness.threshold);
   ctx.visual = {
     flow: { nodes: [{ label: 'STATE', status: 'done' }, { label: 'SPEC', status: ctx.spec.raw ? 'done' : 'pending' }, { label: 'PLAN', status: ctx.plan.raw ? 'done' : 'pending' }, { label: 'REVIEW', status: ctx.planReviewStatus === 'approved' ? 'done' : /(rejected|needs_revision)/i.test(ctx.planReviewStatus) ? 'blocked' : 'active' }, { label: 'EXECUTE', status: ctx.runtime.parsed.status === 'running' ? 'active' : ctx.runtime.raw ? 'done' : 'pending' }, { label: 'CHECKPOINTS', status: ctx.readiness.checkpointPending ? 'active' : ctx.checkpoints.parsed.length ? 'done' : 'pending' }, { label: 'VERIFY', status: ctx.verify.raw ? 'done' : 'pending' }, { label: 'LESSONS', status: 'pending' }] },
-    artifactGraph: [{ id: 'state', label: 'STATE', path: ctx.state.path, detail: ctx.phase || 'índice global', status: 'done' }, { id: 'spec', label: 'SPEC', path: ctx.spec.path, detail: ctx.spec.objective || 'contrato', status: ctx.spec.raw ? 'done' : 'pending' }, { id: 'plan', label: 'PLAN', path: ctx.plan.path, detail: `${ctx.plan.totalTasks} tarefas`, status: ctx.plan.raw ? 'done' : 'pending' }, { id: 'review', label: 'PLAN REVIEW', path: ctx.review.markdownPath, detail: ctx.planReviewStatus, status: ctx.planReviewStatus === 'approved' ? 'done' : 'active' }, { id: 'runtime', label: 'RUNTIME', path: ctx.runtime.path, detail: ctx.runtime.parsed.status || 'sem status', status: ctx.runtime.raw ? 'active' : 'pending' }, { id: 'active-run', label: 'ACTIVE RUN', path: operational.operationalPaths(projectRoot, activeSession || null).activeRun, detail: ctx.activeRun && ctx.activeRun.run_id ? `${ctx.activeRun.run_id} · ${ctx.activeRun.status}` : 'sem run ativo', status: ctx.activeRun ? 'active' : 'pending' }, { id: 'events', label: 'TRACE', path: operational.operationalPaths(projectRoot, activeSession || null).events, detail: `${ctx.tracing.summary.total} evento(s)`, status: ctx.tracing.summary.total ? 'done' : 'pending' }, { id: 'checkpoints', label: 'CHECKPOINTS', path: ctx.checkpoints.path, detail: `${ctx.checkpoints.parsed.length} gates`, status: ctx.readiness.checkpointPending ? 'active' : 'pending' }, { id: 'verify', label: 'VERIFY', path: ctx.verify.path, detail: ctx.calibration.status, status: ctx.verify.raw ? 'done' : 'pending' }],
+    artifactGraph: [
+      { id: 'state', label: 'STATE', path: ctx.state.path, detail: ctx.phase || 'índice global', status: 'done' },
+      { id: 'spec', label: 'SPEC', path: ctx.spec.path, detail: ctx.spec.objective || 'contrato', status: ctx.spec.raw ? 'done' : 'pending' },
+      { id: 'plan', label: 'PLAN', path: ctx.plan.path, detail: `${ctx.plan.totalTasks} tarefas`, status: ctx.plan.raw ? 'done' : 'pending' },
+      {
+        id: 'implementation-pack',
+        label: 'IMPLEMENTATION PACK',
+        path: ctx.executionRationality && ctx.executionRationality.implementationPack ? ctx.executionRationality.implementationPack.path : '—',
+        detail: ctx.executionRationality && ctx.executionRationality.implementationPack ? `${ctx.executionRationality.implementationPack.taskCount || 0} contratos` : 'sem contrato',
+        status: ctx.executionRationality && ctx.executionRationality.implementationPackReady ? 'done' : 'blocked',
+      },
+      {
+        id: 'reference-anchors',
+        label: 'REFERENCE ANCHORS',
+        path: ctx.executionRationality && ctx.executionRationality.referenceAnchors ? ctx.executionRationality.referenceAnchors.path : '—',
+        detail: ctx.executionRationality && ctx.executionRationality.referenceAnchors ? `${ctx.executionRationality.referenceAnchors.anchors ? ctx.executionRationality.referenceAnchors.anchors.length : 0} âncoras` : 'sem âncoras',
+        status: ctx.executionRationality && ctx.executionRationality.referenceAnchorsReady ? 'done' : 'blocked',
+      },
+      {
+        id: 'fixture-pack',
+        label: 'FIXTURE PACK',
+        path: ctx.executionRationality && ctx.executionRationality.fixturePack ? ctx.executionRationality.fixturePack.path : '—',
+        detail: ctx.executionRationality && ctx.executionRationality.fixturePack ? `${ctx.executionRationality.fixturePack.fixtureCount || 0} fixtures` : 'sem fixtures',
+        status: ctx.executionRationality && ctx.executionRationality.fixturePackReady ? 'done' : 'blocked',
+      },
+      { id: 'review', label: 'PLAN REVIEW', path: ctx.review.markdownPath, detail: ctx.planReviewStatus, status: ctx.planReviewStatus === 'approved' ? 'done' : 'active' },
+      { id: 'runtime', label: 'RUNTIME', path: ctx.runtime.path, detail: ctx.runtime.parsed.status || 'sem status', status: ctx.runtime.raw ? 'active' : 'pending' },
+      { id: 'active-run', label: 'ACTIVE RUN', path: operational.operationalPaths(projectRoot, activeSession || null).activeRun, detail: ctx.activeRun && ctx.activeRun.run_id ? `${ctx.activeRun.run_id} · ${ctx.activeRun.status}` : 'sem run ativo', status: ctx.activeRun ? 'active' : 'pending' },
+      { id: 'events', label: 'TRACE', path: operational.operationalPaths(projectRoot, activeSession || null).events, detail: `${ctx.tracing.summary.total} evento(s)`, status: ctx.tracing.summary.total ? 'done' : 'pending' },
+      { id: 'checkpoints', label: 'CHECKPOINTS', path: ctx.checkpoints.path, detail: `${ctx.checkpoints.parsed.length} gates`, status: ctx.readiness.checkpointPending ? 'active' : 'pending' },
+      { id: 'verify', label: 'VERIFY', path: ctx.verify.path, detail: ctx.calibration.status, status: ctx.verify.raw ? 'done' : 'pending' },
+    ],
   };
   if (ctx.azure) {
     ctx.visual.artifactGraph.push(

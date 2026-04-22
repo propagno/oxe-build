@@ -22,7 +22,7 @@ Inspecionar `.oxe/STATE.md` global, a sessão ativa quando existir, e a existên
    - Senão → **execute** (há passos curtos a implementar).
 4. Se não houver `SPEC.md` no escopo resolvido e não for quick intencional declarado → **spec** (passo único).
 5. Se houver SPEC no escopo resolvido mas não PLAN → se `.oxe/config.json` tiver `discuss_before_plan: true` e faltar **`DISCUSS.md`** com decisões → **discuss**; senão → **plan**.
-6. Se PLAN existe mas a seção **Autoavaliação do Plano** disser `Melhor plano atual: não`, ou a `Confiança` estiver abaixo do limiar configurado (padrão 70%), o próximo passo deve ser **plan** (replanejar) ou **discuss/research** se a própria autoavaliação indicar isso.
+6. Se PLAN existe mas a seção **Autoavaliação do Plano** estiver incompleta, disser `Melhor plano atual: não`, ou a `Confiança` não superar o limiar configurado (padrão canónico `>90%`), o próximo passo deve ser **plan** (replanejar) ou **discuss/research** se a própria autoavaliação indicar isso.
 7. Se PLAN existe, **VERIFY.md** ainda **não** existe ou está claramente antes da implementação atual → **execute** (onda atual).
 8. Se PLAN existe e VERIFY falta após implementação declarada → **verify**.
 9. Se VERIFY indica falha ou gaps não resolvidos → **plan** (replanejamento) como passo único, com referência a `SUMMARY.md`.

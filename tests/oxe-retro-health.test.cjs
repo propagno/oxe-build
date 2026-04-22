@@ -67,8 +67,12 @@ describe('oxe-retro-health', () => {
     for (const m of maps) fs.writeFileSync(path.join(codebase, m), `# ${m}\n`, 'utf8');
     // STATE com verify_complete e sem last_retro
     fs.writeFileSync(path.join(oxe, 'STATE.md'), '## Fase atual\n\n`verify_complete`\n', 'utf8');
-    fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# SPEC\n', 'utf8');
-    fs.writeFileSync(path.join(oxe, 'PLAN.md'), '# PLAN\n', 'utf8');
+    fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# SPEC\n\n## Critérios de aceite\n| A1 | x | y |\n', 'utf8');
+    fs.writeFileSync(
+      path.join(oxe, 'PLAN.md'),
+      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 91%\n- **Base da confiança:**\n  - Completude dos requisitos: 23/25\n  - Dependências conhecidas: 14/15\n  - Risco técnico: 18/20\n  - Impacto no código existente: 14/15\n  - Clareza da validação / testes: 13/15\n  - Lacunas externas / decisões pendentes: 9/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n<confidence_vector cycle="C-01" generated_at="2026-04-22T12:00:00Z">\n  <dim name="requirements" score="0.92" weight="25" note="ok" />\n  <dim name="dependencies" score="0.93" weight="15" note="ok" />\n  <dim name="technical_risk" score="0.90" weight="20" note="controlado" />\n  <dim name="code_impact" score="0.93" weight="15" note="claro" />\n  <dim name="validation" score="0.87" weight="15" note="bom" />\n  <dim name="open_gaps" score="0.90" weight="10" note="sem gaps" />\n  <global score="0.91" gate="proceed" />\n</confidence_vector>\n\n### T1 — Demo\n- **Aceite vinculado:** A1\n',
+      'utf8'
+    );
     fs.writeFileSync(path.join(oxe, 'VERIFY.md'), '# VERIFY\n\n## Gaps\n\nNenhum gap restante\n', 'utf8');
     // LESSONS.md NÃO existe → deve sugerir retro
     const result = h.suggestNextStep(dir);
@@ -86,8 +90,12 @@ describe('oxe-retro-health', () => {
     for (const m of maps) fs.writeFileSync(path.join(codebase, m), `# ${m}\n`, 'utf8');
     // STATE com verify_complete E last_retro
     fs.writeFileSync(path.join(oxe, 'STATE.md'), '## Fase atual\n\n`verify_complete`\n\nlast_retro: 2026-04-04\n', 'utf8');
-    fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# SPEC\n', 'utf8');
-    fs.writeFileSync(path.join(oxe, 'PLAN.md'), '# PLAN\n', 'utf8');
+    fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# SPEC\n\n## Critérios de aceite\n| A1 | x | y |\n', 'utf8');
+    fs.writeFileSync(
+      path.join(oxe, 'PLAN.md'),
+      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 91%\n- **Base da confiança:**\n  - Completude dos requisitos: 23/25\n  - Dependências conhecidas: 14/15\n  - Risco técnico: 18/20\n  - Impacto no código existente: 14/15\n  - Clareza da validação / testes: 13/15\n  - Lacunas externas / decisões pendentes: 9/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n<confidence_vector cycle="C-01" generated_at="2026-04-22T12:00:00Z">\n  <dim name="requirements" score="0.92" weight="25" note="ok" />\n  <dim name="dependencies" score="0.93" weight="15" note="ok" />\n  <dim name="technical_risk" score="0.90" weight="20" note="controlado" />\n  <dim name="code_impact" score="0.93" weight="15" note="claro" />\n  <dim name="validation" score="0.87" weight="15" note="bom" />\n  <dim name="open_gaps" score="0.90" weight="10" note="sem gaps" />\n  <global score="0.91" gate="proceed" />\n</confidence_vector>\n\n### T1 — Demo\n- **Aceite vinculado:** A1\n',
+      'utf8'
+    );
     fs.writeFileSync(path.join(oxe, 'VERIFY.md'), '# VERIFY\n\n## Gaps\n\nNenhum gap restante\n', 'utf8');
     // LESSONS.md existe
     fs.writeFileSync(path.join(oxe, 'LESSONS.md'), '# LESSONS\n\n### C-01\n', 'utf8');

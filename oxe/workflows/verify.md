@@ -122,10 +122,10 @@ O preenchimento da checklist é responsabilidade do **usuário** (não do agente
 **Calibração do plano** (obrigatória quando existir `PLAN.md`)
 
 Ler a `## Autoavaliação do Plano` e comparar com o resultado real:
-1. Se `Confiança >= 85%` e houver falha precoce em critérios centrais ou tarefas iniciais, marcar **erro de calibração do plano**.
-2. Se `Confiança < 70%` e as falhas ocorrerem nas incertezas previstas, marcar **autoavaliação aderente**.
-3. Se `Confiança >= 70%` e os critérios/tarefas passarem de forma consistente, marcar **plano calibrado**.
-4. Se `Confiança < 70%` e o ciclo passar amplamente, marcar **plano conservador demais**.
+1. Se `Confiança > limiar executável` (padrão canónico `90%`) e houver falha precoce em critérios centrais ou tarefas iniciais, marcar **erro de calibração do plano**.
+2. Se `Confiança <= limiar executável` e as falhas ocorrerem nas incertezas previstas, marcar **autoavaliação aderente**.
+3. Se `Confiança > limiar executável` e os critérios/tarefas passarem de forma consistente, marcar **plano calibrado**.
+4. Se `Confiança <= limiar executável` e o ciclo passar amplamente, marcar **plano conservador demais**.
 
 Registrar em `VERIFY.md`: `Resultado de calibração | Confiança declarada | Resultado observado | Notas`.
 </calibracao_do_plano>

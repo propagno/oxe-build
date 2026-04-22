@@ -8,6 +8,59 @@ const path = require('path');
 
 const h = require('../bin/lib/oxe-project-health.cjs');
 
+function writeRationalityPacks(oxeDir, taskIds = ['T1']) {
+  fs.writeFileSync(
+    path.join(oxeDir, 'IMPLEMENTATION-PACK.md'),
+    '# IMPLEMENTATION-PACK\n\n- ready\n',
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(oxeDir, 'IMPLEMENTATION-PACK.json'),
+    JSON.stringify({
+      schema_version: '1',
+      generated_at: '2026-04-22T12:00:00Z',
+      ready: true,
+      critical_gaps: [],
+      tasks: taskIds.map((taskId) => ({
+        id: taskId,
+        title: `Contrato ${taskId}`,
+        mode: 'mutating',
+        ready: true,
+        exact_paths: [`src/${taskId.toLowerCase()}.ts`],
+        write_set: 'closed',
+        symbols: [{ kind: 'function', name: `${taskId.toLowerCase()}Handler`, path: `src/${taskId.toLowerCase()}.ts`, signature: '() => void' }],
+        contracts: [{ name: `${taskId}-contract`, input_shape: 'void', output_shape: 'void', invariants: ['none'], not_allowed: ['none'] }],
+        snippets: [{ source_ref: 'not_applicable', path: 'not_applicable', summary: 'not_applicable', status: 'not_applicable' }],
+        expected_checks: ['npm test'],
+        requires_fixture: false,
+        critical_gaps: [],
+      })),
+    }, null, 2),
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(oxeDir, 'REFERENCE-ANCHORS.md'),
+    '<reference_anchors version="1" ready="true" status="not_applicable"></reference_anchors>\n',
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(oxeDir, 'FIXTURE-PACK.md'),
+    '# FIXTURE-PACK\n\n- not_applicable\n',
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(oxeDir, 'FIXTURE-PACK.json'),
+    JSON.stringify({
+      schema_version: '1',
+      generated_at: '2026-04-22T12:00:00Z',
+      ready: true,
+      critical_gaps: [],
+      fixtures: [],
+    }, null, 2),
+    'utf8'
+  );
+}
+
 describe('oxe-project-health', () => {
   test('copilotIntegrationReport is healthy when workspace prompts and instructions are aligned', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-copilot-'));
@@ -270,7 +323,7 @@ describe('oxe-project-health', () => {
     assert.strictEqual(s.step, 'scan');
   });
 
-  test('suggestNextStep execute when plan but no verify', () => {
+  test('suggestNextStep asks for replan when plan lacks rationality gate inputs', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-'));
     const oxe = path.join(dir, '.oxe');
     fs.mkdirSync(path.join(oxe, 'codebase'), { recursive: true });
@@ -284,6 +337,30 @@ describe('oxe-project-health', () => {
     );
     fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# S\n## Critérios de aceite\n| A1 | x | y |\n', 'utf8');
     fs.writeFileSync(path.join(oxe, 'PLAN.md'), '### T1\n- **Onda:** 1\n', 'utf8');
+    const s = h.suggestNextStep(dir, { discuss_before_plan: false });
+    assert.strictEqual(s.step, 'plan');
+    assert.match(s.reason, /Autoavaliação do Plano|confidence_vector/i);
+  });
+
+  test('suggestNextStep execute only when confidence is strictly above 90 with rationality complete', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(path.join(oxe, 'codebase'), { recursive: true });
+    for (const f of h.EXPECTED_CODEBASE_MAPS) {
+      fs.writeFileSync(path.join(oxe, 'codebase', f), '# x', 'utf8');
+    }
+    fs.writeFileSync(
+      path.join(oxe, 'STATE.md'),
+      '## Fase atual\n\n`plan_ready`\n\n## Revisão do plano (opcional — dashboard / aprovação)\n\n- **plan_review_status:** `approved`\n',
+      'utf8'
+    );
+    fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# S\n## Critérios de aceite\n| A1 | x | y |\n', 'utf8');
+    fs.writeFileSync(
+      path.join(oxe, 'PLAN.md'),
+      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 91%\n- **Base da confiança:**\n  - Completude dos requisitos: 23/25\n  - Dependências conhecidas: 14/15\n  - Risco técnico: 18/20\n  - Impacto no código existente: 14/15\n  - Clareza da validação / testes: 13/15\n  - Lacunas externas / decisões pendentes: 9/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n<confidence_vector cycle=\"C-01\" generated_at=\"2026-04-22T12:00:00Z\">\n  <dim name=\"requirements\" score=\"0.92\" weight=\"25\" note=\"ok\" />\n  <dim name=\"dependencies\" score=\"0.93\" weight=\"15\" note=\"ok\" />\n  <dim name=\"technical_risk\" score=\"0.90\" weight=\"20\" note=\"controlado\" />\n  <dim name=\"code_impact\" score=\"0.93\" weight=\"15\" note=\"claro\" />\n  <dim name=\"validation\" score=\"0.87\" weight=\"15\" note=\"bom\" />\n  <dim name=\"open_gaps\" score=\"0.90\" weight=\"10\" note=\"sem gaps\" />\n  <global score=\"0.91\" gate=\"proceed\" />\n</confidence_vector>\n',
+      'utf8'
+    );
+    writeRationalityPacks(oxe, ['T1']);
     const s = h.suggestNextStep(dir, { discuss_before_plan: false });
     assert.strictEqual(s.step, 'execute');
   });
@@ -303,12 +380,93 @@ describe('oxe-project-health', () => {
     fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# S\n## Critérios de aceite\n| A1 | x | y |\n', 'utf8');
     fs.writeFileSync(
       path.join(oxe, 'PLAN.md'),
-      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 80%\n- **Base da confiança:**\n  - Completude dos requisitos: 20/25\n  - Dependências conhecidas: 12/15\n  - Risco técnico: 12/20\n  - Impacto no código existente: 10/15\n  - Clareza da validação / testes: 10/15\n  - Lacunas externas / decisões pendentes: 8/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n',
+      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 91%\n- **Base da confiança:**\n  - Completude dos requisitos: 23/25\n  - Dependências conhecidas: 14/15\n  - Risco técnico: 18/20\n  - Impacto no código existente: 14/15\n  - Clareza da validação / testes: 13/15\n  - Lacunas externas / decisões pendentes: 9/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n<confidence_vector cycle=\"C-01\" generated_at=\"2026-04-22T12:00:00Z\">\n  <dim name=\"requirements\" score=\"0.92\" weight=\"25\" note=\"ok\" />\n  <dim name=\"dependencies\" score=\"0.93\" weight=\"15\" note=\"ok\" />\n  <dim name=\"technical_risk\" score=\"0.90\" weight=\"20\" note=\"controlado\" />\n  <dim name=\"code_impact\" score=\"0.93\" weight=\"15\" note=\"claro\" />\n  <dim name=\"validation\" score=\"0.87\" weight=\"15\" note=\"bom\" />\n  <dim name=\"open_gaps\" score=\"0.90\" weight=\"10\" note=\"sem gaps\" />\n  <global score=\"0.91\" gate=\"proceed\" />\n</confidence_vector>\n',
       'utf8'
     );
+    writeRationalityPacks(oxe, ['T1']);
     const s = h.suggestNextStep(dir, { discuss_before_plan: false });
     assert.strictEqual(s.step, 'execute');
     assert.match(s.reason, /checkpoint pendente/i);
+  });
+
+  test('suggestNextStep blocks execute when implementation pack is missing', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-rationality-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(path.join(oxe, 'codebase'), { recursive: true });
+    for (const f of h.EXPECTED_CODEBASE_MAPS) {
+      fs.writeFileSync(path.join(oxe, 'codebase', f), '# x', 'utf8');
+    }
+    fs.writeFileSync(
+      path.join(oxe, 'STATE.md'),
+      '## Fase atual\n\n`plan_ready`\n\n## Revisão do plano (opcional — dashboard / aprovação)\n\n- **plan_review_status:** `approved`\n',
+      'utf8'
+    );
+    fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# S\n## Critérios de aceite\n| A1 | x | y |\n', 'utf8');
+    fs.writeFileSync(
+      path.join(oxe, 'PLAN.md'),
+      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 91%\n- **Base da confiança:**\n  - Completude dos requisitos: 23/25\n  - Dependências conhecidas: 14/15\n  - Risco técnico: 18/20\n  - Impacto no código existente: 14/15\n  - Clareza da validação / testes: 13/15\n  - Lacunas externas / decisões pendentes: 9/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n<confidence_vector cycle="C-01" generated_at="2026-04-22T12:00:00Z">\n  <dim name="requirements" score="0.92" weight="25" note="ok" />\n  <dim name="dependencies" score="0.93" weight="15" note="ok" />\n  <dim name="technical_risk" score="0.90" weight="20" note="controlado" />\n  <dim name="code_impact" score="0.93" weight="15" note="claro" />\n  <dim name="validation" score="0.87" weight="15" note="bom" />\n  <dim name="open_gaps" score="0.90" weight="10" note="sem gaps" />\n  <global score="0.91" gate="proceed" />\n</confidence_vector>\n\n### T1 — Demo\n- **Arquivos prováveis:** `src/demo.ts`\n- **Aceite vinculado:** A1\n',
+      'utf8'
+    );
+    fs.writeFileSync(path.join(oxe, 'REFERENCE-ANCHORS.md'), '<reference_anchors version="1" ready="true" status="not_applicable"></reference_anchors>\n', 'utf8');
+    fs.writeFileSync(path.join(oxe, 'FIXTURE-PACK.json'), JSON.stringify({ schema_version: '1', ready: true, critical_gaps: [], fixtures: [] }, null, 2), 'utf8');
+    const suggestion = h.suggestNextStep(dir, {});
+    assert.strictEqual(suggestion.step, 'plan');
+    assert.match(suggestion.reason, /IMPLEMENTATION-PACK/i);
+  });
+
+  test('buildHealthReport exposes execution rationality readiness', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-rationality-report-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(path.join(oxe, 'codebase'), { recursive: true });
+    for (const f of h.EXPECTED_CODEBASE_MAPS) {
+      fs.writeFileSync(path.join(oxe, 'codebase', f), '# x', 'utf8');
+    }
+    fs.writeFileSync(
+      path.join(oxe, 'STATE.md'),
+      '## Fase atual\n\n`plan_ready`\n\n## Revisão do plano (opcional — dashboard / aprovação)\n\n- **plan_review_status:** `approved`\n',
+      'utf8'
+    );
+    fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# S\n## Critérios de aceite\n| A1 | x | y |\n', 'utf8');
+    fs.writeFileSync(
+      path.join(oxe, 'PLAN.md'),
+      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 91%\n- **Base da confiança:**\n  - Completude dos requisitos: 23/25\n  - Dependências conhecidas: 14/15\n  - Risco técnico: 18/20\n  - Impacto no código existente: 14/15\n  - Clareza da validação / testes: 13/15\n  - Lacunas externas / decisões pendentes: 9/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n<confidence_vector cycle="C-01" generated_at="2026-04-22T12:00:00Z">\n  <dim name="requirements" score="0.92" weight="25" note="ok" />\n  <dim name="dependencies" score="0.93" weight="15" note="ok" />\n  <dim name="technical_risk" score="0.90" weight="20" note="controlado" />\n  <dim name="code_impact" score="0.93" weight="15" note="claro" />\n  <dim name="validation" score="0.87" weight="15" note="bom" />\n  <dim name="open_gaps" score="0.90" weight="10" note="sem gaps" />\n  <global score="0.91" gate="proceed" />\n</confidence_vector>\n\n### T1 — Demo\n- **Arquivos prováveis:** `src/demo.ts`\n- **Aceite vinculado:** A1\n',
+      'utf8'
+    );
+    writeRationalityPacks(oxe, ['T1']);
+    const report = h.buildHealthReport(dir);
+    assert.strictEqual(report.implementationPackReady, true);
+    assert.strictEqual(report.referenceAnchorsReady, true);
+    assert.strictEqual(report.fixturePackReady, true);
+    assert.strictEqual(report.executionRationalityReady, true);
+    assert.deepStrictEqual(report.criticalExecutionGaps, []);
+  });
+
+  test('buildHealthReport falls back to root rationality packs when session-scoped plan artifacts are absent', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-rationality-session-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(path.join(oxe, 'codebase'), { recursive: true });
+    fs.mkdirSync(path.join(oxe, 'sessions', 's001-demo'), { recursive: true });
+    for (const f of h.EXPECTED_CODEBASE_MAPS) {
+      fs.writeFileSync(path.join(oxe, 'codebase', f), '# x', 'utf8');
+    }
+    fs.writeFileSync(
+      path.join(oxe, 'STATE.md'),
+      '## Fase atual\n\n`plan_ready`\n\n**active_session:** `sessions/s001-demo`\n\n## Revisão do plano (opcional — dashboard / aprovação)\n\n- **plan_review_status:** `approved`\n',
+      'utf8'
+    );
+    fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# S\n## Critérios de aceite\n| A1 | x | y |\n', 'utf8');
+    fs.writeFileSync(
+      path.join(oxe, 'PLAN.md'),
+      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 91%\n- **Base da confiança:**\n  - Completude dos requisitos: 23/25\n  - Dependências conhecidas: 14/15\n  - Risco técnico: 18/20\n  - Impacto no código existente: 14/15\n  - Clareza da validação / testes: 13/15\n  - Lacunas externas / decisões pendentes: 9/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n<confidence_vector cycle="C-01" generated_at="2026-04-22T12:00:00Z">\n  <dim name="requirements" score="0.92" weight="25" note="ok" />\n  <dim name="dependencies" score="0.93" weight="15" note="ok" />\n  <dim name="technical_risk" score="0.90" weight="20" note="controlado" />\n  <dim name="code_impact" score="0.93" weight="15" note="claro" />\n  <dim name="validation" score="0.87" weight="15" note="bom" />\n  <dim name="open_gaps" score="0.90" weight="10" note="sem gaps" />\n  <global score="0.91" gate="proceed" />\n</confidence_vector>\n\n### T1 — Demo\n- **Arquivos prováveis:** `src/demo.ts`\n- **Aceite vinculado:** A1\n',
+      'utf8'
+    );
+    writeRationalityPacks(oxe, ['T1']);
+    const report = h.buildHealthReport(dir);
+    assert.strictEqual(report.activeSession, 'sessions/s001-demo');
+    assert.strictEqual(report.executionRationalityReady, true);
+    assert.deepStrictEqual(report.criticalExecutionGaps, []);
+    assert.strictEqual(path.basename(report.executionRationality.implementationPack.path), 'IMPLEMENTATION-PACK.json');
+    assert.ok(report.executionRationality.implementationPack.path.includes(`${path.sep}.oxe${path.sep}`));
   });
 
   // W3.1 — parseActiveSession

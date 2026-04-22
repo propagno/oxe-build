@@ -9,7 +9,7 @@ Copie `oxe/templates/config.template.json` para **`.oxe/config.json`** no seu pr
 | `profile` | string | Profile de execução: `balanced` (padrão) \| `strict` \| `fast` \| `legacy`. Expande automaticamente outras keys — keys explícitas prevalecem. Ver tabela abaixo. |
 | `discuss_before_plan` | boolean | Se `true`, o fluxo recomenda **`oxe:discuss`** entre spec e plan. |
 | `verification_depth` | string | Profundidade da verificação: `standard` (padrão) \| `thorough` (ativa Camada 5 — validate-gaps automático) \| `quick` (skip camadas 3–4 e UAT). |
-| `plan_confidence_threshold` | number | Limiar mínimo de confiança para o `execute` aceitar um `PLAN.md`. Padrão: `70`. Abaixo disso, o fluxo deve reduzir incerteza antes de implementar. |
+| `plan_confidence_threshold` | number | Limiar mínimo de confiança para o `execute` aceitar um `PLAN.md`. Padrão canónico: `90`, com gate estrito (`Confiança` precisa ser **maior que** o limiar). Valores menores que 90 não reduzem esse gate. |
 | `security_in_verify` | boolean | Se `true`, executa auditoria OWASP automaticamente no **verify** como **Camada 6** (produz `.oxe/SECURITY.md`). Achados P0 bloqueiam `verify_complete`. Padrão: `false`. |
 | `after_verify_suggest_pr` | boolean | Se `true`, o workflow **verify** inclui checklist de PR no fim. |
 | `after_verify_draft_commit` | boolean | Se `true`, o **verify** propõe rascunho de mensagem de commit alinhado aos critérios de aceite. |

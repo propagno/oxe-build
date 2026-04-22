@@ -16,7 +16,7 @@ updated: YYYY-MM-DD
 - **Active run:** `.oxe/ACTIVE-RUN.json` ou artefato equivalente de sessão
 - **Trace log:** `.oxe/OXE-EVENTS.ndjson` ou artefato equivalente de sessão
 - **Autoavaliação do plano:** melhor=`sim|não` | confiança=`NN%`
-- **Limiar de execução:** `70%`
+- **Limiar de execução:** `>90%`
 
 ## Onda atual
 

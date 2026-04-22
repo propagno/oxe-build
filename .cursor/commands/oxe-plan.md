@@ -9,7 +9,7 @@ oxe_tool_profile: mixed
 oxe_confidence_policy: rubric
 oxe_context_tier: standard
 oxe_contract_version: 2.0.0
-oxe_semantics_hash: 7809d830a5f5ff4a
+oxe_semantics_hash: 5c589398cb807029
 ---
 
 OXE — Gera .oxe/PLAN.md com verificação por tarefa
@@ -25,7 +25,7 @@ OXE — Gera .oxe/PLAN.md com verificação por tarefa
 - **Política de confiança:** rubrica
 - **Tier de contexto padrão:** padrão
 - **Versão do contrato:** 2.0.0
-- **Checksum semântico:** `7809d830a5f5ff4a`
+- **Checksum semântico:** `5c589398cb807029`
 - **Entrada de contexto prioritária:** `.oxe/context/packs/plan.md` e `.oxe/context/packs/plan.json`
 - **Regra pack-first:** ler o context pack primeiro; se estiver stale, incompleto ou ausente, cair para leitura direta com fallback explícito.
 - **Inspeção estruturada:** `oxe-cc context inspect --workflow plan --json`

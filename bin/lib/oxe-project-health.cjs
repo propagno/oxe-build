@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 const operational = require('./oxe-operational.cjs');
 const azure = require('./oxe-azure.cjs');
+const rationality = require('./oxe-rationality.cjs');
 
 /** @type {string[]} */
 const ALLOWED_CONFIG_KEYS = [
@@ -64,6 +65,66 @@ const EXPECTED_CODEBASE_MAPS = [
   'CONVENTIONS.md',
   'CONCERNS.md',
 ];
+
+const MIN_EXECUTABLE_PLAN_CONFIDENCE = 90;
+
+/**
+ * @param {unknown} value
+ * @returns {number}
+ */
+function normalizePlanConfidenceThreshold(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return MIN_EXECUTABLE_PLAN_CONFIDENCE;
+  return Math.max(MIN_EXECUTABLE_PLAN_CONFIDENCE, parsed);
+}
+
+/**
+ * @param {number | null | undefined} confidence
+ * @param {number} threshold
+ * @returns {boolean}
+ */
+function isExecutablePlanConfidence(confidence, threshold) {
+  return Number.isFinite(confidence) && Number(confidence) > normalizePlanConfidenceThreshold(threshold);
+}
+
+/**
+ * O gate racional só deve bloquear antes da primeira mutação real.
+ * Depois que a execução entrou em curso ou já foi verificada, os packs
+ * continuam úteis para diagnóstico, mas não podem reescrever o próximo passo.
+ *
+ * @param {string | null} phase
+ * @returns {boolean}
+ */
+function shouldEnforceExecutionRationalityGate(phase) {
+  const low = String(phase || '').trim().toLowerCase();
+  return !new Set([
+    'executing',
+    'verifying',
+    'verify_complete',
+    'verify_failed',
+    'retro_complete',
+  ]).has(low);
+}
+
+/**
+ * @param {{
+ *   hasSection: boolean,
+ *   bestPlan: string | null,
+ *   confidence: number | null,
+ *   warnings: string[],
+ * }} info
+ * @param {number} threshold
+ * @returns {boolean}
+ */
+function hasExecutablePlanSelfEvaluation(info, threshold) {
+  return Boolean(
+    info
+    && info.hasSection
+    && info.bestPlan === 'sim'
+    && !info.warnings.length
+    && isExecutablePlanConfidence(info.confidence, threshold)
+  );
+}
 
 /**
  * @param {string} targetProject
@@ -145,7 +206,7 @@ function loadOxeConfigMerged(targetProject) {
     after_verify_draft_commit: true,
     after_verify_suggest_uat: false,
     verification_depth: 'standard',
-    plan_confidence_threshold: 70,
+    plan_confidence_threshold: 90,
     default_verify_command: '',
     scan_max_age_days: 0,
     compact_max_age_days: 0,
@@ -592,6 +653,11 @@ function oxePaths(target) {
     runtimeSemanticsManifest: path.join(oxe, 'install', 'runtime-semantics.json'),
     spec: path.join(oxe, 'SPEC.md'),
     plan: path.join(oxe, 'PLAN.md'),
+    implementationPackMd: path.join(oxe, 'IMPLEMENTATION-PACK.md'),
+    implementationPackJson: path.join(oxe, 'IMPLEMENTATION-PACK.json'),
+    referenceAnchors: path.join(oxe, 'REFERENCE-ANCHORS.md'),
+    fixturePackMd: path.join(oxe, 'FIXTURE-PACK.md'),
+    fixturePackJson: path.join(oxe, 'FIXTURE-PACK.json'),
     quick: path.join(oxe, 'QUICK.md'),
     verify: path.join(oxe, 'VERIFY.md'),
     discuss: path.join(oxe, 'DISCUSS.md'),
@@ -628,10 +694,56 @@ function scopedOxePaths(target, activeSession) {
     spec: path.join(sessionRoot, 'spec', 'SPEC.md'),
     discuss: path.join(sessionRoot, 'spec', 'DISCUSS.md'),
     plan: path.join(sessionRoot, 'plan', 'PLAN.md'),
+    planAgents: path.join(sessionRoot, 'plan', 'plan-agents.json'),
+    implementationPackMd: path.join(sessionRoot, 'plan', 'IMPLEMENTATION-PACK.md'),
+    implementationPackJson: path.join(sessionRoot, 'plan', 'IMPLEMENTATION-PACK.json'),
+    referenceAnchors: path.join(sessionRoot, 'plan', 'REFERENCE-ANCHORS.md'),
+    fixturePackMd: path.join(sessionRoot, 'plan', 'FIXTURE-PACK.md'),
+    fixturePackJson: path.join(sessionRoot, 'plan', 'FIXTURE-PACK.json'),
     quick: path.join(sessionRoot, 'plan', 'QUICK.md'),
     verify: path.join(sessionRoot, 'verification', 'VERIFY.md'),
     summary: path.join(sessionRoot, 'verification', 'SUMMARY.md'),
     executionState: path.join(sessionRoot, 'execution', 'STATE.md'),
+  };
+}
+
+/**
+ * Para leitura, preferimos o layout session-scoped quando ele existe.
+ * Enquanto a migração não é total, mantemos fallback explícito para os
+ * artefatos canónicos ainda materializados na raiz `.oxe/`.
+ *
+ * @param {string} target
+ * @param {string | null} activeSession
+ */
+function resolvedReadableOxePaths(target, activeSession) {
+  const base = oxePaths(target);
+  const scoped = scopedOxePaths(target, activeSession);
+  if (!activeSession) return scoped;
+  /**
+   * @param {string} key
+   * @returns {string}
+   */
+  function preferScoped(key) {
+    return fs.existsSync(scoped[key]) ? scoped[key] : base[key];
+  }
+  return {
+    ...scoped,
+    planReview: preferScoped('planReview'),
+    planReviewComments: preferScoped('planReviewComments'),
+    runtime: preferScoped('runtime'),
+    checkpoints: preferScoped('checkpoints'),
+    spec: preferScoped('spec'),
+    discuss: preferScoped('discuss'),
+    plan: preferScoped('plan'),
+    planAgents: preferScoped('planAgents'),
+    implementationPackMd: preferScoped('implementationPackMd'),
+    implementationPackJson: preferScoped('implementationPackJson'),
+    referenceAnchors: preferScoped('referenceAnchors'),
+    fixturePackMd: preferScoped('fixturePackMd'),
+    fixturePackJson: preferScoped('fixturePackJson'),
+    quick: preferScoped('quick'),
+    verify: preferScoped('verify'),
+    summary: preferScoped('summary'),
   };
 }
 
@@ -1450,6 +1562,7 @@ function parsePlanSelfEvaluation(planPath) {
   const body = m[1];
   const best = body.match(/\*\*Melhor plano atual:\*\*\s*(sim|não|nao)/i);
   const confidence = body.match(/\*\*Confiança:\*\*\s*(\d{1,3})\s*%/i);
+  const confidenceVector = raw.match(/<confidence_vector\b[\s\S]*?<\/confidence_vector>/i);
   /** @type {string[]} */
   const warnings = [];
   const rubricLabels = [
@@ -1465,6 +1578,38 @@ function parsePlanSelfEvaluation(planPath) {
   if (!/\*\*Principais incertezas:\*\*/i.test(body)) warnings.push('PLAN.md: autoavaliação sem "Principais incertezas"');
   if (!/\*\*Alternativas descartadas:\*\*/i.test(body)) warnings.push('PLAN.md: autoavaliação sem "Alternativas descartadas"');
   if (!/\*\*Condição para replanejar:\*\*/i.test(body)) warnings.push('PLAN.md: autoavaliação sem "Condição para replanejar"');
+  if (!confidenceVector) {
+    warnings.push('PLAN.md: autoavaliação sem bloco <confidence_vector>');
+  } else {
+    const vectorBlock = confidenceVector[0];
+    const vectorGlobal = vectorBlock.match(/<global\b[^>]*score="([0-9.]+)"/i);
+    const requiredDims = [
+      'requirements',
+      'dependencies',
+      'technical_risk',
+      'code_impact',
+      'validation',
+      'open_gaps',
+    ];
+    if (!vectorGlobal) warnings.push('PLAN.md: confidence_vector sem nó <global score="...">');
+    for (const dim of requiredDims) {
+      if (!vectorBlock.includes(`name="${dim}"`)) {
+        warnings.push(`PLAN.md: confidence_vector sem dimensão "${dim}"`);
+      }
+    }
+    if (vectorGlobal) {
+      const vectorGlobalScore = Number(vectorGlobal[1]);
+      if (!Number.isFinite(vectorGlobalScore) || vectorGlobalScore < 0 || vectorGlobalScore > 1) {
+        warnings.push('PLAN.md: confidence_vector com <global score> fora do intervalo 0.0–1.0');
+      } else if (confidence) {
+        const confidencePercent = Number(confidence[1]);
+        const vectorPercent = Math.round(vectorGlobalScore * 100);
+        if (Math.abs(vectorPercent - confidencePercent) > 5) {
+          warnings.push(`PLAN.md: confiança declarada (${confidencePercent}%) diverge do confidence_vector (${vectorPercent}%)`);
+        }
+      }
+    }
+  }
   for (const label of rubricLabels) {
     if (!body.includes(label)) warnings.push(`PLAN.md: rubrica sem "${label}"`);
   }
@@ -1481,19 +1626,66 @@ function parsePlanSelfEvaluation(planPath) {
 }
 
 /**
+ * @param {{
+ *   hasSection: boolean,
+ *   bestPlan: string | null,
+ *   confidence: number | null,
+ *   warnings: string[],
+ * }} info
+ * @param {number} threshold
+ * @returns {string[]}
+ */
+function planSelfEvaluationWarningsFromInfo(info, threshold) {
+  const warns = [...info.warnings];
+  if (info.bestPlan === 'não') warns.push('PLAN.md: autoavaliação declara que este não é o melhor plano atual');
+  if (info.confidence != null && !isExecutablePlanConfidence(info.confidence, threshold)) {
+    const normalizedThreshold = normalizePlanConfidenceThreshold(threshold);
+    warns.push(`PLAN.md: confiança ${info.confidence}% não supera o limiar executável (>${normalizedThreshold}%)`);
+  }
+  return warns;
+}
+
+/**
  * @param {string} planPath
  * @param {number} threshold
  * @returns {string[]}
  */
 function planSelfEvaluationWarnings(planPath, threshold) {
-  const info = parsePlanSelfEvaluation(planPath);
-  const warns = [...info.warnings];
-  if (!fs.existsSync(planPath)) return warns;
-  if (info.bestPlan === 'não') warns.push('PLAN.md: autoavaliação declara que este não é o melhor plano atual');
-  if (info.confidence != null && info.confidence < threshold) {
-    warns.push(`PLAN.md: confiança ${info.confidence}% abaixo do limiar executável (${threshold}%)`);
+  if (!fs.existsSync(planPath)) return [];
+  return planSelfEvaluationWarningsFromInfo(parsePlanSelfEvaluation(planPath), threshold);
+}
+
+/**
+ * @param {{
+ *   applicable: boolean,
+ *   implementationPackReady: boolean,
+ *   referenceAnchorsReady: boolean,
+ *   fixturePackReady: boolean,
+ *   executionRationalityReady: boolean,
+ *   criticalExecutionGaps: string[],
+ *   implementationPack: { path?: string | null, tasks?: unknown[] } | null,
+ *   referenceAnchors: { path?: string | null, anchors?: unknown[], missingCriticalCount?: number } | null,
+ *   fixturePack: { path?: string | null, fixtures?: unknown[] } | null,
+ * }} summary
+ * @returns {string[]}
+ */
+function executionRationalityWarningsFromSummary(summary) {
+  if (!summary || !summary.applicable) return [];
+  /** @type {string[]} */
+  const warns = [];
+  if (!summary.implementationPackReady) {
+    warns.push(`IMPLEMENTATION-PACK não está pronto em ${summary.implementationPack && summary.implementationPack.path ? summary.implementationPack.path : '.oxe/IMPLEMENTATION-PACK.json'}`);
   }
-  return warns;
+  if (!summary.referenceAnchorsReady) {
+    warns.push(`REFERENCE-ANCHORS não está pronto em ${summary.referenceAnchors && summary.referenceAnchors.path ? summary.referenceAnchors.path : '.oxe/REFERENCE-ANCHORS.md'}`);
+  }
+  if (!summary.fixturePackReady) {
+    warns.push(`FIXTURE-PACK não está pronto em ${summary.fixturePack && summary.fixturePack.path ? summary.fixturePack.path : '.oxe/FIXTURE-PACK.json'}`);
+  }
+  if (Array.isArray(summary.criticalExecutionGaps) && summary.criticalExecutionGaps.length) {
+    warns.push(...summary.criticalExecutionGaps);
+  }
+  return Array.from(new Set(warns));
 }
 
 /**
@@ -1651,9 +1843,9 @@ function planReviewWarnings(stateText, p) {
 function suggestNextStep(target, cfg = {}) {
   const base = oxePaths(target);
   const stateText = fs.existsSync(base.state) ? fs.readFileSync(base.state, 'utf8') : '';
-  const p = scopedOxePaths(target, parseActiveSession(stateText));
+  const p = resolvedReadableOxePaths(target, parseActiveSession(stateText));
   const discussBefore = Boolean(cfg.discuss_before_plan);
-  const threshold = Number(cfg.plan_confidence_threshold) || 70;
+  const threshold = normalizePlanConfidenceThreshold(cfg.plan_confidence_threshold);
   const has = (/** @type {string} */ f) => fs.existsSync(f);
   const mapsComplete = EXPECTED_CODEBASE_MAPS.every((f) => has(path.join(p.codebase, f)));
   const azureActive = azure.isAzureContextEnabled(target, cfg);
@@ -1753,12 +1945,44 @@ function suggestNextStep(target, cfg = {}) {
   }
 
   const selfEval = parsePlanSelfEvaluation(p.plan);
-  if (selfEval.bestPlan === 'não' || (selfEval.confidence != null && selfEval.confidence < threshold)) {
+  const selfEvalWarnings = planSelfEvaluationWarningsFromInfo(selfEval, threshold);
+  if (!hasExecutablePlanSelfEvaluation(selfEval, threshold)) {
     return {
       step: 'plan',
       cursorCmd: '/oxe-plan --replan',
-      reason: `O plano atual ainda não atingiu confiança executável (limiar ${threshold}%)`,
+      reason: selfEvalWarnings[0]
+        ? `${selfEvalWarnings[0]} — replaneje antes de executar`
+        : `O plano atual ainda não passou no gate executável (> ${threshold}%)`,
       artifacts: ['.oxe/PLAN.md', '.oxe/STATE.md'],
+    };
+  }
+
+  const executionRationality = rationality.buildExecutionRationality({
+    plan: p.plan,
+    planAgents: p.planAgents,
+    implementationPackJson: p.implementationPackJson,
+    implementationPackMd: p.implementationPackMd,
+    referenceAnchors: p.referenceAnchors,
+    fixturePackJson: p.fixturePackJson,
+    fixturePackMd: p.fixturePackMd,
+  });
+  if (
+    shouldEnforceExecutionRationalityGate(phase)
+    && executionRationality.applicable
+    && !executionRationality.executionRationalityReady
+  ) {
+    const reason = executionRationality.criticalExecutionGaps[0]
+      || 'Artefatos racionais de execução ainda não estão íntegros';
+    return {
+      step: 'plan',
+      cursorCmd: '/oxe-plan --replan',
+      reason: `${reason} — replaneje antes de executar`,
+      artifacts: [
+        '.oxe/PLAN.md',
+        '.oxe/IMPLEMENTATION-PACK.json',
+        '.oxe/REFERENCE-ANCHORS.md',
+        '.oxe/FIXTURE-PACK.json',
+      ],
     };
   }
 
@@ -1893,7 +2117,7 @@ function buildHealthReport(target) {
     }
   }
   const activeSession = parseActiveSession(stateText);
-  const p = scopedOxePaths(target, activeSession);
+  const p = resolvedReadableOxePaths(target, activeSession);
   const phase = parseStatePhase(stateText);
   const scanDate = parseLastScanDate(stateText);
   const stale = isStaleScan(scanDate, Number(config.scan_max_age_days) || 0);
@@ -1906,13 +2130,24 @@ function buildHealthReport(target) {
   const sumWarn = verifyGapsWithoutSummaryWarning(p.verify, p.summary);
   const specReq = Array.isArray(config.spec_required_sections) ? config.spec_required_sections : [];
   const specWarn = specSectionWarnings(p.spec, specReq.map(String));
-  const threshold = Number(config.plan_confidence_threshold) || 70;
+  const threshold = normalizePlanConfidenceThreshold(config.plan_confidence_threshold);
   const capabilityWarn = capabilityWarnings(p);
   const investigationWarn = investigationWarnings(p);
+  const parsedPlanSelfEvaluation = parsePlanSelfEvaluation(p.plan);
+  const executionRationality = rationality.buildExecutionRationality({
+    plan: p.plan,
+    planAgents: p.planAgents,
+    implementationPackJson: p.implementationPackJson,
+    implementationPackMd: p.implementationPackMd,
+    referenceAnchors: p.referenceAnchors,
+    fixturePackJson: p.fixturePackJson,
+    fixturePackMd: p.fixturePackMd,
+  });
   const planWarn = [
     ...planWaveWarningsFixed(p.plan, Number(config.plan_max_tasks_per_wave) || 0),
     ...planTaskAceiteWarnings(p.plan),
-    ...planSelfEvaluationWarnings(p.plan, threshold),
+    ...planSelfEvaluationWarningsFromInfo(parsedPlanSelfEvaluation, threshold),
+    ...executionRationalityWarningsFromSummary(executionRationality),
     ...planAgentsWarnings(target),
   ];
   const sessionWarn = sessionWarnings(target, activeSession);
@@ -1920,7 +2155,16 @@ function buildHealthReport(target) {
   const copilot = copilotIntegrationReport(target);
   const copilotWarn = copilot.warnings;
   const reviewWarn = planReviewWarnings(stateText, p);
-  const planSelfEvaluation = parsePlanSelfEvaluation(p.plan);
+  const planSelfEvaluation = {
+    ...parsedPlanSelfEvaluation,
+    best_plan_current: parsedPlanSelfEvaluation.bestPlan === 'sim'
+      ? true
+      : parsedPlanSelfEvaluation.bestPlan === 'não'
+        ? false
+        : null,
+    threshold,
+    executable: hasExecutablePlanSelfEvaluation(parsedPlanSelfEvaluation, threshold),
+  };
   const activeRun = operational.readRunState(target, activeSession);
   const eventsSummary = operational.summarizeEvents(operational.readEvents(target, activeSession));
   const memoryLayers = operational.buildMemoryLayers(target, activeSession);
@@ -2137,6 +2381,14 @@ function buildHealthReport(target) {
     specWarn,
     planWarn,
     planSelfEvaluation,
+    implementationPackReady: executionRationality.implementationPackReady,
+    referenceAnchorsReady: executionRationality.referenceAnchorsReady,
+    fixturePackReady: executionRationality.fixturePackReady,
+    executionRationalityReady: executionRationality.executionRationalityReady,
+    criticalExecutionGaps: executionRationality.criticalExecutionGaps,
+    executionRationality,
+    planConfidenceThreshold: threshold,
+    planConfidenceExecutable: planSelfEvaluation.executable,
     planReviewStatus: parsePlanReviewStatus(stateText),
     activeRun,
     eventsSummary,
@@ -2207,10 +2459,14 @@ module.exports = {
   copilotWorkspacePaths,
   copilotLegacyPaths,
   copilotIntegrationReport,
+  normalizePlanConfidenceThreshold,
+  isExecutablePlanConfidence,
+  hasExecutablePlanSelfEvaluation,
   planAgentsWarnings,
   installationCompletenessWarnings,
   parsePlanSelfEvaluation,
   planSelfEvaluationWarnings,
+  executionRationalityWarningsFromSummary,
   runtimeWarnings,
   planReviewWarnings,
   capabilityWarnings,
@@ -2222,6 +2478,7 @@ module.exports = {
   planTaskAceiteWarnings,
   suggestNextStep,
   buildHealthReport,
+  buildExecutionRationality: rationality.buildExecutionRationality,
   oxePaths,
   scopedOxePaths,
 };

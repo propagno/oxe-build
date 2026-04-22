@@ -47,6 +47,41 @@ function seedContextProject(dir, options = {}) {
   return { oxe, codebase };
 }
 
+function writeRationalityPacks(oxeDir, taskIds = ['T1']) {
+  fs.writeFileSync(path.join(oxeDir, 'IMPLEMENTATION-PACK.md'), '# implementation\n', 'utf8');
+  fs.writeFileSync(
+    path.join(oxeDir, 'IMPLEMENTATION-PACK.json'),
+    JSON.stringify({
+      schema_version: '1',
+      generated_at: '2026-04-22T12:00:00Z',
+      ready: true,
+      critical_gaps: [],
+      tasks: taskIds.map((taskId) => ({
+        id: taskId,
+        title: taskId,
+        mode: 'mutating',
+        ready: true,
+        exact_paths: [`src/${taskId.toLowerCase()}.ts`],
+        write_set: 'closed',
+        symbols: [{ kind: 'function', name: `${taskId.toLowerCase()}Handler`, path: `src/${taskId.toLowerCase()}.ts`, signature: '() => void' }],
+        contracts: [{ name: `${taskId}-contract`, input_shape: 'void', output_shape: 'void', invariants: ['none'], not_allowed: ['none'] }],
+        snippets: [],
+        expected_checks: ['npm test'],
+        requires_fixture: false,
+        critical_gaps: [],
+      })),
+    }, null, 2),
+    'utf8'
+  );
+  fs.writeFileSync(path.join(oxeDir, 'REFERENCE-ANCHORS.md'), '<reference_anchors version="1" ready="true" status="not_applicable"></reference_anchors>\n', 'utf8');
+  fs.writeFileSync(path.join(oxeDir, 'FIXTURE-PACK.md'), '# fixture\n', 'utf8');
+  fs.writeFileSync(
+    path.join(oxeDir, 'FIXTURE-PACK.json'),
+    JSON.stringify({ schema_version: '1', generated_at: '2026-04-22T12:00:00Z', ready: true, critical_gaps: [], fixtures: [] }, null, 2),
+    'utf8'
+  );
+}
+
 describe('oxe-cc CLI edge', () => {
   test('install --help exits 0', () => {
     const r = spawnSync(process.execPath, [CLI, '--help'], {
@@ -197,6 +232,12 @@ describe('oxe-cc CLI edge', () => {
     assert.ok('gateSla' in j);
     assert.ok('staleGateCount' in j);
     assert.ok('multiAgent' in j);
+    assert.ok('implementationPackReady' in j);
+    assert.ok('referenceAnchorsReady' in j);
+    assert.ok('fixturePackReady' in j);
+    assert.ok('executionRationalityReady' in j);
+    assert.ok(Array.isArray(j.criticalExecutionGaps));
+    assert.ok(j.executionRationality && typeof j.executionRationality === 'object');
     assert.ok(j.diagnostics && typeof j.diagnostics === 'object');
     assert.ok(Array.isArray(j.diagnostics.planWarnings));
     assert.ok(Array.isArray(j.diagnostics.enterpriseWarnings));
@@ -249,6 +290,9 @@ describe('oxe-cc CLI edge', () => {
     assert.ok(Array.isArray(stored.read_order));
     assert.ok(stored.selected_artifacts.some((artifact) => artifact.alias === 'state'));
     assert.ok(stored.selected_artifacts.some((artifact) => artifact.alias === 'plan'));
+    assert.ok(stored.selected_artifacts.some((artifact) => artifact.alias === 'implementation_pack_json'));
+    assert.ok(stored.selected_artifacts.some((artifact) => artifact.alias === 'reference_anchors'));
+    assert.ok(stored.selected_artifacts.some((artifact) => artifact.alias === 'fixture_pack_json'));
   });
 
   test('status --json exposes Copilot workspace-vs-legacy diagnostics', () => {
@@ -325,7 +369,7 @@ describe('oxe-cc CLI edge', () => {
 
     fs.writeFileSync(
       path.join(oxe, 'PLAN.md'),
-      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 60%\n- **Base da confiança:**\n  - Completude dos requisitos: 20/25\n  - Dependências conhecidas: 12/15\n  - Risco técnico: 8/20\n  - Impacto no código existente: 10/15\n  - Clareza da validação / testes: 7/15\n  - Lacunas externas / decisões pendentes: 3/10\n- **Principais incertezas:** integração\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n## Tarefas\n\n### T1 — Demo\n- **Aceite vinculado:** A1\n',
+      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 60%\n- **Base da confiança:**\n  - Completude dos requisitos: 20/25\n  - Dependências conhecidas: 12/15\n  - Risco técnico: 8/20\n  - Impacto no código existente: 10/15\n  - Clareza da validação / testes: 7/15\n  - Lacunas externas / decisões pendentes: 3/10\n- **Principais incertezas:** integração\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n<confidence_vector cycle=\"C-01\" generated_at=\"2026-04-22T12:00:00Z\">\n  <dim name=\"requirements\" score=\"0.80\" weight=\"25\" note=\"ok\" />\n  <dim name=\"dependencies\" score=\"0.80\" weight=\"15\" note=\"ok\" />\n  <dim name=\"technical_risk\" score=\"0.40\" weight=\"20\" note=\"integração\" />\n  <dim name=\"code_impact\" score=\"0.67\" weight=\"15\" note=\"moderado\" />\n  <dim name=\"validation\" score=\"0.47\" weight=\"15\" note=\"baixa clareza\" />\n  <dim name=\"open_gaps\" score=\"0.30\" weight=\"10\" note=\"gaps externos\" />\n  <global score=\"0.60\" gate=\"refine_first\" />\n</confidence_vector>\n\n## Tarefas\n\n### T1 — Demo\n- **Aceite vinculado:** A1\n',
       'utf8'
     );
     const r2 = spawnSync(process.execPath, [CLI, 'status', '--json', '--dir', dir], {
@@ -337,7 +381,7 @@ describe('oxe-cc CLI edge', () => {
     const j2 = JSON.parse(r2.stdout.trim().split(/\r?\n/).filter(Boolean).pop());
     assert.strictEqual(j2.nextStep, 'plan');
     assert.strictEqual(j2.planSelfEvaluation.confidence, 60);
-    assert.ok(j2.diagnostics.planWarnings.some((x) => /abaixo do limiar executável/i.test(x)));
+    assert.ok(j2.diagnostics.planWarnings.some((x) => /não supera o limiar executável/i.test(x)));
   });
 
   test('status suggests dashboard when plan is executable but review is missing', () => {
@@ -360,9 +404,10 @@ describe('oxe-cc CLI edge', () => {
     fs.writeFileSync(path.join(oxe, 'SPEC.md'), '## Critérios de aceite\n\n| ID | Critério | Como verificar |\n| A1 | x | y |\n', 'utf8');
     fs.writeFileSync(
       path.join(oxe, 'PLAN.md'),
-      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 82%\n- **Base da confiança:**\n  - Completude dos requisitos: 20/25\n  - Dependências conhecidas: 12/15\n  - Risco técnico: 12/20\n  - Impacto no código existente: 10/15\n  - Clareza da validação / testes: 10/15\n  - Lacunas externas / decisões pendentes: 8/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n## Tarefas\n\n### T1 — Demo\n- **Aceite vinculado:** A1\n',
+      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 91%\n- **Base da confiança:**\n  - Completude dos requisitos: 23/25\n  - Dependências conhecidas: 14/15\n  - Risco técnico: 18/20\n  - Impacto no código existente: 14/15\n  - Clareza da validação / testes: 13/15\n  - Lacunas externas / decisões pendentes: 9/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n<confidence_vector cycle=\"C-01\" generated_at=\"2026-04-22T12:00:00Z\">\n  <dim name=\"requirements\" score=\"0.92\" weight=\"25\" note=\"ok\" />\n  <dim name=\"dependencies\" score=\"0.93\" weight=\"15\" note=\"ok\" />\n  <dim name=\"technical_risk\" score=\"0.90\" weight=\"20\" note=\"controlado\" />\n  <dim name=\"code_impact\" score=\"0.93\" weight=\"15\" note=\"claro\" />\n  <dim name=\"validation\" score=\"0.87\" weight=\"15\" note=\"bom\" />\n  <dim name=\"open_gaps\" score=\"0.90\" weight=\"10\" note=\"sem gaps\" />\n  <global score=\"0.91\" gate=\"proceed\" />\n</confidence_vector>\n\n## Tarefas\n\n### T1 — Demo\n- **Aceite vinculado:** A1\n',
       'utf8'
     );
+    writeRationalityPacks(oxe, ['T1']);
     const r = spawnSync(process.execPath, [CLI, 'status', '--json', '--dir', dir], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
@@ -373,6 +418,34 @@ describe('oxe-cc CLI edge', () => {
     assert.strictEqual(j.nextStep, 'dashboard');
     assert.strictEqual(j.cursorCmd, '/oxe-dashboard');
     assert.ok(j.diagnostics.reviewWarnings.some((x) => /plan_review_status/i.test(x)));
+  });
+
+  test('status keeps nextStep in plan when confidence is exactly 90%', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-90-'));
+    const oxe = path.join(dir, '.oxe');
+    const codebase = path.join(oxe, 'codebase');
+    fs.mkdirSync(codebase, { recursive: true });
+    for (const f of CODEBASE_MAPS) {
+      fs.writeFileSync(path.join(codebase, f), '# ok\n', 'utf8');
+    }
+    fs.writeFileSync(path.join(oxe, 'STATE.md'), '# OXE — Estado\n\n## Fase atual\n\n`plan_ready`\n', 'utf8');
+    fs.writeFileSync(path.join(oxe, 'SPEC.md'), '## Critérios de aceite\n\n| ID | Critério | Como verificar |\n| A1 | x | y |\n', 'utf8');
+    fs.writeFileSync(
+      path.join(oxe, 'PLAN.md'),
+      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 90%\n- **Base da confiança:**\n  - Completude dos requisitos: 23/25\n  - Dependências conhecidas: 14/15\n  - Risco técnico: 17/20\n  - Impacto no código existente: 14/15\n  - Clareza da validação / testes: 13/15\n  - Lacunas externas / decisões pendentes: 9/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n<confidence_vector cycle=\"C-01\" generated_at=\"2026-04-22T12:00:00Z\">\n  <dim name=\"requirements\" score=\"0.92\" weight=\"25\" note=\"ok\" />\n  <dim name=\"dependencies\" score=\"0.93\" weight=\"15\" note=\"ok\" />\n  <dim name=\"technical_risk\" score=\"0.85\" weight=\"20\" note=\"controlado\" />\n  <dim name=\"code_impact\" score=\"0.93\" weight=\"15\" note=\"claro\" />\n  <dim name=\"validation\" score=\"0.87\" weight=\"15\" note=\"bom\" />\n  <dim name=\"open_gaps\" score=\"0.90\" weight=\"10\" note=\"sem gaps\" />\n  <global score=\"0.90\" gate=\"refine_first\" />\n</confidence_vector>\n\n## Tarefas\n\n### T1 — Demo\n- **Aceite vinculado:** A1\n',
+      'utf8'
+    );
+    const r = spawnSync(process.execPath, [CLI, 'status', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+    const j = JSON.parse(r.stdout.trim().split(/\r?\n/).filter(Boolean).pop());
+    assert.strictEqual(j.nextStep, 'plan');
+    assert.strictEqual(j.planConfidenceThreshold, 90);
+    assert.strictEqual(j.planConfidenceExecutable, false);
+    assert.ok(j.diagnostics.planWarnings.some((x) => />90%/.test(x)));
   });
 
   test('status --json --hints includes hints array', () => {

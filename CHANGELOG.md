@@ -4,6 +4,31 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.5.1] — 2026-04-22
+
+### Rational Execution Readiness
+
+- `/oxe-plan` passou a exigir e propagar artefatos racionais de execução: `IMPLEMENTATION-PACK`, `REFERENCE-ANCHORS` e `FIXTURE-PACK`
+- `/oxe-execute` agora é `pack-first` e bloqueia mutação quando confiança `<= 90%`, quando os packs estão incompletos ou quando há `critical_gap` aberto
+- `doctor`, `status --json`, dashboard e SDK passaram a expor `implementationPackReady`, `referenceAnchorsReady`, `fixturePackReady`, `executionRationalityReady` e `criticalExecutionGaps`
+
+### Session Compatibility
+
+- o health report agora faz fallback explícito entre artefatos session-scoped e artefatos ainda materializados na raiz `.oxe/`, evitando falso negativo de readiness em workspaces legados
+- o gate racional foi limitado ao estágio pré-execução; depois de `executing`/`verify_complete`, os packs continuam diagnósticos, mas não reescrevem o próximo passo do ciclo
+
+### Publication Alignment
+
+- versão alinhada para `1.5.1` em pacote raiz, runtime package, extensão VS Code, README e lockfile
+- matriz pública de smoke runtime atualizada para refletir a release `1.5.1`
+
+### Validation
+
+- `npm test`
+- `npm run scan:assets`
+- `npm run release:manifest`
+- `npm run build:vscode-ext`
+
 ## [1.5.0] — 2026-04-21
 
 ### Release Readiness 5/5

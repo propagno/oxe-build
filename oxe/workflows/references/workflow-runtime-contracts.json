@@ -265,6 +265,9 @@
       "optional_artifacts": [
         "session_summary",
         "plan",
+        "implementation_pack_json",
+        "reference_anchors",
+        "fixture_pack_json",
         "runtime",
         "verify",
         "active_run",
@@ -322,11 +325,16 @@
       "required_artifacts": [
         "state",
         "runtime",
-        "checkpoints"
+        "checkpoints",
+        "implementation_pack_json",
+        "reference_anchors",
+        "fixture_pack_json"
       ],
       "optional_artifacts": [
         "plan",
         "quick",
+        "implementation_pack_md",
+        "fixture_pack_md",
         "active_run",
         "events",
         "verify",
@@ -343,6 +351,9 @@
           "runtime",
           "checkpoints",
           "plan",
+          "implementation_pack_json",
+          "reference_anchors",
+          "fixture_pack_json",
           "quick",
           "phase_summary"
         ],
@@ -351,6 +362,9 @@
           "runtime",
           "checkpoints",
           "plan",
+          "implementation_pack_json",
+          "reference_anchors",
+          "fixture_pack_json",
           "quick",
           "phase_summary",
           "session_summary",
@@ -364,6 +378,11 @@
           "runtime",
           "checkpoints",
           "plan",
+          "implementation_pack_md",
+          "implementation_pack_json",
+          "reference_anchors",
+          "fixture_pack_md",
+          "fixture_pack_json",
           "quick",
           "active_run",
           "events",
@@ -521,7 +540,12 @@
         "capabilities_index",
         "azure_inventory",
         "checkpoints",
-        "calibration"
+        "calibration",
+        "implementation_pack_md",
+        "implementation_pack_json",
+        "reference_anchors",
+        "fixture_pack_md",
+        "fixture_pack_json"
       ],
       "context_tiers": {
         "minimal": [
@@ -540,7 +564,10 @@
           "project_summary",
           "global_lessons",
           "capabilities_index",
-          "checkpoints"
+          "checkpoints",
+          "implementation_pack_json",
+          "reference_anchors",
+          "fixture_pack_json"
         ],
         "full": [
           "state",
@@ -554,7 +581,12 @@
           "capabilities_index",
           "azure_inventory",
           "checkpoints",
-          "calibration"
+          "calibration",
+          "implementation_pack_md",
+          "implementation_pack_json",
+          "reference_anchors",
+          "fixture_pack_md",
+          "fixture_pack_json"
         ]
       },
       "extraction_intent": "planning_input"
