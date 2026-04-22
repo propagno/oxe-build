@@ -1,0 +1,61 @@
+{
+  "name": "orphan-work-item",
+  "phase": "executing",
+  "run_id": "fixture-orphan-work-item",
+  "run_state": {
+    "run_id": "fixture-orphan-work-item",
+    "status": "paused",
+    "current_wave": 2,
+    "cursor": { "wave": 2, "task": "T7", "mode": "C" },
+    "active_tasks": ["T7"],
+    "metrics": { "recover_count": 1 },
+    "compiled_graph": {
+      "nodes": {
+        "T7": {
+          "id": "T7",
+          "title": "Handle orphan",
+          "wave": 2,
+          "depends_on": [],
+          "workspace_strategy": "git_worktree",
+          "mutation_scope": ["src/orphan.ts"],
+          "actions": [],
+          "verify": { "must_pass": [], "acceptance_refs": ["A7"], "command": null },
+          "policy": { "max_retries": 1, "requires_human_approval": false }
+        }
+      },
+      "edges": [],
+      "waves": [{ "wave_number": 2, "node_ids": ["T7"] }],
+      "metadata": { "compiled_at": "2026-04-21T12:00:00.000Z", "plan_hash": "plan7", "spec_hash": "spec7", "node_count": 1, "wave_count": 1 }
+    }
+  },
+  "journal": {
+    "run_id": "fixture-orphan-work-item",
+    "paused_at": "2026-04-21T12:00:00.000Z",
+    "cancelled": false,
+    "eligible_work_items": ["T7"],
+    "completed_work_items": [],
+    "failed_work_items": [],
+    "blocked_work_items": [],
+    "pending_gates": [],
+    "scheduler_state": "paused",
+    "partial_result": { "run_id": "fixture-orphan-work-item", "completed": [], "failed": [], "blocked": [] }
+  },
+  "promotion_record": {
+    "status": "blocked",
+    "target_kind": "pr_draft",
+    "remote": "origin",
+    "reasons": ["pending gate"],
+    "coverage_percent": 100
+  },
+  "events": [
+    {
+      "type": "WorkItemBlocked",
+      "run_id": "fixture-orphan-work-item",
+      "work_item_id": "T7",
+      "payload": { "failure_class": "env" }
+    }
+  ],
+  "expect": {
+    "consistency_issue_min": 0
+  }
+}

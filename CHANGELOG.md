@@ -4,6 +4,31 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.5.0] — 2026-04-21
+
+### Release Readiness 5/5
+
+- `doctor --release --write-manifest` virou gate formal de publicação, com verificação bloqueante de versões, topo do `CHANGELOG`, runtime compilado, wrapper sync e relatórios obrigatórios
+- a release agora persiste `release-manifest.json`, `runtime-smoke-report.json`, `recovery-fixture-report.json` e `multi-agent-soak-report.json` em `.oxe/release/`
+- `npm test` passou a incluir smoke matrix multi-runtime, fixtures reproduzíveis de recovery/incidente e soak multi-agent
+
+### Operational Proof
+
+- nova smoke matrix obrigatória para Cursor, Copilot VS Code, Claude Code, Codex, OpenCode, Gemini, Windsurf e Antigravity, cobrindo install, entrypoint `oxe`, resolução de workflow e uninstall granular
+- novo corpus de incidentes em `tests/fixtures/runtime-incidents/` para provar `runtime replay` e `runtime recover` fora do caminho feliz
+- multi-agent passou a gerar e auditar `multi-agent-summary.json`, incluindo timeouts e reassignments
+
+### Publication Contract
+
+- versão alinhada para `1.5.0` em pacote raiz, runtime package, extensão VS Code, README e lockfile
+- README, AGENTS e SDK docs atualizados para refletir o gate de release, os relatórios obrigatórios e o contrato estável desta publicação
+
+### Validation
+
+- `npm test`
+- `npm run scan:assets`
+- `npm run release:doctor`
+
 ## [1.4.0] — 2026-04-20
 
 ### Runtime Publication Stabilization

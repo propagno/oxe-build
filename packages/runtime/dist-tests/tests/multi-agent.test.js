@@ -43,6 +43,16 @@ function makeFailExecutor() {
         }),
     };
 }
+function makeSlowExecutor(delayMs) {
+    return {
+        execute: async () => {
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+            return {
+                success: true, failure_class: null, evidence: [], output: 'slow-done',
+            };
+        },
+    };
+}
 function makeGraph(nodeIds, workspaceStrategy = 'git_worktree') {
     const nodes = new Map();
     for (const id of nodeIds) {
@@ -137,6 +147,33 @@ function makeTmpProjectRoot() {
         const coordinator = new multi_agent_coordinator_1.MultiAgentCoordinator();
         const result = await coordinator.run(graph, opts);
         strict_1.default.equal(result.completed.length, 4);
+    });
+    (0, node_test_1.it)('persists summary and reassigns orphan tasks on timeout', async () => {
+        const root = makeTmpProjectRoot();
+        const graph = makeGraph(['t1', 't2']);
+        const opts = {
+            mode: 'parallel',
+            heartbeatTimeoutMs: 25,
+            agents: [
+                makeAgent('a-timeout', makeSlowExecutor(100), ['t1']),
+                makeAgent('a-fast', makeSuccessExecutor(), ['t2']),
+            ],
+            projectRoot: root,
+            sessionId: null,
+            runId: 'r-parallel-timeout',
+        };
+        const coordinator = new multi_agent_coordinator_1.MultiAgentCoordinator();
+        const result = await coordinator.run(graph, opts);
+        strict_1.default.ok(result.completed.includes('t1'));
+        strict_1.default.ok(result.summary);
+        strict_1.default.equal(result.summary?.timeout_count, 1);
+        strict_1.default.equal(result.summary?.orphan_reassignment_count, 1);
+        const summaryPath = path_1.default.join(root, '.oxe', 'runs', 'r-parallel-timeout', 'multi-agent-summary.json');
+        strict_1.default.ok(fs_1.default.existsSync(summaryPath));
+        const statePath = path_1.default.join(root, '.oxe', 'runs', 'r-parallel-timeout', 'multi-agent-state.json');
+        const state = JSON.parse(fs_1.default.readFileSync(statePath, 'utf8'));
+        strict_1.default.equal(state.timed_out_agents.length, 1);
+        strict_1.default.equal(state.orphan_reassignments.length, 1);
     });
 });
 (0, node_test_1.describe)('MultiAgentCoordinator — competitive mode', () => {

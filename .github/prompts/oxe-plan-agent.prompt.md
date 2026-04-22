@@ -1,5 +1,6 @@
 ---
 name: oxe-plan-agent
+agent: agent
 description: "OXE — PLAN.md + plan-agents.json (plano orientado a agentes / ondas)"
 oxe_workflow_slug: plan-agent
 oxe_reasoning_mode: planning

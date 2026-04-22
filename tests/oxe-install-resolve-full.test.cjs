@@ -1,12 +1,16 @@
 'use strict';
 
-const { test, describe } = require('node:test');
+const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const resolve = require('../bin/lib/oxe-install-resolve.cjs');
+
+let prevHome;
+let prevUserProfile;
+let prevSystemConfig;
 
 const baseOpts = () => ({
   ignoreInstallConfig: false,
@@ -24,6 +28,25 @@ const baseOpts = () => ({
 });
 
 describe('oxe-install-resolve full', () => {
+  beforeEach(() => {
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-ir-home-'));
+    prevHome = process.env.HOME;
+    prevUserProfile = process.env.USERPROFILE;
+    prevSystemConfig = process.env.OXE_SYSTEM_CONFIG;
+    process.env.HOME = fakeHome;
+    process.env.USERPROFILE = fakeHome;
+    process.env.OXE_SYSTEM_CONFIG = path.join(fakeHome, 'missing-system-config.json');
+  });
+
+  afterEach(() => {
+    if (prevHome == null) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevUserProfile == null) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = prevUserProfile;
+    if (prevSystemConfig == null) delete process.env.OXE_SYSTEM_CONFIG;
+    else process.env.OXE_SYSTEM_CONFIG = prevSystemConfig;
+  });
+
   test('ignoreInstallConfig short-circuit', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-ir-'));
     const { options, warnings } = resolve.resolveInstallOptionsFromConfig(dir, {

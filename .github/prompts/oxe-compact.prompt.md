@@ -1,6 +1,6 @@
 ---
 name: oxe-compact
-mode: agent
+agent: agent
 description: OXE — refresh .oxe/codebase vs repo + CODEBASE-DELTA + RESUME
 oxe_workflow_slug: compact
 oxe_reasoning_mode: discovery

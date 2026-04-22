@@ -1,8 +1,10 @@
 # OXE — Runtime Smoke Matrix
 
-> Estado de suporte por runtime de IA. Atualizado em v1.4.0.
+> Estado de suporte por runtime de IA. Atualizado em v1.5.0.
 >
 > `✓` = suportado e testado | `~` = suportado parcialmente | `✗` = não suportado | `?` = não testado
+
+Este documento descreve a matrix estável da release. O artefato operacional consumido por `doctor --release` é `.oxe/release/runtime-smoke-report.json`.
 
 ---
 

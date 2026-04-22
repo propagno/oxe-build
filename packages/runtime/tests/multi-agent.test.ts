@@ -48,6 +48,17 @@ function makeFailExecutor(): TaskExecutor {
   };
 }
 
+function makeSlowExecutor(delayMs: number): TaskExecutor {
+  return {
+    execute: async (): Promise<TaskResult> => {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      return {
+        success: true, failure_class: null, evidence: [], output: 'slow-done',
+      };
+    },
+  };
+}
+
 function makeGraph(nodeIds: string[], workspaceStrategy: GraphNode['workspace_strategy'] = 'git_worktree'): ExecutionGraph {
   const nodes = new Map<string, GraphNode>();
   for (const id of nodeIds) {
@@ -156,6 +167,34 @@ describe('MultiAgentCoordinator — parallel mode', () => {
     const coordinator = new MultiAgentCoordinator();
     const result = await coordinator.run(graph, opts);
     assert.equal(result.completed.length, 4);
+  });
+
+  it('persists summary and reassigns orphan tasks on timeout', async () => {
+    const root = makeTmpProjectRoot();
+    const graph = makeGraph(['t1', 't2']);
+    const opts: CoordinationOptions = {
+      mode: 'parallel',
+      heartbeatTimeoutMs: 25,
+      agents: [
+        makeAgent('a-timeout', makeSlowExecutor(100), ['t1']),
+        makeAgent('a-fast', makeSuccessExecutor(), ['t2']),
+      ],
+      projectRoot: root,
+      sessionId: null,
+      runId: 'r-parallel-timeout',
+    };
+    const coordinator = new MultiAgentCoordinator();
+    const result = await coordinator.run(graph, opts);
+    assert.ok(result.completed.includes('t1'));
+    assert.ok(result.summary);
+    assert.equal(result.summary?.timeout_count, 1);
+    assert.equal(result.summary?.orphan_reassignment_count, 1);
+    const summaryPath = path.join(root, '.oxe', 'runs', 'r-parallel-timeout', 'multi-agent-summary.json');
+    assert.ok(fs.existsSync(summaryPath));
+    const statePath = path.join(root, '.oxe', 'runs', 'r-parallel-timeout', 'multi-agent-state.json');
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.equal(state.timed_out_agents.length, 1);
+    assert.equal(state.orphan_reassignments.length, 1);
   });
 });
 

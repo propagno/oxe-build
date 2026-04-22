@@ -653,15 +653,20 @@ function readRuntimeMultiAgentStatus(projectRoot, activeSession, options = {}) {
       orphanReassignments: [],
       handoffs: [],
       arbitrationResults: [],
+      summary: null,
     };
   }
   const runDir = path.join(projectRoot, '.oxe', 'runs', runId);
   const statePath = path.join(runDir, 'multi-agent-state.json');
+  const summaryPath = path.join(runDir, 'multi-agent-summary.json');
   const handoffsPath = path.join(runDir, 'handoffs.json');
   const arbitrationPath = path.join(runDir, 'arbitration-results.json');
   const state = runtime && typeof runtime.loadMultiAgentState === 'function'
     ? runtime.loadMultiAgentState(projectRoot, runId)
     : readJsonIfExists(statePath);
+  const summary = runtime && typeof runtime.loadMultiAgentSummary === 'function'
+    ? runtime.loadMultiAgentSummary(projectRoot, runId)
+    : readJsonIfExists(summaryPath);
   const handoffs = readJsonIfExists(handoffsPath);
   const arbitrationResults = readJsonIfExists(arbitrationPath);
   return {
@@ -675,6 +680,7 @@ function readRuntimeMultiAgentStatus(projectRoot, activeSession, options = {}) {
     orphanReassignments: state && Array.isArray(state.orphan_reassignments) ? state.orphan_reassignments : [],
     handoffs: Array.isArray(handoffs) ? handoffs : [],
     arbitrationResults: Array.isArray(arbitrationResults) ? arbitrationResults : [],
+    summary: summary || null,
   };
 }
 

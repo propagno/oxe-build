@@ -157,6 +157,38 @@ export interface MultiAgentStatusSummary {
   orphanReassignments: Array<Record<string, unknown>>;
   handoffs: Array<Record<string, unknown>>;
   arbitrationResults: Array<Record<string, unknown>>;
+  summary?: Record<string, unknown> | null;
+}
+
+export interface ReleaseManifest {
+  schema_version: number;
+  generated_at: string;
+  project_root: string;
+  package_root: string;
+  release_contract: Record<string, unknown>;
+  versions: Record<string, unknown>;
+  runtime_compiled: { path: string; ok: boolean };
+  wrappers: Record<string, unknown>;
+  reports: Record<string, unknown>;
+}
+
+export interface ReleaseConsistencyResult {
+  ok: boolean;
+  blockers: string[];
+  warnings: string[];
+  manifest: ReleaseManifest;
+  manifestPath: string;
+}
+
+export interface RuntimeSmokeReport {
+  path: string;
+  present: boolean;
+  ok: boolean;
+  total: number;
+  failures: string[];
+  missingRequired: string[];
+  results: Array<Record<string, unknown>>;
+  raw: Record<string, unknown> | null;
 }
 
 export interface PolicyDecisionSummary {
@@ -690,6 +722,18 @@ export interface OxeSdk {
     savePlanReviewStatus: (projectRoot: string, input?: Record<string, unknown>) => Record<string, unknown>;
     addPlanReviewComment: (projectRoot: string, input?: Record<string, unknown>) => Record<string, unknown>;
     updatePlanReviewCommentStatus: (projectRoot: string, input?: Record<string, unknown>) => Record<string, unknown> | null;
+  };
+
+  release: {
+    REQUIRED_RUNTIMES: string[];
+    WRAPPER_TARGETS: Array<Record<string, unknown>>;
+    releasePaths: (projectRoot: string) => Record<string, string>;
+    collectWrapperHashes: (projectRoot: string) => Record<string, unknown>;
+    loadRuntimeSmokeReport: (projectRoot: string) => RuntimeSmokeReport;
+    loadRecoveryFixtureReport: (projectRoot: string) => RuntimeSmokeReport;
+    loadMultiAgentSoakReport: (projectRoot: string) => RuntimeSmokeReport;
+    buildReleaseManifest: (projectRoot: string, options?: Record<string, unknown>) => ReleaseManifest;
+    checkReleaseConsistency: (projectRoot: string, options?: Record<string, unknown>) => ReleaseConsistencyResult;
   };
 
   context: ContextAPI;

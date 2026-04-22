@@ -38,6 +38,7 @@ describe('oxe-sdk', () => {
 
   test('install.resolveOptionsFromConfig applies core profile', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-sdk-i-'));
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-sdk-home-'));
     fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
     fs.writeFileSync(
       path.join(dir, '.oxe', 'config.json'),
@@ -54,7 +55,24 @@ describe('oxe-sdk', () => {
       cursor: false,
       copilot: false,
     };
-    const { options, warnings } = sdk.install.resolveOptionsFromConfig(dir, base);
+    const prevHome = process.env.HOME;
+    const prevUserProfile = process.env.USERPROFILE;
+    const prevSystemConfig = process.env.OXE_SYSTEM_CONFIG;
+    process.env.HOME = fakeHome;
+    process.env.USERPROFILE = fakeHome;
+    process.env.OXE_SYSTEM_CONFIG = path.join(fakeHome, 'missing-system-config.json');
+    let options;
+    let warnings;
+    try {
+      ({ options, warnings } = sdk.install.resolveOptionsFromConfig(dir, base));
+    } finally {
+      if (prevHome == null) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      if (prevUserProfile == null) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = prevUserProfile;
+      if (prevSystemConfig == null) delete process.env.OXE_SYSTEM_CONFIG;
+      else process.env.OXE_SYSTEM_CONFIG = prevSystemConfig;
+    }
     assert.strictEqual(warnings.length, 0);
     assert.strictEqual(options.cursor, false);
     assert.strictEqual(options.integrationsUnset, false);
@@ -217,5 +235,12 @@ describe('oxe-sdk', () => {
     assert.ok(sdk.runtimeSemantics);
     assert.strictEqual(typeof sdk.runtimeSemantics.getWorkflowContract, 'function');
     assert.strictEqual(typeof sdk.runtimeSemantics.auditRuntimeTargets, 'function');
+  });
+
+  test('release SDK namespace is exposed', () => {
+    assert.ok(sdk.release);
+    assert.strictEqual(typeof sdk.release.buildReleaseManifest, 'function');
+    assert.strictEqual(typeof sdk.release.checkReleaseConsistency, 'function');
+    assert.strictEqual(typeof sdk.release.loadRuntimeSmokeReport, 'function');
   });
 });

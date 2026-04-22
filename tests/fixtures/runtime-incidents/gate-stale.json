@@ -1,0 +1,68 @@
+{
+  "name": "gate-stale",
+  "phase": "executing",
+  "run_id": "fixture-gate-stale",
+  "run_state": {
+    "run_id": "fixture-gate-stale",
+    "status": "paused",
+    "current_wave": 1,
+    "cursor": { "wave": 1, "task": "T1", "mode": "B" },
+    "active_tasks": ["T1"],
+    "metrics": { "recover_count": 0 },
+    "compiled_graph": {
+      "nodes": {
+        "T1": {
+          "id": "T1",
+          "title": "Approve external mutation",
+          "wave": 1,
+          "depends_on": [],
+          "workspace_strategy": "git_worktree",
+          "mutation_scope": ["src/a.ts"],
+          "actions": [],
+          "verify": { "must_pass": [], "acceptance_refs": ["A1"], "command": null },
+          "policy": { "max_retries": 1, "requires_human_approval": true }
+        }
+      },
+      "edges": [],
+      "waves": [{ "wave_number": 1, "node_ids": ["T1"] }],
+      "metadata": { "compiled_at": "2026-04-21T12:00:00.000Z", "plan_hash": "plan1", "spec_hash": "spec1", "node_count": 1, "wave_count": 1 }
+    }
+  },
+  "journal": {
+    "run_id": "fixture-gate-stale",
+    "paused_at": "2026-04-21T12:00:00.000Z",
+    "cancelled": false,
+    "eligible_work_items": ["T1"],
+    "completed_work_items": [],
+    "failed_work_items": [],
+    "blocked_work_items": [],
+    "pending_gates": [],
+    "scheduler_state": "paused",
+    "partial_result": { "run_id": "fixture-gate-stale", "completed": [], "failed": [], "blocked": [] }
+  },
+  "gates": [
+    {
+      "gate_id": "gate-stale-1",
+      "scope": "action",
+      "run_id": "fixture-gate-stale",
+      "work_item_id": "T1",
+      "action": "apply_patch",
+      "requested_at": "2026-04-18T10:00:00.000Z",
+      "context": { "description": "manual approval", "evidence_refs": [], "risks": ["scope"], "rationale": null, "policy_decision_id": null },
+      "status": "pending",
+      "resolution_history": []
+    }
+  ],
+  "events": [
+    {
+      "type": "GateRequested",
+      "run_id": "fixture-gate-stale",
+      "work_item_id": "T1",
+      "payload": { "gate_id": "gate-stale-1" }
+    }
+  ],
+  "expect": {
+    "pending_gate_min": 1,
+    "consistency_issue_min": 0
+  }
+}
