@@ -153,4 +153,23 @@ describe('scripts', () => {
     assert.ok(manifest.wrappers['.github/prompts']);
     assert.ok(manifest.wrappers['commands/oxe']);
   });
+
+  test('release-doctor writes manifest and blocks incomplete release project', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-release-doctor-'));
+    const r = spawnSync(process.execPath, [path.join(REPO_ROOT, 'scripts', 'release-doctor.cjs'), '--write-manifest'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        OXE_RELEASE_PROJECT_ROOT: dir,
+        OXE_RELEASE_PACKAGE_ROOT: REPO_ROOT,
+      },
+    });
+    assert.strictEqual(r.status, 1, r.stdout + r.stderr);
+    const manifestPath = path.join(dir, '.oxe', 'release', 'release-manifest.json');
+    assert.strictEqual(fs.existsSync(manifestPath), true);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    assert.ok(manifest.versions);
+    assert.ok(manifest.reports);
+  });
 });

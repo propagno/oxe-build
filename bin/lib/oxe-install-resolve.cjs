@@ -36,6 +36,16 @@ function resolveInstallOptionsFromConfig(projectRoot, optsIn) {
     opts.explicitScope = true;
   }
 
+  if (!opts.explicitIdeScope && !opts.oxeOnly && typeof inst.ide_scope === 'string') {
+    if (inst.ide_scope === 'local') {
+      opts.ideLocal = true;
+      opts.explicitIdeScope = true;
+    } else if (inst.ide_scope === 'global') {
+      opts.ideLocal = false;
+      opts.explicitIdeScope = true;
+    }
+  }
+
   if (!opts.oxeOnly && inst.vscode === true) {
     opts.vscode = true;
   }

@@ -4,7 +4,7 @@ Este repositório empacota o fluxo **OXE** (spec-driven, artefatos em `.oxe/`). 
 
 - **npm:** `npx oxe-cc@latest` · pacote `oxe-cc` · [README.md](README.md)
 - **Workflows canónicos:** [oxe/workflows/](oxe/workflows/) — editar aqui primeiro; todas as integrações apontam para estes ficheiros. Referência **legado / brownfield:** [oxe/workflows/references/legacy-brownfield.md](oxe/workflows/references/legacy-brownfield.md).
-- **CLI:** `oxe-cc install | doctor | status | init-oxe | update | uninstall` + `oxe-cc runtime <status|compile|verify|gates|replay|recover|ci|promote|agents>` — ver [README.md](README.md#cli-oxe-cc).
+- **CLI:** `oxe-cc install | doctor | doctor --release | status | init-oxe | update | uninstall` + `oxe-cc runtime <status|compile|verify|gates|replay|recover|ci|promote|agents>` — ver [README.md](README.md#cli-oxe-cc).
 - **SDK:** `require('oxe-cc')` expõe `runDoctorChecks`, `health`, `workflows`, `install`, `manifest`, `agents`, `verifyRun` e bridges `operational.*` do runtime enterprise — ver [lib/sdk/README.md](lib/sdk/README.md).
 
 ---
@@ -98,3 +98,5 @@ Quando o utilizador pedir uma etapa OXE por linguagem natural, seguir o ficheiro
 Os wrappers por runtime podem carregar metadata cognitiva (`oxe_reasoning_mode`, `oxe_question_policy`, `oxe_output_contract`, `oxe_tool_profile`, `oxe_confidence_policy`), mas o comportamento canónico continua no workflow. Use essa metadata para adaptar a postura do agente sem bifurcar a lógica do OXE por ferramenta.
 
 Para `execute` e `verify`, o comportamento atual esperado é **runtime-first**: se `oxe-cc runtime` estiver disponível, preferir `runtime compile/project/verify/gates` e tratar markdown como projeção derivada; se o runtime não puder ser executado, declarar `fallback legado` explicitamente.
+
+Para publicação, o gate local esperado passa por `oxe-cc doctor --release --write-manifest`. Essa verificação deve falhar se houver drift de versão, topo inválido no `CHANGELOG`, wrapper dirty após sync, runtime não compilado ou ausência dos relatórios `.oxe/release/*.json` exigidos pela release.

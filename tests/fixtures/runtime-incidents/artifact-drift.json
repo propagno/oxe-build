@@ -1,0 +1,54 @@
+{
+  "name": "artifact-drift",
+  "phase": "executing",
+  "run_id": "fixture-artifact-drift",
+  "run_state": {
+    "run_id": "fixture-artifact-drift",
+    "status": "paused",
+    "current_wave": 1,
+    "cursor": { "wave": 1, "task": "T4", "mode": "B" },
+    "active_tasks": ["T4", "T99"],
+    "metrics": { "recover_count": 2 },
+    "compiled_graph": {
+      "nodes": {
+        "T4": {
+          "id": "T4",
+          "title": "Persist artifact set",
+          "wave": 1,
+          "depends_on": [],
+          "workspace_strategy": "git_worktree",
+          "mutation_scope": ["artifacts"],
+          "actions": [],
+          "verify": { "must_pass": [], "acceptance_refs": ["A4"], "command": null },
+          "policy": { "max_retries": 1, "requires_human_approval": false }
+        }
+      },
+      "edges": [],
+      "waves": [{ "wave_number": 1, "node_ids": ["T4"] }],
+      "metadata": { "compiled_at": "2026-04-21T12:00:00.000Z", "plan_hash": "plan4", "spec_hash": "spec4", "node_count": 1, "wave_count": 1 }
+    }
+  },
+  "journal": {
+    "run_id": "fixture-artifact-drift",
+    "paused_at": "2026-04-21T12:00:00.000Z",
+    "cancelled": false,
+    "eligible_work_items": ["T4"],
+    "completed_work_items": [],
+    "failed_work_items": [],
+    "blocked_work_items": [],
+    "pending_gates": ["T99"],
+    "scheduler_state": "paused",
+    "partial_result": { "run_id": "fixture-artifact-drift", "completed": [], "failed": [], "blocked": [] }
+  },
+  "events": [
+    {
+      "type": "RunStarted",
+      "run_id": "fixture-artifact-drift",
+      "payload": { "mode": "por_onda" }
+    }
+  ],
+  "expect": {
+    "orphan_work_items": ["T99"],
+    "consistency_issue_min": 1
+  }
+}

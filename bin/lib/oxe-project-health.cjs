@@ -24,6 +24,7 @@ const ALLOWED_CONFIG_KEYS = [
   'verification_depth',
   'plan_confidence_threshold',
   'security_in_verify',
+  'adversarial_verify',
   'install',
   'plugins',
   'workstreams',
@@ -52,7 +53,7 @@ const INSTALL_PROFILES = ['recommended', 'cursor', 'copilot', 'core', 'cli', 'al
 const INSTALL_REPO_LAYOUTS = ['nested', 'classic'];
 
 /** @type {string[]} */
-const INSTALL_OBJECT_KEYS = ['profile', 'repo_layout', 'vscode', 'include_commands_dir', 'include_agents_md'];
+const INSTALL_OBJECT_KEYS = ['profile', 'repo_layout', 'ide_scope', 'vscode', 'include_commands_dir', 'include_agents_md'];
 
 const EXPECTED_CODEBASE_MAPS = [
   'OVERVIEW.md',
@@ -152,6 +153,8 @@ function loadOxeConfigMerged(targetProject) {
     scan_ignore_globs: [],
     spec_required_sections: [],
     plan_max_tasks_per_wave: 0,
+    lessons_max_age_days: 0,
+    install: {},
     azure: {
       enabled: false,
       default_resource_group: '',
@@ -212,15 +215,18 @@ function loadOxeConfigMerged(targetProject) {
     if (typeof layer.profile === 'string') {
       Object.assign(merged, expandExecutionProfile(layer.profile));
     }
+    const layerFlat = { ...layer };
     // Azure: merge aninhado para não sobrescrever campos não especificados
     if (layer.azure && typeof layer.azure === 'object' && !Array.isArray(layer.azure)) {
       merged.azure = { .../** @type {any} */ (merged.azure), ...layer.azure };
-      const layerWithoutAzure = { ...layer };
-      delete layerWithoutAzure.azure;
-      Object.assign(merged, layerWithoutAzure);
-    } else {
-      Object.assign(merged, layer);
+      delete layerFlat.azure;
     }
+    // Install: merge aninhado para não sobrescrever campos não especificados
+    if (layer.install && typeof layer.install === 'object' && !Array.isArray(layer.install)) {
+      merged.install = { .../** @type {any} */ (merged.install || {}), ...layer.install };
+      delete layerFlat.install;
+    }
+    Object.assign(merged, layerFlat);
   }
 
   const primaryPath = sources.project || sources.user || sources.system || null;
@@ -260,6 +266,11 @@ function validateConfigShape(cfg) {
           typeErrors.push(
             `install.repo_layout deve ser "nested" ou "classic"`
           );
+        }
+      }
+      if (inst.ide_scope != null) {
+        if (typeof inst.ide_scope !== 'string' || !['global', 'local'].includes(inst.ide_scope)) {
+          typeErrors.push('install.ide_scope deve ser "global" ou "local"');
         }
       }
       if (inst.vscode != null && typeof inst.vscode !== 'boolean') {
@@ -313,6 +324,27 @@ function validateConfigShape(cfg) {
   }
   if (cfg.scale_adaptive != null && typeof cfg.scale_adaptive !== 'boolean') {
     typeErrors.push('scale_adaptive deve ser boolean');
+  }
+  if (cfg.discuss_before_plan != null && typeof cfg.discuss_before_plan !== 'boolean') {
+    typeErrors.push('discuss_before_plan deve ser boolean');
+  }
+  if (cfg.after_verify_suggest_pr != null && typeof cfg.after_verify_suggest_pr !== 'boolean') {
+    typeErrors.push('after_verify_suggest_pr deve ser boolean');
+  }
+  if (cfg.after_verify_draft_commit != null && typeof cfg.after_verify_draft_commit !== 'boolean') {
+    typeErrors.push('after_verify_draft_commit deve ser boolean');
+  }
+  if (cfg.security_in_verify != null && typeof cfg.security_in_verify !== 'boolean') {
+    typeErrors.push('security_in_verify deve ser boolean');
+  }
+  if (cfg.adversarial_verify != null && typeof cfg.adversarial_verify !== 'boolean') {
+    typeErrors.push('adversarial_verify deve ser boolean');
+  }
+  if (cfg.lessons_max_age_days != null && typeof cfg.lessons_max_age_days !== 'number') {
+    typeErrors.push('lessons_max_age_days deve ser número (use 0 para desligar)');
+  }
+  if (cfg.default_verify_command != null && typeof cfg.default_verify_command !== 'string') {
+    typeErrors.push('default_verify_command deve ser string');
   }
   if (cfg.azure != null) {
     if (typeof cfg.azure !== 'object' || Array.isArray(cfg.azure)) {

@@ -17,6 +17,7 @@ export interface CoordinationOptions {
     sessionId: string | null;
     runId: string;
     onEvent?: SchedulerContext['onEvent'];
+    heartbeatTimeoutMs?: number;
 }
 export interface ArbitrationRecord {
     work_item_id: string;
@@ -48,12 +49,36 @@ export interface MultiAgentStatusSnapshot {
         assigned_task_ids: string[];
         completed: string[];
         failed: string[];
+        timed_out: boolean;
+        reassigned_task_ids: string[];
     }>;
     orphan_reassignments: Array<{
         from_agent_id: string;
         to_agent_id: string;
         work_item_ids: string[];
     }>;
+    timed_out_agents: Array<{
+        agent_id: string;
+        work_item_ids: string[];
+        detected_at: string;
+    }>;
+    updated_at: string;
+}
+export interface MultiAgentOperationalSummary {
+    run_id: string;
+    mode: CoordinationMode;
+    workspace_isolation_enforced: boolean;
+    agent_count: number;
+    completed_count: number;
+    failed_count: number;
+    blocked_count: number;
+    ownership_count: number;
+    handoff_count: number;
+    arbitration_count: number;
+    orphan_reassignment_count: number;
+    timeout_count: number;
+    participating_agents: string[];
+    health: 'healthy' | 'degraded';
     updated_at: string;
 }
 export interface CoordinationResult {
@@ -70,9 +95,12 @@ export interface CoordinationResult {
     handoffs?: CooperativeHandoff[];
     arbitration_results?: ArbitrationRecord[];
     state?: MultiAgentStatusSnapshot;
+    summary?: MultiAgentOperationalSummary;
 }
 export declare class MultiAgentCoordinator {
     run(graph: ExecutionGraph, opts: CoordinationOptions): Promise<CoordinationResult>;
 }
 export declare function multiAgentStatePath(projectRoot: string, runId: string): string;
+export declare function multiAgentSummaryPath(projectRoot: string, runId: string): string;
 export declare function loadMultiAgentState(projectRoot: string, runId: string): MultiAgentStatusSnapshot | null;
+export declare function loadMultiAgentSummary(projectRoot: string, runId: string): MultiAgentOperationalSummary | null;

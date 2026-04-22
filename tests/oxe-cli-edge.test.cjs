@@ -136,6 +136,20 @@ describe('oxe-cc CLI edge', () => {
     assert.strictEqual(r.status, 1);
   });
 
+  test('doctor --release --json returns structured blockers without banner noise', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-release-json-'));
+    const r = spawnSync(process.execPath, [CLI, 'doctor', '--release', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r.status, 1, r.stderr || r.stdout);
+    const payload = JSON.parse(r.stdout.trim());
+    assert.strictEqual(payload.status, 'blocked');
+    assert.ok(Array.isArray(payload.blockers));
+    assert.ok(payload.blockers.length >= 1);
+  });
+
   test('status missing dir exits 1', () => {
     const r = spawnSync(process.execPath, [CLI, 'status', path.join(os.tmpdir(), 'oxe-nope2-xyz')], {
       cwd: REPO_ROOT,

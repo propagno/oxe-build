@@ -1,0 +1,67 @@
+{
+  "name": "policy-blocked",
+  "phase": "executing",
+  "run_id": "fixture-policy-blocked",
+  "run_state": {
+    "run_id": "fixture-policy-blocked",
+    "status": "blocked",
+    "current_wave": 1,
+    "cursor": { "wave": 1, "task": "T2", "mode": "B" },
+    "active_tasks": [],
+    "metrics": { "recover_count": 1 },
+    "compiled_graph": {
+      "nodes": {
+        "T2": {
+          "id": "T2",
+          "title": "Execute SQL",
+          "wave": 1,
+          "depends_on": [],
+          "workspace_strategy": "git_worktree",
+          "mutation_scope": ["sql/prod"],
+          "actions": [],
+          "verify": { "must_pass": [], "acceptance_refs": ["A2"], "command": null },
+          "policy": { "max_retries": 0, "requires_human_approval": true }
+        }
+      },
+      "edges": [],
+      "waves": [{ "wave_number": 1, "node_ids": ["T2"] }],
+      "metadata": { "compiled_at": "2026-04-21T12:00:00.000Z", "plan_hash": "plan2", "spec_hash": "spec2", "node_count": 1, "wave_count": 1 }
+    }
+  },
+  "journal": {
+    "run_id": "fixture-policy-blocked",
+    "cancelled": false,
+    "eligible_work_items": [],
+    "completed_work_items": [],
+    "failed_work_items": [],
+    "blocked_work_items": ["T2"],
+    "pending_gates": [],
+    "scheduler_state": "blocked",
+    "partial_result": { "run_id": "fixture-policy-blocked", "completed": [], "failed": [], "blocked": ["T2"] }
+  },
+  "policy_decisions": [
+    {
+      "decision_id": "pd-1",
+      "run_id": "fixture-policy-blocked",
+      "work_item_id": "T2",
+      "action": "execute_sql",
+      "actor": "policy-engine",
+      "reason": "prod sql requires approval",
+      "allowed": false,
+      "gate_required": true,
+      "timestamp": "2026-04-21T12:00:00.000Z"
+    }
+  ],
+  "events": [
+    {
+      "type": "PolicyEvaluated",
+      "run_id": "fixture-policy-blocked",
+      "work_item_id": "T2",
+      "payload": { "decision_id": "pd-1", "allowed": false }
+    }
+  ],
+  "expect": {
+    "policy_decision_min": 1,
+    "consistency_issue_min": 0
+  }
+}

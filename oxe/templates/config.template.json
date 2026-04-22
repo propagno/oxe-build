@@ -30,6 +30,7 @@
   "install": {
     "profile": "recommended",
     "repo_layout": "nested",
+    "ide_scope": "global",
     "vscode": false,
     "include_commands_dir": true,
     "include_agents_md": true

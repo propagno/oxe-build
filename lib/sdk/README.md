@@ -76,5 +76,7 @@ O SDK já expõe os helpers usados pela operação enterprise do OXE:
 - `operational.readRuntimeGates(...)` / `operational.resolveRuntimeGate(...)`
 - `operational.recoverRuntimeState(...)` / `operational.replayRuntimeState(...)`
 - `operational.readRuntimeMultiAgentStatus(...)` / `operational.multiAgentStatus(...)`
+- `release.checkReleaseConsistency(...)` / `release.buildReleaseManifest(...)`
+- `release.loadRuntimeSmokeReport(...)` / `release.loadRecoveryFixtureReport(...)` / `release.loadMultiAgentSoakReport(...)`
 
 Use esses helpers quando quiser integrar gates, verify, recovery e multi-agent a scripts de CI, automações internas ou observabilidade.

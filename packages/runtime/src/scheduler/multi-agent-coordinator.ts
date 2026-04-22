@@ -3,10 +3,11 @@ import path from 'path';
 import { appendEvent } from '../events/bus';
 import type { ExecutionGraph, GraphNode } from '../compiler/graph-compiler';
 import type { WorkspaceManager } from '../workspace/workspace-manager';
-import type { TaskExecutor, TaskResult, SchedulerContext } from './scheduler';
+import type { TaskExecutor, TaskResult, SchedulerContext, RunResult } from './scheduler';
 import { Scheduler } from './scheduler';
 import { buildHandoff } from './agent-roles';
 import type { CooperativeHandoff } from './agent-roles';
+import { AgentRegistry } from './agent-registry';
 
 export type CoordinationMode = 'parallel' | 'competitive' | 'cooperative';
 
@@ -25,6 +26,7 @@ export interface CoordinationOptions {
   sessionId: string | null;
   runId: string;
   onEvent?: SchedulerContext['onEvent'];
+  heartbeatTimeoutMs?: number;
 }
 
 export interface ArbitrationRecord {
@@ -59,8 +61,29 @@ export interface MultiAgentStatusSnapshot {
     assigned_task_ids: string[];
     completed: string[];
     failed: string[];
+    timed_out: boolean;
+    reassigned_task_ids: string[];
   }>;
   orphan_reassignments: Array<{ from_agent_id: string; to_agent_id: string; work_item_ids: string[] }>;
+  timed_out_agents: Array<{ agent_id: string; work_item_ids: string[]; detected_at: string }>;
+  updated_at: string;
+}
+
+export interface MultiAgentOperationalSummary {
+  run_id: string;
+  mode: CoordinationMode;
+  workspace_isolation_enforced: boolean;
+  agent_count: number;
+  completed_count: number;
+  failed_count: number;
+  blocked_count: number;
+  ownership_count: number;
+  handoff_count: number;
+  arbitration_count: number;
+  orphan_reassignment_count: number;
+  timeout_count: number;
+  participating_agents: string[];
+  health: 'healthy' | 'degraded';
   updated_at: string;
 }
 
@@ -74,6 +97,7 @@ export interface CoordinationResult {
   handoffs?: CooperativeHandoff[];
   arbitration_results?: ArbitrationRecord[];
   state?: MultiAgentStatusSnapshot;
+  summary?: MultiAgentOperationalSummary;
 }
 
 function ensureRunDir(projectRoot: string, runId: string): string {
@@ -93,6 +117,24 @@ function persistMultiAgentArtifacts(
   fs.writeFileSync(path.join(runDir, 'multi-agent-state.json'), JSON.stringify(state, null, 2), 'utf8');
   fs.writeFileSync(path.join(runDir, 'handoffs.json'), JSON.stringify(handoffs, null, 2), 'utf8');
   fs.writeFileSync(path.join(runDir, 'arbitration-results.json'), JSON.stringify(arbitrationResults, null, 2), 'utf8');
+  const summary: MultiAgentOperationalSummary = {
+    run_id: state.run_id,
+    mode: state.mode,
+    workspace_isolation_enforced: state.workspace_isolation_enforced,
+    agent_count: state.agent_count,
+    completed_count: state.completed.length,
+    failed_count: state.failed.length,
+    blocked_count: state.blocked.length,
+    ownership_count: state.ownership.length,
+    handoff_count: handoffs.length,
+    arbitration_count: arbitrationResults.length,
+    orphan_reassignment_count: state.orphan_reassignments.length,
+    timeout_count: state.timed_out_agents.length,
+    participating_agents: state.agent_results.map((entry) => entry.agent_id),
+    health: state.timed_out_agents.length > 0 || state.failed.length > 0 ? 'degraded' : 'healthy',
+    updated_at: state.updated_at,
+  };
+  fs.writeFileSync(path.join(runDir, 'multi-agent-summary.json'), JSON.stringify(summary, null, 2), 'utf8');
 }
 
 function ensureIsolatedAgents(agents: AgentSpec[]): void {
@@ -120,11 +162,12 @@ function makeState(
   runId: string,
   agents: AgentSpec[],
   partitions: string[][],
-  agentResults: Array<{ agent_id: string; completed: string[]; failed: string[] }>,
+  agentResults: Array<{ agent_id: string; completed: string[]; failed: string[]; timed_out: boolean; reassigned_task_ids: string[] }>,
   completed: string[],
   failed: string[],
   blocked: string[],
-  orphanReassignments: Array<{ from_agent_id: string; to_agent_id: string; work_item_ids: string[] }>
+  orphanReassignments: Array<{ from_agent_id: string; to_agent_id: string; work_item_ids: string[] }>,
+  timedOutAgents: Array<{ agent_id: string; work_item_ids: string[]; detected_at: string }>
 ): MultiAgentStatusSnapshot {
   return {
     run_id: runId,
@@ -144,10 +187,89 @@ function makeState(
         assigned_task_ids: partitions[idx] ?? agent.assignedTaskIds ?? [],
         completed: result?.completed ?? [],
         failed: result?.failed ?? [],
+        timed_out: Boolean(result?.timed_out),
+        reassigned_task_ids: result?.reassigned_task_ids ?? [],
       };
     }),
     orphan_reassignments: orphanReassignments,
+    timed_out_agents: timedOutAgents,
     updated_at: new Date().toISOString(),
+  };
+}
+
+async function runGraphForAgent(
+  graph: ExecutionGraph,
+  nodeIds: string[],
+  agent: AgentSpec,
+  idx: number,
+  opts: CoordinationOptions,
+  heartbeatTimeoutMs: number | null
+): Promise<{
+  agent_id: string;
+  completed: string[];
+  failed: string[];
+  timed_out: boolean;
+  assigned_task_ids: string[];
+  reassigned_task_ids: string[];
+}> {
+  const subGraph = subGraphFor(graph, nodeIds);
+  if (subGraph.nodes.size === 0) {
+    return {
+      agent_id: agent.id,
+      completed: [],
+      failed: [],
+      timed_out: false,
+      assigned_task_ids: nodeIds,
+      reassigned_task_ids: [],
+    };
+  }
+  const ctx: SchedulerContext = {
+    projectRoot: opts.projectRoot,
+    sessionId: opts.sessionId,
+    runId: `${opts.runId}-agent${idx}`,
+    executor: agent.executor,
+    workspaceManager: agent.workspaceManager,
+    onEvent: opts.onEvent,
+  };
+  const scheduler = new Scheduler();
+  const work = scheduler.run(subGraph, ctx);
+  if (!heartbeatTimeoutMs || heartbeatTimeoutMs <= 0) {
+    const result = await work;
+    return {
+      agent_id: agent.id,
+      completed: result.completed,
+      failed: result.failed,
+      timed_out: false,
+      assigned_task_ids: nodeIds,
+      reassigned_task_ids: [],
+    };
+  }
+  let timer: NodeJS.Timeout | null = null;
+  const raced: { type: 'result'; result: RunResult } | { type: 'timeout' } = await Promise.race([
+    work.then((result) => ({ type: 'result' as const, result })),
+    new Promise<{ type: 'timeout' }>((resolve) => {
+      timer = setTimeout(() => resolve({ type: 'timeout' }), heartbeatTimeoutMs);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+  if (raced && raced.type === 'timeout') {
+    return {
+      agent_id: agent.id,
+      completed: [],
+      failed: [],
+      timed_out: true,
+      assigned_task_ids: nodeIds,
+      reassigned_task_ids: [],
+    };
+  }
+  const result = raced.result;
+  return {
+    agent_id: agent.id,
+    completed: result.completed,
+    failed: result.failed,
+    timed_out: false,
+    assigned_task_ids: nodeIds,
+    reassigned_task_ids: [],
   };
 }
 
@@ -159,6 +281,7 @@ async function runParallel(
 ): Promise<CoordinationResult> {
   const { agents, projectRoot, sessionId, runId } = opts;
   ensureIsolatedAgents(agents);
+  const heartbeatTimeoutMs = opts.heartbeatTimeoutMs ?? null;
 
   const partitions = agents.map((agent) => [...(agent.assignedTaskIds ?? [])]);
   if (partitions.every((partition) => partition.length === 0)) {
@@ -167,6 +290,10 @@ async function runParallel(
       partitions[index % agents.length].push(id);
     });
   }
+  const registry = new AgentRegistry(heartbeatTimeoutMs == null ? 30_000 : heartbeatTimeoutMs);
+  agents.forEach((agent, idx) => {
+    registry.register(agent.id, agent.executor, agent.workspaceManager, partitions[idx] ?? []);
+  });
 
   appendEvent(projectRoot, sessionId, {
     type: 'RunStarted',
@@ -174,31 +301,49 @@ async function runParallel(
     payload: { mode: 'parallel', agent_count: agents.length, isolation_level: 'isolated' },
   });
 
-  const agentResults = await Promise.all(
+  const initialResults = await Promise.all(
     agents.map(async (agent, idx) => {
-      const subGraph = subGraphFor(graph, partitions[idx]);
-      if (subGraph.nodes.size === 0) {
-        return { agent_id: agent.id, completed: [], failed: [] };
-      }
-      const ctx: SchedulerContext = {
-        projectRoot,
-        sessionId,
-        runId: `${runId}-agent${idx}`,
-        executor: agent.executor,
-        workspaceManager: agent.workspaceManager,
-        onEvent: opts.onEvent,
-      };
-      const scheduler = new Scheduler();
-      const result = await scheduler.run(subGraph, ctx);
-      return { agent_id: agent.id, completed: result.completed, failed: result.failed };
+      registry.beat(agent.id, partitions[idx][0] || null);
+      const result = await runGraphForAgent(graph, partitions[idx], agent, idx, opts, heartbeatTimeoutMs);
+      registry.setStatus(agent.id, result.timed_out ? 'timeout' : 'idle');
+      return result;
     })
   );
 
-  const completed = agentResults.flatMap((result) => result.completed);
-  const failed = agentResults.flatMap((result) => result.failed);
+  const timedOutAgents = [];
   const blocked: string[] = [];
   const orphanReassignments: Array<{ from_agent_id: string; to_agent_id: string; work_item_ids: string[] }> = [];
-  const state = makeState('parallel', runId, agents, partitions, agentResults, completed, failed, blocked, orphanReassignments);
+  const agentResults = initialResults.map((entry) => ({
+    ...entry,
+    reassigned_task_ids: entry.reassigned_task_ids || [],
+  }));
+  const liveAgents = agentResults.filter((entry) => !entry.timed_out);
+  for (const timedOut of agentResults.filter((entry) => entry.timed_out)) {
+    timedOutAgents.push({
+      agent_id: timedOut.agent_id,
+      work_item_ids: timedOut.assigned_task_ids,
+      detected_at: new Date().toISOString(),
+    });
+    const fallback = liveAgents.find((entry) => entry.agent_id !== timedOut.agent_id);
+    if (!fallback || timedOut.assigned_task_ids.length === 0) continue;
+    const fallbackIdx = agents.findIndex((agent) => agent.id === fallback.agent_id);
+    const timeoutIdx = agents.findIndex((agent) => agent.id === timedOut.agent_id);
+    const rerun = await runGraphForAgent(graph, timedOut.assigned_task_ids, agents[fallbackIdx], fallbackIdx, opts, null);
+    fallback.completed.push(...rerun.completed);
+    fallback.failed.push(...rerun.failed);
+    fallback.reassigned_task_ids.push(...timedOut.assigned_task_ids);
+    partitions[fallbackIdx] = [...partitions[fallbackIdx], ...timedOut.assigned_task_ids];
+    partitions[timeoutIdx] = [];
+    orphanReassignments.push({
+      from_agent_id: timedOut.agent_id,
+      to_agent_id: fallback.agent_id,
+      work_item_ids: timedOut.assigned_task_ids,
+    });
+  }
+
+  const completed = Array.from(new Set(agentResults.flatMap((result) => result.completed)));
+  const failed = Array.from(new Set(agentResults.flatMap((result) => result.failed)));
+  const state = makeState('parallel', runId, agents, partitions, agentResults, completed, failed, blocked, orphanReassignments, timedOutAgents);
   persistMultiAgentArtifacts(projectRoot, runId, state);
 
   appendEvent(projectRoot, sessionId, {
@@ -216,6 +361,7 @@ async function runParallel(
     agent_results: agentResults,
     arbitration_results: [],
     state,
+    summary: loadMultiAgentSummary(projectRoot, runId) || undefined,
   };
 }
 
@@ -261,12 +407,13 @@ async function runCompetitive(
     opts.agents,
     partitions,
     [
-      { agent_id: agentA.id, completed, failed },
-      { agent_id: agentB.id, completed: [], failed: [] },
+      { agent_id: agentA.id, completed, failed, timed_out: false, reassigned_task_ids: [] },
+      { agent_id: agentB.id, completed: [], failed: [], timed_out: false, reassigned_task_ids: [] },
     ],
     completed,
     failed,
     blocked,
+    [],
     []
   );
   persistMultiAgentArtifacts(projectRoot, runId, state, [], arbitrationResults);
@@ -289,6 +436,7 @@ async function runCompetitive(
     ],
     arbitration_results: arbitrationResults,
     state,
+    summary: loadMultiAgentSummary(projectRoot, runId) || undefined,
   };
 }
 
@@ -439,12 +587,13 @@ async function runCooperative(
     opts.agents,
     partitions,
     [
-      { agent_id: planner.id, completed: [], failed: [] },
-      { agent_id: executor.id, completed, failed },
+      { agent_id: planner.id, completed: [], failed: [], timed_out: false, reassigned_task_ids: [] },
+      { agent_id: executor.id, completed, failed, timed_out: false, reassigned_task_ids: [] },
     ],
     completed,
     failed,
     blocked,
+    [],
     []
   );
   persistMultiAgentArtifacts(projectRoot, runId, state, handoffs, []);
@@ -468,6 +617,7 @@ async function runCooperative(
     handoffs,
     arbitration_results: [],
     state,
+    summary: loadMultiAgentSummary(projectRoot, runId) || undefined,
   };
 }
 
@@ -489,11 +639,25 @@ export function multiAgentStatePath(projectRoot: string, runId: string): string 
   return path.join(projectRoot, '.oxe', 'runs', runId, 'multi-agent-state.json');
 }
 
+export function multiAgentSummaryPath(projectRoot: string, runId: string): string {
+  return path.join(projectRoot, '.oxe', 'runs', runId, 'multi-agent-summary.json');
+}
+
 export function loadMultiAgentState(projectRoot: string, runId: string): MultiAgentStatusSnapshot | null {
   const statePath = multiAgentStatePath(projectRoot, runId);
   if (!fs.existsSync(statePath)) return null;
   try {
     return JSON.parse(fs.readFileSync(statePath, 'utf8')) as MultiAgentStatusSnapshot;
+  } catch {
+    return null;
+  }
+}
+
+export function loadMultiAgentSummary(projectRoot: string, runId: string): MultiAgentOperationalSummary | null {
+  const summaryPath = multiAgentSummaryPath(projectRoot, runId);
+  if (!fs.existsSync(summaryPath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(summaryPath, 'utf8')) as MultiAgentOperationalSummary;
   } catch {
     return null;
   }

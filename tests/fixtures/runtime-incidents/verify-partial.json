@@ -1,0 +1,78 @@
+{
+  "name": "verify-partial",
+  "phase": "verify_complete",
+  "run_id": "fixture-verify-partial",
+  "run_state": {
+    "run_id": "fixture-verify-partial",
+    "status": "running",
+    "current_wave": 1,
+    "cursor": { "wave": 1, "task": "T3", "mode": "B" },
+    "active_tasks": [],
+    "metrics": { "recover_count": 0 },
+    "compiled_graph": {
+      "nodes": {
+        "T3": {
+          "id": "T3",
+          "title": "Run acceptance suite",
+          "wave": 1,
+          "depends_on": [],
+          "workspace_strategy": "git_worktree",
+          "mutation_scope": [],
+          "actions": [],
+          "verify": { "must_pass": ["check-1"], "acceptance_refs": ["A3"], "command": null },
+          "policy": { "max_retries": 1, "requires_human_approval": false }
+        }
+      },
+      "edges": [],
+      "waves": [{ "wave_number": 1, "node_ids": ["T3"] }],
+      "metadata": { "compiled_at": "2026-04-21T12:00:00.000Z", "plan_hash": "plan3", "spec_hash": "spec3", "node_count": 1, "wave_count": 1 }
+    },
+    "verification_manifest": {
+      "summary": { "total": 2, "pass": 1, "fail": 0, "skip": 1, "error": 0, "all_passed": false },
+      "checks": [{ "id": "check-1", "evidence_refs": ["ev-1"] }, { "id": "check-2", "evidence_refs": [] }],
+      "profile": "standard"
+    },
+    "residual_risks": { "risks": [{ "severity": "medium", "description": "partial verify" }] },
+    "verification_evidence_coverage": {
+      "total_checks": 2,
+      "checks_with_evidence": 1,
+      "total_evidence_refs": 1,
+      "coverage_percent": 50
+    }
+  },
+  "journal": {
+    "run_id": "fixture-verify-partial",
+    "cancelled": false,
+    "eligible_work_items": [],
+    "completed_work_items": ["T3"],
+    "failed_work_items": [],
+    "blocked_work_items": [],
+    "pending_gates": [],
+    "scheduler_state": "running",
+    "partial_result": { "run_id": "fixture-verify-partial", "completed": ["T3"], "failed": [], "blocked": [] }
+  },
+  "verification_manifest": {
+    "summary": { "total": 2, "pass": 1, "fail": 0, "skip": 1, "error": 0, "all_passed": false },
+    "checks": [{ "id": "check-1", "evidence_refs": ["ev-1"] }, { "id": "check-2", "evidence_refs": [] }],
+    "profile": "standard"
+  },
+  "residual_risks": { "risks": [{ "severity": "medium", "description": "partial verify" }] },
+  "evidence_coverage": {
+    "total_checks": 2,
+    "checks_with_evidence": 1,
+    "total_evidence_refs": 1,
+    "coverage_percent": 50
+  },
+  "events": [
+    {
+      "type": "VerificationCompleted",
+      "run_id": "fixture-verify-partial",
+      "work_item_id": "T3",
+      "payload": { "partial": true }
+    }
+  ],
+  "expect": {
+    "verification_present": true,
+    "consistency_issue_min": 0
+  }
+}

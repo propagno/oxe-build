@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
-**Versão:** `1.4.1` · [package.json](package.json)
+**Versão:** `1.5.0` · [package.json](package.json)
 
 **Framework OXE — Orchestrated eXperience Engineering**
 
@@ -97,6 +97,7 @@ Contrato estável desta release:
 | Exemplo completo reproduzível | [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) |
 | Incidentes e gates | [docs/INCIDENT-PLAYBOOK.md](docs/INCIDENT-PLAYBOOK.md) |
 | Suporte por runtime (Cursor, Copilot, Claude Code…) | [docs/RUNTIME-SMOKE-MATRIX.md](docs/RUNTIME-SMOKE-MATRIX.md) |
+| Release readiness e publicação | [docs/RELEASE-READINESS.md](docs/RELEASE-READINESS.md) |
 
 ---
 
@@ -461,8 +462,15 @@ O pacote está pronto para uma publicação robusta quando estes sinais estivere
 - `npm test`
 - `npm run scan:assets`
 - `npm run build:vscode-ext`
-- `node bin/oxe-cc.js doctor`
+- `node bin/oxe-cc.js doctor --release --write-manifest`
 - `node bin/oxe-cc.js status --full`
+
+Artefatos obrigatórios desta fase:
+
+- `.oxe/release/release-manifest.json`
+- `.oxe/release/runtime-smoke-report.json`
+- `.oxe/release/recovery-fixture-report.json`
+- `.oxe/release/multi-agent-soak-report.json`
 
 Não há outro bloqueador funcional do plano runtime core para esta publicação. O que sobra depois dela é evolução de ergonomia e expansão de targets, não correção estrutural do contrato atual.
 
@@ -560,6 +568,7 @@ node bin/oxe-cc.js --help
 |---------|-----------|
 | `oxe-cc` / `oxe-cc install` | Instala workflows e integrações |
 | `oxe-cc doctor` | Diagnóstico completo: Node, workflows, config, bootstrap `.oxe/`, sessão ativa, autoavaliação do plano, saúde lógica (`healthy` \| `warning` \| `broken`), drift semântico multi-runtime e workflows sem contrato no registry |
+| `oxe-cc doctor --release --write-manifest` | Gate de publicação: valida versões, topo do `CHANGELOG`, runtime compilado, wrapper sync e relatórios obrigatórios; persiste `release-manifest.json` |
 | `oxe-cc status` | Próximo passo sugerido + saúde lógica do fluxo |
 | `oxe-cc status --full` | Coverage matrix + readiness gate + active run no terminal (ANSI) |
 | `oxe-cc status --json` | Mesmo, em JSON (schema v5), com `healthStatus`, `activeSession`, `planSelfEvaluation`, `contextPacks`, `contextQuality`, `semanticsDrift`, `verificationSummary`, `residualRiskSummary`, `evidenceCoverage`, `pendingGates`, `policyDecisionSummary`, `quotaSummary`, `auditSummary`, `promotionSummary`, `runtimeMode`, `fallbackMode`, `gateQueue`, `policyCoverage`, `promotionReadiness`, `recoveryState`, `multiAgent` e `providerCatalog` |

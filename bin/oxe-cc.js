@@ -24,6 +24,7 @@ const oxeAzure = require(path.join(__dirname, 'lib', 'oxe-azure.cjs'));
 const oxePlugins = require(path.join(__dirname, 'lib', 'oxe-plugins.cjs'));
 const oxeContext = require(path.join(__dirname, 'lib', 'oxe-context-engine.cjs'));
 const oxeRuntimeSemantics = require(path.join(__dirname, 'lib', 'oxe-runtime-semantics.cjs'));
+const oxeRelease = require(path.join(__dirname, 'lib', 'oxe-release.cjs'));
 
 /** Merge markers for ~/.copilot/copilot-instructions.md (bloco OXE). */
 const OXE_INST_BEGIN = '<!-- oxe-cc:install-begin -->';
@@ -296,7 +297,7 @@ function buildUninstallFooter(u) {
   return { bullets, nextSteps, dryRun: u.dryRun };
 }
 
-/** @typedef {{ help: boolean, version: boolean, cursor: boolean, copilot: boolean, copilotCli: boolean, allAgents: boolean, agentOpenCode: boolean, agentGemini: boolean, agentCodex: boolean, agentWindsurf: boolean, agentAntigravity: boolean, vscode: boolean, commands: boolean, agents: boolean, force: boolean, dryRun: boolean, dir: string, all: boolean, noInitOxe: boolean, oxeOnly: boolean, globalCli: boolean, noGlobalCli: boolean, installAssetsGlobal: boolean, explicitScope: boolean, integrationsUnset: boolean, ideLocal: boolean, explicitIdeScope: boolean, explicitConfigDir: string | null, parseError: boolean, unknownFlag: string, conflictFlags: string, ignoreInstallConfig: boolean }} InstallOpts */
+/** @typedef {{ help: boolean, version: boolean, cursor: boolean, copilot: boolean, copilotCli: boolean, allAgents: boolean, agentOpenCode: boolean, agentGemini: boolean, agentCodex: boolean, agentWindsurf: boolean, agentAntigravity: boolean, vscode: boolean, commands: boolean, agents: boolean, force: boolean, dryRun: boolean, dir: string, all: boolean, noInitOxe: boolean, oxeOnly: boolean, globalCli: boolean, noGlobalCli: boolean, installAssetsGlobal: boolean, explicitScope: boolean, integrationsUnset: boolean, ideLocal: boolean, explicitIdeScope: boolean, explicitConfigDir: string | null, parseError: boolean, unknownFlag: string, conflictFlags: string, ignoreInstallConfig: boolean, releaseDoctor: boolean, writeManifest: boolean }} InstallOpts */
 
 /** @param {InstallOpts} o */
 function anyGranularAgent(o) {
@@ -364,6 +365,8 @@ function parseInstallArgs(argv) {
     unknownFlag: '',
     conflictFlags: '',
     ignoreInstallConfig: false,
+    releaseDoctor: false,
+    writeManifest: false,
     /** Saída JSON em `status` (CI / agentes). */
     jsonOutput: false,
     /** Lembretes agregados scan/compact em `status`. */
@@ -415,6 +418,8 @@ function parseInstallArgs(argv) {
     } else if (a === '--json') out.jsonOutput = true;
     else if (a === '--hints') out.statusHints = true;
     else if (a === '--full') out.statusFull = true;
+    else if (a === '--release') out.releaseDoctor = true;
+    else if (a === '--write-manifest') out.writeManifest = true;
     else if (!a.startsWith('-')) out.restPositional.push(a);
     else {
       out.parseError = true;
@@ -456,6 +461,14 @@ function parseInstallArgs(argv) {
     out.agentCodex = true;
     out.agentWindsurf = true;
     out.agentAntigravity = true;
+  }
+  if (!out.conflictFlags && out.oxeOnly) {
+    const IDE_FLAGS = ['--cursor', '--copilot', '--copilot-vscode', '--copilot-cli', '--all-agents',
+      '--opencode', '--gemini', '--codex', '--windsurf', '--antigravity', '--vscode'];
+    const conflicting = IDE_FLAGS.filter((f) => argv.includes(f));
+    if (conflicting.length > 0) {
+      out.conflictFlags = `--oxe-only não combina com flags de IDE (${conflicting.join(', ')})`;
+    }
   }
   if (out.oxeOnly) {
     out.cursor = false;
@@ -777,7 +790,11 @@ function writeCopilotVsCodeManifest(opts, info) {
   const promptFiles = fs.existsSync(promptsDir)
     ? fs
         .readdirSync(promptsDir, { withFileTypes: true })
-        .filter((entry) => entry.isFile() && /^oxe-.*\.prompt\.md$/i.test(entry.name))
+        .filter(
+          (entry) =>
+            entry.isFile() &&
+            (entry.name === 'oxe.prompt.md' || /^oxe-.*\.prompt\.md$/i.test(entry.name))
+        )
         .map((entry) => entry.name)
         .sort()
     : [];
@@ -1038,6 +1055,27 @@ async function promptInstallScope(opts) {
   }
 }
 
+/**
+ * Grava a escolha resolvida de ide_scope de volta em .oxe/config.json para que
+ * futuras reinstalações/updates não precisem perguntar novamente.
+ * @param {InstallOpts} opts
+ */
+function persistIdeScope(opts) {
+  if (opts.dryRun || opts.oxeOnly) return;
+  const configPath = path.join(opts.dir, '.oxe', 'config.json');
+  if (!fs.existsSync(configPath)) return;
+  try {
+    const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const scope = opts.ideLocal ? 'local' : 'global';
+    if (!cfg.install || typeof cfg.install !== 'object') cfg.install = {};
+    if (cfg.install.ide_scope === scope) return;
+    cfg.install.ide_scope = scope;
+    fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+  } catch {
+    /* silêncio — não bloquear instalação por falha ao persistir config */
+  }
+}
+
 /** @param {InstallOpts} opts */
 async function resolveInteractiveInstall(opts) {
   if (!opts.ignoreInstallConfig) {
@@ -1280,7 +1318,13 @@ function bootstrapOxe(target, opts) {
 
   if (fs.existsSync(configSrc)) {
     if (!fs.existsSync(configDest) || opts.force) {
-      copyFile(configSrc, configDest, { dryRun: false });
+      try {
+        const cfgRaw = JSON.parse(fs.readFileSync(configSrc, 'utf8'));
+        delete cfgRaw._comment;
+        fs.writeFileSync(configDest, JSON.stringify(cfgRaw, null, 2) + '\n', 'utf8');
+      } catch {
+        copyFile(configSrc, configDest, { dryRun: false });
+      }
       console.log(`${green}init${reset}  ${configDest}`);
     } else {
       console.log(`${dim}omitido${reset} ${configDest} (já existe — use --force para substituir)`);
@@ -1926,7 +1970,46 @@ function runStatus(target, opts = {}) {
 }
 
 /** @param {string} target */
-function runDoctor(target) {
+function runDoctor(target, options = {}) {
+    if (options.release) {
+      if (!options.json) printSection('OXE ▸ doctor --release');
+      const c = useAnsiColors();
+      const result = oxeRelease.checkReleaseConsistency(target, {
+        packageRoot: PKG_ROOT,
+        writeManifest: Boolean(options.writeManifest),
+    });
+    if (options.json) {
+      console.log(
+        JSON.stringify(
+          {
+            status: result.ok ? 'ok' : 'blocked',
+            blockers: result.blockers,
+            warnings: result.warnings,
+            manifestPath: result.manifestPath,
+            manifest: result.manifest,
+          },
+          null,
+          2
+        )
+      );
+    } else {
+      console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${target}${c ? reset : ''}`);
+      console.log(`  ${c ? green : ''}Versão alvo:${c ? reset : ''} ${result.manifest.versions.rootPackage.version || '—'}`);
+      console.log(`  ${c ? green : ''}Manifest:${c ? reset : ''} ${result.manifestPath}`);
+      if (result.ok) {
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} release readiness OK`);
+      } else {
+        console.log(`  ${c ? red : ''}✗${c ? reset : ''} release readiness bloqueada`);
+        for (const blocker of result.blockers) {
+          console.log(`    - ${blocker}`);
+        }
+      }
+      for (const warning of result.warnings) {
+        console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${warning}`);
+      }
+    }
+    process.exit(result.ok ? 0 : 1);
+  }
   printSection('OXE ▸ doctor');
   const v = process.versions.node;
   const major = parseInt(v.split('.')[0], 10);
@@ -2147,6 +2230,12 @@ function installGlobalCliPackage() {
     shell: true,
     env: process.env,
   });
+  if (r.error) {
+    console.log(
+      `\n  ${c ? yellow : ''}⚠${c ? reset : ''} npm install -g falhou (${r.error.message}). Tente manualmente: ${c ? cyan : ''}npm install -g ${spec}${c ? reset : ''}\n`
+    );
+    return false;
+  }
   if (r.status === 0) {
     console.log(
       `\n  ${c ? green : ''}✓${c ? reset : ''} ${c ? cyan : ''}oxe-cc${c ? reset : ''} disponível globalmente (execute ${c ? cyan : ''}oxe-cc --help${c ? reset : ''} em qualquer pasta).\n`
@@ -2328,22 +2417,27 @@ function usage() {
   console.log(`
 ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: Cursor, Copilot, Claude, OpenCode, Gemini, Codex, Windsurf, Antigravity, …)
 
-${green}Uso:${reset}
-  npx oxe-cc@latest [opções] [pasta-do-projeto]
-  npx oxe-cc@latest install [opções] [pasta-do-projeto]   ${dim}(equivalente à instalação predefinida)${reset}
-  npx oxe-cc@latest --dir /caminho/do/projeto
-  npx oxe-cc doctor [opções] [pasta-do-projeto]
-  npx oxe-cc status [opções] [pasta-do-projeto]
-  npx oxe-cc init-oxe [opções] [pasta-do-projeto]
-  npx oxe-cc context <build|inspect> [opções] [pasta-do-projeto]
-  npx oxe-cc dashboard [opções] [pasta-do-projeto]
-  npx oxe-cc runtime <status|start|pause|resume|replay|compile|verify|project|ci|promote|recover|gates> [opções] [pasta-do-projeto]
-  npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
-  npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
-  npx oxe-cc uninstall [opções] [pasta-do-projeto]
-  npx oxe-cc update [opções] [argumentos extras…]
+  ${green}Uso:${reset}
+    npx oxe-cc@latest [opções] [pasta-do-projeto]
+    npx oxe-cc@latest install [opções] [pasta-do-projeto]   ${dim}(equivalente à instalação predefinida)${reset}
+    npx oxe-cc@latest --dir /caminho/do/projeto
+    npx oxe-cc doctor [--release] [--write-manifest] [opções] [pasta-do-projeto]
+    npx oxe-cc status [opções] [pasta-do-projeto]
+    npx oxe-cc init-oxe [opções] [pasta-do-projeto]
+    npx oxe-cc context <build|inspect> [opções] [pasta-do-projeto]
+    npx oxe-cc dashboard [opções] [pasta-do-projeto]
+  npx oxe-cc runtime <status|start|pause|resume|replay|compile|verify|project|ci|promote|recover|gates|agents> [opções] [pasta-do-projeto]
+    npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
+    npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
+    npx oxe-cc uninstall [opções] [pasta-do-projeto]
+    npx oxe-cc update [opções] [argumentos extras…]
+  
+  ${green}doctor${reset}
+    --release                             valida release readiness: versões, changelog, wrappers, runtime build e relatórios obrigatórios
+    --write-manifest                      persiste .oxe/release/release-manifest.json durante doctor --release
+    --json                                saída estruturada para CI
 
-${green}uninstall${reset} (remove OXE da pasta do usuário + pastas de workflows no repo)
+  ${green}uninstall${reset} (remove OXE da pasta do usuário + pastas de workflows no repo)
   --cursor / --copilot / --copilot-cli   só essa integração (omissão = todas)
   --copilot-vscode                       alias explícito de --copilot
   --copilot-legacy-clean                 limpa só o legado antigo do Copilot VS Code em ~/.copilot/
@@ -2875,7 +2969,7 @@ function uninstallLocalIdeFromProject(u, removedPaths) {
     const pr = path.join(proj, '.github', 'prompts');
     if (fs.existsSync(pr)) {
       for (const name of fs.readdirSync(pr)) {
-        if (/^oxe-.*\.prompt\.md$/i.test(name)) {
+        if (name === 'oxe.prompt.md' || /^oxe-.*\.prompt\.md$/i.test(name)) {
           const p = path.join(pr, name);
           unlinkQuiet(p, u);
           track(p);
@@ -3088,7 +3182,7 @@ function cleanupLegacyCopilotVsCode(ideOpts, opts, removedPaths) {
   const pr = copilotLegacyPromptDir(ideOpts);
   if (!fs.existsSync(pr)) return;
   for (const name of fs.readdirSync(pr)) {
-    if (!/^oxe-.*\.prompt\.md$/i.test(name)) continue;
+    if (name !== 'oxe.prompt.md' && !/^oxe-.*\.prompt\.md$/i.test(name)) continue;
     const promptPath = path.join(pr, name);
     unlinkQuiet(promptPath, opts);
     removedPaths.push(promptPath);
@@ -3206,7 +3300,7 @@ function runUninstall(u) {
     const pr = path.join(u.dir, '.github', 'prompts');
     if (fs.existsSync(pr)) {
       for (const name of fs.readdirSync(pr)) {
-        if (/^oxe-.*\.prompt\.md$/i.test(name)) {
+        if (name === 'oxe.prompt.md' || /^oxe-.*\.prompt\.md$/i.test(name)) {
           const p = path.join(pr, name);
           unlinkQuiet(p, u);
           removedPaths.push(p);
@@ -3557,7 +3651,7 @@ function runUpdate(u) {
   const r = spawnSync('npx', args, {
     cwd: u.dir,
     stdio: 'inherit',
-    env: { ...process.env },
+    env: { ...process.env, OXE_NO_PROMPT: '1' },
     shell: process.platform === 'win32',
   });
   if (r.error) {
@@ -5271,7 +5365,7 @@ async function main() {
     process.exit(0);
   }
 
-  if (!(command === 'status' && opts.jsonOutput)) {
+  if (!((command === 'status' && opts.jsonOutput) || (command === 'doctor' && opts.jsonOutput))) {
     printBanner();
   }
 
@@ -5281,7 +5375,7 @@ async function main() {
       console.error(`${yellow}Diretório não encontrado: ${target}${reset}`);
       process.exit(1);
     }
-    runDoctor(target);
+    runDoctor(target, { release: opts.releaseDoctor, json: opts.jsonOutput, writeManifest: opts.writeManifest });
     return;
   }
 
@@ -5324,6 +5418,7 @@ async function main() {
   }
 
   await resolveInteractiveInstall(opts);
+  persistIdeScope(opts);
   runInstall(opts);
   await maybePromptGlobalCli(opts);
 }

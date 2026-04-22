@@ -1,0 +1,2675 @@
+
+> oxe-cc@1.5.0 test:root
+> node --test tests/install.test.cjs tests/oxe-project-health.test.cjs tests/oxe-dashboard.test.cjs tests/oxe-operational.test.cjs tests/oxe-azure.test.cjs tests/oxe-sdk.test.cjs tests/oxe-manifest.test.cjs tests/oxe-agent-install.test.cjs tests/oxe-install-resolve-full.test.cjs tests/oxe-health-extended.test.cjs tests/oxe-workflows-edge.test.cjs tests/oxe-sdk-edge.test.cjs tests/oxe-cli-edge.test.cjs tests/oxe-npm-version.test.cjs tests/oxe-scripts.test.cjs tests/oxe-retro-health.test.cjs tests/oxe-security-permissions.test.cjs tests/oxe-runtime-semantics.test.cjs tests/oxe-plugins.test.cjs
+
+TAP version 13
+# Subtest: oxe-cc CLI
+    # Subtest: unknown flag exits 1
+    ok 1 - unknown flag exits 1
+      ---
+      duration_ms: 733.4923
+      type: 'test'
+      ...
+    # Subtest: install nests workflows under .oxe and bootstraps (no oxe/ at repo root)
+    ok 2 - install nests workflows under .oxe and bootstraps (no oxe/ at repo root)
+      ---
+      duration_ms: 1946.8122
+      type: 'test'
+      ...
+    # Subtest: commands/oxe/ has review-pr.md, update.md, session.md, ask.md, capabilities.md and dashboard.md
+    ok 3 - commands/oxe/ has review-pr.md, update.md, session.md, ask.md, capabilities.md and dashboard.md
+      ---
+      duration_ms: 1.1447
+      type: 'test'
+      ...
+    # Subtest: --no-init-oxe skips .oxe bootstrap but keeps .oxe/workflows
+    ok 4 - --no-init-oxe skips .oxe bootstrap but keeps .oxe/workflows
+      ---
+      duration_ms: 1562.4181
+      type: 'test'
+      ...
+    # Subtest: doctor passes after install
+    ok 5 - doctor passes after install
+      ---
+      duration_ms: 1991.2307
+      type: 'test'
+      ...
+    # Subtest: status exits 0 after oxe-only install and mentions próximo passo
+    ok 6 - status exits 0 after oxe-only install and mentions próximo passo
+      ---
+      duration_ms: 2187.6945
+      type: 'test'
+      ...
+    # Subtest: doctor fails without oxe/workflows
+    ok 7 - doctor fails without oxe/workflows
+      ---
+      duration_ms: 202.0528
+      type: 'test'
+      ...
+    # Subtest: init-oxe creates .oxe only
+    ok 8 - init-oxe creates .oxe only
+      ---
+      duration_ms: 270.8606
+      type: 'test'
+      ...
+    # Subtest: install does not duplicate .oxe/ rule when .gitignore already ignores .oxe
+    ok 9 - install does not duplicate .oxe/ rule when .gitignore already ignores .oxe
+      ---
+      duration_ms: 2381.8332
+      type: 'test'
+      ...
+    # Subtest: --version has no banner (single line)
+    ok 10 - --version has no banner (single line)
+      ---
+      duration_ms: 256.762
+      type: 'test'
+      ...
+    # Subtest: --all-agents writes OpenCode, Gemini TOML, Codex skills, Windsurf workflows
+    ok 11 - --all-agents writes OpenCode, Gemini TOML, Codex skills, Windsurf workflows
+      ---
+      duration_ms: 1855.2381
+      type: 'test'
+      ...
+    # Subtest: --copilot-cli creates ~/.claude/commands and .oxe/workflows in project
+    ok 12 - --copilot-cli creates ~/.claude/commands and .oxe/workflows in project
+      ---
+      duration_ms: 1193.2828
+      type: 'test'
+      ...
+    # Subtest: uninstall --ide-only removes CLI command dirs but keeps .oxe/workflows
+    ok 13 - uninstall --ide-only removes CLI command dirs but keeps .oxe/workflows
+      ---
+      duration_ms: 2573.4908
+      type: 'test'
+      ...
+    # Subtest: uninstall removes nested .oxe/workflows from project
+    ok 14 - uninstall removes nested .oxe/workflows from project
+      ---
+      duration_ms: 1356.1862
+      type: 'test'
+      ...
+    # Subtest: --global-cli and --no-global-cli together exits 1
+    ok 15 - --global-cli and --no-global-cli together exits 1
+      ---
+      duration_ms: 188.3247
+      type: 'test'
+      ...
+    # Subtest: doctor fails on invalid .oxe/config.json
+    ok 16 - doctor fails on invalid .oxe/config.json
+      ---
+      duration_ms: 1126.7955
+      type: 'test'
+      ...
+    # Subtest: --global and --local together exits 1
+    ok 17 - --global and --local together exits 1
+      ---
+      duration_ms: 143.5711
+      type: 'test'
+      ...
+    # Subtest: .oxe/config.json install.profile core skips IDE files (non-interactive)
+    ok 18 - .oxe/config.json install.profile core skips IDE files (non-interactive)
+      ---
+      duration_ms: 1804.5869
+      type: 'test'
+      ...
+    # Subtest: --no-install-config ignores .oxe install.profile core
+    ok 19 - --no-install-config ignores .oxe install.profile core
+      ---
+      duration_ms: 1827.6682
+      type: 'test'
+      ...
+    # Subtest: install subcommand is equivalent to default install
+    ok 20 - install subcommand is equivalent to default install
+      ---
+      duration_ms: 974.9578
+      type: 'test'
+      ...
+    # Subtest: --global --cursor installs under HOME .cursor and oxe/ at repo root
+    ok 21 - --global --cursor installs under HOME .cursor and oxe/ at repo root
+      ---
+      duration_ms: 1253.018
+      type: 'test'
+      ...
+    # Subtest: --ide-local --cursor installs commands under project .cursor
+    ok 22 - --ide-local --cursor installs commands under project .cursor
+      ---
+      duration_ms: 1015.567
+      type: 'test'
+      ...
+    # Subtest: --ide-global and --ide-local together exits 1
+    ok 23 - --ide-global and --ide-local together exits 1
+      ---
+      duration_ms: 146.2061
+      type: 'test'
+      ...
+    # Subtest: --opencode alone installs only OpenCode paths
+    ok 24 - --opencode alone installs only OpenCode paths
+      ---
+      duration_ms: 1241.9192
+      type: 'test'
+      ...
+    # Subtest: --copilot installs workspace prompts and manifest without writing legacy ~/.copilot/prompts
+    ok 25 - --copilot installs workspace prompts and manifest without writing legacy ~/.copilot/prompts
+      ---
+      duration_ms: 1458.6851
+      type: 'test'
+      ...
+    # Subtest: --gemini alone installs only Gemini TOML
+    ok 26 - --gemini alone installs only Gemini TOML
+      ---
+      duration_ms: 1135.2958
+      type: 'test'
+      ...
+    # Subtest: uninstall --gemini removes only Gemini artifacts
+    ok 27 - uninstall --gemini removes only Gemini artifacts
+      ---
+      duration_ms: 1204.6229
+      type: 'test'
+      ...
+    # Subtest: uninstall help lists granular agent flags
+    ok 28 - uninstall help lists granular agent flags
+      ---
+      duration_ms: 102.0963
+      type: 'test'
+      ...
+    # Subtest: install --ide-local with --config-dir exits 1
+    ok 29 - install --ide-local with --config-dir exits 1
+      ---
+      duration_ms: 105.9325
+      type: 'test'
+      ...
+    # Subtest: install --copilot with --config-dir exits 1
+    ok 30 - install --copilot with --config-dir exits 1
+      ---
+      duration_ms: 113.9459
+      type: 'test'
+      ...
+    # Subtest: uninstall --ide-local removes project .cursor OXE commands
+    ok 31 - uninstall --ide-local removes project .cursor OXE commands
+      ---
+      duration_ms: 979.7738
+      type: 'test'
+      ...
+    # Subtest: uninstall --copilot removes workspace assets and leaves legacy global until explicit clean
+    ok 32 - uninstall --copilot removes workspace assets and leaves legacy global until explicit clean
+      ---
+      duration_ms: 1054.9053
+      type: 'test'
+      ...
+    1..32
+ok 1 - oxe-cc CLI
+  ---
+  duration_ms: 34394.1018
+  type: 'suite'
+  ...
+# Subtest: oxe-agent-install
+    # Subtest: parseCursorCommandFrontmatter without yaml
+    ok 1 - parseCursorCommandFrontmatter without yaml
+      ---
+      duration_ms: 1.5751
+      type: 'test'
+      ...
+    # Subtest: parseCursorCommandFrontmatter unclosed yaml
+    ok 2 - parseCursorCommandFrontmatter unclosed yaml
+      ---
+      duration_ms: 0.1933
+      type: 'test'
+      ...
+    # Subtest: adjustWorkflowPathsForNestedLayout
+    ok 3 - adjustWorkflowPathsForNestedLayout
+      ---
+      duration_ms: 0.3311
+      type: 'test'
+      ...
+    # Subtest: buildAgentSkillMarkdown
+    ok 4 - buildAgentSkillMarkdown
+      ---
+      duration_ms: 0.3972
+      type: 'test'
+      ...
+    # Subtest: installSkillTreeFromCursorCommands writes skills
+    ok 5 - installSkillTreeFromCursorCommands writes skills
+      ---
+      duration_ms: 92.9178
+      type: 'test'
+      ...
+    # Subtest: installOpenCodeCommands writes both opencode dirs
+    ok 6 - installOpenCodeCommands writes both opencode dirs
+      ---
+      duration_ms: 110.6716
+      type: 'test'
+      ...
+    # Subtest: installOpenCodeCommands ide-local writes under project
+    ok 7 - installOpenCodeCommands ide-local writes under project
+      ---
+      duration_ms: 79.8808
+      type: 'test'
+      ...
+    # Subtest: installGeminiTomlCommands
+    ok 8 - installGeminiTomlCommands
+      ---
+      duration_ms: 53.4571
+      type: 'test'
+      ...
+    # Subtest: installWindsurfGlobalWorkflows and oxe.md omitido
+    ok 9 - installWindsurfGlobalWorkflows and oxe.md omitido
+      ---
+      duration_ms: 100.4991
+      type: 'test'
+      ...
+    # Subtest: installCodexPrompts
+    ok 10 - installCodexPrompts
+      ---
+      duration_ms: 92.6411
+      type: 'test'
+      ...
+    # Subtest: cleanupMarkedUnifiedArtifacts removes managed files
+    ok 11 - cleanupMarkedUnifiedArtifacts removes managed files
+      ---
+      duration_ms: 226.2611
+      type: 'test'
+      ...
+    # Subtest: cleanupMarkedUnifiedArtifacts respects granular targets
+    ok 12 - cleanupMarkedUnifiedArtifacts respects granular targets
+      ---
+      duration_ms: 263.1491
+      type: 'test'
+      ...
+    # Subtest: cleanup dryRun no unlink
+    ok 13 - cleanup dryRun no unlink
+      ---
+      duration_ms: 139.5385
+      type: 'test'
+      ...
+    # Subtest: opencodeCommandDirs and path helpers
+    ok 14 - opencodeCommandDirs and path helpers
+      ---
+      duration_ms: 1.87
+      type: 'test'
+      ...
+    1..14
+ok 2 - oxe-agent-install
+  ---
+  duration_ms: 1165.7027
+  type: 'suite'
+  ...
+# Subtest: oxe-azure
+    # Subtest: azure doctor fails deterministically when az is not installed
+    ok 1 - azure doctor fails deterministically when az is not installed
+      ---
+      duration_ms: 859.8198
+      type: 'test'
+      ...
+    # Subtest: azure auth whoami via CLI writes profile and auth-status artifacts
+    ok 2 - azure auth whoami via CLI writes profile and auth-status artifacts
+      ---
+      duration_ms: 1554.7439
+      type: 'test'
+      ...
+    # Subtest: azure sync materializes inventory and derived markdowns
+    ok 3 - azure sync materializes inventory and derived markdowns
+      ---
+      duration_ms: 1797.9338
+      type: 'test'
+      ...
+    # Subtest: apply without approve opens checkpoint and apply with approve emits trace and provider context
+    ok 4 - apply without approve opens checkpoint and apply with approve emits trace and provider context
+      ---
+      duration_ms: 1885.4174
+      type: 'test'
+      ...
+    # Subtest: health report and dashboard expose azure summary when context is enabled
+    ok 5 - health report and dashboard expose azure summary when context is enabled
+      ---
+      duration_ms: 5695.7584
+      type: 'test'
+      ...
+    # Subtest: sdk exports azure namespace
+    ok 6 - sdk exports azure namespace
+      ---
+      duration_ms: 0.3478
+      type: 'test'
+      ...
+    # Subtest: summarizeInventory array vazio retorna zeros
+    ok 7 - summarizeInventory array vazio retorna zeros
+      ---
+      duration_ms: 2.9635
+      type: 'test'
+      ...
+    # Subtest: summarizeInventory conta ServiceBus, EventGrid, SQL e other corretamente
+    ok 8 - summarizeInventory conta ServiceBus, EventGrid, SQL e other corretamente
+      ---
+      duration_ms: 0.4986
+      type: 'test'
+      ...
+    # Subtest: summarizeInventory aceita null sem quebrar
+    ok 9 - summarizeInventory aceita null sem quebrar
+      ---
+      duration_ms: 1.5509
+      type: 'test'
+      ...
+    # Subtest: summarizeInventory multiplos itens do mesmo tipo acumulam
+    ok 10 - summarizeInventory multiplos itens do mesmo tipo acumulam
+      ---
+      duration_ms: 0.7688
+      type: 'test'
+      ...
+    # Subtest: normalizeInventoryItem item completo preenche todos os campos
+    ok 11 - normalizeInventoryItem item completo preenche todos os campos
+      ---
+      duration_ms: 0.7505
+      type: 'test'
+      ...
+    # Subtest: normalizeInventoryItem item vazio usa fallbacks
+    ok 12 - normalizeInventoryItem item vazio usa fallbacks
+      ---
+      duration_ms: 0.3371
+      type: 'test'
+      ...
+    # Subtest: normalizeInventoryItem resource_group alias aceito
+    ok 13 - normalizeInventoryItem resource_group alias aceito
+      ---
+      duration_ms: 0.167
+      type: 'test'
+      ...
+    # Subtest: normalizeInventoryItem tags null vira objeto vazio
+    ok 14 - normalizeInventoryItem tags null vira objeto vazio
+      ---
+      duration_ms: 0.1297
+      type: 'test'
+      ...
+    # Subtest: redactObject redacta password
+    ok 15 - redactObject redacta password
+      ---
+      duration_ms: 0.2472
+      type: 'test'
+      ...
+    # Subtest: redactObject redacta connection_string
+    ok 16 - redactObject redacta connection_string
+      ---
+      duration_ms: 0.3111
+      type: 'test'
+      ...
+    # Subtest: redactObject redacta primary_key
+    ok 17 - redactObject redacta primary_key
+      ---
+      duration_ms: 0.4836
+      type: 'test'
+      ...
+    # Subtest: redactObject recursivo em sub-objetos
+    ok 18 - redactObject recursivo em sub-objetos
+      ---
+      duration_ms: 0.1512
+      type: 'test'
+      ...
+    # Subtest: redactObject percorre array de objetos
+    ok 19 - redactObject percorre array de objetos
+      ---
+      duration_ms: 0.1245
+      type: 'test'
+      ...
+    # Subtest: redactObject campos nao-sensiveis mantidos
+    ok 20 - redactObject campos nao-sensiveis mantidos
+      ---
+      duration_ms: 0.115
+      type: 'test'
+      ...
+    # Subtest: searchAzureInventory sem inventory retorna vazio
+    ok 21 - searchAzureInventory sem inventory retorna vazio
+      ---
+      duration_ms: 1.6428
+      type: 'test'
+      ...
+    # Subtest: searchAzureInventory encontra por nome exato
+    ok 22 - searchAzureInventory encontra por nome exato
+      ---
+      duration_ms: 16.7856
+      type: 'test'
+      ...
+    # Subtest: searchAzureInventory case-insensitive no type
+    ok 23 - searchAzureInventory case-insensitive no type
+      ---
+      duration_ms: 24.9804
+      type: 'test'
+      ...
+    # Subtest: searchAzureInventory query sem match retorna vazio
+    ok 24 - searchAzureInventory query sem match retorna vazio
+      ---
+      duration_ms: 17.4592
+      type: 'test'
+      ...
+    # Subtest: isAzureContextEnabled false quando dir sem azure
+    ok 25 - isAzureContextEnabled false quando dir sem azure
+      ---
+      duration_ms: 2.2706
+      type: 'test'
+      ...
+    # Subtest: isAzureContextEnabled true quando config.azure.enabled = true
+    ok 26 - isAzureContextEnabled true quando config.azure.enabled = true
+      ---
+      duration_ms: 1.9816
+      type: 'test'
+      ...
+    # Subtest: isAzureContextEnabled true quando profile.json existe
+    ok 27 - isAzureContextEnabled true quando profile.json existe
+      ---
+      duration_ms: 3.4631
+      type: 'test'
+      ...
+    # Subtest: isAzureContextEnabled true quando capability azure-auth existe
+    ok 28 - isAzureContextEnabled true quando capability azure-auth existe
+      ---
+      duration_ms: 4.9547
+      type: 'test'
+      ...
+    # Subtest: azure find retorna recurso quando query bate com inventario
+    ok 29 - azure find retorna recurso quando query bate com inventario
+      ---
+      duration_ms: 1259.5732
+      type: 'test'
+      ...
+    # Subtest: azure find sem match exibe mensagem adequada
+    ok 30 - azure find sem match exibe mensagem adequada
+      ---
+      duration_ms: 1098.8105
+      type: 'test'
+      ...
+    # Subtest: azure auth set-subscription seleciona subscription pelo ID
+    ok 31 - azure auth set-subscription seleciona subscription pelo ID
+      ---
+      duration_ms: 913.8533
+      type: 'test'
+      ...
+    # Subtest: azure servicebus list retorna JSON com namespaces
+    ok 32 - azure servicebus list retorna JSON com namespaces
+      ---
+      duration_ms: 1104.9925
+      type: 'test'
+      ...
+    # Subtest: azure servicebus show retorna JSON do namespace pelo nome
+    ok 33 - azure servicebus show retorna JSON do namespace pelo nome
+      ---
+      duration_ms: 785.7169
+      type: 'test'
+      ...
+    # Subtest: azure servicebus plan cria operacao planejada
+    ok 34 - azure servicebus plan cria operacao planejada
+      ---
+      duration_ms: 825.1946
+      type: 'test'
+      ...
+    # Subtest: azure eventgrid list retorna JSON com topics
+    ok 35 - azure eventgrid list retorna JSON com topics
+      ---
+      duration_ms: 935.645
+      type: 'test'
+      ...
+    # Subtest: azure sql list retorna JSON com servidores SQL
+    ok 36 - azure sql list retorna JSON com servidores SQL
+      ---
+      duration_ms: 774.5454
+      type: 'test'
+      ...
+    # Subtest: azure sql plan cria operacao planejada para servidor
+    ok 37 - azure sql plan cria operacao planejada para servidor
+      ---
+      duration_ms: 721.1618
+      type: 'test'
+      ...
+    # Subtest: searchAzureInventory filtra por --type
+    ok 38 - searchAzureInventory filtra por --type
+      ---
+      duration_ms: 13.3083
+      type: 'test'
+      ...
+    # Subtest: searchAzureInventory filtra por --filter-rg
+    ok 39 - searchAzureInventory filtra por --filter-rg
+      ---
+      duration_ms: 12.7168
+      type: 'test'
+      ...
+    # Subtest: diffInventory detecta adicionados e removidos
+    ok 40 - diffInventory detecta adicionados e removidos
+      ---
+      duration_ms: 0.3611
+      type: 'test'
+      ...
+    # Subtest: diffInventory sem mudancas retorna unchanged correto
+    ok 41 - diffInventory sem mudancas retorna unchanged correto
+      ---
+      duration_ms: 0.1457
+      type: 'test'
+      ...
+    # Subtest: statusAzure retorna estrutura completa
+    ok 42 - statusAzure retorna estrutura completa
+      ---
+      duration_ms: 1013.4313
+      type: 'test'
+      ...
+    # Subtest: applyAzureOperation com dryRun retorna preview sem criar artefatos
+    ok 43 - applyAzureOperation com dryRun retorna preview sem criar artefatos
+      ---
+      duration_ms: 383.1957
+      type: 'test'
+      ...
+    # Subtest: applyAzureOperation lanca erro quando vpn_required e nao confirmada
+    ok 44 - applyAzureOperation lanca erro quando vpn_required e nao confirmada
+      ---
+      duration_ms: 346.7977
+      type: 'test'
+      ...
+    # Subtest: azure sync --diff mostra recursos adicionados via CLI
+    ok 45 - azure sync --diff mostra recursos adicionados via CLI
+      ---
+      duration_ms: 1558.6209
+      type: 'test'
+      ...
+    # Subtest: azure status exibe estado compacto via CLI
+    ok 46 - azure status exibe estado compacto via CLI
+      ---
+      duration_ms: 662.6934
+      type: 'test'
+      ...
+    # Subtest: azure operations list exibe historico de operacoes
+    ok 47 - azure operations list exibe historico de operacoes
+      ---
+      duration_ms: 850.8855
+      type: 'test'
+      ...
+    # Subtest: azure find --type filtra por tipo de servico
+    ok 48 - azure find --type filtra por tipo de servico
+      ---
+      duration_ms: 979.0189
+      type: 'test'
+      ...
+    # Subtest: azure apply --dry-run mostra preview sem aplicar
+    ok 49 - azure apply --dry-run mostra preview sem aplicar
+      ---
+      duration_ms: 717.1467
+      type: 'test'
+      ...
+    # Subtest: azure auth login sem --tenant nao passa --tenant ao az login
+    ok 50 - azure auth login sem --tenant nao passa --tenant ao az login
+      ---
+      duration_ms: 998.1801
+      type: 'test'
+      ...
+    # Subtest: azure auth login --tenant via CLI passa --tenant ao az login
+    ok 51 - azure auth login --tenant via CLI passa --tenant ao az login
+      ---
+      duration_ms: 1110.5085
+      type: 'test'
+      ...
+    # Subtest: azure sql apply com approve executa operacao e cria artefato em operations/
+    ok 52 - azure sql apply com approve executa operacao e cria artefato em operations/
+      ---
+      duration_ms: 1195.2187
+      type: 'test'
+      ...
+    1..52
+ok 3 - oxe-azure
+  ---
+  duration_ms: 30143.0587
+  type: 'suite'
+  ...
+# Subtest: oxe-cc CLI edge
+    # Subtest: install --help exits 0
+    ok 1 - install --help exits 0
+      ---
+      duration_ms: 681.5662
+      type: 'test'
+      ...
+    # Subtest: uninstall --help exits 0
+    ok 2 - uninstall --help exits 0
+      ---
+      duration_ms: 424.2112
+      type: 'test'
+      ...
+    # Subtest: update --dry-run exits 0
+    ok 3 - update --dry-run exits 0
+      ---
+      duration_ms: 1217.0861
+      type: 'test'
+      ...
+    # Subtest: update --dry-run forwards install flags
+    ok 4 - update --dry-run forwards install flags
+      ---
+      duration_ms: 247.0763
+      type: 'test'
+      ...
+    # Subtest: capabilities help exits 0
+    ok 5 - capabilities help exits 0
+      ---
+      duration_ms: 426.1922
+      type: 'test'
+      ...
+    # Subtest: dashboard help exits 0
+    ok 6 - dashboard help exits 0
+      ---
+      duration_ms: 227.5834
+      type: 'test'
+      ...
+    # Subtest: runtime help exits 0
+    ok 7 - runtime help exits 0
+      ---
+      duration_ms: 198.4999
+      type: 'test'
+      ...
+    # Subtest: azure help exits 0
+    ok 8 - azure help exits 0
+      ---
+      duration_ms: 322.4614
+      type: 'test'
+      ...
+    # Subtest: doctor missing dir exits 1
+    ok 9 - doctor missing dir exits 1
+      ---
+      duration_ms: 323.7963
+      type: 'test'
+      ...
+    # Subtest: doctor --release --json returns structured blockers without banner noise
+    ok 10 - doctor --release --json returns structured blockers without banner noise
+      ---
+      duration_ms: 567.3617
+      type: 'test'
+      ...
+    # Subtest: status missing dir exits 1
+    ok 11 - status missing dir exits 1
+      ---
+      duration_ms: 189.4297
+      type: 'test'
+      ...
+    # Subtest: status --json prints valid JSON with nextStep
+    ok 12 - status --json prints valid JSON with nextStep
+      ---
+      duration_ms: 433.0563
+      type: 'test'
+      ...
+    # Subtest: context inspect resolves on demand without materializing pack files
+    ok 13 - context inspect resolves on demand without materializing pack files
+      ---
+      duration_ms: 269.8674
+      type: 'test'
+      ...
+    # Subtest: context build materializes structured pack files
+    ok 14 - context build materializes structured pack files
+      ---
+      duration_ms: 310.5774
+      type: 'test'
+      ...
+    # Subtest: status --json exposes Copilot workspace-vs-legacy diagnostics
+    ok 15 - status --json exposes Copilot workspace-vs-legacy diagnostics
+      ---
+      duration_ms: 398.8744
+      type: 'test'
+      ...
+    # Subtest: status warns when PLAN.md misses autoavaliação and suggests replan on low confidence
+    ok 16 - status warns when PLAN.md misses autoavaliação and suggests replan on low confidence
+      ---
+      duration_ms: 728.575
+      type: 'test'
+      ...
+    # Subtest: status suggests dashboard when plan is executable but review is missing
+    ok 17 - status suggests dashboard when plan is executable but review is missing
+      ---
+      duration_ms: 423.1004
+      type: 'test'
+      ...
+    # Subtest: status --json --hints includes hints array
+    ok 18 - status --json --hints includes hints array
+      ---
+      duration_ms: 497.3665
+      type: 'test'
+      ...
+    # Subtest: runtime lifecycle commands persist ACTIVE-RUN and trace events
+    ok 19 - runtime lifecycle commands persist ACTIVE-RUN and trace events
+      ---
+      duration_ms: 1422.484
+      type: 'test'
+      ...
+    # Subtest: runtime compile, project and ci integrate the TypeScript runtime package
+    ok 20 - runtime compile, project and ci integrate the TypeScript runtime package
+      ---
+      duration_ms: 5334.2127
+      type: 'test'
+      ...
+    # Subtest: init-oxe exits 1 when target path does not exist without dry-run
+    ok 21 - init-oxe exits 1 when target path does not exist without dry-run
+      ---
+      duration_ms: 157.2112
+      type: 'test'
+      ...
+    # Subtest: init-oxe --dry-run
+    ok 22 - init-oxe --dry-run
+      ---
+      duration_ms: 132.7382
+      type: 'test'
+      ...
+    # Subtest: init-oxe bootstraps active run and trace artifacts
+    ok 23 - init-oxe bootstraps active run and trace artifacts
+      ---
+      duration_ms: 208.032
+      type: 'test'
+      ...
+    # Subtest: --config-dir with --all-agents exits 1
+    ok 24 - --config-dir with --all-agents exits 1
+      ---
+      duration_ms: 181.3031
+      type: 'test'
+      ...
+    # Subtest: uninstall --ide-local with --config-dir exits 1
+    ok 25 - uninstall --ide-local with --config-dir exits 1
+      ---
+      duration_ms: 182.6348
+      type: 'test'
+      ...
+    # Subtest: uninstall unknown flag exits 1
+    ok 26 - uninstall unknown flag exits 1
+      ---
+      duration_ms: 192.622
+      type: 'test'
+      ...
+    # Subtest: uninstall --global-cli calls npm uninstall -g
+    ok 27 - uninstall --global-cli calls npm uninstall -g
+      ---
+      duration_ms: 445.2213
+      type: 'test'
+      ...
+    # Subtest: update unknown flag exits 1
+    ok 28 - update unknown flag exits 1
+      ---
+      duration_ms: 165.4987
+      type: 'test'
+      ...
+    # Subtest: update --check --dry-run exits 1 (conflito)
+    ok 29 - update --check --dry-run exits 1 (conflito)
+      ---
+      duration_ms: 164.3597
+      type: 'test'
+      ...
+    # Subtest: update --check --if-newer exits 1 (conflito)
+    ok 30 - update --check --if-newer exits 1 (conflito)
+      ---
+      duration_ms: 155.7282
+      type: 'test'
+      ...
+    # Subtest: update --check com OXE_UPDATE_SKIP_REGISTRY sai 2
+    ok 31 - update --check com OXE_UPDATE_SKIP_REGISTRY sai 2
+      ---
+      duration_ms: 159.0372
+      type: 'test'
+      ...
+    # Subtest: update --if-newer com OXE_UPDATE_SKIP_REGISTRY sai 2
+    ok 32 - update --if-newer com OXE_UPDATE_SKIP_REGISTRY sai 2
+      ---
+      duration_ms: 143.6946
+      type: 'test'
+      ...
+    # Subtest: update --if-newer sai 0 sem npx quando npm latest é mais antigo
+    ok 33 - update --if-newer sai 0 sem npx quando npm latest é mais antigo
+      ---
+      duration_ms: 255.8438
+      type: 'test'
+      ...
+    # Subtest: install --dry-run
+    ok 34 - install --dry-run
+      ---
+      duration_ms: 279.9608
+      type: 'test'
+      ...
+    # Subtest: capabilities install/list/update/remove manage local capability catalog
+    ok 35 - capabilities install/list/update/remove manage local capability catalog
+      ---
+      duration_ms: 750.3532
+      type: 'test'
+      ...
+    1..35
+ok 4 - oxe-cc CLI edge
+  ---
+  duration_ms: 18221.594
+  type: 'suite'
+  ...
+# Subtest: oxe-dashboard
+    # Subtest: savePlanReviewStatus writes state markers and PLAN-REVIEW.md
+    ok 1 - savePlanReviewStatus writes state markers and PLAN-REVIEW.md
+      ---
+      duration_ms: 42.7167
+      type: 'test'
+      ...
+    # Subtest: addPlanReviewComment persists comment json and markdown summary
+    ok 2 - addPlanReviewComment persists comment json and markdown summary
+      ---
+      duration_ms: 36.366
+      type: 'test'
+      ...
+    # Subtest: loadDashboardContext consolidates plan, review and diagnostics
+    ok 3 - loadDashboardContext consolidates plan, review and diagnostics
+      ---
+      duration_ms: 432.9761
+      type: 'test'
+      ...
+    # Subtest: dashboard dump-context prints json
+    ok 4 - dashboard dump-context prints json
+      ---
+      duration_ms: 580.0927
+      type: 'test'
+      ...
+    # Subtest: dashboard runtime API updates active run
+    ok 5 - dashboard runtime API updates active run
+      ---
+      duration_ms: 133.5815
+      type: 'test'
+      ...
+    # Subtest: dashboard runtime gates resolve API returns updated queue payload
+    ok 6 - dashboard runtime gates resolve API returns updated queue payload
+      ---
+      duration_ms: 42.8202
+      type: 'test'
+      ...
+    1..6
+ok 5 - oxe-dashboard
+  ---
+  duration_ms: 1270.788
+  type: 'suite'
+  ...
+# Subtest: oxe-project-health extended
+    # Subtest: loadOxeConfigMerged invalid top-level array
+    ok 1 - loadOxeConfigMerged invalid top-level array
+      ---
+      duration_ms: 37.1812
+      type: 'test'
+      ...
+    # Subtest: parseLastScanDate placeholder and BR date
+    ok 2 - parseLastScanDate placeholder and BR date
+      ---
+      duration_ms: 2.5603
+      type: 'test'
+      ...
+    # Subtest: parseLastScanDate paren line
+    ok 3 - parseLastScanDate paren line
+      ---
+      duration_ms: 0.1892
+      type: 'test'
+      ...
+    # Subtest: phaseCoherenceWarnings several phases
+    ok 4 - phaseCoherenceWarnings several phases
+      ---
+      duration_ms: 8.826
+      type: 'test'
+      ...
+    # Subtest: verifyGapsWithoutSummaryWarning
+    ok 5 - verifyGapsWithoutSummaryWarning
+      ---
+      duration_ms: 3.966
+      type: 'test'
+      ...
+    # Subtest: planWaveWarningsFixed over limit
+    ok 6 - planWaveWarningsFixed over limit
+      ---
+      duration_ms: 10.7127
+      type: 'test'
+      ...
+    # Subtest: suggestNextStep verify_failed and gaps
+    ok 7 - suggestNextStep verify_failed and gaps
+      ---
+      duration_ms: 77.9087
+      type: 'test'
+      ...
+    # Subtest: buildHealthReport with stale scan
+    ok 8 - buildHealthReport with stale scan
+      ---
+      duration_ms: 151.6668
+      type: 'test'
+      ...
+    # Subtest: buildHealthReport with stale compact
+    ok 9 - buildHealthReport with stale compact
+      ---
+      duration_ms: 50.4795
+      type: 'test'
+      ...
+    # Subtest: validateConfigShape many type errors
+    ok 10 - validateConfigShape many type errors
+      ---
+      duration_ms: 2.5056
+      type: 'test'
+      ...
+    # Subtest: buildHealthReport exposes context and semantics summaries
+    ok 11 - buildHealthReport exposes context and semantics summaries
+      ---
+      duration_ms: 84.5275
+      type: 'test'
+      ...
+    1..11
+ok 6 - oxe-project-health extended
+  ---
+  duration_ms: 434.1766
+  type: 'suite'
+  ...
+# Subtest: oxe-install-resolve full
+    # Subtest: ignoreInstallConfig short-circuit
+    ok 1 - ignoreInstallConfig short-circuit
+      ---
+      duration_ms: 11.8692
+      type: 'test'
+      ...
+    # Subtest: missing project root
+    ok 2 - missing project root
+      ---
+      duration_ms: 0.3484
+      type: 'test'
+      ...
+    # Subtest: parseError in config emits warning and skips install block
+    ok 3 - parseError in config emits warning and skips install block
+      ---
+      duration_ms: 8.4375
+      type: 'test'
+      ...
+    # Subtest: repo_layout classic from config
+    ok 4 - repo_layout classic from config
+      ---
+      duration_ms: 52.2832
+      type: 'test'
+      ...
+    # Subtest: vscode true from config
+    ok 5 - vscode true from config
+      ---
+      duration_ms: 5.7946
+      type: 'test'
+      ...
+    # Subtest: profiles recommended cursor copilot core cli all_agents
+    not ok 6 - profiles recommended cursor copilot core cli all_agents
+      ---
+      duration_ms: 45.3959
+      type: 'test'
+      location: 'C:\\Users\\dudu-\\Estudos\\oxe-build\\tests\\oxe-install-resolve-full.test.cjs:85:3'
+      failureType: 'testCodeFailure'
+      error: |-
+        Expected values to be strictly equal:
+        
+        true !== false
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: false
+      actual: true
+      operator: 'strictEqual'
+      stack: |-
+        TestContext.<anonymous> (C:\Users\dudu-\Estudos\oxe-build\tests\oxe-install-resolve-full.test.cjs:108:16)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    # Subtest: invalid profile warning
+    ok 7 - invalid profile warning
+      ---
+      duration_ms: 4.7275
+      type: 'test'
+      ...
+    # Subtest: include_commands_dir and include_agents_md
+    ok 8 - include_commands_dir and include_agents_md
+      ---
+      duration_ms: 14.7098
+      type: 'test'
+      ...
+    # Subtest: oxeOnly returns early before profile
+    ok 9 - oxeOnly returns early before profile
+      ---
+      duration_ms: 9.5862
+      type: 'test'
+      ...
+    1..9
+not ok 7 - oxe-install-resolve full
+  ---
+  duration_ms: 155.7079
+  type: 'suite'
+  location: 'C:\\Users\\dudu-\\Estudos\\oxe-build\\tests\\oxe-install-resolve-full.test.cjs:26:1'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+#   i  1 arquivo(s) OXE alterado(s) localmente — backup em .oxe-cc\\oxe-local-patches\\2026-04-22T02-07-32-158Z
+#      C:\\Users\\dudu-\\AppData\\Local\\Temp\\oxe-mf-uT7ec1\\oxe-scan.md
+# Subtest: oxe-manifest
+    # Subtest: loadFileManifest empty when missing
+    ok 1 - loadFileManifest empty when missing
+      ---
+      duration_ms: 3.5359
+      type: 'test'
+      ...
+    # Subtest: loadFileManifest invalid JSON returns {}
+    ok 2 - loadFileManifest invalid JSON returns {}
+      ---
+      duration_ms: 5.1901
+      type: 'test'
+      ...
+    # Subtest: loadFileManifest missing files object
+    ok 3 - loadFileManifest missing files object
+      ---
+      duration_ms: 4.517
+      type: 'test'
+      ...
+    # Subtest: writeFileManifest roundtrip
+    ok 4 - writeFileManifest roundtrip
+      ---
+      duration_ms: 14.6042
+      type: 'test'
+      ...
+    # Subtest: backupModifiedFromManifest copies diverged files
+    ok 5 - backupModifiedFromManifest copies diverged files
+      ---
+      duration_ms: 8.8861
+      type: 'test'
+      ...
+    # Subtest: backupModifiedFromManifest no-op without force or dryRun
+    ok 6 - backupModifiedFromManifest no-op without force or dryRun
+      ---
+      duration_ms: 0.9626
+      type: 'test'
+      ...
+    # Subtest: backupModifiedFromManifest skips unreadable hash
+    ok 7 - backupModifiedFromManifest skips unreadable hash
+      ---
+      duration_ms: 11.6022
+      type: 'test'
+      ...
+    # Subtest: backupModifiedFromManifest skips path when sha256 throws
+    ok 8 - backupModifiedFromManifest skips path when sha256 throws
+      ---
+      duration_ms: 1.9823
+      type: 'test'
+      ...
+    # Subtest: collectFilesRecursive filters
+    ok 9 - collectFilesRecursive filters
+      ---
+      duration_ms: 3.5992
+      type: 'test'
+      ...
+    # Subtest: collectFilesRecursive missing dir
+    ok 10 - collectFilesRecursive missing dir
+      ---
+      duration_ms: 0.8798
+      type: 'test'
+      ...
+    # Subtest: sha256File
+    ok 11 - sha256File
+      ---
+      duration_ms: 1.997
+      type: 'test'
+      ...
+    1..11
+ok 8 - oxe-manifest
+  ---
+  duration_ms: 59.9156
+  type: 'suite'
+  ...
+# Subtest: oxe-npm-version
+    # Subtest: parseNpmViewVersion plain line
+    ok 1 - parseNpmViewVersion plain line
+      ---
+      duration_ms: 2.4402
+      type: 'test'
+      ...
+    # Subtest: parseNpmViewVersion JSON quoted
+    ok 2 - parseNpmViewVersion JSON quoted
+      ---
+      duration_ms: 0.9393
+      type: 'test'
+      ...
+    # Subtest: parseNpmViewVersion v prefix
+    ok 3 - parseNpmViewVersion v prefix
+      ---
+      duration_ms: 0.8363
+      type: 'test'
+      ...
+    # Subtest: parseNpmViewVersion invalid
+    ok 4 - parseNpmViewVersion invalid
+      ---
+      duration_ms: 0.2773
+      type: 'test'
+      ...
+    # Subtest: parseNpmViewVersion single-quoted line JSON.parse fallback
+    ok 5 - parseNpmViewVersion single-quoted line JSON.parse fallback
+      ---
+      duration_ms: 0.4501
+      type: 'test'
+      ...
+    # Subtest: isNewerThan
+    ok 6 - isNewerThan
+      ---
+      duration_ms: 0.759
+      type: 'test'
+      ...
+    # Subtest: syncNpmViewVersion uses fake npm on PATH
+    ok 7 - syncNpmViewVersion uses fake npm on PATH
+      ---
+      duration_ms: 493.897
+      type: 'test'
+      ...
+    # Subtest: syncNpmViewVersion empty stdout yields parse error
+    ok 8 - syncNpmViewVersion empty stdout yields parse error
+      ---
+      duration_ms: 317.3024
+      type: 'test'
+      ...
+    # Subtest: syncNpmViewVersion maps non-zero npm exit to error
+    ok 9 - syncNpmViewVersion maps non-zero npm exit to error
+      ---
+      duration_ms: 340.1018
+      type: 'test'
+      ...
+    1..9
+ok 9 - oxe-npm-version
+  ---
+  duration_ms: 1160.4086
+  type: 'suite'
+  ...
+# Subtest: oxe-operational
+    # Subtest: writeRunState and readRunState persist active run
+    ok 1 - writeRunState and readRunState persist active run
+      ---
+      duration_ms: 22.6509
+      type: 'test'
+      ...
+    # Subtest: appendEvent writes append-only ndjson trace
+    ok 2 - appendEvent writes append-only ndjson trace
+      ---
+      duration_ms: 15.9905
+      type: 'test'
+      ...
+    # Subtest: appendEvent persists runtime envelope fields without breaking legacy trace
+    ok 3 - appendEvent persists runtime envelope fields without breaking legacy trace
+      ---
+      duration_ms: 18.071
+      type: 'test'
+      ...
+    # Subtest: parseCapabilityManifest reads approval policy and evidence outputs
+    ok 4 - parseCapabilityManifest reads approval policy and evidence outputs
+      ---
+      duration_ms: 1.6937
+      type: 'test'
+      ...
+    # Subtest: verifyGitEvidence returns no warnings for running run without evidence
+    ok 5 - verifyGitEvidence returns no warnings for running run without evidence
+      ---
+      duration_ms: 137.9143
+      type: 'test'
+      ...
+    # Subtest: verifyGitEvidence returns warning for completed run with no commits
+    ok 6 - verifyGitEvidence returns warning for completed run with no commits
+      ---
+      duration_ms: 111.0486
+      type: 'test'
+      ...
+    # Subtest: readGitActivity returns array (empty when no git or no commits in range)
+    ok 7 - readGitActivity returns array (empty when no git or no commits in range)
+      ---
+      duration_ms: 115.9668
+      type: 'test'
+      ...
+    # Subtest: readCapabilityCatalog retorna array vazio quando dir nao existe
+    ok 8 - readCapabilityCatalog retorna array vazio quando dir nao existe
+      ---
+      duration_ms: 2.0658
+      type: 'test'
+      ...
+    # Subtest: readCapabilityCatalog retorna array vazio quando capabilities dir esta vazio
+    ok 9 - readCapabilityCatalog retorna array vazio quando capabilities dir esta vazio
+      ---
+      duration_ms: 2.6937
+      type: 'test'
+      ...
+    # Subtest: readCapabilityCatalog retorna entry para capability valida
+    ok 10 - readCapabilityCatalog retorna entry para capability valida
+      ---
+      duration_ms: 15.5053
+      type: 'test'
+      ...
+    # Subtest: capabilityCatalogWarnings retorna warning para capability sem id
+    ok 11 - capabilityCatalogWarnings retorna warning para capability sem id
+      ---
+      duration_ms: 14.5391
+      type: 'test'
+      ...
+    # Subtest: capabilityCatalogWarnings retorna warning para type invalido
+    ok 12 - capabilityCatalogWarnings retorna warning para type invalido
+      ---
+      duration_ms: 4.9516
+      type: 'test'
+      ...
+    # Subtest: capabilityCatalogWarnings retorna warning para approval_policy ausente
+    ok 13 - capabilityCatalogWarnings retorna warning para approval_policy ausente
+      ---
+      duration_ms: 13.7242
+      type: 'test'
+      ...
+    # Subtest: capabilityCatalogWarnings retorna warning para entrypoint ausente
+    ok 14 - capabilityCatalogWarnings retorna warning para entrypoint ausente
+      ---
+      duration_ms: 16.6319
+      type: 'test'
+      ...
+    # Subtest: capabilityCatalogWarnings retorna warning para evidence_outputs ausente
+    ok 15 - capabilityCatalogWarnings retorna warning para evidence_outputs ausente
+      ---
+      duration_ms: 21.0308
+      type: 'test'
+      ...
+    # Subtest: capabilityCatalogWarnings sem warnings para capability valida
+    ok 16 - capabilityCatalogWarnings sem warnings para capability valida
+      ---
+      duration_ms: 4.6717
+      type: 'test'
+      ...
+    # Subtest: applyRuntimeAction builds graph and lifecycle transitions
+    ok 17 - applyRuntimeAction builds graph and lifecycle transitions
+      ---
+      duration_ms: 19.7902
+      type: 'test'
+      ...
+    # Subtest: replayEvents com arquivo vazio retorna report vazio
+    ok 18 - replayEvents com arquivo vazio retorna report vazio
+      ---
+      duration_ms: 2.6267
+      type: 'test'
+      ...
+    # Subtest: replayEvents com eventos retorna report completo
+    ok 19 - replayEvents com eventos retorna report completo
+      ---
+      duration_ms: 18.6753
+      type: 'test'
+      ...
+    # Subtest: replayEvents filtra por runId
+    ok 20 - replayEvents filtra por runId
+      ---
+      duration_ms: 14.4299
+      type: 'test'
+      ...
+    # Subtest: replayEvents filtra por waveId
+    ok 21 - replayEvents filtra por waveId
+      ---
+      duration_ms: 12.9941
+      type: 'test'
+      ...
+    # Subtest: replayEvents registra runId do primeiro evento
+    ok 22 - replayEvents registra runId do primeiro evento
+      ---
+      duration_ms: 18.2185
+      type: 'test'
+      ...
+    # Subtest: replayEvents escreve REPLAY-SESSION.md com writeReport
+    ok 23 - replayEvents escreve REPLAY-SESSION.md com writeReport
+      ---
+      duration_ms: 22.4532
+      type: 'test'
+      ...
+    # Subtest: replayRuntimeState returns structured summary and writes report when requested
+    ok 24 - replayRuntimeState returns structured summary and writes report when requested
+      ---
+      duration_ms: 123.9823
+      type: 'test'
+      ...
+    # Subtest: readRuntimeMultiAgentStatus reads persisted runtime artifacts
+    ok 25 - readRuntimeMultiAgentStatus reads persisted runtime artifacts
+      ---
+      duration_ms: 65.5732
+      type: 'test'
+      ...
+    # Subtest: compileExecutionGraphFromArtifacts persists compiled graph and canonical state
+    ok 26 - compileExecutionGraphFromArtifacts persists compiled graph and canonical state
+      ---
+      duration_ms: 95.4665
+      type: 'test'
+      ...
+    # Subtest: projectRuntimeArtifacts writes derived markdowns from canonical state
+    ok 27 - projectRuntimeArtifacts writes derived markdowns from canonical state
+      ---
+      duration_ms: 59.943
+      type: 'test'
+      ...
+    # Subtest: runRuntimeCiChecks persists CI results on the active run
+    ok 28 - runRuntimeCiChecks persists CI results on the active run
+      ---
+      duration_ms: 39.6664
+      type: 'test'
+      ...
+    1..28
+ok 10 - oxe-operational
+  ---
+  duration_ms: 1018.9435
+  type: 'suite'
+  ...
+# Subtest: oxe-plugins — loadPlugins
+    # Subtest: returns empty arrays when plugins dir does not exist
+    ok 1 - returns empty arrays when plugins dir does not exist
+      ---
+      duration_ms: 7.1157
+      type: 'test'
+      ...
+    # Subtest: loads a valid plugin
+    ok 2 - loads a valid plugin
+      ---
+      duration_ms: 17.6634
+      type: 'test'
+      ...
+    # Subtest: reports error for plugin without name
+    ok 3 - reports error for plugin without name
+      ---
+      duration_ms: 13.1558
+      type: 'test'
+      ...
+    # Subtest: reports error for plugin without hooks
+    ok 4 - reports error for plugin without hooks
+      ---
+      duration_ms: 5.0602
+      type: 'test'
+      ...
+    # Subtest: reports error for plugin exporting non-object
+    ok 5 - reports error for plugin exporting non-object
+      ---
+      duration_ms: 5.0045
+      type: 'test'
+      ...
+    # Subtest: reports error for plugin that throws on require
+    ok 6 - reports error for plugin that throws on require
+      ---
+      duration_ms: 8.5936
+      type: 'test'
+      ...
+    # Subtest: loads plugins from config.json external sources
+    ok 7 - loads plugins from config.json external sources
+      ---
+      duration_ms: 24.1954
+      type: 'test'
+      ...
+    # Subtest: deduplicates plugins by name from external sources
+    ok 8 - deduplicates plugins by name from external sources
+      ---
+      duration_ms: 21.6121
+      type: 'test'
+      ...
+    1..8
+ok 11 - oxe-plugins — loadPlugins
+  ---
+  duration_ms: 104.615
+  type: 'suite'
+  ...
+# Subtest: oxe-plugins — runHook
+    # Subtest: calls matching hook on all plugins
+    ok 1 - calls matching hook on all plugins
+      ---
+      duration_ms: 0.7658
+      type: 'test'
+      ...
+    # Subtest: skips plugins without the requested hook
+    ok 2 - skips plugins without the requested hook
+      ---
+      duration_ms: 0.3959
+      type: 'test'
+      ...
+    # Subtest: captures hook errors without propagating
+    ok 3 - captures hook errors without propagating
+      ---
+      duration_ms: 0.2874
+      type: 'test'
+      ...
+    1..3
+ok 12 - oxe-plugins — runHook
+  ---
+  duration_ms: 1.756
+  type: 'suite'
+  ...
+# Subtest: oxe-plugins — validatePlugins
+    # Subtest: returns valid:true when no plugins dir exists
+    ok 1 - returns valid:true when no plugins dir exists
+      ---
+      duration_ms: 1.9389
+      type: 'test'
+      ...
+    # Subtest: warns about non-cjs files
+    ok 2 - warns about non-cjs files
+      ---
+      duration_ms: 4.1726
+      type: 'test'
+      ...
+    # Subtest: aggregates load errors as issues
+    ok 3 - aggregates load errors as issues
+      ---
+      duration_ms: 13.5552
+      type: 'test'
+      ...
+    1..3
+ok 13 - oxe-plugins — validatePlugins
+  ---
+  duration_ms: 19.9048
+  type: 'suite'
+  ...
+# Subtest: oxe-plugins — initPluginsDir
+    # Subtest: creates plugins dir and README when not present
+    ok 1 - creates plugins dir and README when not present
+      ---
+      duration_ms: 4.6216
+      type: 'test'
+      ...
+    # Subtest: is idempotent — does not overwrite existing README
+    ok 2 - is idempotent — does not overwrite existing README
+      ---
+      duration_ms: 22.9279
+      type: 'test'
+      ...
+    1..2
+ok 14 - oxe-plugins — initPluginsDir
+  ---
+  duration_ms: 29.7679
+  type: 'suite'
+  ...
+# Subtest: oxe-plugins — resolvePluginSources
+    # Subtest: resolves string entry (legacy format) when file exists
+    ok 1 - resolves string entry (legacy format) when file exists
+      ---
+      duration_ms: 3.4363
+      type: 'test'
+      ...
+    # Subtest: reports error for string entry when file not found
+    ok 2 - reports error for string entry when file not found
+      ---
+      duration_ms: 1.1111
+      type: 'test'
+      ...
+    # Subtest: resolves path: prefix when file exists
+    ok 3 - resolves path: prefix when file exists
+      ---
+      duration_ms: 5.9478
+      type: 'test'
+      ...
+    # Subtest: reports error for path: when file not found
+    ok 4 - reports error for path: when file not found
+      ---
+      duration_ms: 0.9622
+      type: 'test'
+      ...
+    # Subtest: resolves ./ relative path when file exists
+    ok 5 - resolves ./ relative path when file exists
+      ---
+      duration_ms: 1.6056
+      type: 'test'
+      ...
+    # Subtest: reports error for npm: source not installed
+    ok 6 - reports error for npm: source not installed
+      ---
+      duration_ms: 0.7141
+      type: 'test'
+      ...
+    # Subtest: reports error for unknown prefix
+    ok 7 - reports error for unknown prefix
+      ---
+      duration_ms: 0.5452
+      type: 'test'
+      ...
+    # Subtest: reports error for invalid entry (missing source)
+    ok 8 - reports error for invalid entry (missing source)
+      ---
+      duration_ms: 0.4742
+      type: 'test'
+      ...
+    # Subtest: returns empty resolved for empty array
+    ok 9 - returns empty resolved for empty array
+      ---
+      duration_ms: 0.4844
+      type: 'test'
+      ...
+    1..9
+ok 15 - oxe-plugins — resolvePluginSources
+  ---
+  duration_ms: 16.333
+  type: 'suite'
+  ...
+# Subtest: oxe-project-health
+    # Subtest: copilotIntegrationReport is healthy when workspace prompts and instructions are aligned
+    ok 1 - copilotIntegrationReport is healthy when workspace prompts and instructions are aligned
+      ---
+      duration_ms: 46.7711
+      type: 'test'
+      ...
+    # Subtest: copilotIntegrationReport warns when only legacy global install exists
+    ok 2 - copilotIntegrationReport warns when only legacy global install exists
+      ---
+      duration_ms: 16.0397
+      type: 'test'
+      ...
+    # Subtest: copilotIntegrationReport flags prompt path mismatch for nested layout
+    ok 3 - copilotIntegrationReport flags prompt path mismatch for nested layout
+      ---
+      duration_ms: 19.166
+      type: 'test'
+      ...
+    # Subtest: validateConfigShape flags invalid install.profile
+    ok 4 - validateConfigShape flags invalid install.profile
+      ---
+      duration_ms: 0.9256
+      type: 'test'
+      ...
+    # Subtest: validateConfigShape accepts install object
+    ok 5 - validateConfigShape accepts install object
+      ---
+      duration_ms: 0.1993
+      type: 'test'
+      ...
+    # Subtest: validateConfigShape accepts azure object
+    ok 6 - validateConfigShape accepts azure object
+      ---
+      duration_ms: 0.2042
+      type: 'test'
+      ...
+    # Subtest: parseStatePhase reads first backtick token
+    ok 7 - parseStatePhase reads first backtick token
+      ---
+      duration_ms: 0.4163
+      type: 'test'
+      ...
+    # Subtest: parseLastScanDate parses ISO line
+    ok 8 - parseLastScanDate parses ISO line
+      ---
+      duration_ms: 1.5992
+      type: 'test'
+      ...
+    # Subtest: parseLastCompactDate parses ISO under Último compact section
+    ok 9 - parseLastCompactDate parses ISO under Último compact section
+      ---
+      duration_ms: 0.8235
+      type: 'test'
+      ...
+    # Subtest: parseLastCompactDate placeholder paren returns null
+    ok 10 - parseLastCompactDate placeholder paren returns null
+      ---
+      duration_ms: 0.7425
+      type: 'test'
+      ...
+    # Subtest: isStaleScan respects maxAgeDays
+    ok 11 - isStaleScan respects maxAgeDays
+      ---
+      duration_ms: 0.2687
+      type: 'test'
+      ...
+    # Subtest: specSectionWarnings when heading missing
+    ok 12 - specSectionWarnings when heading missing
+      ---
+      duration_ms: 2.8497
+      type: 'test'
+      ...
+    # Subtest: planWaveWarningsFixed counts tasks per Onda
+    ok 13 - planWaveWarningsFixed counts tasks per Onda
+      ---
+      duration_ms: 14.7496
+      type: 'test'
+      ...
+    # Subtest: planTaskAceiteWarnings flags Tn without Aceite vinculado
+    ok 14 - planTaskAceiteWarnings flags Tn without Aceite vinculado
+      ---
+      duration_ms: 11.1214
+      type: 'test'
+      ...
+    # Subtest: buildHealthReport merges planTaskAceiteWarnings into planWarn
+    ok 15 - buildHealthReport merges planTaskAceiteWarnings into planWarn
+      ---
+      duration_ms: 196.8667
+      type: 'test'
+      ...
+    # Subtest: runtimeWarnings flag missing runtime and checkpoints artifacts referenced by state
+    ok 16 - runtimeWarnings flag missing runtime and checkpoints artifacts referenced by state
+      ---
+      duration_ms: 5.1053
+      type: 'test'
+      ...
+    # Subtest: capabilityWarnings flag missing capability index when dir exists
+    ok 17 - capabilityWarnings flag missing capability index when dir exists
+      ---
+      duration_ms: 3.7323
+      type: 'test'
+      ...
+    # Subtest: capabilityWarnings flag malformed capability policy metadata
+    ok 18 - capabilityWarnings flag malformed capability policy metadata
+      ---
+      duration_ms: 17.404
+      type: 'test'
+      ...
+    # Subtest: investigationWarnings flag missing investigations index when dir exists
+    ok 19 - investigationWarnings flag missing investigations index when dir exists
+      ---
+      duration_ms: 5.0619
+      type: 'test'
+      ...
+    # Subtest: suggestNextStep scan when no .oxe
+    ok 20 - suggestNextStep scan when no .oxe
+      ---
+      duration_ms: 1.5256
+      type: 'test'
+      ...
+    # Subtest: suggestNextStep execute when plan but no verify
+    ok 21 - suggestNextStep execute when plan but no verify
+      ---
+      duration_ms: 24.1324
+      type: 'test'
+      ...
+    # Subtest: suggestNextStep respects pending checkpoint approval
+    ok 22 - suggestNextStep respects pending checkpoint approval
+      ---
+      duration_ms: 20.6989
+      type: 'test'
+      ...
+    # Subtest: parseActiveSession extrai session string do STATE
+    ok 23 - parseActiveSession extrai session string do STATE
+      ---
+      duration_ms: 0.254
+      type: 'test'
+      ...
+    # Subtest: parseActiveSession retorna null para placeholder em dash
+    ok 24 - parseActiveSession retorna null para placeholder em dash
+      ---
+      duration_ms: 0.1262
+      type: 'test'
+      ...
+    # Subtest: parseActiveSession retorna null para none
+    ok 25 - parseActiveSession retorna null para none
+      ---
+      duration_ms: 0.1135
+      type: 'test'
+      ...
+    # Subtest: parseActiveSession converte backslash para forward slash
+    ok 26 - parseActiveSession converte backslash para forward slash
+      ---
+      duration_ms: 0.1669
+      type: 'test'
+      ...
+    # Subtest: parseActiveSession retorna null para texto vazio
+    ok 27 - parseActiveSession retorna null para texto vazio
+      ---
+      duration_ms: 0.0972
+      type: 'test'
+      ...
+    # Subtest: scopedOxePaths sem activeSession retorna paths base inalterados
+    ok 28 - scopedOxePaths sem activeSession retorna paths base inalterados
+      ---
+      duration_ms: 3.1616
+      type: 'test'
+      ...
+    # Subtest: scopedOxePaths com activeSession escopa spec, plan e verify sob session root
+    ok 29 - scopedOxePaths com activeSession escopa spec, plan e verify sob session root
+      ---
+      duration_ms: 3.0015
+      type: 'test'
+      ...
+    # Subtest: scopedOxePaths com activeSession mantem state no nivel base .oxe/
+    ok 30 - scopedOxePaths com activeSession mantem state no nivel base .oxe/
+      ---
+      duration_ms: 1.0911
+      type: 'test'
+      ...
+    # Subtest: buildHealthReport exposes active run, event summary and memory layers
+    ok 31 - buildHealthReport exposes active run, event summary and memory layers
+      ---
+      duration_ms: 94.7392
+      type: 'test'
+      ...
+    # Subtest: permissions array com regra válida aceita
+    ok 32 - permissions array com regra válida aceita
+      ---
+      duration_ms: 0.2676
+      type: 'test'
+      ...
+    # Subtest: permissions regra com action inválido rejeitada
+    ok 33 - permissions regra com action inválido rejeitada
+      ---
+      duration_ms: 0.3481
+      type: 'test'
+      ...
+    # Subtest: permissions regra sem pattern rejeitada
+    ok 34 - permissions regra sem pattern rejeitada
+      ---
+      duration_ms: 0.1921
+      type: 'test'
+      ...
+    # Subtest: permissions scope inválido rejeitado
+    ok 35 - permissions scope inválido rejeitado
+      ---
+      duration_ms: 0.1965
+      type: 'test'
+      ...
+    # Subtest: permissions não-array rejeitado
+    ok 36 - permissions não-array rejeitado
+      ---
+      duration_ms: 0.1359
+      type: 'test'
+      ...
+    # Subtest: loadOxeConfigMerged retorna sources com campos system/user/project
+    ok 37 - loadOxeConfigMerged retorna sources com campos system/user/project
+      ---
+      duration_ms: 1.1533
+      type: 'test'
+      ...
+    # Subtest: loadOxeConfigMerged project source aponta para .oxe/config.json quando existe
+    ok 38 - loadOxeConfigMerged project source aponta para .oxe/config.json quando existe
+      ---
+      duration_ms: 10.8181
+      type: 'test'
+      ...
+    # Subtest: plugins array com source objects aceita
+    ok 39 - plugins array com source objects aceita
+      ---
+      duration_ms: 0.245
+      type: 'test'
+      ...
+    # Subtest: plugins array com strings legado aceita
+    ok 40 - plugins array com strings legado aceita
+      ---
+      duration_ms: 0.1219
+      type: 'test'
+      ...
+    # Subtest: plugins source vazia rejeitada
+    ok 41 - plugins source vazia rejeitada
+      ---
+      duration_ms: 0.1375
+      type: 'test'
+      ...
+    # Subtest: plugins não-array rejeitado
+    ok 42 - plugins não-array rejeitado
+      ---
+      duration_ms: 0.1292
+      type: 'test'
+      ...
+    1..42
+ok 16 - oxe-project-health
+  ---
+  duration_ms: 511.1286
+  type: 'suite'
+  ...
+# Subtest: oxe-retro-health
+    # Subtest: security_in_verify is in ALLOWED_CONFIG_KEYS
+    ok 1 - security_in_verify is in ALLOWED_CONFIG_KEYS
+      ---
+      duration_ms: 5.3244
+      type: 'test'
+      ...
+    # Subtest: validateConfigShape accepts security_in_verify
+    ok 2 - validateConfigShape accepts security_in_verify
+      ---
+      duration_ms: 1.018
+      type: 'test'
+      ...
+    # Subtest: config.template.json has security_in_verify field
+    ok 3 - config.template.json has security_in_verify field
+      ---
+      duration_ms: 0.7247
+      type: 'test'
+      ...
+    # Subtest: parseLastRetroDate parses last_retro field from STATE.md
+    ok 4 - parseLastRetroDate parses last_retro field from STATE.md
+      ---
+      duration_ms: 6.0988
+      type: 'test'
+      ...
+    # Subtest: parseLastRetroDate returns null when field is absent
+    ok 5 - parseLastRetroDate returns null when field is absent
+      ---
+      duration_ms: 0.4087
+      type: 'test'
+      ...
+    # Subtest: parseLastRetroDate returns null for invalid date format
+    ok 6 - parseLastRetroDate returns null for invalid date format
+      ---
+      duration_ms: 0.1831
+      type: 'test'
+      ...
+    # Subtest: suggestNextStep returns retro when verify_complete and LESSONS.md missing
+    ok 7 - suggestNextStep returns retro when verify_complete and LESSONS.md missing
+      ---
+      duration_ms: 46.9776
+      type: 'test'
+      ...
+    # Subtest: suggestNextStep returns next when verify_complete and LESSONS.md exists with last_retro in STATE
+    ok 8 - suggestNextStep returns next when verify_complete and LESSONS.md exists with last_retro in STATE
+      ---
+      duration_ms: 28.2679
+      type: 'test'
+      ...
+    # Subtest: planAgentsWarnings warns about schema 1 (legacy)
+    ok 9 - planAgentsWarnings warns about schema 1 (legacy)
+      ---
+      duration_ms: 18.5172
+      type: 'test'
+      ...
+    # Subtest: planAgentsWarnings warns about invalid model_hint
+    ok 10 - planAgentsWarnings warns about invalid model_hint
+      ---
+      duration_ms: 5.7024
+      type: 'test'
+      ...
+    # Subtest: planAgentsWarnings returns empty for valid schema 3
+    ok 11 - planAgentsWarnings returns empty for valid schema 3
+      ---
+      duration_ms: 10.3214
+      type: 'test'
+      ...
+    # Subtest: planAgentsWarnings returns empty when plan-agents.json does not exist
+    ok 12 - planAgentsWarnings returns empty when plan-agents.json does not exist
+      ---
+      duration_ms: 2.0733
+      type: 'test'
+      ...
+    # Subtest: plan-agents.schema.json enum includes 3
+    ok 13 - plan-agents.schema.json enum includes 3
+      ---
+      duration_ms: 0.54
+      type: 'test'
+      ...
+    # Subtest: plan-agents.schema.json agents items has model_hint and persona
+    ok 14 - plan-agents.schema.json agents items has model_hint and persona
+      ---
+      duration_ms: 1.232
+      type: 'test'
+      ...
+    1..14
+ok 17 - oxe-retro-health
+  ---
+  duration_ms: 134.1668
+  type: 'suite'
+  ...
+# Subtest: runtime semantics metadata
+    # Subtest: reasoning references exist
+    ok 1 - reasoning references exist
+      ---
+      duration_ms: 1.644
+      type: 'test'
+      ...
+    # Subtest: prompt and command wrappers expose identical runtime metadata per slug
+    ok 2 - prompt and command wrappers expose identical runtime metadata per slug
+      ---
+      duration_ms: 34.5066
+      type: 'test'
+      ...
+    # Subtest: execute e verify wrappers expõem caminho runtime enterprise padrão
+    ok 3 - execute e verify wrappers expõem caminho runtime enterprise padrão
+      ---
+      duration_ms: 0.9767
+      type: 'test'
+      ...
+    1..3
+ok 18 - runtime semantics metadata
+  ---
+  duration_ms: 38.6164
+  type: 'suite'
+  ...
+# Subtest: runtime semantics — funções utilitárias puras
+    # Subtest: RUNTIME_METADATA_KEYS contém exatamente 9 chaves
+    ok 1 - RUNTIME_METADATA_KEYS contém exatamente 9 chaves
+      ---
+      duration_ms: 0.5516
+      type: 'test'
+      ...
+    # Subtest: CONTRACT_VERSION é uma string semver
+    ok 2 - CONTRACT_VERSION é uma string semver
+      ---
+      duration_ms: 0.3688
+      type: 'test'
+      ...
+    # Subtest: REQUIRED_CONTRACT_FIELDS lista os campos obrigatórios esperados
+    ok 3 - REQUIRED_CONTRACT_FIELDS lista os campos obrigatórios esperados
+      ---
+      duration_ms: 0.1831
+      type: 'test'
+      ...
+    # Subtest: slugFromPromptFilename extrai slug corretamente
+    ok 4 - slugFromPromptFilename extrai slug corretamente
+      ---
+      duration_ms: 0.3083
+      type: 'test'
+      ...
+    # Subtest: slugFromCommandFilename extrai slug corretamente
+    ok 5 - slugFromCommandFilename extrai slug corretamente
+      ---
+      duration_ms: 0.4941
+      type: 'test'
+      ...
+    # Subtest: splitFrontmatter separa frontmatter do corpo
+    ok 6 - splitFrontmatter separa frontmatter do corpo
+      ---
+      duration_ms: 0.4255
+      type: 'test'
+      ...
+    # Subtest: splitFrontmatter retorna body vazio sem frontmatter
+    ok 7 - splitFrontmatter retorna body vazio sem frontmatter
+      ---
+      duration_ms: 0.3946
+      type: 'test'
+      ...
+    # Subtest: splitFrontmatter normaliza BOM e CRLF
+    ok 8 - splitFrontmatter normaliza BOM e CRLF
+      ---
+      duration_ms: 0.2024
+      type: 'test'
+      ...
+    # Subtest: parseFrontmatterMap extrai pares chave-valor
+    ok 9 - parseFrontmatterMap extrai pares chave-valor
+      ---
+      duration_ms: 0.2171
+      type: 'test'
+      ...
+    # Subtest: parseFrontmatterMap retorna objeto vazio sem frontmatter
+    ok 10 - parseFrontmatterMap retorna objeto vazio sem frontmatter
+      ---
+      duration_ms: 0.8811
+      type: 'test'
+      ...
+    # Subtest: buildContextPackPaths retorna caminhos corretos para slug
+    ok 11 - buildContextPackPaths retorna caminhos corretos para slug
+      ---
+      duration_ms: 0.1925
+      type: 'test'
+      ...
+    # Subtest: buildContextTiers constrói minimal/standard/full corretamente
+    ok 12 - buildContextTiers constrói minimal/standard/full corretamente
+      ---
+      duration_ms: 0.1997
+      type: 'test'
+      ...
+    # Subtest: buildContextTiers deduplica entradas
+    ok 13 - buildContextTiers deduplica entradas
+      ---
+      duration_ms: 0.156
+      type: 'test'
+      ...
+    # Subtest: pickRuntimeMetadata filtra apenas chaves do schema
+    ok 14 - pickRuntimeMetadata filtra apenas chaves do schema
+      ---
+      duration_ms: 0.2106
+      type: 'test'
+      ...
+    # Subtest: renderRuntimeMetadataLines retorna array de linhas com formato chave: valor
+    ok 15 - renderRuntimeMetadataLines retorna array de linhas com formato chave: valor
+      ---
+      duration_ms: 0.1805
+      type: 'test'
+      ...
+    1..15
+ok 19 - runtime semantics — funções utilitárias puras
+  ---
+  duration_ms: 5.8704
+  type: 'suite'
+  ...
+# Subtest: runtime semantics — contratos e registry
+    # Subtest: getAllWorkflowContracts retorna array não vazio de contratos
+    ok 1 - getAllWorkflowContracts retorna array não vazio de contratos
+      ---
+      duration_ms: 2.8262
+      type: 'test'
+      ...
+    # Subtest: getAllWorkflowContracts retorna contratos em ordem alfabética
+    ok 2 - getAllWorkflowContracts retorna contratos em ordem alfabética
+      ---
+      duration_ms: 1.3072
+      type: 'test'
+      ...
+    # Subtest: getWorkflowContract retorna null para slug desconhecido
+    ok 3 - getWorkflowContract retorna null para slug desconhecido
+      ---
+      duration_ms: 0.1448
+      type: 'test'
+      ...
+    # Subtest: getWorkflowContract retorna contrato completo para slug válido
+    ok 4 - getWorkflowContract retorna contrato completo para slug válido
+      ---
+      duration_ms: 0.6017
+      type: 'test'
+      ...
+    # Subtest: computeSemanticsHash retorna hash hex de 16 chars para slug válido
+    ok 5 - computeSemanticsHash retorna hash hex de 16 chars para slug válido
+      ---
+      duration_ms: 0.8919
+      type: 'test'
+      ...
+    # Subtest: computeSemanticsHash é determinístico para o mesmo slug
+    ok 6 - computeSemanticsHash é determinístico para o mesmo slug
+      ---
+      duration_ms: 0.7757
+      type: 'test'
+      ...
+    # Subtest: computeSemanticsHash retorna null para slug desconhecido
+    ok 7 - computeSemanticsHash retorna null para slug desconhecido
+      ---
+      duration_ms: 0.1349
+      type: 'test'
+      ...
+    # Subtest: getRuntimeMetadataForSlug retorna metadados corretos para slug válido
+    ok 8 - getRuntimeMetadataForSlug retorna metadados corretos para slug válido
+      ---
+      duration_ms: 2.1926
+      type: 'test'
+      ...
+    # Subtest: getRuntimeMetadataForSlug respeita opção de tier
+    ok 9 - getRuntimeMetadataForSlug respeita opção de tier
+      ---
+      duration_ms: 0.9254
+      type: 'test'
+      ...
+    # Subtest: getRuntimeMetadataForSlug retorna fallback para slug desconhecido
+    ok 10 - getRuntimeMetadataForSlug retorna fallback para slug desconhecido
+      ---
+      duration_ms: 0.2203
+      type: 'test'
+      ...
+    # Subtest: validateWorkflowContractsRegistry retorna array vazio para registry válido
+    ok 11 - validateWorkflowContractsRegistry retorna array vazio para registry válido
+      ---
+      duration_ms: 0.884
+      type: 'test'
+      ...
+    # Subtest: validateWorkflowContractsRegistry reporta erros para registry inválido
+    ok 12 - validateWorkflowContractsRegistry reporta erros para registry inválido
+      ---
+      duration_ms: 0.2383
+      type: 'test'
+      ...
+    # Subtest: buildReasoningContractBlock inclui marcadores obrigatórios
+    ok 13 - buildReasoningContractBlock inclui marcadores obrigatórios
+      ---
+      duration_ms: 0.9489
+      type: 'test'
+      ...
+    # Subtest: buildReasoningContractBlock sem includeReference omite referência canónica
+    ok 14 - buildReasoningContractBlock sem includeReference omite referência canónica
+      ---
+      duration_ms: 1.4763
+      type: 'test'
+      ...
+    # Subtest: auditWrapperText detecta drift em wrapper com frontmatter errado
+    ok 15 - auditWrapperText detecta drift em wrapper com frontmatter errado
+      ---
+      duration_ms: 5.9287
+      type: 'test'
+      ...
+    # Subtest: auditRuntimeTargets audita targets do projeto e retorna estrutura válida
+    ok 16 - auditRuntimeTargets audita targets do projeto e retorna estrutura válida
+      ---
+      duration_ms: 55.0533
+      type: 'test'
+      ...
+    1..16
+ok 20 - runtime semantics — contratos e registry
+  ---
+  duration_ms: 75.3531
+  type: 'suite'
+  ...
+# Subtest: scripts
+    # Subtest: oxe-assets-scan exits 0
+    ok 1 - oxe-assets-scan exits 0
+      ---
+      duration_ms: 183.7706
+      type: 'test'
+      ...
+    # Subtest: oxe-assets-scan exits 1 when OpenAI-style pattern in fixture tree
+    ok 2 - oxe-assets-scan exits 1 when OpenAI-style pattern in fixture tree
+      ---
+      duration_ms: 138.3048
+      type: 'test'
+      ...
+    # Subtest: sync-cursor-from-prompts exits 0
+    ok 3 - sync-cursor-from-prompts exits 0
+      ---
+      duration_ms: 384.8244
+      type: 'test'
+      ...
+    # Subtest: sync-cursor-from-prompts fails without .github/prompts
+    ok 4 - sync-cursor-from-prompts fails without .github/prompts
+      ---
+      duration_ms: 208.3134
+      type: 'test'
+      ...
+    # Subtest: sync-cursor-from-prompts uses default description when frontmatter omits description
+    ok 5 - sync-cursor-from-prompts uses default description when frontmatter omits description
+      ---
+      duration_ms: 131.8664
+      type: 'test'
+      ...
+    # Subtest: sync-cursor-from-prompts handles CRLF frontmatter in prompts
+    ok 6 - sync-cursor-from-prompts handles CRLF frontmatter in prompts
+      ---
+      duration_ms: 190.1625
+      type: 'test'
+      ...
+    # Subtest: sync-runtime-metadata adds shared metadata and reasoning contract to prompts and commands
+    ok 7 - sync-runtime-metadata adds shared metadata and reasoning contract to prompts and commands
+      ---
+      duration_ms: 189.7719
+      type: 'test'
+      ...
+    # Subtest: release-doctor writes manifest and blocks incomplete release project
+    ok 8 - release-doctor writes manifest and blocks incomplete release project
+      ---
+      duration_ms: 519.0069
+      type: 'test'
+      ...
+    1..8
+ok 21 - scripts
+  ---
+  duration_ms: 1948.3868
+  type: 'suite'
+  ...
+# Subtest: oxe-sdk edge
+    # Subtest: readPackageMeta bad json falls back
+    ok 1 - readPackageMeta bad json falls back
+      ---
+      duration_ms: 5.4488
+      type: 'test'
+      ...
+    # Subtest: readMinNode without engines
+    ok 2 - readMinNode without engines
+      ---
+      duration_ms: 3.2202
+      type: 'test'
+      ...
+    # Subtest: readMinNode engines.node without >= digit pattern returns 18
+    ok 3 - readMinNode engines.node without >= digit pattern returns 18
+      ---
+      duration_ms: 2.7779
+      type: 'test'
+      ...
+    # Subtest: readMinNode parses engines.node with >= major
+    ok 4 - readMinNode parses engines.node with >= major
+      ---
+      duration_ms: 6.0637
+      type: 'test'
+      ...
+    # Subtest: runDoctorChecks NODE_VERSION error
+    ok 5 - runDoctorChecks NODE_VERSION error
+      ---
+      duration_ms: 2175.1438
+      type: 'test'
+      ...
+    # Subtest: runDoctorChecks PACKAGE_WORKFLOWS_MISSING
+    ok 6 - runDoctorChecks PACKAGE_WORKFLOWS_MISSING
+      ---
+      duration_ms: 21.638
+      type: 'test'
+      ...
+    # Subtest: runDoctorChecks config parseError and unknown keys
+    ok 7 - runDoctorChecks config parseError and unknown keys
+      ---
+      duration_ms: 2211.8506
+      type: 'test'
+      ...
+    # Subtest: runDoctorChecks WORKFLOW_DRIFT when project misses packaged workflow
+    ok 8 - runDoctorChecks WORKFLOW_DRIFT when project misses packaged workflow
+      ---
+      duration_ms: 30.3928
+      type: 'test'
+      ...
+    # Subtest: runDoctorChecks WORKFLOW_EXTRA warns on extra project workflows
+    ok 9 - runDoctorChecks WORKFLOW_EXTRA warns on extra project workflows
+      ---
+      duration_ms: 645.8406
+      type: 'test'
+      ...
+    # Subtest: runDoctorChecks forwards workflowShape warnings
+    ok 10 - runDoctorChecks forwards workflowShape warnings
+      ---
+      duration_ms: 2762.8253
+      type: 'test'
+      ...
+    # Subtest: runDoctorChecks applies workflowLintOptions to shape validator
+    ok 11 - runDoctorChecks applies workflowLintOptions to shape validator
+      ---
+      duration_ms: 2260.1117
+      type: 'test'
+      ...
+    1..11
+ok 22 - oxe-sdk edge
+  ---
+  duration_ms: 10127.9567
+  type: 'suite'
+  ...
+# Subtest: oxe-sdk
+    # Subtest: exports version and name
+    ok 1 - exports version and name
+      ---
+      duration_ms: 1.7454
+      type: 'test'
+      ...
+    # Subtest: workflows.resolveWorkflowsDir prefers .oxe/workflows
+    ok 2 - workflows.resolveWorkflowsDir prefers .oxe/workflows
+      ---
+      duration_ms: 6.8584
+      type: 'test'
+      ...
+    # Subtest: workflows.diffWorkflows detects missing files
+    ok 3 - workflows.diffWorkflows detects missing files
+      ---
+      duration_ms: 10.5436
+      type: 'test'
+      ...
+    # Subtest: install.resolveOptionsFromConfig applies core profile
+    ok 4 - install.resolveOptionsFromConfig applies core profile
+      ---
+      duration_ms: 6.5013
+      type: 'test'
+      ...
+    # Subtest: runDoctorChecks ok after oxe-only install
+    ok 5 - runDoctorChecks ok after oxe-only install
+      ---
+      duration_ms: 2177.5096
+      type: 'test'
+      ...
+    # Subtest: runDoctorChecks omits workflowShape when includeWorkflowLint is false
+    ok 6 - runDoctorChecks omits workflowShape when includeWorkflowLint is false
+      ---
+      duration_ms: 2025.947
+      type: 'test'
+      ...
+    # Subtest: workflows.validateWorkflowShapes warns when objective missing
+    ok 7 - workflows.validateWorkflowShapes warns when objective missing
+      ---
+      duration_ms: 4.9006
+      type: 'test'
+      ...
+    # Subtest: workflows.validateWorkflowShapes clean for package oxe/workflows
+    ok 8 - workflows.validateWorkflowShapes clean for package oxe/workflows
+      ---
+      duration_ms: 11.5304
+      type: 'test'
+      ...
+    # Subtest: runDoctorChecks fails without workflows
+    ok 9 - runDoctorChecks fails without workflows
+      ---
+      duration_ms: 28.6949
+      type: 'test'
+      ...
+    # Subtest: health.validateConfigShape re-export
+    ok 10 - health.validateConfigShape re-export
+      ---
+      duration_ms: 0.6601
+      type: 'test'
+      ...
+    # Subtest: health re-exports Copilot integration helpers
+    ok 11 - health re-exports Copilot integration helpers
+      ---
+      duration_ms: 0.2596
+      type: 'test'
+      ...
+    # Subtest: parseState extracts runId from STATE.md blueprint section
+    ok 12 - parseState extracts runId from STATE.md blueprint section
+      ---
+      duration_ms: 2.5985
+      type: 'test'
+      ...
+    # Subtest: parseState extracts lifecycleStatus from STATE.md
+    ok 13 - parseState extracts lifecycleStatus from STATE.md
+      ---
+      duration_ms: 1.8017
+      type: 'test'
+      ...
+    # Subtest: parseState returns null runId/lifecycleStatus when absent
+    ok 14 - parseState returns null runId/lifecycleStatus when absent
+      ---
+      duration_ms: 0.1988
+      type: 'test'
+      ...
+    # Subtest: parseState extracts loopStatus from STATE.md
+    ok 15 - parseState extracts loopStatus from STATE.md
+      ---
+      duration_ms: 0.1447
+      type: 'test'
+      ...
+    # Subtest: parseState returns null loopStatus when absent
+    ok 16 - parseState returns null loopStatus when absent
+      ---
+      duration_ms: 0.144
+      type: 'test'
+      ...
+    # Subtest: buildHealthReport returns staleLessons with stale and days fields
+    ok 17 - buildHealthReport returns staleLessons with stale and days fields
+      ---
+      duration_ms: 40.8906
+      type: 'test'
+      ...
+    # Subtest: operational SDK exports run state and memory helpers
+    ok 18 - operational SDK exports run state and memory helpers
+      ---
+      duration_ms: 24.0287
+      type: 'test'
+      ...
+    # Subtest: operational SDK exposes canonical runtime bridge helpers
+    ok 19 - operational SDK exposes canonical runtime bridge helpers
+      ---
+      duration_ms: 0.3132
+      type: 'test'
+      ...
+    # Subtest: azure SDK namespace is exposed
+    ok 20 - azure SDK namespace is exposed
+      ---
+      duration_ms: 0.1833
+      type: 'test'
+      ...
+    # Subtest: context and runtime semantics SDK namespaces are exposed
+    ok 21 - context and runtime semantics SDK namespaces are exposed
+      ---
+      duration_ms: 0.2063
+      type: 'test'
+      ...
+    # Subtest: release SDK namespace is exposed
+    ok 22 - release SDK namespace is exposed
+      ---
+      duration_ms: 0.1445
+      type: 'test'
+      ...
+    1..22
+ok 23 - oxe-sdk
+  ---
+  duration_ms: 4349.3532
+  type: 'suite'
+  ...
+# Subtest: globToRegex
+    # Subtest: *.env matches .env and prefixed variants
+    ok 1 - *.env matches .env and prefixed variants
+      ---
+      duration_ms: 1.3835
+      type: 'test'
+      ...
+    # Subtest: *.env does not match .env.local
+    ok 2 - *.env does not match .env.local
+      ---
+      duration_ms: 0.233
+      type: 'test'
+      ...
+    # Subtest: **/.env* matches nested .env files
+    ok 3 - **/.env* matches nested .env files
+      ---
+      duration_ms: 0.2926
+      type: 'test'
+      ...
+    # Subtest: scripts/deploy.sh matches exact path
+    ok 4 - scripts/deploy.sh matches exact path
+      ---
+      duration_ms: 0.2153
+      type: 'test'
+      ...
+    # Subtest: ? matches single non-separator char
+    ok 5 - ? matches single non-separator char
+      ---
+      duration_ms: 0.3
+      type: 'test'
+      ...
+    # Subtest: ** matches deep nesting
+    ok 6 - ** matches deep nesting
+      ---
+      duration_ms: 0.2359
+      type: 'test'
+      ...
+    1..6
+ok 24 - globToRegex
+  ---
+  duration_ms: 4.2309
+  type: 'suite'
+  ...
+# Subtest: checkFilePermission
+    # Subtest: first-match wins — .env denied
+    ok 1 - first-match wins — .env denied
+      ---
+      duration_ms: 0.6888
+      type: 'test'
+      ...
+    # Subtest: production.env denied
+    ok 2 - production.env denied
+      ---
+      duration_ms: 0.4107
+      type: 'test'
+      ...
+    # Subtest: scripts/deploy.sh needs approval in execute scope
+    ok 3 - scripts/deploy.sh needs approval in execute scope
+      ---
+      duration_ms: 0.7193
+      type: 'test'
+      ...
+    # Subtest: scripts/deploy.sh allowed in apply scope (scope mismatch)
+    ok 4 - scripts/deploy.sh allowed in apply scope (scope mismatch)
+      ---
+      duration_ms: 0.6097
+      type: 'test'
+      ...
+    # Subtest: src/app.ts allowed
+    ok 5 - src/app.ts allowed
+      ---
+      duration_ms: 0.2012
+      type: 'test'
+      ...
+    # Subtest: sem regras → allow
+    ok 6 - sem regras → allow
+      ---
+      duration_ms: 0.11
+      type: 'test'
+      ...
+    # Subtest: sem match → allow por default
+    ok 7 - sem match → allow por default
+      ---
+      duration_ms: 0.188
+      type: 'test'
+      ...
+    # Subtest: backslash Windows normalizado
+    ok 8 - backslash Windows normalizado
+      ---
+      duration_ms: 0.1478
+      type: 'test'
+      ...
+    1..8
+ok 25 - checkFilePermission
+  ---
+  duration_ms: 3.6025
+  type: 'suite'
+  ...
+# Subtest: checkPermissions
+    # Subtest: classifica denied, needsApproval e allowed
+    ok 1 - classifica denied, needsApproval e allowed
+      ---
+      duration_ms: 1.2591
+      type: 'test'
+      ...
+    # Subtest: lista vazia retorna tudo vazio
+    ok 2 - lista vazia retorna tudo vazio
+      ---
+      duration_ms: 0.1516
+      type: 'test'
+      ...
+    # Subtest: sem regras → tudo allowed
+    ok 3 - sem regras → tudo allowed
+      ---
+      duration_ms: 0.128
+      type: 'test'
+      ...
+    1..3
+ok 26 - checkPermissions
+  ---
+  duration_ms: 1.6986
+  type: 'suite'
+  ...
+# Subtest: checkPathSafety
+    # Subtest: path dentro do projeto é seguro
+    ok 1 - path dentro do projeto é seguro
+      ---
+      duration_ms: 1.0501
+      type: 'test'
+      ...
+    # Subtest: path traversal é bloqueado
+    ok 2 - path traversal é bloqueado
+      ---
+      duration_ms: 0.2654
+      type: 'test'
+      ...
+    # Subtest: caminho em node_modules é negado
+    ok 3 - caminho em node_modules é negado
+      ---
+      duration_ms: 0.1911
+      type: 'test'
+      ...
+    # Subtest: arquivo .env é negado por padrão de segredo
+    ok 4 - arquivo .env é negado por padrão de segredo
+      ---
+      duration_ms: 0.6094
+      type: 'test'
+      ...
+    # Subtest: arquivo relativo dentro do projeto é seguro
+    ok 5 - arquivo relativo dentro do projeto é seguro
+      ---
+      duration_ms: 0.5483
+      type: 'test'
+      ...
+    1..5
+ok 27 - checkPathSafety
+  ---
+  duration_ms: 2.8812
+  type: 'suite'
+  ...
+# Subtest: scanFileForSecrets
+    # Subtest: retorna vazio para arquivo inexistente
+    ok 1 - retorna vazio para arquivo inexistente
+      ---
+      duration_ms: 0.5122
+      type: 'test'
+      ...
+    # Subtest: detecta JWT em arquivo
+    ok 2 - detecta JWT em arquivo
+      ---
+      duration_ms: 16.3368
+      type: 'test'
+      ...
+    # Subtest: retorna vazio para arquivo limpo
+    ok 3 - retorna vazio para arquivo limpo
+      ---
+      duration_ms: 11.1259
+      type: 'test'
+      ...
+    1..3
+ok 28 - scanFileForSecrets
+  ---
+  duration_ms: 28.2167
+  type: 'suite'
+  ...
+# Subtest: scanDirForSecretFiles
+    # Subtest: encontra arquivos com nomes sensíveis
+    ok 1 - encontra arquivos com nomes sensíveis
+      ---
+      duration_ms: 3.021
+      type: 'test'
+      ...
+    # Subtest: varre recursivamente e encontra segredos aninhados
+    ok 2 - varre recursivamente e encontra segredos aninhados
+      ---
+      duration_ms: 2.3466
+      type: 'test'
+      ...
+    # Subtest: retorna vazio para diretório sem arquivos sensíveis
+    ok 3 - retorna vazio para diretório sem arquivos sensíveis
+      ---
+      duration_ms: 1.4985
+      type: 'test'
+      ...
+    # Subtest: trata graciosamente diretório inacessível
+    ok 4 - trata graciosamente diretório inacessível
+      ---
+      duration_ms: 4.5306
+      type: 'test'
+      ...
+    1..4
+ok 29 - scanDirForSecretFiles
+  ---
+  duration_ms: 11.7128
+  type: 'suite'
+  ...
+# Subtest: validatePlanPaths
+    # Subtest: retorna ok:true para caminhos seguros
+    ok 1 - retorna ok:true para caminhos seguros
+      ---
+      duration_ms: 0.5359
+      type: 'test'
+      ...
+    # Subtest: retorna ok:false para caminhos inseguros
+    ok 2 - retorna ok:false para caminhos inseguros
+      ---
+      duration_ms: 0.2084
+      type: 'test'
+      ...
+    # Subtest: lista vazia retorna ok:true
+    ok 3 - lista vazia retorna ok:true
+      ---
+      duration_ms: 0.1278
+      type: 'test'
+      ...
+    1..3
+ok 30 - validatePlanPaths
+  ---
+  duration_ms: 1.052
+  type: 'suite'
+  ...
+# Subtest: oxe-workflows edge
+    # Subtest: validateWorkflowShapes read failure via directory named .md
+    ok 1 - validateWorkflowShapes read failure via directory named .md
+      ---
+      duration_ms: 5.2244
+      type: 'test'
+      ...
+    # Subtest: validateWorkflowShapes partial objective tags
+    ok 2 - validateWorkflowShapes partial objective tags
+      ---
+      duration_ms: 9.2312
+      type: 'test'
+      ...
+    # Subtest: validateWorkflowShapes objective close before open
+    ok 3 - validateWorkflowShapes objective close before open
+      ---
+      duration_ms: 4.6534
+      type: 'test'
+      ...
+    # Subtest: validateWorkflowShapes oversize file
+    ok 4 - validateWorkflowShapes oversize file
+      ---
+      duration_ms: 11.0686
+      type: 'test'
+      ...
+    # Subtest: validateWorkflowShapes missing dir
+    ok 5 - validateWorkflowShapes missing dir
+      ---
+      duration_ms: 0.3674
+      type: 'test'
+      ...
+    # Subtest: validateWorkflowShapes help.md without output warns
+    ok 6 - validateWorkflowShapes help.md without output warns
+      ---
+      duration_ms: 11.6858
+      type: 'test'
+      ...
+    # Subtest: core workflows declare pack-first context consumption
+    ok 7 - core workflows declare pack-first context consumption
+      ---
+      duration_ms: 1.9053
+      type: 'test'
+      ...
+    # Subtest: execute e verify preferem runtime enterprise como caminho padrão
+    ok 8 - execute e verify preferem runtime enterprise como caminho padrão
+      ---
+      duration_ms: 1.1771
+      type: 'test'
+      ...
+    1..8
+ok 31 - oxe-workflows edge
+  ---
+  duration_ms: 47.2199
+  type: 'suite'
+  ...
+1..31
+# tests 403
+# suites 31
+# pass 402
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 34533.3024
