@@ -44,6 +44,10 @@ oxe_semantics_hash: afa0ff72a118df58
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canônico:** `oxe/workflows/update.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro. Verifica versão no npm, reinstala com --force se necessário e valida com doctor. `$ARGUMENTS` = flags opcionais.
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/update.md ou oxe/workflows/update.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+Verifica versão no npm, reinstala com --force se necessário e valida com doctor. `$ARGUMENTS` = flags opcionais.

@@ -44,6 +44,10 @@ oxe_semantics_hash: a9461a0a5c59fa8d
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canónico:** `oxe/workflows/forensics.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro na raiz do repositório. Usa `$ARGUMENTS` como contexto do sintoma.
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/forensics.md ou oxe/workflows/forensics.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+Usa `$ARGUMENTS` como contexto do sintoma.

@@ -44,6 +44,10 @@ oxe_semantics_hash: 262a73b77bf68d6d
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canónico:** `oxe/workflows/ui-review.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro na raiz do repositório. Usa `$ARGUMENTS` como âmbito da revisão.
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/ui-review.md ou oxe/workflows/ui-review.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+Usa `$ARGUMENTS` como âmbito da revisão.

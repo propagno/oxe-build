@@ -44,6 +44,10 @@ oxe_semantics_hash: 5a2fb7b4988f3de6
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canônico:** `oxe/workflows/retro.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro. Lê VERIFY.md, FORENSICS.md, SUMMARY.md para sintetizar 3–5 lições prescritivas. `$ARGUMENTS` = contexto extra opcional.
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/retro.md ou oxe/workflows/retro.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+Lê VERIFY.md, FORENSICS.md, SUMMARY.md para sintetizar 3–5 lições prescritivas. `$ARGUMENTS` = contexto extra opcional.

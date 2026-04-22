@@ -251,6 +251,13 @@ function buildUninstallFooter(u) {
   const bullets = [];
   const p = u.dryRun ? '[simulação] ' : '';
   const rm = u.dryRun ? 'Seriam removidos' : 'Removidos';
+  const granularAgents = [
+    u.agentOpenCode ? 'OpenCode' : null,
+    u.agentGemini ? 'Gemini' : null,
+    u.agentCodex ? 'Codex' : null,
+    u.agentWindsurf ? 'Windsurf' : null,
+    u.agentAntigravity ? 'Antigravity' : null,
+  ].filter(Boolean);
   if (u.cursor) bullets.push(`${p}${rm} artefatos OXE em ~/.cursor (comandos e regras).`);
   if (u.copilot) {
     bullets.push(`${p}${rm} prompt files OXE em .github/prompts/ e o bloco OXE em .github/copilot-instructions.md.`);
@@ -258,12 +265,16 @@ function buildUninstallFooter(u) {
   if (u.copilotLegacyClean) {
     bullets.push(`${p}${rm} apenas o legado global do Copilot VS Code em ~/.copilot/ (prompts oxe-* e bloco OXE global).`);
   }
-  if (u.copilotCli || u.allAgents) {
-    bullets.push(`${p}${rm} comandos oxe-* em ~/.claude/commands e ~/.copilot/commands.`);
+  if (u.copilotCli) {
+    bullets.push(`${p}${rm} comandos oxe/oxe-* em ~/.claude/commands e ~/.copilot/commands.`);
     bullets.push(`${p}${rm} skills OXE (marcadas oxe-cc) em ~/.copilot/skills/oxe*/.`);
+  }
+  if (u.allAgents) {
     bullets.push(
       `${p}${rm} extensões multi-agente marcadas oxe-cc (OpenCode, Gemini TOML, Windsurf workflows, Codex prompts/skills, Antigravity), se existirem.`
     );
+  } else if (granularAgents.length) {
+    bullets.push(`${p}${rm} apenas as integrações selecionadas: ${granularAgents.join(', ')}.`);
   }
   if (u.ideLocal) {
     bullets.push(
@@ -290,6 +301,23 @@ function buildUninstallFooter(u) {
 /** @param {InstallOpts} o */
 function anyGranularAgent(o) {
   return !!(o.agentOpenCode || o.agentGemini || o.agentCodex || o.agentWindsurf || o.agentAntigravity);
+}
+
+/** @param {UninstallOpts} o */
+function anyGranularUninstallAgent(o) {
+  return !!(o.agentOpenCode || o.agentGemini || o.agentCodex || o.agentWindsurf || o.agentAntigravity);
+}
+
+/** @param {UninstallOpts} u */
+function buildAgentCleanupTargets(u) {
+  if (u.allAgents || !anyGranularUninstallAgent(u)) return null;
+  return {
+    opencode: Boolean(u.agentOpenCode),
+    gemini: Boolean(u.agentGemini),
+    windsurf: Boolean(u.agentWindsurf),
+    codex: Boolean(u.agentCodex),
+    antigravity: Boolean(u.agentAntigravity),
+  };
 }
 
 /** @param {InstallOpts} o */
@@ -2320,10 +2348,12 @@ ${green}uninstall${reset} (remove OXE da pasta do usuário + pastas de workflows
   --copilot-vscode                       alias explícito de --copilot
   --copilot-legacy-clean                 limpa só o legado antigo do Copilot VS Code em ~/.copilot/
   --all-agents                           também remove ficheiros multi-plataforma (com --copilot-cli implícito)
+  --opencode / --gemini / --codex / --windsurf / --antigravity
+                                         remove só esse agente multi-runtime
   --ide-local                            remove integrações IDE neste repositório (.cursor, .github, .claude, .copilot, …)
   --ide-only                             não apagar .oxe/workflows, oxe/, etc. no projeto
   --global-cli, -g                       também executa npm uninstall -g oxe-cc
-  --config-dir <caminho>                 com exatamente uma flag IDE acima (não combina com --ide-local nem com --copilot)
+  --config-dir <caminho>                 com exatamente uma flag IDE acima (não combina com --ide-local, --copilot nem agentes granulares)
   --dry-run
   --dir <pasta>                          raiz do projeto (padrão: diretório atual)
 
@@ -2720,8 +2750,8 @@ function runInstall(opts) {
     }
     trackFile(runtimeSemanticsManifestPath(opts));
     if (opts.copilotCli || opts.allAgents) {
-      addTracked(path.join(installClaudeBase(opts), 'commands'), (n) => n.startsWith('oxe-') && n.endsWith('.md'));
-      addTracked(path.join(cpCliHome, 'commands'), (n) => n.startsWith('oxe-') && n.endsWith('.md'));
+      addTracked(path.join(installClaudeBase(opts), 'commands'), (n) => oxeAgentInstall.isOxeCommandMarkdownName(n));
+      addTracked(path.join(cpCliHome, 'commands'), (n) => oxeAgentInstall.isOxeCommandMarkdownName(n));
       const skRoot = path.join(cpCliHome, 'skills');
       if (fs.existsSync(skRoot)) {
         for (const sub of fs.readdirSync(skRoot, { withFileTypes: true })) {
@@ -2739,7 +2769,7 @@ function runInstall(opts) {
     }
     if (opts.agentOpenCode || opts.allAgents) {
       for (const d of agentPaths.opencodeCommandDirs) {
-        addTracked(d, (n) => n.startsWith('oxe-') && n.endsWith('.md'));
+        addTracked(d, (n) => oxeAgentInstall.isOxeCommandMarkdownName(n));
       }
     }
     if (opts.agentGemini || opts.allAgents) {
@@ -2758,7 +2788,7 @@ function runInstall(opts) {
     if (opts.agentCodex || opts.allAgents) {
       const cxPrompts = agentPaths.codexPromptsDir;
       if (fs.existsSync(cxPrompts)) {
-        addTracked(cxPrompts, (n) => n.startsWith('oxe-') && n.endsWith('.md'));
+        addTracked(cxPrompts, (n) => oxeAgentInstall.isOxeCommandMarkdownName(n));
       }
     }
     if (opts.agentAntigravity || opts.allAgents) {
@@ -2803,7 +2833,7 @@ function runInstall(opts) {
   console.log(`  ${c ? green : ''}✓${c ? reset : ''} Instalação concluída com sucesso.\n`);
 }
 
-/** @typedef {{ help: boolean, dryRun: boolean, cursor: boolean, copilot: boolean, copilotCli: boolean, allAgents: boolean, globalCli: boolean, ideLocal: boolean, ideExplicit: boolean, noProject: boolean, copilotLegacyClean: boolean, dir: string, explicitConfigDir: string | null, parseError: boolean, unknownFlag: string, conflictFlags: string }} UninstallOpts */
+/** @typedef {{ help: boolean, dryRun: boolean, cursor: boolean, copilot: boolean, copilotCli: boolean, allAgents: boolean, agentOpenCode: boolean, agentGemini: boolean, agentCodex: boolean, agentWindsurf: boolean, agentAntigravity: boolean, globalCli: boolean, ideLocal: boolean, ideExplicit: boolean, noProject: boolean, copilotLegacyClean: boolean, dir: string, explicitConfigDir: string | null, parseError: boolean, unknownFlag: string, conflictFlags: string }} UninstallOpts */
 
 /**
  * @param {UninstallOpts} u
@@ -2819,7 +2849,7 @@ function uninstallLocalIdeFromProject(u, removedPaths) {
     const cmdDir = path.join(proj, '.cursor', 'commands');
     if (fs.existsSync(cmdDir)) {
       for (const name of fs.readdirSync(cmdDir)) {
-        if (name.startsWith('oxe-') && name.endsWith('.md')) {
+        if (oxeAgentInstall.isOxeCommandMarkdownName(name)) {
           const p = path.join(cmdDir, name);
           unlinkQuiet(p, u);
           track(p);
@@ -2862,7 +2892,7 @@ function uninstallLocalIdeFromProject(u, removedPaths) {
       const cmdDir = path.join(base, 'commands');
       if (!fs.existsSync(cmdDir)) continue;
       for (const name of fs.readdirSync(cmdDir)) {
-        if (name.startsWith('oxe-') && name.endsWith('.md')) {
+        if (oxeAgentInstall.isOxeCommandMarkdownName(name)) {
           const p = path.join(cmdDir, name);
           unlinkQuiet(p, u);
           track(p);
@@ -2893,16 +2923,20 @@ function uninstallLocalIdeFromProject(u, removedPaths) {
     }
   }
 
-  if (u.copilotCli || u.allAgents) {
+  if (u.allAgents || anyGranularUninstallAgent(u)) {
     const localPaths = oxeAgentInstall.buildAgentInstallPaths(false, proj);
+    const cleanupTargets = buildAgentCleanupTargets(u);
     if (!u.dryRun) {
-      oxeAgentInstall.cleanupMarkedUnifiedArtifacts(u, localPaths);
+      oxeAgentInstall.cleanupMarkedUnifiedArtifacts({ dryRun: u.dryRun, targets: cleanupTargets }, localPaths);
     } else {
-      console.log(`${dim}agents${reset}  (dry-run) limparia marcadores oxe-cc em pastas locais do projeto (OpenCode, Gemini, …)`);
+      const label = cleanupTargets
+        ? Object.keys(cleanupTargets).filter((key) => cleanupTargets[key]).join(', ')
+        : 'OpenCode, Gemini, Windsurf, Codex, Antigravity';
+      console.log(`${dim}agents${reset}  (dry-run) limparia marcadores oxe-cc em pastas locais do projeto (${label})`);
     }
   }
 
-  if (u.cursor || u.copilot || u.copilotCli || u.allAgents) {
+  if (u.cursor || u.copilot || u.copilotCli || u.allAgents || anyGranularUninstallAgent(u)) {
     const runtimeManifest = path.join(proj, '.oxe', 'install', 'runtime-semantics.json');
     unlinkQuiet(runtimeManifest, u);
     track(runtimeManifest);
@@ -2922,6 +2956,11 @@ function parseUninstallArgs(argv) {
     copilot: false,
     copilotCli: false,
     allAgents: false,
+    agentOpenCode: false,
+    agentGemini: false,
+    agentCodex: false,
+    agentWindsurf: false,
+    agentAntigravity: false,
     globalCli: false,
     ideLocal: false,
     ideExplicit: false,
@@ -2949,11 +2988,31 @@ function parseUninstallArgs(argv) {
     } else if (a === '--copilot-cli') {
       out.copilotCli = true;
       out.ideExplicit = true;
+    } else if (a === '--opencode') {
+      out.agentOpenCode = true;
+      out.ideExplicit = true;
+    } else if (a === '--gemini') {
+      out.agentGemini = true;
+      out.ideExplicit = true;
+    } else if (a === '--codex') {
+      out.agentCodex = true;
+      out.ideExplicit = true;
+    } else if (a === '--windsurf') {
+      out.agentWindsurf = true;
+      out.ideExplicit = true;
+    } else if (a === '--antigravity') {
+      out.agentAntigravity = true;
+      out.ideExplicit = true;
     } else if (a === '--copilot-legacy-clean') {
       out.copilotLegacyClean = true;
     } else if (a === '--all-agents') {
       out.allAgents = true;
       out.copilotCli = true;
+      out.agentOpenCode = true;
+      out.agentGemini = true;
+      out.agentCodex = true;
+      out.agentWindsurf = true;
+      out.agentAntigravity = true;
       out.ideExplicit = true;
     } else if (a === '--global-cli' || a === '-g') {
       out.globalCli = true;
@@ -2972,6 +3031,7 @@ function parseUninstallArgs(argv) {
     out.cursor = true;
     out.copilot = true;
     out.copilotCli = true;
+    out.allAgents = true;
   } else if (out.copilotLegacyClean && !out.ideExplicit && !out.noProject) {
     out.noProject = true;
   }
@@ -2980,6 +3040,8 @@ function parseUninstallArgs(argv) {
       out.conflictFlags = '--config-dir não combina com --ide-local';
     } else if (out.allAgents) {
       out.conflictFlags = '--config-dir não combina com --all-agents';
+    } else if (anyGranularUninstallAgent(out)) {
+      out.conflictFlags = '--config-dir só é suportado com exatamente um entre --cursor, --copilot e --copilot-cli';
     } else if (out.copilot && !out.cursor && !out.copilotCli) {
       out.conflictFlags =
         '--config-dir não combina com --copilot porque o GitHub Copilot no VS Code usa .github/ no workspace';
@@ -3074,6 +3136,11 @@ function runUninstall(u) {
     copilot: u.copilot,
     copilotCli: u.copilotCli,
     allAgents: u.allAgents,
+    agentOpenCode: u.agentOpenCode,
+    agentGemini: u.agentGemini,
+    agentCodex: u.agentCodex,
+    agentWindsurf: u.agentWindsurf,
+    agentAntigravity: u.agentAntigravity,
     vscode: false,
     commands: false,
     agents: false,
@@ -3114,7 +3181,7 @@ function runUninstall(u) {
     const ruleDir = path.join(base, 'rules');
     if (fs.existsSync(cmdDir)) {
       for (const name of fs.readdirSync(cmdDir)) {
-        if (name.startsWith('oxe-') && name.endsWith('.md')) {
+        if (oxeAgentInstall.isOxeCommandMarkdownName(name)) {
           const p = path.join(cmdDir, name);
           unlinkQuiet(p, u);
           removedPaths.push(p);
@@ -3160,7 +3227,7 @@ function runUninstall(u) {
       const cmdDir = path.join(base, 'commands');
       if (!fs.existsSync(cmdDir)) continue;
       for (const name of fs.readdirSync(cmdDir)) {
-        if (name.startsWith('oxe-') && name.endsWith('.md')) {
+        if (oxeAgentInstall.isOxeCommandMarkdownName(name)) {
           const p = path.join(cmdDir, name);
           unlinkQuiet(p, u);
           removedPaths.push(p);
@@ -3189,10 +3256,66 @@ function runUninstall(u) {
         removedPaths.push(skillFile);
       }
     }
+  }
+
+  if (u.allAgents || anyGranularUninstallAgent(u)) {
+    const cleanupTargets = buildAgentCleanupTargets(u);
     if (u.dryRun) {
-      console.log(`${dim}agents${reset}  (dry-run) limparia OpenCode, Gemini TOML, Windsurf, Codex, Antigravity (marcadores oxe-cc)`);
+      const label = cleanupTargets
+        ? Object.keys(cleanupTargets).filter((key) => cleanupTargets[key]).join(', ')
+        : 'OpenCode, Gemini, Windsurf, Codex, Antigravity';
+      console.log(`${dim}agents${reset}  (dry-run) limparia ${label || 'OpenCode, Gemini, Windsurf, Codex, Antigravity'} (marcadores oxe-cc)`);
     } else {
-      oxeAgentInstall.cleanupMarkedUnifiedArtifacts(u);
+      oxeAgentInstall.cleanupMarkedUnifiedArtifacts({ dryRun: u.dryRun, targets: cleanupTargets });
+    }
+    const globalAgentPaths = oxeAgentInstall.buildAgentInstallPaths(true, u.dir);
+    const shouldTrack = (name) => !cleanupTargets || cleanupTargets[name] !== false;
+    const pushRemoved = (filePath) => {
+      if (removedPaths.indexOf(filePath) === -1) removedPaths.push(filePath);
+    };
+    if (shouldTrack('opencode')) {
+      for (const dir of globalAgentPaths.opencodeCommandDirs) {
+        if (!fs.existsSync(dir)) continue;
+        for (const name of fs.readdirSync(dir)) {
+          if (!oxeAgentInstall.isOxeCommandMarkdownName(name)) continue;
+          pushRemoved(path.join(dir, name));
+        }
+      }
+    }
+    if (shouldTrack('gemini')) {
+      pushRemoved(path.join(globalAgentPaths.geminiCommandsBase, 'oxe.toml'));
+      const geminiSub = path.join(globalAgentPaths.geminiCommandsBase, 'oxe');
+      if (fs.existsSync(geminiSub)) {
+        for (const name of fs.readdirSync(geminiSub)) {
+          if (name.endsWith('.toml')) pushRemoved(path.join(geminiSub, name));
+        }
+      }
+    }
+    if (shouldTrack('windsurf') && fs.existsSync(globalAgentPaths.windsurfWorkflowsDir)) {
+      for (const name of fs.readdirSync(globalAgentPaths.windsurfWorkflowsDir)) {
+        if (!oxeAgentInstall.isOxeCommandMarkdownName(name)) continue;
+        pushRemoved(path.join(globalAgentPaths.windsurfWorkflowsDir, name));
+      }
+    }
+    if (shouldTrack('codex')) {
+      if (fs.existsSync(globalAgentPaths.codexPromptsDir)) {
+        for (const name of fs.readdirSync(globalAgentPaths.codexPromptsDir)) {
+          if (!oxeAgentInstall.isOxeCommandMarkdownName(name)) continue;
+          pushRemoved(path.join(globalAgentPaths.codexPromptsDir, name));
+        }
+      }
+      if (fs.existsSync(globalAgentPaths.codexAgentsSkillsRoot)) {
+        for (const entry of fs.readdirSync(globalAgentPaths.codexAgentsSkillsRoot, { withFileTypes: true })) {
+          if (!entry.isDirectory() || !/^oxe($|-)/.test(entry.name)) continue;
+          pushRemoved(path.join(globalAgentPaths.codexAgentsSkillsRoot, entry.name, 'SKILL.md'));
+        }
+      }
+    }
+    if (shouldTrack('antigravity') && fs.existsSync(globalAgentPaths.antigravitySkillsRoot)) {
+      for (const entry of fs.readdirSync(globalAgentPaths.antigravitySkillsRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory() || !/^oxe($|-)/.test(entry.name)) continue;
+        pushRemoved(path.join(globalAgentPaths.antigravitySkillsRoot, entry.name, 'SKILL.md'));
+      }
     }
   }
 
@@ -3227,7 +3350,7 @@ function runUninstall(u) {
     }
   }
 
-  if (!u.dryRun && (u.cursor || u.copilot || u.copilotCli || u.copilotLegacyClean)) {
+  if (!u.dryRun && (u.cursor || u.copilot || u.copilotCli || u.copilotLegacyClean || anyGranularUninstallAgent(u))) {
     const prev = oxeManifest.loadFileManifest(home);
     const next = { ...prev };
     for (const p of removedPaths) delete next[p];

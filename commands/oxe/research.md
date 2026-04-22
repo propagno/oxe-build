@@ -44,6 +44,10 @@ oxe_semantics_hash: 6c3005eec893f1b7
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canónico:** `oxe/workflows/research.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro na raiz do repositório. Usa `$ARGUMENTS` como âmbito e perguntas.
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/research.md ou oxe/workflows/research.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+Usa `$ARGUMENTS` como âmbito e perguntas.

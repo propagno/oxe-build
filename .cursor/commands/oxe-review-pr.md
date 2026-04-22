@@ -38,8 +38,10 @@ OXE — Revisão de PR (link GitHub, branches ou SHAs)
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE review-pr**. Lê e aplica **integralmente**:
+<!-- oxe-workflow-resolution:start -->
 
-`.oxe/workflows/review-pr.md` (na raiz do repositório em contexto)
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/review-pr.md ou oxe/workflows/review-pr.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
 
 **Exemplos de entrada:** cola o URL da PR (`https://github.com/org/repo/pull/10`, com ou sem `/files`); ou `org/repo#10`; ou **base** e **head** (branches/tags/SHAs). Sem refs, o agente infere (ex.: `main` vs branch atual).

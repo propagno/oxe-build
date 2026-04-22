@@ -39,6 +39,10 @@ oxe_semantics_hash: e292f28e042fbaa5
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canónico:** `oxe/workflows/help.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro (inclui Cursor vs Copilot).
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/help.md ou oxe/workflows/help.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+

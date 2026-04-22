@@ -44,6 +44,10 @@ oxe_semantics_hash: 3cfb16d4930b8a59
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canónico:** `oxe/workflows/skill.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro na raiz do repositório em que estás a trabalhar. Usa `$ARGUMENTS` como subcomando ou invocação de skill.
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/skill.md ou oxe/workflows/skill.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+Usa `$ARGUMENTS` como subcomando ou invocação de skill.

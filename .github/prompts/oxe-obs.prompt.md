@@ -38,8 +38,10 @@ oxe_semantics_hash: ef2faec6af3a4964
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE obs** no repositório atual. Lê e aplica **integralmente** o ficheiro no workspace:
+<!-- oxe-workflow-resolution:start -->
 
-`.oxe/workflows/obs.md`
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/obs.md ou oxe/workflows/obs.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
 
 Usa o texto adicional desta mensagem como a observação a registrar.

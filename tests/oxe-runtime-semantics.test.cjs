@@ -81,6 +81,46 @@ describe('runtime semantics metadata', () => {
         command.text.includes('Regra pack-first'),
         `${commandName} deve declarar a regra pack-first`
       );
+      assert.ok(
+        prompt.text.includes('oxe-workflow-resolution:start'),
+        `${promptName} deve incluir bloco de resolução do workflow`
+      );
+      assert.ok(
+        command.text.includes('oxe-workflow-resolution:start'),
+        `${commandName} deve incluir bloco de resolução do workflow`
+      );
+      assert.ok(
+        prompt.text.includes(`.oxe/workflows/${slug}.md`) && prompt.text.includes(`oxe/workflows/${slug}.md`),
+        `${promptName} deve instruir fallback entre layout nested e flat`
+      );
+      assert.ok(
+        command.text.includes(`.oxe/workflows/${slug}.md`) && command.text.includes(`oxe/workflows/${slug}.md`),
+        `${commandName} deve instruir fallback entre layout nested e flat`
+      );
+      assert.ok(
+        /subir diretórios até encontrar/i.test(prompt.text),
+        `${promptName} deve instruir resolução da raiz do repositório`
+      );
+      assert.ok(
+        /subir diretórios até encontrar/i.test(command.text),
+        `${commandName} deve instruir resolução da raiz do repositório`
+      );
+      assert.ok(
+        !/\*\*Workflow can[óôo]nic[oa]:\*\*/i.test(prompt.text),
+        `${promptName} não deve reintroduzir âncora de workflow fixa`
+      );
+      assert.ok(
+        !/\*\*Workflow can[óôo]nic[oa]:\*\*/i.test(command.text),
+        `${commandName} não deve reintroduzir âncora de workflow fixa`
+      );
+      assert.ok(
+        !/raiz do projeto atual \(CWD\)|na raiz do repositório em contexto|na raiz do repositório em que estás a trabalhar/i.test(prompt.text),
+        `${promptName} não deve reintroduzir dependência fixa de CWD/raiz`
+      );
+      assert.ok(
+        !/raiz do projeto atual \(CWD\)|na raiz do repositório em contexto|na raiz do repositório em que estás a trabalhar/i.test(command.text),
+        `${commandName} não deve reintroduzir dependência fixa de CWD/raiz`
+      );
     }
   });
 

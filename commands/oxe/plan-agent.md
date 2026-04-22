@@ -43,6 +43,10 @@ oxe_semantics_hash: a8f516ec17603d26
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canónico:** `oxe/workflows/plan-agent.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro. Se `$ARGUMENTS` contiver `--replan`, seguir a variante de replanejamento descrita no workflow.
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/plan-agent.md ou oxe/workflows/plan-agent.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+Se `$ARGUMENTS` contiver `--replan`, seguir a variante de replanejamento descrita no workflow.

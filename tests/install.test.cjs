@@ -157,9 +157,11 @@ describe('oxe-cc CLI', () => {
     assert.strictEqual(status, 0);
     const xdg = path.join(fakeHome, '.config');
     assert.ok(fs.existsSync(path.join(xdg, 'opencode', 'commands', 'oxe-scan.md')));
+    assert.ok(fs.existsSync(path.join(xdg, 'opencode', 'commands', 'oxe.md')));
     assert.ok(fs.existsSync(path.join(fakeHome, '.gemini', 'commands', 'oxe.toml')));
     assert.ok(fs.existsSync(path.join(fakeHome, '.gemini', 'commands', 'oxe', 'scan.toml')));
     assert.ok(fs.existsSync(path.join(fakeHome, '.agents', 'skills', 'oxe-scan', 'SKILL.md')));
+    assert.ok(fs.existsSync(path.join(fakeHome, '.codex', 'prompts', 'oxe.md')));
     assert.ok(fs.existsSync(path.join(fakeHome, '.codeium', 'windsurf', 'global_workflows', 'oxe-scan.md')));
     assert.ok(fs.existsSync(path.join(fakeHome, '.gemini', 'antigravity', 'skills', 'oxe-scan', 'SKILL.md')));
   });
@@ -169,7 +171,9 @@ describe('oxe-cc CLI', () => {
     const { status, fakeHome } = run(['--copilot-cli', '--no-init-oxe', '--no-global-cli', '-l', dir]);
     assert.strictEqual(status, 0);
     assert.ok(fs.existsSync(path.join(fakeHome, '.claude', 'commands', 'oxe-scan.md')));
+    assert.ok(fs.existsSync(path.join(fakeHome, '.claude', 'commands', 'oxe.md')));
     assert.ok(fs.existsSync(path.join(fakeHome, '.copilot', 'commands', 'oxe-scan.md')));
+    assert.ok(fs.existsSync(path.join(fakeHome, '.copilot', 'commands', 'oxe.md')));
     const skillScan = path.join(fakeHome, '.copilot', 'skills', 'oxe-scan', 'SKILL.md');
     const skillOxe = path.join(fakeHome, '.copilot', 'skills', 'oxe', 'SKILL.md');
     assert.ok(fs.existsSync(skillScan), 'Copilot CLI espera skills em ~/.copilot/skills/');
@@ -204,7 +208,9 @@ describe('oxe-cc CLI', () => {
     });
     assert.strictEqual(u.status, 0, u.stderr + u.stdout);
     assert.ok(!fs.existsSync(path.join(fakeHome, '.claude', 'commands', 'oxe-scan.md')));
+    assert.ok(!fs.existsSync(path.join(fakeHome, '.claude', 'commands', 'oxe.md')));
     assert.ok(!fs.existsSync(path.join(fakeHome, '.copilot', 'commands', 'oxe-scan.md')));
+    assert.ok(!fs.existsSync(path.join(fakeHome, '.copilot', 'commands', 'oxe.md')));
     assert.ok(!fs.existsSync(path.join(fakeHome, '.copilot', 'skills', 'oxe-scan', 'SKILL.md')));
     assert.ok(!fs.existsSync(path.join(fakeHome, '.copilot', 'skills', 'oxe', 'SKILL.md')));
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'workflows', 'scan.md')));
@@ -322,6 +328,7 @@ describe('oxe-cc CLI', () => {
     );
     assert.strictEqual(status, 0);
     assert.ok(fs.existsSync(path.join(dir, '.cursor', 'commands', 'oxe-scan.md')));
+    assert.ok(fs.existsSync(path.join(dir, '.cursor', 'commands', 'oxe.md')));
   });
 
   test('--ide-global and --ide-local together exits 1', () => {
@@ -339,6 +346,7 @@ describe('oxe-cc CLI', () => {
     );
     assert.strictEqual(status, 0);
     assert.ok(fs.existsSync(path.join(fakeHome, '.config', 'opencode', 'commands', 'oxe-scan.md')));
+    assert.ok(fs.existsSync(path.join(fakeHome, '.config', 'opencode', 'commands', 'oxe.md')));
     assert.ok(!fs.existsSync(path.join(fakeHome, '.gemini', 'commands', 'oxe.toml')));
   });
 
@@ -374,6 +382,40 @@ describe('oxe-cc CLI', () => {
     assert.strictEqual(status, 0);
     assert.ok(fs.existsSync(path.join(fakeHome, '.gemini', 'commands', 'oxe.toml')));
     assert.ok(!fs.existsSync(path.join(fakeHome, '.config', 'opencode', 'commands', 'oxe-scan.md')));
+  });
+
+  test('uninstall --gemini removes only Gemini artifacts', () => {
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-home-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    const env = isolatedHomeEnv(fakeHome, { OXE_NO_PROMPT: '1' });
+    assert.strictEqual(
+      spawnSync(process.execPath, [CLI, '--gemini', '--opencode', '--no-init-oxe', '--no-global-cli', '-l', dir], {
+        cwd: REPO_ROOT,
+        env,
+        encoding: 'utf8',
+      }).status,
+      0
+    );
+    const geminiRoot = path.join(fakeHome, '.gemini', 'commands', 'oxe.toml');
+    const openCodeRoot = path.join(fakeHome, '.config', 'opencode', 'commands', 'oxe.md');
+    assert.ok(fs.existsSync(geminiRoot));
+    assert.ok(fs.existsSync(openCodeRoot));
+    const uninstall = spawnSync(process.execPath, [CLI, 'uninstall', '--gemini', '--ide-only', '--dir', dir], {
+      cwd: REPO_ROOT,
+      env,
+      encoding: 'utf8',
+    });
+    assert.strictEqual(uninstall.status, 0, uninstall.stderr + uninstall.stdout);
+    assert.ok(!fs.existsSync(geminiRoot));
+    assert.ok(fs.existsSync(openCodeRoot));
+  });
+
+  test('uninstall help lists granular agent flags', () => {
+    const { status, stdout, stderr } = run(['uninstall', '--help']);
+    assert.strictEqual(status, 0, stderr);
+    assert.match(stdout, /--opencode/);
+    assert.match(stdout, /--gemini/);
+    assert.match(stdout, /--codex/);
   });
 
   test('install --ide-local with --config-dir exits 1', () => {
@@ -413,7 +455,9 @@ describe('oxe-cc CLI', () => {
       0
     );
     const cmd = path.join(dir, '.cursor', 'commands', 'oxe-scan.md');
+    const rootCmd = path.join(dir, '.cursor', 'commands', 'oxe.md');
     assert.ok(fs.existsSync(cmd));
+    assert.ok(fs.existsSync(rootCmd));
     const u = spawnSync(process.execPath, [CLI, 'uninstall', '--ide-local', '--ide-only', '--dir', dir], {
       cwd: REPO_ROOT,
       env,
@@ -421,6 +465,7 @@ describe('oxe-cc CLI', () => {
     });
     assert.strictEqual(u.status, 0, u.stderr + u.stdout);
     assert.ok(!fs.existsSync(cmd));
+    assert.ok(!fs.existsSync(rootCmd));
   });
 
   test('uninstall --copilot removes workspace assets and leaves legacy global until explicit clean', () => {

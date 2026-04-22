@@ -42,10 +42,14 @@ oxe_semantics_hash: 4af3aaa3d86aabef
 
 <!-- oxe-reasoning-contract:end -->
 
+<!-- oxe-workflow-resolution:start -->
+
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/ask.md ou oxe/workflows/ask.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
 > **[DEPRECATED v1.1.0]** Este comando foi incorporado por `/oxe`.
 > Use: `/oxe "sua pergunta"` para perguntas situacionais.
 > Este alias continuará funcionando nesta versão por compatibilidade.
 
-**Workflow canónico:** `oxe/workflows/ask.md`
-
-Execute integralmente esse ficheiro na raiz do repositório em que estás a trabalhar. Usa o texto em `$ARGUMENTS` como pergunta e foco.
+Usa o texto em `$ARGUMENTS` como pergunta e foco.

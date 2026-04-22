@@ -38,8 +38,10 @@ oxe_semantics_hash: ebbadaede8629bea
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE loop** no repositório atual. Lê e aplica **integralmente**:
+<!-- oxe-workflow-resolution:start -->
 
-`.oxe/workflows/loop.md`
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/loop.md ou oxe/workflows/loop.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
 
 `$ARGUMENTS` = onda alvo e máximo de tentativas (ex.: `onda 2 max:5`). Pré-requisito: `.oxe/PLAN.md`.

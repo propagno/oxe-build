@@ -44,6 +44,10 @@ oxe_semantics_hash: 4a8d0d23c56065a7
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canônico:** `oxe/workflows/oxe.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro. `$ARGUMENTS`: vazio → próximo passo; "help" → trilha principal (6 comandos + 2 avançados); pergunta situacional → situação atual com base nos artefatos; texto de ação → roteamento inteligente para o workflow correto.
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/oxe.md ou oxe/workflows/oxe.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+`$ARGUMENTS`: vazio → próximo passo; "help" → trilha principal (6 comandos + 2 avançados); pergunta situacional → situação atual com base nos artefatos; texto de ação → roteamento inteligente para o workflow correto.

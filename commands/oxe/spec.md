@@ -42,6 +42,10 @@ oxe_semantics_hash: eea8766eab635c97
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canónico:** `oxe/workflows/spec.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro. Usa `$ARGUMENTS` e o contexto da conversa como entrada do utilizador (texto ou `@ficheiro`).
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/spec.md ou oxe/workflows/spec.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+Usa `$ARGUMENTS` e o contexto da conversa como entrada do utilizador (texto ou `@ficheiro`).

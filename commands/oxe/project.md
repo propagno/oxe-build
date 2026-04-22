@@ -44,6 +44,10 @@ oxe_semantics_hash: 7f329aace340b533
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canônico:** `oxe/workflows/project.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro. `$ARGUMENTS` = subcomando. Sem argumento: mostra status atual (milestone ativo, workstreams, último checkpoint).
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/project.md ou oxe/workflows/project.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+`$ARGUMENTS` = subcomando. Sem argumento: mostra status atual (milestone ativo, workstreams, último checkpoint).

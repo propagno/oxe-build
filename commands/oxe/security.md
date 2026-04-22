@@ -44,6 +44,10 @@ oxe_semantics_hash: 0addcd00818ddee2
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canônico:** `oxe/workflows/security.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro na raiz do repositório. Lê `STACK.md` para determinar categorias OWASP pertinentes. `$ARGUMENTS` = foco opcional.
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/security.md ou oxe/workflows/security.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+Lê `STACK.md` para determinar categorias OWASP pertinentes. `$ARGUMENTS` = foco opcional.

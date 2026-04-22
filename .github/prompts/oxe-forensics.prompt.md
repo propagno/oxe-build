@@ -38,8 +38,10 @@ oxe_semantics_hash: a9461a0a5c59fa8d
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE forensics** no repositório atual. Lê e aplica **integralmente**:
+<!-- oxe-workflow-resolution:start -->
 
-`.oxe/workflows/forensics.md`
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/forensics.md ou oxe/workflows/forensics.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
 
 Usa o texto adicional desta mensagem como contexto do sintoma (falha de verify, doctor, estado incoerente).

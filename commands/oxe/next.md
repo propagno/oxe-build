@@ -40,6 +40,10 @@ oxe_semantics_hash: 5767434e94769645
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canónico:** `oxe/workflows/next.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro.
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/next.md ou oxe/workflows/next.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+

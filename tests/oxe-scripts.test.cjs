@@ -119,12 +119,12 @@ describe('scripts', () => {
     fs.mkdirSync(commandDir, { recursive: true });
     fs.writeFileSync(
       path.join(promptDir, 'oxe-demo.prompt.md'),
-      '---\nname: oxe-demo\nagent: agent\ndescription: Demo\n---\n\nCorpo prompt.\n',
+      '---\nname: oxe-demo\nagent: agent\ndescription: Demo\n---\n\n<!-- oxe-workflow-resolution:start -->\nbloco antigo\n<!-- oxe-workflow-resolution:end -->\n\n**Workflow canónico:** `oxe/workflows/demo.md`\n\nExecuta o workflow **OXE demo**.\n\n`.oxe/workflows/demo.md`\n\nCorpo prompt. Lê `.oxe/workflows/demo.md` na raiz do projeto atual (CWD).\n',
       'utf8'
     );
     fs.writeFileSync(
       path.join(commandDir, 'demo.md'),
-      '---\nname: oxe:demo\ndescription: Demo\nallowed-tools:\n  - Read\n---\n\nCorpo comando.\n',
+      '---\nname: oxe:demo\ndescription: Demo\nallowed-tools:\n  - Read\n---\n\n**Workflow canónico:** `oxe/workflows/demo.md`\n\nExecute integralmente esse ficheiro na raiz do repositório em que estás a trabalhar. Usa `$ARGUMENTS` como foco.\n',
       'utf8'
     );
     const r = spawnSync(process.execPath, [path.join(REPO_ROOT, 'scripts', 'sync-runtime-metadata.cjs')], {
@@ -139,6 +139,12 @@ describe('scripts', () => {
     assert.match(commandOut, /oxe_output_contract:\s*routing/);
     assert.match(promptOut, /oxe-reasoning-contract:start/);
     assert.match(commandOut, /Referência canónica/);
+    assert.match(promptOut, /oxe-workflow-resolution:start/);
+    assert.match(commandOut, /oxe-workflow-resolution:start/);
+    assert.doesNotMatch(promptOut, /\*\*Workflow can[óôo]nic[oa]:\*\*/i);
+    assert.doesNotMatch(commandOut, /\*\*Workflow can[óôo]nic[oa]:\*\*/i);
+    assert.doesNotMatch(promptOut, /raiz do projeto atual \(CWD\)/i);
+    assert.doesNotMatch(commandOut, /na raiz do repositório em que estás a trabalhar/i);
     const manifestPath = path.join(dir, '.oxe', 'install', 'runtime-semantics.json');
     assert.strictEqual(fs.existsSync(manifestPath), true);
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));

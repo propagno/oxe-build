@@ -38,8 +38,10 @@ oxe_semantics_hash: 7f329aace340b533
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE project** no repositório atual. Lê e aplica **integralmente**:
+<!-- oxe-workflow-resolution:start -->
 
-`.oxe/workflows/project.md`
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/project.md ou oxe/workflows/project.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
 
 `$ARGUMENTS` = subcomando: `milestone new|complete|status|audit`, `workstream new|switch|list|close <nome>`, `checkpoint [slug]`, ou vazio para status atual.

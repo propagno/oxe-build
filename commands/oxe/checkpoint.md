@@ -44,6 +44,10 @@ oxe_semantics_hash: 536e476616b47060
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canónico:** `oxe/workflows/checkpoint.md`
+<!-- oxe-workflow-resolution:start -->
+
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/checkpoint.md ou oxe/workflows/checkpoint.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
 
 Execute integralmente. `$ARGUMENTS` = slug obrigatório + nota opcional.
