@@ -41,8 +41,10 @@ OXE — Valida implementação (.oxe/VERIFY.md)
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE verify**. Lê e aplica **integralmente**:
+<!-- oxe-workflow-resolution:start -->
 
-`.oxe/workflows/verify.md` (na raiz do repositório em contexto)
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/verify.md ou oxe/workflows/verify.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
 
 Se o utilizador indicar uma tarefa `Tn`, restringe a verificação a essa tarefa.

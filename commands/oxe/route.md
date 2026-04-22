@@ -39,6 +39,10 @@ oxe_semantics_hash: 17b5078ffaad8644
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canónico:** `oxe/workflows/route.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro. Usa `$ARGUMENTS` como pedido a classificar (ver tabela Router em `help.md`).
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/route.md ou oxe/workflows/route.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+Usa `$ARGUMENTS` como pedido a classificar (ver tabela Router em `help.md`).

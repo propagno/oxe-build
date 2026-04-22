@@ -38,8 +38,10 @@ oxe_semantics_hash: 7809d830a5f5ff4a
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE plan**. Lê e aplica **integralmente**:
+<!-- oxe-workflow-resolution:start -->
 
-`.oxe/workflows/plan.md` (na raiz do repositório em contexto)
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/plan.md ou oxe/workflows/plan.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
 
 Se o utilizador pedir replanejamento, trata como `--replan` conforme o workflow.

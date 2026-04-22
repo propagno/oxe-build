@@ -38,8 +38,12 @@ oxe_semantics_hash: 4a8d0d23c56065a7
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE** (entrada universal) no repositório atual. Lê e aplica **integralmente**:
+<!-- oxe-workflow-resolution:start -->
 
-`.oxe/workflows/oxe.md`
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/oxe.md ou oxe/workflows/oxe.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+Executa o workflow **OXE** (entrada universal) no repositório atual. Lê e aplica **integralmente**:
 
 `$ARGUMENTS`: vazio → próximo passo; texto → roteamento; "help" → trilha principal + trilha avançada.

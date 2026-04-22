@@ -37,8 +37,10 @@ oxe_semantics_hash: ad10e8dc6f83b4fe
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE compact** no repositório atual. Lê e aplica **integralmente**:
+<!-- oxe-workflow-resolution:start -->
 
-`.oxe/workflows/compact.md`
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/compact.md ou oxe/workflows/compact.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
 
 Atualiza os **sete** mapas em **`.oxe/codebase/`** (incremental ou bootstrap como scan), gera **`.oxe/CODEBASE-DELTA.md`** e **`.oxe/RESUME.md`**. Texto extra do utilizador: foco ou decisões/bloqueios a incluir no RESUME.

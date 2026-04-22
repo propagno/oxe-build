@@ -49,6 +49,42 @@ function stripReasoningContract(body) {
   );
 }
 
+function stripWorkflowResolution(body) {
+  return body.replace(
+    /<!-- oxe-workflow-resolution:start -->[\s\S]*?<!-- oxe-workflow-resolution:end -->\s*/g,
+    ''
+  );
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripLegacyWorkflowInstructions(body, slug) {
+  const workflowPattern = escapeRegExp(slug);
+  const workflowLine = new RegExp(
+    `^\\*\\*Workflow can[óôo]nic[oa]:\\*\\*\\s*\\\`(?:\\.oxe|oxe)/workflows/${workflowPattern}\\.md\\\`\\s*$`,
+    'gmi'
+  );
+  const workflowPathLine = new RegExp(
+    `^\\\`(?:\\.oxe|oxe)/workflows/${workflowPattern}\\.md\\\`(?:\\s*\\([^\\n]*\\))?\\s*$`,
+    'gmi'
+  );
+  const workflowTail = new RegExp(
+    `\\s*L[eê]\\s+\\\`(?:\\.oxe|oxe)/workflows/${workflowPattern}\\.md\\\`[^\\n]*`,
+    'gi'
+  );
+
+  return body
+    .replace(workflowLine, '')
+    .replace(workflowPathLine, '')
+    .replace(/^Execut[ae] integralmente esse ficheiro[^.]*\.\s*/gmi, '')
+    .replace(/^Executa o workflow \*\*OXE [^*]+\*\*.*$/gmi, '')
+    .replace(workflowTail, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trimStart();
+}
+
 function syncOne(fullPath, slug) {
   const raw = fs.readFileSync(fullPath, 'utf8');
   const { frontmatter, body } = splitFrontmatter(raw);
@@ -62,9 +98,10 @@ function syncOne(fullPath, slug) {
     .join('\n')
     .trimEnd();
   const updatedFront = `${cleanedFront}\n${runtimeSemantics.renderRuntimeMetadataLines(meta).join('\n')}`.trim();
-  const cleanedBody = stripReasoningContract(body).trimStart();
+  const cleanedBody = stripLegacyWorkflowInstructions(stripWorkflowResolution(stripReasoningContract(body)), slug).trimStart();
   const contract = runtimeSemantics.buildReasoningContractBlock(meta);
-  const next = `---\n${updatedFront}\n---\n\n${contract}\n\n${cleanedBody.replace(/\n+$/g, '')}\n`;
+  const resolution = runtimeSemantics.buildWorkflowResolutionBlock(slug);
+  const next = `---\n${updatedFront}\n---\n\n${contract}\n\n${resolution}\n\n${cleanedBody.replace(/\n+$/g, '')}\n`;
   fs.writeFileSync(fullPath, next, 'utf8');
 }
 

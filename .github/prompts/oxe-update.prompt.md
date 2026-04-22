@@ -37,8 +37,10 @@ oxe_semantics_hash: afa0ff72a118df58
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE update**. Lê e segue **integralmente**:
+<!-- oxe-workflow-resolution:start -->
 
-`.oxe/workflows/update.md` (na raiz do repositório em contexto; ou `..oxe/workflows/update.md` se a instalação aninhou os workflows)
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/update.md ou oxe/workflows/update.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
 
 Na prática: na raiz do projeto, correr **`npx oxe-cc update --check`**, depois (se aplicável) **`npx oxe-cc update`** ou **`npx oxe-cc update --if-newer`**, e por fim **`npx oxe-cc doctor`**.

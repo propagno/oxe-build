@@ -36,8 +36,12 @@ oxe_semantics_hash: ad10e8dc6f83b4fe
 
 <!-- oxe-reasoning-contract:end -->
 
-# OXE — compact
+<!-- oxe-workflow-resolution:start -->
 
-**Workflow canónico:** `oxe/workflows/compact.md`
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/compact.md ou oxe/workflows/compact.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+# OXE — compact
 
 Execute integralmente. Atualiza **`.oxe/codebase/*.md`**, **`.oxe/CODEBASE-DELTA.md`** e **`.oxe/RESUME.md`**. `$ARGUMENTS` = foco opcional (ex. módulo) ou notas para Decisões/Bloqueios no RESUME.

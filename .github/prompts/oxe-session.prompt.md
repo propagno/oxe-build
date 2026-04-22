@@ -38,8 +38,10 @@ oxe_semantics_hash: df52e7982aeabf21
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE session** no repositório atual. Lê e aplica **integralmente** o ficheiro no workspace:
+<!-- oxe-workflow-resolution:start -->
 
-`.oxe/workflows/session.md`
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/session.md ou oxe/workflows/session.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
 
-Usa o texto adicional desta mensagem como foco do subcomando: `new <nome>`, `list`, `switch <id>`, `resume <id>`, `status`, `close` ou `migrate <nome>`. Lê `.oxe/workflows/session.md` na raiz do projeto atual (CWD).
+<!-- oxe-workflow-resolution:end -->
+
+Usa o texto adicional desta mensagem como foco do subcomando: `new <nome>`, `list`, `switch <id>`, `resume <id>`, `status`, `close` ou `migrate <nome>`.

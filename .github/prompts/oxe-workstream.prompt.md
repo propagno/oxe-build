@@ -38,8 +38,10 @@ oxe_semantics_hash: 380bd0a3f3620845
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE workstream** no repositório atual. Lê e aplica **integralmente** o ficheiro no workspace:
+<!-- oxe-workflow-resolution:start -->
 
-`.oxe/workflows/workstream.md`
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/workstream.md ou oxe/workflows/workstream.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
 
 Usa o texto adicional desta mensagem como subcomando e contexto.

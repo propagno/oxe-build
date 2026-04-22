@@ -261,6 +261,16 @@ function buildContextPackPaths(slug) {
   };
 }
 
+function buildWorkflowResolutionBlock(slug) {
+  return [
+    '<!-- oxe-workflow-resolution:start -->',
+    '',
+    `**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/${slug}.md ou oxe/workflows/${slug}.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.`,
+    '',
+    '<!-- oxe-workflow-resolution:end -->',
+  ].join('\n');
+}
+
 function buildReasoningContractBlock(meta, options = {}) {
   const includeReference = options.includeReference !== false;
   const slug = String(meta.oxe_workflow_slug || options.slug || '');
@@ -340,6 +350,7 @@ function auditWrapperText(slug, raw) {
   const frontmatter = parseFrontmatterMap(raw);
   const expected = getRuntimeMetadataForSlug(slug);
   const expectedPack = buildContextPackPaths(slug);
+  const workflowResolution = buildWorkflowResolutionBlock(slug);
   const issues = [];
   for (const key of RUNTIME_METADATA_KEYS) {
     if ((frontmatter[key] || '') !== (expected[key] || '')) {
@@ -357,6 +368,38 @@ function auditWrapperText(slug, raw) {
   }
   if (!String(raw || '').includes('Regra pack-first')) {
     issues.push({ key: 'oxe_pack_first_rule', expected: 'present', actual: 'missing' });
+  }
+  if (!String(raw || '').includes('<!-- oxe-workflow-resolution:start -->')) {
+    issues.push({ key: 'oxe_workflow_resolution_block', expected: 'present', actual: 'missing' });
+  } else {
+    if (!String(raw || '').includes(`.oxe/workflows/${slug}.md`) || !String(raw || '').includes(`oxe/workflows/${slug}.md`)) {
+      issues.push({
+        key: 'oxe_workflow_resolution_paths',
+        expected: workflowResolution,
+        actual: 'missing_path_reference',
+      });
+    }
+    if (!/subir diretórios até encontrar/i.test(String(raw || ''))) {
+      issues.push({
+        key: 'oxe_workflow_resolution_walkup',
+        expected: 'subir diretórios até encontrar',
+        actual: 'missing',
+      });
+    }
+  }
+  if (/\*\*Workflow can[óôo]nic[oa]:\*\*/i.test(String(raw || ''))) {
+    issues.push({
+      key: 'legacy_workflow_anchor',
+      expected: 'absent',
+      actual: 'present',
+    });
+  }
+  if (/raiz do projeto atual \(CWD\)|na raiz do repositório em contexto|na raiz do repositório em que estás a trabalhar/i.test(String(raw || ''))) {
+    issues.push({
+      key: 'legacy_fixed_root_instruction',
+      expected: 'absent',
+      actual: 'present',
+    });
   }
   return {
     slug,
@@ -457,6 +500,7 @@ module.exports = {
   buildContextPackPaths,
   buildContextTiers,
   buildReasoningContractBlock,
+  buildWorkflowResolutionBlock,
   computeSemanticsHash,
   getAllWorkflowContracts,
   getRuntimeMetadataForSlug,

@@ -41,8 +41,10 @@ OXE — Executar plano (solo ou com agentes): escolha Completo (1 sessão) | Por
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE execute** no repositório atual. Lê e aplica **integralmente** o ficheiro no workspace:
+<!-- oxe-workflow-resolution:start -->
 
-`.oxe/workflows/execute.md`
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/execute.md ou oxe/workflows/execute.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
 
-Usa o texto adicional desta mensagem como foco: `A` (Completo), `B` (Por onda), `C` (Por tarefa), `onda N`, `Tn`, ou confirmação de progresso. Lê `.oxe/workflows/execute.md` na raiz do projeto atual (CWD).
+<!-- oxe-workflow-resolution:end -->
+
+Usa o texto adicional desta mensagem como foco: `A` (Completo), `B` (Por onda), `C` (Por tarefa), `onda N`, `Tn`, ou confirmação de progresso.

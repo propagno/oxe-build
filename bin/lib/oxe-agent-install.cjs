@@ -16,6 +16,11 @@ const runtimeSemantics = require('./oxe-runtime-semantics.cjs');
 const OXE_MANAGED_HTML = '<!-- oxe-cc managed -->';
 const OXE_MANAGED_TOML = '# oxe-cc managed';
 
+/** @param {string} name */
+function isOxeCommandMarkdownName(name) {
+  return (name === 'oxe.md' || name.startsWith('oxe-')) && name.endsWith('.md');
+}
+
 function expandTilde(p) {
   if (typeof p !== 'string') return p;
   if (p === '~' || p.startsWith(`~${path.sep}`)) return path.join(os.homedir(), p.slice(2));
@@ -227,7 +232,7 @@ function installOpenCodeCommands(cCmdSrc, paths, opts, pathRewriteNested, logOmi
   if (!fs.existsSync(cCmdSrc)) return;
   for (const destDir of paths.opencodeCommandDirs) {
     for (const name of fs.readdirSync(cCmdSrc)) {
-      if (!name.startsWith('oxe-') || !name.endsWith('.md')) continue;
+      if (!isOxeCommandMarkdownName(name)) continue;
       const src = path.join(cCmdSrc, name);
       const dest = path.join(destDir, name);
       if (opts.dryRun) {
@@ -349,7 +354,7 @@ function installCodexPrompts(cCmdSrc, paths, opts, pathRewriteNested, logOmitido
   if (!fs.existsSync(cCmdSrc)) return;
   const destDir = paths.codexPromptsDir;
   for (const name of fs.readdirSync(cCmdSrc)) {
-    if (!name.startsWith('oxe-') || !name.endsWith('.md')) continue;
+    if (!isOxeCommandMarkdownName(name)) continue;
     const src = path.join(cCmdSrc, name);
     const dest = path.join(destDir, name);
     if (opts.dryRun) {
@@ -387,6 +392,8 @@ function installCodexPrompts(cCmdSrc, paths, opts, pathRewriteNested, logOmitido
  */
 function cleanupMarkedUnifiedArtifacts(u, paths) {
   const p = paths || buildAgentInstallPaths(true, process.cwd());
+  const targets = u && typeof u === 'object' && u.targets && typeof u.targets === 'object' ? u.targets : null;
+  const shouldClean = (name) => !targets || targets[name] !== false;
 
   const unlinkQuiet = (filePath) => {
     if (!fs.existsSync(filePath)) return;
@@ -416,89 +423,101 @@ function cleanupMarkedUnifiedArtifacts(u, paths) {
     }
   };
 
-  for (const dir of p.opencodeCommandDirs) {
-    if (!fs.existsSync(dir)) continue;
-    for (const name of fs.readdirSync(dir)) {
-      if (!name.startsWith('oxe-') || !name.endsWith('.md')) continue;
-      const filePath = path.join(dir, name);
-      let txt = '';
-      try {
-        txt = fs.readFileSync(filePath, 'utf8');
-      } catch {
-        continue;
+  if (shouldClean('opencode')) {
+    for (const dir of p.opencodeCommandDirs) {
+      if (!fs.existsSync(dir)) continue;
+      for (const name of fs.readdirSync(dir)) {
+        if (!isOxeCommandMarkdownName(name)) continue;
+        const filePath = path.join(dir, name);
+        let txt = '';
+        try {
+          txt = fs.readFileSync(filePath, 'utf8');
+        } catch {
+          continue;
+        }
+        if (txt.includes(OXE_MANAGED_HTML)) unlinkQuiet(filePath);
       }
-      if (txt.includes(OXE_MANAGED_HTML)) unlinkQuiet(filePath);
     }
   }
 
-  const gBase = p.geminiCommandsBase;
-  const oxeToml = path.join(gBase, 'oxe.toml');
-  if (fs.existsSync(oxeToml)) {
-    try {
-      if (fs.readFileSync(oxeToml, 'utf8').includes(OXE_MANAGED_TOML)) unlinkQuiet(oxeToml);
-    } catch {
-      /* ignore */
-    }
-  }
-  const oxeSub = path.join(gBase, 'oxe');
-  if (fs.existsSync(oxeSub)) {
-    for (const name of fs.readdirSync(oxeSub)) {
-      if (!name.endsWith('.toml')) continue;
-      const filePath = path.join(oxeSub, name);
+  if (shouldClean('gemini')) {
+    const gBase = p.geminiCommandsBase;
+    const oxeToml = path.join(gBase, 'oxe.toml');
+    if (fs.existsSync(oxeToml)) {
       try {
-        if (fs.readFileSync(filePath, 'utf8').includes(OXE_MANAGED_TOML)) unlinkQuiet(filePath);
+        if (fs.readFileSync(oxeToml, 'utf8').includes(OXE_MANAGED_TOML)) unlinkQuiet(oxeToml);
       } catch {
         /* ignore */
       }
     }
-    try {
-      if (!u.dryRun && fs.existsSync(oxeSub) && fs.readdirSync(oxeSub).length === 0) fs.rmdirSync(oxeSub);
-    } catch {
-      /* ignore */
-    }
-  }
-
-  const wfDir = p.windsurfWorkflowsDir;
-  if (fs.existsSync(wfDir)) {
-    for (const name of fs.readdirSync(wfDir)) {
-      if (name !== 'oxe.md' && !(name.startsWith('oxe-') && name.endsWith('.md'))) continue;
-      const filePath = path.join(wfDir, name);
+    const oxeSub = path.join(gBase, 'oxe');
+    if (fs.existsSync(oxeSub)) {
+      for (const name of fs.readdirSync(oxeSub)) {
+        if (!name.endsWith('.toml')) continue;
+        const filePath = path.join(oxeSub, name);
+        try {
+          if (fs.readFileSync(filePath, 'utf8').includes(OXE_MANAGED_TOML)) unlinkQuiet(filePath);
+        } catch {
+          /* ignore */
+        }
+      }
       try {
-        if (fs.readFileSync(filePath, 'utf8').includes(OXE_MANAGED_HTML)) unlinkQuiet(filePath);
+        if (!u.dryRun && fs.existsSync(oxeSub) && fs.readdirSync(oxeSub).length === 0) fs.rmdirSync(oxeSub);
       } catch {
         /* ignore */
       }
     }
   }
 
-  const cpDir = p.codexPromptsDir;
-  if (fs.existsSync(cpDir)) {
-    for (const name of fs.readdirSync(cpDir)) {
-      if (!name.startsWith('oxe-') || !name.endsWith('.md')) continue;
-      const filePath = path.join(cpDir, name);
-      try {
-        if (fs.readFileSync(filePath, 'utf8').includes(OXE_MANAGED_HTML)) unlinkQuiet(filePath);
-      } catch {
-        /* ignore */
+  if (shouldClean('windsurf')) {
+    const wfDir = p.windsurfWorkflowsDir;
+    if (fs.existsSync(wfDir)) {
+      for (const name of fs.readdirSync(wfDir)) {
+        if (!isOxeCommandMarkdownName(name)) continue;
+        const filePath = path.join(wfDir, name);
+        try {
+          if (fs.readFileSync(filePath, 'utf8').includes(OXE_MANAGED_HTML)) unlinkQuiet(filePath);
+        } catch {
+          /* ignore */
+        }
       }
     }
   }
 
-  const agRoot = p.antigravitySkillsRoot;
-  if (fs.existsSync(agRoot)) {
-    for (const name of fs.readdirSync(agRoot, { withFileTypes: true })) {
-      if (!name.isDirectory()) continue;
-      if (!/^oxe($|-)/.test(name.name)) continue;
-      rmDirIfOxeSkill(path.join(agRoot, name.name));
+  if (shouldClean('codex')) {
+    const cpDir = p.codexPromptsDir;
+    if (fs.existsSync(cpDir)) {
+      for (const name of fs.readdirSync(cpDir)) {
+        if (!isOxeCommandMarkdownName(name)) continue;
+        const filePath = path.join(cpDir, name);
+        try {
+          if (fs.readFileSync(filePath, 'utf8').includes(OXE_MANAGED_HTML)) unlinkQuiet(filePath);
+        } catch {
+          /* ignore */
+        }
+      }
     }
   }
 
-  const cxRoot = p.codexAgentsSkillsRoot;
-  if (fs.existsSync(cxRoot)) {
-    for (const name of fs.readdirSync(cxRoot, { withFileTypes: true })) {
-      if (!name.isDirectory()) continue;
-      if (!/^oxe($|-)/.test(name.name)) continue;
-      rmDirIfOxeSkill(path.join(cxRoot, name.name));
+  if (shouldClean('antigravity')) {
+    const agRoot = p.antigravitySkillsRoot;
+    if (fs.existsSync(agRoot)) {
+      for (const name of fs.readdirSync(agRoot, { withFileTypes: true })) {
+        if (!name.isDirectory()) continue;
+        if (!/^oxe($|-)/.test(name.name)) continue;
+        rmDirIfOxeSkill(path.join(agRoot, name.name));
+      }
+    }
+  }
+
+  if (shouldClean('codex')) {
+    const cxRoot = p.codexAgentsSkillsRoot;
+    if (fs.existsSync(cxRoot)) {
+      for (const name of fs.readdirSync(cxRoot, { withFileTypes: true })) {
+        if (!name.isDirectory()) continue;
+        if (!/^oxe($|-)/.test(name.name)) continue;
+        rmDirIfOxeSkill(path.join(cxRoot, name.name));
+      }
     }
   }
 }
@@ -521,5 +540,6 @@ module.exports = {
   codexAgentsSkillsRoot,
   codexPromptsDir,
   antigravitySkillsRoot,
+  isOxeCommandMarkdownName,
   cleanupMarkedUnifiedArtifacts,
 };

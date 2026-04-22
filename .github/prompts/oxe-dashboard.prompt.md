@@ -38,8 +38,10 @@ oxe_semantics_hash: 37f74d8be3442fe1
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE dashboard** no repositório atual. Lê e aplica **integralmente** o ficheiro no workspace:
+<!-- oxe-workflow-resolution:start -->
 
-`.oxe/workflows/dashboard.md`
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/dashboard.md ou oxe/workflows/dashboard.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
 
 Usa o texto adicional desta mensagem como foco opcional.

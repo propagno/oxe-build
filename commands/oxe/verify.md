@@ -46,6 +46,10 @@ oxe_semantics_hash: 8b47625394eec62a
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canónico:** `oxe/workflows/verify.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro. Se `$ARGUMENTS` indicar um id de tarefa (ex. `T2`), restringir a verificação a essa tarefa.
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/verify.md ou oxe/workflows/verify.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+Se `$ARGUMENTS` indicar um id de tarefa (ex. `T2`), restringir a verificação a essa tarefa.

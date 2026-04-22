@@ -44,6 +44,10 @@ oxe_semantics_hash: 836780b0831671b7
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canônico:** `oxe/workflows/review-pr.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro. Recebe URL de PR do GitHub (`org/repo#N`) ou par de branches/SHAs. `$ARGUMENTS` = referência do diff.
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/review-pr.md ou oxe/workflows/review-pr.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+Recebe URL de PR do GitHub (`org/repo#N`) ou par de branches/SHAs. `$ARGUMENTS` = referência do diff.

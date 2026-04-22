@@ -44,6 +44,10 @@ oxe_semantics_hash: 4a5d304e6ca781fc
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canônico:** `oxe/workflows/ship.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro na raiz do repositório em que estás a trabalhar. Usa `$ARGUMENTS` como flags de entrega (`--message`, `--amend`, `--verify-first`, `--no-checks`, `--dry-run`).
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/ship.md ou oxe/workflows/ship.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+Usa `$ARGUMENTS` como flags de entrega (`--message`, `--amend`, `--verify-first`, `--no-checks`, `--dry-run`).

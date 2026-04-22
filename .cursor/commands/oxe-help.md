@@ -37,6 +37,8 @@ OXE — Ajuda (fluxo .oxe/, várias IDEs e CLIs, artefatos)
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE help**. Lê e segue **integralmente**:
+<!-- oxe-workflow-resolution:start -->
 
-`.oxe/workflows/help.md` (na raiz do repositório em contexto)
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/help.md ou oxe/workflows/help.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->

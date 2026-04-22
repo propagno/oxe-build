@@ -44,6 +44,10 @@ oxe_semantics_hash: 8a7c3e675d6a4e36
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canónico:** `oxe/workflows/milestone.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro na raiz do repositório em que estás a trabalhar. Usa o texto em `$ARGUMENTS` como subcomando e contexto (ex.: `new sprint-1`, `complete`, `audit`).
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/milestone.md ou oxe/workflows/milestone.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+Usa o texto em `$ARGUMENTS` como subcomando e contexto (ex.: `new sprint-1`, `complete`, `audit`).

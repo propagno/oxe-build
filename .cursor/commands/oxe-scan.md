@@ -38,8 +38,10 @@ OXE — Scan do repositório (.oxe/codebase/)
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE scan** no repositório atual. Lê e aplica **integralmente** o ficheiro:
+<!-- oxe-workflow-resolution:start -->
 
-`.oxe/workflows/scan.md` (na raiz do repositório em contexto)
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/scan.md ou oxe/workflows/scan.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
 
 Usa o texto adicional desta mensagem como foco opcional de área (pastas/módulos).

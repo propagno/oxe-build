@@ -44,6 +44,10 @@ oxe_semantics_hash: c7c6e28ef92595b1
 
 <!-- oxe-reasoning-contract:end -->
 
-**Workflow canónico:** `oxe/workflows/scan.md`
+<!-- oxe-workflow-resolution:start -->
 
-Execute integralmente esse ficheiro na raiz do repositório em que estás a trabalhar. Se o utilizador passar texto em `$ARGUMENTS`, usa-o como **foco opcional** de área (pastas/módulos) no mapeamento.
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/scan.md ou oxe/workflows/scan.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
+
+Se o utilizador passar texto em `$ARGUMENTS`, usa-o como **foco opcional** de área (pastas/módulos) no mapeamento.

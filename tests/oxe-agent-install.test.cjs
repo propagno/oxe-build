@@ -79,9 +79,13 @@ describe('oxe-agent-install', () => {
       agent.installOpenCodeCommands(C_CMD, paths, { dryRun: false, force: true }, false);
       const xdg = path.join(home, '.config', 'opencode', 'commands', 'oxe-scan.md');
       const alt = path.join(home, '.opencode', 'commands', 'oxe-scan.md');
+      const xdgRoot = path.join(home, '.config', 'opencode', 'commands', 'oxe.md');
+      const altRoot = path.join(home, '.opencode', 'commands', 'oxe.md');
       assert.ok(fs.existsSync(xdg) || fs.existsSync(alt));
       assert.ok(fs.existsSync(xdg));
       assert.ok(fs.existsSync(alt));
+      assert.ok(fs.existsSync(xdgRoot));
+      assert.ok(fs.existsSync(altRoot));
     });
   });
 
@@ -90,7 +94,9 @@ describe('oxe-agent-install', () => {
     const paths = agent.buildAgentInstallPaths(false, proj);
     agent.installOpenCodeCommands(C_CMD, paths, { dryRun: false, force: true }, false);
     const one = path.join(proj, '.opencode', 'commands', 'oxe-scan.md');
+    const root = path.join(proj, '.opencode', 'commands', 'oxe.md');
     assert.ok(fs.existsSync(one));
+    assert.ok(fs.existsSync(root));
   });
 
   test('installGeminiTomlCommands', () => {
@@ -136,7 +142,9 @@ describe('oxe-agent-install', () => {
       const paths = agent.buildAgentInstallPaths(true, home);
       agent.installCodexPrompts(C_CMD, paths, { dryRun: false, force: true }, false);
       const p = path.join(home, '.codex', 'prompts', 'oxe-scan.md');
+      const root = path.join(home, '.codex', 'prompts', 'oxe.md');
       assert.ok(fs.existsSync(p));
+      assert.ok(fs.existsSync(root));
       const promptText = fs.readFileSync(p, 'utf8');
       assert.match(promptText, /oxe_reasoning_mode:\s*discovery/);
       assert.match(promptText, /oxe-reasoning-contract:start/);
@@ -151,9 +159,28 @@ describe('oxe-agent-install', () => {
       const paths = agent.buildAgentInstallPaths(true, home);
       agent.installOpenCodeCommands(C_CMD, paths, { dryRun: false, force: true }, false);
       const xdg = path.join(home, '.config', 'opencode', 'commands', 'oxe-scan.md');
+      const xdgRoot = path.join(home, '.config', 'opencode', 'commands', 'oxe.md');
       assert.ok(fs.existsSync(xdg));
+      assert.ok(fs.existsSync(xdgRoot));
       agent.cleanupMarkedUnifiedArtifacts({ dryRun: false }, paths);
       assert.ok(!fs.existsSync(xdg));
+      assert.ok(!fs.existsSync(xdgRoot));
+    });
+  });
+
+  test('cleanupMarkedUnifiedArtifacts respects granular targets', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-ag-'));
+    withFakeHome(home, () => {
+      const paths = agent.buildAgentInstallPaths(true, home);
+      agent.installOpenCodeCommands(C_CMD, paths, { dryRun: false, force: true }, false);
+      agent.installGeminiTomlCommands(C_CMD, paths, { dryRun: false, force: true }, false);
+      const openCodeRoot = path.join(home, '.config', 'opencode', 'commands', 'oxe.md');
+      const geminiRoot = path.join(home, '.gemini', 'commands', 'oxe.toml');
+      assert.ok(fs.existsSync(openCodeRoot));
+      assert.ok(fs.existsSync(geminiRoot));
+      agent.cleanupMarkedUnifiedArtifacts({ dryRun: false, targets: { opencode: true, gemini: false } }, paths);
+      assert.ok(!fs.existsSync(openCodeRoot));
+      assert.ok(fs.existsSync(geminiRoot));
     });
   });
 

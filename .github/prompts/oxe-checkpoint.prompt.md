@@ -38,8 +38,10 @@ oxe_semantics_hash: 536e476616b47060
 
 <!-- oxe-reasoning-contract:end -->
 
-Executa o workflow **OXE checkpoint** no repositório atual. Lê e aplica **integralmente**:
+<!-- oxe-workflow-resolution:start -->
 
-`.oxe/workflows/checkpoint.md`
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/checkpoint.md ou oxe/workflows/checkpoint.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+
+<!-- oxe-workflow-resolution:end -->
 
 O **primeiro** argumento deve ser o **slug** (ex. `pre-migracao-api`); o resto é nota livre.
