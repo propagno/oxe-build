@@ -23,6 +23,9 @@ const TARGETS = [
   },
 ];
 
+const CANONICAL_WORKFLOWS_DIR = path.join(ROOT, 'oxe', 'workflows');
+const CONTRACTS_PATH = path.join(CANONICAL_WORKFLOWS_DIR, 'references', 'workflow-runtime-contracts.json');
+
 function normalizeNewlines(text) {
   return text.replace(/\r\n/g, '\n');
 }
@@ -146,6 +149,21 @@ function writeRuntimeSemanticsManifest(root) {
 }
 
 function main() {
+  if (!fs.existsSync(CANONICAL_WORKFLOWS_DIR)) {
+    throw new Error(`Fonte canónica ausente: ${CANONICAL_WORKFLOWS_DIR}`);
+  }
+  if (!fs.existsSync(CONTRACTS_PATH)) {
+    throw new Error(`Contrato semântico ausente: ${CONTRACTS_PATH}`);
+  }
+  const registryIssues = runtimeSemantics.validateWorkflowContractsRegistry();
+  if (runtimeSemantics.CONTRACT_VERSION === '0.0.0' || registryIssues.length) {
+    throw new Error(`workflow-runtime-contracts.json inválido: ${registryIssues.join('; ') || 'contract_version ausente'}`);
+  }
+  for (const target of TARGETS) {
+    if (!fs.existsSync(target.dir)) {
+      throw new Error(`Superfície derivada ausente: ${target.dir}`);
+    }
+  }
   let count = 0;
   for (const target of TARGETS) {
     if (!fs.existsSync(target.dir)) continue;

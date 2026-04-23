@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 
 const h = require('../bin/lib/oxe-project-health.cjs');
+const REPO_ROOT = path.join(__dirname, '..');
 
 function writeRationalityPacks(oxeDir, taskIds = ['T1']) {
   fs.writeFileSync(
@@ -59,6 +60,25 @@ function writeRationalityPacks(oxeDir, taskIds = ['T1']) {
     }, null, 2),
     'utf8'
   );
+}
+
+function seedPackageRepoFixture(dir) {
+  fs.mkdirSync(path.join(dir, '.oxe', 'release'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'packages', 'runtime'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'vscode-extension'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'bin'), { recursive: true });
+  fs.cpSync(path.join(REPO_ROOT, 'oxe'), path.join(dir, 'oxe'), { recursive: true });
+  fs.cpSync(path.join(REPO_ROOT, 'commands', 'oxe'), path.join(dir, 'commands', 'oxe'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'oxe-cc', version: '1.6.0' }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, 'packages', 'runtime', 'package.json'), JSON.stringify({ name: '@oxe/runtime', version: '1.6.0' }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, 'vscode-extension', 'package.json'), JSON.stringify({ name: 'oxe-agents', version: '1.6.0' }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, 'bin', 'oxe-cc.js'), '#!/usr/bin/env node\n', 'utf8');
+  fs.writeFileSync(path.join(dir, 'bin', 'banner.txt'), 'OXE v{version}\n', 'utf8');
+  fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n\n## [1.6.0] - 2026-04-23\n\n- Release readiness fixture.\n', 'utf8');
+  fs.writeFileSync(path.join(dir, '.oxe', 'STATE.md'), '## Fase atual\n\n`initial`\n', 'utf8');
+  fs.writeFileSync(path.join(dir, '.oxe', 'release', 'runtime-smoke-report.json'), JSON.stringify({ ok: true, results: [] }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, '.oxe', 'release', 'recovery-fixture-report.json'), JSON.stringify({ ok: true, results: [] }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, '.oxe', 'release', 'multi-agent-soak-report.json'), JSON.stringify({ ok: true, results: [] }, null, 2), 'utf8');
 }
 
 describe('oxe-project-health', () => {
@@ -323,6 +343,14 @@ describe('oxe-project-health', () => {
     assert.strictEqual(s.step, 'scan');
   });
 
+  test('suggestNextStep prefers release doctor in product package mode', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-package-'));
+    seedPackageRepoFixture(dir);
+    const s = h.suggestNextStep(dir, {});
+    assert.strictEqual(s.step, 'doctor');
+    assert.match(s.cursorCmd, /doctor --release --write-manifest/i);
+  });
+
   test('suggestNextStep asks for replan when plan lacks rationality gate inputs', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-'));
     const oxe = path.join(dir, '.oxe');
@@ -467,6 +495,17 @@ describe('oxe-project-health', () => {
     assert.deepStrictEqual(report.criticalExecutionGaps, []);
     assert.strictEqual(path.basename(report.executionRationality.implementationPack.path), 'IMPLEMENTATION-PACK.json');
     assert.ok(report.executionRationality.implementationPack.path.includes(`${path.sep}.oxe${path.sep}`));
+  });
+
+  test('buildHealthReport marks package repo mode and suppresses plan-execute blockers without active cycle', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-package-report-'));
+    seedPackageRepoFixture(dir);
+    const report = h.buildHealthReport(dir);
+    assert.strictEqual(report.workspaceMode, 'product_package');
+    assert.strictEqual(report.next.step, 'doctor');
+    assert.ok(report.releaseReadiness);
+    assert.deepStrictEqual(report.planWarn, []);
+    assert.deepStrictEqual(report.reviewWarn, []);
   });
 
   // W3.1 — parseActiveSession

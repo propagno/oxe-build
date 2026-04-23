@@ -160,6 +160,8 @@ export interface MultiAgentStatusSummary {
   summary?: Record<string, unknown> | null;
 }
 
+export type WorkspaceMode = 'product_package' | 'oxe_project';
+
 export interface ReleaseManifest {
   schema_version: number;
   generated_at: string;
@@ -168,6 +170,8 @@ export interface ReleaseManifest {
   release_contract: Record<string, unknown>;
   versions: Record<string, unknown>;
   runtime_compiled: { path: string; ok: boolean };
+  canonical_source?: Record<string, unknown>;
+  semantics?: Record<string, unknown>;
   wrappers: Record<string, unknown>;
   reports: Record<string, unknown>;
 }
@@ -284,6 +288,7 @@ export interface ExecutionRationalitySummary {
 
 /** Relatório retornado por `health.buildHealthReport` e incluído em `runDoctorChecks`.healthReport. */
 export interface OxeHealthReport {
+  workspaceMode?: WorkspaceMode;
   configPath: string | null;
   configParseError: string | null;
   unknownConfigKeys: string[];
@@ -336,6 +341,7 @@ export interface OxeHealthReport {
   contextPacks?: Record<string, ContextPackSummary>;
   contextQuality?: ContextQualitySummary;
   semanticsDrift?: SemanticsDriftSummary;
+  releaseReadiness?: ReleaseConsistencyResult | null;
   packFreshness?: Record<string, PackFreshness>;
   activeSummaryRefs?: { project: string | null; session: string | null; phase: string | null };
   scanFocusGlobs?: unknown;
@@ -693,6 +699,8 @@ export interface OxeSdk {
     loadOxeConfigMerged: (targetProject: string) => { config: Record<string, unknown>; path: string | null; parseError: string | null; sources: { system: string | null; user: string | null; project: string | null } };
     validateConfigShape: (cfg: Record<string, unknown>) => { unknownKeys: string[]; typeErrors: string[] };
     buildHealthReport: (target: string) => OxeHealthReport;
+    detectWorkspaceMode: (target: string) => { workspaceMode: WorkspaceMode; packageName: string | null; canonicalTreePresent: boolean; commandsTreePresent: boolean };
+    shouldSuppressExecutionWorkspaceGates: (workspaceMode: WorkspaceMode, phase?: string | null, activeSession?: string | null, activeRun?: Record<string, unknown> | null) => boolean;
     suggestNextStep: (target: string, cfg?: { discuss_before_plan?: boolean }) => OxeNextSuggestion;
     oxePaths: (target: string) => Record<string, string>;
     parseStatePhase: (stateText: string) => string | null;
@@ -787,6 +795,9 @@ export interface OxeSdk {
     loadRecoveryFixtureReport: (projectRoot: string) => RuntimeSmokeReport;
     loadMultiAgentSoakReport: (projectRoot: string) => RuntimeSmokeReport;
     buildReleaseManifest: (projectRoot: string, options?: Record<string, unknown>) => ReleaseManifest;
+    inspectCanonicalSource: (projectRoot: string) => Record<string, unknown>;
+    evaluateReleaseManifest: (manifest: ReleaseManifest, options?: Record<string, unknown>) => ReleaseConsistencyResult;
+    inspectReleaseReadiness: (projectRoot: string, options?: Record<string, unknown>) => ReleaseConsistencyResult;
     checkReleaseConsistency: (projectRoot: string, options?: Record<string, unknown>) => ReleaseConsistencyResult;
   };
 

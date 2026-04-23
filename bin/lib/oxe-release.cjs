@@ -5,6 +5,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const oxeManifest = require('./oxe-manifest.cjs');
+const runtimeSemantics = require('./oxe-runtime-semantics.cjs');
 
 const REQUIRED_RUNTIMES = [
   'cursor',
@@ -269,6 +270,7 @@ function loadRuntimeSmokeReport(projectRoot) {
       && item.oxe_present
       && item.workflow_resolution_ok
       && item.wrapper_drift_ok !== false
+      && item.extra_checks_ok !== false
       && item.uninstall_ok
     );
   });
@@ -301,11 +303,42 @@ function readVersionSnapshot(projectRoot) {
   };
 }
 
+function inspectCanonicalSource(projectRoot) {
+  const workflowsDir = path.join(projectRoot, 'oxe', 'workflows');
+  const referencesDir = path.join(workflowsDir, 'references');
+  const contractsPath = path.join(referencesDir, 'workflow-runtime-contracts.json');
+  const commandsDir = path.join(projectRoot, 'commands', 'oxe');
+  const workflowFiles = fs.existsSync(workflowsDir)
+    ? fs.readdirSync(workflowsDir).filter((name) => name.endsWith('.md'))
+    : [];
+  const registryIssues = runtimeSemantics.validateWorkflowContractsRegistry();
+  return {
+    workflowsDir,
+    referencesDir,
+    contractsPath,
+    commandsDir,
+    workflowsPresent: fs.existsSync(workflowsDir),
+    referencesPresent: fs.existsSync(referencesDir),
+    commandsPresent: fs.existsSync(commandsDir),
+    contractsPresent: fs.existsSync(contractsPath),
+    workflowCount: workflowFiles.length,
+    contractVersion: runtimeSemantics.CONTRACT_VERSION,
+    registryIssues,
+    ok: fs.existsSync(workflowsDir)
+      && fs.existsSync(referencesDir)
+      && fs.existsSync(commandsDir)
+      && fs.existsSync(contractsPath)
+      && workflowFiles.length > 0
+      && registryIssues.length === 0,
+  };
+}
+
 function buildReleaseManifest(projectRoot, options = {}) {
   const packageRoot = path.resolve(options.packageRoot || projectRoot);
   const paths = releasePaths(projectRoot);
   const versions = readVersionSnapshot(projectRoot);
   const runtimeEntry = path.join(packageRoot, 'lib', 'runtime', 'index.js');
+  const canonicalSource = inspectCanonicalSource(projectRoot);
   const wrapperSync = options.skipWrapperSync ? {
     before: collectWrapperHashes(projectRoot),
     after: collectWrapperHashes(projectRoot),
@@ -313,6 +346,7 @@ function buildReleaseManifest(projectRoot, options = {}) {
     mismatches: [],
     ok: true,
   } : syncWrappers(projectRoot, packageRoot);
+  const semanticsAudit = runtimeSemantics.auditRuntimeTargets(projectRoot);
   const smoke = loadRuntimeSmokeReport(projectRoot);
   const recovery = loadRecoveryFixtureReport(projectRoot);
   const multiAgent = loadMultiAgentSoakReport(projectRoot);
@@ -331,6 +365,12 @@ function buildReleaseManifest(projectRoot, options = {}) {
     runtime_compiled: {
       path: runtimeEntry,
       ok: fs.existsSync(runtimeEntry),
+    },
+    canonical_source: canonicalSource,
+    semantics: {
+      contractVersion: runtimeSemantics.CONTRACT_VERSION,
+      registryPath: runtimeSemantics.CONTRACTS_PATH,
+      audit: semanticsAudit,
     },
     wrappers: {
       hash_before_sync: wrapperSync.before,
@@ -354,8 +394,8 @@ function buildReleaseManifest(projectRoot, options = {}) {
   return manifest;
 }
 
-function checkReleaseConsistency(projectRoot, options = {}) {
-  const manifest = buildReleaseManifest(projectRoot, options);
+function evaluateReleaseManifest(manifest, options = {}) {
+  const enforceSync = options.enforceSync !== false;
   const blockers = [];
   const warnings = [];
   const versions = manifest.versions;
@@ -378,16 +418,32 @@ function checkReleaseConsistency(projectRoot, options = {}) {
     if (!versions.changelog.date) blockers.push('CHANGELOG.md topo sem data');
     if (!versions.changelog.hasHighlights) blockers.push('CHANGELOG.md topo sem highlights');
   }
+  const canonical = manifest.canonical_source || {};
+  if (!canonical.ok) {
+    blockers.push('árvore canónica ausente ou inválida');
+  }
+  if (!canonical.workflowsPresent) blockers.push('oxe/workflows ausente');
+  if (!canonical.referencesPresent) blockers.push('oxe/workflows/references ausente');
+  if (!canonical.commandsPresent) blockers.push('commands/oxe ausente');
+  if (!canonical.contractsPresent) blockers.push('workflow-runtime-contracts.json ausente');
+  if (canonical.workflowCount === 0) blockers.push('oxe/workflows sem workflows canónicos');
+  if (Array.isArray(canonical.registryIssues) && canonical.registryIssues.length) {
+    blockers.push('workflow-runtime-contracts.json inválido');
+  }
   if (!manifest.runtime_compiled.ok) {
     blockers.push('runtime não compilado (lib/runtime/index.js ausente)');
   }
-  if (!manifest.wrappers.sync.ok) {
+  if (enforceSync && !manifest.wrappers.sync.ok) {
     if (manifest.wrappers.sync.scripts.some((entry) => !entry.ok)) {
       blockers.push('sync de wrappers falhou');
     }
     if (manifest.wrappers.sync.mismatches.length > 0) {
       blockers.push('wrappers ficam dirty após sync-runtime-metadata/sync:cursor');
     }
+  }
+  const semanticsAudit = manifest.semantics && manifest.semantics.audit;
+  if (!semanticsAudit || semanticsAudit.ok !== true) {
+    blockers.push('drift semântico entre workflows e wrappers');
   }
   if (!manifest.reports.runtime_smoke.present || !manifest.reports.runtime_smoke.ok) {
     blockers.push('runtime smoke matrix incompleta ou com falhas');
@@ -406,8 +462,21 @@ function checkReleaseConsistency(projectRoot, options = {}) {
     blockers,
     warnings,
     manifest,
-    manifestPath: releasePaths(projectRoot).manifest,
+    manifestPath: releasePaths(manifest.project_root).manifest,
   };
+}
+
+function checkReleaseConsistency(projectRoot, options = {}) {
+  const manifest = buildReleaseManifest(projectRoot, options);
+  return evaluateReleaseManifest(manifest, { enforceSync: true });
+}
+
+function inspectReleaseReadiness(projectRoot, options = {}) {
+  const manifest = buildReleaseManifest(projectRoot, {
+    ...options,
+    skipWrapperSync: true,
+  });
+  return evaluateReleaseManifest(manifest, { enforceSync: false });
 }
 
 module.exports = {
@@ -419,5 +488,8 @@ module.exports = {
   loadRecoveryFixtureReport,
   loadMultiAgentSoakReport,
   buildReleaseManifest,
+  inspectCanonicalSource,
+  evaluateReleaseManifest,
+  inspectReleaseReadiness,
   checkReleaseConsistency,
 };

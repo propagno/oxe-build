@@ -115,16 +115,29 @@ describe('scripts', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-sync-meta-'));
     const promptDir = path.join(dir, '.github', 'prompts');
     const commandDir = path.join(dir, 'commands', 'oxe');
+    const cursorDir = path.join(dir, '.cursor', 'commands');
+    const canonicalWorkflows = path.join(dir, 'oxe', 'workflows');
+    const canonicalRefs = path.join(canonicalWorkflows, 'references');
     fs.mkdirSync(promptDir, { recursive: true });
     fs.mkdirSync(commandDir, { recursive: true });
+    fs.mkdirSync(cursorDir, { recursive: true });
+    fs.mkdirSync(canonicalRefs, { recursive: true });
+    fs.copyFileSync(
+      path.join(REPO_ROOT, 'oxe', 'workflows', 'plan.md'),
+      path.join(canonicalWorkflows, 'plan.md')
+    );
+    fs.copyFileSync(
+      path.join(REPO_ROOT, 'oxe', 'workflows', 'references', 'workflow-runtime-contracts.json'),
+      path.join(canonicalRefs, 'workflow-runtime-contracts.json')
+    );
     fs.writeFileSync(
-      path.join(promptDir, 'oxe-demo.prompt.md'),
-      '---\nname: oxe-demo\nagent: agent\ndescription: Demo\n---\n\n<!-- oxe-workflow-resolution:start -->\nbloco antigo\n<!-- oxe-workflow-resolution:end -->\n\n**Workflow canónico:** `oxe/workflows/demo.md`\n\nExecuta o workflow **OXE demo**.\n\n`.oxe/workflows/demo.md`\n\nCorpo prompt. Lê `.oxe/workflows/demo.md` na raiz do projeto atual (CWD).\n',
+      path.join(promptDir, 'oxe-plan.prompt.md'),
+      '---\nname: oxe-plan\nagent: agent\ndescription: Demo\n---\n\n<!-- oxe-workflow-resolution:start -->\nbloco antigo\n<!-- oxe-workflow-resolution:end -->\n\n**Workflow canónico:** `oxe/workflows/plan.md`\n\nExecuta o workflow **OXE plan**.\n\n`.oxe/workflows/plan.md`\n\nCorpo prompt. Lê `.oxe/workflows/plan.md` na raiz do projeto atual (CWD).\n',
       'utf8'
     );
     fs.writeFileSync(
-      path.join(commandDir, 'demo.md'),
-      '---\nname: oxe:demo\ndescription: Demo\nallowed-tools:\n  - Read\n---\n\n**Workflow canónico:** `oxe/workflows/demo.md`\n\nExecute integralmente esse ficheiro na raiz do repositório em que estás a trabalhar. Usa `$ARGUMENTS` como foco.\n',
+      path.join(commandDir, 'plan.md'),
+      '---\nname: oxe:plan\ndescription: Demo\nallowed-tools:\n  - Read\n---\n\n**Workflow canónico:** `oxe/workflows/plan.md`\n\nExecute integralmente esse ficheiro na raiz do repositório em que estás a trabalhar. Usa `$ARGUMENTS` como foco.\n',
       'utf8'
     );
     const r = spawnSync(process.execPath, [path.join(REPO_ROOT, 'scripts', 'sync-runtime-metadata.cjs')], {
@@ -133,10 +146,10 @@ describe('scripts', () => {
       env: { ...process.env, OXE_SYNC_REPO_ROOT: dir },
     });
     assert.strictEqual(r.status, 0, r.stderr);
-    const promptOut = fs.readFileSync(path.join(promptDir, 'oxe-demo.prompt.md'), 'utf8');
-    const commandOut = fs.readFileSync(path.join(commandDir, 'demo.md'), 'utf8');
-    assert.match(promptOut, /oxe_reasoning_mode:\s*status/);
-    assert.match(commandOut, /oxe_output_contract:\s*routing/);
+    const promptOut = fs.readFileSync(path.join(promptDir, 'oxe-plan.prompt.md'), 'utf8');
+    const commandOut = fs.readFileSync(path.join(commandDir, 'plan.md'), 'utf8');
+    assert.match(promptOut, /oxe_reasoning_mode:\s*planning/);
+    assert.match(commandOut, /oxe_output_contract:\s*plan/);
     assert.match(promptOut, /oxe-reasoning-contract:start/);
     assert.match(commandOut, /Referência canónica/);
     assert.match(promptOut, /oxe-workflow-resolution:start/);
