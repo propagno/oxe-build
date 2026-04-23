@@ -78,6 +78,9 @@ function runtimeCases() {
       installArgs: ['--codex', '--no-init-oxe', '--no-global-cli', '--dir', '__DIR__'],
       uninstallArgs: ['uninstall', '--codex', '--ide-only', '--dir', '__DIR__'],
       entrypoint: (fakeHome) => path.join(fakeHome, '.codex', 'prompts', 'oxe.md'),
+      extraPaths: (fakeHome) => [
+        path.join(fakeHome, '.agents', 'skills', 'oxe', 'SKILL.md'),
+      ],
     },
     {
       runtime: 'opencode',
@@ -113,6 +116,9 @@ function evaluateRuntime(runtimeCase) {
   const installArgs = runtimeCase.installArgs.map((value) => (value === '__DIR__' ? dir : value));
   const uninstallArgs = runtimeCase.uninstallArgs.map((value) => (value === '__DIR__' ? dir : value));
   const entrypoint = runtimeCase.entrypoint(fakeHome, dir);
+  const extraPaths = typeof runtimeCase.extraPaths === 'function'
+    ? runtimeCase.extraPaths(fakeHome, dir)
+    : [];
 
   const install = runCli(installArgs, env);
   const installOk = install.status === 0;
@@ -120,8 +126,20 @@ function evaluateRuntime(runtimeCase) {
   const content = readIfExists(entrypoint);
   const workflowResolutionOk = oxePresent && hasResolutionPolicy(content);
   const wrapperDriftOk = workflowResolutionOk;
+  const extraChecks = extraPaths.map((filePath) => {
+    const exists = fs.existsSync(filePath);
+    const text = readIfExists(filePath);
+    return {
+      path: filePath,
+      exists,
+      workflow_resolution_ok: exists && hasResolutionPolicy(text),
+    };
+  });
+  const extraChecksOk = extraChecks.every((item) => item.exists && item.workflow_resolution_ok);
   const uninstall = runCli(uninstallArgs, env);
-  const uninstallOk = uninstall.status === 0 && !fs.existsSync(entrypoint);
+  const uninstallOk = uninstall.status === 0
+    && !fs.existsSync(entrypoint)
+    && extraPaths.every((filePath) => !fs.existsSync(filePath));
 
   return {
     runtime: runtimeCase.runtime,
@@ -130,12 +148,15 @@ function evaluateRuntime(runtimeCase) {
     oxe_present: oxePresent,
     workflow_resolution_ok: workflowResolutionOk,
     wrapper_drift_ok: wrapperDriftOk,
+    extra_checks_ok: extraChecksOk,
+    extra_checks: extraChecks,
     uninstall_ok: uninstallOk,
     observations: [
       installOk ? null : `install failed: ${(install.stderr || install.stdout || '').trim()}`,
       oxePresent ? null : 'entrypoint oxe ausente',
       workflowResolutionOk ? null : 'wrapper sem política de resolução walk-up/.oxe→oxe',
       wrapperDriftOk ? null : 'wrapper com drift em relação ao contrato esperado',
+      extraChecksOk ? null : `checks extras falharam: ${extraChecks.filter((item) => !item.exists || !item.workflow_resolution_ok).map((item) => path.basename(item.path)).join(', ')}`,
       uninstallOk ? null : `uninstall failed: ${(uninstall.stderr || uninstall.stdout || '').trim()}`,
     ].filter(Boolean),
   };
@@ -150,8 +171,8 @@ function main() {
     results,
     summary: {
       total: results.length,
-      pass: results.filter((item) => item.install_ok && item.oxe_present && item.workflow_resolution_ok && item.wrapper_drift_ok && item.uninstall_ok).length,
-      fail: results.filter((item) => !(item.install_ok && item.oxe_present && item.workflow_resolution_ok && item.wrapper_drift_ok && item.uninstall_ok)).length,
+      pass: results.filter((item) => item.install_ok && item.oxe_present && item.workflow_resolution_ok && item.wrapper_drift_ok && item.extra_checks_ok !== false && item.uninstall_ok).length,
+      fail: results.filter((item) => !(item.install_ok && item.oxe_present && item.workflow_resolution_ok && item.wrapper_drift_ok && item.extra_checks_ok !== false && item.uninstall_ok)).length,
     },
   };
   const reportPath = release.releasePaths(PROJECT_ROOT).smokeReport;

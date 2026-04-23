@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
-**Versão:** `1.5.1` · [package.json](package.json)
+**Versão:** `1.6.0` · [package.json](package.json)
 
 **Framework OXE — Orchestrated eXperience Engineering**
 
@@ -52,7 +52,7 @@ O OXE agora distingue cinco famílias de raciocínio:
 - `review` — findings primeiro, severidade, evidência e risco residual
 - `status` — leitura curta do estado, recomendação única e motivo
 
-Essas regras vivem no núcleo canónico em `oxe/workflows/references/reasoning-*.md`, sobem para os workflows em `oxe/workflows/` e são renderizadas para cada runtime em `.github/prompts/`, `.cursor/commands/`, `commands/oxe/`, `.codex/prompts/` e skills multiagente.
+Essas regras vivem no núcleo canónico em `oxe/workflows/references/reasoning-*.md`, sobem para os workflows em `oxe/workflows/` e são renderizadas para cada runtime em `.github/prompts/`, `.cursor/commands/`, `commands/oxe/`, `.codex/prompts/` e skills multiagente. Nesta linha, `oxe/workflows/**` e `workflow-runtime-contracts.json` voltam a ser o contrato obrigatório da release; superfícies geradas permanecem derivadas e sincronizadas.
 
 ---
 
@@ -525,7 +525,9 @@ npx oxe-cc@latest
 | `--copilot-cli` | Skills globais do Copilot CLI em `~/.copilot/skills/` |
 | `--all-agents` | Cursor + Copilot + Claude + OpenCode + Gemini + Codex + Windsurf + Antigravity |
 | `--global` | Layout clássico: `oxe/` na raiz + `.oxe/` |
-| `--local` | Layout mínimo: só `.oxe/` (padrão) |
+| `--local` | Layout do repositório: mínimo, só `.oxe/` (padrão). Não controla onde a integração da IDE é instalada. |
+| `--ide-local` | Instala a integração no próprio repositório (`.cursor/`, `.github/`, `.claude/`, `.codex/` etc.) |
+| `--ide-global` | Instala a integração no HOME do utilizador quando o runtime suportar esse escopo |
 | `--force` / `-f` | Sobrescreve arquivos existentes (use para atualizar) |
 | `--dry-run` | Lista ações sem escrever |
 | `--oxe-only` | Só workflows em `.oxe/`, sem integrações IDE |
@@ -568,10 +570,10 @@ node bin/oxe-cc.js --help
 |---------|-----------|
 | `oxe-cc` / `oxe-cc install` | Instala workflows e integrações |
 | `oxe-cc doctor` | Diagnóstico completo: Node, workflows, config, bootstrap `.oxe/`, sessão ativa, autoavaliação do plano, saúde lógica (`healthy` \| `warning` \| `broken`), drift semântico multi-runtime e workflows sem contrato no registry |
-| `oxe-cc doctor --release --write-manifest` | Gate de publicação: valida versões, topo do `CHANGELOG`, runtime compilado, wrapper sync e relatórios obrigatórios; persiste `release-manifest.json` |
+| `oxe-cc doctor --release --write-manifest` | Gate de publicação: valida árvore canónica `oxe/`, `workflow-runtime-contracts.json`, versões, topo do `CHANGELOG`, runtime compilado, wrapper sync e relatórios obrigatórios; persiste `release-manifest.json` |
 | `oxe-cc status` | Próximo passo sugerido + saúde lógica do fluxo |
-| `oxe-cc status --full` | Coverage matrix + readiness gate + active run no terminal (ANSI) |
-| `oxe-cc status --json` | Mesmo, em JSON (schema v5), com `healthStatus`, `activeSession`, `planSelfEvaluation`, `contextPacks`, `contextQuality`, `semanticsDrift`, `verificationSummary`, `residualRiskSummary`, `evidenceCoverage`, `pendingGates`, `policyDecisionSummary`, `quotaSummary`, `auditSummary`, `promotionSummary`, `runtimeMode`, `fallbackMode`, `gateQueue`, `policyCoverage`, `promotionReadiness`, `recoveryState`, `multiAgent` e `providerCatalog` |
+| `oxe-cc status --full` | Coverage matrix + readiness gate + active run no terminal (ANSI); em repositório do pacote, troca para release readiness em vez de plan readiness |
+| `oxe-cc status --json` | Mesmo, em JSON (schema v5), com `workspaceMode`, `releaseReadiness`, `healthStatus`, `activeSession`, `planSelfEvaluation`, `contextPacks`, `contextQuality`, `semanticsDrift`, `verificationSummary`, `residualRiskSummary`, `evidenceCoverage`, `pendingGates`, `policyDecisionSummary`, `quotaSummary`, `auditSummary`, `promotionSummary`, `runtimeMode`, `fallbackMode`, `gateQueue`, `policyCoverage`, `promotionReadiness`, `recoveryState`, `multiAgent` e `providerCatalog` |
 | `oxe-cc context build [--workflow <slug>] [--tier <minimal\|standard\|full>]` | Gera context pack(s) em `.oxe/context/packs/` — seleção determinística de artefatos por contrato de workflow |
 | `oxe-cc context inspect [--workflow <slug>]` | Inspeciona um context pack existente ou resolve sob demanda (sem escrita); útil para diagnóstico antes de iniciar um passo |
 | `oxe-cc update` | Atualiza workflows para a versão mais recente |

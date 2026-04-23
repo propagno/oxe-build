@@ -1671,6 +1671,7 @@ function runStatusFull(target) {
   printSection('OXE ▸ status --full');
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${target}${c ? reset : ''}`);
   console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Workspace mode:${c ? reset : ''} ${report.workspaceMode || 'oxe_project'}`);
   console.log(`  ${c ? green : ''}Fase:${c ? reset : ''} ${report.phase || '—'}`);
 
   const healthColor = report.healthStatus === 'healthy' ? green : report.healthStatus === 'warning' ? yellow : red;
@@ -1701,23 +1702,40 @@ function runStatusFull(target) {
   console.log(`  ${coverageCell(codebaseExists, 'codebase scan')}   ${coverageCell(specExists, 'SPEC.md')}   ${coverageCell(planExists, 'PLAN.md')}   ${coverageCell(verifyExists, 'VERIFY.md')}   ${coverageCell(lessonsExists, 'LESSONS.md')}`);
 
   // Readiness gate
-  const ready = specExists
-    && planExists
-    && report.executionRationalityReady
-    && !report.planWarn.length
-    && !report.runtimeWarn.length;
+  const packageMode = report.workspaceMode === 'product_package';
+  const ready = packageMode
+    ? Boolean(report.releaseReadiness && report.releaseReadiness.ok)
+    : specExists
+      && planExists
+      && report.executionRationalityReady
+      && !report.planWarn.length
+      && !report.runtimeWarn.length;
   const gateColor = ready ? green : yellow;
   console.log(`\n  ${c ? yellow : ''}Readiness gate${c ? reset : ''}`);
-  console.log(`  ${c ? gateColor : ''}${ready ? '✓ Pronto para executar' : '✗ Não pronto para executar'}${c ? reset : ''}`);
-  if (!specExists) console.log(`  ${c ? dim : ''}  • SPEC.md ausente — rode /oxe-spec${c ? reset : ''}`);
-  if (!planExists) console.log(`  ${c ? dim : ''}  • PLAN.md ausente — rode /oxe-plan${c ? reset : ''}`);
-  if (report.planWarn.length) {
-    for (const w of report.planWarn) {
-      console.log(`  ${c ? yellow : ''}  • ${w}${c ? reset : ''}`);
+  console.log(`  ${c ? gateColor : ''}${ready ? (packageMode ? '✓ Pronto para publicar' : '✓ Pronto para executar') : (packageMode ? '✗ Não pronto para publicar' : '✗ Não pronto para executar')}${c ? reset : ''}`);
+  if (packageMode) {
+    const releaseReadiness = report.releaseReadiness || { blockers: [], warnings: [] };
+    if (Array.isArray(releaseReadiness.blockers) && releaseReadiness.blockers.length) {
+      for (const blocker of releaseReadiness.blockers) {
+        console.log(`  ${c ? red : ''}  • ${blocker}${c ? reset : ''}`);
+      }
     }
-  }
-  if (planExists) {
-    console.log(`  ${c ? dim : ''}  • Artefatos racionais:${c ? reset : ''} implementation=${report.implementationPackReady ? 'ok' : 'pendente'} · anchors=${report.referenceAnchorsReady ? 'ok' : 'pendente'} · fixtures=${report.fixturePackReady ? 'ok' : 'pendente'}`);
+    if (Array.isArray(releaseReadiness.warnings) && releaseReadiness.warnings.length) {
+      for (const warning of releaseReadiness.warnings) {
+        console.log(`  ${c ? yellow : ''}  • ${warning}${c ? reset : ''}`);
+      }
+    }
+  } else {
+    if (!specExists) console.log(`  ${c ? dim : ''}  • SPEC.md ausente — rode /oxe-spec${c ? reset : ''}`);
+    if (!planExists) console.log(`  ${c ? dim : ''}  • PLAN.md ausente — rode /oxe-plan${c ? reset : ''}`);
+    if (report.planWarn.length) {
+      for (const w of report.planWarn) {
+        console.log(`  ${c ? yellow : ''}  • ${w}${c ? reset : ''}`);
+      }
+    }
+    if (planExists) {
+      console.log(`  ${c ? dim : ''}  • Artefatos racionais:${c ? reset : ''} implementation=${report.implementationPackReady ? 'ok' : 'pendente'} · anchors=${report.referenceAnchorsReady ? 'ok' : 'pendente'} · fixtures=${report.fixturePackReady ? 'ok' : 'pendente'}`);
+    }
   }
 
   // Active run summary
@@ -1804,7 +1822,7 @@ function runStatusFull(target) {
   }
 
   // Plan self-evaluation
-  if (report.planSelfEvaluation) {
+  if (!packageMode && report.planSelfEvaluation) {
     const pse = report.planSelfEvaluation;
     const threshold = report.planConfidenceThreshold || 90;
     console.log(`\n  ${c ? yellow : ''}Autoavaliação do plano${c ? reset : ''}`);
@@ -1844,6 +1862,8 @@ function runStatus(target, opts = {}) {
     const payload = {
       oxeStatusSchema: 5,
       projectRoot: path.resolve(target),
+      workspaceMode: report.workspaceMode || 'oxe_project',
+      releaseReadiness: report.releaseReadiness || null,
       nextStep: report.next.step,
       cursorCmd: report.next.cursorCmd,
       reason: report.next.reason,
@@ -1924,6 +1944,7 @@ function runStatus(target, opts = {}) {
   printSection('OXE ▸ status');
   const c = useAnsiColors();
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${target}${c ? reset : ''}`);
+  console.log(`  ${c ? dim : ''}Workspace mode:${c ? reset : ''} ${report.workspaceMode || 'oxe_project'}`);
 
   const wfTgt = oxeWorkflows.resolveWorkflowsDir(target);
   if (!wfTgt) {
@@ -1954,10 +1975,18 @@ function runStatus(target, opts = {}) {
   }
 
   // Explicit blockage diagnosis
+  const packageMode = report.workspaceMode === 'product_package';
   const specMissing = !fs.existsSync(path.join(target, '.oxe', 'SPEC.md'));
   const planMissing = !fs.existsSync(path.join(target, '.oxe', 'PLAN.md'));
   const verifyMissing = !fs.existsSync(path.join(target, '.oxe', 'VERIFY.md'));
-  if (specMissing) {
+  if (packageMode) {
+    const releaseReadiness = report.releaseReadiness || { ok: false, blockers: [], warnings: [] };
+    if (!releaseReadiness.ok && Array.isArray(releaseReadiness.blockers) && releaseReadiness.blockers.length) {
+      console.log(`  ${c ? yellow : ''}⚠ Release blockers:${c ? reset : ''} ${releaseReadiness.blockers[0]}`);
+    } else if (Array.isArray(releaseReadiness.warnings) && releaseReadiness.warnings.length) {
+      console.log(`  ${c ? dim : ''}Obs.:${c ? reset : ''} release warnings ativas — ${releaseReadiness.warnings[0]}`);
+    }
+  } else if (specMissing) {
     console.log(`  ${c ? yellow : ''}⚠ Bloqueio:${c ? reset : ''} SPEC.md ausente — rode ${c ? cyan : ''}/oxe-spec${c ? reset : ''} antes de planejar`);
   } else if (planMissing) {
     console.log(`  ${c ? yellow : ''}⚠ Bloqueio:${c ? reset : ''} PLAN.md ausente — rode ${c ? cyan : ''}/oxe-plan${c ? reset : ''}`);

@@ -749,6 +749,50 @@ function resolvedReadableOxePaths(target, activeSession) {
 
 /**
  * @param {string} target
+ * @returns {{ workspaceMode: 'product_package' | 'oxe_project', packageName: string | null, canonicalTreePresent: boolean, commandsTreePresent: boolean }}
+ */
+function detectWorkspaceMode(target) {
+  const packageJsonPath = path.join(target, 'package.json');
+  let packageName = null;
+  try {
+    if (fs.existsSync(packageJsonPath)) {
+      const parsed = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+      packageName = parsed && typeof parsed.name === 'string' ? parsed.name : null;
+    }
+  } catch {
+    packageName = null;
+  }
+  const canonicalTreePresent = fs.existsSync(path.join(target, 'oxe', 'workflows'));
+  const commandsTreePresent = fs.existsSync(path.join(target, 'commands', 'oxe'));
+  const packageRepo =
+    packageName === 'oxe-cc'
+    && fs.existsSync(path.join(target, 'bin', 'oxe-cc.js'))
+    && fs.existsSync(path.join(target, 'packages', 'runtime', 'package.json'))
+    && canonicalTreePresent;
+  return {
+    workspaceMode: packageRepo ? 'product_package' : 'oxe_project',
+    packageName,
+    canonicalTreePresent,
+    commandsTreePresent,
+  };
+}
+
+/**
+ * @param {'product_package' | 'oxe_project'} workspaceMode
+ * @param {string | null} phase
+ * @param {string | null} activeSession
+ * @param {Record<string, unknown> | null} activeRun
+ * @returns {boolean}
+ */
+function shouldSuppressExecutionWorkspaceGates(workspaceMode, phase, activeSession, activeRun) {
+  if (workspaceMode !== 'product_package') return false;
+  if (activeSession) return false;
+  if (activeRun && typeof activeRun === 'object') return false;
+  return !phase || phase === 'initial';
+}
+
+/**
+ * @param {string} target
  */
 function copilotWorkspacePaths(target) {
   return {
@@ -1843,12 +1887,15 @@ function planReviewWarnings(stateText, p) {
 function suggestNextStep(target, cfg = {}) {
   const base = oxePaths(target);
   const stateText = fs.existsSync(base.state) ? fs.readFileSync(base.state, 'utf8') : '';
-  const p = resolvedReadableOxePaths(target, parseActiveSession(stateText));
+  const activeSession = parseActiveSession(stateText);
+  const p = resolvedReadableOxePaths(target, activeSession);
   const discussBefore = Boolean(cfg.discuss_before_plan);
   const threshold = normalizePlanConfidenceThreshold(cfg.plan_confidence_threshold);
   const has = (/** @type {string} */ f) => fs.existsSync(f);
   const mapsComplete = EXPECTED_CODEBASE_MAPS.every((f) => has(path.join(p.codebase, f)));
   const azureActive = azure.isAzureContextEnabled(target, cfg);
+  const activeRun = operational.readRunState(target, activeSession);
+  const workspaceInfo = detectWorkspaceMode(target);
 
   if (!has(p.oxe) || !has(p.state)) {
     return {
@@ -1860,6 +1907,23 @@ function suggestNextStep(target, cfg = {}) {
   }
 
   const phase = parseStatePhase(stateText);
+  if (shouldSuppressExecutionWorkspaceGates(workspaceInfo.workspaceMode, phase, activeSession, activeRun)) {
+    const release = require('./oxe-release.cjs');
+    const readiness = release.inspectReleaseReadiness(target, { packageRoot: target });
+    return {
+      step: 'doctor',
+      cursorCmd: 'oxe-cc doctor --release --write-manifest',
+      reason: readiness.ok
+        ? 'Repositório do pacote OXE detectado — o próximo passo operacional é validar/publicar a release, não replanejar um workspace de entrega.'
+        : `Repositório do pacote OXE detectado — trate primeiro os blockers de release (${readiness.blockers[0] || 'release readiness incompleta'}).`,
+      artifacts: [
+        '.oxe/release/release-manifest.json',
+        '.oxe/release/runtime-smoke-report.json',
+        '.oxe/release/recovery-fixture-report.json',
+        '.oxe/release/multi-agent-soak-report.json',
+      ],
+    };
+  }
 
   if (!mapsComplete && !has(p.quick)) {
     return {
@@ -2003,8 +2067,6 @@ function suggestNextStep(target, cfg = {}) {
       artifacts: ['.oxe/PLAN.md', '.oxe/PLAN-REVIEW.md', '.oxe/STATE.md'],
     };
   }
-
-  const activeRun = operational.readRunState(target, parseActiveSession(stateText));
   if (activeRun && activeRun.status === 'waiting_approval') {
     return {
       step: 'dashboard',
@@ -2119,6 +2181,7 @@ function buildHealthReport(target) {
   const activeSession = parseActiveSession(stateText);
   const p = resolvedReadableOxePaths(target, activeSession);
   const phase = parseStatePhase(stateText);
+  const workspaceInfo = detectWorkspaceMode(target);
   const scanDate = parseLastScanDate(stateText);
   const stale = isStaleScan(scanDate, Number(config.scan_max_age_days) || 0);
   const compactDate = parseLastCompactDate(stateText);
@@ -2134,6 +2197,7 @@ function buildHealthReport(target) {
   const capabilityWarn = capabilityWarnings(p);
   const investigationWarn = investigationWarnings(p);
   const parsedPlanSelfEvaluation = parsePlanSelfEvaluation(p.plan);
+  const activeRun = operational.readRunState(target, activeSession);
   const executionRationality = rationality.buildExecutionRationality({
     plan: p.plan,
     planAgents: p.planAgents,
@@ -2143,18 +2207,25 @@ function buildHealthReport(target) {
     fixturePackJson: p.fixturePackJson,
     fixturePackMd: p.fixturePackMd,
   });
-  const planWarn = [
+  const suppressExecutionWorkspaceGates = shouldSuppressExecutionWorkspaceGates(
+    workspaceInfo.workspaceMode,
+    phase,
+    activeSession,
+    activeRun
+  );
+  const executionPlanWarn = [
     ...planWaveWarningsFixed(p.plan, Number(config.plan_max_tasks_per_wave) || 0),
     ...planTaskAceiteWarnings(p.plan),
     ...planSelfEvaluationWarningsFromInfo(parsedPlanSelfEvaluation, threshold),
     ...executionRationalityWarningsFromSummary(executionRationality),
     ...planAgentsWarnings(target),
   ];
+  const planWarn = suppressExecutionWorkspaceGates ? [] : executionPlanWarn;
   const sessionWarn = sessionWarnings(target, activeSession);
   const installWarn = installationCompletenessWarnings(target);
   const copilot = copilotIntegrationReport(target);
   const copilotWarn = copilot.warnings;
-  const reviewWarn = planReviewWarnings(stateText, p);
+  const reviewWarn = suppressExecutionWorkspaceGates ? [] : planReviewWarnings(stateText, p);
   const planSelfEvaluation = {
     ...parsedPlanSelfEvaluation,
     best_plan_current: parsedPlanSelfEvaluation.bestPlan === 'sim'
@@ -2165,7 +2236,9 @@ function buildHealthReport(target) {
     threshold,
     executable: hasExecutablePlanSelfEvaluation(parsedPlanSelfEvaluation, threshold),
   };
-  const activeRun = operational.readRunState(target, activeSession);
+  const releaseReadiness = workspaceInfo.workspaceMode === 'product_package'
+    ? require('./oxe-release.cjs').inspectReleaseReadiness(target, { packageRoot: target })
+    : null;
   const eventsSummary = operational.summarizeEvents(operational.readEvents(target, activeSession));
   const memoryLayers = operational.buildMemoryLayers(target, activeSession);
   const enterpriseRuntime = summarizeEnterpriseRuntime(target, activeRun, activeSession, config);
@@ -2335,13 +2408,14 @@ function buildHealthReport(target) {
     },
   };
   const hardFailure = Boolean(parseError) || sessionWarn.some((w) => /não existe|sem SESSION\.md/i.test(w));
+  const planWarningCount = suppressExecutionWorkspaceGates ? 0 : planWarn.length;
   const warningCount =
     phaseWarn.length +
     runtimeWarn.length +
     reviewWarn.length +
     enterpriseRuntime.enterpriseWarnings.length +
     specWarn.length +
-    planWarn.length +
+    planWarningCount +
     capabilityWarn.length +
     investigationWarn.length +
     sessionWarn.length +
@@ -2354,6 +2428,7 @@ function buildHealthReport(target) {
   const healthStatus = hardFailure ? 'broken' : warningCount > 0 ? 'warning' : 'healthy';
 
   return {
+    workspaceMode: workspaceInfo.workspaceMode,
     configPath: cfgPath,
     configParseError: parseError,
     unknownConfigKeys: shape.unknownKeys,
@@ -2428,6 +2503,7 @@ function buildHealthReport(target) {
     contextPacks,
     contextQuality,
     semanticsDrift,
+    releaseReadiness,
     packFreshness,
     activeSummaryRefs,
     healthStatus,
@@ -2476,6 +2552,8 @@ module.exports = {
   specSectionWarnings,
   planWaveWarningsFixed,
   planTaskAceiteWarnings,
+  detectWorkspaceMode,
+  shouldSuppressExecutionWorkspaceGates,
   suggestNextStep,
   buildHealthReport,
   buildExecutionRationality: rationality.buildExecutionRationality,

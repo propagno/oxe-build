@@ -4,6 +4,33 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.6.0] — 2026-04-23
+
+### Product Reconciliation
+
+- a árvore canónica `oxe/` foi restaurada como source of truth da release, incluindo `oxe/workflows/`, `oxe/workflows/references/`, `oxe/templates/` e `commands/oxe/` como superfície derivada sincronizada
+- `workflow-runtime-contracts.json` voltou a ser contrato obrigatório da release; `sync-runtime-metadata` agora falha fechado quando a fonte canónica ou o registry semântico estão ausentes/inválidos
+- `doctor --release` passou a bloquear explicitamente por topologia canónica ausente, contrato semântico inválido e drift entre workflows e wrappers
+
+### Package-vs-Workspace Health
+
+- `status`, `status --full`, dashboard e SDK agora distinguem `workspaceMode: product_package` de `workspaceMode: oxe_project`
+- no repositório do pacote, o próximo passo deixa de cair em `plan/replan` por ruído de manutenção e passa a apontar para `doctor --release --write-manifest`
+- `status --json` passou a expor `workspaceMode` e `releaseReadiness` como contrato estável da linha `1.6.0`
+
+### Multi-runtime Edge Hardening
+
+- a smoke matrix de release passou a validar a instalação do Codex de forma completa: prompts em `.codex/prompts/` e skills em `.agents/skills/oxe/`
+- documentação de instalação foi ajustada para separar `--local` (layout do repo) de `--ide-local` (escopo da integração), eliminando a ambiguidade operacional em runtimes como Codex
+
+### Validation
+
+- `node --test tests/oxe-project-health.test.cjs`
+- `node --test tests/oxe-cli-edge.test.cjs`
+- `npm test`
+- `npm run scan:assets`
+- `npm run release:doctor`
+
 ## [1.5.1] — 2026-04-22
 
 ### Rational Execution Readiness

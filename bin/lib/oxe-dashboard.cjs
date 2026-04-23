@@ -162,6 +162,20 @@ function confidenceBand(confidence, threshold) {
 }
 
 function computeReadiness(ctx, threshold) {
+  if (ctx.workspaceMode === 'product_package' && ctx.releaseReadiness) {
+    const blockers = Array.isArray(ctx.releaseReadiness.blockers) ? ctx.releaseReadiness.blockers.slice() : [];
+    const warnings = Array.isArray(ctx.releaseReadiness.warnings) ? ctx.releaseReadiness.warnings.slice() : [];
+    return {
+      go: Boolean(ctx.releaseReadiness.ok),
+      decision: ctx.releaseReadiness.ok ? 'go' : 'no-go',
+      threshold: health.normalizePlanConfidenceThreshold(threshold),
+      confidence: ctx.plan && ctx.plan.selfEvaluation ? ctx.plan.selfEvaluation.confidence : null,
+      confidenceBand: confidenceBand(ctx.plan && ctx.plan.selfEvaluation ? ctx.plan.selfEvaluation.confidence : null, threshold),
+      checkpointPending: false,
+      blockers,
+      warnings,
+    };
+  }
   const normalizedThreshold = health.normalizePlanConfidenceThreshold(threshold);
   const blockers = [];
   const warnings = [...ctx.diagnostics.reviewWarnings, ...ctx.diagnostics.runtimeWarnings, ...ctx.diagnostics.planWarnings];
@@ -375,6 +389,8 @@ function loadDashboardContext(projectRoot, opts = {}) {
   const sessionRaw = sessionPath ? readTextIfExists(sessionPath) || '' : '';
   const ctx = {
     projectRoot: path.resolve(projectRoot),
+    workspaceMode: report.workspaceMode || 'oxe_project',
+    releaseReadiness: report.releaseReadiness || null,
     activeSession: activeSession || null,
     phase: report.phase || health.parseStatePhase(stateText),
     healthStatus: report.healthStatus,

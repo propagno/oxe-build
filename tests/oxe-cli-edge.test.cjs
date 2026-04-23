@@ -82,6 +82,25 @@ function writeRationalityPacks(oxeDir, taskIds = ['T1']) {
   );
 }
 
+function seedPackageRepoFixture(dir) {
+  fs.mkdirSync(path.join(dir, '.oxe', 'release'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'packages', 'runtime'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'vscode-extension'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'bin'), { recursive: true });
+  fs.cpSync(path.join(REPO_ROOT, 'oxe'), path.join(dir, 'oxe'), { recursive: true });
+  fs.cpSync(path.join(REPO_ROOT, 'commands', 'oxe'), path.join(dir, 'commands', 'oxe'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'oxe-cc', version: '1.6.0' }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, 'packages', 'runtime', 'package.json'), JSON.stringify({ name: '@oxe/runtime', version: '1.6.0' }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, 'vscode-extension', 'package.json'), JSON.stringify({ name: 'oxe-agents', version: '1.6.0' }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, 'bin', 'oxe-cc.js'), '#!/usr/bin/env node\n', 'utf8');
+  fs.writeFileSync(path.join(dir, 'bin', 'banner.txt'), 'OXE v{version}\n', 'utf8');
+  fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n\n## [1.6.0] - 2026-04-23\n\n- Release readiness fixture.\n', 'utf8');
+  fs.writeFileSync(path.join(dir, '.oxe', 'STATE.md'), '## Fase atual\n\n`initial`\n', 'utf8');
+  fs.writeFileSync(path.join(dir, '.oxe', 'release', 'runtime-smoke-report.json'), JSON.stringify({ ok: true, results: [] }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, '.oxe', 'release', 'recovery-fixture-report.json'), JSON.stringify({ ok: true, results: [] }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, '.oxe', 'release', 'multi-agent-soak-report.json'), JSON.stringify({ ok: true, results: [] }, null, 2), 'utf8');
+}
+
 describe('oxe-cc CLI edge', () => {
   test('install --help exits 0', () => {
     const r = spawnSync(process.execPath, [CLI, '--help'], {
@@ -242,6 +261,22 @@ describe('oxe-cc CLI edge', () => {
     assert.ok(Array.isArray(j.diagnostics.planWarnings));
     assert.ok(Array.isArray(j.diagnostics.enterpriseWarnings));
     assert.ok(j.staleCompact && typeof j.staleCompact.stale === 'boolean');
+  });
+
+  test('status --json exposes package repo mode and release readiness without plan noise', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-package-'));
+    seedPackageRepoFixture(dir);
+    const r = spawnSync(process.execPath, [CLI, 'status', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+    const j = JSON.parse(r.stdout.trim().split(/\r?\n/).filter(Boolean).pop());
+    assert.strictEqual(j.workspaceMode, 'product_package');
+    assert.strictEqual(j.nextStep, 'doctor');
+    assert.ok(j.releaseReadiness && typeof j.releaseReadiness === 'object');
+    assert.deepStrictEqual(j.diagnostics.planWarnings, []);
   });
 
   test('context inspect resolves on demand without materializing pack files', () => {

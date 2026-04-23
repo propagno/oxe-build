@@ -1,6 +1,6 @@
 # OXE — Runtime Smoke Matrix
 
-> Estado de suporte por runtime de IA. Atualizado em v1.5.1.
+> Estado de suporte por runtime de IA. Atualizado em v1.6.0.
 >
 > `✓` = suportado e testado | `~` = suportado parcialmente | `✗` = não suportado | `?` = não testado
 
@@ -60,10 +60,17 @@ Este documento descreve a matrix estável da release. O artefato operacional con
 
 ### Codex CLI
 
-- Lê `.github/prompts/` via `--instructions` flag
+- Lê `.codex/prompts/` como entrypoint e depende também de skills em `.agents/skills/oxe/`
+- A smoke matrix desta release valida **prompts e skills**; falha se um dos dois lados estiver ausente ou sem a política de resolução de workflow
 - `verify` parcial: gera VERIFY.md mas evidências são menos detalhadas (sem análise de AST)
 - `runtime-first` não suportado: Codex CLI não tem acesso a subprocessos Node
 - **Limitação:** não suporta contexto multi-arquivo simultâneo em tasks longas
+
+### Escopo de instalação
+
+- `--local` define o layout do repositório (`oxe/` + `.oxe/` vs só `.oxe/`)
+- `--ide-local` define que a integração do runtime deve ser instalada no próprio projeto
+- Para Codex, `install --codex --ide-local` é o fluxo correto quando a intenção é materializar `.codex/` e `.agents/` no repositório atual
 
 ### Gemini CLI
 
