@@ -20,6 +20,9 @@ const PATTERNS = [
   { name: 'AWS access key', re: /AKIA[A-Z0-9]{16}/g },
   { name: 'GitHub PAT ghp', re: /ghp_[a-zA-Z0-9]{36}/g },
   { name: 'Private key block', re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/g },
+  { name: 'Legacy product name', re: /get shit done|get-shit-done|\bGSD\b/gi },
+  { name: 'Legacy command namespace', re: /\/gsd|commands\/gsd|gsd-tools/gi },
+  { name: 'Legacy state directory', re: /\.planning/gi },
 ];
 
 const DIRS = [

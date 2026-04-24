@@ -4,6 +4,24 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.7.0] — 2026-04-23
+
+### OXE-native Agent Catalog
+
+- adicionada a fonte canónica `oxe/agents/` com agentes especializados para plan, execute, verify, debug, research, codebase mapping, integração, validação e UI
+- o instalador multi-runtime agora distribui agentes OXE para Claude Code (`.claude/agents`) e Codex/Antigravity (`.agents/skills` / skills compatíveis), além dos comandos já existentes
+- uninstall e smoke matrix passaram a validar e remover os agentes gerados pelo OXE
+
+### Rational Execution Artifacts
+
+- templates de `PLAN`, `IMPLEMENTATION-PACK`, `REFERENCE-ANCHORS`, `FIXTURE-PACK` e `SUMMARY` foram endurecidos com contratos goal-backward, write-set, símbolos, sequência mínima, rollback, fixtures e evidência
+- `/oxe-plan`, `/oxe-execute`, `/oxe-verify`, `/oxe-debug`, `/oxe-forensics`, `/oxe-ui-spec` e `/oxe-ui-review` agora referenciam explicitamente os agentes e gates racionais compatíveis com runtime enterprise
+
+### Public Surface Hygiene
+
+- `scan:assets` agora bloqueia referências públicas a namespaces, paths e nomes de origem legada
+- criado `docs/CONTENT-MIGRATION-AUDIT.md` como trilha interna de incorporação, sem exposição nas superfícies instaladas
+
 ## [1.6.0] — 2026-04-23
 
 ### Product Reconciliation

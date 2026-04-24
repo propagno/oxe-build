@@ -17,3 +17,4 @@ export * from './context/index';
 export * from './scheduler/multi-agent-coordinator';
 export * from './decision/index';
 export * from './audit/index';
+export * from './executor/index';

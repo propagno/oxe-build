@@ -1,7 +1,12 @@
 ---
 name: oxe:discuss
-description: Perguntas objetivas antes do plano — .oxe/DISCUSS.md
-argument-hint: "[contexto ou respostas]"
+description: >
+  Conduz sessão estruturada de resolução de decisões técnicas antes do planejamento. Identifica
+  trade-offs relevantes, apresenta alternativas com critérios objetivos, registra a decisão
+  escolhida com motivo e impacto em DISCUSS.md como D-NN. Cada D-NN fechado aqui é vinculado a
+  tarefas Tn no PLAN.md e verificado pelo Verificador após execução. Usar quando: `discuss_before_plan`
+  está ativo no config, há decisão arquitetural aberta, ou o Arquiteto sinalizou bloqueio.
+argument-hint: "[decisão a tomar | contexto do trade-off | D-NN a reabrir]"
 allowed-tools:
   - Read
   - Bash

@@ -161,9 +161,12 @@ describe('oxe-cc CLI', () => {
     assert.ok(fs.existsSync(path.join(fakeHome, '.gemini', 'commands', 'oxe.toml')));
     assert.ok(fs.existsSync(path.join(fakeHome, '.gemini', 'commands', 'oxe', 'scan.toml')));
     assert.ok(fs.existsSync(path.join(fakeHome, '.agents', 'skills', 'oxe-scan', 'SKILL.md')));
+    assert.ok(fs.existsSync(path.join(fakeHome, '.agents', 'skills', 'oxe-planner', 'SKILL.md')));
     assert.ok(fs.existsSync(path.join(fakeHome, '.codex', 'prompts', 'oxe.md')));
     assert.ok(fs.existsSync(path.join(fakeHome, '.codeium', 'windsurf', 'global_workflows', 'oxe-scan.md')));
     assert.ok(fs.existsSync(path.join(fakeHome, '.gemini', 'antigravity', 'skills', 'oxe-scan', 'SKILL.md')));
+    assert.ok(fs.existsSync(path.join(fakeHome, '.gemini', 'antigravity', 'skills', 'oxe-verifier', 'SKILL.md')));
+    assert.ok(fs.existsSync(path.join(fakeHome, '.claude', 'agents', 'oxe-planner.md')));
   });
 
   test('--copilot-cli creates ~/.claude/commands and .oxe/workflows in project', () => {
@@ -172,6 +175,7 @@ describe('oxe-cc CLI', () => {
     assert.strictEqual(status, 0);
     assert.ok(fs.existsSync(path.join(fakeHome, '.claude', 'commands', 'oxe-scan.md')));
     assert.ok(fs.existsSync(path.join(fakeHome, '.claude', 'commands', 'oxe.md')));
+    assert.ok(fs.existsSync(path.join(fakeHome, '.claude', 'agents', 'oxe-executor.md')));
     assert.ok(fs.existsSync(path.join(fakeHome, '.copilot', 'commands', 'oxe-scan.md')));
     assert.ok(fs.existsSync(path.join(fakeHome, '.copilot', 'commands', 'oxe.md')));
     const skillScan = path.join(fakeHome, '.copilot', 'skills', 'oxe-scan', 'SKILL.md');
@@ -201,6 +205,7 @@ describe('oxe-cc CLI', () => {
     );
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'workflows', 'scan.md')));
     assert.ok(fs.existsSync(path.join(fakeHome, '.claude', 'commands', 'oxe-scan.md')));
+    assert.ok(fs.existsSync(path.join(fakeHome, '.claude', 'agents', 'oxe-executor.md')));
     const u = spawnSync(process.execPath, [CLI, 'uninstall', '--ide-only', '--dir', dir], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
@@ -209,6 +214,7 @@ describe('oxe-cc CLI', () => {
     assert.strictEqual(u.status, 0, u.stderr + u.stdout);
     assert.ok(!fs.existsSync(path.join(fakeHome, '.claude', 'commands', 'oxe-scan.md')));
     assert.ok(!fs.existsSync(path.join(fakeHome, '.claude', 'commands', 'oxe.md')));
+    assert.ok(!fs.existsSync(path.join(fakeHome, '.claude', 'agents', 'oxe-executor.md')));
     assert.ok(!fs.existsSync(path.join(fakeHome, '.copilot', 'commands', 'oxe-scan.md')));
     assert.ok(!fs.existsSync(path.join(fakeHome, '.copilot', 'commands', 'oxe.md')));
     assert.ok(!fs.existsSync(path.join(fakeHome, '.copilot', 'skills', 'oxe-scan', 'SKILL.md')));

@@ -61,6 +61,56 @@ export function reduce(events: OxeEvent[]): RunState {
 // Exported alias so debug-reducer can import applyEvent without circular issues
 export { applyEvent as applyEventExported };
 
+// ─── State machine: valid transitions ─────────────────────────────────────────
+
+import type { WorkItemStatus } from '../models/work-item';
+import type { RunStatus } from '../models/run';
+
+const VALID_WORK_ITEM_TRANSITIONS: Record<WorkItemStatus, readonly WorkItemStatus[]> = {
+  pending:   ['ready'],
+  ready:     ['running'],
+  running:   ['completed', 'failed', 'blocked'],
+  failed:    ['ready'],      // retry path
+  completed: [],             // terminal
+  blocked:   [],             // terminal
+  skipped:   [],             // terminal
+};
+
+const VALID_RUN_TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
+  planned:          ['running'],
+  running:          ['paused', 'failed', 'completed', 'aborted', 'cancelled', 'waiting_approval'],
+  paused:           ['running', 'cancelled'],
+  waiting_approval: ['running', 'cancelled'],
+  failed:           ['replaying'],
+  replaying:        ['running', 'failed', 'completed'],
+  completed:        [],
+  aborted:          [],
+  cancelled:        [],
+};
+
+function assertWorkItemTransition(
+  itemId: string,
+  from: WorkItemStatus,
+  to: WorkItemStatus,
+  eventType: string
+): void {
+  const allowed = VALID_WORK_ITEM_TRANSITIONS[from] ?? [];
+  if (!(allowed as readonly string[]).includes(to)) {
+    throw new Error(
+      `[state-machine] Invalid work item transition for "${itemId}": ${from} → ${to} (event: ${eventType})`
+    );
+  }
+}
+
+function assertRunTransition(from: RunStatus, to: RunStatus, eventType: string): void {
+  const allowed = VALID_RUN_TRANSITIONS[from] ?? [];
+  if (!(allowed as readonly string[]).includes(to)) {
+    throw new Error(
+      `[state-machine] Invalid run transition: ${from} → ${to} (event: ${eventType})`
+    );
+  }
+}
+
 function applyEvent(state: RunState, event: OxeEvent): RunState {
   switch (event.type) {
     case 'RunStarted': {
@@ -71,6 +121,7 @@ function applyEvent(state: RunState, event: OxeEvent): RunState {
     case 'RunCompleted': {
       if (!state.run) return state;
       const status = (event.payload as { status?: Run['status'] }).status ?? 'completed';
+      assertRunTransition(state.run.status, status, event.type);
       return {
         ...state,
         run: { ...state.run, status, ended_at: event.timestamp },
@@ -121,7 +172,10 @@ function applyEvent(state: RunState, event: OxeEvent): RunState {
       if (!event.work_item_id) return state;
       const workItems = new Map(state.workItems);
       const item = workItems.get(event.work_item_id);
-      if (item) workItems.set(event.work_item_id, { ...item, status: 'completed' });
+      if (item) {
+        assertWorkItemTransition(event.work_item_id, item.status, 'completed', event.type);
+        workItems.set(event.work_item_id, { ...item, status: 'completed' });
+      }
       const completedWorkItems = new Set(state.completedWorkItems);
       completedWorkItems.add(event.work_item_id);
       // Collect evidence refs from payload
@@ -139,7 +193,10 @@ function applyEvent(state: RunState, event: OxeEvent): RunState {
       if (!event.work_item_id) return state;
       const workItems = new Map(state.workItems);
       const item = workItems.get(event.work_item_id);
-      if (item) workItems.set(event.work_item_id, { ...item, status: 'blocked' });
+      if (item) {
+        assertWorkItemTransition(event.work_item_id, item.status, 'blocked', event.type);
+        workItems.set(event.work_item_id, { ...item, status: 'blocked' });
+      }
       const blockedWorkItems = new Set(state.blockedWorkItems);
       blockedWorkItems.add(event.work_item_id);
       return { ...state, workItems, blockedWorkItems };

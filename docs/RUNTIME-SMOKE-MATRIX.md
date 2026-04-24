@@ -1,6 +1,6 @@
 # OXE — Runtime Smoke Matrix
 
-> Estado de suporte por runtime de IA. Atualizado em v1.6.0.
+> Estado de suporte por runtime de IA. Atualizado em v1.7.0.
 >
 > `✓` = suportado e testado | `~` = suportado parcialmente | `✗` = não suportado | `?` = não testado
 

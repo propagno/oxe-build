@@ -15,12 +15,20 @@ export interface ToolInvocationResult {
     side_effects_applied: string[];
     error?: string;
 }
+export interface PreInvokeResult {
+    allowed: boolean;
+    reason?: string;
+}
 export interface ToolProvider {
     readonly name: string;
     readonly kind: 'read' | 'mutation' | 'verification' | 'analysis' | 'external_operation';
     readonly idempotent: boolean;
     supports(actionType: string): boolean;
     invoke(input: ToolInvocationInput): Promise<ToolInvocationResult>;
+    /** Optional: called before invoke. Return allowed:false to block execution. */
+    preInvoke?(input: ToolInvocationInput): Promise<PreInvokeResult>;
+    /** Optional: called after invoke. Errors are swallowed — does not affect outcome. */
+    postInvoke?(input: ToolInvocationInput, result: ToolInvocationResult): Promise<void>;
 }
 export interface WorkspaceProvider extends WorkspaceManager {
     readonly name: string;

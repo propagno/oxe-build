@@ -39,3 +39,6 @@ export * from './scheduler/multi-agent-coordinator';
 // R4 Public ABI — Decision, Audit & Enterprise
 export * from './decision/index';
 export * from './audit/index';
+
+// R5 Public ABI — LLM Task Executor
+export * from './executor/index';

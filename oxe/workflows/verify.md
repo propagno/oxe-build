@@ -54,6 +54,7 @@ Ao receber qualquer argumento, verificar flags antes de iniciar o fluxo principa
 - **Runtime enterprise como caminho padrão:** quando `oxe-cc runtime` estiver disponível, executar ou solicitar `oxe-cc runtime verify --dir <projeto>` como caminho primário deste passo. Tratar `verification-manifest.json`, `residual-risk-ledger.json` e `evidence-coverage.json` da run ativa como fonte primária de evidência técnica, e o `VERIFY.md` projetado pelo runtime como base do artefato final.
 - Se `runtime verify` retornar `partial`, continuar com as camadas manuais usando os gaps explícitos do runtime como backlog obrigatório da revisão; não cair silenciosamente para narrativa solta.
 - Se o runtime não estiver compilado, indisponível ou não puder ser executado no ambiente atual, declarar `fallback legado` explicitamente antes de seguir com a verificação manual baseada em markdown e comandos locais.
+- **Agentes de verificação:** quando disponíveis, usar `oxe-verifier`, `oxe-integration-checker`, `oxe-validation-auditor` e `oxe-ui-auditor` como papéis auxiliares para auditar evidência, integração, lacunas de validação e UI. O resultado final continua sendo `VERIFY.md` + manifest/evidence do runtime.
 - Ler `EXECUTION-RUNTIME.md` e `CHECKPOINTS.md` do escopo resolvido quando existirem. Eles são evidência tática para saber o que realmente foi executado, bloqueado, aprovado ou desviado.
 - Se a trilha tocar Azure, ler `.oxe/cloud/azure/INVENTORY.md`, `SERVICEBUS.md`, `EVENTGRID.md`, `SQL.md` e `operations/*.md|json` para confirmar recursos reais, checkpoints e mutações aplicadas.
 - **Observações CI como evidência:** se `OBSERVATIONS.md` do escopo resolvido tiver obs do tipo `ci_failure` com `CI-evidência` preenchida, usar como evidência adicional para critérios A* de qualidade (ex.: cobertura, build verde). Se obs tiver `ci_run_url`, referenciar na coluna **Evidência** da tabela de critérios. Se obs estiver `pendente` e critério A* de qualidade existir, marcar o critério como `evidence_pending_ci` — não como passou — até o CI ser resolvido.
@@ -79,6 +80,8 @@ Verificar que o PLAN.md está apto para verificação:
 3. Se houver `DISCUSS.md` no escopo resolvido, toda decisão técnica com ID **D-NN** aparece em **Decisão vinculada:** de alguma tarefa (ou nota explícita de gap no PLAN).
 4. Não há dependências `Tk` inválidas (ID inexistente no PLAN).
 5. `PLAN.md` contém a seção **Autoavaliação do Plano** com `Melhor plano atual`, `Confiança` e rubrica preenchida.
+6. `IMPLEMENTATION-PACK`, `REFERENCE-ANCHORS` e `FIXTURE-PACK` existem quando a execução veio de plano e não possuem `critical_gap` não resolvido.
+7. Tarefas de risco têm evidência executável ou fixture/UAT explicitamente justificada.
 
 Se auditoria falhar: registrar na seção **Auditoria de pré-execução** do VERIFY.md os itens com problema e **pausar** — pedir correção do PLAN antes de continuar. Se o usuário forçar continuar com `--skip-audit`, documentar e prosseguir com aviso.
 </camada_1_pre_exec_audit>

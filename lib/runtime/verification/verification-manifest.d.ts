@@ -1,13 +1,16 @@
 import type { VerificationStatus } from '../models/verification-result';
 import type { CheckResult } from './verification-compiler';
 export type VerificationProfile = 'quick' | 'standard' | 'critical';
-export type FailureClass = 'deterministic' | 'flaky' | 'timeout' | 'env_setup' | 'policy_failure' | 'evidence_missing';
+/** Verification-specific failure classification (why a check failed, not why a task failed). */
+export type VerificationFailureClass = 'deterministic' | 'flaky' | 'timeout' | 'env_setup' | 'policy_failure' | 'evidence_missing';
+/** @deprecated Use VerificationFailureClass. Kept for backwards compat. */
+export type FailureClass = VerificationFailureClass;
 export type VerificationGranularity = 'work_item' | 'wave' | 'run';
 export interface ManifestCheck {
     check_id: string;
     acceptance_ref: string | null;
     status: VerificationStatus;
-    failure_class: FailureClass | null;
+    failure_class: VerificationFailureClass | null;
     evidence_refs: string[];
     duration_ms: number;
 }

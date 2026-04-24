@@ -24,10 +24,17 @@
       "expected_checks": [
         "npm test -- example"
       ],
+      "negative_cases": [
+        {
+          "summary": "entrada inválida deve falhar de forma controlada",
+          "expected": "erro classificado, sem mutação parcial"
+        }
+      ],
       "critical_fields": [
         "id",
         "status"
       ],
+      "source_anchor": "RA-01",
       "critical_gaps": []
     }
   ]

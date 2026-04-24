@@ -23,6 +23,8 @@ Se o usuário pedir **--replan** (ou replanejamento implícito após `verify_fai
 <execution_rational_artifacts>
 ## Artefatos racionais obrigatórios
 
+Quando o plano tiver múltiplos domínios, usar os agentes especializados OXE como referência de qualidade: `oxe-planner`, `oxe-plan-checker`, `oxe-codebase-mapper`, `oxe-assumptions-analyzer`, `oxe-researcher`, `oxe-ui-checker` e `oxe-validation-auditor`. Eles não substituem o workflow; apenas ajudam a fechar evidência, contratos e gaps antes da execução.
+
 ### IMPLEMENTATION-PACK
 Contrato de implementação por tarefa `Tn`, com:
 - caminhos exatos dos arquivos alvo, sem `...` e sem "arquivos prováveis" vagos;
@@ -30,6 +32,7 @@ Contrato de implementação por tarefa `Tn`, com:
 - assinatura/shape de entrada e saída;
 - dependências, invariantes, `not_allowed`, `write_set`, `expected_checks` e `requires_fixture`;
 - snippets somente quando ancorados em evidência local ou materializada.
+- sequência mínima de implementação, rollback/contensão para risco high/critical e imports/dependências obrigatórias.
 
 ### REFERENCE-ANCHORS
 Materializa referências críticas que hoje ficam frouxas no plano:
@@ -43,6 +46,7 @@ Fixtures mínimos por fluxo/tarefa de risco:
 - payloads, arquivos exemplo, trechos significativos, offsets/campos críticos;
 - expected outputs ou checks parciais/completos;
 - queries/checks de validação e smoke commands.
+- negative cases mínimos para validação de erro, limite ou regressão principal.
 
 Regra de readiness:
 - `IMPLEMENTATION-PACK` precisa estar `ready`;
@@ -179,6 +183,279 @@ Depois do resumo e antes das tarefas, o `PLAN.md` deve conter também:
 
 **Comparativo host ↔ cliente (migração / paridade):** pode-se dedicar tarefas a produzir ou atualizar uma **matriz Markdown** (classificações: equivalente / implementação diferente / só host / só cliente) com colunas de artefactos reais no repo — ver secção *Molde de comparativo* em **`oxe/workflows/references/legacy-brownfield.md`**. Cada **Tn** deve manter **Aceite vinculado** aos **A*** que essa matriz satisfaz.
 </format_plan>
+
+<executor_node_contract>
+## Contrato executor — mapeamento tarefa → GraphNode
+
+Cada tarefa `Tn` do `PLAN.md` pode ser executada pelo `LlmTaskExecutor` quando convertida em `GraphNode`. O planejador deve pensar em cada tarefa já com essa estrutura em mente para garantir executabilidade direta.
+
+### Campos do GraphNode que o plano deve alimentar
+
+| Campo do GraphNode | Equivalente no PLAN.md |
+|--------------------|------------------------|
+| `id` | ID da tarefa (ex.: `T3`) |
+| `title` | Título da tarefa |
+| `mutation_scope` | Arquivos que serão modificados (em **Arquivos prováveis**) |
+| `actions[].type` | Tipo de ação (derivado de **Implementar**) |
+| `verify.must_pass` | Critérios de aceite (de **Verificar** + **Aceite vinculado**) |
+| `verify.command` | Comando em **Verificar → Comando:** |
+| `depends_on` | IDs em **Depende de:** |
+
+### Catálogo de `action_type`
+
+Ao escrever o campo **Implementar** de cada tarefa, classificar a ação principal:
+
+| `action_type` | Quando usar | Tools disponíveis no executor |
+|---------------|-------------|-------------------------------|
+| `read_code` | Ler, mapear, investigar sem nenhuma mutação | `read_file`, `glob`, `grep` |
+| `generate_patch` | Criar ou modificar arquivos de código | `read_file`, `write_file`, `patch_file` |
+| `run_tests` | Executar suite de testes | `run_command` |
+| `run_lint` | Executar linter, type-check ou análise estática | `run_command` |
+| `collect_evidence` | Coletar artefatos, logs, relatórios | `read_file`, `glob`, `run_command` |
+| `custom` | Combinação arbitrária ou não classificável | todas as tools |
+
+**Regra:** tarefas de investigação/leitura devem usar `read_code` ou `collect_evidence`. Tarefas de codificação usam `generate_patch`. Nunca usar `custom` quando uma ação mais específica for suficiente — `custom` desativa otimizações de paralelismo.
+
+### `mutation_scope` e idempotência no scheduler
+
+O campo `mutation_scope` lista os arquivos que **serão criados ou modificados**. Ele define:
+1. Se a tarefa pode rodar em paralelo com outras (sem mutation_scope = idempotente = segura)
+2. Quais arquivos o executor tem permissão de escrever
+3. O escopo de rollback em caso de falha
+
+**Regras de mutation_scope para ondas:**
+- Tarefas de leitura/investigação: `mutation_scope: []` → podem estar na mesma onda sem conflito
+- Tarefas de escrita com arquivos **disjuntos**: podem estar na mesma onda em paralelo
+- Tarefas de escrita com **algum arquivo em comum**: obrigatoriamente em ondas separadas
+- Tarefas que executam comandos com side effects (migrations, deploys): sempre em série, onda própria
+
+**Exemplo de particionamento correto:**
+```
+T1 — Criar entidade User       mutation_scope: [src/users/user.entity.ts]      → Onda 1
+T2 — Criar entidade Order      mutation_scope: [src/orders/order.entity.ts]    → Onda 1 (paralelo)
+T3 — Criar migration inicial   mutation_scope: [src/migrations/001-init.ts]    → Onda 2 (depende T1, T2)
+T4 — Executar migration        mutation_scope: []  (side effect: banco)         → Onda 3, serial
+T5 — Rodar suite de testes     mutation_scope: []  (idempotente)                → Onda 4
+```
+
+### Verificar como critério executável pelo agente
+
+O campo **Verificar → Comando:** deve ser:
+- Executável no ambiente do agente sem input interativo
+- Determinístico: mesmo input → mesmo resultado
+- Rápido o suficiente para feedback em tempo real (< 60s preferível)
+
+Se o comando não for possível no agente (ex.: requer browser ou acesso manual), usar **Verificar → Manual:** com checklist de passos observáveis. Nunca deixar **Verificar** vazio em tarefa mutável.
+</executor_node_contract>
+
+<wave_design_patterns>
+## Padrões de design de ondas
+
+Ondas definem a ordem de execução e o nível de paralelismo. Use estes padrões como referência ao estruturar o plano.
+
+### Padrão 1: Foundation → Core → Integration → Validation
+
+O padrão mais comum para features novas de um único domínio:
+
+```
+Onda 1 — Foundation (sem dependências entre si, mutation_scope disjuntos):
+  T1 — Definir tipos e interfaces
+  T2 — Criar entidades / models
+  T3 — Criar schemas de validação
+
+Onda 2 — Core (dependem da Onda 1):
+  T4 — Implementar serviço principal
+  T5 — Implementar repositório
+  T6 — Criar testes unitários do serviço
+
+Onda 3 — Integration (dependem da Onda 2):
+  T7 — Criar controller / handler
+  T8 — Adicionar rota / endpoint
+  T9 — Criar testes de integração
+
+Onda 4 — Validation (depende de tudo):
+  T10 — Executar suite de testes completa
+  T11 — Verificar tipagem (typecheck)
+```
+
+### Padrão 2: Migration-safe (mudanças de schema)
+
+Para mudanças que envolvem banco de dados com dados existentes:
+
+```
+Onda 1 — Schema prep (reversível, aditivo apenas):
+  T1 — Criar migration de schema (ADD COLUMN nullable ou com default)
+  T2 — Criar / atualizar types e DTOs
+
+Onda 2 — Code adaptation (código adaptado ao novo schema):
+  T3 — Atualizar repositório para usar novos campos
+  T4 — Atualizar testes para o novo schema
+
+Onda 3 — Gate + Execute:
+  T5 — [GATE HUMANO: revisar migration antes de aplicar em staging]
+  T6 — Executar migration em staging
+  T7 — Validar dados migrados (query de verificação)
+
+Onda 4 — Cleanup (após validação aprovada):
+  T8 — Remover código de compatibilidade legado
+  T9 — Rodar suite completa contra staging
+```
+
+### Padrão 3: Refactor incremental (sem quebrar o sistema)
+
+Para refatorações que não podem causar regressão:
+
+```
+Onda 1 — Nova interface ao lado da antiga (strangler fig):
+  T1 — Criar nova abstração / interface
+  T2 — Criar testes para nova interface (TDD)
+
+Onda 2 — Migração parcial (módulo a módulo, paralela):
+  T3 — Migrar módulo A para nova interface
+  T4 — Migrar módulo B para nova interface
+  (paralelas se mutation_scope disjuntos)
+
+Onda 3 — Cutover:
+  T5 — Remover interface antiga
+  T6 — Verificar que nenhum ponto usa a interface removida (grep)
+
+Onda 4 — Validação final:
+  T7 — Rodar suite completa
+  T8 — Verificar cobertura de testes
+```
+
+### Padrão 4: Investigação → Gate → Execução
+
+Para mudanças em código desconhecido ou de alto risco:
+
+```
+Onda 1 — Investigação (idempotente, action_type: read_code/collect_evidence):
+  T1 — Mapear arquivos afetados (read_code)
+  T2 — Verificar testes existentes (collect_evidence)
+  T3 — Analisar dependências transitivas (read_code)
+
+Onda 2 — Gate humano:
+  T4 — [GATE: revisar findings de T1-T3 antes de executar qualquer mutação]
+
+Onda 3 — Execução (baseada nos findings):
+  T5 — Implementar mudança A
+  T6 — Implementar mudança B
+  T7 — Rodar testes de regressão
+```
+
+### Regras universais de onda
+
+1. **Sem dependência circular:** T2→T3→T2 é inválido; quebrar em sub-tarefas ou redesenhar.
+2. **Onda não pode ter tarefas com mutation_scope em comum** — separar em ondas distintas.
+3. **Gates humanos são tarefas explícitas:** aprovação humana = tarefa `T-GATE` que bloqueia a onda seguinte.
+4. **Onda de validação sempre ao final:** o último grupo de tarefas deve incluir `run_tests` ou `run_lint`.
+5. **Respeitar `plan_max_tasks_per_wave`** da config (default: ilimitado) — se configurado, dividir em mais ondas.
+6. **Ondas sem tarefas são inválidas** — verificar que cada número de onda tem pelo menos uma tarefa (gate 4 do quality gate).
+</wave_design_patterns>
+
+<task_granularity_rubric>
+## Rubrica de granularidade de tarefas
+
+### O que define uma boa tarefa
+
+| Dimensão | Boa tarefa | Tarefa problemática |
+|----------|------------|---------------------|
+| **Escopo** | 1-3 arquivos com propósito coeso | "Implementar o módulo inteiro" |
+| **Verificação** | Comando único que passa/falha deterministicamente | "Verificar manualmente se funciona" |
+| **Dependências** | 0-2 dependências explícitas | Cadeia de 5+ em série |
+| **Tempo** | < 2h de trabalho focado | "Será rápido mas depende do ambiente" |
+| **Reversibilidade** | Pode ser revertida sem afetar outras tarefas | Mudança destrutiva sem rollback |
+| **Ação dominante** | Um único `action_type` cobre 80%+ do trabalho | Mistura de leitura, escrita e execução sem sequência clara |
+
+### Tamanhos de referência
+
+| Complexidade | Escopo típico | `action_type` típico | Verificar típico | Exemplos |
+|-------------|---------------|----------------------|-----------------|---------|
+| `S` | 1-2 arquivos, mudança localizada | `generate_patch` | `npm test -- auth` | Adicionar campo em DTO; corrigir tipo; nova constante |
+| `M` | 2-5 arquivos, feature pequena | `generate_patch` + `run_tests` | `npm test -- users` | Novo endpoint CRUD; nova migration + model; novo middleware |
+| `L` | 5-10 arquivos, feature completa | múltiplos | `npm test` (suite) | Sistema de auth; módulo de relatórios; integração com terceiro |
+| `XL` | > 10 arquivos, ou impacto arquitetural | múltiplos | Múltiplos comandos + manual | Migração de banco; refactor de módulo core; nova infra |
+
+### Sinais de que uma tarefa deve ser quebrada (XL obrigatório)
+
+- `mutation_scope` com mais de 5 arquivos distintos sem relação direta
+- **Verificar** tem 2+ comandos distintos que devem **todos** passar
+- **Implementar** tem 3+ etapas com lógica condicional entre elas
+- A tarefa envolve banco de dados **e** código **e** infraestrutura ao mesmo tempo
+- A tarefa toca área listada em CONCERNS com impacto `high`/`critical` sem contenção explícita
+
+**Quando a tarefa XL não pode ser quebrada:** exigir sub-tarefas Tn.1, Tn.2, … como bullets dentro da tarefa, ou justificativa explícita de por que não pode ser dividida. Sem sub-tarefas e sem justificativa = falha do quality gate (item 8).
+
+### Tarefas de investigação (action_type: read_code / collect_evidence)
+
+Tarefas de investigação são sempre `S` ou `M` — não escrevem código. Devem:
+- Produzir um artefato observável (ex.: lista de arquivos afetados em OBSERVATIONS.md)
+- Ter verificação por leitura (agente confirma que o artefato foi criado e tem conteúdo)
+- Estar na Onda 1 (sem dependências, idempotentes, paralelas entre si)
+- Nunca bloquear ondas de execução sem um gate de revisão explícito antes
+
+### Anti-padrões de granularidade
+
+| Anti-padrão | Por quê é ruim | Solução |
+|-------------|----------------|---------|
+| "Implementar tudo em T1" | XL sem sub-tarefas = sem plano real | Quebrar em S/M |
+| "T2 faz o mesmo que T1 mas melhor" | Redundância sem distinção | Merge ou eliminar |
+| "T5 depende de T1, T2, T3, T4" | Cadeia serial = bottleneck total | Verificar se todas as deps são reais |
+| "Verificar: rodar o sistema e ver se funciona" | Não determinístico, não automatizável | Especificar comando exato |
+| Tarefa `S` com mutation_scope de 10 arquivos | Inconsistente — complexidade subestimada | Elevar para `M` ou `L` |
+</task_granularity_rubric>
+
+<plan_anti_patterns>
+## Anti-padrões de planejamento
+
+### Decisão adiada para a execução
+
+**Problema:** "A implementação de T3 dependerá do que T2 decidir sobre a estrutura de dados."
+**Por quê é ruim:** o executor (humano ou `LlmTaskExecutor`) não tem contexto para tomar decisões de design no meio da execução. Decisões abertas viram improviso.
+**Solução:** tomar a decisão antes de finalizar o plano. Se a decisão for complexa, criar tarefa de `read_code` na Onda 1 + gate humano, ou executar `oxe:discuss` antes.
+
+### Verificar escrito depois de Implementar
+
+**Problema:** escrever primeiro o que fazer e só depois como verificar.
+**Por quê é ruim:** o executor não sabe o que "pronto" significa até o final — o trabalho pode ir na direção errada.
+**Solução:** o campo **Verificar** deve preceder **Implementar** no texto. A pergunta é "como saberei que está pronto?" — a resposta define o target; **Implementar** é o caminho mínimo até esse target. (Ver também gate item 9.)
+
+### Acoplamento de ondas desnecessário
+
+**Problema:** T4 depende de T3 que depende de T2 que depende de T1 — toda a feature em série.
+**Por quê é ruim:** impossibilita paralelismo; um atraso em T1 atrasa tudo; tempo de execução total aumenta linearmente.
+**Solução:** verificar se cada dependência é real. T1 e T2 com `mutation_scope` disjuntos podem rodar em paralelo na mesma onda.
+
+### mutation_scope vazio em tarefa de escrita
+
+**Problema:** tarefa com `action_type: generate_patch` sem listar os arquivos afetados em **Arquivos prováveis**.
+**Por quê é ruim:** o executor não sabe o que tem permissão de escrever; pode escrever nos arquivos errados ou duplicar código.
+**Solução:** todo `generate_patch` deve ter `mutation_scope` com pelo menos 1 arquivo. Se o arquivo ainda não existe, listar o path planejado.
+
+### Confiança > 90% sem artefatos racionais íntegros
+
+**Problema:** declarar `Confiança: 95%` sem `IMPLEMENTATION-PACK`, `REFERENCE-ANCHORS` e `FIXTURE-PACK` completos.
+**Por quê é ruim:** confiança sem evidência é otimismo sem base — o quality gate item 19 falha explicitamente.
+**Solução:** reduzir para ≤ 90% até os três artefatos racionais estarem íntegros e sem `critical_gap` aberto.
+
+### Risco sem contenção
+
+**Problema:** tarefa de migration, mudança de auth, ou alteração de contrato público sem rollback ou fallback explícito.
+**Por quê é ruim:** falha em produção sem plano de recuperação = incident sem saída clara.
+**Solução:** toda tarefa de risco `high`/`critical` deve ter contenção em **Implementar**: ex.: "fazer backup da tabela antes da migration", "manter endpoint legado por uma versão". Ver quality gate item 13.
+
+### "Tarefa de revisão final" no plano
+
+**Problema:** última tarefa do plano é "revisar tudo e garantir que está correto".
+**Por quê é ruim:** revisão final sem critério objetivo é o ciclo `verify`, não o `plan`. O plano termina com `run_tests`, não com inspeção manual aberta.
+**Solução:** mover revisão manual para o fluxo `oxe:verify`. O plano termina com uma tarefa de `run_tests` ou `run_lint` determinística.
+
+### Tarefa sem rastreabilidade de entrada
+
+**Problema:** `T7 — Adicionar campo de auditoria` sem referência à SPEC, DISCUSS, OBS ou CONCERNS que a originou.
+**Por quê é ruim:** o quality gate item 12 falha; a tarefa parece inventada sem evidência.
+**Solução:** toda tarefa deve ter origem observável: `Aceite vinculado: A5` ou `Decisão vinculada: D-03` ou uma nota inline referenciando CONCERNS/OBS.
+</plan_anti_patterns>
 
 <plan_quality_gate>
 Antes de finalizar a resposta ao utilizador, o agente **deve** percorrer este gate sobre o `PLAN.md` já escrito; se falhar, **corrigir o PLAN** na mesma sessão.

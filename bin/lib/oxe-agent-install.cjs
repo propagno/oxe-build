@@ -37,6 +37,7 @@ function expandTilde(p) {
  *   codexPromptsDir: string,
  *   codexAgentsSkillsRoot: string,
  *   antigravitySkillsRoot: string,
+ *   claudeAgentsDir: string,
  * }} AgentInstallPaths
  */
 
@@ -59,6 +60,7 @@ function buildAgentInstallPaths(ideGlobal, projectRoot) {
       codexPromptsDir: path.join(codexHome, 'prompts'),
       codexAgentsSkillsRoot: path.join(home, '.agents', 'skills'),
       antigravitySkillsRoot: path.join(home, '.gemini', 'antigravity', 'skills'),
+      claudeAgentsDir: path.join(home, '.claude', 'agents'),
     };
   }
   return {
@@ -69,6 +71,7 @@ function buildAgentInstallPaths(ideGlobal, projectRoot) {
     codexPromptsDir: path.join(root, '.codex', 'prompts'),
     codexAgentsSkillsRoot: path.join(root, '.agents', 'skills'),
     antigravitySkillsRoot: path.join(root, '.gemini', 'antigravity', 'skills'),
+    claudeAgentsDir: path.join(root, '.claude', 'agents'),
   };
 }
 
@@ -129,6 +132,86 @@ function buildAgentSkillMarkdown(skillName, description, body, metadata) {
     `${OXE_MANAGED_HTML}\n\n` +
     `${body}\n`
   );
+}
+
+/** @param {string} name */
+function isOxeAgentMarkdownName(name) {
+  return name.startsWith('oxe-') && name.endsWith('.md');
+}
+
+/**
+ * @param {string} text
+ * @returns {{ name: string, description: string, body: string, frontmatter: Record<string, string> }}
+ */
+function parseCanonicalAgentMarkdown(text) {
+  const parsed = parseCursorCommandFrontmatter(text);
+  return {
+    name: parsed.frontmatter.name || '',
+    description: parsed.description || parsed.frontmatter.description || '',
+    body: parsed.body,
+    frontmatter: parsed.frontmatter,
+  };
+}
+
+/**
+ * Instala agentes especializados OXE como markdown nativo para runtimes que suportam agentes.
+ * @param {string} agentsSrc
+ * @param {string} destDir
+ * @param {{ dryRun: boolean, force: boolean }} opts
+ * @param {(s: string) => void} [logOmitido]
+ * @param {(s: string) => void} [logWrite]
+ */
+function installCanonicalAgentMarkdowns(agentsSrc, destDir, opts, logOmitido, logWrite) {
+  if (!fs.existsSync(agentsSrc)) return;
+  for (const name of fs.readdirSync(agentsSrc)) {
+    if (!isOxeAgentMarkdownName(name)) continue;
+    const src = path.join(agentsSrc, name);
+    const dest = path.join(destDir, name);
+    if (opts.dryRun) {
+      if (logWrite) logWrite(`${src} → ${dest}`);
+      continue;
+    }
+    if (fs.existsSync(dest) && !opts.force) {
+      if (logOmitido) logOmitido(dest);
+      continue;
+    }
+    const raw = fs.readFileSync(src, 'utf8');
+    const out = raw.includes(OXE_MANAGED_HTML) ? raw : raw.replace(/\n?$/, `\n\n${OXE_MANAGED_HTML}\n`);
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.writeFileSync(dest, out, 'utf8');
+  }
+}
+
+/**
+ * Instala agentes especializados OXE como skills Codex/Antigravity.
+ * @param {string} agentsSrc
+ * @param {string} skillsRoot
+ * @param {{ dryRun: boolean, force: boolean }} opts
+ * @param {(s: string) => void} [logOmitido]
+ * @param {(s: string) => void} [logWrite]
+ */
+function installCanonicalAgentSkills(agentsSrc, skillsRoot, opts, logOmitido, logWrite) {
+  if (!fs.existsSync(agentsSrc)) return;
+  for (const name of fs.readdirSync(agentsSrc)) {
+    if (!isOxeAgentMarkdownName(name)) continue;
+    const src = path.join(agentsSrc, name);
+    const raw = fs.readFileSync(src, 'utf8');
+    const parsed = parseCanonicalAgentMarkdown(raw);
+    const skillName = parsed.name || name.replace(/\.md$/i, '');
+    const md = buildAgentSkillMarkdown(skillName, parsed.description, parsed.body, parsed.frontmatter);
+    const destDir = path.join(skillsRoot, skillName);
+    const dest = path.join(destDir, 'SKILL.md');
+    if (opts.dryRun) {
+      if (logWrite) logWrite(`${src} → ${dest}`);
+      continue;
+    }
+    if (fs.existsSync(dest) && !opts.force) {
+      if (logOmitido) logOmitido(dest);
+      continue;
+    }
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.writeFileSync(dest, md, 'utf8');
+  }
 }
 
 /**
@@ -499,6 +582,21 @@ function cleanupMarkedUnifiedArtifacts(u, paths) {
     }
   }
 
+  if (shouldClean('claude')) {
+    const clAgents = p.claudeAgentsDir;
+    if (fs.existsSync(clAgents)) {
+      for (const name of fs.readdirSync(clAgents)) {
+        if (!isOxeAgentMarkdownName(name)) continue;
+        const filePath = path.join(clAgents, name);
+        try {
+          if (fs.readFileSync(filePath, 'utf8').includes(OXE_MANAGED_HTML)) unlinkQuiet(filePath);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+
   if (shouldClean('antigravity')) {
     const agRoot = p.antigravitySkillsRoot;
     if (fs.existsSync(agRoot)) {
@@ -534,6 +632,8 @@ module.exports = {
   installGeminiTomlCommands,
   installWindsurfGlobalWorkflows,
   installCodexPrompts,
+  installCanonicalAgentMarkdowns,
+  installCanonicalAgentSkills,
   opencodeCommandDirs,
   windsurfGlobalWorkflowsDir,
   geminiUserDir,
@@ -541,5 +641,6 @@ module.exports = {
   codexPromptsDir,
   antigravitySkillsRoot,
   isOxeCommandMarkdownName,
+  isOxeAgentMarkdownName,
   cleanupMarkedUnifiedArtifacts,
 };

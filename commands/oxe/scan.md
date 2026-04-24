@@ -1,6 +1,11 @@
 ---
 name: oxe:scan
-description: "[DEPRECATED v1.1.0] Incorporado por /oxe-spec. Use: /oxe-spec --refresh (incremental) ou /oxe-spec --full (completo)"
+description: >
+  Analisa o codebase e produz os sete documentos em .oxe/codebase/ (OVERVIEW, STACK, STRUCTURE,
+  TESTING, INTEGRATIONS, CONVENTIONS, CONCERNS). Detecta padrão arquitetural dominante, domínios
+  funcionais e sugere profile scale-adaptive. Modo bootstrap (do zero) ou refresh (incremental).
+  Cada documento passa por gate de qualidade com critérios e anti-padrões por tipo. O mapa
+  resultante alimenta spec, plan e o contexto do LlmTaskExecutor.
 argument-hint: "[área opcional, ex. auth, api]"
 allowed-tools:
   - Read

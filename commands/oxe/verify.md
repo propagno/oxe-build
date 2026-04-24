@@ -1,6 +1,11 @@
 ---
 name: oxe:verify
-description: "Valida e fecha o ciclo (retro automática). Flags: --gaps, --security, --ui, --pr, --diff, --skip-retro"
+description: >
+  Audita a implementação em quatro camadas: pré-execução (ambiente e commits), por tarefa Tn
+  (verify command de cada task), por critério A* (cobertura completa da SPEC), e fidelidade de
+  decisões D-NN. Produz VERIFY.md com evidência observável por critério, classifica findings por
+  severidade, gera checklist UAT para validação humana, e fecha o ciclo com retro automática.
+  --security adiciona auditoria de segurança baseline. --gaps foca em A* sem cobertura.
 argument-hint: "[Tn | --gaps | --security | --ui | --pr | --diff branchA...branchB | --skip-retro]"
 allowed-tools:
   - Read

@@ -11,6 +11,7 @@ const { IDE_HOME_VARS } = require('./isolated-home-env.cjs');
 
 const REPO = path.join(__dirname, '..');
 const C_CMD = path.join(REPO, '.cursor', 'commands');
+const OXE_AGENTS = path.join(REPO, 'oxe', 'agents');
 
 function withFakeHome(fakeHome, fn) {
   /** @type {Record<string, string | undefined>} */
@@ -150,6 +151,34 @@ describe('oxe-agent-install', () => {
       assert.match(promptText, /oxe-reasoning-contract:start/);
       assert.match(promptText, /\.oxe\/context\/packs\/scan\.json/);
       assert.match(promptText, /Regra pack-first/);
+    });
+  });
+
+  test('installCanonicalAgentSkills writes OXE-native Codex skills', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-ag-'));
+    withFakeHome(home, () => {
+      const paths = agent.buildAgentInstallPaths(true, home);
+      agent.installCanonicalAgentSkills(OXE_AGENTS, paths.codexAgentsSkillsRoot, { dryRun: false, force: true });
+      const skillPath = path.join(home, '.agents', 'skills', 'oxe-planner', 'SKILL.md');
+      assert.ok(fs.existsSync(skillPath));
+      const text = fs.readFileSync(skillPath, 'utf8');
+      assert.match(text, /name: oxe-planner/);
+      assert.match(text, /\.oxe\//);
+      assert.doesNotMatch(text, /get shit done|get-shit-done|\bGSD\b|\/gsd|gsd-tools|\.planning/i);
+    });
+  });
+
+  test('installCanonicalAgentMarkdowns writes Claude agent markdown', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-ag-'));
+    withFakeHome(home, () => {
+      const paths = agent.buildAgentInstallPaths(true, home);
+      agent.installCanonicalAgentMarkdowns(OXE_AGENTS, paths.claudeAgentsDir, { dryRun: false, force: true });
+      const agentPath = path.join(home, '.claude', 'agents', 'oxe-verifier.md');
+      assert.ok(fs.existsSync(agentPath));
+      const text = fs.readFileSync(agentPath, 'utf8');
+      assert.match(text, /name: oxe-verifier/);
+      assert.match(text, /oxe-cc managed/);
+      assert.doesNotMatch(text, /get shit done|get-shit-done|\bGSD\b|\/gsd|gsd-tools|\.planning/i);
     });
   });
 

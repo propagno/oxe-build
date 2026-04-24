@@ -53,10 +53,19 @@ export class PluginRegistry {
     return loaded;
   }
 
-  toolProviderFor(actionType: string): ToolProvider | null {
+  toolProviderFor(actionType: string, required: true): ToolProvider;
+  toolProviderFor(actionType: string, required?: false): ToolProvider | null;
+  toolProviderFor(actionType: string, required = false): ToolProvider | null {
     for (const plugin of this.plugins) {
       const provider = plugin.toolProviders?.find((p) => p.supports(actionType));
       if (provider) return provider;
+    }
+    if (required) {
+      const loaded = this.plugins.map(p => p.name).join(', ') || '(none)';
+      throw new Error(
+        `[plugin-registry] No provider supports action type "${actionType}". ` +
+        `Loaded plugins: [${loaded}]. Load errors: ${this.loadErrors.length}.`
+      );
     }
     return null;
   }

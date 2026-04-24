@@ -6,13 +6,17 @@ import type { CheckResult } from './verification-compiler';
 
 export type VerificationProfile = 'quick' | 'standard' | 'critical';
 
-export type FailureClass =
-  | 'deterministic'
-  | 'flaky'
-  | 'timeout'
-  | 'env_setup'
-  | 'policy_failure'
-  | 'evidence_missing';
+/** Verification-specific failure classification (why a check failed, not why a task failed). */
+export type VerificationFailureClass =
+  | 'deterministic'    // check always fails regardless of retry
+  | 'flaky'            // check outcome is non-deterministic
+  | 'timeout'          // check exceeded time budget
+  | 'env_setup'        // environment/infrastructure prevented check from running
+  | 'policy_failure'   // policy blocked the check
+  | 'evidence_missing'; // required evidence was never collected
+
+/** @deprecated Use VerificationFailureClass. Kept for backwards compat. */
+export type FailureClass = VerificationFailureClass;
 
 export type VerificationGranularity = 'work_item' | 'wave' | 'run';
 
@@ -20,7 +24,7 @@ export interface ManifestCheck {
   check_id: string;
   acceptance_ref: string | null;
   status: VerificationStatus;
-  failure_class: FailureClass | null;
+  failure_class: VerificationFailureClass | null;
   evidence_refs: string[];
   duration_ms: number;
 }
