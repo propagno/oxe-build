@@ -95,6 +95,38 @@ function validateGraph(graph) {
             break;
         }
     }
+    // Validate mutation_scope conflicts between parallel nodes in the same wave
+    const waveMap = new Map();
+    for (const [id, node] of graph.nodes) {
+        const list = waveMap.get(node.wave) ?? [];
+        waveMap.set(node.wave, [...list, id]);
+    }
+    for (const [wave, waveNodeIds] of waveMap) {
+        for (let i = 0; i < waveNodeIds.length; i++) {
+            for (let j = i + 1; j < waveNodeIds.length; j++) {
+                const idA = waveNodeIds[i];
+                const idB = waveNodeIds[j];
+                const a = graph.nodes.get(idA);
+                const b = graph.nodes.get(idB);
+                const notDependent = !a.depends_on.includes(idB) && !b.depends_on.includes(idA);
+                if (notDependent && a.mutation_scope.length > 0 && b.mutation_scope.length > 0) {
+                    const overlap = a.mutation_scope.filter(p => b.mutation_scope.includes(p));
+                    if (overlap.length > 0) {
+                        errors.push(`Wave ${wave}: nodes "${idA}" and "${idB}" mutate the same paths in parallel: ${overlap.join(', ')}`);
+                    }
+                }
+            }
+        }
+    }
+    // Validate wave ordering: a node must only depend on nodes from earlier waves
+    for (const [id, node] of graph.nodes) {
+        for (const dep of node.depends_on) {
+            const depNode = graph.nodes.get(dep);
+            if (depNode && depNode.wave >= node.wave) {
+                errors.push(`Node "${id}" (wave ${node.wave}) depends on "${dep}" (wave ${depNode.wave}) — dependency must come from an earlier wave`);
+            }
+        }
+    }
     return errors;
 }
 function toSerializable(graph) {

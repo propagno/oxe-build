@@ -44,3 +44,5 @@ __exportStar(require("./scheduler/multi-agent-coordinator"), exports);
 // R4 Public ABI — Decision, Audit & Enterprise
 __exportStar(require("./decision/index"), exports);
 __exportStar(require("./audit/index"), exports);
+// R5 Public ABI — LLM Task Executor
+__exportStar(require("./executor/index"), exports);
