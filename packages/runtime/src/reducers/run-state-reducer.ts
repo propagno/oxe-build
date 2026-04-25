@@ -68,7 +68,7 @@ import type { RunStatus } from '../models/run';
 
 const VALID_WORK_ITEM_TRANSITIONS: Record<WorkItemStatus, readonly WorkItemStatus[]> = {
   pending:   ['ready'],
-  ready:     ['running'],
+  ready:     ['running', 'completed', 'failed', 'blocked'],
   running:   ['completed', 'failed', 'blocked'],
   failed:    ['ready'],      // retry path
   completed: [],             // terminal
