@@ -271,6 +271,7 @@ function loadRuntimeSmokeReport(projectRoot) {
       && item.workflow_resolution_ok
       && item.wrapper_drift_ok !== false
       && item.extra_checks_ok !== false
+      && item.agent_checks_ok !== false
       && item.uninstall_ok
     );
   });

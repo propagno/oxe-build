@@ -2733,6 +2733,10 @@ function runInstall(opts) {
     if (fs.existsSync(personasSrc)) {
       copyDir(personasSrc, path.join(nested, 'personas'), copyOpts, false);
     }
+    const agentsSrc = path.join(PKG_ROOT, 'oxe', 'agents');
+    if (fs.existsSync(agentsSrc)) {
+      copyDir(agentsSrc, path.join(nested, 'agents'), copyOpts, false);
+    }
     // Schemas: copiar para .oxe/schemas/ (ex.: plan-agents.schema.json para validação local)
     const schemasSrc = path.join(PKG_ROOT, 'oxe', 'schemas');
     if (fs.existsSync(schemasSrc)) {
@@ -2751,6 +2755,7 @@ function runInstall(opts) {
   const doAgentClis = opts.copilotCli || opts.allAgents;
   if (doAgentClis) {
     const cCmd = path.join(PKG_ROOT, '.cursor', 'commands');
+    const canonicalAgents = path.join(PKG_ROOT, 'oxe', 'agents');
     const clBase = installClaudeBase(opts);
     const cpHome = installCopilotCliHome(opts);
     const clDest = path.join(clBase, 'commands');
@@ -2763,12 +2768,20 @@ function runInstall(opts) {
       installOxeCopilotCliSkills(cCmd, cpHome, copyOpts, idePathRewrite);
       copyDir(cCmd, clDest, copyOpts, idePathRewrite);
       copyDir(cCmd, cpCmdDest, copyOpts, idePathRewrite);
+      if (fs.existsSync(canonicalAgents)) {
+        oxeAgentInstall.installCanonicalAgentMarkdowns(
+          canonicalAgents,
+          agentPaths.claudeAgentsDir,
+          copyOpts
+        );
+      }
     } else {
       console.warn(`${yellow}aviso:${reset} pasta ausente ${cCmd} — ignorando comandos CLI`);
     }
   }
 
   const cCmdAgents = path.join(PKG_ROOT, '.cursor', 'commands');
+  const canonicalAgents = path.join(PKG_ROOT, 'oxe', 'agents');
   if (fs.existsSync(cCmdAgents) && (opts.allAgents || anyGranularAgent(opts))) {
     const logO = (d) => console.log(`${dim}omitido${reset} ${d} (já existe — use --force)`);
     const logW = (msg) => console.log(`${dim}agents${reset}  ${msg}`);
@@ -2796,6 +2809,13 @@ function runInstall(opts) {
         logO,
         logW
       );
+      oxeAgentInstall.installCanonicalAgentSkills(
+        canonicalAgents,
+        agentPaths.antigravitySkillsRoot,
+        copyOpts,
+        logO,
+        logW
+      );
     }
     if (opts.agentCodex || opts.allAgents) {
       oxeAgentInstall.installSkillTreeFromCursorCommands(
@@ -2803,6 +2823,13 @@ function runInstall(opts) {
         agentPaths.codexAgentsSkillsRoot,
         copyOpts,
         idePathRewrite,
+        logO,
+        logW
+      );
+      oxeAgentInstall.installCanonicalAgentSkills(
+        canonicalAgents,
+        agentPaths.codexAgentsSkillsRoot,
+        copyOpts,
         logO,
         logW
       );
@@ -2900,6 +2927,7 @@ function runInstall(opts) {
     trackFile(runtimeSemanticsManifestPath(opts));
     if (opts.copilotCli || opts.allAgents) {
       addTracked(path.join(installClaudeBase(opts), 'commands'), (n) => oxeAgentInstall.isOxeCommandMarkdownName(n));
+      addTracked(agentPaths.claudeAgentsDir, (n) => oxeAgentInstall.isOxeAgentMarkdownName(n));
       addTracked(path.join(cpCliHome, 'commands'), (n) => oxeAgentInstall.isOxeCommandMarkdownName(n));
       const skRoot = path.join(cpCliHome, 'skills');
       if (fs.existsSync(skRoot)) {
@@ -3043,6 +3071,16 @@ function uninstallLocalIdeFromProject(u, removedPaths) {
       for (const name of fs.readdirSync(cmdDir)) {
         if (oxeAgentInstall.isOxeCommandMarkdownName(name)) {
           const p = path.join(cmdDir, name);
+          unlinkQuiet(p, u);
+          track(p);
+        }
+      }
+    }
+    const claudeAgentsDir = path.join(proj, '.claude', 'agents');
+    if (fs.existsSync(claudeAgentsDir)) {
+      for (const name of fs.readdirSync(claudeAgentsDir)) {
+        if (oxeAgentInstall.isOxeAgentMarkdownName(name)) {
+          const p = path.join(claudeAgentsDir, name);
           unlinkQuiet(p, u);
           track(p);
         }
@@ -3378,6 +3416,16 @@ function runUninstall(u) {
       for (const name of fs.readdirSync(cmdDir)) {
         if (oxeAgentInstall.isOxeCommandMarkdownName(name)) {
           const p = path.join(cmdDir, name);
+          unlinkQuiet(p, u);
+          removedPaths.push(p);
+        }
+      }
+    }
+    const claudeAgentsDir = path.join(claudeUserDir(ideOpts), 'agents');
+    if (fs.existsSync(claudeAgentsDir)) {
+      for (const name of fs.readdirSync(claudeAgentsDir)) {
+        if (oxeAgentInstall.isOxeAgentMarkdownName(name)) {
+          const p = path.join(claudeAgentsDir, name);
           unlinkQuiet(p, u);
           removedPaths.push(p);
         }

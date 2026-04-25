@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
-**Versão:** `1.6.0` · [package.json](package.json)
+**Versão:** `1.7.0` · [package.json](package.json)
 
 **Framework OXE — Orchestrated eXperience Engineering**
 
@@ -52,7 +52,7 @@ O OXE agora distingue cinco famílias de raciocínio:
 - `review` — findings primeiro, severidade, evidência e risco residual
 - `status` — leitura curta do estado, recomendação única e motivo
 
-Essas regras vivem no núcleo canónico em `oxe/workflows/references/reasoning-*.md`, sobem para os workflows em `oxe/workflows/` e são renderizadas para cada runtime em `.github/prompts/`, `.cursor/commands/`, `commands/oxe/`, `.codex/prompts/` e skills multiagente. Nesta linha, `oxe/workflows/**` e `workflow-runtime-contracts.json` voltam a ser o contrato obrigatório da release; superfícies geradas permanecem derivadas e sincronizadas.
+Essas regras vivem no núcleo canónico em `oxe/workflows/references/reasoning-*.md`, sobem para os workflows em `oxe/workflows/` e são renderizadas para cada runtime em `.github/prompts/`, `.cursor/commands/`, `commands/oxe/`, `.codex/prompts/` e skills multiagente. Agentes especializados vivem em `oxe/agents/` e são instalados como agentes/skills OXE-native quando o runtime suporta esse conceito. Nesta linha, `oxe/workflows/**`, `oxe/agents/**` e `workflow-runtime-contracts.json` são contratos obrigatórios da release; superfícies geradas permanecem derivadas e sincronizadas.
 
 ---
 
@@ -537,6 +537,8 @@ npx oxe-cc@latest
 </details>
 
 GitHub Copilot no VS Code é **workspace-first**: o OXE instala prompt files em `.github/prompts/*.prompt.md` e mescla instruções em `.github/copilot-instructions.md`. `~/.copilot/` fica reservado ao legado detectável e ao runtime do Copilot CLI.
+
+Claude Code recebe comandos em `.claude/commands` e agentes especializados em `.claude/agents`. Codex recebe prompts em `.codex/prompts` e skills OXE em `.agents/skills`, incluindo os agentes especializados derivados de `oxe/agents/`.
 
 <details>
 <summary><strong>Atualizar e desinstalar</strong></summary>

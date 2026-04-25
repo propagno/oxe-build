@@ -238,6 +238,86 @@ export class ContextPackBuilder {
   }
 
   /**
+   * Remove artifacts with lowest relevance until the pack fits within targetTokens.
+   * Artifacts already sorted by relevance; we trim the tail.
+   */
+  compact(pack: ContextPack, targetTokens: number): ContextPack {
+    if (estimateTokens(pack.artifacts.map((a) => a.content).join('\n')) <= targetTokens) {
+      return pack;
+    }
+    const sorted = [...pack.artifacts].sort((a, b) => b.relevanceScore - a.relevanceScore);
+    const trimmed: ContextArtifact[] = [];
+    let used = 0;
+    for (const artifact of sorted) {
+      const t = estimateTokens(artifact.content);
+      if (used + t > targetTokens) break;
+      trimmed.push(artifact);
+      used += t;
+    }
+    return {
+      ...pack,
+      artifacts: trimmed,
+      redundancy_removed: pack.redundancy_removed + (pack.artifacts.length - trimmed.length),
+    };
+  }
+
+  /**
+   * Merge groups of similar artifacts (cosine similarity >= threshold) into single
+   * combined artifacts to reduce redundancy without discarding information entirely.
+   */
+  microCompact(artifacts: ContextArtifact[], similarityThreshold = 0.7): ContextArtifact[] {
+    const merged: ContextArtifact[] = [];
+    const used = new Set<number>();
+
+    for (let i = 0; i < artifacts.length; i++) {
+      if (used.has(i)) continue;
+      const group: ContextArtifact[] = [artifacts[i]];
+      for (let j = i + 1; j < artifacts.length; j++) {
+        if (!used.has(j) && cosineSimilarity(artifacts[i], artifacts[j]) >= similarityThreshold) {
+          group.push(artifacts[j]);
+          used.add(j);
+        }
+      }
+      used.add(i);
+      if (group.length === 1) {
+        merged.push(group[0]);
+      } else {
+        const combinedContent = group
+          .map((a) => a.content)
+          .join('\n---\n')
+          .slice(0, 4000);
+        merged.push({
+          id: group[0].id,
+          kind: group[0].kind,
+          content: combinedContent,
+          relevanceScore: group.reduce((s, a) => s + a.relevanceScore, 0) / group.length,
+          tags: [...new Set(group.flatMap((a) => a.tags))],
+        });
+      }
+    }
+    return merged;
+  }
+
+  /**
+   * Automatically compact a pack to fit within hardLimitTokens.
+   * First applies microCompact (lossless merging), then compact (trimming by relevance).
+   */
+  autoCompact(pack: ContextPack, hardLimitTokens: number): ContextPack {
+    const currentTokens = estimateTokens(pack.artifacts.map((a) => a.content).join('\n'));
+    if (currentTokens <= hardLimitTokens) return pack;
+
+    const microCompacted = this.microCompact(pack.artifacts);
+    const removedByMicro = pack.artifacts.length - microCompacted.length;
+
+    const interim: ContextPack = {
+      ...pack,
+      artifacts: microCompacted,
+      redundancy_removed: pack.redundancy_removed + removedByMicro,
+    };
+    return this.compact(interim, hardLimitTokens);
+  }
+
+  /**
    * Filter artifacts to those whose path-like tags are within mutation_scope.
    * L0/L1 tiers apply the filter; L2/L3 skip it (full access).
    */

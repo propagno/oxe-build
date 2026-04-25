@@ -1,7 +1,12 @@
 ---
 name: oxe:plan-agent
-description: Gera PLAN.md e plan-agents.json (blueprint de agentes e ondas)
-argument-hint: "[--replan se já existe PLAN.md]"
+description: >
+  Gera PLAN.md e plan-agents.json — blueprint de execução multi-agente com ondas paralelas.
+  Cada agente recebe persona (executor, db-specialist, ui-specialist, etc.), escopo de tarefas,
+  dependências entre agentes e lifecycle state rastreável. Ideal para planos com 3+ domínios
+  distintos (backend, frontend, banco) onde paralelismo real de agentes é possível. --replan
+  regenera o runId, preserva tarefas concluídas e alinha STATE.md.
+argument-hint: "[--replan | <contexto adicional de domínios>]"
 allowed-tools:
   - Read
   - Write

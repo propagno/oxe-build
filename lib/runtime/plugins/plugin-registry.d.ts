@@ -6,7 +6,8 @@ export declare class PluginRegistry {
     register(plugin: OxePlugin): void;
     unregister(name: string): void;
     loadFromDirectory(dir: string): string[];
-    toolProviderFor(actionType: string): ToolProvider | null;
+    toolProviderFor(actionType: string, required: true): ToolProvider;
+    toolProviderFor(actionType: string, required?: false): ToolProvider | null;
     workspaceProviderFor(strategy: string): WorkspaceProvider | null;
     verifierProviderFor(checkType: string): VerifierProvider | null;
     contextProviderFor(name: string): ContextProvider | null;

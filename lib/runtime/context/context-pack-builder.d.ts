@@ -44,6 +44,21 @@ export declare class ContextPackBuilder {
     /** Convenience: build with no evidence, just lessons and state summary */
     buildLightweight(workItem: WorkItem, state: RunState, lessons: LessonMetric[]): ContextPack;
     /**
+     * Remove artifacts with lowest relevance until the pack fits within targetTokens.
+     * Artifacts already sorted by relevance; we trim the tail.
+     */
+    compact(pack: ContextPack, targetTokens: number): ContextPack;
+    /**
+     * Merge groups of similar artifacts (cosine similarity >= threshold) into single
+     * combined artifacts to reduce redundancy without discarding information entirely.
+     */
+    microCompact(artifacts: ContextArtifact[], similarityThreshold?: number): ContextArtifact[];
+    /**
+     * Automatically compact a pack to fit within hardLimitTokens.
+     * First applies microCompact (lossless merging), then compact (trimming by relevance).
+     */
+    autoCompact(pack: ContextPack, hardLimitTokens: number): ContextPack;
+    /**
      * Filter artifacts to those whose path-like tags are within mutation_scope.
      * L0/L1 tiers apply the filter; L2/L3 skip it (full access).
      */

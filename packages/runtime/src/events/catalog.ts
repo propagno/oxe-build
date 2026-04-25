@@ -20,6 +20,11 @@ export const EVENT_TYPES = [
   'RunCompleted',
   'RetroPublished',
   'LessonPromoted',
+  'RunAborted',
+  'RollbackExecuted',
+  'RollbackFailed',
+  'TaskErrorBoundaryTripped',
+  'WorkspaceDisposeFailed',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

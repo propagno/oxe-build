@@ -15,11 +15,12 @@ Não substitui **`verify`**: cruza contrato UI; o verify global continua a amarr
 - Se não existir `UI-SPEC.md`, pedir **`/oxe-ui-spec`** primeiro ou documentar em UI-REVIEW que a revisão é **ad hoc** (menos preferível).
 - Incluir checklist curta (ex.: pilares: semântica, foco, contraste, mensagens de erro, mobile).
 - **Bloqueios P0** (ex.: inacessível, fluxo quebrado) devem ser listados explicitamente; P1/P2 como melhorias.
+- Agente especializado: quando disponível, usar `oxe-ui-auditor` para comparar implementação contra `UI-SPEC.md`, evidência visual e critérios A*.
 </context>
 
 <process>
 1. Resolver `active_session` conforme `session-path-resolution.md`; ler `UI-SPEC.md` e `SPEC.md` do escopo resolvido e inspecionar ficheiros de UI relevantes (paths do PLAN ou indicados pelo utilizador).
-2. Escrever **`UI-REVIEW.md`** no escopo de `verification/` da sessão ativa (ou `.oxe/` legado) com: **Data**, **Âmbito revisto**, **Checklist** (passou / falhou / N/A), **Bloqueios**, **Sugestões**.
+2. Escrever **`UI-REVIEW.md`** no escopo de `verification/` da sessão ativa (ou `.oxe/` legado) com: **Data**, **Âmbito revisto**, **Checklist** (passou / falhou / N/A), **Bloqueios**, **Sugestões**, evidência visual quando disponível e divergências justificadas.
 3. Atualizar **`.oxe/STATE.md`** global se útil (referência a UI-REVIEW pendente de verify).
 4. Indicar no chat nesta ordem:
    - **Findings**

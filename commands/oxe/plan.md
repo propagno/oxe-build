@@ -1,7 +1,12 @@
 ---
 name: oxe:plan
-description: Gera PLAN.md a partir da SPEC com tarefas atômicas e verificação por item
-argument-hint: "[--replan se já existe PLAN.md]"
+description: >
+  Decompõe os critérios A* da SPEC em tarefas GraphNode com mutation_scope explícito, action_type
+  correto e verify command determinístico. Projeta ondas que maximizam paralelismo respeitando
+  dependências e mutation_scope disjunto. Aplica rubrica de confiança em 6 dimensões e quality gate
+  de 19 itens. Gera IMPLEMENTATION-PACK, REFERENCE-ANCHORS e FIXTURE-PACK junto com o PLAN.md.
+  --replan preserva histórico e atualiza tarefas sem apagar o trabalho anterior.
+argument-hint: "[--replan | --agents (gera blueprint de agentes junto)]"
 allowed-tools:
   - Read
   - Write

@@ -17,6 +17,7 @@ Não reescrever `SPEC.md` nem apagar `PLAN.md`; apenas **recomendar** o reingres
 - **Git é opcional:** em sandbox sem Git ou sem permissão de terminal, **não** falhar o workflow; registar em `FORENSICS.md` que Git não foi avaliado.
 - Opcional: saída resumida de `npx oxe-cc doctor` no diretório do projeto.
 - Se o sintoma for **mapa OXE desatualizado** (ex.: `STACK.md` / estrutura em `.oxe/codebase/` claramente atrás do repo) sem workflows em falta, a **Hipótese de causa** ou a **Justificativa** pode mencionar **`/oxe-compact`** como ação complementar **depois** de escolhido o passo canónico — o próximo passo OXE recomendado continua a ser **um** entre `scan` | `plan` | `execute`.
+- Agentes úteis: `oxe-debugger` para falha técnica, `oxe-integration-checker` para divergência entre ondas/artefatos, `oxe-validation-auditor` para evidence gaps e `oxe-codebase-mapper` quando o mapa estiver obsoleto.
 
 **Git (opcional)** — se o agente puder correr terminal **ou** o utilizador colar saída, preferir recolher:
 
@@ -33,6 +34,7 @@ Não reescrever `SPEC.md` nem apagar `PLAN.md`; apenas **recomendar** o reingres
 3. Redigir **`FORENSICS.md`** no escopo resolvido com secções fixas:
    - **Data** (ISO) e **Sintoma** (1–3 frases).
    - **Linha do tempo** — bullets curtos (o que se tentou, ordem aproximada); **incorporar** commits/datas e ficheiros mais tocados quando houver evidência Git; se Git não foi avaliado, linha explícita: *Git não avaliado (ambiente/indisponível)*.
+   - **Divergências de consistência** — diferenças entre `ACTIVE-RUN.json`, run file, eventos, gates, policy decisions, VERIFY e STATE quando existirem.
    - **Hipótese de causa** — uma ou duas hipóteses ranqueadas (ex.: plano desalinhado, mapa desatualizado, workflows em falta, implementação incompleta); usar padrões Git (ficheiros repetidos, working tree suja) quando útil.
    - **Próximo passo OXE recomendado:** **um único** valor entre `scan` | `plan` | `execute` e o **comando** correspondente (`/oxe-scan`, `/oxe-plan`, `/oxe-execute` ou `npx oxe-cc@latest` / `npx oxe-cc doctor` quando a causa for tooling).
    - **Justificativa** — uma frase que liga evidência ao passo escolhido.

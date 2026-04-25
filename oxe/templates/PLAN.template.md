@@ -3,6 +3,16 @@ oxe_doc: plan
 status: draft
 updated: YYYY-MM-DD
 inputs: []
+spec_version: ""
+plan_confidence_threshold: 90
+goal_backward_verification: required
+rationality_gate: required
+risk_level: low | medium | high | critical
+autonomous: false
+must_haves: []
+dependencies: []
+checkpoints: []
+evidence_expectation: manifest | command | manual | mixed
 ---
 
 <!--
@@ -25,6 +35,8 @@ inputs: []
 
 - **Melhor plano atual:** sim
 - **Confiança:** 92%
+- **Limiar para execute:** > 90%
+- **Resultado do gate racional:** ready | not_ready
 - **Base da confiança:**
   - Completude dos requisitos: 23/25
   - Dependências conhecidas: 14/15
@@ -35,6 +47,7 @@ inputs: []
 - **Principais incertezas:** (0–3 bullets)
 - **Alternativas descartadas:** (1–2 linhas)
 - **Condição para replanejar:** (critério objetivo)
+- **Bloqueadores de execução:** nenhum | listar gaps críticos
 
 <confidence_vector cycle="C-NN" generated_at="YYYY-MM-DDTHH:MM:SSZ">
   <dim name="requirements"   score="0.92" weight="25" note="completude dos requisitos" />
@@ -78,6 +91,20 @@ inputs: []
 - **FIXTURE-PACK:** `ready | not_ready | not_applicable`
 - **Critical gaps abertos:** (nenhum | listar IDs/causas)
 
+### Contrato goal-backward
+
+| Critério | Evidência esperada | Tarefa(s) | Risco se falhar |
+|----------|--------------------|-----------|-----------------|
+| A1 | comando, arquivo, fixture ou UAT | T1 | high |
+
+### Must-haves de execução
+
+- Nenhuma tarefa mutável com path ambíguo.
+- Nenhum símbolo alvo indefinido.
+- Nenhuma referência crítica não materializada.
+- Nenhuma tarefa de parsing/integração/transformação sem fixture ou justificativa `not_applicable`.
+- Nenhum checkpoint humano pendente antes de side effect crítico.
+
 ## Replanejamento
 
 > Preencher apenas em **--replan** ou após verify falhado. Manter histórico legível.
@@ -90,16 +117,20 @@ inputs: []
 
 ### T1 — (título)
 
-- **Arquivos prováveis:** `…`
+- **Arquivos alvo:** `src/exato.ts`
 - **Depende de:** —
 - **Onda:** 1
 - **Complexidade:** S
+- **Risco:** low | medium | high | critical
+- **Evidência de entrada:** SPEC A1 | DISCUSS D-01 | RESEARCH RA-01 | codebase path
+- **Checkpoint:** nenhum | CHK-01
 - **Verificar:**
   - Comando: `…`
   - Manual: (opcional) …
 - **Implementar:** o mínimo para fazer a verificação acima passar.
 - **Aceite vinculado:** A1, A2 (IDs da tabela de critérios em SPEC.md)
 - **Contrato racional:** ver `IMPLEMENTATION-PACK.json` (task `T1`)
+- **Rollback/contensão:** obrigatório para risco high/critical; `not_applicable` se low/medium.
 
 ---
 

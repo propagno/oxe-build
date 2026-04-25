@@ -131,6 +131,8 @@ Quando o comando `**Verificar:**` de uma tarefa `Tn` falha, **não parar silenci
 
 O `execute` é **pack-first**, não apenas `plan-first`. Esses artefatos existem para impedir improviso de paths, interfaces, referências externas e fixtures. Se estiverem ausentes, inconsistentes ou com `critical_gap`, a execução deve bloquear e devolver para replanejamento.
 
+**Agente executor especializado:** quando um runtime suportar agentes OXE, o papel esperado é `oxe-executor`. Para ondas com UI, debug, integração ou validação pesada, consultar os agentes especializados correspondentes, mas manter o estado operacional em `.oxe/` e no runtime.
+
 **Runtime operacional:** usar `EXECUTION-RUNTIME.md` do escopo resolvido como artefato tático da execução. Ele deve refletir agentes ativos, onda atual, handoffs, evidências, retries, checkpoints pendentes e tarefas bloqueadas. O `PLAN.md` continua estratégico; o runtime regista a operação do ciclo.
 
 **Runtime enterprise como caminho padrão:** quando `oxe-cc runtime` estiver disponível no ambiente, preferir o caminho formal deste passo:
@@ -200,6 +202,7 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
    - `REFERENCE-ANCHORS.md` deve existir e manter todas as âncoras críticas em `status: resolved`;
    - `FIXTURE-PACK.json` deve existir, estar `ready` e cobrir tarefas de parser/layout/integração/transformação/fila/migração/builder;
    - se algum pack tiver `critical_gap`, **não executar**. Registrar o bloqueio explicitamente em `EXECUTION-RUNTIME.md` / `STATE.md` e recomendar um único próximo passo: normalmente `/oxe-plan --replan`.
+   - se uma tarefa mutável usar path com `...`, símbolo indefinido, write-set aberto ou fixture obrigatória ausente, bloquear a tarefa mesmo que o `PLAN.md` pareça completo.
 3. Antes da primeira mudança, verificar `CHECKPOINTS.md` e `EXECUTION-RUNTIME.md` do escopo resolvido:
    - se houver checkpoint `pending_approval` que se aplique à onda atual, **não avançar**;
    - inicializar ou atualizar o runtime com onda atual, status, agentes ativos, handoffs e evidências esperadas.

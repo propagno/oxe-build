@@ -1,6 +1,11 @@
 ---
 name: oxe:spec
-description: "Spec em 5 fases. Flags: --refresh (scan incremental), --full (scan completo), --research (spike), --ui (gera UI-SPEC)"
+description: >
+  Conduz as 5 fases do processo de especificação: perguntas (blocos coesos por domínio), pesquisa
+  (investigação de incertezas técnicas), requisitos (tabela R-ID com v1/v2/fora e critérios A*
+  verificáveis), elevação de robustez (checklist de segurança por domínio AUTH/API/DB/FRONTEND/FILE),
+  e aprovação com roteiro ROADMAP.md. Flags: --refresh (atualiza codebase/ antes), --full (scan
+  completo), --research (Fase 2 explícita), --ui (gera UI-SPEC.md ao final).
 argument-hint: "[descrição da feature | --refresh | --full | --research | --ui]"
 allowed-tools:
   - Read

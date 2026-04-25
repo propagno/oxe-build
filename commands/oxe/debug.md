@@ -1,6 +1,11 @@
 ---
 name: oxe:debug
-description: "[DEPRECATED v1.1.0] Incorporado por /oxe-execute. Use: /oxe-execute --debug"
+description: >
+  Diagnóstica falhas com metodologia RCA: hipóteses explícitas → evidência → reprodução controlada
+  → causa raiz → hotfix mínimo. Não corrige sintomas — rasteia até a causa raiz antes de propor
+  qualquer mudança. Documenta o diagnóstico completo em DEBUG.md (sintoma, hipóteses testadas,
+  root cause, hotfix aplicado, evidência de resolução). Após o hotfix, orienta execução de
+  /oxe-verify para confirmar que os critérios A* afetados ainda passam.
 argument-hint: "[Tn ou erro/stack]"
 allowed-tools:
   - Read

@@ -13,6 +13,8 @@
         "src/example.ts"
       ],
       "write_set": "closed",
+      "mutation_scope": "code",
+      "risk": "medium",
       "symbols": [
         {
           "kind": "function",
@@ -34,6 +36,19 @@
           ]
         }
       ],
+      "required_imports": [
+        {
+          "module": "src/example.ts",
+          "symbol": "ExampleInput",
+          "reason": "tipo de entrada do contrato"
+        }
+      ],
+      "implementation_sequence": [
+        "confirmar símbolo e contrato no path alvo",
+        "implementar menor delta",
+        "rodar expected checks",
+        "registrar evidência"
+      ],
       "snippets": [
         {
           "source_ref": "not_applicable",
@@ -46,6 +61,7 @@
         "npm test -- example"
       ],
       "requires_fixture": false,
+      "rollback_or_containment": "not_applicable",
       "critical_gaps": []
     }
   ]

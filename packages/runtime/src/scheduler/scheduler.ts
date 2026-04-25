@@ -1,3 +1,5 @@
+import path from 'path';
+import fs from 'fs';
 import { appendEvent } from '../events/bus';
 import type { OxeEvent } from '../events/envelope';
 import type { EventInput } from '../events/bus';
@@ -18,10 +20,14 @@ import {
   createJournal,
 } from './run-journal';
 import type { RunJournal } from './run-journal';
+import type { FailureClass } from '../models/failure';
+import { listMemos } from '../decision/decision-memo';
+import type { RollbackPlan } from '../decision/decision-memo';
+import { runCapabilityAsync } from '../plugins/capability-adapter';
 
 export interface TaskResult {
   success: boolean;
-  failure_class: 'env' | 'policy' | 'test' | 'timeout' | null;
+  failure_class: FailureClass;
   evidence: string[];
   output: string;
 }
@@ -33,6 +39,11 @@ export interface TaskExecutor {
     runId: string,
     attemptNumber: number
   ): Promise<TaskResult>;
+}
+
+export interface SchedulerOptions {
+  maxRunDurationMs?: number;   // default: 30 min
+  staleProgressMs?: number;    // default: 5 min without any task completing
 }
 
 export interface SchedulerContext {
@@ -48,15 +59,17 @@ export interface SchedulerContext {
   quota?: RunQuota;
   policyActor?: string;
   onEvent?: (event: OxeEvent) => void;
+  options?: SchedulerOptions;
 }
 
 export interface RunResult {
   run_id: string;
-  status: 'completed' | 'failed' | 'blocked' | 'cancelled' | 'paused';
+  status: 'completed' | 'failed' | 'blocked' | 'cancelled' | 'paused' | 'aborted';
   completed: string[];
   failed: string[];
   blocked: string[];
   pending_gates?: string[];
+  reason?: string;
 }
 
 type NodeStatus = 'pending' | 'ready' | 'running' | 'completed' | 'failed' | 'blocked';
@@ -66,11 +79,43 @@ export class Scheduler {
   private paused = false;
   private journal: RunJournal | null = null;
   private ctx: SchedulerContext | null = null;
+  private runStartMs = 0;
+  private lastProgressMs = 0;
+
+  private recordProgress(): void {
+    this.lastProgressMs = Date.now();
+  }
+
+  private async executeRollback(plan: RollbackPlan, ctx: SchedulerContext): Promise<void> {
+    try {
+      switch (plan.strategy) {
+        case 'revert_commit':
+          await runCapabilityAsync('git', ['revert', 'HEAD', '--no-edit'], {}, ctx.projectRoot, 30_000);
+          break;
+        case 'restore_workspace':
+          await runCapabilityAsync('git', ['checkout', '.'], {}, ctx.projectRoot, 30_000);
+          break;
+        case 'undo_patch':
+          for (const p of plan.steps) {
+            await runCapabilityAsync('git', ['checkout', 'HEAD', '--', p], {}, ctx.projectRoot, 10_000);
+          }
+          break;
+        case 'no_rollback':
+        default:
+          break;
+      }
+      this.emit(ctx, { type: 'RollbackExecuted', payload: { strategy: plan.strategy } });
+    } catch (err) {
+      this.emit(ctx, { type: 'RollbackFailed', payload: { strategy: plan.strategy, error: String(err) } });
+    }
+  }
 
   async run(graph: ExecutionGraph, ctx: SchedulerContext): Promise<RunResult> {
     this.cancelled = false;
     this.paused = false;
     this.ctx = ctx;
+    this.runStartMs = Date.now();
+    this.lastProgressMs = Date.now();
 
     const status = new Map<string, NodeStatus>();
     for (const id of graph.nodes.keys()) status.set(id, 'pending');
@@ -78,6 +123,30 @@ export class Scheduler {
     const completed: string[] = [];
     const failed: string[] = [];
     const blocked: string[] = [];
+
+    // Plan hash drift detection: abort if the graph was recompiled since ACTIVE-RUN was saved
+    const activeRunPath = ctx.sessionId
+      ? path.join(ctx.projectRoot, '.oxe', ctx.sessionId, 'execution', 'ACTIVE-RUN.json')
+      : path.join(ctx.projectRoot, '.oxe', 'ACTIVE-RUN.json');
+    if (fs.existsSync(activeRunPath)) {
+      try {
+        const activeRun = JSON.parse(fs.readFileSync(activeRunPath, 'utf8')) as Record<string, unknown>;
+        const savedHash = activeRun.plan_hash as string | undefined;
+        const currentHash = graph.metadata.plan_hash;
+        if (savedHash && savedHash !== currentHash) {
+          return {
+            run_id: ctx.runId,
+            status: 'aborted',
+            completed: [],
+            failed: [],
+            blocked: [],
+            reason: `plan_drift: graph recompiled (${savedHash} → ${currentHash}). Run /oxe-plan --replan to realign.`,
+          };
+        }
+      } catch {
+        // ACTIVE-RUN not parseable — continue without drift check
+      }
+    }
 
     this.journal = createJournal(ctx.runId);
     saveJournal(ctx.projectRoot, ctx.runId, this.journal);
@@ -88,8 +157,23 @@ export class Scheduler {
       detail: { session_id: ctx.sessionId ?? null },
     });
 
+    const maxRunMs  = ctx.options?.maxRunDurationMs ?? 30 * 60_000;
+    const staleMs   = ctx.options?.staleProgressMs  ?? 5 * 60_000;
+
     for (const wave of graph.waves) {
       if (this.cancelled) break;
+
+      // Global run timeout
+      if (Date.now() - this.runStartMs > maxRunMs) {
+        this.emit(ctx, { type: 'RunAborted', payload: { reason: 'global_timeout' } });
+        return { run_id: ctx.runId, status: 'aborted', completed: [], failed: [], blocked: [], reason: 'global_timeout' };
+      }
+
+      // Stale progress timeout (no task completed in staleMs)
+      if (Date.now() - this.lastProgressMs > staleMs) {
+        this.emit(ctx, { type: 'RunAborted', payload: { reason: 'no_progress_timeout' } });
+        return { run_id: ctx.runId, status: 'aborted', completed: [], failed: [], blocked: [], reason: 'no_progress_timeout' };
+      }
 
       // Respect pause: persist journal and return paused result
       if (this.paused) {
@@ -123,7 +207,17 @@ export class Scheduler {
       this.journal.blocked_work_items = blocked.slice();
       saveJournal(ctx.projectRoot, ctx.runId, this.journal);
 
-      if (waveFailed) break;
+      if (waveFailed) {
+        // Execute rollback plan if one was created for this run
+        const memos = listMemos(ctx.projectRoot, ctx.runId);
+        for (const memo of memos) {
+          if (memo.rollback_plan.strategy !== 'no_rollback') {
+            await this.executeRollback(memo.rollback_plan, ctx);
+            break; // apply at most one rollback plan per wave failure
+          }
+        }
+        break;
+      }
     }
 
     // Any remaining pending nodes become blocked
@@ -305,6 +399,15 @@ export class Scheduler {
     };
   }
 
+  private isConcurrentSafe(nodeId: string, graph: ExecutionGraph, ctx: SchedulerContext): boolean {
+    const node = graph.nodes.get(nodeId)!;
+    if (node.mutation_scope.length > 0) return false;
+    const primaryAction = pickPrimaryAction(node, ctx.pluginRegistry);
+    if (!primaryAction) return true;
+    const provider = ctx.pluginRegistry?.toolProviderFor(primaryAction.type);
+    return provider?.idempotent ?? true;
+  }
+
   private async runWave(
     nodeIds: string[],
     graph: ExecutionGraph,
@@ -338,10 +441,7 @@ export class Scheduler {
       });
     }
 
-    const readOnly = eligible.filter((id) => {
-      const node = graph.nodes.get(id)!;
-      return node.mutation_scope.length === 0;
-    });
+    const readOnly = eligible.filter((id) => this.isConcurrentSafe(id, graph, ctx));
     const mutations = eligible.filter((id) => !readOnly.includes(id));
 
     if (readOnly.length > 0) {
@@ -453,6 +553,7 @@ export class Scheduler {
           });
           status.set(nodeId, 'completed');
           completed.push(nodeId);
+          this.recordProgress();
           return;
         }
 
@@ -464,29 +565,47 @@ export class Scheduler {
             this.blockNode(nodeId, ctx, status, blocked, 'quota_exceeded', retryBlocked);
             return;
           }
+          // Exponential backoff with jitter: 1s * 2^(attempt-1) + [0, 500ms], capped at 30s
+          const backoffMs = Math.min(
+            1_000 * Math.pow(2, attempt - 1) + Math.random() * 500,
+            30_000
+          );
+          await new Promise<void>(resolve => setTimeout(resolve, backoffMs));
           this.emit(ctx, {
             type: 'RetryScheduled',
             work_item_id: nodeId,
-            payload: { next_attempt: attempt + 1, reason: lastResult.failure_class },
+            payload: { next_attempt: attempt + 1, reason: lastResult.failure_class, backoff_ms: backoffMs },
           });
         }
-      } catch (err) {
+      } catch (err: unknown) {
+        // Error boundary: isolate task failure, emit structured event, do not crash scheduler
+        const message = err instanceof Error ? err.message : String(err);
+        const stack   = err instanceof Error ? err.stack   : undefined;
+        this.emit(ctx, {
+          type: 'TaskErrorBoundaryTripped',
+          work_item_id: nodeId,
+          payload: { message, stack, attempt },
+        });
         lastResult = {
           success: false,
           failure_class: 'env',
           evidence: [],
-          output: String(err),
+          output: `[error_boundary] ${message}`,
         };
         if (attempt < maxAttempts) {
+          const backoffMs = Math.min(1_000 * Math.pow(2, attempt - 1) + Math.random() * 500, 30_000);
+          await new Promise<void>(resolve => setTimeout(resolve, backoffMs));
           this.emit(ctx, {
             type: 'RetryScheduled',
             work_item_id: nodeId,
-            payload: { next_attempt: attempt + 1, reason: 'env' },
+            payload: { next_attempt: attempt + 1, reason: 'env', backoff_ms: backoffMs },
           });
         }
       } finally {
         if (lease) {
-          await ctx.workspaceManager.dispose(lease.workspace_id).catch(() => {});
+          await ctx.workspaceManager.dispose(lease.workspace_id).catch((e: unknown) =>
+            this.emit(ctx!, { type: 'WorkspaceDisposeFailed', payload: { workspace_id: lease?.workspace_id, error: String(e) } })
+          );
           lease = null;
         }
       }
@@ -562,7 +681,7 @@ export class Scheduler {
       payload: { provider: provider.name, action_type: primaryAction.type },
     });
 
-    const result = await provider.invoke({
+    const invocationInput = {
       action_type: primaryAction.type,
       work_item_id: node.id,
       run_id: ctx.runId,
@@ -572,7 +691,26 @@ export class Scheduler {
         targets: primaryAction.targets ?? [],
       },
       workspace_root: lease.root_path,
-    });
+    };
+
+    if (provider.preInvoke) {
+      const preCheck = await provider.preInvoke(invocationInput);
+      if (!preCheck.allowed) {
+        this.emit(ctx, {
+          type: 'ToolFailed',
+          work_item_id: node.id,
+          attempt_id: attemptId,
+          payload: { provider: provider.name, action_type: primaryAction.type, error: preCheck.reason ?? 'pre_invoke blocked', evidence_paths: [], side_effects_applied: [] },
+        });
+        return { success: false, failure_class: 'policy', evidence: [], output: preCheck.reason ?? 'pre_invoke blocked' };
+      }
+    }
+
+    const result = await provider.invoke(invocationInput);
+
+    if (provider.postInvoke) {
+      await provider.postInvoke(invocationInput, result).catch(() => {});
+    }
 
     this.emit(ctx, {
       type: result.success ? 'ToolCompleted' : 'ToolFailed',

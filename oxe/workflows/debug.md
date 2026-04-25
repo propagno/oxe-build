@@ -16,6 +16,7 @@ Diferente de **`verify`**, que audita **aceite** contra SPEC/PLAN. Depois de est
 - Preferir ancorar ao identificador de tarefa **`Tn`** do `PLAN.md` do escopo resolvido quando existir.
 - Resolver `active_session` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa, usar `.oxe/<active_session>/execution/DEBUG.md`; sem sessão ativa, usar `.oxe/DEBUG.md`.
 - Artefato: **`DEBUG.md`** no escopo correto — ficheiro único com **sessões** datadas (append); não dispersar em vários ficheiros sem convenção.
+- Agente especializado: quando disponível, usar `oxe-debugger` para conduzir hipótese, reprodução mínima, evidência, eliminados e handoff retomável. O agente não deve declarar entrega aprovada; após correção, a trilha volta para `execute` e depois `verify`.
 </context>
 
 <process>
@@ -24,6 +25,7 @@ Diferente de **`verify`**, que audita **aceite** contra SPEC/PLAN. Depois de est
    - **Data** / **Sintoma** (com stack ou comando que falhou).
    - **Hipóteses** (ordenadas por plausibilidade).
    - **Experiências** — o que foi tentado e resultado (uma linha cada).
+   - **Eliminados** — hipóteses descartadas e evidência.
    - **Evidência atual** — ficheiros, linhas, conclusão parcial.
    - **Próximo passo:** `execute` (continuar correção) | `discuss` (decisão técnica em grupo) | `spec` ou `plan` (requisito ambíguo ou impossível como escrito).
 3. Se a causa for **requisito errado**, documentar em DEBUG e recomendar **`/oxe-spec`** ou **`/oxe-plan`** (e opcionalmente **`/oxe-discuss`**).

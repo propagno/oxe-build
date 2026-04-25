@@ -1,7 +1,12 @@
 ---
 name: oxe:execute
-description: "Executar plano A/B/C. Flags: --note (obs), --debug, --deep-diagnosis, --checkpoint '<nome>', --iterative"
-argument-hint: "[A|B|C | --note 'texto' | --debug | --deep-diagnosis | --checkpoint '<nome>' | --iterative]"
+description: >
+  Executa as tarefas do PLAN.md onda por onda, com write set mínimo e verificação obrigatória
+  antes de avançar. Compila o grafo de execução via LlmTaskExecutor, respeita dependências entre
+  tarefas, particiona tools idempotentes (paralelas) e mutáveis (seriais), e registra evidência
+  auditável por Tn. Modo --debug ativa diagnóstico de falha inline. --checkpoint '<nome>' cria
+  ponto de restauração antes de ondas de alto risco.
+argument-hint: "[onda|Tn | --debug | --deep-diagnosis | --checkpoint '<nome>' | --note 'texto' | --iterative]"
 allowed-tools:
   - Read
   - Bash
