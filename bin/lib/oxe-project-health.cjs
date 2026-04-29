@@ -818,6 +818,27 @@ function copilotLegacyPaths() {
   };
 }
 
+function expandHomePath(value) {
+  if (typeof value !== 'string') return value;
+  if (value === '~') return os.homedir();
+  if (value.startsWith('~/') || value.startsWith('~\\')) return path.join(os.homedir(), value.slice(2));
+  return value;
+}
+
+function codexHome() {
+  if (process.env.CODEX_HOME) return path.resolve(expandHomePath(process.env.CODEX_HOME));
+  return path.join(os.homedir(), '.codex');
+}
+
+function codexIntegrationPaths() {
+  const root = codexHome();
+  return {
+    root,
+    promptsDir: path.join(root, 'prompts'),
+    skillsRoot: path.join(os.homedir(), '.agents', 'skills'),
+  };
+}
+
 /**
  * @param {string} filePath
  */
@@ -1280,6 +1301,32 @@ function listOxePromptFiles(dir) {
 }
 
 /**
+ * @param {string} dir
+ * @returns {string[]}
+ */
+function listOxeCodexPromptFiles(dir) {
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && (entry.name === 'oxe.md' || /^oxe-.*\.md$/i.test(entry.name)))
+    .map((entry) => path.join(dir, entry.name))
+    .sort();
+}
+
+/**
+ * @param {string} root
+ * @returns {string[]}
+ */
+function listOxeSkillDirs(root) {
+  if (!fs.existsSync(root)) return [];
+  return fs
+    .readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /^oxe($|-)/i.test(entry.name) && fs.existsSync(path.join(root, entry.name, 'SKILL.md')))
+    .map((entry) => path.join(root, entry.name))
+    .sort();
+}
+
+/**
  * @param {string} filePath
  * @returns {boolean}
  */
@@ -1429,6 +1476,60 @@ function copilotIntegrationReport(target) {
       detected: legacyDetected,
     },
     manifest,
+    warnings,
+  };
+}
+
+/**
+ * @param {string} target
+ */
+function codexIntegrationReport(target) {
+  const paths = codexIntegrationPaths();
+  const promptFiles = listOxeCodexPromptFiles(paths.promptsDir);
+  const skillDirs = listOxeSkillDirs(paths.skillsRoot);
+  const promptNames = promptFiles.map((filePath) => path.basename(filePath));
+  const skillNames = skillDirs.map((dirPath) => path.basename(dirPath));
+  const promptPathWarnings = [];
+  for (const filePath of promptFiles) {
+    for (const warning of promptWorkflowPathWarnings(filePath, target)) promptPathWarnings.push(warning);
+  }
+
+  /** @type {string[]} */
+  const warnings = [];
+  const detected = promptFiles.length > 0 || skillDirs.length > 0;
+  const commandsReady = promptNames.includes('oxe.md');
+  const skillsReady = skillNames.includes('oxe');
+  if (detected && promptFiles.length === 0) {
+    warnings.push('Codex tem skills OXE instaladas, mas ~/.codex/prompts não contém prompts OXE; a barra / não listará /oxe.');
+  }
+  if (promptFiles.length > 0 && !commandsReady) {
+    warnings.push('Codex prompts OXE existem, mas o entrypoint principal oxe.md está ausente.');
+  }
+  if (skillDirs.length > 0 && !skillsReady) {
+    warnings.push('Codex skills OXE existem, mas o skill raiz oxe está ausente.');
+  }
+  if (promptFiles.length > 0 && skillDirs.length === 0) {
+    warnings.push('Codex prompts OXE existem, mas ~/.agents/skills não contém skills OXE; recursos especializados podem não aparecer.');
+  }
+  for (const warning of promptPathWarnings) warnings.push(warning);
+
+  let status = 'not_installed';
+  if (commandsReady && skillsReady && promptPathWarnings.length === 0) {
+    status = warnings.length ? 'warning' : 'healthy';
+  } else if (detected) {
+    status = commandsReady ? 'warning' : 'broken';
+  }
+
+  return {
+    status,
+    detected,
+    commandsReady,
+    skillsReady,
+    root: paths.root,
+    promptsDir: paths.promptsDir,
+    skillsRoot: paths.skillsRoot,
+    promptFiles,
+    skillDirs,
     warnings,
   };
 }
@@ -2225,6 +2326,8 @@ function buildHealthReport(target) {
   const installWarn = installationCompletenessWarnings(target);
   const copilot = copilotIntegrationReport(target);
   const copilotWarn = copilot.warnings;
+  const codex = codexIntegrationReport(target);
+  const codexWarn = codex.warnings;
   const reviewWarn = suppressExecutionWorkspaceGates ? [] : planReviewWarnings(stateText, p);
   const planSelfEvaluation = {
     ...parsedPlanSelfEvaluation,
@@ -2421,6 +2524,7 @@ function buildHealthReport(target) {
     sessionWarn.length +
     installWarn.length +
     copilotWarn.length +
+    codexWarn.length +
     contextWarn.length +
     semanticsWarn.length +
     (azureReport ? azureReport.warnings.length : 0) +
@@ -2452,6 +2556,8 @@ function buildHealthReport(target) {
     contextWarn,
     semanticsWarn,
     copilot,
+    codexWarn,
+    codex,
     summaryGapWarn: sumWarn,
     specWarn,
     planWarn,
@@ -2535,6 +2641,8 @@ module.exports = {
   copilotWorkspacePaths,
   copilotLegacyPaths,
   copilotIntegrationReport,
+  codexIntegrationPaths,
+  codexIntegrationReport,
   normalizePlanConfidenceThreshold,
   isExecutablePlanConfidence,
   hasExecutablePlanSelfEvaluation,

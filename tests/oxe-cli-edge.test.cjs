@@ -369,6 +369,29 @@ describe('oxe-cc CLI edge', () => {
     assert.ok(j.diagnostics.copilotWarnings.some((x) => /legado global/i.test(x)));
   });
 
+  test('status --json exposes Codex prompts and skills diagnostics', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-codex-'));
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-codex-home-'));
+    const env = isolatedHomeEnv(fakeHome);
+    seedContextProject(dir);
+    const codexPrompts = path.join(fakeHome, '.codex', 'prompts');
+    const codexSkill = path.join(fakeHome, '.agents', 'skills', 'oxe');
+    fs.mkdirSync(codexPrompts, { recursive: true });
+    fs.mkdirSync(codexSkill, { recursive: true });
+    fs.writeFileSync(path.join(codexPrompts, 'oxe.md'), '---\ndescription: OXE\n---\n<!-- oxe-cc managed -->\n', 'utf8');
+    fs.writeFileSync(path.join(codexSkill, 'SKILL.md'), '---\nname: oxe\n---\n<!-- oxe-cc managed -->\n', 'utf8');
+    const r = spawnSync(process.execPath, [CLI, 'status', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      env,
+      encoding: 'utf8',
+    });
+    assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+    const j = JSON.parse(r.stdout.trim().split(/\r?\n/).filter(Boolean).pop());
+    assert.strictEqual(j.codex.commandsReady, true);
+    assert.strictEqual(j.codex.skillsReady, true);
+    assert.ok(Array.isArray(j.diagnostics.codexWarnings));
+  });
+
   test('status warns when PLAN.md misses autoavaliação and suggests replan on low confidence', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-plan-'));
     const oxe = path.join(dir, '.oxe');

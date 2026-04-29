@@ -46,6 +46,12 @@ describe('oxe-agent-install', () => {
     assert.strictEqual(r.description, '');
   });
 
+  test('parseCursorCommandFrontmatter supports folded yaml descriptions', () => {
+    const r = agent.parseCursorCommandFrontmatter('---\nname: oxe-planner\ndescription: >\n  Linha um\n  linha dois\n---\nbody');
+    assert.strictEqual(r.description, 'Linha um linha dois');
+    assert.strictEqual(r.frontmatter.description, 'Linha um linha dois');
+  });
+
   test('adjustWorkflowPathsForNestedLayout', () => {
     const t = agent.adjustWorkflowPathsForNestedLayout('Ver oxe/workflows/scan.md e oxe/templates/X');
     assert.ok(t.includes('.oxe/workflows/'));
@@ -163,6 +169,8 @@ describe('oxe-agent-install', () => {
       assert.ok(fs.existsSync(skillPath));
       const text = fs.readFileSync(skillPath, 'utf8');
       assert.match(text, /name: oxe-planner/);
+      assert.doesNotMatch(text, /description:\s*">"/);
+      assert.match(text, /description: "Transforma SPEC\.md/);
       assert.match(text, /\.oxe\//);
       assert.doesNotMatch(text, /get shit done|get-shit-done|\bGSD\b|\/gsd|gsd-tools|\.planning/i);
     });

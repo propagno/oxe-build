@@ -98,7 +98,23 @@ function parseCursorCommandFrontmatter(text) {
   const yamlBlock = normalized.slice(4, end);
   const frontmatter = {};
   let description = '';
-  for (const line of yamlBlock.split('\n')) {
+  const yamlLines = yamlBlock.split('\n');
+  for (let i = 0; i < yamlLines.length; i++) {
+    const line = yamlLines[i];
+    const foldedDescription = line.match(/^description:\s*[>|]\s*$/);
+    if (foldedDescription) {
+      const parts = [];
+      let j = i + 1;
+      while (j < yamlLines.length && /^\s+/.test(yamlLines[j])) {
+        const value = yamlLines[j].trim();
+        if (value) parts.push(value);
+        j += 1;
+      }
+      description = parts.join(' ').trim();
+      frontmatter.description = description;
+      i = j - 1;
+      continue;
+    }
     const m = line.match(/^description:\s*(.+)$/);
     if (m) {
       description = m[1].trim().replace(/^["']|["']$/g, '');
