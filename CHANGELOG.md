@@ -4,6 +4,49 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.8.0] — 2026-04-29
+
+### Autonomous Execution — 5 Critical Gaps Resolved
+
+Esta release eleva a autonomia do runtime de ~65% para ~85%+ em projetos de baixo a médio risco, tornando o OXE capaz de transformar um input bem estruturado em entrega verificada com mínima intervenção humana.
+
+#### Gap 1 — GateManager Wiring
+- `createExecutionContext()` exportada de `oxe-operational.cjs`: instancia `GateManager` real sempre que o runtime estiver disponível, eliminando o deadlock silencioso de `'gate-missing-manager'`
+- `scheduler.js`: warning explícito quando `ctx.gateManager` ausente em vez de falha silenciosa
+- Novo subcomando `oxe-cc runtime execute` com roteamento automático single-agent / multi-agent
+
+#### Gap 2 — Verificação Inline após cada tarefa
+- `Scheduler.verifyNode()`: executa o `verify.command` do nó logo após execução bem-sucedida, antes de emitir `WorkItemCompleted`
+- Falha de verificação → tarefa reentrada no loop de retry com `failure_class: 'verify'`
+- Falha de infraestrutura de verificação (comando inexistente, timeout) → não bloqueia progresso
+- Eventos `VerificationStarted` / `VerificationCompleted` emitidos por tarefa (reducer já existia)
+
+#### Gap 3 — Retry Inteligente com Contexto do Erro Anterior
+- `node-prompt-builder.js`: seção "Contexto da tentativa anterior" injetada automaticamente nas tentativas 2+ com stderr/output truncado em 2000 chars
+- `llm-task-executor.js`: aceita `options.previousError`; repassado para o prompt builder
+- `scheduler.js`: `lastError` rastreado e propagado entre tentativas via `executeNode(options)`
+
+#### Gap 4 — Sinal Autoritativo de Conclusão (`finish_task`)
+- Nova tool built-in `finish_task` (idempotente) registrada em `BUILT_IN_TOOLS` e `ALL_BUILT_IN_SCHEMAS`
+- `selectToolsForActions()`: `finish_task` injetada universalmente em todos os tipos de ação
+- `node-prompt-builder.js`: instrução explícita de chamar `finish_task` ao concluir
+- `llm-task-executor.js`: detecta chamada de `finish_task` → `completed_by: 'finish_task'`; turns esgotados sem `finish_task` → `success: false, failure_class: 'llm'`
+
+#### Gap 5 — MultiAgentCoordinator Wiring
+- `runRuntimeExecute()` exportada de `oxe-operational.cjs`: detecta `plan-agents.json` (sessão > raiz) e roteia para `MultiAgentCoordinator` (parallel/competitive/cooperative) ou `Scheduler` single-agent
+- `oxe-cc runtime execute`: novo subcomando CLI com output formatado e exit code em falhas
+
+#### Testes
+- 5 novos arquivos de teste cobrindo cada gap: `gap1-gate-manager`, `gap2-inline-verify`, `gap3-retry-context`, `gap4-finish-task`, `gap5-multi-agent`
+- Suite total: **543 testes passando**, 0 falhas
+
+### Validation
+
+- `node --test tests/*.cjs tests/*.test.js`
+- `node bin/oxe-cc.js --version`
+
+---
+
 ## [1.7.0] — 2026-04-23
 
 ### OXE-native Agent Catalog
