@@ -79,6 +79,31 @@ function loadRuntimeModule() {
   }
 }
 
+// Gap 1: factory that always wires GateManager into ctx
+function createExecutionContext(projectRoot, activeSession, options = {}) {
+  const runtime = loadRuntimeModule();
+  const runId = options.runId || makeRunId();
+  const gateManager = (runtime && typeof runtime.GateManager === 'function')
+    ? new runtime.GateManager(projectRoot, activeSession || null, runId)
+    : null;
+  return {
+    projectRoot,
+    sessionId: activeSession || null,
+    runId,
+    executor: options.executor || null,
+    workspaceManager: options.workspaceManager || null,
+    gateManager,
+    policyEngine: options.policyEngine || null,
+    policyActor: options.policyActor || 'runtime',
+    quota: options.quota || null,
+    pluginRegistry: options.pluginRegistry || null,
+    auditTrail: options.auditTrail || null,
+    evidenceStore: options.evidenceStore || null,
+    onEvent: options.onEvent || null,
+    options: options.schedulerOptions || {},
+  };
+}
+
 function buildRuntimePluginRegistry(projectRoot) {
   const runtime = loadRuntimeModule();
   if (!runtime || typeof runtime.PluginRegistry !== 'function') return null;
@@ -635,6 +660,86 @@ async function resolveRuntimeGate(projectRoot, activeSession, options = {}) {
       runId,
     },
   };
+}
+
+// Gap 5: route execution to MultiAgentCoordinator when plan-agents.json exists
+async function runRuntimeExecute(projectRoot, activeSession, options = {}) {
+  const runtime = loadRuntimeModule();
+  if (!runtime) throw new Error('Runtime package não está disponível. Rode npm run build:runtime.');
+  const parsers = loadSdkParsers();
+  if (!parsers) throw new Error('SDK parsers não disponíveis.');
+
+  // Resolve compiled graph from run state or compile on demand
+  let current = options.runState || readRunState(projectRoot, activeSession);
+  if (!current || !current.compiled_graph) {
+    current = compileExecutionGraphFromArtifacts(projectRoot, activeSession, { runState: current }).run;
+  }
+  if (!current || !current.compiled_graph) {
+    throw new Error('Nenhum grafo compilado encontrado. Execute oxe-cc runtime compile primeiro.');
+  }
+  const graph = runtime.fromSerializable
+    ? runtime.fromSerializable(current.compiled_graph)
+    : current.compiled_graph;
+
+  // Detect plan-agents.json (session path takes priority over root)
+  const rootAgentPlan = path.join(projectRoot, '.oxe', 'plan-agents.json');
+  const sessAgentPlan = activeSession
+    ? path.join(projectRoot, '.oxe', activeSession, 'plan', 'plan-agents.json')
+    : null;
+  const agentPlanPath = (sessAgentPlan && fs.existsSync(sessAgentPlan))
+    ? sessAgentPlan
+    : (fs.existsSync(rootAgentPlan) ? rootAgentPlan : null);
+
+  // Build ctx with GateManager (Gap 1)
+  const ctx = createExecutionContext(projectRoot, activeSession, {
+    runId: current.run_id,
+    executor: options.executor || null,
+    workspaceManager: options.workspaceManager || null,
+    pluginRegistry: options.pluginRegistry || buildRuntimePluginRegistry(projectRoot),
+    schedulerOptions: options.schedulerOptions || {},
+    onEvent: (event) => appendEvent(projectRoot, activeSession, event),
+  });
+
+  // Gap 5: multi-agent path if plan-agents.json exists
+  if (agentPlanPath) {
+    let agentPlan;
+    try {
+      agentPlan = JSON.parse(fs.readFileSync(agentPlanPath, 'utf8'));
+    } catch (err) {
+      throw new Error(`plan-agents.json inválido: ${err.message}`);
+    }
+    if (!Array.isArray(agentPlan.agents) || agentPlan.agents.length === 0) {
+      throw new Error('plan-agents.json não contém agentes válidos (campo "agents" vazio ou ausente).');
+    }
+    if (typeof runtime.MultiAgentCoordinator !== 'function') {
+      throw new Error('Runtime não exporta MultiAgentCoordinator. Verifique a versão do runtime.');
+    }
+    const agents = agentPlan.agents.map((spec) => ({
+      id: spec.id,
+      executor: options.executorFactory ? options.executorFactory(spec) : (options.executor || null),
+      workspaceManager: options.workspaceManager || null,
+      assignedTaskIds: Array.isArray(spec.tasks) ? spec.tasks : [],
+    }));
+    const coordinator = new runtime.MultiAgentCoordinator();
+    const result = await coordinator.run(graph, {
+      mode: agentPlan.mode || 'parallel',
+      agents,
+      projectRoot,
+      sessionId: activeSession || null,
+      runId: current.run_id,
+      heartbeatTimeoutMs: options.heartbeatTimeoutMs ?? 120000,
+      onEvent: ctx.onEvent,
+    });
+    return { mode: agentPlan.mode || 'parallel', agentPlan, result, run: current };
+  }
+
+  // Single-agent fallback
+  if (typeof runtime.Scheduler !== 'function') {
+    throw new Error('Runtime não exporta Scheduler. Verifique a versão do runtime.');
+  }
+  const scheduler = new runtime.Scheduler();
+  const result = await scheduler.run(graph, ctx);
+  return { mode: 'single', agentPlan: null, result, run: current };
 }
 
 function readRuntimeMultiAgentStatus(projectRoot, activeSession, options = {}) {
@@ -2138,6 +2243,8 @@ module.exports = {
   buildRecoveryConsistency,
   readRuntimeGates,
   resolveRuntimeGate,
+  createExecutionContext,
+  runRuntimeExecute,
   runRuntimeVerify,
   projectRuntimeArtifacts,
   runRuntimeCiChecks,

@@ -1687,6 +1687,14 @@ function runStatusFull(target) {
       console.log(`  ${c ? yellow : ''}  • ${warning}${c ? reset : ''}`);
     }
   }
+  if (report.codex && (report.codex.detected || report.codex.warnings.length)) {
+    console.log(`\n  ${c ? yellow : ''}Codex${c ? reset : ''}`);
+    console.log(`  ${c ? dim : ''}Prompts:${c ? reset : ''} ${report.codex.commandsReady ? 'ok' : 'pendente'} · ${displayPathForUser(report.codex.promptsDir)}`);
+    console.log(`  ${c ? dim : ''}Skills:${c ? reset : ''} ${report.codex.skillsReady ? 'ok' : 'pendente'} · ${displayPathForUser(report.codex.skillsRoot)}`);
+    for (const warning of report.codexWarn.slice(0, 3)) {
+      console.log(`  ${c ? yellow : ''}  • ${warning}${c ? reset : ''}`);
+    }
+  }
 
   // Coverage matrix
   const specPath = activeSession && sp.spec ? sp.spec : p.spec;
@@ -1909,6 +1917,7 @@ function runStatus(target, opts = {}) {
       azureActive: report.azureActive,
       azure: report.azure,
       copilot: report.copilot,
+      codex: report.codex,
       contextPacks: report.contextPacks,
       contextQuality: report.contextQuality,
       semanticsDrift: report.semanticsDrift,
@@ -1927,6 +1936,7 @@ function runStatus(target, opts = {}) {
         sessionWarnings: report.sessionWarn,
         installWarnings: report.installWarn,
         copilotWarnings: report.copilotWarn,
+        codexWarnings: report.codexWarn,
         contextWarnings: report.contextWarn,
         semanticsWarnings: report.semanticsWarn,
         summaryGapWarning: report.summaryGapWarn,
@@ -1962,6 +1972,8 @@ function runStatus(target, opts = {}) {
   const _claudeLocal = path.join(target, 'commands', 'oxe');
   const _claudeGlobal = path.join(require('os').homedir(), '.claude', 'commands');
   ideStatusLines.push(`Claude Code ${fs.existsSync(_claudeLocal) || fs.existsSync(_claudeGlobal) ? (c ? green + '✓' + reset : '✓') : (c ? dim + '✗' + reset : '✗')}`);
+  const _codex = report.codex || oxeHealth.codexIntegrationReport(target);
+  ideStatusLines.push(`Codex ${_codex.commandsReady ? (c ? green + '✓' + reset : '✓') : (c ? dim + '✗' + reset : '✗')}`);
   console.log(`\n  ${c ? dim : ''}IDEs:${c ? reset : ''} ${ideStatusLines.join('  ')}`);
 
   // Gates pending in default view
@@ -2194,6 +2206,9 @@ function runDoctor(target, options = {}) {
   const claudeGlobalDir = path.join(require('os').homedir(), '.claude', 'commands');
   const claudeReady = fs.existsSync(claudeLocalDir) || fs.existsSync(claudeGlobalDir);
   ideChecks.push({ label: 'Claude Code', ready: claudeReady, hint: 'commands/oxe/ ou ~/.claude/commands/' });
+
+  const codexReport = oxeHealth.codexIntegrationReport(target);
+  ideChecks.push({ label: 'Codex', ready: codexReport.commandsReady, hint: '~/.codex/prompts/oxe.md' });
 
   for (const ide of ideChecks) {
     if (ide.ready) {
@@ -4577,6 +4592,35 @@ async function runRuntime(opts) {
       return;
     } catch (err) {
       console.error(`${red}${err && err.message ? err.message : 'Falha ao projetar artefatos do runtime.'}${reset}`);
+      process.exit(1);
+    }
+  }
+
+  if (opts.action === 'execute') {
+    try {
+      const result = await oxeOperational.runRuntimeExecute(opts.dir, activeSession, {
+        runId: opts.runId || undefined,
+        heartbeatTimeoutMs: opts.heartbeatTimeoutMs || undefined,
+      });
+      if (opts.jsonOutput) {
+        console.log(JSON.stringify(result, null, 2));
+        if (result.result && result.result.failed && result.result.failed.length > 0) process.exitCode = 1;
+        return;
+      }
+      const r = result.result || {};
+      const completed = Array.isArray(r.completed) ? r.completed : [];
+      const failed = Array.isArray(r.failed) ? r.failed : [];
+      const blocked = Array.isArray(r.blocked) ? r.blocked : [];
+      console.log(`  ${c ? green : ''}✓${c ? reset : ''} Runtime execute concluído (modo: ${result.mode})`);
+      console.log(`  ${c ? green : ''}Completados:${c ? reset : ''} ${completed.length}`);
+      if (failed.length > 0)
+        console.log(`  ${c ? red : ''}Falhos:${c ? reset : ''} ${failed.length} — ${failed.join(', ')}`);
+      if (blocked.length > 0)
+        console.log(`  ${c ? '\x1b[33m' : ''}Bloqueados:${c ? reset : ''} ${blocked.length} — ${blocked.join(', ')}`);
+      if (failed.length > 0) process.exitCode = 1;
+      return;
+    } catch (err) {
+      console.error(`${red}${err && err.message ? err.message : 'Falha ao executar runtime.'}${reset}`);
       process.exit(1);
     }
   }

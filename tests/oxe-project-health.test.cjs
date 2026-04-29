@@ -69,12 +69,12 @@ function seedPackageRepoFixture(dir) {
   fs.mkdirSync(path.join(dir, 'bin'), { recursive: true });
   fs.cpSync(path.join(REPO_ROOT, 'oxe'), path.join(dir, 'oxe'), { recursive: true });
   fs.cpSync(path.join(REPO_ROOT, 'commands', 'oxe'), path.join(dir, 'commands', 'oxe'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'oxe-cc', version: '1.7.0' }, null, 2), 'utf8');
-  fs.writeFileSync(path.join(dir, 'packages', 'runtime', 'package.json'), JSON.stringify({ name: '@oxe/runtime', version: '1.7.0' }, null, 2), 'utf8');
-  fs.writeFileSync(path.join(dir, 'vscode-extension', 'package.json'), JSON.stringify({ name: 'oxe-agents', version: '1.7.0' }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'oxe-cc', version: '1.8.0' }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, 'packages', 'runtime', 'package.json'), JSON.stringify({ name: '@oxe/runtime', version: '1.8.0' }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, 'vscode-extension', 'package.json'), JSON.stringify({ name: 'oxe-agents', version: '1.8.0' }, null, 2), 'utf8');
   fs.writeFileSync(path.join(dir, 'bin', 'oxe-cc.js'), '#!/usr/bin/env node\n', 'utf8');
   fs.writeFileSync(path.join(dir, 'bin', 'banner.txt'), 'OXE v{version}\n', 'utf8');
-  fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n\n## [1.7.0] - 2026-04-23\n\n- Release readiness fixture.\n', 'utf8');
+  fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n\n## [1.8.0] - 2026-04-29\n\n- Release readiness fixture.\n', 'utf8');
   fs.writeFileSync(path.join(dir, '.oxe', 'STATE.md'), '## Fase atual\n\n`initial`\n', 'utf8');
   fs.writeFileSync(path.join(dir, '.oxe', 'release', 'runtime-smoke-report.json'), JSON.stringify({ ok: true, results: [] }, null, 2), 'utf8');
   fs.writeFileSync(path.join(dir, '.oxe', 'release', 'recovery-fixture-report.json'), JSON.stringify({ ok: true, results: [] }, null, 2), 'utf8');
