@@ -468,8 +468,8 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
   const artifactPaths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const specText = readTextIfExists(artifactPaths.spec);
   const planText = readTextIfExists(artifactPaths.plan);
-  if (!specText) throw new Error(`SPEC.md ausente em ${artifactPaths.spec}`);
-  if (!planText) throw new Error(`PLAN.md ausente em ${artifactPaths.plan}`);
+  if (!specText) throw new Error(`SPEC.md ausente em ${artifactPaths.spec}\n  Crie .oxe/SPEC.md com /oxe-spec no seu agente, ou use o template em oxe/templates/SPEC.template.md`);
+  if (!planText) throw new Error(`PLAN.md ausente em ${artifactPaths.plan}\n  Crie .oxe/PLAN.md com /oxe-plan no seu agente (requer SPEC.md), ou use o template em oxe/templates/PLAN.template.md`);
   const parsedSpec = parsers.parseSpec(specText);
   const parsedPlan = parsers.parsePlan(planText);
   const graph = runtime.compile(parsedPlan, parsedSpec, options.compilerOptions || {});
@@ -923,6 +923,11 @@ function buildRecoveryConsistency(projectRoot, activeSession, runState, journal,
   const runDir = runState && runState.run_id ? path.join(projectRoot, '.oxe', 'runs', runState.run_id) : null;
   const allEvents = readEvents(projectRoot, activeSession);
   const runEvents = runState && runState.run_id ? allEvents.filter((event) => event.run_id === runState.run_id) : [];
+  // Detect if execution has ever started (at least one attempt recorded)
+  const attemptCount = runState && runState.canonical_state && runState.canonical_state.summary
+    ? (runState.canonical_state.summary.attempt_count || 0)
+    : 0;
+  const executionStarted = attemptCount > 0;
   const issues = [];
   if (!activeRunRef || activeRunRef.run_id !== (runState && runState.run_id)) {
     issues.push('ACTIVE-RUN.json não referencia o mesmo run persistido em .oxe/runs/.');
@@ -930,10 +935,12 @@ function buildRecoveryConsistency(projectRoot, activeSession, runState, journal,
   if (!runFile || !fs.existsSync(runFile)) {
     issues.push('Arquivo canónico da run ausente em .oxe/runs/<run>.json.');
   }
-  if (!journal) {
+  // Journal is only created after execution starts — skip this check pre-execution
+  if (!journal && executionStarted) {
     issues.push('Journal ausente para recover/replay.');
   }
-  if (runEvents.length === 0) {
+  // Events for this run only exist after execution — skip pre-execution
+  if (runEvents.length === 0 && executionStarted) {
     issues.push('Nenhum evento NDJSON encontrado para a run ativa.');
   }
   if (!runState || !runState.canonical_state) {

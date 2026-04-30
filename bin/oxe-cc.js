@@ -1673,7 +1673,7 @@ function runStatusFull(target) {
 
   printSection('OXE ▸ status --full');
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${target}${c ? reset : ''}`);
-  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
   console.log(`  ${c ? green : ''}Workspace mode:${c ? reset : ''} ${report.workspaceMode || 'oxe_project'}`);
   console.log(`  ${c ? green : ''}Fase:${c ? reset : ''} ${report.phase || '—'}`);
 
@@ -2105,10 +2105,18 @@ function runDoctor(target, options = {}) {
     .sort();
 
   if (!wfTgt) {
-    console.log(
-      `${yellow}AVISO${reset} Não há oxe/workflows/ nem .oxe/workflows/ neste projeto — rode ${cyan}npx oxe-cc@latest${reset} para instalar.`
-    );
-    process.exit(1);
+    // If the project has .oxe/runs/ it's a runtime-only project — workflows are optional
+    const hasRuntimeRuns = fs.existsSync(path.join(target, '.oxe', 'runs'));
+    if (hasRuntimeRuns) {
+      console.log(`${green}OK${reset} Runtime-only project (.oxe/runs/ presente) — workflows não obrigatórios.`);
+      console.log(`${c ? dim : ''}  Para instalar workflows completos: ${cyan}npx oxe-cc@latest${reset}`);
+    } else {
+      console.log(
+        `${yellow}AVISO${reset} Não há oxe/workflows/ nem .oxe/workflows/ neste projeto — rode ${cyan}npx oxe-cc@latest${reset} para instalar.`
+      );
+      process.exit(1);
+    }
+    return;
   }
 
   const actual = fs
@@ -4229,7 +4237,7 @@ function runContext(opts) {
       return;
     }
     console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
-    console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+    console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
     console.log(`  ${c ? green : ''}Workflow:${c ? reset : ''} ${selectedWorkflow}`);
     console.log(`  ${c ? green : ''}Tier:${c ? reset : ''} ${pack.context_tier}`);
     console.log(`  ${c ? green : ''}Quality:${c ? reset : ''} ${pack.context_quality.score} (${pack.context_quality.status})`);
@@ -4296,7 +4304,7 @@ function runContext(opts) {
     return;
   }
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
-  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
   console.log(`  ${c ? green : ''}Packs:${c ? reset : ''} ${packs.length}`);
   for (const pack of packs) {
     const qualityFlag = (pack.context_quality.score < 30 || pack.context_quality.status === 'critical') ? ` ${yellow}[CRÍTICO]${reset}` : '';
@@ -4361,7 +4369,7 @@ async function runRuntime(opts) {
   const activeSession = opts.activeSession || oxeHealth.parseActiveSession(stateText) || null;
   const p = oxeOperational.operationalPaths(opts.dir, activeSession);
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
-  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
 
   if (opts.action === 'status') {
     const current = oxeOperational.readRunState(opts.dir, activeSession);
@@ -4424,13 +4432,28 @@ async function runRuntime(opts) {
       console.log(`  ${c ? green : ''}Runtime:${c ? reset : ''} ${runtimeMode.runtime_mode || 'legacy'} · fallback=${runtimeMode.fallback_mode || 'none'}`);
     }
     if (report.policyCoverage) {
-      console.log(`  ${c ? green : ''}Policy coverage:${c ? reset : ''} ${report.policyCoverage.coveragePercent}% · uncovered=${report.policyCoverage.uncoveredMutations}`);
+      const pctCov = report.policyCoverage.coveragePercent;
+      const policyLabel = pctCov === 0
+        ? `${c ? dim : ''}não configurada (opcional)${c ? reset : ''}`
+        : `${pctCov}% · uncovered=${report.policyCoverage.uncoveredMutations}`;
+      console.log(`  ${c ? green : ''}Policy coverage:${c ? reset : ''} ${policyLabel}`);
     }
     if (report.promotionReadiness) {
-      console.log(`  ${c ? green : ''}Promotion readiness:${c ? reset : ''} ${report.promotionReadiness.status}${Array.isArray(report.promotionReadiness.blockers) && report.promotionReadiness.blockers.length ? ` · ${report.promotionReadiness.blockers.join(', ')}` : ''}`);
+      const promoStatus = report.promotionReadiness.status;
+      const blockers = Array.isArray(report.promotionReadiness.blockers) ? report.promotionReadiness.blockers : [];
+      // Only show blockers that are not solely due to unconfigured policy
+      const meaningfulBlockers = blockers.filter(b => b !== 'policy_uncovered_mutations' || report.policyCoverage.coveragePercent > 0);
+      const promoLabel = promoStatus === 'blocked' && meaningfulBlockers.length === 0
+        ? `${c ? dim : ''}n/a (execução não concluída)${c ? reset : ''}`
+        : `${promoStatus}${meaningfulBlockers.length ? ` · ${meaningfulBlockers.join(', ')}` : ''}`;
+      console.log(`  ${c ? green : ''}Promotion readiness:${c ? reset : ''} ${promoLabel}`);
     }
     if (report.recoveryState) {
-      console.log(`  ${c ? green : ''}Recovery:${c ? reset : ''} ${report.recoveryState.status} · recoveries=${report.recoveryState.recoverCount ?? 0} · issues=${Array.isArray(report.recoveryState.issues) ? report.recoveryState.issues.length : 0}`);
+      const recIssues = Array.isArray(report.recoveryState.issues) ? report.recoveryState.issues.length : 0;
+      const recLabel = recIssues === 0
+        ? `${report.recoveryState.status} · ok`
+        : `${report.recoveryState.status} · issues=${recIssues} — rode ${c ? cyan : ''}runtime status --verbose${c ? reset : ''} para detalhes`;
+      console.log(`  ${c ? green : ''}Recovery:${c ? reset : ''} ${recLabel} · recoveries=${report.recoveryState.recoverCount ?? 0}`);
     }
     if (multiAgent) {
       console.log(`  ${c ? green : ''}Multi-agent:${c ? reset : ''} ${multiAgent.enabled ? (multiAgent.mode || 'active') : 'disabled'} · agentes=${Array.isArray(multiAgent.agents) ? multiAgent.agents.length : 0} · ownership=${Array.isArray(multiAgent.ownership) ? multiAgent.ownership.length : 0}`);
@@ -4620,7 +4643,16 @@ async function runRuntime(opts) {
       console.log(`  ${c ? green : ''}Graph:${c ? reset : ''} ${compiled.graph.metadata.node_count} nó(s) · ${compiled.graph.metadata.wave_count} onda(s)`);
       console.log(`  ${c ? green : ''}Checks:${c ? reset : ''} ${Array.isArray(suite.suite.checks) ? suite.suite.checks.length : 0}`);
       if (compiled.validationErrors.length) {
-        console.log(`  ${yellow}Validation:${reset} ${compiled.validationErrors.join(' | ')}`);
+        // Split: cycle/dependency errors are blocking; mutation-scope overlaps are info-only in single-agent
+        const blocking = compiled.validationErrors.filter(e => !e.includes('mutate the same paths in parallel'));
+        const mutationWarns = compiled.validationErrors.filter(e => e.includes('mutate the same paths in parallel'));
+        if (blocking.length) {
+          console.log(`  ${yellow}Validation (erros):${reset} ${blocking.join(' | ')}`);
+        }
+        if (mutationWarns.length) {
+          console.log(`  ${c ? dim : ''}Info (single-agent — tarefas na mesma onda são sequenciais, sobreposição de arquivos não bloqueia):${c ? reset : ''}`);
+          mutationWarns.forEach(w => console.log(`  ${c ? dim : ''}  · ${w}${c ? reset : ''}`));
+        }
       }
       console.log(`  ${c ? green : ''}Arquivo:${c ? reset : ''} ${path.join(p.runsDir, `${compiled.run.run_id}.json`)}`);
       return;
@@ -4907,7 +4939,7 @@ function runAzure(opts) {
   };
 
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
-  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
 
   try {
     if (opts.scope === 'status') {
@@ -5231,7 +5263,7 @@ function runPlanVisual(opts) {
   const planPath = sp.plan || oxeHealth.oxePaths(opts.dir).plan;
 
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
-  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
 
   if (!fs.existsSync(planPath)) {
     console.log(`\n  ${yellow}PLAN.md não encontrado em ${planPath}${reset}`);
@@ -5285,7 +5317,7 @@ function runVerifyMatrix(opts) {
   const verifyPath = sp.verify || oxeHealth.oxePaths(opts.dir).verify;
 
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
-  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
 
   const specMd = fs.existsSync(specPath) ? fs.readFileSync(specPath, 'utf8') : '';
   const planMd = fs.existsSync(planPath) ? fs.readFileSync(planPath, 'utf8') : '';
@@ -5669,7 +5701,8 @@ async function main() {
       nextSteps: [
         { desc: 'Validar o projeto:', cmd: 'npx oxe-cc doctor' },
         { desc: 'Instalar integrações IDE/CLI (se ainda não fez):', cmd: 'npx oxe-cc@latest' },
-        { desc: 'Começar o fluxo no agente:', cmd: '/oxe-scan' },
+        { desc: 'Fluxo runtime — criar spec (no agente):', cmd: '/oxe-spec  →  /oxe-plan  →  oxe-cc runtime compile  →  oxe-cc runtime execute' },
+        { desc: 'Começar pelo scan do codebase (agente):', cmd: '/oxe-scan' },
       ],
       dryRun: opts.dryRun,
     });
