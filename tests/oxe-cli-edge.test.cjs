@@ -263,6 +263,21 @@ describe('oxe-cc CLI edge', () => {
     assert.ok(j.staleCompact && typeof j.staleCompact.stale === 'boolean');
   });
 
+  test('status --json suggests /oxe for fresh workspace without spec or codebase maps', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-fresh-'));
+    fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.oxe', 'STATE.md'), '## Fase atual\n\n`initial`\n', 'utf8');
+    const r = spawnSync(process.execPath, [CLI, 'status', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1' },
+    });
+    assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+    const j = JSON.parse(r.stdout.trim().split(/\r?\n/).filter(Boolean).pop());
+    assert.strictEqual(j.nextStep, 'oxe');
+    assert.strictEqual(j.cursorCmd, '/oxe');
+  });
+
   test('status --json exposes package repo mode and release readiness without plan noise', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-package-'));
     seedPackageRepoFixture(dir);
@@ -390,6 +405,28 @@ describe('oxe-cc CLI edge', () => {
     assert.strictEqual(j.codex.commandsReady, true);
     assert.strictEqual(j.codex.skillsReady, true);
     assert.ok(Array.isArray(j.diagnostics.codexWarnings));
+  });
+
+  test('status --json marks Codex as global-only when only user-wide installation exists', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-codex-global-'));
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-st-codex-global-home-'));
+    const env = isolatedHomeEnv(fakeHome);
+    seedContextProject(dir);
+    const codexPrompts = path.join(fakeHome, '.codex', 'prompts');
+    const codexSkill = path.join(fakeHome, '.agents', 'skills', 'oxe');
+    fs.mkdirSync(codexPrompts, { recursive: true });
+    fs.mkdirSync(codexSkill, { recursive: true });
+    fs.writeFileSync(path.join(codexPrompts, 'oxe.md'), '---\ndescription: OXE\n---\n<!-- oxe-cc managed -->\n', 'utf8');
+    fs.writeFileSync(path.join(codexSkill, 'SKILL.md'), '---\nname: oxe\n---\n<!-- oxe-cc managed -->\n', 'utf8');
+    const r = spawnSync(process.execPath, [CLI, 'status', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      env,
+      encoding: 'utf8',
+    });
+    assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+    const j = JSON.parse(r.stdout.trim().split(/\r?\n/).filter(Boolean).pop());
+    assert.strictEqual(j.codex.promptSource, 'global');
+    assert.ok(j.diagnostics.codexWarnings.some((warning) => /apenas no ambiente global/i.test(warning)));
   });
 
   test('status warns when PLAN.md misses autoavaliação and suggests replan on low confidence', () => {

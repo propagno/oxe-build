@@ -669,6 +669,20 @@ async function runRuntimeExecute(projectRoot, activeSession, options = {}) {
   const parsers = loadSdkParsers();
   if (!parsers) throw new Error('SDK parsers não disponíveis.');
 
+  // Auto-wire LlmTaskExecutor if providerConfig is supplied
+  let executor = options.executor || null;
+  if (!executor && options.providerConfig) {
+    if (typeof runtime.LlmTaskExecutor !== 'function') throw new Error('Runtime não exporta LlmTaskExecutor.');
+    executor = new runtime.LlmTaskExecutor(options.providerConfig, null, options.onProgress || null);
+  }
+  // Auto-wire InplaceWorkspaceManager as default
+  let workspaceManager = options.workspaceManager || null;
+  if (!workspaceManager) {
+    if (typeof runtime.InplaceWorkspaceManager === 'function') {
+      workspaceManager = new runtime.InplaceWorkspaceManager(projectRoot);
+    }
+  }
+
   // Resolve compiled graph from run state or compile on demand
   let current = options.runState || readRunState(projectRoot, activeSession);
   if (!current || !current.compiled_graph) {
@@ -693,11 +707,14 @@ async function runRuntimeExecute(projectRoot, activeSession, options = {}) {
   // Build ctx with GateManager (Gap 1)
   const ctx = createExecutionContext(projectRoot, activeSession, {
     runId: current.run_id,
-    executor: options.executor || null,
-    workspaceManager: options.workspaceManager || null,
+    executor,
+    workspaceManager,
     pluginRegistry: options.pluginRegistry || buildRuntimePluginRegistry(projectRoot),
     schedulerOptions: options.schedulerOptions || {},
-    onEvent: (event) => appendEvent(projectRoot, activeSession, event),
+    onEvent: (event) => {
+      appendEvent(projectRoot, activeSession, event);
+      options.onProgress?.(event);
+    },
   });
 
   // Gap 5: multi-agent path if plan-agents.json exists
@@ -1146,7 +1163,7 @@ function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const op = operationalPaths(projectRoot, activeSession);
   const projectionRefs = {
-    plan_ref: path.relative(projectRoot, paths.plan).replace(/\\/g, '/'),
+    plan_ref: path.relative(projectRoot, paths.plan.replace(/PLAN\.md$/, 'PLAN-STATUS.md')).replace(/\\/g, '/'),
     verify_ref: path.relative(projectRoot, paths.verify).replace(/\\/g, '/'),
     state_ref: path.relative(projectRoot, paths.state).replace(/\\/g, '/'),
     run_summary_ref: path.relative(projectRoot, path.join(op.executionRoot, 'RUN-SUMMARY.md')).replace(/\\/g, '/'),
@@ -1156,10 +1173,12 @@ function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
     generated_at: new Date().toISOString(),
   };
   if (options.write !== false) {
-    ensureDirForFile(paths.plan);
+    // Write plan projection to PLAN-STATUS.md — never overwrite the source PLAN.md
+    const planStatusPath = paths.plan.replace(/PLAN\.md$/, 'PLAN-STATUS.md');
+    ensureDirForFile(planStatusPath);
     ensureDirForFile(paths.verify);
     ensureDirForFile(paths.state);
-    fs.writeFileSync(paths.plan, projections.plan + '\n', 'utf8');
+    fs.writeFileSync(planStatusPath, projections.plan + '\n', 'utf8');
     fs.writeFileSync(paths.verify, projections.verify + '\n', 'utf8');
     fs.writeFileSync(paths.state, projections.state + '\n', 'utf8');
     fs.writeFileSync(path.join(op.executionRoot, 'RUN-SUMMARY.md'), projections.runSummary + '\n', 'utf8');

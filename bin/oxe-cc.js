@@ -209,8 +209,8 @@ function buildInstallSummary(opts, fullLayout) {
   if (opts.copilotCli || opts.allAgents || anyGranularAgent(opts)) agentHint.push('CLIs / multi-agente');
   if (agentHint.length) {
     nextSteps.push({
-      desc: `Mapear o código no agente (${agentHint.join(', ')}):`,
-      cmd: '/oxe-scan',
+      desc: `Entrar no fluxo OXE no agente (${agentHint.join(', ')}) e deixar o router indicar o primeiro passo:`,
+      cmd: '/oxe',
     });
   } else if (opts.oxeOnly) {
     nextSteps.push({
@@ -220,7 +220,7 @@ function buildInstallSummary(opts, fullLayout) {
   } else {
     nextSteps.push({
       desc: 'Primeiro passo do fluxo no seu editor:',
-      cmd: '/oxe-scan',
+      cmd: '/oxe',
     });
   }
 
@@ -252,6 +252,7 @@ function buildUninstallFooter(u) {
   const bullets = [];
   const p = u.dryRun ? '[simulação] ' : '';
   const rm = u.dryRun ? 'Seriam removidos' : 'Removidos';
+  const localIdeArtifacts = shouldAlsoRemoveLocalIdeArtifacts(u);
   const granularAgents = [
     u.agentOpenCode ? 'OpenCode' : null,
     u.agentGemini ? 'Gemini' : null,
@@ -277,9 +278,9 @@ function buildUninstallFooter(u) {
   } else if (granularAgents.length) {
     bullets.push(`${p}${rm} apenas as integrações selecionadas: ${granularAgents.join(', ')}.`);
   }
-  if (u.ideLocal) {
+  if (localIdeArtifacts) {
     bullets.push(
-      `${p}${rm} integrações OXE no repositório (.cursor, .github, .claude, .copilot, .opencode, … conforme flags).`
+      `${p}${rm} integrações OXE no repositório (.cursor, .github, .claude, .copilot, .opencode, … conforme flags ou artefatos locais detectados).`
     );
   }
   if (u.globalCli) bullets.push(`${p}${rm} também o pacote npm global oxe-cc do PATH.`);
@@ -1533,7 +1534,9 @@ function printOxeHealthDiagnostics(target, c, diagOpts = {}) {
       typeof r.planSelfEvaluation.confidence === 'number' ? `${r.planSelfEvaluation.confidence}%` : '—';
     console.log(`  ${c ? dim : ''}Plano (autoavaliação):${c ? reset : ''} melhor=${best} | confiança=${conf}`);
   }
-  if (typeof r.executionRationalityReady === 'boolean') {
+  if (r.executionRationality && r.executionRationality.applicable === false) {
+    console.log(`  ${c ? dim : ''}Prontidão racional:${c ? reset : ''} não aplicável ainda (PLAN.md ausente)`);
+  } else if (typeof r.executionRationalityReady === 'boolean') {
     console.log(
       `  ${c ? dim : ''}Prontidão racional:${c ? reset : ''} implementation=${r.implementationPackReady ? 'ok' : 'pendente'} | anchors=${r.referenceAnchorsReady ? 'ok' : 'pendente'} | fixtures=${r.fixturePackReady ? 'ok' : 'pendente'}`
     );
@@ -2190,6 +2193,8 @@ function runDoctor(target, options = {}) {
     }
   }
 
+  const report = oxeHealth.buildHealthReport(target);
+
   // IDE health gates
   console.log('');
   const ideChecks = [];
@@ -2204,25 +2209,44 @@ function runDoctor(target, options = {}) {
 
   const claudeLocalDir = path.join(target, 'commands', 'oxe');
   const claudeGlobalDir = path.join(require('os').homedir(), '.claude', 'commands');
-  const claudeReady = fs.existsSync(claudeLocalDir) || fs.existsSync(claudeGlobalDir);
-  ideChecks.push({ label: 'Claude Code', ready: claudeReady, hint: 'commands/oxe/ ou ~/.claude/commands/' });
+  const claudeLocalReady = fs.existsSync(claudeLocalDir);
+  const claudeGlobalReady = fs.existsSync(claudeGlobalDir);
+  ideChecks.push({
+    label: 'Claude Code',
+    ready: claudeLocalReady || claudeGlobalReady,
+    hint: claudeLocalReady
+      ? 'commands/oxe/'
+      : claudeGlobalReady
+        ? '~/.claude/commands/ (global do utilizador)'
+        : 'commands/oxe/ ou ~/.claude/commands/',
+    status: claudeLocalReady ? 'local' : claudeGlobalReady ? 'global_only' : 'missing',
+  });
 
   const codexReport = oxeHealth.codexIntegrationReport(target);
-  ideChecks.push({ label: 'Codex', ready: codexReport.commandsReady, hint: '~/.codex/prompts/oxe.md' });
+  ideChecks.push({
+    label: 'Codex',
+    ready: codexReport.commandsReady,
+    hint: codexReport.promptSource === 'workspace'
+      ? '.codex/prompts/oxe.md'
+      : codexReport.promptSource === 'global'
+        ? '~/.codex/prompts/oxe.md (global do utilizador)'
+        : '.codex/prompts/oxe.md ou ~/.codex/prompts/oxe.md',
+    status: codexReport.promptSource,
+  });
 
   for (const ide of ideChecks) {
     if (ide.ready) {
-      console.log(`${c ? green : ''}OK${c ? reset : ''} ${ide.label} pronto (${ide.hint})`);
+      const suffix = ide.status === 'global_only' || ide.status === 'global'
+        ? ' — apenas global'
+        : '';
+      console.log(`${c ? green : ''}OK${c ? reset : ''} ${ide.label} pronto (${ide.hint})${suffix}`);
     } else {
       console.log(`${c ? dim : ''}Obs.:${c ? reset : ''} ${ide.label} não detectado — esperado ${ide.hint}`);
     }
   }
 
   // Runtime compilation check
-  const runtimeCompiledPath = path.join(target, 'lib', 'runtime', 'index.js');
-  const runtimeDistPath = path.join(target, 'packages', 'runtime', 'dist-tests');
-  const runtimeCompiled = fs.existsSync(runtimeCompiledPath) || fs.existsSync(runtimeDistPath);
-  if (runtimeCompiled) {
+  if (report.runtimeMode && report.runtimeMode.enterprise_available) {
     console.log(`${c ? green : ''}OK${c ? reset : ''} Runtime compilado detectado — modo enterprise disponível`);
   } else {
     console.log(`${c ? dim : ''}Obs.:${c ? reset : ''} Runtime não compilado — operando em modo legado (sem perda de UX)`);
@@ -2230,7 +2254,7 @@ function runDoctor(target, options = {}) {
 
   // Readiness gate summary
   const stateFilePath = path.join(target, '.oxe', 'STATE.md');
-  let readinessCmd = '/oxe-scan';
+  let readinessCmd = '/oxe';
   let readinessDesc = 'Nenhum STATE.md encontrado';
   if (fs.existsSync(stateFilePath)) {
     try {
@@ -2238,7 +2262,7 @@ function runDoctor(target, options = {}) {
       const phaseMatch = stateContent.match(/fase[:\s]+([a-z_]+)/i) || stateContent.match(/phase[:\s]+([a-z_]+)/i) || stateContent.match(/status[:\s]+([a-z_]+)/i);
       const phase = phaseMatch ? phaseMatch[1].toLowerCase() : 'init';
       const phaseMap = {
-        init: { cmd: '/oxe-scan', desc: 'Pronto para /oxe-scan' },
+        init: { cmd: '/oxe', desc: 'Pronto para /oxe' },
         scan_complete: { cmd: '/oxe-spec', desc: 'Pronto para /oxe-spec' },
         spec_complete: { cmd: '/oxe-plan', desc: 'Pronto para /oxe-plan' },
         plan_complete: { cmd: '/oxe-execute', desc: 'Pronto para /oxe-execute' },
@@ -2260,7 +2284,6 @@ function runDoctor(target, options = {}) {
   }
 
   printOxeHealthDiagnostics(target, c);
-  const report = oxeHealth.buildHealthReport(target);
   const statusColor = report.healthStatus === 'healthy' ? green : report.healthStatus === 'warning' ? yellow : red;
   console.log(`\n  ${statusColor}Diagnóstico ${report.healthStatus}${reset}`);
   if (report.healthStatus === 'broken') {
@@ -2275,7 +2298,7 @@ function runDoctor(target, options = {}) {
       `Saúde lógica: ${report.healthStatus}`,
     ],
     nextSteps: [
-      { desc: 'Mapear ou atualizar o codebase no agente:', cmd: '/oxe-scan' },
+      { desc: 'Entrar no fluxo OXE e deixar o router apontar o primeiro passo:', cmd: '/oxe' },
       { desc: 'Ver ajuda e ordem dos passos OXE:', cmd: '/oxe-help' },
       { desc: 'Reinstalar ou atualizar arquivos do OXE:', cmd: 'npx oxe-cc@latest --force' },
     ],
@@ -2496,7 +2519,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
     npx oxe-cc init-oxe [opções] [pasta-do-projeto]
     npx oxe-cc context <build|inspect> [opções] [pasta-do-projeto]
     npx oxe-cc dashboard [opções] [pasta-do-projeto]
-  npx oxe-cc runtime <status|start|pause|resume|replay|compile|verify|project|ci|promote|recover|gates|agents> [opções] [pasta-do-projeto]
+  npx oxe-cc runtime <status|start|pause|resume|replay|compile|verify|project|ci|promote|recover|gates|agents|execute> [opções] [pasta-do-projeto]
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
     npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
     npx oxe-cc uninstall [opções] [pasta-do-projeto]
@@ -2695,7 +2718,19 @@ function runInstall(opts) {
   assertNotWslWindowsNode();
   const home = os.homedir();
   const prevManifest = oxeManifest.loadFileManifest(home);
-  oxeManifest.backupModifiedFromManifest(home, prevManifest, opts, { yellow, cyan, dim, reset });
+  const backupScopeRoots = [target];
+  const installAgentPaths = oxeAgentInstall.buildAgentInstallPaths(!opts.ideLocal, target);
+  if (opts.cursor) backupScopeRoots.push(installCursorBase(opts));
+  if (opts.copilot) backupScopeRoots.push(path.join(target, '.github'));
+  if (opts.copilotCli || opts.allAgents) {
+    backupScopeRoots.push(installClaudeBase(opts), installCopilotCliHome(opts));
+  }
+  if (opts.agentOpenCode || opts.allAgents) backupScopeRoots.push(...installAgentPaths.opencodeCommandDirs);
+  if (opts.agentGemini || opts.allAgents) backupScopeRoots.push(installAgentPaths.geminiCommandsBase);
+  if (opts.agentCodex || opts.allAgents) backupScopeRoots.push(installAgentPaths.codexPromptsDir, installAgentPaths.codexAgentsSkillsRoot);
+  if (opts.agentWindsurf || opts.allAgents) backupScopeRoots.push(installAgentPaths.windsurfWorkflowsDir);
+  if (opts.agentAntigravity || opts.allAgents) backupScopeRoots.push(installAgentPaths.antigravitySkillsRoot);
+  oxeManifest.backupModifiedFromManifest(home, prevManifest, opts, { yellow, cyan, dim, reset }, { scopeRoots: backupScopeRoots });
 
   printSection('OXE ▸ Instalação no projeto');
   const c = useAnsiColors();
@@ -2735,7 +2770,7 @@ function runInstall(opts) {
   }
 
   const copyOpts = { dryRun: opts.dryRun, force: opts.force };
-  const agentPaths = oxeAgentInstall.buildAgentInstallPaths(!opts.ideLocal, target);
+  const agentPaths = installAgentPaths;
 
   if (fullLayout) {
     copyDir(path.join(PKG_ROOT, 'oxe'), path.join(target, 'oxe'), copyOpts, false);
@@ -3146,6 +3181,31 @@ function uninstallLocalIdeFromProject(u, removedPaths) {
 }
 
 /**
+ * @param {UninstallOpts} u
+ */
+function shouldAlsoRemoveLocalIdeArtifacts(u) {
+  if (u.ideLocal) return true;
+  if (u.noProject) return false;
+  if (!(u.allAgents || anyGranularUninstallAgent(u) || u.cursor || u.copilot || u.copilotCli)) return false;
+  const proj = path.resolve(u.dir);
+  const localAgentPaths = oxeAgentInstall.buildAgentInstallPaths(false, proj);
+  if (u.cursor && fs.existsSync(path.join(proj, '.cursor', 'commands'))) return true;
+  if (u.copilot && (fs.existsSync(path.join(proj, '.github', 'prompts')) || fs.existsSync(path.join(proj, '.github', 'copilot-instructions.md')))) {
+    return true;
+  }
+  if (u.copilotCli && (fs.existsSync(path.join(proj, '.claude', 'commands')) || fs.existsSync(path.join(proj, '.copilot', 'commands')))) {
+    return true;
+  }
+  const selectedAll = u.allAgents || !anyGranularUninstallAgent(u);
+  if ((selectedAll || u.agentOpenCode) && localAgentPaths.opencodeCommandDirs.some((dir) => fs.existsSync(dir))) return true;
+  if ((selectedAll || u.agentGemini) && fs.existsSync(localAgentPaths.geminiCommandsBase)) return true;
+  if ((selectedAll || u.agentCodex) && (fs.existsSync(localAgentPaths.codexPromptsDir) || fs.existsSync(localAgentPaths.codexAgentsSkillsRoot))) return true;
+  if ((selectedAll || u.agentWindsurf) && fs.existsSync(localAgentPaths.windsurfWorkflowsDir)) return true;
+  if ((selectedAll || u.agentAntigravity) && fs.existsSync(localAgentPaths.antigravitySkillsRoot)) return true;
+  return false;
+}
+
+/**
  * @param {string[]} argv
  * @returns {UninstallOpts}
  */
@@ -3376,6 +3436,7 @@ function runUninstall(u) {
   if (u.dryRun) console.log(`  ${c ? yellow : ''}(dry-run)${c ? reset : ''}`);
 
   const removedPaths = [];
+  const removeLocalIdeArtifacts = shouldAlsoRemoveLocalIdeArtifacts(u);
 
   if (u.cursor) {
     const base = cursorUserDir(ideOpts);
@@ -3531,7 +3592,7 @@ function runUninstall(u) {
     }
   }
 
-  if (u.ideLocal) {
+  if (removeLocalIdeArtifacts) {
     uninstallLocalIdeFromProject(u, removedPaths);
   }
 
@@ -3976,6 +4037,13 @@ function parseRuntimeArgs(argv) {
     fromEventId: '',
     writeReport: false,
     gateId: '',
+    // execute flags
+    provider: '',
+    apiKey: '',
+    model: '',
+    baseUrl: '',
+    maxTurns: null,
+    recompile: false,
     decision: '',
     actor: '',
     targetKind: '',
@@ -4013,6 +4081,12 @@ function parseRuntimeArgs(argv) {
     else if (a === '--status' && argv[i + 1]) out.gateStatus = String(argv[++i]);
     else if (a === '--scope' && argv[i + 1]) out.gateScope = String(argv[++i]);
     else if (a === '--json') out.jsonOutput = true;
+    else if (a === '--provider' && argv[i + 1]) out.provider = String(argv[++i]);
+    else if (a === '--api-key' && argv[i + 1]) out.apiKey = String(argv[++i]);
+    else if (a === '--model' && argv[i + 1]) out.model = String(argv[++i]);
+    else if (a === '--base-url' && argv[i + 1]) out.baseUrl = String(argv[++i]);
+    else if (a === '--max-turns' && argv[i + 1]) out.maxTurns = Number(argv[++i]);
+    else if (a === '--recompile') out.recompile = true;
     else if (!a.startsWith('-')) positionals.push(a);
     else {
       out.parseError = true;
@@ -4526,6 +4600,17 @@ async function runRuntime(opts) {
 
   if (opts.action === 'compile') {
     try {
+      // --recompile: delete existing run state files so a fresh run_id is generated
+      if (opts.recompile) {
+        const runsDir = path.join(opts.dir, '.oxe', 'runs');
+        if (require('fs').existsSync(runsDir)) {
+          require('fs').readdirSync(runsDir).forEach(f => {
+            if (f.endsWith('.json') && !f.includes('ci-results')) {
+              require('fs').unlinkSync(path.join(runsDir, f));
+            }
+          });
+        }
+      }
       const compiled = oxeOperational.compileExecutionGraphFromArtifacts(opts.dir, activeSession);
       const suite = oxeOperational.compileVerificationSuiteFromArtifacts(opts.dir, activeSession, {
         runState: compiled.run,
@@ -4585,7 +4670,7 @@ async function runRuntime(opts) {
       console.log(`  ${c ? green : ''}✓${c ? reset : ''} Projeções geradas a partir do estado canônico.`);
       console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${projected.run.run_id}`);
       console.log(`  ${c ? green : ''}STATE:${c ? reset : ''} ${projected.paths.state}`);
-      console.log(`  ${c ? green : ''}PLAN:${c ? reset : ''} ${projected.paths.plan}`);
+      console.log(`  ${c ? green : ''}PLAN-STATUS:${c ? reset : ''} ${projected.paths.plan.replace(/PLAN\.md$/, 'PLAN-STATUS.md')}`);
       console.log(`  ${c ? green : ''}VERIFY:${c ? reset : ''} ${projected.paths.verify}`);
       console.log(`  ${c ? green : ''}RUN-SUMMARY:${c ? reset : ''} ${projected.paths.runSummary}`);
       console.log(`  ${c ? green : ''}PR-SUMMARY:${c ? reset : ''} ${projected.paths.prSummary}`);
@@ -4598,9 +4683,37 @@ async function runRuntime(opts) {
 
   if (opts.action === 'execute') {
     try {
+      // Resolve provider: flag > env vars
+      const apiKey = opts.apiKey || process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || '';
+      const model = opts.model || process.env.OXE_MODEL || 'claude-sonnet-4-6';
+      const baseUrl = opts.baseUrl || process.env.OXE_BASE_URL || 'https://api.anthropic.com/v1';
+      if (!apiKey) {
+        console.error(`${red}Erro: executor LLM não configurado.${reset}`);
+        console.error(`  Use: --api-key <chave>  ou  exporte ANTHROPIC_API_KEY`);
+        console.error(`  Exemplo: oxe-cc runtime execute --api-key $ANTHROPIC_API_KEY --model claude-sonnet-4-6`);
+        process.exit(1);
+      }
+      const providerConfig = { baseUrl, apiKey, model, maxTurns: opts.maxTurns || 10 };
       const result = await oxeOperational.runRuntimeExecute(opts.dir, activeSession, {
         runId: opts.runId || undefined,
         heartbeatTimeoutMs: opts.heartbeatTimeoutMs || undefined,
+        providerConfig,
+        onProgress: (event) => {
+          if (event.type === 'turn_start') {
+            const turn = event.detail?.turn ?? 0;
+            if (turn === 0) process.stdout.write(`  → ${event.nodeId} `);
+          } else if (event.type === 'tool_call') {
+            process.stdout.write('.');
+          } else if (event.type === 'VerificationStarted') {
+            process.stdout.write(' [verify]');
+          } else if (event.type === 'WorkItemCompleted') {
+            process.stdout.write(` ✓\n`);
+          } else if (event.type === 'WorkItemBlocked') {
+            process.stdout.write(` ✗\n`);
+          } else if (event.type === 'RetryScheduled') {
+            process.stdout.write(` ↺ retry ${event.payload?.next_attempt}\n  → ${event.work_item_id} `);
+          }
+        },
       });
       if (opts.jsonOutput) {
         console.log(JSON.stringify(result, null, 2));

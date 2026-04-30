@@ -4,6 +4,31 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.8.2] — 2026-04-30
+
+### Fluxo inicial mais coerente e geração de `spec`/`plan` mais forte
+
+Esta release fecha a linha de robustez do ciclo `install -> status/doctor -> /oxe -> spec -> plan -> execute -> verify` sem abrir nova superfície pública. O foco foi remover ruído operacional em projetos novos e aumentar a densidade executável dos artefatos que o OXE induz.
+
+#### Fluxo operacional
+
+- `install`, `status` e `doctor` passam a convergir em `/oxe` como próximo passo canônico para projetos recém-inicializados
+- `doctor` e `status` deixam de tratar `IMPLEMENTATION-PACK`, `REFERENCE-ANCHORS` e `FIXTURE-PACK` como blocker primário antes de existir `PLAN.md`
+- o relatório racional agora marca o estado sem plano como `não aplicável ainda`, sem contaminar o próximo passo
+- instalações e desinstalações locais por runtime continuam simétricas, com inferência de artefatos locais preservada
+
+#### Indução mais forte de SPEC e PLAN
+
+- `SPEC.template.md` passou a exigir outcome observável, público-alvo, restrições técnicas, setup externo, conteúdo/fluxos obrigatórios e contratos esperados para o plano
+- `PLAN.template.md` ganhou contrato operacional da solução, densidade operacional mínima, `symbols alvo`, `estado/fluxo coberto` e `fixture/anchor obrigatório` por tarefa
+- `oxe/workflows/spec.md` agora força extração explícita de blocos de interface, conteúdo mínimo, interações, responsividade e acessibilidade em demandas de produto/app/UI
+- `oxe/workflows/plan.md` agora endurece o gate de confiança `>90%` para tarefas mutáveis vagas e exige fechamento mais forte de interface, conteúdo, estado persistido, anchors e fixtures em apps/UI estáticos
+
+#### Testes
+
+- novo teste cobrindo o estado racional não bloqueante antes da existência de `PLAN.md`
+- suíte focada de CLI/health atualizada para manter o comportamento novo estável
+
 ## [1.8.1] — 2026-04-30
 
 ### Hotfix — Gaps implementados no fonte TypeScript (não em arquivos compilados)

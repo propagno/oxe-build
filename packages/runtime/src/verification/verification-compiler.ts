@@ -188,16 +188,18 @@ export async function runCheck(
 
   const start = Date.now();
   try {
-    // Split command into program + args (simple split; no shell expansion)
-    const parts = check.command.split(/\s+/);
-    const prog = parts[0];
-    const args = parts.slice(1);
+    // Use shell so the full command string is interpreted (handles quotes, &&, node -e "...")
+    const isWin = process.platform === 'win32';
+    const shell = isWin ? 'cmd' : 'sh';
+    const shellArgs = isWin ? ['/c', check.command] : ['-c', check.command];
 
-    const result = spawnSync(prog, args, {
+    const result = spawnSync(shell, shellArgs, {
       cwd,
       encoding: 'utf8',
       timeout: timeoutMs,
       maxBuffer: 2 * 1024 * 1024,
+      // On Windows, prevent Node from re-quoting the args (preserves double-quotes inside node -e "...")
+      windowsVerbatimArguments: isWin,
     });
 
     const duration_ms = Date.now() - start;
