@@ -1,6 +1,6 @@
 {
 	"name": "oxe-cc",
-	"version": "1.8.0",
+	"version": "1.8.1",
 	"description": "OXE — spec-driven workflows in .oxe/ with runtime enterprise, evidence-first verification and multi-runtime integrations (npx)",
 	"license": "MIT",
 	"author": "",

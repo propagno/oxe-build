@@ -4,6 +4,27 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.8.1] — 2026-04-30
+
+### Hotfix — Gaps implementados no fonte TypeScript (não em arquivos compilados)
+
+A v1.8.0 aplicou as 5 correções críticas diretamente nos arquivos `.js` compilados (`lib/runtime/`), que são sobrescritos a cada `npm run build:runtime`. Esta release porta todas as correções para o fonte TypeScript em `packages/runtime/src/`, tornando-as permanentes.
+
+#### Correções portadas para TypeScript
+
+- **`models/failure.ts`**: `FailureClass` agora inclui `'verify'` e `'llm'` como classes canônicas
+- **`scheduler/scheduler.ts`**: `TaskResult` com campo opcional `completed_by`; `TaskExecutor.execute()` aceita `options?: { previousError? }`; `verifyNode()` importa e chama `verifyRun` da fonte TS; `executeNode()` repassa `options`; `requestGateForNode()` com warning quando manager ausente
+- **`executor/built-in-tools.ts`**: `finishTask` handler + registro em `BUILT_IN_TOOLS`
+- **`executor/action-tool-map.ts`**: `finish_task` injetado universalmente em `selectToolsForActions()`
+- **`executor/node-prompt-builder.ts`**: parâmetro `options`, seção de retry context, instrução `finish_task`
+- **`executor/llm-task-executor.ts`**: detecção de `finish_task`, `completed_by` no retorno, `turn_limit_exhausted` retorna `success: false`
+
+#### Testes
+- 542 testes passando (era 542 na v1.8.0, nenhuma regressão)
+- 36 testes de gaps (gap1–gap5) todos passando contra o código compilado
+
+---
+
 ## [1.8.0] — 2026-04-29
 
 ### Autonomous Execution — 5 Critical Gaps Resolved

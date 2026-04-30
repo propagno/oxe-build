@@ -24,12 +24,15 @@ import type { FailureClass } from '../models/failure';
 import { listMemos } from '../decision/decision-memo';
 import type { RollbackPlan } from '../decision/decision-memo';
 import { runCapabilityAsync } from '../plugins/capability-adapter';
+import { verifyRun } from '../verification/verification-compiler';
+import type { AcceptanceCheckSuite } from '../verification/verification-compiler';
 
 export interface TaskResult {
   success: boolean;
   failure_class: FailureClass;
   evidence: string[];
   output: string;
+  completed_by?: string;
 }
 
 export interface TaskExecutor {
@@ -37,7 +40,8 @@ export interface TaskExecutor {
     node: GraphNode,
     lease: WorkspaceLease,
     runId: string,
-    attemptNumber: number
+    attemptNumber: number,
+    options?: { previousError?: string | null }
   ): Promise<TaskResult>;
 }
 
@@ -477,6 +481,7 @@ export class Scheduler {
 
     let lease: WorkspaceLease | null = null;
     let lastResult: TaskResult | null = null;
+    let lastError: string | null = null;
     const maxAttempts = node.policy.max_retries + 1;
     const quotaBlocked = this.consumeQuotaForNode(ctx, node);
     if (quotaBlocked) {
@@ -542,20 +547,32 @@ export class Scheduler {
           payload: { workspace_id: lease.workspace_id, strategy: lease.strategy },
         });
 
-        lastResult = await this.executeNode(node, lease, ctx, attempt, attemptId);
+        lastResult = await this.executeNode(node, lease, ctx, attempt, attemptId, { previousError: lastError });
 
         if (lastResult.success) {
-          this.emit(ctx, {
-            type: 'WorkItemCompleted',
-            work_item_id: nodeId,
-            attempt_id: attemptId,
-            payload: { attempt_number: attempt, evidence: lastResult.evidence },
-          });
-          status.set(nodeId, 'completed');
-          completed.push(nodeId);
-          this.recordProgress();
-          return;
+          const verifyResult = await this.verifyNode(node, lease, ctx, attemptId, attempt);
+          if (verifyResult && verifyResult.status === 'failed') {
+            lastResult = {
+              success: false,
+              failure_class: 'verify',
+              evidence: lastResult.evidence,
+              output: `Verification failed: ${(verifyResult.gaps || []).join('; ') || 'checks did not pass'}`,
+            };
+          } else {
+            this.emit(ctx, {
+              type: 'WorkItemCompleted',
+              work_item_id: nodeId,
+              attempt_id: attemptId,
+              payload: { attempt_number: attempt, evidence: lastResult.evidence },
+            });
+            status.set(nodeId, 'completed');
+            completed.push(nodeId);
+            this.recordProgress();
+            return;
+          }
         }
+
+        lastError = lastResult.output || (lastResult.failure_class ?? 'unknown error');
 
         if (lastResult.failure_class === 'policy') break;
 
@@ -592,6 +609,7 @@ export class Scheduler {
           evidence: [],
           output: `[error_boundary] ${message}`,
         };
+        lastError = lastResult.output;
         if (attempt < maxAttempts) {
           const backoffMs = Math.min(1_000 * Math.pow(2, attempt - 1) + Math.random() * 500, 30_000);
           await new Promise<void>(resolve => setTimeout(resolve, backoffMs));
@@ -660,12 +678,13 @@ export class Scheduler {
     lease: WorkspaceLease,
     ctx: SchedulerContext,
     attempt: number,
-    attemptId: string
+    attemptId: string,
+    options: { previousError?: string | null } = {},
   ): Promise<TaskResult> {
     const primaryAction = pickPrimaryAction(node, ctx.pluginRegistry);
     const provider = primaryAction ? ctx.pluginRegistry?.toolProviderFor(primaryAction.type) : null;
     if (!provider || !primaryAction) {
-      return ctx.executor.execute(node, lease, ctx.runId, attempt);
+      return ctx.executor.execute(node, lease, ctx.runId, attempt, options);
     }
 
     ctx.auditTrail?.record('plugin_invoked', ctx.policyActor ?? 'runtime', {
@@ -733,6 +752,62 @@ export class Scheduler {
     };
   }
 
+  private async verifyNode(
+    node: GraphNode,
+    lease: WorkspaceLease,
+    ctx: SchedulerContext,
+    attemptId: string,
+    attempt: number,
+  ): Promise<{ status: string; gaps?: string[] } | null> {
+    if (!node.verify?.command) return null;
+    this.emit(ctx, {
+      type: 'VerificationStarted',
+      work_item_id: node.id,
+      payload: { command: node.verify.command, attempt_number: attempt },
+    });
+    const suite: AcceptanceCheckSuite = {
+      checks: [{
+        id: `inline-${node.id}`,
+        type: 'custom',
+        command: node.verify.command,
+        evidence_type_expected: 'stdout',
+        acceptance_ref: null,
+        description: `Verify ${node.id}`,
+      }],
+      compiled_at: new Date().toISOString(),
+      spec_hash: '',
+      plan_hash: '',
+    };
+    let result: { status: string; gaps?: string[] };
+    try {
+      result = await verifyRun({
+        suite,
+        cwd: lease.root_path,
+        timeoutMs: (ctx.options as Record<string, unknown>)?.verifyTimeoutMs as number ?? 60_000,
+        runId: ctx.runId,
+        workItemId: node.id,
+        attemptNumber: attempt,
+        projectRoot: ctx.projectRoot,
+        pluginRegistry: ctx.pluginRegistry,
+      });
+    } catch (err) {
+      this.emit(ctx, {
+        type: 'VerificationCompleted',
+        work_item_id: node.id,
+        attempt_id: attemptId,
+        payload: { status: 'error', error: String(err) },
+      });
+      return null;
+    }
+    this.emit(ctx, {
+      type: 'VerificationCompleted',
+      work_item_id: node.id,
+      attempt_id: attemptId,
+      payload: { status: result.status },
+    });
+    return result;
+  }
+
   private evaluatePolicyForNode(node: GraphNode, ctx: SchedulerContext): PersistedPolicyDecision | null {
     if (!ctx.policyEngine) return null;
     const primaryAction = pickPrimaryAction(node, ctx.pluginRegistry);
@@ -767,7 +842,10 @@ export class Scheduler {
     ctx: SchedulerContext,
     decision: PersistedPolicyDecision | null
   ): Promise<string> {
-    if (!ctx.gateManager) return 'gate-missing-manager';
+    if (!ctx.gateManager) {
+      console.warn('[scheduler] ctx.gateManager not configured — gates will not be persisted');
+      return 'gate-missing-manager';
+    }
     const scope = inferGateScope(node);
     const primaryAction = pickPrimaryAction(node, ctx.pluginRegistry);
     const gate = await ctx.gateManager.request(scope, {
