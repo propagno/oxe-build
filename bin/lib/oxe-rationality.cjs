@@ -350,14 +350,16 @@ function buildExecutionRationality(paths = {}) {
   const implementationPack = summarizeImplementationPack(paths.implementationPackJson || null, planTasks);
   const referenceAnchors = summarizeReferenceAnchors(paths.referenceAnchors || null, externalRefs);
   const fixturePack = summarizeFixturePack(paths.fixturePackJson || null, planTasks, implementationPack);
-  const criticalExecutionGaps = Array.from(
-    new Set([
-      ...implementationPack.criticalGaps,
-      ...referenceAnchors.criticalGaps,
-      ...fixturePack.criticalGaps,
-    ])
-  );
   const applicable = Boolean(paths.plan && fs.existsSync(paths.plan));
+  const criticalExecutionGaps = applicable
+    ? Array.from(
+      new Set([
+        ...implementationPack.criticalGaps,
+        ...referenceAnchors.criticalGaps,
+        ...fixturePack.criticalGaps,
+      ])
+    )
+    : [];
   return {
     applicable,
     planTaskCount: planTasks.length,

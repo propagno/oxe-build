@@ -262,6 +262,34 @@ function runShell(command: string, cwd: string, timeoutMs: number): Promise<stri
   });
 }
 
+// ─── finish_task ──────────────────────────────────────────────────────────────
+
+const finishTask: BuiltInToolHandler = {
+  idempotent: true,
+  schema: {
+    type: 'function',
+    function: {
+      name: 'finish_task',
+      description: 'Signal that the task is complete. Call this when ALL required actions have been performed.',
+      parameters: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', description: 'Summary of what was accomplished' },
+          evidence_paths: { type: 'array', items: { type: 'string' }, description: 'Paths to files created or modified' },
+        },
+        required: ['summary'],
+      },
+    },
+  },
+  async execute(args, _cwd) {
+    return JSON.stringify({
+      __finish_task__: true,
+      summary: String(args.summary || ''),
+      evidence_paths: Array.isArray(args.evidence_paths) ? args.evidence_paths : [],
+    });
+  },
+};
+
 // ─── Registry ─────────────────────────────────────────────────────────────────
 
 export const BUILT_IN_TOOLS: Record<string, BuiltInToolHandler> = {
@@ -271,6 +299,7 @@ export const BUILT_IN_TOOLS: Record<string, BuiltInToolHandler> = {
   glob,
   grep,
   run_command: runCommand,
+  finish_task: finishTask,
 };
 
 export const ALL_BUILT_IN_SCHEMAS: ToolSchema[] = Object.values(BUILT_IN_TOOLS).map((t) => t.schema);

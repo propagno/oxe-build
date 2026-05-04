@@ -4,6 +4,69 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.8.3] — 2026-05-04
+
+### Release readiness e higiene de publicação
+
+Esta release consolida a linha `1.8.3` para publicação no npm com foco em consistência de versão, alinhamento documental e pacote distribuído mais limpo.
+
+#### Publicação
+
+- alinhamento da versão `1.8.3` entre manifesto raiz, runtime, extensão VS Code, README e changelog
+- fechamento do gate oficial `doctor --release` para a linha atual
+- preparação do pacote npm para sair sem drift entre versão publicada e documentação principal
+
+#### Higiene do pacote
+
+- exclusão dos arquivos `.vsix` históricos da extensão VS Code do tarball npm
+- manutenção apenas do código-fonte da extensão dentro do pacote, evitando distribuir binários legados desnecessários
+
+## [1.8.2] — 2026-04-30
+
+### Fluxo inicial mais coerente e geração de `spec`/`plan` mais forte
+
+Esta release fecha a linha de robustez do ciclo `install -> status/doctor -> /oxe -> spec -> plan -> execute -> verify` sem abrir nova superfície pública. O foco foi remover ruído operacional em projetos novos e aumentar a densidade executável dos artefatos que o OXE induz.
+
+#### Fluxo operacional
+
+- `install`, `status` e `doctor` passam a convergir em `/oxe` como próximo passo canônico para projetos recém-inicializados
+- `doctor` e `status` deixam de tratar `IMPLEMENTATION-PACK`, `REFERENCE-ANCHORS` e `FIXTURE-PACK` como blocker primário antes de existir `PLAN.md`
+- o relatório racional agora marca o estado sem plano como `não aplicável ainda`, sem contaminar o próximo passo
+- instalações e desinstalações locais por runtime continuam simétricas, com inferência de artefatos locais preservada
+
+#### Indução mais forte de SPEC e PLAN
+
+- `SPEC.template.md` passou a exigir outcome observável, público-alvo, restrições técnicas, setup externo, conteúdo/fluxos obrigatórios e contratos esperados para o plano
+- `PLAN.template.md` ganhou contrato operacional da solução, densidade operacional mínima, `symbols alvo`, `estado/fluxo coberto` e `fixture/anchor obrigatório` por tarefa
+- `oxe/workflows/spec.md` agora força extração explícita de blocos de interface, conteúdo mínimo, interações, responsividade e acessibilidade em demandas de produto/app/UI
+- `oxe/workflows/plan.md` agora endurece o gate de confiança `>90%` para tarefas mutáveis vagas e exige fechamento mais forte de interface, conteúdo, estado persistido, anchors e fixtures em apps/UI estáticos
+
+#### Testes
+
+- novo teste cobrindo o estado racional não bloqueante antes da existência de `PLAN.md`
+- suíte focada de CLI/health atualizada para manter o comportamento novo estável
+
+## [1.8.1] — 2026-04-30
+
+### Hotfix — Gaps implementados no fonte TypeScript (não em arquivos compilados)
+
+A v1.8.0 aplicou as 5 correções críticas diretamente nos arquivos `.js` compilados (`lib/runtime/`), que são sobrescritos a cada `npm run build:runtime`. Esta release porta todas as correções para o fonte TypeScript em `packages/runtime/src/`, tornando-as permanentes.
+
+#### Correções portadas para TypeScript
+
+- **`models/failure.ts`**: `FailureClass` agora inclui `'verify'` e `'llm'` como classes canônicas
+- **`scheduler/scheduler.ts`**: `TaskResult` com campo opcional `completed_by`; `TaskExecutor.execute()` aceita `options?: { previousError? }`; `verifyNode()` importa e chama `verifyRun` da fonte TS; `executeNode()` repassa `options`; `requestGateForNode()` com warning quando manager ausente
+- **`executor/built-in-tools.ts`**: `finishTask` handler + registro em `BUILT_IN_TOOLS`
+- **`executor/action-tool-map.ts`**: `finish_task` injetado universalmente em `selectToolsForActions()`
+- **`executor/node-prompt-builder.ts`**: parâmetro `options`, seção de retry context, instrução `finish_task`
+- **`executor/llm-task-executor.ts`**: detecção de `finish_task`, `completed_by` no retorno, `turn_limit_exhausted` retorna `success: false`
+
+#### Testes
+- 542 testes passando (era 542 na v1.8.0, nenhuma regressão)
+- 36 testes de gaps (gap1–gap5) todos passando contra o código compilado
+
+---
+
 ## [1.8.0] — 2026-04-29
 
 ### Autonomous Execution — 5 Critical Gaps Resolved

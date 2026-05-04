@@ -12,6 +12,7 @@ const audit_trail_1 = require("../audit/audit-trail");
 const run_journal_1 = require("./run-journal");
 const decision_memo_1 = require("../decision/decision-memo");
 const capability_adapter_1 = require("../plugins/capability-adapter");
+const verification_compiler_1 = require("../verification/verification-compiler");
 class Scheduler {
     constructor() {
         this.cancelled = false;
@@ -350,6 +351,7 @@ class Scheduler {
         });
         let lease = null;
         let lastResult = null;
+        let lastError = null;
         const maxAttempts = node.policy.max_retries + 1;
         const quotaBlocked = this.consumeQuotaForNode(ctx, node);
         if (quotaBlocked) {
@@ -408,19 +410,31 @@ class Scheduler {
                     attempt_id: attemptId,
                     payload: { workspace_id: lease.workspace_id, strategy: lease.strategy },
                 });
-                lastResult = await this.executeNode(node, lease, ctx, attempt, attemptId);
+                lastResult = await this.executeNode(node, lease, ctx, attempt, attemptId, { previousError: lastError });
                 if (lastResult.success) {
-                    this.emit(ctx, {
-                        type: 'WorkItemCompleted',
-                        work_item_id: nodeId,
-                        attempt_id: attemptId,
-                        payload: { attempt_number: attempt, evidence: lastResult.evidence },
-                    });
-                    status.set(nodeId, 'completed');
-                    completed.push(nodeId);
-                    this.recordProgress();
-                    return;
+                    const verifyResult = await this.verifyNode(node, lease, ctx, attemptId, attempt);
+                    if (verifyResult && verifyResult.status === 'failed') {
+                        lastResult = {
+                            success: false,
+                            failure_class: 'verify',
+                            evidence: lastResult.evidence,
+                            output: `Verification failed: ${(verifyResult.gaps || []).join('; ') || 'checks did not pass'}`,
+                        };
+                    }
+                    else {
+                        this.emit(ctx, {
+                            type: 'WorkItemCompleted',
+                            work_item_id: nodeId,
+                            attempt_id: attemptId,
+                            payload: { attempt_number: attempt, evidence: lastResult.evidence },
+                        });
+                        status.set(nodeId, 'completed');
+                        completed.push(nodeId);
+                        this.recordProgress();
+                        return;
+                    }
                 }
+                lastError = lastResult.output || (lastResult.failure_class ?? 'unknown error');
                 if (lastResult.failure_class === 'policy')
                     break;
                 if (attempt < maxAttempts) {
@@ -454,6 +468,7 @@ class Scheduler {
                     evidence: [],
                     output: `[error_boundary] ${message}`,
                 };
+                lastError = lastResult.output;
                 if (attempt < maxAttempts) {
                     const backoffMs = Math.min(1000 * Math.pow(2, attempt - 1) + Math.random() * 500, 30000);
                     await new Promise(resolve => setTimeout(resolve, backoffMs));
@@ -509,11 +524,11 @@ class Scheduler {
     static loadJournal(projectRoot, runId) {
         return (0, run_journal_1.loadJournal)(projectRoot, runId);
     }
-    async executeNode(node, lease, ctx, attempt, attemptId) {
+    async executeNode(node, lease, ctx, attempt, attemptId, options = {}) {
         const primaryAction = pickPrimaryAction(node, ctx.pluginRegistry);
         const provider = primaryAction ? ctx.pluginRegistry?.toolProviderFor(primaryAction.type) : null;
         if (!provider || !primaryAction) {
-            return ctx.executor.execute(node, lease, ctx.runId, attempt);
+            return ctx.executor.execute(node, lease, ctx.runId, attempt, options);
         }
         ctx.auditTrail?.record('plugin_invoked', ctx.policyActor ?? 'runtime', {
             runId: ctx.runId,
@@ -573,6 +588,57 @@ class Scheduler {
             output: result.output,
         };
     }
+    async verifyNode(node, lease, ctx, attemptId, attempt) {
+        if (!node.verify?.command)
+            return null;
+        this.emit(ctx, {
+            type: 'VerificationStarted',
+            work_item_id: node.id,
+            payload: { command: node.verify.command, attempt_number: attempt },
+        });
+        const suite = {
+            checks: [{
+                    id: `inline-${node.id}`,
+                    type: 'custom',
+                    command: node.verify.command,
+                    evidence_type_expected: 'stdout',
+                    acceptance_ref: null,
+                    description: `Verify ${node.id}`,
+                }],
+            compiled_at: new Date().toISOString(),
+            spec_hash: '',
+            plan_hash: '',
+        };
+        let result;
+        try {
+            result = await (0, verification_compiler_1.verifyRun)({
+                suite,
+                cwd: lease.root_path,
+                timeoutMs: ctx.options?.verifyTimeoutMs ?? 60000,
+                runId: ctx.runId,
+                workItemId: node.id,
+                attemptNumber: attempt,
+                projectRoot: ctx.projectRoot,
+                pluginRegistry: ctx.pluginRegistry,
+            });
+        }
+        catch (err) {
+            this.emit(ctx, {
+                type: 'VerificationCompleted',
+                work_item_id: node.id,
+                attempt_id: attemptId,
+                payload: { status: 'error', error: String(err) },
+            });
+            return null;
+        }
+        this.emit(ctx, {
+            type: 'VerificationCompleted',
+            work_item_id: node.id,
+            attempt_id: attemptId,
+            payload: { status: result.status },
+        });
+        return result;
+    }
     evaluatePolicyForNode(node, ctx) {
         if (!ctx.policyEngine)
             return null;
@@ -603,8 +669,10 @@ class Scheduler {
         return persisted;
     }
     async requestGateForNode(node, ctx, decision) {
-        if (!ctx.gateManager)
+        if (!ctx.gateManager) {
+            console.warn('[scheduler] ctx.gateManager not configured — gates will not be persisted');
             return 'gate-missing-manager';
+        }
         const scope = inferGateScope(node);
         const primaryAction = pickPrimaryAction(node, ctx.pluginRegistry);
         const gate = await ctx.gateManager.request(scope, {

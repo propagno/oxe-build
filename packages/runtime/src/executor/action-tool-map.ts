@@ -42,5 +42,9 @@ export function selectToolsForActions(actions: Action[]): ToolSchema[] {
       }
     }
   }
+  // finish_task is always available so the LLM can signal authoritative completion
+  if (!seen.has('finish_task') && BUILT_IN_TOOLS.finish_task) {
+    result.push(BUILT_IN_TOOLS.finish_task.schema);
+  }
   return result;
 }

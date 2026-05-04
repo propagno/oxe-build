@@ -456,6 +456,61 @@ function reduceCanonicalRunState(projectRoot, activeSession, options = {}) {
   return serializeCanonicalState(reduceCanonicalRunStateLive(projectRoot, activeSession, options));
 }
 
+/**
+ * Static-analysis lints for common pitfalls detectable before execution.
+ * Returns hint strings to be appended to validationErrors (shown at compile time).
+ */
+function lintPlanForCommonPitfalls(parsedPlan, parsedSpec, projectRoot, rawSpecText = '') {
+  const hints = [];
+  const specText = (parsedSpec && parsedSpec.objective ? parsedSpec.objective : '') +
+    JSON.stringify(parsedSpec && parsedSpec.criteria ? parsedSpec.criteria : []) +
+    (rawSpecText || '');
+  const planTasks = parsedPlan && Array.isArray(parsedPlan.tasks) ? parsedPlan.tasks : [];
+
+  // ── Lint 1: HTML/JS SPA sem restrição de file:// ──────────────────────────
+  // Detects: spec mentions HTML/SPA + no files restriction, but no verify command
+  // checks for fetch() absence. Warns to add a fetch-detection verify.
+  const isHtmlApp = /html|spa|browser|page|frontend|estático|static|aplicação web|web app|web page|interface web|\.html/i.test(specText);
+  if (isHtmlApp) {
+    const hasFetchGuard = planTasks.some(t =>
+      t.verifyCommand && /fetch|XMLHttpRequest|file:\/\//i.test(t.verifyCommand)
+    );
+    const specMentionsServer = /servidor|server|http-server|localhost|npx serve|vite|webpack/i.test(specText);
+    const specMentionsFileProtocol = /file:\/\/|sem servidor|without server|no.server/i.test(specText);
+    if (!hasFetchGuard && !specMentionsServer && !specMentionsFileProtocol) {
+      hints.push(
+        'HINT(html-fetch): SPEC não declara se o app precisa de servidor HTTP. ' +
+        'Se abrir em file://, adicione à SPEC: "sem servidor HTTP" e um verify que detecte fetch(): ' +
+        '`node -e "if(require(\'fs\').readFileSync(\'app.js\',\'utf8\').includes(\'fetch(\'))throw new Error(\'fetch not allowed in file://\')"`'
+      );
+    }
+  }
+
+  // ── Lint 2: Verify commands que só verificam existência de função, não comportamento ──
+  const existenceOnlyVerify = planTasks.filter(t =>
+    t.verifyCommand &&
+    /s\.includes\(/.test(t.verifyCommand) &&
+    !/existsSync|readFileSync.*utf8|require\(/.test(t.verifyCommand)
+  );
+  if (existenceOnlyVerify.length > 2) {
+    hints.push(
+      `HINT(verify-depth): ${existenceOnlyVerify.length} tarefa(s) verificam apenas presença de string no código ` +
+      `(s.includes). Considere adicionar verificações de comportamento: executar o código, não só inspecioná-lo.`
+    );
+  }
+
+  // ── Lint 3: Tarefas sem verify command (T-level) ──────────────────────────
+  const noVerify = planTasks.filter(t => !t.verifyCommand && !t.done);
+  if (noVerify.length > 0) {
+    hints.push(
+      `HINT(no-verify): ${noVerify.length} tarefa(s) sem Comando de verificação: ${noVerify.map(t => t.id).join(', ')}. ` +
+      `Tarefas sem verify não serão testadas inline pelo scheduler.`
+    );
+  }
+
+  return hints;
+}
+
 function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options = {}) {
   const runtime = loadRuntimeModule();
   const parsers = loadSdkParsers();
@@ -468,12 +523,17 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
   const artifactPaths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const specText = readTextIfExists(artifactPaths.spec);
   const planText = readTextIfExists(artifactPaths.plan);
-  if (!specText) throw new Error(`SPEC.md ausente em ${artifactPaths.spec}`);
-  if (!planText) throw new Error(`PLAN.md ausente em ${artifactPaths.plan}`);
+  if (!specText) throw new Error(`SPEC.md ausente em ${artifactPaths.spec}\n  Crie .oxe/SPEC.md com /oxe-spec no seu agente, ou use o template em oxe/templates/SPEC.template.md`);
+  if (!planText) throw new Error(`PLAN.md ausente em ${artifactPaths.plan}\n  Crie .oxe/PLAN.md com /oxe-plan no seu agente (requer SPEC.md), ou use o template em oxe/templates/PLAN.template.md`);
   const parsedSpec = parsers.parseSpec(specText);
   const parsedPlan = parsers.parsePlan(planText);
   const graph = runtime.compile(parsedPlan, parsedSpec, options.compilerOptions || {});
   const validationErrors = typeof runtime.validateGraph === 'function' ? runtime.validateGraph(graph) : [];
+
+  // Static-analysis lints: detect common patterns that cause runtime failures
+  const lintHints = lintPlanForCommonPitfalls(parsedPlan, parsedSpec, projectRoot, specText);
+  if (lintHints.length) validationErrors.push(...lintHints);
+
   const compiledGraph = runtime.toSerializable(graph);
   const current = options.runState || readRunState(projectRoot, activeSession) || {};
   const runId = current.run_id || makeRunId();
@@ -669,6 +729,20 @@ async function runRuntimeExecute(projectRoot, activeSession, options = {}) {
   const parsers = loadSdkParsers();
   if (!parsers) throw new Error('SDK parsers não disponíveis.');
 
+  // Auto-wire LlmTaskExecutor if providerConfig is supplied
+  let executor = options.executor || null;
+  if (!executor && options.providerConfig) {
+    if (typeof runtime.LlmTaskExecutor !== 'function') throw new Error('Runtime não exporta LlmTaskExecutor.');
+    executor = new runtime.LlmTaskExecutor(options.providerConfig, null, options.onProgress || null);
+  }
+  // Auto-wire InplaceWorkspaceManager as default
+  let workspaceManager = options.workspaceManager || null;
+  if (!workspaceManager) {
+    if (typeof runtime.InplaceWorkspaceManager === 'function') {
+      workspaceManager = new runtime.InplaceWorkspaceManager(projectRoot);
+    }
+  }
+
   // Resolve compiled graph from run state or compile on demand
   let current = options.runState || readRunState(projectRoot, activeSession);
   if (!current || !current.compiled_graph) {
@@ -693,11 +767,14 @@ async function runRuntimeExecute(projectRoot, activeSession, options = {}) {
   // Build ctx with GateManager (Gap 1)
   const ctx = createExecutionContext(projectRoot, activeSession, {
     runId: current.run_id,
-    executor: options.executor || null,
-    workspaceManager: options.workspaceManager || null,
+    executor,
+    workspaceManager,
     pluginRegistry: options.pluginRegistry || buildRuntimePluginRegistry(projectRoot),
     schedulerOptions: options.schedulerOptions || {},
-    onEvent: (event) => appendEvent(projectRoot, activeSession, event),
+    onEvent: (event) => {
+      appendEvent(projectRoot, activeSession, event);
+      options.onProgress?.(event);
+    },
   });
 
   // Gap 5: multi-agent path if plan-agents.json exists
@@ -906,6 +983,11 @@ function buildRecoveryConsistency(projectRoot, activeSession, runState, journal,
   const runDir = runState && runState.run_id ? path.join(projectRoot, '.oxe', 'runs', runState.run_id) : null;
   const allEvents = readEvents(projectRoot, activeSession);
   const runEvents = runState && runState.run_id ? allEvents.filter((event) => event.run_id === runState.run_id) : [];
+  // Detect if execution has ever started (at least one attempt recorded)
+  const attemptCount = runState && runState.canonical_state && runState.canonical_state.summary
+    ? (runState.canonical_state.summary.attempt_count || 0)
+    : 0;
+  const executionStarted = attemptCount > 0;
   const issues = [];
   if (!activeRunRef || activeRunRef.run_id !== (runState && runState.run_id)) {
     issues.push('ACTIVE-RUN.json não referencia o mesmo run persistido em .oxe/runs/.');
@@ -913,10 +995,12 @@ function buildRecoveryConsistency(projectRoot, activeSession, runState, journal,
   if (!runFile || !fs.existsSync(runFile)) {
     issues.push('Arquivo canónico da run ausente em .oxe/runs/<run>.json.');
   }
-  if (!journal) {
+  // Journal is only created after execution starts — skip this check pre-execution
+  if (!journal && executionStarted) {
     issues.push('Journal ausente para recover/replay.');
   }
-  if (runEvents.length === 0) {
+  // Events for this run only exist after execution — skip pre-execution
+  if (runEvents.length === 0 && executionStarted) {
     issues.push('Nenhum evento NDJSON encontrado para a run ativa.');
   }
   if (!runState || !runState.canonical_state) {
@@ -1146,7 +1230,7 @@ function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const op = operationalPaths(projectRoot, activeSession);
   const projectionRefs = {
-    plan_ref: path.relative(projectRoot, paths.plan).replace(/\\/g, '/'),
+    plan_ref: path.relative(projectRoot, paths.plan.replace(/PLAN\.md$/, 'PLAN-STATUS.md')).replace(/\\/g, '/'),
     verify_ref: path.relative(projectRoot, paths.verify).replace(/\\/g, '/'),
     state_ref: path.relative(projectRoot, paths.state).replace(/\\/g, '/'),
     run_summary_ref: path.relative(projectRoot, path.join(op.executionRoot, 'RUN-SUMMARY.md')).replace(/\\/g, '/'),
@@ -1156,10 +1240,12 @@ function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
     generated_at: new Date().toISOString(),
   };
   if (options.write !== false) {
-    ensureDirForFile(paths.plan);
+    // Write plan projection to PLAN-STATUS.md — never overwrite the source PLAN.md
+    const planStatusPath = paths.plan.replace(/PLAN\.md$/, 'PLAN-STATUS.md');
+    ensureDirForFile(planStatusPath);
     ensureDirForFile(paths.verify);
     ensureDirForFile(paths.state);
-    fs.writeFileSync(paths.plan, projections.plan + '\n', 'utf8');
+    fs.writeFileSync(planStatusPath, projections.plan + '\n', 'utf8');
     fs.writeFileSync(paths.verify, projections.verify + '\n', 'utf8');
     fs.writeFileSync(paths.state, projections.state + '\n', 'utf8');
     fs.writeFileSync(path.join(op.executionRoot, 'RUN-SUMMARY.md'), projections.runSummary + '\n', 'utf8');

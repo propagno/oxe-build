@@ -240,6 +240,30 @@ describe('oxe-cc CLI', () => {
     assert.ok(!fs.existsSync(path.join(dir, '.oxe', 'workflows', 'scan.md')));
   });
 
+  test('uninstall --codex removes local Codex artifacts without requiring --ide-local', () => {
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-home-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    const env = isolatedHomeEnv(fakeHome);
+    const install = spawnSync(process.execPath, [CLI, '--local', '--ide-local', '--codex', '--no-global-cli', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(install.status, 0, install.stderr + install.stdout);
+    assert.ok(fs.existsSync(path.join(dir, '.codex', 'prompts', 'oxe.md')));
+    assert.ok(fs.existsSync(path.join(dir, '.agents', 'skills', 'oxe', 'SKILL.md')));
+
+    const uninstall = spawnSync(process.execPath, [CLI, 'uninstall', '--codex', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    assert.strictEqual(uninstall.status, 0, uninstall.stderr + uninstall.stdout);
+    assert.match(uninstall.stdout, /integrações OXE no repositório/i);
+    assert.ok(!fs.existsSync(path.join(dir, '.codex', 'prompts', 'oxe.md')));
+    assert.ok(!fs.existsSync(path.join(dir, '.agents', 'skills', 'oxe', 'SKILL.md')));
+  });
+
   test('--global-cli and --no-global-cli together exits 1', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
     const r = run(['--global-cli', '--no-global-cli', '--oxe-only', dir]);

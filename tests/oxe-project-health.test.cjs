@@ -469,6 +469,26 @@ describe('oxe-project-health', () => {
     assert.deepStrictEqual(report.criticalExecutionGaps, []);
   });
 
+  test('buildHealthReport keeps rationality non-blocking before PLAN exists', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-rationality-na-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(path.join(oxe, 'codebase'), { recursive: true });
+    for (const f of h.EXPECTED_CODEBASE_MAPS) {
+      fs.writeFileSync(path.join(oxe, 'codebase', f), '# x', 'utf8');
+    }
+    fs.writeFileSync(
+      path.join(oxe, 'STATE.md'),
+      '## Fase atual\n\n`scan_complete`\n',
+      'utf8'
+    );
+    fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# S\n## Critérios de aceite\n| A1 | x | y |\n', 'utf8');
+    const report = h.buildHealthReport(dir);
+    assert.strictEqual(report.executionRationality.applicable, false);
+    assert.strictEqual(report.executionRationalityReady, false);
+    assert.deepStrictEqual(report.criticalExecutionGaps, []);
+    assert.strictEqual(report.next.step, 'plan');
+  });
+
   test('buildHealthReport falls back to root rationality packs when session-scoped plan artifacts are absent', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-rationality-session-'));
     const oxe = path.join(dir, '.oxe');

@@ -14,9 +14,12 @@ export interface TaskResult {
     failure_class: FailureClass;
     evidence: string[];
     output: string;
+    completed_by?: string;
 }
 export interface TaskExecutor {
-    execute(node: GraphNode, lease: WorkspaceLease, runId: string, attemptNumber: number): Promise<TaskResult>;
+    execute(node: GraphNode, lease: WorkspaceLease, runId: string, attemptNumber: number, options?: {
+        previousError?: string | null;
+    }): Promise<TaskResult>;
 }
 export interface SchedulerOptions {
     maxRunDurationMs?: number;
@@ -70,6 +73,7 @@ export declare class Scheduler {
     getJournal(): RunJournal | null;
     static loadJournal(projectRoot: string, runId: string): RunJournal | null;
     private executeNode;
+    private verifyNode;
     private evaluatePolicyForNode;
     private requestGateForNode;
     private blockNode;

@@ -209,8 +209,8 @@ function buildInstallSummary(opts, fullLayout) {
   if (opts.copilotCli || opts.allAgents || anyGranularAgent(opts)) agentHint.push('CLIs / multi-agente');
   if (agentHint.length) {
     nextSteps.push({
-      desc: `Mapear o código no agente (${agentHint.join(', ')}):`,
-      cmd: '/oxe-scan',
+      desc: `Entrar no fluxo OXE no agente (${agentHint.join(', ')}) e deixar o router indicar o primeiro passo:`,
+      cmd: '/oxe',
     });
   } else if (opts.oxeOnly) {
     nextSteps.push({
@@ -220,7 +220,7 @@ function buildInstallSummary(opts, fullLayout) {
   } else {
     nextSteps.push({
       desc: 'Primeiro passo do fluxo no seu editor:',
-      cmd: '/oxe-scan',
+      cmd: '/oxe',
     });
   }
 
@@ -252,6 +252,7 @@ function buildUninstallFooter(u) {
   const bullets = [];
   const p = u.dryRun ? '[simulação] ' : '';
   const rm = u.dryRun ? 'Seriam removidos' : 'Removidos';
+  const localIdeArtifacts = shouldAlsoRemoveLocalIdeArtifacts(u);
   const granularAgents = [
     u.agentOpenCode ? 'OpenCode' : null,
     u.agentGemini ? 'Gemini' : null,
@@ -277,9 +278,9 @@ function buildUninstallFooter(u) {
   } else if (granularAgents.length) {
     bullets.push(`${p}${rm} apenas as integrações selecionadas: ${granularAgents.join(', ')}.`);
   }
-  if (u.ideLocal) {
+  if (localIdeArtifacts) {
     bullets.push(
-      `${p}${rm} integrações OXE no repositório (.cursor, .github, .claude, .copilot, .opencode, … conforme flags).`
+      `${p}${rm} integrações OXE no repositório (.cursor, .github, .claude, .copilot, .opencode, … conforme flags ou artefatos locais detectados).`
     );
   }
   if (u.globalCli) bullets.push(`${p}${rm} também o pacote npm global oxe-cc do PATH.`);
@@ -1533,7 +1534,9 @@ function printOxeHealthDiagnostics(target, c, diagOpts = {}) {
       typeof r.planSelfEvaluation.confidence === 'number' ? `${r.planSelfEvaluation.confidence}%` : '—';
     console.log(`  ${c ? dim : ''}Plano (autoavaliação):${c ? reset : ''} melhor=${best} | confiança=${conf}`);
   }
-  if (typeof r.executionRationalityReady === 'boolean') {
+  if (r.executionRationality && r.executionRationality.applicable === false) {
+    console.log(`  ${c ? dim : ''}Prontidão racional:${c ? reset : ''} não aplicável ainda (PLAN.md ausente)`);
+  } else if (typeof r.executionRationalityReady === 'boolean') {
     console.log(
       `  ${c ? dim : ''}Prontidão racional:${c ? reset : ''} implementation=${r.implementationPackReady ? 'ok' : 'pendente'} | anchors=${r.referenceAnchorsReady ? 'ok' : 'pendente'} | fixtures=${r.fixturePackReady ? 'ok' : 'pendente'}`
     );
@@ -1670,7 +1673,7 @@ function runStatusFull(target) {
 
   printSection('OXE ▸ status --full');
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${target}${c ? reset : ''}`);
-  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
   console.log(`  ${c ? green : ''}Workspace mode:${c ? reset : ''} ${report.workspaceMode || 'oxe_project'}`);
   console.log(`  ${c ? green : ''}Fase:${c ? reset : ''} ${report.phase || '—'}`);
 
@@ -2102,10 +2105,18 @@ function runDoctor(target, options = {}) {
     .sort();
 
   if (!wfTgt) {
-    console.log(
-      `${yellow}AVISO${reset} Não há oxe/workflows/ nem .oxe/workflows/ neste projeto — rode ${cyan}npx oxe-cc@latest${reset} para instalar.`
-    );
-    process.exit(1);
+    // If the project has .oxe/runs/ it's a runtime-only project — workflows are optional
+    const hasRuntimeRuns = fs.existsSync(path.join(target, '.oxe', 'runs'));
+    if (hasRuntimeRuns) {
+      console.log(`${green}OK${reset} Runtime-only project (.oxe/runs/ presente) — workflows não obrigatórios.`);
+      console.log(`${c ? dim : ''}  Para instalar workflows completos: ${cyan}npx oxe-cc@latest${reset}`);
+    } else {
+      console.log(
+        `${yellow}AVISO${reset} Não há oxe/workflows/ nem .oxe/workflows/ neste projeto — rode ${cyan}npx oxe-cc@latest${reset} para instalar.`
+      );
+      process.exit(1);
+    }
+    return;
   }
 
   const actual = fs
@@ -2190,6 +2201,8 @@ function runDoctor(target, options = {}) {
     }
   }
 
+  const report = oxeHealth.buildHealthReport(target);
+
   // IDE health gates
   console.log('');
   const ideChecks = [];
@@ -2204,25 +2217,44 @@ function runDoctor(target, options = {}) {
 
   const claudeLocalDir = path.join(target, 'commands', 'oxe');
   const claudeGlobalDir = path.join(require('os').homedir(), '.claude', 'commands');
-  const claudeReady = fs.existsSync(claudeLocalDir) || fs.existsSync(claudeGlobalDir);
-  ideChecks.push({ label: 'Claude Code', ready: claudeReady, hint: 'commands/oxe/ ou ~/.claude/commands/' });
+  const claudeLocalReady = fs.existsSync(claudeLocalDir);
+  const claudeGlobalReady = fs.existsSync(claudeGlobalDir);
+  ideChecks.push({
+    label: 'Claude Code',
+    ready: claudeLocalReady || claudeGlobalReady,
+    hint: claudeLocalReady
+      ? 'commands/oxe/'
+      : claudeGlobalReady
+        ? '~/.claude/commands/ (global do utilizador)'
+        : 'commands/oxe/ ou ~/.claude/commands/',
+    status: claudeLocalReady ? 'local' : claudeGlobalReady ? 'global_only' : 'missing',
+  });
 
   const codexReport = oxeHealth.codexIntegrationReport(target);
-  ideChecks.push({ label: 'Codex', ready: codexReport.commandsReady, hint: '~/.codex/prompts/oxe.md' });
+  ideChecks.push({
+    label: 'Codex',
+    ready: codexReport.commandsReady,
+    hint: codexReport.promptSource === 'workspace'
+      ? '.codex/prompts/oxe.md'
+      : codexReport.promptSource === 'global'
+        ? '~/.codex/prompts/oxe.md (global do utilizador)'
+        : '.codex/prompts/oxe.md ou ~/.codex/prompts/oxe.md',
+    status: codexReport.promptSource,
+  });
 
   for (const ide of ideChecks) {
     if (ide.ready) {
-      console.log(`${c ? green : ''}OK${c ? reset : ''} ${ide.label} pronto (${ide.hint})`);
+      const suffix = ide.status === 'global_only' || ide.status === 'global'
+        ? ' — apenas global'
+        : '';
+      console.log(`${c ? green : ''}OK${c ? reset : ''} ${ide.label} pronto (${ide.hint})${suffix}`);
     } else {
       console.log(`${c ? dim : ''}Obs.:${c ? reset : ''} ${ide.label} não detectado — esperado ${ide.hint}`);
     }
   }
 
   // Runtime compilation check
-  const runtimeCompiledPath = path.join(target, 'lib', 'runtime', 'index.js');
-  const runtimeDistPath = path.join(target, 'packages', 'runtime', 'dist-tests');
-  const runtimeCompiled = fs.existsSync(runtimeCompiledPath) || fs.existsSync(runtimeDistPath);
-  if (runtimeCompiled) {
+  if (report.runtimeMode && report.runtimeMode.enterprise_available) {
     console.log(`${c ? green : ''}OK${c ? reset : ''} Runtime compilado detectado — modo enterprise disponível`);
   } else {
     console.log(`${c ? dim : ''}Obs.:${c ? reset : ''} Runtime não compilado — operando em modo legado (sem perda de UX)`);
@@ -2230,7 +2262,7 @@ function runDoctor(target, options = {}) {
 
   // Readiness gate summary
   const stateFilePath = path.join(target, '.oxe', 'STATE.md');
-  let readinessCmd = '/oxe-scan';
+  let readinessCmd = '/oxe';
   let readinessDesc = 'Nenhum STATE.md encontrado';
   if (fs.existsSync(stateFilePath)) {
     try {
@@ -2238,7 +2270,7 @@ function runDoctor(target, options = {}) {
       const phaseMatch = stateContent.match(/fase[:\s]+([a-z_]+)/i) || stateContent.match(/phase[:\s]+([a-z_]+)/i) || stateContent.match(/status[:\s]+([a-z_]+)/i);
       const phase = phaseMatch ? phaseMatch[1].toLowerCase() : 'init';
       const phaseMap = {
-        init: { cmd: '/oxe-scan', desc: 'Pronto para /oxe-scan' },
+        init: { cmd: '/oxe', desc: 'Pronto para /oxe' },
         scan_complete: { cmd: '/oxe-spec', desc: 'Pronto para /oxe-spec' },
         spec_complete: { cmd: '/oxe-plan', desc: 'Pronto para /oxe-plan' },
         plan_complete: { cmd: '/oxe-execute', desc: 'Pronto para /oxe-execute' },
@@ -2260,7 +2292,6 @@ function runDoctor(target, options = {}) {
   }
 
   printOxeHealthDiagnostics(target, c);
-  const report = oxeHealth.buildHealthReport(target);
   const statusColor = report.healthStatus === 'healthy' ? green : report.healthStatus === 'warning' ? yellow : red;
   console.log(`\n  ${statusColor}Diagnóstico ${report.healthStatus}${reset}`);
   if (report.healthStatus === 'broken') {
@@ -2275,7 +2306,7 @@ function runDoctor(target, options = {}) {
       `Saúde lógica: ${report.healthStatus}`,
     ],
     nextSteps: [
-      { desc: 'Mapear ou atualizar o codebase no agente:', cmd: '/oxe-scan' },
+      { desc: 'Entrar no fluxo OXE e deixar o router apontar o primeiro passo:', cmd: '/oxe' },
       { desc: 'Ver ajuda e ordem dos passos OXE:', cmd: '/oxe-help' },
       { desc: 'Reinstalar ou atualizar arquivos do OXE:', cmd: 'npx oxe-cc@latest --force' },
     ],
@@ -2496,7 +2527,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
     npx oxe-cc init-oxe [opções] [pasta-do-projeto]
     npx oxe-cc context <build|inspect> [opções] [pasta-do-projeto]
     npx oxe-cc dashboard [opções] [pasta-do-projeto]
-  npx oxe-cc runtime <status|start|pause|resume|replay|compile|verify|project|ci|promote|recover|gates|agents> [opções] [pasta-do-projeto]
+  npx oxe-cc runtime <status|start|pause|resume|replay|compile|verify|project|ci|promote|recover|gates|agents|execute> [opções] [pasta-do-projeto]
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
     npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
     npx oxe-cc uninstall [opções] [pasta-do-projeto]
@@ -2695,7 +2726,19 @@ function runInstall(opts) {
   assertNotWslWindowsNode();
   const home = os.homedir();
   const prevManifest = oxeManifest.loadFileManifest(home);
-  oxeManifest.backupModifiedFromManifest(home, prevManifest, opts, { yellow, cyan, dim, reset });
+  const backupScopeRoots = [target];
+  const installAgentPaths = oxeAgentInstall.buildAgentInstallPaths(!opts.ideLocal, target);
+  if (opts.cursor) backupScopeRoots.push(installCursorBase(opts));
+  if (opts.copilot) backupScopeRoots.push(path.join(target, '.github'));
+  if (opts.copilotCli || opts.allAgents) {
+    backupScopeRoots.push(installClaudeBase(opts), installCopilotCliHome(opts));
+  }
+  if (opts.agentOpenCode || opts.allAgents) backupScopeRoots.push(...installAgentPaths.opencodeCommandDirs);
+  if (opts.agentGemini || opts.allAgents) backupScopeRoots.push(installAgentPaths.geminiCommandsBase);
+  if (opts.agentCodex || opts.allAgents) backupScopeRoots.push(installAgentPaths.codexPromptsDir, installAgentPaths.codexAgentsSkillsRoot);
+  if (opts.agentWindsurf || opts.allAgents) backupScopeRoots.push(installAgentPaths.windsurfWorkflowsDir);
+  if (opts.agentAntigravity || opts.allAgents) backupScopeRoots.push(installAgentPaths.antigravitySkillsRoot);
+  oxeManifest.backupModifiedFromManifest(home, prevManifest, opts, { yellow, cyan, dim, reset }, { scopeRoots: backupScopeRoots });
 
   printSection('OXE ▸ Instalação no projeto');
   const c = useAnsiColors();
@@ -2735,7 +2778,7 @@ function runInstall(opts) {
   }
 
   const copyOpts = { dryRun: opts.dryRun, force: opts.force };
-  const agentPaths = oxeAgentInstall.buildAgentInstallPaths(!opts.ideLocal, target);
+  const agentPaths = installAgentPaths;
 
   if (fullLayout) {
     copyDir(path.join(PKG_ROOT, 'oxe'), path.join(target, 'oxe'), copyOpts, false);
@@ -3146,6 +3189,31 @@ function uninstallLocalIdeFromProject(u, removedPaths) {
 }
 
 /**
+ * @param {UninstallOpts} u
+ */
+function shouldAlsoRemoveLocalIdeArtifacts(u) {
+  if (u.ideLocal) return true;
+  if (u.noProject) return false;
+  if (!(u.allAgents || anyGranularUninstallAgent(u) || u.cursor || u.copilot || u.copilotCli)) return false;
+  const proj = path.resolve(u.dir);
+  const localAgentPaths = oxeAgentInstall.buildAgentInstallPaths(false, proj);
+  if (u.cursor && fs.existsSync(path.join(proj, '.cursor', 'commands'))) return true;
+  if (u.copilot && (fs.existsSync(path.join(proj, '.github', 'prompts')) || fs.existsSync(path.join(proj, '.github', 'copilot-instructions.md')))) {
+    return true;
+  }
+  if (u.copilotCli && (fs.existsSync(path.join(proj, '.claude', 'commands')) || fs.existsSync(path.join(proj, '.copilot', 'commands')))) {
+    return true;
+  }
+  const selectedAll = u.allAgents || !anyGranularUninstallAgent(u);
+  if ((selectedAll || u.agentOpenCode) && localAgentPaths.opencodeCommandDirs.some((dir) => fs.existsSync(dir))) return true;
+  if ((selectedAll || u.agentGemini) && fs.existsSync(localAgentPaths.geminiCommandsBase)) return true;
+  if ((selectedAll || u.agentCodex) && (fs.existsSync(localAgentPaths.codexPromptsDir) || fs.existsSync(localAgentPaths.codexAgentsSkillsRoot))) return true;
+  if ((selectedAll || u.agentWindsurf) && fs.existsSync(localAgentPaths.windsurfWorkflowsDir)) return true;
+  if ((selectedAll || u.agentAntigravity) && fs.existsSync(localAgentPaths.antigravitySkillsRoot)) return true;
+  return false;
+}
+
+/**
  * @param {string[]} argv
  * @returns {UninstallOpts}
  */
@@ -3376,6 +3444,7 @@ function runUninstall(u) {
   if (u.dryRun) console.log(`  ${c ? yellow : ''}(dry-run)${c ? reset : ''}`);
 
   const removedPaths = [];
+  const removeLocalIdeArtifacts = shouldAlsoRemoveLocalIdeArtifacts(u);
 
   if (u.cursor) {
     const base = cursorUserDir(ideOpts);
@@ -3531,7 +3600,7 @@ function runUninstall(u) {
     }
   }
 
-  if (u.ideLocal) {
+  if (removeLocalIdeArtifacts) {
     uninstallLocalIdeFromProject(u, removedPaths);
   }
 
@@ -3976,6 +4045,13 @@ function parseRuntimeArgs(argv) {
     fromEventId: '',
     writeReport: false,
     gateId: '',
+    // execute flags
+    provider: '',
+    apiKey: '',
+    model: '',
+    baseUrl: '',
+    maxTurns: null,
+    recompile: false,
     decision: '',
     actor: '',
     targetKind: '',
@@ -4013,6 +4089,12 @@ function parseRuntimeArgs(argv) {
     else if (a === '--status' && argv[i + 1]) out.gateStatus = String(argv[++i]);
     else if (a === '--scope' && argv[i + 1]) out.gateScope = String(argv[++i]);
     else if (a === '--json') out.jsonOutput = true;
+    else if (a === '--provider' && argv[i + 1]) out.provider = String(argv[++i]);
+    else if (a === '--api-key' && argv[i + 1]) out.apiKey = String(argv[++i]);
+    else if (a === '--model' && argv[i + 1]) out.model = String(argv[++i]);
+    else if (a === '--base-url' && argv[i + 1]) out.baseUrl = String(argv[++i]);
+    else if (a === '--max-turns' && argv[i + 1]) out.maxTurns = Number(argv[++i]);
+    else if (a === '--recompile') out.recompile = true;
     else if (!a.startsWith('-')) positionals.push(a);
     else {
       out.parseError = true;
@@ -4155,7 +4237,7 @@ function runContext(opts) {
       return;
     }
     console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
-    console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+    console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
     console.log(`  ${c ? green : ''}Workflow:${c ? reset : ''} ${selectedWorkflow}`);
     console.log(`  ${c ? green : ''}Tier:${c ? reset : ''} ${pack.context_tier}`);
     console.log(`  ${c ? green : ''}Quality:${c ? reset : ''} ${pack.context_quality.score} (${pack.context_quality.status})`);
@@ -4222,7 +4304,7 @@ function runContext(opts) {
     return;
   }
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
-  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
   console.log(`  ${c ? green : ''}Packs:${c ? reset : ''} ${packs.length}`);
   for (const pack of packs) {
     const qualityFlag = (pack.context_quality.score < 30 || pack.context_quality.status === 'critical') ? ` ${yellow}[CRÍTICO]${reset}` : '';
@@ -4287,7 +4369,7 @@ async function runRuntime(opts) {
   const activeSession = opts.activeSession || oxeHealth.parseActiveSession(stateText) || null;
   const p = oxeOperational.operationalPaths(opts.dir, activeSession);
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
-  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
 
   if (opts.action === 'status') {
     const current = oxeOperational.readRunState(opts.dir, activeSession);
@@ -4350,13 +4432,28 @@ async function runRuntime(opts) {
       console.log(`  ${c ? green : ''}Runtime:${c ? reset : ''} ${runtimeMode.runtime_mode || 'legacy'} · fallback=${runtimeMode.fallback_mode || 'none'}`);
     }
     if (report.policyCoverage) {
-      console.log(`  ${c ? green : ''}Policy coverage:${c ? reset : ''} ${report.policyCoverage.coveragePercent}% · uncovered=${report.policyCoverage.uncoveredMutations}`);
+      const pctCov = report.policyCoverage.coveragePercent;
+      const policyLabel = pctCov === 0
+        ? `${c ? dim : ''}não configurada (opcional)${c ? reset : ''}`
+        : `${pctCov}% · uncovered=${report.policyCoverage.uncoveredMutations}`;
+      console.log(`  ${c ? green : ''}Policy coverage:${c ? reset : ''} ${policyLabel}`);
     }
     if (report.promotionReadiness) {
-      console.log(`  ${c ? green : ''}Promotion readiness:${c ? reset : ''} ${report.promotionReadiness.status}${Array.isArray(report.promotionReadiness.blockers) && report.promotionReadiness.blockers.length ? ` · ${report.promotionReadiness.blockers.join(', ')}` : ''}`);
+      const promoStatus = report.promotionReadiness.status;
+      const blockers = Array.isArray(report.promotionReadiness.blockers) ? report.promotionReadiness.blockers : [];
+      // Only show blockers that are not solely due to unconfigured policy
+      const meaningfulBlockers = blockers.filter(b => b !== 'policy_uncovered_mutations' || report.policyCoverage.coveragePercent > 0);
+      const promoLabel = promoStatus === 'blocked' && meaningfulBlockers.length === 0
+        ? `${c ? dim : ''}n/a (execução não concluída)${c ? reset : ''}`
+        : `${promoStatus}${meaningfulBlockers.length ? ` · ${meaningfulBlockers.join(', ')}` : ''}`;
+      console.log(`  ${c ? green : ''}Promotion readiness:${c ? reset : ''} ${promoLabel}`);
     }
     if (report.recoveryState) {
-      console.log(`  ${c ? green : ''}Recovery:${c ? reset : ''} ${report.recoveryState.status} · recoveries=${report.recoveryState.recoverCount ?? 0} · issues=${Array.isArray(report.recoveryState.issues) ? report.recoveryState.issues.length : 0}`);
+      const recIssues = Array.isArray(report.recoveryState.issues) ? report.recoveryState.issues.length : 0;
+      const recLabel = recIssues === 0
+        ? `${report.recoveryState.status} · ok`
+        : `${report.recoveryState.status} · issues=${recIssues} — rode ${c ? cyan : ''}runtime status --verbose${c ? reset : ''} para detalhes`;
+      console.log(`  ${c ? green : ''}Recovery:${c ? reset : ''} ${recLabel} · recoveries=${report.recoveryState.recoverCount ?? 0}`);
     }
     if (multiAgent) {
       console.log(`  ${c ? green : ''}Multi-agent:${c ? reset : ''} ${multiAgent.enabled ? (multiAgent.mode || 'active') : 'disabled'} · agentes=${Array.isArray(multiAgent.agents) ? multiAgent.agents.length : 0} · ownership=${Array.isArray(multiAgent.ownership) ? multiAgent.ownership.length : 0}`);
@@ -4526,6 +4623,17 @@ async function runRuntime(opts) {
 
   if (opts.action === 'compile') {
     try {
+      // --recompile: delete existing run state files so a fresh run_id is generated
+      if (opts.recompile) {
+        const runsDir = path.join(opts.dir, '.oxe', 'runs');
+        if (require('fs').existsSync(runsDir)) {
+          require('fs').readdirSync(runsDir).forEach(f => {
+            if (f.endsWith('.json') && !f.includes('ci-results')) {
+              require('fs').unlinkSync(path.join(runsDir, f));
+            }
+          });
+        }
+      }
       const compiled = oxeOperational.compileExecutionGraphFromArtifacts(opts.dir, activeSession);
       const suite = oxeOperational.compileVerificationSuiteFromArtifacts(opts.dir, activeSession, {
         runState: compiled.run,
@@ -4535,7 +4643,33 @@ async function runRuntime(opts) {
       console.log(`  ${c ? green : ''}Graph:${c ? reset : ''} ${compiled.graph.metadata.node_count} nó(s) · ${compiled.graph.metadata.wave_count} onda(s)`);
       console.log(`  ${c ? green : ''}Checks:${c ? reset : ''} ${Array.isArray(suite.suite.checks) ? suite.suite.checks.length : 0}`);
       if (compiled.validationErrors.length) {
-        console.log(`  ${yellow}Validation:${reset} ${compiled.validationErrors.join(' | ')}`);
+        // Bucket 1: static-analysis hints (HINT(...))
+        const hints = compiled.validationErrors.filter(e => e.startsWith('HINT('));
+        // Bucket 2: mutation-scope overlaps (info-only in single-agent)
+        const mutationWarns = compiled.validationErrors.filter(e => e.includes('mutate the same paths in parallel'));
+        // Bucket 3: structural errors (cycles, missing deps)
+        const blocking = compiled.validationErrors.filter(e =>
+          !e.startsWith('HINT(') && !e.includes('mutate the same paths in parallel')
+        );
+        if (blocking.length) {
+          console.log(`  ${yellow}Validation (erros):${reset} ${blocking.join(' | ')}`);
+        }
+        if (mutationWarns.length) {
+          console.log(`  ${c ? dim : ''}Info (single-agent — tarefas na mesma onda são sequenciais, sobreposição de arquivos não bloqueia):${c ? reset : ''}`);
+          mutationWarns.forEach(w => console.log(`  ${c ? dim : ''}  · ${w}${c ? reset : ''}`));
+        }
+        if (hints.length) {
+          console.log(`  ${yellow}Dicas de spec/plan (detectadas em tempo de compilação):${reset}`);
+          hints.forEach(h => {
+            // Format: HINT(type): message
+            const match = h.match(/^HINT\(([^)]+)\):\s*(.*)/s);
+            if (match) {
+              console.log(`  ${yellow}⚑${reset} [${match[1]}] ${match[2]}`);
+            } else {
+              console.log(`  ${yellow}⚑${reset} ${h}`);
+            }
+          });
+        }
       }
       console.log(`  ${c ? green : ''}Arquivo:${c ? reset : ''} ${path.join(p.runsDir, `${compiled.run.run_id}.json`)}`);
       return;
@@ -4585,7 +4719,7 @@ async function runRuntime(opts) {
       console.log(`  ${c ? green : ''}✓${c ? reset : ''} Projeções geradas a partir do estado canônico.`);
       console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${projected.run.run_id}`);
       console.log(`  ${c ? green : ''}STATE:${c ? reset : ''} ${projected.paths.state}`);
-      console.log(`  ${c ? green : ''}PLAN:${c ? reset : ''} ${projected.paths.plan}`);
+      console.log(`  ${c ? green : ''}PLAN-STATUS:${c ? reset : ''} ${projected.paths.plan.replace(/PLAN\.md$/, 'PLAN-STATUS.md')}`);
       console.log(`  ${c ? green : ''}VERIFY:${c ? reset : ''} ${projected.paths.verify}`);
       console.log(`  ${c ? green : ''}RUN-SUMMARY:${c ? reset : ''} ${projected.paths.runSummary}`);
       console.log(`  ${c ? green : ''}PR-SUMMARY:${c ? reset : ''} ${projected.paths.prSummary}`);
@@ -4598,9 +4732,37 @@ async function runRuntime(opts) {
 
   if (opts.action === 'execute') {
     try {
+      // Resolve provider: flag > env vars
+      const apiKey = opts.apiKey || process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || '';
+      const model = opts.model || process.env.OXE_MODEL || 'claude-sonnet-4-6';
+      const baseUrl = opts.baseUrl || process.env.OXE_BASE_URL || 'https://api.anthropic.com/v1';
+      if (!apiKey) {
+        console.error(`${red}Erro: executor LLM não configurado.${reset}`);
+        console.error(`  Use: --api-key <chave>  ou  exporte ANTHROPIC_API_KEY`);
+        console.error(`  Exemplo: oxe-cc runtime execute --api-key $ANTHROPIC_API_KEY --model claude-sonnet-4-6`);
+        process.exit(1);
+      }
+      const providerConfig = { baseUrl, apiKey, model, maxTurns: opts.maxTurns || 10 };
       const result = await oxeOperational.runRuntimeExecute(opts.dir, activeSession, {
         runId: opts.runId || undefined,
         heartbeatTimeoutMs: opts.heartbeatTimeoutMs || undefined,
+        providerConfig,
+        onProgress: (event) => {
+          if (event.type === 'turn_start') {
+            const turn = event.detail?.turn ?? 0;
+            if (turn === 0) process.stdout.write(`  → ${event.nodeId} `);
+          } else if (event.type === 'tool_call') {
+            process.stdout.write('.');
+          } else if (event.type === 'VerificationStarted') {
+            process.stdout.write(' [verify]');
+          } else if (event.type === 'WorkItemCompleted') {
+            process.stdout.write(` ✓\n`);
+          } else if (event.type === 'WorkItemBlocked') {
+            process.stdout.write(` ✗\n`);
+          } else if (event.type === 'RetryScheduled') {
+            process.stdout.write(` ↺ retry ${event.payload?.next_attempt}\n  → ${event.work_item_id} `);
+          }
+        },
       });
       if (opts.jsonOutput) {
         console.log(JSON.stringify(result, null, 2));
@@ -4794,7 +4956,7 @@ function runAzure(opts) {
   };
 
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
-  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
 
   try {
     if (opts.scope === 'status') {
@@ -5118,7 +5280,7 @@ function runPlanVisual(opts) {
   const planPath = sp.plan || oxeHealth.oxePaths(opts.dir).plan;
 
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
-  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
 
   if (!fs.existsSync(planPath)) {
     console.log(`\n  ${yellow}PLAN.md não encontrado em ${planPath}${reset}`);
@@ -5172,7 +5334,7 @@ function runVerifyMatrix(opts) {
   const verifyPath = sp.verify || oxeHealth.oxePaths(opts.dir).verify;
 
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
-  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || 'modo legado'}${c ? reset : ''}`);
+  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
 
   const specMd = fs.existsSync(specPath) ? fs.readFileSync(specPath, 'utf8') : '';
   const planMd = fs.existsSync(planPath) ? fs.readFileSync(planPath, 'utf8') : '';
@@ -5556,7 +5718,8 @@ async function main() {
       nextSteps: [
         { desc: 'Validar o projeto:', cmd: 'npx oxe-cc doctor' },
         { desc: 'Instalar integrações IDE/CLI (se ainda não fez):', cmd: 'npx oxe-cc@latest' },
-        { desc: 'Começar o fluxo no agente:', cmd: '/oxe-scan' },
+        { desc: 'Fluxo runtime — criar spec (no agente):', cmd: '/oxe-spec  →  /oxe-plan  →  oxe-cc runtime compile  →  oxe-cc runtime execute' },
+        { desc: 'Começar pelo scan do codebase (agente):', cmd: '/oxe-scan' },
       ],
       dryRun: opts.dryRun,
     });

@@ -18,12 +18,15 @@ export interface LlmExecutorEvent {
     attempt: number;
     detail?: Record<string, unknown>;
 }
+export interface LlmExecuteOptions {
+    previousError?: string | null;
+}
 export declare class LlmTaskExecutor implements TaskExecutor {
     private readonly provider;
     private readonly registry?;
     private readonly onProgress?;
     constructor(provider: LlmProviderConfig, registry?: PluginRegistry | undefined, onProgress?: ((event: LlmExecutorEvent) => void) | undefined);
-    execute(node: GraphNode, lease: WorkspaceLease, runId: string, attempt: number): Promise<TaskResult>;
+    execute(node: GraphNode, lease: WorkspaceLease, runId: string, attempt: number, options?: LlmExecuteOptions): Promise<TaskResult>;
     private invokeToolCall;
     private emit;
 }

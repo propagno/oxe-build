@@ -34,6 +34,21 @@ Se **`.oxe/config.json`** tiver `discuss_before_plan: true`: mencionar no final 
 
 **Setup externo:** quando o sucesso depender de conta, variável de ambiente, dashboard, fila, banco, credencial, VPN ou recurso cloud, registrar em SPEC a seção **Setup externo e pré-condições**. O plano deve transformar isso em checkpoint ou tarefa explícita; não deixar como suposição solta.
 
+**Contrato de indução da SPEC:** a SPEC deve sair forte o suficiente para que o usuário não precise compensar lacunas "no braço" durante o PLAN. Sempre extrair ou materializar explicitamente:
+- público-alvo primário;
+- outcome esperado observável;
+- restrições técnicas obrigatórias e proibições relevantes;
+- fluxos obrigatórios da v1;
+- conteúdo mínimo exigido por área;
+- exemplos mínimos esperados quando o pedido tocar UI, app, material didático, integração ou contrato público.
+
+**Demandas de produto/app/UI:** quando o pedido for uma aplicação, página, dashboard, fluxo visual ou experiência educacional, a SPEC deve congelar antes do PLAN:
+- blocos obrigatórios da interface;
+- estados principais (`loading`, `empty`, `error`, `success` quando aplicável);
+- interações mínimas esperadas;
+- regras objetivas de responsividade e acessibilidade;
+- critérios de aceite verificáveis por comportamento visível, não só por intenção narrativa.
+
 **Resolução de sessão:** antes de ler ou escrever artefatos desta trilha, resolver `active_session` em `.oxe/STATE.md` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa:
 - `SPEC.md`, `ROADMAP.md` e `DISCUSS.md` vivem em `.oxe/<active_session>/spec/`
 - `OBSERVATIONS.md`, `RESEARCH.md` e `research/` seguem o escopo da sessão
@@ -200,6 +215,13 @@ Complemento adaptativo para a Fase 1. Quando o domínio for confirmado (via scan
 - `A-N: Erro de API exibe mensagem legível, não stack trace`
 - `A-N: Formulário desabilita submit enquanto request está em andamento`
 - `A-N: Todos os campos de formulário têm label associada (WCAG básico)`
+
+*Para páginas estáticas, apps sem framework ou experiências didáticas, também perguntar:*
+- Quais blocos da página são obrigatórios acima da dobra e abaixo da dobra?
+- O conteúdo é mais exploratório, guiado passo a passo, ou ambos?
+- Quais interações precisam existir obrigatoriamente na v1?
+- O progresso do usuário precisa persistir entre reloads?
+- Há exemplos de conteúdo, visualização ou exercícios mínimos que a aplicação precisa materializar?
 
 ---
 
