@@ -4766,20 +4766,29 @@ async function runRuntime(opts) {
       });
       if (opts.jsonOutput) {
         console.log(JSON.stringify(result, null, 2));
-        if (result.result && result.result.failed && result.result.failed.length > 0) process.exitCode = 1;
+        if (result.result && ((result.result.failed && result.result.failed.length > 0) || result.result.status === 'blocked')) process.exitCode = 1;
         return;
       }
       const r = result.result || {};
       const completed = Array.isArray(r.completed) ? r.completed : [];
       const failed = Array.isArray(r.failed) ? r.failed : [];
       const blocked = Array.isArray(r.blocked) ? r.blocked : [];
-      console.log(`  ${c ? green : ''}✓${c ? reset : ''} Runtime execute concluído (modo: ${result.mode})`);
+      const okColor = r.status === 'blocked' ? yellow : green;
+      console.log(`  ${c ? okColor : ''}${r.status === 'blocked' ? '!' : '✓'}${c ? reset : ''} Runtime execute concluído (modo: ${result.mode})`);
+      if (result.preflight) {
+        console.log(`  ${c ? green : ''}Preflight:${c ? reset : ''} ${result.preflight.ok ? 'ready' : 'blocked'}`);
+        if (Array.isArray(result.preflight.blockers) && result.preflight.blockers.length) {
+          for (const blocker of result.preflight.blockers) {
+            console.log(`  ${yellow}BLOCKER${reset} ${blocker}`);
+          }
+        }
+      }
       console.log(`  ${c ? green : ''}Completados:${c ? reset : ''} ${completed.length}`);
       if (failed.length > 0)
         console.log(`  ${c ? red : ''}Falhos:${c ? reset : ''} ${failed.length} — ${failed.join(', ')}`);
       if (blocked.length > 0)
         console.log(`  ${c ? '\x1b[33m' : ''}Bloqueados:${c ? reset : ''} ${blocked.length} — ${blocked.join(', ')}`);
-      if (failed.length > 0) process.exitCode = 1;
+      if (failed.length > 0 || r.status === 'blocked') process.exitCode = 1;
       return;
     } catch (err) {
       console.error(`${red}${err && err.message ? err.message : 'Falha ao executar runtime.'}${reset}`);

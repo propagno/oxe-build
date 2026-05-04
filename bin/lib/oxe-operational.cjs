@@ -722,10 +722,52 @@ async function resolveRuntimeGate(projectRoot, activeSession, options = {}) {
   };
 }
 
-// Gap 5: route execution to MultiAgentCoordinator when plan-agents.json exists
-async function runRuntimeExecute(projectRoot, activeSession, options = {}) {
-  const runtime = loadRuntimeModule();
-  if (!runtime) throw new Error('Runtime package não está disponível. Rode npm run build:runtime.');
+  // Gap 5: route execution to MultiAgentCoordinator when plan-agents.json exists
+function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
+    const health = loadProjectHealth();
+    const blockers = [];
+    const warnings = [];
+    let report = null;
+    if (health && typeof health.buildHealthReport === 'function') {
+      report = health.buildHealthReport(projectRoot);
+      if (report.planSelfEvaluation && report.planSelfEvaluation.executable === false) {
+        const confidence = report.planSelfEvaluation.confidence;
+        const threshold = report.planConfidenceThreshold || 90;
+        blockers.push(`plan_confidence:${confidence == null ? 'missing' : `${confidence}%`}<=${threshold}%`);
+      }
+      if (report.executionRationality && report.executionRationality.applicable && !report.executionRationalityReady) {
+        const gaps = Array.isArray(report.criticalExecutionGaps) ? report.criticalExecutionGaps : [];
+        blockers.push(`execution_rationality:${gaps[0] || 'not_ready'}`);
+      }
+      if (report.fallbackMode && report.fallbackMode !== 'none') {
+        warnings.push(`fallback_mode:${report.fallbackMode}`);
+      }
+    } else {
+      warnings.push('health_report_unavailable');
+    }
+    const runId = runState && runState.run_id ? runState.run_id : null;
+    const queue = readRuntimeGates(projectRoot, activeSession, { runId });
+    if (queue.pending.length > 0) {
+      blockers.push(`pending_gates:${queue.pending.length}`);
+    }
+    return {
+      ok: blockers.length === 0,
+      blockers,
+      warnings,
+      runId,
+      gateQueue: {
+        pending: queue.pending.length,
+        stale: queue.staleCount || 0,
+      },
+      confidence: report && report.planSelfEvaluation ? report.planSelfEvaluation.confidence : null,
+      confidenceThreshold: report ? report.planConfidenceThreshold || 90 : 90,
+      executionRationalityReady: report ? Boolean(report.executionRationalityReady) : false,
+    };
+  }
+
+  async function runRuntimeExecute(projectRoot, activeSession, options = {}) {
+    const runtime = loadRuntimeModule();
+    if (!runtime) throw new Error('Runtime package não está disponível. Rode npm run build:runtime.');
   const parsers = loadSdkParsers();
   if (!parsers) throw new Error('SDK parsers não disponíveis.');
 
@@ -745,15 +787,41 @@ async function runRuntimeExecute(projectRoot, activeSession, options = {}) {
 
   // Resolve compiled graph from run state or compile on demand
   let current = options.runState || readRunState(projectRoot, activeSession);
-  if (!current || !current.compiled_graph) {
-    current = compileExecutionGraphFromArtifacts(projectRoot, activeSession, { runState: current }).run;
-  }
-  if (!current || !current.compiled_graph) {
-    throw new Error('Nenhum grafo compilado encontrado. Execute oxe-cc runtime compile primeiro.');
-  }
-  const graph = runtime.fromSerializable
-    ? runtime.fromSerializable(current.compiled_graph)
-    : current.compiled_graph;
+    if (!current || !current.compiled_graph) {
+      current = compileExecutionGraphFromArtifacts(projectRoot, activeSession, { runState: current }).run;
+    }
+    if (!current || !current.compiled_graph) {
+      throw new Error('Nenhum grafo compilado encontrado. Execute oxe-cc runtime compile primeiro.');
+    }
+    const preflight = buildRuntimeExecutePreflight(projectRoot, activeSession, current);
+    if (!preflight.ok && !options.skipPreflight) {
+      const reason = preflight.blockers[0] || 'runtime_execute_preflight_failed';
+      appendEvent(projectRoot, activeSession, {
+        type: 'WorkItemBlocked',
+        run_id: current.run_id,
+        payload: {
+          reason: 'runtime_execute_preflight_failed',
+          blockers: preflight.blockers,
+        },
+      });
+      return {
+        mode: 'preflight',
+        agentPlan: null,
+        result: {
+          run_id: current.run_id,
+          status: 'blocked',
+          completed: [],
+          failed: [],
+          blocked: ['runtime_execute_preflight'],
+          reason,
+        },
+        run: current,
+        preflight,
+      };
+    }
+    const graph = runtime.fromSerializable
+      ? runtime.fromSerializable(current.compiled_graph)
+      : current.compiled_graph;
 
   // Detect plan-agents.json (session path takes priority over root)
   const rootAgentPlan = path.join(projectRoot, '.oxe', 'plan-agents.json');
@@ -785,16 +853,20 @@ async function runRuntimeExecute(projectRoot, activeSession, options = {}) {
     } catch (err) {
       throw new Error(`plan-agents.json inválido: ${err.message}`);
     }
-    if (!Array.isArray(agentPlan.agents) || agentPlan.agents.length === 0) {
-      throw new Error('plan-agents.json não contém agentes válidos (campo "agents" vazio ou ausente).');
+    const planErrors = validateMultiAgentPlan(agentPlan);
+    if (planErrors.length > 0) {
+      throw new Error(`plan-agents.json inválido: ${planErrors.join('; ')}`);
     }
     if (typeof runtime.MultiAgentCoordinator !== 'function') {
       throw new Error('Runtime não exporta MultiAgentCoordinator. Verifique a versão do runtime.');
     }
+    if (typeof runtime.GitWorktreeManager !== 'function' && !options.workspaceManager) {
+      throw new Error('Runtime não exporta GitWorktreeManager. Multi-agent real exige backend git_worktree.');
+    }
     const agents = agentPlan.agents.map((spec) => ({
       id: spec.id,
-      executor: options.executorFactory ? options.executorFactory(spec) : (options.executor || null),
-      workspaceManager: options.workspaceManager || null,
+      executor: options.executorFactory ? options.executorFactory(spec) : (options.executor || executor),
+      workspaceManager: options.workspaceManager || new runtime.GitWorktreeManager(projectRoot),
       assignedTaskIds: Array.isArray(spec.tasks) ? spec.tasks : [],
     }));
     const coordinator = new runtime.MultiAgentCoordinator();
@@ -805,10 +877,11 @@ async function runRuntimeExecute(projectRoot, activeSession, options = {}) {
       sessionId: activeSession || null,
       runId: current.run_id,
       heartbeatTimeoutMs: options.heartbeatTimeoutMs ?? 120000,
+      applyWorkspaceMerges: true,
       onEvent: ctx.onEvent,
     });
-    return { mode: agentPlan.mode || 'parallel', agentPlan, result, run: current };
-  }
+      return { mode: agentPlan.mode || 'parallel', agentPlan, result, run: current, preflight };
+    }
 
   // Single-agent fallback
   if (typeof runtime.Scheduler !== 'function') {
@@ -816,8 +889,8 @@ async function runRuntimeExecute(projectRoot, activeSession, options = {}) {
   }
   const scheduler = new runtime.Scheduler();
   const result = await scheduler.run(graph, ctx);
-  return { mode: 'single', agentPlan: null, result, run: current };
-}
+    return { mode: 'single', agentPlan: null, result, run: current, preflight };
+  }
 
 function readRuntimeMultiAgentStatus(projectRoot, activeSession, options = {}) {
   const runtime = loadRuntimeModule();
@@ -835,6 +908,11 @@ function readRuntimeMultiAgentStatus(projectRoot, activeSession, options = {}) {
       orphanReassignments: [],
       handoffs: [],
       arbitrationResults: [],
+      workspaceMergeReport: null,
+      worktrees: [],
+      mergeBlockers: [],
+      mergeReadiness: null,
+      arbitrationRequired: false,
       summary: null,
     };
   }
@@ -843,12 +921,16 @@ function readRuntimeMultiAgentStatus(projectRoot, activeSession, options = {}) {
   const summaryPath = path.join(runDir, 'multi-agent-summary.json');
   const handoffsPath = path.join(runDir, 'handoffs.json');
   const arbitrationPath = path.join(runDir, 'arbitration-results.json');
+  const workspaceMergePath = path.join(runDir, 'workspace-merge-report.json');
   const state = runtime && typeof runtime.loadMultiAgentState === 'function'
     ? runtime.loadMultiAgentState(projectRoot, runId)
     : readJsonIfExists(statePath);
   const summary = runtime && typeof runtime.loadMultiAgentSummary === 'function'
     ? runtime.loadMultiAgentSummary(projectRoot, runId)
     : readJsonIfExists(summaryPath);
+  const workspaceMergeReport = runtime && typeof runtime.loadWorkspaceMergeReport === 'function'
+    ? runtime.loadWorkspaceMergeReport(projectRoot, runId)
+    : readJsonIfExists(workspaceMergePath);
   const handoffs = readJsonIfExists(handoffsPath);
   const arbitrationResults = readJsonIfExists(arbitrationPath);
   return {
@@ -862,8 +944,39 @@ function readRuntimeMultiAgentStatus(projectRoot, activeSession, options = {}) {
     orphanReassignments: state && Array.isArray(state.orphan_reassignments) ? state.orphan_reassignments : [],
     handoffs: Array.isArray(handoffs) ? handoffs : [],
     arbitrationResults: Array.isArray(arbitrationResults) ? arbitrationResults : [],
+    workspaceMergeReport: workspaceMergeReport || null,
+    worktrees: workspaceMergeReport && Array.isArray(workspaceMergeReport.records) ? workspaceMergeReport.records : [],
+    mergeBlockers: workspaceMergeReport && Array.isArray(workspaceMergeReport.blockers) ? workspaceMergeReport.blockers : [],
+    mergeReadiness: workspaceMergeReport && workspaceMergeReport.merge_readiness ? workspaceMergeReport.merge_readiness : null,
+    arbitrationRequired: Boolean(workspaceMergeReport && workspaceMergeReport.arbitration_required),
     summary: summary || null,
   };
+}
+
+function validateMultiAgentPlan(agentPlan) {
+  const errors = [];
+  const allowedModes = new Set(['parallel', 'competitive', 'cooperative']);
+  const mode = agentPlan && agentPlan.mode ? String(agentPlan.mode) : 'parallel';
+  if (!allowedModes.has(mode)) errors.push(`mode inválido: ${mode}`);
+  if (!Array.isArray(agentPlan && agentPlan.agents) || agentPlan.agents.length === 0) {
+    errors.push('campo "agents" vazio ou ausente');
+    return errors;
+  }
+  const schemaVersion = Number(agentPlan.schema_version || agentPlan.schema || 0);
+  const seen = new Set();
+  for (const [idx, spec] of agentPlan.agents.entries()) {
+    const id = spec && spec.id ? String(spec.id) : '';
+    if (!id) errors.push(`agents[${idx}].id ausente`);
+    if (id && seen.has(id)) errors.push(`agent duplicado: ${id}`);
+    if (id) seen.add(id);
+    if (schemaVersion >= 3 && !spec.persona) errors.push(`${id || `agents[${idx}]`}.persona ausente`);
+    if (schemaVersion >= 3 && !spec.model_hint) errors.push(`${id || `agents[${idx}]`}.model_hint ausente`);
+    if (spec.tasks != null && !Array.isArray(spec.tasks)) errors.push(`${id || `agents[${idx}]`}.tasks deve ser array`);
+  }
+  if ((mode === 'competitive' || mode === 'cooperative') && agentPlan.agents.length < 2) {
+    errors.push(`${mode} exige pelo menos 2 agentes`);
+  }
+  return errors;
 }
 
 function loadRuntimeVerificationArtifacts(projectRoot, runState) {
@@ -902,6 +1015,25 @@ function countVerificationEvidenceRefs(runState, verificationArtifacts) {
     }, 0);
   }
   return 0;
+}
+
+function detectOrphanWorktrees(projectRoot, runId) {
+  const workspacesDir = path.join(projectRoot, '.oxe', 'workspaces');
+  if (!fs.existsSync(workspacesDir)) return [];
+  const active = new Set();
+  const mergeReport = readJsonIfExists(path.join(projectRoot, '.oxe', 'runs', runId, 'workspace-merge-report.json'));
+  for (const record of (mergeReport && Array.isArray(mergeReport.records) ? mergeReport.records : [])) {
+    if (record && record.workspace_id) active.add(String(record.workspace_id));
+  }
+  return fs.readdirSync(workspacesDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((name) => !active.has(name))
+    .map((name) => ({
+      workspace_id: name,
+      path: path.join(workspacesDir, name),
+      next_action: 'inspecione o worktree órfão; depois remova com git worktree remove --force se não houver diffs úteis',
+    }));
 }
 
 function buildRuntimeModeStatus(runState) {
@@ -1076,6 +1208,12 @@ function writeRecoverySummaryMarkdown(projectRoot, activeSession, runState, reco
     '',
     ...(Array.isArray(recoverySummary.orphan_work_items) && recoverySummary.orphan_work_items.length
       ? recoverySummary.orphan_work_items.map((item) => `- ${item}`)
+      : ['- Nenhum']),
+    '',
+    '## Worktrees órfãos',
+    '',
+    ...(Array.isArray(recoverySummary.orphan_worktrees) && recoverySummary.orphan_worktrees.length
+      ? recoverySummary.orphan_worktrees.map((item) => `- ${item.workspace_id} · ${item.next_action}`)
       : ['- Nenhum']),
     '',
     '## Tentativas incompletas',
@@ -1445,6 +1583,7 @@ function recoverRuntimeState(projectRoot, activeSession, options = {}) {
     recovered_at: new Date().toISOString(),
     journal_state: journal.scheduler_state,
     orphan_work_items: orphanWorkItems,
+    orphan_worktrees: detectOrphanWorktrees(projectRoot, current.run_id),
     pending_gates: readRuntimeGates(projectRoot, activeSession, { runId: current.run_id }).pending.map((gate) => gate.gate_id),
     consistency,
   };
@@ -2330,6 +2469,7 @@ module.exports = {
   readRuntimeGates,
   resolveRuntimeGate,
   createExecutionContext,
+  buildRuntimeExecutePreflight,
   runRuntimeExecute,
   runRuntimeVerify,
   projectRuntimeArtifacts,

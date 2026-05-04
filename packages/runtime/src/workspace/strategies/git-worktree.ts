@@ -12,16 +12,18 @@ export class GitWorktreeManager implements WorkspaceManager {
   constructor(private readonly projectRoot: string) {}
 
   async allocate(req: WorkspaceRequest): Promise<WorkspaceLease> {
-    const wsId = `ws-${req.work_item_id}-a${req.attempt_number}`;
-    const branch = `oxe/${req.work_item_id}-attempt${req.attempt_number}`;
+    const suffix = crypto.randomBytes(4).toString('hex');
+    const safeWorkItem = String(req.work_item_id).replace(/[^A-Za-z0-9._-]/g, '-');
+    const wsId = `ws-${safeWorkItem}-a${req.attempt_number}-${suffix}`;
+    const branch = `oxe/${safeWorkItem}-attempt${req.attempt_number}-${suffix}`;
     const worktreePath = path.join(this.projectRoot, '.oxe', 'workspaces', wsId);
 
-    const baseCommit = this.git(['rev-parse', 'HEAD']).trim();
+    const baseCommit = this.git(['rev-parse', 'HEAD'], undefined, 'git_worktree requires a git repository with at least one base commit').trim();
 
     fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
 
     // Create worktree on a new branch starting from HEAD
-    this.git(['worktree', 'add', worktreePath, '-b', branch]);
+    this.git(['worktree', 'add', worktreePath, '-b', branch], undefined, 'failed to create git_worktree workspace');
 
     const lease: WorkspaceLease = {
       workspace_id: wsId,
@@ -70,10 +72,16 @@ export class GitWorktreeManager implements WorkspaceManager {
     this.leases.delete(id);
   }
 
-  private git(args: string[], cwd?: string): string {
-    return execFileSync('git', args, {
-      cwd: cwd ?? this.projectRoot,
-      encoding: 'utf8',
-    });
+  private git(args: string[], cwd?: string, message?: string): string {
+    try {
+      return execFileSync('git', args, {
+        cwd: cwd ?? this.projectRoot,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`${message || 'git command failed'}: git ${args.join(' ')} (${detail})`);
+    }
   }
 }

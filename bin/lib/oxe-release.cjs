@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const semver = require('semver');
 
 const oxeManifest = require('./oxe-manifest.cjs');
 const runtimeSemantics = require('./oxe-runtime-semantics.cjs');
@@ -42,8 +43,10 @@ function releasePaths(projectRoot) {
     releaseDir,
     manifest: path.join(releaseDir, 'release-manifest.json'),
     smokeReport: path.join(releaseDir, 'runtime-smoke-report.json'),
+    runtimeRealReport: path.join(releaseDir, 'runtime-real-report.json'),
     recoveryFixtureReport: path.join(releaseDir, 'recovery-fixture-report.json'),
     multiAgentSoakReport: path.join(releaseDir, 'multi-agent-soak-report.json'),
+    multiAgentRealReport: path.join(releaseDir, 'multi-agent-real-report.json'),
   };
 }
 
@@ -277,12 +280,20 @@ function loadRuntimeSmokeReport(projectRoot) {
   });
 }
 
+function loadRuntimeRealReport(projectRoot) {
+  return readReportSummary(releasePaths(projectRoot).runtimeRealReport, null, (item) => Boolean(item && item.ok));
+}
+
 function loadRecoveryFixtureReport(projectRoot) {
   return readReportSummary(releasePaths(projectRoot).recoveryFixtureReport, null, (item) => Boolean(item && item.ok));
 }
 
 function loadMultiAgentSoakReport(projectRoot) {
   return readReportSummary(releasePaths(projectRoot).multiAgentSoakReport, null, (item) => Boolean(item && item.ok));
+}
+
+function loadMultiAgentRealReport(projectRoot) {
+  return readReportSummary(releasePaths(projectRoot).multiAgentRealReport, null, (item) => Boolean(item && item.ok));
 }
 
 function readVersionSnapshot(projectRoot) {
@@ -349,8 +360,10 @@ function buildReleaseManifest(projectRoot, options = {}) {
   } : syncWrappers(projectRoot, packageRoot);
   const semanticsAudit = runtimeSemantics.auditRuntimeTargets(projectRoot);
   const smoke = loadRuntimeSmokeReport(projectRoot);
+  const runtimeReal = loadRuntimeRealReport(projectRoot);
   const recovery = loadRecoveryFixtureReport(projectRoot);
   const multiAgent = loadMultiAgentSoakReport(projectRoot);
+  const multiAgentReal = loadMultiAgentRealReport(projectRoot);
   const manifest = {
     schema_version: 1,
     generated_at: new Date().toISOString(),
@@ -384,8 +397,10 @@ function buildReleaseManifest(projectRoot, options = {}) {
     },
     reports: {
       runtime_smoke: smoke,
+      runtime_real: runtimeReal,
       recovery_fixtures: recovery,
       multi_agent_soak: multiAgent,
+      multi_agent_real: multiAgentReal,
     },
   };
   if (options.writeManifest) {
@@ -449,11 +464,20 @@ function evaluateReleaseManifest(manifest, options = {}) {
   if (!manifest.reports.runtime_smoke.present || !manifest.reports.runtime_smoke.ok) {
     blockers.push('runtime smoke matrix incompleta ou com falhas');
   }
+  if (!manifest.reports.runtime_real.present || !manifest.reports.runtime_real.ok) {
+    blockers.push('runtime real report incompleto ou com falhas');
+  }
   if (!manifest.reports.recovery_fixtures.present || !manifest.reports.recovery_fixtures.ok) {
     blockers.push('recovery fixture report incompleto ou com falhas');
   }
   if (!manifest.reports.multi_agent_soak.present || !manifest.reports.multi_agent_soak.ok) {
     blockers.push('multi-agent soak report incompleto ou com falhas');
+  }
+  const releaseVersion = semver.valid(versions.root) ? versions.root : null;
+  if (releaseVersion && semver.gte(releaseVersion, '1.9.1')) {
+    if (!manifest.reports.multi_agent_real.present || !manifest.reports.multi_agent_real.ok) {
+      blockers.push('multi-agent real report incompleto ou com falhas');
+    }
   }
   if (versions.banner.mode === 'unknown') {
     warnings.push('banner.txt sem placeholder v{version} nem versão fixa detectável');
@@ -486,8 +510,10 @@ module.exports = {
   releasePaths,
   collectWrapperHashes,
   loadRuntimeSmokeReport,
+  loadRuntimeRealReport,
   loadRecoveryFixtureReport,
   loadMultiAgentSoakReport,
+  loadMultiAgentRealReport,
   buildReleaseManifest,
   inspectCanonicalSource,
   evaluateReleaseManifest,

@@ -18,6 +18,7 @@ export interface CoordinationOptions {
     runId: string;
     onEvent?: SchedulerContext['onEvent'];
     heartbeatTimeoutMs?: number;
+    applyWorkspaceMerges?: boolean;
 }
 export interface ArbitrationRecord {
     work_item_id: string;
@@ -32,6 +33,33 @@ export interface ArbitrationRecord {
 export interface MultiAgentOwnership {
     work_item_id: string;
     owner_agent_id: string;
+}
+export interface WorkspaceMergeRecord {
+    work_item_id: string;
+    agent_id: string;
+    workspace_id: string;
+    strategy: string;
+    isolation_level: 'shared' | 'isolated';
+    branch: string | null;
+    base_commit: string | null;
+    root_path: string | null;
+    mutation_scope: string[];
+    diff_paths: string[];
+    evidence_count: number;
+    verify_status: 'pass' | 'fail' | 'partial';
+    status: 'ready' | 'merged' | 'blocked' | 'skipped';
+    blocker: string | null;
+    recorded_at: string;
+}
+export interface WorkspaceMergeReport {
+    schema_version: 1;
+    run_id: string;
+    generated_at: string;
+    workspace_isolation: 'git_worktree';
+    merge_readiness: 'ready' | 'blocked' | 'partial';
+    arbitration_required: boolean;
+    blockers: string[];
+    records: WorkspaceMergeRecord[];
 }
 export interface MultiAgentStatusSnapshot {
     run_id: string;
@@ -52,6 +80,10 @@ export interface MultiAgentStatusSnapshot {
         timed_out: boolean;
         reassigned_task_ids: string[];
     }>;
+    worktrees: WorkspaceMergeRecord[];
+    workspace_merge: WorkspaceMergeReport;
+    merge_blockers: string[];
+    arbitration_required: boolean;
     orphan_reassignments: Array<{
         from_agent_id: string;
         to_agent_id: string;
@@ -78,6 +110,10 @@ export interface MultiAgentOperationalSummary {
     orphan_reassignment_count: number;
     timeout_count: number;
     participating_agents: string[];
+    workspace_isolation: 'git_worktree';
+    merge_readiness: WorkspaceMergeReport['merge_readiness'];
+    arbitration_required: boolean;
+    merge_blocker_count: number;
     health: 'healthy' | 'degraded';
     updated_at: string;
 }
@@ -94,6 +130,7 @@ export interface CoordinationResult {
     }>;
     handoffs?: CooperativeHandoff[];
     arbitration_results?: ArbitrationRecord[];
+    workspace_merge_report?: WorkspaceMergeReport;
     state?: MultiAgentStatusSnapshot;
     summary?: MultiAgentOperationalSummary;
 }
@@ -102,5 +139,7 @@ export declare class MultiAgentCoordinator {
 }
 export declare function multiAgentStatePath(projectRoot: string, runId: string): string;
 export declare function multiAgentSummaryPath(projectRoot: string, runId: string): string;
+export declare function workspaceMergeReportPath(projectRoot: string, runId: string): string;
 export declare function loadMultiAgentState(projectRoot: string, runId: string): MultiAgentStatusSnapshot | null;
 export declare function loadMultiAgentSummary(projectRoot: string, runId: string): MultiAgentOperationalSummary | null;
+export declare function loadWorkspaceMergeReport(projectRoot: string, runId: string): WorkspaceMergeReport | null;
