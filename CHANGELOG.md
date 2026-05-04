@@ -4,6 +4,37 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.9.1] — 2026-05-04
+
+### Multi-Agent Real
+
+Esta release endurece a coordenação multi-agent sobre workspaces reais, sem abrir novos comandos públicos.
+
+- multi-agent real passa a exigir workspaces isolados `git_worktree` para modos `parallel`, `competitive` e `cooperative`
+- `runtime execute` valida `plan-agents.json` antes de iniciar agentes e usa `GitWorktreeManager` por padrão no caminho multi-agent
+- novo artefato por run `.oxe/runs/<run_id>/workspace-merge-report.json` com worktrees, ownership, merge blockers e readiness
+- `runtime agents status --json`, `status --json` e recovery passam a expor merge readiness, blockers, arbitration e worktrees órfãos
+- novo `npm run test:multi-agent-real` gera `.oxe/release/multi-agent-real-report.json` usando repositório git temporário com worktrees reais
+- `doctor --release` passa a exigir `multi-agent-real-report.json` em versões `>=1.9.1`
+
+## [1.9.0] — 2026-05-04
+
+### Runtime Real Maturity
+
+Esta release eleva a maturidade prática do OXE com foco em prova determinística do ciclo real `spec -> plan -> execute -> verify -> status/doctor`, sem abrir novos comandos públicos.
+
+#### Runtime real
+
+- nova suíte `test:runtime-real` valida projetos representativos com executor mockado e sem chamada a LLM/API externa
+- `runtime execute` passa a bloquear antes da mutação quando confiança, rationality packs ou gates não estão prontos
+- `runtime verify` continua evidence-first e passa a ser validado dentro do fluxo real de execução
+
+#### Release proof
+
+- novo relatório obrigatório `.oxe/release/runtime-real-report.json`
+- `doctor --release` passa a bloquear publicação quando a prova de runtime real estiver ausente ou falha
+- novo `release:pack-check` valida o tarball npm em dry-run contra artefatos indevidos
+
 ## [1.8.3] — 2026-05-04
 
 ### Release readiness e higiene de publicação

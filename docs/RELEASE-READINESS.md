@@ -8,6 +8,7 @@ Este é o contrato mínimo para publicar uma versão estável do OXE sem drift e
 npm test
 npm run scan:assets
 npm run build:vscode-ext
+npm run release:pack-check
 npx oxe-cc doctor --release --write-manifest
 ```
 
@@ -21,6 +22,7 @@ O `doctor --release` deve bloquear a publicação quando encontrar:
 - wrappers dirty após `sync-runtime-metadata` e `sync:cursor`
 - drift semântico entre workflows canónicos e superfícies geradas
 - ausência ou falha dos relatórios obrigatórios da release
+- tarball npm contendo `.tgz`, `.vsix`, `.oxe/` ou sem arquivos obrigatórios do pacote
 
 ## Relatórios obrigatórios
 
@@ -28,8 +30,10 @@ Todos os artefatos abaixo devem existir em `.oxe/release/`:
 
 - `release-manifest.json`
 - `runtime-smoke-report.json`
+- `runtime-real-report.json`
 - `recovery-fixture-report.json`
 - `multi-agent-soak-report.json`
+- `multi-agent-real-report.json` para versões `>=1.9.1`
 
 ## Defaults estáveis desta publicação
 
@@ -44,7 +48,8 @@ O pipeline de CI e o pipeline de release devem rodar o mesmo gate:
 
 1. `npm test`
 2. `npm run scan:assets`
-3. `npm run release:doctor`
+3. `npm run release:pack-check`
+4. `npm run release:doctor`
 
 Se qualquer etapa falhar, a release não está pronta.
 

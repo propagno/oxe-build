@@ -6,8 +6,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.MultiAgentCoordinator = void 0;
 exports.multiAgentStatePath = multiAgentStatePath;
 exports.multiAgentSummaryPath = multiAgentSummaryPath;
+exports.workspaceMergeReportPath = workspaceMergeReportPath;
 exports.loadMultiAgentState = loadMultiAgentState;
 exports.loadMultiAgentSummary = loadMultiAgentSummary;
+exports.loadWorkspaceMergeReport = loadWorkspaceMergeReport;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const bus_1 = require("../events/bus");
@@ -19,11 +21,12 @@ function ensureRunDir(projectRoot, runId) {
     fs_1.default.mkdirSync(dir, { recursive: true });
     return dir;
 }
-function persistMultiAgentArtifacts(projectRoot, runId, state, handoffs = [], arbitrationResults = []) {
+function persistMultiAgentArtifacts(projectRoot, runId, state, handoffs = [], arbitrationResults = [], workspaceMergeReport = emptyWorkspaceMergeReport(runId)) {
     const runDir = ensureRunDir(projectRoot, runId);
     fs_1.default.writeFileSync(path_1.default.join(runDir, 'multi-agent-state.json'), JSON.stringify(state, null, 2), 'utf8');
     fs_1.default.writeFileSync(path_1.default.join(runDir, 'handoffs.json'), JSON.stringify(handoffs, null, 2), 'utf8');
     fs_1.default.writeFileSync(path_1.default.join(runDir, 'arbitration-results.json'), JSON.stringify(arbitrationResults, null, 2), 'utf8');
+    fs_1.default.writeFileSync(path_1.default.join(runDir, 'workspace-merge-report.json'), JSON.stringify(workspaceMergeReport, null, 2), 'utf8');
     const summary = {
         run_id: state.run_id,
         mode: state.mode,
@@ -38,6 +41,10 @@ function persistMultiAgentArtifacts(projectRoot, runId, state, handoffs = [], ar
         orphan_reassignment_count: state.orphan_reassignments.length,
         timeout_count: state.timed_out_agents.length,
         participating_agents: state.agent_results.map((entry) => entry.agent_id),
+        workspace_isolation: 'git_worktree',
+        merge_readiness: workspaceMergeReport.merge_readiness,
+        arbitration_required: workspaceMergeReport.arbitration_required,
+        merge_blocker_count: workspaceMergeReport.blockers.length,
         health: state.timed_out_agents.length > 0 || state.failed.length > 0 ? 'degraded' : 'healthy',
         updated_at: state.updated_at,
     };
@@ -62,7 +69,7 @@ function buildOwnership(agents, partitions) {
     }
     return ownership;
 }
-function makeState(mode, runId, agents, partitions, agentResults, completed, failed, blocked, orphanReassignments, timedOutAgents) {
+function makeState(mode, runId, agents, partitions, agentResults, completed, failed, blocked, orphanReassignments, timedOutAgents, workspaceMergeReport = emptyWorkspaceMergeReport(runId)) {
     return {
         run_id: runId,
         mode,
@@ -85,13 +92,132 @@ function makeState(mode, runId, agents, partitions, agentResults, completed, fai
                 reassigned_task_ids: result?.reassigned_task_ids ?? [],
             };
         }),
+        worktrees: workspaceMergeReport.records,
+        workspace_merge: workspaceMergeReport,
+        merge_blockers: workspaceMergeReport.blockers,
+        arbitration_required: workspaceMergeReport.arbitration_required,
         orphan_reassignments: orphanReassignments,
         timed_out_agents: timedOutAgents,
         updated_at: new Date().toISOString(),
     };
 }
+function emptyWorkspaceMergeReport(runId) {
+    return {
+        schema_version: 1,
+        run_id: runId,
+        generated_at: new Date().toISOString(),
+        workspace_isolation: 'git_worktree',
+        merge_readiness: 'ready',
+        arbitration_required: false,
+        blockers: [],
+        records: [],
+    };
+}
+function ensureGitWorktreeLease(agent, lease) {
+    if (lease.isolation_level !== 'isolated' || lease.strategy !== 'git_worktree') {
+        throw new Error(`Multi-agent real requires git_worktree isolated workspace. Agent ${agent.id} received ${lease.strategy}/${lease.isolation_level}.`);
+    }
+}
+function mutationScopeOf(node) {
+    return Array.isArray(node?.mutation_scope) ? node.mutation_scope.map(String).filter(Boolean) : [];
+}
+function createMergeRecord(agent, node, lease, result) {
+    const evidenceCount = Array.isArray(result?.evidence) ? result.evidence.length : 0;
+    return {
+        work_item_id: node.id,
+        agent_id: agent.id,
+        workspace_id: lease.workspace_id,
+        strategy: lease.strategy,
+        isolation_level: lease.isolation_level,
+        branch: lease.branch ?? null,
+        base_commit: lease.base_commit ?? null,
+        root_path: lease.root_path ?? null,
+        mutation_scope: mutationScopeOf(node),
+        diff_paths: mutationScopeOf(node),
+        evidence_count: evidenceCount,
+        verify_status: result ? (result.success ? 'pass' : 'fail') : 'partial',
+        status: result ? (result.success ? 'ready' : 'blocked') : 'ready',
+        blocker: result && !result.success ? `verify_failed:${result.failure_class}` : null,
+        recorded_at: new Date().toISOString(),
+    };
+}
+function buildWorkspaceMergeReport(runId, records, extraBlockers = [], arbitrationRequired = false) {
+    const blockers = [
+        ...extraBlockers,
+        ...records.filter((record) => record.status === 'blocked' && record.blocker).map((record) => `${record.work_item_id}:${record.blocker}`),
+    ];
+    return {
+        schema_version: 1,
+        run_id: runId,
+        generated_at: new Date().toISOString(),
+        workspace_isolation: 'git_worktree',
+        merge_readiness: blockers.length > 0 ? 'blocked' : records.some((record) => record.status === 'ready') ? 'partial' : 'ready',
+        arbitration_required: arbitrationRequired,
+        blockers,
+        records,
+    };
+}
+function detectMutationConflicts(graph, agents, partitions) {
+    const owners = new Map();
+    const conflicts = [];
+    for (let idx = 0; idx < agents.length; idx += 1) {
+        for (const nodeId of partitions[idx] ?? []) {
+            const node = graph.nodes.get(nodeId);
+            for (const scope of mutationScopeOf(node)) {
+                const previous = owners.get(scope);
+                if (previous && previous !== agents[idx].id) {
+                    conflicts.push(`mutation_scope_overlap:${scope}:${previous}:${agents[idx].id}`);
+                }
+                else {
+                    owners.set(scope, agents[idx].id);
+                }
+            }
+        }
+    }
+    return conflicts;
+}
+function applyWorkspaceRecord(projectRoot, record) {
+    if (!record.root_path || record.status !== 'ready')
+        return record;
+    for (const relativePath of record.mutation_scope) {
+        const source = path_1.default.join(record.root_path, relativePath);
+        const target = path_1.default.join(projectRoot, relativePath);
+        if (!fs_1.default.existsSync(source) || fs_1.default.statSync(source).isDirectory()) {
+            return { ...record, status: 'blocked', blocker: `missing_output:${relativePath}` };
+        }
+        fs_1.default.mkdirSync(path_1.default.dirname(target), { recursive: true });
+        fs_1.default.copyFileSync(source, target);
+    }
+    return { ...record, status: 'merged', blocker: null };
+}
+function createTrackingWorkspaceManager(base, agent, graph, records) {
+    const leases = new Map();
+    return {
+        isolation_level: base.isolation_level,
+        allocate: async (req) => {
+            const lease = await base.allocate(req);
+            ensureGitWorktreeLease(agent, lease);
+            leases.set(lease.workspace_id, lease);
+            const node = graph.nodes.get(req.work_item_id);
+            if (node)
+                records.push(createMergeRecord(agent, node, lease));
+            return lease;
+        },
+        snapshot: (id) => base.snapshot(id),
+        reset: (id, snapRef) => base.reset(id, snapRef),
+        dispose: async () => {
+            // Scheduler calls dispose before the coordinator can reconcile diffs.
+            // Defer real cleanup until the merge report has been produced.
+        },
+        disposeDeferred: async () => {
+            await Promise.all([...leases.keys()].map((id) => base.dispose(id).catch(() => { })));
+            leases.clear();
+        },
+    };
+}
 async function runGraphForAgent(graph, nodeIds, agent, idx, opts, heartbeatTimeoutMs) {
     const subGraph = subGraphFor(graph, nodeIds);
+    const workspaceRecords = [];
     if (subGraph.nodes.size === 0) {
         return {
             agent_id: agent.id,
@@ -100,14 +226,17 @@ async function runGraphForAgent(graph, nodeIds, agent, idx, opts, heartbeatTimeo
             timed_out: false,
             assigned_task_ids: nodeIds,
             reassigned_task_ids: [],
+            workspace_records: workspaceRecords,
+            cleanup: async () => { },
         };
     }
+    const trackingWorkspaceManager = createTrackingWorkspaceManager(agent.workspaceManager, agent, graph, workspaceRecords);
     const ctx = {
         projectRoot: opts.projectRoot,
         sessionId: opts.sessionId,
         runId: `${opts.runId}-agent${idx}`,
         executor: agent.executor,
-        workspaceManager: agent.workspaceManager,
+        workspaceManager: trackingWorkspaceManager,
         onEvent: opts.onEvent,
     };
     const scheduler = new scheduler_1.Scheduler();
@@ -121,6 +250,8 @@ async function runGraphForAgent(graph, nodeIds, agent, idx, opts, heartbeatTimeo
             timed_out: false,
             assigned_task_ids: nodeIds,
             reassigned_task_ids: [],
+            workspace_records: workspaceRecords,
+            cleanup: () => trackingWorkspaceManager.disposeDeferred(),
         };
     }
     let timer = null;
@@ -140,6 +271,8 @@ async function runGraphForAgent(graph, nodeIds, agent, idx, opts, heartbeatTimeo
             timed_out: true,
             assigned_task_ids: nodeIds,
             reassigned_task_ids: [],
+            workspace_records: workspaceRecords,
+            cleanup: () => trackingWorkspaceManager.disposeDeferred(),
         };
     }
     const result = raced.result;
@@ -150,6 +283,8 @@ async function runGraphForAgent(graph, nodeIds, agent, idx, opts, heartbeatTimeo
         timed_out: false,
         assigned_task_ids: nodeIds,
         reassigned_task_ids: [],
+        workspace_records: workspaceRecords,
+        cleanup: () => trackingWorkspaceManager.disposeDeferred(),
     };
 }
 // ─── Parallel mode ───────────────────────────────────────────────────────────
@@ -163,6 +298,30 @@ async function runParallel(graph, opts) {
         allIds.forEach((id, index) => {
             partitions[index % agents.length].push(id);
         });
+    }
+    const mutationConflicts = detectMutationConflicts(graph, agents, partitions);
+    if (mutationConflicts.length > 0) {
+        const blocked = mutationConflicts;
+        const workspaceMergeReport = buildWorkspaceMergeReport(runId, [], blocked);
+        const state = makeState('parallel', runId, agents, partitions, [], [], [], blocked, [], [], workspaceMergeReport);
+        persistMultiAgentArtifacts(projectRoot, runId, state, [], [], workspaceMergeReport);
+        (0, bus_1.appendEvent)(projectRoot, sessionId, {
+            type: 'WorkItemBlocked',
+            run_id: runId,
+            payload: { mode: 'parallel', blockers: blocked },
+        });
+        return {
+            mode: 'parallel',
+            run_id: runId,
+            completed: [],
+            failed: [],
+            blocked,
+            agent_results: [],
+            arbitration_results: [],
+            workspace_merge_report: workspaceMergeReport,
+            state,
+            summary: loadMultiAgentSummary(projectRoot, runId) || undefined,
+        };
     }
     const registry = new agent_registry_1.AgentRegistry(heartbeatTimeoutMs == null ? 30000 : heartbeatTimeoutMs);
     agents.forEach((agent, idx) => {
@@ -201,7 +360,13 @@ async function runParallel(graph, opts) {
         const rerun = await runGraphForAgent(graph, timedOut.assigned_task_ids, agents[fallbackIdx], fallbackIdx, opts, null);
         fallback.completed.push(...rerun.completed);
         fallback.failed.push(...rerun.failed);
+        fallback.workspace_records.push(...rerun.workspace_records);
         fallback.reassigned_task_ids.push(...timedOut.assigned_task_ids);
+        const previousCleanup = fallback.cleanup;
+        fallback.cleanup = async () => {
+            await previousCleanup?.();
+            await rerun.cleanup?.();
+        };
         partitions[fallbackIdx] = [...partitions[fallbackIdx], ...timedOut.assigned_task_ids];
         partitions[timeoutIdx] = [];
         orphanReassignments.push({
@@ -212,8 +377,14 @@ async function runParallel(graph, opts) {
     }
     const completed = Array.from(new Set(agentResults.flatMap((result) => result.completed)));
     const failed = Array.from(new Set(agentResults.flatMap((result) => result.failed)));
-    const state = makeState('parallel', runId, agents, partitions, agentResults, completed, failed, blocked, orphanReassignments, timedOutAgents);
-    persistMultiAgentArtifacts(projectRoot, runId, state);
+    const rawRecords = agentResults.flatMap((result) => result.workspace_records || []);
+    const mergedRecords = opts.applyWorkspaceMerges
+        ? rawRecords.map((record) => applyWorkspaceRecord(projectRoot, record))
+        : rawRecords;
+    await Promise.all(agentResults.map((result) => result.cleanup?.().catch(() => { })));
+    const workspaceMergeReport = buildWorkspaceMergeReport(runId, mergedRecords, blocked);
+    const state = makeState('parallel', runId, agents, partitions, agentResults, completed, failed, blocked, orphanReassignments, timedOutAgents, workspaceMergeReport);
+    persistMultiAgentArtifacts(projectRoot, runId, state, [], [], workspaceMergeReport);
     (0, bus_1.appendEvent)(projectRoot, sessionId, {
         type: 'RunCompleted',
         run_id: runId,
@@ -227,6 +398,7 @@ async function runParallel(graph, opts) {
         blocked,
         agent_results: agentResults,
         arbitration_results: [],
+        workspace_merge_report: workspaceMergeReport,
         state,
         summary: loadMultiAgentSummary(projectRoot, runId) || undefined,
     };
@@ -248,10 +420,11 @@ async function runCompetitive(graph, opts) {
     const failed = [];
     const blocked = [];
     const arbitrationResults = [];
+    const workspaceRecords = [];
     for (const wave of graph.waves) {
         for (const nodeId of wave.node_ids) {
             const node = graph.nodes.get(nodeId);
-            const result = await competeTwoAgents(nodeId, node, agentA, agentB, opts, arbitrationResults);
+            const result = await competeTwoAgents(nodeId, node, agentA, agentB, opts, arbitrationResults, workspaceRecords);
             if (result.success)
                 completed.push(nodeId);
             else
@@ -263,11 +436,12 @@ async function runCompetitive(graph, opts) {
             break;
     }
     const partitions = [Array.from(graph.nodes.keys()), Array.from(graph.nodes.keys())];
+    const workspaceMergeReport = buildWorkspaceMergeReport(runId, workspaceRecords, blocked, true);
     const state = makeState('competitive', runId, opts.agents, partitions, [
         { agent_id: agentA.id, completed, failed, timed_out: false, reassigned_task_ids: [] },
         { agent_id: agentB.id, completed: [], failed: [], timed_out: false, reassigned_task_ids: [] },
-    ], completed, failed, blocked, [], []);
-    persistMultiAgentArtifacts(projectRoot, runId, state, [], arbitrationResults);
+    ], completed, failed, blocked, [], [], workspaceMergeReport);
+    persistMultiAgentArtifacts(projectRoot, runId, state, [], arbitrationResults, workspaceMergeReport);
     (0, bus_1.appendEvent)(projectRoot, sessionId, {
         type: 'RunCompleted',
         run_id: runId,
@@ -284,18 +458,21 @@ async function runCompetitive(graph, opts) {
             { agent_id: agentB.id, completed: [], failed: [] },
         ],
         arbitration_results: arbitrationResults,
+        workspace_merge_report: workspaceMergeReport,
         state,
         summary: loadMultiAgentSummary(projectRoot, runId) || undefined,
     };
 }
-async function competeTwoAgents(nodeId, node, agentA, agentB, opts, arbitrationResults) {
+async function competeTwoAgents(nodeId, node, agentA, agentB, opts, arbitrationResults, workspaceRecords) {
     const { projectRoot, sessionId, runId } = opts;
     const allocA = await agentA.workspaceManager.allocate({
         work_item_id: nodeId, attempt_number: 1, strategy: node.workspace_strategy, mutation_scope: node.mutation_scope,
     });
+    ensureGitWorktreeLease(agentA, allocA);
     const allocB = await agentB.workspaceManager.allocate({
         work_item_id: nodeId, attempt_number: 1, strategy: node.workspace_strategy, mutation_scope: node.mutation_scope,
     });
+    ensureGitWorktreeLease(agentB, allocB);
     (0, bus_1.appendEvent)(projectRoot, sessionId, {
         type: 'AttemptStarted',
         run_id: runId,
@@ -310,12 +487,23 @@ async function competeTwoAgents(nodeId, node, agentA, agentB, opts, arbitrationR
             success: false, failure_class: 'env', evidence: [], output: String(error),
         })),
     ]);
+    const candidates = [
+        { agent: agentA, alloc: allocA, result: resultA },
+        { agent: agentB, alloc: allocB, result: resultB },
+    ].sort((left, right) => {
+        const leftScore = (left.result.success ? 10000 : 0) + left.result.evidence.length * 100 - String(left.result.output || '').length;
+        const rightScore = (right.result.success ? 10000 : 0) + right.result.evidence.length * 100 - String(right.result.output || '').length;
+        return rightScore - leftScore;
+    });
+    const winnerCandidate = candidates[0];
+    const winner = winnerCandidate.result;
+    const winnerAgentId = winnerCandidate.agent.id;
+    const winnerRecord = createMergeRecord(winnerCandidate.agent, node, winnerCandidate.alloc, winner);
+    workspaceRecords.push(opts.applyWorkspaceMerges ? applyWorkspaceRecord(projectRoot, winnerRecord) : winnerRecord);
     await Promise.all([
         agentA.workspaceManager.dispose(allocA.workspace_id).catch(() => { }),
         agentB.workspaceManager.dispose(allocB.workspace_id).catch(() => { }),
     ]);
-    const winner = resultA.success ? resultA : resultB.success ? resultB : resultA;
-    const winnerAgentId = resultA.success ? agentA.id : resultB.success ? agentB.id : agentA.id;
     arbitrationResults.push({
         work_item_id: nodeId,
         mode: 'competitive',
@@ -343,6 +531,7 @@ async function runCooperative(graph, opts) {
     const [planner, executor] = opts.agents;
     const { projectRoot, sessionId, runId } = opts;
     const handoffs = [];
+    const workspaceRecords = [];
     (0, bus_1.appendEvent)(projectRoot, sessionId, {
         type: 'RunStarted',
         run_id: runId,
@@ -360,6 +549,7 @@ async function runCooperative(graph, opts) {
                 strategy: node.workspace_strategy,
                 mutation_scope: node.mutation_scope,
             });
+            ensureGitWorktreeLease(planner, planAlloc);
             await planner.workspaceManager.dispose(planAlloc.workspace_id).catch(() => { });
             const handoff = (0, agent_roles_1.buildHandoff)({
                 from_agent_id: planner.id,
@@ -382,6 +572,7 @@ async function runCooperative(graph, opts) {
                 strategy: node.workspace_strategy,
                 mutation_scope: node.mutation_scope,
             });
+            ensureGitWorktreeLease(executor, execAlloc);
             let result;
             try {
                 result = await executor.executor.execute(node, execAlloc, runId, 1);
@@ -389,6 +580,8 @@ async function runCooperative(graph, opts) {
             catch (error) {
                 result = { success: false, failure_class: 'env', evidence: [], output: String(error) };
             }
+            const mergeRecord = createMergeRecord(executor, node, execAlloc, result);
+            workspaceRecords.push(opts.applyWorkspaceMerges ? applyWorkspaceRecord(projectRoot, mergeRecord) : mergeRecord);
             await executor.workspaceManager.dispose(execAlloc.workspace_id).catch(() => { });
             if (result.success) {
                 completed.push(nodeId);
@@ -404,11 +597,12 @@ async function runCooperative(graph, opts) {
             break;
     }
     const partitions = [Array.from(graph.nodes.keys()), Array.from(graph.nodes.keys())];
+    const workspaceMergeReport = buildWorkspaceMergeReport(runId, workspaceRecords, blocked);
     const state = makeState('cooperative', runId, opts.agents, partitions, [
         { agent_id: planner.id, completed: [], failed: [], timed_out: false, reassigned_task_ids: [] },
         { agent_id: executor.id, completed, failed, timed_out: false, reassigned_task_ids: [] },
-    ], completed, failed, blocked, [], []);
-    persistMultiAgentArtifacts(projectRoot, runId, state, handoffs, []);
+    ], completed, failed, blocked, [], [], workspaceMergeReport);
+    persistMultiAgentArtifacts(projectRoot, runId, state, handoffs, [], workspaceMergeReport);
     (0, bus_1.appendEvent)(projectRoot, sessionId, {
         type: 'RunCompleted',
         run_id: runId,
@@ -426,6 +620,7 @@ async function runCooperative(graph, opts) {
         ],
         handoffs,
         arbitration_results: [],
+        workspace_merge_report: workspaceMergeReport,
         state,
         summary: loadMultiAgentSummary(projectRoot, runId) || undefined,
     };
@@ -449,6 +644,9 @@ function multiAgentStatePath(projectRoot, runId) {
 function multiAgentSummaryPath(projectRoot, runId) {
     return path_1.default.join(projectRoot, '.oxe', 'runs', runId, 'multi-agent-summary.json');
 }
+function workspaceMergeReportPath(projectRoot, runId) {
+    return path_1.default.join(projectRoot, '.oxe', 'runs', runId, 'workspace-merge-report.json');
+}
 function loadMultiAgentState(projectRoot, runId) {
     const statePath = multiAgentStatePath(projectRoot, runId);
     if (!fs_1.default.existsSync(statePath))
@@ -466,6 +664,17 @@ function loadMultiAgentSummary(projectRoot, runId) {
         return null;
     try {
         return JSON.parse(fs_1.default.readFileSync(summaryPath, 'utf8'));
+    }
+    catch {
+        return null;
+    }
+}
+function loadWorkspaceMergeReport(projectRoot, runId) {
+    const reportPath = workspaceMergeReportPath(projectRoot, runId);
+    if (!fs_1.default.existsSync(reportPath))
+        return null;
+    try {
+        return JSON.parse(fs_1.default.readFileSync(reportPath, 'utf8'));
     }
     catch {
         return null;

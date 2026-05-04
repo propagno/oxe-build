@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
-**Versão:** `1.8.3` · [package.json](package.json)
+**Versão:** `1.9.1` · [package.json](package.json)
 
 **Framework OXE — Orchestrated eXperience Engineering**
 
@@ -463,16 +463,19 @@ O pacote está pronto para uma publicação robusta quando estes sinais estivere
 - `npm run scan:assets`
 - `npm run build:vscode-ext`
 - `node bin/oxe-cc.js doctor --release --write-manifest`
+- `npm run release:pack-check`
 - `node bin/oxe-cc.js status --full`
 
 Artefatos obrigatórios desta fase:
 
 - `.oxe/release/release-manifest.json`
 - `.oxe/release/runtime-smoke-report.json`
+- `.oxe/release/runtime-real-report.json`
 - `.oxe/release/recovery-fixture-report.json`
 - `.oxe/release/multi-agent-soak-report.json`
+- `.oxe/release/multi-agent-real-report.json`
 
-Não há outro bloqueador funcional do plano runtime core para esta publicação. O que sobra depois dela é evolução de ergonomia e expansão de targets, não correção estrutural do contrato atual.
+Na linha `1.9.1`, `runtime-real-report.json` prova o ciclo real `compile -> execute mockado -> verify -> project -> status --json`, e `multi-agent-real-report.json` prova coordenação com `git_worktree`, ownership, arbitragem e merge readiness antes da publicação.
 
 ### `/oxe-retro` — loop de aprendizado
 

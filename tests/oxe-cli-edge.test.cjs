@@ -97,8 +97,10 @@ function seedPackageRepoFixture(dir) {
   fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n\n## [1.8.0] - 2026-04-29\n\n- Release readiness fixture.\n', 'utf8');
   fs.writeFileSync(path.join(dir, '.oxe', 'STATE.md'), '## Fase atual\n\n`initial`\n', 'utf8');
   fs.writeFileSync(path.join(dir, '.oxe', 'release', 'runtime-smoke-report.json'), JSON.stringify({ ok: true, results: [] }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, '.oxe', 'release', 'runtime-real-report.json'), JSON.stringify({ ok: true, results: [] }, null, 2), 'utf8');
   fs.writeFileSync(path.join(dir, '.oxe', 'release', 'recovery-fixture-report.json'), JSON.stringify({ ok: true, results: [] }, null, 2), 'utf8');
   fs.writeFileSync(path.join(dir, '.oxe', 'release', 'multi-agent-soak-report.json'), JSON.stringify({ ok: true, results: [] }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, '.oxe', 'release', 'multi-agent-real-report.json'), JSON.stringify({ ok: true, results: [] }, null, 2), 'utf8');
 }
 
 describe('oxe-cc CLI edge', () => {

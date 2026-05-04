@@ -2070,8 +2070,10 @@ function suggestNextStep(target, cfg = {}) {
       artifacts: [
         '.oxe/release/release-manifest.json',
         '.oxe/release/runtime-smoke-report.json',
+        '.oxe/release/runtime-real-report.json',
         '.oxe/release/recovery-fixture-report.json',
         '.oxe/release/multi-agent-soak-report.json',
+        '.oxe/release/multi-agent-real-report.json',
       ],
     };
   }
