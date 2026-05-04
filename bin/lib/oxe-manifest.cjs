@@ -53,13 +53,20 @@ function writeFileManifest(home, files, version) {
  * @param {Record<string, string>} prevManifest
  * @param {{ dryRun: boolean, force: boolean }} opts
  * @param {{ yellow: string, cyan: string, dim: string, reset: string }} colors
+ * @param {{ scopeRoots?: string[] }} [scope]
  * @returns {string[]} modified paths
  */
-function backupModifiedFromManifest(home, prevManifest, opts, colors) {
+function backupModifiedFromManifest(home, prevManifest, opts, colors, scope = {}) {
   const { yellow, cyan, dim, reset } = colors;
   if (!opts.force || opts.dryRun) return [];
+  const normalizedRoots = Array.isArray(scope.scopeRoots)
+    ? scope.scopeRoots.map((root) => path.resolve(root))
+    : [];
   const modified = [];
   for (const [absPath, oldHash] of Object.entries(prevManifest)) {
+    if (normalizedRoots.length > 0 && !normalizedRoots.some((root) => absPath === root || absPath.startsWith(`${root}${path.sep}`))) {
+      continue;
+    }
     if (!fs.existsSync(absPath)) continue;
     let now;
     try {

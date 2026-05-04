@@ -840,6 +840,18 @@ function codexIntegrationPaths() {
 }
 
 /**
+ * @param {string} target
+ */
+function codexWorkspacePaths(target) {
+  const root = path.resolve(target);
+  return {
+    root,
+    promptsDir: path.join(root, '.codex', 'prompts'),
+    skillsRoot: path.join(root, '.agents', 'skills'),
+  };
+}
+
+/**
  * @param {string} filePath
  */
 function readJsonFileSafe(filePath) {
@@ -1111,8 +1123,18 @@ function summarizeRecoveryState(target, activeSession, activeRun, verificationAr
 function summarizeEnterpriseRuntime(target, activeRun, activeSession, config) {
   const pendingGates = readExecutionGates(target, activeSession);
   const auditSummary = summarizeAuditTrail(target, activeRun && activeRun.run_id ? activeRun.run_id : null);
-  const runtimeMode = operational.buildRuntimeModeStatus(activeRun);
+  const runtimeModeBase = operational.buildRuntimeModeStatus(activeRun);
   const providerCatalog = operational.buildRuntimeProviderCatalog(target);
+  const enterprisePackageAvailable = Boolean(providerCatalog && providerCatalog.available);
+  const runtimeMode = enterprisePackageAvailable && runtimeModeBase.enterprise_available === false
+    ? {
+        ...runtimeModeBase,
+        enterprise_available: true,
+        reason: runtimeModeBase.reason === 'Nenhum ACTIVE-RUN encontrado para o escopo atual.'
+          ? 'Runtime enterprise disponível no pacote, mas ainda sem ACTIVE-RUN canónico neste escopo.'
+          : 'Runtime enterprise disponível no pacote; a run atual ainda não materializou artefatos canónicos.',
+      }
+    : runtimeModeBase;
   if (!activeRun || !activeRun.run_id) {
     return {
       runtimeMode,
@@ -1484,9 +1506,16 @@ function copilotIntegrationReport(target) {
  * @param {string} target
  */
 function codexIntegrationReport(target) {
-  const paths = codexIntegrationPaths();
-  const promptFiles = listOxeCodexPromptFiles(paths.promptsDir);
-  const skillDirs = listOxeSkillDirs(paths.skillsRoot);
+  const workspace = codexWorkspacePaths(target);
+  const globalPaths = codexIntegrationPaths();
+  const workspacePromptFiles = listOxeCodexPromptFiles(workspace.promptsDir);
+  const workspaceSkillDirs = listOxeSkillDirs(workspace.skillsRoot);
+  const globalPromptFiles = listOxeCodexPromptFiles(globalPaths.promptsDir);
+  const globalSkillDirs = listOxeSkillDirs(globalPaths.skillsRoot);
+  const workspaceDetected = workspacePromptFiles.length > 0 || workspaceSkillDirs.length > 0;
+  const globalDetected = globalPromptFiles.length > 0 || globalSkillDirs.length > 0;
+  const promptFiles = workspaceDetected ? workspacePromptFiles : globalPromptFiles;
+  const skillDirs = workspaceDetected ? workspaceSkillDirs : globalSkillDirs;
   const promptNames = promptFiles.map((filePath) => path.basename(filePath));
   const skillNames = skillDirs.map((dirPath) => path.basename(dirPath));
   const promptPathWarnings = [];
@@ -1496,11 +1525,15 @@ function codexIntegrationReport(target) {
 
   /** @type {string[]} */
   const warnings = [];
-  const detected = promptFiles.length > 0 || skillDirs.length > 0;
+  const detected = workspaceDetected || globalDetected;
+  const promptSource = workspaceDetected ? 'workspace' : globalDetected ? 'global' : 'missing';
   const commandsReady = promptNames.includes('oxe.md');
   const skillsReady = skillNames.includes('oxe');
+  if (!workspaceDetected && globalDetected) {
+    warnings.push('Codex OXE foi encontrado apenas no ambiente global do usuário; este projeto não tem integração local instalada.');
+  }
   if (detected && promptFiles.length === 0) {
-    warnings.push('Codex tem skills OXE instaladas, mas ~/.codex/prompts não contém prompts OXE; a barra / não listará /oxe.');
+    warnings.push('Codex tem skills OXE instaladas, mas o diretório de prompts ativo não contém prompts OXE; a barra / não listará /oxe.');
   }
   if (promptFiles.length > 0 && !commandsReady) {
     warnings.push('Codex prompts OXE existem, mas o entrypoint principal oxe.md está ausente.');
@@ -1525,11 +1558,28 @@ function codexIntegrationReport(target) {
     detected,
     commandsReady,
     skillsReady,
-    root: paths.root,
-    promptsDir: paths.promptsDir,
-    skillsRoot: paths.skillsRoot,
+    promptSource,
+    root: workspaceDetected ? workspace.root : globalPaths.root,
+    promptsDir: workspaceDetected ? workspace.promptsDir : globalPaths.promptsDir,
+    skillsRoot: workspaceDetected ? workspace.skillsRoot : globalPaths.skillsRoot,
     promptFiles,
     skillDirs,
+    workspace: {
+      root: workspace.root,
+      promptsDir: workspace.promptsDir,
+      skillsRoot: workspace.skillsRoot,
+      promptFiles: workspacePromptFiles,
+      skillDirs: workspaceSkillDirs,
+      detected: workspaceDetected,
+    },
+    global: {
+      root: globalPaths.root,
+      promptsDir: globalPaths.promptsDir,
+      skillsRoot: globalPaths.skillsRoot,
+      promptFiles: globalPromptFiles,
+      skillDirs: globalSkillDirs,
+      detected: globalDetected,
+    },
     warnings,
   };
 }
@@ -2023,6 +2073,15 @@ function suggestNextStep(target, cfg = {}) {
         '.oxe/release/recovery-fixture-report.json',
         '.oxe/release/multi-agent-soak-report.json',
       ],
+    };
+  }
+
+  if (!mapsComplete && !has(p.quick) && !has(p.spec) && !has(p.plan)) {
+    return {
+      step: 'oxe',
+      cursorCmd: '/oxe',
+      reason: 'Projeto recém-inicializado e sem SPEC/PLAN — use a entrada universal para começar o fluxo e escolher o primeiro scan.',
+      artifacts: ['.oxe/STATE.md', '.oxe/codebase/'],
     };
   }
 

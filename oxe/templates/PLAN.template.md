@@ -30,6 +30,8 @@ evidence_expectation: manifest | command | manual | mixed
 - **Ondas:** (número)
 - **Tarefas:** (número)
 - **Artefatos racionais:** `IMPLEMENTATION-PACK`, `REFERENCE-ANCHORS`, `FIXTURE-PACK`
+- **Público / outcome da spec:** …
+- **Padrão de validação dominante:** testes | smoke | manual guiado | mixed
 
 ## Autoavaliação do Plano
 
@@ -48,6 +50,7 @@ evidence_expectation: manifest | command | manual | mixed
 - **Alternativas descartadas:** (1–2 linhas)
 - **Condição para replanejar:** (critério objetivo)
 - **Bloqueadores de execução:** nenhum | listar gaps críticos
+- **Densidade operacional mínima confirmada:** paths | symbols | fixtures | anchors | checks
 
 <confidence_vector cycle="C-NN" generated_at="YYYY-MM-DDTHH:MM:SSZ">
   <dim name="requirements"   score="0.92" weight="25" note="completude dos requisitos" />
@@ -84,6 +87,14 @@ evidence_expectation: manifest | command | manual | mixed
 
 - (ex.: branch base, feature flags, migrations)
 
+## Contrato operacional da solução
+
+- **Write-set principal:** módulos/paths que concentram a mutação
+- **Modelo de conteúdo / dados a materializar:** …
+- **Interações ou fluxos obrigatórios:** …
+- **Persistência local/remota:** none | localStorage | API | outro
+- **Responsividade / acessibilidade obrigatória:** …
+
 ## Artefatos racionais de execução
 
 - **IMPLEMENTATION-PACK:** `ready | not_ready | not_applicable`
@@ -118,18 +129,21 @@ evidence_expectation: manifest | command | manual | mixed
 ### T1 — (título)
 
 - **Arquivos alvo:** `src/exato.ts`
+- **Símbolos alvo:** `função`, `classe`, `componente`, `builder`, `schema`
 - **Depende de:** —
 - **Onda:** 1
 - **Complexidade:** S
 - **Risco:** low | medium | high | critical
 - **Evidência de entrada:** SPEC A1 | DISCUSS D-01 | RESEARCH RA-01 | codebase path
 - **Checkpoint:** nenhum | CHK-01
+- **Estado/fluxo coberto:** loading | empty | success | error | interação X
 - **Verificar:**
   - Comando: `…`
   - Manual: (opcional) …
 - **Implementar:** o mínimo para fazer a verificação acima passar.
 - **Aceite vinculado:** A1, A2 (IDs da tabela de critérios em SPEC.md)
 - **Contrato racional:** ver `IMPLEMENTATION-PACK.json` (task `T1`)
+- **Fixture/anchor obrigatório:** FX-01 | RA-01 | not_applicable
 - **Rollback/contensão:** obrigatório para risco high/critical; `not_applicable` se low/medium.
 
 ---

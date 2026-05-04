@@ -6,15 +6,15 @@ const built_in_tools_1 = require("./built-in-tools");
 const action_tool_map_1 = require("./action-tool-map");
 const node_prompt_builder_1 = require("./node-prompt-builder");
 const DEFAULT_SYSTEM_PROMPT = 'You are a precise software engineering agent. Use the tools provided to complete the task. ' +
-    'When the task is done, summarize what was accomplished in your final message without calling any tools.';
+    'When all actions are done, call finish_task with a summary of what was accomplished.';
 class LlmTaskExecutor {
     constructor(provider, registry, onProgress) {
         this.provider = provider;
         this.registry = registry;
         this.onProgress = onProgress;
     }
-    async execute(node, lease, runId, attempt) {
-        const prompt = (0, node_prompt_builder_1.buildNodePrompt)(node, lease, runId, attempt);
+    async execute(node, lease, runId, attempt, options = {}) {
+        const prompt = (0, node_prompt_builder_1.buildNodePrompt)(node, lease, runId, attempt, { previousError: options.previousError ?? null });
         const tools = (0, action_tool_map_1.selectToolsForActions)(node.actions);
         const cwd = lease.root_path;
         const maxTurns = this.provider.maxTurns ?? 10;
@@ -25,7 +25,10 @@ class LlmTaskExecutor {
         ];
         let finalOutput = '';
         const evidencePaths = [];
-        for (let turn = 0; turn < maxTurns; turn++) {
+        let completedByFinishTask = false;
+        let finishTaskSummary = '';
+        let turn = 0;
+        for (; turn < maxTurns; turn++) {
             this.emit({ type: 'turn_start', nodeId: node.id, attempt, detail: { turn } });
             let response;
             try {
@@ -60,12 +63,45 @@ class LlmTaskExecutor {
                 serialResults.push(await this.invokeToolCall(tc, cwd, node, evidencePaths));
             }
             messages.push(...concurrentResults, ...serialResults);
+            // Detect finish_task call — authoritative completion signal
+            const allResults = [...concurrentResults, ...serialResults];
+            const finishResult = allResults.find((r) => r.name === 'finish_task');
+            if (finishResult) {
+                try {
+                    const parsed = JSON.parse(finishResult.content);
+                    if (parsed.__finish_task__) {
+                        completedByFinishTask = true;
+                        finishTaskSummary = parsed.summary || '';
+                        if (Array.isArray(parsed.evidence_paths)) {
+                            evidencePaths.push(...parsed.evidence_paths.filter((p) => typeof p === 'string'));
+                        }
+                    }
+                }
+                catch { /* ignore parse errors */ }
+                if (completedByFinishTask)
+                    break;
+            }
+        }
+        const completedBy = completedByFinishTask
+            ? 'finish_task'
+            : turn < maxTurns
+                ? 'no_tool_call'
+                : 'turn_limit_exhausted';
+        if (completedBy === 'turn_limit_exhausted') {
+            return {
+                success: false,
+                failure_class: 'llm',
+                evidence: evidencePaths,
+                output: finalOutput || `Task exhausted ${maxTurns} turns without calling finish_task`,
+                completed_by: completedBy,
+            };
         }
         return {
             success: true,
             failure_class: null,
             evidence: evidencePaths,
-            output: finalOutput,
+            output: completedByFinishTask ? (finishTaskSummary || finalOutput) : finalOutput,
+            completed_by: completedBy,
         };
     }
     async invokeToolCall(tc, cwd, node, evidencePaths) {

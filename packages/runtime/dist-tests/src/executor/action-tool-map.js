@@ -37,5 +37,9 @@ function selectToolsForActions(actions) {
             }
         }
     }
+    // finish_task is always available so the LLM can signal authoritative completion
+    if (!seen.has('finish_task') && built_in_tools_1.BUILT_IN_TOOLS.finish_task) {
+        result.push(built_in_tools_1.BUILT_IN_TOOLS.finish_task.schema);
+    }
     return result;
 }

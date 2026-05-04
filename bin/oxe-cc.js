@@ -4643,15 +4643,32 @@ async function runRuntime(opts) {
       console.log(`  ${c ? green : ''}Graph:${c ? reset : ''} ${compiled.graph.metadata.node_count} nó(s) · ${compiled.graph.metadata.wave_count} onda(s)`);
       console.log(`  ${c ? green : ''}Checks:${c ? reset : ''} ${Array.isArray(suite.suite.checks) ? suite.suite.checks.length : 0}`);
       if (compiled.validationErrors.length) {
-        // Split: cycle/dependency errors are blocking; mutation-scope overlaps are info-only in single-agent
-        const blocking = compiled.validationErrors.filter(e => !e.includes('mutate the same paths in parallel'));
+        // Bucket 1: static-analysis hints (HINT(...))
+        const hints = compiled.validationErrors.filter(e => e.startsWith('HINT('));
+        // Bucket 2: mutation-scope overlaps (info-only in single-agent)
         const mutationWarns = compiled.validationErrors.filter(e => e.includes('mutate the same paths in parallel'));
+        // Bucket 3: structural errors (cycles, missing deps)
+        const blocking = compiled.validationErrors.filter(e =>
+          !e.startsWith('HINT(') && !e.includes('mutate the same paths in parallel')
+        );
         if (blocking.length) {
           console.log(`  ${yellow}Validation (erros):${reset} ${blocking.join(' | ')}`);
         }
         if (mutationWarns.length) {
           console.log(`  ${c ? dim : ''}Info (single-agent — tarefas na mesma onda são sequenciais, sobreposição de arquivos não bloqueia):${c ? reset : ''}`);
           mutationWarns.forEach(w => console.log(`  ${c ? dim : ''}  · ${w}${c ? reset : ''}`));
+        }
+        if (hints.length) {
+          console.log(`  ${yellow}Dicas de spec/plan (detectadas em tempo de compilação):${reset}`);
+          hints.forEach(h => {
+            // Format: HINT(type): message
+            const match = h.match(/^HINT\(([^)]+)\):\s*(.*)/s);
+            if (match) {
+              console.log(`  ${yellow}⚑${reset} [${match[1]}] ${match[2]}`);
+            } else {
+              console.log(`  ${yellow}⚑${reset} ${h}`);
+            }
+          });
         }
       }
       console.log(`  ${c ? green : ''}Arquivo:${c ? reset : ''} ${path.join(p.runsDir, `${compiled.run.run_id}.json`)}`);

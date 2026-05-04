@@ -76,7 +76,7 @@ export class EvidenceStore {
 
     const existing = this.readIndex(run_id, work_item_id, attempt_number);
     const seq = existing.filter((e) => e.type === type).length + 1;
-    const filename = `${type}-${seq}.${ext}`;
+    const filename = seq === 1 ? `${type}.${ext}` : `${type}-${seq}.${ext}`;
     const filePath = path.join(dir, filename);
 
     fs.writeFileSync(filePath, buf);

@@ -53,6 +53,11 @@ Regra de readiness:
 - `REFERENCE-ANCHORS` não pode ter âncora crítica em `missing|stale|conflicting`;
 - `FIXTURE-PACK` é obrigatório para tarefas mutáveis com parser/layout/integração/transformação/fila/migração/builder;
 - qualquer `critical_gap` aberto derruba a prontidão executável do plano.
+
+**Contrato adicional para app/UI estático:** quando a trilha for página HTML/CSS/JS, dashboard, microsite, app sem framework ou experiência educacional:
+- o `IMPLEMENTATION-PACK` deve fechar seções obrigatórias da interface, comportamento por interação, estado persistido e modelo de conteúdo;
+- o `REFERENCE-ANCHORS` deve apontar para snippets, predecessores ou contratos locais/materializados que reduzam improviso visual e estrutural;
+- o `FIXTURE-PACK` deve incluir ao menos exemplos de conteúdo, estados da interface e checks de responsividade/console limpo quando a UI for parte central do aceite.
 </execution_rational_artifacts>
 
 <plan_iteration_contract>
@@ -178,6 +183,13 @@ Depois do resumo e antes das tarefas, o `PLAN.md` deve conter também:
 **Princípio test-first:** escreva o `Verificar` antes de escrever o `Implementar`. A pergunta é: "Como saberei que está pronto?" — a resposta define o target; `Implementar` é o caminho mínimo até esse target.
 
 **Contrato racional por tarefa:** se a tarefa for mutável ou tecnicamente relevante, o `PLAN.md` sozinho não basta. O `IMPLEMENTATION-PACK` deve fechar o write-set, os symbols e os checks; o `REFERENCE-ANCHORS` deve materializar evidência externa; o `FIXTURE-PACK` deve reduzir improviso em parsing/integração/transformação.
+
+**Contrato racional de densidade operacional:** plano com tarefa mutável ainda vaga (`...`, "ajustar onde necessário", "melhorar interface", "organizar conteúdo") não sustenta `Confiança > 90%`. Para passar do gate, o plano precisa fechar:
+- arquivos alvo exatos ou padrão restrito;
+- symbols/estruturas esperadas;
+- sequência mínima de implementação;
+- verificação observável por tarefa;
+- fixture ou anchor quando o risco for de UI, integração, parsing, contrato ou transformação.
 
 **Projetos sem suíte de testes única (legado):** o bloco **Verificar** pode usar `Comando: —` e **Manual** com Grep, leitura de paths ou checklist — ver exemplos em **`oxe/workflows/references/legacy-brownfield.md`**. Todo critério **A*** da SPEC deve aparecer em **Aceite vinculado** de alguma tarefa ou como gap explícito.
 

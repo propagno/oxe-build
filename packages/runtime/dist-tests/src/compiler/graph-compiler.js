@@ -26,7 +26,7 @@ function compile(plan, spec, options = {}) {
             mutation_scope: task.files,
             actions: buildActions(task),
             verify: {
-                must_pass: task.verifyCommand ? ['tests'] : [],
+                must_pass: task.verifyCommand ? (task.aceite.length > 0 ? task.aceite : ['tests']) : [],
                 acceptance_refs: task.aceite,
                 command: task.verifyCommand,
             },

@@ -456,6 +456,61 @@ function reduceCanonicalRunState(projectRoot, activeSession, options = {}) {
   return serializeCanonicalState(reduceCanonicalRunStateLive(projectRoot, activeSession, options));
 }
 
+/**
+ * Static-analysis lints for common pitfalls detectable before execution.
+ * Returns hint strings to be appended to validationErrors (shown at compile time).
+ */
+function lintPlanForCommonPitfalls(parsedPlan, parsedSpec, projectRoot, rawSpecText = '') {
+  const hints = [];
+  const specText = (parsedSpec && parsedSpec.objective ? parsedSpec.objective : '') +
+    JSON.stringify(parsedSpec && parsedSpec.criteria ? parsedSpec.criteria : []) +
+    (rawSpecText || '');
+  const planTasks = parsedPlan && Array.isArray(parsedPlan.tasks) ? parsedPlan.tasks : [];
+
+  // ── Lint 1: HTML/JS SPA sem restrição de file:// ──────────────────────────
+  // Detects: spec mentions HTML/SPA + no files restriction, but no verify command
+  // checks for fetch() absence. Warns to add a fetch-detection verify.
+  const isHtmlApp = /html|spa|browser|page|frontend|estático|static|aplicação web|web app|web page|interface web|\.html/i.test(specText);
+  if (isHtmlApp) {
+    const hasFetchGuard = planTasks.some(t =>
+      t.verifyCommand && /fetch|XMLHttpRequest|file:\/\//i.test(t.verifyCommand)
+    );
+    const specMentionsServer = /servidor|server|http-server|localhost|npx serve|vite|webpack/i.test(specText);
+    const specMentionsFileProtocol = /file:\/\/|sem servidor|without server|no.server/i.test(specText);
+    if (!hasFetchGuard && !specMentionsServer && !specMentionsFileProtocol) {
+      hints.push(
+        'HINT(html-fetch): SPEC não declara se o app precisa de servidor HTTP. ' +
+        'Se abrir em file://, adicione à SPEC: "sem servidor HTTP" e um verify que detecte fetch(): ' +
+        '`node -e "if(require(\'fs\').readFileSync(\'app.js\',\'utf8\').includes(\'fetch(\'))throw new Error(\'fetch not allowed in file://\')"`'
+      );
+    }
+  }
+
+  // ── Lint 2: Verify commands que só verificam existência de função, não comportamento ──
+  const existenceOnlyVerify = planTasks.filter(t =>
+    t.verifyCommand &&
+    /s\.includes\(/.test(t.verifyCommand) &&
+    !/existsSync|readFileSync.*utf8|require\(/.test(t.verifyCommand)
+  );
+  if (existenceOnlyVerify.length > 2) {
+    hints.push(
+      `HINT(verify-depth): ${existenceOnlyVerify.length} tarefa(s) verificam apenas presença de string no código ` +
+      `(s.includes). Considere adicionar verificações de comportamento: executar o código, não só inspecioná-lo.`
+    );
+  }
+
+  // ── Lint 3: Tarefas sem verify command (T-level) ──────────────────────────
+  const noVerify = planTasks.filter(t => !t.verifyCommand && !t.done);
+  if (noVerify.length > 0) {
+    hints.push(
+      `HINT(no-verify): ${noVerify.length} tarefa(s) sem Comando de verificação: ${noVerify.map(t => t.id).join(', ')}. ` +
+      `Tarefas sem verify não serão testadas inline pelo scheduler.`
+    );
+  }
+
+  return hints;
+}
+
 function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options = {}) {
   const runtime = loadRuntimeModule();
   const parsers = loadSdkParsers();
@@ -474,6 +529,11 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
   const parsedPlan = parsers.parsePlan(planText);
   const graph = runtime.compile(parsedPlan, parsedSpec, options.compilerOptions || {});
   const validationErrors = typeof runtime.validateGraph === 'function' ? runtime.validateGraph(graph) : [];
+
+  // Static-analysis lints: detect common patterns that cause runtime failures
+  const lintHints = lintPlanForCommonPitfalls(parsedPlan, parsedSpec, projectRoot, specText);
+  if (lintHints.length) validationErrors.push(...lintHints);
+
   const compiledGraph = runtime.toSerializable(graph);
   const current = options.runState || readRunState(projectRoot, activeSession) || {};
   const runId = current.run_id || makeRunId();
