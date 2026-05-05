@@ -658,6 +658,8 @@ function oxePaths(target) {
     referenceAnchors: path.join(oxe, 'REFERENCE-ANCHORS.md'),
     fixturePackMd: path.join(oxe, 'FIXTURE-PACK.md'),
     fixturePackJson: path.join(oxe, 'FIXTURE-PACK.json'),
+    visualInputsMd: path.join(oxe, 'investigations', 'visual', 'VISUAL-INPUTS.md'),
+    visualInputsJson: path.join(oxe, 'investigations', 'visual', 'VISUAL-INPUTS.json'),
     quick: path.join(oxe, 'QUICK.md'),
     verify: path.join(oxe, 'VERIFY.md'),
     discuss: path.join(oxe, 'DISCUSS.md'),
@@ -700,6 +702,8 @@ function scopedOxePaths(target, activeSession) {
     referenceAnchors: path.join(sessionRoot, 'plan', 'REFERENCE-ANCHORS.md'),
     fixturePackMd: path.join(sessionRoot, 'plan', 'FIXTURE-PACK.md'),
     fixturePackJson: path.join(sessionRoot, 'plan', 'FIXTURE-PACK.json'),
+    visualInputsMd: path.join(sessionRoot, 'research', 'investigations', 'visual', 'VISUAL-INPUTS.md'),
+    visualInputsJson: path.join(sessionRoot, 'research', 'investigations', 'visual', 'VISUAL-INPUTS.json'),
     quick: path.join(sessionRoot, 'plan', 'QUICK.md'),
     verify: path.join(sessionRoot, 'verification', 'VERIFY.md'),
     summary: path.join(sessionRoot, 'verification', 'SUMMARY.md'),
@@ -741,6 +745,8 @@ function resolvedReadableOxePaths(target, activeSession) {
     referenceAnchors: preferScoped('referenceAnchors'),
     fixturePackMd: preferScoped('fixturePackMd'),
     fixturePackJson: preferScoped('fixturePackJson'),
+    visualInputsMd: preferScoped('visualInputsMd'),
+    visualInputsJson: preferScoped('visualInputsJson'),
     quick: preferScoped('quick'),
     verify: preferScoped('verify'),
     summary: preferScoped('summary'),
@@ -1317,7 +1323,7 @@ function listOxePromptFiles(dir) {
   if (!fs.existsSync(dir)) return [];
   return fs
     .readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && /^oxe-.*\.prompt\.md$/i.test(entry.name))
+    .filter((entry) => entry.isFile() && (entry.name === 'oxe.prompt.md' || /^oxe-.*\.prompt\.md$/i.test(entry.name)))
     .map((entry) => path.join(dir, entry.name))
     .sort();
 }
@@ -1440,7 +1446,7 @@ function copilotIntegrationReport(target) {
     warnings.push('Bloco OXE legado detectado em ~/.copilot/copilot-instructions.md');
   }
   if (legacyHasOtherManagedBlocks) {
-    warnings.push('copilot-instructions global contém blocos geridos por outro framework; isso pode contaminar respostas do Copilot');
+    warnings.push('copilot-instructions global contém blocos geridos por outro framework; isso pode contaminar respostas do Copilot — execute `oxe-cc uninstall --copilot-legacy-clean` se quiser limpar o legado global.');
   }
   if (!manifestRaw.ok && fs.existsSync(workspace.manifest)) {
     warnings.push(`Manifesto Copilot VS Code inválido: ${manifestRaw.error}`);
@@ -1856,11 +1862,14 @@ function planSelfEvaluationWarnings(planPath, threshold) {
  *   implementationPackReady: boolean,
  *   referenceAnchorsReady: boolean,
  *   fixturePackReady: boolean,
+ *   visualInputReadiness?: string,
+ *   visualInputsReady?: boolean,
  *   executionRationalityReady: boolean,
  *   criticalExecutionGaps: string[],
  *   implementationPack: { path?: string | null, tasks?: unknown[] } | null,
  *   referenceAnchors: { path?: string | null, anchors?: unknown[], missingCriticalCount?: number } | null,
  *   fixturePack: { path?: string | null, fixtures?: unknown[] } | null,
+ *   visualInputs?: { path?: string | null, inputCount?: number, criticalInputCount?: number } | null,
  * }} summary
  * @returns {string[]}
  */
@@ -1876,6 +1885,9 @@ function executionRationalityWarningsFromSummary(summary) {
   }
   if (!summary.fixturePackReady) {
     warns.push(`FIXTURE-PACK não está pronto em ${summary.fixturePack && summary.fixturePack.path ? summary.fixturePack.path : '.oxe/FIXTURE-PACK.json'}`);
+  }
+  if (summary.visualInputReadiness === 'blocked') {
+    warns.push(`VISUAL-INPUTS bloqueado em ${summary.visualInputs && summary.visualInputs.path ? summary.visualInputs.path : '.oxe/investigations/visual/VISUAL-INPUTS.json'}`);
   }
   if (Array.isArray(summary.criticalExecutionGaps) && summary.criticalExecutionGaps.length) {
     warns.push(...summary.criticalExecutionGaps);
@@ -2191,6 +2203,9 @@ function suggestNextStep(target, cfg = {}) {
     referenceAnchors: p.referenceAnchors,
     fixturePackJson: p.fixturePackJson,
     fixturePackMd: p.fixturePackMd,
+    spec: p.spec,
+    visualInputsJson: p.visualInputsJson,
+    visualInputsMd: p.visualInputsMd,
   });
   if (
     shouldEnforceExecutionRationalityGate(phase)
@@ -2368,6 +2383,9 @@ function buildHealthReport(target) {
     referenceAnchors: p.referenceAnchors,
     fixturePackJson: p.fixturePackJson,
     fixturePackMd: p.fixturePackMd,
+    spec: p.spec,
+    visualInputsJson: p.visualInputsJson,
+    visualInputsMd: p.visualInputsMd,
   });
   const suppressExecutionWorkspaceGates = shouldSuppressExecutionWorkspaceGates(
     workspaceInfo.workspaceMode,
@@ -2523,6 +2541,18 @@ function buildHealthReport(target) {
   } catch (err) {
     contextWarn.push(`Contexto — falha ao inspecionar context packs: ${err instanceof Error ? err.message : String(err)}`);
   }
+  if (suppressExecutionWorkspaceGates) {
+    for (const key of Object.keys(contextPacks)) delete contextPacks[key];
+    for (const key of Object.keys(packFreshness)) delete packFreshness[key];
+    contextWarn.length = 0;
+    activeSummaryRefs = { project: null, session: null, phase: null };
+    contextQuality = {
+      primaryWorkflow: 'release',
+      primaryScore: null,
+      primaryStatus: 'not_applicable',
+      byWorkflow: {},
+    };
+  }
   const semanticsManifest = readJsonFileSafe(base.runtimeSemanticsManifest);
   const semanticsAudit = runtimeSemantics.auditRuntimeTargets(target);
   /** @type {string[]} */
@@ -2626,6 +2656,8 @@ function buildHealthReport(target) {
     implementationPackReady: executionRationality.implementationPackReady,
     referenceAnchorsReady: executionRationality.referenceAnchorsReady,
     fixturePackReady: executionRationality.fixturePackReady,
+    visualInputReadiness: executionRationality.visualInputReadiness,
+    visualInputsReady: executionRationality.visualInputsReady,
     executionRationalityReady: executionRationality.executionRationalityReady,
     criticalExecutionGaps: executionRationality.criticalExecutionGaps,
     executionRationality,

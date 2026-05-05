@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
-**Versão:** `1.9.1` · [package.json](package.json)
+**Versão:** `1.10.0` · [package.json](package.json)
 
 **Framework OXE — Orchestrated eXperience Engineering**
 
@@ -37,6 +37,7 @@ Ele se apoia em três princípios:
 - **Lessons loop** — ao fim de cada ciclo, `/oxe-retro` extrai 3–5 lições prescritivas que o próximo spec/plan lê automaticamente. Depois de alguns ciclos, os planos ficam dramaticamente melhores porque os erros anteriores não se repetem.
 - **Plan-Driven Dynamic Agents** — quando há múltiplos domínios, o plano cria agentes específicos para *aquela demanda*. Agentes não são reaproveitados entre projetos ou demandas.
 - **Semântica de raciocínio multi-runtime** — discovery, planning, execution, review e status seguem contratos cognitivos explícitos. O mesmo workflow OXE deve gerar respostas exploratórias, decision-complete e auditáveis em Copilot, Cursor, Claude, Codex e demais runtimes suportados.
+- **Entradas visuais rastreáveis** — imagens, screenshots e mockups enviados ao chat são interpretados pelo runtime hospedeiro quando ele tem visão, mas o OXE exige que essa interpretação vire `VISUAL-INPUTS.md/json` e anchors antes de alimentar plan/execute.
 
 O resultado: **menos requisições**, **mais coerência**, e uma experiência de engenharia orquestrada que funciona do mesmo jeito em qualquer IDE.
 
@@ -73,6 +74,7 @@ Em termos práticos, o estado operacional real agora passa por:
 - `.oxe/runs/<run_id>/verification-manifest.json`
 - `.oxe/runs/<run_id>/residual-risk-ledger.json`
 - `.oxe/runs/<run_id>/evidence-coverage.json`
+- `.oxe/runs/<run_id>/workspace-merge-report.json`
 - `.oxe/execution/GATES.json`
 - `OXE-EVENTS.ndjson`
 
@@ -250,7 +252,7 @@ Cada passo lê o anterior como contexto e escreve seu artefato no escopo correto
 | Comando | O que entrega |
 |---------|--------------|
 | `/oxe` | Sem input → próximo passo. Com pergunta → situação atual (artefatos reais). Com "help" → trilha principal. |
-| `/oxe-spec` | **5 fases**: perguntas → pesquisa → requisitos R-ID → roteiro → aprovação. `--refresh` / `--full` fazem scan antes. `--research` ativa spike explícito. `--ui` gera UI-SPEC ao final. **Auto-reflexão semântica** automática antes da aprovação. |
+| `/oxe-spec` | **5 fases**: perguntas → pesquisa → requisitos R-ID → roteiro → aprovação. `--refresh` / `--full` fazem scan antes. `--research` ativa spike explícito. `--ui` gera UI-SPEC ao final. Se houver imagem/screenshot/mockup no chat, materializa `VISUAL-INPUTS` quando o runtime suportar visão ou registra limitação explícita. |
 | `/oxe-plan` | **Test-first:** `Verificar` vem antes de `Implementar` em cada tarefa. `PLAN.md` com `## Autoavaliação do Plano` (rubrica fixa + confiança determinística). Usa investigações e capabilities como evidência. |
 | `/oxe-execute` | Execução A/B/C. Valida autoavaliação antes de implementar. `--note` registra observação. `--debug` aciona diagnóstico inline. `--deep-diagnosis` escalona para forensics. `--checkpoint "<nome>"` cria snapshot. `--iterative` ativa loop de retry. Usa `EXECUTION-RUNTIME.md`, `ACTIVE-RUN.json`, `OXE-EVENTS.ndjson`. |
 | `/oxe-verify` | Até 6 camadas: audit + critérios + decisões + coerência operacional + calibração + UAT. `--gaps` ativa Camada 5 (cobertura). `--security` ativa Camada 6 (OWASP). `--ui` inclui UI-REVIEW. `--pr` / `--diff` incluem revisão de PR. Retro automática ao fechar (`--skip-retro` para desativar). |
@@ -284,6 +286,7 @@ Estes comportamentos continuam existindo, mas agora são ativados como flags dos
 | Scan / refresh do codebase | `/oxe-spec --refresh` (incremental) ou `--full` (completo) |
 | Research / spike / engenharia reversa | `/oxe-spec --research` |
 | Contrato UI/UX | `/oxe-spec --ui` |
+| Imagem, screenshot ou mockup como entrada de spec | anexar no chat junto com `/oxe-spec`; o OXE materializa a interpretação em `.oxe/investigations/visual/VISUAL-INPUTS.*` quando o runtime tiver visão |
 | Registrar observação durante execução | `/oxe-execute --note "texto"` |
 | Diagnóstico técnico inline | `/oxe-execute --debug` |
 | Diagnóstico pós-falha persistente | `/oxe-execute --deep-diagnosis` |

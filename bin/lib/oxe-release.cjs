@@ -19,6 +19,17 @@ const REQUIRED_RUNTIMES = [
   'antigravity',
 ];
 
+const REQUIRED_RUNTIME_REAL_SCENARIOS_1_10 = [
+  'static-html-js',
+  'node-cli-api',
+  'brownfield-docs',
+  'multi_file_mutation',
+  'multi_wave_app',
+  'gate_blocked_execute',
+  'partial_verify_replan',
+  'promotion_blocked_by_risk',
+];
+
 const WRAPPER_TARGETS = [
   {
     key: '.github/prompts',
@@ -275,13 +286,19 @@ function loadRuntimeSmokeReport(projectRoot) {
       && item.wrapper_drift_ok !== false
       && item.extra_checks_ok !== false
       && item.agent_checks_ok !== false
+      && item.copilot_manifest_ok !== false
+      && item.codex_discovery_ok !== false
       && item.uninstall_ok
     );
   });
 }
 
 function loadRuntimeRealReport(projectRoot) {
-  return readReportSummary(releasePaths(projectRoot).runtimeRealReport, null, (item) => Boolean(item && item.ok));
+  return readReportSummary(
+    releasePaths(projectRoot).runtimeRealReport,
+    REQUIRED_RUNTIME_REAL_SCENARIOS_1_10,
+    (item) => Boolean(item && item.ok)
+  );
 }
 
 function loadRecoveryFixtureReport(projectRoot) {
@@ -293,7 +310,18 @@ function loadMultiAgentSoakReport(projectRoot) {
 }
 
 function loadMultiAgentRealReport(projectRoot) {
-  return readReportSummary(releasePaths(projectRoot).multiAgentRealReport, null, (item) => Boolean(item && item.ok));
+  return readReportSummary(releasePaths(projectRoot).multiAgentRealReport, null, (item) => {
+    if (!item || !item.ok) return false;
+    const records = item.report && Array.isArray(item.report.records) ? item.report.records : [];
+    for (const record of records) {
+      if (record.status !== 'merged') continue;
+      if (record.verify_status !== 'pass') return false;
+      if (!Array.isArray(record.evidence_refs) || record.evidence_refs.length === 0) return false;
+      if (!Array.isArray(record.applied_paths) || record.applied_paths.length === 0) return false;
+      if (!record.diff_summary || !Array.isArray(record.diff_summary.paths) || record.diff_summary.paths.length === 0) return false;
+    }
+    return true;
+  });
 }
 
 function readVersionSnapshot(projectRoot) {
@@ -506,6 +534,7 @@ function inspectReleaseReadiness(projectRoot, options = {}) {
 
 module.exports = {
   REQUIRED_RUNTIMES,
+  REQUIRED_RUNTIME_REAL_SCENARIOS_1_10,
   WRAPPER_TARGETS,
   releasePaths,
   collectWrapperHashes,

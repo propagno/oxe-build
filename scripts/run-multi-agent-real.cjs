@@ -124,6 +124,17 @@ async function runParallelSuccess() {
   const observations = [];
   if (result.completed.length !== 2) observations.push('parallel não concluiu as duas tarefas');
   if (report.merge_readiness !== 'ready') observations.push(`merge readiness inesperado: ${report.merge_readiness}`);
+  if (!Array.isArray(report.records) || report.records.length !== 2) observations.push('merge report não registrou os dois worktrees');
+  for (const record of report.records || []) {
+    if (record.evidence_count < 1 || !Array.isArray(record.evidence_refs) || record.evidence_refs.length < 1) {
+      observations.push(`evidência ausente no record ${record.work_item_id}`);
+    }
+    if (record.verify_status !== 'pass') observations.push(`verify pós-execução não passou em ${record.work_item_id}: ${record.verify_status}`);
+    if (!Array.isArray(record.applied_paths) || record.applied_paths.length < 1) observations.push(`applied_paths ausente em ${record.work_item_id}`);
+    if (!record.diff_summary || !Array.isArray(record.diff_summary.paths) || record.diff_summary.paths.length < 1) {
+      observations.push(`diff_summary ausente em ${record.work_item_id}`);
+    }
+  }
   if (!fs.existsSync(path.join(root, 'src', 'a.txt')) || !fs.existsSync(path.join(root, 'src', 'b.txt'))) observations.push('diffs não foram aplicados ao workspace principal');
   return { scenario: 'parallel_git_worktree_success', ok: observations.length === 0, observations, report };
 }

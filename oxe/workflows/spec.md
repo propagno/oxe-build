@@ -49,6 +49,14 @@ Se **`.oxe/config.json`** tiver `discuss_before_plan: true`: mencionar no final 
 - regras objetivas de responsividade e acessibilidade;
 - critérios de aceite verificáveis por comportamento visível, não só por intenção narrativa.
 
+**Entradas visuais / imagens anexadas:** quando o usuário enviar ou mencionar imagem, screenshot, mockup, wireframe ou anexo visual:
+- deixar explícito que a inspeção visual depende do runtime hospedeiro (Copilot/Claude/Codex/etc.) e do modelo ativo;
+- se o runtime permitir ver a imagem, antes de escrever requisitos gerar `.oxe/investigations/visual/VISUAL-INPUTS.md` e `.oxe/investigations/visual/VISUAL-INPUTS.json` usando `oxe/templates/VISUAL-INPUTS.template.*`;
+- se o runtime não permitir ver a imagem, registrar `inspection_status: unavailable`, não inventar detalhes e pedir descrição textual quando a imagem for crítica;
+- tratar anexo efêmero de chat como `reproducibility: chat_attachment_only`, salvo se houver arquivo local/materializado;
+- requisitos derivados de imagem devem apontar para `VI-*` e para um anchor visual em `REFERENCE-ANCHORS` no plano;
+- imagem crítica para UI, layout, fluxo ou regra funcional sem extração textual suficiente deve virar bloqueio explícito para `execute`.
+
 **Resolução de sessão:** antes de ler ou escrever artefatos desta trilha, resolver `active_session` em `.oxe/STATE.md` conforme `oxe/workflows/references/session-path-resolution.md`. Com sessão ativa:
 - `SPEC.md`, `ROADMAP.md` e `DISCUSS.md` vivem em `.oxe/<active_session>/spec/`
 - `OBSERVATIONS.md`, `RESEARCH.md` e `research/` seguem o escopo da sessão
@@ -62,11 +70,13 @@ Ler no início:
 - **OBS do escopo ativo** — se houver entradas `pendente` com impacto `spec` ou `all`, incorporá-las na Fase 3 (Requisitos) e marcá-las `incorporada → spec (data)` após uso
 - **`.oxe/global/LESSONS.md`** — se existir, ler entradas com `Aplicar em: spec` e status `ativo`. **Priorizar entradas com `Frequência >= 2` ou `Impacto: alto`** — aplicar como restrições explícitas. Entradas com `Frequência: 1` e `Impacto: baixo` são contexto secundário. Usar durante a Fase 1 (perguntas) e Fase 3 (requisitos). Exemplo: se uma lição diz "perguntar explicitamente sobre integração com X", adicionar essa pergunta no Bloco B da Fase 1.
 - `.oxe/CAPABILITIES.md` e `.oxe/INVESTIGATIONS.md` — usar para sugerir capacidades e pesquisas já existentes antes de abrir novas lacunas
+- `.oxe/investigations/visual/VISUAL-INPUTS.md|json` — se existirem ou se houver imagem/anexo no chat, usar como fonte visual estruturada; quando ausentes e imagem for crítica, gerar antes de fechar a SPEC
 - Se o problema tocar Azure, ler `.oxe/cloud/azure/profile.json`, `auth-status.json` e `INVENTORY.md` antes de fechar requisitos; se o inventário estiver ausente ou stale, exigir discovery via `oxe-cc azure sync` antes de consolidar a spec
 
 **Brownfield (COBOL, JCL, copybooks, VB6, SP):** quando o objetivo for documentar ou planear migração, ver **`oxe/workflows/references/legacy-brownfield.md`** — épicos por trilha, critérios A* verificáveis por Grep/leitura/checklist.
 
 Usar templates: **`oxe/templates/SPEC.template.md`** e **`oxe/templates/ROADMAP.template.md`**.
+Para entradas visuais, usar também **`oxe/templates/VISUAL-INPUTS.template.md`** e **`oxe/templates/VISUAL-INPUTS.template.json`**.
 </context>
 
 <fase_1_perguntas>
@@ -109,6 +119,7 @@ Usar templates: **`oxe/templates/SPEC.template.md`** e **`oxe/templates/ROADMAP.
 - quais evidências faltam;
 - quais riscos podem reduzir a confiança do plano.
 - quais anchors, fixtures ou investigações serão obrigatórios para permitir `Confiança > 90%` no plano.
+- se houver imagem/anexo visual: quais elementos foram inspecionados, quais ficaram ambíguos e se `VISUAL-INPUTS` está `ready`, `partial` ou `blocked`.
 </fase_1_perguntas>
 
 <fase_2_pesquisa>

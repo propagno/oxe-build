@@ -1,0 +1,27 @@
+{
+  "schema_version": "1",
+  "generated_at": "YYYY-MM-DDTHH:mm:ssZ",
+  "ready": false,
+  "visualInputReadiness": "blocked",
+  "critical_gaps": [],
+  "inputs": [
+    {
+      "id": "VI-01",
+      "source_ref": "chat-attachment",
+      "source_kind": "visual_attachment",
+      "runtime_support": "unknown",
+      "inspection_status": "unavailable",
+      "reproducibility": "chat_attachment_only",
+      "critical": true,
+      "confidence": 0,
+      "visual_summary": "",
+      "detected_text": [],
+      "layout_regions": [],
+      "ui_components": [],
+      "states": [],
+      "ambiguities": [],
+      "derived_requirements": [],
+      "limitations": []
+    }
+  ]
+}

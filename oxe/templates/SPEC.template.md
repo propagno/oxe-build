@@ -72,6 +72,16 @@ Use **IDs estáveis** (A1, A2, …) para o plano e o verify vincularem cada tare
 - Conteúdo mínimo obrigatório por área/módulo: …
 - Exemplos concretos que devem existir na entrega: …
 
+## Entradas visuais e interpretação
+
+- Status: ready | partial | blocked | not_applicable
+- Artefato visual: `.oxe/investigations/visual/VISUAL-INPUTS.md` | not_applicable
+- Imagens/anexos usados como fonte: …
+- Capacidade visual do runtime hospedeiro: supported | unsupported | unknown
+- Requisitos derivados de imagem: R-ID/A* | not_applicable
+- Ambiguidades visuais ainda abertas: …
+- Observação: se a imagem for crítica para UI, layout, fluxo ou regra funcional, `VISUAL-INPUTS` precisa estar pronto antes do PLAN sustentar confiança > 90%.
+
 ## Suposições
 
 - …
