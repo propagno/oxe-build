@@ -20,25 +20,45 @@ function writeJson(filePath, value) {
   writeFile(filePath, JSON.stringify(value, null, 2) + '\n');
 }
 
-function planFor(title, taskTitle, targetPaths, acceptanceId) {
-  const files = targetPaths.map((entry) => `\`${entry}\``).join(', ');
+function tasksForScenario(scenario) {
+  if (Array.isArray(scenario.tasks) && scenario.tasks.length > 0) return scenario.tasks;
+  return [
+    {
+      id: 'T1',
+      title: scenario.taskTitle,
+      wave: 1,
+      dependsOn: 'nenhum',
+      targetPaths: scenario.targetPaths,
+      acceptanceId: scenario.acceptanceId,
+      symbol: scenario.symbol,
+      contract: scenario.contract,
+      risk: 'medium',
+    },
+  ];
+}
+
+function planFor(title, tasks) {
+  const taskSections = tasks.map((task) => {
+    const files = task.targetPaths.map((entry) => `\`${entry}\``).join(', ');
+    return `### ${task.id} — ${task.title}
+
+**Onda:** ${task.wave || 1}
+**Depende de:** ${task.dependsOn || 'nenhum'}
+**Complexidade:** ${task.complexity || 'M'}
+**Arquivos prováveis:** ${files}
+**Aceite vinculado:** ${task.acceptanceId}
+**Decisão vinculada:** ${task.decisionId || 'D-01'}
+Comando: \`node scripts/check.js\`
+
+Implementar o menor delta funcional para satisfazer o contrato do fixture.`;
+  }).join('\n\n');
   return `# OXE — PLAN
 
 ## Resumo
 
 Plano determinístico para fixture de runtime real: ${title}.
 
-### T1 — ${taskTitle}
-
-**Onda:** 1
-**Depende de:** nenhum
-**Complexidade:** M
-**Arquivos prováveis:** ${files}
-**Aceite vinculado:** ${acceptanceId}
-**Decisão vinculada:** D-01
-Comando: \`node scripts/check.js\`
-
-Implementar o menor delta funcional para satisfazer o contrato do fixture.
+${taskSections}
 
 ## Autoavaliação do Plano
 
@@ -70,7 +90,8 @@ Implementar o menor delta funcional para satisfazer o contrato do fixture.
 `;
 }
 
-function specFor(title, objective, acceptanceId, criterion) {
+function specFor(title, objective, criteria) {
+  const rows = criteria.map((entry) => `| ${entry.id} | ${entry.criterion} | node scripts/check.js |`).join('\n');
   return `# OXE — SPEC
 
 ## Objetivo
@@ -81,7 +102,7 @@ ${objective}
 
 | ID | Critério | Como verificar |
 |---|---|---|
-| ${acceptanceId} | ${criterion} | node scripts/check.js |
+${rows}
 
 ## Decisões persistentes
 
@@ -105,43 +126,40 @@ function stateFor(title) {
 `;
 }
 
-function implementationPack(targetPaths, symbol, contract) {
+function implementationPack(tasks) {
   return {
     schema_version: 1,
     ready: true,
     critical_gaps: [],
-    tasks: [
-      {
-        id: 'T1',
+    tasks: tasks.map((task) => ({
+        id: task.id,
         mode: 'mutating',
         ready: true,
-        exact_paths: targetPaths,
+        exact_paths: task.targetPaths,
         write_set: 'closed',
         mutation_scope: 'code',
-        risk: 'medium',
-        symbols: [symbol],
+        risk: task.risk || 'medium',
+        symbols: [task.symbol],
         imports: [],
-        contracts: [contract],
+        contracts: [task.contract],
         minimum_sequence: ['write deterministic fixture files', 'run node scripts/check.js', 'persist runtime evidence'],
         expected_checks: ['node scripts/check.js'],
         requires_fixture: true,
         snippet_base_local: 'not_applicable',
         rollback: 'remove generated fixture files',
         critical_gaps: [],
-      },
-    ],
+      })),
   };
 }
 
-function fixturePack(title) {
+function fixturePack(title, tasks) {
   return {
     schema_version: 1,
     ready: true,
     critical_gaps: [],
-    fixtures: [
-      {
-        id: 'FX-01',
-        task_id: 'T1',
+    fixtures: tasks.map((task, index) => ({
+        id: `FX-${String(index + 1).padStart(2, '0')}`,
+        task_id: task.id,
         status: 'ready',
         inputs: [`runtime-real:${title}`],
         expected_outputs: ['node scripts/check.js exits 0'],
@@ -151,8 +169,7 @@ function fixturePack(title) {
         negative_cases: ['missing generated file fails the smoke check'],
         source_anchor: 'not_applicable',
         critical_gaps: [],
-      },
-    ],
+      })),
   };
 }
 
@@ -166,14 +183,16 @@ function referenceAnchors() {
 
 function createProject(scenario) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `oxe-runtime-real-${scenario.name}-`));
+  const tasks = tasksForScenario(scenario);
+  const criteria = tasks.map((task) => ({ id: task.acceptanceId, criterion: task.criterion || scenario.criterion }));
   fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
   writeFile(path.join(dir, '.oxe', 'STATE.md'), stateFor(scenario.name));
-  writeFile(path.join(dir, '.oxe', 'SPEC.md'), specFor(scenario.name, scenario.objective, scenario.acceptanceId, scenario.criterion));
-  writeFile(path.join(dir, '.oxe', 'PLAN.md'), planFor(scenario.name, scenario.taskTitle, scenario.targetPaths, scenario.acceptanceId));
-  writeJson(path.join(dir, '.oxe', 'IMPLEMENTATION-PACK.json'), implementationPack(scenario.targetPaths, scenario.symbol, scenario.contract));
+  writeFile(path.join(dir, '.oxe', 'SPEC.md'), specFor(scenario.name, scenario.objective, criteria));
+  writeFile(path.join(dir, '.oxe', 'PLAN.md'), planFor(scenario.name, tasks));
+  writeJson(path.join(dir, '.oxe', 'IMPLEMENTATION-PACK.json'), implementationPack(tasks));
   writeFile(path.join(dir, '.oxe', 'IMPLEMENTATION-PACK.md'), `# OXE — Implementation Pack\n\n- Fixture: ${scenario.name}\n- Status: ready\n`);
   writeFile(path.join(dir, '.oxe', 'REFERENCE-ANCHORS.md'), referenceAnchors());
-  writeJson(path.join(dir, '.oxe', 'FIXTURE-PACK.json'), fixturePack(scenario.name));
+  writeJson(path.join(dir, '.oxe', 'FIXTURE-PACK.json'), fixturePack(scenario.name, tasks));
   writeFile(path.join(dir, '.oxe', 'FIXTURE-PACK.md'), `# OXE — Fixture Pack\n\n- Fixture: ${scenario.name}\n- Status: ready\n`);
   writeFile(path.join(dir, '.oxe', 'execution', 'GATES.json'), '[]\n');
   writeFile(path.join(dir, 'scripts', 'check.js'), scenario.checkScript);
@@ -189,7 +208,7 @@ class DeterministicExecutor {
   }
 
   async execute(node, lease, runId, attemptNumber) {
-    this.scenario.apply(lease.root_path);
+    this.scenario.apply(lease.root_path, node);
     return {
       success: true,
       failure_class: null,
@@ -262,6 +281,73 @@ console.log('brownfield-docs ok');
 `,
     apply(root) {
       writeFile(path.join(root, 'docs', 'OPERATIONS.md'), '# Operação Brownfield\n\n## Contexto legado\n\nBaseline em `legacy/main.txt`.\n\n## Smoke\n\n`node scripts/check.js`\n');
+    },
+  },
+  {
+    name: 'multi_file_mutation',
+    objective: 'Validar runtime execute em mutação determinística multi-file com contrato de app estático modular, sem servidor HTTP e sem fetch().',
+    taskTitle: 'Criar app estático modular multi-file',
+    acceptanceId: 'A1',
+    criterion: 'HTML, CSS e JS são materializados e o JS exporta dados de conteúdo verificáveis.',
+    targetPaths: ['index.html', 'styles.css', 'src/content.js', 'src/app.js'],
+    symbol: 'module:LearningApp(index.html,styles.css,src/content.js,src/app.js)',
+    contract: { name: 'multi file static app', input: 'browser load', output: 'modular educational shell' },
+    checkScript: `const fs=require('fs');
+for (const file of ['index.html','styles.css','src/content.js','src/app.js']) {
+  if(!fs.existsSync(file)) throw new Error('missing '+file);
+}
+const content=fs.readFileSync('src/content.js','utf8');
+if(!content.includes('arrays') || !content.includes('linked-list')) throw new Error('missing content model');
+console.log('multi_file_mutation ok');
+`,
+    apply(root) {
+      writeFile(path.join(root, 'index.html'), '<!doctype html><html><head><link rel="stylesheet" href="styles.css"></head><body><main id="app"></main><script type="module" src="src/app.js"></script></body></html>\n');
+      writeFile(path.join(root, 'styles.css'), ':root{--ink:#101820} body{font-family:sans-serif;color:var(--ink)}\n');
+      writeFile(path.join(root, 'src', 'content.js'), 'export const modules = [{ id: "arrays" }, { id: "linked-list" }];\n');
+      writeFile(path.join(root, 'src', 'app.js'), 'import { modules } from "./content.js"; document.querySelector("#app").textContent = modules.map(m => m.id).join(",");\n');
+    },
+  },
+  {
+    name: 'multi_wave_app',
+    objective: 'Validar runtime compile/execute em plano multi-wave com dependência entre camada de dados e renderização.',
+    criterion: 'As duas ondas materializam conteúdo e renderização com contrato verificável.',
+    tasks: [
+      {
+        id: 'T1',
+        title: 'Criar modelo de conteúdo',
+        wave: 1,
+        dependsOn: 'nenhum',
+        targetPaths: ['src/content.js'],
+        acceptanceId: 'A1',
+        symbol: 'module:content.modules',
+        contract: { name: 'content model', input: 'none', output: 'learning modules array' },
+        criterion: 'Modelo de conteúdo exporta estruturas e operações.',
+      },
+      {
+        id: 'T2',
+        title: 'Criar renderização que consome o modelo',
+        wave: 2,
+        dependsOn: 'T1',
+        targetPaths: ['index.html', 'src/app.js'],
+        acceptanceId: 'A2',
+        symbol: 'function:renderLearningModules()',
+        contract: { name: 'renderer', input: 'content modules', output: 'html list' },
+        criterion: 'Renderização consome o modelo de conteúdo e expõe jornada.',
+      },
+    ],
+    checkScript: `const fs=require('fs');
+const content=fs.readFileSync('src/content.js','utf8');
+const app=fs.readFileSync('src/app.js','utf8');
+const html=fs.readFileSync('index.html','utf8');
+if(!content.includes('Queue') || !content.includes('Tree')) throw new Error('missing model');
+if(!app.includes('renderLearningModules')) throw new Error('missing renderer');
+if(!html.includes('Jornada')) throw new Error('missing shell');
+console.log('multi_wave_app ok');
+`,
+    apply(root) {
+      writeFile(path.join(root, 'src', 'content.js'), 'export const modules = [{ name: "Queue" }, { name: "Tree" }];\n');
+      writeFile(path.join(root, 'index.html'), '<!doctype html><html><body><h1>Jornada</h1><ul id="app"></ul><script type="module" src="src/app.js"></script></body></html>\n');
+      writeFile(path.join(root, 'src', 'app.js'), 'import { modules } from "./content.js"; export function renderLearningModules(){ return modules.map(m=>m.name).join(","); }\n');
     },
   },
 ];
@@ -377,11 +463,124 @@ async function runScenario(scenario) {
   return result;
 }
 
+async function runGateBlockedExecute() {
+  const scenario = scenarios.find((item) => item.name === 'static-html-js');
+  const projectRoot = createProject({ ...scenario, name: 'gate_blocked_execute' });
+  const result = {
+    name: 'gate_blocked_execute',
+    project_root: projectRoot,
+    ok: false,
+    phases: {},
+    failures: [],
+  };
+  try {
+    const compiled = operational.compileExecutionGraphFromArtifacts(projectRoot, null, {
+      compilerOptions: { default_workspace_strategy: 'inplace', default_max_retries: 0 },
+    });
+    writeJson(path.join(projectRoot, '.oxe', 'execution', 'GATES.json'), [
+      {
+        gate_id: 'gate-runtime-real-1',
+        scope: 'work_item',
+        run_id: compiled.run.run_id,
+        work_item_id: 'T1',
+        action: 'execute',
+        requested_at: new Date().toISOString(),
+        context: { description: 'runtime-real pending gate', evidence_refs: [], risks: ['operator_gate'], rationale: null, policy_decision_id: null },
+        status: 'pending',
+      },
+    ]);
+    const executed = await operational.runRuntimeExecute(projectRoot, null, {
+      executor: new DeterministicExecutor(scenario),
+      runState: compiled.run,
+    });
+    result.phases.execute = {
+      ok: executed.result.status === 'blocked'
+        && Array.isArray(executed.preflight.blockers)
+        && executed.preflight.blockers.some((blocker) => /pending_gates/i.test(blocker)),
+      status: executed.result.status,
+      preflight: executed.preflight,
+    };
+    if (!result.phases.execute.ok) result.failures.push('execute não bloqueou com gate pendente');
+    result.ok = result.phases.execute.ok;
+  } catch (error) {
+    result.failures.push(error && error.stack ? error.stack : String(error));
+  }
+  return result;
+}
+
+async function runPartialVerifyReplan() {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-runtime-real-partial_verify_replan-'));
+  fs.mkdirSync(path.join(projectRoot, '.oxe'), { recursive: true });
+  writeFile(path.join(projectRoot, '.oxe', 'STATE.md'), stateFor('partial_verify_replan'));
+  writeFile(path.join(projectRoot, '.oxe', 'SPEC.md'), '# OXE — SPEC\n\n## Objetivo\n\nValidar verify parcial quando não há critérios executáveis.\n');
+  writeFile(path.join(projectRoot, '.oxe', 'PLAN.md'), '# OXE — PLAN\n\n## Resumo\n\nPlano intencionalmente sem tarefa executável para validar gap de verify.\n\n## Autoavaliação do Plano\n\n**Melhor plano atual:** sim\n**Confiança:** 93%\n');
+  const result = {
+    name: 'partial_verify_replan',
+    project_root: projectRoot,
+    ok: false,
+    phases: {},
+    failures: [],
+  };
+  try {
+    const compiled = operational.compileVerificationSuiteFromArtifacts(projectRoot, null, {});
+    const verified = await operational.runRuntimeVerify(projectRoot, null, {
+      runId: compiled.run.run_id,
+      timeoutMs: 10_000,
+    });
+    result.phases.verify = {
+      ok: verified.report.status === 'partial' && Array.isArray(verified.report.gaps) && verified.report.gaps.length > 0,
+      status: verified.report.status,
+      gaps: verified.report.gaps,
+    };
+    if (!result.phases.verify.ok) result.failures.push(`verify parcial inesperado: ${verified.report.status}`);
+    result.ok = result.phases.verify.ok;
+  } catch (error) {
+    result.failures.push(error && error.stack ? error.stack : String(error));
+  }
+  return result;
+}
+
+async function runPromotionBlockedByRisk() {
+  const scenario = scenarios.find((item) => item.name === 'node-cli-api');
+  const projectRoot = createProject({ ...scenario, name: 'promotion_blocked_by_risk' });
+  const result = {
+    name: 'promotion_blocked_by_risk',
+    project_root: projectRoot,
+    ok: false,
+    phases: {},
+    failures: [],
+  };
+  try {
+    const compiled = operational.compileExecutionGraphFromArtifacts(projectRoot, null, {
+      compilerOptions: { default_workspace_strategy: 'inplace', default_max_retries: 0 },
+    });
+    try {
+      await operational.runRuntimePromotion(projectRoot, null, { runState: compiled.run, targetKind: 'pr_draft' });
+      result.failures.push('promotion avançou sem manifest de verify');
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      result.phases.promote = {
+        ok: /Manifest de verify ausente/i.test(message),
+        status: 'blocked',
+        blocker: message,
+      };
+      if (!result.phases.promote.ok) result.failures.push(`blocker inesperado: ${message}`);
+    }
+    result.ok = Boolean(result.phases.promote && result.phases.promote.ok);
+  } catch (error) {
+    result.failures.push(error && error.stack ? error.stack : String(error));
+  }
+  return result;
+}
+
 (async () => {
   const results = [];
   for (const scenario of scenarios) {
     results.push(await runScenario(scenario));
   }
+  results.push(await runGateBlockedExecute());
+  results.push(await runPartialVerifyReplan());
+  results.push(await runPromotionBlockedByRisk());
   const report = {
     schema_version: 1,
     generated_at: new Date().toISOString(),

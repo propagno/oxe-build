@@ -15,7 +15,7 @@ oxe_tool_profile: read_heavy
 oxe_confidence_policy: explicit
 oxe_context_tier: standard
 oxe_contract_version: 2.0.0
-oxe_semantics_hash: ebb4473c14e5b080
+oxe_semantics_hash: 13daa3c62e0efaa4
 ---
 
 <!-- oxe-reasoning-contract:start -->
@@ -29,7 +29,7 @@ oxe_semantics_hash: ebb4473c14e5b080
 - **Política de confiança:** explícita
 - **Tier de contexto padrão:** padrão
 - **Versão do contrato:** 2.0.0
-- **Checksum semântico:** `ebb4473c14e5b080`
+- **Checksum semântico:** `13daa3c62e0efaa4`
 - **Entrada de contexto prioritária:** `.oxe/context/packs/dashboard.md` e `.oxe/context/packs/dashboard.json`
 - **Regra pack-first:** ler o context pack primeiro; se estiver stale, incompleto ou ausente, cair para leitura direta com fallback explícito.
 - **Inspeção estruturada:** `oxe-cc context inspect --workflow dashboard --json`

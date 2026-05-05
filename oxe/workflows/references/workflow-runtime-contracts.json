@@ -267,6 +267,7 @@
         "plan",
         "implementation_pack_json",
         "reference_anchors",
+        "visual_inputs_json",
         "fixture_pack_json",
         "runtime",
         "verify",
@@ -327,8 +328,9 @@
         "runtime",
         "checkpoints",
         "implementation_pack_json",
-        "reference_anchors",
-        "fixture_pack_json"
+          "reference_anchors",
+          "visual_inputs_json",
+          "fixture_pack_json"
       ],
       "optional_artifacts": [
         "plan",
@@ -353,6 +355,7 @@
           "plan",
           "implementation_pack_json",
           "reference_anchors",
+          "visual_inputs_json",
           "fixture_pack_json",
           "quick",
           "phase_summary"
@@ -364,6 +367,7 @@
           "plan",
           "implementation_pack_json",
           "reference_anchors",
+          "visual_inputs_json",
           "fixture_pack_json",
           "quick",
           "phase_summary",
@@ -381,6 +385,8 @@
           "implementation_pack_md",
           "implementation_pack_json",
           "reference_anchors",
+          "visual_inputs_md",
+          "visual_inputs_json",
           "fixture_pack_md",
           "fixture_pack_json",
           "quick",
@@ -544,6 +550,8 @@
         "implementation_pack_md",
         "implementation_pack_json",
         "reference_anchors",
+        "visual_inputs_md",
+        "visual_inputs_json",
         "fixture_pack_md",
         "fixture_pack_json"
       ],
@@ -566,8 +574,9 @@
           "capabilities_index",
           "checkpoints",
           "implementation_pack_json",
-          "reference_anchors",
-          "fixture_pack_json"
+        "reference_anchors",
+        "visual_inputs_json",
+        "fixture_pack_json"
         ],
         "full": [
           "state",
@@ -585,6 +594,8 @@
           "implementation_pack_md",
           "implementation_pack_json",
           "reference_anchors",
+          "visual_inputs_md",
+          "visual_inputs_json",
           "fixture_pack_md",
           "fixture_pack_json"
         ]
@@ -613,6 +624,8 @@
       ],
       "optional_artifacts": [
         "plan",
+        "visual_inputs_md",
+        "visual_inputs_json",
         "project_summary",
         "session_summary",
         "phase_summary",
@@ -778,6 +791,8 @@
         "discuss",
         "spec",
         "investigations_index",
+        "visual_inputs_md",
+        "visual_inputs_json",
         "project_summary",
         "session_summary",
         "phase_summary",

@@ -223,9 +223,14 @@ function summarizeReferenceAnchors(filePath, externalRefs) {
       sourceType: attrs.source_type || null,
       path: attrs.path || null,
       sourceRef: attrs.source_ref || null,
+      visualRef: attrs.visual_ref || null,
+      extractionConfidence: attrs.extraction_confidence || null,
+      reproducibility: attrs.reproducibility || null,
       relevance: (((match[2].match(/<relevance>([\s\S]*?)<\/relevance>/i) || [null, ''])[1]) || '').trim(),
       action: (((match[2].match(/<action>([\s\S]*?)<\/action>/i) || [null, ''])[1]) || '').trim(),
       summary: (((match[2].match(/<summary>([\s\S]*?)<\/summary>/i) || [null, ''])[1]) || '').trim(),
+      limitations: (((match[2].match(/<limitations>([\s\S]*?)<\/limitations>/i) || [null, ''])[1]) || '').trim(),
+      derivedRequirements: (((match[2].match(/<derived_requirements>([\s\S]*?)<\/derived_requirements>/i) || [null, ''])[1]) || '').trim(),
     });
   }
   if (status === 'not_applicable' && externalRefs.length) {
@@ -264,6 +269,136 @@ function summarizeReferenceAnchors(filePath, externalRefs) {
     missingCriticalCount,
     staleCount,
     criticalGaps: Array.from(new Set(criticalGaps)),
+  };
+}
+
+function specRequiresVisualInput(specPath) {
+  const raw = readTextIfExists(specPath);
+  if (!raw) return false;
+  const text = raw.toLowerCase();
+  if (/visualinputreadiness\s*:\s*(ready|partial|blocked)/i.test(raw)) return true;
+  if (/<visual_inputs?\b/i.test(raw)) return true;
+  if (/##+\s*entradas visuais e interpreta[çc][ãa]o/i.test(raw) && !/not_applicable|não aplicável|nao aplicavel/i.test(raw)) {
+    return true;
+  }
+  return /\b(visual-?inputs?|visual attachment|screenshot|mockup|imagem anexada|anexo visual)\b/i.test(text);
+}
+
+function normalizeInspectionStatus(value) {
+  const status = String(value || '').trim().toLowerCase();
+  if (!status) return 'unavailable';
+  return status;
+}
+
+function summarizeVisualInputs(paths = {}) {
+  const specPath = paths.spec || null;
+  const jsonPath = paths.visualInputsJson || null;
+  const mdPath = paths.visualInputsMd || null;
+  const specRequires = specRequiresVisualInput(specPath);
+  const json = readJsonIfExists(jsonPath);
+  const mdExists = Boolean(readTextIfExists(mdPath));
+  const exists = Boolean(json.ok || mdExists);
+  const applicable = specRequires || exists;
+  /** @type {string[]} */
+  const criticalGaps = [];
+  if (!applicable) {
+    return {
+      applicable: false,
+      ready: true,
+      visualInputReadiness: 'not_applicable',
+      path: jsonPath,
+      markdownPath: mdPath,
+      exists,
+      inputCount: 0,
+      criticalInputCount: 0,
+      blockedCount: 0,
+      partialCount: 0,
+      inputs: [],
+      criticalGaps: [],
+    };
+  }
+  if (!json.ok) {
+    criticalGaps.push(`VISUAL-INPUTS.json inválido ou ausente${json.error ? `: ${json.error}` : ''}`);
+    return {
+      applicable: true,
+      ready: false,
+      visualInputReadiness: 'blocked',
+      path: jsonPath,
+      markdownPath: mdPath,
+      exists,
+      inputCount: 0,
+      criticalInputCount: 0,
+      blockedCount: 1,
+      partialCount: 0,
+      inputs: [],
+      criticalGaps,
+    };
+  }
+  const data = json.data && typeof json.data === 'object' ? json.data : {};
+  const inputs = Array.isArray(data.inputs) ? data.inputs : [];
+  const topReady = data.ready !== false;
+  let criticalInputCount = 0;
+  let blockedCount = 0;
+  let partialCount = 0;
+  for (const input of inputs) {
+    const id = String(input && (input.id || input.source_ref || input.sourceRef) || '?');
+    const critical = Boolean(input && input.critical === true);
+    const status = normalizeInspectionStatus(input && input.inspection_status);
+    const confidence = Number(input && input.confidence);
+    const summary = String(input && input.visual_summary || '').trim();
+    const derived = Array.isArray(input && input.derived_requirements)
+      ? input.derived_requirements
+      : [];
+    if (critical) criticalInputCount += 1;
+    if (status === 'partial') partialCount += 1;
+    if (critical && status !== 'inspected') {
+      blockedCount += 1;
+      criticalGaps.push(`VISUAL-INPUTS.json entrada crítica ${id} com inspection_status=${status}`);
+    }
+    if (critical && !summary) {
+      blockedCount += 1;
+      criticalGaps.push(`VISUAL-INPUTS.json entrada crítica ${id} sem visual_summary`);
+    }
+    if (critical && !derived.length) {
+      blockedCount += 1;
+      criticalGaps.push(`VISUAL-INPUTS.json entrada crítica ${id} sem derived_requirements`);
+    }
+    if (critical && Number.isFinite(confidence) && confidence < 0.75) {
+      partialCount += 1;
+      criticalGaps.push(`VISUAL-INPUTS.json entrada crítica ${id} com confidence abaixo de 0.75`);
+    }
+  }
+  if (data.visualInputReadiness === 'blocked') {
+    blockedCount += 1;
+    criticalGaps.push('VISUAL-INPUTS.json declara visualInputReadiness=blocked');
+  }
+  if (Array.isArray(data.critical_gaps) && data.critical_gaps.length) {
+    blockedCount += data.critical_gaps.length;
+    criticalGaps.push(...data.critical_gaps.map((gap) => `VISUAL-INPUTS.json: ${String(gap)}`));
+  }
+  if (!topReady) {
+    blockedCount += 1;
+    criticalGaps.push('VISUAL-INPUTS.json com ready=false');
+  }
+  const uniqueGaps = Array.from(new Set(criticalGaps));
+  const visualInputReadiness = uniqueGaps.length
+    ? 'blocked'
+    : partialCount > 0 || data.visualInputReadiness === 'partial'
+      ? 'partial'
+      : 'ready';
+  return {
+    applicable: true,
+    ready: visualInputReadiness !== 'blocked',
+    visualInputReadiness,
+    path: jsonPath,
+    markdownPath: mdPath,
+    exists,
+    inputCount: inputs.length,
+    criticalInputCount,
+    blockedCount,
+    partialCount,
+    inputs,
+    criticalGaps: uniqueGaps,
   };
 }
 
@@ -350,6 +485,11 @@ function buildExecutionRationality(paths = {}) {
   const implementationPack = summarizeImplementationPack(paths.implementationPackJson || null, planTasks);
   const referenceAnchors = summarizeReferenceAnchors(paths.referenceAnchors || null, externalRefs);
   const fixturePack = summarizeFixturePack(paths.fixturePackJson || null, planTasks, implementationPack);
+  const visualInputs = summarizeVisualInputs({
+    spec: paths.spec || null,
+    visualInputsJson: paths.visualInputsJson || null,
+    visualInputsMd: paths.visualInputsMd || null,
+  });
   const applicable = Boolean(paths.plan && fs.existsSync(paths.plan));
   const criticalExecutionGaps = applicable
     ? Array.from(
@@ -357,6 +497,7 @@ function buildExecutionRationality(paths = {}) {
         ...implementationPack.criticalGaps,
         ...referenceAnchors.criticalGaps,
         ...fixturePack.criticalGaps,
+        ...visualInputs.criticalGaps,
       ])
     )
     : [];
@@ -367,13 +508,16 @@ function buildExecutionRationality(paths = {}) {
     implementationPackReady: applicable ? implementationPack.ready : false,
     referenceAnchorsReady: applicable ? referenceAnchors.ready : false,
     fixturePackReady: applicable ? fixturePack.ready : false,
+    visualInputReadiness: applicable ? visualInputs.visualInputReadiness : 'not_applicable',
+    visualInputsReady: applicable ? visualInputs.ready : true,
     executionRationalityReady: applicable
-      ? implementationPack.ready && referenceAnchors.ready && fixturePack.ready && criticalExecutionGaps.length === 0
+      ? implementationPack.ready && referenceAnchors.ready && fixturePack.ready && visualInputs.ready && criticalExecutionGaps.length === 0
       : false,
     criticalExecutionGaps,
     implementationPack,
     referenceAnchors,
     fixturePack,
+    visualInputs,
   };
 }
 
@@ -384,4 +528,5 @@ module.exports = {
   summarizeImplementationPack,
   summarizeReferenceAnchors,
   summarizeFixturePack,
+  summarizeVisualInputs,
 };

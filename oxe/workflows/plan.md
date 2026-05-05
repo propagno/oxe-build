@@ -40,6 +40,7 @@ Materializa referências críticas que hoje ficam frouxas no plano:
 - origem local ou materializada em `.oxe/investigations/externals/`;
 - `source_ref`, `path`, `relevance`, `action`, `summary`, `status`;
 - estados válidos: `resolved`, `missing`, `stale`, `conflicting`, `not_applicable`.
+- referências visuais vindas de imagem/screenshot/mockup devem usar `source_type="visual_attachment|screenshot|mockup|image_description"`, apontar `visual_ref="VI-*"` e declarar `extraction_confidence`, `reproducibility`, limitações e requisitos derivados.
 
 ### FIXTURE-PACK
 Fixtures mínimos por fluxo/tarefa de risco:
@@ -52,6 +53,7 @@ Regra de readiness:
 - `IMPLEMENTATION-PACK` precisa estar `ready`;
 - `REFERENCE-ANCHORS` não pode ter âncora crítica em `missing|stale|conflicting`;
 - `FIXTURE-PACK` é obrigatório para tarefas mutáveis com parser/layout/integração/transformação/fila/migração/builder;
+- se a SPEC depender de entrada visual crítica, `VISUAL-INPUTS` precisa estar `ready` e todo requisito visual crítico precisa de anchor resolvido;
 - qualquer `critical_gap` aberto derruba a prontidão executável do plano.
 
 **Contrato adicional para app/UI estático:** quando a trilha for página HTML/CSS/JS, dashboard, microsite, app sem framework ou experiência educacional:
@@ -105,6 +107,7 @@ Resumo operacional:
 - Não inventar APIs inexistentes: cruzar com **STRUCTURE.md**, **INTEGRATIONS.md** e arquivos reais; respeitar **CONCERNS.md** (evitar agravar dívida conhecida sem tarefa explícita).
 - Se existir **`.oxe/NOTES.md`**, rever entradas em aberto: incorporar em tarefas (com **Aceite vinculado** quando aplicável) ou registar na secção **Replanejamento** / nota explícita *fora de âmbito desta trilha*. Se não existir e houver necessidade de registrar notas, criar a partir de `oxe/templates/NOTES.template.md`.
 - Se existir `UI-SPEC.md` no escopo resolvido, as tarefas de UI devem referenciar secções do UI-SPEC no texto de **Implementação** ou **Verificar**.
+- Se existir `VISUAL-INPUTS.md|json` no escopo resolvido, ou se a SPEC declarar entradas visuais críticas, ler antes de definir tarefas de UI. Tarefa que implemente layout, copy, componente, fluxo ou estado derivado de imagem deve citar `VI-*` no `REFERENCE-ANCHORS` e no `IMPLEMENTATION-PACK`.
 - Se existir `DISCUSS.md` no escopo resolvido, alinhar tarefas às decisões registradas. Referenciar IDs **D-NN** no campo **Decisão vinculada:** de cada tarefa impactada — se nenhuma decisão impactar a tarefa, omitir o campo. A rastreabilidade D-NN → Tn → verify é usada pela seção **Fidelidade de decisões** do verify.
 - Se existir `RESEARCH.md` e notas em `research/*.md` do escopo resolvido, ler o índice e as notas cujo **Tema** cruza o âmbito do plano (ou as mais recentes relevantes). Se o índice marcar **Estado** pendente em tópico bloqueante, pedir nova sessão **research** ou **discuss**, ou registar **suposição explícita** no PLAN antes de ondas que dependam dessa decisão.
 - Se existir `plan-agents.json` no escopo resolvido (gerado por **`/oxe-plan-agent`**), um **--replan** ou renumerar tarefas deve **atualizar o JSON em conjunto** com o `PLAN.md` (cobertura `taskIds`, ondas e dependências entre agentes) — ver **`oxe/workflows/plan-agent.md`**. Preferir **`/oxe-plan-agent --replan`** para regerar **`runId`**, **`lifecycle`** (`pending_execute`) e alinhar **STATE.md**; se só **`/oxe-plan`** for usado, ou o JSON fica manualmente sincronizado, ou marcar no JSON `lifecycle.invalidatedBy: new_plan` até novo plan-agent.
@@ -489,6 +492,7 @@ Antes de finalizar a resposta ao utilizador, o agente **deve** percorrer este ga
 15. **Contexto estruturado:** se houver pack do workflow `plan`, as lacunas e conflitos críticos do pack aparecem na autoavaliação do plano ou são explicitamente dados como resolvidos durante a leitura direta.
 16. **Implementation contract:** toda tarefa mutável deve aparecer em `IMPLEMENTATION-PACK.json` com `exact_paths`, `symbols`, `contracts`, `write_set: "closed"`, `expected_checks` e `ready: true`. Path com `...`, símbolo indefinido ou contrato ausente = falha do gate.
 17. **Reference anchors:** toda referência `external-ref`, "copiar do predecessor", "usar layout X" ou equivalente deve aparecer em `REFERENCE-ANCHORS.md` com `status: resolved`. Âncora crítica em `missing|stale|conflicting` = falha do gate.
+17a. **Visual anchors:** se a SPEC ou UI-SPEC depender de imagem/screenshot/mockup, todo requisito visual crítico deve ter `VISUAL-INPUTS` pronto e anchor visual `resolved`. `chat_attachment_only` sem extração textual suficiente = falha do gate.
 18. **Fixture coverage:** toda tarefa de parser/layout/integração/transformação/fila/migração/builder deve ter fixture `ready` em `FIXTURE-PACK.json`, salvo `not_applicable` explicitamente justificado. Ausência de fixture em tarefa de risco = falha do gate.
 19. **Confiança > 90 de verdade:** `Confiança > 90%` só é válida se `IMPLEMENTATION-PACK`, `REFERENCE-ANCHORS` e `FIXTURE-PACK` estiverem íntegros e sem `critical_gap` aberto. Caso contrário, reduzir a confiança para `<= 90%` e recomendar refino.
 

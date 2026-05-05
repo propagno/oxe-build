@@ -913,6 +913,8 @@ function readRuntimeMultiAgentStatus(projectRoot, activeSession, options = {}) {
       mergeBlockers: [],
       mergeReadiness: null,
       arbitrationRequired: false,
+      health: 'unknown',
+      nextAction: 'Execute ou compile uma run antes de inspecionar status multi-agent.',
       summary: null,
     };
   }
@@ -933,6 +935,18 @@ function readRuntimeMultiAgentStatus(projectRoot, activeSession, options = {}) {
     : readJsonIfExists(workspaceMergePath);
   const handoffs = readJsonIfExists(handoffsPath);
   const arbitrationResults = readJsonIfExists(arbitrationPath);
+  const mergeBlockers = workspaceMergeReport && Array.isArray(workspaceMergeReport.blockers) ? workspaceMergeReport.blockers : [];
+  const mergeReadiness = workspaceMergeReport && workspaceMergeReport.merge_readiness ? workspaceMergeReport.merge_readiness : null;
+  let nextAction = null;
+  if (!state) {
+    nextAction = 'Execute runtime com plan-agents.json válido para materializar o estado multi-agent.';
+  } else if (mergeBlockers.length > 0) {
+    nextAction = 'Resolva os merge blockers do workspace antes de promover ou aplicar novos resultados.';
+  } else if (mergeReadiness === 'partial') {
+    nextAction = 'Conclua verify/evidence pós-merge ou aplique os worktrees pendentes antes de fechar a run.';
+  } else if (mergeReadiness === 'ready') {
+    nextAction = 'Multi-agent merge pronto; avance para runtime verify ou promotion conforme o ciclo.';
+  }
   return {
     path: statePath,
     enabled: Boolean(state),
@@ -946,9 +960,11 @@ function readRuntimeMultiAgentStatus(projectRoot, activeSession, options = {}) {
     arbitrationResults: Array.isArray(arbitrationResults) ? arbitrationResults : [],
     workspaceMergeReport: workspaceMergeReport || null,
     worktrees: workspaceMergeReport && Array.isArray(workspaceMergeReport.records) ? workspaceMergeReport.records : [],
-    mergeBlockers: workspaceMergeReport && Array.isArray(workspaceMergeReport.blockers) ? workspaceMergeReport.blockers : [],
-    mergeReadiness: workspaceMergeReport && workspaceMergeReport.merge_readiness ? workspaceMergeReport.merge_readiness : null,
+    mergeBlockers,
+    mergeReadiness,
     arbitrationRequired: Boolean(workspaceMergeReport && workspaceMergeReport.arbitration_required),
+    health: summary && summary.health ? summary.health : (mergeBlockers.length > 0 ? 'degraded' : 'unknown'),
+    nextAction,
     summary: summary || null,
   };
 }

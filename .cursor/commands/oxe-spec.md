@@ -9,7 +9,7 @@ oxe_tool_profile: read_heavy
 oxe_confidence_policy: explicit
 oxe_context_tier: standard
 oxe_contract_version: 2.0.0
-oxe_semantics_hash: eea8766eab635c97
+oxe_semantics_hash: 4ec66ac1e704fdbf
 ---
 
 OXE — Spec em 5 fases: perguntas → pesquisa → requisitos (R-ID v1/v2/fora) → roteiro (.oxe/ROADMAP.md) → aprovação → plan
@@ -25,7 +25,7 @@ OXE — Spec em 5 fases: perguntas → pesquisa → requisitos (R-ID v1/v2/fora)
 - **Política de confiança:** explícita
 - **Tier de contexto padrão:** padrão
 - **Versão do contrato:** 2.0.0
-- **Checksum semântico:** `eea8766eab635c97`
+- **Checksum semântico:** `4ec66ac1e704fdbf`
 - **Entrada de contexto prioritária:** `.oxe/context/packs/spec.md` e `.oxe/context/packs/spec.json`
 - **Regra pack-first:** ler o context pack primeiro; se estiver stale, incompleto ou ausente, cair para leitura direta com fallback explícito.
 - **Inspeção estruturada:** `oxe-cc context inspect --workflow spec --json`
@@ -44,4 +44,4 @@ OXE — Spec em 5 fases: perguntas → pesquisa → requisitos (R-ID v1/v2/fora)
 
 <!-- oxe-workflow-resolution:end -->
 
-Usa o resto desta mensagem e ficheiros anexados como entrada do utilizador.
+Usa o resto desta mensagem e ficheiros anexados como entrada do utilizador. Se houver imagem, screenshot ou mockup e o runtime suportar visão, materializar a interpretação em `VISUAL-INPUTS`; se não suportar, declarar a limitação e não inventar detalhes visuais.

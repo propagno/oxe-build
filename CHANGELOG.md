@@ -4,6 +4,20 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.10.0] — 2026-05-05
+
+### Operational Maturity
+
+Esta release amplia a prova operacional do OXE para cenários mais próximos de uso real, sem abrir novos comandos públicos.
+
+- `test:runtime-real` passa a cobrir cenários multi-wave, multi-file, gate pendente, verify parcial e promoção bloqueada por ausência de evidência técnica
+- `workspace-merge-report.json` passa a carregar `evidence_refs`, `diff_summary`, arquivos aplicados, status de verify pós-execução e próxima ação operacional por task
+- `status`, `runtime status` e `runtime agents status` expõem merge readiness, blockers e próxima ação multi-agent de forma mais direta
+- `workspaceMode: product_package` deixa de marcar `contextQuality` como crítico quando não há ciclo OXE ativo no próprio repositório do pacote
+- smoke multi-runtime reforça Codex e Copilot VS Code com validação explícita de prompts/skills, manifesto e referências quebradas
+- `doctor --release` passa a validar o conteúdo mínimo dos relatórios runtime-real e multi-agent-real da linha `1.10.0`
+- `/oxe-spec` passa a ter contrato multimodal: imagens, screenshots e mockups enviados no chat devem virar `VISUAL-INPUTS.md/json`, anchors visuais e readiness bloqueante quando críticos para UI/fluxo
+
 ## [1.9.1] — 2026-05-04
 
 ### Multi-Agent Real

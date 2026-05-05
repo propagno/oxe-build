@@ -35,6 +35,8 @@ Todos os artefatos abaixo devem existir em `.oxe/release/`:
 - `multi-agent-soak-report.json`
 - `multi-agent-real-report.json` para versões `>=1.9.1`
 
+Na linha `>=1.10.0`, `runtime-real-report.json` deve cobrir cenários representativos além do happy path simples: multi-wave, multi-file, verify parcial, gate pendente e promoção bloqueada. O `multi-agent-real-report.json` deve provar merge com evidência, diff summary, arquivos aplicados e verify status por task; o release doctor valida esse conteúdo, não apenas a presença do arquivo.
+
 ## Defaults estáveis desta publicação
 
 - `execute` e `verify`: `runtime-first`

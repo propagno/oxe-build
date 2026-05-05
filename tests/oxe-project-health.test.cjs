@@ -62,6 +62,46 @@ function writeRationalityPacks(oxeDir, taskIds = ['T1']) {
   );
 }
 
+function writeReadyVisualInputs(oxeDir) {
+  const visualDir = path.join(oxeDir, 'investigations', 'visual');
+  fs.mkdirSync(visualDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(visualDir, 'VISUAL-INPUTS.md'),
+    '# OXE — Visual Inputs\n\n- Status: ready\n',
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(visualDir, 'VISUAL-INPUTS.json'),
+    JSON.stringify({
+      schema_version: '1',
+      ready: true,
+      visualInputReadiness: 'ready',
+      critical_gaps: [],
+      inputs: [
+        {
+          id: 'VI-01',
+          source_ref: 'chat-attachment',
+          source_kind: 'mockup',
+          runtime_support: 'vision_supported',
+          inspection_status: 'inspected',
+          reproducibility: 'chat_attachment_only',
+          critical: true,
+          confidence: 0.91,
+          visual_summary: 'Mockup com header, cards e CTA principal.',
+          detected_text: ['Aprender estruturas'],
+          layout_regions: ['header', 'content'],
+          ui_components: ['card', 'button'],
+          states: ['selected'],
+          ambiguities: [],
+          derived_requirements: ['R1', 'A1'],
+          limitations: ['Anexo efêmero do chat'],
+        },
+      ],
+    }, null, 2),
+    'utf8'
+  );
+}
+
 function seedPackageRepoFixture(dir) {
   fs.mkdirSync(path.join(dir, '.oxe', 'release'), { recursive: true });
   fs.mkdirSync(path.join(dir, 'packages', 'runtime'), { recursive: true });
@@ -119,6 +159,37 @@ describe('oxe-project-health', () => {
     }
   });
 
+  test('copilotIntegrationReport counts root oxe.prompt.md as installed prompt', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-copilot-root-prompt-'));
+    const fakeCopilotHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-copilot-home-'));
+    const prevCopilotHome = process.env.COPILOT_HOME;
+    process.env.COPILOT_HOME = fakeCopilotHome;
+    try {
+      fs.mkdirSync(path.join(dir, '.github', 'prompts'), { recursive: true });
+      fs.mkdirSync(path.join(dir, '.oxe', 'install'), { recursive: true });
+      fs.mkdirSync(path.join(dir, '.oxe', 'workflows'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.oxe', 'workflows', 'oxe.md'), '# oxe\n', 'utf8');
+      fs.writeFileSync(path.join(dir, '.github', 'prompts', 'oxe.prompt.md'), 'Veja `.oxe/workflows/oxe.md`.\n', 'utf8');
+      fs.writeFileSync(
+        path.join(dir, '.github', 'copilot-instructions.md'),
+        '<!-- oxe-cc:install-begin -->\nworkspace\n<!-- oxe-cc:install-end -->\n',
+        'utf8'
+      );
+      fs.writeFileSync(
+        path.join(dir, '.oxe', 'install', 'copilot-vscode.json'),
+        JSON.stringify({ prompt_files: ['oxe.prompt.md'] }),
+        'utf8'
+      );
+      const report = h.copilotIntegrationReport(dir);
+      assert.strictEqual(report.status, 'healthy');
+      assert.deepStrictEqual(report.warnings, []);
+      assert.ok(report.workspace.promptFiles.some((filePath) => path.basename(filePath) === 'oxe.prompt.md'));
+    } finally {
+      if (prevCopilotHome == null) delete process.env.COPILOT_HOME;
+      else process.env.COPILOT_HOME = prevCopilotHome;
+    }
+  });
+
   test('copilotIntegrationReport warns when only legacy global install exists', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-copilot-legacy-'));
     const fakeCopilotHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-copilot-home-'));
@@ -138,6 +209,7 @@ describe('oxe-project-health', () => {
       assert.strictEqual(report.status, 'warning');
       assert.ok(report.warnings.some((w) => /apenas no legado global/i.test(w)));
       assert.ok(report.warnings.some((w) => /outro framework/i.test(w)));
+      assert.ok(report.warnings.some((w) => /copilot-legacy-clean/i.test(w)));
     } finally {
       if (prevCopilotHome == null) delete process.env.COPILOT_HOME;
       else process.env.COPILOT_HOME = prevCopilotHome;
@@ -471,6 +543,67 @@ describe('oxe-project-health', () => {
     assert.deepStrictEqual(report.criticalExecutionGaps, []);
   });
 
+  test('buildHealthReport blocks execute when critical visual input is missing', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-visual-blocked-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(path.join(oxe, 'codebase'), { recursive: true });
+    for (const f of h.EXPECTED_CODEBASE_MAPS) {
+      fs.writeFileSync(path.join(oxe, 'codebase', f), '# x', 'utf8');
+    }
+    fs.writeFileSync(
+      path.join(oxe, 'STATE.md'),
+      '## Fase atual\n\n`plan_ready`\n\n## Revisão do plano (opcional — dashboard / aprovação)\n\n- **plan_review_status:** `approved`\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(oxe, 'SPEC.md'),
+      '# S\n\n## Entradas visuais e interpretação\n\n- Status: blocked\n- Imagens/anexos usados como fonte: mockup crítico\n\n## Critérios de aceite\n| A1 | x | y |\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(oxe, 'PLAN.md'),
+      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 91%\n- **Base da confiança:**\n  - Completude dos requisitos: 23/25\n  - Dependências conhecidas: 14/15\n  - Risco técnico: 18/20\n  - Impacto no código existente: 14/15\n  - Clareza da validação / testes: 13/15\n  - Lacunas externas / decisões pendentes: 9/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n<confidence_vector cycle="C-01" generated_at="2026-04-22T12:00:00Z">\n  <dim name="requirements" score="0.92" weight="25" note="ok" />\n  <dim name="dependencies" score="0.93" weight="15" note="ok" />\n  <dim name="technical_risk" score="0.90" weight="20" note="controlado" />\n  <dim name="code_impact" score="0.93" weight="15" note="claro" />\n  <dim name="validation" score="0.87" weight="15" note="bom" />\n  <dim name="open_gaps" score="0.90" weight="10" note="sem gaps" />\n  <global score="0.91" gate="proceed" />\n</confidence_vector>\n\n### T1 — Demo visual\n- **Arquivos prováveis:** `src/demo.ts`\n- **Aceite vinculado:** A1\n',
+      'utf8'
+    );
+    writeRationalityPacks(oxe, ['T1']);
+    const report = h.buildHealthReport(dir);
+    assert.strictEqual(report.visualInputReadiness, 'blocked');
+    assert.strictEqual(report.executionRationalityReady, false);
+    assert.ok(report.criticalExecutionGaps.some((gap) => /VISUAL-INPUTS\.json/i.test(gap)));
+    assert.strictEqual(report.next.step, 'plan');
+    assert.match(report.next.reason, /VISUAL-INPUTS/i);
+  });
+
+  test('buildHealthReport accepts ready critical visual input', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-visual-ready-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(path.join(oxe, 'codebase'), { recursive: true });
+    for (const f of h.EXPECTED_CODEBASE_MAPS) {
+      fs.writeFileSync(path.join(oxe, 'codebase', f), '# x', 'utf8');
+    }
+    fs.writeFileSync(
+      path.join(oxe, 'STATE.md'),
+      '## Fase atual\n\n`plan_ready`\n\n## Revisão do plano (opcional — dashboard / aprovação)\n\n- **plan_review_status:** `approved`\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(oxe, 'SPEC.md'),
+      '# S\n\n## Entradas visuais e interpretação\n\n- Status: ready\n- Artefato visual: `.oxe/investigations/visual/VISUAL-INPUTS.md`\n\n## Critérios de aceite\n| A1 | x | y |\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(oxe, 'PLAN.md'),
+      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 91%\n- **Base da confiança:**\n  - Completude dos requisitos: 23/25\n  - Dependências conhecidas: 14/15\n  - Risco técnico: 18/20\n  - Impacto no código existente: 14/15\n  - Clareza da validação / testes: 13/15\n  - Lacunas externas / decisões pendentes: 9/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n<confidence_vector cycle="C-01" generated_at="2026-04-22T12:00:00Z">\n  <dim name="requirements" score="0.92" weight="25" note="ok" />\n  <dim name="dependencies" score="0.93" weight="15" note="ok" />\n  <dim name="technical_risk" score="0.90" weight="20" note="controlado" />\n  <dim name="code_impact" score="0.93" weight="15" note="claro" />\n  <dim name="validation" score="0.87" weight="15" note="bom" />\n  <dim name="open_gaps" score="0.90" weight="10" note="sem gaps" />\n  <global score="0.91" gate="proceed" />\n</confidence_vector>\n\n### T1 — Demo visual\n- **Arquivos prováveis:** `src/demo.ts`\n- **Aceite vinculado:** A1\n',
+      'utf8'
+    );
+    writeRationalityPacks(oxe, ['T1']);
+    writeReadyVisualInputs(oxe);
+    const report = h.buildHealthReport(dir);
+    assert.strictEqual(report.visualInputReadiness, 'ready');
+    assert.strictEqual(report.visualInputsReady, true);
+    assert.strictEqual(report.executionRationalityReady, true);
+  });
+
   test('buildHealthReport keeps rationality non-blocking before PLAN exists', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-rationality-na-'));
     const oxe = path.join(dir, '.oxe');
@@ -528,6 +661,9 @@ describe('oxe-project-health', () => {
     assert.ok(report.releaseReadiness);
     assert.deepStrictEqual(report.planWarn, []);
     assert.deepStrictEqual(report.reviewWarn, []);
+    assert.deepStrictEqual(report.contextWarn, []);
+    assert.strictEqual(report.contextQuality.primaryStatus, 'not_applicable');
+    assert.strictEqual(report.contextQuality.primaryWorkflow, 'release');
   });
 
   // W3.1 — parseActiveSession

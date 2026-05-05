@@ -45,10 +45,19 @@ export interface WorkspaceMergeRecord {
     root_path: string | null;
     mutation_scope: string[];
     diff_paths: string[];
+    evidence_refs: string[];
     evidence_count: number;
     verify_status: 'pass' | 'fail' | 'partial';
     status: 'ready' | 'merged' | 'blocked' | 'skipped';
     blocker: string | null;
+    applied_paths: string[];
+    diff_summary: {
+        added: number;
+        modified: number;
+        missing: number;
+        paths: string[];
+    };
+    next_action: string | null;
     recorded_at: string;
 }
 export interface WorkspaceMergeReport {

@@ -1540,6 +1540,9 @@ function printOxeHealthDiagnostics(target, c, diagOpts = {}) {
     console.log(
       `  ${c ? dim : ''}Prontidão racional:${c ? reset : ''} implementation=${r.implementationPackReady ? 'ok' : 'pendente'} | anchors=${r.referenceAnchorsReady ? 'ok' : 'pendente'} | fixtures=${r.fixturePackReady ? 'ok' : 'pendente'}`
     );
+    if (r.visualInputReadiness && r.visualInputReadiness !== 'not_applicable') {
+      console.log(`  ${c ? dim : ''}Entradas visuais:${c ? reset : ''} ${r.visualInputReadiness}`);
+    }
   }
   if (r.contextQuality) {
     console.log(
@@ -1746,6 +1749,9 @@ function runStatusFull(target) {
     }
     if (planExists) {
       console.log(`  ${c ? dim : ''}  • Artefatos racionais:${c ? reset : ''} implementation=${report.implementationPackReady ? 'ok' : 'pendente'} · anchors=${report.referenceAnchorsReady ? 'ok' : 'pendente'} · fixtures=${report.fixturePackReady ? 'ok' : 'pendente'}`);
+      if (report.visualInputReadiness && report.visualInputReadiness !== 'not_applicable') {
+        console.log(`  ${c ? dim : ''}  • Entradas visuais:${c ? reset : ''} ${report.visualInputReadiness}`);
+      }
     }
   }
 
@@ -1808,7 +1814,9 @@ function runStatusFull(target) {
       const agents = Array.isArray(report.multiAgent.agents) ? report.multiAgent.agents.length : 0;
       const handoffs = Array.isArray(report.multiAgent.handoffs) ? report.multiAgent.handoffs.length : 0;
       const ownership = Array.isArray(report.multiAgent.ownership) ? report.multiAgent.ownership.length : 0;
-      console.log(`  ${c ? dim : ''}Multi-agent:${c ? reset : ''} ${report.multiAgent.enabled ? (report.multiAgent.mode || 'active') : 'disabled'} · agentes ${agents} · ownership ${ownership} · handoffs ${handoffs}`);
+      const blockers = Array.isArray(report.multiAgent.mergeBlockers) ? report.multiAgent.mergeBlockers.length : 0;
+      console.log(`  ${c ? dim : ''}Multi-agent:${c ? reset : ''} ${report.multiAgent.enabled ? (report.multiAgent.mode || 'active') : 'disabled'} · agentes ${agents} · ownership ${ownership} · handoffs ${handoffs} · merge ${report.multiAgent.mergeReadiness || 'n/a'} · blockers ${blockers}`);
+      if (report.multiAgent.nextAction) console.log(`  ${c ? dim : ''}Multi-agent next:${c ? reset : ''} ${report.multiAgent.nextAction}`);
     }
     if (report.providerCatalog) {
       const summary = report.providerCatalog.summary || {};
@@ -1892,6 +1900,8 @@ function runStatus(target, opts = {}) {
       implementationPackReady: report.implementationPackReady,
       referenceAnchorsReady: report.referenceAnchorsReady,
       fixturePackReady: report.fixturePackReady,
+      visualInputReadiness: report.visualInputReadiness,
+      visualInputsReady: report.visualInputsReady,
       executionRationalityReady: report.executionRationalityReady,
       criticalExecutionGaps: report.criticalExecutionGaps,
       executionRationality: report.executionRationality,
@@ -4456,7 +4466,9 @@ async function runRuntime(opts) {
       console.log(`  ${c ? green : ''}Recovery:${c ? reset : ''} ${recLabel} · recoveries=${report.recoveryState.recoverCount ?? 0}`);
     }
     if (multiAgent) {
-      console.log(`  ${c ? green : ''}Multi-agent:${c ? reset : ''} ${multiAgent.enabled ? (multiAgent.mode || 'active') : 'disabled'} · agentes=${Array.isArray(multiAgent.agents) ? multiAgent.agents.length : 0} · ownership=${Array.isArray(multiAgent.ownership) ? multiAgent.ownership.length : 0}`);
+      const blockers = Array.isArray(multiAgent.mergeBlockers) ? multiAgent.mergeBlockers.length : 0;
+      console.log(`  ${c ? green : ''}Multi-agent:${c ? reset : ''} ${multiAgent.enabled ? (multiAgent.mode || 'active') : 'disabled'} · agentes=${Array.isArray(multiAgent.agents) ? multiAgent.agents.length : 0} · ownership=${Array.isArray(multiAgent.ownership) ? multiAgent.ownership.length : 0} · merge=${multiAgent.mergeReadiness || 'n/a'} · blockers=${blockers}`);
+      if (multiAgent.nextAction) console.log(`  ${c ? cyan : ''}Próxima ação:${c ? reset : ''} ${multiAgent.nextAction}`);
     }
     if (report.providerCatalog && report.providerCatalog.summary) {
       const summary = report.providerCatalog.summary;
@@ -4901,6 +4913,8 @@ async function runRuntime(opts) {
     console.log(`  ${c ? green : ''}Modo:${c ? reset : ''} ${multiAgent.enabled ? (multiAgent.mode || 'active') : 'disabled'}`);
     console.log(`  ${c ? green : ''}Isolamento:${c ? reset : ''} ${multiAgent.workspaceIsolationEnforced ? 'enforced' : 'shared/disabled'}`);
     console.log(`  ${c ? green : ''}Agentes:${c ? reset : ''} ${Array.isArray(multiAgent.agents) ? multiAgent.agents.length : 0} · ownership=${Array.isArray(multiAgent.ownership) ? multiAgent.ownership.length : 0} · handoffs=${Array.isArray(multiAgent.handoffs) ? multiAgent.handoffs.length : 0}`);
+    console.log(`  ${c ? green : ''}Merge:${c ? reset : ''} ${multiAgent.mergeReadiness || 'n/a'} · blockers=${Array.isArray(multiAgent.mergeBlockers) ? multiAgent.mergeBlockers.length : 0} · arbitration=${multiAgent.arbitrationRequired ? 'required' : 'no'}`);
+    if (multiAgent.nextAction) console.log(`  ${c ? cyan : ''}Próxima ação:${c ? reset : ''} ${multiAgent.nextAction}`);
     return;
   }
 

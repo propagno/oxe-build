@@ -58,10 +58,19 @@ export interface WorkspaceMergeRecord {
   root_path: string | null;
   mutation_scope: string[];
   diff_paths: string[];
+  evidence_refs: string[];
   evidence_count: number;
   verify_status: 'pass' | 'fail' | 'partial';
   status: 'ready' | 'merged' | 'blocked' | 'skipped';
   blocker: string | null;
+  applied_paths: string[];
+  diff_summary: {
+    added: number;
+    modified: number;
+    missing: number;
+    paths: string[];
+  };
+  next_action: string | null;
   recorded_at: string;
 }
 
@@ -277,7 +286,8 @@ function createMergeRecord(
   lease: WorkspaceLease,
   result?: TaskResult
 ): WorkspaceMergeRecord {
-  const evidenceCount = Array.isArray(result?.evidence) ? result!.evidence.length : 0;
+  const evidenceRefs = Array.isArray(result?.evidence) ? result!.evidence.map(String).filter(Boolean) : [];
+  const scope = mutationScopeOf(node);
   return {
     work_item_id: node.id,
     agent_id: agent.id,
@@ -287,12 +297,31 @@ function createMergeRecord(
     branch: lease.branch ?? null,
     base_commit: lease.base_commit ?? null,
     root_path: lease.root_path ?? null,
-    mutation_scope: mutationScopeOf(node),
-    diff_paths: mutationScopeOf(node),
-    evidence_count: evidenceCount,
+    mutation_scope: scope,
+    diff_paths: scope,
+    evidence_refs: evidenceRefs,
+    evidence_count: evidenceRefs.length,
     verify_status: result ? (result.success ? 'pass' : 'fail') : 'partial',
     status: result ? (result.success ? 'ready' : 'blocked') : 'ready',
     blocker: result && !result.success ? `verify_failed:${result.failure_class}` : null,
+    applied_paths: [],
+    diff_summary: { added: 0, modified: 0, missing: 0, paths: scope },
+    next_action: result && !result.success ? 'Corrija a falha de verify/evidence antes de aplicar merge do workspace.' : null,
+    recorded_at: new Date().toISOString(),
+  };
+}
+
+function enrichMergeRecordWithResult(record: WorkspaceMergeRecord, result?: TaskResult): WorkspaceMergeRecord {
+  if (!result) return record;
+  const evidenceRefs = Array.isArray(result.evidence) ? result.evidence.map(String).filter(Boolean) : [];
+  return {
+    ...record,
+    evidence_refs: evidenceRefs,
+    evidence_count: evidenceRefs.length,
+    verify_status: result.success ? 'pass' : 'fail',
+    status: result.success ? 'ready' : 'blocked',
+    blocker: result.success ? null : `verify_failed:${result.failure_class}`,
+    next_action: result.success ? null : 'Corrija a falha de verify/evidence antes de aplicar merge do workspace.',
     recorded_at: new Date().toISOString(),
   };
 }
@@ -340,16 +369,35 @@ function detectMutationConflicts(graph: ExecutionGraph, agents: AgentSpec[], par
 
 function applyWorkspaceRecord(projectRoot: string, record: WorkspaceMergeRecord): WorkspaceMergeRecord {
   if (!record.root_path || record.status !== 'ready') return record;
+  const appliedPaths: string[] = [];
+  const summary = { added: 0, modified: 0, missing: 0, paths: [...record.mutation_scope] };
   for (const relativePath of record.mutation_scope) {
     const source = path.join(record.root_path, relativePath);
     const target = path.join(projectRoot, relativePath);
     if (!fs.existsSync(source) || fs.statSync(source).isDirectory()) {
-      return { ...record, status: 'blocked', blocker: `missing_output:${relativePath}` };
+      summary.missing += 1;
+      return {
+        ...record,
+        status: 'blocked',
+        blocker: `missing_output:${relativePath}`,
+        diff_summary: summary,
+        next_action: `Materialize o arquivo esperado ${relativePath} no worktree do agente antes do merge.`,
+      };
     }
+    if (fs.existsSync(target)) summary.modified += 1;
+    else summary.added += 1;
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(source, target);
+    appliedPaths.push(relativePath);
   }
-  return { ...record, status: 'merged', blocker: null };
+  return {
+    ...record,
+    status: 'merged',
+    blocker: null,
+    applied_paths: appliedPaths,
+    diff_summary: summary,
+    next_action: null,
+  };
 }
 
 function createTrackingWorkspaceManager(
@@ -414,11 +462,19 @@ async function runGraphForAgent(
     };
   }
   const trackingWorkspaceManager = createTrackingWorkspaceManager(agent.workspaceManager, agent, graph, workspaceRecords);
+  const taskResults = new Map<string, TaskResult>();
+  const trackingExecutor: TaskExecutor = {
+    execute: async (node, lease, runId, attemptNumber) => {
+      const result = await agent.executor.execute(node, lease, runId, attemptNumber);
+      taskResults.set(node.id, result);
+      return result;
+    },
+  };
   const ctx: SchedulerContext = {
     projectRoot: opts.projectRoot,
     sessionId: opts.sessionId,
     runId: `${opts.runId}-agent${idx}`,
-    executor: agent.executor,
+    executor: trackingExecutor,
     workspaceManager: trackingWorkspaceManager,
     onEvent: opts.onEvent,
   };
@@ -426,6 +482,7 @@ async function runGraphForAgent(
   const work = scheduler.run(subGraph, ctx);
   if (!heartbeatTimeoutMs || heartbeatTimeoutMs <= 0) {
     const result = await work;
+    const reconciledRecords = workspaceRecords.map((record) => enrichMergeRecordWithResult(record, taskResults.get(record.work_item_id)));
     return {
       agent_id: agent.id,
       completed: result.completed,
@@ -433,7 +490,7 @@ async function runGraphForAgent(
       timed_out: false,
       assigned_task_ids: nodeIds,
       reassigned_task_ids: [],
-      workspace_records: workspaceRecords,
+      workspace_records: reconciledRecords,
       cleanup: () => trackingWorkspaceManager.disposeDeferred(),
     };
   }
@@ -458,6 +515,7 @@ async function runGraphForAgent(
     };
   }
   const result = raced.result;
+  const reconciledRecords = workspaceRecords.map((record) => enrichMergeRecordWithResult(record, taskResults.get(record.work_item_id)));
   return {
     agent_id: agent.id,
     completed: result.completed,
@@ -465,7 +523,7 @@ async function runGraphForAgent(
     timed_out: false,
     assigned_task_ids: nodeIds,
     reassigned_task_ids: [],
-    workspace_records: workspaceRecords,
+    workspace_records: reconciledRecords,
     cleanup: () => trackingWorkspaceManager.disposeDeferred(),
   };
 }

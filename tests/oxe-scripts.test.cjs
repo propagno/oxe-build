@@ -8,6 +8,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const REPO_ROOT = path.join(__dirname, '..');
+const release = require('../bin/lib/oxe-release.cjs');
 
 describe('scripts', () => {
   test('oxe-assets-scan exits 0', () => {
@@ -184,5 +185,49 @@ describe('scripts', () => {
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     assert.ok(manifest.versions);
     assert.ok(manifest.reports);
+  });
+
+  test('release report loaders require 1.10 runtime-real scenarios and merge evidence', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-release-report-contract-'));
+    const releaseDir = path.join(dir, '.oxe', 'release');
+    fs.mkdirSync(releaseDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(releaseDir, 'runtime-real-report.json'),
+      JSON.stringify({
+        results: [
+          { name: 'static-html-js', ok: true },
+        ],
+      }, null, 2),
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(releaseDir, 'multi-agent-real-report.json'),
+      JSON.stringify({
+        results: [
+          {
+            scenario: 'parallel_git_worktree_success',
+            ok: true,
+            report: {
+              records: [
+                {
+                  status: 'merged',
+                  verify_status: 'partial',
+                  evidence_refs: [],
+                  applied_paths: [],
+                  diff_summary: { paths: [] },
+                },
+              ],
+            },
+          },
+        ],
+      }, null, 2),
+      'utf8'
+    );
+    const runtimeReal = release.loadRuntimeRealReport(dir);
+    const multiAgentReal = release.loadMultiAgentRealReport(dir);
+    assert.strictEqual(runtimeReal.ok, false);
+    assert.ok(runtimeReal.missingRequired.includes('multi_wave_app'));
+    assert.strictEqual(multiAgentReal.ok, false);
+    assert.deepStrictEqual(multiAgentReal.failures, ['parallel_git_worktree_success']);
   });
 });

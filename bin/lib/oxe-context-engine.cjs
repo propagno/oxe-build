@@ -231,6 +231,8 @@ function resolveArtifactCandidates(projectRoot, activeSession) {
     reference_anchors: withFallback('reference_anchors', 'reference_anchors', scoped.referenceAnchors, base.referenceAnchors),
     fixture_pack_md: withFallback('fixture_pack_md', 'fixtures', scoped.fixturePackMd, base.fixturePackMd),
     fixture_pack_json: withFallback('fixture_pack_json', 'fixtures', scoped.fixturePackJson, base.fixturePackJson),
+    visual_inputs_md: withFallback('visual_inputs_md', 'visual_inputs', scoped.visualInputsMd, base.visualInputsMd),
+    visual_inputs_json: withFallback('visual_inputs_json', 'visual_inputs', scoped.visualInputsJson, base.visualInputsJson),
     plan_agents: withFallback('plan_agents', 'plan_agents', scoped.planAgents, base.planAgents),
     quick: withFallback('quick', 'plan', scoped.quick, base.quick),
     runtime: withFallback('runtime', 'runtime', scoped.runtime, base.runtime),

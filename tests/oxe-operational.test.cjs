@@ -373,6 +373,29 @@ describe('oxe-operational', () => {
     );
     fs.writeFileSync(path.join(runDir, 'handoffs.json'), JSON.stringify([{ handoff_id: 'h1' }], null, 2), 'utf8');
     fs.writeFileSync(path.join(runDir, 'arbitration-results.json'), JSON.stringify([{ work_item_id: 'T1' }], null, 2), 'utf8');
+    fs.writeFileSync(
+      path.join(runDir, 'workspace-merge-report.json'),
+      JSON.stringify({
+        schema_version: 1,
+        run_id: 'run-ma',
+        merge_readiness: 'blocked',
+        arbitration_required: false,
+        blockers: ['T1:missing_output:src/a.ts'],
+        records: [
+          {
+            work_item_id: 'T1',
+            agent_id: 'agent-a',
+            evidence_count: 1,
+            evidence_refs: ['evidence:T1'],
+            verify_status: 'pass',
+            applied_paths: [],
+            diff_summary: { added: 0, modified: 0, missing: 1, paths: ['src/a.ts'] },
+            next_action: 'Materialize o arquivo esperado src/a.ts no worktree do agente antes do merge.',
+          },
+        ],
+      }, null, 2),
+      'utf8'
+    );
     operational.writeRunState(dir, null, { run_id: 'run-ma', status: 'running' });
     const status = operational.readRuntimeMultiAgentStatus(dir, null, {});
     assert.strictEqual(status.enabled, true);
@@ -381,6 +404,9 @@ describe('oxe-operational', () => {
     assert.strictEqual(status.agents.length, 1);
     assert.strictEqual(status.handoffs.length, 1);
     assert.strictEqual(status.arbitrationResults.length, 1);
+    assert.strictEqual(status.mergeReadiness, 'blocked');
+    assert.strictEqual(status.mergeBlockers.length, 1);
+    assert.match(status.nextAction, /Resolva os merge blockers/);
   });
 
   test('compileExecutionGraphFromArtifacts persists compiled graph and canonical state', () => {

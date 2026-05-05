@@ -47,6 +47,14 @@ function readIfExists(filePath) {
   }
 }
 
+function readJsonIfExists(filePath) {
+  try {
+    return fs.existsSync(filePath) ? JSON.parse(fs.readFileSync(filePath, 'utf8')) : null;
+  } catch {
+    return null;
+  }
+}
+
 function hasResolutionPolicy(text) {
   return /\.oxe\/workflows\//.test(text)
     && /oxe\/workflows\//.test(text)
@@ -166,6 +174,22 @@ function evaluateRuntime(runtimeCase) {
     };
   });
   const agentChecksOk = agentChecks.every((item) => item.exists && item.oxe_agent_ok && item.no_legacy_refs);
+  const copilotManifest = runtimeCase.runtime === 'copilot_vscode'
+    ? readJsonIfExists(path.join(dir, '.oxe', 'install', 'copilot-vscode.json'))
+    : null;
+  const copilotPromptFiles = copilotManifest && Array.isArray(copilotManifest.prompt_files)
+    ? copilotManifest.prompt_files.map(String)
+    : [];
+  const copilotMissingManifestPrompts = runtimeCase.runtime === 'copilot_vscode'
+    ? copilotPromptFiles.filter((name) => !fs.existsSync(path.join(dir, '.github', 'prompts', name)))
+    : [];
+  const copilotManifestOk = runtimeCase.runtime !== 'copilot_vscode'
+    || (Boolean(copilotManifest)
+      && copilotPromptFiles.length > 0
+      && copilotMissingManifestPrompts.length === 0
+      && fs.existsSync(path.join(dir, '.github', 'copilot-instructions.md')));
+  const codexDiscoveryOk = runtimeCase.runtime !== 'codex'
+    || (oxePresent && extraChecksOk && agentChecksOk);
   const uninstall = runCli(uninstallArgs, env);
   const uninstallOk = uninstall.status === 0
     && !fs.existsSync(entrypoint)
@@ -183,6 +207,9 @@ function evaluateRuntime(runtimeCase) {
     extra_checks: extraChecks,
     agent_checks_ok: agentChecksOk,
     agent_checks: agentChecks,
+    copilot_manifest_ok: copilotManifestOk,
+    copilot_missing_manifest_prompts: copilotMissingManifestPrompts,
+    codex_discovery_ok: codexDiscoveryOk,
     uninstall_ok: uninstallOk,
     observations: [
       installOk ? null : `install failed: ${(install.stderr || install.stdout || '').trim()}`,
@@ -191,6 +218,8 @@ function evaluateRuntime(runtimeCase) {
       wrapperDriftOk ? null : 'wrapper com drift em relação ao contrato esperado',
       extraChecksOk ? null : `checks extras falharam: ${extraChecks.filter((item) => !item.exists || !item.workflow_resolution_ok).map((item) => path.basename(item.path)).join(', ')}`,
       agentChecksOk ? null : `checks de agentes falharam: ${agentChecks.filter((item) => !item.exists || !item.oxe_agent_ok || !item.no_legacy_refs).map((item) => path.basename(item.path)).join(', ')}`,
+      copilotManifestOk ? null : `manifesto Copilot inválido ou aponta para prompts ausentes: ${copilotMissingManifestPrompts.join(', ') || 'sem prompt_files'}`,
+      codexDiscoveryOk ? null : 'Codex não materializou prompts e skills suficientes para descoberta real',
       uninstallOk ? null : `uninstall failed: ${(uninstall.stderr || uninstall.stdout || '').trim()}`,
     ].filter(Boolean),
   };
@@ -205,8 +234,8 @@ function main() {
     results,
     summary: {
       total: results.length,
-      pass: results.filter((item) => item.install_ok && item.oxe_present && item.workflow_resolution_ok && item.wrapper_drift_ok && item.extra_checks_ok !== false && item.agent_checks_ok !== false && item.uninstall_ok).length,
-      fail: results.filter((item) => !(item.install_ok && item.oxe_present && item.workflow_resolution_ok && item.wrapper_drift_ok && item.extra_checks_ok !== false && item.agent_checks_ok !== false && item.uninstall_ok)).length,
+      pass: results.filter((item) => item.install_ok && item.oxe_present && item.workflow_resolution_ok && item.wrapper_drift_ok && item.extra_checks_ok !== false && item.agent_checks_ok !== false && item.copilot_manifest_ok !== false && item.codex_discovery_ok !== false && item.uninstall_ok).length,
+      fail: results.filter((item) => !(item.install_ok && item.oxe_present && item.workflow_resolution_ok && item.wrapper_drift_ok && item.extra_checks_ok !== false && item.agent_checks_ok !== false && item.copilot_manifest_ok !== false && item.codex_discovery_ok !== false && item.uninstall_ok)).length,
     },
   };
   const reportPath = release.releasePaths(PROJECT_ROOT).smokeReport;

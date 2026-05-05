@@ -11,7 +11,7 @@ oxe_tool_profile: mixed
 oxe_confidence_policy: rubric
 oxe_context_tier: standard
 oxe_contract_version: 2.0.0
-oxe_semantics_hash: 2193373eb2691e0d
+oxe_semantics_hash: ea0c06ca7b5c87bb
 ---
 
 <!-- oxe-reasoning-contract:start -->
@@ -25,7 +25,7 @@ oxe_semantics_hash: 2193373eb2691e0d
 - **Política de confiança:** rubrica
 - **Tier de contexto padrão:** padrão
 - **Versão do contrato:** 2.0.0
-- **Checksum semântico:** `2193373eb2691e0d`
+- **Checksum semântico:** `ea0c06ca7b5c87bb`
 - **Entrada de contexto prioritária:** `.oxe/context/packs/quick.md` e `.oxe/context/packs/quick.json`
 - **Regra pack-first:** ler o context pack primeiro; se estiver stale, incompleto ou ausente, cair para leitura direta com fallback explícito.
 - **Inspeção estruturada:** `oxe-cc context inspect --workflow quick --json`
