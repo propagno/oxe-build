@@ -75,6 +75,8 @@
     "test:recovery-fixtures": "node scripts/run-recovery-fixtures.cjs",
     "test:multi-agent-soak": "node scripts/run-multi-agent-soak.cjs",
     "test:multi-agent-real": "node scripts/run-multi-agent-real.cjs",
+    "test:runtime-llm": "node scripts/test-runtime-llm.cjs",
+    "benchmark:autonomy": "node scripts/benchmark-autonomy.cjs",
     "test": "npm run build:runtime && npm run test:root && npm run test:runtime && npm run test:runtime-smoke && npm run test:runtime-real && npm run test:recovery-fixtures && npm run test:multi-agent-soak && npm run test:multi-agent-real",
     "test:coverage": "c8 --check-coverage --lines 82 --functions 85 --branches 58 --statements 82 npm test",
     "scan:assets": "node scripts/oxe-assets-scan.cjs",

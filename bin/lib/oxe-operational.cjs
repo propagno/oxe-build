@@ -86,6 +86,19 @@ function createExecutionContext(projectRoot, activeSession, options = {}) {
   const gateManager = (runtime && typeof runtime.GateManager === 'function')
     ? new runtime.GateManager(projectRoot, activeSession || null, runId)
     : null;
+  // Auto-wire PolicyEngine from .oxe/config.json runtime.policy when not explicitly injected
+  let policyEngine = options.policyEngine || null;
+  if (!policyEngine && runtime && typeof runtime.PolicyEngine === 'function') {
+    try {
+      const cfgPath = path.join(projectRoot, '.oxe', 'config.json');
+      if (fs.existsSync(cfgPath)) {
+        const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+        if (cfg.runtime && cfg.runtime.policy && typeof cfg.runtime.policy === 'object') {
+          policyEngine = runtime.PolicyEngine.fromConfig(cfg.runtime.policy);
+        }
+      }
+    } catch {}
+  }
   return {
     projectRoot,
     sessionId: activeSession || null,
@@ -93,7 +106,7 @@ function createExecutionContext(projectRoot, activeSession, options = {}) {
     executor: options.executor || null,
     workspaceManager: options.workspaceManager || null,
     gateManager,
-    policyEngine: options.policyEngine || null,
+    policyEngine,
     policyActor: options.policyActor || 'runtime',
     quota: options.quota || null,
     pluginRegistry: options.pluginRegistry || null,
@@ -102,6 +115,44 @@ function createExecutionContext(projectRoot, activeSession, options = {}) {
     onEvent: options.onEvent || null,
     options: options.schedulerOptions || {},
   };
+}
+
+/**
+ * Persists LLM provider config to .oxe/config.json under runtime.provider.
+ * @param {string} projectRoot
+ * @param {{ baseUrl?: string, model?: string, apiKeyEnv?: string, maxTurns?: number }} providerConfig
+ */
+function saveRuntimeProviderConfig(projectRoot, providerConfig) {
+  const configPath = path.join(projectRoot, '.oxe', 'config.json');
+  let cfg = {};
+  try { cfg = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch {}
+  if (!cfg.runtime || typeof cfg.runtime !== 'object') cfg.runtime = {};
+  cfg.runtime.provider = {
+    baseUrl: providerConfig.baseUrl || 'https://api.anthropic.com/v1',
+    model: providerConfig.model || 'claude-sonnet-4-6',
+  };
+  if (providerConfig.apiKeyEnv) cfg.runtime.provider.apiKeyEnv = providerConfig.apiKeyEnv;
+  if (providerConfig.maxTurns != null) cfg.runtime.provider.maxTurns = providerConfig.maxTurns;
+  const oxeDir = path.join(projectRoot, '.oxe');
+  if (!fs.existsSync(oxeDir)) fs.mkdirSync(oxeDir, { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+  return cfg.runtime.provider;
+}
+
+/**
+ * Reads persisted LLM provider config from .oxe/config.json runtime.provider.
+ * @param {string} projectRoot
+ * @returns {{ baseUrl?: string, model?: string, apiKeyEnv?: string, maxTurns?: number } | null}
+ */
+function loadRuntimeProviderConfig(projectRoot) {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(projectRoot, '.oxe', 'config.json'), 'utf8'));
+    return (cfg.runtime && cfg.runtime.provider && typeof cfg.runtime.provider === 'object')
+      ? cfg.runtime.provider
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function buildRuntimePluginRegistry(projectRoot) {
@@ -535,6 +586,37 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
   if (lintHints.length) validationErrors.push(...lintHints);
 
   const compiledGraph = runtime.toSerializable(graph);
+
+  // Gap B: enrich node verify.command from SPEC criteria howToVerify when linked via acceptance_refs.
+  // Extracts commands from backtick patterns (e.g. "Run `npm test`") and appends to existing command
+  // or sets as command when none exists. Only runs when spec has criteria.
+  if (parsedSpec.criteria && parsedSpec.criteria.length > 0 && compiledGraph.nodes) {
+    const criteriaMap = new Map(parsedSpec.criteria.map(c => [c.id, c]));
+    const nodeList = Array.isArray(compiledGraph.nodes)
+      ? compiledGraph.nodes
+      : Object.values(compiledGraph.nodes);
+    for (const node of nodeList) {
+      if (!node || !node.verify) continue;
+      const refs = Array.isArray(node.verify.acceptance_refs) ? node.verify.acceptance_refs : [];
+      const criteriaCommands = [];
+      for (const ref of refs) {
+        const criterion = criteriaMap.get(ref);
+        if (criterion && criterion.howToVerify) {
+          const cmdMatch = criterion.howToVerify.match(/`([^`]+)`/);
+          if (cmdMatch) criteriaCommands.push(cmdMatch[1].trim());
+        }
+      }
+      if (criteriaCommands.length === 0) continue;
+      const unique = [...new Set(criteriaCommands)];
+      if (node.verify.command) {
+        const extra = unique.filter(c => !node.verify.command.includes(c));
+        if (extra.length > 0) node.verify.command += ' && ' + extra.join(' && ');
+      } else {
+        node.verify.command = unique.join(' && ');
+      }
+    }
+  }
+
   const current = options.runState || readRunState(projectRoot, activeSession) || {};
   const runId = current.run_id || makeRunId();
   const next = writeRunState(projectRoot, activeSession, {
@@ -823,14 +905,16 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
       ? runtime.fromSerializable(current.compiled_graph)
       : current.compiled_graph;
 
-  // Detect plan-agents.json (session path takes priority over root)
+  // Detect plan-agents.json: explicit override > session path > root path
   const rootAgentPlan = path.join(projectRoot, '.oxe', 'plan-agents.json');
   const sessAgentPlan = activeSession
     ? path.join(projectRoot, '.oxe', activeSession, 'plan', 'plan-agents.json')
     : null;
-  const agentPlanPath = (sessAgentPlan && fs.existsSync(sessAgentPlan))
-    ? sessAgentPlan
-    : (fs.existsSync(rootAgentPlan) ? rootAgentPlan : null);
+  const agentPlanPath = (options.agentsPlanPath && fs.existsSync(options.agentsPlanPath))
+    ? options.agentsPlanPath
+    : (sessAgentPlan && fs.existsSync(sessAgentPlan))
+      ? sessAgentPlan
+      : (fs.existsSync(rootAgentPlan) ? rootAgentPlan : null);
 
   // Build ctx with GateManager (Gap 1)
   const ctx = createExecutionContext(projectRoot, activeSession, {
@@ -2485,6 +2569,8 @@ module.exports = {
   readRuntimeGates,
   resolveRuntimeGate,
   createExecutionContext,
+  saveRuntimeProviderConfig,
+  loadRuntimeProviderConfig,
   buildRuntimeExecutePreflight,
   runRuntimeExecute,
   runRuntimeVerify,

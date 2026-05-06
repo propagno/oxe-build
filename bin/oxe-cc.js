@@ -3916,7 +3916,7 @@ function parseCapabilitiesArgs(argv) {
  */
 
 /**
- * @typedef {{ help: boolean, dir: string, action: string, subAction: string, activeSession: string|null, wave: number|null, task: string, mode: string, reason: string, runId: string, fromEventId: string, writeReport: boolean, gateId: string, decision: string, actor: string, targetKind: string, remote: string, baseBranch: string, minimumCoverage: number|null, timeoutMs: number|null, jsonOutput: boolean, gateStatus: string, gateScope: string, parseError: boolean, unknownFlag: string }} RuntimeOpts
+ * @typedef {{ help: boolean, dir: string, action: string, subAction: string, activeSession: string|null, wave: number|null, task: string, mode: string, reason: string, runId: string, fromEventId: string, writeReport: boolean, gateId: string, decision: string, actor: string, targetKind: string, remote: string, baseBranch: string, minimumCoverage: number|null, timeoutMs: number|null, jsonOutput: boolean, gateStatus: string, gateScope: string, parseError: boolean, unknownFlag: string, agentsPlanPath: string, apiKeyEnv: string }} RuntimeOpts
  */
 
 /**
@@ -4062,6 +4062,8 @@ function parseRuntimeArgs(argv) {
     baseUrl: '',
     maxTurns: null,
     recompile: false,
+    agentsPlanPath: '',
+    apiKeyEnv: '',
     decision: '',
     actor: '',
     targetKind: '',
@@ -4104,6 +4106,8 @@ function parseRuntimeArgs(argv) {
     else if (a === '--model' && argv[i + 1]) out.model = String(argv[++i]);
     else if (a === '--base-url' && argv[i + 1]) out.baseUrl = String(argv[++i]);
     else if (a === '--max-turns' && argv[i + 1]) out.maxTurns = Number(argv[++i]);
+    else if (a === '--agents-plan' && argv[i + 1]) out.agentsPlanPath = path.resolve(argv[++i]);
+    else if (a === '--api-key-env' && argv[i + 1]) out.apiKeyEnv = String(argv[++i]);
     else if (a === '--recompile') out.recompile = true;
     else if (!a.startsWith('-')) positionals.push(a);
     else {
@@ -4633,6 +4637,28 @@ async function runRuntime(opts) {
     return;
   }
 
+  if (opts.action === 'configure') {
+    try {
+      const providerConfig = {
+        baseUrl: opts.baseUrl || undefined,
+        model: opts.model || undefined,
+        apiKeyEnv: opts.apiKeyEnv || undefined,
+        maxTurns: opts.maxTurns ? parseInt(opts.maxTurns, 10) : undefined,
+      };
+      const saved = oxeOperational.saveRuntimeProviderConfig(opts.dir, providerConfig);
+      console.log(`  ${c ? green : ''}✓${c ? reset : ''} Provider configurado em .oxe/config.json`);
+      console.log(`  ${c ? green : ''}Base URL:${c ? reset : ''} ${saved.baseUrl}`);
+      console.log(`  ${c ? green : ''}Modelo:${c ? reset : ''} ${saved.model}`);
+      if (saved.apiKeyEnv) console.log(`  ${c ? green : ''}API Key env:${c ? reset : ''} $${saved.apiKeyEnv}`);
+      if (saved.maxTurns != null) console.log(`  ${c ? green : ''}Max turns:${c ? reset : ''} ${saved.maxTurns}`);
+      console.log(`  ${c ? dim : ''}Passe --api-key na execução ou exporte a variável configurada em apiKeyEnv.${c ? reset : ''}`);
+      return;
+    } catch (err) {
+      console.error(`${red}${err && err.message ? err.message : 'Falha ao salvar configuração.'}${reset}`);
+      process.exit(1);
+    }
+  }
+
   if (opts.action === 'compile') {
     try {
       // --recompile: delete existing run state files so a fresh run_id is generated
@@ -4744,21 +4770,28 @@ async function runRuntime(opts) {
 
   if (opts.action === 'execute') {
     try {
-      // Resolve provider: flag > env vars
-      const apiKey = opts.apiKey || process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || '';
-      const model = opts.model || process.env.OXE_MODEL || 'claude-sonnet-4-6';
-      const baseUrl = opts.baseUrl || process.env.OXE_BASE_URL || 'https://api.anthropic.com/v1';
+      // Resolve provider: flag > env vars > persisted .oxe/config.json runtime.provider
+      const _persisted = oxeOperational.loadRuntimeProviderConfig(opts.dir);
+      const apiKey = opts.apiKey
+        || process.env.ANTHROPIC_API_KEY
+        || process.env.OPENAI_API_KEY
+        || (_persisted && _persisted.apiKeyEnv ? process.env[_persisted.apiKeyEnv] || '' : '')
+        || '';
+      const model = opts.model || process.env.OXE_MODEL || (_persisted && _persisted.model) || 'claude-sonnet-4-6';
+      const baseUrl = opts.baseUrl || process.env.OXE_BASE_URL || (_persisted && _persisted.baseUrl) || 'https://api.anthropic.com/v1';
+      const maxTurns = opts.maxTurns || (_persisted && _persisted.maxTurns) || 10;
       if (!apiKey) {
         console.error(`${red}Erro: executor LLM não configurado.${reset}`);
         console.error(`  Use: --api-key <chave>  ou  exporte ANTHROPIC_API_KEY`);
-        console.error(`  Exemplo: oxe-cc runtime execute --api-key $ANTHROPIC_API_KEY --model claude-sonnet-4-6`);
+        console.error(`  Ou persista com: oxe-cc runtime configure --model <modelo> --api-key-env ANTHROPIC_API_KEY`);
         process.exit(1);
       }
-      const providerConfig = { baseUrl, apiKey, model, maxTurns: opts.maxTurns || 10 };
+      const providerConfig = { baseUrl, apiKey, model, maxTurns };
       const result = await oxeOperational.runRuntimeExecute(opts.dir, activeSession, {
         runId: opts.runId || undefined,
         heartbeatTimeoutMs: opts.heartbeatTimeoutMs || undefined,
         providerConfig,
+        agentsPlanPath: opts.agentsPlanPath || undefined,
         onProgress: (event) => {
           if (event.type === 'turn_start') {
             const turn = event.detail?.turn ?? 0;

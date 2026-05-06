@@ -501,6 +501,24 @@ function validateConfigShape(cfg) {
           }
         }
       }
+      if (runtimeCfg.provider != null) {
+        if (typeof runtimeCfg.provider !== 'object' || Array.isArray(runtimeCfg.provider)) {
+          typeErrors.push('runtime.provider deve ser um objeto');
+        } else {
+          const p = /** @type {Record<string, unknown>} */ (runtimeCfg.provider);
+          if (p.baseUrl != null && typeof p.baseUrl !== 'string') typeErrors.push('runtime.provider.baseUrl deve ser string');
+          if (p.model != null && typeof p.model !== 'string') typeErrors.push('runtime.provider.model deve ser string');
+          if (p.apiKeyEnv != null && typeof p.apiKeyEnv !== 'string') typeErrors.push('runtime.provider.apiKeyEnv deve ser string');
+          if (p.maxTurns != null && (typeof p.maxTurns !== 'number' || !Number.isInteger(p.maxTurns) || p.maxTurns < 1)) {
+            typeErrors.push('runtime.provider.maxTurns deve ser inteiro positivo');
+          }
+        }
+      }
+      if (runtimeCfg.policy != null) {
+        if (typeof runtimeCfg.policy !== 'object' || Array.isArray(runtimeCfg.policy)) {
+          typeErrors.push('runtime.policy deve ser um objeto');
+        }
+      }
     }
   }
   return { unknownKeys, typeErrors };
