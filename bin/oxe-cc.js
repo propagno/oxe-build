@@ -207,10 +207,20 @@ function buildInstallSummary(opts, fullLayout) {
   if (opts.cursor) agentHint.push('Cursor');
   if (opts.copilot) agentHint.push('Copilot no VS Code');
   if (opts.copilotCli || opts.allAgents || anyGranularAgent(opts)) agentHint.push('CLIs / multi-agente');
+  const onlyCodexAgent =
+    opts.agentCodex &&
+    !opts.allAgents &&
+    !opts.copilotCli &&
+    !opts.cursor &&
+    !opts.copilot &&
+    !opts.agentOpenCode &&
+    !opts.agentGemini &&
+    !opts.agentWindsurf &&
+    !opts.agentAntigravity;
   if (agentHint.length) {
     nextSteps.push({
       desc: `Entrar no fluxo OXE no agente (${agentHint.join(', ')}) e deixar o router indicar o primeiro passo:`,
-      cmd: '/oxe',
+      cmd: onlyCodexAgent ? '/prompts:oxe' : '/oxe',
     });
   } else if (opts.oxeOnly) {
     nextSteps.push({
@@ -228,6 +238,12 @@ function buildInstallSummary(opts, fullLayout) {
     nextSteps.push({
       desc: 'No Copilot CLI: após instalar, rode /skills reload (ou reinicie o copilot) e use /oxe ou /oxe-scan:',
       cmd: '/skills list',
+    });
+  }
+  if (opts.agentCodex || opts.allAgents) {
+    nextSteps.push({
+      desc: 'No Codex Desktop: reinicie o app ou abra uma nova conversa para recarregar prompts/skills; use a superfície de prompts do Codex:',
+      cmd: '/prompts:oxe   ou   /prompts:oxe-spec',
     });
   }
   if (opts.allAgents || opts.agentGemini) {
