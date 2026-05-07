@@ -1421,6 +1421,94 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
   };
 }
 
+// Marks SPEC.md checklist items as [x] when the run is completed.
+// Finds **DoD Wave N:** blocks and numbered checklist sections (e.g. "21.1 MVP"),
+// marks unchecked items only within sections whose waves are fully completed.
+function applySpecChecklistSync(specPath, canonicalLive, compiledGraph) {
+  if (!canonicalLive || (canonicalLive.run && canonicalLive.run.status !== 'completed')) return;
+  if (!specPath || !fs.existsSync(specPath)) return;
+
+  const completedIds = new Set(
+    canonicalLive.completedWorkItems instanceof Set
+      ? [...canonicalLive.completedWorkItems]
+      : Array.isArray(canonicalLive.completedWorkItems)
+        ? canonicalLive.completedWorkItems
+        : []
+  );
+  if (completedIds.size === 0) return;
+
+  const waves = Array.isArray(compiledGraph && compiledGraph.waves) ? compiledGraph.waves : [];
+
+  // Which wave numbers are fully completed (all node_ids in completedIds)?
+  const completedWaveNums = new Set();
+  for (const wave of waves) {
+    if (Array.isArray(wave.node_ids) && wave.node_ids.length > 0 &&
+        wave.node_ids.every(id => completedIds.has(id))) {
+      completedWaveNums.add(wave.wave_number);
+    }
+  }
+
+  // Are ALL waves completed? (run is complete = yes, since status === 'completed')
+  const allWavesDone = waves.length === 0 || waves.every(w =>
+    Array.isArray(w.node_ids) && w.node_ids.every(id => completedIds.has(id))
+  );
+
+  const lines = fs.readFileSync(specPath, 'utf8').split('\n');
+  let changed = false;
+
+  // Tracking state: which section type are we marking?
+  // 'none' | 'dod_wave' | 'checklist_mvp' | 'checklist_full'
+  let markMode = 'none';
+
+  const result = lines.map((line, i) => {
+    // Detect DoD Wave block header: **DoD Wave N:** or **DoD Wave N:** (with optional emoji/text)
+    const dodMatch = line.match(/\*\*DoD Wave\s+(\d+):/i);
+    if (dodMatch) {
+      const waveNum = parseInt(dodMatch[1], 10);
+      markMode = completedWaveNums.has(waveNum) ? 'dod_wave' : 'none';
+      return line;
+    }
+
+    // Detect numbered checklist section headers (e.g. "### 21.1 MVP", "### 21.2 v1.0.0")
+    const checklistMatch = line.match(/^#{2,4}\s+\d+\.\d+\s+(.+)/i);
+    if (checklistMatch) {
+      const sectionTitle = checklistMatch[1].toLowerCase();
+      // MVP / v0.x.x → mark when run is fully complete (pre-release milestones)
+      // v1.0.0 or any X.Y.Z ≥ 1.0.0 → never auto-mark (requires explicit human sign-off)
+      if (/mvp|v?0\.\d+\.\d+/i.test(sectionTitle) && allWavesDone) {
+        markMode = 'checklist_mvp';
+      } else {
+        markMode = 'none';
+      }
+      return line;
+    }
+
+    // Exit section on any top-level heading (##, ###) that isn't a checklist header
+    if (/^#{1,3}\s/.test(line) && !checklistMatch) {
+      markMode = 'none';
+      return line;
+    }
+
+    // Exit DoD section on **Limite técnico or **Condição para replanejar etc.
+    if (markMode === 'dod_wave' && /^\*\*(?:Limite|Condição|Nota|Atenção|Warning)/.test(line)) {
+      markMode = 'none';
+      return line;
+    }
+
+    // Mark unchecked items in active section
+    if (markMode !== 'none' && /^- \[ \]/.test(line)) {
+      changed = true;
+      return line.replace(/^- \[ \]/, '- [x]');
+    }
+
+    return line;
+  });
+
+  if (changed) {
+    fs.writeFileSync(specPath, result.join('\n'), 'utf8');
+  }
+}
+
 function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
   const runtime = loadRuntimeModule();
   if (!runtime || typeof runtime.ProjectionEngine !== 'function' || typeof runtime.fromSerializable !== 'function') {
@@ -1490,6 +1578,8 @@ function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
     fs.writeFileSync(path.join(op.executionRoot, 'COMMIT-SUMMARY.md'), projections.commitSummary + '\n', 'utf8');
     fs.writeFileSync(path.join(op.executionRoot, 'PROMOTION-SUMMARY.md'), projections.promotionSummary + '\n', 'utf8');
     fs.writeFileSync(path.join(op.executionRoot, 'PR-SUMMARY.md'), projections.prSummary + '\n', 'utf8');
+    // Sync SPEC.md checklist: mark completed wave DoD sections and MVP checklist when run closes
+    applySpecChecklistSync(paths.spec, canonicalLive, current.compiled_graph);
   }
   const next = writeRunState(projectRoot, activeSession, {
     ...current,
@@ -2582,4 +2672,5 @@ module.exports = {
   replayEvents,
   replayRuntimeState,
   readRuntimeMultiAgentStatus,
+  applySpecChecklistSync,
 };
