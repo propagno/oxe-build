@@ -4,6 +4,45 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.11.0] — 2026-05-06
+
+### Spec Lifecycle Automation & CLI Gaps
+
+Esta release fecha os gaps de adoção identificados na análise de maturidade v1.10.0, com foco em automação do ciclo de vida do SPEC, configuração de provider e tolerância de formato no parser de planos.
+
+#### Automação do ciclo de vida (SPEC.md)
+
+- nova função `applySpecChecklistSync` em `oxe-operational.cjs`: ao executar `runtime project` com um run `completed`, marca automaticamente `**DoD Wave N:**` e seções MVP/v0.x.x do checklist no `SPEC.md` com `[x]`
+- v1.0.0 checklist não é marcado automaticamente — requer sign-off explícito
+- exportada no módulo para testes de integração e uso programático
+
+#### CLI — `runtime execute`
+
+- novo flag `--agents-plan <path>`: override explícito para localização do `plan-agents.json`, com prioridade sobre detecção automática por sessão e raiz do projeto
+- novo flag `--api-key-env <VAR>`: lê API key de variável de ambiente nomeada em vez de `OXE_LLM_API_KEY`
+- novo subcomando `runtime configure`: wizard interativo que persiste `baseUrl`, `model`, `apiKey` em `.oxe/config.json` (seção `runtime.provider`)
+
+#### Provider LLM auto-wired
+
+- `createExecutionContext` passa a instanciar `PolicyEngine.fromConfigFile()` automaticamente quando `.oxe/config.json` contém seção `runtime.policy`
+- `loadRuntimeProviderConfig` / `saveRuntimeProviderConfig` exportados de `oxe-operational.cjs`
+- health checks de `runtime.provider` e `runtime.policy` adicionados ao `oxe-cc status`
+
+#### Parser de planos — tolerância de formato (Gap E)
+
+- `parsePlan` agora aceita `**Verificação:**`, `**Verify command:**` e `**Verification:**` além do formato `Verificação:` sem negrito
+- planos gerados por LLM com markdown bold deixam de silenciosamente omitir verify commands
+
+#### Spec-criteria enrichment (Gap B)
+
+- `compileExecutionGraphFromArtifacts` extrai comandos backtick dos campos `howToVerify` dos critérios de aceite da SPEC e os anexa a `node.verify.command` quando ausente no PLAN
+
+#### Testes e benchmark
+
+- novo `test:runtime-llm` (`scripts/test-runtime-llm.cjs`): valida `LlmTaskExecutor` end-to-end com LLM real; skipa automaticamente quando `OXE_LLM_API_KEY` não está definido
+- novo `benchmark:autonomy` (`scripts/benchmark-autonomy.cjs`): 5 fixtures de referência (simple → medium → parallel), mede taxa de compilação→execução→verify sem intervenção; saída em `.oxe/release/benchmark-autonomy-report.json`
+- novos testes: `gap-spec-enrichment.test.cjs` (5 casos) e `gap-spec-checklist-sync.test.cjs` (4 casos)
+
 ## [1.10.0] — 2026-05-05
 
 ### Operational Maturity

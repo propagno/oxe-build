@@ -86,6 +86,19 @@ function createExecutionContext(projectRoot, activeSession, options = {}) {
   const gateManager = (runtime && typeof runtime.GateManager === 'function')
     ? new runtime.GateManager(projectRoot, activeSession || null, runId)
     : null;
+  // Auto-wire PolicyEngine from .oxe/config.json runtime.policy when not explicitly injected
+  let policyEngine = options.policyEngine || null;
+  if (!policyEngine && runtime && typeof runtime.PolicyEngine === 'function') {
+    try {
+      const cfgPath = path.join(projectRoot, '.oxe', 'config.json');
+      if (fs.existsSync(cfgPath)) {
+        const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+        if (cfg.runtime && cfg.runtime.policy && typeof cfg.runtime.policy === 'object') {
+          policyEngine = runtime.PolicyEngine.fromConfig(cfg.runtime.policy);
+        }
+      }
+    } catch {}
+  }
   return {
     projectRoot,
     sessionId: activeSession || null,
@@ -93,7 +106,7 @@ function createExecutionContext(projectRoot, activeSession, options = {}) {
     executor: options.executor || null,
     workspaceManager: options.workspaceManager || null,
     gateManager,
-    policyEngine: options.policyEngine || null,
+    policyEngine,
     policyActor: options.policyActor || 'runtime',
     quota: options.quota || null,
     pluginRegistry: options.pluginRegistry || null,
@@ -102,6 +115,44 @@ function createExecutionContext(projectRoot, activeSession, options = {}) {
     onEvent: options.onEvent || null,
     options: options.schedulerOptions || {},
   };
+}
+
+/**
+ * Persists LLM provider config to .oxe/config.json under runtime.provider.
+ * @param {string} projectRoot
+ * @param {{ baseUrl?: string, model?: string, apiKeyEnv?: string, maxTurns?: number }} providerConfig
+ */
+function saveRuntimeProviderConfig(projectRoot, providerConfig) {
+  const configPath = path.join(projectRoot, '.oxe', 'config.json');
+  let cfg = {};
+  try { cfg = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch {}
+  if (!cfg.runtime || typeof cfg.runtime !== 'object') cfg.runtime = {};
+  cfg.runtime.provider = {
+    baseUrl: providerConfig.baseUrl || 'https://api.anthropic.com/v1',
+    model: providerConfig.model || 'claude-sonnet-4-6',
+  };
+  if (providerConfig.apiKeyEnv) cfg.runtime.provider.apiKeyEnv = providerConfig.apiKeyEnv;
+  if (providerConfig.maxTurns != null) cfg.runtime.provider.maxTurns = providerConfig.maxTurns;
+  const oxeDir = path.join(projectRoot, '.oxe');
+  if (!fs.existsSync(oxeDir)) fs.mkdirSync(oxeDir, { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+  return cfg.runtime.provider;
+}
+
+/**
+ * Reads persisted LLM provider config from .oxe/config.json runtime.provider.
+ * @param {string} projectRoot
+ * @returns {{ baseUrl?: string, model?: string, apiKeyEnv?: string, maxTurns?: number } | null}
+ */
+function loadRuntimeProviderConfig(projectRoot) {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(projectRoot, '.oxe', 'config.json'), 'utf8'));
+    return (cfg.runtime && cfg.runtime.provider && typeof cfg.runtime.provider === 'object')
+      ? cfg.runtime.provider
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function buildRuntimePluginRegistry(projectRoot) {
@@ -535,6 +586,37 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
   if (lintHints.length) validationErrors.push(...lintHints);
 
   const compiledGraph = runtime.toSerializable(graph);
+
+  // Gap B: enrich node verify.command from SPEC criteria howToVerify when linked via acceptance_refs.
+  // Extracts commands from backtick patterns (e.g. "Run `npm test`") and appends to existing command
+  // or sets as command when none exists. Only runs when spec has criteria.
+  if (parsedSpec.criteria && parsedSpec.criteria.length > 0 && compiledGraph.nodes) {
+    const criteriaMap = new Map(parsedSpec.criteria.map(c => [c.id, c]));
+    const nodeList = Array.isArray(compiledGraph.nodes)
+      ? compiledGraph.nodes
+      : Object.values(compiledGraph.nodes);
+    for (const node of nodeList) {
+      if (!node || !node.verify) continue;
+      const refs = Array.isArray(node.verify.acceptance_refs) ? node.verify.acceptance_refs : [];
+      const criteriaCommands = [];
+      for (const ref of refs) {
+        const criterion = criteriaMap.get(ref);
+        if (criterion && criterion.howToVerify) {
+          const cmdMatch = criterion.howToVerify.match(/`([^`]+)`/);
+          if (cmdMatch) criteriaCommands.push(cmdMatch[1].trim());
+        }
+      }
+      if (criteriaCommands.length === 0) continue;
+      const unique = [...new Set(criteriaCommands)];
+      if (node.verify.command) {
+        const extra = unique.filter(c => !node.verify.command.includes(c));
+        if (extra.length > 0) node.verify.command += ' && ' + extra.join(' && ');
+      } else {
+        node.verify.command = unique.join(' && ');
+      }
+    }
+  }
+
   const current = options.runState || readRunState(projectRoot, activeSession) || {};
   const runId = current.run_id || makeRunId();
   const next = writeRunState(projectRoot, activeSession, {
@@ -823,14 +905,16 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
       ? runtime.fromSerializable(current.compiled_graph)
       : current.compiled_graph;
 
-  // Detect plan-agents.json (session path takes priority over root)
+  // Detect plan-agents.json: explicit override > session path > root path
   const rootAgentPlan = path.join(projectRoot, '.oxe', 'plan-agents.json');
   const sessAgentPlan = activeSession
     ? path.join(projectRoot, '.oxe', activeSession, 'plan', 'plan-agents.json')
     : null;
-  const agentPlanPath = (sessAgentPlan && fs.existsSync(sessAgentPlan))
-    ? sessAgentPlan
-    : (fs.existsSync(rootAgentPlan) ? rootAgentPlan : null);
+  const agentPlanPath = (options.agentsPlanPath && fs.existsSync(options.agentsPlanPath))
+    ? options.agentsPlanPath
+    : (sessAgentPlan && fs.existsSync(sessAgentPlan))
+      ? sessAgentPlan
+      : (fs.existsSync(rootAgentPlan) ? rootAgentPlan : null);
 
   // Build ctx with GateManager (Gap 1)
   const ctx = createExecutionContext(projectRoot, activeSession, {
@@ -1337,6 +1421,94 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
   };
 }
 
+// Marks SPEC.md checklist items as [x] when the run is completed.
+// Finds **DoD Wave N:** blocks and numbered checklist sections (e.g. "21.1 MVP"),
+// marks unchecked items only within sections whose waves are fully completed.
+function applySpecChecklistSync(specPath, canonicalLive, compiledGraph) {
+  if (!canonicalLive || (canonicalLive.run && canonicalLive.run.status !== 'completed')) return;
+  if (!specPath || !fs.existsSync(specPath)) return;
+
+  const completedIds = new Set(
+    canonicalLive.completedWorkItems instanceof Set
+      ? [...canonicalLive.completedWorkItems]
+      : Array.isArray(canonicalLive.completedWorkItems)
+        ? canonicalLive.completedWorkItems
+        : []
+  );
+  if (completedIds.size === 0) return;
+
+  const waves = Array.isArray(compiledGraph && compiledGraph.waves) ? compiledGraph.waves : [];
+
+  // Which wave numbers are fully completed (all node_ids in completedIds)?
+  const completedWaveNums = new Set();
+  for (const wave of waves) {
+    if (Array.isArray(wave.node_ids) && wave.node_ids.length > 0 &&
+        wave.node_ids.every(id => completedIds.has(id))) {
+      completedWaveNums.add(wave.wave_number);
+    }
+  }
+
+  // Are ALL waves completed? (run is complete = yes, since status === 'completed')
+  const allWavesDone = waves.length === 0 || waves.every(w =>
+    Array.isArray(w.node_ids) && w.node_ids.every(id => completedIds.has(id))
+  );
+
+  const lines = fs.readFileSync(specPath, 'utf8').split('\n');
+  let changed = false;
+
+  // Tracking state: which section type are we marking?
+  // 'none' | 'dod_wave' | 'checklist_mvp' | 'checklist_full'
+  let markMode = 'none';
+
+  const result = lines.map((line, i) => {
+    // Detect DoD Wave block header: **DoD Wave N:** or **DoD Wave N:** (with optional emoji/text)
+    const dodMatch = line.match(/\*\*DoD Wave\s+(\d+):/i);
+    if (dodMatch) {
+      const waveNum = parseInt(dodMatch[1], 10);
+      markMode = completedWaveNums.has(waveNum) ? 'dod_wave' : 'none';
+      return line;
+    }
+
+    // Detect numbered checklist section headers (e.g. "### 21.1 MVP", "### 21.2 v1.0.0")
+    const checklistMatch = line.match(/^#{2,4}\s+\d+\.\d+\s+(.+)/i);
+    if (checklistMatch) {
+      const sectionTitle = checklistMatch[1].toLowerCase();
+      // MVP / v0.x.x → mark when run is fully complete (pre-release milestones)
+      // v1.0.0 or any X.Y.Z ≥ 1.0.0 → never auto-mark (requires explicit human sign-off)
+      if (/mvp|v?0\.\d+\.\d+/i.test(sectionTitle) && allWavesDone) {
+        markMode = 'checklist_mvp';
+      } else {
+        markMode = 'none';
+      }
+      return line;
+    }
+
+    // Exit section on any top-level heading (##, ###) that isn't a checklist header
+    if (/^#{1,3}\s/.test(line) && !checklistMatch) {
+      markMode = 'none';
+      return line;
+    }
+
+    // Exit DoD section on **Limite técnico or **Condição para replanejar etc.
+    if (markMode === 'dod_wave' && /^\*\*(?:Limite|Condição|Nota|Atenção|Warning)/.test(line)) {
+      markMode = 'none';
+      return line;
+    }
+
+    // Mark unchecked items in active section
+    if (markMode !== 'none' && /^- \[ \]/.test(line)) {
+      changed = true;
+      return line.replace(/^- \[ \]/, '- [x]');
+    }
+
+    return line;
+  });
+
+  if (changed) {
+    fs.writeFileSync(specPath, result.join('\n'), 'utf8');
+  }
+}
+
 function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
   const runtime = loadRuntimeModule();
   if (!runtime || typeof runtime.ProjectionEngine !== 'function' || typeof runtime.fromSerializable !== 'function') {
@@ -1406,6 +1578,8 @@ function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
     fs.writeFileSync(path.join(op.executionRoot, 'COMMIT-SUMMARY.md'), projections.commitSummary + '\n', 'utf8');
     fs.writeFileSync(path.join(op.executionRoot, 'PROMOTION-SUMMARY.md'), projections.promotionSummary + '\n', 'utf8');
     fs.writeFileSync(path.join(op.executionRoot, 'PR-SUMMARY.md'), projections.prSummary + '\n', 'utf8');
+    // Sync SPEC.md checklist: mark completed wave DoD sections and MVP checklist when run closes
+    applySpecChecklistSync(paths.spec, canonicalLive, current.compiled_graph);
   }
   const next = writeRunState(projectRoot, activeSession, {
     ...current,
@@ -2485,6 +2659,8 @@ module.exports = {
   readRuntimeGates,
   resolveRuntimeGate,
   createExecutionContext,
+  saveRuntimeProviderConfig,
+  loadRuntimeProviderConfig,
   buildRuntimeExecutePreflight,
   runRuntimeExecute,
   runRuntimeVerify,
@@ -2496,4 +2672,5 @@ module.exports = {
   replayEvents,
   replayRuntimeState,
   readRuntimeMultiAgentStatus,
+  applySpecChecklistSync,
 };

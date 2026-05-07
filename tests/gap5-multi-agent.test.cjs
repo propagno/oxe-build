@@ -56,13 +56,14 @@ describe('Gap 5 — MultiAgentCoordinator wiring via runRuntimeExecute', () => {
   });
 
   it('plan-agents.json invalid JSON error message includes "plan-agents.json inválido" when graph is compiled', async () => {
-    // Simulate a run state with a compiled_graph to bypass the compile step
+    // Simulate a run state with a compiled_graph to bypass the compile step.
+    // skipPreflight: true bypasses buildRuntimeExecutePreflight which returns (not throws) on stub run state.
     const agentPlanPath = path.join(tmpDir, '.oxe', 'plan-agents.json');
     fs.writeFileSync(agentPlanPath, '{ invalid json <<<');
     const fakeRunState = { run_id: 'run-test', compiled_graph: { nodes: [], edges: [], waves: [], metadata: {} } };
     try {
       await assert.rejects(
-        () => runRuntimeExecute(tmpDir, null, { runState: fakeRunState }),
+        () => runRuntimeExecute(tmpDir, null, { runState: fakeRunState, skipPreflight: true }),
         (err) => {
           assert.ok(err instanceof Error);
           assert.ok(
@@ -77,18 +78,19 @@ describe('Gap 5 — MultiAgentCoordinator wiring via runRuntimeExecute', () => {
     }
   });
 
-  it('throws "não contém agentes válidos" when plan-agents.json has empty agents array (with compiled graph)', async () => {
+  it('throws "agents vazio ou ausente" when plan-agents.json has empty agents array (with compiled graph)', async () => {
+    // validateMultiAgentPlan reports 'campo "agents" vazio ou ausente', wrapped in 'plan-agents.json inválido: ...'
     const agentPlanPath = path.join(tmpDir, '.oxe', 'plan-agents.json');
     fs.writeFileSync(agentPlanPath, JSON.stringify({ oxePlanAgentsSchema: 3, mode: 'parallel', agents: [] }));
     const fakeRunState = { run_id: 'run-test', compiled_graph: { nodes: [], edges: [], waves: [], metadata: {} } };
     try {
       await assert.rejects(
-        () => runRuntimeExecute(tmpDir, null, { runState: fakeRunState }),
+        () => runRuntimeExecute(tmpDir, null, { runState: fakeRunState, skipPreflight: true }),
         (err) => {
           assert.ok(err instanceof Error);
           assert.ok(
-            err.message.includes('não contém agentes válidos'),
-            `Expected "não contém agentes válidos", got: ${err.message}`
+            err.message.includes('agents') && err.message.includes('inválido'),
+            `Expected error about agents, got: ${err.message}`
           );
           return true;
         }

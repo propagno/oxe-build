@@ -113,6 +113,33 @@ describe('parsePlan', () => {
     assert.deepEqual(r.waves[3], ['T10', 'T15']);
   });
 
+  it('verifyCommand: formato bold **Verificação:**', () => {
+    const md = `
+### T1 — Tarefa
+- **Onda:** 1
+- **Verificação:** \`npm test\`
+`;
+    assert.equal(parsePlan(md).tasks[0].verifyCommand, 'npm test');
+  });
+
+  it('verifyCommand: formato bold **Verify command:**', () => {
+    const md = `
+### T1 — Tarefa
+- **Onda:** 1
+- **Verify command:** \`node --test\`
+`;
+    assert.equal(parsePlan(md).tasks[0].verifyCommand, 'node --test');
+  });
+
+  it('verifyCommand: formato bold **Verification:**', () => {
+    const md = `
+### T1 — Tarefa
+- **Onda:** 1
+- **Verification:** \`pytest\`
+`;
+    assert.equal(parsePlan(md).tasks[0].verifyCommand, 'pytest');
+  });
+
   it('tarefa sem aceite, files e decisions retorna arrays vazios', () => {
     const md = `
 ### T1 — Tarefa minima
