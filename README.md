@@ -21,128 +21,182 @@ npx oxe-cc@latest
 
 ## O que é o OXE
 
-> **OXE é a camada de disciplina entre você e seu agente de IA. Qualquer agente, qualquer IDE, qualquer projeto — o mesmo ciclo estruturado, com histórico persistente que melhora a cada entrega.**
+> **OXE é a camada de disciplina entre você e seu agente de IA. Qualquer agente, qualquer IDE, qualquer projeto — o mesmo ciclo estruturado, com memória persistente que melhora a cada entrega.**
 
-OXE é o **Framework OXE — Orchestrated eXperience Engineering**: um framework de desenvolvimento assistido por IA orientado por artefatos, contexto em disco e execução verificável. Funciona identicamente em Cursor, GitHub Copilot, Claude Code, Gemini CLI, Windsurf e qualquer outro agente — o estado fica em `.oxe/` no seu projeto, não preso a nenhuma IDE.
+OXE é o **Framework OXE — Orchestrated eXperience Engineering**: um sistema de desenvolvimento assistido por IA orientado por artefatos, contexto em disco e execução verificável. Funciona em Cursor, GitHub Copilot, Claude Code, Gemini CLI, Windsurf e qualquer outro agente — o estado fica em `.oxe/` no seu projeto, não preso a nenhuma IDE.
 
-No momento atual, o OXE opera em duas camadas complementares já prontas para publicação:
+A partir da v1.12.0, o OXE opera em três camadas complementares:
 
-- **framework de método** — `spec -> plan -> execute -> verify`, sessões, workstreams, lessons loop e contratos de raciocínio multi-runtime
-- **runtime enterprise** — `ExecutionGraph`, `canonical_state`, context packs, evidence store, verification manifest, gates, policy, promotion, recovery e auditoria operacional
+- **modo autônomo** — `/oxe <objetivo>` → Conductor Agent classifica, recupera memória, seleciona personas e decide automaticamente Agent Mode ou Swarm Mode
+- **framework de método** — `spec → plan → execute → verify`, sessões, workstreams, lessons loop e contratos de raciocínio multi-runtime
+- **runtime enterprise** — `ExecutionGraph`, evidence store, verification manifest, gates, policy, promotion, recovery e auditoria operacional
 
-Ele se apoia em três princípios:
+Seus princípios:
 
-- **Spec-driven design** — antes de escrever código, você define *o que* construir e *como saber que está pronto*. Essa especificação restringe e guia tudo o que vem depois.
-- **Context engineering** — o estado do trabalho fica em arquivos pequenos dentro de `.oxe/`, não na memória do chat. O agente lê o que precisa, quando precisa — sem sobrecarregar o contexto com decisões já tomadas.
-- **Lessons loop** — ao fim de cada ciclo, `/oxe-retro` extrai 3–5 lições prescritivas que o próximo spec/plan lê automaticamente. Depois de alguns ciclos, os planos ficam dramaticamente melhores porque os erros anteriores não se repetem.
-- **Plan-Driven Dynamic Agents** — quando há múltiplos domínios, o plano cria agentes específicos para *aquela demanda*. Agentes não são reaproveitados entre projetos ou demandas.
-- **Semântica de raciocínio multi-runtime** — discovery, planning, execution, review e status seguem contratos cognitivos explícitos. O mesmo workflow OXE deve gerar respostas exploratórias, decision-complete e auditáveis em Copilot, Cursor, Claude, Codex e demais runtimes suportados.
-- **Entradas visuais rastreáveis** — imagens, screenshots e mockups enviados ao chat são interpretados pelo runtime hospedeiro quando ele tem visão, mas o OXE exige que essa interpretação vire `VISUAL-INPUTS.md/json` e anchors antes de alimentar plan/execute.
+- **Spec-driven design** — antes de escrever código, você define *o que* construir e *como saber que está pronto*.
+- **Context engineering** — o estado do trabalho fica em arquivos pequenos em `.oxe/`, não na memória do chat. O agente lê o que precisa, quando precisa.
+- **Memory Kernel** — memória cross-session em `.oxe/memory/REPO-MEMORY.md` injetada automaticamente antes de cada run. Decisões, pitfalls e padrões não se perdem entre sessões.
+- **Learning Kernel** — ao fim de cada ciclo, padrões são destilados, lições atualizadas com dedup e skills candidatas enfileiradas para promoção. Os próximos planos ficam melhores porque os erros anteriores não se repetem.
+- **Plan-Driven Dynamic Agents** — quando há múltiplos domínios, o Conductor cria agentes específicos para *aquela demanda* com ownership de arquivo e coordenação por ondas.
+- **Semântica de raciocínio multi-runtime** — discovery, planning, execution, review e status seguem contratos cognitivos explícitos em qualquer IDE.
 
-O resultado: **menos requisições**, **mais coerência**, e uma experiência de engenharia orquestrada que funciona do mesmo jeito em qualquer IDE.
-
----
-
-## Semântica de raciocínio do OXE
-
-O OXE agora distingue cinco famílias de raciocínio:
-
-- `discovery` — explorar antes de perguntar; separar fatos, inferências e lacunas
-- `planning` — produzir plano decision-complete, com riscos, validação e confidence gate
-- `execution` — reconhecimento curto antes de mutar; menor write set viável; validação por fatia
-- `review` — findings primeiro, severidade, evidência e risco residual
-- `status` — leitura curta do estado, recomendação única e motivo
-
-Essas regras vivem no núcleo canónico em `oxe/workflows/references/reasoning-*.md`, sobem para os workflows em `oxe/workflows/` e são renderizadas para cada runtime em `.github/prompts/`, `.cursor/commands/`, `commands/oxe/`, `.codex/prompts/` e skills multiagente. Agentes especializados vivem em `oxe/agents/` e são instalados como agentes/skills OXE-native quando o runtime suporta esse conceito. Nesta linha, `oxe/workflows/**`, `oxe/agents/**` e `workflow-runtime-contracts.json` são contratos obrigatórios da release; superfícies geradas permanecem derivadas e sincronizadas.
+O resultado: **menos requisições**, **mais coerência**, e uma experiência de engenharia orquestrada que aprende com cada ciclo.
 
 ---
 
-## Momento atual do produto
+## Modo autônomo — `/oxe <objetivo>`
 
-O OXE já não é só um conjunto de prompts e markdowns. Hoje ele combina:
+A forma mais direta de usar o OXE a partir da v1.12.0:
 
-- **artefatos canónicos em `.oxe/`** para continuidade entre sessões, IDEs e agentes
-- **Context Engine V2** para seleção e compressão determinística de contexto
-- **runtime TypeScript compilado para CJS** em `packages/runtime/`, responsável por grafo formal, scheduler, evidence, gates, policy, promotion e recovery
-- **projeção derivada para markdown**: `PLAN.md`, `VERIFY.md`, `STATE.md`, summaries e dashboards passam a refletir o estado formal sempre que o runtime está disponível
-- **fallback compatível**: se o runtime não estiver compilado, os comandos seguem funcionando no modo legado, sem quebrar a UX do OXE
+```
+/oxe cria um módulo de importação de arquivos com histórico e validação
+```
 
-Em termos práticos, o estado operacional real agora passa por:
+O **Conductor Agent** (`oxe/workflows/conduct.md`) faz automaticamente:
 
-- `ACTIVE-RUN.json`
-- `.oxe/runs/<run_id>.json`
-- `.oxe/runs/<run_id>/verification-manifest.json`
-- `.oxe/runs/<run_id>/residual-risk-ledger.json`
-- `.oxe/runs/<run_id>/evidence-coverage.json`
-- `.oxe/runs/<run_id>/workspace-merge-report.json`
-- `.oxe/execution/GATES.json`
-- `OXE-EVENTS.ndjson`
+1. **Classifica** a complexidade: simples | médio | complexo
+2. **Recupera memória** das 5 camadas (runtime_state → session → project → lessons → observations)
+3. **Seleciona personas** aplicáveis ao objetivo (executor, architect, ui-specialist, db-specialist…)
+4. **Decide o modo** e executa:
 
-Contrato estável desta release:
+```
+intent_score = simples ou médio
+  → Agent Mode: Conductor age sozinho com a persona correta
+    artefatos: .oxe/agent/AGENT-SESSION.json
 
-- `execute` e `verify` são `runtime-first` quando `oxe-cc runtime` está disponível
-- `status`, `doctor`, dashboard e CLI de runtime leem o mesmo estado canónico
-- `multi-agent` é GA apenas com isolamento real (`git_worktree`); `inplace` não é backend válido para coordenação paralela
-- `pr_draft` é o alvo remoto estável de promotion nesta publicação
+intent_score = complexo (3+ domínios, 8+ arquivos, feature end-to-end)
+  → Swarm Mode: Scout → Coordinator → Builders → Reviewer → Verifier
+    artefatos: .oxe/swarm/SWARM-RUN.json, BOARD.md, FILE-OWNERSHIP.json
+```
 
-→ [Guia por papel](docs/ROLES.md) — executor, reviewer, operador de gate, mantenedor do pacote
+### Agent Mode
 
----
+Para objetivos de 1–2 domínios. O Conductor age como implementador com a persona mais adequada:
 
-## Para times
+```
+/oxe ajusta o texto do botão de exportar para "Exportar CSV"
+→ persona: executor
+→ discovery mínimo → implementa → verifica → grava AGENT-SESSION.json
+→ OXE-EVENTS.ndjson: RunStarted + WorkItemCompleted + RunCompleted
+```
 
-| Recurso | Link |
-|---------|------|
-| Primeiros 15 minutos | [QUICKSTART.md](QUICKSTART.md) |
-| Guia por papel (executor / reviewer / operador) | [docs/ROLES.md](docs/ROLES.md) |
-| Fluxo recomendado para times | [docs/TEAM-ADOPTION.md](docs/TEAM-ADOPTION.md) |
-| Exemplo completo reproduzível | [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) |
-| Incidentes e gates | [docs/INCIDENT-PLAYBOOK.md](docs/INCIDENT-PLAYBOOK.md) |
-| Suporte por runtime (Cursor, Copilot, Claude Code…) | [docs/RUNTIME-SMOKE-MATRIX.md](docs/RUNTIME-SMOKE-MATRIX.md) |
-| Release readiness e publicação | [docs/RELEASE-READINESS.md](docs/RELEASE-READINESS.md) |
+Artefatos em `.oxe/agent/`:
+- `AGENT-SESSION.json` — intent, skills carregadas, work_items, reconciliação
+- `MEMORY-INJECTIONS.md` — contexto de memória injetado (auditável)
+- `SKILLS-LOADED.json` — personas ativas no run
+- `RECONCILIATION.md` — resultado final: objective_satisfied, arquivos alterados
+
+### Swarm Mode
+
+Para objetivos complexos com múltiplos domínios. Uma equipe de agentes especializados opera em pipeline:
+
+```
+/oxe criar módulo de importação com histórico, validação e tela de acompanhamento
+→ Swarm: Scout + builder-backend + builder-frontend + builder-storage + Reviewer + Verifier
+→ FILE-OWNERSHIP.json: sem conflito, 3 builders em paralelo na wave 1
+→ reviews/T001..T005-REVIEW.md por task
+→ FINAL-INTEGRATION.md com evidências
+→ LESSONS.md atualizado automaticamente
+```
+
+Artefatos em `.oxe/swarm/`:
+- `SWARM-RUN.json` — estado completo do run multi-agente
+- `TASK-GRAPH.json` — tarefas, dependências e waves
+- `FILE-OWNERSHIP.json` — qual agente toca qual arquivo (sem conflitos)
+- `BOARD.md` / `BOARD.json` — visão em tempo real: status por task, bloqueios, gates
+- `scout/` — `CODEBASE-MAP.md`, `PATTERNS.md`, `RISK-MAP.md`, `FILE-CANDIDATES.json`
+- `reviews/` — um arquivo por task, produzido pelo Reviewer
+- `FINAL-INTEGRATION.md` — resultado da integração pelo Verifier
+- `QUALITY-GATES.md` — gates automáticos por risk_score
+
+### Memory Kernel
+
+Memória ativa injetada automaticamente antes de cada run:
+
+```
+.oxe/memory/
+├── REPO-MEMORY.md      ← decisões arquiteturais, pitfalls, preferências, padrões validados
+├── MEMORY-INDEX.json   ← índice com relevance_tags por fase
+└── retrieved/          ← snapshots do contexto injetado (auditável por run)
+    ├── conduct.md
+    ├── agent.md
+    └── swarm.md
+```
+
+`bin/lib/oxe-memory-kernel.cjs` — `retrieveMemory(intent_tags, phase)` filtra por relevância e ranking; `bin/lib/oxe-skill-loader.cjs` — `selectPersonasForIntent(tags)` mapeia domínios para personas.
+
+### Learning Kernel
+
+Ao final de cada run, `oxe/workflows/distill.md` aciona automaticamente:
+
+```
+Run completo
+  ↓
+Detecta padrões: blocker_pattern, success_pattern, anti_pattern, file_conflict…
+  ↓
+CANDIDATES.ndjson ← candidatos categorizados
+  ↓
+LESSONS.md ← dedup: mesma raiz → Frequência++; novo → C-NN-L1
+  ↓
+lessons-metrics.json ← success_rate; deprecação auto se < 0.5 em 3+ aplicações
+  ↓
+PROMOTION-QUEUE.md ← skills candidatas para revisão humana
+  ↓
+REPO-MEMORY.md ← decisões e pitfalls persistidos cross-session
+```
 
 ---
 
 ## Modos de uso
 
-Escolha a complexidade certa para sua tarefa. Você sempre começa simples e adiciona estrutura quando precisar.
+Escolha o ponto de entrada certo para o nível de controle que você quer.
 
-### Nano — 1 comando
-Para tarefas pequenas e pontuais, sem overhead:
+### Autônomo — 1 comando, Conductor decide
+
+Para quando você quer só entregar:
+
+```
+/oxe <objetivo em linguagem natural>
+```
+
+### Nano — tarefa pontual, sem overhead
+
 ```
 /oxe-quick → objetivo → passos → verify
 ```
 
-### Standard — ciclo completo
-Para features, refatorações ou qualquer trabalho com múltiplos arquivos:
+### Standard — ciclo completo com controle manual
+
+Para features, refatorações ou quando você quer conduzir cada fase:
+
 ```
 /oxe → /oxe-spec → /oxe-plan → /oxe-execute → /oxe-verify
 ```
 
 > scan, research, debug, retro e validações especializadas são acionados automaticamente
-> pelos estágios corretos ou por flags explícitas (ex.: `--research`, `--debug`, `--security`).
+> pelos estágios corretos ou por flags explícitas (`--research`, `--debug`, `--security`).
 
-### Full — orquestração avançada
-Para projetos longos, multi-domínio, múltiplos agentes ou times:
+### Full — orquestração avançada de times
+
+Para projetos longos, multi-domínio ou com revisão em equipe:
+
 ```
 /oxe-session new <nome>   ← isola o ciclo numa sessão
-/oxe-plan --agents        ← blueprint multi-agente
-/oxe-execute              ← com runtime tracking, checkpoints e eventos
-/oxe-dashboard            ← visão web opcional para revisão de equipe
+/oxe-plan --agents        ← blueprint multi-agente explícito
+/oxe-execute              ← runtime tracking, checkpoints e eventos
+/oxe-dashboard            ← visão web para revisão de equipe
 ```
-
-> O README apresenta o modo Standard na maior parte da documentação. O modo Full está descrito em detalhes em cada seção específica.
 
 ---
 
 ## Trilha principal
 
 ```
-/oxe              → onde estou / o que faço / help / perguntas situacionais
+/oxe              → autônomo (Conductor) | status | help | perguntas situacionais
 /oxe-quick        → tarefa pequena, sem cerimônia
 /oxe-spec         → nova feature: perguntas → requisitos → roteiro
                     (absorve scan, research e ui-spec via flags)
-/oxe-plan         → tarefas por onda (--agents para multi-agente)
+/oxe-plan         → tarefas por onda (--agents para multi-agente explícito)
 /oxe-execute      → implementar (A: completo | B: por onda | C: por tarefa)
                     (absorve obs, debug, forensics, checkpoint, loop via flags)
 /oxe-verify       → validar e fechar o ciclo (retro automática)
@@ -160,17 +214,103 @@ Para projetos longos, multi-domínio, múltiplos agentes ou times:
 
 ```
 /oxe-capabilities → catálogo nativo de capabilities
-/oxe-skill        → skills OXE via @<id>
+/oxe-skill        → skills OXE via @<id> — list, explain, new, @<id>
 oxe-cc azure      → autenticar, sincronizar inventário e operar Azure com checkpoint formal
 ```
 
-Tudo o mais é ativado automaticamente por contexto, por config, ou existe como flag dos estágios principais.
+---
+
+## Semântica de raciocínio
+
+O OXE distingue cinco famílias de raciocínio aplicadas por cada workflow:
+
+- `discovery` — explorar antes de perguntar; separar fatos, inferências e lacunas
+- `planning` — produzir plano decision-complete, com riscos, validação e confidence gate
+- `execution` — reconhecimento curto antes de mutar; menor write set viável; validação por fatia
+- `review` — findings primeiro, severidade, evidência e risco residual
+- `status` — leitura curta do estado, recomendação única e motivo
+
+Contratos em `oxe/workflows/references/reasoning-*.md`, derivados para cada runtime em `.github/prompts/`, `.cursor/commands/`, `commands/oxe/` e `.codex/prompts/`. `oxe/workflows/**` e `workflow-runtime-contracts.json` são contratos obrigatórios da release.
+
+---
+
+## Estado atual do produto
+
+O OXE combina hoje cinco camadas:
+
+- **modo autônomo** — Conductor Agent decide Agent Mode vs Swarm Mode a partir de linguagem natural
+- **artefatos canónicos em `.oxe/`** — continuidade entre sessões, IDEs e agentes
+- **Memory Kernel** — `REPO-MEMORY.md` + `MEMORY-INDEX.json` + context packs injetados antes de cada run
+- **Learning Kernel** — destilação de padrões → `LESSONS.md` (dedup) + `PROMOTION-QUEUE.md` (skills candidatas)
+- **runtime TypeScript compilado para CJS** em `packages/runtime/` — ExecutionGraph, scheduler multi-agente (parallel/competitive/cooperative), evidence store, gates, policy, promotion e recovery
+
+O estado operacional real passa por:
+
+```
+.oxe/
+├── OXE-EVENTS.ndjson         ← tracing append-only, agora efetivamente populado
+├── ACTIVE-RUN.json           ← cursor e estado do run atual
+├── agent/                    ← artefatos de Agent Mode runs
+│   ├── AGENT-SESSION.json
+│   ├── MEMORY-INJECTIONS.md
+│   ├── SKILLS-LOADED.json
+│   └── RECONCILIATION.md
+├── swarm/                    ← artefatos de Swarm Mode runs
+│   ├── SWARM-RUN.json
+│   ├── TASK-GRAPH.json
+│   ├── FILE-OWNERSHIP.json
+│   ├── BOARD.md / BOARD.json
+│   ├── QUALITY-GATES.md
+│   ├── FINAL-INTEGRATION.md
+│   ├── scout/
+│   └── reviews/
+├── memory/                   ← Memory Kernel
+│   ├── REPO-MEMORY.md
+│   ├── MEMORY-INDEX.json
+│   └── retrieved/
+├── learning/                 ← Learning Kernel
+│   ├── CANDIDATES.ndjson
+│   ├── PROMOTION-QUEUE.md
+│   └── LEARNING-EVENTS.ndjson
+├── runs/<run_id>/            ← runtime enterprise por run
+│   ├── verification-manifest.json
+│   ├── residual-risk-ledger.json
+│   ├── evidence-coverage.json
+│   └── workspace-merge-report.json
+├── execution/GATES.json
+└── global/
+    └── LESSONS.md            ← lições prescritivas cumulativas
+```
+
+Contrato estável desta release:
+
+- `/oxe <objetivo>` → Conductor → Agent Mode ou Swarm Mode (automático)
+- `execute` e `verify` são `runtime-first` quando `oxe-cc runtime` está disponível
+- `multi-agent` é GA apenas com isolamento real (`git_worktree`)
+- `OXE-EVENTS.ndjson` é populado em todo run (RunStarted, WorkItemCompleted, GateRequested, LessonPromoted, RunCompleted)
+- `REPO-MEMORY.md` é atualizado automaticamente ao final de Swarm Mode runs
+
+→ [Guia por papel](docs/ROLES.md) · [Quickstart](QUICKSTART.md) · [Walkthrough](docs/WALKTHROUGH.md)
+
+---
+
+## Para times
+
+| Recurso | Link |
+|---------|------|
+| Primeiros 15 minutos | [QUICKSTART.md](QUICKSTART.md) |
+| Guia por papel (executor / reviewer / operador) | [docs/ROLES.md](docs/ROLES.md) |
+| Fluxo recomendado para times | [docs/TEAM-ADOPTION.md](docs/TEAM-ADOPTION.md) |
+| Exemplo completo reproduzível | [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) |
+| Incidentes e gates | [docs/INCIDENT-PLAYBOOK.md](docs/INCIDENT-PLAYBOOK.md) |
+| Suporte por runtime (Cursor, Copilot, Claude Code…) | [docs/RUNTIME-SMOKE-MATRIX.md](docs/RUNTIME-SMOKE-MATRIX.md) |
+| Release readiness e publicação | [docs/RELEASE-READINESS.md](docs/RELEASE-READINESS.md) |
 
 ---
 
 ## Sessões OXE
 
-Sessões organizam um ciclo completo em `.oxe/sessions/sNNN-slug/` sem misturar artefatos de entregas diferentes na raiz. `spec`, `plan`, `execute`, `verify`, `checkpoint`, `research` e afins respeitam `active_session` em `.oxe/STATE.md`. `oxe-cc status` e `oxe-cc doctor` também devem refletir a sessão ativa, a autoavaliação do plano e a saúde lógica do fluxo.
+Sessões organizam um ciclo completo em `.oxe/sessions/sNNN-slug/` sem misturar artefatos de entregas diferentes na raiz. `spec`, `plan`, `execute`, `verify`, `checkpoint`, `research` e afins respeitam `active_session` em `.oxe/STATE.md`.
 
 ```text
 .oxe/
@@ -179,6 +319,8 @@ Sessões organizam um ciclo completo em `.oxe/sessions/sNNN-slug/` sem misturar 
 ├── global/
 │   ├── LESSONS.md
 │   └── MILESTONES.md
+├── memory/         ← cross-session (não scoped)
+├── learning/       ← cross-session (não scoped)
 ├── codebase/
 └── sessions/
     └── s001-exemplo/
@@ -202,48 +344,34 @@ Sessões organizam um ciclo completo em `.oxe/sessions/sNNN-slug/` sem misturar 
 | `/oxe-session close` | Arquiva a sessão ativa |
 | `/oxe-session migrate <nome>` | Cria sessão nova e move artefatos session-scoped da raiz |
 
-Exemplo de ciclo:
-
-```text
-/oxe-session new auth-redesign
-/oxe-spec
-/oxe-plan
-/oxe-execute
-/oxe-verify
-/oxe-session close
-```
-
-Com sessão ativa:
-
-- `spec/` contém `SPEC.md`, `ROADMAP.md`, `DISCUSS.md`, `UI-SPEC.md`
-- `plan/` contém `PLAN.md`, `QUICK.md`, `plan-agents.json`, `quick-agents.json`
-- `execution/` contém o `STATE.md` operacional da trilha, `EXECUTION-RUNTIME.md`, `CHECKPOINTS.md`, `ACTIVE-RUN.json`, `OXE-EVENTS.ndjson`, `runs/`, `OBSERVATIONS.md`, `DEBUG.md`, `FORENSICS.md`
-- `research/` também pode conter `INVESTIGATIONS.md` e `investigations/` para evidência estruturada
-- `verification/` contém `VERIFY.md`, `VALIDATION-GAPS.md`, `SECURITY.md`, `UI-REVIEW.md`
-- `LESSONS.md`, `MILESTONES.md`, `codebase/`, `SESSIONS.md`, `CAPABILITIES.md`, `capabilities/` e o `STATE.md` global permanecem fora da sessão
-
 ---
 
 ## A cadeia
 
 ```
-/oxe → /oxe-spec → /oxe-plan ──────────→ /oxe-execute → /oxe-verify
-                       ↓                                      ↓
-                  /oxe-quick (trabalho pequeno)     .oxe/global/LESSONS.md
-                                                               ↓
-                                                    (alimenta o próximo ciclo)
+/oxe <objetivo>
+  ↓ Conductor (automático)
+  ├── Agent Mode ──────────────────────────── → .oxe/agent/
+  └── Swarm Mode (Scout→Builders→Reviewer→Verifier) → .oxe/swarm/
+          ↓
+     Learning Kernel → .oxe/learning/ + .oxe/global/LESSONS.md
+          ↓
+     Memory Kernel → .oxe/memory/REPO-MEMORY.md (próximo run lê)
+
+/oxe-spec → /oxe-plan → /oxe-execute → /oxe-verify  (controle manual)
+                ↓                            ↓
+          /oxe-quick               .oxe/global/LESSONS.md
+         (trabalho pequeno)         (alimenta próximo ciclo)
 ```
 
 **Comportamentos absorvidos por cada estágio:**
 
 | Estágio | Absorve (via flags ou automático) |
 |---------|-----------------------------------|
-| `/oxe` | ask (perguntas situacionais inline) |
+| `/oxe` | Conductor (objetivos), ask (perguntas situacionais), route, status, help |
 | `/oxe-spec` | scan (`--refresh`/`--full`), research (`--research`), ui-spec (`--ui`) |
 | `/oxe-execute` | obs (`--note`), debug (`--debug`), forensics (`--deep-diagnosis`), checkpoint (`--checkpoint`), loop (`--iterative`) |
 | `/oxe-verify` | gaps (`--gaps`), security (`--security`), ui-review (`--ui`), review-pr (`--pr`), retro (automática) |
-
-Cada passo lê o anterior como contexto e escreve seu artefato no escopo correto: raiz `.oxe/` em modo legado, ou `.oxe/sessions/sNNN-slug/` quando `active_session` está definido. Nenhum passo depende de você re-explicar o que já foi decidido.
 
 ---
 
@@ -251,17 +379,35 @@ Cada passo lê o anterior como contexto e escreve seu artefato no escopo correto
 
 | Comando | O que entrega |
 |---------|--------------|
-| `/oxe` | Sem input → próximo passo. Com pergunta → situação atual (artefatos reais). Com "help" → trilha principal. |
-| `/oxe-spec` | **5 fases**: perguntas → pesquisa → requisitos R-ID → roteiro → aprovação. `--refresh` / `--full` fazem scan antes. `--research` ativa spike explícito. `--ui` gera UI-SPEC ao final. Se houver imagem/screenshot/mockup no chat, materializa `VISUAL-INPUTS` quando o runtime suportar visão ou registra limitação explícita. |
-| `/oxe-plan` | **Test-first:** `Verificar` vem antes de `Implementar` em cada tarefa. `PLAN.md` com `## Autoavaliação do Plano` (rubrica fixa + confiança determinística). Usa investigações e capabilities como evidência. |
-| `/oxe-execute` | Execução A/B/C. Valida autoavaliação antes de implementar. `--note` registra observação. `--debug` aciona diagnóstico inline. `--deep-diagnosis` escalona para forensics. `--checkpoint "<nome>"` cria snapshot. `--iterative` ativa loop de retry. Usa `EXECUTION-RUNTIME.md`, `ACTIVE-RUN.json`, `OXE-EVENTS.ndjson`. |
-| `/oxe-verify` | Até 6 camadas: audit + critérios + decisões + coerência operacional + calibração + UAT. `--gaps` ativa Camada 5 (cobertura). `--security` ativa Camada 6 (OWASP). `--ui` inclui UI-REVIEW. `--pr` / `--diff` incluem revisão de PR. Retro automática ao fechar (`--skip-retro` para desativar). |
-| `/oxe-quick` | Objetivo → passos → agentes opcionais (PDDA lean) → verify. Para correções pontuais e features pequenas. |
-| `/oxe-session` | Cria, alterna, retoma, fecha e migra sessões OXE. Subcomandos: `new`, `list`, `switch`, `resume`, `status`, `close`, `migrate`, `milestone`, `workstream`. |
-| `/oxe-dashboard` | Consolida `STATE`, `PLAN`, `ACTIVE-RUN`, trace log, runtime, checkpoints e verify numa visão visual de ciclo, ondas, handoffs e aprovação. |
-| `/oxe-capabilities` | Gera e mantém o catálogo nativo de capabilities em `.oxe/CAPABILITIES.md` e `.oxe/capabilities/`, com política, side effects e evidência esperada. |
-| `/oxe-skill` | Descobrir, invocar e gerenciar skills OXE via `@<skill-id>`. Subcomandos: `list`, `explain <id>`, `new <id>`. |
-| `oxe-cc azure` | Provider Azure nativo via Azure CLI: autenticação corporativa com MFA, inventário via Resource Graph e operações guiadas para Service Bus, Event Grid e Azure SQL. |
+| `/oxe` | Com objetivo de implementação → Conductor (Agent/Swarm). Sem input → próximo passo. Com pergunta → situação atual. Com "help" → trilha principal. |
+| `/oxe-spec` | **5 fases**: perguntas → pesquisa → requisitos R-ID → roteiro → aprovação. `--refresh`/`--full` fazem scan antes. `--research` ativa spike. `--ui` gera UI-SPEC. Imagem/screenshot no chat → materializa `VISUAL-INPUTS` quando o runtime suportar visão. |
+| `/oxe-plan` | **Test-first:** `Verificar` antes de `Implementar`. `PLAN.md` com `## Autoavaliação do Plano`. `--agents` gera `plan-agents.json` (schema v3 com personas e model_hint). |
+| `/oxe-execute` | Modos A/B/C. Valida autoavaliação antes de implementar. `--note` → observação. `--debug` → diagnóstico inline. `--deep-diagnosis` → forensics. `--checkpoint` → snapshot. `--iterative` → loop de retry. |
+| `/oxe-verify` | Até 6 camadas: audit + critérios + decisões + coerência operacional + calibração + UAT. `--gaps` → cobertura. `--security` → OWASP. `--ui` → UI-REVIEW. `--pr`/`--diff` → revisão de PR. Retro automática ao fechar. |
+| `/oxe-quick` | Objetivo → passos → agentes opcionais (PDDA lean) → verify. Para correções pontuais. |
+| `/oxe-session` | `new`, `list`, `switch`, `resume`, `status`, `close`, `migrate`, `milestone`, `workstream`. |
+| `/oxe-dashboard` | Consolida STATE, PLAN, ACTIVE-RUN, trace log, runtime, checkpoints e verify numa visão visual de ciclo, ondas e aprovação. |
+| `/oxe-skill` | `list` (active/proposed/archived/global) · `explain <id>` · `new <id>` · `@<id>` (inline). Resolução: projeto → capabilities → global. |
+| `oxe-cc azure` | Provider Azure nativo: autenticação, inventário via Resource Graph, operações guiadas para Service Bus, Event Grid e Azure SQL. |
+
+---
+
+## Personas disponíveis
+
+O OXE tem 8 personas builtin em `oxe/personas/`. O Conductor as seleciona automaticamente por `intent_tags`; você pode invocá-las diretamente em qualquer workflow com `@<id>`:
+
+| ID | Papel | Domínio |
+|----|-------|---------|
+| `executor` | Implementador de precisão | código, commits atômicos, write set mínimo |
+| `planner` | Arquiteto de grafo | decomposição, waves, mutation_scope |
+| `verifier` | Auditor cético | verificação 4-camadas, evidence-only |
+| `architect` | Design de sistema | boundaries, contratos, decisões D-NN |
+| `ui-specialist` | UI/UX | componentes, estados, acessibilidade |
+| `db-specialist` | Banco de dados | schema, migrations, N+1, integridade |
+| `researcher` | Exploração | descoberta, redução de incerteza, POC |
+| `debugger` | Root cause | RCA, hotfix mínimo, reprodução |
+
+Skills de projeto ficam em `.oxe/skills/active/` e têm precedência sobre as globais.
 
 ---
 
@@ -273,234 +419,145 @@ B) Por onda   → onda 1, você verifica, chama de novo  (1 rodada por onda)
 C) Por tarefa → máximo controle  (1 rodada por tarefa)
 ```
 
-Se uma tarefa falha: diagnóstico inline automático (2-3 hipóteses → fix → retry). O Modo B inclui loop iterativo com escalada automática para diagnóstico profundo quando necessário.
+Se uma tarefa falha: diagnóstico inline automático (2-3 hipóteses → fix → retry). O Modo B inclui loop iterativo com escalada automática para diagnóstico profundo.
 
 ---
 
 ## Comportamentos especializados (via flags)
 
-Estes comportamentos continuam existindo, mas agora são ativados como flags dos estágios principais ou automaticamente por contexto. Você não precisa decorar comandos separados.
-
 | Comportamento | Como ativar |
 |---------------|-------------|
-| Scan / refresh do codebase | `/oxe-spec --refresh` (incremental) ou `--full` (completo) |
-| Research / spike / engenharia reversa | `/oxe-spec --research` |
+| Scan / refresh do codebase | `/oxe-spec --refresh` ou `--full` |
+| Research / spike | `/oxe-spec --research` |
 | Contrato UI/UX | `/oxe-spec --ui` |
-| Imagem, screenshot ou mockup como entrada de spec | anexar no chat junto com `/oxe-spec`; o OXE materializa a interpretação em `.oxe/investigations/visual/VISUAL-INPUTS.*` quando o runtime tiver visão |
 | Registrar observação durante execução | `/oxe-execute --note "texto"` |
 | Diagnóstico técnico inline | `/oxe-execute --debug` |
 | Diagnóstico pós-falha persistente | `/oxe-execute --deep-diagnosis` |
-| Snapshot nomeado de sessão | `/oxe-execute --checkpoint "<nome>"` |
-| Loop de retry até verify passar | `/oxe-execute --iterative` |
-| Auditoria de cobertura pós-verify | `/oxe-verify --gaps` |
-| Auditoria OWASP P0/P1/P2 | `/oxe-verify --security` |
+| Snapshot nomeado | `/oxe-execute --checkpoint "<nome>"` |
+| Loop de retry | `/oxe-execute --iterative` |
+| Auditoria de cobertura | `/oxe-verify --gaps` |
+| Auditoria OWASP | `/oxe-verify --security` |
 | Auditoria de implementação UI | `/oxe-verify --ui` |
-| Revisão de PR ou diff de branches | `/oxe-verify --pr` ou `--diff branchA...branchB` |
-| Retrospectiva (lições do ciclo) | automática ao fechar `/oxe-verify` (desativar: `--skip-retro`) |
+| Revisão de PR ou diff | `/oxe-verify --pr` ou `--diff branchA...branchB` |
+| Retrospectiva | automática ao fechar `/oxe-verify` (desativar: `--skip-retro`) |
 
-**Compatibilidade:** os comandos legados (`/oxe-debug`, `/oxe-forensics`, `/oxe-research`, `/oxe-security`, `/oxe-validate-gaps`, `/oxe-ui-spec`, `/oxe-ui-review`, `/oxe-review-pr`, `/oxe-checkpoint`, `/oxe-loop`, `/oxe-obs`, `/oxe-ask`, `/oxe-scan`, `/oxe-retro`, `/oxe-project`) continuam funcionando desde v1.1.0 e exibem um aviso sugerindo o novo destino.
+**Compatibilidade:** comandos legados (`/oxe-debug`, `/oxe-forensics`, `/oxe-research`, etc.) continuam funcionando desde v1.1.0 com aviso de migração.
 
 ---
 
 ## Azure no OXE
 
-O OXE agora tem um provider Azure nativo, local-first, orientado a Azure CLI no Windows. Ele não guarda segredos no repositório: usa a sessão oficial da Azure CLI, materializa contexto em `.oxe/cloud/azure/` e integra esse contexto com `ask`, `spec`, `plan`, `execute`, `verify`, `status`, `doctor`, runtime e dashboard.
-
-Artefatos principais:
-
-- `.oxe/cloud/azure/profile.json`
-- `.oxe/cloud/azure/auth-status.json`
-- `.oxe/cloud/azure/inventory.json`
-- `.oxe/cloud/azure/INVENTORY.md`
-- `.oxe/cloud/azure/SERVICEBUS.md`
-- `.oxe/cloud/azure/EVENTGRID.md`
-- `.oxe/cloud/azure/SQL.md`
-- `.oxe/cloud/azure/operations/`
-
-Comandos principais:
+Provider Azure nativo, local-first, via Azure CLI. Não guarda segredos no repositório; usa a sessão oficial da CLI e materializa contexto em `.oxe/cloud/azure/`.
 
 ```bash
-# Autenticação (Entra ID corporativo: use --tenant)
+# Autenticação
 npx oxe-cc azure auth login [--tenant <entra-tenant-id>]
 npx oxe-cc azure auth set-subscription --subscription "<dev-sub-id>"
-npx oxe-cc azure auth whoami
 
-# Diagnóstico e estado compacto
+# Diagnóstico
 npx oxe-cc azure doctor
 npx oxe-cc azure status
 
 # Inventário
 npx oxe-cc azure sync [--diff]
-npx oxe-cc azure find servicebus [--type servicebus] [--filter-rg rg-app]
+npx oxe-cc azure find servicebus [--type servicebus]
 
-# Histórico de operações
-npx oxe-cc azure operations list
-
-# Service Bus, Event Grid e Azure SQL
+# Operações (com --dry-run disponível)
 npx oxe-cc azure servicebus plan --kind namespace --name sb-core --resource-group rg-app --location brazilsouth
 npx oxe-cc azure servicebus apply --kind namespace --name sb-core --resource-group rg-app --location brazilsouth --approve
-npx oxe-cc azure servicebus apply --kind namespace --name sb-preview --resource-group rg-app --dry-run
 ```
 
-Princípios:
-
-- opt-in: ativado apenas quando a SPEC ou o codebase menciona Azure explicitamente
-- discovery via Azure Resource Graph, não heurística por serviço
-- mutação só com checkpoint formal
-- `--dry-run` em qualquer apply: pré-visualiza o comando `az` sem executar
-- `--vpn-confirmed` para projetos com `vpn_required: true` na config
-- evidência operacional persistida e redacted em `.oxe/cloud/azure/operations/`
+Princípios: opt-in, discovery via Resource Graph, mutação só com checkpoint formal, evidência persistida e redacted em `.oxe/cloud/azure/operations/`.
 
 ---
 
-## Conceitos-chave
+## Concepts-chave
 
 ### Context engineering — estado em disco, não no chat
 
 ```
 .oxe/
-├── STATE.md              ← índice global: fase resumida, sessão ativa, próximo passo
+├── STATE.md              ← índice global: fase, sessão ativa, próximo passo
 ├── SESSIONS.md           ← índice de sessões
-├── CAPABILITIES.md       ← catálogo nativo de capabilities instaladas
-├── INVESTIGATIONS.md     ← índice global de investigações estruturadas
-├── EXECUTION-RUNTIME.md  ← runtime operacional legado / fallback global
+├── CAPABILITIES.md       ← catálogo de capabilities instaladas
 ├── ACTIVE-RUN.json       ← cursor e estado durável do run atual
-├── OXE-EVENTS.ndjson     ← tracing append-only local-first
+├── OXE-EVENTS.ndjson     ← tracing append-only (populado em todo run)
+├── agent/                ← artefatos de Agent Mode
+├── swarm/                ← artefatos de Swarm Mode
+├── memory/               ← Memory Kernel (cross-session)
+├── learning/             ← Learning Kernel (cross-session)
 ├── cloud/azure/          ← profile, auth-status, inventory e operações Azure
-├── CHECKPOINTS.md        ← índice de aprovações e gates
 ├── global/
 │   ├── LESSONS.md        ← lições prescritivas cumulativas
 │   └── MILESTONES.md     ← marcos globais de entrega
-├── capabilities/
-├── investigations/
-├── dashboard/
-├── codebase/             ← mapa do repo (stack, estrutura, testes, …)
+├── codebase/             ← mapa do repo (stack, estrutura, testes…)
 └── sessions/
     └── sNNN-slug/
         ├── spec/         ← SPEC.md, ROADMAP.md, DISCUSS.md, UI-SPEC.md
         ├── plan/         ← PLAN.md, QUICK.md, blueprints de agentes
-        ├── execution/    ← STATE.md local, OBSERVATIONS.md, DEBUG.md, FORENSICS.md
-        ├── verification/ ← VERIFY.md, VALIDATION-GAPS.md, SECURITY.md, UI-REVIEW.md
+        ├── execution/    ← STATE.md local, OBSERVATIONS.md, DEBUG.md
+        ├── verification/ ← VERIFY.md, VALIDATION-GAPS.md, SECURITY.md
         ├── checkpoints/
         ├── research/
         └── workstreams/
 ```
 
-### `/oxe-spec` — spec em 5 fases com discovery adaptativo e auto-reflexão semântica
+### `/oxe-spec` — spec em 5 fases com auto-reflexão
 
 1. **Perguntas** — blocos de 3-5 por rodada, máximo 3 rodadas
-2. **Pesquisa** — proposta inline na Fase 2 (sem sair do spec), com investigações estruturadas quando houver incerteza relevante
+2. **Pesquisa** — proposta inline na Fase 2 com investigações estruturadas
 3. **Requisitos** — tabela R-ID com v1/v2/fora e critérios A*
 4. **Roteiro** — fases de entrega → `.oxe/ROADMAP.md`
-5. **Auto-reflexão** *(automática, sem requisição extra)* — detecta contradições, critérios vagos, escopo creep, conflitos com stack e lacunas de evidência. Corrige antes de apresentar ao usuário.
+5. **Auto-reflexão** — detecta contradições, critérios vagos, escopo creep, conflitos com stack
 6. **Aprovação** → instrui `/oxe-plan` ou `/oxe-plan --agents`
 
-A spec lê `.oxe/global/LESSONS.md` antes de iniciar — lições do ciclo anterior informam as perguntas e os critérios.
+A spec lê `.oxe/global/LESSONS.md` e `.oxe/memory/REPO-MEMORY.md` antes de iniciar.
 
 ### `/oxe-plan` — test-first com complexidade explícita
 
-Cada tarefa usa a ordem **Verificar → Implementar** (test-first):
+Cada tarefa usa a ordem **Verificar → Implementar**:
 ```
 Verificar: como saberei que está pronto?   ← definido PRIMEIRO
 Implementar: o mínimo para passar o Verificar
 Complexidade: S | M | L | XL
 ```
 
-Tarefas `XL` bloqueiam o gate sem sub-tarefas ou justificativa. `/oxe-obs` propaga automaticamente constraints para os R-IDs e Tns afetados.
+Tarefas `XL` bloqueiam o gate sem sub-tarefas ou justificativa. `/oxe-obs` propaga automaticamente constraints para R-IDs e Tns afetados.
 
-#### Iteração correta do plano
+### Learning loop completo
 
-Se o usuário quiser chamar `/oxe-plan` várias vezes até ficar satisfeito, o fluxo esperado é este:
-
-- **Mesmo escopo e mesma `SPEC.md`, mas quer refinar tarefas, ondas, dependências, riscos ou validação**: usar `/oxe-plan --replan`
-- **Mudou a estratégia técnica**: voltar para `/oxe-discuss` e depois `/oxe-plan --replan`
-- **Mudou requisitos, critérios, prioridades ou aceite**: voltar para `/oxe-spec` e depois `/oxe-plan`
-
-Regra prática:
-
-- `spec` muda o **que** será entregue
-- `discuss` muda o **como** ou o **porquê** da estratégia
-- `plan --replan` muda **como quebrar e executar** a mesma entrega
-
-Se já existir `PLAN.md` no escopo atual e o usuário chamar `/oxe-plan` de novo sem alterar a spec, o OXE deve tratar isso como **replan implícito**, preservando a seção **Replanejamento** e o histórico útil do plano anterior.
-
-### Runtime operacional e checkpoints
-
-- `PLAN.md` continua estratégico.
-- `EXECUTION-RUNTIME.md` continua como superfície humana de operação, mas o estado canónico vive no runtime.
-- `ACTIVE-RUN.json` formaliza o run atual: `run_id`, cursor, estado, retries, checkpoints pendentes, `compiled_graph`, `canonical_state` e contexto de provider.
-- `.oxe/runs/<run_id>.json` persiste o snapshot canónico da run com grafo compilado, suite de verify, resultados, policy, delivery e recovery.
-- `.oxe/runs/<run_id>/verification-manifest.json`, `residual-risk-ledger.json` e `evidence-coverage.json` são a fonte primária do verify enterprise.
-- `OXE-EVENTS.ndjson` regista tracing append-only por evento, local-first.
-- `CHECKPOINTS.md` continua a trilha humana; a fila operacional de aprovação fica em `.oxe/execution/GATES.json`.
-- `status`, `doctor`, `dashboard`, `runtime verify`, `runtime promote` e `runtime recover` usam esses artefatos para auditar se a execução real continua coerente com o plano.
+```
+/oxe-verify completo (ou Swarm Verifier)
+     ↓
+distill.md → detecta padrões do run
+     ↓
+.oxe/learning/CANDIDATES.ndjson
+     ↓
+.oxe/global/LESSONS.md (dedup: Frequência++ se mesma raiz)
+     ↓
+lessons-metrics.json (success_rate, deprecação automática)
+     ↓
+.oxe/learning/PROMOTION-QUEUE.md (skills candidatas → revisão humana)
+     ↓
+/oxe-skill new <id> (promove skill aprovada)
+     ↓
+próximo run: Conductor carrega skill como persona ativa
+```
 
 ### Runtime tracking e inspeção no terminal
 
-O caminho padrão de inspeção é CLI-first:
-
 ```bash
-oxe-cc status --full    # health + coverage matrix + readiness gate no terminal
-oxe-cc runtime status   # run ativo, cursor, onda atual
-oxe-cc runtime verify   # verify enterprise: suite + evidence + manifest + risk ledger
+oxe-cc status --full          # health + coverage matrix + readiness gate
+oxe-cc runtime status         # run ativo, cursor, onda atual
+oxe-cc runtime verify         # suite + evidence + manifest + risk ledger
 oxe-cc runtime gates list
 oxe-cc runtime agents --json
 oxe-cc runtime promote --target pr_draft
 ```
 
-O `status --full` mostra em ANSI: readiness do ciclo, autoavaliação do plano, health lógico, contexto, gates pendentes, verify enterprise, quotas, audit trail, recovery state, multi-agent e promotion state.
-
 ### Dashboard web — opt-in para revisões de equipe
 
-- `oxe-cc dashboard` sobe uma interface web local em `localhost` para revisar o plano antes da execução — indicado para apresentações, operação de gates e revisões em equipe, não para substituir o terminal no dia a dia.
-- A UI lê os artefatos OXE reais; ela não substitui `PLAN.md`, `STATE.md` ou `VERIFY.md`.
-- A visão inclui ciclo principal, mapa de artefatos, active run, trace log, trilha de ondas, handoffs, checkpoints, agentes, evidências, gates, quotas, audit summary, recovery state e promotion state sem criar uma segunda fonte de verdade.
-- `oxe-cc runtime <start|pause|resume|replay|status|compile|verify|project|ci|promote|recover|gates|agents>` controla explicitamente `ACTIVE-RUN.json`, `runs/`, `GATES.json`, manifests de verify, artefatos de recovery, `multi-agent-state.json` e `OXE-EVENTS.ndjson` no mesmo contrato consumido pelo dashboard.
-- A aprovação visual persiste em `plan_review_status` no `STATE.md`, em `PLAN-REVIEW.md` e em `plan-review-comments.json`.
-
-### Critérios de publicação desta release
-
-O pacote está pronto para uma publicação robusta quando estes sinais estiverem verdes no repositório da release:
-
-- `npm test`
-- `npm run scan:assets`
-- `npm run build:vscode-ext`
-- `node bin/oxe-cc.js doctor --release --write-manifest`
-- `npm run release:pack-check`
-- `node bin/oxe-cc.js status --full`
-
-Artefatos obrigatórios desta fase:
-
-- `.oxe/release/release-manifest.json`
-- `.oxe/release/runtime-smoke-report.json`
-- `.oxe/release/runtime-real-report.json`
-- `.oxe/release/recovery-fixture-report.json`
-- `.oxe/release/multi-agent-soak-report.json`
-- `.oxe/release/multi-agent-real-report.json`
-
-Na linha `1.9.1`, `runtime-real-report.json` prova o ciclo real `compile -> execute mockado -> verify -> project -> status --json`, e `multi-agent-real-report.json` prova coordenação com `git_worktree`, ownership, arbitragem e merge readiness antes da publicação.
-
-### `/oxe-retro` — loop de aprendizado
-
-```
-/oxe-verify completo
-     ↓
-/oxe-retro → 3–5 lições prescritivas → .oxe/global/LESSONS.md
-                                              ↓
-                              /oxe-spec (próximo ciclo lê LESSONS)
-                              /oxe-plan (próximo ciclo lê LESSONS)
-```
-
-Lições não são diário — são instruções para o próximo ciclo. Exemplo:
-> "Tarefas com integração de terceiros: `Complexidade: L` mínimo + `Verificar` com mock fallback"
-
-### Plan-Driven Dynamic Agents — agentes por demanda
-
-Com `/oxe-plan --agents` (ou sugerido quando 3+ domínios detectados):
-- `runId` único por demanda — nunca reutilizado
-- `role` específico ao domínio desta entrega
-- `model_hint` por agente: `"fast"` / `"balanced"` / `"powerful"`
-- Execute exibe o hint ao iniciar cada agente para o usuário configurar o modelo
+`oxe-cc dashboard` sobe uma interface web local para revisar o plano antes da execução — indicado para apresentações, operação de gates e revisões em equipe. Lê os artefatos OXE reais (não é uma segunda fonte de verdade). Inclui: ciclo principal, mapa de artefatos, active run, trace log, trilha de ondas, handoffs, checkpoints, agentes, evidências, gates e promotion state.
 
 ---
 
@@ -531,9 +588,9 @@ npx oxe-cc@latest
 | `--copilot-cli` | Skills globais do Copilot CLI em `~/.copilot/skills/` |
 | `--all-agents` | Cursor + Copilot + Claude + OpenCode + Gemini + Codex + Windsurf + Antigravity |
 | `--global` | Layout clássico: `oxe/` na raiz + `.oxe/` |
-| `--local` | Layout do repositório: mínimo, só `.oxe/` (padrão). Não controla onde a integração da IDE é instalada. |
-| `--ide-local` | Instala a integração no próprio repositório (`.cursor/`, `.github/`, `.claude/`, `.codex/` etc.) |
-| `--ide-global` | Instala a integração no HOME do utilizador quando o runtime suportar esse escopo |
+| `--local` | Layout mínimo, só `.oxe/` (padrão) |
+| `--ide-local` | Instala integração no próprio repositório |
+| `--ide-global` | Instala integração no HOME do utilizador |
 | `--force` / `-f` | Sobrescreve arquivos existentes (use para atualizar) |
 | `--dry-run` | Lista ações sem escrever |
 | `--oxe-only` | Só workflows em `.oxe/`, sem integrações IDE |
@@ -542,16 +599,12 @@ npx oxe-cc@latest
 
 </details>
 
-GitHub Copilot no VS Code é **workspace-first**: o OXE instala prompt files em `.github/prompts/*.prompt.md` e mescla instruções em `.github/copilot-instructions.md`. `~/.copilot/` fica reservado ao legado detectável e ao runtime do Copilot CLI.
-
-Claude Code recebe comandos em `.claude/commands` e agentes especializados em `.claude/agents`. Codex recebe prompts em `.codex/prompts` e skills OXE em `.agents/skills`, incluindo os agentes especializados derivados de `oxe/agents/`.
-
 <details>
 <summary><strong>Atualizar e desinstalar</strong></summary>
 
 ```bash
-npx oxe-cc@latest --force   # atualizar workflows
-npx oxe-cc update --check   # verificar versão sem atualizar
+npx oxe-cc@latest --force        # atualizar workflows
+npx oxe-cc update --check        # verificar versão sem atualizar
 npx oxe-cc uninstall --ide-only  # remove integrações (mantém .oxe/)
 ```
 
@@ -577,27 +630,25 @@ node bin/oxe-cc.js --help
 | Comando | O que faz |
 |---------|-----------|
 | `oxe-cc` / `oxe-cc install` | Instala workflows e integrações |
-| `oxe-cc doctor` | Diagnóstico completo: Node, workflows, config, bootstrap `.oxe/`, sessão ativa, autoavaliação do plano, saúde lógica (`healthy` \| `warning` \| `broken`), drift semântico multi-runtime e workflows sem contrato no registry |
-| `oxe-cc doctor --release --write-manifest` | Gate de publicação: valida árvore canónica `oxe/`, `workflow-runtime-contracts.json`, versões, topo do `CHANGELOG`, runtime compilado, wrapper sync e relatórios obrigatórios; persiste `release-manifest.json` |
-| `oxe-cc status` | Próximo passo sugerido + saúde lógica do fluxo |
-| `oxe-cc status --full` | Coverage matrix + readiness gate + active run no terminal (ANSI); em repositório do pacote, troca para release readiness em vez de plan readiness |
-| `oxe-cc status --json` | Mesmo, em JSON (schema v5), com `workspaceMode`, `releaseReadiness`, `healthStatus`, `activeSession`, `planSelfEvaluation`, `contextPacks`, `contextQuality`, `semanticsDrift`, `verificationSummary`, `residualRiskSummary`, `evidenceCoverage`, `pendingGates`, `policyDecisionSummary`, `quotaSummary`, `auditSummary`, `promotionSummary`, `runtimeMode`, `fallbackMode`, `gateQueue`, `policyCoverage`, `promotionReadiness`, `recoveryState`, `multiAgent` e `providerCatalog` |
-| `oxe-cc context build [--workflow <slug>] [--tier <minimal\|standard\|full>]` | Gera context pack(s) em `.oxe/context/packs/` — seleção determinística de artefatos por contrato de workflow |
-| `oxe-cc context inspect [--workflow <slug>]` | Inspeciona um context pack existente ou resolve sob demanda (sem escrita); útil para diagnóstico antes de iniciar um passo |
+| `oxe-cc doctor` | Diagnóstico completo: Node, workflows, contratos semânticos, config, sessão ativa, saúde lógica (`healthy` \| `warning` \| `broken`) |
+| `oxe-cc doctor --release --write-manifest` | Gate de publicação: valida árvore canónica, `workflow-runtime-contracts.json`, versões, CHANGELOG, runtime compilado; persiste `release-manifest.json` |
+| `oxe-cc status` | Próximo passo sugerido + saúde lógica |
+| `oxe-cc status --full` | Coverage matrix + readiness gate + active run (ANSI) |
+| `oxe-cc status --json` | Estado completo em JSON (schema v5): workspaceMode, healthStatus, activeSession, planSelfEvaluation, contextQuality, semanticsDrift, verificationSummary, pendingGates, multiAgent, promotionSummary e mais |
+| `oxe-cc context build` | Gera context pack em `.oxe/context/packs/` por contrato de workflow |
+| `oxe-cc context inspect` | Inspeciona context pack sem escrita |
 | `oxe-cc update` | Atualiza workflows para a versão mais recente |
-| `oxe-cc init-oxe` | Bootstrap do `.oxe/` (STATE, config, codebase/, context/, install/) |
-| `oxe-cc dashboard` | Interface web local para revisão, comentários e aprovação do plano (inclui aba Context com quality score e drift semântico) |
-| `oxe-cc runtime <status\|start\|pause\|resume\|replay\|compile\|verify\|project\|ci\|promote\|recover\|gates\|agents>` | Controla o runtime enterprise: run ativo, grafo compilado, verify executável, gates, promoção remota, recovery, multi-agent e tracing operacional |
-| `oxe-cc runtime replay [--run <id>] [--from <event-id>] [--wave <n>] [--write] [--json]` | Timeline operacional estruturada; `--write` gera `REPLAY-SESSION.md` com divergências e deltas |
-| `oxe-cc runtime verify` | Executa `compileVerification + executeSuite + EvidenceStore + manifest + residual risk + projections` para a run ativa |
-| `oxe-cc runtime gates <list\|show\|resolve>` | Lista, inspeciona e resolve gates operacionais persistidos; `list` aceita `--run`, `--status`, `--scope`, `--task` e `--json` |
-| `oxe-cc runtime agents status [--run <id>] [--json]` | Inspeciona ownership, handoffs, heartbeats, timeouts e failover multi-agent |
-| `oxe-cc runtime promote --target pr_draft` | Promoção remota explícita, separada de `ship`, governada por verify, gates, risk e coverage; `pr_draft` é o alvo estável desta release |
-| `oxe-cc runtime recover [--run <id>] [--json]` | Reidrata journal, gates, policy decisions, evidence refs, verification artifacts e estado canónico da run |
-| `oxe-cc capabilities <list\|install\|remove\|update>` | Mantém o catálogo nativo de capabilities em `.oxe/` |
-| `oxe-cc plugins <list\|install\|remove>` | Gerencia plugins de lifecycle; `install npm:<pkg>` instala em `.oxe/plugins/_npm/` |
-| `oxe-cc uninstall` | Remove integrações OXE do HOME e do repo |
-| `oxe-cc uninstall --global-cli` | Também remove o pacote npm global do PATH |
+| `oxe-cc init-oxe` | Bootstrap do `.oxe/` |
+| `oxe-cc dashboard` | Interface web local para revisão, comentários e aprovação |
+| `oxe-cc runtime <status\|start\|pause\|resume\|replay\|compile\|verify\|project\|ci\|promote\|recover\|gates\|agents>` | Controla o runtime enterprise |
+| `oxe-cc runtime gates <list\|show\|resolve>` | Lista, inspeciona e resolve gates operacionais |
+| `oxe-cc runtime agents status` | Ownership, handoffs, heartbeats e failover multi-agent |
+| `oxe-cc runtime promote --target pr_draft` | Promoção remota governada por verify, gates, risk e coverage |
+| `oxe-cc runtime recover` | Reidrata journal, gates, evidence e estado canónico |
+| `oxe-cc capabilities <list\|install\|remove\|update>` | Mantém catálogo de capabilities em `.oxe/` |
+| `oxe-cc plugins <list\|install\|remove>` | Gerencia plugins de lifecycle |
+| `oxe-cc uninstall` | Remove integrações OXE |
+| `oxe-cc uninstall --global-cli` | Também remove o pacote npm global |
 
 ---
 
@@ -608,18 +659,14 @@ Arquivo `.oxe/config.json`. Principais opções:
 | Chave | Padrão | Descrição |
 |-------|--------|-----------|
 | `profile` | `"balanced"` | `strict` / `balanced` / `fast` / `legacy` |
-| `verification_depth` | `"standard"` | `"thorough"` ativa gaps automático no verify (Camada 5) |
-| `plan_confidence_threshold` | `90` | Limiar canónico para `execute` aceitar um `PLAN.md`; a confiança precisa ser **maior que** esse valor |
-| `security_in_verify` | `false` | `true` ativa OWASP automático no verify (Camada 6) |
+| `verification_depth` | `"standard"` | `"thorough"` ativa gaps automático no verify |
+| `plan_confidence_threshold` | `90` | Limiar para `execute` aceitar um `PLAN.md` |
+| `security_in_verify` | `false` | `true` ativa OWASP automático no verify |
 | `discuss_before_plan` | `false` | Exige aprovação de decisões antes do plano |
 | `scale_adaptive` | `true` | Scan sugere o profile pelo tamanho do projeto |
-| `scan_max_age_days` | `0` | Doctor avisa quando o scan estiver velho |
-| `lessons_max_age_days` | `0` | Doctor avisa quando a última retro estiver velho |
-| `plugins` | `[]` | Hooks de lifecycle em `.oxe/plugins/*.cjs`; aceita `{ source: "npm:<pkg>" }` e `{ source: "path:./file.cjs" }` |
-| `permissions` | `[]` | Regras glob+ação para gate de arquivos em execute/apply — `{ pattern, action: allow\|deny\|ask, scope?: execute\|apply\|all }` |
-| `runtime.quotas.max_work_items_per_run` | `Infinity` | Limite enterprise para work items por run |
-| `runtime.quotas.max_mutations_per_run` | `Infinity` | Limite enterprise para mutações por run |
-| `runtime.quotas.max_retries_per_run` | `Infinity` | Limite enterprise para retries por run |
+| `plugins` | `[]` | Hooks de lifecycle em `.oxe/plugins/*.cjs` |
+| `permissions` | `[]` | Regras glob+ação para gate de arquivos em execute/apply |
+| `runtime.quotas.*` | `Infinity` | Limites enterprise para work items, mutações e retries por run |
 
 ---
 
@@ -628,13 +675,12 @@ Arquivo `.oxe/config.json`. Principais opções:
 ```js
 const oxe = require('oxe-cc');
 
-const plan  = oxe.parsePlan(fs.readFileSync('.oxe/PLAN.md', 'utf8')); // ou .oxe/sessions/<id>/plan/PLAN.md
-const spec  = oxe.parseSpec(fs.readFileSync('.oxe/SPEC.md', 'utf8')); // ou .oxe/sessions/<id>/spec/SPEC.md
+const plan  = oxe.parsePlan(fs.readFileSync('.oxe/PLAN.md', 'utf8'));
+const spec  = oxe.parseSpec(fs.readFileSync('.oxe/SPEC.md', 'utf8'));
 const state = oxe.parseState(fs.readFileSync('.oxe/STATE.md', 'utf8'));
 
 const fidelity = oxe.validateDecisionFidelity(discussMd, planMd);
 const result   = oxe.runDoctorChecks({ projectRoot: process.cwd() });
-const expanded = oxe.health.expandExecutionProfile('strict');
 
 async function verifyActiveRun() {
   return oxe.verifyRun?.({
@@ -646,17 +692,26 @@ async function verifyActiveRun() {
 }
 ```
 
-Além dos parsers e health helpers, o SDK agora reexporta bridges do runtime enterprise para:
-
-- `verifyRun(...)`
-- `operational.buildRuntimePluginRegistry(...)`
-- `operational.readRuntimeGates(...)`
-- `operational.resolveRuntimeGate(...)`
-- `operational.runRuntimeVerify(...)`
-- `operational.runRuntimePromotion(...)`
-- `operational.recoverRuntimeState(...)`
+O SDK reexporta bridges do runtime enterprise: `verifyRun`, `operational.buildRuntimePluginRegistry`, `operational.readRuntimeGates`, `operational.resolveRuntimeGate`, `operational.runRuntimeVerify`, `operational.runRuntimePromotion`, `operational.recoverRuntimeState`.
 
 TypeScript: [`lib/sdk/index.d.ts`](lib/sdk/index.d.ts) · Docs: [`lib/sdk/README.md`](lib/sdk/README.md)
+
+---
+
+## Critérios de publicação
+
+O pacote está pronto para publicação quando estes sinais estiverem verdes:
+
+```bash
+npm test
+npm run scan:assets
+npm run build:vscode-ext
+node bin/oxe-cc.js doctor --release --write-manifest
+npm run release:pack-check
+node bin/oxe-cc.js status --full
+```
+
+Artefatos obrigatórios: `release-manifest.json`, `runtime-smoke-report.json`, `runtime-real-report.json`, `recovery-fixture-report.json`, `multi-agent-soak-report.json`, `multi-agent-real-report.json` em `.oxe/release/`.
 
 ---
 
@@ -665,10 +720,10 @@ TypeScript: [`lib/sdk/index.d.ts`](lib/sdk/index.d.ts) · Docs: [`lib/sdk/README
 | Situação | O que tentar |
 |----------|-------------|
 | Comandos não aparecem no Cursor | Confirme `~/.cursor/commands/`; reinicie o Cursor |
-| `/oxe-*` não aparecem no Copilot | Ative `"chat.promptFiles": true`; confirme `.github/prompts/` e `.github/copilot-instructions.md`; se existir legado em `~/.copilot/`, rode `npx oxe-cc uninstall --copilot-legacy-clean` |
-| Copilot responde fora do workflow OXE | Rode `npx oxe-cc doctor`; confirme que o prompt veio de `.github/prompts/` e não do legado em `~/.copilot/`; se houver blocos mistos de outros frameworks no global, limpe o legado |
-| Um runtime responde sem a nova disciplina de raciocínio | Verifique drift entre `oxe/workflows/`, `.github/prompts/`, `commands/oxe/` e os prompts instalados; rode `npm run sync:runtime-metadata` e `npm run sync:cursor` no repo do pacote |
-| Arquivos não atualizam | Reinstale com `--force` |
+| `/oxe-*` não aparecem no Copilot | Ative `"chat.promptFiles": true`; confirme `.github/prompts/` e `.github/copilot-instructions.md` |
+| Copilot responde fora do workflow OXE | `npx oxe-cc doctor`; se houver blocos mistos de outros frameworks, `npx oxe-cc uninstall --copilot-legacy-clean` |
+| Runtime não responde com nova semântica | Verifique drift entre `oxe/workflows/` e prompts instalados; `npm run sync:runtime-metadata` |
+| Arquivos não atualizam | `npx oxe-cc@latest --force` |
 | `ETARGET` / versão não encontrada | `npm cache clean --force` |
 | Erro no WSL sobre Node | Use Node instalado dentro do WSL |
 
