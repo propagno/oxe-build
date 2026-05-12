@@ -217,6 +217,7 @@ Um pedido → **um** destino (sem gerar contrato). O agente aplica `route.md` ou
 
 | Se o utilizador disser (exemplos) | Comando / ação |
 |-----------------------------------|----------------|
+| **Objetivo de implementação** (“cria X”, “implementa Y”, “adiciona Z”, “corrige W”, “desenvolve N”) | `/oxe <objetivo>` → Conductor decide automaticamente Agent Mode (simples/médio) ou Swarm Mode (complexo) |
 | Não sei que passo OXE sou / “o que faço agora?” | `/oxe` ou `npx oxe-cc status` |
 | Quero entender rapidamente a situação real da trilha atual | `/oxe “pergunta”` |
 | Acabei de clonar / falta OXE no projeto | `npx oxe-cc@latest` (ou `oxe-cc`) na raiz do repo |

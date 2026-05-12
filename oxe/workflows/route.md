@@ -13,15 +13,17 @@ Este passo é **meta**: só orientação. A execução real pertence ao workflow
 </context>
 
 <process>
-1. Ler a secção **Router** em `oxe/workflows/help.md` (ou `.oxe/workflows/help.md` no projeto).
-2. Classificar a intenção do utilizador e escolher **uma** linha da tabela.
-3. Se a classificação não for claramente dominante, ainda devolver um único destino, mas explicitar a confiança da escolha e a lacuna que poderia mudar o roteamento.
-4. Responder apenas:
+1. Verificar se o input é um **objetivo de implementação** (cria, implementa, adiciona, corrige, constrói, desenvolve, migra — verbos de ação sobre o código):
+   - **Sim** → destino direto: `oxe/workflows/conduct.md` (Conductor decide Agent Mode vs Swarm Mode). Não consultar tabela.
+2. Caso contrário, ler a secção **Router** em `oxe/workflows/help.md` (ou `.oxe/workflows/help.md` no projeto).
+3. Classificar a intenção do utilizador e escolher **uma** linha da tabela.
+4. Se a classificação não for claramente dominante, ainda devolver um único destino, mas explicitar a confiança da escolha e a lacuna que poderia mudar o roteamento.
+5. Responder apenas:
    - **Comando:** …
    - **Workflow:** `oxe/workflows/<nome>.md`
    - **Por quê:** (uma frase)
    - **Confiança:** alta | média | baixa (só quando houver ambiguidade real)
-5. Não criar ficheiros em `.oxe/` salvo o utilizador pedir explícito registo; se o utilizador pedir rastreio: acrescentar uma linha em **`.oxe/STATE.md`** (ex.: `last_route: /oxe-scan — YYYY-MM-DD`).
+6. Não criar ficheiros em `.oxe/` salvo o utilizador pedir explícito registo; se o utilizador pedir rastreio: acrescentar uma linha em **`.oxe/STATE.md`** (ex.: `last_route: /oxe-scan — YYYY-MM-DD`).
 </process>
 
 <success_criteria>

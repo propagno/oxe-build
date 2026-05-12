@@ -4,6 +4,87 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.12.0] — 2026-05-12
+
+### Agent Mode, Swarm Mode, Memory Kernel & Learning Kernel
+
+Esta release transforma o OXE em um sistema autônomo orientado a objetivos. O usuário escreve `/oxe <objetivo em linguagem natural>` e o Conductor decide automaticamente o fluxo, os agentes e a estratégia de execução — sem precisar escolher comandos manualmente.
+
+#### Conductor Agent (`oxe/workflows/conduct.md`)
+
+- novo workflow que age como ponto de entrada para objetivos de implementação em linguagem natural
+- classifica complexidade em três scores: simples | médio | complexo
+- recupera memória relevante das 5 camadas (runtime_state, session_memory, project_memory, lessons, observations)
+- seleciona personas aplicáveis por `intent_tags` (backend → executor/architect, frontend → ui-specialist, storage → db-specialist, etc.)
+- decide automaticamente **Agent Mode** (simples/médio) ou **Swarm Mode** (complexo/multi-domínio)
+- `oxe/workflows/oxe.md` e `route.md` atualizados: objetivos de implementação redirecionam para `conduct.md`
+
+#### Agent Mode (`oxe/workflows/agent-mode.md`)
+
+- Conductor age sozinho com a persona selecionada para objetivos de 1–2 domínios e ≤ 8 arquivos
+- grava `AGENT-SESSION.json` em `.oxe/agent/` com intent, skills, tool_calls e reconciliação
+- discovery mínimo antes de mutar: confirma write_set, padrões, riscos
+- se write_set exceder threshold para `intent_score=simples`, eleva automaticamente para Swarm Mode
+- `RECONCILIATION.md` gerado ao final com arquivos alterados e objective_satisfied
+
+#### Swarm Mode (`oxe/workflows/swarm-mode.md`)
+
+- orquestração de 5 papéis em pipeline controlado: Scout → Coordinator → Builder(s) → Reviewer → Verifier
+- **Scout** (`oxe/workflows/swarm/scout.md`): produz CODEBASE-MAP.md, PATTERNS.md, RISK-MAP.md, FILE-CANDIDATES.json e TEST-CANDIDATES.json antes de qualquer mutação
+- **File Ownership** (`FILE-OWNERSHIP.json`): cada Builder declara `write_set`; conflitos → Coordinator serializa em waves sequenciais
+- **Board** (`oxe/workflows/swarm/board.md`): BOARD.md e BOARD.json atualizados em tempo real por fase
+- **Quality Gates** automáticos: arquivo high-risk → gate humano; cobertura abaixo de threshold → gate auto
+- **Reviewer**: produz `.oxe/swarm/reviews/<task_id>-REVIEW.md` por tarefa antes de integração
+- **Verifier/Integrator**: FINAL-INTEGRATION.md com evidências completas e VERIFY.md atualizado
+- novo schema `oxe/schemas/swarm-run.schema.json` (JSON Schema Draft-07) para SWARM-RUN.json
+
+#### Memory Kernel (`oxe/workflows/memory.md` + `bin/lib/oxe-memory-kernel.cjs`)
+
+- ativa o modelo de 4 camadas de memória já definido em `oxe-operational.cjs:2364`
+- `retrieveMemory(projectRoot, intentTags, phase, objective)`: filtra fragmentos por relevância e phase; ranking por score (tag match, impacto, frequência)
+- `saveContextPack()`: grava context pack em `.oxe/agent/MEMORY-INJECTIONS.md` ou `.oxe/swarm/DECISIONS.md` + snapshot auditável em `.oxe/memory/retrieved/<phase>.md`
+- novos templates: `REPO-MEMORY.template.md` (decisões cross-session, pitfalls, preferências, padrões validados) e `MEMORY-INDEX.template.json`
+
+#### Learning Kernel (`oxe/workflows/distill.md` + `bin/lib/oxe-learning-kernel.cjs`)
+
+- detecta padrões automaticamente ao final de cada run: blocker_pattern, success_pattern, anti_pattern, file_conflict_pattern, integration_gap, scope_expansion
+- atualiza `LESSONS.md` com dedup correto (Frequência++ para lições repetidas, não duplicatas)
+- popula `lessons-metrics.json` com `outcomes` e `success_rate` por lição; deprecação automática se `success_rate < 0.5` e `apply_count >= 3`
+- enfileira skill candidatas em `.oxe/learning/PROMOTION-QUEUE.md` quando padrão aparece em 2+ runs
+- atualiza `REPO-MEMORY.md` com decisões arquiteturais e pitfalls novos
+
+#### Skill Runtime (`bin/lib/oxe-skill-loader.cjs`)
+
+- `loadSkill(id, projectRoot)`: resolve por ordem de precedência projeto → capabilities → global
+- `listSkills()`: enumera active/proposed/archived/global por diretório
+- `selectPersonasForIntent(intentTags, projectRoot)`: mapeia intent_tags para personas primárias e secundárias
+- `recordSkillsLoaded()`: grava snapshot das personas ativas em `.oxe/agent/SKILLS-LOADED.json`
+
+#### Event Bus (`bin/lib/oxe-event-bus.cjs`)
+
+- `OXE-EVENTS.ndjson` passa a ser efetivamente populado durante runs (antes: schema definido, nunca emitido)
+- helpers tipados: `emitRunStarted`, `emitWorkItemCompleted`, `emitWorkItemBlocked`, `emitRunCompleted`, `emitGateRequested`, `emitGateResolved`, `emitLessonPromoted`, `emitRetroPublished`
+- `readEvents(projectRoot, filters)`: leitura com filtro por `run_id`, `type`, `since`
+
+#### Runtime contracts
+
+- `workflow-runtime-contracts.json` atualizado com contratos semânticos para todos os 5 novos workflows (conduct, agent-mode, swarm-mode, memory, distill)
+- `help.md` router: nova entrada de prioridade máxima para objetivos de implementação → `/oxe <objetivo>` → Conductor
+
+#### Templates adicionados
+
+- `.oxe/templates/AGENT-SESSION.template.json`
+- `.oxe/templates/swarm/SWARM-RUN.template.json`
+- `.oxe/templates/swarm/FILE-OWNERSHIP.template.json`
+- `.oxe/templates/swarm/BOARD.template.md`
+- `.oxe/templates/swarm/QUALITY-GATES.template.md`
+- `.oxe/templates/REPO-MEMORY.template.md`
+- `.oxe/templates/MEMORY-INDEX.template.json`
+- `.oxe/templates/learning/CANDIDATES.template.ndjson`
+- `.oxe/templates/learning/PROMOTION-QUEUE.template.md`
+
+---
+
 ## [1.11.0] — 2026-05-06
 
 ### Spec Lifecycle Automation & CLI Gaps
