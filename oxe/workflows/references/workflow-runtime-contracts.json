@@ -328,9 +328,9 @@
         "runtime",
         "checkpoints",
         "implementation_pack_json",
-          "reference_anchors",
-          "visual_inputs_json",
-          "fixture_pack_json"
+        "reference_anchors",
+        "visual_inputs_json",
+        "fixture_pack_json"
       ],
       "optional_artifacts": [
         "plan",
@@ -574,9 +574,9 @@
           "capabilities_index",
           "checkpoints",
           "implementation_pack_json",
-        "reference_anchors",
-        "visual_inputs_json",
-        "fixture_pack_json"
+          "reference_anchors",
+          "visual_inputs_json",
+          "fixture_pack_json"
         ],
         "full": [
           "state",
@@ -994,6 +994,159 @@
         "phase_summary"
       ],
       "extraction_intent": "execution_input"
+    },
+    "conduct": {
+      "reasoning_mode": "planning",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "global_lessons",
+        "session_manifest",
+        "spec",
+        "plan",
+        "codebase_overview"
+      ],
+      "context_tiers": {
+        "minimal": [
+          "state"
+        ],
+        "standard": [
+          "state",
+          "global_lessons",
+          "spec",
+          "plan"
+        ],
+        "full": [
+          "state",
+          "global_lessons",
+          "session_manifest",
+          "spec",
+          "plan",
+          "codebase_overview"
+        ]
+      },
+      "extraction_intent": "planning_input"
+    },
+    "agent-mode": {
+      "reasoning_mode": "execution",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "spec",
+        "plan",
+        "global_lessons",
+        "codebase_overview"
+      ],
+      "context_tiers": {
+        "minimal": [
+          "state"
+        ],
+        "standard": [
+          "state",
+          "spec",
+          "plan",
+          "global_lessons"
+        ],
+        "full": [
+          "state",
+          "spec",
+          "plan",
+          "global_lessons",
+          "codebase_overview"
+        ]
+      },
+      "extraction_intent": "execution_input"
+    },
+    "swarm-mode": {
+      "reasoning_mode": "planning",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "spec",
+        "plan",
+        "global_lessons",
+        "codebase_overview",
+        "codebase_stack"
+      ],
+      "context_tiers": {
+        "minimal": [
+          "state"
+        ],
+        "standard": [
+          "state",
+          "spec",
+          "plan",
+          "global_lessons"
+        ],
+        "full": [
+          "state",
+          "spec",
+          "plan",
+          "global_lessons",
+          "codebase_overview",
+          "codebase_stack"
+        ]
+      },
+      "extraction_intent": "planning_input"
+    },
+    "memory": {
+      "reasoning_mode": "discovery",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "global_lessons",
+        "session_manifest",
+        "verify"
+      ],
+      "context_tiers": {
+        "minimal": [
+          "state"
+        ],
+        "standard": [
+          "state",
+          "global_lessons"
+        ],
+        "full": [
+          "state",
+          "global_lessons",
+          "session_manifest",
+          "verify"
+        ]
+      },
+      "extraction_intent": "status_read"
+    },
+    "distill": {
+      "reasoning_mode": "review",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "verify",
+        "global_lessons",
+        "runtime"
+      ],
+      "context_tiers": {
+        "minimal": [
+          "state",
+          "verify"
+        ],
+        "standard": [
+          "state",
+          "verify",
+          "global_lessons"
+        ],
+        "full": [
+          "state",
+          "verify",
+          "global_lessons",
+          "runtime"
+        ]
+      },
+      "extraction_intent": "verification"
     }
   }
 }

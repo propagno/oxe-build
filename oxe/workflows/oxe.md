@@ -135,7 +135,8 @@ Não precisam ser decorados como comandos separados:
    - **Sem input ou "next / o que faço / status":** aplicar `<modo_status>`.
    - **"help / comandos / o que é OXE":** aplicar `<modo_help>`.
    - **Pergunta situacional** ("onde estou?", "qual o risco?", "o que está acontecendo?", "me contextualize"): aplicar `<modo_pergunta>`.
-   - **Input de ação/tarefa** (linguagem natural com contexto operacional): aplicar `<modo_route>` e, se o workflow for claro, carregar e executar diretamente o `oxe/workflows/<nome>.md` correspondente.
+   - **Objetivo de implementação** (linguagem natural descrevendo uma tarefa, feature ou mudança a executar — ex.: "cria X", "implementa Y", "adiciona Z", "corrige W"): carregar e executar diretamente `oxe/workflows/conduct.md`. O Conductor decide Agent Mode vs Swarm Mode automaticamente.
+   - **Input de roteamento simples** (pedido que mapeia diretamente a um comando OXE existente sem necessidade de execução): aplicar `<modo_route>` e, se o workflow for claro, carregar e executar diretamente o `oxe/workflows/<nome>.md` correspondente.
 2. Nunca produzir listas longas de alternativas. Um passo, um comando, uma frase.
 3. Se o workflow executado diretamente gerar artefatos, reportar no chat conforme esse workflow.
 </process>
