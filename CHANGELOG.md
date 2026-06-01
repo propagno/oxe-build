@@ -4,6 +4,31 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.14.0] — 2026-05-30
+
+### Contratos de integração para hosts — reatividade + dashboard embutível
+
+Aditivo — nenhum contrato existente muda. Complementa o 1.13.0 (`status --json --summary`, `agentSkills`) para hosts como o OXESpace embutirem o oxe-cc de forma reativa e visual.
+
+- **`oxe events --tail [N] --json [--since <evt_id>] [--session <s>]`** — projeção read-only e versionada (`oxeEventsSchema: 1`) do log append-only `.oxe/OXE-EVENTS.ndjson`: `{ summary: { total, byType, lastEvent }, events: [...] }`. `--since` devolve só os eventos novos desde um `event_id` conhecido (leitura incremental). Reusa `operational.readEvents`/`summarizeEvents`. Um host normalmente observa o arquivo e chama `status --json --summary`; este comando é a forma documentada de ler o tail sem reparsear tudo.
+- **`oxe dashboard --json`** — emite **uma linha** estável e versionada (`oxeDashboardSchema: 1`) com `{ url, port, readOnly, projectRoot }` assim que o servidor sobe, e **continua servindo**. Permite a um host capturar URL/porta de forma robusta e embutir o dashboard num webview, em vez de raspar o banner humano. Combine com `--no-open --port 0` para porta efêmera.
+- **`dashboard --port 0`** agora seleciona uma porta efêmera de verdade (antes caía no default `4173`).
+- **`docs/INTEGRATION.md`** — contrato estável para hosts: `status --json --summary`, `agentSkills`, schema do `OXE-EVENTS.ndjson`, `events --json` e `dashboard --json`; marca o que é estável vs experimental.
+
+---
+
+## [1.13.0] — 2026-05-29
+
+### Contratos de integração para hosts (IDEs, OXESpace)
+
+Aditivo — nenhum contrato existente muda. Facilita hosts consumirem o oxe-cc.
+
+- **`oxe status --json --summary`** — projeção compacta e versionada (`oxeSummarySchema: 1`) com `workspaceMode, phase, healthStatus, activeSession, nextStep, cursorCmd, reason, eventsCount, warningsCount` + um `agentSkills` compacto. Troca ~150KB do status completo por <1KB para o "glance" que um host precisa.
+- **`agentSkills` no `status --json`** e **`agentSkillsReport(target)` no SDK** (`health.agentSkillsReport`) — status das skills `/oxe-*` por agente no workspace (`copilot-vscode`, `codex`, `copilot-cli`): `detected/skillsInstalled/skillsPath/status/issues`. Permite a um host detectar skills ausentes e oferecer instalação **antes** de lançar o agente (resolve o "Failed to load N skills").
+- **SDK**: `health.buildStatusSummary(report)` e `health.agentSkillsReport(target)` exportados + tipados em `lib/sdk/index.d.ts`.
+
+---
+
 ## [1.12.0] — 2026-05-12
 
 ### Agent Mode, Swarm Mode, Memory Kernel & Learning Kernel

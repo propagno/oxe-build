@@ -45,6 +45,30 @@ export interface OxeNextSuggestion {
   artifacts: string[];
 }
 
+/** Compact, host-facing projection of the health report (versioned). */
+export interface OxeStatusSummary {
+  oxeSummarySchema: number;
+  workspaceMode: string;
+  phase: string | null;
+  healthStatus: string | null;
+  activeSession: string | null;
+  nextStep: string | null;
+  cursorCmd: string | null;
+  reason: string | null;
+  eventsCount: number;
+  warningsCount: number;
+}
+
+/** Per-agent OXE skills/integration status for a workspace. */
+export interface AgentSkillsStatus {
+  agent: string;
+  detected: boolean;
+  skillsInstalled: boolean;
+  skillsPath: string;
+  status: string;
+  issues: string[];
+}
+
 export interface AzureInventorySummary {
   total: number;
   servicebus: number;
@@ -699,6 +723,8 @@ export interface OxeSdk {
     loadOxeConfigMerged: (targetProject: string) => { config: Record<string, unknown>; path: string | null; parseError: string | null; sources: { system: string | null; user: string | null; project: string | null } };
     validateConfigShape: (cfg: Record<string, unknown>) => { unknownKeys: string[]; typeErrors: string[] };
     buildHealthReport: (target: string) => OxeHealthReport;
+    buildStatusSummary: (report: OxeHealthReport) => OxeStatusSummary;
+    agentSkillsReport: (target: string) => AgentSkillsStatus[];
     detectWorkspaceMode: (target: string) => { workspaceMode: WorkspaceMode; packageName: string | null; canonicalTreePresent: boolean; commandsTreePresent: boolean };
     shouldSuppressExecutionWorkspaceGates: (workspaceMode: WorkspaceMode, phase?: string | null, activeSession?: string | null, activeRun?: Record<string, unknown> | null) => boolean;
     suggestNextStep: (target: string, cfg?: { discuss_before_plan?: boolean }) => OxeNextSuggestion;

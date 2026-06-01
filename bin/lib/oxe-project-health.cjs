@@ -2730,6 +2730,79 @@ function buildHealthReport(target) {
   };
 }
 
+/**
+ * Compact, stable projection of `buildHealthReport` for host integrations
+ * (IDEs, OXESpace). Versioned independently via `oxeSummarySchema` so a host
+ * can depend on a small, cheap payload instead of parsing the full ~100KB
+ * status. Pure — pass in a report from `buildHealthReport`.
+ * @param {ReturnType<typeof buildHealthReport>} report
+ */
+function buildStatusSummary(report) {
+  const next = (report && report.next) || {};
+  const gaps = Array.isArray(report && report.criticalExecutionGaps) ? report.criticalExecutionGaps.length : 0;
+  const planWarn = report && report.planSelfEvaluation && Array.isArray(report.planSelfEvaluation.warnings)
+    ? report.planSelfEvaluation.warnings.length
+    : 0;
+  return {
+    oxeSummarySchema: 1,
+    workspaceMode: (report && report.workspaceMode) || 'oxe_project',
+    phase: (report && report.phase) || null,
+    healthStatus: (report && report.healthStatus) || null,
+    activeSession: (report && report.activeSession) || null,
+    nextStep: next.step || null,
+    cursorCmd: next.cursorCmd || null,
+    reason: next.reason || null,
+    eventsCount: report && report.eventsSummary && typeof report.eventsSummary.total === 'number' ? report.eventsSummary.total : 0,
+    warningsCount: gaps + planWarn,
+  };
+}
+
+/**
+ * Per-agent OXE skills/integration status for a workspace. Lets a host detect
+ * when an agent lacks the `/oxe-*` skills BEFORE launching it — directly
+ * addresses the "Failed to load N skills" failure seen in agent CLIs. Reuses
+ * the tested copilot/codex integration reports plus a filesystem check of the
+ * Copilot CLI skills home (~/.copilot/skills).
+ * @param {string} target
+ */
+function agentSkillsReport(target) {
+  const agents = [];
+
+  const cp = copilotIntegrationReport(target);
+  agents.push({
+    agent: 'copilot-vscode',
+    detected: cp.detected,
+    skillsInstalled: cp.promptSource === 'workspace',
+    skillsPath: cp.workspace.promptsDir,
+    status: cp.status,
+    issues: cp.warnings || [],
+  });
+
+  const cx = codexIntegrationReport(target);
+  agents.push({
+    agent: 'codex',
+    detected: cx.detected,
+    skillsInstalled: Boolean(cx.skillsReady),
+    skillsPath: cx.skillsRoot,
+    status: cx.status,
+    issues: cx.warnings || [],
+  });
+
+  const cliSkillsRoot = path.join(copilotLegacyHome(), 'skills');
+  const cliSkillDirs = listOxeSkillDirs(cliSkillsRoot);
+  const cliInstalled = cliSkillDirs.length > 0;
+  agents.push({
+    agent: 'copilot-cli',
+    detected: cliInstalled,
+    skillsInstalled: cliInstalled,
+    skillsPath: cliSkillsRoot,
+    status: cliInstalled ? 'healthy' : 'not_installed',
+    issues: cliInstalled ? [] : ['Skills OXE ausentes em ~/.copilot/skills — rode `oxe install --copilot-cli` e depois `/skills reload`'],
+  });
+
+  return agents;
+}
+
 module.exports = {
   ALLOWED_CONFIG_KEYS,
   EXECUTION_PROFILES,
@@ -2775,6 +2848,8 @@ module.exports = {
   shouldSuppressExecutionWorkspaceGates,
   suggestNextStep,
   buildHealthReport,
+  buildStatusSummary,
+  agentSkillsReport,
   buildExecutionRationality: rationality.buildExecutionRationality,
   oxePaths,
   scopedOxePaths,

@@ -390,6 +390,8 @@ function parseInstallArgs(argv) {
     statusHints: false,
     /** Visão extendida CLI-first: coverage matrix + readiness gate no terminal. */
     statusFull: false,
+    /** Saída JSON compacta/versionada para hosts (status --json --summary). */
+    statusSummary: false,
     restPositional: [],
   };
   for (let i = 0; i < argv.length; i++) {
@@ -435,6 +437,7 @@ function parseInstallArgs(argv) {
     } else if (a === '--json') out.jsonOutput = true;
     else if (a === '--hints') out.statusHints = true;
     else if (a === '--full') out.statusFull = true;
+    else if (a === '--summary') out.statusSummary = true;
     else if (a === '--release') out.releaseDoctor = true;
     else if (a === '--write-manifest') out.writeManifest = true;
     else if (!a.startsWith('-')) out.restPositional.push(a);
@@ -1892,6 +1895,18 @@ function runStatus(target, opts = {}) {
   const routineHints = collectOxeRoutineHints(target, report, config);
   const next = report.next;
 
+  // Lightweight, versioned summary for host integrations (IDEs, OXESpace) —
+  // a small stable payload instead of the full ~100KB status. Includes a
+  // compact per-agent skills view so a host can decide whether to offer
+  // "install OXE skills" before launching an agent.
+  if (opts.json && opts.summary) {
+    const summary = oxeHealth.buildStatusSummary(report);
+    summary.projectRoot = path.resolve(target);
+    summary.agentSkills = oxeHealth.agentSkillsReport(target).map((a) => ({ agent: a.agent, skillsInstalled: a.skillsInstalled }));
+    console.log(JSON.stringify(summary));
+    return;
+  }
+
   if (opts.json) {
     /** @type {Record<string, unknown>} */
     const payload = {
@@ -1947,6 +1962,7 @@ function runStatus(target, opts = {}) {
       azure: report.azure,
       copilot: report.copilot,
       codex: report.codex,
+      agentSkills: oxeHealth.agentSkillsReport(target),
       contextPacks: report.contextPacks,
       contextQuality: report.contextQuality,
       semanticsDrift: report.semanticsDrift,
@@ -2553,6 +2569,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
     npx oxe-cc init-oxe [opções] [pasta-do-projeto]
     npx oxe-cc context <build|inspect> [opções] [pasta-do-projeto]
     npx oxe-cc dashboard [opções] [pasta-do-projeto]
+    npx oxe-cc events [--tail N] [--since <evt_id>] [--json] [opções] [pasta-do-projeto]
   npx oxe-cc runtime <status|start|pause|resume|replay|compile|verify|project|ci|promote|recover|gates|agents|execute> [opções] [pasta-do-projeto]
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
     npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
@@ -2587,10 +2604,19 @@ ${green}update${reset} (executa npx oxe-cc@latest --force na pasta do projeto)
   ${dim}CI / sem rede:${reset} OXE_UPDATE_SKIP_REGISTRY=1 desativa consultas (--check sai 2; --if-newer sai 2 sem npx)
 
 ${green}dashboard${reset} (interface web local para revisão e aprovação do plano)
-  --port <número>                        porta local (padrão: 4173)
+  --port <número>                        porta local (padrão: 4173; use 0 para porta efêmera)
   --no-open                              não abre o browser automaticamente
+  --json                                 emite {url,port,...} (oxeDashboardSchema:1) e segue servindo — para embutir num host
+  --read-only                            UI visual sem persistência (embed seguro)
   --session <sessions/sNNN-slug>         força visualização de uma sessão específica
   --dump-context                         imprime JSON consolidado e sai
+  --dir <pasta>                          raiz do projeto (padrão: diretório atual)
+
+${green}events${reset} (projeção read-only do log .oxe/OXE-EVENTS.ndjson — para hosts)
+  --tail <N>                             só os últimos N eventos (padrão: 50)
+  --since <evt_id>                       só eventos posteriores a um event_id conhecido (leitura incremental)
+  --json                                 saída estruturada (oxeEventsSchema:1) com summary + events
+  --session <sessions/sNNN-slug>         força sessão específica (padrão: sessão ativa do STATE.md)
   --dir <pasta>                          raiz do projeto (padrão: diretório atual)
 
 ${green}context${reset} (Context Engine V2: seleção, compressão e inspeção determinística)
@@ -3924,7 +3950,7 @@ function parseCapabilitiesArgs(argv) {
 }
 
 /**
- * @typedef {{ help: boolean, dir: string, port: number, noOpen: boolean, readOnly: boolean, dumpContext: boolean, activeSession: string|null, parseError: boolean, unknownFlag: string }} DashboardOpts
+ * @typedef {{ help: boolean, dir: string, port: number, noOpen: boolean, readOnly: boolean, dumpContext: boolean, json: boolean, activeSession: string|null, parseError: boolean, unknownFlag: string }} DashboardOpts
  */
 
 /**
@@ -3985,6 +4011,7 @@ function parseDashboardArgs(argv) {
     noOpen: false,
     readOnly: false,
     dumpContext: false,
+    json: false,
     activeSession: null,
     parseError: false,
     unknownFlag: '',
@@ -3993,10 +4020,15 @@ function parseDashboardArgs(argv) {
     const a = argv[i];
     if (a === '-h' || a === '--help') out.help = true;
     else if (a === '--dir' && argv[i + 1]) out.dir = path.resolve(argv[++i]);
-    else if (a === '--port' && argv[i + 1]) out.port = Number(argv[++i]) || 4173;
-    else if (a === '--no-open') out.noOpen = true;
+    else if (a === '--port' && argv[i + 1] !== undefined) {
+      // Allow `--port 0` (OS picks an ephemeral port — used by hosts that embed
+      // the dashboard and read the real port back from `--json`).
+      const n = Number(argv[++i]);
+      out.port = Number.isFinite(n) && n >= 0 ? n : 4173;
+    } else if (a === '--no-open') out.noOpen = true;
     else if (a === '--read-only') out.readOnly = true;
     else if (a === '--dump-context') out.dumpContext = true;
+    else if (a === '--json') out.json = true;
     else if (a === '--session' && argv[i + 1]) out.activeSession = String(argv[++i]).replace(/\\/g, '/');
     else if (!a.startsWith('-') && i === 0) out.dir = path.resolve(a);
     else {
@@ -4357,7 +4389,7 @@ async function runDashboard(opts) {
     return;
   }
   const c = useAnsiColors();
-  printSection('OXE ▸ dashboard');
+  if (!opts.json) printSection('OXE ▸ dashboard');
   const server = oxeDashboard.createDashboardServer(target, { activeSession: opts.activeSession });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -4366,6 +4398,24 @@ async function runDashboard(opts) {
   const address = server.address();
   const port = address && typeof address === 'object' ? address.port : opts.port;
   const url = `http://127.0.0.1:${port}/`;
+  // Host-integration mode: emit one stable, versioned line with the live URL/port
+  // as soon as the server is listening, then keep serving until killed. Lets a
+  // host (OXESpace) embed the dashboard in a webview without scraping the
+  // human-readable banner. Pair with `--no-open --port 0` for an ephemeral port.
+  if (opts.json) {
+    console.log(JSON.stringify({
+      oxeDashboardSchema: 1,
+      projectRoot: path.resolve(target),
+      url,
+      port,
+      readOnly: Boolean(opts.readOnly),
+    }));
+    if (!opts.noOpen) {
+      try { openUrlInBrowser(url); } catch { /* host owns presentation */ }
+    }
+    await new Promise(() => {});
+    return;
+  }
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${target}${c ? reset : ''}`);
   console.log(`  ${c ? green : ''}URL:${c ? reset : ''} ${c ? cyan : ''}${url}${c ? reset : ''}`);
   if (opts.readOnly) {
@@ -4381,6 +4431,99 @@ async function runDashboard(opts) {
   }
   console.log(`  ${dim}Pressione Ctrl+C para encerrar o servidor local.${reset}\n`);
   await new Promise(() => {});
+}
+
+/**
+ * @typedef {{ help: boolean, dir: string, tail: number, since: string, activeSession: string|null, json: boolean, parseError: boolean, unknownFlag: string }} EventsOpts
+ */
+
+/**
+ * @param {string[]} argv
+ * @returns {EventsOpts}
+ */
+function parseEventsArgs(argv) {
+  /** @type {EventsOpts} */
+  const out = {
+    help: false,
+    dir: process.cwd(),
+    tail: 50,
+    since: '',
+    activeSession: null,
+    json: false,
+    parseError: false,
+    unknownFlag: '',
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '-h' || a === '--help') out.help = true;
+    else if (a === '--dir' && argv[i + 1]) out.dir = path.resolve(argv[++i]);
+    else if (a === '--tail') {
+      // `--tail` alone keeps the default; `--tail N` overrides the count.
+      const next = argv[i + 1];
+      if (next && /^\d+$/.test(next)) out.tail = Number(argv[++i]);
+    } else if (a === '--since' && argv[i + 1]) out.since = String(argv[++i]);
+    else if (a === '--json') out.json = true;
+    else if (a === '--session' && argv[i + 1]) out.activeSession = String(argv[++i]).replace(/\\/g, '/');
+    else if (!a.startsWith('-') && i === 0) out.dir = path.resolve(a);
+    else {
+      out.parseError = true;
+      out.unknownFlag = a;
+      break;
+    }
+  }
+  return out;
+}
+
+/**
+ * Read-only projection of the append-only event log (.oxe/OXE-EVENTS.ndjson)
+ * for host integrations. A host typically watches that file directly and then
+ * calls `status --json --summary`; this command is the documented way to read
+ * the tail of the log (optionally since a known event_id) without parsing the
+ * whole file. Reuses the same SDK helpers the runtime uses.
+ * @param {EventsOpts} opts
+ */
+function runEvents(opts) {
+  const target = opts.dir;
+  if (!fs.existsSync(target)) {
+    if (opts.json) console.log(JSON.stringify({ oxeEventsSchema: 1, projectRoot: path.resolve(target), error: 'dir-not-found', events: [] }));
+    else console.error(`${yellow}Diretório não encontrado: ${target}${reset}`);
+    process.exit(1);
+  }
+  const stateText = fs.existsSync(oxeHealth.oxePaths(target).state)
+    ? fs.readFileSync(oxeHealth.oxePaths(target).state, 'utf8')
+    : '';
+  const activeSession = opts.activeSession || oxeHealth.parseActiveSession(stateText) || null;
+  let events = oxeOperational.readEvents(target, activeSession);
+  if (opts.since) {
+    const idx = events.findIndex((e) => e && e.event_id === opts.since);
+    if (idx >= 0) events = events.slice(idx + 1);
+  }
+  const tail = opts.tail > 0 ? events.slice(-opts.tail) : events;
+
+  if (opts.json) {
+    console.log(JSON.stringify({
+      oxeEventsSchema: 1,
+      projectRoot: path.resolve(target),
+      activeSession,
+      summary: oxeOperational.summarizeEvents(events),
+      events: tail,
+    }));
+    return;
+  }
+
+  const c = useAnsiColors();
+  printSection('OXE ▸ events');
+  const summary = oxeOperational.summarizeEvents(events);
+  console.log(`  ${c ? green : ''}Total:${c ? reset : ''} ${summary.total}${activeSession ? `  ${c ? dim : ''}(sessão: ${activeSession})${c ? reset : ''}` : ''}`);
+  if (!tail.length) {
+    console.log(`  ${c ? dim : ''}Sem eventos.${c ? reset : ''}\n`);
+    return;
+  }
+  for (const e of tail) {
+    const ts = e.timestamp ? String(e.timestamp).replace('T', ' ').replace(/\..*$/, '') : '';
+    console.log(`  ${c ? dim : ''}${ts}${c ? reset : ''}  ${c ? cyan : ''}${e.type}${c ? reset : ''}${e.run_id ? ` ${c ? dim : ''}run=${e.run_id}${c ? reset : ''}` : ''}`);
+  }
+  console.log('');
 }
 
 /**
@@ -5473,6 +5616,7 @@ async function main() {
     argv[0] === 'init-oxe' ||
     argv[0] === 'context' ||
     argv[0] === 'dashboard' ||
+    argv[0] === 'events' ||
     argv[0] === 'runtime' ||
     argv[0] === 'azure' ||
     argv[0] === 'uninstall' ||
@@ -5582,8 +5726,26 @@ async function main() {
       usage();
       process.exit(1);
     }
-    printBanner();
+    if (!d.json) printBanner();
     await runDashboard(d);
+    return;
+  }
+
+  if (command === 'events') {
+    const e = parseEventsArgs(argv);
+    if (e.help) {
+      printBanner();
+      usage();
+      process.exit(0);
+    }
+    if (e.parseError) {
+      printBanner();
+      console.error(`${red}Opção desconhecida:${reset} ${e.unknownFlag}`);
+      usage();
+      process.exit(1);
+    }
+    if (!e.json) printBanner();
+    runEvents(e);
     return;
   }
 
@@ -5768,7 +5930,7 @@ async function main() {
     if (opts.statusFull) {
       runStatusFull(target);
     } else {
-      runStatus(target, { json: opts.jsonOutput, hints: opts.statusHints });
+      runStatus(target, { json: opts.jsonOutput, hints: opts.statusHints, summary: opts.statusSummary });
     }
     return;
   }
