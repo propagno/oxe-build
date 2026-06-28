@@ -896,6 +896,29 @@ export interface OxeSdk {
     redactObject: (value: unknown) => unknown;
   };
 
+  artifacts: {
+    ARTIFACT_CATALOG: Array<{ path: string; kind: 'file' | 'dir'; purpose: string; createdBy: string; group: string }>;
+    GROUPS: Array<{ key: string; label: string; order: number }>;
+    CORE_INSTALL_PATHS: string[];
+    SOURCE_LABELS: Record<string, string>;
+    sourceLabel: (createdBy: string) => string;
+    renderLegend: () => string;
+    classifyEntry: (oxeDir: string, entry: { path: string; kind: string }) => 'absent' | 'empty' | 'active';
+    buildMapModel: (
+      target: string,
+      opts?: { staleScan?: boolean }
+    ) => {
+      projectRoot: string;
+      oxeExists: boolean;
+      groups: Array<{ key: string; label: string; present: Array<Record<string, unknown>>; available: Array<Record<string, unknown>> }>;
+      present: Array<Record<string, unknown>>;
+      available: Array<Record<string, unknown>>;
+      extras: string[];
+      counts: { total: number; present: number; active: number; empty: number; stale: number; available: number; extras: number };
+    };
+    renderMap: (model: Record<string, unknown>, opts?: { paint?: (s: string, kind: string) => string }) => string;
+  };
+
   runDoctorChecks: (args: {
     projectRoot: string;
     packageRoot?: string;

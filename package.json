@@ -1,6 +1,6 @@
 {
   "name": "oxe-cc",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "description": "OXE — spec-driven workflows in .oxe/ with runtime enterprise, evidence-first verification and multi-runtime integrations (npx)",
   "license": "MIT",
   "author": "",
@@ -68,7 +68,7 @@
     "sync:cursor": "node scripts/sync-cursor-from-prompts.cjs",
     "release:doctor": "node scripts/release-doctor.cjs",
     "release:manifest": "node scripts/release-doctor.cjs --write-manifest",
-    "test:root": "node --test tests/install.test.cjs tests/oxe-project-health.test.cjs tests/oxe-dashboard.test.cjs tests/oxe-operational.test.cjs tests/oxe-azure.test.cjs tests/oxe-sdk.test.cjs tests/oxe-manifest.test.cjs tests/oxe-agent-install.test.cjs tests/oxe-install-resolve-full.test.cjs tests/oxe-health-extended.test.cjs tests/oxe-workflows-edge.test.cjs tests/oxe-sdk-edge.test.cjs tests/oxe-cli-edge.test.cjs tests/oxe-npm-version.test.cjs tests/oxe-scripts.test.cjs tests/oxe-retro-health.test.cjs tests/oxe-security-permissions.test.cjs tests/oxe-runtime-semantics.test.cjs tests/oxe-plugins.test.cjs tests/oxe-status-summary.test.cjs tests/oxe-integration-contracts.test.cjs",
+    "test:root": "node --test tests/install.test.cjs tests/oxe-project-health.test.cjs tests/oxe-dashboard.test.cjs tests/oxe-operational.test.cjs tests/oxe-azure.test.cjs tests/oxe-sdk.test.cjs tests/oxe-manifest.test.cjs tests/oxe-agent-install.test.cjs tests/oxe-install-resolve-full.test.cjs tests/oxe-health-extended.test.cjs tests/oxe-workflows-edge.test.cjs tests/oxe-sdk-edge.test.cjs tests/oxe-cli-edge.test.cjs tests/oxe-npm-version.test.cjs tests/oxe-scripts.test.cjs tests/oxe-retro-health.test.cjs tests/oxe-security-permissions.test.cjs tests/oxe-runtime-semantics.test.cjs tests/oxe-plugins.test.cjs tests/oxe-status-summary.test.cjs tests/oxe-integration-contracts.test.cjs tests/oxe-map.test.cjs",
     "test:runtime": "cd packages/runtime && npm test",
     "test:runtime-smoke": "node scripts/runtime-smoke-matrix.cjs",
     "test:runtime-real": "node scripts/runtime-real-suite.cjs",

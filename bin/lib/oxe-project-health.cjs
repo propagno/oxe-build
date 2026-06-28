@@ -1945,20 +1945,14 @@ function installationCompletenessWarnings(target) {
   /** @type {string[]} */
   const warns = [];
   if (!fs.existsSync(p.oxe)) return warns;
-  if (!fs.existsSync(p.globalDir)) warns.push('.oxe/global/ ausente');
-  if (!fs.existsSync(p.globalLessons)) warns.push('.oxe/global/LESSONS.md ausente');
-  if (!fs.existsSync(p.globalMilestones)) warns.push('.oxe/global/MILESTONES.md ausente');
-  if (!fs.existsSync(p.globalMilestonesDir)) warns.push('.oxe/global/milestones/ ausente');
-  if (!fs.existsSync(p.sessionsDir)) warns.push('.oxe/sessions/ ausente');
-  if (!fs.existsSync(p.capabilitiesDir)) warns.push('.oxe/capabilities/ ausente');
-  if (!fs.existsSync(p.capabilitiesIndex)) warns.push('.oxe/CAPABILITIES.md ausente');
-  if (!fs.existsSync(p.investigationsDir)) warns.push('.oxe/investigations/ ausente');
-  if (!fs.existsSync(p.investigationsIndex)) warns.push('.oxe/INVESTIGATIONS.md ausente');
-  if (!fs.existsSync(p.runtime)) warns.push('.oxe/EXECUTION-RUNTIME.md ausente');
-  if (!fs.existsSync(p.checkpoints)) warns.push('.oxe/CHECKPOINTS.md ausente');
-  if (!fs.existsSync(p.activeRun)) warns.push('.oxe/ACTIVE-RUN.json ausente');
-  if (!fs.existsSync(p.runsDir)) warns.push('.oxe/runs/ ausente');
-  if (!fs.existsSync(p.events)) warns.push('.oxe/OXE-EVENTS.ndjson ausente');
+  // Lazy scaffolding: o núcleo do `.oxe/` é só STATE.md, config.json e README.md.
+  // Os demais artefatos/pastas (global/, sessions/, capabilities/, investigations/,
+  // EXECUTION-RUNTIME.md, CHECKPOINTS.md, ACTIVE-RUN.json, runs/, OXE-EVENTS.ndjson)
+  // nascem sob demanda no primeiro uso do workflow correspondente. A simples
+  // ausência NÃO é um problema — não emitir avisos por isso. Inconsistências
+  // reais (STATE diz X mas o artefato não existe) são detectadas em runtimeWarnings.
+  // Azure é opt-in explícito: se o contexto está habilitado mas o inventário não
+  // foi sincronizado, isso é um sinal legítimo e permanece como aviso.
   if (azure.isAzureContextEnabled(target)) {
     const azurePaths = azure.azurePaths(target);
     if (!fs.existsSync(azurePaths.root)) warns.push('.oxe/cloud/azure/ ausente');
@@ -1992,12 +1986,8 @@ function runtimeWarnings(stateText, p) {
     if (!/Run ID/i.test(raw)) warns.push('EXECUTION-RUNTIME.md sem referência explícita de Run ID');
     if (!/Tracing operacional/i.test(raw)) warns.push('EXECUTION-RUNTIME.md sem seção "Tracing operacional"');
   }
-  if (!fs.existsSync(p.activeRun)) {
-    warns.push('ACTIVE-RUN.json não existe para o escopo atual');
-  }
-  if (!fs.existsSync(p.events)) {
-    warns.push('OXE-EVENTS.ndjson não existe para o escopo atual');
-  }
+  // ACTIVE-RUN.json / OXE-EVENTS.ndjson nascem sob demanda quando o runtime roda
+  // pela primeira vez. A ausência é estado normal pré-execução — não avisar.
   const runState = operational.readRunState(path.dirname(p.oxe), p.activeSession || null);
   const checkpointRows = [];
   if (fs.existsSync(p.checkpoints)) {

@@ -903,7 +903,7 @@ describe('oxe-cc CLI edge', () => {
     assert.strictEqual(r.status, 0);
   });
 
-  test('init-oxe bootstraps active run and trace artifacts', () => {
+  test('init-oxe leaves operational artifacts lazy; events --json degrades gracefully', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-init-op-'));
     const r = spawnSync(process.execPath, [CLI, 'init-oxe', dir], {
       cwd: REPO_ROOT,
@@ -911,9 +911,20 @@ describe('oxe-cc CLI edge', () => {
       env: { ...process.env, OXE_NO_BANNER: '1', OXE_NO_PROMPT: '1' },
     });
     assert.strictEqual(r.status, 0, r.stderr + r.stdout);
-    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'ACTIVE-RUN.json')));
-    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'OXE-EVENTS.ndjson')));
-    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'runs')));
+    // Lazy scaffolding: estes artefatos operacionais só nascem quando o runtime roda.
+    assert.ok(!fs.existsSync(path.join(dir, '.oxe', 'ACTIVE-RUN.json')));
+    assert.ok(!fs.existsSync(path.join(dir, '.oxe', 'OXE-EVENTS.ndjson')));
+    assert.ok(!fs.existsSync(path.join(dir, '.oxe', 'runs')));
+    // Absência graciosa: `events --json` num projeto recém-criado não falha.
+    const e = spawnSync(process.execPath, [CLI, 'events', '--json', '--dir', dir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, OXE_NO_BANNER: '1', OXE_NO_PROMPT: '1' },
+    });
+    assert.strictEqual(e.status, 0, e.stderr + e.stdout);
+    const parsed = JSON.parse(e.stdout);
+    assert.strictEqual(parsed.oxeEventsSchema, 1);
+    assert.strictEqual(parsed.summary.total, 0);
   });
 
   test('--config-dir with --all-agents exits 1', () => {

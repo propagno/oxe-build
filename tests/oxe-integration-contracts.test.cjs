@@ -96,3 +96,21 @@ describe('oxe dashboard --json', () => {
     }
   });
 });
+
+describe('oxe map --json', () => {
+  test('projects a versioned artifact map with present/available split and counts', () => {
+    const dir = makeOxeProject(SAMPLE_EVENTS);
+    const out = execFileSync(process.execPath, [BIN, 'map', '--json', '--dir', dir], { encoding: 'utf8' });
+    const parsed = JSON.parse(out);
+    assert.strictEqual(parsed.oxeMapSchema, 1);
+    assert.strictEqual(parsed.oxeExists, true);
+    assert.ok(Array.isArray(parsed.groups));
+    assert.ok(Array.isArray(parsed.present));
+    assert.ok(Array.isArray(parsed.available));
+    assert.ok(parsed.counts && typeof parsed.counts.total === 'number');
+    // STATE.md exists in the fixture, so it must appear as present/active.
+    const state = parsed.present.find((n) => n.path === 'STATE.md');
+    assert.ok(state, 'STATE.md should be present');
+    assert.strictEqual(state.state, 'active');
+  });
+});

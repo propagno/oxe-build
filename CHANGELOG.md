@@ -4,6 +4,40 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.15.0] — 2026-06-27
+
+### `.oxe/` enxuto no install + mapa vivo de artefatos
+
+Resposta ao feedback de que a quantidade de pastas criadas no install era grande
+demais e dificultava entender o fluxo versus o que de fato foi/será criado.
+
+- **Lazy scaffolding** — `oxe-cc init-oxe`/`install` agora cria só o núcleo
+  essencial: `.oxe/STATE.md`, `.oxe/config.json` e `.oxe/README.md` (legenda
+  gerada). As ~13 subpastas e os arquivos operacionais (`codebase/`,
+  `capabilities/`, `investigations/`, `global/`, `sessions/`, `memory/`,
+  `runs/`, `EXECUTION-RUNTIME.md`, `ACTIVE-RUN.json`, `OXE-EVENTS.ndjson`,
+  `CHECKPOINTS.md`, `CAPABILITIES.md`, `INVESTIGATIONS.md`, …) passam a nascer
+  **sob demanda**, no primeiro uso do workflow correspondente.
+- **Catálogo único de artefatos** (`bin/lib/oxe-artifact-catalog.cjs`) — fonte
+  da verdade que descreve cada artefato do `.oxe/` (path, propósito, origem,
+  grupo) e da qual derivam legenda, mapa e docs (uma definição, três saídas).
+- **`oxe-cc map`** — mapa vivo anotado do `.oxe/`: o que já existe, o que está
+  disponível sob demanda e o estado de cada item (`✓ ativo · ◦ vazio ·
+  ⚠ desatualizado · · sob demanda`). `oxe-cc map --json` (`oxeMapSchema: 1`)
+  para hosts; exposto no SDK como `artifacts.buildMapModel` / `renderLegend`.
+- **`.oxe/README.md` gerado** — legenda local de todos os artefatos, escrita no
+  init e **re-renderizada por `oxe-cc doctor`** (documentação forte sem pastas
+  vazias).
+- **STATE.md enxuto** — template reduzido de 141 → ~30 linhas (fase, sessão,
+  próximo passo, decisões, bloqueios). As ~15 seções opcionais foram movidas
+  para `oxe/templates/STATE-REFERENCE.md`, anexadas sob demanda.
+- **`doctor`/`status` sem falsos-positivos** — a ausência de artefato lazy agora
+  é estado normal (não gera aviso); inconsistências reais (STATE diz X mas o
+  artefato não existe) continuam detectadas.
+- Novos contratos documentados em `docs/INTEGRATION.md`; testes em
+  `tests/oxe-map.test.cjs` + contrato `map --json` em
+  `tests/oxe-integration-contracts.test.cjs`.
+
 ## [1.14.0] — 2026-05-30
 
 ### Contratos de integração para hosts — reatividade + dashboard embutível

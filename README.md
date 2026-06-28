@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/oxe-cc.svg?style=flat-square)](https://www.npmjs.com/package/oxe-cc)
 [![license](https://img.shields.io/npm/l/oxe-cc.svg?style=flat-square)](LICENSE)
 
-**Versão:** `1.14.0` · [package.json](package.json)
+**Versão:** `1.15.0` · [package.json](package.json)
 
 **Framework OXE — Orchestrated eXperience Engineering**
 
@@ -244,43 +244,23 @@ O OXE combina hoje cinco camadas:
 - **Learning Kernel** — destilação de padrões → `LESSONS.md` (dedup) + `PROMOTION-QUEUE.md` (skills candidatas)
 - **runtime TypeScript compilado para CJS** em `packages/runtime/` — ExecutionGraph, scheduler multi-agente (parallel/competitive/cooperative), evidence store, gates, policy, promotion e recovery
 
-O estado operacional real passa por:
+**Mínimo no install → cresce conforme você trabalha.** A partir da `1.15.0`, o `npx oxe-cc` deixa o `.oxe/` enxuto — só o núcleo essencial:
 
 ```
 .oxe/
-├── OXE-EVENTS.ndjson         ← tracing append-only, agora efetivamente populado
-├── ACTIVE-RUN.json           ← cursor e estado do run atual
-├── agent/                    ← artefatos de Agent Mode runs
-│   ├── AGENT-SESSION.json
-│   ├── MEMORY-INJECTIONS.md
-│   ├── SKILLS-LOADED.json
-│   └── RECONCILIATION.md
-├── swarm/                    ← artefatos de Swarm Mode runs
-│   ├── SWARM-RUN.json
-│   ├── TASK-GRAPH.json
-│   ├── FILE-OWNERSHIP.json
-│   ├── BOARD.md / BOARD.json
-│   ├── QUALITY-GATES.md
-│   ├── FINAL-INTEGRATION.md
-│   ├── scout/
-│   └── reviews/
-├── memory/                   ← Memory Kernel
-│   ├── REPO-MEMORY.md
-│   ├── MEMORY-INDEX.json
-│   └── retrieved/
-├── learning/                 ← Learning Kernel
-│   ├── CANDIDATES.ndjson
-│   ├── PROMOTION-QUEUE.md
-│   └── LEARNING-EVENTS.ndjson
-├── runs/<run_id>/            ← runtime enterprise por run
-│   ├── verification-manifest.json
-│   ├── residual-risk-ledger.json
-│   ├── evidence-coverage.json
-│   └── workspace-merge-report.json
-├── execution/GATES.json
-└── global/
-    └── LESSONS.md            ← lições prescritivas cumulativas
+├── STATE.md      ← estado curto: fase, sessão ativa, próximo passo
+├── config.json   ← configuração do projeto
+└── README.md     ← legenda gerada: o que cada artefato é e quando aparece
 ```
+
+Todo o resto — `codebase/`, `SPEC.md`, `PLAN.md`, `agent/`, `swarm/`, `memory/`, `learning/`, `runs/<run_id>/`, `OXE-EVENTS.ndjson`, sessões, milestones — **nasce sob demanda**, criado pelo workflow que o produz. Para ver a qualquer momento o que já existe no seu projeto, o que está disponível sob demanda e o estado de cada item:
+
+```bash
+oxe-cc map            # árvore anotada: ✓ ativo · ◦ vazio · ⚠ desatualizado · · sob demanda
+oxe-cc map --json     # mesmo modelo para hosts (oxeMapSchema:1) — ver docs/INTEGRATION.md
+```
+
+A legenda completa de todos os artefatos vive, gerada e sempre atualizada, em **`.oxe/README.md`** (re-renderizada por `oxe-cc doctor`).
 
 Contrato estável desta release:
 
@@ -475,9 +455,12 @@ Princípios: opt-in, discovery via Resource Graph, mutação só com checkpoint 
 
 ### Context engineering — estado em disco, não no chat
 
+O `.oxe/` começa com **3 arquivos** (STATE.md, config.json, README.md) e cresce sob demanda. A árvore abaixo é o **layout completo já "crescido"** — o que você verá depois de usar spec/plan/execute, sessões, swarm e os kernels. Nenhuma dessas pastas é criada avidamente no install; rode `oxe-cc map` para ver o que de fato existe agora.
+
 ```
-.oxe/
+.oxe/  (layout completo — itens nascem conforme o workflow correspondente roda)
 ├── STATE.md              ← índice global: fase, sessão ativa, próximo passo
+├── README.md             ← legenda gerada dos artefatos
 ├── SESSIONS.md           ← índice de sessões
 ├── CAPABILITIES.md       ← catálogo de capabilities instaladas
 ├── ACTIVE-RUN.json       ← cursor e estado durável do run atual

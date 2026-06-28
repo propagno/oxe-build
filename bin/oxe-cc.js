@@ -25,6 +25,7 @@ const oxePlugins = require(path.join(__dirname, 'lib', 'oxe-plugins.cjs'));
 const oxeContext = require(path.join(__dirname, 'lib', 'oxe-context-engine.cjs'));
 const oxeRuntimeSemantics = require(path.join(__dirname, 'lib', 'oxe-runtime-semantics.cjs'));
 const oxeRelease = require(path.join(__dirname, 'lib', 'oxe-release.cjs'));
+const oxeArtifactCatalog = require(path.join(__dirname, 'lib', 'oxe-artifact-catalog.cjs'));
 
 /** Merge markers for ~/.copilot/copilot-instructions.md (bloco OXE). */
 const OXE_INST_BEGIN = '<!-- oxe-cc:install-begin -->';
@@ -1291,20 +1292,48 @@ function ensureGitignoreIgnoresOxeDir(projectRoot, opts = {}) {
 }
 
 /**
- * Create `.oxe/STATE.md` from template and ensure `.oxe/codebase/` exists.
+ * Ensure a subdirectory under `.oxe/` exists, creating it (and parents) on
+ * demand. This is the lazy-scaffolding primitive: writers call it right before
+ * persisting so the `.oxe/` tree only grows as features are actually used,
+ * instead of being scaffolded eagerly at install time.
+ * @param {string} target project root
+ * @param {string} sub path relative to `.oxe/` (e.g. 'runs', 'global/milestones')
+ * @returns {string} absolute path of the ensured directory
+ */
+function ensureOxeSubdir(target, sub) {
+  const dir = path.join(target, '.oxe', ...String(sub).split(/[\\/]/).filter(Boolean));
+  ensureDir(dir);
+  return dir;
+}
+
+/**
+ * (Re)generate the `.oxe/README.md` legend from the single artifact catalog.
+ * Written at init and refreshed by `doctor`, so the local documentation always
+ * reflects the canonical structure without the empty folders cluttering disk.
+ * @param {string} target project root
+ * @param {{ quiet?: boolean }} [opts]
+ */
+function writeOxeLegend(target, opts = {}) {
+  const oxeDir = path.join(target, '.oxe');
+  const dest = path.join(oxeDir, 'README.md');
+  try {
+    ensureDir(oxeDir);
+    fs.writeFileSync(dest, oxeArtifactCatalog.renderLegend(), 'utf8');
+    if (!opts.quiet) console.log(`${green}init${reset}  ${dest}`);
+  } catch {
+    /* best-effort: a missing legend is never fatal */
+  }
+}
+
+/**
+ * Create the lean `.oxe/` core: STATE.md, config.json and the generated
+ * README.md legend. Every other artifact/folder is created lazily, on first
+ * use, by the workflow that owns it (see `bin/lib/oxe-artifact-catalog.cjs`).
  * @param {string} target
  * @param {{ dryRun: boolean, force: boolean }} opts
  */
 function bootstrapOxe(target, opts) {
   const oxeDir = path.join(target, '.oxe');
-  const codebaseDir = path.join(oxeDir, 'codebase');
-  const capabilitiesDir = path.join(oxeDir, 'capabilities');
-  const investigationsDir = path.join(oxeDir, 'investigations');
-  const dashboardDir = path.join(oxeDir, 'dashboard');
-  const contextDir = path.join(oxeDir, 'context');
-  const contextPacksDir = path.join(contextDir, 'packs');
-  const contextSummariesDir = path.join(contextDir, 'summaries');
-  const installDir = path.join(oxeDir, 'install');
   const stateSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'STATE.md');
   const stateDest = path.join(oxeDir, 'STATE.md');
   const configSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'config.template.json');
@@ -1316,18 +1345,12 @@ function bootstrapOxe(target, opts) {
   }
 
   if (opts.dryRun) {
-    console.log(`${dim}init${reset}  ${oxeDir}/ (STATE.md, config.json, codebase/, capabilities/, investigations/, dashboard/, context/, install/, runs/, OXE-EVENTS.ndjson, ACTIVE-RUN.json)`);
+    console.log(`${dim}init${reset}  ${oxeDir}/ (STATE.md, config.json, README.md — demais artefatos sob demanda)`);
     ensureGitignoreIgnoresOxeDir(target, { dryRun: true });
     return;
   }
 
-  ensureDir(codebaseDir);
-  ensureDir(capabilitiesDir);
-  ensureDir(investigationsDir);
-  ensureDir(dashboardDir);
-  ensureDir(contextPacksDir);
-  ensureDir(contextSummariesDir);
-  ensureDir(installDir);
+  ensureDir(oxeDir);
 
   if (!fs.existsSync(stateDest) || opts.force) {
     copyFile(stateSrc, stateDest, { dryRun: false });
@@ -1351,107 +1374,8 @@ function bootstrapOxe(target, opts) {
     }
   }
 
-  // Criar estruturas opcionais: plugins/, workstreams/, memory/
-  const pluginsDir = path.join(oxeDir, 'plugins');
-  if (!fs.existsSync(pluginsDir)) {
-    ensureDir(pluginsDir);
-    const pluginsReadme = path.join(PKG_ROOT, 'oxe', 'templates', 'PLUGINS.md');
-    if (fs.existsSync(pluginsReadme)) {
-      const destPluginsReadme = path.join(pluginsDir, 'README.md');
-      if (!fs.existsSync(destPluginsReadme)) {
-        copyFile(pluginsReadme, destPluginsReadme, { dryRun: false });
-        console.log(`${green}init${reset}  ${destPluginsReadme}`);
-      }
-    }
-  }
-
-  const workstreamsDir = path.join(oxeDir, 'workstreams');
-  if (!fs.existsSync(workstreamsDir)) {
-    ensureDir(workstreamsDir);
-  }
-
-  const sessionsDir = path.join(oxeDir, 'sessions');
-  if (!fs.existsSync(sessionsDir)) {
-    ensureDir(sessionsDir);
-  }
-
-  const globalDir = path.join(oxeDir, 'global');
-  if (!fs.existsSync(globalDir)) {
-    ensureDir(globalDir);
-  }
-
-  const globalMilestonesDir = path.join(globalDir, 'milestones');
-  if (!fs.existsSync(globalMilestonesDir)) {
-    ensureDir(globalMilestonesDir);
-  }
-
-  const lessonsSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'LESSONS.template.md');
-  const lessonsDest = path.join(globalDir, 'LESSONS.md');
-  if (fs.existsSync(lessonsSrc) && !fs.existsSync(lessonsDest)) {
-    copyFile(lessonsSrc, lessonsDest, { dryRun: false });
-    console.log(`${green}init${reset}  ${lessonsDest}`);
-  }
-
-  const milestonesSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'MILESTONES.template.md');
-  const milestonesDest = path.join(globalDir, 'MILESTONES.md');
-  if (fs.existsSync(milestonesSrc) && !fs.existsSync(milestonesDest)) {
-    copyFile(milestonesSrc, milestonesDest, { dryRun: false });
-    console.log(`${green}init${reset}  ${milestonesDest}`);
-  }
-
-  const memoryDir = path.join(oxeDir, 'memory');
-  if (!fs.existsSync(memoryDir)) {
-    ensureDir(memoryDir);
-  }
-
-  const runsDir = path.join(oxeDir, 'runs');
-  if (!fs.existsSync(runsDir)) {
-    ensureDir(runsDir);
-  }
-
-  const runtimeSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'EXECUTION-RUNTIME.template.md');
-  const runtimeDest = path.join(oxeDir, 'EXECUTION-RUNTIME.md');
-  if (fs.existsSync(runtimeSrc) && !fs.existsSync(runtimeDest)) {
-    copyFile(runtimeSrc, runtimeDest, { dryRun: false });
-    console.log(`${green}init${reset}  ${runtimeDest}`);
-  }
-
-  const activeRunSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'ACTIVE-RUN.template.json');
-  const activeRunDest = path.join(oxeDir, 'ACTIVE-RUN.json');
-  if (fs.existsSync(activeRunSrc) && !fs.existsSync(activeRunDest)) {
-    copyFile(activeRunSrc, activeRunDest, { dryRun: false });
-    console.log(`${green}init${reset}  ${activeRunDest}`);
-  }
-
-  const eventsDest = path.join(oxeDir, 'OXE-EVENTS.ndjson');
-  if (!fs.existsSync(eventsDest)) {
-    fs.writeFileSync(eventsDest, '', 'utf8');
-    console.log(`${green}init${reset}  ${eventsDest}`);
-  }
-
-  const checkpointsSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'CHECKPOINTS.template.md');
-  const checkpointsDest = path.join(oxeDir, 'CHECKPOINTS.md');
-  if (fs.existsSync(checkpointsSrc) && !fs.existsSync(checkpointsDest)) {
-    copyFile(checkpointsSrc, checkpointsDest, { dryRun: false });
-    console.log(`${green}init${reset}  ${checkpointsDest}`);
-  }
-
-  const capabilitiesSrc = path.join(PKG_ROOT, 'oxe', 'templates', 'CAPABILITIES.template.md');
-  const capabilitiesDest = path.join(oxeDir, 'CAPABILITIES.md');
-  if (fs.existsSync(capabilitiesSrc) && !fs.existsSync(capabilitiesDest)) {
-    copyFile(capabilitiesSrc, capabilitiesDest, { dryRun: false });
-    console.log(`${green}init${reset}  ${capabilitiesDest}`);
-  }
-
-  const investigationsIndexDest = path.join(oxeDir, 'INVESTIGATIONS.md');
-  if (!fs.existsSync(investigationsIndexDest)) {
-    fs.writeFileSync(
-      investigationsIndexDest,
-      '# OXE — Investigações\n\n| Data | Ficheiro | Objetivo | Modo | Estado |\n|------|----------|----------|------|--------|\n',
-      'utf8'
-    );
-    console.log(`${green}init${reset}  ${investigationsIndexDest}`);
-  }
+  // Generated legend — always (re)written so it tracks the current catalog.
+  writeOxeLegend(target);
 
   ensureGitignoreIgnoresOxeDir(target, { dryRun: false });
 }
@@ -2135,6 +2059,11 @@ function runDoctor(target, options = {}) {
   }
   console.log(`${green}OK${reset} Node.js`);
 
+  // Keep the generated `.oxe/README.md` legend fresh against the current catalog.
+  if (fs.existsSync(path.join(target, '.oxe'))) {
+    writeOxeLegend(target, { quiet: true });
+  }
+
   const wfPkg = path.join(PKG_ROOT, 'oxe', 'workflows');
   const wfTgt = oxeWorkflows.resolveWorkflowsDir(target);
   if (!fs.existsSync(wfPkg)) {
@@ -2570,6 +2499,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
     npx oxe-cc context <build|inspect> [opções] [pasta-do-projeto]
     npx oxe-cc dashboard [opções] [pasta-do-projeto]
     npx oxe-cc events [--tail N] [--since <evt_id>] [--json] [opções] [pasta-do-projeto]
+    npx oxe-cc map [--json] [opções] [pasta-do-projeto]
   npx oxe-cc runtime <status|start|pause|resume|replay|compile|verify|project|ci|promote|recover|gates|agents|execute> [opções] [pasta-do-projeto]
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
     npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
@@ -4527,6 +4457,70 @@ function runEvents(opts) {
 }
 
 /**
+ * @typedef {{ help: boolean, dir: string, json: boolean, parseError: boolean, unknownFlag: string }} MapOpts
+ * @param {string[]} argv
+ * @returns {MapOpts}
+ */
+function parseMapArgs(argv) {
+  /** @type {MapOpts} */
+  const out = { help: false, dir: process.cwd(), json: false, parseError: false, unknownFlag: '' };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '-h' || a === '--help') out.help = true;
+    else if (a === '--dir' && argv[i + 1]) out.dir = path.resolve(argv[++i]);
+    else if (a === '--json') out.json = true;
+    else if (!a.startsWith('-') && i === 0) out.dir = path.resolve(a);
+    else {
+      out.parseError = true;
+      out.unknownFlag = a;
+      break;
+    }
+  }
+  return out;
+}
+
+/**
+ * Live, annotated map of the `.oxe/` artifacts: what already exists, what is
+ * available on demand, and the state of each (active/empty/stale). Built from
+ * the single artifact catalog so it never drifts from the legend or docs.
+ * @param {MapOpts} opts
+ */
+function runMap(opts) {
+  const target = opts.dir;
+  if (!fs.existsSync(target)) {
+    if (opts.json) console.log(JSON.stringify({ oxeMapSchema: 1, projectRoot: path.resolve(target), error: 'dir-not-found', groups: [] }));
+    else console.error(`${yellow}Diretório não encontrado: ${target}${reset}`);
+    process.exit(1);
+  }
+  // Stale-scan signal reuses the same health helpers `status`/`doctor` rely on.
+  let staleScan = false;
+  try {
+    const statePath = oxeHealth.oxePaths(target).state;
+    const stateText = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : '';
+    const cfg = oxeHealth.loadOxeConfigMerged(target);
+    const scanDate = oxeHealth.parseLastScanDate(stateText);
+    staleScan = oxeHealth.isStaleScan(scanDate, cfg.scan_max_age_days || 0);
+  } catch {
+    staleScan = false;
+  }
+  const model = oxeArtifactCatalog.buildMapModel(target, { staleScan });
+
+  if (opts.json) {
+    console.log(JSON.stringify({ oxeMapSchema: 1, ...model }));
+    return;
+  }
+
+  const c = useAnsiColors();
+  const palette = { active: green, empty: yellow, stale: yellow, absent: dim, group: cyan, dim, root: green };
+  const paint = (s, kind) => (c && palette[kind] ? `${palette[kind]}${s}${reset}` : s);
+  printSection('OXE ▸ map');
+  console.log(`  ${paint('Projeto:', 'group')} ${paint(model.projectRoot, 'group')}`);
+  console.log('');
+  console.log(oxeArtifactCatalog.renderMap(model, { paint }));
+  console.log('');
+}
+
+/**
  * @param {RuntimeOpts} opts
  */
 async function runRuntime(opts) {
@@ -5617,6 +5611,7 @@ async function main() {
     argv[0] === 'context' ||
     argv[0] === 'dashboard' ||
     argv[0] === 'events' ||
+    argv[0] === 'map' ||
     argv[0] === 'runtime' ||
     argv[0] === 'azure' ||
     argv[0] === 'uninstall' ||
@@ -5728,6 +5723,24 @@ async function main() {
     }
     if (!d.json) printBanner();
     await runDashboard(d);
+    return;
+  }
+
+  if (command === 'map') {
+    const m = parseMapArgs(argv);
+    if (m.help) {
+      printBanner();
+      usage();
+      process.exit(0);
+    }
+    if (m.parseError) {
+      printBanner();
+      console.error(`${red}Opção desconhecida:${reset} ${m.unknownFlag}`);
+      usage();
+      process.exit(1);
+    }
+    if (!m.json) printBanner();
+    runMap(m);
     return;
   }
 
@@ -5947,8 +5960,8 @@ async function main() {
     bootstrapOxe(target, { dryRun: opts.dryRun, force: opts.force });
     printSummaryAndNextSteps(c0, {
       bullets: opts.dryRun
-        ? ['[simulação] Seriam criados ou atualizados .oxe/STATE.md, .oxe/config.json, .oxe/codebase/, .oxe/ACTIVE-RUN.json e .oxe/OXE-EVENTS.ndjson']
-        : ['.oxe/STATE.md, .oxe/config.json, .oxe/codebase/, .oxe/context/, .oxe/ACTIVE-RUN.json e .oxe/OXE-EVENTS.ndjson (criados ou atualizados conforme --force)'],
+        ? ['[simulação] Seriam criados .oxe/STATE.md, .oxe/config.json e .oxe/README.md (legenda) — demais artefatos nascem sob demanda; veja com oxe-cc map']
+        : ['.oxe/STATE.md, .oxe/config.json e .oxe/README.md (legenda) — núcleo enxuto; demais pastas/artefatos são criados sob demanda pelo workflow correspondente (veja oxe-cc map)'],
       nextSteps: [
         { desc: 'Validar o projeto:', cmd: 'npx oxe-cc doctor' },
         { desc: 'Instalar integrações IDE/CLI (se ainda não fez):', cmd: 'npx oxe-cc@latest' },
