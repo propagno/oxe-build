@@ -1,7 +1,7 @@
 'use strict';
 
-const { spawnSync } = require('child_process');
 const semver = require('semver');
+const { runPackageManagerSync } = require('./oxe-process.cjs');
 
 /**
  * Extrai versão semver do stdout de `npm view <pkg> version`.
@@ -41,11 +41,13 @@ function isNewerThan(latest, current) {
  * @returns {{ ok: true, version: string } | { ok: false, error: string }}
  */
 function syncNpmViewVersion(packageName, spawnOpts = {}) {
-  const r = spawnSync('npm', ['view', packageName, 'version'], {
+  const run = spawnOpts.runPackageManagerSync || runPackageManagerSync;
+  const options = { ...spawnOpts };
+  delete options.runPackageManagerSync;
+  const r = run('npm', ['view', packageName, 'version'], {
     encoding: 'utf8',
     env: process.env,
-    shell: process.platform === 'win32',
-    ...spawnOpts,
+    ...options,
   });
   if (r.error) return { ok: false, error: r.error.message || String(r.error) };
   if (r.status !== 0 && r.status !== null) {

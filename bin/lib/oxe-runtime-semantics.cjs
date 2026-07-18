@@ -238,7 +238,6 @@ function humanizeValue(value) {
     plan: 'plano',
     findings: 'achados',
     routing: 'roteamento',
-    execution: 'execução',
     read_heavy: 'leitura intensa',
     write_bounded: 'mutação limitada',
     review_heavy: 'revisão intensa',

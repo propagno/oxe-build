@@ -47,7 +47,7 @@ describe('oxe status --summary', () => {
     for (const a of agents) {
       assert.strictEqual(typeof a.skillsInstalled, 'boolean');
       assert.ok(Array.isArray(a.issues));
-    } 
+    }
   });
 
   test('CLI status --json --summary is small and parseable', () => {

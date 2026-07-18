@@ -4,6 +4,55 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.16.0] — 2026-07-18
+
+### Segurança, pacote verificável e engenharia de release
+
+Esta versão consolida o OXE-BUILD como framework multi-runtime orientado por
+evidências, com foco em segurança de subprocessos, consumo real do pacote,
+qualidade mensurável e releases reproduzíveis.
+
+- **Executor seguro e multiplataforma** — invocações de `npm` e `npx` foram
+  centralizadas com argumentos estruturados e `shell: false`, incluindo
+  resolução explícita de `npm-cli.js`/`npx-cli.js` no Windows e testes contra
+  payloads hostis.
+- **CLI modular** — dispatch de comandos separado em registry e handlers
+  testáveis, reduzindo o acoplamento do entrypoint sem alterar a interface
+  pública.
+- **Pacote validado como um consumidor real** — o gate cria o tarball, instala
+  em projeto temporário limpo e exercita CLI, SDK, runtime e compilação
+  TypeScript.
+- **npm workspaces e lockfile único** — raiz, runtime e extensão usam a mesma
+  resolução; o lockfile aninhado obsoleto do runtime foi removido.
+- **SDK types gerados pelo TypeScript** — `index.d.ts` passa a ser emissão
+  determinística de `index.types.ts`, com gate de drift e validação da ABI
+  pública.
+- **Coverage ratchet** — pisos globais e de módulos críticos são executáveis e
+  não podem ser reduzidos abaixo do baseline versionado.
+- **Extensão validada no VS Code real** — o Extension Host 1.95.3 comprova a
+  ativação e o registro observável dos 13 participantes OXE; o VSIX é gerado
+  por uma versão fixa do `vsce`.
+- **Supply chain endurecida** — GitHub Actions fixadas por SHA, Dependabot,
+  permissões mínimas, actionlint, tag vinculada à versão e GitHub Release
+  condicionada ao build do VSIX.
+- **Publicação npm manual nesta release** — a criação da tag gera validação e
+  GitHub Release, mas não executa `npm publish`; a promoção ao registry fica
+  sob controle explícito do mantenedor.
+- **Quality telemetry** — relatório JSON/Markdown exige os 10 gates, rejeita
+  gates ausentes, duplicados ou inesperados e invalida evidências antigas.
+- **README redesenhado** — proposta de valor, quickstart, fluxos Nano/Standard/
+  Full, runtime-first, adoção por equipes e métricas verificáveis agora formam
+  uma narrativa única e orientada ao uso.
+
+### Evidência da release
+
+- 10/10 quality gates aprovados.
+- 384/384 testes do runtime e mais de 600 testes raiz.
+- 30/30 cenários smoke, runtime real, recovery e multiagente.
+- Cobertura: 83,05% lines/statements, 92,48% functions e 61,76% branches.
+- `npm audit`: 0 vulnerabilidades.
+- Tarball npm: 507 arquivos; VSIX: 13 participantes ativados em host real.
+
 ## [1.15.0] — 2026-06-27
 
 ### `.oxe/` enxuto no install + mapa vivo de artefatos

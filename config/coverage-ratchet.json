@@ -1,0 +1,25 @@
+{
+  "global": {
+    "lines": 82,
+    "statements": 82,
+    "functions": 85,
+    "branches": 60
+  },
+  "modules": {
+    "bin/lib/oxe-plugins.cjs": {
+      "lines": 90,
+      "functions": 85,
+      "branches": 80
+    },
+    "lib/sdk/index.cjs": {
+      "lines": 95,
+      "functions": 100,
+      "branches": 75
+    },
+    "scripts/release-pack-check.cjs": {
+      "lines": 85,
+      "functions": 70,
+      "branches": 60
+    }
+  }
+}

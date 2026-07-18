@@ -1,6 +1,6 @@
 {
   "name": "oxe-cc",
-  "version": "1.15.0",
+  "version": "1.16.0",
   "description": "OXE — spec-driven workflows in .oxe/ with runtime enterprise, evidence-first verification and multi-runtime integrations (npx)",
   "license": "MIT",
   "author": "",
@@ -31,6 +31,10 @@
   "engines": {
     "node": ">=18.0.0"
   },
+  "workspaces": [
+    "packages/runtime",
+    "vscode-extension"
+  ],
   "main": "lib/sdk/index.cjs",
   "exports": {
     ".": "./lib/sdk/index.cjs",
@@ -63,13 +67,17 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build:runtime": "cd packages/runtime && npm run build",
+    "build:runtime": "npm run build --workspace @oxe/runtime",
+    "generate:sdk-types": "node scripts/generate-sdk-types.cjs",
+    "check:sdk-types": "node scripts/generate-sdk-types.cjs --check",
     "sync:runtime-metadata": "node scripts/sync-runtime-metadata.cjs",
     "sync:cursor": "node scripts/sync-cursor-from-prompts.cjs",
     "release:doctor": "node scripts/release-doctor.cjs",
     "release:manifest": "node scripts/release-doctor.cjs --write-manifest",
-    "test:root": "node --test tests/install.test.cjs tests/oxe-project-health.test.cjs tests/oxe-dashboard.test.cjs tests/oxe-operational.test.cjs tests/oxe-azure.test.cjs tests/oxe-sdk.test.cjs tests/oxe-manifest.test.cjs tests/oxe-agent-install.test.cjs tests/oxe-install-resolve-full.test.cjs tests/oxe-health-extended.test.cjs tests/oxe-workflows-edge.test.cjs tests/oxe-sdk-edge.test.cjs tests/oxe-cli-edge.test.cjs tests/oxe-npm-version.test.cjs tests/oxe-scripts.test.cjs tests/oxe-retro-health.test.cjs tests/oxe-security-permissions.test.cjs tests/oxe-runtime-semantics.test.cjs tests/oxe-plugins.test.cjs tests/oxe-status-summary.test.cjs tests/oxe-integration-contracts.test.cjs tests/oxe-map.test.cjs",
-    "test:runtime": "cd packages/runtime && npm test",
+    "test:root": "node scripts/quality-check.cjs test-root",
+    "test:sdk-types": "npm run check:sdk-types && node --test tests/oxe-sdk-types.test.cjs",
+    "test:packed-consumer": "npm run check:sdk-types && npm run build:runtime && node scripts/test-packed-consumer.cjs",
+    "test:runtime": "npm test --workspace @oxe/runtime",
     "test:runtime-smoke": "node scripts/runtime-smoke-matrix.cjs",
     "test:runtime-real": "node scripts/runtime-real-suite.cjs",
     "test:recovery-fixtures": "node scripts/run-recovery-fixtures.cjs",
@@ -77,11 +85,17 @@
     "test:multi-agent-real": "node scripts/run-multi-agent-real.cjs",
     "test:runtime-llm": "node scripts/test-runtime-llm.cjs",
     "benchmark:autonomy": "node scripts/benchmark-autonomy.cjs",
-    "test": "npm run build:runtime && npm run test:root && npm run test:runtime && npm run test:runtime-smoke && npm run test:runtime-real && npm run test:recovery-fixtures && npm run test:multi-agent-soak && npm run test:multi-agent-real",
-    "test:coverage": "c8 --check-coverage --lines 82 --functions 85 --branches 58 --statements 82 npm test",
+    "lint": "node scripts/quality-check.cjs lint",
+    "format": "node scripts/quality-check.cjs format",
+    "format:check": "node scripts/quality-check.cjs format-check",
+    "test": "npm run lint && npm run format:check && npm run build:runtime && npm run test:root && npm run test:sdk-types && npm run test:packed-consumer && npm run test:runtime && npm run test:runtime-smoke && npm run test:runtime-real && npm run test:recovery-fixtures && npm run test:multi-agent-soak && npm run test:multi-agent-real",
+    "test:coverage": "c8 --reporter=text-summary --reporter=json-summary npm test && node scripts/coverage-ratchet.cjs",
     "scan:assets": "node scripts/oxe-assets-scan.cjs",
     "release:pack-check": "node scripts/release-pack-check.cjs",
-    "build:vscode-ext": "cd vscode-extension && npx @vscode/vsce package --no-yarn --allow-missing-repository",
+    "test:vscode-ext": "npm test --workspace oxe-agents",
+    "build:vscode-ext": "npm run package --workspace oxe-agents",
+    "quality:report": "node scripts/quality-report.cjs finalize",
+    "prepack": "npm run generate:sdk-types && npm run build:runtime",
     "prepublishOnly": "npm test && npm run scan:assets && npm run build:vscode-ext && npm run release:manifest && npm run release:pack-check && node bin/oxe-cc.js --version"
   },
   "c8": {
@@ -93,16 +107,23 @@
       "scripts/**/*.cjs"
     ],
     "exclude": [
-      "**/node_modules/**"
+      "**/node_modules/**",
+      "scripts/benchmark-autonomy.cjs",
+      "scripts/test-runtime-llm.cjs"
     ],
     "reporter": [
-      "text-summary"
+      "text-summary",
+      "json-summary"
     ]
   },
   "devDependencies": {
-    "c8": "^11.0.0"
+    "c8": "^11.0.0",
+    "eslint": "^9.31.0",
+    "globals": "^15.14.0",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@types/node": "^18.19.120",
     "semver": "^7.7.4"
   }
 }

@@ -9,8 +9,63 @@ const { spawnSync } = require('child_process');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const release = require('../bin/lib/oxe-release.cjs');
+const packCheck = require('../scripts/release-pack-check.cjs');
 
 describe('scripts', () => {
+  test('release-pack-check accepts a complete npm pack result', () => {
+    const pkg = { name: 'fixture-package', version: '1.2.3' };
+    const files = ['package.json', 'README.md', 'CHANGELOG.md', 'bin/oxe-cc.js', 'lib/sdk/index.cjs'];
+    const result = packCheck.runPackCheck({
+      pkg,
+      spawn: () => ({
+        status: 0,
+        stdout: JSON.stringify([{ ...pkg, filename: 'fixture-package-1.2.3.tgz', files: files.map((file) => ({ path: file })) }]),
+      }),
+    });
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(result.files, files);
+  });
+
+  test('release-pack-check blocks failed, invalid and unsafe npm pack results', () => {
+    const pkg = { name: 'fixture-package', version: '1.2.3' };
+    const spawnFailure = packCheck.runPackCheck({
+      pkg,
+      spawn: () => ({ status: 1, stderr: 'registry unavailable' }),
+    });
+    assert.strictEqual(spawnFailure.ok, false);
+    assert.match(spawnFailure.error, /registry unavailable/);
+
+    const invalidJson = packCheck.runPackCheck({
+      pkg,
+      spawn: () => ({ status: 0, stdout: 'not-json' }),
+    });
+    assert.strictEqual(invalidJson.ok, false);
+    assert.match(invalidJson.error, /JSON inválido/);
+
+    const unsafe = packCheck.runPackCheck({
+      pkg,
+      spawn: () => ({
+        status: 0,
+        stdout: JSON.stringify([{
+          name: 'wrong-name',
+          version: '0.0.0',
+          files: [
+            { path: 'package.json' },
+            { path: 'nested.tgz' },
+            { path: 'old.vsix' },
+            { path: '.oxe/STATE.md' },
+          ],
+        }]),
+      }),
+    });
+    assert.strictEqual(unsafe.ok, false);
+    assert.ok(unsafe.blockers.some((blocker) => blocker.includes('nome do pacote divergente')));
+    assert.ok(unsafe.blockers.some((blocker) => blocker.includes('tarball aninhado')));
+    assert.ok(unsafe.blockers.some((blocker) => blocker.includes('VSIX histórico')));
+    assert.ok(unsafe.blockers.some((blocker) => blocker.includes('.oxe')));
+    assert.ok(unsafe.blockers.some((blocker) => blocker.includes('arquivo obrigatório ausente')));
+  });
+
   test('oxe-assets-scan exits 0', () => {
     const r = spawnSync(process.execPath, [path.join(REPO_ROOT, 'scripts', 'oxe-assets-scan.cjs')], {
       cwd: REPO_ROOT,

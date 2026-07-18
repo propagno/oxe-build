@@ -21,11 +21,13 @@ const oxeNpmVersion = require(path.join(__dirname, 'lib', 'oxe-npm-version.cjs')
 const oxeDashboard = require(path.join(__dirname, 'lib', 'oxe-dashboard.cjs'));
 const oxeOperational = require(path.join(__dirname, 'lib', 'oxe-operational.cjs'));
 const oxeAzure = require(path.join(__dirname, 'lib', 'oxe-azure.cjs'));
-const oxePlugins = require(path.join(__dirname, 'lib', 'oxe-plugins.cjs'));
+const oxePluginCli = require(path.join(__dirname, 'lib', 'oxe-plugin-cli.cjs'));
 const oxeContext = require(path.join(__dirname, 'lib', 'oxe-context-engine.cjs'));
 const oxeRuntimeSemantics = require(path.join(__dirname, 'lib', 'oxe-runtime-semantics.cjs'));
 const oxeRelease = require(path.join(__dirname, 'lib', 'oxe-release.cjs'));
 const oxeArtifactCatalog = require(path.join(__dirname, 'lib', 'oxe-artifact-catalog.cjs'));
+const { runPackageManagerSync } = require(path.join(__dirname, 'lib', 'oxe-process.cjs'));
+const { createCoreCommandRegistry } = require(path.join(__dirname, 'lib', 'oxe-core-command-handlers.cjs'));
 
 /** Merge markers for ~/.copilot/copilot-instructions.md (bloco OXE). */
 const OXE_INST_BEGIN = '<!-- oxe-cc:install-begin -->';
@@ -936,7 +938,7 @@ function applyInstallFromOxeConfig(opts, targetDir) {
 }
 
 /**
- * Mapa número da lista → chaves de runtime 
+ * Mapa número da lista → chaves de runtime
  * @param {string} input
  * @returns {string[]}
  */
@@ -2297,9 +2299,8 @@ function installGlobalCliPackage() {
   const dimOrEmpty = c ? dim : '';
   const resetOrEmpty = c ? reset : '';
   console.log(`\n  ${dimOrEmpty}npm install -g ${spec}${resetOrEmpty}\n`);
-  const r = spawnSync('npm', ['install', '-g', spec], {
+  const r = runPackageManagerSync('npm', ['install', '-g', spec], {
     stdio: 'inherit',
-    shell: true,
     env: process.env,
   });
   if (r.error) {
@@ -2330,9 +2331,8 @@ function uninstallGlobalCliPackage() {
   const dimOrEmpty = c ? dim : '';
   const resetOrEmpty = c ? reset : '';
   console.log(`\n  ${dimOrEmpty}npm uninstall -g ${name}${resetOrEmpty}\n`);
-  const r = spawnSync('npm', ['uninstall', '-g', name], {
+  const r = runPackageManagerSync('npm', ['uninstall', '-g', name], {
     stdio: 'inherit',
-    shell: true,
     env: process.env,
   });
   if (r.status === 0) {
@@ -2354,9 +2354,8 @@ function uninstallGlobalCliPackage() {
  */
 function isRunningFromGlobalNpmInstall() {
   try {
-    const r = spawnSync('npm', ['root', '-g'], {
+    const r = runPackageManagerSync('npm', ['root', '-g'], {
       encoding: 'utf8',
-      shell: true,
       env: process.env,
     });
     if (r.status !== 0) return false;
@@ -2503,9 +2502,10 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime <status|start|pause|resume|replay|compile|verify|project|ci|promote|recover|gates|agents|execute> [opções] [pasta-do-projeto]
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
     npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
+    npx oxe-cc plugins <list|install|remove> [opções]
     npx oxe-cc uninstall [opções] [pasta-do-projeto]
     npx oxe-cc update [opções] [argumentos extras…]
-  
+
   ${green}doctor${reset}
     --release                             valida release readiness: versões, changelog, wrappers, runtime build e relatórios obrigatórios
     --write-manifest                      persiste .oxe/release/release-manifest.json durante doctor --release
@@ -2557,6 +2557,13 @@ ${green}context${reset} (Context Engine V2: seleção, compressão e inspeção 
   --session <sessions/sNNN-slug>         força sessão específica
   --json                                 saída estruturada em JSON
   --dir <pasta>                          raiz do projeto (padrão: diretório atual)
+
+${green}plugins${reset} (plugins de lifecycle locais ou publicados no npm)
+  list                                   lista plugins carregados e erros de resolução
+  install <npm-package> [version]        instala somente pacote npm; prefixo npm: é opcional
+  remove <id>                            mostra como remover a referência e os arquivos npm
+  --dir <pasta>                          raiz do projeto (padrão: diretório atual)
+  ${dim}Plugins por path:${reset} crie o .cjs localmente e referencie-o em .oxe/config.json; o comando install não aceita paths
 
 ${green}runtime${reset} (controle operacional explícito do ACTIVE-RUN)
   status                                 mostra o run ativo resolvido para a sessão atual
@@ -3414,11 +3421,6 @@ function runUninstall(u) {
     ignoreInstallConfig: false,
     ideLocal: false,
     explicitIdeScope: true,
-    agentOpenCode: false,
-    agentGemini: false,
-    agentCodex: false,
-    agentWindsurf: false,
-    agentAntigravity: false,
   });
 
   printSection('OXE ▸ uninstall');
@@ -3817,11 +3819,10 @@ function runUpdate(u) {
   } else {
     args.push('--no-global-cli', '-l', ...u.rest);
   }
-  const r = spawnSync('npx', args, {
+  const r = runPackageManagerSync('npx', args, {
     cwd: u.dir,
     stdio: 'inherit',
     env: { ...process.env, OXE_NO_PROMPT: '1' },
-    shell: process.platform === 'win32',
   });
   if (r.error) {
     console.error(`${red}Falha ao executar npx:${reset}`, r.error.message);
@@ -5626,87 +5627,33 @@ async function main() {
     argv.shift();
   }
 
-  if (command === 'uninstall') {
-    const u = parseUninstallArgs(argv);
-    if (u.help) {
-      printBanner();
-      usage();
-      process.exit(0);
-    }
-    if (u.conflictFlags) {
-      printBanner();
-      console.error(`${red}${u.conflictFlags}${reset}`);
-      usage();
-      process.exit(1);
-    }
-    if (u.parseError) {
-      printBanner();
-      console.error(`${red}Opção desconhecida:${reset} ${u.unknownFlag}`);
-      usage();
-      process.exit(1);
-    }
-    printBanner();
-    if (!u.dryRun && !fs.existsSync(u.dir)) {
-      console.error(`${yellow}Diretório não encontrado: ${u.dir}${reset}`);
-      process.exit(1);
-    }
-    runUninstall(u);
-    return;
-  }
-
-  if (command === 'update') {
-    const u = parseUpdateArgs(argv);
-    if (u.help) {
-      printBanner();
-      usage();
-      process.exit(0);
-    }
-    if (u.conflictFlags) {
-      printBanner();
-      console.error(`${red}${u.conflictFlags}${reset}`);
-      usage();
-      process.exit(1);
-    }
-    if (u.parseError) {
-      printBanner();
-      console.error(`${red}Opção desconhecida:${reset} ${u.unknownFlag}`);
-      usage();
-      process.exit(1);
-    }
-    printBanner();
-    if (u.check) {
-      runUpdateVersionCheck(u);
-      return;
-    }
-    if (!u.dryRun && !fs.existsSync(u.dir)) {
-      console.error(`${yellow}Diretório não encontrado: ${u.dir}${reset}`);
-      process.exit(1);
-    }
-    runUpdate(u);
-    return;
-  }
-
-  if (command === 'capabilities') {
-    const cap = parseCapabilitiesArgs(argv);
-    if (cap.help) {
-      printBanner();
-      usage();
-      process.exit(0);
-    }
-    if (cap.parseError) {
-      printBanner();
-      console.error(`${red}Opção desconhecida:${reset} ${cap.unknownFlag}`);
-      usage();
-      process.exit(1);
-    }
-    printBanner();
-    if (!fs.existsSync(cap.dir)) {
-      console.error(`${yellow}Diretório não encontrado: ${cap.dir}${reset}`);
-      process.exit(1);
-    }
-    runCapabilities(cap);
-    return;
-  }
+  const coreRegistry = createCoreCommandRegistry({
+    existsSync: fs.existsSync,
+    printBanner,
+    usage,
+    log: console.log,
+    error: console.error,
+    exit: process.exit,
+    colors: { red, yellow, reset },
+    readPkgVersion,
+    parseUninstallArgs,
+    parseUpdateArgs,
+    parseCapabilitiesArgs,
+    parseRuntimeArgs,
+    parseAzureArgs,
+    parseInstallArgs,
+    runUninstall,
+    runUpdateVersionCheck,
+    runUpdate,
+    runCapabilities,
+    runRuntime,
+    runAzure,
+    runDoctor,
+    runStatus,
+    runStatusFull,
+  });
+  const coreDispatch = await coreRegistry.dispatch(command, argv);
+  if (coreDispatch.handled) return;
 
   if (command === 'dashboard') {
     const d = parseDashboardArgs(argv);
@@ -5780,95 +5727,13 @@ async function main() {
     return;
   }
 
-  if (command === 'runtime') {
-    const runtime = parseRuntimeArgs(argv);
-    if (runtime.help) {
-      printBanner();
-      usage();
-      process.exit(0);
-    }
-    if (runtime.parseError) {
-      printBanner();
-      console.error(`${red}Opção desconhecida:${reset} ${runtime.unknownFlag}`);
-      usage();
-      process.exit(1);
-    }
-    printBanner();
-    if (!fs.existsSync(runtime.dir)) {
-      console.error(`${yellow}Diretório não encontrado: ${runtime.dir}${reset}`);
-      process.exit(1);
-    }
-    runRuntime(runtime).catch((err) => {
-      console.error(`${red}${err && err.message ? err.message : 'Falha ao executar runtime.'}${reset}`);
-      process.exit(1);
-    });
-    return;
-  }
-
   if (command === 'plugins') {
     printBanner();
-    // Parse --dir flag
-    let pluginsDir = process.cwd();
-    const pluginsArgv = argv.slice();
-    for (let i = 0; i < pluginsArgv.length; i++) {
-      if (pluginsArgv[i] === '--dir' && pluginsArgv[i + 1]) {
-        pluginsDir = path.resolve(pluginsArgv[++i]);
-        pluginsArgv.splice(i - 1, 2);
-        i -= 2;
-      }
-    }
-    const c = useAnsiColors();
-    const subCmd = pluginsArgv[0] || 'list';
-    const pluginTarget = pluginsArgv[1] || '';
-
-    if (subCmd === 'list') {
-      const result = oxePlugins.loadPlugins(pluginsDir);
-      console.log(`\n  ${c ? green : ''}Plugins carregados:${c ? reset : ''} ${result.plugins.length}`);
-      for (const p of result.plugins) {
-        console.log(`    • ${p.name}${p.version ? ` (${p.version})` : ''} — hooks: ${Object.keys(p.hooks).join(', ')}`);
-      }
-      if (result.errors.length) {
-        console.log(`\n  ${c ? yellow : ''}Erros:${c ? reset : ''}`);
-        for (const e of result.errors) {
-          console.log(`    ✗ ${e.file}: ${e.error}`);
-        }
-      }
-    } else if (subCmd === 'install' && pluginTarget) {
-      const src = pluginTarget.startsWith('npm:') ? pluginTarget.slice(4) : pluginTarget;
-      const ver = pluginsArgv[2] || '';
-      console.log(`  Instalando plugin: ${src}${ver ? `@${ver}` : ''}...`);
-      const result = oxePlugins.installNpmPlugin(pluginsDir, src, ver || undefined);
-      if (result.ok) {
-        console.log(`  ${c ? green : ''}✓${c ? reset : ''} Instalado em: ${result.path}`);
-        console.log(`  ${c ? dim : ''}Adicione ao .oxe/config.json: "plugins": [{ "source": "npm:${src}" }]${c ? reset : ''}`);
-      } else {
-        console.error(`  ${c ? red : ''}✗ Falha:${c ? reset : ''} ${result.error}`);
-        process.exit(1);
-      }
-    } else if (subCmd === 'remove' && pluginTarget) {
-      console.log(`  ${c ? yellow : ''}Remove "${pluginTarget}" de .oxe/config.json → plugins[] manualmente.${c ? reset : ''}`);
-      console.log(`  ${c ? dim : ''}Arquivos npm: rm -rf .oxe/plugins/_npm/node_modules/${pluginTarget}${c ? reset : ''}`);
-    } else {
-      console.log(`  ${c ? yellow : ''}Uso: oxe-cc plugins list | install <npm:pkg|path> | remove <id>${c ? reset : ''}`);
-    }
-    return;
-  }
-
-  if (command === 'azure') {
-    const azure = parseAzureArgs(argv);
-    if (azure.help) {
-      printBanner();
-      usage();
-      process.exit(0);
-    }
-    if (azure.parseError) {
-      printBanner();
-      console.error(`${red}Opção desconhecida:${reset} ${azure.unknownFlag}`);
-      usage();
-      process.exit(1);
-    }
-    printBanner();
-    runAzure(azure);
+    const exitCode = oxePluginCli.runPluginCommand(argv, {
+      useAnsiColors,
+      colors: { green, yellow, dim, red, reset },
+    });
+    if (exitCode !== 0) process.exit(exitCode);
     return;
   }
 
@@ -5921,33 +5786,9 @@ async function main() {
     process.exit(0);
   }
 
-  if (!((command === 'status' && opts.jsonOutput) || (command === 'doctor' && opts.jsonOutput))) {
-    printBanner();
-  }
+  printBanner();
 
   const target = opts.dir;
-  if (command === 'doctor') {
-    if (!fs.existsSync(target)) {
-      console.error(`${yellow}Diretório não encontrado: ${target}${reset}`);
-      process.exit(1);
-    }
-    runDoctor(target, { release: opts.releaseDoctor, json: opts.jsonOutput, writeManifest: opts.writeManifest });
-    return;
-  }
-
-  if (command === 'status') {
-    if (!fs.existsSync(target)) {
-      console.error(`${yellow}Diretório não encontrado: ${target}${reset}`);
-      process.exit(1);
-    }
-    if (opts.statusFull) {
-      runStatusFull(target);
-    } else {
-      runStatus(target, { json: opts.jsonOutput, hints: opts.statusHints, summary: opts.statusSummary });
-    }
-    return;
-  }
-
   if (command === 'init-oxe') {
     if (!opts.dryRun && !fs.existsSync(target)) {
       console.error(`${yellow}Diretório não encontrado: ${target}${reset}`);

@@ -61,3 +61,8 @@ out/
 .eslintcache
 .oxe/*
 .github/*
+!.github/workflows/
+!.github/dependabot.yml
+
+# OXESpace internal MCP config — machine-local token, do not commit
+.mcp.json
