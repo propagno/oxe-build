@@ -24,7 +24,9 @@ jobs:
       - name: Install immutable actionlint
         run: go install github.com/rhysd/actionlint/cmd/actionlint@03d0035246f3e81f36aed592ffb4bebf33a03106 # v1.7.7
       - name: Validate GitHub Actions workflows
-        run: "$(go env GOPATH)/bin/actionlint"
+        run: |
+          ACTIONLINT="$(go env GOPATH)/bin/actionlint"
+          "$ACTIONLINT"
 
   test:
     runs-on: ubuntu-latest
