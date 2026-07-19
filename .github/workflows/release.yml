@@ -69,10 +69,17 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build:vscode-ext
+      - name: Resolve current VSIX
+        id: current-vsix
+        run: |
+          VERSION="$(node -p "require('./vscode-extension/package.json').version")"
+          FILE="vscode-extension/oxe-agents-${VERSION}.vsix"
+          test -f "$FILE"
+          echo "path=$FILE" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: oxe-agents-vsix
-          path: 'vscode-extension/*.vsix'
+          path: ${{ steps.current-vsix.outputs.path }}
           if-no-files-found: error
           retention-days: 30
 
