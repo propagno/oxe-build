@@ -58,7 +58,7 @@ describe('VerificationCompiler', () => {
     const check: AcceptanceCheck = {
       id: 'check-echo',
       type: 'smoke',
-      command: 'node -e process.exit(0)',
+      command: 'node -e "process.exit(0)"',
       evidence_type_expected: 'stdout',
       acceptance_ref: null,
       description: 'exits zero',
@@ -72,7 +72,7 @@ describe('VerificationCompiler', () => {
     const check: AcceptanceCheck = {
       id: 'check-fail',
       type: 'smoke',
-      command: 'node -e process.exit(1)',
+      command: 'node -e "process.exit(1)"',
       evidence_type_expected: 'stdout',
       acceptance_ref: null,
       description: 'exits one',
@@ -86,7 +86,7 @@ describe('VerificationCompiler', () => {
     const check: AcceptanceCheck = {
       id: 'check-dur',
       type: 'smoke',
-      command: 'node -e process.exit(0)',
+      command: 'node -e "process.exit(0)"',
       evidence_type_expected: 'stdout',
       acceptance_ref: null,
       description: 'duration test',
