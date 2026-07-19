@@ -55,7 +55,7 @@ const PLAN = {
         const check = {
             id: 'check-echo',
             type: 'smoke',
-            command: 'node -e process.exit(0)',
+            command: 'node -e "process.exit(0)"',
             evidence_type_expected: 'stdout',
             acceptance_ref: null,
             description: 'exits zero',
@@ -68,7 +68,7 @@ const PLAN = {
         const check = {
             id: 'check-fail',
             type: 'smoke',
-            command: 'node -e process.exit(1)',
+            command: 'node -e "process.exit(1)"',
             evidence_type_expected: 'stdout',
             acceptance_ref: null,
             description: 'exits one',
@@ -81,7 +81,7 @@ const PLAN = {
         const check = {
             id: 'check-dur',
             type: 'smoke',
-            command: 'node -e process.exit(0)',
+            command: 'node -e "process.exit(0)"',
             evidence_type_expected: 'stdout',
             acceptance_ref: null,
             description: 'duration test',
