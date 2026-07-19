@@ -16,6 +16,10 @@ qualidade mensurável e releases reproduzíveis.
   centralizadas com argumentos estruturados e `shell: false`, incluindo
   resolução explícita de `npm-cli.js`/`npx-cli.js` no Windows e testes contra
   payloads hostis.
+- **Portabilidade comprovada em Windows e Linux** — resolução de caminhos
+  Windows usa semântica `win32` mesmo quando simulada em outro host; mocks do
+  Azure CLI e instalações globais de agentes passaram a ser herméticos, e o
+  OpenCode recebe também a entrada raiz `oxe.md`.
 - **CLI modular** — dispatch de comandos separado em registry e handlers
   testáveis, reduzindo o acoplamento do entrypoint sem alterar a interface
   pública.
@@ -49,9 +53,9 @@ qualidade mensurável e releases reproduzíveis.
 - 10/10 quality gates aprovados.
 - 384/384 testes do runtime e mais de 600 testes raiz.
 - 30/30 cenários smoke, runtime real, recovery e multiagente.
-- Cobertura: 83,05% lines/statements, 92,48% functions e 61,76% branches.
+- Cobertura: 83,06% lines/statements, 92,63% functions e 61,77% branches.
 - `npm audit`: 0 vulnerabilidades.
-- Tarball npm: 507 arquivos; VSIX: 13 participantes ativados em host real.
+- Tarball npm: 506 arquivos; VSIX: 13 participantes ativados em host real.
 
 ## [1.15.0] — 2026-06-27
 

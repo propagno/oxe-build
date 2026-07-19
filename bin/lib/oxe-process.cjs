@@ -21,25 +21,26 @@ function resolvePackageManagerInvocation(manager, options = {}) {
   }
   const platform = options.platform || process.platform;
   if (platform !== 'win32') return { command: manager, argsPrefix: [] };
+  const platformPath = path.win32;
 
   const env = options.env || process.env;
   const nodeExecutable = options.nodeExecutable || process.execPath;
   const existsSync = options.existsSync || fs.existsSync;
   const cliName = `${manager}-cli.js`;
   const candidates = [];
-  const pathEntries = String(env.PATH || env.Path || '').split(path.delimiter).filter(Boolean);
+  const pathEntries = String(env.PATH || env.Path || '').split(platformPath.delimiter).filter(Boolean);
   // Honor PATH precedence first, including test/toolchain shims that expose the
   // JavaScript CLI directly.
-  for (const pathEntry of pathEntries) candidates.push(path.join(pathEntry, cliName));
+  for (const pathEntry of pathEntries) candidates.push(platformPath.join(pathEntry, cliName));
   const execPath = manager === 'npm' ? env.npm_execpath : env.npx_execpath;
   if (execPath && new RegExp(`${manager}-cli\\.js$`, 'i').test(execPath)) candidates.push(execPath);
   if (manager === 'npx' && env.npm_execpath && /npm-cli\.js$/i.test(env.npm_execpath)) {
-    candidates.push(path.join(path.dirname(env.npm_execpath), cliName));
+    candidates.push(platformPath.join(platformPath.dirname(env.npm_execpath), cliName));
   }
-  candidates.push(path.join(path.dirname(nodeExecutable), 'node_modules', 'npm', 'bin', cliName));
+  candidates.push(platformPath.join(platformPath.dirname(nodeExecutable), 'node_modules', 'npm', 'bin', cliName));
   for (const pathEntry of pathEntries) {
-    candidates.push(path.join(pathEntry, 'node_modules', 'npm', 'bin', cliName));
-    candidates.push(path.join(path.dirname(pathEntry), 'node_modules', 'npm', 'bin', cliName));
+    candidates.push(platformPath.join(pathEntry, 'node_modules', 'npm', 'bin', cliName));
+    candidates.push(platformPath.join(platformPath.dirname(pathEntry), 'node_modules', 'npm', 'bin', cliName));
   }
   const cliPath = candidates.find((candidate) => existsSync(candidate));
   if (!cliPath) {

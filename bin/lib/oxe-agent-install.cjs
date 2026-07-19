@@ -44,10 +44,11 @@ function expandTilde(p) {
 /**
  * @param {boolean} ideGlobal
  * @param {string} projectRoot
+ * @param {{ home?: string }} [options]
  * @returns {AgentInstallPaths}
  */
-function buildAgentInstallPaths(ideGlobal, projectRoot) {
-  const home = os.homedir();
+function buildAgentInstallPaths(ideGlobal, projectRoot, options = {}) {
+  const home = options.home ? path.resolve(options.home) : os.homedir();
   const root = path.resolve(projectRoot);
   if (ideGlobal) {
     const xdg = process.env.XDG_CONFIG_HOME || path.join(home, '.config');
@@ -346,6 +347,20 @@ function installOpenCodeCommands(cCmdSrc, paths, opts, pathRewriteNested, logOmi
       const out = injectManagedAfterFrontmatter(raw, pathRewriteNested);
       fs.mkdirSync(destDir, { recursive: true });
       fs.writeFileSync(dest, out, 'utf8');
+    }
+    const helpSrc = path.join(cCmdSrc, 'oxe-help.md');
+    const rootDest = path.join(destDir, 'oxe.md');
+    if (fs.existsSync(helpSrc) && (opts.force || !fs.existsSync(rootDest))) {
+      const raw = fs.readFileSync(helpSrc, 'utf8');
+      const out = injectManagedAfterFrontmatter(raw, pathRewriteNested);
+      if (opts.dryRun) {
+        if (logWrite) logWrite(`opencode ${helpSrc} → ${rootDest}`);
+      } else {
+        fs.mkdirSync(destDir, { recursive: true });
+        fs.writeFileSync(rootDest, out, 'utf8');
+      }
+    } else if (fs.existsSync(rootDest) && logOmitido) {
+      logOmitido(rootDest);
     }
   }
 }

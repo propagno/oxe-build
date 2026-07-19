@@ -82,7 +82,7 @@ describe('oxe-agent-install', () => {
   test('installOpenCodeCommands writes both opencode dirs', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-ag-'));
     withFakeHome(home, () => {
-      const paths = agent.buildAgentInstallPaths(true, home);
+      const paths = agent.buildAgentInstallPaths(true, home, { home });
       agent.installOpenCodeCommands(C_CMD, paths, { dryRun: false, force: true }, false);
       const xdg = path.join(home, '.config', 'opencode', 'commands', 'oxe-scan.md');
       const alt = path.join(home, '.opencode', 'commands', 'oxe-scan.md');
@@ -109,7 +109,7 @@ describe('oxe-agent-install', () => {
   test('installGeminiTomlCommands', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-ag-'));
     withFakeHome(home, () => {
-      const paths = agent.buildAgentInstallPaths(true, home);
+      const paths = agent.buildAgentInstallPaths(true, home, { home });
       agent.installGeminiTomlCommands(C_CMD, paths, { dryRun: false, force: true }, false);
       const oxeToml = path.join(home, '.gemini', 'commands', 'oxe.toml');
       assert.ok(fs.existsSync(oxeToml));
@@ -120,7 +120,7 @@ describe('oxe-agent-install', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-ag-'));
     withFakeHome(home, () => {
       const logs = [];
-      const paths = agent.buildAgentInstallPaths(true, home);
+      const paths = agent.buildAgentInstallPaths(true, home, { home });
       agent.installWindsurfGlobalWorkflows(
         C_CMD,
         paths,
@@ -146,7 +146,7 @@ describe('oxe-agent-install', () => {
   test('installCodexPrompts', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-ag-'));
     withFakeHome(home, () => {
-      const paths = agent.buildAgentInstallPaths(true, home);
+      const paths = agent.buildAgentInstallPaths(true, home, { home });
       agent.installCodexPrompts(C_CMD, paths, { dryRun: false, force: true }, false);
       const p = path.join(home, '.codex', 'prompts', 'oxe-scan.md');
       const root = path.join(home, '.codex', 'prompts', 'oxe.md');
@@ -163,7 +163,7 @@ describe('oxe-agent-install', () => {
   test('installCanonicalAgentSkills writes OXE-native Codex skills', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-ag-'));
     withFakeHome(home, () => {
-      const paths = agent.buildAgentInstallPaths(true, home);
+      const paths = agent.buildAgentInstallPaths(true, home, { home });
       agent.installCanonicalAgentSkills(OXE_AGENTS, paths.codexAgentsSkillsRoot, { dryRun: false, force: true });
       const skillPath = path.join(home, '.agents', 'skills', 'oxe-planner', 'SKILL.md');
       assert.ok(fs.existsSync(skillPath));
@@ -179,7 +179,7 @@ describe('oxe-agent-install', () => {
   test('installCanonicalAgentMarkdowns writes Claude agent markdown', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-ag-'));
     withFakeHome(home, () => {
-      const paths = agent.buildAgentInstallPaths(true, home);
+      const paths = agent.buildAgentInstallPaths(true, home, { home });
       agent.installCanonicalAgentMarkdowns(OXE_AGENTS, paths.claudeAgentsDir, { dryRun: false, force: true });
       const agentPath = path.join(home, '.claude', 'agents', 'oxe-verifier.md');
       assert.ok(fs.existsSync(agentPath));
@@ -193,7 +193,7 @@ describe('oxe-agent-install', () => {
   test('cleanupMarkedUnifiedArtifacts removes managed files', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-ag-'));
     withFakeHome(home, () => {
-      const paths = agent.buildAgentInstallPaths(true, home);
+      const paths = agent.buildAgentInstallPaths(true, home, { home });
       agent.installOpenCodeCommands(C_CMD, paths, { dryRun: false, force: true }, false);
       const xdg = path.join(home, '.config', 'opencode', 'commands', 'oxe-scan.md');
       const xdgRoot = path.join(home, '.config', 'opencode', 'commands', 'oxe.md');
@@ -208,7 +208,7 @@ describe('oxe-agent-install', () => {
   test('cleanupMarkedUnifiedArtifacts respects granular targets', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-ag-'));
     withFakeHome(home, () => {
-      const paths = agent.buildAgentInstallPaths(true, home);
+      const paths = agent.buildAgentInstallPaths(true, home, { home });
       agent.installOpenCodeCommands(C_CMD, paths, { dryRun: false, force: true }, false);
       agent.installGeminiTomlCommands(C_CMD, paths, { dryRun: false, force: true }, false);
       const openCodeRoot = path.join(home, '.config', 'opencode', 'commands', 'oxe.md');
@@ -224,7 +224,7 @@ describe('oxe-agent-install', () => {
   test('cleanup dryRun no unlink', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-ag-'));
     withFakeHome(home, () => {
-      const paths = agent.buildAgentInstallPaths(true, home);
+      const paths = agent.buildAgentInstallPaths(true, home, { home });
       agent.installOpenCodeCommands(C_CMD, paths, { dryRun: false, force: true }, false);
       const xdg = path.join(home, '.config', 'opencode', 'commands', 'oxe-scan.md');
       agent.cleanupMarkedUnifiedArtifacts({ dryRun: true }, paths);
