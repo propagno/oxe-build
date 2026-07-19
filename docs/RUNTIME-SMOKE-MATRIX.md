@@ -6,6 +6,8 @@
 
 Este documento descreve a matrix estável da release. O artefato operacional consumido por `doctor --release` é `.oxe/release/runtime-smoke-report.json`.
 
+As suítes `test:runtime-smoke` e `test:runtime-real` são locais e determinísticas. `runtime-real` significa que os cenários percorrem a implementação operacional real do runtime, sem substituir o núcleo por mocks; não significa uma chamada live a um LLM. O teste com provedor LLM é separado, opt-in e executado por `npm run test:runtime-llm` quando credenciais e provider estão explicitamente configurados.
+
 ---
 
 ## Matriz de operações × runtimes

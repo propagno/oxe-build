@@ -42,6 +42,68 @@
 
 const fs = require('fs');
 const path = require('path');
+const {
+  resolvePackageManagerInvocation,
+  runPackageManagerSync,
+} = require('./oxe-process.cjs');
+
+const MAX_NPM_PACKAGE_NAME_LENGTH = 214;
+const MAX_NPM_VERSION_LENGTH = 128;
+const NPM_NAME_PART = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/;
+const NPM_VERSION_SPEC = /^[0-9A-Za-z*+._~^<>=-]+$/;
+
+/**
+ * Valida um nome de pacote npm sem aceitar URLs, paths ou option injection.
+ * @param {unknown} pkgName
+ * @returns {{ valid: boolean, error: string }}
+ */
+function validateNpmPackageName(pkgName) {
+  if (typeof pkgName !== 'string' || pkgName.length === 0) {
+    return { valid: false, error: 'Nome do pacote npm é obrigatório' };
+  }
+  if (pkgName !== pkgName.trim() || pkgName.length > MAX_NPM_PACKAGE_NAME_LENGTH) {
+    return { valid: false, error: 'Nome do pacote npm inválido' };
+  }
+
+  const parts = pkgName.startsWith('@')
+    ? pkgName.slice(1).split('/')
+    : [pkgName];
+  if (parts.length !== (pkgName.startsWith('@') ? 2 : 1) || parts.some((part) => !NPM_NAME_PART.test(part))) {
+    return { valid: false, error: 'Nome do pacote npm inválido' };
+  }
+  return { valid: true, error: '' };
+}
+
+/**
+ * Valida seletores npm usuais (versão exata, range sem espaços ou dist-tag).
+ * @param {unknown} version
+ * @returns {{ valid: boolean, error: string }}
+ */
+function validateNpmVersion(version) {
+  if (version === undefined || version === null || version === '') {
+    return { valid: true, error: '' };
+  }
+  if (
+    typeof version !== 'string' ||
+    version !== version.trim() ||
+    version.length > MAX_NPM_VERSION_LENGTH ||
+    version.startsWith('-') ||
+    !NPM_VERSION_SPEC.test(version)
+  ) {
+    return { valid: false, error: 'Versão ou tag npm inválida' };
+  }
+  return { valid: true, error: '' };
+}
+
+/**
+ * No Windows, scripts `.cmd` exigem shell. Para manter `shell: false`, executa
+ * diretamente o npm-cli.js com o processo Node atual.
+ * @param {{ platform?: string, env?: NodeJS.ProcessEnv, nodeExecutable?: string }} [options]
+ * @returns {{ command: string, argsPrefix: string[] }}
+ */
+function resolveNpmInvocation(options = {}) {
+  return resolvePackageManagerInvocation('npm', options);
+}
 
 /**
  * @typedef {{
@@ -316,15 +378,41 @@ function resolvePluginSources(projectRoot, pluginsSources) {
  * @param {string} [version]
  * @returns {{ ok: boolean, path: string, error: string }}
  */
-function installNpmPlugin(projectRoot, pkgName, version) {
+function installNpmPlugin(projectRoot, pkgName, version, options = {}) {
+  const packageValidation = validateNpmPackageName(pkgName);
+  if (!packageValidation.valid) {
+    return { ok: false, path: '', error: packageValidation.error };
+  }
+  const versionValidation = validateNpmVersion(version);
+  if (!versionValidation.valid) {
+    return { ok: false, path: '', error: versionValidation.error };
+  }
+
   const npmDir = path.join(projectRoot, '.oxe', 'plugins', '_npm');
   try {
     if (!fs.existsSync(npmDir)) {
       fs.mkdirSync(npmDir, { recursive: true });
     }
     const spec = version ? `${pkgName}@${version}` : pkgName;
-    const { execSync } = require('child_process');
-    execSync(`npm install --prefix "${npmDir}" ${spec}`, { stdio: 'pipe', timeout: 60000 });
+    const run = options.runPackageManagerSync || runPackageManagerSync;
+    const runOptions = { ...options };
+    delete runOptions.runPackageManagerSync;
+    const child = run('npm', [
+      'install',
+      '--prefix',
+      npmDir,
+      '--',
+      spec,
+    ], {
+      stdio: 'pipe',
+      timeout: 60000,
+      ...runOptions,
+    });
+    if (child.error) throw child.error;
+    if (child.status !== 0) {
+      const stderr = child.stderr ? String(child.stderr).trim() : '';
+      throw new Error(stderr || `npm install terminou com código ${child.status}`);
+    }
     return { ok: true, path: path.join(npmDir, 'node_modules', pkgName), error: '' };
   } catch (e) {
     return { ok: false, path: '', error: e.message || String(e) };
@@ -338,4 +426,7 @@ module.exports = {
   initPluginsDir,
   resolvePluginSources,
   installNpmPlugin,
+  validateNpmPackageName,
+  validateNpmVersion,
+  resolveNpmInvocation,
 };

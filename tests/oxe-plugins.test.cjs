@@ -19,6 +19,12 @@ function writePlugin(dir, filename, content) {
   return pluginsDir;
 }
 
+test('resolveNpmInvocation delegates to the shared shell-free resolver', () => {
+  const invocation = plugins.resolveNpmInvocation({ platform: 'linux' });
+  assert.strictEqual(invocation.command, 'npm');
+  assert.deepStrictEqual(invocation.argsPrefix, []);
+});
+
 describe('oxe-plugins — loadPlugins', () => {
   test('returns empty arrays when plugins dir does not exist', () => {
     const dir = makeTmp();
@@ -240,5 +246,114 @@ describe('oxe-plugins — resolvePluginSources', () => {
     const result = plugins.resolvePluginSources(dir, []);
     assert.deepStrictEqual(result.resolved, []);
     assert.deepStrictEqual(result.errors, []);
+  });
+});
+
+describe('oxe-plugins — installNpmPlugin', () => {
+  test('invokes npm with an argument array and shell disabled', () => {
+    const dir = makeTmp();
+    let invocation;
+    const result = plugins.installNpmPlugin(dir, '@oxe/example-plugin', '^1.2.3', {
+      platform: 'linux',
+      spawnSync(command, args, options) {
+        invocation = { command, args, options };
+        return { status: 0, stderr: Buffer.from('') };
+      },
+    });
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(invocation.command, 'npm');
+    assert.deepStrictEqual(invocation.args, [
+      'install',
+      '--prefix',
+      path.join(dir, '.oxe', 'plugins', '_npm'),
+      '--',
+      '@oxe/example-plugin@^1.2.3',
+    ]);
+    assert.strictEqual(invocation.options.shell, false);
+  });
+
+  test('runs npm-cli.js through Node on Windows without a shell', () => {
+    const dir = makeTmp();
+    const npmCli = path.join(dir, 'npm-cli.js');
+    fs.writeFileSync(npmCli, '', 'utf8');
+    let invocation;
+    const result = plugins.installNpmPlugin(dir, 'safe-plugin', 'latest', {
+      platform: 'win32',
+      env: { npm_execpath: npmCli, PATH: '' },
+      nodeExecutable: 'C:\\node\\node.exe',
+      spawnSync(command, args, options) {
+        invocation = { command, args, options };
+        return { status: 0, stderr: Buffer.from('') };
+      },
+    });
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(invocation.command, 'C:\\node\\node.exe');
+    assert.strictEqual(invocation.args[0], npmCli);
+    assert.deepStrictEqual(invocation.args.slice(1), [
+      'install',
+      '--prefix',
+      path.join(dir, '.oxe', 'plugins', '_npm'),
+      '--',
+      'safe-plugin@latest',
+    ]);
+    assert.strictEqual(invocation.options.shell, false);
+  });
+
+  test('rejects Unix and Windows command payloads before spawning npm', () => {
+    const dir = makeTmp();
+    const payloads = [
+      'safe;touch-pwned',
+      'safe && calc.exe',
+      'safe|whoami',
+      '$(whoami)',
+      '`whoami`',
+      'safe&echo-pwned',
+      'safe%COMSPEC%',
+      '../safe',
+      '--force',
+      '@scope/pkg/extra',
+    ];
+    let spawnCount = 0;
+    for (const payload of payloads) {
+      const result = plugins.installNpmPlugin(dir, payload, undefined, {
+        spawnSync() {
+          spawnCount++;
+          return { status: 0 };
+        },
+      });
+      assert.strictEqual(result.ok, false, `deveria rejeitar ${payload}`);
+      assert.match(result.error, /inválido|obrigatório/);
+    }
+    assert.strictEqual(spawnCount, 0, 'nenhum payload deve chegar ao processo filho');
+  });
+
+  test('rejects malicious versions before spawning npm', () => {
+    const dir = makeTmp();
+    const payloads = ['1.0.0;whoami', 'latest && calc.exe', '$(whoami)', '`whoami`', '--force', '1.0.0|id'];
+    let spawnCount = 0;
+    for (const payload of payloads) {
+      const result = plugins.installNpmPlugin(dir, 'safe-plugin', payload, {
+        spawnSync() {
+          spawnCount++;
+          return { status: 0 };
+        },
+      });
+      assert.strictEqual(result.ok, false, `deveria rejeitar ${payload}`);
+      assert.match(result.error, /inválida/);
+    }
+    assert.strictEqual(spawnCount, 0, 'nenhuma versão maliciosa deve chegar ao processo filho');
+  });
+
+  test('reports a non-zero npm exit without throwing', () => {
+    const dir = makeTmp();
+    const result = plugins.installNpmPlugin(dir, 'safe-plugin', 'latest', {
+      spawnSync() {
+        return { status: 1, stderr: Buffer.from('registry unavailable') };
+      },
+    });
+    assert.strictEqual(result.ok, false);
+    assert.match(result.error, /registry unavailable/);
   });
 });

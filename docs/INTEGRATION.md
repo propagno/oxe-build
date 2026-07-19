@@ -17,8 +17,9 @@ Detecte a versão com `oxe --version` (imprime `oxe-cc vX.Y.Z`). Tabela de dispo
 | `agentSkills[]` no `status --json` + `agentSkills` no summary | 1.13.0 | — |
 | `events --tail --json` | 1.14.0 | `oxeEventsSchema: 1` |
 | `dashboard --json` + `--port 0` efêmero | 1.14.0 | `oxeDashboardSchema: 1` |
+| `map --json` (mapa de artefatos do `.oxe/`) | 1.15.0 | `oxeMapSchema: 1` |
 
-> **Estável:** `status --json --summary`, `agentSkills`, `events --json`, `dashboard --json`.
+> **Estável:** `status --json --summary`, `agentSkills`, `events --json`, `dashboard --json`, `map --json`.
 > **Experimental (pode mudar):** o conteúdo de `payload` dentro de cada evento; o HTML servido pelo dashboard; o corpo de `status --json` completo (`oxeStatusSchema`) além dos campos listados abaixo.
 
 ---
@@ -146,7 +147,36 @@ A **primeira linha** do stdout é, assim que o servidor está ouvindo, e o proce
 
 ---
 
-## 5. Roadmap de integração (ainda não estável)
+## 5. Mapa de artefatos — `map --json`
+
+A partir da `1.15.0` o `.oxe/` é **enxuto no install** (só `STATE.md`, `config.json` e o `README.md`-legenda); o resto nasce sob demanda. Para projetar o estado real do diretório — o que já existe, o que está disponível sob demanda, e o estado de cada item — use:
+
+```bash
+oxe map --json --dir <projeto>
+```
+
+```jsonc
+{
+  "oxeMapSchema": 1,
+  "projectRoot": "/abs/path",
+  "oxeExists": true,
+  "groups": [ { "key": "core", "label": "…", "present": [ … ], "available": [ … ] } ],
+  "present":   [ { "path": "STATE.md", "kind": "file", "purpose": "…", "createdBy": "install", "group": "core", "state": "active" } ],
+  "available": [ { "path": "codebase/", "kind": "dir", "purpose": "…", "createdBy": "scan", "group": "discovery", "state": "absent" } ],
+  "extras": ["WHATEVER.md"],
+  "counts": { "total": 56, "present": 6, "active": 5, "empty": 1, "stale": 0, "available": 50, "extras": 1 }
+}
+```
+
+- `state`: `active` (com conteúdo) · `empty` (existe mas vazio/zero-byte) · `stale` (scan desatualizado) · `absent` (disponível sob demanda).
+- `createdBy`: a origem do artefato (workflow/CLI/kernel) — use `SOURCE_LABELS` no SDK para rótulos amigáveis.
+- O mesmo modelo está no SDK: `require('oxe-cc').artifacts.buildMapModel(projectRoot)` e `renderLegend()` (o conteúdo do `.oxe/README.md`).
+
+O texto humano (`oxe map`, sem `--json`) imprime a árvore anotada e agrupa os itens "disponível sob demanda" por comando de origem.
+
+---
+
+## 6. Roadmap de integração (ainda não estável)
 
 - **`install … --json`** — saída idempotente `{ ok, agents:[{agent, installedPaths[]}], skipped[], errors[] }` para instalar skills sem terminal. Hoje a instalação é via os comandos `install` (no terminal) + reconferir com `agentSkills`.
 - **`events --follow` / streaming (SSE)** — hoje a reatividade é via `fs.watch` + `events --tail`/`--since`.

@@ -1,0 +1,125 @@
+# OXE — Seções opcionais do STATE.md (referência)
+
+Estas seções **não** vêm no `STATE.md` enxuto criado no install. O agente (ou o
+runtime, via `runtime project`) deve **anexá-las ao `.oxe/STATE.md` sob demanda**,
+apenas quando o recurso correspondente passa a ser usado. Copie só a seção
+necessária — mantenha a porta de entrada curta. Cada bloco abaixo é
+auto-contido e usa o mesmo formato que o `oxe-cc doctor`/`status` espera ler.
+
+---
+
+## Último scan
+
+- **Data:** (use **YYYY-MM-DD** para o `oxe-cc doctor` avisar scan antigo com `scan_max_age_days` em `.oxe/config.json`)
+- **Notas:** (opcional)
+
+## Último compact (codebase + RESUME) (opcional)
+
+- **Data:** (**YYYY-MM-DD** — preenchido por **`/oxe-compact`**: refresh incremental dos mapas em `.oxe/codebase/` + `CODEBASE-DELTA.md` + `RESUME.md`)
+- **Notas:** (opcional; ex.: "só STRUCTURE e TESTING")
+- **last_retro:** (YYYY-MM-DD — preenchido por **`/oxe-retro`** ao concluir retrospectiva; lido por `oxe-cc doctor` para rastrear ciclos sem lições)
+
+## Contexto do plano / quick (opcional)
+
+- **Spec / plano:** (revisão informal ou data de `.oxe/SPEC.md` / `.oxe/PLAN.md`)
+- **Última onda executada:** (número ou —)
+- **Tarefas concluídas:** (ex.: T1, T2 ou passos 1–3 do QUICK.md)
+
+## Checkpoints de aprovação (opcional)
+
+- **checkpoint_status:** `pending_approval` | `approved` | `rejected` | `overridden` | —
+- **checkpoint_ref:** `.oxe/CHECKPOINTS.md` ou artefato de sessão correspondente
+- **Notas:** (ex.: aguardando aprovação para Onda 2)
+
+## Runtime operacional (opcional)
+
+- **runtime_status:** `planned` | `running` | `paused` | `waiting_approval` | `failed` | `completed` | `replaying` | `aborted` | —
+- **runtime_ref:** `.oxe/EXECUTION-RUNTIME.md` ou artefato de sessão correspondente
+- **active_run_ref:** `.oxe/ACTIVE-RUN.json` ou artefato de sessão correspondente
+- **events_ref:** `.oxe/OXE-EVENTS.ndjson` ou artefato de sessão correspondente
+- **Notas:** (agentes ativos, bloqueio principal, handoff pendente)
+
+## Revisão do plano (opcional — dashboard / aprovação)
+
+- **plan_review_status:** `draft` | `in_review` | `approved` | `rejected` | `needs_revision` | —
+- **plan_review_updated:** (ISO legível — ex.: `2026-04-10T14:22:00-03:00`)
+- **plan_review_ref:** `.oxe/PLAN-REVIEW.md` ou artefato de sessão correspondente
+- **Notas:** (ex.: aprovado para execute; revisão pendente da onda 2)
+
+## Blueprint de agentes (sessão) (opcional — `/oxe-plan-agent`)
+
+Espelho do **`.oxe/plan-agents.json`** ativo (schema ≥ 2). Atualizar em **`/oxe-plan-agent`**, **`/oxe-execute`**, **`/oxe-verify`**, **`/oxe-quick`** quando o lifecycle mudar.
+
+- **run_id:** (igual a `runId` no JSON; — se não houver blueprint)
+- **lifecycle_status:** `pending_execute` | `executing` | `closed` | `invalidated` | —
+- **Última onda (execute):** (número ou —)
+- **Notas:** (ex.: invalidado por quick; mensagens em `.oxe/plan-agent-messages/`)
+
+## Quick agents (sessão) (opcional — `/oxe-quick` com PDDA)
+
+Preenchido por **`/oxe-quick`** quando Plan-Driven Dynamic Agents lean estiver ativo.
+
+- **quick_id:** (ex.: `quick-2026-04-05-a1b2c3` — gerado por `/oxe-quick`)
+- **quick_agents_status:** `active` | `done` | `invalidated` | —
+- **Notas:** (ex.: invalidado ao iniciar novo quick ou promover a spec/plan)
+
+## Loop (sessão) (opcional — `/oxe-loop`)
+
+Preenchido por **`/oxe-loop`** durante retry iterativo de onda.
+
+- **loop_onda:** (número da onda em retry, ex.: `2`)
+- **loop_iteracao:** (tentativa atual / máximo, ex.: `2/3`)
+- **loop_status:** `retrying` | `passed` | `escalated` | —
+- **Notas:** (ex.: escalado para `/oxe-forensics` após 3 tentativas)
+
+## Checklist da onda OXE (opcional — workflow execute)
+
+_(O agente pode preencher após cada onda.)_
+
+- [ ] Onda N — pré-requisitos conferidos
+- [ ] Onda N — implementação concluída
+- [ ] Onda N — **Verificar** executado ou agendado
+
+## Milestone ativo (opcional — `/oxe-milestone`)
+
+- **ID:** (ex.: M-01 — ou — se não houver milestone ativo)
+- **Nome:** (ex.: v1.0 — autenticação básica)
+- **Iniciado:** (YYYY-MM-DD)
+- **Progresso:** (N/M critérios verificados)
+
+## Último milestone encerrado (opcional)
+
+- **ID:** —
+- **Data de encerramento:** —
+- **Artefatos:** `.oxe/milestones/M-NN/`
+
+## Workstreams ativos (opcional — `/oxe-workstream`)
+
+- (nenhum ou lista de nomes: ex.: `feature-billing`, `bugfix-auth`)
+
+## Workstream ativo (contexto atual)
+
+- (nome do workstream ativo — ou — para pipeline principal)
+
+## Memory (sidecars de sessão) (opcional — `/oxe-memory`)
+
+Sidecars de memória persistente por agente/sessão. Armazenados em `.oxe/memory/`.
+
+- (nenhum ou lista: ex.: `architect-2025-01-15.md`, `researcher-auth-2025-01-14.md`)
+
+## Camadas de memória (contrato)
+
+- **memory_read_order:** `runtime_state -> session_memory -> project_memory -> evidence`
+- **session_memory_ref:** `SESSION.md` ou —
+- **project_memory_ref:** `.oxe/global/LESSONS.md`
+- **evidence_ref:** `INVESTIGATIONS.md`, `VERIFY.md` e derivados
+
+## Capabilities nativas (opcional)
+
+- **capabilities_ref:** `.oxe/CAPABILITIES.md`
+- **Capabilities ativas:** (IDs ou —)
+
+## Investigações estruturadas (opcional)
+
+- **investigations_ref:** `.oxe/INVESTIGATIONS.md` ou índice de sessão
+- **Última investigação:** (path ou —)

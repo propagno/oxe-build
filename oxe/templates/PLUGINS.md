@@ -4,7 +4,14 @@ Plugins OXE são módulos CJS colocados em **`.oxe/plugins/`** que se executam e
 
 ## Instalação
 
-Crie um arquivo `.cjs` em `.oxe/plugins/`:
+Para instalar um plugin publicado no npm, use um nome de pacote npm válido. O prefixo `npm:` é opcional:
+
+```bash
+oxe-cc plugins install @scope/meu-plugin 1.2.3
+# equivalente: oxe-cc plugins install npm:@scope/meu-plugin 1.2.3
+```
+
+O comando `plugins install` aceita somente pacotes npm; ele não instala paths, URLs ou arquivos locais. Para um plugin local, crie um arquivo `.cjs` em `.oxe/plugins/`:
 
 ```js
 // .oxe/plugins/meu-plugin.cjs

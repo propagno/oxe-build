@@ -4,6 +4,93 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.16.0] — 2026-07-18
+
+### Segurança, pacote verificável e engenharia de release
+
+Esta versão consolida o OXE-BUILD como framework multi-runtime orientado por
+evidências, com foco em segurança de subprocessos, consumo real do pacote,
+qualidade mensurável e releases reproduzíveis.
+
+- **Executor seguro e multiplataforma** — invocações de `npm` e `npx` foram
+  centralizadas com argumentos estruturados e `shell: false`, incluindo
+  resolução explícita de `npm-cli.js`/`npx-cli.js` no Windows e testes contra
+  payloads hostis.
+- **Portabilidade comprovada em Windows e Linux** — resolução de caminhos
+  Windows usa semântica `win32` mesmo quando simulada em outro host; mocks do
+  Azure CLI e instalações globais de agentes passaram a ser herméticos, e o
+  OpenCode recebe também a entrada raiz `oxe.md`.
+- **CLI modular** — dispatch de comandos separado em registry e handlers
+  testáveis, reduzindo o acoplamento do entrypoint sem alterar a interface
+  pública.
+- **Pacote validado como um consumidor real** — o gate cria o tarball, instala
+  em projeto temporário limpo e exercita CLI, SDK, runtime e compilação
+  TypeScript.
+- **npm workspaces e lockfile único** — raiz, runtime e extensão usam a mesma
+  resolução; o lockfile aninhado obsoleto do runtime foi removido.
+- **SDK types gerados pelo TypeScript** — `index.d.ts` passa a ser emissão
+  determinística de `index.types.ts`, com gate de drift e validação da ABI
+  pública.
+- **Coverage ratchet** — pisos globais e de módulos críticos são executáveis e
+  não podem ser reduzidos abaixo do baseline versionado.
+- **Extensão validada no VS Code real** — o Extension Host 1.95.3 comprova a
+  ativação e o registro observável dos 13 participantes OXE; o VSIX é gerado
+  por uma versão fixa do `vsce`.
+- **Supply chain endurecida** — GitHub Actions fixadas por SHA, Dependabot,
+  permissões mínimas, actionlint, tag vinculada à versão e GitHub Release
+  condicionada ao build do VSIX.
+- **Publicação npm manual nesta release** — a criação da tag gera validação e
+  GitHub Release, mas não executa `npm publish`; a promoção ao registry fica
+  sob controle explícito do mantenedor.
+- **Quality telemetry** — relatório JSON/Markdown exige os 10 gates, rejeita
+  gates ausentes, duplicados ou inesperados e invalida evidências antigas.
+- **README redesenhado** — proposta de valor, quickstart, fluxos Nano/Standard/
+  Full, runtime-first, adoção por equipes e métricas verificáveis agora formam
+  uma narrativa única e orientada ao uso.
+
+### Evidência da release
+
+- 10/10 quality gates aprovados.
+- 384/384 testes do runtime e mais de 600 testes raiz.
+- 30/30 cenários smoke, runtime real, recovery e multiagente.
+- Cobertura: 83,06% lines/statements, 92,63% functions e 61,77% branches.
+- `npm audit`: 0 vulnerabilidades.
+- Tarball npm: 506 arquivos; VSIX: 13 participantes ativados em host real.
+
+## [1.15.0] — 2026-06-27
+
+### `.oxe/` enxuto no install + mapa vivo de artefatos
+
+Resposta ao feedback de que a quantidade de pastas criadas no install era grande
+demais e dificultava entender o fluxo versus o que de fato foi/será criado.
+
+- **Lazy scaffolding** — `oxe-cc init-oxe`/`install` agora cria só o núcleo
+  essencial: `.oxe/STATE.md`, `.oxe/config.json` e `.oxe/README.md` (legenda
+  gerada). As ~13 subpastas e os arquivos operacionais (`codebase/`,
+  `capabilities/`, `investigations/`, `global/`, `sessions/`, `memory/`,
+  `runs/`, `EXECUTION-RUNTIME.md`, `ACTIVE-RUN.json`, `OXE-EVENTS.ndjson`,
+  `CHECKPOINTS.md`, `CAPABILITIES.md`, `INVESTIGATIONS.md`, …) passam a nascer
+  **sob demanda**, no primeiro uso do workflow correspondente.
+- **Catálogo único de artefatos** (`bin/lib/oxe-artifact-catalog.cjs`) — fonte
+  da verdade que descreve cada artefato do `.oxe/` (path, propósito, origem,
+  grupo) e da qual derivam legenda, mapa e docs (uma definição, três saídas).
+- **`oxe-cc map`** — mapa vivo anotado do `.oxe/`: o que já existe, o que está
+  disponível sob demanda e o estado de cada item (`✓ ativo · ◦ vazio ·
+  ⚠ desatualizado · · sob demanda`). `oxe-cc map --json` (`oxeMapSchema: 1`)
+  para hosts; exposto no SDK como `artifacts.buildMapModel` / `renderLegend`.
+- **`.oxe/README.md` gerado** — legenda local de todos os artefatos, escrita no
+  init e **re-renderizada por `oxe-cc doctor`** (documentação forte sem pastas
+  vazias).
+- **STATE.md enxuto** — template reduzido de 141 → ~30 linhas (fase, sessão,
+  próximo passo, decisões, bloqueios). As ~15 seções opcionais foram movidas
+  para `oxe/templates/STATE-REFERENCE.md`, anexadas sob demanda.
+- **`doctor`/`status` sem falsos-positivos** — a ausência de artefato lazy agora
+  é estado normal (não gera aviso); inconsistências reais (STATE diz X mas o
+  artefato não existe) continuam detectadas.
+- Novos contratos documentados em `docs/INTEGRATION.md`; testes em
+  `tests/oxe-map.test.cjs` + contrato `map --json` em
+  `tests/oxe-integration-contracts.test.cjs`.
+
 ## [1.14.0] — 2026-05-30
 
 ### Contratos de integração para hosts — reatividade + dashboard embutível

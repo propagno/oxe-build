@@ -37,7 +37,9 @@ describe('oxe-cc CLI', () => {
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'workflows', 'quick.md')));
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'STATE.md')));
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'config.json')));
-    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'codebase')));
+    // Lazy scaffolding: o núcleo gera README.md (legenda); codebase/ nasce sob demanda no /oxe-scan
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'README.md')), '.oxe/README.md (legenda) deve ser gerado no bootstrap');
+    assert.ok(!fs.existsSync(path.join(dir, '.oxe', 'codebase')), 'codebase/ não deve ser criado avidamente (lazy)');
     assert.ok(!fs.existsSync(path.join(dir, 'oxe')), 'default layout must not create top-level oxe/');
     // schemas devem ser copiados para .oxe/schemas/
     assert.ok(
@@ -108,27 +110,33 @@ describe('oxe-cc CLI', () => {
     assert.strictEqual(d.status, 1);
   });
 
-  test('init-oxe creates .oxe only', () => {
+  test('init-oxe creates a lean .oxe core (STATE, config, README only)', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
     const { status } = run(['init-oxe', dir]);
     assert.strictEqual(status, 0);
+    // Núcleo enxuto: exatamente STATE.md, config.json e README.md (legenda gerada).
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'STATE.md')));
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'config.json')));
-    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'global', 'LESSONS.md')));
-    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'global', 'MILESTONES.md')));
-    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'global', 'milestones')));
-    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'sessions')));
-    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'EXECUTION-RUNTIME.md')));
-    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'CHECKPOINTS.md')));
-    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'CAPABILITIES.md')));
-    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'INVESTIGATIONS.md')));
-    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'capabilities')));
-    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'investigations')));
-    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'dashboard')));
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'README.md')));
+    const coreEntries = fs.readdirSync(path.join(dir, '.oxe')).sort();
+    assert.deepStrictEqual(coreEntries, ['README.md', 'STATE.md', 'config.json']);
+    // Artefatos/pastas que antes eram criados avidamente agora nascem sob demanda.
+    for (const lazy of ['global', 'sessions', 'EXECUTION-RUNTIME.md', 'CHECKPOINTS.md', 'CAPABILITIES.md', 'INVESTIGATIONS.md', 'capabilities', 'investigations', 'dashboard', 'codebase', 'runs', 'memory', 'ACTIVE-RUN.json', 'OXE-EVENTS.ndjson']) {
+      assert.ok(!fs.existsSync(path.join(dir, '.oxe', lazy)), `${lazy} não deve ser criado avidamente (lazy scaffolding)`);
+    }
     const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'config.json'), 'utf8'));
     assert.strictEqual(cfg.plan_confidence_threshold, 90);
     const gi = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');
     assert.match(gi, /\.oxe\/\s*$/m);
+  });
+
+  test('.oxe/README.md legend documents lazy artifacts and points to oxe-cc map', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-cc-test-'));
+    assert.strictEqual(run(['init-oxe', dir]).status, 0);
+    const legend = fs.readFileSync(path.join(dir, '.oxe', 'README.md'), 'utf8');
+    assert.match(legend, /oxe-cc map/);
+    assert.match(legend, /sob demanda/i);
+    assert.match(legend, /codebase\//);
   });
 
   test('install does not duplicate .oxe/ rule when .gitignore already ignores .oxe', () => {

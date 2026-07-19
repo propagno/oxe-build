@@ -12,6 +12,8 @@ OXE é um fluxo **spec-driven** com artefatos em `.oxe/` no projeto alvo — **o
 O OXE distingue cinco famílias de raciocínio multi-runtime: `discovery`, `planning`, `execution`, `review` e `status`. Essa semântica nasce em `oxe/workflows/references/reasoning-*.md`, entra nos workflows canónicos e é renderizada nos prompts/skills de cada runtime. A mesma etapa deve produzir respostas mais exploratórias, decision-complete e auditáveis em qualquer agente suportado.
 
 No **projeto**, os passos canónicos estão em **`.oxe/workflows/*.md`** (layout mínimo) ou **`oxe/workflows/*.md`** (layout clássico com `--global`); no **pacote npm**, os modelos vivem em **`oxe/workflows/*.md`**.
+
+**`.oxe/` enxuto (1.15.0+):** o install cria só o núcleo — `STATE.md`, `config.json` e `README.md` (legenda gerada). Todo o resto (`codebase/`, `SPEC.md`, `PLAN.md`, `agent/`, `swarm/`, `memory/`, `runs/`, sessões…) **nasce sob demanda** no primeiro uso do workflow correspondente. Para ver o que já existe e o que está disponível sob demanda, rode **`oxe-cc map`** (`--json` para hosts). A legenda completa fica em **`.oxe/README.md`** (re-gerada por `oxe-cc doctor`). O `STATE.md` é a porta de entrada curta; as seções avançadas (runtime, blueprint de agentes, milestones, workstreams, loop, memória) são anexadas sob demanda a partir de `oxe/templates/STATE-REFERENCE.md`.
 </context>
 
 <output>

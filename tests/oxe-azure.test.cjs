@@ -238,6 +238,9 @@ fail('Command not implemented: ' + a.join(' '));
     'utf8'
   );
   fs.writeFileSync(path.join(dir, 'az.cmd'), '@echo off\r\nnode "%~dp0fake-az.js" %*\r\n', 'utf8');
+  const posixLauncher = path.join(dir, 'az');
+  fs.writeFileSync(posixLauncher, `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/fake-az.js" "$@"\n`, 'utf8');
+  fs.chmodSync(posixLauncher, 0o755);
   return {
     dir,
     statePath,

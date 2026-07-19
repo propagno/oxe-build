@@ -11,6 +11,13 @@ const contractBuilder = require('./shared/contractBuilder');
 
 /** @type {vscode.OutputChannel | null} */
 let outputChannel = null;
+let registeredParticipantIds = [];
+
+function publicRegistrationApi() {
+  return Object.freeze({
+    getRegisteredParticipantIds: () => [...registeredParticipantIds],
+  });
+}
 
 function log(message) {
   if (outputChannel) outputChannel.appendLine(`[OXE Agents] ${message}`);
@@ -261,6 +268,7 @@ function makeHandler(agentDef) {
  * @param {import('vscode').ExtensionContext} context
  */
 function activate(context) {
+  registeredParticipantIds = [];
   // Criar output channel para diagnóstico
   outputChannel = vscode.window.createOutputChannel('OXE Agents');
   context.subscriptions.push(outputChannel);
@@ -271,7 +279,7 @@ function activate(context) {
     const msg = 'OXE Agents requer GitHub Copilot Chat (GitHub.copilot-chat) instalado e habilitado no VS Code.';
     log(`AVISO: ${msg}`);
     vscode.window.showWarningMessage(msg);
-    return;
+    return publicRegistrationApi();
   }
 
   // Registrar todos os agentes
@@ -282,6 +290,7 @@ function activate(context) {
       participant.iconPath = new vscode.ThemeIcon('sparkle');
       context.subscriptions.push(participant);
       registered++;
+      registeredParticipantIds.push(agentDef.id);
       log(`Agente registrado: ${agentDef.id}`);
     } catch (err) {
       log(`Falha ao registrar ${agentDef.id}: ${err.message}`);
@@ -301,6 +310,7 @@ function activate(context) {
       if (choice === 'Ver log') outputChannel?.show();
     });
   }
+  return publicRegistrationApi();
 }
 
 function deactivate() {

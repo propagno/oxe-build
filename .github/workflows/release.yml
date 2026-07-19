@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - name: Validate release tag against package version
+        run: test "${GITHUB_REF_NAME#v}" = "$(node -p "require('./package.json').version")"
+      - run: node scripts/quality-report.cjs reset
+      - run: node scripts/quality-report.cjs exec --name lint -- npm run lint
+      - run: node scripts/quality-report.cjs exec --name format -- npm run format:check
+      - run: node scripts/quality-report.cjs exec --name sdk-types -- npm run test:sdk-types
+      - run: node scripts/quality-report.cjs exec --name coverage -- npm run test:coverage
+      - run: node scripts/quality-report.cjs exec --name extension-host -- xvfb-run -a npm test --workspace oxe-agents
+      - run: node scripts/quality-report.cjs exec --name npm-audit -- npm audit
+      - run: node scripts/quality-report.cjs exec --name assets -- npm run scan:assets
+      - run: node scripts/quality-report.cjs exec --name vsix -- npm run build:vscode-ext
+      - run: node scripts/quality-report.cjs exec --name pack -- npm run release:pack-check
+      - run: node scripts/quality-report.cjs exec --name release-manifest -- npm run release:manifest
+      - name: Build quality report
+        if: always()
+        run: |
+          node scripts/quality-report.cjs finalize
+          cat .oxe/release/quality-gates-report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload quality evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oxe-release-quality-gates
+          path: |
+            .oxe/release/quality-gates-report.json
+            .oxe/release/quality-gates-report.md
+            coverage/coverage-summary.json
+          if-no-files-found: error
+          retention-days: 90
+
+  build-vsix:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm run build:vscode-ext
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oxe-agents-vsix
+          path: 'vscode-extension/*.vsix'
+          if-no-files-found: error
+          retention-days: 30
+
+  create-release:
+    needs: [validate, build-vsix]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Extract changelog entry
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          awk "/^## \[${VERSION}\]/{found=1; next} found && /^## \[/{exit} found{print}" CHANGELOG.md > CHANGELOG_EXTRACT.md
+          test -s CHANGELOG_EXTRACT.md
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: oxe-agents-vsix
+          path: dist/
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          mapfile -t VSIX_FILES < <(find dist/ -type f -name "*.vsix")
+          if [ "${#VSIX_FILES[@]}" -eq 0 ]; then
+            echo "VSIX obrigatório não encontrado no artefato oxe-agents-vsix" >&2
+            exit 1
+          fi
+          gh release create "$TAG" \
+            --title "oxe-cc $TAG" \
+            --notes-file CHANGELOG_EXTRACT.md \
+            "${VSIX_FILES[@]}"

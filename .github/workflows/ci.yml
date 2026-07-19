@@ -6,26 +6,108 @@ on:
   pull_request:
     branches: [main, master]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  workflow-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install immutable actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@03d0035246f3e81f36aed592ffb4bebf33a03106 # v1.7.7
+      - name: Validate GitHub Actions workflows
+        run: |
+          ACTIONLINT="$(go env GOPATH)/bin/actionlint"
+          "$ACTIONLINT"
+
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           cache: npm
       - run: npm ci
-      - run: npm test
-      - run: npm run scan:assets
-      - run: npm run release:doctor
+      - name: Reset quality telemetry
+        run: node scripts/quality-report.cjs reset
+      - name: Lint
+        run: node scripts/quality-report.cjs exec --name lint -- npm run lint
+      - name: Formatting
+        run: node scripts/quality-report.cjs exec --name format -- npm run format:check
+      - name: SDK type contract
+        run: node scripts/quality-report.cjs exec --name sdk-types -- npm run test:sdk-types
+      - name: Full test and coverage gate
+        run: node scripts/quality-report.cjs exec --name coverage -- npm run test:coverage
+      - name: Extension Host integration
+        run: node scripts/quality-report.cjs exec --name extension-host -- xvfb-run -a npm test --workspace oxe-agents
+      - name: Production dependency audit
+        run: node scripts/quality-report.cjs exec --name npm-audit -- npm audit
+      - name: Canonical assets
+        run: node scripts/quality-report.cjs exec --name assets -- npm run scan:assets
+      - name: Build VSIX
+        run: node scripts/quality-report.cjs exec --name vsix -- npm run build:vscode-ext
+      - name: npm package contract
+        run: node scripts/quality-report.cjs exec --name pack -- npm run release:pack-check
+      - name: Release manifest
+        run: node scripts/quality-report.cjs exec --name release-manifest -- npm run release:manifest
+      - name: Build quality report
+        if: always()
+        run: |
+          node scripts/quality-report.cjs finalize
+          cat .oxe/release/quality-gates-report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload quality evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oxe-quality-gates
+          path: |
+            .oxe/release/quality-gates-report.json
+            .oxe/release/quality-gates-report.md
+            coverage/coverage-summary.json
+          if-no-files-found: error
+          retention-days: 30
+
+  node-compatibility:
+    name: Node ${{ matrix.node-version }} compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['18', '22']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build:runtime
+      - run: npm run test:root
 
   doctor:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: test
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           cache: npm
@@ -35,10 +117,13 @@ jobs:
 
   wrapper-audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: test
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           cache: npm
