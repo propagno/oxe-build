@@ -117,10 +117,10 @@
     ]
   },
   "devDependencies": {
-    "c8": "^11.0.0",
-    "eslint": "^9.31.0",
-    "globals": "^15.14.0",
-    "typescript": "^5.9.3"
+    "c8": "^12.0.0",
+    "eslint": "^10.7.0",
+    "globals": "^17.7.0",
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "@types/node": "^18.19.120",
