@@ -13,8 +13,8 @@
     "package": "vsce package --no-yarn --no-dependencies --allow-missing-repository"
   },
   "devDependencies": {
-    "@vscode/test-electron": "2.5.2",
-    "@vscode/vsce": "3.9.2"
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "4.0.0"
   },
   "categories": [
     "AI",
