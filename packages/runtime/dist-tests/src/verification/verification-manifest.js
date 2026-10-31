@@ -124,6 +124,7 @@ function summarizeEvidenceCoverage(manifest) {
     // Coverage is measured over checks that actually ran; skipped checks produce no evidence by definition.
     const executed = manifest.checks.filter((check) => check.status !== 'skip');
     const checksWithEvidence = executed.filter((check) => check.evidence_refs.length > 0).length;
+    const withoutEvidence = executed.filter((check) => check.evidence_refs.length === 0).map((check) => check.check_id);
     const totalEvidenceRefs = manifest.checks.reduce((sum, check) => sum + check.evidence_refs.length, 0);
     const coveragePercent = totalChecks === 0
         ? 100
@@ -136,6 +137,7 @@ function summarizeEvidenceCoverage(manifest) {
         checks_with_evidence: checksWithEvidence,
         total_evidence_refs: totalEvidenceRefs,
         coverage_percent: coveragePercent,
+        checks_without_evidence: withoutEvidence,
     };
 }
 function saveManifest(projectRoot, runId, manifest) {

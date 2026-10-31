@@ -2107,7 +2107,8 @@ function suggestNextStep(target, cfg = {}) {
     };
   }
 
-  if (!mapsComplete && !has(p.quick)) {
+  // Com PLAN pronto, mapas ausentes não justificam scan (greenfield nunca tem codebase a mapear).
+  if (!mapsComplete && !has(p.quick) && !has(p.plan)) {
     return {
       step: 'scan',
       cursorCmd: '/oxe-scan',

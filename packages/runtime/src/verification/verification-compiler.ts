@@ -41,6 +41,8 @@ export interface AcceptanceCheck {
   evidence_type_expected: EvidenceType;
   acceptance_ref: string | null;
   description: string;
+  /** Paths that must exist in the workspace (IMPLEMENTATION-PACK `exact_paths`); checked before any command. */
+  files_exist?: string[];
 }
 
 export interface AcceptanceCheckSuite {
@@ -105,6 +107,8 @@ interface ParsedTaskLike {
   id: string;
   verifyCommand: string | null;
   aceite: string[];
+  /** Contracted paths from the IMPLEMENTATION-PACK, attached by the caller. */
+  filesExist?: string[];
 }
 
 interface ParsedPlanLike {
@@ -206,6 +210,22 @@ export function compile(
     });
   }
 
+  // The IMPLEMENTATION-PACK contract is checked, not just recorded: a task that skipped a contracted
+  // file must not pass because its own verify command happened to exit 0 (T3 in the 1.17 benchmark).
+  for (const task of plan.tasks) {
+    const files = [...new Set(task.filesExist ?? [])];
+    if (files.length === 0) continue;
+    checks.push({
+      id: `check-pack-${task.id.toLowerCase()}`,
+      type: 'contract',
+      command: null,
+      evidence_type_expected: 'stdout',
+      acceptance_ref: null,
+      description: `Implementation pack paths for task ${task.id}`,
+      files_exist: files,
+    });
+  }
+
   return {
     checks,
     compiled_at: new Date().toISOString(),
@@ -219,6 +239,24 @@ export async function runCheck(
   cwd: string,
   timeoutMs = 60_000
 ): Promise<CheckResult> {
+  const contracted = check.files_exist ?? [];
+  if (contracted.length > 0) {
+    const absent = contracted.filter((file) => !fs.existsSync(path.resolve(cwd, file)));
+    if (absent.length > 0 || !check.command) {
+      return {
+        check_id: check.id,
+        acceptance_ref: check.acceptance_ref,
+        status: absent.length > 0 ? 'fail' : 'pass',
+        stdout: absent.length > 0 ? '' : `files_exist ok: ${contracted.join(', ')}\n`,
+        stderr: '',
+        exit_code: null,
+        duration_ms: 0,
+        error: absent.length > 0 ? `files_missing: ${absent.join(', ')}` : null,
+        tests_executed: null,
+      };
+    }
+  }
+
   if (!check.command) {
     return {
       check_id: check.id,

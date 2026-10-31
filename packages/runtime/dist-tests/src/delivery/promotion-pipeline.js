@@ -39,7 +39,9 @@ class MergeGateEvaluator {
             reasons.push(`${pendingGates.length} pending gate(s)`);
         }
         if (evidenceCoverage && evidenceCoverage.coverage_percent < minimumCoverage) {
-            reasons.push(`Evidence coverage below threshold: ${evidenceCoverage.coverage_percent}%/${minimumCoverage}%`);
+            const missing = evidenceCoverage.checks_without_evidence ?? [];
+            reasons.push(`Evidence coverage below threshold: ${evidenceCoverage.coverage_percent}%/${minimumCoverage}%`
+                + (missing.length > 0 ? ` — no evidence: ${missing.join(', ')}` : ''));
         }
         const hasBlockers = reasons.length > 0 || blockingRisks.length > 0;
         const verdict = hasBlockers ? 'blocked' : 'approved';

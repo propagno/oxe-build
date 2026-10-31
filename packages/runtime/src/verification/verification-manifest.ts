@@ -77,6 +77,8 @@ export interface EvidenceCoverageSummary {
   checks_with_evidence: number;
   total_evidence_refs: number;
   coverage_percent: number;
+  /** Ids of checks that ran but produced no evidence — what the coverage gate is missing. */
+  checks_without_evidence?: string[];
 }
 
 function runDir(projectRoot: string, runId: string): string {
@@ -209,6 +211,7 @@ export function summarizeEvidenceCoverage(manifest: VerificationManifest): Evide
   // Coverage is measured over checks that actually ran; skipped checks produce no evidence by definition.
   const executed = manifest.checks.filter((check) => check.status !== 'skip');
   const checksWithEvidence = executed.filter((check) => check.evidence_refs.length > 0).length;
+  const withoutEvidence = executed.filter((check) => check.evidence_refs.length === 0).map((check) => check.check_id);
   const totalEvidenceRefs = manifest.checks.reduce((sum, check) => sum + check.evidence_refs.length, 0);
   const coveragePercent = totalChecks === 0
     ? 100
@@ -221,6 +224,7 @@ export function summarizeEvidenceCoverage(manifest: VerificationManifest): Evide
     checks_with_evidence: checksWithEvidence,
     total_evidence_refs: totalEvidenceRefs,
     coverage_percent: coveragePercent,
+    checks_without_evidence: withoutEvidence,
   };
 }
 

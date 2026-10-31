@@ -14,6 +14,8 @@ export interface AcceptanceCheck {
     evidence_type_expected: EvidenceType;
     acceptance_ref: string | null;
     description: string;
+    /** Paths that must exist in the workspace (IMPLEMENTATION-PACK `exact_paths`); checked before any command. */
+    files_exist?: string[];
 }
 export interface AcceptanceCheckSuite {
     checks: AcceptanceCheck[];
@@ -70,6 +72,8 @@ interface ParsedTaskLike {
     id: string;
     verifyCommand: string | null;
     aceite: string[];
+    /** Contracted paths from the IMPLEMENTATION-PACK, attached by the caller. */
+    filesExist?: string[];
 }
 interface ParsedPlanLike {
     tasks: ParsedTaskLike[];

@@ -105,6 +105,58 @@ describe('estado pós-execute — ACTIVE-RUN e projeção refletem o resultado',
     assert.equal(op.readRunState(tmp, null).status, 'completed');
   });
 
+  // Benchmark 1.17 (linkly): a suíte persistida no primeiro verify continuava em uso depois de o
+  // PLAN mudar — era preciso apagá-la à mão de .oxe/runs/<id>.json.
+  it('verify recompila a suíte quando SPEC/PLAN mudam depois do compile', async () => {
+    const tmp = makeProject('oxe-sync-stale-suite-');
+    dirs.push(tmp);
+    const executor = {
+      async execute() {
+        return { success: true, failure_class: null, evidence: [], output: 'ok' };
+      },
+    };
+    await op.runRuntimeExecute(tmp, null, { executor, skipPreflight: true });
+    await op.runRuntimeVerify(tmp, null);
+    assert.equal(op.readRunState(tmp, null).status, 'completed');
+
+    const planPath = path.join(tmp, '.oxe', 'PLAN.md');
+    fs.writeFileSync(planPath, PLAN.replace('process.exit(0)', 'process.exit(3)'), 'utf8');
+    await op.runRuntimeVerify(tmp, null);
+
+    const stored = op.readRunState(tmp, null);
+    assert.equal(stored.status, 'failed', 'a suíte nova (exit 3) deve ser a executada');
+    assert.match(JSON.stringify(stored.verification_suite.checks), /process\.exit\(3\)/);
+    const recompiled = op.readEvents(tmp, null).filter((e) => e.type === 'VerificationSuiteRecompiled');
+    assert.equal(recompiled.length, 1);
+  });
+
+  it('verify cobra os exact_paths do IMPLEMENTATION-PACK da tarefa mutável', async () => {
+    const tmp = makeProject('oxe-sync-pack-');
+    dirs.push(tmp);
+    fs.writeFileSync(
+      path.join(tmp, '.oxe', 'IMPLEMENTATION-PACK.json'),
+      JSON.stringify({ tasks: [{ id: 'T1', mode: 'mutating', exact_paths: ['src/a.js'] }] }),
+      'utf8'
+    );
+    const executor = {
+      async execute() {
+        return { success: true, failure_class: null, evidence: [], output: 'ok' };
+      },
+    };
+    await op.runRuntimeExecute(tmp, null, { executor, skipPreflight: true });
+    await op.runRuntimeVerify(tmp, null);
+    let stored = op.readRunState(tmp, null);
+    assert.equal(stored.status, 'failed', 'src/a.js não foi criado: o contrato do pack não foi cumprido');
+    const packCheck = stored.verification_check_results.find((r) => r.check_id === 'check-pack-t1');
+    assert.equal(packCheck.error, 'files_missing: src/a.js');
+
+    fs.mkdirSync(path.join(tmp, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'src', 'a.js'), 'module.exports = 1;\n', 'utf8');
+    await op.runRuntimeVerify(tmp, null);
+    stored = op.readRunState(tmp, null);
+    assert.equal(stored.status, 'completed');
+  });
+
   it('run com executor falhando: status failed e failures registradas', async () => {
     const tmp = makeProject('oxe-sync-fail-');
     dirs.push(tmp);

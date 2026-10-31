@@ -19,6 +19,7 @@ exports.EVENT_TYPES = [
     'GateResolved',
     'VerificationStarted',
     'VerificationCompleted',
+    'VerificationSuiteRecompiled',
     'RetryScheduled',
     'WorkItemCompleted',
     'WorkItemBlocked',

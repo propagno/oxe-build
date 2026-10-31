@@ -11,7 +11,7 @@ import {
   extractCommandFromHowToVerify,
 } from '../src/verification/verification-compiler';
 import type { AcceptanceCheck, CheckResult } from '../src/verification/verification-compiler';
-import { buildManifest } from '../src/verification/verification-manifest';
+import { buildManifest, summarizeEvidenceCoverage } from '../src/verification/verification-manifest';
 import { MergeGateEvaluator } from '../src/delivery/promotion-pipeline';
 import type { RunResult } from '../src/scheduler/scheduler';
 
@@ -99,6 +99,32 @@ describe('verification — critérios manuais nunca viram comando', () => {
     }
   });
 
+  // Benchmark 1.17 (linkly): a T3 desviou do IMPLEMENTATION-PACK e o verify não percebeu.
+  test('compile + runCheck: caminhos do pack viram check contract que falha quando faltam', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-pack-'));
+    try {
+      const suite = compile(
+        { objective: 'x', criteria: [] },
+        { tasks: [{ id: 'T3', verifyCommand: null, aceite: [], filesExist: ['src/store.js', 'src/store.js'] }] },
+      );
+      const check = suite.checks.find((c) => c.id === 'check-pack-t3')!;
+      assert.equal(check.type, 'contract');
+      assert.deepEqual(check.files_exist, ['src/store.js']);
+
+      const missing = await runCheck(check, tmp);
+      assert.equal(missing.status, 'fail');
+      assert.equal(missing.error, 'files_missing: src/store.js');
+
+      fs.mkdirSync(path.join(tmp, 'src'));
+      fs.writeFileSync(path.join(tmp, 'src', 'store.js'), 'module.exports = {};\n');
+      const present = await runCheck(check, tmp);
+      assert.equal(present.status, 'pass', String(present.error));
+      assert.match(present.stdout, /files_exist ok: src\/store\.js/);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   test('buildManifest: o motivo da falha chega ao manifest', () => {
     const failed: CheckResult = { ...passResult('c1'), status: 'fail', error: 'no_tests_executed' };
     const manifest = buildManifest('r', [failed, passResult('c2')]);
@@ -144,6 +170,19 @@ describe('verification — critérios manuais nunca viram comando', () => {
     const plainSkip = buildManifest('r', [passResult('c1'), { ...manualResult('c2', 'A2'), skip_reason: 'no_command' }]);
     assert.equal(plainSkip.summary.all_passed, true);
     assert.equal(plainSkip.summary.manual, 0);
+  });
+
+  // Benchmark 1.17 (linkly): cobertura 89% bloqueava o promote sem dizer quais checks faltavam.
+  test('MergeGateEvaluator: bloqueio por cobertura nomeia os checks sem evidência', () => {
+    const manifest = buildManifest('r', [passResult('c1'), passResult('c2')]);
+    manifest.checks[0].evidence_refs = ['ev-1'];
+    manifest.checks[1].evidence_refs = [];
+    const coverage = summarizeEvidenceCoverage(manifest);
+    assert.deepEqual(coverage.checks_without_evidence, ['c2']);
+    const runResult: RunResult = { run_id: 'r', status: 'completed', completed: ['T1'], failed: [], blocked: [] };
+    const report = new MergeGateEvaluator().evaluate(runResult, manifest, null, [], coverage, 100);
+    assert.equal(report.verdict, 'blocked');
+    assert.ok(report.reasons.some((r) => /coverage below threshold: 50%\/100% — no evidence: c2/.test(r)), report.reasons.join(' | '));
   });
 
   test('MergeGateEvaluator bloqueia promoção quando há critério manual', () => {

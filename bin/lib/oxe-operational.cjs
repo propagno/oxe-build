@@ -236,6 +236,7 @@ function resolveRuntimeArtifactPaths(projectRoot, activeSession) {
         spec: path.join(oxeDir, 'SPEC.md'),
         plan: path.join(oxeDir, 'PLAN.md'),
         verify: path.join(oxeDir, 'VERIFY.md'),
+        implementationPack: path.join(oxeDir, 'IMPLEMENTATION-PACK.json'),
       };
     }
     const sessionRoot = path.join(oxeDir, ...String(activeSession).split('/'));
@@ -244,6 +245,7 @@ function resolveRuntimeArtifactPaths(projectRoot, activeSession) {
       spec: preferExistingPath(path.join(sessionRoot, 'spec', 'SPEC.md'), path.join(oxeDir, 'SPEC.md')),
       plan: preferExistingPath(path.join(sessionRoot, 'plan', 'PLAN.md'), path.join(oxeDir, 'PLAN.md')),
       verify: preferExistingPath(path.join(sessionRoot, 'verification', 'VERIFY.md'), path.join(oxeDir, 'VERIFY.md')),
+      implementationPack: preferExistingPath(path.join(sessionRoot, 'plan', 'IMPLEMENTATION-PACK.json'), path.join(oxeDir, 'IMPLEMENTATION-PACK.json')),
     };
   }
   const base = health.oxePaths(projectRoot);
@@ -253,7 +255,33 @@ function resolveRuntimeArtifactPaths(projectRoot, activeSession) {
     spec: preferExistingPath(scoped.spec, base.spec),
     plan: preferExistingPath(scoped.plan, base.plan),
     verify: preferExistingPath(scoped.verify, base.verify),
+    implementationPack: preferExistingPath(scoped.implementationPackJson, base.implementationPackJson),
   };
+}
+
+/**
+ * Anexa a cada tarefa mutável do plano os `exact_paths` do IMPLEMENTATION-PACK como `filesExist`,
+ * para que o verify cobre o contrato em vez de só registrá-lo.
+ */
+function attachImplementationPackContracts(parsedPlan, packPath) {
+  if (!parsedPlan || !Array.isArray(parsedPlan.tasks) || !packPath) return parsedPlan;
+  let pack;
+  try {
+    pack = JSON.parse(fs.readFileSync(packPath, 'utf8'));
+  } catch {
+    return parsedPlan;
+  }
+  const packTasks = pack && Array.isArray(pack.tasks) ? pack.tasks : [];
+  const byId = new Map(packTasks.map((task) => [String(task && (task.id || task.task_id) || '').trim(), task]));
+  for (const task of parsedPlan.tasks) {
+    const entry = byId.get(task.id);
+    if (!entry || String(entry.mode || '').trim().toLowerCase() !== 'mutating') continue;
+    const files = (Array.isArray(entry.exact_paths) ? entry.exact_paths : [])
+      .map((value) => String(value || '').trim())
+      .filter((value) => looksLikeFilePath(value) && !value.includes('*') && !value.includes('...'));
+    if (files.length > 0) task.filesExist = [...new Set(files)];
+  }
+  return parsedPlan;
 }
 
 function normalizeRuntimeEventType(type) {
@@ -276,6 +304,7 @@ function normalizeRuntimeEventType(type) {
     GateResolved: 'GateResolved',
     VerificationStarted: 'VerificationStarted',
     VerificationCompleted: 'VerificationCompleted',
+    VerificationSuiteRecompiled: 'VerificationSuiteRecompiled',
     RetryScheduled: 'RetryScheduled',
     WorkItemCompleted: 'WorkItemCompleted',
     WorkItemBlocked: 'WorkItemBlocked',
@@ -776,7 +805,8 @@ function compileVerificationSuiteFromArtifacts(projectRoot, activeSession, optio
   if (!specText || !planText) {
     throw new Error('SPEC.md e PLAN.md são obrigatórios para compilar a suite de verificação.');
   }
-  const suite = runtime.compileVerification(parsers.parseSpec(specText), parsers.parsePlan(planText), options.compilerOptions || {});
+  const parsedPlan = attachImplementationPackContracts(parsers.parsePlan(planText), artifactPaths.implementationPack);
+  const suite = runtime.compileVerification(parsers.parseSpec(specText), parsedPlan, options.compilerOptions || {});
   const current = options.runState || readRunState(projectRoot, activeSession) || {};
   const runId = current.run_id || makeRunId();
   const next = writeRunState(projectRoot, activeSession, {
@@ -1518,9 +1548,25 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     throw new Error('SPEC.md e PLAN.md são obrigatórios para runtime verify.');
   }
   const parsedSpec = parsers.parseSpec(specText);
-  const parsedPlan = parsers.parsePlan(planText);
-  const suite = current.verification_suite
-    || runtime.compileVerification(parsedSpec, parsedPlan, options.compilerOptions || {});
+  const parsedPlan = attachImplementationPackContracts(parsers.parsePlan(planText), artifactPaths.implementationPack);
+  // A suíte persistida no compile fica velha se SPEC/PLAN mudarem depois: recompila pelo hash.
+  const freshSuite = runtime.compileVerification(parsedSpec, parsedPlan, options.compilerOptions || {});
+  const persistedSuite = current.verification_suite;
+  const suiteStale = Boolean(persistedSuite)
+    && (persistedSuite.spec_hash !== freshSuite.spec_hash || persistedSuite.plan_hash !== freshSuite.plan_hash);
+  const suite = persistedSuite && !suiteStale ? persistedSuite : freshSuite;
+  if (suiteStale) {
+    appendEvent(projectRoot, activeSession, {
+      type: 'VerificationSuiteRecompiled',
+      run_id: current.run_id,
+      payload: {
+        reason: 'source_hash_changed',
+        previous: { spec_hash: persistedSuite.spec_hash || null, plan_hash: persistedSuite.plan_hash || null },
+        current: { spec_hash: freshSuite.spec_hash, plan_hash: freshSuite.plan_hash },
+        total_checks: Array.isArray(freshSuite.checks) ? freshSuite.checks.length : 0,
+      },
+    });
+  }
   const registry = buildRuntimePluginRegistry(projectRoot);
   const evidenceStore = new runtime.EvidenceStore(projectRoot);
   const targetWorkItem = options.workItemId

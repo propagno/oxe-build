@@ -59,6 +59,8 @@ export interface EvidenceCoverageSummary {
     checks_with_evidence: number;
     total_evidence_refs: number;
     coverage_percent: number;
+    /** Ids of checks that ran but produced no evidence — what the coverage gate is missing. */
+    checks_without_evidence?: string[];
 }
 export declare function classifyFailure(result: CheckResult): FailureClass | null;
 export declare function buildManifest(runId: string, results: CheckResult[], options?: {
