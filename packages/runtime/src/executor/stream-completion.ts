@@ -44,8 +44,17 @@ export interface ToolSchema {
   };
 }
 
+/**
+ * `<baseUrl>/chat/completions`, keeping any path prefix such as `/v1`.
+ * (`new URL('/chat/completions', base)` discarded the prefix and hit `<host>/chat/completions`.)
+ */
+export function buildChatCompletionsUrl(baseUrl: string): URL {
+  const base = String(baseUrl || '').trim().replace(/\/+$/, '');
+  return new URL(`${base}/chat/completions`);
+}
+
 export async function streamCompletion(opts: StreamCompletionOptions): Promise<CompletionResponse> {
-  const url = new URL('/chat/completions', opts.baseUrl.replace(/\/$/, '') + '/');
+  const url = buildChatCompletionsUrl(opts.baseUrl);
   const body = JSON.stringify({
     model: opts.model,
     messages: opts.messages,

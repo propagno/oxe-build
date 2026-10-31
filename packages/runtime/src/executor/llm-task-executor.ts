@@ -3,7 +3,7 @@ import type { WorkspaceLease } from '../models/workspace';
 import type { TaskExecutor, TaskResult } from '../scheduler/scheduler';
 import type { PluginRegistry } from '../plugins/plugin-registry';
 import { streamCompletion } from './stream-completion';
-import type { ChatMessage, ToolCall, ToolSchema } from './stream-completion';
+import type { ChatMessage, ToolCall } from './stream-completion';
 import { BUILT_IN_TOOLS } from './built-in-tools';
 import { selectToolsForActions } from './action-tool-map';
 import { buildNodePrompt } from './node-prompt-builder';
@@ -23,7 +23,11 @@ export type LlmExecutorEventType =
   | 'turn_complete'
   | 'tool_call'
   | 'tool_result'
+  | 'tool_denied'
   | 'executor_complete';
+
+/** Injectable completion function (defaults to the HTTP OpenAI-compatible client). */
+export type CompletionFn = typeof streamCompletion;
 
 export interface LlmExecutorEvent {
   type: LlmExecutorEventType;
@@ -43,8 +47,9 @@ const DEFAULT_SYSTEM_PROMPT =
 export class LlmTaskExecutor implements TaskExecutor {
   constructor(
     private readonly provider: LlmProviderConfig,
-    private readonly registry?: PluginRegistry,
-    private readonly onProgress?: (event: LlmExecutorEvent) => void,
+    private readonly registry?: PluginRegistry | null,
+    private readonly onProgress?: ((event: LlmExecutorEvent) => void) | null,
+    private readonly complete: CompletionFn = streamCompletion,
   ) {}
 
   async execute(
@@ -56,6 +61,8 @@ export class LlmTaskExecutor implements TaskExecutor {
   ): Promise<TaskResult> {
     const prompt = buildNodePrompt(node, lease, runId, attempt, { previousError: options.previousError ?? null });
     const tools = selectToolsForActions(node.actions);
+    // Only the tools offered for this node's actions may run; the model can still name others.
+    const allowedTools = new Set(tools.map((tool) => tool.function.name));
     const cwd = lease.root_path;
     const maxTurns = this.provider.maxTurns ?? 10;
     const systemPrompt = this.provider.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
@@ -76,7 +83,7 @@ export class LlmTaskExecutor implements TaskExecutor {
 
       let response;
       try {
-        response = await streamCompletion({
+        response = await this.complete({
           baseUrl: this.provider.baseUrl,
           apiKey: this.provider.apiKey,
           model: this.provider.model,
@@ -102,14 +109,14 @@ export class LlmTaskExecutor implements TaskExecutor {
       });
 
       // Partition: idempotent tools run concurrently, mutations run serially
-      const [concurrent, serial] = partitionToolCalls(response.tool_calls, tools);
+      const [concurrent, serial] = partitionToolCalls(response.tool_calls, this.registry ?? undefined);
 
       const concurrentResults = await Promise.all(
-        concurrent.map((tc) => this.invokeToolCall(tc, cwd, node, evidencePaths)),
+        concurrent.map((tc) => this.invokeToolCall(tc, cwd, node, evidencePaths, allowedTools)),
       );
       const serialResults: ChatMessage[] = [];
       for (const tc of serial) {
-        serialResults.push(await this.invokeToolCall(tc, cwd, node, evidencePaths));
+        serialResults.push(await this.invokeToolCall(tc, cwd, node, evidencePaths, allowedTools));
       }
 
       messages.push(...concurrentResults, ...serialResults);
@@ -148,6 +155,19 @@ export class LlmTaskExecutor implements TaskExecutor {
       };
     }
 
+    // A text-only answer is not a completed task when the node had work to do and nothing was
+    // written: that was the "T6 verified, test/api.test.js never created" false green.
+    const requiresWork = node.actions.some((action) => action.type !== 'read_code' && action.type !== 'collect_evidence');
+    if (completedBy === 'no_tool_call' && requiresWork && evidencePaths.length === 0) {
+      return {
+        success: false,
+        failure_class: 'llm',
+        evidence: [],
+        output: finalOutput || 'Model ended the turn without calling any tool or finish_task',
+        completed_by: completedBy,
+      };
+    }
+
     return {
       success: true,
       failure_class: null,
@@ -162,6 +182,7 @@ export class LlmTaskExecutor implements TaskExecutor {
     cwd: string,
     node: GraphNode,
     evidencePaths: string[],
+    allowedTools: Set<string>,
   ): Promise<ChatMessage> {
     this.emit({ type: 'tool_call', nodeId: node.id, attempt: 0, detail: { tool: tc.function.name } });
 
@@ -174,7 +195,10 @@ export class LlmTaskExecutor implements TaskExecutor {
 
     let result: string;
     const builtIn = BUILT_IN_TOOLS[tc.function.name];
-    if (builtIn) {
+    if (builtIn && !allowedTools.has(tc.function.name)) {
+      this.emit({ type: 'tool_denied', nodeId: node.id, attempt: 0, detail: { tool: tc.function.name } });
+      result = `[tool denied: ${tc.function.name} is not permitted for this task]`;
+    } else if (builtIn) {
       try {
         result = await builtIn.execute(args, cwd);
         if (tc.function.name === 'write_file' || tc.function.name === 'patch_file') {
@@ -221,16 +245,14 @@ export class LlmTaskExecutor implements TaskExecutor {
   }
 }
 
-function partitionToolCalls(
+/** Only tools known to be idempotent run concurrently; anything unknown is treated as a mutation. */
+export function partitionToolCalls(
   toolCalls: ToolCall[],
-  schemas: ToolSchema[],
+  registry?: PluginRegistry,
 ): [ToolCall[], ToolCall[]] {
-  const idempotentNames = new Set(
-    schemas
-      .map((s) => s.function.name)
-      .filter((name) => BUILT_IN_TOOLS[name]?.idempotent ?? true),
-  );
-  const concurrent = toolCalls.filter((tc) => idempotentNames.has(tc.function.name));
-  const serial = toolCalls.filter((tc) => !idempotentNames.has(tc.function.name));
+  const isIdempotent = (name: string): boolean =>
+    BUILT_IN_TOOLS[name]?.idempotent ?? registry?.toolProviderFor(name)?.idempotent ?? false;
+  const concurrent = toolCalls.filter((tc) => isIdempotent(tc.function.name));
+  const serial = toolCalls.filter((tc) => !isIdempotent(tc.function.name));
   return [concurrent, serial];
 }

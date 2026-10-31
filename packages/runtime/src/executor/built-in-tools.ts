@@ -2,11 +2,32 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import type { ToolSchema } from './stream-completion';
+import { shellInvocation, childProcessEnv } from './shell-argv';
 
 export interface BuiltInToolHandler {
   schema: ToolSchema;
   idempotent: boolean;
   execute(args: Record<string, unknown>, cwd: string): Promise<string>;
+}
+
+export class PathContainmentError extends Error {
+  constructor(candidate: unknown) {
+    super(`path escapes workspace: ${String(candidate)}`);
+    this.name = 'PathContainmentError';
+  }
+}
+
+/**
+ * Resolve a tool-supplied path and refuse anything outside the workspace root.
+ * The LLM only ever sees relative paths; `..` or an absolute path elsewhere is a violation.
+ */
+export function resolveWithin(cwd: string, candidate: unknown): string {
+  const root = path.resolve(cwd);
+  const target = path.resolve(root, String(candidate ?? ''));
+  const rel = path.relative(root, target);
+  if (rel === '') return target;
+  if (rel.startsWith('..') || path.isAbsolute(rel)) throw new PathContainmentError(candidate);
+  return target;
 }
 
 // ─── read_file ────────────────────────────────────────────────────────────────
@@ -30,7 +51,7 @@ const readFile: BuiltInToolHandler = {
     },
   },
   async execute(args, cwd) {
-    const filePath = path.resolve(cwd, String(args.path));
+    const filePath = resolveWithin(cwd, args.path);
     if (!fs.existsSync(filePath)) return `Error: file not found: ${args.path}`;
     const content = fs.readFileSync(filePath, 'utf8');
     const lines = content.split('\n');
@@ -60,7 +81,7 @@ const writeFile: BuiltInToolHandler = {
     },
   },
   async execute(args, cwd) {
-    const filePath = path.resolve(cwd, String(args.path));
+    const filePath = resolveWithin(cwd, args.path);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, String(args.content), 'utf8');
     return `Written ${String(args.content).length} bytes to ${args.path}`;
@@ -88,7 +109,7 @@ const patchFile: BuiltInToolHandler = {
     },
   },
   async execute(args, cwd) {
-    const filePath = path.resolve(cwd, String(args.path));
+    const filePath = resolveWithin(cwd, args.path);
     if (!fs.existsSync(filePath)) return `Error: file not found: ${args.path}`;
     const content = fs.readFileSync(filePath, 'utf8');
     const oldStr = String(args.old_string);
@@ -128,6 +149,9 @@ function globSync(pattern: string, root: string): string[] {
   const parts = pattern.split('/');
   function walk(dir: string, remaining: string[]): void {
     if (!fs.existsSync(dir)) return;
+    // `..` segments must not walk out of the workspace.
+    const rel = path.relative(path.resolve(root), path.resolve(dir));
+    if (rel.startsWith('..') || path.isAbsolute(rel)) return;
     const [head, ...tail] = remaining;
     if (!head) return;
     const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -177,7 +201,7 @@ const grep: BuiltInToolHandler = {
     },
   },
   async execute(args, cwd) {
-    const searchRoot = args.path ? path.resolve(cwd, String(args.path)) : cwd;
+    const searchRoot = args.path ? resolveWithin(cwd, args.path) : cwd;
     const regex = new RegExp(String(args.pattern));
     const results: string[] = [];
     grepDir(searchRoot, regex, cwd, results);
@@ -241,10 +265,14 @@ const runCommand: BuiltInToolHandler = {
 
 function runShell(command: string, cwd: string, timeoutMs: number): Promise<string> {
   return new Promise((resolve) => {
-    const isWin = process.platform === 'win32';
-    const shell = isWin ? 'cmd' : 'sh';
-    const shellArgs = isWin ? ['/c', command] : ['-c', command];
-    const proc = spawn(shell, shellArgs, { cwd, stdio: 'pipe' });
+    const shell = shellInvocation(command);
+    // stdin is closed so a command that waits for input (e.g. grep without a file) ends instead of hanging.
+    const proc = spawn(shell.file, shell.args, {
+      cwd,
+      env: childProcessEnv(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsVerbatimArguments: shell.windowsVerbatimArguments,
+    });
     const out: Buffer[] = [];
     let timedOut = false;
 
