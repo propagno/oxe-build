@@ -79,6 +79,25 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  runtime-windows:
+    # Shell quoting (cmd.exe) and path containment differ on Windows; the e2e run that found the
+    # 1.16 quoting bug was on Windows while CI was Ubuntu-only.
+    name: Runtime on Windows
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build:runtime
+      - run: npm run test:runtime
+      - run: npm run test:e2e-linkly
+
   node-compatibility:
     name: Node ${{ matrix.node-version }} compatibility
     runs-on: ubuntu-latest
