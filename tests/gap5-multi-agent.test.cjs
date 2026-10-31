@@ -100,6 +100,30 @@ describe('Gap 5 — MultiAgentCoordinator wiring via runRuntimeExecute', () => {
     }
   });
 
+  it('schema 3 (oxePlanAgentsSchema) exige persona e model_hint por agente', async () => {
+    // Regressão: o validador lia `schema_version`, campo que os arquivos reais não têm, e as
+    // checagens do schema 3 nunca rodavam.
+    const agentPlanPath = path.join(tmpDir, '.oxe', 'plan-agents.json');
+    fs.writeFileSync(agentPlanPath, JSON.stringify({
+      oxePlanAgentsSchema: 3,
+      mode: 'parallel',
+      agents: [{ id: 'a1', tasks: ['T1'] }],
+    }));
+    const fakeRunState = { run_id: 'run-test', compiled_graph: { nodes: [], edges: [], waves: [], metadata: {} } };
+    try {
+      await assert.rejects(
+        () => runRuntimeExecute(tmpDir, null, { runState: fakeRunState, skipPreflight: true }),
+        (err) => {
+          assert.match(err.message, /a1\.persona ausente/);
+          assert.match(err.message, /a1\.model_hint ausente/);
+          return true;
+        }
+      );
+    } finally {
+      fs.rmSync(agentPlanPath, { force: true });
+    }
+  });
+
   it('throws when plan-agents.json has no agents field', async () => {
     const agentPlanPath = path.join(tmpDir, '.oxe', 'plan-agents.json');
     fs.writeFileSync(agentPlanPath, JSON.stringify({ oxePlanAgentsSchema: 3, mode: 'parallel' }));

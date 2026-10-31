@@ -169,6 +169,67 @@ Criar config.json válido.
     );
   });
 
+  it('só spans que parecem comando são anexados; paths viram verify.expect.files_exist', () => {
+    // Regressão do e2e "linkly": `package.json` entre crases virava `&& package.json`.
+    const specMd = `# OXE — SPEC
+
+## Objetivo
+
+Testar filtro de spans de comando.
+
+## Critérios de aceite
+
+| ID | Critério | Como verificar |
+|---|---|---|
+| A1 | POST cria link | \`npm test\` — \`test/api.test.js\` caso "POST /links cria link" |
+| A2 | scripts.test definido | Inspeção de \`package.json\` (\`scripts.test\`) + \`npm test\` verde |
+
+## Decisões persistentes
+
+| ID | Decisão | Racional |
+|---|---|---|
+| D-01 | Sem deps | Fixture |
+`;
+    const planMd = `# OXE — PLAN
+
+## Resumo
+
+Plano com critérios mistos.
+
+### T1 — Servidor
+
+- **Arquivos alvo:** \`src/server.js\`
+- **Onda:** 1
+- **Depende de:** nenhum
+- **Complexidade:** S
+- **Verificar:**
+  - Comando: \`node -e "1"\`
+- **Aceite vinculado:** A1, A2
+- **Decisão vinculada:** D-01
+
+## Autoavaliação do Plano
+
+**Melhor plano atual:** sim
+**Confiança:** 93%
+`;
+    writeArtifacts(specMd, planMd);
+
+    let compiled;
+    try {
+      compiled = compileExecutionGraphFromArtifacts(tmpDir, null, {});
+    } catch (err) {
+      if (err.message.includes('Runtime package') || err.message.includes('Parsers do SDK')) return;
+      throw err;
+    }
+
+    const nodeList = Array.isArray(compiled.graph.nodes) ? compiled.graph.nodes : Object.values(compiled.graph.nodes || {});
+    const t1 = nodeList.find((n) => n && n.id === 'T1');
+    assert.ok(t1 && t1.verify);
+    assert.equal(t1.verify.command, 'node -e "1" && npm test');
+    assert.deepEqual(t1.mutation_scope, ['src/server.js'], '"Arquivos alvo" deve alimentar mutation_scope');
+    assert.deepEqual(t1.verify.expect.files_exist, ['test/api.test.js', 'package.json']);
+  });
+
   it('node sem acceptance_refs não recebe enriquecimento', () => {
     const specMd = `# OXE — SPEC
 

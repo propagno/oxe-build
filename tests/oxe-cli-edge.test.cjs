@@ -651,6 +651,13 @@ describe('oxe-cc CLI edge', () => {
     const oxe = path.join(dir, '.oxe');
     fs.mkdirSync(oxe, { recursive: true });
     fs.writeFileSync(path.join(dir, 'README.md'), '# runtime fixture\n', 'utf8');
+    // `node --test` must execute at least one test: a runner that ran nothing is not a pass (1.17).
+    fs.mkdirSync(path.join(dir, 'test'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'test', 'demo.test.js'),
+      "const test = require('node:test'); const assert = require('node:assert');\ntest('demo', () => assert.ok(true));\n",
+      'utf8'
+    );
     fs.writeFileSync(
       path.join(oxe, 'SPEC.md'),
       '# OXE — Spec\n\n## Objetivo\n\nCompilar runtime.\n\n## Critérios de aceite\n\n| ID | Critério | Como verificar |\n|----|----------|----------------|\n| A1 | Runtime compilado | node --test |\n',

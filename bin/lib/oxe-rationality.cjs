@@ -44,6 +44,18 @@ function isMutatingMode(mode) {
   return !new Set(['docs_only', 'not_applicable', 'external', 'docs-only']).has(normalizeTaskMode(mode));
 }
 
+/** Task ids a fixture covers: `task_id: "T2,T6"`, `task_ids: [...]` or `tasks: [...]`. */
+function fixtureTaskIds(fixture) {
+  if (!fixture || typeof fixture !== 'object') return [];
+  const raw = [];
+  for (const key of ['task_id', 'taskId', 'task_ids', 'tasks']) {
+    const value = fixture[key];
+    if (Array.isArray(value)) raw.push(...value.map(String));
+    else if (value != null) raw.push(...String(value).split(/[,\s]+/));
+  }
+  return Array.from(new Set(raw.map((id) => id.trim()).filter(Boolean)));
+}
+
 function isTaskRiskKeyword(task) {
   const text = `${task.title || ''} ${task.body || ''}`.toLowerCase();
   return /(parser|parse|layout|integra|integration|contrato|contract|migra|migration|fila|queue|service bus|event grid|builder|payload|transform|cnab|listener|schema|ddl)/.test(text);
@@ -70,7 +82,7 @@ function parsePlanTasks(planPath) {
     const id = String(parts[i] || '').trim();
     const rest = String(parts[i + 1] || '').split(/^###\s+T\d+/m)[0];
     const title = (((rest.match(/^([^\n]+)/) || [null, ''])[1]) || '').trim();
-    const filesLine = (((rest.match(/\*\*Arquivos\s+prov[aá]veis:\*\*\s*([^\n]+)/i) || [null, ''])[1]) || '').trim();
+    const filesLine = (((rest.match(/\*\*Arquivos(?:\s+(?:prov[aá]veis|alvo))?:\*\*\s*([^\n]+)/i) || [null, ''])[1]) || '').trim();
     const backtickPaths = Array.from(filesLine.matchAll(/`([^`]+)`/g)).map((match) => match[1].trim()).filter(Boolean);
     const files = backtickPaths.length
       ? backtickPaths
@@ -421,10 +433,10 @@ function summarizeFixturePack(filePath, planTasks, implementationPack) {
   const fixtures = Array.isArray(data.fixtures) ? data.fixtures : [];
   const byTask = new Map();
   for (const fixture of fixtures) {
-    const taskId = String(fixture && fixture.task_id || fixture && fixture.taskId || '').trim();
-    if (!taskId) continue;
-    if (!byTask.has(taskId)) byTask.set(taskId, []);
-    byTask.get(taskId).push(fixture);
+    for (const taskId of fixtureTaskIds(fixture)) {
+      if (!byTask.has(taskId)) byTask.set(taskId, []);
+      byTask.get(taskId).push(fixture);
+    }
   }
   if (data.ready === false) {
     criticalGaps.push('FIXTURE-PACK.json com ready=false');
@@ -437,15 +449,20 @@ function summarizeFixturePack(filePath, planTasks, implementationPack) {
     const taskId = String(task && task.id || task && task.task_id || '').trim();
     if (!taskId) continue;
     const planTask = planTasks.find((candidate) => candidate.id === taskId);
+    // The pack's explicit `requires_fixture` wins; the keyword heuristic only fills the gap when
+    // the planner said nothing (it used to override an explicit `false`).
     const requiresFixture = task && task.requires_fixture === true
-      || (planTask ? isTaskRiskKeyword(planTask) : false);
+      || (task && task.requires_fixture !== false && planTask ? isTaskRiskKeyword(planTask) : false);
     if (!requiresFixture) continue;
     const entries = byTask.get(taskId) || [];
     if (!entries.length) {
       criticalGaps.push(`FIXTURE-PACK.json sem fixture para ${taskId}`);
       continue;
     }
-    const readyFixture = entries.find((entry) => String(entry && entry.status || '').toLowerCase() === 'ready');
+    const statusOf = (entry) => String(entry && entry.status || '').toLowerCase();
+    // A fixture deliberately marked not_applicable satisfies the requirement without checks.
+    if (entries.some((entry) => statusOf(entry) === 'not_applicable')) continue;
+    const readyFixture = entries.find((entry) => statusOf(entry) === 'ready');
     if (!readyFixture) {
       criticalGaps.push(`FIXTURE-PACK.json sem fixture ready para ${taskId}`);
       continue;

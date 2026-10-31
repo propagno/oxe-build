@@ -71,6 +71,28 @@ function parseArrayField(value) {
   return raw.split(',').map((item) => item.trim()).filter(Boolean);
 }
 
+const SHELL_COMMAND_RE =
+  /^(npm|npx|pnpm|yarn|node|deno|bun|python3?|pytest|go|cargo|make|dotnet|mvn|gradle|bash|sh|curl|git|eslint|tsc|jest|vitest|mocha|oxe-cc|oxe|docker)(\s|$)/i;
+
+/** Backtick spans of a markdown cell, trimmed and non-empty. */
+function extractBacktickSpans(text) {
+  return Array.from(String(text || '').matchAll(/`([^`]+)`/g)).map((match) => match[1].trim()).filter(Boolean);
+}
+
+function looksLikeShellCommand(span) {
+  return SHELL_COMMAND_RE.test(String(span || '').trim());
+}
+
+const FILE_EXTENSIONS_RE =
+  /\.(json|[cm]?[jt]sx?|md|ya?ml|toml|txt|html?|css|scss|py|go|rs|java|cs|sh|ps1|env|lock|xml|csv|sql|graphql|proto|vue|svelte)$/i;
+
+/** `package.json`, `test/api.test.js` — but not dotted identifiers such as `scripts.test`. */
+function looksLikeFilePath(span) {
+  const value = String(span || '').trim();
+  if (!value || /\s/.test(value)) return false;
+  return value.includes('/') ? /^[\w@./-]+$/.test(value) : FILE_EXTENSIONS_RE.test(value);
+}
+
 function loadRuntimeModule() {
   try {
     return require('../../lib/runtime/index.js');
@@ -249,6 +271,7 @@ function normalizeRuntimeEventType(type) {
     ToolFailed: 'ToolFailed',
     EvidenceCollected: 'EvidenceCollected',
     PolicyEvaluated: 'PolicyEvaluated',
+    PolicyWarning: 'PolicyWarning',
     GateRequested: 'GateRequested',
     GateResolved: 'GateResolved',
     VerificationStarted: 'VerificationStarted',
@@ -259,6 +282,11 @@ function normalizeRuntimeEventType(type) {
     RunCompleted: 'RunCompleted',
     RetroPublished: 'RetroPublished',
     LessonPromoted: 'LessonPromoted',
+    RunAborted: 'RunAborted',
+    RollbackExecuted: 'RollbackExecuted',
+    RollbackFailed: 'RollbackFailed',
+    TaskErrorBoundaryTripped: 'TaskErrorBoundaryTripped',
+    WorkspaceDisposeFailed: 'WorkspaceDisposeFailed',
   };
   if (directMap[raw]) return directMap[raw];
   const lower = raw.toLowerCase();
@@ -334,7 +362,7 @@ function toRuntimeEventEnvelope(event = {}, activeSession) {
     payload.status = payload.status || 'ready';
   }
   return {
-    id: String(event.event_id || ''),
+    id: String(event.event_id || event.id || ''),
     type,
     timestamp: event.timestamp || new Date().toISOString(),
     session_id: activeSession || event.session_id || null,
@@ -415,6 +443,20 @@ function mergeCanonicalStateWithRunState(serializedState, runState = {}, activeS
     };
   }
 
+  // ACTIVE-RUN.status may only advance the reduced status; the event log stays the source of truth.
+  if (live.run && runState.status) {
+    const rank = { planned: 0, running: 1, replaying: 1, paused: 1, waiting_approval: 1, blocked: 2, failed: 3, completed: 3, aborted: 3 };
+    const currentRank = rank[String(live.run.status || 'planned')] ?? 0;
+    const nextRank = rank[String(runState.status)] ?? -1;
+    if (nextRank > currentRank) {
+      live.run = {
+        ...live.run,
+        status: String(runState.status),
+        ended_at: nextRank >= 2 ? (runState.updated_at || live.run.ended_at || null) : (live.run.ended_at || null),
+      };
+    }
+  }
+
   const compiledNodes = compiledGraph && compiledGraph.nodes && typeof compiledGraph.nodes === 'object'
     ? Object.values(compiledGraph.nodes)
     : [];
@@ -462,6 +504,8 @@ function mergeCanonicalStateWithRunState(serializedState, runState = {}, activeS
         : '';
       if (ref) {
         live.failedWorkItems.add(ref);
+        // A task that exhausted its attempts is "failed", not merely "blocked".
+        live.blockedWorkItems.delete(ref);
         const item = live.workItems.get(ref);
         if (item) live.workItems.set(ref, { ...item, status: 'failed' });
       }
@@ -487,6 +531,52 @@ function mergeCanonicalStateWithRunState(serializedState, runState = {}, activeS
   return live;
 }
 
+/**
+ * Drop exact duplicates written by pre-1.17 runtimes (same event forwarded twice with distinct
+ * ids). Identity = everything but the id; two real events never share type, scope, timestamp
+ * and payload.
+ */
+function dedupeEventRecords(events) {
+  const seen = new Set();
+  const out = [];
+  for (const event of events) {
+    if (!event || typeof event !== 'object') continue;
+    const key = [
+      event.type,
+      event.run_id,
+      event.work_item_id || event.task_id || '',
+      event.attempt_id || '',
+      event.timestamp || '',
+      JSON.stringify(event.payload || {}),
+    ].join('|');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(event);
+  }
+  return out;
+}
+
+/** Merge a stored canonical snapshot into the live (event-reduced) state without regressing it. */
+function unionCanonicalStates(primary, secondary) {
+  if (!secondary) return primary;
+  for (const [id, item] of secondary.workItems || []) {
+    if (!primary.workItems.has(id)) primary.workItems.set(id, item);
+  }
+  for (const id of secondary.completedWorkItems || []) primary.completedWorkItems.add(id);
+  for (const id of secondary.failedWorkItems || []) {
+    if (!primary.completedWorkItems.has(id)) primary.failedWorkItems.add(id);
+  }
+  for (const id of secondary.blockedWorkItems || []) {
+    if (!primary.completedWorkItems.has(id) && !primary.failedWorkItems.has(id)) primary.blockedWorkItems.add(id);
+  }
+  if (!primary.run && secondary.run) primary.run = secondary.run;
+  for (const completedId of primary.completedWorkItems) {
+    const item = primary.workItems.get(completedId);
+    if (item && item.status !== 'completed') primary.workItems.set(completedId, { ...item, status: 'completed' });
+  }
+  return primary;
+}
+
 function reduceCanonicalRunStateLive(projectRoot, activeSession, options = {}) {
   const runtime = loadRuntimeModule();
   if (!runtime || typeof runtime.reduce !== 'function') return null;
@@ -494,7 +584,14 @@ function reduceCanonicalRunStateLive(projectRoot, activeSession, options = {}) {
   const runId = options.runId || (currentRun && currentRun.run_id) || null;
   let events = readEvents(projectRoot, activeSession);
   if (runId) events = events.filter((event) => !event.run_id || event.run_id === runId);
-  const reduced = runtime.reduce(events.map((event) => toRuntimeEventEnvelope(event, activeSession)));
+  let reduced;
+  try {
+    reduced = runtime.reduce(dedupeEventRecords(events).map((event) => toRuntimeEventEnvelope(event, activeSession)));
+  } catch (err) {
+    // A corrupt or legacy log must degrade to the stored snapshot, never crash verify/project.
+    if (process.env.OXE_DEBUG === '1') console.error(`[oxe] reduce falhou: ${err && err.message ? err.message : err}`);
+    return null;
+  }
   return mergeCanonicalStateWithRunState(
     serializeCanonicalState(reduced),
     currentRun || {},
@@ -599,12 +696,21 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
       if (!node || !node.verify) continue;
       const refs = Array.isArray(node.verify.acceptance_refs) ? node.verify.acceptance_refs : [];
       const criteriaCommands = [];
+      const criteriaFiles = [];
       for (const ref of refs) {
         const criterion = criteriaMap.get(ref);
-        if (criterion && criterion.howToVerify) {
-          const cmdMatch = criterion.howToVerify.match(/`([^`]+)`/);
-          if (cmdMatch) criteriaCommands.push(cmdMatch[1].trim());
+        if (!criterion || !criterion.howToVerify) continue;
+        // Only backtick spans that look like shell commands are appended; path-like spans become
+        // `verify.expect.files_exist` (a bare `package.json` must never be executed as a command).
+        for (const span of extractBacktickSpans(criterion.howToVerify)) {
+          if (looksLikeShellCommand(span)) criteriaCommands.push(span);
+          else if (looksLikeFilePath(span)) criteriaFiles.push(span);
         }
+      }
+      if (criteriaFiles.length > 0) {
+        const expect = node.verify.expect && typeof node.verify.expect === 'object' ? node.verify.expect : {};
+        const existing = Array.isArray(expect.files_exist) ? expect.files_exist : [];
+        node.verify.expect = { ...expect, files_exist: [...new Set([...existing, ...criteriaFiles])] };
       }
       if (criteriaCommands.length === 0) continue;
       const unique = [...new Set(criteriaCommands)];
@@ -923,8 +1029,9 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
     workspaceManager,
     pluginRegistry: options.pluginRegistry || buildRuntimePluginRegistry(projectRoot),
     schedulerOptions: options.schedulerOptions || {},
+    // The scheduler already persists every event through the runtime bus (events/bus.ts →
+    // appendEvent). This hook only forwards progress; writing here again duplicated the log.
     onEvent: (event) => {
-      appendEvent(projectRoot, activeSession, event);
       options.onProgress?.(event);
     },
   });
@@ -964,7 +1071,8 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
       applyWorkspaceMerges: true,
       onEvent: ctx.onEvent,
     });
-      return { mode: agentPlan.mode || 'parallel', agentPlan, result, run: current, preflight };
+      const syncedRun = syncRunStateAfterExecute(projectRoot, activeSession, current, result, agentPlan.mode || 'parallel');
+      return { mode: agentPlan.mode || 'parallel', agentPlan, result, run: syncedRun, preflight };
     }
 
   // Single-agent fallback
@@ -973,8 +1081,61 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
   }
   const scheduler = new runtime.Scheduler();
   const result = await scheduler.run(graph, ctx);
-    return { mode: 'single', agentPlan: null, result, run: current, preflight };
+  const syncedRun = syncRunStateAfterExecute(projectRoot, activeSession, current, result, 'single');
+    return { mode: 'single', agentPlan: null, result, run: syncedRun, preflight };
   }
+
+const EXECUTE_RESULT_STATUS = {
+  completed: 'completed',
+  failed: 'failed',
+  blocked: 'blocked',
+  paused: 'paused',
+  aborted: 'aborted',
+  cancelled: 'aborted',
+};
+
+/**
+ * Persist the outcome of Scheduler/Coordinator.run into ACTIVE-RUN and runs/<id>.json.
+ * Without this the run stayed `planned` forever and every projection showed zero progress.
+ */
+function syncRunStateAfterExecute(projectRoot, activeSession, current, result, mode) {
+  const safeResult = result && typeof result === 'object' ? result : {};
+  const mapped = EXECUTE_RESULT_STATUS[String(safeResult.status || '')] || 'running';
+  const status = VALID_RUN_STATUSES.has(mapped) ? mapped : 'running';
+  const completed = Array.isArray(safeResult.completed) ? safeResult.completed.map(String) : [];
+  const failed = Array.isArray(safeResult.failed) ? safeResult.failed.map(String) : [];
+  const blocked = Array.isArray(safeResult.blocked) ? safeResult.blocked.map(String) : [];
+  const now = new Date().toISOString();
+  const previousFailures = Array.isArray(current.failures) ? current.failures : [];
+  const knownFailed = new Set(previousFailures.map((f) => f && (f.work_item_id || f.task_id)).filter(Boolean));
+  const failures = [
+    ...previousFailures,
+    ...failed.filter((id) => !knownFailed.has(id)).map((id) => ({ work_item_id: id, reason: 'execute_failed', at: now })),
+  ];
+  // `failures` must be in the state handed to the reducer: the scheduler reports an exhausted
+  // task as WorkItemBlocked, so the failed set comes from here, not from the event log.
+  const base = { ...current, status, updated_at: now, failures, active_tasks: [] };
+  const canonical = reduceCanonicalRunState(projectRoot, activeSession, { runState: base, runId: current.run_id })
+    || current.canonical_state
+    || null;
+  return writeRunState(projectRoot, activeSession, {
+    ...base,
+    canonical_state: canonical,
+    metrics: {
+      ...(current.metrics && typeof current.metrics === 'object' ? current.metrics : {}),
+      last_execute: {
+        mode,
+        status: safeResult.status || null,
+        completed: completed.length,
+        failed: failed.length,
+        blocked: blocked.length,
+        pending_gates: Array.isArray(safeResult.pending_gates) ? safeResult.pending_gates.length : 0,
+        reason: safeResult.reason || null,
+        finished_at: now,
+      },
+    },
+  });
+}
 
 function readRuntimeMultiAgentStatus(projectRoot, activeSession, options = {}) {
   const runtime = loadRuntimeModule();
@@ -1062,7 +1223,8 @@ function validateMultiAgentPlan(agentPlan) {
     errors.push('campo "agents" vazio ou ausente');
     return errors;
   }
-  const schemaVersion = Number(agentPlan.schema_version || agentPlan.schema || 0);
+  // Real files (schema + template) declare the version as `oxePlanAgentsSchema`.
+  const schemaVersion = Number(agentPlan.oxePlanAgentsSchema || agentPlan.schema_version || agentPlan.schema || 0);
   const seen = new Set();
   for (const [idx, spec] of agentPlan.agents.entries()) {
     const id = spec && spec.id ? String(spec.id) : '';
@@ -1509,6 +1671,46 @@ function applySpecChecklistSync(specPath, canonicalLive, compiledGraph) {
   }
 }
 
+const PROJECTION_BEGIN = '<!-- oxe:runtime:begin -->';
+const PROJECTION_END = '<!-- oxe:runtime:end -->';
+const LEGACY_PROJECTION_MARK = 'Gerado automaticamente pelo Projection Engine';
+
+/** Demote a projected document so it nests under the human file: H1 dropped, `##` → `###`. */
+function demoteProjection(content) {
+  return String(content || '')
+    .split('\n')
+    .filter((line) => !/^# /.test(line) && !line.includes(LEGACY_PROJECTION_MARK))
+    .map((line) => (/^#{2,5} /.test(line) ? `#${line}` : line))
+    .join('\n')
+    .replace(/^\n+/, '');
+}
+
+/**
+ * Write a runtime projection into a human-owned markdown file without destroying it.
+ * - file with markers → only the block between them is replaced;
+ * - missing file or a legacy full projection → the projection is written whole, wrapped in markers;
+ * - human file without markers → a demoted block is appended at the end.
+ */
+function writeProjectedBlock(filePath, content, heading) {
+  const existing = readTextIfExists(filePath);
+  const full = `${PROJECTION_BEGIN}\n${String(content).trimEnd()}\n${PROJECTION_END}\n`;
+  if (existing == null || !existing.trim() || existing.includes(LEGACY_PROJECTION_MARK) && !existing.includes(PROJECTION_BEGIN)) {
+    fs.writeFileSync(filePath, full, 'utf8');
+    return 'replaced';
+  }
+  const begin = existing.indexOf(PROJECTION_BEGIN);
+  const end = existing.indexOf(PROJECTION_END);
+  if (begin !== -1 && end > begin) {
+    const inner = existing.slice(0, begin).trim() ? `## ${heading}\n\n${demoteProjection(content).trimEnd()}` : String(content).trimEnd();
+    const next = `${existing.slice(0, begin)}${PROJECTION_BEGIN}\n${inner}\n${existing.slice(end)}`;
+    fs.writeFileSync(filePath, next, 'utf8');
+    return 'block';
+  }
+  const block = `${PROJECTION_BEGIN}\n## ${heading}\n\n${demoteProjection(content).trimEnd()}\n${PROJECTION_END}\n`;
+  fs.writeFileSync(filePath, `${existing.trimEnd()}\n\n${block}`, 'utf8');
+  return 'appended';
+}
+
 function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
   const runtime = loadRuntimeModule();
   if (!runtime || typeof runtime.ProjectionEngine !== 'function' || typeof runtime.fromSerializable !== 'function') {
@@ -1522,9 +1724,14 @@ function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
     current = compileExecutionGraphFromArtifacts(projectRoot, activeSession, { runState: current }).run;
   }
   const graph = runtime.fromSerializable(current.compiled_graph);
-  const canonicalLive = current.canonical_state
-    ? mergeCanonicalStateWithRunState(current.canonical_state, current, activeSession, current.compiled_graph)
-    : reduceCanonicalRunStateLive(projectRoot, activeSession, { runState: current });
+  // Always re-reduce from the event log: the canonical_state frozen at compile time is stale after
+  // execute/verify and used to project "planned / 0 concluídos" over real progress. The stored
+  // snapshot is only merged in as a fallback for progress recorded without events.
+  let canonicalLive = reduceCanonicalRunStateLive(projectRoot, activeSession, { runState: current });
+  if (current.canonical_state) {
+    const stored = mergeCanonicalStateWithRunState(current.canonical_state, current, activeSession, current.compiled_graph);
+    canonicalLive = canonicalLive ? unionCanonicalStates(canonicalLive, stored) : stored;
+  }
   if (!canonicalLive) {
     throw new Error('Não foi possível reconstruir o estado canônico da run.');
   }
@@ -1572,8 +1779,9 @@ function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
     ensureDirForFile(paths.verify);
     ensureDirForFile(paths.state);
     fs.writeFileSync(planStatusPath, projections.plan + '\n', 'utf8');
-    fs.writeFileSync(paths.verify, projections.verify + '\n', 'utf8');
-    fs.writeFileSync(paths.state, projections.state + '\n', 'utf8');
+    // STATE.md and VERIFY.md are curated by people and workflows: only the marked block is ours.
+    writeProjectedBlock(paths.verify, projections.verify, 'Verificação do runtime (projetado)');
+    writeProjectedBlock(paths.state, projections.state, 'Runtime (projetado)');
     fs.writeFileSync(path.join(op.executionRoot, 'RUN-SUMMARY.md'), projections.runSummary + '\n', 'utf8');
     fs.writeFileSync(path.join(op.executionRoot, 'COMMIT-SUMMARY.md'), projections.commitSummary + '\n', 'utf8');
     fs.writeFileSync(path.join(op.executionRoot, 'PROMOTION-SUMMARY.md'), projections.promotionSummary + '\n', 'utf8');
@@ -2075,11 +2283,22 @@ function buildOperationalGraph(runState = {}) {
   };
 }
 
+const RECENT_EVENT_IDS_MAX = 10000;
+const recentEventIds = new Set();
+
+function rememberEventId(key) {
+  if (recentEventIds.size >= RECENT_EVENT_IDS_MAX) {
+    recentEventIds.delete(recentEventIds.values().next().value);
+  }
+  recentEventIds.add(key);
+}
+
 function appendEvent(projectRoot, activeSession, event = {}) {
   const p = operationalPaths(projectRoot, activeSession);
   ensureDirForFile(p.events);
   const entry = {
-    event_id: event.event_id || `evt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    // Runtime envelopes (OxeEvent) carry `id`; operational records carry `event_id`. Same identity.
+    event_id: event.event_id || event.id || `evt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     type: String(event.type || 'custom'),
     timestamp: event.timestamp || new Date().toISOString(),
     run_id: event.run_id || null,
@@ -2093,6 +2312,10 @@ function appendEvent(projectRoot, activeSession, event = {}) {
     correlation_id: event.correlation_id || null,
     payload: event.payload && typeof event.payload === 'object' ? event.payload : {},
   };
+  // Idempotent append: the same event forwarded twice (bus + onEvent) must land once.
+  const dedupeKey = `${p.events}::${entry.event_id}`;
+  if (recentEventIds.has(dedupeKey)) return entry;
+  rememberEventId(dedupeKey);
   fs.appendFileSync(p.events, `${JSON.stringify(entry)}\n`, 'utf8');
   return entry;
 }
@@ -2636,6 +2859,11 @@ module.exports = {
   makeRunId,
   appendEvent,
   readEvents,
+  syncRunStateAfterExecute,
+  writeProjectedBlock,
+  extractBacktickSpans,
+  looksLikeShellCommand,
+  looksLikeFilePath,
   summarizeEvents,
   writeRunState,
   readRunState,

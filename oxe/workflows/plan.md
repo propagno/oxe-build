@@ -210,7 +210,7 @@ Cada tarefa `Tn` do `PLAN.md` pode ser executada pelo `LlmTaskExecutor` quando c
 |--------------------|------------------------|
 | `id` | ID da tarefa (ex.: `T3`) |
 | `title` | Título da tarefa |
-| `mutation_scope` | Arquivos que serão modificados (em **Arquivos prováveis**) |
+| `mutation_scope` | Arquivos que serão modificados (em **Arquivos alvo** ou **Arquivos prováveis**) |
 | `actions[].type` | Tipo de ação (derivado de **Implementar**) |
 | `verify.must_pass` | Critérios de aceite (de **Verificar** + **Aceite vinculado**) |
 | `verify.command` | Comando em **Verificar → Comando:** |
