@@ -27,6 +27,8 @@ export interface ManifestCheck {
   failure_class: VerificationFailureClass | null;
   evidence_refs: string[];
   duration_ms: number;
+  skip_reason?: string | null;
+  tests_executed?: number | null;
 }
 
 export interface VerificationManifest {
@@ -44,6 +46,8 @@ export interface VerificationManifest {
     fail: number;
     skip: number;
     error: number;
+    /** Skipped checks whose criterion has no executable verification. */
+    manual?: number;
     all_passed: boolean;
   };
 }
@@ -66,6 +70,8 @@ export interface ResidualRiskLedger {
 
 export interface EvidenceCoverageSummary {
   total_checks: number;
+  /** Checks that actually ran (status other than skip). */
+  executed_checks?: number;
   checks_with_evidence: number;
   total_evidence_refs: number;
   coverage_percent: number;
@@ -131,15 +137,20 @@ export function buildManifest(
     failure_class: classifyFailure(r),
     evidence_refs: evidenceRefs.get(r.check_id) ?? [],
     duration_ms: r.duration_ms,
+    skip_reason: r.skip_reason ?? null,
+    tests_executed: r.tests_executed ?? null,
   }));
 
+  const isManual = (c: ManifestCheck): boolean => c.status === 'skip' && c.skip_reason === 'needs_structured_check';
   const summary = {
     total: checks.length,
     pass: checks.filter((c) => c.status === 'pass').length,
     fail: checks.filter((c) => c.status === 'fail').length,
     skip: checks.filter((c) => c.status === 'skip').length,
     error: checks.filter((c) => c.status === 'error').length,
-    all_passed: checks.every((c) => c.status === 'pass' || c.status === 'skip'),
+    manual: checks.filter(isManual).length,
+    // A deliberate skip still passes; a manual criterion (no executable verification) is not proof.
+    all_passed: checks.every((c) => c.status === 'pass' || (c.status === 'skip' && !isManual(c))),
   };
 
   return {
@@ -192,11 +203,18 @@ export function buildRiskLedger(
 
 export function summarizeEvidenceCoverage(manifest: VerificationManifest): EvidenceCoverageSummary {
   const totalChecks = manifest.checks.length;
-  const checksWithEvidence = manifest.checks.filter((check) => check.evidence_refs.length > 0).length;
+  // Coverage is measured over checks that actually ran; skipped checks produce no evidence by definition.
+  const executed = manifest.checks.filter((check) => check.status !== 'skip');
+  const checksWithEvidence = executed.filter((check) => check.evidence_refs.length > 0).length;
   const totalEvidenceRefs = manifest.checks.reduce((sum, check) => sum + check.evidence_refs.length, 0);
-  const coveragePercent = totalChecks === 0 ? 100 : Math.round((checksWithEvidence / totalChecks) * 100);
+  const coveragePercent = totalChecks === 0
+    ? 100
+    : executed.length === 0
+      ? 0
+      : Math.round((checksWithEvidence / executed.length) * 100);
   return {
     total_checks: totalChecks,
+    executed_checks: executed.length,
     checks_with_evidence: checksWithEvidence,
     total_evidence_refs: totalEvidenceRefs,
     coverage_percent: coveragePercent,

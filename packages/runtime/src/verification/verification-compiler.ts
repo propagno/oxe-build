@@ -1,5 +1,9 @@
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { spawnSync } from 'child_process';
+import { parseTestReport, extractTestFileArgs } from './test-report-parsers';
+import { shellInvocation, childProcessEnv } from '../executor/shell-argv';
 import type { EvidenceType } from '../models/evidence';
 import type { VerificationStatus } from '../models/verification-result';
 import type { VerificationResult } from '../models/verification-result';
@@ -26,7 +30,9 @@ export type CheckType =
   | 'security'
   | 'ux_snapshot'
   | 'performance_baseline'
-  | 'custom';
+  | 'custom'
+  /** Criterion without an executable verification — never counts as proof. */
+  | 'manual';
 
 export interface AcceptanceCheck {
   id: string;
@@ -54,6 +60,12 @@ export interface CheckResult {
   duration_ms: number;
   error: string | null;
   evidence_refs?: string[];
+  /** Why a check was skipped (`needs_structured_check` = criterion has no executable verification). */
+  skip_reason?: string | null;
+  /** Test cases the runner reported; null when the output has no recognizable test report. */
+  tests_executed?: number | null;
+  /** Evidence id of the structured summary record (kept out of `evidence_refs` so coverage counts real output only). */
+  summary_evidence_ref?: string | null;
 }
 
 export interface ExecutedVerificationSuite {
@@ -119,6 +131,29 @@ function inferEvidenceType(checkType: CheckType): EvidenceType {
   }
 }
 
+export const SHELL_COMMAND_RE =
+  /^(npm|npx|pnpm|yarn|node|deno|bun|python3?|pytest|go|cargo|make|dotnet|mvn|gradle|bash|sh|curl|git|eslint|tsc|jest|vitest|mocha|oxe-cc|oxe|docker)(\s|$)/i;
+
+export function looksLikeShellCommand(text: string): boolean {
+  return SHELL_COMMAND_RE.test(String(text || '').trim());
+}
+
+/**
+ * Turn a SPEC "Como verificar" cell into an executable command, or null when it is prose.
+ * Only backtick spans that look like commands count; path-like spans (`test/api.test.js`)
+ * and free text are never executed.
+ */
+export function extractCommandFromHowToVerify(howToVerify: string): string | null {
+  const text = String(howToVerify || '').trim();
+  if (!text || text.startsWith('#')) return null;
+  const spans = [...text.matchAll(/`([^`]+)`/g)].map((m) => m[1].trim()).filter(Boolean);
+  if (spans.length > 0) {
+    const commands = [...new Set(spans.filter(looksLikeShellCommand))];
+    return commands.length ? commands.join(' && ') : null;
+  }
+  return looksLikeShellCommand(text) ? text : null;
+}
+
 export function compile(
   spec: ParsedSpecLike,
   plan: ParsedPlanLike
@@ -130,13 +165,14 @@ export function compile(
   for (const criterion of spec.criteria) {
     // Find the verify command from the task that references this criterion
     const task = plan.tasks.find((t) => t.aceite.includes(criterion.id));
-    const command = task?.verifyCommand ?? null;
-    const type = inferCheckType(criterion.howToVerify);
+    const command = task?.verifyCommand ?? extractCommandFromHowToVerify(criterion.howToVerify);
+    // Prose that cannot be executed is a manual criterion, not a shell command.
+    const type: CheckType = command ? inferCheckType(`${criterion.howToVerify}\n${command}`) : 'manual';
 
     checks.push({
       id: `check-${criterion.id.toLowerCase()}`,
       type,
-      command: command ?? (criterion.howToVerify.startsWith('#') ? null : criterion.howToVerify),
+      command,
       evidence_type_expected: inferEvidenceType(type),
       acceptance_ref: criterion.id,
       description: criterion.criterion,
@@ -183,37 +219,75 @@ export async function runCheck(
       exit_code: null,
       duration_ms: 0,
       error: null,
+      skip_reason: check.type === 'manual' ? 'needs_structured_check' : 'no_command',
+      tests_executed: null,
+    };
+  }
+
+  // A verify command that names a test file which does not exist cannot have verified it,
+  // whatever the runner's exit code says.
+  const missingFiles = extractTestFileArgs(check.command).filter(
+    (file) => !fs.existsSync(path.resolve(cwd, file))
+  );
+  if (missingFiles.length > 0) {
+    return {
+      check_id: check.id,
+      acceptance_ref: check.acceptance_ref,
+      status: 'fail',
+      stdout: '',
+      stderr: '',
+      exit_code: null,
+      duration_ms: 0,
+      error: `test_file_missing: ${missingFiles.join(', ')}`,
+      tests_executed: 0,
     };
   }
 
   const start = Date.now();
   try {
-    // Use shell so the full command string is interpreted (handles quotes, &&, node -e "...")
-    const isWin = process.platform === 'win32';
-    const shell = isWin ? 'cmd' : 'sh';
-    const shellArgs = isWin ? ['/c', check.command] : ['-c', check.command];
-
-    const result = spawnSync(shell, shellArgs, {
+    // Use a shell so the full command string is interpreted (handles quotes, &&, node -e "...").
+    // The child never inherits node:test context: it would emit a serialized protocol, not TAP.
+    const shell = shellInvocation(check.command);
+    const result = spawnSync(shell.file, shell.args, {
       cwd,
+      env: childProcessEnv(),
       encoding: 'utf8',
       timeout: timeoutMs,
       maxBuffer: 2 * 1024 * 1024,
-      // On Windows, prevent Node from re-quoting the args (preserves double-quotes inside node -e "...")
-      windowsVerbatimArguments: isWin,
+      windowsVerbatimArguments: shell.windowsVerbatimArguments,
     });
 
     const duration_ms = Date.now() - start;
-    const status: VerificationStatus = result.status === 0 ? 'pass' : 'fail';
+    const stdout = result.stdout ?? '';
+    const stderr = result.stderr ?? '';
+    const report = parseTestReport(`${stdout}\n${stderr}`);
+    let status: VerificationStatus = result.status === 0 ? 'pass' : 'fail';
+    let error: string | null = result.error ? String(result.error) : null;
+
+    // Exit code 0 is not proof: `node --test` exits 0 when a listed file is missing, and a
+    // unit check that executed zero tests verified nothing.
+    if (status === 'pass' && report.missing_files.length > 0) {
+      status = 'fail';
+      error = `test_file_missing: ${report.missing_files.join(', ')}`;
+    } else if (status === 'pass' && check.type === 'unit' && report.tests_executed === 0) {
+      status = 'fail';
+      error = 'no_tests_executed';
+    } else if (status === 'pass' && check.type === 'unit' && report.tests_executed === null && !stdout.trim() && !stderr.trim()) {
+      // A unit check that printed nothing cannot have run a test runner.
+      status = 'fail';
+      error = 'no_test_report';
+    }
 
     return {
       check_id: check.id,
       acceptance_ref: check.acceptance_ref,
       status,
-      stdout: result.stdout ?? '',
-      stderr: result.stderr ?? '',
+      stdout,
+      stderr,
       exit_code: result.status ?? null,
       duration_ms,
-      error: result.error ? String(result.error) : null,
+      error,
+      tests_executed: report.tests_executed,
     };
   } catch (err) {
     return {
@@ -287,20 +361,21 @@ export async function executeSuite(
       verificationResult = providerResult;
     } else {
       result = await runCheck(check, cwd, timeoutMs);
-      const collectedEvidence = options.evidenceStore
+      const collected = options.evidenceStore
         ? await collectCheckEvidence(options.evidenceStore, check, result, {
             run_id: options.runId,
             work_item_id: options.workItemId,
             attempt_number: attemptNumber,
           })
-        : [];
-      result.evidence_refs = collectedEvidence;
+        : { refs: [], summaryRef: null };
+      result.evidence_refs = collected.refs;
+      result.summary_evidence_ref = collected.summaryRef;
       verificationResult = {
         verification_id: `vr-${crypto.randomBytes(4).toString('hex')}`,
         work_item_id: options.workItemId,
         check_id: check.id,
         status: result.status,
-        evidence_refs: collectedEvidence,
+        evidence_refs: collected.refs,
         summary: result.error || result.stderr || result.stdout || null,
       };
     }
@@ -335,11 +410,17 @@ export function summarizeSuite(results: CheckResult[]): {
   fail: number;
   skip: number;
   error: number;
+  /** Skipped checks whose criterion has no executable verification. */
+  manual: number;
   allPassed: boolean;
 } {
   const counts = { total: results.length, pass: 0, fail: 0, skip: 0, error: 0 };
-  for (const r of results) counts[r.status]++;
-  return { ...counts, allPassed: counts.fail === 0 && counts.error === 0 };
+  let manual = 0;
+  for (const r of results) {
+    counts[r.status]++;
+    if (r.status === 'skip' && r.skip_reason === 'needs_structured_check') manual++;
+  }
+  return { ...counts, manual, allPassed: counts.fail === 0 && counts.error === 0 };
 }
 
 export async function verifyRun(input: {
@@ -381,8 +462,23 @@ export async function verifyRun(input: {
   saveRiskLedger(input.projectRoot, input.runId, executed.risk_ledger);
   saveEvidenceCoverage(input.projectRoot, input.runId, executed.evidence_coverage);
   const summary = summarizeSuite(executed.results);
+  for (const r of executed.results) {
+    if (r.status === 'skip' && r.skip_reason === 'needs_structured_check') {
+      gaps.push(
+        `Critério ${r.acceptance_ref ?? r.check_id}: "Como verificar" não é executável — informe um comando ou vincule a uma tarefa com verificação.`
+      );
+    }
+  }
+  // Manual criteria leave the run `partial`: nothing failed, but nothing proved them either.
+  const status: VerifyRunResult['status'] = summary.total === 0
+    ? 'partial'
+    : !summary.allPassed
+      ? 'failed'
+      : summary.manual > 0
+        ? 'partial'
+        : 'passed';
   return {
-    status: summary.total === 0 ? 'partial' : summary.allPassed ? 'passed' : 'failed',
+    status,
     suite: input.suite,
     executed,
     gaps,
@@ -407,7 +503,7 @@ async function collectCheckEvidence(
   check: AcceptanceCheck,
   result: CheckResult,
   options: { run_id: string; work_item_id: string; attempt_number: number }
-): Promise<string[]> {
+): Promise<{ refs: string[]; summaryRef: string }> {
   const refs: string[] = [];
   if (result.stdout) {
     const evidence = await store.collect('stdout', result.stdout, options);
@@ -433,6 +529,7 @@ async function collectCheckEvidence(
     ),
     options
   );
-  refs.push(summaryEvidence.evidence_id);
-  return refs;
+  // The summary record is bookkeeping, not proof: it is stored but excluded from `evidence_refs`,
+  // otherwise every check (even a silent exit 0) counts as "covered".
+  return { refs, summaryRef: summaryEvidence.evidence_id };
 }

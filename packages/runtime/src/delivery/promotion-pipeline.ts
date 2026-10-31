@@ -74,7 +74,11 @@ export class MergeGateEvaluator {
     }
 
     if (manifest && !manifest.summary.all_passed) {
-      reasons.push(`Verification: ${manifest.summary.fail} check(s) failed, ${manifest.summary.error} error(s)`);
+      const manual = manifest.summary.manual ?? 0;
+      reasons.push(
+        `Verification: ${manifest.summary.fail} check(s) failed, ${manifest.summary.error} error(s)` +
+          (manual > 0 ? `, ${manual} criterion(s) without executable check` : '')
+      );
     }
 
     if (riskLedger) {
