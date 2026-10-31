@@ -418,7 +418,8 @@ function parseInstallArgs(argv) {
       out.explicitIdeScope = true;
     } else if (a === '--cursor') out.cursor = true;
     else if (a === '--copilot' || a === '--copilot-vscode') out.copilot = true;
-    else if (a === '--copilot-cli') out.copilotCli = true;
+    // `--claude` is the same integration the interactive menu calls "claude" (Claude Code commands + agents).
+    else if (a === '--copilot-cli' || a === '--claude') out.copilotCli = true;
     else if (a === '--all-agents') out.allAgents = true;
     else if (a === '--opencode') out.agentOpenCode = true;
     else if (a === '--gemini') out.agentGemini = true;
@@ -659,19 +660,14 @@ function runtimeSemanticsManifestPath(opts) {
  * Não falha a instalação global se o VS Code CLI não estiver disponível.
  * @param {{ dryRun?: boolean, force?: boolean }} opts
  */
+const { pickVsixFile, shouldInstallVscodeExtension } = oxeInstallResolve;
+
 function installVscodeExtension(opts) {
   const c = useAnsiColors();
   const extDir = path.join(PKG_ROOT, 'vscode-extension');
 
-  // Encontrar o VSIX mais recente na pasta da extensão
-  let vsixPath = null;
-  if (fs.existsSync(extDir)) {
-    const vsixFiles = fs.readdirSync(extDir)
-      .filter((f) => f.startsWith('oxe-agents') && f.endsWith('.vsix'))
-      .sort()
-      .reverse();
-    if (vsixFiles.length > 0) vsixPath = path.join(extDir, vsixFiles[0]);
-  }
+  const vsixName = pickVsixFile(fs.existsSync(extDir) ? fs.readdirSync(extDir) : [], readPkgVersion());
+  const vsixPath = vsixName ? path.join(extDir, vsixName) : null;
 
   if (!vsixPath) {
     console.log(`  ${c ? dim : ''}VS Code extension${c ? reset : ''}  VSIX não encontrado — pulando.`);
@@ -2189,17 +2185,22 @@ function runDoctor(target, options = {}) {
   ideChecks.push({ label: 'Cursor', ready: cursorReady, hint: '.cursor/commands/' });
 
   const claudeLocalDir = path.join(target, 'commands', 'oxe');
+  // `install --claude --ide-local` writes the commands to <project>/.claude/commands
+  const claudeProjectDir = path.join(target, '.claude', 'commands');
   const claudeGlobalDir = path.join(require('os').homedir(), '.claude', 'commands');
-  const claudeLocalReady = fs.existsSync(claudeLocalDir);
+  const claudeProjectReady = fs.existsSync(path.join(claudeProjectDir, 'oxe.md'));
+  const claudeLocalReady = fs.existsSync(claudeLocalDir) || claudeProjectReady;
   const claudeGlobalReady = fs.existsSync(claudeGlobalDir);
   ideChecks.push({
     label: 'Claude Code',
     ready: claudeLocalReady || claudeGlobalReady,
-    hint: claudeLocalReady
-      ? 'commands/oxe/'
-      : claudeGlobalReady
-        ? '~/.claude/commands/ (global do utilizador)'
-        : 'commands/oxe/ ou ~/.claude/commands/',
+    hint: claudeProjectReady
+      ? '.claude/commands/'
+      : claudeLocalReady
+        ? 'commands/oxe/'
+        : claudeGlobalReady
+          ? '~/.claude/commands/ (global do utilizador)'
+          : '.claude/commands/, commands/oxe/ ou ~/.claude/commands/',
     status: claudeLocalReady ? 'local' : claudeGlobalReady ? 'global_only' : 'missing',
   });
 
@@ -2641,6 +2642,7 @@ ${green}Opções da instalação:${reset}
   --cursor       Copia comandos e regras para ~/.cursor (padrão com --all)
   --copilot      Instala GitHub Copilot VS Code no workspace: .github/copilot-instructions.md + .github/prompts/
   --copilot-vscode  Alias explícito de --copilot
+  --claude       Claude Code: commands + agents em ~/.claude (ou .claude/ com --ide-local) — mesmo que --copilot-cli
   --copilot-cli  Skills em ~/.copilot/skills (/oxe, /oxe-scan, …) + cópia legado em ~/.claude/commands e ~/.copilot/commands
                    (subconjunto de --all-agents)
   --all-agents   Cursor+Copilot + CLIs + OpenCode, Gemini (TOML), Codex, Windsurf, Antigravity
@@ -3037,8 +3039,8 @@ function runInstall(opts) {
     oxeManifest.writeFileManifest(home, mergedManifest, readPkgVersion());
   }
 
-  // Instalar extensão VS Code OXE Agents (sempre tenta, falha graciosamente)
-  installVscodeExtension(opts);
+  // Extensão VS Code OXE Agents: só quando a integração VS Code/Copilot foi pedida (falha graciosamente)
+  if (shouldInstallVscodeExtension(opts)) installVscodeExtension(opts);
 
   printSummaryAndNextSteps(c, buildInstallSummary(opts, fullLayout));
   if (opts.copilot) {

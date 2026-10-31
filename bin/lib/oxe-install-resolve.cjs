@@ -101,6 +101,34 @@ function resolveInstallOptionsFromConfig(projectRoot, optsIn) {
   return { options: opts, warnings };
 }
 
+/**
+ * VSIX matching the package version, else the highest semver one. A plain `.sort()` compared
+ * strings and installed 1.9.1 over 1.16.0.
+ * @param {string[]} files
+ * @param {string} pkgVersion
+ * @returns {string | null}
+ */
+function pickVsixFile(files, pkgVersion) {
+  const semver = require('semver');
+  const candidates = files
+    .map((name) => ({ name, version: (String(name).match(/^oxe-agents-(.+)\.vsix$/) || [])[1] }))
+    .filter((entry) => entry.version && semver.valid(entry.version));
+  const exact = candidates.find((entry) => entry.version === pkgVersion);
+  if (exact) return exact.name;
+  candidates.sort((a, b) => semver.rcompare(a.version, b.version));
+  return candidates.length ? candidates[0].name : null;
+}
+
+/**
+ * The extension only adds Copilot Chat participants: install it when VS Code/Copilot is being set up.
+ * @param {{ copilot?: boolean, vscode?: boolean, allAgents?: boolean }} opts
+ */
+function shouldInstallVscodeExtension(opts) {
+  return Boolean(opts && (opts.copilot || opts.vscode || opts.allAgents));
+}
+
 module.exports = {
   resolveInstallOptionsFromConfig,
+  pickVsixFile,
+  shouldInstallVscodeExtension,
 };
