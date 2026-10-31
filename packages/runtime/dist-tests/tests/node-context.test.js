@@ -52,6 +52,7 @@ const lease = {
         strict_1.default.match(prompt, /## Contrato \(IMPLEMENTATION-PACK\)/);
         strict_1.default.match(prompt, /"generateCode"/);
         strict_1.default.match(prompt, /## Fixture \(FIXTURE-PACK\)/);
+        strict_1.default.match(prompt, /nunca leem `\.oxe\/`/);
         strict_1.default.match(prompt, /`src\/code\.js` — não existe ainda/);
         strict_1.default.match(prompt, /`src\/validate\.js` — 42 bytes\n```\nmodule\.exports = \{ isValidUrl \};\n```/);
         strict_1.default.match(prompt, /## git status\n```\nM src\/validate\.js/);

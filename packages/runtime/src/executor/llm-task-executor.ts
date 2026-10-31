@@ -51,6 +51,8 @@ export interface LlmTaskExecutorOptions {
 export interface ExecutorUsage {
   turns: number;
   tool_calls: number;
+  /** Calls per tool name (e.g. how many `run_command`). */
+  tools: Record<string, number>;
   cost_usd: number | null;
 }
 
@@ -98,9 +100,17 @@ export class LlmTaskExecutor implements TaskExecutor {
     let completedByFinishTask = false;
     let finishTaskSummary = '';
 
-    const usage: ExecutorUsage = { turns: 0, tool_calls: 0, cost_usd: null };
+    const usage: ExecutorUsage = { turns: 0, tool_calls: 0, cost_usd: null, tools: {} };
     const done = (result: TaskResult): TaskResult => {
-      this.emit({ type: 'executor_usage', nodeId: node.id, attempt, detail: { ...usage, completed_by: result.completed_by ?? null, success: result.success } });
+      // A failed attempt keeps its reason in the event log: `env` failures (CLI crash, timeout)
+      // were only visible on the console.
+      const error = result.success ? null : String(result.output || '').slice(0, 500) || null;
+      this.emit({
+        type: 'executor_usage',
+        nodeId: node.id,
+        attempt,
+        detail: { ...usage, completed_by: result.completed_by ?? null, success: result.success, failure_class: result.failure_class, error },
+      });
       return result;
     };
 
@@ -125,6 +135,7 @@ export class LlmTaskExecutor implements TaskExecutor {
       usage.turns += 1;
       if (typeof response.usage?.cost_usd === 'number') usage.cost_usd = (usage.cost_usd ?? 0) + response.usage.cost_usd;
       usage.tool_calls += response.tool_calls.length;
+      for (const tc of response.tool_calls) usage.tools[tc.function.name] = (usage.tools[tc.function.name] ?? 0) + 1;
 
       this.emit({ type: 'turn_complete', nodeId: node.id, attempt, detail: { turn, finish_reason: response.finish_reason } });
 

@@ -104,6 +104,29 @@ function passResult(id) {
             fs_1.default.rmSync(tmp, { recursive: true, force: true });
         }
     });
+    // Benchmark 1.18 (linkly): test/api.test.js lia `.oxe/investigations/fixtures/…` — verde no
+    // workspace, quebrado em clone limpo/CI (`.oxe/` no .gitignore). O verify dizia 25/25.
+    (0, node_test_1.test)('runCheck contract: código do produto que lê .oxe/ reprova; docs podem citar', async () => {
+        const tmp = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-leak-'));
+        try {
+            fs_1.default.mkdirSync(path_1.default.join(tmp, 'test'));
+            fs_1.default.writeFileSync(path_1.default.join(tmp, 'test', 'api.test.js'), "const f = new URL('../.oxe/investigations/fixtures/x.json', import.meta.url);\n");
+            fs_1.default.writeFileSync(path_1.default.join(tmp, 'README.md'), 'Estado local em `.oxe/` (não versionado).\n');
+            fs_1.default.writeFileSync(path_1.default.join(tmp, 'test', 'ok.test.js'), "const dotoxe = 'my.oxe/x'; // não é o diretório .oxe\n");
+            const suite = (0, verification_compiler_1.compile)({ objective: 'x', criteria: [] }, { tasks: [
+                    { id: 'T6', verifyCommand: null, aceite: [], filesExist: ['test/api.test.js', 'README.md'] },
+                    { id: 'T7', verifyCommand: null, aceite: [], filesExist: ['README.md', 'test/ok.test.js'] },
+                ] });
+            const leak = await (0, verification_compiler_1.runCheck)(suite.checks.find((c) => c.id === 'check-pack-t6'), tmp);
+            strict_1.default.equal(leak.status, 'fail');
+            strict_1.default.equal(leak.error, 'oxe_internal_reference: test/api.test.js');
+            const docs = await (0, verification_compiler_1.runCheck)(suite.checks.find((c) => c.id === 'check-pack-t7'), tmp);
+            strict_1.default.equal(docs.status, 'pass', String(docs.error));
+        }
+        finally {
+            fs_1.default.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
     (0, node_test_1.test)('buildManifest: o motivo da falha chega ao manifest', () => {
         const failed = { ...passResult('c1'), status: 'fail', error: 'no_tests_executed' };
         const manifest = (0, verification_manifest_1.buildManifest)('r', [failed, passResult('c2')]);

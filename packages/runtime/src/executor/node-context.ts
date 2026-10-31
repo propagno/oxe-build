@@ -72,7 +72,10 @@ export function renderNodeContext(ctx: NodeExecutionContext | null | undefined, 
   }
 
   if (ctx.fixture) {
-    lines.push('', '## Fixture (FIXTURE-PACK)', '```json', truncate(asJson(ctx.fixture), budget.fixture), '```');
+    lines.push('', '## Fixture (FIXTURE-PACK)');
+    // `.oxe/` is OXE's local state (usually gitignored): product code reading it breaks in CI.
+    lines.push('Os `ref` abaixo são artefatos do OXE em `.oxe/`, que não fazem parte do produto: copie os dados necessários para dentro do escopo da tarefa (ex.: `test/fixtures/`). Código e testes do produto nunca leem `.oxe/` — o verify reprova.');
+    lines.push('```json', truncate(asJson(ctx.fixture), budget.fixture), '```');
   }
 
   const files = ctx.workspaceFiles ?? [];

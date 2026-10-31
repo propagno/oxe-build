@@ -57,6 +57,7 @@ describe('NodeExecutionContext no prompt do nó', () => {
     assert.match(prompt, /## Contrato \(IMPLEMENTATION-PACK\)/);
     assert.match(prompt, /"generateCode"/);
     assert.match(prompt, /## Fixture \(FIXTURE-PACK\)/);
+    assert.match(prompt, /nunca leem `\.oxe\/`/);
     assert.match(prompt, /`src\/code\.js` — não existe ainda/);
     assert.match(prompt, /`src\/validate\.js` — 42 bytes\n```\nmodule\.exports = \{ isValidUrl \};\n```/);
     assert.match(prompt, /## git status\n```\nM src\/validate\.js/);

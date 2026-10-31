@@ -15,6 +15,7 @@
  *   --real [--adapter claude|http] [--model <m>]  modelo real dirigindo `runtime execute`; mede
  *          tentativas, turnos, custo e `run_command` por tarefa (KPIs da 1.18). `http` usa
  *          ANTHROPIC_API_KEY/OPENAI_API_KEY e OXE_BASE_URL.
+ *   --oracle <dir>  reaplica o oráculo de referência a um projeto mantido com --keep
  *   --keep  mantém os diretórios temporários para inspeção
  *
  * Saída: .oxe/release/e2e-linkly-report.json (mock) ou e2e-linkly-real-report.json (real);
@@ -158,6 +159,43 @@ function oracle(dir) {
   return { ok, missing_files: missing, tests_executed: executed, tests_expected: expected, exit_code: run.status };
 }
 
+/**
+ * Oráculo do modo real: os testes de referência do fixture (não os escritos pelo modelo) rodam
+ * contra o `src/` produzido, numa cópia isolada. Contar os testes do próprio modelo não mede nada —
+ * ele pode escrever mais, menos ou testes triviais.
+ */
+function referenceOracle(dir) {
+  const missing = TASKS.flatMap((t) => t.files).filter((f) => !fs.existsSync(path.join(dir, f)));
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-e2e-oracle-'));
+  try {
+    if (fs.existsSync(path.join(dir, 'src'))) fs.cpSync(path.join(dir, 'src'), path.join(sandbox, 'src'), { recursive: true });
+    const refTests = TASKS.map((t) => {
+      const rel = t.test.replace(/^test\//, 'oracle-test/');
+      writeFile(path.join(sandbox, rel), t.source[t.test]);
+      return rel;
+    });
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+    const run = spawnSync(process.execPath, ['--test', ...refTests], { cwd: sandbox, encoding: 'utf8', env });
+    const executed = Number(((run.stdout || '').match(/^# tests (\d+)/m) || [])[1] || 0);
+    const passed = Number(((run.stdout || '').match(/^# pass (\d+)/m) || [])[1] || 0);
+    const expected = 5;
+    const own = oracle(dir);
+    return {
+      ok: missing.length === 0 && run.status === 0 && executed === expected && passed === expected && own.exit_code === 0,
+      missing_files: missing,
+      reference_tests_executed: executed,
+      reference_tests_passed: passed,
+      reference_tests_expected: expected,
+      model_tests_executed: own.tests_executed,
+      model_tests_exit_code: own.exit_code,
+      failures: run.status === 0 ? [] : String(run.stdout || '').split('\n').filter((l) => /^not ok/.test(l)).slice(0, 10),
+    };
+  } finally {
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+}
+
 // ─── Cenários ────────────────────────────────────────────────────────────────
 
 async function runScenario(name, liarTasks) {
@@ -252,7 +290,7 @@ async function runRealScenario() {
       t.tool_calls += row.tool_calls || 0;
       t.cost_usd += row.cost_usd || 0;
     }
-    const truth = oracle(dir);
+    const truth = referenceOracle(dir);
     const oxeSaysPass = executed.result.status === 'completed' && verified.report.status === 'passed';
     const result = {
       name: `real-${adapter}`,
@@ -326,6 +364,13 @@ async function mainReal() {
 }
 
 (async () => {
+  const oracleDir = argValue('--oracle', null);
+  if (oracleDir) {
+    // Reaplica o oráculo de referência a um projeto mantido com --keep, sem chamar o modelo de novo.
+    const truth = referenceOracle(path.resolve(oracleDir));
+    console.log(JSON.stringify(truth, null, 2));
+    process.exit(truth.ok ? 0 : 1);
+  }
   if (REAL) return mainReal();
   const results = [
     await runScenario('honest', new Set()),

@@ -104,6 +104,7 @@ const provider = { baseUrl: '', apiKey: '', model: '', maxTurns: 4 };
         strict_1.default.ok(usage, 'executor_usage emitido');
         strict_1.default.equal(usage.detail.turns, 2);
         strict_1.default.equal(usage.detail.tool_calls, 2);
+        strict_1.default.deepEqual(usage.detail.tools, { write_file: 1, finish_task: 1 });
         strict_1.default.ok(Math.abs(Number(usage.detail.cost_usd) - 0.02) < 1e-9);
     });
     (0, node_test_1.test)('resposta fora do protocolo: retenta e falha como llm, nunca como sucesso', async () => {
@@ -129,10 +130,15 @@ const provider = { baseUrl: '', apiKey: '', model: '', maxTurns: 4 };
     (0, node_test_1.test)('binário ausente: detect indisponível e a tentativa falha como env', async () => {
         const missing = new claude_cli_1.ClaudeCliAdapter({ command: 'oxe-no-such-claude-binary' });
         strict_1.default.equal(missing.detect().available, false);
-        const exec = new llm_task_executor_1.LlmTaskExecutor(provider, null, null, missing.createCompletion());
+        const events = [];
+        const exec = new llm_task_executor_1.LlmTaskExecutor(provider, null, (e) => events.push(e), missing.createCompletion());
         const result = await exec.execute(node([{ type: 'generate_patch', targets: ['out.txt'] }]), lease(tmp), 'run-1', 1);
         strict_1.default.equal(result.success, false);
         strict_1.default.equal(result.failure_class, 'env');
+        // O motivo fica no evento de uso, não só no console.
+        const usage = events.find((e) => e.type === 'executor_usage');
+        strict_1.default.equal(usage.detail.failure_class, 'env');
+        strict_1.default.match(String(usage.detail.error), /não encontrado no PATH/);
     });
 });
 (0, node_test_1.describe)('claude-cli — protocolo e spawn portável', () => {

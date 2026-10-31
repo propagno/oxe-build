@@ -125,6 +125,32 @@ describe('verification — critérios manuais nunca viram comando', () => {
     }
   });
 
+  // Benchmark 1.18 (linkly): test/api.test.js lia `.oxe/investigations/fixtures/…` — verde no
+  // workspace, quebrado em clone limpo/CI (`.oxe/` no .gitignore). O verify dizia 25/25.
+  test('runCheck contract: código do produto que lê .oxe/ reprova; docs podem citar', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-leak-'));
+    try {
+      fs.mkdirSync(path.join(tmp, 'test'));
+      fs.writeFileSync(path.join(tmp, 'test', 'api.test.js'), "const f = new URL('../.oxe/investigations/fixtures/x.json', import.meta.url);\n");
+      fs.writeFileSync(path.join(tmp, 'README.md'), 'Estado local em `.oxe/` (não versionado).\n');
+      fs.writeFileSync(path.join(tmp, 'test', 'ok.test.js'), "const dotoxe = 'my.oxe/x'; // não é o diretório .oxe\n");
+      const suite = compile(
+        { objective: 'x', criteria: [] },
+        { tasks: [
+          { id: 'T6', verifyCommand: null, aceite: [], filesExist: ['test/api.test.js', 'README.md'] },
+          { id: 'T7', verifyCommand: null, aceite: [], filesExist: ['README.md', 'test/ok.test.js'] },
+        ] },
+      );
+      const leak = await runCheck(suite.checks.find((c) => c.id === 'check-pack-t6')!, tmp);
+      assert.equal(leak.status, 'fail');
+      assert.equal(leak.error, 'oxe_internal_reference: test/api.test.js');
+      const docs = await runCheck(suite.checks.find((c) => c.id === 'check-pack-t7')!, tmp);
+      assert.equal(docs.status, 'pass', String(docs.error));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   test('buildManifest: o motivo da falha chega ao manifest', () => {
     const failed: CheckResult = { ...passResult('c1'), status: 'fail', error: 'no_tests_executed' };
     const manifest = buildManifest('r', [failed, passResult('c2')]);

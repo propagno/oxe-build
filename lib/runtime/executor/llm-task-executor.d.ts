@@ -35,6 +35,8 @@ export interface LlmTaskExecutorOptions {
 export interface ExecutorUsage {
     turns: number;
     tool_calls: number;
+    /** Calls per tool name (e.g. how many `run_command`). */
+    tools: Record<string, number>;
     cost_usd: number | null;
 }
 export declare class LlmTaskExecutor implements TaskExecutor {

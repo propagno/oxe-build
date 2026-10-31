@@ -121,6 +121,7 @@ describe('ExecutorAdapter claude-cli (bridge in-process)', () => {
     assert.ok(usage, 'executor_usage emitido');
     assert.equal(usage!.detail!.turns, 2);
     assert.equal(usage!.detail!.tool_calls, 2);
+    assert.deepEqual(usage!.detail!.tools, { write_file: 1, finish_task: 1 });
     assert.ok(Math.abs(Number(usage!.detail!.cost_usd) - 0.02) < 1e-9);
   });
 
@@ -149,10 +150,15 @@ describe('ExecutorAdapter claude-cli (bridge in-process)', () => {
   test('binário ausente: detect indisponível e a tentativa falha como env', async () => {
     const missing = new ClaudeCliAdapter({ command: 'oxe-no-such-claude-binary' });
     assert.equal(missing.detect().available, false);
-    const exec = new LlmTaskExecutor(provider, null, null, missing.createCompletion());
+    const events: LlmExecutorEvent[] = [];
+    const exec = new LlmTaskExecutor(provider, null, (e) => events.push(e), missing.createCompletion());
     const result = await exec.execute(node([{ type: 'generate_patch', targets: ['out.txt'] }]), lease(tmp), 'run-1', 1);
     assert.equal(result.success, false);
     assert.equal(result.failure_class, 'env');
+    // O motivo fica no evento de uso, não só no console.
+    const usage = events.find((e) => e.type === 'executor_usage')!;
+    assert.equal(usage.detail!.failure_class, 'env');
+    assert.match(String(usage.detail!.error), /não encontrado no PATH/);
   });
 });
 

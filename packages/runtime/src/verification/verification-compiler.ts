@@ -242,16 +242,22 @@ export async function runCheck(
   const contracted = check.files_exist ?? [];
   if (contracted.length > 0) {
     const absent = contracted.filter((file) => !fs.existsSync(path.resolve(cwd, file)));
-    if (absent.length > 0 || !check.command) {
+    const leaks = absent.length > 0 ? [] : contracted.filter((file) => referencesOxeInternals(path.resolve(cwd, file)));
+    const failed = absent.length > 0 || leaks.length > 0;
+    if (failed || !check.command) {
       return {
         check_id: check.id,
         acceptance_ref: check.acceptance_ref,
-        status: absent.length > 0 ? 'fail' : 'pass',
-        stdout: absent.length > 0 ? '' : `files_exist ok: ${contracted.join(', ')}\n`,
+        status: failed ? 'fail' : 'pass',
+        stdout: failed ? '' : `files_exist ok: ${contracted.join(', ')}\n`,
         stderr: '',
         exit_code: null,
         duration_ms: 0,
-        error: absent.length > 0 ? `files_missing: ${absent.join(', ')}` : null,
+        error: absent.length > 0
+          ? `files_missing: ${absent.join(', ')}`
+          : leaks.length > 0
+            ? `oxe_internal_reference: ${leaks.join(', ')}`
+            : null,
         tests_executed: null,
       };
     }
@@ -536,6 +542,25 @@ export async function verifyRun(input: {
     risk_ledger: executed.risk_ledger,
     evidence_coverage: executed.evidence_coverage,
   };
+}
+
+const CODE_FILE_RE = /\.(c|m)?[jt]sx?$|\.(py|go|rs|java|kt|rb|php|cs|json|ya?ml|sh)$/i;
+const OXE_INTERNAL_REF_RE = /(^|[^\w.-])\.oxe[\\/]/;
+
+/**
+ * Product code or tests that read `.oxe/` depend on OXE's local state, which is usually
+ * gitignored: they pass in the workspace and break on a clean clone or in CI. Seen in the 1.18
+ * benchmark (test/api.test.js loading `.oxe/investigations/fixtures/…`). Docs may mention `.oxe/`.
+ */
+function referencesOxeInternals(absPath: string): boolean {
+  if (!CODE_FILE_RE.test(absPath)) return false;
+  try {
+    const stat = fs.statSync(absPath);
+    if (!stat.isFile() || stat.size > 1024 * 1024) return false;
+    return OXE_INTERNAL_REF_RE.test(fs.readFileSync(absPath, 'utf8'));
+  } catch {
+    return false;
+  }
 }
 
 function hashObject(obj: unknown): string {
