@@ -4,7 +4,9 @@ import type { VerificationResult } from '../models/verification-result';
 import type { EvidenceStore } from '../evidence/evidence-store';
 import type { PluginRegistry } from '../plugins/plugin-registry';
 import { type EvidenceCoverageSummary, type ResidualRiskLedger, type VerificationManifest } from './verification-manifest';
-export type CheckType = 'unit' | 'integration' | 'contract' | 'smoke' | 'policy' | 'security' | 'ux_snapshot' | 'performance_baseline' | 'custom';
+export type CheckType = 'unit' | 'integration' | 'contract' | 'smoke' | 'policy' | 'security' | 'ux_snapshot' | 'performance_baseline' | 'custom'
+/** Criterion without an executable verification — never counts as proof. */
+ | 'manual';
 export interface AcceptanceCheck {
     id: string;
     type: CheckType;
@@ -29,6 +31,12 @@ export interface CheckResult {
     duration_ms: number;
     error: string | null;
     evidence_refs?: string[];
+    /** Why a check was skipped (`needs_structured_check` = criterion has no executable verification). */
+    skip_reason?: string | null;
+    /** Test cases the runner reported; null when the output has no recognizable test report. */
+    tests_executed?: number | null;
+    /** Evidence id of the structured summary record (kept out of `evidence_refs` so coverage counts real output only). */
+    summary_evidence_ref?: string | null;
 }
 export interface ExecutedVerificationSuite {
     results: CheckResult[];
@@ -66,6 +74,14 @@ interface ParsedTaskLike {
 interface ParsedPlanLike {
     tasks: ParsedTaskLike[];
 }
+export declare const SHELL_COMMAND_RE: RegExp;
+export declare function looksLikeShellCommand(text: string): boolean;
+/**
+ * Turn a SPEC "Como verificar" cell into an executable command, or null when it is prose.
+ * Only backtick spans that look like commands count; path-like spans (`test/api.test.js`)
+ * and free text are never executed.
+ */
+export declare function extractCommandFromHowToVerify(howToVerify: string): string | null;
 export declare function compile(spec: ParsedSpecLike, plan: ParsedPlanLike): AcceptanceCheckSuite;
 export declare function runCheck(check: AcceptanceCheck, cwd: string, timeoutMs?: number): Promise<CheckResult>;
 export declare function runSuite(suite: AcceptanceCheckSuite, cwd: string, timeoutMs?: number): Promise<CheckResult[]>;
@@ -83,6 +99,8 @@ export declare function summarizeSuite(results: CheckResult[]): {
     fail: number;
     skip: number;
     error: number;
+    /** Skipped checks whose criterion has no executable verification. */
+    manual: number;
     allPassed: boolean;
 };
 export declare function verifyRun(input: {

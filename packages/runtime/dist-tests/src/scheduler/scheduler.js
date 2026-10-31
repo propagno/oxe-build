@@ -99,13 +99,11 @@ class Scheduler {
                 break;
             // Global run timeout
             if (Date.now() - this.runStartMs > maxRunMs) {
-                this.emit(ctx, { type: 'RunAborted', payload: { reason: 'global_timeout' } });
-                return { run_id: ctx.runId, status: 'aborted', completed: [], failed: [], blocked: [], reason: 'global_timeout' };
+                return this.abortRun(ctx, 'global_timeout', completed, failed, blocked);
             }
             // Stale progress timeout (no task completed in staleMs)
             if (Date.now() - this.lastProgressMs > staleMs) {
-                this.emit(ctx, { type: 'RunAborted', payload: { reason: 'no_progress_timeout' } });
-                return { run_id: ctx.runId, status: 'aborted', completed: [], failed: [], blocked: [], reason: 'no_progress_timeout' };
+                return this.abortRun(ctx, 'no_progress_timeout', completed, failed, blocked);
             }
             // Respect pause: persist journal and return paused result
             if (this.paused) {
@@ -173,7 +171,11 @@ class Scheduler {
                 pending_gates: this.journal.pending_gates.slice(),
             },
         });
-        this.journal.scheduler_state = this.cancelled ? 'cancelled' : finalStatus === 'blocked' ? 'blocked' : 'completed';
+        this.journal.scheduler_state = this.cancelled
+            ? 'cancelled'
+            : finalStatus === 'blocked' || finalStatus === 'failed'
+                ? finalStatus
+                : 'completed';
         this.journal.completed_work_items = completed.slice();
         this.journal.failed_work_items = failed.slice();
         this.journal.blocked_work_items = blocked.slice();
@@ -193,7 +195,9 @@ class Scheduler {
      */
     async recover(runId, ctx, graph) {
         const journal = (0, run_journal_1.loadJournal)(ctx.projectRoot, runId);
-        if (!journal || journal.scheduler_state !== 'paused')
+        // Paused, blocked (gates since approved), aborted (timeout) and failed runs can all be resumed;
+        // only completed/cancelled runs have nothing left to do.
+        if (!journal || !RECOVERABLE_JOURNAL_STATES.has(journal.scheduler_state))
             return null;
         // Restore state from journal
         this.cancelled = false;
@@ -280,7 +284,11 @@ class Scheduler {
                 pending_gates: this.journal.pending_gates.slice(),
             },
         });
-        this.journal.scheduler_state = this.cancelled ? 'cancelled' : finalStatus === 'blocked' ? 'blocked' : 'completed';
+        this.journal.scheduler_state = this.cancelled
+            ? 'cancelled'
+            : finalStatus === 'blocked' || finalStatus === 'failed'
+                ? finalStatus
+                : 'completed';
         this.journal.completed_work_items = completed.slice();
         this.journal.failed_work_items = failed.slice();
         this.journal.blocked_work_items = blocked.slice();
@@ -298,6 +306,10 @@ class Scheduler {
     isConcurrentSafe(nodeId, graph, ctx) {
         const node = graph.nodes.get(nodeId);
         if (node.mutation_scope.length > 0)
+            return false;
+        // A node that may write files but declares no scope is not provably safe to run in parallel
+        // (an empty scope used to mean "run everything in parallel, in place").
+        if (nodeMayMutate(node))
             return false;
         const primaryAction = pickPrimaryAction(node, ctx.pluginRegistry);
         if (!primaryAction)
@@ -329,6 +341,19 @@ class Scheduler {
                 payload: { reason: 'dependency_not_met' },
             });
         }
+        for (const id of eligible) {
+            const node = graph.nodes.get(id);
+            if (node.mutation_scope.length === 0 && nodeMayMutate(node)) {
+                this.emit(ctx, {
+                    type: 'PolicyWarning',
+                    work_item_id: id,
+                    payload: {
+                        reason: 'empty_mutation_scope',
+                        detail: 'node may write files but declares no mutation_scope; running serially and without scope checks',
+                    },
+                });
+            }
+        }
         const readOnly = eligible.filter((id) => this.isConcurrentSafe(id, graph, ctx));
         const mutations = eligible.filter((id) => !readOnly.includes(id));
         if (readOnly.length > 0) {
@@ -350,6 +375,8 @@ class Scheduler {
             payload: { title: node.title, wave: node.wave },
         });
         let lease = null;
+        // Dispose through the manager that allocated the lease (plugin provider or default).
+        let leaseManager = null;
         let lastResult = null;
         let lastError = null;
         const maxAttempts = node.policy.max_retries + 1;
@@ -391,7 +418,7 @@ class Scheduler {
                         payload: { ...policyDecision },
                     });
                 }
-                if (policyDecision?.gate_required || node.policy.requires_human_approval) {
+                if ((policyDecision?.gate_required || node.policy.requires_human_approval) && !this.hasApprovedGate(node, ctx)) {
                     const gateId = await this.requestGateForNode(node, ctx, policyDecision);
                     this.blockNode(nodeId, ctx, status, blocked, 'pending_gate', gateId);
                     return;
@@ -403,6 +430,7 @@ class Scheduler {
                     mutation_scope: node.mutation_scope,
                 };
                 const workspaceManager = ctx.pluginRegistry?.workspaceProviderFor(node.workspace_strategy) ?? ctx.workspaceManager;
+                leaseManager = workspaceManager;
                 lease = await workspaceManager.allocate(wsReq);
                 this.emit(ctx, {
                     type: 'WorkspaceAllocated',
@@ -481,8 +509,9 @@ class Scheduler {
             }
             finally {
                 if (lease) {
-                    await ctx.workspaceManager.dispose(lease.workspace_id).catch((e) => this.emit(ctx, { type: 'WorkspaceDisposeFailed', payload: { workspace_id: lease?.workspace_id, error: String(e) } }));
+                    await (leaseManager ?? ctx.workspaceManager).dispose(lease.workspace_id).catch((e) => this.emit(ctx, { type: 'WorkspaceDisposeFailed', payload: { workspace_id: lease?.workspace_id, error: String(e) } }));
                     lease = null;
+                    leaseManager = null;
                 }
             }
         }
@@ -493,6 +522,19 @@ class Scheduler {
         });
         status.set(nodeId, 'failed');
         failed.push(nodeId);
+    }
+    /** Abort keeps the progress made so far: an aborted run is recoverable, not a blank slate. */
+    abortRun(ctx, reason, completed, failed, blocked) {
+        this.emit(ctx, { type: 'RunAborted', payload: { reason, completed: completed.slice(), failed: failed.slice(), blocked: blocked.slice() } });
+        if (this.journal) {
+            this.journal.scheduler_state = 'aborted';
+            this.journal.completed_work_items = completed.slice();
+            this.journal.failed_work_items = failed.slice();
+            this.journal.blocked_work_items = blocked.slice();
+            this.journal.partial_result = { run_id: ctx.runId, completed, failed, blocked };
+            (0, run_journal_1.saveJournal)(ctx.projectRoot, ctx.runId, this.journal);
+        }
+        return { run_id: ctx.runId, status: 'aborted', completed, failed, blocked, reason };
     }
     pause() {
         this.paused = true;
@@ -668,6 +710,14 @@ class Scheduler {
         (0, policy_engine_1.savePolicyDecision)(ctx.projectRoot, persisted);
         return persisted;
     }
+    /** An approval already granted for this node in this run must not be requested again on re-execution. */
+    hasApprovedGate(node, ctx) {
+        if (!ctx.gateManager)
+            return false;
+        return ctx.gateManager
+            .listResolved()
+            .some((gate) => gate.work_item_id === node.id && gate.decision === 'approved' && (gate.run_id == null || gate.run_id === ctx.runId));
+    }
     async requestGateForNode(node, ctx, decision) {
         if (!ctx.gateManager) {
             console.warn('[scheduler] ctx.gateManager not configured — gates will not be persisted');
@@ -732,6 +782,11 @@ class Scheduler {
     }
 }
 exports.Scheduler = Scheduler;
+const RECOVERABLE_JOURNAL_STATES = new Set(['paused', 'blocked', 'aborted', 'failed']);
+/** Nodes whose actions may write to the workspace (anything beyond reading and collecting evidence). */
+function nodeMayMutate(node) {
+    return node.actions.some((action) => action.type !== 'read_code' && action.type !== 'collect_evidence');
+}
 function inferSideEffectClass(node) {
     if (node.mutation_scope.length > 0)
         return 'write_fs';

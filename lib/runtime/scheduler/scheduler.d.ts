@@ -67,6 +67,8 @@ export declare class Scheduler {
     private isConcurrentSafe;
     private runWave;
     private runNode;
+    /** Abort keeps the progress made so far: an aborted run is recoverable, not a blank slate. */
+    private abortRun;
     pause(): void;
     resume(): void;
     cancel(): void;
@@ -75,6 +77,8 @@ export declare class Scheduler {
     private executeNode;
     private verifyNode;
     private evaluatePolicyForNode;
+    /** An approval already granted for this node in this run must not be requested again on re-execution. */
+    private hasApprovedGate;
     private requestGateForNode;
     private blockNode;
     private consumeQuotaForNode;

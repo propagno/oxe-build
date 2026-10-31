@@ -13,6 +13,8 @@ export interface ManifestCheck {
     failure_class: VerificationFailureClass | null;
     evidence_refs: string[];
     duration_ms: number;
+    skip_reason?: string | null;
+    tests_executed?: number | null;
 }
 export interface VerificationManifest {
     manifest_id: string;
@@ -29,6 +31,8 @@ export interface VerificationManifest {
         fail: number;
         skip: number;
         error: number;
+        /** Skipped checks whose criterion has no executable verification. */
+        manual?: number;
         all_passed: boolean;
     };
 }
@@ -48,6 +52,8 @@ export interface ResidualRiskLedger {
 }
 export interface EvidenceCoverageSummary {
     total_checks: number;
+    /** Checks that actually ran (status other than skip). */
+    executed_checks?: number;
     checks_with_evidence: number;
     total_evidence_refs: number;
     coverage_percent: number;
