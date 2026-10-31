@@ -8,6 +8,7 @@ export const EVENT_TYPES = [
   'ToolInvoked',
   'ToolCompleted',
   'ToolFailed',
+  'ExecutorUsage',
   'EvidenceCollected',
   'PolicyEvaluated',
   'PolicyWarning',

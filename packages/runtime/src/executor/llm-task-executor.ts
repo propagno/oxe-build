@@ -7,6 +7,7 @@ import type { ChatMessage, ToolCall } from './stream-completion';
 import { BUILT_IN_TOOLS } from './built-in-tools';
 import { selectToolsForActions } from './action-tool-map';
 import { buildNodePrompt } from './node-prompt-builder';
+import type { NodeContextProvider } from './node-context';
 
 export interface LlmProviderConfig {
   baseUrl: string;
@@ -24,7 +25,9 @@ export type LlmExecutorEventType =
   | 'tool_call'
   | 'tool_result'
   | 'tool_denied'
-  | 'executor_complete';
+  | 'executor_complete'
+  /** Once per attempt: turns, tool calls and backend-reported cost. */
+  | 'executor_usage';
 
 /** Injectable completion function (defaults to the HTTP OpenAI-compatible client). */
 export type CompletionFn = typeof streamCompletion;
@@ -40,6 +43,17 @@ export interface LlmExecuteOptions {
   previousError?: string | null;
 }
 
+export interface LlmTaskExecutorOptions {
+  /** Task body, pack contract, workspace snapshot… rendered into the node prompt. */
+  contextProvider?: NodeContextProvider | null;
+}
+
+export interface ExecutorUsage {
+  turns: number;
+  tool_calls: number;
+  cost_usd: number | null;
+}
+
 const DEFAULT_SYSTEM_PROMPT =
   'You are a precise software engineering agent. Use the tools provided to complete the task. ' +
   'When all actions are done, call finish_task with a summary of what was accomplished.';
@@ -50,6 +64,7 @@ export class LlmTaskExecutor implements TaskExecutor {
     private readonly registry?: PluginRegistry | null,
     private readonly onProgress?: ((event: LlmExecutorEvent) => void) | null,
     private readonly complete: CompletionFn = streamCompletion,
+    private readonly options: LlmTaskExecutorOptions = {},
   ) {}
 
   async execute(
@@ -59,7 +74,13 @@ export class LlmTaskExecutor implements TaskExecutor {
     attempt: number,
     options: LlmExecuteOptions = {},
   ): Promise<TaskResult> {
-    const prompt = buildNodePrompt(node, lease, runId, attempt, { previousError: options.previousError ?? null });
+    let context = null;
+    try {
+      context = this.options.contextProvider?.(node, lease) ?? null;
+    } catch {
+      // Context is an aid, never a reason to fail the attempt.
+    }
+    const prompt = buildNodePrompt(node, lease, runId, attempt, { previousError: options.previousError ?? null, context });
     const tools = selectToolsForActions(node.actions);
     // Only the tools offered for this node's actions may run; the model can still name others.
     const allowedTools = new Set(tools.map((tool) => tool.function.name));
@@ -77,6 +98,12 @@ export class LlmTaskExecutor implements TaskExecutor {
     let completedByFinishTask = false;
     let finishTaskSummary = '';
 
+    const usage: ExecutorUsage = { turns: 0, tool_calls: 0, cost_usd: null };
+    const done = (result: TaskResult): TaskResult => {
+      this.emit({ type: 'executor_usage', nodeId: node.id, attempt, detail: { ...usage, completed_by: result.completed_by ?? null, success: result.success } });
+      return result;
+    };
+
     let turn = 0;
     for (; turn < maxTurns; turn++) {
       this.emit({ type: 'turn_start', nodeId: node.id, attempt, detail: { turn } });
@@ -93,8 +120,11 @@ export class LlmTaskExecutor implements TaskExecutor {
           timeoutMs: this.provider.timeoutMs,
         });
       } catch (err) {
-        return { success: false, failure_class: 'env', evidence: evidencePaths, output: String(err) };
+        return done({ success: false, failure_class: 'env', evidence: evidencePaths, output: String(err) });
       }
+      usage.turns += 1;
+      if (typeof response.usage?.cost_usd === 'number') usage.cost_usd = (usage.cost_usd ?? 0) + response.usage.cost_usd;
+      usage.tool_calls += response.tool_calls.length;
 
       this.emit({ type: 'turn_complete', nodeId: node.id, attempt, detail: { turn, finish_reason: response.finish_reason } });
 
@@ -146,35 +176,35 @@ export class LlmTaskExecutor implements TaskExecutor {
         : 'turn_limit_exhausted';
 
     if (completedBy === 'turn_limit_exhausted') {
-      return {
+      return done({
         success: false,
         failure_class: 'llm',
         evidence: evidencePaths,
         output: finalOutput || `Task exhausted ${maxTurns} turns without calling finish_task`,
         completed_by: completedBy,
-      };
+      });
     }
 
     // A text-only answer is not a completed task when the node had work to do and nothing was
     // written: that was the "T6 verified, test/api.test.js never created" false green.
     const requiresWork = node.actions.some((action) => action.type !== 'read_code' && action.type !== 'collect_evidence');
     if (completedBy === 'no_tool_call' && requiresWork && evidencePaths.length === 0) {
-      return {
+      return done({
         success: false,
         failure_class: 'llm',
         evidence: [],
         output: finalOutput || 'Model ended the turn without calling any tool or finish_task',
         completed_by: completedBy,
-      };
+      });
     }
 
-    return {
+    return done({
       success: true,
       failure_class: null,
       evidence: evidencePaths,
       output: completedByFinishTask ? (finishTaskSummary || finalOutput) : finalOutput,
       completed_by: completedBy,
-    };
+    });
   }
 
   private async invokeToolCall(

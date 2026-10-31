@@ -1,8 +1,11 @@
 import type { GraphNode } from '../compiler/graph-compiler';
 import type { WorkspaceLease } from '../models/workspace';
+import { renderNodeContext } from './node-context';
+import type { NodeExecutionContext } from './node-context';
 
 export interface NodePromptOptions {
   previousError?: string | null;
+  context?: NodeExecutionContext | null;
 }
 
 export function buildNodePrompt(
@@ -52,6 +55,8 @@ export function buildNodePrompt(
   if (node.verify.command) {
     lines.push('', `**Verificação:** \`${node.verify.command}\``);
   }
+
+  lines.push(...renderNodeContext(options.context));
 
   lines.push('', '## Conclusão da tarefa');
   lines.push('Quando **todas** as ações estiverem concluídas, chame `finish_task` com um resumo do que foi realizado.');

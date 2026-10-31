@@ -154,6 +154,7 @@ function saveRuntimeProviderConfig(projectRoot, providerConfig) {
     model: providerConfig.model || 'claude-sonnet-4-6',
   };
   if (providerConfig.apiKeyEnv) cfg.runtime.provider.apiKeyEnv = providerConfig.apiKeyEnv;
+  if (providerConfig.adapter) cfg.runtime.provider.adapter = providerConfig.adapter;
   if (providerConfig.maxTurns != null) cfg.runtime.provider.maxTurns = providerConfig.maxTurns;
   const oxeDir = path.join(projectRoot, '.oxe');
   if (!fs.existsSync(oxeDir)) fs.mkdirSync(oxeDir, { recursive: true });
@@ -175,6 +176,30 @@ function loadRuntimeProviderConfig(projectRoot) {
   } catch {
     return null;
   }
+}
+
+/** Eventos `ExecutorUsage` da run, no formato da tabela do RUN-SUMMARY. */
+function readExecutorUsageRows(projectRoot, activeSession, runId) {
+  return readEvents(projectRoot, activeSession)
+    .filter((event) => event && event.type === 'ExecutorUsage' && (!runId || event.run_id === runId))
+    .map((event) => {
+      const payload = event.payload || {};
+      return {
+        work_item_id: event.work_item_id || payload.work_item_id || '—',
+        attempt: payload.attempt == null ? null : Number(payload.attempt),
+        turns: payload.turns == null ? null : Number(payload.turns),
+        tool_calls: payload.tool_calls == null ? null : Number(payload.tool_calls),
+        cost_usd: typeof payload.cost_usd === 'number' ? payload.cost_usd : null,
+        adapter: payload.adapter || null,
+      };
+    });
+}
+
+/** Adapters de executor conhecidos e se estão disponíveis nesta máquina (`runtime providers`). */
+function detectRuntimeAdapters(options = {}) {
+  const runtime = loadRuntimeModule();
+  if (!runtime || typeof runtime.detectExecutorAdapters !== 'function') return [];
+  return runtime.detectExecutorAdapters(options);
 }
 
 function buildRuntimePluginRegistry(projectRoot) {
@@ -284,6 +309,149 @@ function attachImplementationPackContracts(parsedPlan, packPath) {
   return parsedPlan;
 }
 
+function readJsonQuiet(filePath) {
+  try {
+    return filePath ? JSON.parse(fs.readFileSync(filePath, 'utf8')) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Seção da tarefa no PLAN.md: do heading `### T3 …` até o próximo heading de mesmo nível ou acima. */
+function extractPlanTaskBody(planText, taskId) {
+  const lines = String(planText || '').split(/\r?\n/);
+  const escaped = String(taskId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const startRe = new RegExp(`^(#{2,4})\\s+${escaped}(?![\\w-])`);
+  const start = lines.findIndex((line) => startRe.test(line));
+  if (start < 0) return null;
+  const level = lines[start].match(/^#+/)[0].length;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const heading = lines[i].match(/^(#+)\s/);
+    if (heading && heading[1].length <= level) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(start, end).join('\n').trim();
+}
+
+function readLessonLines(projectRoot, limit = 8) {
+  for (const rel of [path.join('.oxe', 'global', 'LESSONS.md'), path.join('.oxe', 'LESSONS.md')]) {
+    const text = readTextIfExists(path.join(projectRoot, rel));
+    if (!text) continue;
+    return text
+      .split(/\r?\n/)
+      .map((line) => line.match(/^\s*(?:[-*]|\d+\.)\s+(.*)$/))
+      .filter(Boolean)
+      .map((match) => match[1].trim())
+      .filter(Boolean)
+      .slice(0, limit);
+  }
+  return [];
+}
+
+function snapshotWorkspaceFile(root, rel, headChars = 1500, headLines = 40) {
+  const abs = path.resolve(root, rel);
+  const relative = path.relative(root, abs);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  let stat;
+  try {
+    stat = fs.statSync(abs);
+  } catch {
+    return { path: rel, exists: false };
+  }
+  if (!stat.isFile()) return null;
+  let head = '';
+  try {
+    const fd = fs.openSync(abs, 'r');
+    const buffer = Buffer.alloc(Math.min(stat.size, headChars * 4));
+    fs.readSync(fd, buffer, 0, buffer.length, 0);
+    fs.closeSync(fd);
+    head = buffer.toString('utf8').split(/\r?\n/).slice(0, headLines).join('\n').slice(0, headChars);
+  } catch {}
+  return { path: rel, exists: true, bytes: stat.size, head };
+}
+
+/**
+ * NodeExecutionContext por nó: corpo da tarefa no PLAN, entradas do IMPLEMENTATION-PACK e do
+ * FIXTURE-PACK, snapshot dos arquivos do escopo, git status e lições. Sem isso cada tentativa
+ * redescobria o workspace (benchmark 1.17).
+ */
+function buildNodeContextProvider(projectRoot, activeSession) {
+  const rationality = require('./oxe-rationality.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const planText = readTextIfExists(paths.plan) || '';
+  const pack = readJsonQuiet(paths.implementationPack);
+  const fixturePath = paths.implementationPack
+    ? path.join(path.dirname(paths.implementationPack), 'FIXTURE-PACK.json')
+    : null;
+  const fixturePack = readJsonQuiet(fixturePath);
+  const lessons = readLessonLines(projectRoot);
+  const packTasks = pack && Array.isArray(pack.tasks) ? pack.tasks : [];
+  const fixtures = fixturePack && Array.isArray(fixturePack.fixtures) ? fixturePack.fixtures : [];
+  return (node, lease) => {
+    const root = (lease && lease.root_path) || projectRoot;
+    const contract = packTasks.find((task) => String(task && (task.id || task.task_id) || '').trim() === node.id) || null;
+    const fixture = fixtures.find((entry) => rationality.fixtureTaskIds(entry).includes(node.id)) || null;
+    const contractPaths = contract && Array.isArray(contract.exact_paths) ? contract.exact_paths : [];
+    const files = [...new Set([...(node.mutation_scope || []), ...contractPaths].map((value) => String(value || '').trim()))]
+      .filter((value) => looksLikeFilePath(value) && !value.includes('*'))
+      .slice(0, 12)
+      .map((rel) => snapshotWorkspaceFile(root, rel))
+      .filter(Boolean);
+    let gitStatus = null;
+    if (fs.existsSync(path.join(root, '.git'))) {
+      const res = spawnSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8', timeout: 5000 });
+      if (res.status === 0) gitStatus = res.stdout;
+    }
+    return {
+      taskBody: extractPlanTaskBody(planText, node.id),
+      implementationContract: contract,
+      fixture,
+      workspaceFiles: files,
+      gitStatus,
+      lessons,
+    };
+  };
+}
+
+/**
+ * LlmTaskExecutor sobre um adapter (`claude` = `claude -p` por turno, `http` = OpenAI-compatível).
+ * O uso por tentativa vira evento `ExecutorUsage`.
+ */
+function createAdapterExecutor(runtime, projectRoot, activeSession, options, getRunId) {
+  const adapterId = options.adapter || 'http';
+  if (typeof runtime.createExecutorAdapter !== 'function') throw new Error('Runtime não exporta createExecutorAdapter.');
+  const adapter = runtime.createExecutorAdapter(adapterId, { claude: options.adapterOptions || {} });
+  const provider = options.providerConfig || {};
+  const progress = (event) => {
+    if (event && event.type === 'executor_usage') {
+      appendEvent(projectRoot, activeSession, {
+        type: 'ExecutorUsage',
+        run_id: getRunId(),
+        work_item_id: event.nodeId,
+        payload: { adapter: adapterId, attempt: event.attempt, ...(event.detail || {}) },
+      });
+    }
+    if (typeof options.onProgress === 'function') options.onProgress(event);
+  };
+  return new runtime.LlmTaskExecutor(
+    {
+      baseUrl: provider.baseUrl || '',
+      apiKey: provider.apiKey || '',
+      model: provider.model || '',
+      maxTurns: provider.maxTurns,
+      maxTokens: provider.maxTokens,
+      timeoutMs: provider.timeoutMs,
+    },
+    null,
+    progress,
+    adapter.createCompletion(),
+    { contextProvider: options.contextProvider === false ? null : buildNodeContextProvider(projectRoot, activeSession) }
+  );
+}
+
 function normalizeRuntimeEventType(type) {
   const raw = String(type || '').trim();
   if (!raw) return 'RunStarted';
@@ -297,6 +465,7 @@ function normalizeRuntimeEventType(type) {
     ToolInvoked: 'ToolInvoked',
     ToolCompleted: 'ToolCompleted',
     ToolFailed: 'ToolFailed',
+    ExecutorUsage: 'ExecutorUsage',
     EvidenceCollected: 'EvidenceCollected',
     PolicyEvaluated: 'PolicyEvaluated',
     PolicyWarning: 'PolicyWarning',
@@ -989,11 +1158,12 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
   const parsers = loadSdkParsers();
   if (!parsers) throw new Error('SDK parsers não disponíveis.');
 
-  // Auto-wire LlmTaskExecutor if providerConfig is supplied
+  // Auto-wire LlmTaskExecutor (via adapter) if providerConfig or adapter is supplied
   let executor = options.executor || null;
-  if (!executor && options.providerConfig) {
+  let usageRunId = null;
+  if (!executor && (options.providerConfig || options.adapter)) {
     if (typeof runtime.LlmTaskExecutor !== 'function') throw new Error('Runtime não exporta LlmTaskExecutor.');
-    executor = new runtime.LlmTaskExecutor(options.providerConfig, null, options.onProgress || null);
+    executor = createAdapterExecutor(runtime, projectRoot, activeSession, options, () => usageRunId);
   }
   // Auto-wire InplaceWorkspaceManager as default
   let workspaceManager = options.workspaceManager || null;
@@ -1011,6 +1181,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
     if (!current || !current.compiled_graph) {
       throw new Error('Nenhum grafo compilado encontrado. Execute oxe-cc runtime compile primeiro.');
     }
+    usageRunId = current.run_id;
     const preflight = buildRuntimeExecutePreflight(projectRoot, activeSession, current);
     if (!preflight.ok && !options.skipPreflight) {
       const reason = preflight.blockers[0] || 'runtime_execute_preflight_failed';
@@ -1806,7 +1977,7 @@ function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
       verificationArtifacts.evidenceCoverage
     ),
     state: projector.projectState(canonicalLive),
-    runSummary: projector.projectRunSummary(canonicalLive),
+    runSummary: projector.projectRunSummary(canonicalLive, readExecutorUsageRows(projectRoot, activeSession, current.run_id)),
     commitSummary: typeof projector.projectCommitSummary === 'function'
       ? projector.projectCommitSummary(canonicalLive, graph)
       : projector.projectRunSummary(canonicalLive),
@@ -2914,6 +3085,10 @@ module.exports = {
   makeRunId,
   appendEvent,
   readEvents,
+  buildNodeContextProvider,
+  detectRuntimeAdapters,
+  readExecutorUsageRows,
+  extractPlanTaskBody,
   syncRunStateAfterExecute,
   writeProjectedBlock,
   extractBacktickSpans,

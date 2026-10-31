@@ -12,6 +12,7 @@ exports.EVENT_TYPES = [
     'ToolInvoked',
     'ToolCompleted',
     'ToolFailed',
+    'ExecutorUsage',
     'EvidenceCollected',
     'PolicyEvaluated',
     'PolicyWarning',

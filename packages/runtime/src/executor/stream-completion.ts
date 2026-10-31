@@ -19,10 +19,16 @@ export interface ToolCall {
   };
 }
 
+export interface CompletionUsage {
+  /** Cost reported by the backend for this turn (USD), when it reports one. */
+  cost_usd?: number | null;
+}
+
 export interface CompletionResponse {
   content: string;
   tool_calls: ToolCall[];
   finish_reason: string | null;
+  usage?: CompletionUsage;
 }
 
 export interface StreamCompletionOptions {

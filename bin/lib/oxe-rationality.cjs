@@ -547,6 +547,7 @@ function buildExecutionRationality(paths = {}) {
 
 module.exports = {
   buildExecutionRationality,
+  fixtureTaskIds,
   parsePlanTasks,
   readExternalRefs,
   summarizeImplementationPack,

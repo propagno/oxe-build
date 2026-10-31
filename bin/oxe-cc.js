@@ -2500,7 +2500,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
     npx oxe-cc dashboard [opções] [pasta-do-projeto]
     npx oxe-cc events [--tail N] [--since <evt_id>] [--json] [opções] [pasta-do-projeto]
     npx oxe-cc map [--json] [opções] [pasta-do-projeto]
-  npx oxe-cc runtime <status|start|pause|resume|replay|compile|verify|project|ci|promote|recover|gates|agents|execute> [opções] [pasta-do-projeto]
+  npx oxe-cc runtime <status|start|pause|resume|replay|compile|verify|project|ci|promote|recover|gates|agents|execute|providers> [opções] [pasta-do-projeto]
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
     npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
     npx oxe-cc plugins <list|install|remove> [opções]
@@ -4038,6 +4038,7 @@ function parseRuntimeArgs(argv) {
     gateId: '',
     // execute flags
     provider: '',
+    adapter: '',
     apiKey: '',
     model: '',
     baseUrl: '',
@@ -4083,6 +4084,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--scope' && argv[i + 1]) out.gateScope = String(argv[++i]);
     else if (a === '--json') out.jsonOutput = true;
     else if (a === '--provider' && argv[i + 1]) out.provider = String(argv[++i]);
+    else if (a === '--adapter' && argv[i + 1]) out.adapter = String(argv[++i]).toLowerCase();
     else if (a === '--api-key' && argv[i + 1]) out.apiKey = String(argv[++i]);
     else if (a === '--model' && argv[i + 1]) out.model = String(argv[++i]);
     else if (a === '--base-url' && argv[i + 1]) out.baseUrl = String(argv[++i]);
@@ -4793,6 +4795,20 @@ async function runRuntime(opts) {
     return;
   }
 
+  if (opts.action === 'providers') {
+    const adapters = oxeOperational.detectRuntimeAdapters();
+    if (opts.jsonOutput) {
+      console.log(JSON.stringify({ oxeRuntimeProvidersSchema: 1, adapters }, null, 2));
+      return;
+    }
+    for (const a of adapters) {
+      const mark = a.available ? `${c ? green : ''}✓${c ? reset : ''}` : `${c ? yellow : ''}✗${c ? reset : ''}`;
+      const detail = a.available ? (a.version || (a.requires_api_key ? 'requer API key' : 'disponível')) : (a.error || 'indisponível');
+      console.log(`  ${mark} ${a.id.padEnd(8)} ${detail}${a.binary ? `  ${c ? dim : ''}${a.binary}${c ? reset : ''}` : ''}`);
+    }
+    return;
+  }
+
   if (opts.action === 'configure') {
     try {
       const providerConfig = {
@@ -4800,6 +4816,7 @@ async function runRuntime(opts) {
         model: opts.model || undefined,
         apiKeyEnv: opts.apiKeyEnv || undefined,
         maxTurns: opts.maxTurns ? parseInt(opts.maxTurns, 10) : undefined,
+        adapter: opts.adapter || undefined,
       };
       const saved = oxeOperational.saveRuntimeProviderConfig(opts.dir, providerConfig);
       console.log(`  ${c ? green : ''}✓${c ? reset : ''} Provider configurado em .oxe/config.json`);
@@ -4807,6 +4824,7 @@ async function runRuntime(opts) {
       console.log(`  ${c ? green : ''}Modelo:${c ? reset : ''} ${saved.model}`);
       if (saved.apiKeyEnv) console.log(`  ${c ? green : ''}API Key env:${c ? reset : ''} $${saved.apiKeyEnv}`);
       if (saved.maxTurns != null) console.log(`  ${c ? green : ''}Max turns:${c ? reset : ''} ${saved.maxTurns}`);
+      if (saved.adapter) console.log(`  ${c ? green : ''}Adapter:${c ? reset : ''} ${saved.adapter}`);
       console.log(`  ${c ? dim : ''}Passe --api-key na execução ou exporte a variável configurada em apiKeyEnv.${c ? reset : ''}`);
       return;
     } catch (err) {
@@ -4936,17 +4954,38 @@ async function runRuntime(opts) {
       const model = opts.model || process.env.OXE_MODEL || (_persisted && _persisted.model) || 'claude-sonnet-4-6';
       const baseUrl = opts.baseUrl || process.env.OXE_BASE_URL || (_persisted && _persisted.baseUrl) || 'https://api.anthropic.com/v1';
       const maxTurns = opts.maxTurns || (_persisted && _persisted.maxTurns) || 10;
-      if (!apiKey) {
+      // Adapter: --adapter > configurado > `http` quando há chave/URL (comportamento anterior) >
+      // `claude` quando o CLI está instalado (sem API key) > http.
+      let adapterId = opts.adapter || (_persisted && _persisted.adapter) || '';
+      if (!adapterId) {
+        if (apiKey || opts.baseUrl) adapterId = 'http';
+        else {
+          const claude = oxeOperational.detectRuntimeAdapters().find((a) => a.id === 'claude');
+          adapterId = claude && claude.available ? 'claude' : 'http';
+        }
+      }
+      if (adapterId !== 'claude' && adapterId !== 'http') {
+        console.error(`${red}Erro: --adapter ${adapterId} desconhecido (use claude ou http).${reset}`);
+        process.exit(1);
+      }
+      if (adapterId === 'http' && !apiKey) {
         console.error(`${red}Erro: executor LLM não configurado.${reset}`);
-        console.error(`  Use: --api-key <chave>  ou  exporte ANTHROPIC_API_KEY`);
+        console.error(`  Use: --adapter claude (Claude Code instalado, sem API key)`);
+        console.error(`  Ou:  --api-key <chave>  ou  exporte ANTHROPIC_API_KEY`);
         console.error(`  Ou persista com: oxe-cc runtime configure --model <modelo> --api-key-env ANTHROPIC_API_KEY`);
         process.exit(1);
       }
       const providerConfig = { baseUrl, apiKey, model, maxTurns };
+      const adapterOptions = adapterId === 'claude'
+        ? { model: opts.model || process.env.OXE_CLAUDE_MODEL || null }
+        : {};
+      if (!opts.jsonOutput) console.log(`  ${c ? green : ''}Adapter:${c ? reset : ''} ${adapterId}${adapterId === 'claude' ? ` (claude -p${adapterOptions.model ? ` --model ${adapterOptions.model}` : ''})` : ` (${baseUrl})`}`);
       const result = await oxeOperational.runRuntimeExecute(opts.dir, activeSession, {
         runId: opts.runId || undefined,
         heartbeatTimeoutMs: opts.heartbeatTimeoutMs || undefined,
         providerConfig,
+        adapter: adapterId,
+        adapterOptions,
         agentsPlanPath: opts.agentsPlanPath || undefined,
         onProgress: (event) => {
           if (event.type === 'turn_start') {
@@ -4954,6 +4993,8 @@ async function runRuntime(opts) {
             if (turn === 0) process.stdout.write(`  → ${event.nodeId} `);
           } else if (event.type === 'tool_call') {
             process.stdout.write('.');
+          } else if (event.type === 'executor_usage' && typeof event.detail?.cost_usd === 'number') {
+            process.stdout.write(` $${event.detail.cost_usd.toFixed(2)}`);
           } else if (event.type === 'VerificationStarted') {
             process.stdout.write(' [verify]');
           } else if (event.type === 'WorkItemCompleted') {

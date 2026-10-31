@@ -12,9 +12,13 @@
  *
  * Modos:
  *   --mock (padrão, determinístico — roda no `npm test`)
+ *   --real [--adapter claude|http] [--model <m>]  modelo real dirigindo `runtime execute`; mede
+ *          tentativas, turnos, custo e `run_command` por tarefa (KPIs da 1.18). `http` usa
+ *          ANTHROPIC_API_KEY/OPENAI_API_KEY e OXE_BASE_URL.
  *   --keep  mantém os diretórios temporários para inspeção
  *
- * Saída: .oxe/release/e2e-linkly-report.json (OXE_RELEASE_PROJECT_ROOT sobrescreve a raiz).
+ * Saída: .oxe/release/e2e-linkly-report.json (mock) ou e2e-linkly-real-report.json (real);
+ * OXE_RELEASE_PROJECT_ROOT sobrescreve a raiz.
  */
 
 const fs = require('fs');
@@ -26,8 +30,14 @@ const operational = require('../bin/lib/oxe-operational.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const REPORT_ROOT = process.env.OXE_RELEASE_PROJECT_ROOT ? path.resolve(process.env.OXE_RELEASE_PROJECT_ROOT) : REPO_ROOT;
-const REPORT_PATH = path.join(REPORT_ROOT, '.oxe', 'release', 'e2e-linkly-report.json');
 const KEEP = process.argv.includes('--keep');
+const REAL = process.argv.includes('--real');
+const REPORT_PATH = path.join(REPORT_ROOT, '.oxe', 'release', REAL ? 'e2e-linkly-real-report.json' : 'e2e-linkly-report.json');
+
+function argValue(flag, fallback) {
+  const i = process.argv.indexOf(flag);
+  return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
+}
 
 function writeFile(filePath, content) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -41,6 +51,7 @@ const TASKS = [
     id: 'T1',
     wave: 1,
     title: 'Validação de URL',
+    goal: 'Criar src/validate.js exportando validateUrl(input): true só para URLs http/https válidas; e test/validate.test.js (node:test) com casos [A1].',
     files: ['src/validate.js', 'test/validate.test.js'],
     test: 'test/validate.test.js',
     aceite: 'A1',
@@ -54,6 +65,7 @@ const TASKS = [
     id: 'T2',
     wave: 1,
     title: 'Gerador de códigos',
+    goal: 'Criar src/code.js exportando newCode(): string de 6 caracteres base62; e test/code.test.js (node:test) com caso [A2].',
     files: ['src/code.js', 'test/code.test.js'],
     test: 'test/code.test.js',
     aceite: 'A2',
@@ -67,6 +79,7 @@ const TASKS = [
     id: 'T3',
     wave: 2,
     title: 'Suíte de API',
+    goal: 'Criar src/api.js exportando shorten(url): { code } para URL válida (usa validateUrl e newCode) ou { error } caso contrário; e test/api.test.js (node:test) com casos [A3].',
     files: ['src/api.js', 'test/api.test.js'],
     test: 'test/api.test.js',
     aceite: 'A3',
@@ -92,6 +105,7 @@ function planMd() {
 - **Arquivos alvo:** ${t.files.map((f) => `\`${f}\``).join(', ')}
 - **Depende de:** ${t.dependsOn ? t.dependsOn.join(', ') : '—'}
 - **Onda:** ${t.wave}
+- **Implementar:** ${t.goal}
 - **Verificar:**
   - Comando: \`${t.verify || `node --test ${t.test}`}\`
 - **Aceite vinculado:** ${t.aceite}
@@ -105,6 +119,9 @@ function makeProject(name) {
   writeFile(path.join(dir, '.oxe', 'SPEC.md'), specMd());
   writeFile(path.join(dir, '.oxe', 'PLAN.md'), planMd());
   writeFile(path.join(dir, '.oxe', 'STATE.md'), '# OXE — Estado\n\n## Fase atual\n\n`plan_ready`\n');
+  writeFile(path.join(dir, '.oxe', 'IMPLEMENTATION-PACK.json'), JSON.stringify({
+    tasks: TASKS.map((t) => ({ id: t.id, mode: 'mutating', exact_paths: t.files, write_set: 'closed' })),
+  }, null, 2));
   return dir;
 }
 
@@ -196,7 +213,120 @@ async function runScenario(name, liarTasks) {
   }
 }
 
+// ─── Modo real: modelo de verdade via adapter ────────────────────────────────
+
+async function runRealScenario() {
+  const adapter = argValue('--adapter', 'claude');
+  const model = argValue('--model', null);
+  const dir = makeProject('real');
+  const started = Date.now();
+  const toolCalls = {};
+  try {
+    operational.compileExecutionGraphFromArtifacts(dir, null, {});
+    const executed = await operational.runRuntimeExecute(dir, null, {
+      adapter,
+      adapterOptions: adapter === 'claude' ? { model } : {},
+      providerConfig: {
+        apiKey: process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || '',
+        baseUrl: process.env.OXE_BASE_URL || 'https://api.anthropic.com/v1',
+        model: model || process.env.OXE_MODEL || 'claude-sonnet-4-6',
+        maxTurns: 15,
+      },
+      skipPreflight: true,
+      onProgress: (event) => {
+        if (event && event.type === 'tool_call' && event.detail && event.detail.tool) {
+          toolCalls[event.detail.tool] = (toolCalls[event.detail.tool] || 0) + 1;
+        }
+      },
+    });
+    const verified = await operational.runRuntimeVerify(dir, null, { timeoutMs: 120_000 });
+    operational.projectRuntimeArtifacts(dir, null, { write: true });
+    const events = operational.readEvents(dir, null);
+    const ids = events.map((e) => e.event_id);
+    const usage = operational.readExecutorUsageRows(dir, null, executed.result.run_id);
+    const perTask = {};
+    for (const row of usage) {
+      const t = perTask[row.work_item_id] || (perTask[row.work_item_id] = { attempts: 0, turns: 0, tool_calls: 0, cost_usd: 0 });
+      t.attempts += 1;
+      t.turns += row.turns || 0;
+      t.tool_calls += row.tool_calls || 0;
+      t.cost_usd += row.cost_usd || 0;
+    }
+    const truth = oracle(dir);
+    const oxeSaysPass = executed.result.status === 'completed' && verified.report.status === 'passed';
+    const result = {
+      name: `real-${adapter}`,
+      adapter,
+      model,
+      oxe: {
+        execute_status: executed.result.status,
+        completed: executed.result.completed,
+        failed: executed.result.failed,
+        verify_status: verified.report.status,
+        manifest: verified.report.manifest ? verified.report.manifest.summary : null,
+        says_pass: oxeSaysPass,
+      },
+      oracle: truth,
+      usage: {
+        per_task: perTask,
+        attempts: usage.length,
+        first_try_tasks: Object.values(perTask).filter((t) => t.attempts === 1).length,
+        turns: usage.reduce((sum, r) => sum + (r.turns || 0), 0),
+        cost_usd: Number(usage.reduce((sum, r) => sum + (r.cost_usd || 0), 0).toFixed(4)),
+        tool_calls: toolCalls,
+        run_command_calls: toolCalls.run_command || 0,
+      },
+      checks: {
+        false_green: oxeSaysPass && !truth.ok,
+        false_red: !oxeSaysPass && truth.ok,
+        duplicate_event_ids: ids.length - new Set(ids).size,
+        run_started_events: events.filter((e) => e.type === 'RunStarted').length,
+      },
+      duration_ms: Date.now() - started,
+      dir: KEEP ? dir : null,
+    };
+    result.ok = oxeSaysPass && truth.ok && result.checks.duplicate_event_ids === 0;
+    return result;
+  } finally {
+    if (!KEEP) fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+async function mainReal() {
+  const r = await runRealScenario();
+  const report = {
+    schema_version: 1,
+    generated_at: new Date().toISOString(),
+    suite: 'e2e-linkly',
+    mode: 'real',
+    kpis: {
+      false_green_count: r.checks.false_green ? 1 : 0,
+      oracle_agreement: !r.checks.false_green && !r.checks.false_red ? 1 : 0,
+      tasks_completed: r.oxe.completed.length,
+      tasks_total: TASKS.length,
+      first_try_tasks: r.usage.first_try_tasks,
+      attempts: r.usage.attempts,
+      turns: r.usage.turns,
+      cost_usd: r.usage.cost_usd,
+      run_command_calls: r.usage.run_command_calls,
+    },
+    summary: { total: 1, pass: r.ok ? 1 : 0, fail: r.ok ? 0 : 1, all_passed: r.ok },
+    results: [r],
+  };
+  writeFile(REPORT_PATH, JSON.stringify(report, null, 2) + '\n');
+  const k = report.kpis;
+  const line = `${k.tasks_completed}/${k.tasks_total} tarefas · ${k.first_try_tasks} na 1ª tentativa · ${k.turns} turnos · US$ ${k.cost_usd.toFixed(2)} · run_command ${k.run_command_calls} · oráculo ${r.oracle.ok ? 'ok' : 'FALHOU'} · falso verde ${k.false_green_count}`;
+  if (!r.ok) {
+    console.error(`e2e-linkly --real: FAIL · ${line}`);
+    console.error(`report: ${REPORT_PATH}`);
+    process.exit(1);
+  }
+  console.log(`e2e-linkly --real (${r.adapter}): OK · ${line}`);
+  console.log(`report: ${REPORT_PATH}`);
+}
+
 (async () => {
+  if (REAL) return mainReal();
   const results = [
     await runScenario('honest', new Set()),
     await runScenario('liar-api-test', new Set(['T3'])),

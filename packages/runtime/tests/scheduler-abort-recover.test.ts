@@ -41,10 +41,11 @@ describe('Scheduler — abort preserva progresso, recover amplo, gate aprovado r
 
   test('abort por timeout devolve o que já foi concluído e deixa journal recuperável', async () => {
     const runId = `r-abort-${Date.now()}`;
-    // Wave 1 starts inside the budget; its 80 ms task pushes wave 2 past the 50 ms limit.
+    // Wave 1 starts inside the budget; its 1.5 s task pushes wave 2 past the 1 s limit. The margins
+    // are wide so the wave-1 start still fits the budget under a loaded parallel test run.
     const slow: TaskExecutor = {
       async execute(): Promise<TaskResult> {
-        await new Promise((resolve) => setTimeout(resolve, 80));
+        await new Promise((resolve) => setTimeout(resolve, 1500));
         return { success: true, failure_class: null, evidence: [], output: 'ok' };
       },
     };
@@ -54,7 +55,7 @@ describe('Scheduler — abort preserva progresso, recover amplo, gate aprovado r
       runId,
       executor: slow,
       workspaceManager: new InplaceWorkspaceManager(tmp),
-      options: { maxRunDurationMs: 50 },
+      options: { maxRunDurationMs: 1000 },
     };
     const graph = compile(plan([task('T1', 1), task('T2', 2)]), SPEC, { default_workspace_strategy: 'inplace' });
     const result = await new Scheduler().run(graph, ctx);
