@@ -4,6 +4,43 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.17.0] — 2026-10-31
+
+### Integridade da verificação: sem falso verde
+
+Um teste ponta a ponta real (app "linkly") mostrou o runtime reportando 18/18
+checks aprovados com tarefas falhadas e um arquivo de teste inexistente. Esta
+versão fecha essas causas e mede o falso verde com um oráculo independente
+(`npm run test:e2e-linkly`: 50% na 1.16.0, 0% agora).
+
+- **Verify baseado em testes executados** — arquivo de teste ausente, zero
+  testes executados ou ausência de relatório de teste reprovam o check; parsers
+  para TAP/node, jest, vitest, mocha, pytest e JUnit. "Como verificar" em prosa
+  vira check manual: a run fica `partial` e o merge gate bloqueia com motivo.
+  Cobertura de evidência conta só checks executados.
+- **Escopo de mutação** — `parsePlan` lê `Arquivos`, `Arquivos alvo` e
+  `Arquivos prováveis`; tarefa mutável sem escopo roda em série e emite
+  `PolicyWarning`. O Gap B só anexa trechos que parecem comando.
+- **Eventos e estado** — cada evento é gravado uma vez com id estável; logs
+  antigos duplicados são deduplicados. ACTIVE-RUN recebe status, falhas e
+  `canonical_state` ao fim do execute; STATE.md e VERIFY.md são projetados em
+  blocos `<!-- oxe:runtime:begin/end -->` que preservam o texto manual.
+- **Executor** — tools fora da allowlist da tarefa são negadas; caminhos ficam
+  contidos no workspace; resposta só em texto numa tarefa que precisa escrever
+  é falha; URL da API preserva `/v1`; comandos no Windows usam
+  `cmd.exe /d /s /c` sem reescrita de aspas.
+- **Scheduler** — abort por timeout preserva o que foi concluído; `recover`
+  aceita runs pausadas, bloqueadas, abortadas ou falhas; gate aprovado não é
+  pedido de novo; workspace é liberado pelo provider que o alocou.
+- **Preflight de fixtures** alinhado ao gate do plano (`task_id` em lista,
+  `not_applicable`, `requires_fixture:false`).
+- **Instalação** — flag `--claude`; VSIX escolhido por semver; extensão VS Code
+  só quando a integração VS Code é pedida; doctor detecta `.claude/` local;
+  `*.vsix` fora do git.
+- **CI** — job Windows para o runtime e o e2e-linkly.
+
+---
+
 ## [1.16.0] — 2026-07-18
 
 ### Segurança, pacote verificável e engenharia de release
