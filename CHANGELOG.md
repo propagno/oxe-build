@@ -4,6 +4,28 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.17.1] — 2026-10-31
+
+### Achados do benchmark real da 1.17
+
+O benchmark ponta a ponta da 1.17.0 (replay do linkly: 8/8 tarefas na 1ª tentativa,
+oráculo independente 18/18, US$ 4,88 contra US$ 6,57 da 1.16) expôs estes defeitos, agora corrigidos:
+
+- **Falso vermelho:** o tipo do check passa a vir do comando executado, ignorando argumentos entre aspas.
+  Um `node -e "…'node --test'…"` deixa de exigir relatório de teste.
+- **Suíte velha:** `runtime verify` recompila a suíte persistida quando o hash de SPEC/PLAN muda
+  e emite o evento `VerificationSuiteRecompiled`. Não é mais preciso apagá-la à mão de `.oxe/runs/<id>.json`.
+- **Contrato do IMPLEMENTATION-PACK verificado:** os `exact_paths` de tarefas `mutating` viram checks `contract`.
+  Um arquivo ausente falha a run com `files_missing`.
+- **Gate de cobertura explicável:** o resumo traz `checks_without_evidence`, e o merge gate nomeia os checks que faltam.
+- **Manifest** carrega o motivo da falha (`error`) de cada check.
+- **Re-verify verde** de uma run executada restaura `completed` em vez de deixá-la `running`.
+- **Preflight:** os modos `read_only`, `verify-only` e equivalentes são normalizados para `not_applicable`.
+- **parsePlan:** descarta spans de escopo que não são caminhos e junta todas as linhas `Comando:` da tarefa.
+- **Router:** com PLAN pronto, sugere `execute` mesmo sem mapas do codebase (projetos greenfield).
+
+---
+
 ## [1.17.0] — 2026-10-31
 
 ### Integridade da verificação: sem falso verde

@@ -15,7 +15,7 @@ Desenvolvimento assistido por IA com especificação, contexto persistente, exec
 npx oxe-cc@latest
 ```
 
-**Versão:** `1.17.0` · **Node.js:** `>=18`
+**Versão:** `1.17.1` · **Node.js:** `>=18`
 
 </div>
 
