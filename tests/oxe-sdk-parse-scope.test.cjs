@@ -65,3 +65,35 @@ describe('parsePlan — rótulos de arquivos aceitos', () => {
     }
   });
 });
+
+// Benchmark 1.17 (linkly): `\`# linkly\`` e `\`mutation_scope: []\`` viravam escopo de mutação, e só o
+// primeiro "Comando:" da tarefa era lido (os outros dois checks sumiam).
+describe('parsePlan — escopo só com paths e todos os comandos de verificação', () => {
+  const plan = `### T7 — README
+
+- **Arquivos alvo:** \`test/meta.test.js\` (criar), \`README.md\` (reescrever — conteúdo atual é só \`# linkly\`)
+- **Onda:** 1
+- **Verificar:**
+  - Comando: \`node --test test/meta.test.js\`
+
+### T8 — Validação final
+
+- **Arquivos alvo:** — (sem mutação; \`mutation_scope: []\`)
+- **Onda:** 2
+- **Verificar:**
+  - Comando: \`npm test\` (exit 0)
+  - Comando: \`node -e "process.exit(0)"\` → exit 0
+`;
+
+  it('descarta spans que não são path', () => {
+    const { tasks } = sdk.parsePlan(plan);
+    assert.deepEqual(tasks[0].files, ['test/meta.test.js', 'README.md']);
+    assert.deepEqual(tasks[1].files, []);
+  });
+
+  it('junta vários "Comando:" com &&', () => {
+    const { tasks } = sdk.parsePlan(plan);
+    assert.equal(tasks[0].verifyCommand, 'node --test test/meta.test.js');
+    assert.equal(tasks[1].verifyCommand, 'npm test && node -e "process.exit(0)"');
+  });
+});

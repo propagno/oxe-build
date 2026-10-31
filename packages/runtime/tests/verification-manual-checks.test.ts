@@ -80,6 +80,32 @@ describe('verification — critérios manuais nunca viram comando', () => {
     assert.equal(a1.type, 'unit');
   });
 
+  // Benchmark 1.17 (linkly): A12 dizia "`npm test` verde", mas o comando vinculado (T1) só checa
+  // package.json e não imprime nada → o tipo 'unit' vindo da prosa gerava no_test_report (falso vermelho).
+  test('compile: o tipo vem do comando executado, não da prosa do critério', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-type-'));
+    try {
+      const suite = compile(
+        { objective: 'x', criteria: [{ id: 'A12', criterion: 'pkg ok', howToVerify: 'Inspeção de `package.json` + `npm test` verde' }] },
+        // Literal do T1 do linkly: `node --test` aparece só dentro da string do `node -e`.
+        { tasks: [{ id: 'T1', verifyCommand: `node -e "const t='node --test \\"test/*.test.js\\"';process.exit(t?0:1)"`, aceite: ['A12'] }] },
+      );
+      const a12 = suite.checks.find((c) => c.id === 'check-a12')!;
+      assert.equal(a12.type, 'custom');
+      const result = await runCheck(a12, tmp);
+      assert.equal(result.status, 'pass', String(result.error));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('buildManifest: o motivo da falha chega ao manifest', () => {
+    const failed: CheckResult = { ...passResult('c1'), status: 'fail', error: 'no_tests_executed' };
+    const manifest = buildManifest('r', [failed, passResult('c2')]);
+    assert.equal(manifest.checks[0].error, 'no_tests_executed');
+    assert.equal(manifest.checks[1].error, null);
+  });
+
   test('runCheck: check manual → skip com needs_structured_check', async () => {
     const check: AcceptanceCheck = {
       id: 'check-a1',

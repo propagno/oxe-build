@@ -65,3 +65,31 @@ describe('summarizeFixturePack — paridade com o gate do plano', () => {
     assert.equal(summary.ready, false);
   });
 });
+
+// Benchmark 1.17 (linkly fresh): o planner escreveu `mode: "read_only"` para a tarefa de validação
+// final e o preflight bloqueou a run inteira por "mode inválido".
+describe('summarizeImplementationPack — sinônimos de tarefa sem mutação', () => {
+  it('read_only / verify_only contam como not_applicable', () => {
+    const { summarizeImplementationPack } = require('../bin/lib/oxe-rationality.cjs');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-impl-pack-'));
+    try {
+      const file = path.join(tmp, 'IMPLEMENTATION-PACK.json');
+      fs.writeFileSync(file, JSON.stringify({
+        ready: true,
+        critical_gaps: [],
+        tasks: [
+          { id: 'T6', mode: 'read_only', ready: true },
+          { id: 'T7', mode: 'verify-only', ready: true },
+          { id: 'T8', mode: 'banana', ready: true },
+        ],
+      }), 'utf8');
+      const summary = summarizeImplementationPack(file, []);
+      assert.equal(summary.mutatingTasks, 1);
+      assert.deepEqual(summary.criticalGaps.filter((g) => /mode inválido/.test(g)), [
+        'IMPLEMENTATION-PACK.json tarefa T8 com mode inválido: banana',
+      ]);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});

@@ -34,9 +34,16 @@ function parseAttrs(fragment) {
   return attrs;
 }
 
+// Synonyms planners write for a task that changes nothing (benchmark 1.17: `read_only` blocked the
+// whole run in preflight although the intent was unambiguous).
+const NON_MUTATING_MODE_ALIASES = new Set([
+  'read_only', 'read-only', 'readonly', 'verify_only', 'verify-only', 'verification', 'validation', 'no_mutation', 'none',
+]);
+
 function normalizeTaskMode(value) {
   const mode = String(value || '').trim().toLowerCase();
   if (!mode) return 'mutating';
+  if (NON_MUTATING_MODE_ALIASES.has(mode)) return 'not_applicable';
   return mode;
 }
 

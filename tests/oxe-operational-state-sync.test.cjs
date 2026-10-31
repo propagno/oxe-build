@@ -89,6 +89,22 @@ describe('estado pós-execute — ACTIVE-RUN e projeção refletem o resultado',
     assert.match(stateMd, /\*\*Concluídos \(1\):\*\* T1/);
   });
 
+  // Benchmark 1.17 (linkly): um verify falho deixava a run em `failed`; o verify seguinte, verde,
+  // a movia para `running` em vez de `completed`.
+  it('re-verify verde de run executada restaura completed', async () => {
+    const tmp = makeProject('oxe-sync-reverify-');
+    dirs.push(tmp);
+    const executor = {
+      async execute() {
+        return { success: true, failure_class: null, evidence: [], output: 'ok' };
+      },
+    };
+    await op.runRuntimeExecute(tmp, null, { executor, skipPreflight: true });
+    op.writeRunState(tmp, null, { ...op.readRunState(tmp, null), status: 'failed' });
+    await op.runRuntimeVerify(tmp, null);
+    assert.equal(op.readRunState(tmp, null).status, 'completed');
+  });
+
   it('run com executor falhando: status failed e failures registradas', async () => {
     const tmp = makeProject('oxe-sync-fail-');
     dirs.push(tmp);

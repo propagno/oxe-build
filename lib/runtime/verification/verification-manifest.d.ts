@@ -15,6 +15,8 @@ export interface ManifestCheck {
     duration_ms: number;
     skip_reason?: string | null;
     tests_executed?: number | null;
+    /** Why a check did not pass (e.g. `no_tests_executed`, `test_file_missing: …`). */
+    error?: string | null;
 }
 export interface VerificationManifest {
     manifest_id: string;

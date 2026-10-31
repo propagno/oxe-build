@@ -66,6 +66,29 @@ function passResult(id) {
         strict_1.default.equal(a1.command, 'node --test test/ui.test.js');
         strict_1.default.equal(a1.type, 'unit');
     });
+    // Benchmark 1.17 (linkly): A12 dizia "`npm test` verde", mas o comando vinculado (T1) só checa
+    // package.json e não imprime nada → o tipo 'unit' vindo da prosa gerava no_test_report (falso vermelho).
+    (0, node_test_1.test)('compile: o tipo vem do comando executado, não da prosa do critério', async () => {
+        const tmp = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-type-'));
+        try {
+            const suite = (0, verification_compiler_1.compile)({ objective: 'x', criteria: [{ id: 'A12', criterion: 'pkg ok', howToVerify: 'Inspeção de `package.json` + `npm test` verde' }] }, 
+            // Literal do T1 do linkly: `node --test` aparece só dentro da string do `node -e`.
+            { tasks: [{ id: 'T1', verifyCommand: `node -e "const t='node --test \\"test/*.test.js\\"';process.exit(t?0:1)"`, aceite: ['A12'] }] });
+            const a12 = suite.checks.find((c) => c.id === 'check-a12');
+            strict_1.default.equal(a12.type, 'custom');
+            const result = await (0, verification_compiler_1.runCheck)(a12, tmp);
+            strict_1.default.equal(result.status, 'pass', String(result.error));
+        }
+        finally {
+            fs_1.default.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
+    (0, node_test_1.test)('buildManifest: o motivo da falha chega ao manifest', () => {
+        const failed = { ...passResult('c1'), status: 'fail', error: 'no_tests_executed' };
+        const manifest = (0, verification_manifest_1.buildManifest)('r', [failed, passResult('c2')]);
+        strict_1.default.equal(manifest.checks[0].error, 'no_tests_executed');
+        strict_1.default.equal(manifest.checks[1].error, null);
+    });
     (0, node_test_1.test)('runCheck: check manual → skip com needs_structured_check', async () => {
         const check = {
             id: 'check-a1',

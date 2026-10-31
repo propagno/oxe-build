@@ -29,6 +29,8 @@ export interface ManifestCheck {
   duration_ms: number;
   skip_reason?: string | null;
   tests_executed?: number | null;
+  /** Why a check did not pass (e.g. `no_tests_executed`, `test_file_missing: …`). */
+  error?: string | null;
 }
 
 export interface VerificationManifest {
@@ -139,6 +141,7 @@ export function buildManifest(
     duration_ms: r.duration_ms,
     skip_reason: r.skip_reason ?? null,
     tests_executed: r.tests_executed ?? null,
+    error: r.status === 'pass' ? null : r.error ? r.error.slice(0, 500) : null,
   }));
 
   const isManual = (c: ManifestCheck): boolean => c.status === 'skip' && c.skip_reason === 'needs_structured_check';

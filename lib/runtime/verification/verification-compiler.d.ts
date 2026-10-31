@@ -74,6 +74,11 @@ interface ParsedTaskLike {
 interface ParsedPlanLike {
     tasks: ParsedTaskLike[];
 }
+/**
+ * Drop quoted arguments so only invoked programs are classified: `node -e "…'node --test'…"`
+ * checks package.json, it does not run a test runner.
+ */
+export declare function stripQuotedArgs(command: string): string;
 export declare const SHELL_COMMAND_RE: RegExp;
 export declare function looksLikeShellCommand(text: string): boolean;
 /**

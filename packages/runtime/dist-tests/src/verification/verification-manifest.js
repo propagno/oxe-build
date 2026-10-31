@@ -64,6 +64,7 @@ function buildManifest(runId, results, options = {}) {
         duration_ms: r.duration_ms,
         skip_reason: r.skip_reason ?? null,
         tests_executed: r.tests_executed ?? null,
+        error: r.status === 'pass' ? null : r.error ? r.error.slice(0, 500) : null,
     }));
     const isManual = (c) => c.status === 'skip' && c.skip_reason === 'needs_structured_check';
     const summary = {

@@ -111,6 +111,14 @@ interface ParsedPlanLike {
   tasks: ParsedTaskLike[];
 }
 
+/**
+ * Drop quoted arguments so only invoked programs are classified: `node -e "…'node --test'…"`
+ * checks package.json, it does not run a test runner.
+ */
+export function stripQuotedArgs(command: string): string {
+  return command.replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, '""');
+}
+
 function inferCheckType(howToVerify: string): CheckType {
   const v = howToVerify.toLowerCase();
   if (v.includes('npm test') || v.includes('jest') || v.includes('vitest') || v.includes('node --test')) return 'unit';
@@ -166,8 +174,10 @@ export function compile(
     // Find the verify command from the task that references this criterion
     const task = plan.tasks.find((t) => t.aceite.includes(criterion.id));
     const command = task?.verifyCommand ?? extractCommandFromHowToVerify(criterion.howToVerify);
-    // Prose that cannot be executed is a manual criterion, not a shell command.
-    const type: CheckType = command ? inferCheckType(`${criterion.howToVerify}\n${command}`) : 'manual';
+    // Prose that cannot be executed is a manual criterion, not a shell command. The type comes from
+    // the command that actually runs: prose saying "npm test" must not demand a test report from a
+    // task command that never runs tests (false red seen in the 1.17 linkly benchmark).
+    const type: CheckType = command ? inferCheckType(stripQuotedArgs(command)) : 'manual';
 
     checks.push({
       id: `check-${criterion.id.toLowerCase()}`,
@@ -188,7 +198,7 @@ export function compile(
 
     checks.push({
       id: `check-task-${task.id.toLowerCase()}`,
-      type: inferCheckType(task.verifyCommand),
+      type: inferCheckType(stripQuotedArgs(task.verifyCommand)),
       command: task.verifyCommand,
       evidence_type_expected: 'stdout',
       acceptance_ref: uncovered[0] ?? null,

@@ -1547,8 +1547,17 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     attemptNumber: options.attemptNumber || 1,
     timeoutMs: options.timeoutMs,
   });
+  // A passing re-verify of a fully executed run restores `completed` (a previous failed verify
+  // must not leave it stuck in `running`).
+  const graphNodes = current.compiled_graph && current.compiled_graph.nodes
+    ? Object.keys(current.compiled_graph.nodes).length
+    : 0;
+  const doneNodes = current.canonical_state && Array.isArray(current.canonical_state.completedWorkItems)
+    ? current.canonical_state.completedWorkItems.length
+    : 0;
+  const executionDone = current.status === 'completed' || (graphNodes > 0 && doneNodes >= graphNodes);
   const nextStatus = report.status === 'passed'
-    ? current.status === 'completed' ? 'completed' : 'running'
+    ? executionDone ? 'completed' : 'running'
     : report.status === 'failed'
       ? 'failed'
       : 'blocked';
