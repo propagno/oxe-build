@@ -12,7 +12,7 @@ export interface RunJournal {
   blocked_work_items: string[];
   pending_gates: string[];
   replay_cursor: string | null;
-  scheduler_state: 'running' | 'paused' | 'cancelled' | 'completed' | 'blocked';
+  scheduler_state: 'running' | 'paused' | 'cancelled' | 'completed' | 'blocked' | 'failed' | 'aborted';
   partial_result: Omit<RunResult, 'status'> | null;
 }
 

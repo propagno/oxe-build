@@ -16,7 +16,10 @@ export {
   executeSuite,
   verifyRun,
   summarizeSuite,
+  extractCommandFromHowToVerify,
+  looksLikeShellCommand,
 } from './verification/verification-compiler';
+export * from './verification/test-report-parsers';
 export type {
   CheckType,
   AcceptanceCheck,

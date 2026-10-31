@@ -10,6 +10,7 @@ export const EVENT_TYPES = [
   'ToolFailed',
   'EvidenceCollected',
   'PolicyEvaluated',
+  'PolicyWarning',
   'GateRequested',
   'GateResolved',
   'VerificationStarted',
