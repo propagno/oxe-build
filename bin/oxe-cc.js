@@ -3995,37 +3995,11 @@ function parseContextArgs(argv) {
     json: false,
     parseError: false,
     unknownFlag: '',
-    phase: '',
-    force: false,
-    noCommit: false,
-    message: '',
-    base: '',
-    criteria: '',
-    by: '',
-    evidence: '',
-    changeClass: '',
-    summary: '',
-    amendTo: null,
-    deferSignoff: false,
-    risk: '',
   };
   const positionals = [];
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '-h' || a === '--help') out.help = true;
-    else if (a === '--phase' && argv[i + 1]) out.phase = String(argv[++i]);
-    else if (a === '--base-commit' && argv[i + 1]) out.base = String(argv[++i]);
-    else if (a === '--criteria' && argv[i + 1]) out.criteria = String(argv[++i]);
-    else if (a === '--by' && argv[i + 1]) out.by = String(argv[++i]);
-    else if (a === '--evidence' && argv[i + 1]) out.evidence = String(argv[++i]);
-    else if (a === '--class' && argv[i + 1]) out.changeClass = String(argv[++i]);
-    else if (a === '--summary' && argv[i + 1]) out.summary = String(argv[++i]);
-    else if (a === '--amend-to' && argv[i + 1]) out.amendTo = Number(argv[++i]);
-    else if (a === '--defer-signoff') out.deferSignoff = true;
-    else if (a === '--risk' && argv[i + 1]) out.risk = String(argv[++i]);
-    else if (a === '--force') out.force = true;
-    else if (a === '--no-commit') out.noCommit = true;
-    else if (a === '--message' && argv[i + 1]) out.message = String(argv[++i]);
     else if (a === '--dir' && argv[i + 1]) out.dir = path.resolve(argv[++i]);
     else if (a === '--workflow' && argv[i + 1]) out.workflow = String(argv[++i]);
     else if (a === '--tier' && argv[i + 1]) {
@@ -4090,11 +4064,37 @@ function parseRuntimeArgs(argv) {
     gateScope: '',
     parseError: false,
     unknownFlag: '',
+    phase: '',
+    force: false,
+    noCommit: false,
+    message: '',
+    base: '',
+    criteria: '',
+    by: '',
+    evidence: '',
+    changeClass: '',
+    summary: '',
+    amendTo: null,
+    deferSignoff: false,
+    risk: '',
   };
   const positionals = [];
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '-h' || a === '--help') out.help = true;
+    else if (a === '--phase' && argv[i + 1]) out.phase = String(argv[++i]);
+    else if (a === '--base-commit' && argv[i + 1]) out.base = String(argv[++i]);
+    else if (a === '--criteria' && argv[i + 1]) out.criteria = String(argv[++i]);
+    else if (a === '--by' && argv[i + 1]) out.by = String(argv[++i]);
+    else if (a === '--evidence' && argv[i + 1]) out.evidence = String(argv[++i]);
+    else if (a === '--class' && argv[i + 1]) out.changeClass = String(argv[++i]);
+    else if (a === '--summary' && argv[i + 1]) out.summary = String(argv[++i]);
+    else if (a === '--amend-to' && argv[i + 1]) out.amendTo = Number(argv[++i]);
+    else if (a === '--defer-signoff') out.deferSignoff = true;
+    else if (a === '--risk' && argv[i + 1]) out.risk = String(argv[++i]);
+    else if (a === '--force') out.force = true;
+    else if (a === '--no-commit') out.noCommit = true;
+    else if (a === '--message' && argv[i + 1]) out.message = String(argv[++i]);
     else if (a === '--dir' && argv[i + 1]) out.dir = path.resolve(argv[++i]);
     else if (a === '--session' && argv[i + 1]) out.activeSession = String(argv[++i]).replace(/\\/g, '/');
     else if (a === '--wave' && argv[i + 1]) out.wave = Number(argv[++i]);
@@ -4132,7 +4132,15 @@ function parseRuntimeArgs(argv) {
     }
   }
   if (positionals[0]) out.action = positionals[0];
-  if (out.action === 'gates' || out.action === 'program' || out.action === 'feedback') {
+  if (out.action === 'feedback') {
+    // Só `list` é subcomando; qualquer outro posicional é o diretório do projeto.
+    if (positionals[1] === 'list') {
+      out.subAction = 'list';
+      if (positionals[2]) out.dir = path.resolve(positionals[2]);
+    } else if (positionals[1]) {
+      out.dir = path.resolve(positionals[1]);
+    }
+  } else if (out.action === 'gates' || out.action === 'program') {
     if (positionals[1]) out.subAction = positionals[1];
     if (positionals[2]) out.dir = path.resolve(positionals[2]);
   } else {

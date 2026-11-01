@@ -118,3 +118,12 @@ Hipóteses a confirmar com dados das fases:
 - **Custo e turnos por fase:** o coordenador do oxespace pede um ASK quando uma fase passa de 2× os turnos planejados. Proposta: o PLAN.json declara `budget.turns` por tarefa, o runtime aplica o limite e emite `BudgetExceeded`, que vira gate humano.
 - **Coordenação multi-time:** o oxespace tem "hot files" disputados por outras equipes. Proposta: o PLAN.json declara `contested_paths`, o scheduler serializa as tarefas que tocam esses arquivos e o `program close` exige um ASK registrado antes do PR.
 - **Validação cross-OS:** voz nativa depende do SO. Proposta: um verify por matriz (`runs_on: [windows, macos, linux]`) delegado ao CI, em que a fase só fecha com evidência das 3 plataformas.
+
+## OXB-012: flags da CLI no parser errado, sem teste pela linha de comando
+
+- **Status:** resolvido.
+- **Evidência:** as flags de `runtime program/dossier/signoff/feedback` (1.19–1.20) foram inseridas no `parseContextArgs`, e não no `parseRuntimeArgs`. Os testes chamavam o operational direto, e o e2e também, então nada falhou.
+  - Pela CLI real, `feedback --class` dava "Opção desconhecida".
+  - O `feedback <dir>` tratava o diretório como subcomando e gravou um CR no `.oxe` do repositório errado.
+- **Correção:** as flags foram movidas para o parser certo, só `list` é subcomando do `feedback`, e o `tests/oxe-runtime-program-cli.test.cjs` exercita os comandos pela CLI de verdade.
+- **Fora da caixa:** um teste gerado a partir da tabela de uso (`usage()`): todo comando e flag documentado é chamado pela CLI num projeto temporário, então documentação e parser não divergem.
