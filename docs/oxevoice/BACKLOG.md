@@ -168,3 +168,9 @@ Hipóteses a confirmar com dados das fases:
 - **Status:** resolvido.
 - **Evidência:** no verify do rework da F1, os `check-accept-*` ficaram verdes, mas nenhum CR foi marcado como resolvido. O `attachAcceptanceLock` reconstruía as entradas sem `resolves`/`version`, e o reconcile não via a ligação teste → CR.
 - **Correção:** os campos são preservados. Um teste de ponta a ponta (feedback → compile → verify → CR resolvido) cobre o caminho real, que os testes unitários do reconcile não exercitavam.
+
+## OXB-020: o aceite congelado não cobre o typecheck do projeto
+
+- **Status:** aberto.
+- **Evidência:** no rework da F1, todos os aceites ficaram verdes (vitest), mas o `npm run typecheck` completo (heavy-lock) reprovou. O namespace `voice` não foi registrado nos tipos do i18next. O vitest transpila sem checar tipos, e o executor só rodou os testes da própria tarefa.
+- **Fora da caixa:** o PLAN.json ganha `phase_gates` (typecheck, lint, bundle budget), comandos do projeto que o `program close` executa (via heavy-lock quando o projeto tem um). Também devem rodar no **verify da fase**, não por tarefa, para não custar turno nem memória a cada tentativa. Uma falha vira CR `defect` automático, com a saída do comando.
