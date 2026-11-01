@@ -174,3 +174,9 @@ Hipóteses a confirmar com dados das fases:
 - **Status:** aberto.
 - **Evidência:** no rework da F1, todos os aceites ficaram verdes (vitest), mas o `npm run typecheck` completo (heavy-lock) reprovou. O namespace `voice` não foi registrado nos tipos do i18next. O vitest transpila sem checar tipos, e o executor só rodou os testes da própria tarefa.
 - **Fora da caixa:** o PLAN.json ganha `phase_gates` (typecheck, lint, bundle budget), comandos do projeto que o `program close` executa (via heavy-lock quando o projeto tem um). Também devem rodar no **verify da fase**, não por tarefa, para não custar turno nem memória a cada tentativa. Uma falha vira CR `defect` automático, com a saída do comando.
+
+## OXB-021: commits de checkpoint fora da convenção do projeto
+
+- **Status:** aberto.
+- **Evidência:** os commits `oxe(Tn): <título em pt-BR>` do `--checkpoint-commits` não seguem Conventional Commits em inglês, a regra do oxespace. No PR #417, ficou anotado que serão squashados.
+- **Fora da caixa:** um `commit_convention` no PLAN.json ou no `config.json` (template, idioma, sufixo `Co-Authored-By`), com o título do commit gerado pela tarefa (`feat(voice): ...`). O `plan lint` valida o template.
