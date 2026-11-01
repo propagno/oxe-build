@@ -9,6 +9,7 @@ import type { AuditTrail } from '../audit/audit-trail';
 import type { RunQuota } from '../audit/audit-trail';
 import type { RunJournal } from './run-journal';
 import type { FailureClass } from '../models/failure';
+import type { CheckResult } from '../verification/verification-compiler';
 export interface TaskResult {
     success: boolean;
     failure_class: FailureClass;
@@ -85,3 +86,9 @@ export declare class Scheduler {
     private consumeRetryQuota;
     private emit;
 }
+/** Last `n` non-empty lines of a text. */
+export declare function tailLines(text: string, n: number): string;
+/** What the next attempt needs to know about a failed task verify (1.20c informed retry). */
+export declare function describeVerifyFailure(command: string | null | undefined, check: CheckResult | undefined, gaps?: string[]): string;
+/** Normalized failure fingerprint: timings, timestamps, hashes and temp paths removed. */
+export declare function verifyFailureSignature(check: CheckResult | undefined): string | null;

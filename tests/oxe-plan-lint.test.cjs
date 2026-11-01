@@ -197,3 +197,31 @@ describe('runtime lê PLAN.json e o CLI `plan lint`', () => {
     assert.match(report.errors.join('\n'), /T2 \(onda 1\) depende de T1 \(onda 1\)/);
   });
 });
+
+describe('gate por tarefa e dependência externa (1.20c, OXB-005)', () => {
+  it('PLAN.json gate/blocked_by viram gate do nó; o scheduler para antes da tarefa', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-taskgate-'));
+    try {
+      fs.mkdirSync(path.join(tmp, '.oxe'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, '.oxe', 'SPEC.md'), SPEC, 'utf8');
+      fs.writeFileSync(path.join(tmp, '.oxe', 'PLAN.md'), PLAN_MD, 'utf8');
+      fs.writeFileSync(path.join(tmp, '.oxe', 'STATE.md'), '# STATE\n', 'utf8');
+      const doc = goodPlan();
+      delete doc.phase;
+      doc.tasks[1].blocked_by = ['oxespace#B21'];
+      doc.tasks[1].gate = { kind: 'external', reason: 'wiring dos hot files só depois do B21' };
+      assert.deepEqual(planJson.validatePlanJson(doc), []);
+      fs.writeFileSync(path.join(tmp, '.oxe', 'PLAN.json'), JSON.stringify(doc), 'utf8');
+      const ran = [];
+      const executor = { async execute(node) { ran.push(node.id); return { success: true, failure_class: null, evidence: [], output: 'ok' }; } };
+      const res = await op.runRuntimeExecute(tmp, null, { executor, skipPreflight: true });
+      assert.deepEqual(ran, ['T1'], 'T2 não executa enquanto o gate não for resolvido');
+      const gateEvent = op.readEvents(tmp, null).find((e) => e.type === 'GateRequested');
+      assert.ok(gateEvent, 'GateRequested emitido');
+      assert.match(JSON.stringify(gateEvent.payload), /oxespace#B21/);
+      assert.notEqual(res.result.status, 'completed');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});

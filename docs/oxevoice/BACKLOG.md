@@ -48,7 +48,7 @@ Status possíveis: `aberto`, `em andamento`, `resolvido (<commit>)`, `proposta`.
 
 ## OXB-005: sem gate humano por tarefa nem execução parcial por onda
 
-- **Status:** aberto.
+- **Status:** resolvido (1.20c). O `PLAN.json` aceita `gate: {kind, reason}` e `blocked_by: ["oxespace#B21"]` por tarefa: o scheduler para antes dela com `GateRequested`, e as outras tarefas seguem.
 - **Evidência:** na F1 do OxeVoice, o wiring dos hot files (de outras equipes) depende de um ASK ao coordenador e do merge do B21. O `runtime execute` roda todas as ondas, e `requires_human_approval` é global (`graph-compiler.ts`).
 - **Contorno:** a T7 virou "proposta de diff" (`docs/voice/HOTFILES-PROPOSAL.md`), e a aplicação entra por `/oxe-plan --replan` depois do ASK.
 - **Fora da caixa:**
@@ -92,7 +92,7 @@ Status possíveis: `aberto`, `em andamento`, `resolvido (<commit>)`, `proposta`.
 
 ## OXB-010: o `recover` não reconhece um journal `running` deixado por um processo morto
 
-- **Status:** aberto (defeito conhecido desde a 1.16, reapareceu).
+- **Status:** resolvido (1.20c). O journal tem lease (`owner_pid` + `heartbeat_at`). Um `running` com dono morto, sem dono ou com heartbeat de mais de 6 h vira `interrupted`, que é retomável e preserva o que foi concluído.
 - **Evidência:** depois do OOM, o `runtime recover` informou `Journal: running` e só deixou a run em `planned`, sem reconciliar a tentativa interrompida.
 - **Fora da caixa:** um lease com heartbeat no journal. Um journal `running` cujo PID não existe mais ou cujo heartbeat venceu vira `interrupted`, e o recover retoma da tarefa interrompida, com o custo das tentativas anteriores preservado.
 
@@ -127,3 +127,13 @@ Hipóteses a confirmar com dados das fases:
   - O `feedback <dir>` tratava o diretório como subcomando e gravou um CR no `.oxe` do repositório errado.
 - **Correção:** as flags foram movidas para o parser certo, só `list` é subcomando do `feedback`, e o `tests/oxe-runtime-program-cli.test.cjs` exercita os comandos pela CLI de verdade.
 - **Fora da caixa:** um teste gerado a partir da tabela de uso (`usage()`): todo comando e flag documentado é chamado pela CLI num projeto temporário, então documentação e parser não divergem.
+
+## OXB-013: o retry era cego (o executor nunca via por que o verify falhou)
+
+- **Status:** resolvido (1.20c).
+- **Evidência:** na F1, a T1 falhou 3 vezes no verify. Cada nova tentativa recebeu só "Verification failed: checks did not pass", e o executor nunca viu o erro do esbuild.
+- **Correção:**
+  - **Retry informado:** a próxima tentativa recebe o comando, o motivo e as últimas 40 linhas da saída, mais a instrução de parar e explicar se o próprio comando estiver errado.
+  - **Régua suspeita:** a mesma falha, com saída normalizada (sem tempos, timestamps, hashes e caminhos temporários), em duas tentativas faz a tarefa parar com `verify_suspect` e emite `VerifyCommandSuspect`, sem pagar as tentativas restantes.
+  - **Checkpoint por tarefa** (`--checkpoint-commits` ou `checkpoint_commits`): commit local só do escopo da tarefa concluída.
+  - `runtime rollback --task Tn [--yes]` devolve o escopo ao último checkpoint (dry-run por padrão).

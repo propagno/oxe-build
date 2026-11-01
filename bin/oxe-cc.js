@@ -2506,6 +2506,8 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime signoff --phase F1 --criteria A8 --by <quem> [--message <nota>] [--evidence <caminho|url>]
   npx oxe-cc runtime feedback --class <defect|spec_gap|constraint|new_scope> --summary "..." [--criteria A4] [--by <quem>] [--amend-to 2]
   npx oxe-cc runtime feedback list [--json]
+  npx oxe-cc runtime rollback --task T3 [--yes]
+  npx oxe-cc runtime execute ... [--checkpoint-commits]
   npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"]
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
     npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
@@ -3897,7 +3899,7 @@ function parseCapabilitiesArgs(argv) {
  */
 
 /**
- * @typedef {{ help: boolean, dir: string, action: string, subAction: string, activeSession: string|null, wave: number|null, task: string, mode: string, reason: string, runId: string, fromEventId: string, writeReport: boolean, gateId: string, decision: string, actor: string, targetKind: string, remote: string, baseBranch: string, minimumCoverage: number|null, timeoutMs: number|null, jsonOutput: boolean, gateStatus: string, gateScope: string, parseError: boolean, unknownFlag: string, agentsPlanPath: string, apiKeyEnv: string, phase?: string, force?: boolean, noCommit?: boolean, message?: string, base?: string, criteria?: string, by?: string, evidence?: string, changeClass?: string, summary?: string, amendTo?: number|null, deferSignoff?: boolean, risk?: string }} RuntimeOpts
+ * @typedef {{ help: boolean, dir: string, action: string, subAction: string, activeSession: string|null, wave: number|null, task: string, mode: string, reason: string, runId: string, fromEventId: string, writeReport: boolean, gateId: string, decision: string, actor: string, targetKind: string, remote: string, baseBranch: string, minimumCoverage: number|null, timeoutMs: number|null, jsonOutput: boolean, gateStatus: string, gateScope: string, parseError: boolean, unknownFlag: string, agentsPlanPath: string, apiKeyEnv: string, phase?: string, force?: boolean, noCommit?: boolean, message?: string, base?: string, criteria?: string, by?: string, evidence?: string, changeClass?: string, summary?: string, amendTo?: number|null, deferSignoff?: boolean, risk?: string, yes?: boolean, checkpointCommits?: boolean }} RuntimeOpts
  */
 
 /**
@@ -4077,6 +4079,8 @@ function parseRuntimeArgs(argv) {
     amendTo: null,
     deferSignoff: false,
     risk: '',
+    yes: false,
+    checkpointCommits: false,
   };
   const positionals = [];
   for (let i = 0; i < argv.length; i += 1) {
@@ -4092,6 +4096,8 @@ function parseRuntimeArgs(argv) {
     else if (a === '--amend-to' && argv[i + 1]) out.amendTo = Number(argv[++i]);
     else if (a === '--defer-signoff') out.deferSignoff = true;
     else if (a === '--risk' && argv[i + 1]) out.risk = String(argv[++i]);
+    else if (a === '--yes') out.yes = true;
+    else if (a === '--checkpoint-commits') out.checkpointCommits = true;
     else if (a === '--force') out.force = true;
     else if (a === '--no-commit') out.noCommit = true;
     else if (a === '--message' && argv[i + 1]) out.message = String(argv[++i]);
@@ -4869,6 +4875,22 @@ async function runRuntime(opts) {
     return;
   }
 
+  if (opts.action === 'rollback') {
+    try {
+      const result = oxeOperational.runtimeRollback(opts.dir, activeSession, { task: opts.task, yes: opts.yes });
+      if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeRollbackSchema: 1, ...result }, null, 2));
+      else {
+        console.log(`  ${result.dry_run ? 'Dry-run' : '✓ Rollback'} ${result.task}: ${result.actions.length} arquivo(s)`);
+        for (const a of result.actions) console.log(`    ${a.action === 'delete' ? 'remover ' : 'restaurar'} ${a.file}`);
+        if (result.dry_run && result.actions.length) console.log('  Use --yes para aplicar.');
+      }
+    } catch (err) {
+      console.error(`  ${c ? red : ''}✗${c ? reset : ''} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (opts.action === 'feedback') {
     try {
       if (opts.subAction === 'list' || (!opts.changeClass && !opts.summary)) {
@@ -5169,6 +5191,7 @@ async function runRuntime(opts) {
         providerConfig,
         adapter: adapterId,
         adapterOptions,
+        checkpointCommits: opts.checkpointCommits || undefined,
         agentsPlanPath: opts.agentsPlanPath || undefined,
         onProgress: (event) => {
           if (event.type === 'turn_start') {

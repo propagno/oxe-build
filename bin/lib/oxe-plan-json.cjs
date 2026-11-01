@@ -51,6 +51,8 @@ function validatePlanJson(doc) {
     if (task.decisions != null && !isStringArray(task.decisions, DECISION_RE)) errors.push(`${at}.decisions: lista de D-<n>`);
     if (task.complexity != null && !COMPLEXITY.has(task.complexity)) errors.push(`${at}.complexity: XS|S|M|L|XL`);
     if (task.done != null && typeof task.done !== 'boolean') errors.push(`${at}.done: boolean`);
+    if (task.gate != null && (typeof task.gate !== 'object' || Array.isArray(task.gate) || typeof task.gate.reason !== 'string')) errors.push(`${at}.gate: { kind?, reason }`);
+    if (task.blocked_by != null && !isStringArray(task.blocked_by)) errors.push(`${at}.blocked_by: lista de dependências externas`);
     if (task.verify != null) {
       if (typeof task.verify !== 'object' || Array.isArray(task.verify)) errors.push(`${at}.verify: objeto`);
       else if (task.verify.commands != null && !isStringArray(task.verify.commands)) errors.push(`${at}.verify.commands: lista de comandos`);
@@ -86,7 +88,12 @@ function planJsonToParsedPlan(doc) {
       aceite: Array.isArray(task.acceptance) ? [...task.acceptance] : [],
       decisions: Array.isArray(task.decisions) ? [...task.decisions] : [],
       done: task.done === true,
-      meta: { source: 'PLAN.json', complexity: task.complexity || null },
+      meta: {
+        source: 'PLAN.json',
+        complexity: task.complexity || null,
+        ...(task.gate ? { gate: task.gate } : {}),
+        ...(Array.isArray(task.blocked_by) && task.blocked_by.length ? { blocked_by: [...task.blocked_by] } : {}),
+      },
     };
   });
   const waves = {};

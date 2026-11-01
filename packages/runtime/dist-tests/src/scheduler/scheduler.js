@@ -4,6 +4,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.Scheduler = void 0;
+exports.tailLines = tailLines;
+exports.describeVerifyFailure = describeVerifyFailure;
+exports.verifyFailureSignature = verifyFailureSignature;
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const bus_1 = require("../events/bus");
@@ -379,6 +382,9 @@ class Scheduler {
         let leaseManager = null;
         let lastResult = null;
         let lastError = null;
+        // 1.20c: the same verify failure twice (normalized output) = suspect ruler or stuck executor: stop paying retries.
+        let lastVerifySignature = null;
+        let verifySuspect = false;
         const maxAttempts = node.policy.max_retries + 1;
         const quotaBlocked = this.consumeQuotaForNode(ctx, node);
         if (quotaBlocked) {
@@ -442,12 +448,30 @@ class Scheduler {
                 if (lastResult.success) {
                     const verifyResult = await this.verifyNode(node, lease, ctx, attemptId, attempt);
                     if (verifyResult && verifyResult.status === 'failed') {
+                        // Informed retry: the next attempt sees the command, the reason and the output — not just "failed".
                         lastResult = {
                             success: false,
                             failure_class: 'verify',
                             evidence: lastResult.evidence,
-                            output: `Verification failed: ${(verifyResult.gaps || []).join('; ') || 'checks did not pass'}`,
+                            output: describeVerifyFailure(node.verify.command, verifyResult.check, verifyResult.gaps),
                         };
+                        const signature = verifyFailureSignature(verifyResult.check);
+                        if (signature && signature === lastVerifySignature) {
+                            verifySuspect = true;
+                            this.emit(ctx, {
+                                type: 'VerifyCommandSuspect',
+                                work_item_id: nodeId,
+                                attempt_id: attemptId,
+                                payload: {
+                                    attempt_number: attempt,
+                                    command: node.verify.command,
+                                    excerpt: tailLines(`${verifyResult.check?.error ?? ''}\n${verifyResult.check?.stderr ?? ''}\n${verifyResult.check?.stdout ?? ''}`, 12),
+                                    reason: 'identical_verify_failure',
+                                },
+                            });
+                            break;
+                        }
+                        lastVerifySignature = signature;
                     }
                     else {
                         this.emit(ctx, {
@@ -518,7 +542,7 @@ class Scheduler {
         this.emit(ctx, {
             type: 'WorkItemBlocked',
             work_item_id: nodeId,
-            payload: { failure_class: lastResult?.failure_class ?? 'env', max_attempts: maxAttempts },
+            payload: { failure_class: verifySuspect ? 'verify_suspect' : lastResult?.failure_class ?? 'env', max_attempts: maxAttempts },
         });
         status.set(nodeId, 'failed');
         failed.push(nodeId);
@@ -679,7 +703,7 @@ class Scheduler {
             attempt_id: attemptId,
             payload: { status: result.status },
         });
-        return result;
+        return { status: result.status, gaps: result.gaps, check: result.check_results?.[0] };
     }
     evaluatePolicyForNode(node, ctx) {
         if (!ctx.policyEngine)
@@ -731,8 +755,8 @@ class Scheduler {
             action: primaryAction?.type ?? 'custom',
             description: `Gate required before executing ${node.id}`,
             evidence_refs: [],
-            risks: [decision?.reason ?? 'human approval required'],
-            rationale: decision?.reason ?? 'node policy requires approval',
+            risks: [decision?.reason ?? node.policy.gate_reason ?? 'human approval required'],
+            rationale: decision?.reason ?? node.policy.gate_reason ?? 'node policy requires approval',
             policy_decision_id: decision?.decision_id ?? null,
         });
         if (this.journal && !this.journal.pending_gates.includes(gate.gate_id)) {
@@ -782,7 +806,7 @@ class Scheduler {
     }
 }
 exports.Scheduler = Scheduler;
-const RECOVERABLE_JOURNAL_STATES = new Set(['paused', 'blocked', 'aborted', 'failed']);
+const RECOVERABLE_JOURNAL_STATES = new Set(['paused', 'interrupted', 'blocked', 'aborted', 'failed']);
 /** Nodes whose actions may write to the workspace (anything beyond reading and collecting evidence). */
 function nodeMayMutate(node) {
     return node.actions.some((action) => action.type !== 'read_code' && action.type !== 'collect_evidence');
@@ -809,4 +833,34 @@ function inferGateScope(node) {
     if (node.actions.some((action) => action.type === 'collect_evidence'))
         return 'security';
     return 'plan_approval';
+}
+/** Last `n` non-empty lines of a text. */
+function tailLines(text, n) {
+    return String(text || '').split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-n).join('\n');
+}
+/** What the next attempt needs to know about a failed task verify (1.20c informed retry). */
+function describeVerifyFailure(command, check, gaps) {
+    const reason = check?.error || (check?.exit_code != null ? `exit code ${check.exit_code}` : (gaps || []).join('; ') || 'checks did not pass');
+    const output = tailLines(`${check?.stdout ?? ''}\n${check?.stderr ?? ''}`, 40);
+    return [
+        'Verification failed after your previous attempt.',
+        `Command: ${command ?? '(none)'}`,
+        `Reason: ${reason}`,
+        output ? `Output (last lines):\n${output.slice(-4000)}` : 'Output: (empty)',
+        'Fix the code so this exact command passes. If you are certain the command itself is wrong (not the code), stop and call finish_task explaining why — do not work around it.',
+    ].join('\n');
+}
+/** Normalized failure fingerprint: timings, timestamps, hashes and temp paths removed. */
+function verifyFailureSignature(check) {
+    if (!check)
+        return null;
+    const raw = `${check.error ?? ''}\n${check.stderr ?? ''}\n${check.stdout ?? ''}`;
+    const normalized = raw
+        .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, '<ts>')
+        .replace(/\b\d+(\.\d+)?\s?(ms|s)\b/g, '<t>')
+        .replace(/\b[0-9a-f]{7,64}\b/gi, '<hash>')
+        .replace(/[A-Za-z]:\\[^\s'"]*|\/tmp\/[^\s'"]*/g, '<path>')
+        .replace(/\s+/g, ' ')
+        .trim();
+    return normalized ? normalized.slice(-1200) : null;
 }

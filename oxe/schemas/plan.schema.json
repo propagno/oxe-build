@@ -48,6 +48,8 @@
           "acceptance": { "type": "array", "items": { "type": "string", "pattern": "^A\\d+$" }, "uniqueItems": true },
           "decisions": { "type": "array", "items": { "type": "string", "pattern": "^D-\\d+$" } },
           "complexity": { "enum": ["XS", "S", "M", "L", "XL"] },
+          "gate": { "type": "object", "required": ["reason"], "properties": { "kind": { "enum": ["human", "external"] }, "reason": { "type": "string" } }, "description": "O scheduler para antes da tarefa e pede aprovação (GateRequested)." },
+          "blocked_by": { "type": "array", "items": { "type": "string" }, "description": "Dependências externas (ex.: \"oxespace#B21\"); a tarefa espera um gate até serem resolvidas." },
           "done": { "type": "boolean" }
         }
       }

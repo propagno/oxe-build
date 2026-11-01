@@ -46,3 +46,10 @@ Antes de declarar o plano pronto, rodar **`oxe-cc plan lint`** e corrigir todos 
   oxe-cc runtime signoff --phase F1 --criteria A8 --by <quem> --message "<nota>" --evidence <caminho|url>
   ```
 - O `STATE.md` passa a ser projeção (fase, programa, run, próximo passo, bloqueios), atualizada por `program start/close` e `verify`.
+
+## Retomada robusta (1.20c)
+
+- **Gate por tarefa:** `"gate": {"kind": "human"|"external", "reason": "..."}` e `"blocked_by": ["repo#item"]` no PLAN.json. A tarefa espera um gate (`oxe-cc runtime gates`), e as demais seguem.
+- **Retry informado e régua suspeita:** a nova tentativa recebe o comando, o motivo e a saída do verify falho. Duas falhas idênticas param a tarefa como `verify_suspect`: revise o comando (`plan lint --dry-verify`) antes de reexecutar.
+- **Checkpoint e rollback:** `runtime execute --checkpoint-commits` faz um commit local por tarefa concluída, só do escopo dela. `runtime rollback --task Tn` mostra o que voltaria ao último checkpoint, e `--yes` aplica.
+- **Execução interrompida** (OOM, terminal fechado): `runtime recover` reconhece o journal sem dono e o marca `interrupted`, que é retomável.

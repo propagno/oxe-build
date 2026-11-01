@@ -567,6 +567,7 @@ function normalizeRuntimeEventType(type) {
     PhaseGateFailed: 'PhaseGateFailed',
     ChangeRequested: 'ChangeRequested',
     ChangeResolved: 'ChangeResolved',
+    VerifyCommandSuspect: 'VerifyCommandSuspect',
   };
   if (directMap[raw]) return directMap[raw];
   const lower = raw.toLowerCase();
@@ -1278,6 +1279,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
     }
     usageRunId = current.run_id;
     touchProgramPhase(projectRoot, activeSession, 'executing', { run_id: current.run_id });
+    const checkpointCommits = Boolean(options.checkpointCommits || readProjectConfig(projectRoot).checkpoint_commits);
     const preflight = buildRuntimeExecutePreflight(projectRoot, activeSession, current);
     if (!preflight.ok && !options.skipPreflight) {
       const reason = preflight.blockers[0] || 'runtime_execute_preflight_failed';
@@ -1330,6 +1332,13 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
     // appendEvent). This hook only forwards progress; writing here again duplicated the log.
     onEvent: (event) => {
       options.onProgress?.(event);
+      // 1.20c: checkpoint de filesystem por tarefa concluída (opt-in).
+      if (checkpointCommits && event && event.type === 'WorkItemCompleted' && event.work_item_id) {
+        try {
+          const cp = commitTaskCheckpoint(projectRoot, current, event.work_item_id);
+          if (cp.committed) appendEvent(projectRoot, activeSession, { type: 'GateResolved', run_id: current.run_id, work_item_id: event.work_item_id, payload: { gate: 'checkpoint', commit: cp.commit, files: cp.files } });
+        } catch { /* checkpoint nunca derruba a execução */ }
+      }
     },
   });
 
@@ -2278,6 +2287,61 @@ function runtimeChanges(projectRoot, activeSession) {
   return changeLib.listChanges(paths.programDir || path.join(projectRoot, '.oxe', 'program'));
 }
 
+// ─── Checkpoint por tarefa e rollback (1.20c) ─────────────────────────────────
+
+/** Arquivos declarados de uma tarefa: mutation_scope do nó compilado (sem curingas). */
+function taskScopeFiles(runState, taskId) {
+  const nodes = runState && runState.compiled_graph && runState.compiled_graph.nodes;
+  const node = nodes ? (Array.isArray(nodes) ? nodes.find((n) => n && n.id === taskId) : nodes[taskId]) : null;
+  const scope = node && Array.isArray(node.mutation_scope) ? node.mutation_scope : [];
+  return scope.map((p) => String(p).replace(/\\/g, '/')).filter((p) => p && !p.includes('*'));
+}
+
+/**
+ * Commit local só dos arquivos da tarefa concluída (`oxe(T3): título`), nunca `add -A`. Um checkpoint de filesystem
+ * por passo: a tentativa seguinte (ou outra tarefa) pode ser revertida sem perder o que já foi entregue.
+ */
+function commitTaskCheckpoint(projectRoot, runState, taskId) {
+  const files = taskScopeFiles(runState, taskId);
+  if (!files.length) return { committed: false, reason: 'tarefa sem escopo declarado' };
+  if (!gitLines(projectRoot, ['rev-parse', '--is-inside-work-tree'])) return { committed: false, reason: 'sem repositório git' };
+  const changed = (gitLines(projectRoot, ['status', '--porcelain', '-uall', '--', ...files]) || []);
+  if (!changed.length) return { committed: false, reason: 'nada mudou no escopo da tarefa' };
+  const node = runState.compiled_graph.nodes[taskId] || {};
+  const title = String(node.title || taskId).slice(0, 72);
+  const add = spawnSync('git', ['add', '--', ...files.filter((f) => fs.existsSync(path.join(projectRoot, f)) || changed.some((l) => l.includes(f)))], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+  if (add.status !== 0) return { committed: false, reason: `git add falhou: ${String(add.stderr).trim()}` };
+  const commit = spawnSync('git', ['commit', '-q', '-m', `oxe(${taskId}): ${title}`, '--', ...files], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+  if (commit.status !== 0) return { committed: false, reason: `git commit falhou: ${String(commit.stderr || commit.stdout).trim()}` };
+  const head = gitLines(projectRoot, ['rev-parse', 'HEAD']);
+  return { committed: true, commit: head && head[0], files };
+}
+
+/**
+ * `oxe-cc runtime rollback --task T3 [--yes]`: devolve os arquivos da tarefa ao último checkpoint (HEAD) e remove
+ * os criados por ela. Só o escopo declarado; dry-run por padrão.
+ */
+function runtimeRollback(projectRoot, activeSession, options = {}) {
+  const taskId = String(options.task || '').trim();
+  if (!/^T\d+$/.test(taskId)) throw new Error('Informe --task T<n>.');
+  const run = readRunState(projectRoot, activeSession);
+  const files = taskScopeFiles(run, taskId);
+  if (!files.length) throw new Error(`Tarefa ${taskId} sem escopo declarado — rollback recusado (não sei o que é dela).`);
+  const status = gitLines(projectRoot, ['status', '--porcelain', '-uall', '--', ...files]) || [];
+  const actions = status.map((line) => {
+    const code = line.slice(0, 2);
+    const file = line.slice(3).replace(/^"|"$/g, '').split(' -> ').pop();
+    return { file, action: code === '??' ? 'delete' : 'restore' };
+  });
+  if (!options.yes) return { dry_run: true, task: taskId, actions };
+  for (const a of actions) {
+    if (a.action === 'delete') fs.rmSync(path.join(projectRoot, a.file), { force: true });
+    else spawnSync('git', ['checkout', 'HEAD', '--', a.file], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+  }
+  appendEvent(projectRoot, activeSession, { type: 'RollbackExecuted', run_id: run && run.run_id, work_item_id: taskId, payload: { actions } });
+  return { dry_run: false, task: taskId, actions };
+}
+
 // ─── Programa por fases (1.19) ───────────────────────────────────────────────
 
 function requireProgramRuntime() {
@@ -2872,9 +2936,19 @@ function recoverRuntimeState(projectRoot, activeSession, options = {}) {
   if (!current || !current.run_id) {
     throw new Error('Nenhum ACTIVE-RUN disponível para recover.');
   }
-  const journal = runtime.loadJournal(projectRoot, current.run_id);
+  let journal = runtime.loadJournal(projectRoot, current.run_id);
   if (!journal) {
     throw new Error(`Journal ausente para run ${current.run_id}.`);
+  }
+  // 1.20c (OXB-010): `running` cujo dono morreu (OOM, terminal fechado) vira `interrupted`, retomável.
+  if (typeof runtime.isJournalStale === 'function' && runtime.isJournalStale(journal)) {
+    journal = runtime.markInterrupted(journal);
+    runtime.saveJournal(projectRoot, current.run_id, journal);
+    appendEvent(projectRoot, activeSession, {
+      type: 'RunAborted',
+      run_id: current.run_id,
+      payload: { reason: 'owner_process_gone', reclaimed: true, completed: journal.completed_work_items || [] },
+    });
   }
   const canonicalLive = reduceCanonicalRunStateLive(projectRoot, activeSession, {
     runId: current.run_id,
@@ -2887,7 +2961,7 @@ function recoverRuntimeState(projectRoot, activeSession, options = {}) {
     ...((journal.pending_gates || []).filter((id) => id && !graphNodes.has(String(id)))),
     ...((current.active_tasks || []).filter((id) => id && !graphNodes.has(String(id)))),
   ]));
-  const nextStatus = journal.scheduler_state === 'paused'
+  const nextStatus = journal.scheduler_state === 'paused' || journal.scheduler_state === 'interrupted'
     ? 'paused'
     : journal.scheduler_state === 'blocked'
       ? 'blocked'
@@ -3788,6 +3862,8 @@ module.exports = {
   buildNodeContextProvider,
   detectRuntimeAdapters,
   runtimeProgramStatus,
+  runtimeRollback,
+  commitTaskCheckpoint,
   runtimeFeedback,
   runtimeChanges,
   runtimeDossier,
