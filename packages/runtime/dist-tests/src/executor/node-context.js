@@ -11,6 +11,7 @@ exports.DEFAULT_NODE_CONTEXT_BUDGET = {
     gitStatus: 1000,
     lessons: 1500,
     interfaces: 4000,
+    acceptance: 6000,
 };
 function truncate(text, limit) {
     if (text.length <= limit)
@@ -27,6 +28,21 @@ function renderNodeContext(ctx, budget = exports.DEFAULT_NODE_CONTEXT_BUDGET) {
     const lines = [];
     if (ctx.taskBody && ctx.taskBody.trim()) {
         lines.push('', '## Tarefa no PLAN', truncate(ctx.taskBody.trim(), budget.taskBody));
+    }
+    const accepts = (ctx.acceptanceTests ?? []).filter((t) => t && t.path);
+    if (accepts.length > 0) {
+        lines.push('', '## Testes de aceite do plano (congelados)');
+        lines.push('Estes testes definem o comportamento exigido e foram escritos antes da execução. Implemente o código para que passem exatamente como estão — inclusive nomes, assinaturas e formato de retorno. Não os edite: a escrita é negada e o verify reprova qualquer alteração (`acceptance_tampered`). Pode escrever testes próprios adicionais em outros arquivos.');
+        let used = 0;
+        const limit = budget.acceptance ?? exports.DEFAULT_NODE_CONTEXT_BUDGET.acceptance;
+        for (const test of accepts) {
+            lines.push(`- ${test.criterion}: \`${test.path}\`${test.command ? ` — \`${test.command}\`` : ''}`);
+            if (test.content && used < limit) {
+                const body = truncate(test.content, Math.max(0, limit - used));
+                used += body.length;
+                lines.push('```', body, '```');
+            }
+        }
     }
     if (ctx.implementationContract) {
         lines.push('', '## Contrato (IMPLEMENTATION-PACK)');

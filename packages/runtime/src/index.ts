@@ -18,6 +18,7 @@ export {
   summarizeSuite,
   extractCommandFromHowToVerify,
   looksLikeShellCommand,
+  sha256File,
 } from './verification/verification-compiler';
 export * from './verification/test-report-parsers';
 export type {
@@ -27,6 +28,8 @@ export type {
   CheckResult,
   ExecutedVerificationSuite,
   VerifyRunResult,
+  FrozenFile,
+  AcceptanceTestLike,
 } from './verification/verification-compiler';
 export * from './verification/verification-manifest';
 export * from './verification/contract-exports';

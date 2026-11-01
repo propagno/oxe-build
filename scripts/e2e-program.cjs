@@ -145,6 +145,24 @@ const PHASES = [
 
 const ALL_A = PHASES.flatMap((p) => p.tasks.map((t) => t.aceite));
 
+const AT = "'use strict';\nconst test = require('node:test');\nconst assert = require('node:assert');\nconst src = (m) => require('../../src/' + m);\n";
+/** Testes de aceite do plano (escritos no /oxe-plan, antes da execução): a interface exigida em código. */
+const ACCEPTANCE = {
+  A1: `${AT}test('A1', () => { const t = src('task.js').createTask('x'); assert.equal(t.done, false); assert.equal(typeof t.id, 'string'); assert.throws(() => src('task.js').createTask('')); });\n`,
+  A2: `${AT}test('A2', () => { const s = src('store.js').createStore(); const t = s.add('a'); assert.equal(s.complete(t.id).done, true); assert.equal(s.complete('none'), null); });\n`,
+  A3: `${AT}test('A3', () => { const { checkToken } = src('auth.js'); assert.equal(checkToken('Bearer k', 'k'), true); assert.equal(checkToken('k', 'k'), false); });\n`,
+  A4: `${AT}test('A4: createApi devolve a função handle', () => { const handle = src('api.js').createApi(src('store.js').createStore(), 'k'); assert.equal(typeof handle, 'function'); assert.equal(handle({ method: 'GET', path: '/tasks', headers: {} }).status, 401); assert.equal(handle({ method: 'POST', path: '/tasks', headers: { authorization: 'Bearer k' }, body: { title: 'a' } }).status, 201); });\n`,
+  A5: `${AT}test('A5', () => { const s = src('store.js').createStore(); s.add('a'); assert.deepEqual(src('report.js').summary(s), { total: 1, done: 0, open: 1 }); });\n`,
+  A6: `${AT}test('A6', () => { const s = src('store.js').createStore(); s.add('q"x'); assert.equal(src('export.js').toCsv(s).split('\\n')[0], 'id,title,done'); });\n`,
+};
+const acceptancePath = (a) => `test/acceptance/${a.toLowerCase()}.test.js`;
+
+// Leitura errada do e2e real 1.19: createApi devolve { handle } e o teste do executor concorda.
+const MISREAD_API = {
+  'src/api.js': "'use strict';\nconst { checkToken } = require('./auth.js');\nfunction createApi(store, token) {\n  function handle(req) {\n    if (!checkToken(((req && req.headers) || {}).authorization, token)) return { status: 401, body: {} };\n    if (req.method === 'POST' && req.path === '/tasks') { try { return { status: 201, body: store.add(req.body && req.body.title) }; } catch { return { status: 400, body: {} }; } }\n    if (req.method === 'GET' && req.path === '/tasks') return { status: 200, body: store.list() };\n    return { status: 404, body: {} };\n  }\n  return { handle };\n}\nmodule.exports = { createApi };\n",
+  'test/api.test.js': "'use strict';\nconst test = require('node:test');\nconst assert = require('node:assert');\nconst { createApi } = require('../src/api.js');\nconst { createStore } = require('../src/store.js');\ntest('[A4] api', () => { const api = createApi(createStore(), 'k'); assert.equal(api.handle({ method: 'GET', path: '/tasks', headers: {} }).status, 401); });\n",
+};
+
 function roadmapMd() {
   const blocks = PHASES.map((p, i) => `## Fase ${i + 1} — ${p.title}\n\n**Requisitos:** R${i + 1}\n**Critérios de aceite:** ${p.tasks.map((t) => t.aceite).join(', ')}\n**Escopo:** ${p.scope}\n`);
   return `---\noxe_doc: roadmap\nstatus: approved\n---\n\n# Roteiro de Entrega\n\n${blocks.join('\n')}`;
@@ -176,6 +194,11 @@ function planJson(phase) {
     tasks: phase.tasks.map((t) => ({
       id: t.id, title: t.title, wave: t.wave, depends_on: t.dependsOn || [], files: t.files,
       verify: { commands: [`node --test ${t.test}`] }, acceptance: [t.aceite], complexity: 'S',
+    })),
+    acceptance_tests: phase.tasks.map((t) => ({
+      criterion: t.aceite,
+      files: [acceptancePath(t.aceite)],
+      command: `node --test ${acceptancePath(t.aceite)}`,
     })),
   };
 }
@@ -214,6 +237,8 @@ function writePhaseArtifacts(dir, phase) {
   writeFile(path.join(dir, '.oxe', 'PLAN.md'), planMd(phase));
   writeFile(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify(planJson(phase), null, 2));
   writeFile(path.join(dir, '.oxe', 'IMPLEMENTATION-PACK.json'), JSON.stringify(pack(phase), null, 2));
+  // O planner escreve o aceite antes da execução (o runtime congela o hash no compile).
+  for (const t of phase.tasks) writeFile(path.join(dir, acceptancePath(t.aceite)), ACCEPTANCE[t.aceite]);
 }
 
 /** Oráculo independente: testes de referência das fases dadas, numa cópia do `src/`. */
@@ -285,7 +310,7 @@ function phaseRecord(phase, step, truthUpToHere) {
   };
 }
 
-async function runMockScenario(name, mutate) {
+async function runMockScenario(name, mutate, variant = null) {
   const dir = makeProject(name);
   try {
     operational.runtimeProgramInit(dir, null);
@@ -293,9 +318,27 @@ async function runMockScenario(name, mutate) {
     let mutationCaught = null;
     for (let i = 0; i < PHASES.length; i += 1) {
       const phase = PHASES[i];
-      const breakFiles = mutate && phase.id === 'F3' ? { 'src/store.js': "'use strict';\nmodule.exports = {};\n" } : {};
+      let breakFiles = mutate && phase.id === 'F3' ? { 'src/store.js': "'use strict';\nmodule.exports = {};\n" } : {};
+      if (variant && phase.id === 'F2') {
+        breakFiles = { ...MISREAD_API };
+        if (variant === 'tamper') {
+          breakFiles[acceptancePath('A4')] = ACCEPTANCE.A4.replace("assert.equal(typeof handle, 'function'); ", '').replace(/handle\(/g, 'handle.handle(');
+        }
+      }
       const step = await runPhase(dir, phase, { executor: scriptedExecutor(phase, breakFiles) });
       records.push(phaseRecord(phase, step, oracle(dir, PHASES.slice(0, i + 1))));
+      if (variant && phase.id === 'F2') {
+        const failed = (step.verified.report.check_results || []).filter((r) => r.status !== 'pass').map((r) => `${r.check_id}:${r.error || ''}`);
+        const expected = variant === 'tamper' ? /check-accept-a4:acceptance_tampered/ : /check-accept-a4:/;
+        mutationCaught = !step.closed.closed && failed.some((f) => expected.test(f));
+        // Correção: interface certa + aceite original restaurado; re-executa e fecha.
+        writeFile(path.join(dir, acceptancePath('A4')), ACCEPTANCE.A4);
+        const reexecuted = await operational.runRuntimeExecute(dir, null, { skipPreflight: true, executor: scriptedExecutor(phase) });
+        if (reexecuted.result.status !== 'completed') records.push({ phase: phase.id, reexecute_status: reexecuted.result.status });
+        const reverified = await operational.runRuntimeVerify(dir, null, { timeoutMs: 120_000 });
+        const reclosed = operational.runtimeProgramClose(dir, null, {});
+        records.push(phaseRecord(phase, { ...step, verified: reverified, closed: reclosed }, oracle(dir, PHASES.slice(0, i + 1))));
+      }
       if (mutate && phase.id === 'F3') {
         const regFailed = step.verified.regression ? step.verified.regression.failed.map((f) => f.check_id) : [];
         mutationCaught = !step.closed.closed && regFailed.some((id) => id.startsWith('reg-f1-'));
@@ -323,10 +366,10 @@ async function runMockScenario(name, mutate) {
       interfaces_flow: records.find((r) => r.phase === 'F2').interfaces_in_context.includes('src/store.js#createStore')
         && records.find((r) => r.phase === 'F3').interfaces_in_context.includes('src/api.js#createApi'),
       phase_commits: commits.length,
-      mutation_caught: mutate ? mutationCaught : null,
+      mutation_caught: mutate || variant ? mutationCaught : null,
     };
     const ok = checks.phases_closed === PHASES.length && checks.false_green === 0 && checks.final_oracle_ok && checks.lint_ok
-      && checks.interfaces_flow && (!mutate || checks.mutation_caught === true);
+      && checks.interfaces_flow && (!(mutate || variant) || checks.mutation_caught === true);
     return { name, ok, checks, phases: records, dir: KEEP ? dir : null };
   } finally {
     if (!KEEP) fs.rmSync(dir, { recursive: true, force: true });
@@ -396,7 +439,12 @@ async function runRealScenario() {
 (async () => {
   const results = REAL
     ? [await runRealScenario()]
-    : [await runMockScenario('honest', false), await runMockScenario('regression-mutation', true)];
+    : [
+      await runMockScenario('honest', false),
+      await runMockScenario('regression-mutation', true),
+      await runMockScenario('misread-interface', false, 'misread'),
+      await runMockScenario('tampered-acceptance', false, 'tamper'),
+    ];
   const report = {
     schema_version: 1,
     generated_at: new Date().toISOString(),
@@ -421,7 +469,7 @@ async function runRealScenario() {
   }
   const tail = REAL
     ? ` · US$ ${report.kpis.cost_usd.toFixed(2)} · turnos/tarefa F1 ${results[0].checks.turns_per_task_f1} → F3 ${results[0].checks.turns_per_task_f3}`
-    : ` · mutação de regressão detectada`;
+    : ` · regressão, leitura errada de interface e aceite adulterado detectados`;
   console.log(`e2e-program: OK (${report.summary.pass}/${report.summary.total}) · ${PHASES.length}/${PHASES.length} fases · falso verde ${report.kpis.false_green_count}${tail}`);
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : String(error));

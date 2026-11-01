@@ -424,6 +424,14 @@ function buildNodeContextProvider(projectRoot, activeSession) {
   const programState = paths.programDir ? program.readProgram(paths.programDir) : null;
   const closedInterfaces = programState ? program.loadClosedInterfaces(paths.programDir, programState) : [];
   const runtimeForExports = loadRuntimeModule();
+  let planAcceptance = [];
+  try {
+    const sdkParsers = loadSdkParsers();
+    const planArtifact = sdkParsers ? parsePlanArtifact(sdkParsers, planText, paths.plan) : null;
+    planAcceptance = (planArtifact && planArtifact.acceptanceTests) || [];
+  } catch {
+    planAcceptance = [];
+  }
   return (node, lease) => {
     const root = (lease && lease.root_path) || projectRoot;
     const contract = packTasks.find((task) => String(task && (task.id || task.task_id) || '').trim() === node.id) || null;
@@ -464,6 +472,17 @@ function buildNodeContextProvider(projectRoot, activeSession) {
       fixture,
       workspaceFiles: files,
       interfaces,
+      acceptanceTests: planAcceptance
+        .filter((entry) => {
+          const refs = node.verify && Array.isArray(node.verify.acceptance_refs) ? node.verify.acceptance_refs : [];
+          return refs.includes(entry.criterion);
+        })
+        .flatMap((entry) => entry.files.map((file) => ({
+          criterion: entry.criterion,
+          path: file,
+          command: entry.command,
+          content: readTextIfExists(path.resolve(root, file)),
+        }))),
       gitStatus,
       lessons,
     };
@@ -502,7 +521,10 @@ function createAdapterExecutor(runtime, projectRoot, activeSession, options, get
     null,
     progress,
     adapter.createCompletion(),
-    { contextProvider: options.contextProvider === false ? null : buildNodeContextProvider(projectRoot, activeSession) }
+    {
+      contextProvider: options.contextProvider === false ? null : buildNodeContextProvider(projectRoot, activeSession),
+      protectedPaths: readProtectedAcceptancePaths(projectRoot, activeSession),
+    }
   );
 }
 
@@ -986,6 +1008,7 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
     run_id: runId,
     status: current.status || 'planned',
     compiled_graph: compiledGraph,
+    acceptance_lock: freezeAcceptanceTests(projectRoot, parsedPlan),
     graph_version: compiledGraph.metadata && compiledGraph.metadata.plan_hash ? compiledGraph.metadata.plan_hash : 'compiled',
     canonical_state: serializeCanonicalState(
       mergeCanonicalStateWithRunState(
@@ -1032,9 +1055,13 @@ function compileVerificationSuiteFromArtifacts(projectRoot, activeSession, optio
   if (!specText || !planText) {
     throw new Error('SPEC.md e PLAN.md são obrigatórios para compilar a suite de verificação.');
   }
-  const parsedPlan = attachImplementationPackContracts(parsePlanArtifact(parsers, planText, artifactPaths.plan), artifactPaths.implementationPack);
-  const suite = runtime.compileVerification(parsers.parseSpec(specText), parsedPlan, options.compilerOptions || {});
   const current = options.runState || readRunState(projectRoot, activeSession) || {};
+  const parsedPlan = attachAcceptanceLock(
+    attachImplementationPackContracts(parsePlanArtifact(parsers, planText, artifactPaths.plan), artifactPaths.implementationPack),
+    current,
+    projectRoot,
+  );
+  const suite = runtime.compileVerification(parsers.parseSpec(specText), parsedPlan, options.compilerOptions || {});
   const runId = current.run_id || makeRunId();
   const next = writeRunState(projectRoot, activeSession, {
     ...current,
@@ -1784,7 +1811,11 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     throw new Error('SPEC.md e PLAN.md são obrigatórios para runtime verify.');
   }
   const parsedSpec = parsers.parseSpec(specText);
-  const parsedPlan = attachImplementationPackContracts(parsePlanArtifact(parsers, planText, artifactPaths.plan), artifactPaths.implementationPack);
+  const parsedPlan = attachAcceptanceLock(
+    attachImplementationPackContracts(parsePlanArtifact(parsers, planText, artifactPaths.plan), artifactPaths.implementationPack),
+    current,
+    projectRoot,
+  );
   // A suíte persistida no compile fica velha se SPEC/PLAN mudarem depois: recompila pelo hash.
   const freshSuite = runtime.compileVerification(parsedSpec, parsedPlan, options.compilerOptions || {});
   const persistedSuite = current.verification_suite;
@@ -1891,6 +1922,63 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
 }
 
 
+/**
+ * Testes de aceite do plano: hash congelado no compile do grafo. O verify compara com este lock,
+ * então uma edição feita durante a execução (por qualquer ferramenta) reprova como adulterada.
+ */
+function freezeAcceptanceTests(projectRoot, parsedPlan) {
+  const tests = parsedPlan && Array.isArray(parsedPlan.acceptanceTests) ? parsedPlan.acceptanceTests : [];
+  if (!tests.length) return null;
+  const runtime = loadRuntimeModule();
+  const hash = (rel) => (runtime && typeof runtime.sha256File === 'function' ? runtime.sha256File(path.resolve(projectRoot, rel)) : null);
+  return {
+    frozen_at: new Date().toISOString(),
+    tests: tests.map((entry) => ({
+      criterion: entry.criterion,
+      command: entry.command,
+      files: entry.files.map((file) => ({ path: file, sha256: hash(file) })),
+    })),
+  };
+}
+
+/** Anexa ao plano os testes de aceite com os hashes do lock da run (ou o hash atual, sem lock). */
+function attachAcceptanceLock(parsedPlan, runState, projectRoot) {
+  if (!parsedPlan || !Array.isArray(parsedPlan.acceptanceTests) || !parsedPlan.acceptanceTests.length) return parsedPlan;
+  const lock = runState && runState.acceptance_lock && Array.isArray(runState.acceptance_lock.tests)
+    ? runState.acceptance_lock
+    : freezeAcceptanceTests(projectRoot, parsedPlan);
+  const byCriterion = new Map(lock.tests.map((entry) => [entry.criterion, entry]));
+  parsedPlan.acceptanceTests = parsedPlan.acceptanceTests.map((entry) => {
+    const locked = byCriterion.get(entry.criterion);
+    const hashes = new Map(locked ? locked.files.map((f) => [f.path, f.sha256]) : []);
+    return {
+      criterion: entry.criterion,
+      command: entry.command,
+      files: entry.files.map((file) => ({ path: file, sha256: hashes.has(file) ? hashes.get(file) : null })),
+    };
+  });
+  return parsedPlan;
+}
+
+/** Arquivos que o executor não pode escrever: aceite do plano atual + aceite congelado das fases fechadas. */
+function readProtectedAcceptancePaths(projectRoot, activeSession) {
+  const out = new Set();
+  try {
+    const parsers = loadSdkParsers();
+    const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+    const plan = parsers ? parsePlanArtifact(parsers, readTextIfExists(paths.plan) || '', paths.plan) : null;
+    for (const entry of (plan && plan.acceptanceTests) || []) for (const file of entry.files) out.add(file);
+    const programLib = require('./oxe-program.cjs');
+    const state = paths.programDir ? programLib.readProgram(paths.programDir) : null;
+    for (const check of state ? programLib.loadRegressionChecks(paths.programDir, state, state.active_phase) : []) {
+      for (const file of check.frozen_files || []) out.add(file.path);
+    }
+  } catch {
+    // proteção é best-effort; o hash do verify continua valendo
+  }
+  return [...out];
+}
+
 /** PLAN.json canônico (1.19) quando existir ao lado do PLAN.md; senão o parser markdown. */
 function parsePlanArtifact(parsers, planText, planPath) {
   return require('./oxe-plan-json.cjs').readPlanArtifact(planPath, planText, parsers.parsePlan);
@@ -1925,7 +2013,10 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     : null;
   const config = readJsonQuiet(path.join(projectRoot, '.oxe', 'config.json')) || {};
   const maxTasksPerWave = Number(options.maxTasksPerWave || config.plan_max_tasks_per_wave || 0) || 0;
-  const result = planJson.lintPlan({ plan, spec, pack, phase, maxTasksPerWave });
+  const result = planJson.lintPlan({
+    plan, spec, pack, phase, maxTasksPerWave, projectRoot,
+    requireAcceptanceTests: Boolean(options.requireAcceptanceTests || config.acceptance_tests_required),
+  });
   if (spec) result.warnings.push(...lintPlanForCommonPitfalls(plan, spec, projectRoot, specText));
   return { ...result, source: plan.source, tasks: plan.tasks.length, phase: phase ? phase.id : null, plan_json: hasJson ? jsonPath : null };
 }
@@ -2942,6 +3033,9 @@ function writeRunState(projectRoot, activeSession, runState = {}) {
       ? runState.verification_evidence_coverage
       : null,
     verification_gaps: Array.isArray(runState.verification_gaps) ? runState.verification_gaps.map(String) : [],
+    // 1.19: hash dos testes de aceite do plano congelado no compile; resumo da regressão de fases.
+    acceptance_lock: runState.acceptance_lock && typeof runState.acceptance_lock === 'object' ? runState.acceptance_lock : null,
+    verification_regression: runState.verification_regression && typeof runState.verification_regression === 'object' ? runState.verification_regression : null,
     ci_checks: runState.ci_checks && typeof runState.ci_checks === 'object' ? runState.ci_checks : null,
     delivery: runState.delivery && typeof runState.delivery === 'object' ? runState.delivery : null,
     recovery_summary: runState.recovery_summary && typeof runState.recovery_summary === 'object' ? runState.recovery_summary : null,

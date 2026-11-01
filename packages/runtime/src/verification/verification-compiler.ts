@@ -49,6 +49,23 @@ export interface AcceptanceCheck {
   exports_expected?: ExpectedExport[];
   /** Set on checks carried over from a closed program phase (regression). */
   regression_phase?: string | null;
+  /**
+   * Plan-owned acceptance test files frozen by hash at compile time (1.19). Checked before the
+   * command: a missing or modified file fails the check — the executor cannot rewrite its proof.
+   */
+  frozen_files?: FrozenFile[];
+}
+
+export interface FrozenFile {
+  path: string;
+  /** sha256 hex at freeze time; null when the file did not exist when the run was compiled. */
+  sha256: string | null;
+}
+
+export interface AcceptanceTestLike {
+  criterion: string;
+  command: string;
+  files: FrozenFile[];
 }
 
 export interface AcceptanceCheckSuite {
@@ -121,6 +138,16 @@ interface ParsedTaskLike {
 
 interface ParsedPlanLike {
   tasks: ParsedTaskLike[];
+  /** PLAN.json `acceptance_tests` with the hashes frozen when the run was compiled. */
+  acceptanceTests?: AcceptanceTestLike[];
+}
+
+export function sha256File(absPath: string): string | null {
+  try {
+    return crypto.createHash('sha256').update(fs.readFileSync(absPath)).digest('hex');
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -236,6 +263,21 @@ export function compile(
     });
   }
 
+  // Plan-owned acceptance tests: the proof of A* is written before execution and frozen.
+  for (const entry of plan.acceptanceTests ?? []) {
+    if (!entry || !entry.command || !Array.isArray(entry.files) || entry.files.length === 0) continue;
+    const type = inferCheckType(stripQuotedArgs(entry.command));
+    checks.push({
+      id: `check-accept-${String(entry.criterion).toLowerCase()}`,
+      type,
+      command: entry.command,
+      evidence_type_expected: inferEvidenceType(type),
+      acceptance_ref: entry.criterion,
+      description: `Teste de aceite congelado de ${entry.criterion}`,
+      frozen_files: entry.files.map((f) => ({ path: f.path, sha256: f.sha256 ?? null })),
+    });
+  }
+
   return {
     checks,
     compiled_at: new Date().toISOString(),
@@ -249,6 +291,32 @@ export async function runCheck(
   cwd: string,
   timeoutMs = 60_000
 ): Promise<CheckResult> {
+  const frozen = check.frozen_files ?? [];
+  if (frozen.length > 0) {
+    const missing = frozen.filter((f) => !fs.existsSync(path.resolve(cwd, f.path)));
+    const tampered = missing.length > 0
+      ? []
+      : frozen.filter((f) => f.sha256 !== null && sha256File(path.resolve(cwd, f.path)) !== f.sha256);
+    const unlocked = frozen.filter((f) => f.sha256 === null);
+    if (missing.length > 0 || tampered.length > 0 || unlocked.length > 0) {
+      return {
+        check_id: check.id,
+        acceptance_ref: check.acceptance_ref,
+        status: 'fail',
+        stdout: '',
+        stderr: '',
+        exit_code: null,
+        duration_ms: 0,
+        error: missing.length > 0
+          ? `acceptance_missing: ${missing.map((f) => f.path).join(', ')}`
+          : tampered.length > 0
+            ? `acceptance_tampered: ${tampered.map((f) => f.path).join(', ')}`
+            : `acceptance_not_frozen: ${unlocked.map((f) => f.path).join(', ')} (não existia no compile)`,
+        tests_executed: null,
+      };
+    }
+  }
+
   const contracted = check.files_exist ?? [];
   const exportsExpected = check.exports_expected ?? [];
   if (contracted.length > 0 || exportsExpected.length > 0) {

@@ -31,6 +31,12 @@ export interface LlmExecuteOptions {
 export interface LlmTaskExecutorOptions {
     /** Task body, pack contract, workspace snapshot… rendered into the node prompt. */
     contextProvider?: NodeContextProvider | null;
+    /**
+     * Workspace-relative files the executor may not write (plan-owned acceptance tests, 1.19).
+     * `write_file`/`patch_file` on them are denied; anything else that changes them is caught by
+     * the verify hash check (`acceptance_tampered`).
+     */
+    protectedPaths?: string[] | null;
 }
 export interface ExecutorUsage {
     turns: number;
@@ -48,6 +54,7 @@ export declare class LlmTaskExecutor implements TaskExecutor {
     constructor(provider: LlmProviderConfig, registry?: (PluginRegistry | null) | undefined, onProgress?: ((event: LlmExecutorEvent) => void) | null | undefined, complete?: CompletionFn, options?: LlmTaskExecutorOptions);
     execute(node: GraphNode, lease: WorkspaceLease, runId: string, attempt: number, options?: LlmExecuteOptions): Promise<TaskResult>;
     private invokeToolCall;
+    private isProtected;
     private emit;
 }
 /** Only tools known to be idempotent run concurrently; anything unknown is treated as a mutation. */

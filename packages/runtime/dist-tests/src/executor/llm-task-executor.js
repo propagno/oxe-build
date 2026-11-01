@@ -1,4 +1,7 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.LlmTaskExecutor = void 0;
 exports.partitionToolCalls = partitionToolCalls;
@@ -6,6 +9,10 @@ const stream_completion_1 = require("./stream-completion");
 const built_in_tools_1 = require("./built-in-tools");
 const action_tool_map_1 = require("./action-tool-map");
 const node_prompt_builder_1 = require("./node-prompt-builder");
+const path_1 = __importDefault(require("path"));
+function normalizeRel(p) {
+    return path_1.default.normalize(String(p || '')).replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+}
 const DEFAULT_SYSTEM_PROMPT = 'You are a precise software engineering agent. Use the tools provided to complete the task. ' +
     'When all actions are done, call finish_task with a summary of what was accomplished.';
 class LlmTaskExecutor {
@@ -158,7 +165,13 @@ class LlmTaskExecutor {
         }
         let result;
         const builtIn = built_in_tools_1.BUILT_IN_TOOLS[tc.function.name];
-        if (builtIn && !allowedTools.has(tc.function.name)) {
+        const writesFile = tc.function.name === 'write_file' || tc.function.name === 'patch_file';
+        const protectedTarget = writesFile && typeof args.path === 'string' && this.isProtected(args.path, cwd);
+        if (protectedTarget) {
+            this.emit({ type: 'tool_denied', nodeId: node.id, attempt: 0, detail: { tool: tc.function.name, path: args.path, reason: 'frozen_acceptance_test' } });
+            result = `[tool denied: ${String(args.path)} is a frozen acceptance test owned by the plan — implement the code so this test passes; do not edit it]`;
+        }
+        else if (builtIn && !allowedTools.has(tc.function.name)) {
             this.emit({ type: 'tool_denied', nodeId: node.id, attempt: 0, detail: { tool: tc.function.name } });
             result = `[tool denied: ${tc.function.name} is not permitted for this task]`;
         }
@@ -205,6 +218,13 @@ class LlmTaskExecutor {
             name: tc.function.name,
             content: result,
         };
+    }
+    isProtected(target, cwd) {
+        const list = this.options.protectedPaths ?? [];
+        if (!list.length)
+            return false;
+        const rel = normalizeRel(path_1.default.isAbsolute(target) ? path_1.default.relative(cwd, target) : target);
+        return list.some((p) => normalizeRel(p) === rel);
     }
     emit(event) {
         this.onProgress?.(event);

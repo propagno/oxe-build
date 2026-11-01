@@ -108,6 +108,35 @@ describe('lintPlan — regras estruturais', () => {
     assert.match(text, /T2: tarefa mutável sem entrada no IMPLEMENTATION-PACK/);
   });
 
+  it('aceite do plano: arquivo ausente, no escopo do executor, critério inexistente e A* sem teste', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-lint-accept-'));
+    try {
+      fs.mkdirSync(path.join(tmp, 'test', 'acceptance'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, 'test', 'acceptance', 'a1.test.js'), '// a1\n');
+      const doc = goodPlan();
+      doc.tasks[1].files.push('test/acceptance/a2.test.js');
+      doc.acceptance_tests = [
+        { criterion: 'A1', files: ['test/acceptance/a1.test.js'], command: 'node --test test/acceptance/a1.test.js' },
+        { criterion: 'A2', files: ['test/acceptance/a2.test.js'], command: 'node --test test/acceptance/a2.test.js' },
+        { criterion: 'A9', files: ['test/acceptance/a1.test.js'], command: 'x' },
+      ];
+      assert.deepEqual(planJson.validatePlanJson(doc), []);
+      const plan = planJson.planJsonToParsedPlan(doc);
+      const text = planJson.lintPlan({ plan, spec: { criteria: [{ id: 'A1' }, { id: 'A2' }] }, projectRoot: tmp }).errors.join('\n');
+      assert.match(text, /teste de aceite A2: test\/acceptance\/a2\.test\.js não existe/);
+      assert.match(text, /teste de aceite A2: test\/acceptance\/a2\.test\.js está no escopo de T2/);
+      assert.match(text, /teste de aceite A9: critério não existe na SPEC/);
+
+      const only = planJson.planJsonToParsedPlan({ ...goodPlan(), acceptance_tests: [doc.acceptance_tests[0]] });
+      const soft = planJson.lintPlan({ plan: only, spec: { criteria: [{ id: 'A1' }, { id: 'A2' }] }, projectRoot: tmp });
+      assert.match(soft.warnings.join('\n'), /A\* sem teste de aceite congelado: A2/);
+      const strict = planJson.lintPlan({ plan: only, spec: { criteria: [{ id: 'A1' }, { id: 'A2' }] }, projectRoot: tmp, requireAcceptanceTests: true });
+      assert.match(strict.errors.join('\n'), /A\* sem teste de aceite congelado: A2/);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('plano bom passa; limite de tarefas por onda é cobrado', () => {
     const plan = planJson.planJsonToParsedPlan(goodPlan());
     assert.deepEqual(planJson.lintPlan({ plan, spec: { criteria: [{ id: 'A1' }, { id: 'A2' }] } }).errors, []);

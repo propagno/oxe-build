@@ -12,22 +12,7 @@ Além do `PLAN.md`, este passo deve gerar no mesmo escopo resolvido da sessão o
 
 Esses artefatos são obrigatórios para considerar o plano executável. Quando algo não se aplicar, marcar explicitamente `not_applicable`; nunca omitir o arquivo.
 
-**`PLAN.json` canônico (1.19):** gravar também `PLAN.json` no mesmo diretório do `PLAN.md`, seguindo `oxe/schemas/plan.schema.json`. O runtime lê o `PLAN.json` (o `PLAN.md` é a leitura humana e o parser markdown vira fallback com aviso). As duas versões devem descrever as mesmas tarefas:
-
-```json
-{
-  "schema_version": 1,
-  "phase": "F1",
-  "tasks": [
-    { "id": "T1", "title": "…", "wave": 1, "depends_on": [], "files": ["src/a.js"],
-      "verify": { "commands": ["node --test test/a.test.js"] }, "acceptance": ["A1"], "complexity": "S" }
-  ]
-}
-```
-
-Antes de declarar o plano pronto, rodar **`oxe-cc plan lint`** e corrigir todos os erros: ids únicos, dependências existentes e em onda anterior, escopos disjuntos na mesma onda, A* existentes na SPEC, tarefa mutável com entrada no IMPLEMENTATION-PACK e `plan_max_tasks_per_wave`.
-
-**Programa por fases:** se existir `.oxe/program/PROGRAM.json` com fase ativa, planejar **somente essa fase**: os A* do plano devem ser exatamente os da fase (o lint reprova A* de outra fase e A* da fase sem tarefa) e `PLAN.json` declara `"phase": "<id>"`. Ler `.oxe/program/interfaces/*.json` das fases fechadas: tarefas que consomem esses módulos devem importá-los pelos nomes/assinaturas registrados, não reimplementá-los. No IMPLEMENTATION-PACK, todo símbolo público de módulo (`kind` function/class/const/type) vira contrato verificado: o verify reprova com `exports_missing` se o arquivo não o exportar.
+**PLAN.json, aceite congelado e programa por fases (obrigatório com runtime):** seguir `oxe/workflows/references/plan-json-acceptance-program.md` — gravar `PLAN.json` (schema `oxe/schemas/plan.schema.json`), **escrever os testes de aceite dos A\* antes da execução** em `acceptance_tests` (o executor não pode alterá-los; o verify reprova `acceptance_tampered`), planejar só a fase ativa do `PROGRAM.json` e passar em `oxe-cc plan lint` antes de declarar o plano pronto.
 
 Base: `SPEC.md` do escopo resolvido da sessão (critérios com IDs **A1**, **A2**, …) + `.oxe/codebase/*` + código quando necessário (Grep/Read pontual).
 

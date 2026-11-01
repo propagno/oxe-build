@@ -8,6 +8,7 @@ import { BUILT_IN_TOOLS } from './built-in-tools';
 import { selectToolsForActions } from './action-tool-map';
 import { buildNodePrompt } from './node-prompt-builder';
 import type { NodeContextProvider } from './node-context';
+import path from 'path';
 
 export interface LlmProviderConfig {
   baseUrl: string;
@@ -46,6 +47,16 @@ export interface LlmExecuteOptions {
 export interface LlmTaskExecutorOptions {
   /** Task body, pack contract, workspace snapshot… rendered into the node prompt. */
   contextProvider?: NodeContextProvider | null;
+  /**
+   * Workspace-relative files the executor may not write (plan-owned acceptance tests, 1.19).
+   * `write_file`/`patch_file` on them are denied; anything else that changes them is caught by
+   * the verify hash check (`acceptance_tampered`).
+   */
+  protectedPaths?: string[] | null;
+}
+
+function normalizeRel(p: string): string {
+  return path.normalize(String(p || '')).replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
 }
 
 export interface ExecutorUsage {
@@ -236,7 +247,12 @@ export class LlmTaskExecutor implements TaskExecutor {
 
     let result: string;
     const builtIn = BUILT_IN_TOOLS[tc.function.name];
-    if (builtIn && !allowedTools.has(tc.function.name)) {
+    const writesFile = tc.function.name === 'write_file' || tc.function.name === 'patch_file';
+    const protectedTarget = writesFile && typeof args.path === 'string' && this.isProtected(args.path, cwd);
+    if (protectedTarget) {
+      this.emit({ type: 'tool_denied', nodeId: node.id, attempt: 0, detail: { tool: tc.function.name, path: args.path, reason: 'frozen_acceptance_test' } });
+      result = `[tool denied: ${String(args.path)} is a frozen acceptance test owned by the plan — implement the code so this test passes; do not edit it]`;
+    } else if (builtIn && !allowedTools.has(tc.function.name)) {
       this.emit({ type: 'tool_denied', nodeId: node.id, attempt: 0, detail: { tool: tc.function.name } });
       result = `[tool denied: ${tc.function.name} is not permitted for this task]`;
     } else if (builtIn) {
@@ -279,6 +295,13 @@ export class LlmTaskExecutor implements TaskExecutor {
       name: tc.function.name,
       content: result,
     };
+  }
+
+  private isProtected(target: string, cwd: string): boolean {
+    const list = this.options.protectedPaths ?? [];
+    if (!list.length) return false;
+    const rel = normalizeRel(path.isAbsolute(target) ? path.relative(cwd, target) : target);
+    return list.some((p) => normalizeRel(p) === rel);
   }
 
   private emit(event: LlmExecutorEvent): void {

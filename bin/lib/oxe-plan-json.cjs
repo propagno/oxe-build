@@ -56,6 +56,16 @@ function validatePlanJson(doc) {
       else if (task.verify.commands != null && !isStringArray(task.verify.commands)) errors.push(`${at}.verify.commands: lista de comandos`);
     }
   });
+  if (doc.acceptance_tests != null) {
+    if (!Array.isArray(doc.acceptance_tests)) errors.push('$.acceptance_tests: lista');
+    else doc.acceptance_tests.forEach((entry, i) => {
+      const at = `$.acceptance_tests[${i}]`;
+      if (!entry || typeof entry !== 'object') return errors.push(`${at}: deve ser objeto`);
+      if (typeof entry.criterion !== 'string' || !ACCEPT_RE.test(entry.criterion)) errors.push(`${at}.criterion: A<n>`);
+      if (!isStringArray(entry.files) || entry.files.length === 0) errors.push(`${at}.files: lista com ao menos 1 caminho`);
+      if (typeof entry.command !== 'string' || !entry.command.trim()) errors.push(`${at}.command: obrigatório`);
+    });
+  }
   return errors;
 }
 
@@ -81,7 +91,13 @@ function planJsonToParsedPlan(doc) {
     if (!waves[task.wave]) waves[task.wave] = [];
     waves[task.wave].push(task.id);
   }
-  return { tasks, waves, totalTasks: tasks.length, source: 'PLAN.json', phase: doc.phase || null };
+  // Testes de aceite do plano (1.19): escritos antes da execução, congelados por hash no compile.
+  const acceptanceTests = (Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : []).map((entry) => ({
+    criterion: entry.criterion,
+    files: [...new Set(entry.files.map((f) => String(f).trim()))],
+    command: entry.command.trim(),
+  }));
+  return { tasks, waves, totalTasks: tasks.length, source: 'PLAN.json', phase: doc.phase || null, acceptanceTests };
 }
 
 /**
@@ -197,6 +213,28 @@ function lintPlan(input) {
   } else if (criteria.length) {
     const missing = criteria.filter((ref) => !covered.has(ref));
     if (missing.length) warnings.push(`A* da SPEC sem tarefa: ${missing.join(', ')}`);
+  }
+
+  // Aceite congelado: o teste que prova o A* é do plano, não do executor.
+  const acceptanceTests = input.plan && Array.isArray(input.plan.acceptanceTests) ? input.plan.acceptanceTests : [];
+  const testedCriteria = new Set(acceptanceTests.map((entry) => entry.criterion));
+  const ownedByTasks = new Map();
+  for (const task of tasks) for (const file of task.files || []) ownedByTasks.set(file, task.id);
+  for (const entry of acceptanceTests) {
+    if (criteria.length && !criteria.includes(entry.criterion)) errors.push(`teste de aceite ${entry.criterion}: critério não existe na SPEC`);
+    for (const file of entry.files) {
+      if (input.projectRoot && !fs.existsSync(path.resolve(input.projectRoot, file))) {
+        errors.push(`teste de aceite ${entry.criterion}: ${file} não existe (escreva-o no /oxe-plan, antes da execução)`);
+      }
+      if (ownedByTasks.has(file)) {
+        errors.push(`teste de aceite ${entry.criterion}: ${file} está no escopo de ${ownedByTasks.get(file)} — o executor não pode escrever o próprio aceite`);
+      }
+    }
+  }
+  const scopeAcceptance = phase && Array.isArray(phase.acceptance) && phase.acceptance.length ? phase.acceptance : [...covered];
+  const untested = scopeAcceptance.filter((ref) => !testedCriteria.has(ref));
+  if (untested.length) {
+    (input.requireAcceptanceTests ? errors : warnings).push(`A* sem teste de aceite congelado: ${untested.join(', ')}`);
   }
 
   const pack = input.pack && Array.isArray(input.pack.tasks) ? input.pack.tasks : null;

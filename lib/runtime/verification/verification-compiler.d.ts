@@ -21,6 +21,21 @@ export interface AcceptanceCheck {
     exports_expected?: ExpectedExport[];
     /** Set on checks carried over from a closed program phase (regression). */
     regression_phase?: string | null;
+    /**
+     * Plan-owned acceptance test files frozen by hash at compile time (1.19). Checked before the
+     * command: a missing or modified file fails the check — the executor cannot rewrite its proof.
+     */
+    frozen_files?: FrozenFile[];
+}
+export interface FrozenFile {
+    path: string;
+    /** sha256 hex at freeze time; null when the file did not exist when the run was compiled. */
+    sha256: string | null;
+}
+export interface AcceptanceTestLike {
+    criterion: string;
+    command: string;
+    files: FrozenFile[];
 }
 export interface AcceptanceCheckSuite {
     checks: AcceptanceCheck[];
@@ -84,7 +99,10 @@ interface ParsedTaskLike {
 }
 interface ParsedPlanLike {
     tasks: ParsedTaskLike[];
+    /** PLAN.json `acceptance_tests` with the hashes frozen when the run was compiled. */
+    acceptanceTests?: AcceptanceTestLike[];
 }
+export declare function sha256File(absPath: string): string | null;
 /**
  * Drop quoted arguments so only invoked programs are classified: `node -e "…'node --test'…"`
  * checks package.json, it does not run a test runner.

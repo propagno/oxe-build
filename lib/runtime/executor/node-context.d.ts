@@ -28,7 +28,18 @@ export interface NodeExecutionContext {
      * exports and signatures instead of raw files, so the prompt does not grow with the codebase.
      */
     interfaces?: ModuleInterface[];
+    /**
+     * Plan-owned acceptance tests for the criteria this task serves (1.19). They are the spec in
+     * executable form: implement against them; they are frozen and cannot be edited.
+     */
+    acceptanceTests?: AcceptanceTestSnapshot[];
     lessons?: string[];
+}
+export interface AcceptanceTestSnapshot {
+    criterion: string;
+    path: string;
+    command?: string | null;
+    content?: string | null;
 }
 export interface ModuleInterface {
     file: string;
@@ -45,6 +56,7 @@ export interface NodeContextBudget {
     gitStatus: number;
     lessons: number;
     interfaces?: number;
+    acceptance?: number;
 }
 export declare const DEFAULT_NODE_CONTEXT_BUDGET: NodeContextBudget;
 export declare function truncate(text: string, limit: number): string;
