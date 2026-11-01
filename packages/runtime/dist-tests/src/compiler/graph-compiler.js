@@ -25,8 +25,10 @@ function compile(plan, spec, options = {}) {
     const nodes = new Map();
     const edges = [];
     const waveMap = new Map();
+    // A done task is not re-run; a dependency on it is already satisfied (replan keeps finished work).
+    const skipped = new Set(skip_done_tasks ? plan.tasks.filter((t) => t.done).map((t) => t.id) : []);
     for (const task of plan.tasks) {
-        if (skip_done_tasks && task.done)
+        if (skipped.has(task.id))
             continue;
         const waveNumber = task.wave ?? 1;
         const gateReason = taskGate(task);
@@ -34,7 +36,7 @@ function compile(plan, spec, options = {}) {
             id: task.id,
             title: task.title,
             wave: waveNumber,
-            depends_on: task.dependsOn,
+            depends_on: task.dependsOn.filter((dep) => !skipped.has(dep)),
             workspace_strategy: default_workspace_strategy,
             mutation_scope: task.files,
             actions: buildActions(task),
@@ -52,6 +54,8 @@ function compile(plan, spec, options = {}) {
         };
         nodes.set(task.id, node);
         for (const dep of task.dependsOn) {
+            if (skipped.has(dep))
+                continue;
             edges.push({ from: dep, to: task.id, type: 'dependency' });
         }
         if (!waveMap.has(waveNumber))

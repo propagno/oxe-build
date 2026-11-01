@@ -956,7 +956,9 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
   if (!planText) throw new Error(`PLAN.md ausente em ${artifactPaths.plan}\n  Crie .oxe/PLAN.md com /oxe-plan no seu agente (requer SPEC.md), ou use o template em oxe/templates/PLAN.template.md`);
   const parsedSpec = parsers.parseSpec(specText);
   const parsedPlan = parsePlanArtifact(parsers, planText, artifactPaths.plan);
-  const graph = runtime.compile(parsedPlan, parsedSpec, options.compilerOptions || {});
+  // PLAN.json marca `done` explicitamente: num replan as tarefas concluídas não voltam a rodar (OXB-017).
+  const compilerOptions = { ...(parsedPlan.source === 'PLAN.json' ? { skip_done_tasks: true } : {}), ...(options.compilerOptions || {}) };
+  const graph = runtime.compile(parsedPlan, parsedSpec, compilerOptions);
   const validationErrors = typeof runtime.validateGraph === 'function' ? runtime.validateGraph(graph) : [];
 
   // Static-analysis lints: detect common patterns that cause runtime failures

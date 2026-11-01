@@ -151,3 +151,7 @@ Hipóteses a confirmar com dados das fases:
 ## OXB-016: o dry-verify não reconhecia o vermelho certo de uma tarefa de correção
 
 - **Status:** resolvido. Quando os alvos já existem (correção, não criação), uma falha de asserção do runner é `assertion_red`, que é vermelho pelo motivo certo. Erros de ferramenta continuam sendo `broken_command`.
+
+## OXB-017: o replan reexecutava as tarefas concluídas
+
+- **Status:** resolvido. A opção `skip_done_tasks` existia, mas vinha desligada por padrão. Agora o compile a partir do PLAN.json pula as tarefas `done`, e as dependências nelas contam como satisfeitas. Sem isso, o rework da F1 pagaria de novo por T1–T7.

@@ -123,8 +123,10 @@ export function compile(
   const edges: GraphEdge[] = [];
   const waveMap = new Map<number, string[]>();
 
+  // A done task is not re-run; a dependency on it is already satisfied (replan keeps finished work).
+  const skipped = new Set(skip_done_tasks ? plan.tasks.filter((t) => t.done).map((t) => t.id) : []);
   for (const task of plan.tasks) {
-    if (skip_done_tasks && task.done) continue;
+    if (skipped.has(task.id)) continue;
 
     const waveNumber = task.wave ?? 1;
     const gateReason = taskGate(task);
@@ -132,7 +134,7 @@ export function compile(
       id: task.id,
       title: task.title,
       wave: waveNumber,
-      depends_on: task.dependsOn,
+      depends_on: task.dependsOn.filter((dep) => !skipped.has(dep)),
       workspace_strategy: default_workspace_strategy,
       mutation_scope: task.files,
       actions: buildActions(task),
@@ -152,6 +154,7 @@ export function compile(
     nodes.set(task.id, node);
 
     for (const dep of task.dependsOn) {
+      if (skipped.has(dep)) continue;
       edges.push({ from: dep, to: task.id, type: 'dependency' });
     }
 

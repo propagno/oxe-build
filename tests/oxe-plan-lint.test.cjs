@@ -238,3 +238,25 @@ describe('replan: tarefas concluídas não disputam escopo (OXB-015)', () => {
     assert.doesNotMatch(planJson.lintPlan({ plan }).errors.join('\n'), /escrevem src\/x\.tsx/);
   });
 });
+
+describe('replan não reexecuta tarefas done (OXB-017)', () => {
+  it('compile a partir do PLAN.json pula as tarefas done e as dependências nelas ficam satisfeitas', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-skipdone-'));
+    try {
+      fs.mkdirSync(path.join(tmp, '.oxe'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, '.oxe', 'SPEC.md'), SPEC, 'utf8');
+      fs.writeFileSync(path.join(tmp, '.oxe', 'PLAN.md'), PLAN_MD, 'utf8');
+      fs.writeFileSync(path.join(tmp, '.oxe', 'STATE.md'), '# STATE\n', 'utf8');
+      const doc = goodPlan();
+      delete doc.phase;
+      doc.tasks[0].done = true;
+      fs.writeFileSync(path.join(tmp, '.oxe', 'PLAN.json'), JSON.stringify(doc), 'utf8');
+      const compiled = op.compileExecutionGraphFromArtifacts(tmp, null);
+      const nodes = compiled.run.compiled_graph.nodes;
+      assert.deepEqual(Object.keys(nodes), ['T2']);
+      assert.deepEqual(nodes.T2.depends_on, []);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
