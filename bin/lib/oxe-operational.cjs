@@ -565,6 +565,8 @@ function normalizeRuntimeEventType(type) {
     PhaseStarted: 'PhaseStarted',
     PhaseClosed: 'PhaseClosed',
     PhaseGateFailed: 'PhaseGateFailed',
+    ChangeRequested: 'ChangeRequested',
+    ChangeResolved: 'ChangeResolved',
   };
   if (directMap[raw]) return directMap[raw];
   const lower = raw.toLowerCase();
@@ -1892,6 +1894,14 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
       ? 'failed'
       : 'blocked';
   const regressionSummary = summarizeRegression(regressionChecks, report.check_results);
+  // 1.20b: um CR aberto fecha só com evidência — o teste congelado que o declara em `resolves` ficou verde.
+  try {
+    const changeLib = require('./oxe-change.cjs');
+    if (artifactPaths.programDir) {
+      const reconciled = changeLib.reconcileChanges(artifactPaths.programDir, programPhaseId, parsedPlan, report.check_results);
+      for (const id of reconciled.resolved) appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', run_id: current.run_id, payload: { id } });
+    }
+  } catch { /* reconciliação é auxiliar ao verify */ }
   const next = writeRunState(projectRoot, activeSession, {
     ...current,
     status: nextStatus,
@@ -2022,6 +2032,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
   const maxTasksPerWave = Number(options.maxTasksPerWave || config.plan_max_tasks_per_wave || 0) || 0;
   const result = planJson.lintPlan({
     plan, spec, pack, phase, maxTasksPerWave, projectRoot,
+    requiredVersions: paths.programDir ? require('./oxe-change.cjs').requiredVersions(paths.programDir) : new Map(),
     requireAcceptanceTests: Boolean(options.requireAcceptanceTests || config.acceptance_tests_required),
   });
   if (spec) result.warnings.push(...lintPlanForCommonPitfalls(plan, spec, projectRoot, specText));
@@ -2114,6 +2125,14 @@ function runtimeDossier(projectRoot, activeSession, options = {}) {
     notes: readNdjsonQuiet(path.join(programDir, 'notes.ndjson')).filter((n) => !phaseId || !n.phase || n.phase === phaseId),
     signoffs: readNdjsonQuiet(path.join(programDir, 'signoffs.ndjson')).filter((s) => !phaseId || s.phase === phaseId),
   });
+  // Gatekeeper: regras do projeto (config.json policy_rules) sobre os arquivos tocados na fase.
+  const changeLib = require('./oxe-change.cjs');
+  const touchedFiles = phaseChanges(projectRoot, base).map((c) => c.path).filter((p) => !p.startsWith('.oxe/'));
+  for (const v of changeLib.checkPolicyRules(projectRoot, readProjectConfig(projectRoot).policy_rules, touchedFiles)) {
+    built.issues.push(`policy_violation: ${v.rule} em ${v.file} — ${v.message}`);
+  }
+  const openChanges = changeLib.listChanges(programDir).filter((cr) => cr.status === 'open' && cr.class !== 'new_scope' && (!phaseId || !cr.phase || cr.phase === phaseId));
+  for (const cr of openChanges) built.issues.push(`change_open: ${cr.id} (${cr.class}) ${cr.summary}`);
   const dir = path.join(path.dirname(paths.plan || path.join(projectRoot, '.oxe', 'PLAN.md')), 'dossier', phaseId || 'run');
   let handoffFilled = false;
   if (options.write !== false) {
@@ -2218,6 +2237,45 @@ function runtimeSignoff(projectRoot, activeSession, options = {}) {
   fs.appendFileSync(file, `${JSON.stringify(record)}\n`, 'utf8');
   appendEvent(projectRoot, activeSession, { type: 'GateResolved', payload: { gate: 'signoff', ...record } });
   return record;
+}
+
+// ─── Ciclo de correção: Change Requests (1.20b) ───────────────────────────────
+
+function readProjectConfig(projectRoot) {
+  return readJsonQuiet(path.join(projectRoot, '.oxe', 'config.json')) || {};
+}
+
+/**
+ * `oxe-cc runtime feedback`: registra a pushback como CR-NN, reabre a fase fechada quando a classe pede e devolve a
+ * rota (o que fazer, em ordem) e as tarefas impactadas pela rastreabilidade A* → T.
+ */
+function runtimeFeedback(projectRoot, activeSession, options = {}) {
+  const changeLib = require('./oxe-change.cjs');
+  const programLib = require('./oxe-program.cjs');
+  const parsers = loadSdkParsers();
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const program = programLib.readProgram(programDir);
+  const planText = readTextIfExists(paths.plan) || '';
+  const plan = parsers && planText ? parsePlanArtifact(parsers, planText, paths.plan) : { tasks: [] };
+  const result = changeLib.recordChange({
+    programDir, program, plan,
+    class: options.class, summary: options.summary, criteria: options.criteria, by: options.by,
+    phase: options.phase, amendTo: options.amendTo, evidence: options.evidence,
+  });
+  if (result.reopened && result.program) programLib.writeProgram(programDir, result.program);
+  appendEvent(projectRoot, activeSession, {
+    type: 'ChangeRequested',
+    payload: { id: result.cr.id, class: result.cr.class, phase: result.cr.phase, criteria: result.cr.criteria, reopened: result.reopened, impacted: result.impacted },
+  });
+  try { projectStateMd(projectRoot, activeSession); } catch { /* projeção auxiliar */ }
+  return result;
+}
+
+function runtimeChanges(projectRoot, activeSession) {
+  const changeLib = require('./oxe-change.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  return changeLib.listChanges(paths.programDir || path.join(projectRoot, '.oxe', 'program'));
 }
 
 // ─── Programa por fases (1.19) ───────────────────────────────────────────────
@@ -2359,7 +2417,14 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   const gate = runtime.evaluatePhaseGate(gateInput);
   if (dossier) {
     for (const issue of dossier.issues) gate.reasons.push(`dossiê: ${issue}`);
-    for (const pending of dossier.pending) gate.reasons.push(`sign-off pendente: ${pending.replace(/^signoff_pending: /, '')}`);
+    const deferred = [];
+    for (const pending of dossier.pending) {
+      const criterion = pending.replace(/^signoff_pending: /, '');
+      // ADIADO declarado (dono + risco), como no workflow de engenharia: não bloqueia, mas fica no programa.
+      if (options.deferSignoff && options.by && options.risk) deferred.push({ criterion, owner: options.by, risk: options.risk, at: new Date().toISOString() });
+      else gate.reasons.push(`sign-off pendente: ${criterion} (ou adie: --defer-signoff --by <dono> --risk "<risco assumido>")`);
+    }
+    if (deferred.length) gate.deferred = deferred;
     if (!dossier.handoff_filled) gate.reasons.push(`handoff vazio: preencha "O que a próxima fase deve saber" em ${path.relative(projectRoot, path.join(dossier.dir, 'plan.md'))}`);
     gate.ok = gate.reasons.length === 0;
   }
@@ -2387,6 +2452,10 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     ? { commit: null, committed: false, reason: 'commit desativado (--no-commit)' }
     : programLib.commitPhase(projectRoot, options.message || `feat(phase-${phase.id.toLowerCase()}): ${phase.title}`);
 
+  if (gate.deferred && gate.deferred.length && gateInput.verify_status === 'blocked') {
+    const onlyManual = (run.verification_check_results || []).every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));
+    if (onlyManual) gateInput.verify_status = 'completed';
+  }
   const closed = runtime.closePhase(state, phase.id, gateInput, {
     closed_commit: commit.commit,
     regression_ref: programLib.relativeRef(projectRoot, regressionFile),
@@ -2394,6 +2463,10 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     run_id: run.run_id || null,
     plan_ref: paths.plan ? programLib.relativeRef(projectRoot, paths.plan) : null,
   });
+  if (gate.deferred && gate.deferred.length) {
+    const target = closed.state.phases.find((p) => p.id === phase.id);
+    if (target) target.deferred = [...(target.deferred || []), ...gate.deferred];
+  }
   programLib.writeProgram(paths.programDir, closed.state);
   try { projectStateMd(projectRoot, activeSession); } catch { /* projeção auxiliar */ }
   appendEvent(projectRoot, activeSession, {
@@ -3715,6 +3788,8 @@ module.exports = {
   buildNodeContextProvider,
   detectRuntimeAdapters,
   runtimeProgramStatus,
+  runtimeFeedback,
+  runtimeChanges,
   runtimeDossier,
   runtimeSignoff,
   projectStateMd,

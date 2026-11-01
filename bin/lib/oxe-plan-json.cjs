@@ -65,6 +65,8 @@ function validatePlanJson(doc) {
       if (!isStringArray(entry.files) || entry.files.length === 0) errors.push(`${at}.files: lista com ao menos 1 caminho`);
       if (typeof entry.command !== 'string' || !entry.command.trim()) errors.push(`${at}.command: obrigatório`);
       if (entry.proves != null && !isStringArray(entry.proves)) errors.push(`${at}.proves: lista de nomes de teste`);
+      if (entry.resolves != null && !isStringArray(entry.resolves, /^CR-\d+$/)) errors.push(`${at}.resolves: lista de CR-NN`);
+      if (entry.version != null && !(Number.isInteger(entry.version) && entry.version >= 1)) errors.push(`${at}.version: inteiro ≥ 1`);
     });
   }
   return errors;
@@ -98,6 +100,8 @@ function planJsonToParsedPlan(doc) {
     files: [...new Set(entry.files.map((f) => String(f).trim()))],
     command: entry.command.trim(),
     proves: Array.isArray(entry.proves) ? entry.proves.map((name) => String(name).trim()).filter(Boolean) : [],
+    resolves: Array.isArray(entry.resolves) ? [...entry.resolves] : [],
+    version: Number.isInteger(entry.version) ? entry.version : 1,
   }));
   return { tasks, waves, totalTasks: tasks.length, source: 'PLAN.json', phase: doc.phase || null, acceptanceTests };
 }
@@ -238,6 +242,13 @@ function lintPlan(input) {
     if (!entry.proves || !entry.proves.length) continue;
     const verbose = /--reporter[= ]verbose|--verbose|--test-reporter[= ](tap|spec)|node\s+--test|\s-v\b|junit/i.test(entry.command);
     if (!verbose) warnings.push(`teste de aceite ${entry.criterion}: 'proves' exige saída com nomes de teste — use um reporter verbose (ex.: vitest --reporter=verbose)`);
+  }
+  // Emenda de SPEC (CR spec_gap): teste de aceite de versão anterior está stale até ser reescrito.
+  const required = input.requiredVersions instanceof Map ? input.requiredVersions : new Map();
+  for (const [criterion, version] of required) {
+    const entry = acceptanceTests.find((a) => a.criterion === criterion);
+    if (!entry) errors.push(`${criterion}@v${version}: emenda sem teste de aceite (escreva-o com "version": ${version})`);
+    else if ((entry.version || 1) < version) errors.push(`${criterion}: teste de aceite v${entry.version || 1} está stale — a SPEC foi emendada para v${version}`);
   }
   const scopeAcceptance = phase && Array.isArray(phase.acceptance) && phase.acceptance.length ? phase.acceptance : [...covered];
   const untested = scopeAcceptance.filter((ref) => !testedCriteria.has(ref));

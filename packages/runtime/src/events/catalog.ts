@@ -32,6 +32,8 @@ export const EVENT_TYPES = [
   'PhaseStarted',
   'PhaseClosed',
   'PhaseGateFailed',
+  'ChangeRequested',
+  'ChangeResolved',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

@@ -2504,6 +2504,9 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime program <status|init|start|close> [--phase F2] [--force] [--no-commit] [--json] [pasta-do-projeto]
   npx oxe-cc runtime dossier [--phase F1] [--base-commit <sha>] [--json] [pasta-do-projeto]
   npx oxe-cc runtime signoff --phase F1 --criteria A8 --by <quem> [--message <nota>] [--evidence <caminho|url>]
+  npx oxe-cc runtime feedback --class <defect|spec_gap|constraint|new_scope> --summary "..." [--criteria A4] [--by <quem>] [--amend-to 2]
+  npx oxe-cc runtime feedback list [--json]
+  npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"]
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
     npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
     npx oxe-cc plugins <list|install|remove> [opções]
@@ -3894,7 +3897,7 @@ function parseCapabilitiesArgs(argv) {
  */
 
 /**
- * @typedef {{ help: boolean, dir: string, action: string, subAction: string, activeSession: string|null, wave: number|null, task: string, mode: string, reason: string, runId: string, fromEventId: string, writeReport: boolean, gateId: string, decision: string, actor: string, targetKind: string, remote: string, baseBranch: string, minimumCoverage: number|null, timeoutMs: number|null, jsonOutput: boolean, gateStatus: string, gateScope: string, parseError: boolean, unknownFlag: string, agentsPlanPath: string, apiKeyEnv: string, phase?: string, force?: boolean, noCommit?: boolean, message?: string, base?: string, criteria?: string, by?: string, evidence?: string }} RuntimeOpts
+ * @typedef {{ help: boolean, dir: string, action: string, subAction: string, activeSession: string|null, wave: number|null, task: string, mode: string, reason: string, runId: string, fromEventId: string, writeReport: boolean, gateId: string, decision: string, actor: string, targetKind: string, remote: string, baseBranch: string, minimumCoverage: number|null, timeoutMs: number|null, jsonOutput: boolean, gateStatus: string, gateScope: string, parseError: boolean, unknownFlag: string, agentsPlanPath: string, apiKeyEnv: string, phase?: string, force?: boolean, noCommit?: boolean, message?: string, base?: string, criteria?: string, by?: string, evidence?: string, changeClass?: string, summary?: string, amendTo?: number|null, deferSignoff?: boolean, risk?: string }} RuntimeOpts
  */
 
 /**
@@ -4000,6 +4003,11 @@ function parseContextArgs(argv) {
     criteria: '',
     by: '',
     evidence: '',
+    changeClass: '',
+    summary: '',
+    amendTo: null,
+    deferSignoff: false,
+    risk: '',
   };
   const positionals = [];
   for (let i = 0; i < argv.length; i += 1) {
@@ -4010,6 +4018,11 @@ function parseContextArgs(argv) {
     else if (a === '--criteria' && argv[i + 1]) out.criteria = String(argv[++i]);
     else if (a === '--by' && argv[i + 1]) out.by = String(argv[++i]);
     else if (a === '--evidence' && argv[i + 1]) out.evidence = String(argv[++i]);
+    else if (a === '--class' && argv[i + 1]) out.changeClass = String(argv[++i]);
+    else if (a === '--summary' && argv[i + 1]) out.summary = String(argv[++i]);
+    else if (a === '--amend-to' && argv[i + 1]) out.amendTo = Number(argv[++i]);
+    else if (a === '--defer-signoff') out.deferSignoff = true;
+    else if (a === '--risk' && argv[i + 1]) out.risk = String(argv[++i]);
     else if (a === '--force') out.force = true;
     else if (a === '--no-commit') out.noCommit = true;
     else if (a === '--message' && argv[i + 1]) out.message = String(argv[++i]);
@@ -4119,7 +4132,7 @@ function parseRuntimeArgs(argv) {
     }
   }
   if (positionals[0]) out.action = positionals[0];
-  if (out.action === 'gates' || out.action === 'program') {
+  if (out.action === 'gates' || out.action === 'program' || out.action === 'feedback') {
     if (positionals[1]) out.subAction = positionals[1];
     if (positionals[2]) out.dir = path.resolve(positionals[2]);
   } else {
@@ -4848,6 +4861,34 @@ async function runRuntime(opts) {
     return;
   }
 
+  if (opts.action === 'feedback') {
+    try {
+      if (opts.subAction === 'list' || (!opts.changeClass && !opts.summary)) {
+        const changes = oxeOperational.runtimeChanges(opts.dir, activeSession);
+        if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeChangesSchema: 1, changes }, null, 2));
+        else if (!changes.length) console.log('  Nenhum change request.');
+        else for (const cr of changes) console.log(`  ${cr.status === 'resolved' ? '✓' : '·'} ${cr.id} ${cr.class.padEnd(10)} ${cr.phase || '—'}  ${cr.criteria.join(',') || '—'}  ${cr.summary}${cr.resolution ? `  (${cr.resolution})` : ''}`);
+        return;
+      }
+      const result = oxeOperational.runtimeFeedback(opts.dir, activeSession, {
+        class: opts.changeClass, summary: opts.summary, criteria: opts.criteria, by: opts.by,
+        phase: opts.phase || null, amendTo: opts.amendTo || null, evidence: opts.evidence || null,
+      });
+      if (opts.jsonOutput) {
+        console.log(JSON.stringify({ oxeRuntimeFeedbackSchema: 1, ...result, program: undefined }, null, 2));
+      } else {
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${result.cr.id} (${result.cr.class}) registrado na fase ${result.cr.phase || '—'}${result.reopened ? ' — fase REABERTA' : ''}`);
+        if (result.impacted.length) console.log(`  ${c ? dim : ''}Tarefas impactadas:${c ? reset : ''} ${result.impacted.join(', ')}`);
+        console.log(`  ${c ? dim : ''}Rota:${c ? reset : ''}`);
+        result.route.forEach((step, i) => console.log(`    ${i + 1}. ${step}`));
+      }
+    } catch (err) {
+      console.error(`  ${c ? red : ''}✗${c ? reset : ''} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (opts.action === 'program') {
     const sub = opts.subAction || 'status';
     const printStatus = (status) => {
@@ -4896,6 +4937,9 @@ async function runRuntime(opts) {
           phase: opts.phase || null,
           commit: !opts.noCommit,
           message: opts.message || undefined,
+          deferSignoff: opts.deferSignoff,
+          by: opts.by || undefined,
+          risk: opts.risk || undefined,
         });
         if (opts.jsonOutput) {
           console.log(JSON.stringify({ oxeRuntimeProgramSchema: 1, ...result }, null, 2));

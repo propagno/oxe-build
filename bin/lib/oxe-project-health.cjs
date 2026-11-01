@@ -2081,6 +2081,21 @@ function suggestProgramStep(target, activeSession, activeRun) {
     };
   }
   const program = { phase: phase.id, index: progress.index, total: progress.total };
+  let openChanges = [];
+  try {
+    openChanges = operational.runtimeChanges(target, activeSession).filter((cr) => cr.status === 'open' && cr.class !== 'new_scope' && (!cr.phase || cr.phase === phase.id));
+  } catch {
+    openChanges = [];
+  }
+  if (openChanges.length && phase.status !== 'executing') {
+    return {
+      step: 'plan',
+      cursorCmd: '/oxe-plan --replan',
+      reason: `${label}: ${openChanges.length} change request(s) aberto(s) — ${openChanges.map((cr) => `${cr.id} ${cr.class}`).join(', ')}. Planeje o teste de aceite que resolve cada um (resolves) e só as tarefas impactadas.`,
+      artifacts: ['.oxe/program/changes.ndjson'],
+      program,
+    };
+  }
   if (phase.status === 'planning') {
     // Só o PLAN.json declara a fase: um PLAN.md antigo é o plano da fase anterior.
     const planJsonPath = path.join(path.dirname(status.paths.plan || path.join(target, '.oxe', 'PLAN.md')), 'PLAN.json');
