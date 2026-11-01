@@ -38,7 +38,9 @@ export interface FrozenFile {
     sha256: string | null;
 }
 export interface AcceptanceTestLike {
-    criterion: string;
+    /** Own id for cross-cutting proofs (e.g. a constraint CR): check id `check-accept-<id>`. Defaults to the criterion. */
+    id?: string | null;
+    criterion: string | null;
     command: string;
     files: FrozenFile[];
     proves?: string[];

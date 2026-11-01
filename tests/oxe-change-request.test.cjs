@@ -107,3 +107,23 @@ describe('feedback pela CLI operacional', () => {
     assert.ok(op.readEvents(tmp, null).some((e) => e.type === 'ChangeRequested'));
   });
 });
+
+describe('prova transversal para CR sem critério (OXB-014)', () => {
+  it('entrada de aceite com id + resolves, sem criterion: valida, gera check próprio e resolve o CR', () => {
+    const dir = tmpDir();
+    change.recordChange({ programDir: dir, program: null, plan, class: 'constraint', summary: 'eslint react-hooks/refs com zero warnings' });
+    const doc = {
+      schema_version: 1,
+      tasks: [{ id: 'T1', title: 'x', wave: 1, acceptance: ['A1'], verify: { commands: ['x'] } }],
+      acceptance_tests: [{ id: 'CR-01-lint', resolves: ['CR-01'], files: ['eslint.voice.json'], command: 'npx eslint src/features/voice --max-warnings 0' }],
+    };
+    assert.deepEqual(planJson.validatePlanJson(doc), []);
+    const bad = { ...doc, acceptance_tests: [{ files: ['x'], command: 'y' }] };
+    assert.match(planJson.validatePlanJson(bad).join('\n'), /criterion: A<n> \(ou "id" \+ "resolves"/);
+    const parsed = planJson.planJsonToParsedPlan(doc);
+    assert.equal(parsed.acceptanceTests[0].id, 'CR-01-lint');
+    assert.equal(parsed.acceptanceTests[0].criterion, null);
+    const r = change.reconcileChanges(dir, null, parsed, [{ check_id: 'check-accept-cr-01-lint', status: 'pass' }]);
+    assert.deepEqual(r.resolved, ['CR-01']);
+  });
+});

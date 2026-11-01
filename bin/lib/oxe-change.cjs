@@ -160,8 +160,9 @@ function reconcileChanges(programDir, phaseId, plan, checkResults) {
   const passing = new Set((checkResults || []).filter((r) => r.status === 'pass').map((r) => r.check_id));
   const resolvedBy = new Map();
   for (const a of (plan && plan.acceptanceTests) || []) {
-    if (!passing.has(`check-accept-${String(a.criterion).toLowerCase()}`)) continue;
-    for (const id of a.resolves || []) resolvedBy.set(id, a.criterion);
+    const key = a.id || a.criterion;
+    if (!key || !passing.has(`check-accept-${String(key).toLowerCase()}`)) continue;
+    for (const id of a.resolves || []) resolvedBy.set(id, key);
   }
   const resolved = [];
   for (const cr of listChanges(programDir)) {

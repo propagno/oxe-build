@@ -1959,6 +1959,7 @@ function freezeAcceptanceTests(projectRoot, parsedPlan) {
   return {
     frozen_at: new Date().toISOString(),
     tests: tests.map((entry) => ({
+      id: entry.id || null,
       criterion: entry.criterion,
       command: entry.command,
       files: entry.files.map((file) => ({ path: file, sha256: hash(file) })),
@@ -1972,11 +1973,13 @@ function attachAcceptanceLock(parsedPlan, runState, projectRoot) {
   const lock = runState && runState.acceptance_lock && Array.isArray(runState.acceptance_lock.tests)
     ? runState.acceptance_lock
     : freezeAcceptanceTests(projectRoot, parsedPlan);
-  const byCriterion = new Map(lock.tests.map((entry) => [entry.criterion, entry]));
+  const keyOf = (entry) => entry.id || entry.criterion;
+  const byCriterion = new Map(lock.tests.map((entry) => [keyOf(entry), entry]));
   parsedPlan.acceptanceTests = parsedPlan.acceptanceTests.map((entry) => {
-    const locked = byCriterion.get(entry.criterion);
+    const locked = byCriterion.get(keyOf(entry));
     const hashes = new Map(locked ? locked.files.map((f) => [f.path, f.sha256]) : []);
     return {
+      id: entry.id || null,
       criterion: entry.criterion,
       command: entry.command,
       files: entry.files.map((file) => ({ path: file, sha256: hashes.has(file) ? hashes.get(file) : null })),

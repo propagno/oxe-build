@@ -137,3 +137,9 @@ Hipóteses a confirmar com dados das fases:
   - **Régua suspeita:** a mesma falha, com saída normalizada (sem tempos, timestamps, hashes e caminhos temporários), em duas tentativas faz a tarefa parar com `verify_suspect` e emite `VerifyCommandSuspect`, sem pagar as tentativas restantes.
   - **Checkpoint por tarefa** (`--checkpoint-commits` ou `checkpoint_commits`): commit local só do escopo da tarefa concluída.
   - `runtime rollback --task Tn [--yes]` devolve o escopo ao último checkpoint (dry-run por padrão).
+
+## OXB-014: CR de `constraint` sem critério não tinha como ser provado
+
+- **Status:** resolvido.
+- **Evidência:** o CR-03 do OxeVoice ("eslint react-hooks/refs com zero warnings") não pertence a nenhum A*. Como o teste de aceite congelado exigia `criterion` e gerava um check por critério, o CR nunca poderia fechar por evidência.
+- **Correção:** a entrada `acceptance_tests[]` pode ter um `id` próprio (check `check-accept-<id>`). O `criterion` passa a ser opcional quando há `id` + `resolves`. O lock, o reconcile do CR e o schema usam `id || criterion`.

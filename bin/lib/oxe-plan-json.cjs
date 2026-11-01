@@ -63,7 +63,11 @@ function validatePlanJson(doc) {
     else doc.acceptance_tests.forEach((entry, i) => {
       const at = `$.acceptance_tests[${i}]`;
       if (!entry || typeof entry !== 'object') return errors.push(`${at}: deve ser objeto`);
-      if (typeof entry.criterion !== 'string' || !ACCEPT_RE.test(entry.criterion)) errors.push(`${at}.criterion: A<n>`);
+      const hasId = typeof entry.id === 'string' && /^[A-Za-z][\w-]*$/.test(entry.id);
+      if (entry.id != null && !hasId) errors.push(`${at}.id: identificador (ex.: "CR-03" ou "lint-voice")`);
+      if (entry.criterion != null && (typeof entry.criterion !== 'string' || !ACCEPT_RE.test(entry.criterion))) errors.push(`${at}.criterion: A<n>`);
+      // Sem critério só para prova transversal (ex.: CR constraint): precisa de id próprio e resolves.
+      if (entry.criterion == null && !(hasId && Array.isArray(entry.resolves) && entry.resolves.length)) errors.push(`${at}.criterion: A<n> (ou "id" + "resolves" para uma prova transversal)`);
       if (!isStringArray(entry.files) || entry.files.length === 0) errors.push(`${at}.files: lista com ao menos 1 caminho`);
       if (typeof entry.command !== 'string' || !entry.command.trim()) errors.push(`${at}.command: obrigatório`);
       if (entry.proves != null && !isStringArray(entry.proves)) errors.push(`${at}.proves: lista de nomes de teste`);
@@ -103,7 +107,8 @@ function planJsonToParsedPlan(doc) {
   }
   // Testes de aceite do plano (1.19): escritos antes da execução, congelados por hash no compile.
   const acceptanceTests = (Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : []).map((entry) => ({
-    criterion: entry.criterion,
+    id: typeof entry.id === 'string' ? entry.id : null,
+    criterion: typeof entry.criterion === 'string' ? entry.criterion : null,
     files: [...new Set(entry.files.map((f) => String(f).trim()))],
     command: entry.command.trim(),
     proves: Array.isArray(entry.proves) ? entry.proves.map((name) => String(name).trim()).filter(Boolean) : [],
@@ -230,11 +235,11 @@ function lintPlan(input) {
 
   // Aceite congelado: o teste que prova o A* é do plano, não do executor.
   const acceptanceTests = input.plan && Array.isArray(input.plan.acceptanceTests) ? input.plan.acceptanceTests : [];
-  const testedCriteria = new Set(acceptanceTests.map((entry) => entry.criterion));
+  const testedCriteria = new Set(acceptanceTests.map((entry) => entry.criterion).filter(Boolean));
   const ownedByTasks = new Map();
   for (const task of tasks) for (const file of task.files || []) ownedByTasks.set(file, task.id);
   for (const entry of acceptanceTests) {
-    if (criteria.length && !criteria.includes(entry.criterion)) errors.push(`teste de aceite ${entry.criterion}: critério não existe na SPEC`);
+    if (entry.criterion && criteria.length && !criteria.includes(entry.criterion)) errors.push(`teste de aceite ${entry.criterion}: critério não existe na SPEC`);
     for (const file of entry.files) {
       if (input.projectRoot && !fs.existsSync(path.resolve(input.projectRoot, file))) {
         errors.push(`teste de aceite ${entry.criterion}: ${file} não existe (escreva-o no /oxe-plan, antes da execução)`);

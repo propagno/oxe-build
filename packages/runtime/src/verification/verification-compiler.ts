@@ -68,7 +68,9 @@ export interface FrozenFile {
 }
 
 export interface AcceptanceTestLike {
-  criterion: string;
+  /** Own id for cross-cutting proofs (e.g. a constraint CR): check id `check-accept-<id>`. Defaults to the criterion. */
+  id?: string | null;
+  criterion: string | null;
   command: string;
   files: FrozenFile[];
   proves?: string[];
@@ -281,12 +283,12 @@ export function compile(
     if (!entry || !entry.command || !Array.isArray(entry.files) || entry.files.length === 0) continue;
     const type = inferCheckType(stripQuotedArgs(entry.command));
     checks.push({
-      id: `check-accept-${String(entry.criterion).toLowerCase()}`,
+      id: `check-accept-${String(entry.id || entry.criterion).toLowerCase()}`,
       type,
       command: entry.command,
       evidence_type_expected: inferEvidenceType(type),
-      acceptance_ref: entry.criterion,
-      description: `Teste de aceite congelado de ${entry.criterion}`,
+      acceptance_ref: entry.criterion || null,
+      description: `Teste de aceite congelado de ${entry.criterion || entry.id}`,
       frozen_files: entry.files.map((f) => ({ path: f.path, sha256: f.sha256 ?? null })),
       ...(Array.isArray(entry.proves) && entry.proves.length ? { proves: [...entry.proves] } : {}),
     });
