@@ -32,6 +32,10 @@ exports.EVENT_TYPES = [
     'RollbackFailed',
     'TaskErrorBoundaryTripped',
     'WorkspaceDisposeFailed',
+    'ProgramCreated',
+    'PhaseStarted',
+    'PhaseClosed',
+    'PhaseGateFailed',
 ];
 function isValidEventType(type) {
     return exports.EVENT_TYPES.includes(type);

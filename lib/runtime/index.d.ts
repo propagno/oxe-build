@@ -9,6 +9,7 @@ export { compile as compileVerification, runCheck, runSuite, executeSuite, verif
 export * from './verification/test-report-parsers';
 export type { CheckType, AcceptanceCheck, AcceptanceCheckSuite, CheckResult, ExecutedVerificationSuite, VerifyRunResult, } from './verification/verification-compiler';
 export * from './verification/verification-manifest';
+export * from './verification/contract-exports';
 export * from './policy/index';
 export * from './gate/index';
 export * from './projection/index';
@@ -19,3 +20,4 @@ export * from './scheduler/multi-agent-coordinator';
 export * from './decision/index';
 export * from './audit/index';
 export * from './executor/index';
+export * from './program/index';

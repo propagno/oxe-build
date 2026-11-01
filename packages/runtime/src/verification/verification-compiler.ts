@@ -4,6 +4,8 @@ import path from 'path';
 import { spawnSync } from 'child_process';
 import { parseTestReport, extractTestFileArgs } from './test-report-parsers';
 import { shellInvocation, childProcessEnv } from '../executor/shell-argv';
+import { checkExpectedExports } from './contract-exports';
+import type { ExpectedExport } from './contract-exports';
 import type { EvidenceType } from '../models/evidence';
 import type { VerificationStatus } from '../models/verification-result';
 import type { VerificationResult } from '../models/verification-result';
@@ -43,6 +45,10 @@ export interface AcceptanceCheck {
   description: string;
   /** Paths that must exist in the workspace (IMPLEMENTATION-PACK `exact_paths`); checked before any command. */
   files_exist?: string[];
+  /** Symbols the pack contracts per file (`symbols`); JS/TS files are scanned statically. */
+  exports_expected?: ExpectedExport[];
+  /** Set on checks carried over from a closed program phase (regression). */
+  regression_phase?: string | null;
 }
 
 export interface AcceptanceCheckSuite {
@@ -109,6 +115,8 @@ interface ParsedTaskLike {
   aceite: string[];
   /** Contracted paths from the IMPLEMENTATION-PACK, attached by the caller. */
   filesExist?: string[];
+  /** Contracted exports from the IMPLEMENTATION-PACK `symbols`. */
+  exportsExpected?: ExpectedExport[];
 }
 
 interface ParsedPlanLike {
@@ -214,15 +222,17 @@ export function compile(
   // file must not pass because its own verify command happened to exit 0 (T3 in the 1.17 benchmark).
   for (const task of plan.tasks) {
     const files = [...new Set(task.filesExist ?? [])];
-    if (files.length === 0) continue;
+    const exportsExpected = dedupeExports(task.exportsExpected ?? []);
+    if (files.length === 0 && exportsExpected.length === 0) continue;
     checks.push({
       id: `check-pack-${task.id.toLowerCase()}`,
       type: 'contract',
       command: null,
       evidence_type_expected: 'stdout',
       acceptance_ref: null,
-      description: `Implementation pack paths for task ${task.id}`,
+      description: `Implementation pack contract for task ${task.id}`,
       files_exist: files,
+      ...(exportsExpected.length ? { exports_expected: exportsExpected } : {}),
     });
   }
 
@@ -240,16 +250,25 @@ export async function runCheck(
   timeoutMs = 60_000
 ): Promise<CheckResult> {
   const contracted = check.files_exist ?? [];
-  if (contracted.length > 0) {
+  const exportsExpected = check.exports_expected ?? [];
+  if (contracted.length > 0 || exportsExpected.length > 0) {
     const absent = contracted.filter((file) => !fs.existsSync(path.resolve(cwd, file)));
     const leaks = absent.length > 0 ? [] : contracted.filter((file) => referencesOxeInternals(path.resolve(cwd, file)));
-    const failed = absent.length > 0 || leaks.length > 0;
+    const exportOutcome = absent.length > 0 || leaks.length > 0
+      ? { missing: [] as ExpectedExport[], unsupported: [] as string[] }
+      : checkExpectedExports(cwd, exportsExpected);
+    const failed = absent.length > 0 || leaks.length > 0 || exportOutcome.missing.length > 0;
     if (failed || !check.command) {
+      const okLines: string[] = [];
+      if (contracted.length) okLines.push(`files_exist ok: ${contracted.join(', ')}`);
+      const checkedExports = exportsExpected.filter((e) => !exportOutcome.unsupported.includes(e.file));
+      if (checkedExports.length) okLines.push(`exports ok: ${checkedExports.map((e) => `${e.file}#${e.name}`).join(', ')}`);
+      if (exportOutcome.unsupported.length) okLines.push(`exports_unchecked (linguagem não suportada): ${exportOutcome.unsupported.join(', ')}`);
       return {
         check_id: check.id,
         acceptance_ref: check.acceptance_ref,
         status: failed ? 'fail' : 'pass',
-        stdout: failed ? '' : `files_exist ok: ${contracted.join(', ')}\n`,
+        stdout: failed ? '' : `${okLines.join('\n')}\n`,
         stderr: '',
         exit_code: null,
         duration_ms: 0,
@@ -257,7 +276,9 @@ export async function runCheck(
           ? `files_missing: ${absent.join(', ')}`
           : leaks.length > 0
             ? `oxe_internal_reference: ${leaks.join(', ')}`
-            : null,
+            : exportOutcome.missing.length > 0
+              ? `exports_missing: ${exportOutcome.missing.map((e) => `${e.file}#${e.name}`).join(', ')}`
+              : null,
         tests_executed: null,
       };
     }
@@ -561,6 +582,19 @@ function referencesOxeInternals(absPath: string): boolean {
   } catch {
     return false;
   }
+}
+
+function dedupeExports(list: ExpectedExport[]): ExpectedExport[] {
+  const seen = new Set<string>();
+  const out: ExpectedExport[] = [];
+  for (const entry of list) {
+    if (!entry || typeof entry.file !== 'string' || typeof entry.name !== 'string') continue;
+    const key = `${entry.file}#${entry.name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ file: entry.file, name: entry.name });
+  }
+  return out;
 }
 
 function hashObject(obj: unknown): string {

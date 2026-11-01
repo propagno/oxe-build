@@ -60,6 +60,21 @@ const lease = {
         // O contexto vem antes das instruções de conclusão.
         strict_1.default.ok(prompt.indexOf('## Tarefa no PLAN') < prompt.indexOf('## Conclusão da tarefa'));
     });
+    (0, node_test_1.test)('interfaces de fases fechadas entram como exports/assinaturas, com orçamento', () => {
+        const prompt = (0, node_prompt_builder_1.buildNodePrompt)(node, lease, 'r', 1, {
+            context: {
+                interfaces: [
+                    { file: 'src/store.js', phase: 'F1', exports: [{ name: 'save', signature: '(item)' }, { name: 'Store', signature: 'class' }] },
+                    { file: 'src/empty.js', exports: [] },
+                ],
+            },
+        });
+        strict_1.default.match(prompt, /## Interfaces disponíveis/);
+        strict_1.default.match(prompt, /- `src\/store\.js` \(fase F1\)\n {2}- `save\(item\)`\n {2}- `Store` — class/);
+        strict_1.default.doesNotMatch(prompt, /src\/empty\.js/);
+        const text = (0, node_context_1.renderNodeContext)({ interfaces: [{ file: 'a.js', exports: Array.from({ length: 50 }, (_, i) => ({ name: `fn${i}`, signature: '(x)' })) }] }, { taskBody: 10, contract: 10, fixture: 10, filesTotal: 10, gitStatus: 10, lessons: 10, interfaces: 40 }).join('\n');
+        strict_1.default.match(text, /… \[truncado: \d+ caracteres omitidos\]/);
+    });
     (0, node_test_1.test)('orçamento: seções longas são truncadas explicitamente', () => {
         strict_1.default.equal((0, node_context_1.truncate)('abc', 10), 'abc');
         strict_1.default.match((0, node_context_1.truncate)('x'.repeat(50), 10), /^x{10}\n… \[truncado: 40 caracteres omitidos\]$/);

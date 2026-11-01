@@ -1,5 +1,6 @@
 import type { GraphNode } from '../compiler/graph-compiler';
 import type { WorkspaceLease } from '../models/workspace';
+import type { ExportedSymbol } from '../verification/contract-exports';
 /**
  * What the executor knows about a node beyond its title and actions. Without it every attempt spent
  * turns rediscovering the workspace and drifted from the IMPLEMENTATION-PACK (1.17 benchmark, T3).
@@ -22,7 +23,18 @@ export interface NodeExecutionContext {
     workspaceFiles?: WorkspaceFileSnapshot[];
     /** `git status --porcelain` of the workspace. */
     gitStatus?: string | null;
+    /**
+     * Public surface of modules the task consumes (closed program phases + completed dependencies):
+     * exports and signatures instead of raw files, so the prompt does not grow with the codebase.
+     */
+    interfaces?: ModuleInterface[];
     lessons?: string[];
+}
+export interface ModuleInterface {
+    file: string;
+    exports: ExportedSymbol[];
+    /** Program phase that delivered it; null for a dependency of the current run. */
+    phase?: string | null;
 }
 export type NodeContextProvider = (node: GraphNode, lease: WorkspaceLease) => NodeExecutionContext | null;
 export interface NodeContextBudget {
@@ -32,6 +44,7 @@ export interface NodeContextBudget {
     filesTotal: number;
     gitStatus: number;
     lessons: number;
+    interfaces?: number;
 }
 export declare const DEFAULT_NODE_CONTEXT_BUDGET: NodeContextBudget;
 export declare function truncate(text: string, limit: number): string;

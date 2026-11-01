@@ -1,5 +1,6 @@
 import type { GraphNode } from '../compiler/graph-compiler';
 import type { WorkspaceLease } from '../models/workspace';
+import type { ExportedSymbol } from '../verification/contract-exports';
 
 /**
  * What the executor knows about a node beyond its title and actions. Without it every attempt spent
@@ -24,7 +25,19 @@ export interface NodeExecutionContext {
   workspaceFiles?: WorkspaceFileSnapshot[];
   /** `git status --porcelain` of the workspace. */
   gitStatus?: string | null;
+  /**
+   * Public surface of modules the task consumes (closed program phases + completed dependencies):
+   * exports and signatures instead of raw files, so the prompt does not grow with the codebase.
+   */
+  interfaces?: ModuleInterface[];
   lessons?: string[];
+}
+
+export interface ModuleInterface {
+  file: string;
+  exports: ExportedSymbol[];
+  /** Program phase that delivered it; null for a dependency of the current run. */
+  phase?: string | null;
 }
 
 export type NodeContextProvider = (node: GraphNode, lease: WorkspaceLease) => NodeExecutionContext | null;
@@ -36,6 +49,7 @@ export interface NodeContextBudget {
   filesTotal: number;
   gitStatus: number;
   lessons: number;
+  interfaces?: number;
 }
 
 export const DEFAULT_NODE_CONTEXT_BUDGET: NodeContextBudget = {
@@ -45,6 +59,7 @@ export const DEFAULT_NODE_CONTEXT_BUDGET: NodeContextBudget = {
   filesTotal: 8000,
   gitStatus: 1000,
   lessons: 1500,
+  interfaces: 4000,
 };
 
 export function truncate(text: string, limit: number): string {
@@ -94,6 +109,20 @@ export function renderNodeContext(ctx: NodeExecutionContext | null | undefined, 
         lines.push('```', head, '```');
       }
     }
+  }
+
+  const modules = (ctx.interfaces ?? []).filter((m) => m && m.file && Array.isArray(m.exports) && m.exports.length > 0);
+  if (modules.length > 0) {
+    lines.push('', '## Interfaces disponíveis');
+    lines.push('Módulos já entregues que esta tarefa pode consumir. Importe por estes nomes; não reimplemente nem mude a assinatura sem a tarefa pedir.');
+    const body = modules
+      .map((m) => {
+        const origin = m.phase ? ` (fase ${m.phase})` : '';
+        const symbols = m.exports.map((e) => `  - \`${e.name}${e.signature && e.signature !== 'class' ? e.signature : ''}\`${e.signature === 'class' ? ' — class' : ''}`);
+        return [`- \`${m.file}\`${origin}`, ...symbols].join('\n');
+      })
+      .join('\n');
+    lines.push(truncate(body, budget.interfaces ?? DEFAULT_NODE_CONTEXT_BUDGET.interfaces!));
   }
 
   if (ctx.gitStatus && ctx.gitStatus.trim()) {

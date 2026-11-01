@@ -28,6 +28,10 @@ export const EVENT_TYPES = [
   'RollbackFailed',
   'TaskErrorBoundaryTripped',
   'WorkspaceDisposeFailed',
+  'ProgramCreated',
+  'PhaseStarted',
+  'PhaseClosed',
+  'PhaseGateFailed',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

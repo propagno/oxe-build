@@ -486,6 +486,44 @@ describe('oxe-project-health', () => {
     assert.strictEqual(s.step, 'execute', s.reason);
   });
 
+  // 1.19: com PROGRAM.json o router fala a fase — "Fase 2/3 — planejar" — e não reaproveita o
+  // PLAN.md da fase anterior.
+  test('suggestNextStep segue a fase ativa do programa', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(path.join(oxe, 'program'), { recursive: true });
+    fs.writeFileSync(path.join(oxe, 'STATE.md'), '## Fase atual\n\n`plan_ready`\n', 'utf8');
+    fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# S\n## Critérios de aceite\n| A1 | x | y |\n', 'utf8');
+    fs.writeFileSync(path.join(oxe, 'PLAN.md'), READY_PLAN, 'utf8');
+    const phase = (id, status, acceptance) => ({
+      id, title: `t${id}`, requirements: [], acceptance, scope: null, status,
+      plan_ref: null, run_id: null, started_at: null, closed_at: null, closed_commit: null, regression_ref: null, interfaces_ref: null,
+    });
+    const write = (activePhase, phases) => fs.writeFileSync(
+      path.join(oxe, 'program', 'PROGRAM.json'),
+      JSON.stringify({ schema_version: 1, roadmap_ref: null, active_phase: activePhase, phases, created_at: '', updated_at: '' }),
+      'utf8'
+    );
+
+    write(null, [phase('F1', 'closed', ['A1']), phase('F2', 'pending', ['A2']), phase('F3', 'pending', ['A3'])]);
+    let s = h.suggestNextStep(dir, {});
+    assert.strictEqual(s.step, 'program-start', s.reason);
+    assert.match(s.reason, /Fase 2\/3 — F2/);
+
+    write('F2', [phase('F1', 'closed', ['A1']), phase('F2', 'planning', ['A2']), phase('F3', 'pending', ['A3'])]);
+    s = h.suggestNextStep(dir, {});
+    assert.strictEqual(s.step, 'plan', 'PLAN.md antigo (fase 1) não vale como plano da fase 2');
+    assert.match(s.reason, /A\*: A2/);
+
+    fs.writeFileSync(path.join(oxe, 'PLAN.json'), JSON.stringify({ schema_version: 1, phase: 'F2', tasks: [] }), 'utf8');
+    s = h.suggestNextStep(dir, {});
+    assert.strictEqual(s.step, 'execute', s.reason);
+
+    write(null, [phase('F1', 'closed', ['A1'])]);
+    s = h.suggestNextStep(dir, {});
+    assert.notStrictEqual(s.step, 'program-start', 'programa concluído volta ao roteamento normal');
+  });
+
   test('suggestNextStep respects pending checkpoint approval', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-'));
     const oxe = path.join(dir, '.oxe');

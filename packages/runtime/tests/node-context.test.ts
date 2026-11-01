@@ -66,6 +66,25 @@ describe('NodeExecutionContext no prompt do nó', () => {
     assert.ok(prompt.indexOf('## Tarefa no PLAN') < prompt.indexOf('## Conclusão da tarefa'));
   });
 
+  test('interfaces de fases fechadas entram como exports/assinaturas, com orçamento', () => {
+    const prompt = buildNodePrompt(node, lease, 'r', 1, {
+      context: {
+        interfaces: [
+          { file: 'src/store.js', phase: 'F1', exports: [{ name: 'save', signature: '(item)' }, { name: 'Store', signature: 'class' }] },
+          { file: 'src/empty.js', exports: [] },
+        ],
+      },
+    });
+    assert.match(prompt, /## Interfaces disponíveis/);
+    assert.match(prompt, /- `src\/store\.js` \(fase F1\)\n {2}- `save\(item\)`\n {2}- `Store` — class/);
+    assert.doesNotMatch(prompt, /src\/empty\.js/);
+    const text = renderNodeContext(
+      { interfaces: [{ file: 'a.js', exports: Array.from({ length: 50 }, (_, i) => ({ name: `fn${i}`, signature: '(x)' })) }] },
+      { taskBody: 10, contract: 10, fixture: 10, filesTotal: 10, gitStatus: 10, lessons: 10, interfaces: 40 },
+    ).join('\n');
+    assert.match(text, /… \[truncado: \d+ caracteres omitidos\]/);
+  });
+
   test('orçamento: seções longas são truncadas explicitamente', () => {
     assert.equal(truncate('abc', 10), 'abc');
     assert.match(truncate('x'.repeat(50), 10), /^x{10}\n… \[truncado: 40 caracteres omitidos\]$/);

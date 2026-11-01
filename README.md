@@ -313,6 +313,26 @@ Sem `--adapter`, o runtime usa `http` quando há chave ou `--base-url`, e `claud
 
 Isso permite pausar, retomar, repetir uma onda, recuperar um journal interrompido e exigir aprovação formal sem depender do histórico do chat.
 
+### Programa por fases (aplicações com várias fases)
+
+Um `ROADMAP.md` aprovado vira um programa executável fase a fase. Cada fase é um ciclo completo (plan → execute → verify) e fecha num gate:
+
+```bash
+oxe-cc runtime program init           # ROADMAP.md → .oxe/program/PROGRAM.json
+oxe-cc runtime program start          # ativa a próxima fase (ordem do roteiro)
+oxe-cc plan lint                      # PLAN.json: schema, ondas, escopos, A* só da fase
+oxe-cc runtime execute && oxe-cc runtime verify   # verify inclui a regressão das fases fechadas
+oxe-cc runtime program close          # gate: verify + regressão + contratos → commit local da fase
+oxe-cc runtime program status
+```
+
+- **Regressão acumulada:** os checks executáveis de cada fase fechada são congelados em `.oxe/program/regression/` e rodam (`reg-<fase>-*`) no verify das fases seguintes. Uma fase não fecha se quebrar uma anterior.
+- **Contratos de interface:** os `symbols` do IMPLEMENTATION-PACK são verificados estaticamente (JS/TS). Um módulo sem o export contratado falha com `exports_missing`.
+- **Contexto que escala:** o prompt de cada tarefa recebe `## Interfaces disponíveis`, com os exports e assinaturas das fases fechadas e das dependências, em vez dos arquivos inteiros.
+- **`PLAN.json` canônico:** `/oxe-plan` grava `PLAN.json` (`oxe/schemas/plan.schema.json`) ao lado do `PLAN.md`. O runtime lê o JSON, e o markdown é o fallback.
+
+`npm run test:e2e-program` roda o benchmark do app "taskboard": 3 fases, oráculo independente por fase e uma mutação que quebra a fase 1 durante a fase 3. Com `--real --adapter claude`, ele também mede custo e turnos por fase.
+
 ---
 
 ## Sessões, workstreams e milestones

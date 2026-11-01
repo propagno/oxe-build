@@ -2500,7 +2500,8 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
     npx oxe-cc dashboard [opções] [pasta-do-projeto]
     npx oxe-cc events [--tail N] [--since <evt_id>] [--json] [opções] [pasta-do-projeto]
     npx oxe-cc map [--json] [opções] [pasta-do-projeto]
-  npx oxe-cc runtime <status|start|pause|resume|replay|compile|verify|project|ci|promote|recover|gates|agents|execute|providers> [opções] [pasta-do-projeto]
+  npx oxe-cc runtime <status|start|pause|resume|replay|compile|verify|project|ci|promote|recover|gates|agents|execute|providers|program> [opções] [pasta-do-projeto]
+  npx oxe-cc runtime program <status|init|start|close> [--phase F2] [--force] [--no-commit] [--json] [pasta-do-projeto]
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
     npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
     npx oxe-cc plugins <list|install|remove> [opções]
@@ -3891,7 +3892,7 @@ function parseCapabilitiesArgs(argv) {
  */
 
 /**
- * @typedef {{ help: boolean, dir: string, action: string, subAction: string, activeSession: string|null, wave: number|null, task: string, mode: string, reason: string, runId: string, fromEventId: string, writeReport: boolean, gateId: string, decision: string, actor: string, targetKind: string, remote: string, baseBranch: string, minimumCoverage: number|null, timeoutMs: number|null, jsonOutput: boolean, gateStatus: string, gateScope: string, parseError: boolean, unknownFlag: string, agentsPlanPath: string, apiKeyEnv: string }} RuntimeOpts
+ * @typedef {{ help: boolean, dir: string, action: string, subAction: string, activeSession: string|null, wave: number|null, task: string, mode: string, reason: string, runId: string, fromEventId: string, writeReport: boolean, gateId: string, decision: string, actor: string, targetKind: string, remote: string, baseBranch: string, minimumCoverage: number|null, timeoutMs: number|null, jsonOutput: boolean, gateStatus: string, gateScope: string, parseError: boolean, unknownFlag: string, agentsPlanPath: string, apiKeyEnv: string, phase?: string, force?: boolean, noCommit?: boolean, message?: string }} RuntimeOpts
  */
 
 /**
@@ -3989,11 +3990,19 @@ function parseContextArgs(argv) {
     json: false,
     parseError: false,
     unknownFlag: '',
+    phase: '',
+    force: false,
+    noCommit: false,
+    message: '',
   };
   const positionals = [];
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '-h' || a === '--help') out.help = true;
+    else if (a === '--phase' && argv[i + 1]) out.phase = String(argv[++i]);
+    else if (a === '--force') out.force = true;
+    else if (a === '--no-commit') out.noCommit = true;
+    else if (a === '--message' && argv[i + 1]) out.message = String(argv[++i]);
     else if (a === '--dir' && argv[i + 1]) out.dir = path.resolve(argv[++i]);
     else if (a === '--workflow' && argv[i + 1]) out.workflow = String(argv[++i]);
     else if (a === '--tier' && argv[i + 1]) {
@@ -4100,7 +4109,7 @@ function parseRuntimeArgs(argv) {
     }
   }
   if (positionals[0]) out.action = positionals[0];
-  if (out.action === 'gates') {
+  if (out.action === 'gates' || out.action === 'program') {
     if (positionals[1]) out.subAction = positionals[1];
     if (positionals[2]) out.dir = path.resolve(positionals[2]);
   } else {
@@ -4795,6 +4804,79 @@ async function runRuntime(opts) {
     return;
   }
 
+  if (opts.action === 'program') {
+    const sub = opts.subAction || 'status';
+    const printStatus = (status) => {
+      if (opts.jsonOutput) {
+        console.log(JSON.stringify({ oxeRuntimeProgramSchema: 1, ...status }, null, 2));
+        return;
+      }
+      if (!status.exists) {
+        console.log(`  ${c ? yellow : ''}Sem programa.${c ? reset : ''} Rode \`oxe-cc runtime program init\` depois de aprovar o ROADMAP.`);
+        return;
+      }
+      const { state, progress } = status;
+      console.log(`  ${c ? green : ''}Programa:${c ? reset : ''} ${progress.closed}/${progress.total} fases fechadas`);
+      for (const phase of state.phases) {
+        const active = state.active_phase === phase.id ? ' ◀ ativa' : '';
+        const mark = phase.status === 'closed' ? '✓' : phase.status === 'pending' ? '·' : '▶';
+        const commit = phase.closed_commit ? `  ${c ? dim : ''}${String(phase.closed_commit).slice(0, 8)}${c ? reset : ''}` : '';
+        console.log(`  ${mark} ${phase.id.padEnd(4)} ${phase.status.padEnd(10)} ${phase.title}${active}${commit}`);
+      }
+      if (progress.phase && progress.phase.status !== 'closed') {
+        const nextStep = progress.phase.status === 'pending'
+          ? `oxe-cc runtime program start --phase ${progress.phase.id}`
+          : progress.phase.status === 'planning'
+            ? `/oxe-plan (só a fase ${progress.phase.id}: ${progress.phase.acceptance.join(', ') || 'sem A*'})`
+            : progress.phase.status === 'executing'
+              ? '/oxe-execute → /oxe-verify'
+              : 'oxe-cc runtime program close';
+        console.log(`  ${c ? dim : ''}Próximo:${c ? reset : ''} ${nextStep}`);
+      }
+    };
+    try {
+      if (sub === 'status') {
+        printStatus(oxeOperational.runtimeProgramStatus(opts.dir, activeSession));
+        return;
+      }
+      if (sub === 'init') {
+        printStatus(oxeOperational.runtimeProgramInit(opts.dir, activeSession, { force: opts.force }));
+        return;
+      }
+      if (sub === 'start') {
+        printStatus(oxeOperational.runtimeProgramStart(opts.dir, activeSession, opts.phase || null));
+        return;
+      }
+      if (sub === 'close') {
+        const result = oxeOperational.runtimeProgramClose(opts.dir, activeSession, {
+          phase: opts.phase || null,
+          commit: !opts.noCommit,
+          message: opts.message || undefined,
+        });
+        if (opts.jsonOutput) {
+          console.log(JSON.stringify({ oxeRuntimeProgramSchema: 1, ...result }, null, 2));
+        } else if (!result.closed) {
+          console.log(`  ${c ? red : ''}✗${c ? reset : ''} Gate da fase ${result.phase} reprovado:`);
+          for (const reason of result.gate.reasons) console.log(`    - ${reason}`);
+        } else {
+          console.log(`  ${c ? green : ''}✓${c ? reset : ''} Fase ${result.phase} fechada.`);
+          console.log(`  ${c ? dim : ''}Regressão congelada:${c ? reset : ''} ${result.regression_checks} checks · interfaces: ${result.interface_modules} módulos`);
+          console.log(`  ${c ? dim : ''}Commit:${c ? reset : ''} ${result.commit.commit || '—'}${result.commit.reason ? ` (${result.commit.reason})` : ''}`);
+          console.log(`  ${c ? dim : ''}Próxima fase:${c ? reset : ''} ${result.next ? `${result.next.id} — ${result.next.title}` : 'nenhuma — programa concluído'}`);
+        }
+        if (!result.closed) process.exitCode = 1;
+        return;
+      }
+      console.error(`  ${c ? red : ''}✗${c ? reset : ''} Subcomando desconhecido: program ${sub} (use status|init|start|close)`);
+      process.exitCode = 1;
+      return;
+    } catch (err) {
+      console.error(`  ${c ? red : ''}✗${c ? reset : ''} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   if (opts.action === 'providers') {
     const adapters = oxeOperational.detectRuntimeAdapters();
     if (opts.jsonOutput) {
@@ -4904,6 +4986,11 @@ async function runRuntime(opts) {
         return;
       }
       console.log(`  ${c ? green : ''}✓${c ? reset : ''} Runtime verify executado.`);
+      if (verified.regression) {
+        const reg = verified.regression;
+        const color = reg.failed.length ? red : green;
+        console.log(`  ${c ? color : ''}Regressão (${reg.phases.join(', ')}):${c ? reset : ''} ${reg.passed}/${reg.total} verdes${reg.failed.length ? ` — falhas: ${reg.failed.map((f) => f.check_id).join(', ')}` : ''}`);
+      }
       console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${verified.run.run_id}`);
       console.log(`  ${c ? green : ''}Status:${c ? reset : ''} ${verified.report.status}`);
       if (verified.report.manifest && verified.report.manifest.summary) {
@@ -5778,6 +5865,49 @@ async function main() {
     });
     if (exitCode !== 0) process.exit(exitCode);
     return;
+  }
+
+  if (command === 'plan' && argv[0] === 'lint') {
+    // oxe-cc plan lint [--json] [--session <s>] [--max-tasks-per-wave N] [pasta]
+    const rest = argv.slice(1);
+    let dir = process.cwd();
+    let session = null;
+    let json = false;
+    let maxTasksPerWave = 0;
+    for (let i = 0; i < rest.length; i += 1) {
+      const a = rest[i];
+      if (a === '--json') json = true;
+      else if (a === '--session' && rest[i + 1]) session = String(rest[++i]).replace(/\\/g, '/');
+      else if (a === '--max-tasks-per-wave' && rest[i + 1]) maxTasksPerWave = Number(rest[++i]) || 0;
+      else if (a === '--dir' && rest[i + 1]) dir = path.resolve(rest[++i]);
+      else if (!a.startsWith('-')) dir = path.resolve(a);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    if (!session) {
+      try {
+        const statePath = oxeHealth.oxePaths(dir).state;
+        session = oxeHealth.parseActiveSession(fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : '') || null;
+      } catch {
+        session = null;
+      }
+    }
+    let result;
+    try {
+      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave });
+    } catch (err) {
+      console.error(`${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exit(1);
+    }
+    if (json) {
+      console.log(JSON.stringify({ oxePlanLintSchema: 1, ...result }, null, 2));
+    } else {
+      const c = useAnsiColors();
+      console.log(`  ${c ? dim : ''}Fonte:${c ? reset : ''} ${result.source} · ${result.tasks} tarefas${result.phase ? ` · fase ${result.phase}` : ''}`);
+      for (const e of result.errors) console.log(`  ${c ? red : ''}✗${c ? reset : ''} ${e}`);
+      for (const w of result.warnings) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${w}`);
+      console.log(result.ok ? `  ${c ? green : ''}✓ plan lint ok${c ? reset : ''}` : `  ${c ? red : ''}✗ plan lint: ${result.errors.length} erro(s)${c ? reset : ''}`);
+    }
+    process.exit(result.ok ? 0 : 1);
   }
 
   if (command === 'plan') {

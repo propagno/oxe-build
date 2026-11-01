@@ -29,6 +29,7 @@ export type {
   VerifyRunResult,
 } from './verification/verification-compiler';
 export * from './verification/verification-manifest';
+export * from './verification/contract-exports';
 export * from './policy/index';
 export * from './gate/index';
 export * from './projection/index';
@@ -45,3 +46,6 @@ export * from './audit/index';
 
 // R5 Public ABI — LLM Task Executor
 export * from './executor/index';
+
+// 1.19 — Program (ROADMAP phases)
+export * from './program/index';

@@ -1,3 +1,4 @@
+import type { ExpectedExport } from './contract-exports';
 import type { EvidenceType } from '../models/evidence';
 import type { VerificationStatus } from '../models/verification-result';
 import type { VerificationResult } from '../models/verification-result';
@@ -16,6 +17,10 @@ export interface AcceptanceCheck {
     description: string;
     /** Paths that must exist in the workspace (IMPLEMENTATION-PACK `exact_paths`); checked before any command. */
     files_exist?: string[];
+    /** Symbols the pack contracts per file (`symbols`); JS/TS files are scanned statically. */
+    exports_expected?: ExpectedExport[];
+    /** Set on checks carried over from a closed program phase (regression). */
+    regression_phase?: string | null;
 }
 export interface AcceptanceCheckSuite {
     checks: AcceptanceCheck[];
@@ -74,6 +79,8 @@ interface ParsedTaskLike {
     aceite: string[];
     /** Contracted paths from the IMPLEMENTATION-PACK, attached by the caller. */
     filesExist?: string[];
+    /** Contracted exports from the IMPLEMENTATION-PACK `symbols`. */
+    exportsExpected?: ExpectedExport[];
 }
 interface ParsedPlanLike {
     tasks: ParsedTaskLike[];

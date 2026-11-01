@@ -262,6 +262,8 @@ function resolveRuntimeArtifactPaths(projectRoot, activeSession) {
         plan: path.join(oxeDir, 'PLAN.md'),
         verify: path.join(oxeDir, 'VERIFY.md'),
         implementationPack: path.join(oxeDir, 'IMPLEMENTATION-PACK.json'),
+        roadmap: path.join(oxeDir, 'ROADMAP.md'),
+        programDir: path.join(oxeDir, 'program'),
       };
     }
     const sessionRoot = path.join(oxeDir, ...String(activeSession).split('/'));
@@ -271,6 +273,8 @@ function resolveRuntimeArtifactPaths(projectRoot, activeSession) {
       plan: preferExistingPath(path.join(sessionRoot, 'plan', 'PLAN.md'), path.join(oxeDir, 'PLAN.md')),
       verify: preferExistingPath(path.join(sessionRoot, 'verification', 'VERIFY.md'), path.join(oxeDir, 'VERIFY.md')),
       implementationPack: preferExistingPath(path.join(sessionRoot, 'plan', 'IMPLEMENTATION-PACK.json'), path.join(oxeDir, 'IMPLEMENTATION-PACK.json')),
+      roadmap: preferExistingPath(path.join(sessionRoot, 'spec', 'ROADMAP.md'), path.join(oxeDir, 'ROADMAP.md')),
+      programDir: path.join(sessionRoot, 'program'),
     };
   }
   const base = health.oxePaths(projectRoot);
@@ -281,6 +285,11 @@ function resolveRuntimeArtifactPaths(projectRoot, activeSession) {
     plan: preferExistingPath(scoped.plan, base.plan),
     verify: preferExistingPath(scoped.verify, base.verify),
     implementationPack: preferExistingPath(scoped.implementationPackJson, base.implementationPackJson),
+    roadmap: preferExistingPath(
+      scoped.sessionRoot ? path.join(scoped.sessionRoot, 'spec', 'ROADMAP.md') : null,
+      path.join(base.oxe, 'ROADMAP.md'),
+    ),
+    programDir: path.join(scoped.scopedRoot || base.oxe, 'program'),
   };
 }
 
@@ -305,8 +314,29 @@ function attachImplementationPackContracts(parsedPlan, packPath) {
       .map((value) => String(value || '').trim())
       .filter((value) => looksLikeFilePath(value) && !value.includes('*') && !value.includes('...'));
     if (files.length > 0) task.filesExist = [...new Set(files)];
+    const exportsExpected = packSymbolExports(entry);
+    if (exportsExpected.length > 0) task.exportsExpected = exportsExpected;
   }
   return parsedPlan;
+}
+
+/** Kinds of pack symbols that are module-level exports (methods, routes, fields are not). */
+const EXPORTED_SYMBOL_KINDS = new Set(['', 'function', 'class', 'const', 'constant', 'variable', 'type', 'interface', 'enum', 'export', 'module']);
+
+/** IMPLEMENTATION-PACK `symbols[] {kind, name, path}` → expected exports checked by the contract (1.19). */
+function packSymbolExports(entry) {
+  const symbols = Array.isArray(entry && entry.symbols) ? entry.symbols : [];
+  const out = [];
+  for (const symbol of symbols) {
+    if (!symbol || typeof symbol !== 'object') continue;
+    const kind = String(symbol.kind || '').trim().toLowerCase();
+    if (!EXPORTED_SYMBOL_KINDS.has(kind) || symbol.exported === false) continue;
+    const name = String(symbol.name || '').trim();
+    const file = String(symbol.path || symbol.file || '').trim();
+    if (!/^[A-Za-z_$][\w$]*$/.test(name) || !looksLikeFilePath(file) || file.includes('*')) continue;
+    out.push({ file, name });
+  }
+  return out;
 }
 
 function readJsonQuiet(filePath) {
@@ -390,6 +420,10 @@ function buildNodeContextProvider(projectRoot, activeSession) {
   const lessons = readLessonLines(projectRoot);
   const packTasks = pack && Array.isArray(pack.tasks) ? pack.tasks : [];
   const fixtures = fixturePack && Array.isArray(fixturePack.fixtures) ? fixturePack.fixtures : [];
+  const program = require('./oxe-program.cjs');
+  const programState = paths.programDir ? program.readProgram(paths.programDir) : null;
+  const closedInterfaces = programState ? program.loadClosedInterfaces(paths.programDir, programState) : [];
+  const runtimeForExports = loadRuntimeModule();
   return (node, lease) => {
     const root = (lease && lease.root_path) || projectRoot;
     const contract = packTasks.find((task) => String(task && (task.id || task.task_id) || '').trim() === node.id) || null;
@@ -400,6 +434,25 @@ function buildNodeContextProvider(projectRoot, activeSession) {
       .slice(0, 12)
       .map((rel) => snapshotWorkspaceFile(root, rel))
       .filter(Boolean);
+    // Superfície pública do que já existe: fases fechadas + dependências concluídas da run.
+    // Arquivos crus só para o próprio escopo; o resto entra como exports/assinaturas.
+    const ownFiles = new Set(files.map((file) => file.path));
+    const interfaces = closedInterfaces.filter((module) => !ownFiles.has(module.file));
+    const depFiles = new Set();
+    for (const dep of Array.isArray(node.depends_on) ? node.depends_on : []) {
+      const depContract = packTasks.find((task) => String(task && (task.id || task.task_id) || '').trim() === dep);
+      for (const file of depContract && Array.isArray(depContract.exact_paths) ? depContract.exact_paths : []) {
+        const rel = String(file || '').trim();
+        if (looksLikeFilePath(rel) && !rel.includes('*') && !ownFiles.has(rel)) depFiles.add(rel);
+      }
+    }
+    for (const rel of depFiles) {
+      if (interfaces.some((module) => module.file === rel)) continue;
+      const exported = runtimeForExports && typeof runtimeForExports.readModuleExports === 'function'
+        ? runtimeForExports.readModuleExports(path.resolve(root, rel))
+        : null;
+      if (exported && exported.length) interfaces.push({ file: rel, exports: exported, phase: null });
+    }
     let gitStatus = null;
     if (fs.existsSync(path.join(root, '.git'))) {
       const res = spawnSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8', timeout: 5000 });
@@ -410,6 +463,7 @@ function buildNodeContextProvider(projectRoot, activeSession) {
       implementationContract: contract,
       fixture,
       workspaceFiles: files,
+      interfaces,
       gitStatus,
       lessons,
     };
@@ -485,6 +539,10 @@ function normalizeRuntimeEventType(type) {
     RollbackFailed: 'RollbackFailed',
     TaskErrorBoundaryTripped: 'TaskErrorBoundaryTripped',
     WorkspaceDisposeFailed: 'WorkspaceDisposeFailed',
+    ProgramCreated: 'ProgramCreated',
+    PhaseStarted: 'PhaseStarted',
+    PhaseClosed: 'PhaseClosed',
+    PhaseGateFailed: 'PhaseGateFailed',
   };
   if (directMap[raw]) return directMap[raw];
   const lower = raw.toLowerCase();
@@ -872,7 +930,7 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
   if (!specText) throw new Error(`SPEC.md ausente em ${artifactPaths.spec}\n  Crie .oxe/SPEC.md com /oxe-spec no seu agente, ou use o template em oxe/templates/SPEC.template.md`);
   if (!planText) throw new Error(`PLAN.md ausente em ${artifactPaths.plan}\n  Crie .oxe/PLAN.md com /oxe-plan no seu agente (requer SPEC.md), ou use o template em oxe/templates/PLAN.template.md`);
   const parsedSpec = parsers.parseSpec(specText);
-  const parsedPlan = parsers.parsePlan(planText);
+  const parsedPlan = parsePlanArtifact(parsers, planText, artifactPaths.plan);
   const graph = runtime.compile(parsedPlan, parsedSpec, options.compilerOptions || {});
   const validationErrors = typeof runtime.validateGraph === 'function' ? runtime.validateGraph(graph) : [];
 
@@ -974,7 +1032,7 @@ function compileVerificationSuiteFromArtifacts(projectRoot, activeSession, optio
   if (!specText || !planText) {
     throw new Error('SPEC.md e PLAN.md são obrigatórios para compilar a suite de verificação.');
   }
-  const parsedPlan = attachImplementationPackContracts(parsers.parsePlan(planText), artifactPaths.implementationPack);
+  const parsedPlan = attachImplementationPackContracts(parsePlanArtifact(parsers, planText, artifactPaths.plan), artifactPaths.implementationPack);
   const suite = runtime.compileVerification(parsers.parseSpec(specText), parsedPlan, options.compilerOptions || {});
   const current = options.runState || readRunState(projectRoot, activeSession) || {};
   const runId = current.run_id || makeRunId();
@@ -1175,6 +1233,9 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
 
   // Resolve compiled graph from run state or compile on demand
   let current = options.runState || readRunState(projectRoot, activeSession);
+    // A run de uma fase já fechada nunca é reaproveitada: a fase nova compila o seu próprio PLAN.
+    // `{}` (não null) força run nova: null faria o compile reler a run antiga do disco.
+    if (current && isClosedPhaseRun(projectRoot, activeSession, current.run_id)) current = {};
     if (!current || !current.compiled_graph) {
       current = compileExecutionGraphFromArtifacts(projectRoot, activeSession, { runState: current }).run;
     }
@@ -1182,6 +1243,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
       throw new Error('Nenhum grafo compilado encontrado. Execute oxe-cc runtime compile primeiro.');
     }
     usageRunId = current.run_id;
+    touchProgramPhase(projectRoot, activeSession, 'executing', { run_id: current.run_id });
     const preflight = buildRuntimeExecutePreflight(projectRoot, activeSession, current);
     if (!preflight.ok && !options.skipPreflight) {
       const reason = preflight.blockers[0] || 'runtime_execute_preflight_failed';
@@ -1706,6 +1768,9 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     throw new Error('Parsers do SDK indisponíveis para executar verification suite.');
   }
   let current = options.runState || readRunState(projectRoot, activeSession);
+  if (current && isClosedPhaseRun(projectRoot, activeSession, current.run_id)) {
+    current = compileExecutionGraphFromArtifacts(projectRoot, activeSession, { runState: {} }).run;
+  }
   if (!current) {
     current = compileExecutionGraphFromArtifacts(projectRoot, activeSession).run;
   }
@@ -1719,7 +1784,7 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     throw new Error('SPEC.md e PLAN.md são obrigatórios para runtime verify.');
   }
   const parsedSpec = parsers.parseSpec(specText);
-  const parsedPlan = attachImplementationPackContracts(parsers.parsePlan(planText), artifactPaths.implementationPack);
+  const parsedPlan = attachImplementationPackContracts(parsePlanArtifact(parsers, planText, artifactPaths.plan), artifactPaths.implementationPack);
   // A suíte persistida no compile fica velha se SPEC/PLAN mudarem depois: recompila pelo hash.
   const freshSuite = runtime.compileVerification(parsedSpec, parsedPlan, options.compilerOptions || {});
   const persistedSuite = current.verification_suite;
@@ -1738,6 +1803,17 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
       },
     });
   }
+  // Programa por fases: a suíte da fase N carrega a regressão congelada das fases fechadas antes.
+  const programLib = require('./oxe-program.cjs');
+  const programState = artifactPaths.programDir ? programLib.readProgram(artifactPaths.programDir) : null;
+  const programPhaseId = programState ? (programState.active_phase || null) : null;
+  const regressionChecks = programState && options.regression !== false
+    ? programLib.loadRegressionChecks(artifactPaths.programDir, programState, programPhaseId)
+    : [];
+  const runSuite = regressionChecks.length
+    ? { ...suite, checks: [...(suite.checks || []).filter((check) => !check.regression_phase), ...regressionChecks] }
+    : suite;
+  touchProgramPhase(projectRoot, activeSession, 'verifying', { run_id: current.run_id || null });
   const registry = buildRuntimePluginRegistry(projectRoot);
   const evidenceStore = new runtime.EvidenceStore(projectRoot);
   const targetWorkItem = options.workItemId
@@ -1750,7 +1826,8 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     run_id: current.run_id,
     work_item_id: targetWorkItem,
     payload: {
-      total_checks: Array.isArray(suite.checks) ? suite.checks.length : 0,
+      total_checks: Array.isArray(runSuite.checks) ? runSuite.checks.length : 0,
+      regression_checks: regressionChecks.length,
     },
   });
   const report = await runtime.verifyRun({
@@ -1758,7 +1835,7 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     runId: current.run_id,
     workItemId: String(targetWorkItem),
     cwd: options.cwd || projectRoot,
-    suite,
+    suite: runSuite,
     pluginRegistry: registry || undefined,
     evidenceStore,
     attemptNumber: options.attemptNumber || 1,
@@ -1778,6 +1855,7 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     : report.status === 'failed'
       ? 'failed'
       : 'blocked';
+  const regressionSummary = summarizeRegression(regressionChecks, report.check_results);
   const next = writeRunState(projectRoot, activeSession, {
     ...current,
     status: nextStatus,
@@ -1788,6 +1866,7 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     residual_risks: report.risk_ledger,
     verification_evidence_coverage: report.evidence_coverage,
     verification_gaps: report.gaps,
+    verification_regression: regressionSummary,
   });
   appendEvent(projectRoot, activeSession, {
     type: 'VerificationCompleted',
@@ -1799,13 +1878,249 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
       fail: report.manifest && report.manifest.summary ? report.manifest.summary.fail : 0,
       error: report.manifest && report.manifest.summary ? report.manifest.summary.error : 0,
       gaps: report.gaps,
+      regression: regressionSummary,
     },
   });
   const projected = projectRuntimeArtifacts(projectRoot, activeSession, { runState: next, write: true });
   return {
     run: projected.run,
     report,
+    regression: regressionSummary,
     projected,
+  };
+}
+
+
+/** PLAN.json canônico (1.19) quando existir ao lado do PLAN.md; senão o parser markdown. */
+function parsePlanArtifact(parsers, planText, planPath) {
+  return require('./oxe-plan-json.cjs').readPlanArtifact(planPath, planText, parsers.parsePlan);
+}
+
+/**
+ * `oxe-cc plan lint`: schema do PLAN.json + regras estruturais (ids, dependências, escopo por onda,
+ * cobertura de A*, pack para tarefas mutáveis, A* restritos à fase ativa do programa).
+ */
+function runtimePlanLint(projectRoot, activeSession, options = {}) {
+  const planJson = require('./oxe-plan-json.cjs');
+  const parsers = loadSdkParsers();
+  if (!parsers) throw new Error('Parsers do SDK indisponíveis.');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const planText = readTextIfExists(paths.plan);
+  const jsonPath = planJson.planJsonPathFor(paths.plan);
+  const hasJson = Boolean(jsonPath && fs.existsSync(jsonPath));
+  if (!planText && !hasJson) throw new Error(`PLAN ausente em ${paths.plan}`);
+  let plan;
+  try {
+    plan = planJson.readPlanArtifact(paths.plan, planText, parsers.parsePlan);
+  } catch (err) {
+    return { ok: false, errors: [err.message], warnings: [], source: hasJson ? 'PLAN.json' : 'PLAN.md', tasks: 0, phase: null };
+  }
+  const specText = readTextIfExists(paths.spec);
+  const spec = specText ? parsers.parseSpec(specText) : null;
+  const pack = readJsonQuiet(paths.implementationPack);
+  const programLib = require('./oxe-program.cjs');
+  const program = paths.programDir ? programLib.readProgram(paths.programDir) : null;
+  const phase = program && program.active_phase
+    ? program.phases.find((p) => p.id === program.active_phase) || null
+    : null;
+  const config = readJsonQuiet(path.join(projectRoot, '.oxe', 'config.json')) || {};
+  const maxTasksPerWave = Number(options.maxTasksPerWave || config.plan_max_tasks_per_wave || 0) || 0;
+  const result = planJson.lintPlan({ plan, spec, pack, phase, maxTasksPerWave });
+  if (spec) result.warnings.push(...lintPlanForCommonPitfalls(plan, spec, projectRoot, specText));
+  return { ...result, source: plan.source, tasks: plan.tasks.length, phase: phase ? phase.id : null, plan_json: hasJson ? jsonPath : null };
+}
+
+// ─── Programa por fases (1.19) ───────────────────────────────────────────────
+
+function requireProgramRuntime() {
+  const runtime = loadRuntimeModule();
+  if (!runtime || typeof runtime.createProgram !== 'function') {
+    throw new Error('Runtime sem suporte a programa por fases. Rode npm run build:runtime.');
+  }
+  return runtime;
+}
+
+/** A run pertence a uma fase fechada do programa (não deve ser reaproveitada pela fase seguinte). */
+function isClosedPhaseRun(projectRoot, activeSession, runId) {
+  if (!runId) return false;
+  try {
+    const programLib = require('./oxe-program.cjs');
+    const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+    const state = paths.programDir ? programLib.readProgram(paths.programDir) : null;
+    return Boolean(state && state.phases.some((phase) => phase.status === 'closed' && phase.run_id === runId));
+  } catch {
+    return false;
+  }
+}
+
+/** Avança o status da fase ativa sem nunca falhar a operação principal (execute/verify). */
+function touchProgramPhase(projectRoot, activeSession, status, patch = {}) {
+  try {
+    const programLib = require('./oxe-program.cjs');
+    const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+    const state = paths.programDir ? programLib.readProgram(paths.programDir) : null;
+    if (!state || !state.active_phase) return null;
+    const runtime = requireProgramRuntime();
+    const phase = runtime.findPhase(state, state.active_phase);
+    if (!phase || phase.status === 'closed') return null;
+    let next = state;
+    // planning → executing → verifying; execute após verify volta a `executing`.
+    if (status === 'executing' && (phase.status === 'planning' || phase.status === 'verifying')) {
+      next = runtime.setPhaseStatus(next, phase.id, 'executing', patch);
+    } else if (status === 'verifying' && phase.status === 'executing') {
+      next = runtime.setPhaseStatus(next, phase.id, 'verifying', patch);
+    } else if (status === phase.status && Object.keys(patch).length) {
+      next = runtime.setPhaseStatus(next, phase.id, status, patch);
+    }
+    if (next !== state) programLib.writeProgram(paths.programDir, next);
+    return next;
+  } catch {
+    return null;
+  }
+}
+
+function runtimeProgramStatus(projectRoot, activeSession) {
+  const programLib = require('./oxe-program.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const state = programLib.readProgram(paths.programDir);
+  const where = { roadmap: paths.roadmap, programDir: paths.programDir, plan: paths.plan };
+  if (!state) return { exists: false, state: null, progress: null, paths: where };
+  const runtime = requireProgramRuntime();
+  return { exists: true, state, progress: runtime.programProgress(state), paths: where };
+}
+
+function runtimeProgramInit(projectRoot, activeSession, options = {}) {
+  const runtime = requireProgramRuntime();
+  const programLib = require('./oxe-program.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const roadmapText = readTextIfExists(paths.roadmap);
+  if (!roadmapText) {
+    throw new Error(`ROADMAP.md não encontrado (${paths.roadmap}). Rode /oxe-spec até a fase de roteiro.`);
+  }
+  const existing = programLib.readProgram(paths.programDir);
+  if (existing && !options.force) {
+    throw new Error('Programa já existe. Use --force para recriar a partir do ROADMAP (perde o estado das fases).');
+  }
+  const state = runtime.createProgram(roadmapText, programLib.relativeRef(projectRoot, paths.roadmap));
+  programLib.writeProgram(paths.programDir, state);
+  appendEvent(projectRoot, activeSession, {
+    type: 'ProgramCreated',
+    payload: { phases: state.phases.map((phase) => phase.id), roadmap: state.roadmap_ref },
+  });
+  return runtimeProgramStatus(projectRoot, activeSession);
+}
+
+function runtimeProgramStart(projectRoot, activeSession, phaseId = null) {
+  const runtime = requireProgramRuntime();
+  const programLib = require('./oxe-program.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const state = programLib.readProgram(paths.programDir);
+  if (!state) throw new Error('Sem programa. Rode `oxe-cc runtime program init` (lê o ROADMAP aprovado).');
+  const next = runtime.startPhase(state, phaseId);
+  const phase = runtime.activePhase(next);
+  programLib.writeProgram(paths.programDir, next);
+  appendEvent(projectRoot, activeSession, {
+    type: 'PhaseStarted',
+    payload: { phase: phase.id, title: phase.title, acceptance: phase.acceptance },
+  });
+  return runtimeProgramStatus(projectRoot, activeSession);
+}
+
+/** Classifica os resultados do último verify para o gate de fase. */
+function phaseGateInputFromRun(run) {
+  const results = Array.isArray(run && run.verification_check_results) ? run.verification_check_results : [];
+  const ids = results
+    .filter((result) => result && (result.status === 'fail' || result.status === 'error'))
+    .map((result) => result.check_id);
+  return {
+    verify_status: !run ? null : results.length === 0 ? 'not_verified' : run.status,
+    regression_failed: ids.filter((id) => /^reg-/.test(id)),
+    contract_failed: ids.filter((id) => /^check-pack-/.test(id)),
+    checks_failed: ids.filter((id) => !/^reg-/.test(id) && !/^check-pack-/.test(id)),
+  };
+}
+
+/**
+ * Gate de fase: verify `completed`, regressão verde e contratos ok. Passando, congela a regressão,
+ * grava as interfaces reais, faz o commit local da fase (sem push) e fecha a fase.
+ */
+function runtimeProgramClose(projectRoot, activeSession, options = {}) {
+  const runtime = requireProgramRuntime();
+  const programLib = require('./oxe-program.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const state = programLib.readProgram(paths.programDir);
+  if (!state) throw new Error('Sem programa. Rode `oxe-cc runtime program init`.');
+  const phase = options.phase ? runtime.findPhase(state, options.phase) : runtime.activePhase(state);
+  if (!phase) throw new Error('Nenhuma fase ativa. Rode `oxe-cc runtime program start`.');
+  const run = options.runState || readRunState(projectRoot, activeSession);
+  const gateInput = phaseGateInputFromRun(run);
+  const gate = runtime.evaluatePhaseGate(gateInput);
+  if (!gate.ok) {
+    appendEvent(projectRoot, activeSession, {
+      type: 'PhaseGateFailed',
+      run_id: run && run.run_id,
+      payload: { phase: phase.id, reasons: gate.reasons },
+    });
+    return { closed: false, phase: phase.id, gate, commit: null };
+  }
+
+  const regressionChecks = programLib.freezeRegressionChecks(run.verification_check_results, run.verification_suite);
+  const regressionFile = programLib.writeRegression(paths.programDir, phase.id, regressionChecks, { run_id: run.run_id || null });
+
+  const parsers = loadSdkParsers();
+  const planText = readTextIfExists(paths.plan);
+  const parsedPlan = parsers && planText
+    ? attachImplementationPackContracts(parsePlanArtifact(parsers, planText, paths.plan), paths.implementationPack)
+    : { tasks: [] };
+  const modules = programLib.buildInterfaces(projectRoot, runtime, programLib.contractedFiles(parsedPlan));
+  const interfacesFile = programLib.writeInterfaces(paths.programDir, phase.id, modules);
+
+  const commit = options.commit === false
+    ? { commit: null, committed: false, reason: 'commit desativado (--no-commit)' }
+    : programLib.commitPhase(projectRoot, options.message || `feat(phase-${phase.id.toLowerCase()}): ${phase.title}`);
+
+  const closed = runtime.closePhase(state, phase.id, gateInput, {
+    closed_commit: commit.commit,
+    regression_ref: programLib.relativeRef(projectRoot, regressionFile),
+    interfaces_ref: programLib.relativeRef(projectRoot, interfacesFile),
+    run_id: run.run_id || null,
+    plan_ref: paths.plan ? programLib.relativeRef(projectRoot, paths.plan) : null,
+  });
+  programLib.writeProgram(paths.programDir, closed.state);
+  appendEvent(projectRoot, activeSession, {
+    type: 'PhaseClosed',
+    run_id: run.run_id,
+    payload: {
+      phase: phase.id,
+      commit: commit.commit,
+      committed: commit.committed,
+      commit_note: commit.reason,
+      regression_checks: regressionChecks.length,
+      interface_modules: modules.length,
+    },
+  });
+  return {
+    closed: true,
+    phase: phase.id,
+    gate,
+    commit,
+    regression_checks: regressionChecks.length,
+    interface_modules: modules.length,
+    next: runtime.nextOpenPhase(closed.state),
+  };
+}
+
+/** Resumo da regressão de fases anteriores: aparece separado no VERIFY e no gate de fase. */
+function summarizeRegression(regressionChecks, checkResults) {
+  if (!regressionChecks.length) return null;
+  const ids = new Set(regressionChecks.map((check) => check.id));
+  const results = (Array.isArray(checkResults) ? checkResults : []).filter((result) => ids.has(result.check_id));
+  const failed = results.filter((result) => result.status === 'fail' || result.status === 'error');
+  return {
+    phases: [...new Set(regressionChecks.map((check) => check.regression_phase))],
+    total: regressionChecks.length,
+    passed: results.filter((result) => result.status === 'pass').length,
+    failed: failed.map((result) => ({ check_id: result.check_id, error: result.error || null })),
   };
 }
 
@@ -3087,6 +3402,12 @@ module.exports = {
   readEvents,
   buildNodeContextProvider,
   detectRuntimeAdapters,
+  runtimeProgramStatus,
+  runtimePlanLint,
+  runtimeProgramInit,
+  runtimeProgramStart,
+  runtimeProgramClose,
+  phaseGateInputFromRun,
   readExecutorUsageRows,
   extractPlanTaskBody,
   syncRunStateAfterExecute,
