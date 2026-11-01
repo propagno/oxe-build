@@ -155,3 +155,10 @@ Hipóteses a confirmar com dados das fases:
 ## OXB-017: o replan reexecutava as tarefas concluídas
 
 - **Status:** resolvido. A opção `skip_done_tasks` existia, mas vinha desligada por padrão. Agora o compile a partir do PLAN.json pula as tarefas `done`, e as dependências nelas contam como satisfeitas. Sem isso, o rework da F1 pagaria de novo por T1–T7.
+
+## OXB-018: o dry-verify não via o comando efetivo do nó
+
+- **Status:** resolvido.
+- **Evidência:** no rework da F1, o verify inline da T11 era `ipc-v2.test.ts && ipc.test.ts`. O segundo segmento era o "Como verificar" antigo do A6, que o compile anexa a partir da SPEC: na emenda eu mudei o texto do A6, mas não a coluna de verificação. O dry-verify testou só o comando da tarefa, e o primeiro segmento, vermelho pelo motivo certo, escondia o segundo quebrado.
+  - A **régua suspeita** (1.20c) pegou o problema na 2ª tentativa idêntica (`test_file_missing`) e parou a tarefa, sem pagar a 3ª: o primeiro caso real dela.
+- **Correção:** o dry-verify roda o comando efetivo (tarefa + "Como verificar" dos critérios dela), **segmento a segmento** do `&&`, e fica com o pior veredito.

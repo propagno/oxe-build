@@ -62,6 +62,31 @@ function classifyFailure(output, targets, options = {}) {
   return mentioned ? 'missing_target' : 'broken_command';
 }
 
+const SEVERITY = { already_green: 0, missing_target: 1, assertion_red: 1, timeout: 3, broken_command: 4 };
+
+/** Top-level `&&` segments of a command (quoted text is not split). */
+function splitSegments(command) {
+  const out = [];
+  let current = '';
+  let quote = null;
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '&' && command[i + 1] === '&') {
+      out.push(current.trim());
+      current = '';
+      i += 1;
+      continue;
+    }
+    current += ch;
+  }
+  if (current.trim()) out.push(current.trim());
+  return out.filter(Boolean);
+}
+
 /**
  * @param {{ tasks: Array<{id:string, files?:string[], verifyCommand?:string|null, done?:boolean}> }} plan
  * @returns {{ ok: boolean, results: Array<{task:string, verdict:string, code:number|null, excerpt:string}>, errors: string[], warnings: string[] }}
@@ -74,14 +99,25 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
   for (const task of plan && Array.isArray(plan.tasks) ? plan.tasks : []) {
     if (task.done || !task.verifyCommand) continue;
     const targets = (task.files || []).filter(Boolean);
-    // A task whose targets already exist (re-plan) cannot be judged red-first.
-    const run = runCommand(task.verifyCommand, projectRoot, timeoutMs);
-    const excerpt = run.output.split('\n').map((line) => line.trim()).filter(Boolean).slice(-6).join(' | ').slice(0, 600);
-    let verdict;
-    if (run.timedOut) verdict = 'timeout';
-    else if (run.code === 0) verdict = 'already_green';
-    else verdict = classifyFailure(run.output, targets, { targetsExist: targets.length > 0 && targets.every((f) => require('fs').existsSync(path.resolve(projectRoot, f))) });
-    results.push({ task: task.id, verdict, code: run.code, excerpt });
+    // OXB-018: each `a && b` segment runs alone. A first segment red for the right reason used to hide a broken
+    // second one (the SPEC "Como verificar" the compile appends), which surfaced only once the task made the first pass.
+    const targetsExist = targets.length > 0 && targets.every((f) => require('fs').existsSync(path.resolve(projectRoot, f)));
+    const segments = splitSegments(task.verifyCommand);
+    let verdict = null;
+    let code = null;
+    let excerpt = '';
+    for (const segment of segments) {
+      const run = runCommand(segment, projectRoot, timeoutMs);
+      const v = run.timedOut ? 'timeout' : run.code === 0 ? 'already_green' : classifyFailure(run.output, targets, { targetsExist });
+      // The worst segment decides; among equals, a red one beats green (a red segment proves the task is not done).
+      if (verdict === null || SEVERITY[v] > SEVERITY[verdict]) {
+        verdict = v;
+        code = run.code;
+        const tail = run.output.split('\n').map((line) => line.trim()).filter(Boolean).slice(-6).join(' | ');
+        excerpt = `${segments.length > 1 ? `[${segment.slice(0, 80)}] ` : ''}${tail}`.slice(0, 600);
+      }
+    }
+    results.push({ task: task.id, verdict, code, excerpt, segments: segments.length });
     if (verdict === 'broken_command') errors.push(`${task.id}: comando de verificação falha por outro motivo que não o alvo ausente — corrija o plano antes de executar: ${excerpt}`);
     else if (verdict === 'timeout') errors.push(`${task.id}: comando de verificação passou de ${Math.round(timeoutMs / 1000)}s sem terminar`);
     else if (verdict === 'already_green') warnings.push(`${task.id}: verificação já passa antes da tarefa — não prova o trabalho dela`);

@@ -2053,7 +2053,24 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
   let dryVerify = null;
   if (options.dryVerify) {
     // OXB-009: cada verify deve estar vermelho pelo motivo certo (alvo ausente), não por comando quebrado.
-    dryVerify = require('./oxe-verify-dryrun.cjs').dryRunVerifyCommands(projectRoot, plan, { timeoutMs: options.dryVerifyTimeoutMs });
+    // OXB-018: roda o comando EFETIVO do nó — o da tarefa mais o "Como verificar" dos critérios dela, que o compile
+    // anexa (gap B). Um "Como verificar" velho na SPEC quebrava o verify inline sem o dry-run perceber.
+    const criteriaById = new Map(((spec && spec.criteria) || []).map((c) => [c.id, c]));
+    const effective = {
+      ...plan,
+      tasks: plan.tasks.map((task) => {
+        const extra = [];
+        for (const ref of task.aceite || []) {
+          const criterion = criteriaById.get(ref);
+          for (const span of criterion ? extractBacktickSpans(criterion.howToVerify || '') : []) {
+            if (looksLikeShellCommand(span) && !(task.verifyCommand || '').includes(span) && !extra.includes(span)) extra.push(span);
+          }
+        }
+        if (!extra.length) return task;
+        return { ...task, verifyCommand: [task.verifyCommand, ...extra].filter(Boolean).join(' && ') };
+      }),
+    };
+    dryVerify = require('./oxe-verify-dryrun.cjs').dryRunVerifyCommands(projectRoot, effective, { timeoutMs: options.dryVerifyTimeoutMs });
     result.errors.push(...dryVerify.errors);
     result.warnings.push(...dryVerify.warnings);
     result.ok = result.errors.length === 0;

@@ -260,3 +260,25 @@ describe('replan não reexecuta tarefas done (OXB-017)', () => {
     }
   });
 });
+
+describe('dry-verify roda o comando efetivo do nó (OXB-018)', () => {
+  it('um "Como verificar" velho na SPEC, anexado pelo compile, é pego antes da execução', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-effective-'));
+    try {
+      fs.mkdirSync(path.join(tmp, '.oxe'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, '.oxe', 'SPEC.md'), '# SPEC\n\n## Objetivo\n\nx\n\n## Critérios de aceite\n\n| ID | Critério | Como verificar |\n|---|---|---|\n| A1 | a | `node removed-old-check.js` |\n', 'utf8');
+      fs.writeFileSync(path.join(tmp, '.oxe', 'PLAN.md'), '# PLAN\n', 'utf8');
+      fs.writeFileSync(path.join(tmp, '.oxe', 'STATE.md'), '# STATE\n', 'utf8');
+      fs.writeFileSync(path.join(tmp, '.oxe', 'PLAN.json'), JSON.stringify({
+        schema_version: 1,
+        tasks: [{ id: 'T1', title: 'x', wave: 1, files: ['src/new.js'], acceptance: ['A1'], verify: { commands: ['node -e "require(\'./src/new.js\')"'] } }],
+      }), 'utf8');
+      const result = op.runtimePlanLint(tmp, null, { dryVerify: true });
+      const t1 = result.dry_verify.find((r) => r.task === 'T1');
+      assert.equal(t1.verdict, 'broken_command', JSON.stringify(t1));
+      assert.match(result.errors.join('\n'), /T1: comando de verificação falha/);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
