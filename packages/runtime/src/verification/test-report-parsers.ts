@@ -140,3 +140,59 @@ export function extractTestFileArgs(command: string): string[] {
   }
   return [...new Set(files)];
 }
+
+export interface TestResultNames {
+  passed: string[];
+  failed: string[];
+}
+
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+
+/**
+ * Names of the tests a runner reported as passed / failed (1.20 "executed proof"). Supported outputs: TAP
+ * (`node --test`, `ok 1 - name`), vitest `--reporter=verbose` (`✓ file > suite > name 5ms`), jest `--verbose`
+ * and mocha (`✓ name`), pytest `-v` (`path::name PASSED`) and JUnit XML `<testcase name=…>`.
+ * Default (non-verbose) vitest/jest output lists no passed names: the plan must use a verbose reporter.
+ */
+export function extractTestResults(output: string): TestResultNames {
+  const text = String(output || '').replace(ANSI_RE, '');
+  const passed: string[] = [];
+  const failed: string[] = [];
+  const add = (list: string[], name: string) => {
+    const clean = name.replace(/\s+\d+(\.\d+)?\s?m?s$/i, '').replace(/\s*#\s*(SKIP|TODO).*$/i, '').trim();
+    if (clean) list.push(clean);
+  };
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    let m: RegExpMatchArray | null;
+    if ((m = line.match(/^(not ok|ok)\s+\d+\s+-\s+(.+)$/))) {
+      if (/#\s*(SKIP|TODO)/i.test(m[2])) continue;
+      add(m[1] === 'ok' ? passed : failed, m[2]);
+    } else if ((m = line.match(/^[✓√✔]\s+(.+)$/))) {
+      add(passed, m[1]);
+    } else if ((m = line.match(/^[×✗✕✘]\s+(.+)$/))) {
+      add(failed, m[1]);
+    } else if ((m = line.match(/^(\S+::\S.*?)\s+(PASSED|FAILED|ERROR)\b/))) {
+      add(m[2] === 'PASSED' ? passed : failed, m[1].split('::').slice(1).join('::'));
+    }
+  }
+  for (const m of text.matchAll(/<testcase\b[^>]*\bname="([^"]+)"[^>]*?(\/>|>([\s\S]*?)<\/testcase>)/g)) {
+    add(/<(failure|error)\b/.test(m[3] || '') ? failed : passed, m[1]);
+  }
+  return { passed, failed };
+}
+
+function normalizeTestName(name: string): string {
+  return name.toLowerCase().replace(/[›>]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** Expected proofs (test names, or `file › name`) that do not appear among the passed tests. */
+export function missingProofs(expected: string[], output: string): string[] {
+  const { passed } = extractTestResults(output);
+  const haystack = passed.map(normalizeTestName);
+  return expected.filter((proof) => {
+    const wanted = normalizeTestName(proof.includes('›') ? proof.split('›').slice(1).join('›') : proof);
+    return !haystack.some((name) => name.includes(wanted));
+  });
+}

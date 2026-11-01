@@ -133,6 +133,15 @@ function writer(files) {
   };
 }
 
+
+/** O handoff humano que o close exige ("O que a próxima fase deve saber"), escrito como uma pessoa escreveria. */
+function writeHandoff(tmp, text = 'O store expõe save(item); a API da próxima fase deve consumi-lo sem reimplementar.') {
+  const r = op.runtimeDossier(tmp, null, {});
+  const file = path.join(r.dir, 'plan.md');
+  const body = fs.readFileSync(file, 'utf8').replace('(preencher antes do `program close`)', text);
+  fs.writeFileSync(file, body, 'utf8');
+}
+
 describe('programa por fases (CLI/operational)', () => {
   const dirs = [];
   after(() => {
@@ -164,6 +173,9 @@ describe('programa por fases (CLI/operational)', () => {
     assert.equal(v1.regression, null, 'fase 1 não tem regressão');
     assert.equal(op.runtimeProgramStatus(tmp, null).state.phases[0].status, 'verifying');
 
+    // Sem handoff o gate reprova; com ele, fecha.
+    assert.match(op.runtimeProgramClose(tmp, null, { commit: false }).gate.reasons.join(' | '), /handoff vazio/);
+    writeHandoff(tmp);
     const closed = op.runtimeProgramClose(tmp, null, { commit: hasGit });
     assert.equal(closed.closed, true, JSON.stringify(closed.gate));
     assert.equal(closed.next.id, 'F2');
@@ -212,6 +224,7 @@ describe('programa por fases (CLI/operational)', () => {
     const v3 = await op.runRuntimeVerify(tmp, null);
     assert.equal(v3.run.status, 'completed');
     assert.equal(v3.regression.failed.length, 0);
+    writeHandoff(tmp, 'Fase 2 fechada; a regressão da F1 pegou a quebra do store e ela foi corrigida antes do close.');
     const done = op.runtimeProgramClose(tmp, null, { commit: false });
     assert.equal(done.closed, true, JSON.stringify(done.gate));
     assert.equal(done.next, null, 'programa concluído');
@@ -226,5 +239,34 @@ describe('programa por fases (CLI/operational)', () => {
     assert.throws(() => op.runtimeProgramStart(tmp, null, 'F2'), /feche antes: F1/);
     fs.rmSync(path.join(tmp, '.oxe', 'ROADMAP.md'));
     assert.throws(() => op.runtimeProgramInit(tmp, null, { force: true }), /ROADMAP\.md não encontrado/);
+  });
+});
+
+describe('fase com critério UAT (1.20 sign-off)', () => {
+  it('não fecha sem sign-off; fecha depois do aceite humano registrado', async () => {
+    const tmp = makeProject();
+    try {
+      fs.writeFileSync(path.join(tmp, '.oxe', 'ROADMAP.md'), '# R\n\n## Fase 1 — Única\n\n**Requisitos:** R1\n**Critérios de aceite:** A1, A2\n', 'utf8');
+      op.runtimeProgramInit(tmp, null, { force: true });
+      op.runtimeProgramStart(tmp, null);
+      writePhaseArtifacts(tmp, SPEC1.replace(/(\| A1 .*\n)/, '$1| A2 | a pessoa aprova o fluxo | UAT manual |\n'), PLAN1, PACK1);
+      await op.runRuntimeExecute(tmp, null, {
+        executor: writer({ 'src/store.js': 'function save(item) { return item; }\nmodule.exports = { save };\n' }),
+        skipPreflight: true,
+      });
+      const verified = await op.runRuntimeVerify(tmp, null);
+      assert.equal(verified.run.status, 'blocked', 'A2 manual deixa a verificação parcial');
+      writeHandoff(tmp);
+      const before = op.runtimeProgramClose(tmp, null, { commit: false });
+      assert.equal(before.closed, false);
+      assert.match(before.gate.reasons.join(' | '), /sign-off pendente: A2/);
+
+      assert.throws(() => op.runtimeSignoff(tmp, null, { criteria: 'A2' }), /--by/);
+      op.runtimeSignoff(tmp, null, { criteria: 'A2', by: 'eduardo', note: 'UAT ok no Windows' });
+      const after = op.runtimeProgramClose(tmp, null, { commit: false });
+      assert.equal(after.closed, true, JSON.stringify(after.gate));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

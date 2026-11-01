@@ -19,7 +19,8 @@
         "properties": {
           "criterion": { "type": "string", "pattern": "^A\\d+$" },
           "files": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
-          "command": { "type": "string", "minLength": 1 }
+          "command": { "type": "string", "minLength": 1 },
+          "proves": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Nomes dos testes (ou `arquivo › nome`) que precisam aparecer como aprovados na saída do runner — Prova executada." }
         }
       }
     },

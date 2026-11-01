@@ -26,6 +26,11 @@ export interface AcceptanceCheck {
      * command: a missing or modified file fails the check — the executor cannot rewrite its proof.
      */
     frozen_files?: FrozenFile[];
+    /**
+     * Executed proof (1.20): names of tests (or `file › name`) that must appear as PASSED in the runner output.
+     * A green exit code without these named tests is `proof_not_executed`.
+     */
+    proves?: string[];
 }
 export interface FrozenFile {
     path: string;
@@ -36,6 +41,7 @@ export interface AcceptanceTestLike {
     criterion: string;
     command: string;
     files: FrozenFile[];
+    proves?: string[];
 }
 export interface AcceptanceCheckSuite {
     checks: AcceptanceCheck[];

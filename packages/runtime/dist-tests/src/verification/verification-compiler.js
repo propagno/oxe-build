@@ -155,6 +155,7 @@ function compile(spec, plan) {
             acceptance_ref: entry.criterion,
             description: `Teste de aceite congelado de ${entry.criterion}`,
             frozen_files: entry.files.map((f) => ({ path: f.path, sha256: f.sha256 ?? null })),
+            ...(Array.isArray(entry.proves) && entry.proves.length ? { proves: [...entry.proves] } : {}),
         });
     }
     return {
@@ -291,6 +292,14 @@ async function runCheck(check, cwd, timeoutMs = 60000) {
             // A unit check that printed nothing cannot have run a test runner.
             status = 'fail';
             error = 'no_test_report';
+        }
+        if (status === 'pass' && check.proves && check.proves.length > 0) {
+            const missing = (0, test_report_parsers_1.missingProofs)(check.proves, `${stdout}
+${stderr}`);
+            if (missing.length > 0) {
+                status = 'fail';
+                error = `proof_not_executed: ${missing.join(' | ')}`;
+            }
         }
         return {
             check_id: check.id,

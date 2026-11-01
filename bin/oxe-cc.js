@@ -2502,6 +2502,8 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
     npx oxe-cc map [--json] [opções] [pasta-do-projeto]
   npx oxe-cc runtime <status|start|pause|resume|replay|compile|verify|project|ci|promote|recover|gates|agents|execute|providers|program> [opções] [pasta-do-projeto]
   npx oxe-cc runtime program <status|init|start|close> [--phase F2] [--force] [--no-commit] [--json] [pasta-do-projeto]
+  npx oxe-cc runtime dossier [--phase F1] [--base-commit <sha>] [--json] [pasta-do-projeto]
+  npx oxe-cc runtime signoff --phase F1 --criteria A8 --by <quem> [--message <nota>] [--evidence <caminho|url>]
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
     npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
     npx oxe-cc plugins <list|install|remove> [opções]
@@ -3892,7 +3894,7 @@ function parseCapabilitiesArgs(argv) {
  */
 
 /**
- * @typedef {{ help: boolean, dir: string, action: string, subAction: string, activeSession: string|null, wave: number|null, task: string, mode: string, reason: string, runId: string, fromEventId: string, writeReport: boolean, gateId: string, decision: string, actor: string, targetKind: string, remote: string, baseBranch: string, minimumCoverage: number|null, timeoutMs: number|null, jsonOutput: boolean, gateStatus: string, gateScope: string, parseError: boolean, unknownFlag: string, agentsPlanPath: string, apiKeyEnv: string, phase?: string, force?: boolean, noCommit?: boolean, message?: string }} RuntimeOpts
+ * @typedef {{ help: boolean, dir: string, action: string, subAction: string, activeSession: string|null, wave: number|null, task: string, mode: string, reason: string, runId: string, fromEventId: string, writeReport: boolean, gateId: string, decision: string, actor: string, targetKind: string, remote: string, baseBranch: string, minimumCoverage: number|null, timeoutMs: number|null, jsonOutput: boolean, gateStatus: string, gateScope: string, parseError: boolean, unknownFlag: string, agentsPlanPath: string, apiKeyEnv: string, phase?: string, force?: boolean, noCommit?: boolean, message?: string, base?: string, criteria?: string, by?: string, evidence?: string }} RuntimeOpts
  */
 
 /**
@@ -3994,12 +3996,20 @@ function parseContextArgs(argv) {
     force: false,
     noCommit: false,
     message: '',
+    base: '',
+    criteria: '',
+    by: '',
+    evidence: '',
   };
   const positionals = [];
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '-h' || a === '--help') out.help = true;
     else if (a === '--phase' && argv[i + 1]) out.phase = String(argv[++i]);
+    else if (a === '--base-commit' && argv[i + 1]) out.base = String(argv[++i]);
+    else if (a === '--criteria' && argv[i + 1]) out.criteria = String(argv[++i]);
+    else if (a === '--by' && argv[i + 1]) out.by = String(argv[++i]);
+    else if (a === '--evidence' && argv[i + 1]) out.evidence = String(argv[++i]);
     else if (a === '--force') out.force = true;
     else if (a === '--no-commit') out.noCommit = true;
     else if (a === '--message' && argv[i + 1]) out.message = String(argv[++i]);
@@ -4800,6 +4810,40 @@ async function runRuntime(opts) {
     }
     if (report._reportPath) {
       console.log(`\n  ${c ? green : ''}Relatório:${c ? reset : ''} ${report._reportPath}`);
+    }
+    return;
+  }
+
+  if (opts.action === 'dossier') {
+    try {
+      const result = oxeOperational.runtimeDossier(opts.dir, activeSession, { phase: opts.phase || null, base: opts.base || null });
+      if (opts.jsonOutput) {
+        console.log(JSON.stringify({ oxeRuntimeDossierSchema: 1, ...result }, null, 2));
+      } else {
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} Dossiê ${result.phase || 'run'}: ${result.dir}`);
+        console.log(`  ${c ? dim : ''}Execução:${c ? reset : ''} ${result.totals.attempts} tentativas · ${result.totals.turns} turnos · US$ ${result.totals.cost.toFixed(2)}`);
+        for (const issue of result.issues) console.log(`  ${c ? red : ''}✗${c ? reset : ''} ${issue}`);
+        for (const pending of result.pending) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${pending}`);
+        if (!result.handoff_filled) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} handoff "O que a próxima fase deve saber" vazio em plan.md`);
+      }
+      if (result.issues.length) process.exitCode = 1;
+    } catch (err) {
+      console.error(`  ${c ? red : ''}✗${c ? reset : ''} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (opts.action === 'signoff') {
+    try {
+      const record = oxeOperational.runtimeSignoff(opts.dir, activeSession, {
+        phase: opts.phase || null, criteria: opts.criteria, by: opts.by, note: opts.message || null, evidence: opts.evidence || null,
+      });
+      if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeSignoffSchema: 1, ...record }, null, 2));
+      else console.log(`  ${c ? green : ''}✓${c ? reset : ''} Sign-off ${record.phase}: ${record.criteria.join(', ')} por ${record.by}`);
+    } catch (err) {
+      console.error(`  ${c ? red : ''}✗${c ? reset : ''} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
     }
     return;
   }

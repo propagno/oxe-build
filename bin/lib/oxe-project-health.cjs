@@ -2105,6 +2105,19 @@ function suggestProgramStep(target, activeSession, activeRun) {
     return { step: 'execute', cursorCmd: '/oxe-execute', reason: `${label}: em execução — concluir e verificar.`, artifacts: programArtifacts, program };
   }
   if (phase.status === 'verifying') {
+    const runChecks = activeRun && Array.isArray(activeRun.verification_check_results) ? activeRun.verification_check_results : [];
+    const onlyManualPending = activeRun && activeRun.status === 'blocked' && runChecks.length > 0
+      && runChecks.every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));
+    if (onlyManualPending) {
+      const manual = runChecks.filter((c) => c.status === 'skip').map((c) => String(c.acceptance_ref || c.check_id).toUpperCase());
+      return {
+        step: 'signoff',
+        cursorCmd: `oxe-cc runtime signoff --phase ${phase.id} --criteria ${manual.join(',')} --by <quem>`,
+        reason: `${label}: checks automáticos verdes; falta o UAT/aceite humano de ${manual.join(', ')} (sign-off com evidência).`,
+        artifacts: programArtifacts,
+        program,
+      };
+    }
     if (activeRun && activeRun.status === 'completed') {
       return {
         step: 'program-close',

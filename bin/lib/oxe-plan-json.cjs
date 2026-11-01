@@ -64,6 +64,7 @@ function validatePlanJson(doc) {
       if (typeof entry.criterion !== 'string' || !ACCEPT_RE.test(entry.criterion)) errors.push(`${at}.criterion: A<n>`);
       if (!isStringArray(entry.files) || entry.files.length === 0) errors.push(`${at}.files: lista com ao menos 1 caminho`);
       if (typeof entry.command !== 'string' || !entry.command.trim()) errors.push(`${at}.command: obrigatório`);
+      if (entry.proves != null && !isStringArray(entry.proves)) errors.push(`${at}.proves: lista de nomes de teste`);
     });
   }
   return errors;
@@ -96,6 +97,7 @@ function planJsonToParsedPlan(doc) {
     criterion: entry.criterion,
     files: [...new Set(entry.files.map((f) => String(f).trim()))],
     command: entry.command.trim(),
+    proves: Array.isArray(entry.proves) ? entry.proves.map((name) => String(name).trim()).filter(Boolean) : [],
   }));
   return { tasks, waves, totalTasks: tasks.length, source: 'PLAN.json', phase: doc.phase || null, acceptanceTests };
 }
@@ -230,6 +232,12 @@ function lintPlan(input) {
         errors.push(`teste de aceite ${entry.criterion}: ${file} está no escopo de ${ownedByTasks.get(file)} — o executor não pode escrever o próprio aceite`);
       }
     }
+  }
+  // Prova executada: o runner precisa listar os nomes dos testes que passaram.
+  for (const entry of acceptanceTests) {
+    if (!entry.proves || !entry.proves.length) continue;
+    const verbose = /--reporter[= ]verbose|--verbose|--test-reporter[= ](tap|spec)|node\s+--test|\s-v\b|junit/i.test(entry.command);
+    if (!verbose) warnings.push(`teste de aceite ${entry.criterion}: 'proves' exige saída com nomes de teste — use um reporter verbose (ex.: vitest --reporter=verbose)`);
   }
   const scopeAcceptance = phase && Array.isArray(phase.acceptance) && phase.acceptance.length ? phase.acceptance : [...covered];
   const untested = scopeAcceptance.filter((ref) => !testedCriteria.has(ref));

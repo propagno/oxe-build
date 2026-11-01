@@ -1918,6 +1918,7 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     },
   });
   const projected = projectRuntimeArtifacts(projectRoot, activeSession, { runState: next, write: true });
+  try { projectStateMd(projectRoot, activeSession); } catch { /* projeção auxiliar */ }
   return {
     run: projected.run,
     report,
@@ -1960,6 +1961,7 @@ function attachAcceptanceLock(parsedPlan, runState, projectRoot) {
       criterion: entry.criterion,
       command: entry.command,
       files: entry.files.map((file) => ({ path: file, sha256: hashes.has(file) ? hashes.get(file) : null })),
+      proves: Array.isArray(entry.proves) ? entry.proves : [],
     };
   });
   return parsedPlan;
@@ -2032,6 +2034,190 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     result.ok = result.errors.length === 0;
   }
   return { ...result, source: plan.source, tasks: plan.tasks.length, phase: phase ? phase.id : null, plan_json: hasJson ? jsonPath : null, dry_verify: dryVerify ? dryVerify.results : null };
+}
+
+// ─── Dossiê vivo verificado + STATE projetado (1.20) ─────────────────────────
+
+function gitLines(projectRoot, args) {
+  const res = spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8', windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+  return res.status === 0 ? String(res.stdout || '').split(/\r?\n/).filter(Boolean) : null;
+}
+
+/** Arquivos tocados desde a base da fase: commits (`diff --name-status base`) + working tree (inclui não rastreados). */
+function phaseChanges(projectRoot, base) {
+  const changes = new Map();
+  if (base) {
+    for (const line of gitLines(projectRoot, ['diff', '--name-status', base, 'HEAD']) || []) {
+      const [status, ...rest] = line.split('\t');
+      changes.set(rest[rest.length - 1], status.charAt(0));
+    }
+  }
+  for (const line of gitLines(projectRoot, ['status', '--porcelain', '-uall']) || []) {
+    const status = line.slice(0, 2).trim() || 'M';
+    const file = line.slice(3).replace(/^"|"$/g, '').split(' -> ').pop();
+    if (!changes.has(file)) changes.set(file, status === '??' ? 'A' : status.charAt(0));
+  }
+  return [...changes.entries()].map(([file, status]) => ({ path: file.replace(/\\/g, '/'), status }));
+}
+
+function resolvePhaseBase(projectRoot, phase, explicit) {
+  if (explicit) return explicit;
+  if (phase && phase.base_commit) return phase.base_commit;
+  for (const ref of ['origin/main', 'main', 'origin/master', 'master']) {
+    const mb = gitLines(projectRoot, ['merge-base', 'HEAD', ref]);
+    if (mb && mb[0]) return mb[0];
+  }
+  return null;
+}
+
+function readNdjsonQuiet(file) {
+  const text = readTextIfExists(file);
+  if (!text) return [];
+  return text.split(/\r?\n/).filter(Boolean).map((line) => {
+    try {
+      return JSON.parse(line);
+    } catch {
+      return null;
+    }
+  }).filter(Boolean);
+}
+
+/**
+ * `oxe-cc runtime dossier`: projeta `.oxe/dossier/<fase>/` e devolve os problemas que bloqueiam o fechamento
+ * (drift de arquitetura, prova não executada, aceite alterado), os pendentes (sign-off UAT) e se o handoff foi escrito.
+ */
+function runtimeDossier(projectRoot, activeSession, options = {}) {
+  const dossierLib = require('./oxe-dossier.cjs');
+  const programLib = require('./oxe-program.cjs');
+  const parsers = loadSdkParsers();
+  if (!parsers) throw new Error('Parsers do SDK indisponíveis.');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const program = paths.programDir ? programLib.readProgram(paths.programDir) : null;
+  const phaseId = options.phase || (program && program.active_phase) || null;
+  const phase = program && phaseId ? program.phases.find((p) => p.id === phaseId) || null : null;
+  const run = options.runState || readRunState(projectRoot, activeSession) || {};
+  const planText = readTextIfExists(paths.plan) || '';
+  const plan = attachAcceptanceLock(parsePlanArtifact(parsers, planText, paths.plan), run, projectRoot);
+  const events = readEvents(projectRoot, activeSession).filter((e) => !run.run_id || e.run_id === run.run_id);
+  const base = resolvePhaseBase(projectRoot, phase, options.base);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const built = dossierLib.buildDossier({
+    phase,
+    specText: readTextIfExists(paths.spec) || '',
+    plan,
+    pack: readJsonQuiet(paths.implementationPack),
+    run,
+    events,
+    changes: phaseChanges(projectRoot, base),
+    hashFile: (rel) => { const rt = loadRuntimeModule(); return rt && typeof rt.sha256File === 'function' ? rt.sha256File(path.resolve(projectRoot, rel)) : null; },
+    decisions: readNdjsonQuiet(path.join(programDir, 'decisions.ndjson')),
+    notes: readNdjsonQuiet(path.join(programDir, 'notes.ndjson')).filter((n) => !phaseId || !n.phase || n.phase === phaseId),
+    signoffs: readNdjsonQuiet(path.join(programDir, 'signoffs.ndjson')).filter((s) => !phaseId || s.phase === phaseId),
+  });
+  const dir = path.join(path.dirname(paths.plan || path.join(projectRoot, '.oxe', 'PLAN.md')), 'dossier', phaseId || 'run');
+  let handoffFilled = false;
+  if (options.write !== false) {
+    for (const [name, content] of Object.entries(built.files)) {
+      const written = dossierLib.writeDossierFile(path.join(dir, name), content, { withHandoff: name === 'plan.md' });
+      if (name === 'plan.md') handoffFilled = dossierLib.handoffFilled(dossierLib.humanPart(written));
+    }
+  } else {
+    handoffFilled = dossierLib.handoffFilled(dossierLib.humanPart(readTextIfExists(path.join(dir, 'plan.md')) || ''));
+  }
+  try {
+    projectStateMd(projectRoot, activeSession);
+  } catch {
+    // STATE é projeção auxiliar; nunca falha o dossiê.
+  }
+  return { dir, phase: phaseId, base, issues: built.issues, pending: built.pending, untouched: built.untouched, handoff_filled: handoffFilled, totals: built.totals };
+}
+
+const STATE_PHASE_BY_STATUS = { pending: 'spec_ready', planning: 'spec_ready', executing: 'executing', verifying: 'executing', closed: 'verify_complete', reopened: 'executing' };
+
+/** STATE.md como projeção (fase, programa, run, próximo passo, bloqueios); o texto humano fora dos marcadores fica. */
+function projectStateMd(projectRoot, activeSession) {
+  const dossierLib = require('./oxe-dossier.cjs');
+  const programLib = require('./oxe-program.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const statePath = paths.state || path.join(projectRoot, '.oxe', 'STATE.md');
+  if (!fs.existsSync(path.dirname(statePath))) return null;
+  const program = paths.programDir ? programLib.readProgram(paths.programDir) : null;
+  const run = readRunState(projectRoot, activeSession) || {};
+  let phaseLabel = 'initial';
+  let programLine = '_(sem programa)_';
+  if (program) {
+    const runtime = loadRuntimeModule();
+    const progress = runtime && typeof runtime.programProgress === 'function' ? runtime.programProgress(program) : null;
+    const phase = progress && progress.phase;
+    if (phase) phaseLabel = run.status === 'failed' ? 'verify_failed' : run.status === 'completed' && phase.status === 'verifying' ? 'verify_complete' : (STATE_PHASE_BY_STATUS[phase.status] || 'executing');
+    else phaseLabel = 'verify_complete';
+    programLine = program.phases.map((p) => `${p.status === 'closed' ? '✓' : p.id === program.active_phase ? '▶' : '·'} ${p.id} ${p.title} (${p.status})`).join(' · ');
+  } else if (run.status) {
+    phaseLabel = run.status === 'completed' ? 'verify_complete' : run.status === 'failed' ? 'verify_failed' : 'executing';
+  }
+  let next = null;
+  try {
+    const health = require('./oxe-project-health.cjs');
+    next = health.suggestNextStep(projectRoot, {});
+  } catch {
+    next = null;
+  }
+  const checks = Array.isArray(run.verification_check_results) ? run.verification_check_results : [];
+  const failing = checks.filter((c) => c.status === 'fail' || c.status === 'error').map((c) => `${c.check_id}: ${c.error || c.status}`);
+  const manual = checks.filter((c) => c.status === 'skip' && c.skip_reason === 'needs_structured_check').map((c) => `${c.check_id}: UAT/sign-off pendente`);
+  const block = [
+    '# OXE — Estado (projeção)',
+    '',
+    '## Fase atual',
+    '',
+    `\`${phaseLabel}\``,
+    '',
+    '## Sessão ativa (opcional — `/oxe-session`)',
+    '',
+    `- **active_session:** ${activeSession || '—'}`,
+    '',
+    '## Programa',
+    '',
+    programLine,
+    '',
+    '## Run',
+    '',
+    `- **run:** \`${run.run_id || '—'}\` · **status:** ${run.status || '—'} · checks ${checks.filter((c) => c.status === 'pass').length}/${checks.length} verdes`,
+    '',
+    '## Próximo passo sugerido',
+    '',
+    next ? `- Comando: \`${next.cursorCmd || next.step}\`\n- Motivo: ${next.reason}` : '- —',
+    '',
+    '## Bloqueios',
+    '',
+    [...failing, ...manual].length ? [...failing, ...manual].map((b) => `- ${b}`).join('\n') : '- nenhum',
+  ].join('\n');
+  const existing = readTextIfExists(statePath);
+  // O template do init-oxe (fase `initial`, placeholders) é substituído; texto humano real é preservado fora do bloco.
+  const isTemplate = !existing || /Porta de entrada enxuta/.test(existing);
+  if (isTemplate) fs.writeFileSync(statePath, `${dossierLib.BEGIN}\n${block}\n${dossierLib.END}\n\n## Decisões persistentes\n\n- (bullet: D-NN: decisão → data)\n`, 'utf8');
+  else dossierLib.writeDossierFile(statePath, block);
+  return statePath;
+}
+
+/** Sign-off humano de critérios manuais/UAT de uma fase (append-only). */
+function runtimeSignoff(projectRoot, activeSession, options = {}) {
+  const programLib = require('./oxe-program.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const program = programLib.readProgram(paths.programDir);
+  const phaseId = options.phase || (program && program.active_phase);
+  if (!phaseId) throw new Error('Informe --phase (sem fase ativa).');
+  const by = String(options.by || '').trim();
+  if (!by) throw new Error('Sign-off exige --by <quem aceitou>.');
+  const criteria = (Array.isArray(options.criteria) ? options.criteria : String(options.criteria || '').split(','))
+    .map((c) => c.trim()).filter((c) => /^A\d+$/.test(c));
+  if (!criteria.length) throw new Error('Sign-off exige --criteria A8[,A9].');
+  const record = { phase: phaseId, criteria, by, at: new Date().toISOString(), note: options.note || null, evidence: options.evidence || null };
+  const file = path.join(paths.programDir, 'signoffs.ndjson');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, `${JSON.stringify(record)}\n`, 'utf8');
+  appendEvent(projectRoot, activeSession, { type: 'GateResolved', payload: { gate: 'signoff', ...record } });
+  return record;
 }
 
 // ─── Programa por fases (1.19) ───────────────────────────────────────────────
@@ -2122,7 +2308,13 @@ function runtimeProgramStart(projectRoot, activeSession, phaseId = null) {
   if (!state) throw new Error('Sem programa. Rode `oxe-cc runtime program init` (lê o ROADMAP aprovado).');
   const next = runtime.startPhase(state, phaseId);
   const phase = runtime.activePhase(next);
+  // Base da fase: o dossiê compara o diff real com o contrato a partir daqui.
+  if (!phase.base_commit) {
+    const head = gitLines(projectRoot, ['rev-parse', 'HEAD']);
+    if (head && head[0]) phase.base_commit = head[0];
+  }
   programLib.writeProgram(paths.programDir, next);
+  try { projectStateMd(projectRoot, activeSession); } catch { /* projeção auxiliar */ }
   appendEvent(projectRoot, activeSession, {
     type: 'PhaseStarted',
     payload: { phase: phase.id, title: phase.title, acceptance: phase.acceptance },
@@ -2158,7 +2350,19 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   if (!phase) throw new Error('Nenhuma fase ativa. Rode `oxe-cc runtime program start`.');
   const run = options.runState || readRunState(projectRoot, activeSession);
   const gateInput = phaseGateInputFromRun(run);
+  // 1.20: um critério UAT com sign-off conta como verificado; o dossiê precisa estar sem drift e com handoff.
+  const dossier = options.dossier === false ? null : runtimeDossier(projectRoot, activeSession, { phase: phase.id, runState: run });
+  if (dossier && gateInput.verify_status === 'blocked' && dossier.pending.length === 0) {
+    const onlyManual = (run.verification_check_results || []).every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));
+    if (onlyManual) gateInput.verify_status = 'completed';
+  }
   const gate = runtime.evaluatePhaseGate(gateInput);
+  if (dossier) {
+    for (const issue of dossier.issues) gate.reasons.push(`dossiê: ${issue}`);
+    for (const pending of dossier.pending) gate.reasons.push(`sign-off pendente: ${pending.replace(/^signoff_pending: /, '')}`);
+    if (!dossier.handoff_filled) gate.reasons.push(`handoff vazio: preencha "O que a próxima fase deve saber" em ${path.relative(projectRoot, path.join(dossier.dir, 'plan.md'))}`);
+    gate.ok = gate.reasons.length === 0;
+  }
   if (!gate.ok) {
     appendEvent(projectRoot, activeSession, {
       type: 'PhaseGateFailed',
@@ -2191,6 +2395,7 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     plan_ref: paths.plan ? programLib.relativeRef(projectRoot, paths.plan) : null,
   });
   programLib.writeProgram(paths.programDir, closed.state);
+  try { projectStateMd(projectRoot, activeSession); } catch { /* projeção auxiliar */ }
   appendEvent(projectRoot, activeSession, {
     type: 'PhaseClosed',
     run_id: run.run_id,
@@ -3510,6 +3715,9 @@ module.exports = {
   buildNodeContextProvider,
   detectRuntimeAdapters,
   runtimeProgramStatus,
+  runtimeDossier,
+  runtimeSignoff,
+  projectStateMd,
   runtimePlanLint,
   runtimeProgramInit,
   runtimeProgramStart,

@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { spawnSync } from 'child_process';
-import { parseTestReport, extractTestFileArgs } from './test-report-parsers';
+import { parseTestReport, extractTestFileArgs, missingProofs } from './test-report-parsers';
 import { shellInvocation, childProcessEnv } from '../executor/shell-argv';
 import { checkExpectedExports } from './contract-exports';
 import type { ExpectedExport } from './contract-exports';
@@ -54,6 +54,11 @@ export interface AcceptanceCheck {
    * command: a missing or modified file fails the check — the executor cannot rewrite its proof.
    */
   frozen_files?: FrozenFile[];
+  /**
+   * Executed proof (1.20): names of tests (or `file › name`) that must appear as PASSED in the runner output.
+   * A green exit code without these named tests is `proof_not_executed`.
+   */
+  proves?: string[];
 }
 
 export interface FrozenFile {
@@ -66,6 +71,7 @@ export interface AcceptanceTestLike {
   criterion: string;
   command: string;
   files: FrozenFile[];
+  proves?: string[];
 }
 
 export interface AcceptanceCheckSuite {
@@ -282,6 +288,7 @@ export function compile(
       acceptance_ref: entry.criterion,
       description: `Teste de aceite congelado de ${entry.criterion}`,
       frozen_files: entry.files.map((f) => ({ path: f.path, sha256: f.sha256 ?? null })),
+      ...(Array.isArray(entry.proves) && entry.proves.length ? { proves: [...entry.proves] } : {}),
     });
   }
 
@@ -427,6 +434,14 @@ export async function runCheck(
       // A unit check that printed nothing cannot have run a test runner.
       status = 'fail';
       error = 'no_test_report';
+    }
+    if (status === 'pass' && check.proves && check.proves.length > 0) {
+      const missing = missingProofs(check.proves, `${stdout}
+${stderr}`);
+      if (missing.length > 0) {
+        status = 'fail';
+        error = `proof_not_executed: ${missing.join(' | ')}`;
+      }
     }
 
     return {

@@ -281,6 +281,15 @@ function interfaceNames(dir, phase) {
   return (ctx.interfaces || []).flatMap((m) => m.exports.map((e) => `${m.file}#${e.name}`)).sort();
 }
 
+
+/** Handoff humano exigido pelo close (1.20): o que a próxima fase deve saber. */
+function writeHandoff(dir, phase) {
+  const r = operational.runtimeDossier(dir, null, { phase: phase.id });
+  const file = path.join(r.dir, 'plan.md');
+  const body = fs.readFileSync(file, 'utf8').replace('(preencher antes do `program close`)', `${phase.id} entrega ${phase.tasks.map((t) => t.symbols.map((x) => x[1]).join(', ')).join('; ')} — a próxima fase importa por esses nomes.`);
+  fs.writeFileSync(file, body, 'utf8');
+}
+
 async function runPhase(dir, phase, executorOptions) {
   operational.runtimeProgramStart(dir, null, phase.id);
   writePhaseArtifacts(dir, phase);
@@ -288,6 +297,7 @@ async function runPhase(dir, phase, executorOptions) {
   const interfaces = interfaceNames(dir, phase);
   const executed = await operational.runRuntimeExecute(dir, null, { skipPreflight: true, ...executorOptions });
   const verified = await operational.runRuntimeVerify(dir, null, { timeoutMs: 120_000 });
+  writeHandoff(dir, phase);
   const closed = operational.runtimeProgramClose(dir, null, {});
   return { lint, interfaces, executed, verified, closed };
 }
