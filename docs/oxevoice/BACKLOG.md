@@ -169,7 +169,7 @@ Hipóteses a confirmar com dados das fases:
 - **Evidência:** no verify do rework da F1, os `check-accept-*` ficaram verdes, mas nenhum CR foi marcado como resolvido. O `attachAcceptanceLock` reconstruía as entradas sem `resolves`/`version`, e o reconcile não via a ligação teste → CR.
 - **Correção:** os campos são preservados. Um teste de ponta a ponta (feedback → compile → verify → CR resolvido) cobre o caminho real, que os testes unitários do reconcile não exercitavam.
 
-## OXB-020: o aceite congelado não cobre o typecheck do projeto
+## OXB-020: o aceite congelado não cobre os gates do projeto (typecheck e suíte de governança)
 
 - **Status:** aberto.
 - **Evidência:** no rework da F1, todos os aceites ficaram verdes (vitest), mas o `npm run typecheck` completo (heavy-lock) reprovou. O namespace `voice` não foi registrado nos tipos do i18next. O vitest transpila sem checar tipos, e o executor só rodou os testes da própria tarefa.
@@ -180,3 +180,9 @@ Hipóteses a confirmar com dados das fases:
 - **Status:** aberto.
 - **Evidência:** os commits `oxe(Tn): <título em pt-BR>` do `--checkpoint-commits` não seguem Conventional Commits em inglês, a regra do oxespace. No PR #417, ficou anotado que serão squashados.
 - **Fora da caixa:** um `commit_convention` no PLAN.json ou no `config.json` (template, idioma, sufixo `Co-Authored-By`), com o título do commit gerado pela tarefa (`feat(voice): ...`). O `plan lint` valida o template.
+
+### OXB-020: evidência adicional (CI do PR #417)
+
+A CI do oxespace reprovou 9 testes de **governança do repositório** (`design-lint` com ratchets de primitivos, tokens e motion; `i18n-catalog`; `mcp-coverage`; `fs-allowlist`), e nenhum de voz. O plano só exercitava os aceites da feature.
+
+**Lição:** num repositório com suíte de governança, o phase gate é **a suíte do repo**, normalmente via CI, porque a local não cabe na máquina. Os ratchets do repo também deveriam entrar no **contexto do executor**, por exemplo um `## Regras do repositório` gerado de `design-lint`/`AGENTS.md`/`CLAUDE.md`, para que ele escreva certo na primeira vez.
