@@ -127,3 +127,25 @@ describe('prova transversal para CR sem critério (OXB-014)', () => {
     assert.deepEqual(r.resolved, ['CR-01']);
   });
 });
+
+describe('verify fecha o CR de ponta a ponta (OXB-019)', () => {
+  it('o resolves sobrevive ao lock do aceite e o CR fica resolvido após o verify', async () => {
+    const tmp = tmpDir();
+    fs.mkdirSync(path.join(tmp, '.oxe', 'program'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 't'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, '.oxe', 'STATE.md'), '# STATE\n');
+    fs.writeFileSync(path.join(tmp, '.oxe', 'SPEC.md'), '# SPEC\n\n## Objetivo\n\nx\n\n## Critérios de aceite\n\n| ID | Critério | Como verificar |\n|---|---|---|\n| A1 | a | manual |\n');
+    fs.writeFileSync(path.join(tmp, '.oxe', 'PLAN.md'), '# PLAN\n');
+    fs.writeFileSync(path.join(tmp, 't', 'ok.js'), 'process.exit(0)\n');
+    fs.writeFileSync(path.join(tmp, '.oxe', 'PLAN.json'), JSON.stringify({
+      schema_version: 1,
+      tasks: [{ id: 'T1', title: 'x', wave: 1, files: ['src/x.js'], acceptance: ['A1'], verify: { commands: ['node t/ok.js'] } }],
+      acceptance_tests: [{ id: 'CR-01-proof', resolves: ['CR-01'], files: ['t/ok.js'], command: 'node t/ok.js' }],
+    }));
+    op.runtimeFeedback(tmp, null, { class: 'constraint', summary: 'regra transversal comprovada por teste' });
+    op.compileExecutionGraphFromArtifacts(tmp, null);
+    await op.runRuntimeVerify(tmp, null);
+    const cr = op.runtimeChanges(tmp, null).find((c) => c.id === 'CR-01');
+    assert.equal(cr.status, 'resolved', JSON.stringify(cr));
+  });
+});

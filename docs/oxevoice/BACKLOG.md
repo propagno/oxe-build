@@ -162,3 +162,9 @@ Hipóteses a confirmar com dados das fases:
 - **Evidência:** no rework da F1, o verify inline da T11 era `ipc-v2.test.ts && ipc.test.ts`. O segundo segmento era o "Como verificar" antigo do A6, que o compile anexa a partir da SPEC: na emenda eu mudei o texto do A6, mas não a coluna de verificação. O dry-verify testou só o comando da tarefa, e o primeiro segmento, vermelho pelo motivo certo, escondia o segundo quebrado.
   - A **régua suspeita** (1.20c) pegou o problema na 2ª tentativa idêntica (`test_file_missing`) e parou a tarefa, sem pagar a 3ª: o primeiro caso real dela.
 - **Correção:** o dry-verify roda o comando efetivo (tarefa + "Como verificar" dos critérios dela), **segmento a segmento** do `&&`, e fica com o pior veredito.
+
+## OXB-019: o lock do aceite descartava `resolves` e `version`
+
+- **Status:** resolvido.
+- **Evidência:** no verify do rework da F1, os `check-accept-*` ficaram verdes, mas nenhum CR foi marcado como resolvido. O `attachAcceptanceLock` reconstruía as entradas sem `resolves`/`version`, e o reconcile não via a ligação teste → CR.
+- **Correção:** os campos são preservados. Um teste de ponta a ponta (feedback → compile → verify → CR resolvido) cobre o caminho real, que os testes unitários do reconcile não exercitavam.

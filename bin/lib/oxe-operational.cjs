@@ -1986,6 +1986,9 @@ function attachAcceptanceLock(parsedPlan, runState, projectRoot) {
       command: entry.command,
       files: entry.files.map((file) => ({ path: file, sha256: hashes.has(file) ? hashes.get(file) : null })),
       proves: Array.isArray(entry.proves) ? entry.proves : [],
+      // OXB-019: o lock reconstrói a entrada — sem estes campos o CR nunca fechava e a emenda nunca era vista.
+      resolves: Array.isArray(entry.resolves) ? entry.resolves : [],
+      version: Number.isInteger(entry.version) ? entry.version : 1,
     };
   });
   return parsedPlan;
