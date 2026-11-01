@@ -4,6 +4,36 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.18.0] — 2026-10-31
+
+### Executor nativo do host e contexto do nó
+
+- **ExecutorAdapter (`claude` | `http`):** o loop de tools da 1.17 é comum aos adapters, que só fornecem a
+  função de completion. Continuam valendo a allowlist, a contenção de caminhos e a regra `no_tool_call` ⇒ falha.
+- **Adapter `claude`:** roda um `claude -p --output-format json --tools ''` por turno, sem ponte HTTP,
+  porta nem API key. O processo morre ao fim de cada turno. Resposta fora do protocolo é retentada
+  até 2 vezes e depois falha como `llm`. No Windows, `.cmd` é suportado via `cmd.exe` verbatim.
+- **`runtime execute --adapter claude|http`:** sem flag, usa o adapter persistido; senão `http` se houver
+  API key; senão `claude` se o binário for detectado. `--api-key` só é exigido para `http`.
+  `runtime providers` lista os adapters detectados (`--json`).
+- **NodeExecutionContext:** o prompt do nó passa a levar:
+  - o corpo da tarefa no PLAN;
+  - o contrato do IMPLEMENTATION-PACK;
+  - o FIXTURE-PACK;
+  - o snapshot dos arquivos do escopo;
+  - o `git status`;
+  - as lições.
+
+  Cada seção tem orçamento e truncamento explícito.
+- **Telemetria `ExecutorUsage`:** turnos, tool calls por ferramenta, custo e motivo da falha por tentativa.
+  Vai para a tabela *Executor usage* do RUN-SUMMARY.
+- **Verify:** código do produto que lê `.oxe/` (artefato interno, fora do git) reprova o contrato
+  com `oxe_internal_reference`. Isso fecha um falso verde visto no benchmark.
+- **`scripts/e2e-linkly.cjs --real`:** benchmark real com oráculo de referência independente.
+  Resultado: replay do linkly com 8/8 tarefas na 1ª tentativa, US$ 1,66 (1.17: US$ 4,88).
+
+---
+
 ## [1.17.1] — 2026-10-31
 
 ### Achados do benchmark real da 1.17
