@@ -9,10 +9,18 @@ exports.buildSpawnable = buildSpawnable;
 exports.renderTranscript = renderTranscript;
 exports.buildBridgePrompt = buildBridgePrompt;
 exports.parseBridgeReply = parseBridgeReply;
+const os_1 = __importDefault(require("os"));
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const child_process_1 = require("child_process");
 const shell_argv_1 = require("../shell-argv");
+/** One `claude -p` at a time per process: turns of parallel nodes queue instead of stacking CLI processes. */
+let turnChain = Promise.resolve();
+function singleFlight(work) {
+    const next = turnChain.then(work, work);
+    turnChain = next.catch(() => undefined);
+    return next;
+}
 const CLAUDE_FLAGS = ['-p', '--output-format', 'json', '--tools', '', '--no-session-persistence', '--strict-mcp-config'];
 const DEFAULT_TIMEOUT_MS = 5 * 60000;
 let callSeq = 0;
@@ -148,7 +156,11 @@ class ClaudeCliAdapter {
         let costUsd = 0;
         let lastText = '';
         for (let attempt = 0; attempt <= retries; attempt++) {
-            const reply = await this.runOnce(buildBridgePrompt(opts.messages, opts.tools ?? [], attempt > 0), opts.timeoutMs);
+            const prompt = buildBridgePrompt(opts.messages, opts.tools ?? [], attempt > 0);
+            const reply = await singleFlight(async () => {
+                await this.waitForMemory();
+                return this.runOnce(prompt, opts.timeoutMs);
+            });
             costUsd += reply.costUsd;
             lastText = reply.text;
             const parsed = parseBridgeReply(reply.text);
@@ -164,6 +176,24 @@ class ClaudeCliAdapter {
         // Still not JSON: hand the text back with no tool calls — the executor's no_tool_call rule fails
         // the attempt as `llm` instead of reporting a success.
         return { content: lastText, tool_calls: [], finish_reason: 'stop', usage: { cost_usd: costUsd } };
+    }
+    /** Pauses the executor while free memory is below the floor; gives up (env failure) after `memoryWaitMs`. */
+    async waitForMemory() {
+        const floorMb = this.options.minFreeMemoryMb ?? Number(process.env.OXE_EXECUTOR_MIN_FREE_MB || 0);
+        if (!floorMb || floorMb <= 0)
+            return;
+        const read = this.options.freeMemory ?? (() => os_1.default.freemem());
+        const poll = this.options.memoryPollMs ?? 5000;
+        const deadline = Date.now() + (this.options.memoryWaitMs ?? 10 * 60000);
+        for (;;) {
+            const freeMb = read() / (1024 * 1024);
+            if (freeMb >= floorMb)
+                return;
+            if (Date.now() >= deadline) {
+                throw new Error(`memória livre ${Math.round(freeMb)} MB abaixo do mínimo ${floorMb} MB — executor pausado até o limite e desistiu`);
+            }
+            await new Promise((resolve) => setTimeout(resolve, poll));
+        }
     }
     runOnce(prompt, timeoutMs) {
         const executable = this.executable();

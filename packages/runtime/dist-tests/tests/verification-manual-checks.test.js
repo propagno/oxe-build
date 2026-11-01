@@ -190,3 +190,15 @@ function passResult(id) {
         strict_1.default.ok(report.reasons.some((r) => /without executable check/.test(r)), report.reasons.join(' | '));
     });
 });
+(0, node_test_1.describe)('critério declarado manual/UAT (OxeVoice F1, A8)', () => {
+    (0, node_test_1.test)('nunca é "provado" pelo verify de uma tarefa que o referencia', () => {
+        const suite = (0, verification_compiler_1.compile)({ objective: null, criteria: [{ id: 'A8', criterion: 'ditado real no Windows', howToVerify: 'UAT manual no Windows' }] }, { tasks: [{ id: 'T7', verifyCommand: 'node -e "process.exit(0)"', aceite: ['A8'] }] });
+        const check = suite.checks.find((c) => c.id === 'check-a8');
+        strict_1.default.equal(check.type, 'manual');
+        strict_1.default.equal(check.command, null);
+    });
+    (0, node_test_1.test)('critério com comando na SPEC continua executável mesmo citando "manual"', () => {
+        const suite = (0, verification_compiler_1.compile)({ objective: null, criteria: [{ id: 'A1', criterion: 'x', howToVerify: 'manual: `node --test t.js`' }] }, { tasks: [] });
+        strict_1.default.equal(suite.checks.find((c) => c.id === 'check-a1').command, 'node --test t.js');
+    });
+});

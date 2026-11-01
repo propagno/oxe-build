@@ -1,3 +1,4 @@
+import os from 'os';
 import fs from 'fs';
 import path from 'path';
 import { spawn, spawnSync } from 'child_process';
@@ -23,6 +24,25 @@ export interface ClaudeCliAdapterOptions {
   /** Extra attempts when the reply is not the expected JSON (default 2). */
   parseRetries?: number;
   extraArgs?: string[];
+  /**
+   * Memory gate before every turn: wait until the machine has this much free memory (MB) before spawning
+   * `claude -p`. Default `$OXE_EXECUTOR_MIN_FREE_MB` or 0 (off). Shared machines reap processes when memory runs out.
+   */
+  minFreeMemoryMb?: number;
+  /** How long a turn waits for memory before failing the attempt as `env` (default 10 min). */
+  memoryWaitMs?: number;
+  /** Free memory reader (bytes); tests inject it. */
+  freeMemory?: () => number;
+  /** Poll interval of the memory gate (default 5 s). */
+  memoryPollMs?: number;
+}
+
+/** One `claude -p` at a time per process: turns of parallel nodes queue instead of stacking CLI processes. */
+let turnChain: Promise<unknown> = Promise.resolve();
+function singleFlight<T>(work: () => Promise<T>): Promise<T> {
+  const next = turnChain.then(work, work);
+  turnChain = next.catch(() => undefined);
+  return next;
 }
 
 interface Spawnable {
@@ -176,7 +196,11 @@ export class ClaudeCliAdapter implements ExecutorAdapter {
     let costUsd = 0;
     let lastText = '';
     for (let attempt = 0; attempt <= retries; attempt++) {
-      const reply = await this.runOnce(buildBridgePrompt(opts.messages, opts.tools ?? [], attempt > 0), opts.timeoutMs);
+      const prompt = buildBridgePrompt(opts.messages, opts.tools ?? [], attempt > 0);
+      const reply = await singleFlight(async () => {
+        await this.waitForMemory();
+        return this.runOnce(prompt, opts.timeoutMs);
+      });
       costUsd += reply.costUsd;
       lastText = reply.text;
       const parsed = parseBridgeReply(reply.text);
@@ -192,6 +216,23 @@ export class ClaudeCliAdapter implements ExecutorAdapter {
     // Still not JSON: hand the text back with no tool calls — the executor's no_tool_call rule fails
     // the attempt as `llm` instead of reporting a success.
     return { content: lastText, tool_calls: [], finish_reason: 'stop', usage: { cost_usd: costUsd } };
+  }
+
+  /** Pauses the executor while free memory is below the floor; gives up (env failure) after `memoryWaitMs`. */
+  private async waitForMemory(): Promise<void> {
+    const floorMb = this.options.minFreeMemoryMb ?? Number(process.env.OXE_EXECUTOR_MIN_FREE_MB || 0);
+    if (!floorMb || floorMb <= 0) return;
+    const read = this.options.freeMemory ?? (() => os.freemem());
+    const poll = this.options.memoryPollMs ?? 5_000;
+    const deadline = Date.now() + (this.options.memoryWaitMs ?? 10 * 60_000);
+    for (;;) {
+      const freeMb = read() / (1024 * 1024);
+      if (freeMb >= floorMb) return;
+      if (Date.now() >= deadline) {
+        throw new Error(`memória livre ${Math.round(freeMb)} MB abaixo do mínimo ${floorMb} MB — executor pausado até o limite e desistiu`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, poll));
+    }
   }
 
   private runOnce(prompt: string, timeoutMs?: number): Promise<CliReply> {

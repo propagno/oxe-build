@@ -1205,7 +1205,12 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
       if (report.planSelfEvaluation && report.planSelfEvaluation.executable === false) {
         const confidence = report.planSelfEvaluation.confidence;
         const threshold = report.planConfidenceThreshold || 90;
-        blockers.push(`plan_confidence:${confidence == null ? 'missing' : `${confidence}%`}<=${threshold}%`);
+        // The gate also fails on an incomplete self-evaluation (rubric, vector): say which, or "91%<=90%" reads as a bug.
+        const evaluationWarnings = Array.isArray(report.planSelfEvaluation.warnings) ? report.planSelfEvaluation.warnings : [];
+        const belowThreshold = confidence == null || confidence <= threshold;
+        blockers.push(belowThreshold || !evaluationWarnings.length
+          ? `plan_confidence:${confidence == null ? 'missing' : `${confidence}%`}<=${threshold}%`
+          : `plan_self_evaluation_incomplete:${evaluationWarnings.length} — ${evaluationWarnings.join('; ')}`);
       }
       if (report.executionRationality && report.executionRationality.applicable && !report.executionRationalityReady) {
         const gaps = Array.isArray(report.criticalExecutionGaps) ? report.criticalExecutionGaps : [];
@@ -2018,7 +2023,15 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     requireAcceptanceTests: Boolean(options.requireAcceptanceTests || config.acceptance_tests_required),
   });
   if (spec) result.warnings.push(...lintPlanForCommonPitfalls(plan, spec, projectRoot, specText));
-  return { ...result, source: plan.source, tasks: plan.tasks.length, phase: phase ? phase.id : null, plan_json: hasJson ? jsonPath : null };
+  let dryVerify = null;
+  if (options.dryVerify) {
+    // OXB-009: cada verify deve estar vermelho pelo motivo certo (alvo ausente), não por comando quebrado.
+    dryVerify = require('./oxe-verify-dryrun.cjs').dryRunVerifyCommands(projectRoot, plan, { timeoutMs: options.dryVerifyTimeoutMs });
+    result.errors.push(...dryVerify.errors);
+    result.warnings.push(...dryVerify.warnings);
+    result.ok = result.errors.length === 0;
+  }
+  return { ...result, source: plan.source, tasks: plan.tasks.length, phase: phase ? phase.id : null, plan_json: hasJson ? jsonPath : null, dry_verify: dryVerify ? dryVerify.results : null };
 }
 
 // ─── Programa por fases (1.19) ───────────────────────────────────────────────

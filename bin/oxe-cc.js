@@ -5874,9 +5874,11 @@ async function main() {
     let session = null;
     let json = false;
     let maxTasksPerWave = 0;
+    let dryVerify = false;
     for (let i = 0; i < rest.length; i += 1) {
       const a = rest[i];
       if (a === '--json') json = true;
+      else if (a === '--dry-verify') dryVerify = true;
       else if (a === '--session' && rest[i + 1]) session = String(rest[++i]).replace(/\\/g, '/');
       else if (a === '--max-tasks-per-wave' && rest[i + 1]) maxTasksPerWave = Number(rest[++i]) || 0;
       else if (a === '--dir' && rest[i + 1]) dir = path.resolve(rest[++i]);
@@ -5893,7 +5895,7 @@ async function main() {
     }
     let result;
     try {
-      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave });
+      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave, dryVerify });
     } catch (err) {
       console.error(`${red}✗${reset} ${err && err.message ? err.message : err}`);
       process.exit(1);

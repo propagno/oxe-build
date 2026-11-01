@@ -201,6 +201,9 @@ export function extractCommandFromHowToVerify(howToVerify: string): string | nul
   return looksLikeShellCommand(text) ? text : null;
 }
 
+/** Bump when the rules that turn SPEC/PLAN into checks change (invalidates persisted suites). */
+export const VERIFICATION_COMPILER_VERSION = '1.20.0';
+
 export function compile(
   spec: ParsedSpecLike,
   plan: ParsedPlanLike
@@ -212,7 +215,11 @@ export function compile(
   for (const criterion of spec.criteria) {
     // Find the verify command from the task that references this criterion
     const task = plan.tasks.find((t) => t.aceite.includes(criterion.id));
-    const command = task?.verifyCommand ?? extractCommandFromHowToVerify(criterion.howToVerify);
+    // A criterion the SPEC declares manual (UAT, manual check) is never "proven" by some task's verify command:
+    // OxeVoice F1's A8 (real dictation, UAT) passed on a doc-exists check of the task that wrote the UAT script.
+    const declaredManual = MANUAL_CRITERION_RE.test(String(criterion.howToVerify || ''))
+      && !extractCommandFromHowToVerify(criterion.howToVerify);
+    const command = declaredManual ? null : (task?.verifyCommand ?? extractCommandFromHowToVerify(criterion.howToVerify));
     // Prose that cannot be executed is a manual criterion, not a shell command. The type comes from
     // the command that actually runs: prose saying "npm test" must not demand a test report from a
     // task command that never runs tests (false red seen in the 1.17 linkly benchmark).
@@ -282,7 +289,8 @@ export function compile(
     checks,
     compiled_at: new Date().toISOString(),
     spec_hash: hashObject(spec),
-    plan_hash: hashObject(plan),
+    // OXB-011: the compiler's own version is part of the cache key — a suite compiled by older rules is stale.
+    plan_hash: hashObject({ plan, compiler: VERIFICATION_COMPILER_VERSION }),
   };
 }
 
@@ -633,6 +641,8 @@ export async function verifyRun(input: {
   };
 }
 
+const MANUAL_CRITERION_RE = /\b(manual|uat|homologa\w*|inspe[cç][aã]o visual|visual inspection)\b/i;
+
 const CODE_FILE_RE = /\.(c|m)?[jt]sx?$|\.(py|go|rs|java|kt|rb|php|cs|json|ya?ml|sh)$/i;
 const OXE_INTERNAL_REF_RE = /(^|[^\w.-])\.oxe[\\/]/;
 
@@ -646,9 +656,33 @@ function referencesOxeInternals(absPath: string): boolean {
   try {
     const stat = fs.statSync(absPath);
     if (!stat.isFile() || stat.size > 1024 * 1024) return false;
-    return OXE_INTERNAL_REF_RE.test(fs.readFileSync(absPath, 'utf8'));
+    const current = fs.readFileSync(absPath, 'utf8');
+    const added = countOxeRefs(current);
+    if (added === 0) return false;
+    // Only references the run introduced count: a product that legitimately talks about `.oxe/` (OXESpace hosts OXE)
+    // already had them at HEAD (false red seen in OxeVoice F1 on shared/mcp-coverage.ts).
+    const baseline = readCommittedVersion(absPath);
+    return baseline === null ? true : added > countOxeRefs(baseline);
   } catch {
     return false;
+  }
+}
+
+function countOxeRefs(text: string): number {
+  return (text.match(new RegExp(OXE_INTERNAL_REF_RE.source, 'g')) || []).length;
+}
+
+/** The file as committed at HEAD, or null when it is untracked / there is no git. */
+function readCommittedVersion(absPath: string): string | null {
+  try {
+    const dir = path.dirname(absPath);
+    const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: dir, encoding: 'utf8', windowsHide: true });
+    if (top.status !== 0) return null;
+    const rel = path.relative(top.stdout.trim(), absPath).split(path.sep).join('/');
+    const shown = spawnSync('git', ['show', `HEAD:${rel}`], { cwd: dir, encoding: 'utf8', windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
+    return shown.status === 0 ? shown.stdout : null;
+  } catch {
+    return null;
   }
 }
 

@@ -127,6 +127,28 @@ const provider = { baseUrl: '', apiKey: '', model: '', maxTurns: 4 };
         strict_1.default.ok(events.some((e) => e.type === 'tool_denied' && e.detail?.tool === 'run_command'));
         delete process.env.OXE_SHIM_MODE;
     });
+    (0, node_test_1.test)('guarda de memória: pausa o turno até haver memória livre; desiste como env', async () => {
+        fs_1.default.rmSync(logPath, { force: true });
+        delete process.env.OXE_SHIM_MODE;
+        let free = 200 * 1024 * 1024;
+        const reads = [];
+        const gated = new claude_cli_1.ClaudeCliAdapter({
+            command: process.execPath, prefixArgs: [shimPath], minFreeMemoryMb: 1024, memoryPollMs: 5, memoryWaitMs: 2000,
+            freeMemory: () => { reads.push(free); if (reads.length === 3)
+                free = 2048 * 1024 * 1024; return free; },
+        });
+        const ws = fs_1.default.mkdtempSync(path_1.default.join(tmp, 'ws-'));
+        const ok = await new llm_task_executor_1.LlmTaskExecutor(provider, null, null, gated.createCompletion()).execute(node([{ type: 'generate_patch', targets: ['out.txt'] }]), lease(ws), 'run-1', 1);
+        strict_1.default.equal(ok.success, true, ok.output);
+        strict_1.default.ok(reads.length >= 3, 'esperou a memória voltar antes do primeiro turno');
+        const starved = new claude_cli_1.ClaudeCliAdapter({ command: process.execPath, prefixArgs: [shimPath], minFreeMemoryMb: 1024, memoryPollMs: 5, memoryWaitMs: 30, freeMemory: () => 100 * 1024 * 1024 });
+        fs_1.default.rmSync(logPath, { force: true });
+        const failed = await new llm_task_executor_1.LlmTaskExecutor(provider, null, null, starved.createCompletion()).execute(node([{ type: 'generate_patch', targets: ['out.txt'] }]), lease(ws), 'run-1', 1);
+        strict_1.default.equal(failed.success, false);
+        strict_1.default.equal(failed.failure_class, 'env');
+        strict_1.default.match(String(failed.output), /memória livre/);
+        strict_1.default.equal(shimCalls().length, 0, 'nenhum claude -p foi aberto sem memória');
+    });
     (0, node_test_1.test)('binário ausente: detect indisponível e a tentativa falha como env', async () => {
         const missing = new claude_cli_1.ClaudeCliAdapter({ command: 'oxe-no-such-claude-binary' });
         strict_1.default.equal(missing.detect().available, false);

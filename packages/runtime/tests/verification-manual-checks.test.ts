@@ -219,3 +219,23 @@ describe('verification — critérios manuais nunca viram comando', () => {
     assert.ok(report.reasons.some((r) => /without executable check/.test(r)), report.reasons.join(' | '));
   });
 });
+
+describe('critério declarado manual/UAT (OxeVoice F1, A8)', () => {
+  test('nunca é "provado" pelo verify de uma tarefa que o referencia', () => {
+    const suite = compile(
+      { objective: null, criteria: [{ id: 'A8', criterion: 'ditado real no Windows', howToVerify: 'UAT manual no Windows' }] },
+      { tasks: [{ id: 'T7', verifyCommand: 'node -e "process.exit(0)"', aceite: ['A8'] }] },
+    );
+    const check = suite.checks.find((c) => c.id === 'check-a8')!;
+    assert.equal(check.type, 'manual');
+    assert.equal(check.command, null);
+  });
+
+  test('critério com comando na SPEC continua executável mesmo citando "manual"', () => {
+    const suite = compile(
+      { objective: null, criteria: [{ id: 'A1', criterion: 'x', howToVerify: 'manual: `node --test t.js`' }] },
+      { tasks: [] },
+    );
+    assert.equal(suite.checks.find((c) => c.id === 'check-a1')!.command, 'node --test t.js');
+  });
+});

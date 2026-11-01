@@ -18,6 +18,17 @@ export interface ClaudeCliAdapterOptions {
     /** Extra attempts when the reply is not the expected JSON (default 2). */
     parseRetries?: number;
     extraArgs?: string[];
+    /**
+     * Memory gate before every turn: wait until the machine has this much free memory (MB) before spawning
+     * `claude -p`. Default `$OXE_EXECUTOR_MIN_FREE_MB` or 0 (off). Shared machines reap processes when memory runs out.
+     */
+    minFreeMemoryMb?: number;
+    /** How long a turn waits for memory before failing the attempt as `env` (default 10 min). */
+    memoryWaitMs?: number;
+    /** Free memory reader (bytes); tests inject it. */
+    freeMemory?: () => number;
+    /** Poll interval of the memory gate (default 5 s). */
+    memoryPollMs?: number;
 }
 interface Spawnable {
     file: string;
@@ -45,6 +56,8 @@ export declare class ClaudeCliAdapter implements ExecutorAdapter {
     detect(): AdapterDetection;
     createCompletion(): (opts: StreamCompletionOptions) => Promise<CompletionResponse>;
     private complete;
+    /** Pauses the executor while free memory is below the floor; gives up (env failure) after `memoryWaitMs`. */
+    private waitForMemory;
     private runOnce;
 }
 export {};

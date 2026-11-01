@@ -147,6 +147,29 @@ describe('ExecutorAdapter claude-cli (bridge in-process)', () => {
     delete process.env.OXE_SHIM_MODE;
   });
 
+  test('guarda de memória: pausa o turno até haver memória livre; desiste como env', async () => {
+    fs.rmSync(logPath, { force: true });
+    delete process.env.OXE_SHIM_MODE;
+    let free = 200 * 1024 * 1024;
+    const reads: number[] = [];
+    const gated = new ClaudeCliAdapter({
+      command: process.execPath, prefixArgs: [shimPath], minFreeMemoryMb: 1024, memoryPollMs: 5, memoryWaitMs: 2_000,
+      freeMemory: () => { reads.push(free); if (reads.length === 3) free = 2048 * 1024 * 1024; return free; },
+    });
+    const ws = fs.mkdtempSync(path.join(tmp, 'ws-'));
+    const ok = await new LlmTaskExecutor(provider, null, null, gated.createCompletion()).execute(node([{ type: 'generate_patch', targets: ['out.txt'] }]), lease(ws), 'run-1', 1);
+    assert.equal(ok.success, true, ok.output);
+    assert.ok(reads.length >= 3, 'esperou a memória voltar antes do primeiro turno');
+
+    const starved = new ClaudeCliAdapter({ command: process.execPath, prefixArgs: [shimPath], minFreeMemoryMb: 1024, memoryPollMs: 5, memoryWaitMs: 30, freeMemory: () => 100 * 1024 * 1024 });
+    fs.rmSync(logPath, { force: true });
+    const failed = await new LlmTaskExecutor(provider, null, null, starved.createCompletion()).execute(node([{ type: 'generate_patch', targets: ['out.txt'] }]), lease(ws), 'run-1', 1);
+    assert.equal(failed.success, false);
+    assert.equal(failed.failure_class, 'env');
+    assert.match(String(failed.output), /memória livre/);
+    assert.equal(shimCalls().length, 0, 'nenhum claude -p foi aberto sem memória');
+  });
+
   test('binário ausente: detect indisponível e a tentativa falha como env', async () => {
     const missing = new ClaudeCliAdapter({ command: 'oxe-no-such-claude-binary' });
     assert.equal(missing.detect().available, false);

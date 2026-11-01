@@ -116,6 +116,8 @@ export declare function looksLikeShellCommand(text: string): boolean;
  * and free text are never executed.
  */
 export declare function extractCommandFromHowToVerify(howToVerify: string): string | null;
+/** Bump when the rules that turn SPEC/PLAN into checks change (invalidates persisted suites). */
+export declare const VERIFICATION_COMPILER_VERSION = "1.20.0";
 export declare function compile(spec: ParsedSpecLike, plan: ParsedPlanLike): AcceptanceCheckSuite;
 export declare function runCheck(check: AcceptanceCheck, cwd: string, timeoutMs?: number): Promise<CheckResult>;
 export declare function runSuite(suite: AcceptanceCheckSuite, cwd: string, timeoutMs?: number): Promise<CheckResult[]>;
