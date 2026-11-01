@@ -42,9 +42,18 @@ function runCommand(command, cwd, timeoutMs) {
   };
 }
 
-/** A failure counts as "red for the right reason" when it complains about something missing that the task creates. */
-function classifyFailure(output, targets) {
+// A test runner's own assertion failure (not a tool/config error): the right red for a task that FIXES existing code.
+const ASSERTION_RE = /AssertionError|expected .+ to (be|equal|deeply equal|match|contain|have)|Expected:|toEqual|toBe\(|^\s*(FAIL|×|✗|not ok)\s/im;
+
+/**
+ * "Red for the right reason": the failure complains about something the task creates (missing target) or, when the
+ * task changes files that already exist, the test runner's own assertions fail (the behavior is not there yet).
+ */
+function classifyFailure(output, targets, options = {}) {
   const text = String(output || '');
+  if (options.targetsExist && ASSERTION_RE.test(text) && !/Must use|Unknown (option|argument)|command not found|is not recognized|Cannot find module '(?!\.)/i.test(text)) {
+    return 'assertion_red';
+  }
   if (!MISSING_TARGET_RE.test(text)) return 'broken_command';
   const mentioned = targets.some((file) => {
     const base = path.basename(file).replace(/\.(c|m)?[jt]sx?$/, '');
@@ -71,7 +80,7 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
     let verdict;
     if (run.timedOut) verdict = 'timeout';
     else if (run.code === 0) verdict = 'already_green';
-    else verdict = classifyFailure(run.output, targets);
+    else verdict = classifyFailure(run.output, targets, { targetsExist: targets.length > 0 && targets.every((f) => require('fs').existsSync(path.resolve(projectRoot, f))) });
     results.push({ task: task.id, verdict, code: run.code, excerpt });
     if (verdict === 'broken_command') errors.push(`${task.id}: comando de verificação falha por outro motivo que não o alvo ausente — corrija o plano antes de executar: ${excerpt}`);
     else if (verdict === 'timeout') errors.push(`${task.id}: comando de verificação passou de ${Math.round(timeoutMs / 1000)}s sem terminar`);

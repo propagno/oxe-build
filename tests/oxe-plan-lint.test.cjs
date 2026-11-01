@@ -225,3 +225,16 @@ describe('gate por tarefa e dependência externa (1.20c, OXB-005)', () => {
     }
   });
 });
+
+describe('replan: tarefas concluídas não disputam escopo (OXB-015)', () => {
+  it('T6 done e T8 nova na mesma onda podem tocar o mesmo arquivo', () => {
+    const plan = planJson.planJsonToParsedPlan({
+      schema_version: 1,
+      tasks: [
+        { id: 'T6', title: 'antiga', wave: 1, files: ['src/x.tsx'], done: true, verify: { commands: ['x'] } },
+        { id: 'T8', title: 'rework', wave: 1, files: ['src/x.tsx'], verify: { commands: ['x'] } },
+      ],
+    });
+    assert.doesNotMatch(planJson.lintPlan({ plan }).errors.join('\n'), /escrevem src\/x\.tsx/);
+  });
+});

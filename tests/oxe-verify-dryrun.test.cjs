@@ -44,3 +44,12 @@ describe('dry-run dos comandos de verificação (vermelho pelo motivo certo)', (
     assert.match(result.warnings.join('\n'), /T3: verificação já passa antes da tarefa/);
   });
 });
+
+describe('tarefa de correção: falha de asserção com alvo existente é vermelho certo (OXB-016)', () => {
+  it('assertion_red só quando os alvos existem; erro de ferramenta continua broken_command', () => {
+    assert.equal(classifyFailure('AssertionError: expected [ …(2) ] to deeply equal []', ['src/hook.ts'], { targetsExist: true }), 'assertion_red');
+    assert.equal(classifyFailure(' FAIL  tests/a.test.ts > x\n× falhou', ['src/a.ts'], { targetsExist: true }), 'assertion_red');
+    assert.equal(classifyFailure('AssertionError: expected 1 to be 2', ['src/hook.ts'], { targetsExist: false }), 'broken_command');
+    assert.equal(classifyFailure('X [ERROR] Must use "outdir" when there are multiple input files\nAssertionError', ['a.ts'], { targetsExist: true }), 'broken_command');
+  });
+});

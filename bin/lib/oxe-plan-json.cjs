@@ -188,7 +188,8 @@ function lintPlan(input) {
 
   const waves = new Map();
   for (const task of tasks) {
-    if (task.wave == null) continue;
+    // Uma tarefa concluída não roda de novo: num replan ela não disputa escopo nem lugar na onda (OXB-015).
+    if (task.wave == null || task.done) continue;
     if (!waves.has(task.wave)) waves.set(task.wave, []);
     waves.get(task.wave).push(task);
   }

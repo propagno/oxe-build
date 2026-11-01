@@ -143,3 +143,11 @@ Hipóteses a confirmar com dados das fases:
 - **Status:** resolvido.
 - **Evidência:** o CR-03 do OxeVoice ("eslint react-hooks/refs com zero warnings") não pertence a nenhum A*. Como o teste de aceite congelado exigia `criterion` e gerava um check por critério, o CR nunca poderia fechar por evidência.
 - **Correção:** a entrada `acceptance_tests[]` pode ter um `id` próprio (check `check-accept-<id>`). O `criterion` passa a ser opcional quando há `id` + `resolves`. O lock, o reconcile do CR e o schema usam `id || criterion`.
+
+## OXB-015: num replan, tarefas concluídas disputavam escopo com as novas
+
+- **Status:** resolvido. O lint ignora as tarefas `done` na checagem de escopo e de onda, porque elas não rodam de novo.
+
+## OXB-016: o dry-verify não reconhecia o vermelho certo de uma tarefa de correção
+
+- **Status:** resolvido. Quando os alvos já existem (correção, não criação), uma falha de asserção do runner é `assertion_red`, que é vermelho pelo motivo certo. Erros de ferramenta continuam sendo `broken_command`.
