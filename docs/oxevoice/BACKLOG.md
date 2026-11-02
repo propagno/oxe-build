@@ -186,3 +186,33 @@ Hipóteses a confirmar com dados das fases:
 A CI do oxespace reprovou 9 testes de **governança do repositório** (`design-lint` com ratchets de primitivos, tokens e motion; `i18n-catalog`; `mcp-coverage`; `fs-allowlist`), e nenhum de voz. O plano só exercitava os aceites da feature.
 
 **Lição:** num repositório com suíte de governança, o phase gate é **a suíte do repo**, normalmente via CI, porque a local não cabe na máquina. Os ratchets do repo também deveriam entrar no **contexto do executor**, por exemplo um `## Regras do repositório` gerado de `design-lint`/`AGENTS.md`/`CLAUDE.md`, para que ele escreva certo na primeira vez.
+
+## OXB-022: o `plan lint` aprova uma tarefa que o preflight do execute bloqueia
+
+- **Status:** aberto.
+- **Evidência:** no rework de governança da F1, a T12 (só `voice.css`) passou no `plan lint --dry-verify`, mas o `runtime execute` parou no preflight com `execution_rationality: IMPLEMENTATION-PACK.json tarefa T12 sem symbols`. Uma tarefa só de CSS, config ou docs não tem symbol de código para declarar, então a regra força juntá-la a outra tarefa (T12 foi fundida na T13).
+- **Fora da caixa:** o lint e o preflight devem partilhar **um único validador** (`validatePack`), para que nada passe num e falhe no outro. Os `symbols` passam a ser exigidos só quando `mutation_scope: code` e o arquivo é de código (`.ts/.js/.tsx/.cjs`). Para estilo, config e docs, valem `selectors`/`keys` opcionais, que o contract-exports ignora.
+
+## OXB-023: não há teto de turnos por run
+
+- **Status:** aberto.
+- **Evidência:** o coordenador fixou um teto de 20 turnos `claude -p` para o rework. O runtime só tem `--max-turns` por tentativa, com `max_retries = 2` fixo no compile (`default_max_retries`). No pior caso, 3 tarefas × 3 tentativas × 6 turnos dariam 54 turnos, e o teto ficou a cargo de um monitor manual dos eventos `ExecutorUsage`.
+- **Fora da caixa:** `--budget-turns N` / `--budget-usd X` no execute, e `budget` no PLAN.json, contados no journal. Ao atingir o teto, o scheduler para **entre tentativas** com `BudgetExhausted` (gate ao planner), sem matar uma tentativa no meio. Também `--max-retries` na CLI, e o `oxe-cc runtime status` mostrando o consumo contra o teto.
+
+## OXB-024: `runtime compile/execute` cria arquivos de init como efeito colateral
+
+- **Status:** aberto (baixo).
+- **Evidência:** cada `runtime compile`/`execute` imprime `init .oxe/README.md` e tenta recriar `STATE.md`/`config.json`. Num projeto já inicializado, um comando de runtime não deveria escrever arquivos de bootstrap.
+- **Correção proposta:** só o `init-oxe` faz bootstrap. O runtime exige um `.oxe` válido e falha com a dica `oxe-cc init-oxe`.
+
+## OXB-025: execute concluído não marca `done` no PLAN.json
+
+- **Status:** aberto.
+- **Evidência:** a T13 e a T14 passaram no verify e ganharam checkpoint commit, mas continuaram sem `done: true` no PLAN.json. No compile seguinte, que só acrescentava a T15 do CR-13, elas voltaram ao grafo (3 nós em vez de 1). O `plan lint` avisou que a verificação delas "já passa antes da tarefa", que é o sintoma. Sem a correção manual, a run teria pago de novo duas tarefas prontas.
+- **Correção proposta:** ao fechar uma tarefa com verify verde, o runtime grava `done: true`, `done_at` e `done_commit` (o checkpoint) no PLAN.json, sob lock. O compile também passa a ignorar tarefas cujo checkpoint está no histórico e cujo verify continua verde. Quando a verificação de uma tarefa pendente já passa e ela tem checkpoint, o lint vira erro com a dica "marcar done".
+
+## OXB-026: estourar o limite de turnos descarta o trabalho sem rodar o verify
+
+- **Status:** aberto (alto custo).
+- **Evidência:** na T15 (CR-13), a tentativa 1 terminou com `completed_by: turn_limit_exhausted`, `failure_class: llm` e a mensagem do próprio executor: "All 35 tests pass across the five files. Running the final verification command…". O diff estava no working tree, mas o scheduler agendou o retry **sem rodar o verify**. A tentativa 2 recomeçou um trabalho já concluído e pagou até 5 turnos a mais, chegando exatamente ao teto de 20 do coordenador.
+- **Fora da caixa:** o verify é o juiz, não o fim de conversa do LLM. Quando um turn limit termina com diff no escopo, o scheduler roda o verify antes de classificar a tentativa: verde conclui a tarefa (`completed_by: verify_after_turn_limit`), vermelho entra no retry informado. Também vale reservar o último turno para "pare e reporte", em vez de um turno de verificação redundante; o executor não precisa rodar o comando final, o runtime roda.
