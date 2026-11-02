@@ -51,6 +51,10 @@ function validatePlanJson(doc) {
     if (task.decisions != null && !isStringArray(task.decisions, DECISION_RE)) errors.push(`${at}.decisions: lista de D-<n>`);
     if (task.complexity != null && !COMPLEXITY.has(task.complexity)) errors.push(`${at}.complexity: XS|S|M|L|XL`);
     if (task.done != null && typeof task.done !== 'boolean') errors.push(`${at}.done: boolean`);
+    if (task.done_at != null && typeof task.done_at !== 'string') errors.push(`${at}.done_at: data ISO`);
+    if (task.done_commit != null && typeof task.done_commit !== 'string') errors.push(`${at}.done_commit: sha do checkpoint`);
+    if (task.commit != null && (typeof task.commit !== 'string' || !task.commit.trim())) errors.push(`${at}.commit: mensagem do checkpoint`);
+    if (task.kind != null && !['code', 'spike'].includes(task.kind)) errors.push(`${at}.kind: code | spike`);
     if (task.gate != null && (typeof task.gate !== 'object' || Array.isArray(task.gate) || typeof task.gate.reason !== 'string')) errors.push(`${at}.gate: { kind?, reason }`);
     if (task.blocked_by != null && !isStringArray(task.blocked_by)) errors.push(`${at}.blocked_by: lista de dependências externas`);
     if (task.verify != null) {
@@ -74,6 +78,15 @@ function validatePlanJson(doc) {
       if (entry.resolves != null && !isStringArray(entry.resolves, /^CR-\d+$/)) errors.push(`${at}.resolves: lista de CR-NN`);
       if (entry.version != null && !(Number.isInteger(entry.version) && entry.version >= 1)) errors.push(`${at}.version: inteiro ≥ 1`);
     });
+  }
+  if (doc.budget != null) {
+    const b = doc.budget;
+    if (typeof b !== 'object' || Array.isArray(b)) errors.push('$.budget: { turns?, usd?, max_retries? }');
+    else {
+      if (b.turns != null && !(Number.isInteger(b.turns) && b.turns > 0)) errors.push('$.budget.turns: inteiro > 0');
+      if (b.usd != null && !(typeof b.usd === 'number' && b.usd > 0)) errors.push('$.budget.usd: número > 0');
+      if (b.max_retries != null && !(Number.isInteger(b.max_retries) && b.max_retries >= 0)) errors.push('$.budget.max_retries: inteiro ≥ 0');
+    }
   }
   if (doc.phase_gates != null) {
     if (!Array.isArray(doc.phase_gates)) errors.push('$.phase_gates: lista');
@@ -108,6 +121,9 @@ function planJsonToParsedPlan(doc) {
       meta: {
         source: 'PLAN.json',
         complexity: task.complexity || null,
+        ...(typeof task.commit === 'string' && task.commit.trim() ? { commit: task.commit.trim() } : {}),
+        ...(task.done_commit ? { done_commit: task.done_commit } : {}),
+        ...(task.kind ? { kind: task.kind } : {}),
         ...(task.gate ? { gate: task.gate } : {}),
         ...(Array.isArray(task.blocked_by) && task.blocked_by.length ? { blocked_by: [...task.blocked_by] } : {}),
       },
@@ -130,7 +146,9 @@ function planJsonToParsedPlan(doc) {
   }));
   // Gates do projeto (1.21, OXB-020): rodam uma vez no verify da fase; normalizados por oxe-phase-gates.cjs.
   const phaseGates = Array.isArray(doc.phase_gates) ? doc.phase_gates.map((gate) => ({ ...gate })) : [];
-  return { tasks, waves, totalTasks: tasks.length, source: 'PLAN.json', phase: doc.phase || null, acceptanceTests, phaseGates };
+  // Teto da execução (1.21, OXB-023): turnos/US$ por run e tentativas por tarefa.
+  const budget = doc.budget && typeof doc.budget === 'object' && !Array.isArray(doc.budget) ? { ...doc.budget } : null;
+  return { tasks, waves, totalTasks: tasks.length, source: 'PLAN.json', phase: doc.phase || null, acceptanceTests, phaseGates, budget };
 }
 
 /**
@@ -152,6 +170,32 @@ function readPlanArtifact(planMdPath, planMdText, parseMarkdown) {
   }
   const parsed = parseMarkdown(planMdText || '');
   return { ...parsed, source: 'PLAN.md' };
+}
+
+/**
+ * OXB-025: a task that finished (verify green) is marked `done` in PLAN.json with when and which checkpoint, so the
+ * next compile skips it instead of paying for it again. Atomic write; the rest of the document is kept as is.
+ * @returns {boolean} whether PLAN.json changed
+ */
+function markPlanTaskDone(planMdPath, taskId, info = {}) {
+  const jsonPath = planJsonPathFor(planMdPath);
+  if (!jsonPath || !fs.existsSync(jsonPath)) return false;
+  let doc;
+  try {
+    doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+  } catch {
+    return false;
+  }
+  const task = Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
+  if (!task) return false;
+  if (task.done === true && (!info.commit || task.done_commit === info.commit)) return false;
+  task.done = true;
+  task.done_at = info.at || new Date().toISOString();
+  if (info.commit) task.done_commit = info.commit;
+  const tmp = `${jsonPath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+  fs.renameSync(tmp, jsonPath);
+  return true;
 }
 
 function hasCycle(tasks) {
@@ -292,12 +336,21 @@ function lintPlan(input) {
         errors.push(`${task.id}: tarefa mutável sem entrada no IMPLEMENTATION-PACK`);
       }
     }
+    // OXB-022: the very rules the execute preflight applies — nothing passes here and blocks there.
+    const { validatePackTask } = require('./oxe-rationality.cjs');
+    const pending = new Set(tasks.filter((task) => !task.done).map((task) => task.id));
+    for (const entry of pack) {
+      const id = String((entry && (entry.id || entry.task_id)) || '').trim();
+      if (id && !pending.has(id)) continue;
+      errors.push(...validatePackTask(entry).gaps);
+    }
   }
 
   return { ok: errors.length === 0, errors, warnings };
 }
 
 module.exports = {
+  markPlanTaskDone,
   planJsonPathFor,
   validatePlanJson,
   planJsonToParsedPlan,

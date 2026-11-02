@@ -208,6 +208,9 @@ function pack(phase) {
     tasks: phase.tasks.map((t) => ({
       id: t.id, mode: 'mutating', exact_paths: t.files, write_set: 'closed',
       symbols: t.symbols.map(([file, name]) => ({ kind: 'function', name, path: file })),
+      // The same pack rules the execute preflight applies (OXB-022): a contract and the checks it must pass.
+      contracts: [{ name: `${t.id}-contract`, input_shape: 'acceptance tests', output_shape: 'exports declared in symbols', invariants: ['frozen acceptance unchanged'], not_allowed: ['editing acceptance tests'] }],
+      expected_checks: ['acceptance tests'],
     })),
   };
 }

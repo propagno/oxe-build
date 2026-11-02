@@ -42,6 +42,8 @@ export interface LlmExecutorEvent {
 
 export interface LlmExecuteOptions {
   previousError?: string | null;
+  /** Cap from the run budget (OXB-023): the attempt never uses more turns than the run has left. */
+  maxTurns?: number | null;
 }
 
 export interface LlmTaskExecutorOptions {
@@ -66,6 +68,11 @@ export interface ExecutorUsage {
   tools: Record<string, number>;
   cost_usd: number | null;
 }
+
+/** Sent before the last turn (OXB-026): finishing and reporting beats spending it on a verification the runtime repeats. */
+export const LAST_TURN_NOTICE =
+  'Last turn: finish what is left and call finish_task with a short summary. Do not spend this turn on a final ' +
+  'verification run — the runtime runs the task verify itself and judges the work by it.';
 
 const DEFAULT_SYSTEM_PROMPT =
   'You are a precise software engineering agent. Use the tools provided to complete the task. ' +
@@ -98,7 +105,10 @@ export class LlmTaskExecutor implements TaskExecutor {
     // Only the tools offered for this node's actions may run; the model can still name others.
     const allowedTools = new Set(tools.map((tool) => tool.function.name));
     const cwd = lease.root_path;
-    const maxTurns = this.provider.maxTurns ?? 10;
+    const providerTurns = this.provider.maxTurns ?? 10;
+    const maxTurns = typeof options.maxTurns === 'number' && options.maxTurns > 0
+      ? Math.min(providerTurns, Math.floor(options.maxTurns))
+      : providerTurns;
     const systemPrompt = this.provider.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
 
     const messages: ChatMessage[] = [
@@ -128,6 +138,10 @@ export class LlmTaskExecutor implements TaskExecutor {
     let turn = 0;
     for (; turn < maxTurns; turn++) {
       this.emit({ type: 'turn_start', nodeId: node.id, attempt, detail: { turn } });
+      // OXB-026: the last turn finishes and reports; the runtime runs the task's verify itself afterwards.
+      if (maxTurns > 1 && turn === maxTurns - 1 && turn > 0) {
+        messages.push({ role: 'user', content: LAST_TURN_NOTICE });
+      }
 
       let response;
       try {

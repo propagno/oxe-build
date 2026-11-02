@@ -35,6 +35,7 @@ export const EVENT_TYPES = [
   'ChangeRequested',
   'ChangeResolved',
   'VerifyCommandSuspect',
+  'BudgetExhausted',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

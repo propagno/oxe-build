@@ -10,6 +10,15 @@
     "schema_version": { "const": 1 },
     "phase": { "type": ["string", "null"], "pattern": "^F\\d+$", "description": "Fase do PROGRAM.json que este plano implementa." },
     "summary": { "type": "string" },
+    "budget": {
+      "description": "Teto da execução (1.21, OXB-023). turns/usd valem para a run inteira, somados entre execuções; o scheduler para entre tentativas (BudgetExhausted) e limita a próxima tentativa aos turnos que restam. max_retries substitui o padrão (2) por tarefa. As flags --budget-turns/--budget-usd/--max-retries vencem.",
+      "type": "object",
+      "properties": {
+        "turns": { "type": "integer", "minimum": 1 },
+        "usd": { "type": "number", "exclusiveMinimum": 0 },
+        "max_retries": { "type": "integer", "minimum": 0 }
+      }
+    },
     "phase_gates": {
       "description": "Gates do projeto (typecheck, lint, suíte de governança, CI) que rodam UMA vez no verify da fase, não por tarefa. Um gate vermelho abre um CR constraint automático com a saída; ele fecha quando o mesmo gate fica verde (1.21, OXB-020). Também aceitos em .oxe/config.json phase_gates.",
       "type": "array",

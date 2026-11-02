@@ -27,6 +27,8 @@ export interface LlmExecutorEvent {
 }
 export interface LlmExecuteOptions {
     previousError?: string | null;
+    /** Cap from the run budget (OXB-023): the attempt never uses more turns than the run has left. */
+    maxTurns?: number | null;
 }
 export interface LlmTaskExecutorOptions {
     /** Task body, pack contract, workspace snapshot… rendered into the node prompt. */
@@ -45,6 +47,8 @@ export interface ExecutorUsage {
     tools: Record<string, number>;
     cost_usd: number | null;
 }
+/** Sent before the last turn (OXB-026): finishing and reporting beats spending it on a verification the runtime repeats. */
+export declare const LAST_TURN_NOTICE: string;
 export declare class LlmTaskExecutor implements TaskExecutor {
     private readonly provider;
     private readonly registry?;

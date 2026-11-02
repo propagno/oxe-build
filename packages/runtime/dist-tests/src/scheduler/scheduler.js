@@ -429,6 +429,19 @@ class Scheduler {
                     this.blockNode(nodeId, ctx, status, blocked, 'pending_gate', gateId);
                     return;
                 }
+                // OXB-023: the run's turn/cost ceiling is checked before every attempt, never in the middle of one.
+                const budgetReason = ctx.budget?.exhausted() ?? null;
+                if (budgetReason) {
+                    this.emit(ctx, {
+                        type: 'BudgetExhausted',
+                        work_item_id: nodeId,
+                        attempt_id: attemptId,
+                        payload: { reason: budgetReason, attempt_number: attempt },
+                    });
+                    this.blockNode(nodeId, ctx, status, blocked, 'budget_exhausted', budgetReason);
+                    return;
+                }
+                const turnsLeft = ctx.budget?.remainingTurns() ?? null;
                 const wsReq = {
                     work_item_id: nodeId,
                     attempt_number: attempt,
@@ -444,8 +457,18 @@ class Scheduler {
                     attempt_id: attemptId,
                     payload: { workspace_id: lease.workspace_id, strategy: lease.strategy },
                 });
-                lastResult = await this.executeNode(node, lease, ctx, attempt, attemptId, { previousError: lastError });
-                if (lastResult.success) {
+                lastResult = await this.executeNode(node, lease, ctx, attempt, attemptId, {
+                    previousError: lastError,
+                    ...(turnsLeft != null ? { maxTurns: turnsLeft } : {}),
+                });
+                // OXB-026: the verify judges the work, not the end of the LLM conversation. An attempt that ran out of turns
+                // after writing in its scope is verified before it is classified: green completes the task, red goes to the
+                // informed retry. Discarding it unverified paid a whole second attempt for finished work.
+                const turnLimitWithWork = !lastResult.success
+                    && lastResult.completed_by === 'turn_limit_exhausted'
+                    && Boolean(node.verify?.command)
+                    && (lastResult.evidence?.length ?? 0) > 0;
+                if (lastResult.success || turnLimitWithWork) {
                     const verifyResult = await this.verifyNode(node, lease, ctx, attemptId, attempt);
                     if (verifyResult && verifyResult.status === 'failed') {
                         // Informed retry: the next attempt sees the command, the reason and the output — not just "failed".
@@ -478,7 +501,11 @@ class Scheduler {
                             type: 'WorkItemCompleted',
                             work_item_id: nodeId,
                             attempt_id: attemptId,
-                            payload: { attempt_number: attempt, evidence: lastResult.evidence },
+                            payload: {
+                                attempt_number: attempt,
+                                evidence: lastResult.evidence,
+                                ...(turnLimitWithWork ? { completed_by: 'verify_after_turn_limit' } : {}),
+                            },
                         });
                         status.set(nodeId, 'completed');
                         completed.push(nodeId);

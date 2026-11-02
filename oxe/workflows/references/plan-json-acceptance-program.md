@@ -79,3 +79,20 @@ Num repositório com suíte própria (typecheck, lint, testes de governança com
   - os títulos dos testes de governança.
 
   `config.repo_rules.tests` acrescenta arquivos, `repo_rules.sources` acrescenta outros markdowns, e `repo_rules.disabled: true` desliga.
+
+## Execução econômica (1.21)
+
+- **Orçamento por run:** `runtime execute --budget-turns N [--budget-usd X]`, ou `"budget": {"turns": 20, "usd": 5, "max_retries": 1}` no PLAN.json. As flags vencem.
+  - O ledger `.oxe/runs/<run>.budget.json` soma o uso entre execuções da mesma run.
+  - O scheduler confere o orçamento **antes de cada tentativa** e limita a próxima aos turnos que restam, então a run nunca passa do teto de turnos. Ao esgotar, emite `BudgetExhausted` e bloqueia a tarefa.
+  - Para continuar, peça OK ao dono do teto. Não faça um reset silencioso: `--budget-reset` só com aprovação.
+  - `--max-retries N` substitui o padrão (2) por tarefa.
+- **Turn limit não descarta trabalho:** quando a tentativa esgota os turnos depois de escrever no escopo, o runtime roda o verify da tarefa antes de classificá-la. Se o verify passar, a tarefa conclui (`completed_by: verify_after_turn_limit`); se reprovar, entra no retry informado. No último turno, o executor é instruído a fechar e reportar.
+- **`done` persistido:** cada tarefa concluída ganha `done`, `done_at` e `done_commit` no PLAN.json, e o próximo compile a pula.
+  - Uma tarefa pendente com checkpoint (`OXE-Task: Tn`) e verify já verde é **erro** no `plan lint --dry-verify`. A correção é `oxe-cc plan done Tn`.
+- **Convenção de commit do checkpoint:** `commit_convention` no `.oxe/config.json`:
+  - os campos são `template`, `type`, `scope`, `pattern`, `trailers` e `require_task_message`;
+  - a mensagem própria de cada tarefa vai em `"commit"` no PLAN.json, escrita pelo planner no idioma e na convenção do projeto;
+  - todo checkpoint leva o trailer `OXE-Task: Tn`;
+  - o `plan lint` valida o `pattern`.
+- **Pack:** o `plan lint` e o preflight usam o mesmo validador. `symbols` só é exigido quando a tarefa escreve um arquivo de código; tarefas de CSS, config ou docs não precisam declarar symbols.

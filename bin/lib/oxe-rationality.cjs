@@ -47,6 +47,43 @@ function normalizeTaskMode(value) {
   return mode;
 }
 
+const PACK_MODES = new Set(['mutating', 'docs_only', 'not_applicable', 'external', 'docs-only']);
+/** Files whose public surface `symbols` describe; styles, config and docs have none to declare (OXB-022). */
+const CODE_FILE_RE = /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|cs|rb|php|swift|scala|vue|svelte)$/i;
+
+/**
+ * One IMPLEMENTATION-PACK task, checked by the same rules in `plan lint` and in the execute preflight (OXB-022:
+ * the lint approved a CSS-only task that the preflight then blocked for missing `symbols`). `symbols` is required
+ * only when the task writes a code file.
+ * @returns {{ id: string, mutating: boolean, gaps: string[] }}
+ */
+function validatePackTask(task) {
+  const gaps = [];
+  const id = String(task && task.id || task && task.task_id || '').trim();
+  if (!id) return { id: '', mutating: false, gaps: ['IMPLEMENTATION-PACK.json com task sem id'] };
+  const mode = normalizeTaskMode(task && task.mode);
+  const exactPaths = Array.isArray(task && task.exact_paths) ? task.exact_paths.map((entry) => String(entry || '').trim()).filter(Boolean) : [];
+  const symbols = Array.isArray(task && task.symbols) ? task.symbols : [];
+  const contracts = Array.isArray(task && task.contracts) ? task.contracts : [];
+  const expectedChecks = Array.isArray(task && task.expected_checks) ? task.expected_checks : [];
+  const openGaps = Array.isArray(task && task.critical_gaps) ? task.critical_gaps : [];
+  if (!PACK_MODES.has(mode)) gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} com mode inválido: ${mode}`);
+  if (task && task.ready === false) gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} marcada como not ready`);
+  if (openGaps.length) gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} com critical_gaps abertos`);
+  const mutating = isMutatingMode(mode);
+  if (mutating) {
+    if (!exactPaths.length) gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} sem exact_paths`);
+    if (exactPaths.some((entry) => entry.includes('...'))) gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} com exact_paths ambíguos (...)`);
+    if (String(task && task.write_set || '').trim().toLowerCase() !== 'closed') gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} com write_set aberto`);
+    if (!symbols.length && exactPaths.some((entry) => CODE_FILE_RE.test(entry))) {
+      gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} sem symbols (escreve arquivo de código: ${exactPaths.filter((e) => CODE_FILE_RE.test(e)).slice(0, 3).join(', ')})`);
+    }
+    if (!contracts.length) gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} sem contracts`);
+    if (!expectedChecks.length) gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} sem expected_checks`);
+  }
+  return { id, mutating, gaps };
+}
+
 function isMutatingMode(mode) {
   return !new Set(['docs_only', 'not_applicable', 'external', 'docs-only']).has(normalizeTaskMode(mode));
 }
@@ -133,7 +170,6 @@ function summarizeImplementationPack(filePath, planTasks) {
   const data = parsed.data && typeof parsed.data === 'object' ? parsed.data : {};
   const tasks = Array.isArray(data.tasks) ? data.tasks : [];
   const byId = new Map(tasks.map((task) => [String(task && task.id || task && task.task_id || '').trim(), task]).filter((entry) => entry[0]));
-  const allowedModes = new Set(['mutating', 'docs_only', 'not_applicable', 'external', 'docs-only']);
   for (const planTask of planTasks) {
     if (!byId.has(planTask.id)) {
       criticalGaps.push(`IMPLEMENTATION-PACK.json sem contrato para ${planTask.id}`);
@@ -141,47 +177,9 @@ function summarizeImplementationPack(filePath, planTasks) {
   }
   let mutatingTasks = 0;
   for (const task of tasks) {
-    const id = String(task && task.id || task && task.task_id || '').trim();
-    const mode = normalizeTaskMode(task && task.mode);
-    const exactPaths = Array.isArray(task && task.exact_paths) ? task.exact_paths.map((entry) => String(entry || '').trim()).filter(Boolean) : [];
-    const symbols = Array.isArray(task && task.symbols) ? task.symbols : [];
-    const contracts = Array.isArray(task && task.contracts) ? task.contracts : [];
-    const expectedChecks = Array.isArray(task && task.expected_checks) ? task.expected_checks : [];
-    const gaps = Array.isArray(task && task.critical_gaps) ? task.critical_gaps : [];
-    if (!id) {
-      criticalGaps.push('IMPLEMENTATION-PACK.json com task sem id');
-      continue;
-    }
-    if (!allowedModes.has(mode)) {
-      criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} com mode inválido: ${mode}`);
-    }
-    if (task && task.ready === false) {
-      criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} marcada como not ready`);
-    }
-    if (gaps.length) {
-      criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} com critical_gaps abertos`);
-    }
-    if (isMutatingMode(mode)) {
-      mutatingTasks += 1;
-      if (!exactPaths.length) {
-        criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} sem exact_paths`);
-      }
-      if (exactPaths.some((entry) => entry.includes('...'))) {
-        criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} com exact_paths ambíguos (...)`);
-      }
-      if (String(task && task.write_set || '').trim().toLowerCase() !== 'closed') {
-        criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} com write_set aberto`);
-      }
-      if (!symbols.length) {
-        criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} sem symbols`);
-      }
-      if (!contracts.length) {
-        criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} sem contracts`);
-      }
-      if (!expectedChecks.length) {
-        criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} sem expected_checks`);
-      }
-    }
+    const checked = validatePackTask(task);
+    if (checked.mutating) mutatingTasks += 1;
+    criticalGaps.push(...checked.gaps);
   }
   if (data.ready === false) {
     criticalGaps.push('IMPLEMENTATION-PACK.json com ready=false');
@@ -546,6 +544,7 @@ function buildExecutionRationality(paths = {}) {
 }
 
 module.exports = {
+  validatePackTask,
   buildExecutionRationality,
   fixtureTaskIds,
   parsePlanTasks,

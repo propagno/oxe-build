@@ -514,6 +514,7 @@ function createAdapterExecutor(runtime, projectRoot, activeSession, options, get
         work_item_id: event.nodeId,
         payload: { adapter: adapterId, attempt: event.attempt, ...(event.detail || {}) },
       });
+      if (typeof options.onUsage === 'function') options.onUsage(event);
     }
     if (typeof options.onProgress === 'function') options.onProgress(event);
   };
@@ -576,6 +577,7 @@ function normalizeRuntimeEventType(type) {
     ChangeRequested: 'ChangeRequested',
     ChangeResolved: 'ChangeResolved',
     VerifyCommandSuspect: 'VerifyCommandSuspect',
+    BudgetExhausted: 'BudgetExhausted',
   };
   if (directMap[raw]) return directMap[raw];
   const lower = raw.toLowerCase();
@@ -1264,9 +1266,17 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
   // Auto-wire LlmTaskExecutor (via adapter) if providerConfig or adapter is supplied
   let executor = options.executor || null;
   let usageRunId = null;
+  // 1.21 (OXB-023): the run's turn/cost ledger, fed by every attempt's usage.
+  const budgetLib = require('./oxe-budget.cjs');
+  let budgetLedger = null;
+  const onUsage = (event) => {
+    if (!budgetLedger || !event || event.type !== 'executor_usage') return;
+    const detail = event.detail || {};
+    budgetLib.recordUsage(projectRoot, budgetLedger, { turns: detail.turns, cost_usd: detail.cost_usd, task: event.nodeId, attempt: event.attempt });
+  };
   if (!executor && (options.providerConfig || options.adapter)) {
     if (typeof runtime.LlmTaskExecutor !== 'function') throw new Error('Runtime não exporta LlmTaskExecutor.');
-    executor = createAdapterExecutor(runtime, projectRoot, activeSession, options, () => usageRunId);
+    executor = createAdapterExecutor(runtime, projectRoot, activeSession, { ...options, onUsage }, () => usageRunId);
   }
   // Auto-wire InplaceWorkspaceManager as default
   let workspaceManager = options.workspaceManager || null;
@@ -1288,6 +1298,38 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
       throw new Error('Nenhum grafo compilado encontrado. Execute oxe-cc runtime compile primeiro.');
     }
     usageRunId = current.run_id;
+    let planBudget = null;
+    const runPaths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+    let runPlan = null;
+    try {
+      runPlan = parsePlanArtifact(parsers, readTextIfExists(runPaths.plan) || '', runPaths.plan);
+      planBudget = runPlan && runPlan.budget ? runPlan.budget : null;
+    } catch {
+      runPlan = null;
+      planBudget = null;
+    }
+    const planTaskById = new Map(((runPlan && runPlan.tasks) || []).map((task) => [task.id, task]));
+    budgetLedger = budgetLib.openBudget(projectRoot, current.run_id, {
+      turns: options.budgetTurns,
+      usd: options.budgetUsd,
+      reset: Boolean(options.budgetReset),
+      plan: planBudget,
+    });
+    const maxRetriesOverride = options.maxRetries != null && Number.isInteger(Number(options.maxRetries)) && Number(options.maxRetries) >= 0
+      ? Number(options.maxRetries)
+      : planBudget && Number.isInteger(planBudget.max_retries) && planBudget.max_retries >= 0 ? planBudget.max_retries : null;
+    if (budgetLedger && budgetLib.exhaustedReason(budgetLedger)) {
+      const reason = budgetLib.exhaustedReason(budgetLedger);
+      appendEvent(projectRoot, activeSession, { type: 'BudgetExhausted', run_id: current.run_id, payload: { reason, before_start: true } });
+      return {
+        mode: 'budget',
+        agentPlan: null,
+        result: { run_id: current.run_id, status: 'blocked', completed: [], failed: [], blocked: ['budget_exhausted'], reason },
+        run: current,
+        preflight: null,
+        budget: budgetLedger,
+      };
+    }
     touchProgramPhase(projectRoot, activeSession, 'executing', { run_id: current.run_id });
     const checkpointCommits = Boolean(options.checkpointCommits || readProjectConfig(projectRoot).checkpoint_commits);
     const preflight = buildRuntimeExecutePreflight(projectRoot, activeSession, current);
@@ -1319,6 +1361,11 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
     const graph = runtime.fromSerializable
       ? runtime.fromSerializable(current.compiled_graph)
       : current.compiled_graph;
+    // OXB-023: `--max-retries` / PLAN.json budget.max_retries replace the compile default (2) for this execution.
+    if (maxRetriesOverride != null && graph && graph.nodes) {
+      const nodes = typeof graph.nodes.values === 'function' ? [...graph.nodes.values()] : Object.values(graph.nodes);
+      for (const node of nodes) if (node && node.policy) node.policy.max_retries = maxRetriesOverride;
+    }
 
   // Detect plan-agents.json: explicit override > session path > root path
   const rootAgentPlan = path.join(projectRoot, '.oxe', 'plan-agents.json');
@@ -1342,15 +1389,27 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
     // appendEvent). This hook only forwards progress; writing here again duplicated the log.
     onEvent: (event) => {
       options.onProgress?.(event);
-      // 1.20c: checkpoint de filesystem por tarefa concluída (opt-in).
-      if (checkpointCommits && event && event.type === 'WorkItemCompleted' && event.work_item_id) {
+      if (event && event.type === 'WorkItemCompleted' && event.work_item_id) {
+        let checkpoint = null;
+        // 1.20c: checkpoint de filesystem por tarefa concluída (opt-in), na convenção de commit do projeto (OXB-021).
+        if (checkpointCommits) {
+          try {
+            const cp = commitTaskCheckpoint(projectRoot, current, event.work_item_id, { task: planTaskById.get(event.work_item_id) });
+            if (cp.committed) {
+              checkpoint = cp.commit;
+              appendEvent(projectRoot, activeSession, { type: 'GateResolved', run_id: current.run_id, work_item_id: event.work_item_id, payload: { gate: 'checkpoint', commit: cp.commit, files: cp.files } });
+            }
+          } catch { /* checkpoint nunca derruba a execução */ }
+        }
+        // OXB-025: a tarefa concluída fica `done` no PLAN.json — o próximo compile não a paga de novo.
         try {
-          const cp = commitTaskCheckpoint(projectRoot, current, event.work_item_id);
-          if (cp.committed) appendEvent(projectRoot, activeSession, { type: 'GateResolved', run_id: current.run_id, work_item_id: event.work_item_id, payload: { gate: 'checkpoint', commit: cp.commit, files: cp.files } });
-        } catch { /* checkpoint nunca derruba a execução */ }
+          require('./oxe-plan-json.cjs').markPlanTaskDone(runPaths.plan, event.work_item_id, { commit: checkpoint });
+        } catch { /* o done é auxiliar; o journal continua sendo a verdade da run */ }
       }
     },
   });
+
+  if (budgetLedger) ctx.budget = budgetLib.schedulerBudget(budgetLedger);
 
   // Gap 5: multi-agent path if plan-agents.json exists
   if (agentPlanPath) {
@@ -1398,7 +1457,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
   const scheduler = new runtime.Scheduler();
   const result = await scheduler.run(graph, ctx);
   const syncedRun = syncRunStateAfterExecute(projectRoot, activeSession, current, result, 'single');
-    return { mode: 'single', agentPlan: null, result, run: syncedRun, preflight };
+    return { mode: 'single', agentPlan: null, result, run: syncedRun, preflight, budget: budgetLedger };
   }
 
 const EXECUTE_RESULT_STATUS = {
@@ -2188,8 +2247,18 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     dryVerify = require('./oxe-verify-dryrun.cjs').dryRunVerifyCommands(projectRoot, effective, { timeoutMs: options.dryVerifyTimeoutMs });
     result.errors.push(...dryVerify.errors);
     result.warnings.push(...dryVerify.warnings);
+    // OXB-025: a pending task whose verify already passes AND that has a checkpoint is finished work the run
+    // would pay for again — an error with the fix, not a warning.
+    for (const entry of dryVerify.results || []) {
+      if (entry.verdict !== 'already_green') continue;
+      const sha = findTaskCheckpoint(projectRoot, entry.task);
+      if (sha) result.errors.push(`${entry.task}: já tem checkpoint ${sha.slice(0, 8)} e o verify passa — marque "done": true (oxe-cc plan done ${entry.task}); senão o execute paga a tarefa de novo`);
+    }
     result.ok = result.errors.length === 0;
   }
+  // OXB-021: checkpoint messages follow the project's commit convention.
+  result.errors.push(...require('./oxe-commit-convention.cjs').lintCommitConvention(plan, config));
+  result.ok = result.errors.length === 0;
   return { ...result, source: plan.source, tasks: plan.tasks.length, phase: phase ? phase.id : null, plan_json: hasJson ? jsonPath : null, dry_verify: dryVerify ? dryVerify.results : null };
 }
 
@@ -2438,17 +2507,46 @@ function taskScopeFiles(runState, taskId) {
  * Commit local só dos arquivos da tarefa concluída (`oxe(T3): título`), nunca `add -A`. Um checkpoint de filesystem
  * por passo: a tentativa seguinte (ou outra tarefa) pode ser revertida sem perder o que já foi entregue.
  */
-function commitTaskCheckpoint(projectRoot, runState, taskId) {
+/** Latest checkpoint commit of a task: the `OXE-Task: Tn` trailer (1.21) or the legacy `oxe(Tn):` subject. */
+function findTaskCheckpoint(projectRoot, taskId) {
+  if (!/^T\d+$/.test(String(taskId || ''))) return null;
+  for (const grep of [`^OXE-Task: ${taskId}$`, `^oxe\\(${taskId}\\):`]) {
+    const lines = gitLines(projectRoot, ['log', '-n', '1', '--format=%H', '-E', `--grep=${grep}`]);
+    if (lines && lines[0]) return lines[0];
+  }
+  return null;
+}
+
+/** `oxe-cc plan done Tn [--commit sha]`: marks a finished task in PLAN.json (default commit: its checkpoint). */
+function runtimePlanDone(projectRoot, activeSession, options = {}) {
+  const taskId = String(options.task || '').trim();
+  if (!/^T\d+$/.test(taskId)) throw new Error('Informe a tarefa: oxe-cc plan done T<n>');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan done exige PLAN.json (o PLAN.md não guarda done por tarefa).');
+  const commit = options.commit || findTaskCheckpoint(projectRoot, taskId);
+  const changed = planJsonLib.markPlanTaskDone(paths.plan, taskId, { commit });
+  return { task: taskId, commit: commit || null, changed };
+}
+
+function commitTaskCheckpoint(projectRoot, runState, taskId, options = {}) {
   const files = taskScopeFiles(runState, taskId);
   if (!files.length) return { committed: false, reason: 'tarefa sem escopo declarado' };
   if (!gitLines(projectRoot, ['rev-parse', '--is-inside-work-tree'])) return { committed: false, reason: 'sem repositório git' };
   const changed = (gitLines(projectRoot, ['status', '--porcelain', '-uall', '--', ...files]) || []);
   if (!changed.length) return { committed: false, reason: 'nada mudou no escopo da tarefa' };
   const node = runState.compiled_graph.nodes[taskId] || {};
-  const title = String(node.title || taskId).slice(0, 72);
+  // OXB-021: the message follows the project's commit_convention (or the task's own `commit`), with an OXE-Task trailer.
+  const planTask = options.task || {};
+  const message = require('./oxe-commit-convention.cjs').checkpointMessage({
+    id: taskId,
+    title: planTask.title || node.title || taskId,
+    commit: planTask.meta && planTask.meta.commit ? planTask.meta.commit : planTask.commit,
+  }, options.config || readProjectConfig(projectRoot));
   const add = spawnSync('git', ['add', '--', ...files.filter((f) => fs.existsSync(path.join(projectRoot, f)) || changed.some((l) => l.includes(f)))], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
   if (add.status !== 0) return { committed: false, reason: `git add falhou: ${String(add.stderr).trim()}` };
-  const commit = spawnSync('git', ['commit', '-q', '-m', `oxe(${taskId}): ${title}`, '--', ...files], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+  const commit = spawnSync('git', ['commit', '-q', '-F', '-', '--', ...files], { cwd: projectRoot, encoding: 'utf8', windowsHide: true, input: message });
   if (commit.status !== 0) return { committed: false, reason: `git commit falhou: ${String(commit.stderr || commit.stdout).trim()}` };
   const head = gitLines(projectRoot, ['rev-parse', 'HEAD']);
   return { committed: true, commit: head && head[0], files };
@@ -3997,6 +4095,8 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 
 module.exports = {
   runtimeCiAttach,
+  runtimePlanDone,
+  findTaskCheckpoint,
   VALID_RUN_STATUSES,
   VALID_APPROVAL_POLICIES,
   VALID_CAPABILITY_TYPES,

@@ -20,7 +20,19 @@ export interface TaskResult {
 export interface TaskExecutor {
     execute(node: GraphNode, lease: WorkspaceLease, runId: string, attemptNumber: number, options?: {
         previousError?: string | null;
+        maxTurns?: number | null;
     }): Promise<TaskResult>;
+}
+/**
+ * Turn/cost ceiling of a run (1.21, OXB-023), kept by the caller from the executor's usage. The scheduler checks it
+ * between attempts — never killing one mid-way — and caps the next attempt to the turns that are left, so the run
+ * cannot go past the turn ceiling.
+ */
+export interface RunBudget {
+    /** Why no further attempt may start, or null while there is budget. */
+    exhausted(): string | null;
+    /** Turns still allowed (the next attempt's cap), or null when turns are unlimited. */
+    remainingTurns(): number | null;
 }
 export interface SchedulerOptions {
     maxRunDurationMs?: number;
@@ -37,6 +49,7 @@ export interface SchedulerContext {
     pluginRegistry?: PluginRegistry;
     auditTrail?: AuditTrail;
     quota?: RunQuota;
+    budget?: RunBudget;
     policyActor?: string;
     onEvent?: (event: OxeEvent) => void;
     options?: SchedulerOptions;

@@ -2507,8 +2507,10 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime feedback --class <defect|spec_gap|constraint|new_scope> --summary "..." [--criteria A4] [--by <quem>] [--amend-to 2]
   npx oxe-cc runtime feedback list [--json]
   npx oxe-cc runtime rollback --task T3 [--yes]
-  npx oxe-cc runtime execute ... [--checkpoint-commits]
-  npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"]
+  npx oxe-cc runtime execute ... [--checkpoint-commits] [--budget-turns N] [--budget-usd X] [--budget-reset] [--max-retries N]
+  npx oxe-cc runtime verify [--no-gates]
+  npx oxe-cc runtime ci --attach <run-id|url> [--repo owner/repo] [--head <sha>]
+  npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"] [--no-gates]
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
     npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
     npx oxe-cc plugins <list|install|remove> [opções]
@@ -4102,6 +4104,10 @@ function parseRuntimeArgs(argv) {
     else if (a === '--repo' && argv[i + 1]) out.repo = String(argv[++i]);
     else if (a === '--head' && argv[i + 1]) out.head = String(argv[++i]);
     else if (a === '--no-gates') out.noGates = true;
+    else if (a === '--budget-turns' && argv[i + 1]) out.budgetTurns = Number(argv[++i]);
+    else if (a === '--budget-usd' && argv[i + 1]) out.budgetUsd = Number(argv[++i]);
+    else if (a === '--budget-reset') out.budgetReset = true;
+    else if (a === '--max-retries' && argv[i + 1]) out.maxRetries = Number(argv[++i]);
     else if (a === '--force') out.force = true;
     else if (a === '--no-commit') out.noCommit = true;
     else if (a === '--message' && argv[i + 1]) out.message = String(argv[++i]);
@@ -5203,6 +5209,10 @@ async function runRuntime(opts) {
         adapter: adapterId,
         adapterOptions,
         checkpointCommits: opts.checkpointCommits || undefined,
+        budgetTurns: opts.budgetTurns || undefined,
+        budgetUsd: opts.budgetUsd || undefined,
+        budgetReset: opts.budgetReset || undefined,
+        maxRetries: opts.maxRetries != null && !Number.isNaN(opts.maxRetries) ? opts.maxRetries : undefined,
         agentsPlanPath: opts.agentsPlanPath || undefined,
         onProgress: (event) => {
           if (event.type === 'turn_start') {
@@ -5220,6 +5230,8 @@ async function runRuntime(opts) {
             process.stdout.write(` ✗\n`);
           } else if (event.type === 'RetryScheduled') {
             process.stdout.write(` ↺ retry ${event.payload?.next_attempt}\n  → ${event.work_item_id} `);
+          } else if (event.type === 'BudgetExhausted') {
+            process.stdout.write(` ⛔ orçamento esgotado (${event.payload?.reason || ''})\n`);
           }
         },
       });
@@ -5242,6 +5254,11 @@ async function runRuntime(opts) {
           }
         }
       }
+      if (result.budget) {
+        const budgetLine = require('./lib/oxe-budget.cjs').describeBudget(result.budget);
+        console.log(`  ${c ? green : ''}Orçamento:${c ? reset : ''} ${budgetLine}`);
+      }
+      if (r.reason && result.mode === 'budget') console.log(`  ${yellow}BLOCKER${reset} ${r.reason} — aumente com --budget-turns/--budget-usd ou peça OK antes de seguir`);
       console.log(`  ${c ? green : ''}Completados:${c ? reset : ''} ${completed.length}`);
       if (failed.length > 0)
         console.log(`  ${c ? red : ''}Falhos:${c ? reset : ''} ${failed.length} — ${failed.join(', ')}`);
@@ -6011,6 +6028,33 @@ async function main() {
     });
     if (exitCode !== 0) process.exit(exitCode);
     return;
+  }
+
+  if (command === 'plan' && argv[0] === 'done') {
+    // oxe-cc plan done T<n> [--commit <sha>] [--session <s>] [pasta]
+    const rest = argv.slice(1);
+    let dir = process.cwd();
+    let task = null;
+    let commit = null;
+    let session = null;
+    for (let i = 0; i < rest.length; i += 1) {
+      const a = rest[i];
+      if (a === '--commit' && rest[i + 1]) commit = String(rest[++i]);
+      else if (a === '--session' && rest[i + 1]) session = String(rest[++i]).replace(/\\/g, '/');
+      else if (a === '--dir' && rest[i + 1]) dir = path.resolve(rest[++i]);
+      else if (/^T\d+$/.test(a)) task = a;
+      else if (!a.startsWith('-')) dir = path.resolve(a);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = oxeOperational.runtimePlanDone(dir, session, { task, commit });
+      const c = useAnsiColors();
+      console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.task} ${out.changed ? 'marcada done' : 'já estava done'}${out.commit ? ` · checkpoint ${out.commit.slice(0, 8)}` : ''}`);
+      process.exit(0);
+    } catch (err) {
+      console.error(`${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exit(1);
+    }
   }
 
   if (command === 'plan' && argv[0] === 'lint') {
