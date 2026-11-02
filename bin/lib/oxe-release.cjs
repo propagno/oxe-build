@@ -58,7 +58,19 @@ function releasePaths(projectRoot) {
     recoveryFixtureReport: path.join(releaseDir, 'recovery-fixture-report.json'),
     multiAgentSoakReport: path.join(releaseDir, 'multi-agent-soak-report.json'),
     multiAgentRealReport: path.join(releaseDir, 'multi-agent-real-report.json'),
+    scorecardReport: path.join(releaseDir, 'scorecard-report.json'),
   };
+}
+
+/** Minimum real-project evidence behind a maturity claim (1.21): tasks per project and projects per release. */
+const SCORECARD_MIN_TASKS = 10;
+const SCORECARD_MIN_PROJECTS = 2;
+
+function loadScorecardReport(projectRoot) {
+  return readReportSummary(releasePaths(projectRoot).scorecardReport, null, (item) => {
+    const card = item && item.report;
+    return Boolean(item && item.ok && card && card.ok && card.sample && card.sample.completed_tasks >= SCORECARD_MIN_TASKS);
+  });
 }
 
 function ensureDirForFile(filePath) {
@@ -392,6 +404,7 @@ function buildReleaseManifest(projectRoot, options = {}) {
   const recovery = loadRecoveryFixtureReport(projectRoot);
   const multiAgent = loadMultiAgentSoakReport(projectRoot);
   const multiAgentReal = loadMultiAgentRealReport(projectRoot);
+  const scorecard = loadScorecardReport(projectRoot);
   const manifest = {
     schema_version: 1,
     generated_at: new Date().toISOString(),
@@ -429,6 +442,7 @@ function buildReleaseManifest(projectRoot, options = {}) {
       recovery_fixtures: recovery,
       multi_agent_soak: multiAgent,
       multi_agent_real: multiAgentReal,
+      scorecard,
     },
   };
   if (options.writeManifest) {
@@ -506,6 +520,14 @@ function evaluateReleaseManifest(manifest, options = {}) {
     if (!manifest.reports.multi_agent_real.present || !manifest.reports.multi_agent_real.ok) {
       blockers.push('multi-agent real report incompleto ou com falhas');
     }
+  }
+  // 1.21: a maturity claim needs the scorecard of real projects (not fixtures), each within its targets.
+  if (releaseVersion && semver.gte(releaseVersion, '1.21.0')) {
+    const card = manifest.reports.scorecard;
+    const passing = card && Array.isArray(card.results) ? card.results.length - card.failures.length : 0;
+    if (!card || !card.present) blockers.push('scorecard report ausente (oxe-cc runtime scorecard --dir <projeto real> --release-report .oxe/release/scorecard-report.json)');
+    else if (card.failures.length) blockers.push(`scorecard fora das metas ou com menos de ${SCORECARD_MIN_TASKS} tarefas: ${card.failures.join(', ')}`);
+    else if (passing < SCORECARD_MIN_PROJECTS) blockers.push(`scorecard com ${passing} projeto(s) real(is); a release exige ${SCORECARD_MIN_PROJECTS}`);
   }
   if (versions.banner.mode === 'unknown') {
     warnings.push('banner.txt sem placeholder v{version} nem versão fixa detectável');

@@ -41,7 +41,14 @@ export interface NodeExecutionContext {
    * come back as a red CI.
    */
   repoRules?: RepoRule[];
+  /** What each closed program phase told the next ones (its dossier handoff), oldest first (1.21). */
+  handoffs?: PhaseHandoff[];
   lessons?: string[];
+}
+
+export interface PhaseHandoff {
+  phase: string;
+  text: string;
 }
 
 export interface RepoRule {
@@ -76,6 +83,7 @@ export interface NodeContextBudget {
   interfaces?: number;
   acceptance?: number;
   repoRules?: number;
+  handoffs?: number;
 }
 
 export const DEFAULT_NODE_CONTEXT_BUDGET: NodeContextBudget = {
@@ -88,6 +96,7 @@ export const DEFAULT_NODE_CONTEXT_BUDGET: NodeContextBudget = {
   interfaces: 4000,
   acceptance: 6000,
   repoRules: 3500,
+  handoffs: 2500,
 };
 
 export function truncate(text: string, limit: number): string {
@@ -132,6 +141,14 @@ export function renderNodeContext(ctx: NodeExecutionContext | null | undefined, 
     for (const rule of rules) bySource.set(rule.source, [...(bySource.get(rule.source) ?? []), rule.text.trim()]);
     const body = [...bySource.entries()].map(([source, texts]) => [`- \`${source}\``, ...texts.map((t) => `  - ${t}`)].join('\n')).join('\n');
     lines.push(truncate(body, budget.repoRules ?? DEFAULT_NODE_CONTEXT_BUDGET.repoRules!));
+  }
+
+  const handoffs = (ctx.handoffs ?? []).filter((h) => h && h.phase && h.text && h.text.trim());
+  if (handoffs.length > 0) {
+    lines.push('', '## O que as fases anteriores deixaram');
+    lines.push('Notas de handoff das fases já fechadas do programa (dossiê). São decisões, limites e armadilhas já conhecidas: respeite-as e não as redescubra.');
+    const body = handoffs.map((h) => `### ${h.phase}\n${h.text.trim()}`).join('\n\n');
+    lines.push(truncate(body, budget.handoffs ?? DEFAULT_NODE_CONTEXT_BUDGET.handoffs!));
   }
 
   if (ctx.implementationContract) {

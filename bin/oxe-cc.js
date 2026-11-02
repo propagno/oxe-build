@@ -2541,6 +2541,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime rollback --task T3 [--yes]
   npx oxe-cc runtime execute ... [--checkpoint-commits] [--budget-turns N] [--budget-usd X] [--budget-reset] [--max-retries N]
   npx oxe-cc runtime verify [--no-gates]
+  npx oxe-cc runtime scorecard [--write] [--release-report <arquivo> --name <projeto>] [--json]
   npx oxe-cc runtime ci --attach <run-id|url> [--repo owner/repo] [--head <sha>]
   npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"] [--no-gates]
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
@@ -4139,6 +4140,8 @@ function parseRuntimeArgs(argv) {
     else if (a === '--budget-turns' && argv[i + 1]) out.budgetTurns = Number(argv[++i]);
     else if (a === '--budget-usd' && argv[i + 1]) out.budgetUsd = Number(argv[++i]);
     else if (a === '--budget-reset') out.budgetReset = true;
+    else if (a === '--release-report' && argv[i + 1]) out.releaseReport = String(argv[++i]);
+    else if (a === '--name' && argv[i + 1]) out.name = String(argv[++i]);
     else if (a === '--max-retries' && argv[i + 1]) out.maxRetries = Number(argv[++i]);
     else if (a === '--force') out.force = true;
     else if (a === '--no-commit') out.noCommit = true;
@@ -5312,6 +5315,24 @@ async function runRuntime(opts) {
       console.error(`${red}${err && err.message ? err.message : 'Falha ao executar runtime.'}${reset}`);
       process.exit(1);
     }
+  }
+
+  if (opts.action === 'scorecard') {
+    const card = oxeOperational.runtimeScorecard(opts.dir, activeSession, { write: Boolean(opts.writeReport), releaseReport: opts.releaseReport || null, name: opts.name || null });
+    if (opts.jsonOutput) {
+      console.log(JSON.stringify(card, null, 2));
+    } else {
+      const s = card.sample;
+      console.log(`  ${c ? dim : ''}Amostra:${c ? reset : ''} ${s.completed_tasks} tarefas concluídas · ${s.change_requests} CRs · ${s.budget_ledgers} orçamento(s) · ${s.events} eventos`);
+      for (const m of card.metrics) {
+        const mark = m.ok === null ? `${c ? dim : ''}·${c ? reset : ''}` : m.ok ? `${c ? green : ''}✓${c ? reset : ''}` : `${c ? red : ''}✗${c ? reset : ''}`;
+        console.log(`  ${mark} ${m.metric}: ${m.value == null ? 'sem dados' : m.value} (meta ${m.target})`);
+      }
+      console.log(card.ok ? `  ${c ? green : ''}✓ scorecard dentro das metas${c ? reset : ''}` : `  ${c ? red : ''}✗ scorecard fora das metas${c ? reset : ''}`);
+      if (card.path) console.log(`  ${c ? dim : ''}Relatório:${c ? reset : ''} ${card.path}`);
+    }
+    if (!card.ok) process.exitCode = 1;
+    return;
   }
 
   if (opts.action === 'ci' && opts.attach) {

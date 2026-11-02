@@ -36,13 +36,13 @@ Status possíveis: `aberto`, `em andamento`, `resolvido (<commit>)`, `proposta`.
 
 ## OXB-003: comandos do runtime recriam arquivos `.oxe/` que o usuário apagou
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21, 9d74d99). Comandos de runtime não recriam arquivos dentro de um `.oxe/` existente. Os de leitura (status, providers, agents, replay, gates list) falham sem `.oxe/` com a dica do `init-oxe`. `tests/oxe-cli-purity.test.cjs`.
 - **Evidência:** `runtime providers` na raiz do repo recriou o `.oxe/STATE.md` a partir do template.
 - **Fora da caixa:** comandos de leitura nunca escrevem. Separar `runtime` em leitura (puro) e escrita (com journal), e escrever só no que o comando declara como efeito colateral.
 
 ## OXB-004: `runtime verify --json` emite o banner antes do JSON
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21, 9d74d99). Com `--json`, banner, cabeçalhos e linhas de projeto/sessão vão para o stderr, e o stdout é só JSON. Ainda não há schema versionado por comando; hoje o contrato é o teste de parse.
 - **Evidência:** a saída não é JSON válido, então os benchmarks leem a run do disco.
 - **Fora da caixa:** toda saída `--json` vira contrato versionado (`oxe*Schema`), testado por um snapshot de schema no CI. O banner vai para stderr.
 
@@ -57,13 +57,13 @@ Status possíveis: `aberto`, `em andamento`, `resolvido (<commit>)`, `proposta`.
 
 ## OXB-006: o ambiente do projeto não faz parte do preflight
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21, fe515dd). `oxe-cc doctor --project` e o preflight comparam a máquina com `engines`, `.nvmrc`, `packageManager` e o **engines das dependências diretas no lockfile**. No oxespace, ele aponta `jsdom@30.1.3` pedindo Node `^22.22.2` com a máquina em 22.17.1. `project_env_check: warn|false` relaxa a checagem.
 - **Evidência:** no worktree do oxespace, o `npm ci` com o Node 22.17/npm 10.9 da máquina rodou `node-gyp rebuild` no `better-sqlite3` 13, mesmo com `gypfile:false` e prebuilds. Falhou, e o pacote foi removido em silêncio como "optional failed". As dependências pedem Node `^22.22.2 || ^24.15`. A causa só apareceu no verify nativo.
 - **Fora da caixa:** um `oxe-cc doctor --project` que lê `engines`, `.nvmrc`, `packageManager` e o lockfile, compara com a máquina e bloqueia o `execute` com um diagnóstico acionável. Um `environment` no PROGRAM.json fixa o toolchain por fase, e a evidência do verify registra a versão usada.
 
 ## OXB-007: o gate de confiança não tem um caminho de "spike" no fluxo
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21, fe515dd). A tarefa `kind: spike` tem `question`, escreve só `.oxe/spikes/<Tn>.md` e é verificada pelo relatório. A resposta vira a decisão `D-SPIKE-Tn`. O bloqueio de `plan_confidence` agora aponta o spike.
 - **Evidência:** o preflight bloqueou o execute com `plan_confidence:88%<=90%`, e com razão: a incerteza era se o PowerShell 5.1 consegue escutar eventos WinRT.
   - O spike manual respondeu que **não consegue** (`Register-ObjectEvent` → "não pode assinar eventos Windows RT").
   - Ele também confirmou o mapeamento do 0x80045509.
@@ -171,13 +171,13 @@ Hipóteses a confirmar com dados das fases:
 
 ## OXB-020: o aceite congelado não cobre os gates do projeto (typecheck e suíte de governança)
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21, 2783eb7). `phase_gates` rodam no verify da fase, e um gate vermelho abre um CR que fecha quando o gate fica verde. Há também gate de CI via `runtime ci --attach`, e o executor recebe as regras do repositório no contexto.
 - **Evidência:** no rework da F1, todos os aceites ficaram verdes (vitest), mas o `npm run typecheck` completo (heavy-lock) reprovou. O namespace `voice` não foi registrado nos tipos do i18next. O vitest transpila sem checar tipos, e o executor só rodou os testes da própria tarefa.
 - **Fora da caixa:** o PLAN.json ganha `phase_gates` (typecheck, lint, bundle budget), comandos do projeto que o `program close` executa (via heavy-lock quando o projeto tem um). Também devem rodar no **verify da fase**, não por tarefa, para não custar turno nem memória a cada tentativa. Uma falha vira CR `defect` automático, com a saída do comando.
 
 ## OXB-021: commits de checkpoint fora da convenção do projeto
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21, 8d78c39). `commit_convention` (template, pattern, trailers, `commit` por tarefa) mais o trailer `OXE-Task: Tn`.
 - **Evidência:** os commits `oxe(Tn): <título em pt-BR>` do `--checkpoint-commits` não seguem Conventional Commits em inglês, a regra do oxespace. No PR #417, ficou anotado que serão squashados.
 - **Fora da caixa:** um `commit_convention` no PLAN.json ou no `config.json` (template, idioma, sufixo `Co-Authored-By`), com o título do commit gerado pela tarefa (`feat(voice): ...`). O `plan lint` valida o template.
 
@@ -189,30 +189,30 @@ A CI do oxespace reprovou 9 testes de **governança do repositório** (`design-l
 
 ## OXB-022: o `plan lint` aprova uma tarefa que o preflight do execute bloqueia
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21, 8d78c39). O lint e o preflight usam o mesmo `validatePackTask`, e `symbols` só é exigido para arquivo de código.
 - **Evidência:** no rework de governança da F1, a T12 (só `voice.css`) passou no `plan lint --dry-verify`, mas o `runtime execute` parou no preflight com `execution_rationality: IMPLEMENTATION-PACK.json tarefa T12 sem symbols`. Uma tarefa só de CSS, config ou docs não tem symbol de código para declarar, então a regra força juntá-la a outra tarefa (T12 foi fundida na T13).
 - **Fora da caixa:** o lint e o preflight devem partilhar **um único validador** (`validatePack`), para que nada passe num e falhe no outro. Os `symbols` passam a ser exigidos só quando `mutation_scope: code` e o arquivo é de código (`.ts/.js/.tsx/.cjs`). Para estilo, config e docs, valem `selectors`/`keys` opcionais, que o contract-exports ignora.
 
 ## OXB-023: não há teto de turnos por run
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21, 8d78c39). `--budget-turns`/`--budget-usd`/`--max-retries` e `budget` no PLAN.json. O ledger por run soma entre execuções, e o scheduler para entre tentativas e limita a próxima aos turnos restantes.
 - **Evidência:** o coordenador fixou um teto de 20 turnos `claude -p` para o rework. O runtime só tem `--max-turns` por tentativa, com `max_retries = 2` fixo no compile (`default_max_retries`). No pior caso, 3 tarefas × 3 tentativas × 6 turnos dariam 54 turnos, e o teto ficou a cargo de um monitor manual dos eventos `ExecutorUsage`.
 - **Fora da caixa:** `--budget-turns N` / `--budget-usd X` no execute, e `budget` no PLAN.json, contados no journal. Ao atingir o teto, o scheduler para **entre tentativas** com `BudgetExhausted` (gate ao planner), sem matar uma tentativa no meio. Também `--max-retries` na CLI, e o `oxe-cc runtime status` mostrando o consumo contra o teto.
 
 ## OXB-024: `runtime compile/execute` cria arquivos de init como efeito colateral
 
-- **Status:** aberto (baixo).
+- **Status:** resolvido (1.21, 9d74d99), junto com o OXB-003.
 - **Evidência:** cada `runtime compile`/`execute` imprime `init .oxe/README.md` e tenta recriar `STATE.md`/`config.json`. Num projeto já inicializado, um comando de runtime não deveria escrever arquivos de bootstrap.
 - **Correção proposta:** só o `init-oxe` faz bootstrap. O runtime exige um `.oxe` válido e falha com a dica `oxe-cc init-oxe`.
 
 ## OXB-025: execute concluído não marca `done` no PLAN.json
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21, 8d78c39). `done`/`done_at`/`done_commit` gravados no PLAN.json, `oxe-cc plan done Tn`, e lint com erro para tarefa pendente com checkpoint e verify verde.
 - **Evidência:** a T13 e a T14 passaram no verify e ganharam checkpoint commit, mas continuaram sem `done: true` no PLAN.json. No compile seguinte, que só acrescentava a T15 do CR-13, elas voltaram ao grafo (3 nós em vez de 1). O `plan lint` avisou que a verificação delas "já passa antes da tarefa", que é o sintoma. Sem a correção manual, a run teria pago de novo duas tarefas prontas.
 - **Correção proposta:** ao fechar uma tarefa com verify verde, o runtime grava `done: true`, `done_at` e `done_commit` (o checkpoint) no PLAN.json, sob lock. O compile também passa a ignorar tarefas cujo checkpoint está no histórico e cujo verify continua verde. Quando a verificação de uma tarefa pendente já passa e ela tem checkpoint, o lint vira erro com a dica "marcar done".
 
 ## OXB-026: estourar o limite de turnos descarta o trabalho sem rodar o verify
 
-- **Status:** aberto (alto custo).
+- **Status:** resolvido (1.21, 8d78c39). Depois de um turn limit com escrita no escopo, o runtime roda o verify: verde conclui (`verify_after_turn_limit`). O último turno pede para fechar e reportar.
 - **Evidência:** na T15 (CR-13), a tentativa 1 terminou com `completed_by: turn_limit_exhausted`, `failure_class: llm` e a mensagem do próprio executor: "All 35 tests pass across the five files. Running the final verification command…". O diff estava no working tree, mas o scheduler agendou o retry **sem rodar o verify**. A tentativa 2 recomeçou um trabalho já concluído e pagou até 5 turnos a mais, chegando exatamente ao teto de 20 do coordenador.
 - **Fora da caixa:** o verify é o juiz, não o fim de conversa do LLM. Quando um turn limit termina com diff no escopo, o scheduler roda o verify antes de classificar a tentativa: verde conclui a tarefa (`completed_by: verify_after_turn_limit`), vermelho entra no retry informado. Também vale reservar o último turno para "pare e reporte", em vez de um turno de verificação redundante; o executor não precisa rodar o comando final, o runtime roda.

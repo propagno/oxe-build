@@ -138,6 +138,30 @@ function loadClosedInterfaces(programDir, state) {
   return [...byFile.values()];
 }
 
+/**
+ * 1.21 (coesão entre fases): the handoff "O que a próxima fase deve saber" each closed phase wrote in its dossier
+ * (`<dossierRoot>/<phase>/plan.md`), so the next phases' executors read it instead of rediscovering it.
+ * @returns {{ phase: string, text: string }[]}
+ */
+function loadClosedHandoffs(dossierRoot, state) {
+  const dossier = require('./oxe-dossier.cjs');
+  const out = [];
+  for (const phase of state && Array.isArray(state.phases) ? state.phases : []) {
+    if (phase.status !== 'closed') continue;
+    let text = '';
+    try {
+      text = fs.readFileSync(path.join(dossierRoot, phase.id, 'plan.md'), 'utf8');
+    } catch {
+      continue;
+    }
+    const human = dossier.humanPart(text);
+    if (!dossier.handoffFilled(human)) continue;
+    const body = dossier.section(human, 'O que a próxima fase deve saber');
+    if (body && body.trim()) out.push({ phase: phase.id, text: body.trim() });
+  }
+  return out;
+}
+
 function git(projectRoot, args) {
   const result = spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
   return { ok: result.status === 0, stdout: String(result.stdout || '').trim(), stderr: String(result.stderr || '').trim() };
@@ -165,6 +189,7 @@ function commitPhase(projectRoot, message) {
 }
 
 module.exports = {
+  loadClosedHandoffs,
   programPaths,
   readProgram,
   writeProgram,

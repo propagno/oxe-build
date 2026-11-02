@@ -39,7 +39,13 @@ export interface NodeExecutionContext {
      * come back as a red CI.
      */
     repoRules?: RepoRule[];
+    /** What each closed program phase told the next ones (its dossier handoff), oldest first (1.21). */
+    handoffs?: PhaseHandoff[];
     lessons?: string[];
+}
+export interface PhaseHandoff {
+    phase: string;
+    text: string;
 }
 export interface RepoRule {
     /** Where the rule comes from (`tests/design-lint.test.ts`, `AGENTS.md`, `.oxe/config.json`). */
@@ -69,6 +75,7 @@ export interface NodeContextBudget {
     interfaces?: number;
     acceptance?: number;
     repoRules?: number;
+    handoffs?: number;
 }
 export declare const DEFAULT_NODE_CONTEXT_BUDGET: NodeContextBudget;
 export declare function truncate(text: string, limit: number): string;

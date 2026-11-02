@@ -111,3 +111,19 @@ Num repositório com suíte própria (typecheck, lint, testes de governança com
   - no pack, declare-o com `mode: docs_only`;
   - ao concluir, a resposta vira a decisão `D-SPIKE-Tn` em `decisions.ndjson` e aparece no dossiê;
   - replaneje com a evidência antes de executar as tarefas de código.
+
+## Coesão entre fases e maturidade medida (1.21)
+
+- **Handoff no contexto:** o executor de cada fase recebe `## O que as fases anteriores deixaram`, com o handoff ("O que a próxima fase deve saber") do dossiê de cada fase fechada. Escreva nele as decisões, os limites e as armadilhas que a próxima fase não pode redescobrir. Os gates do projeto valem em todas as fases.
+- **Scorecard:** `oxe-cc runtime scorecard [--json] [--write]` mede, a partir dos registros do próprio runtime:
+
+  | Métrica | Meta |
+  |---|---|
+  | `first_attempt_rate` (tarefas concluídas na 1ª tentativa) | ≥ 0,80 |
+  | `turns_on_finished_work` (turnos pagos depois de concluir) | 0 |
+  | `budget_overruns` | 0 |
+  | `crs_closed_without_proof` | 0 |
+  | `post_green_crs` (CR que a CI, a revisão ou o UAT abriram depois do verify verde) | 0 |
+
+- **Release:** a partir da 1.21.0, o `doctor --release` exige `.oxe/release/scorecard-report.json` com **≥ 2 projetos reais**, cada um com ≥ 10 tarefas e dentro das metas. Gere com `oxe-cc runtime scorecard --dir <projeto> --release-report <oxe-build>/.oxe/release/scorecard-report.json --name <projeto>`.
+- **Worktrees:** o `dispose` do `git_worktree` desfaz, sem segui-los, os links que saem do worktree (junction de `node_modules`, links de workspace) antes do `worktree remove --force`. Assim, o diretório real nunca é apagado junto.

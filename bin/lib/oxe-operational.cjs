@@ -423,6 +423,14 @@ function buildNodeContextProvider(projectRoot, activeSession) {
   const program = require('./oxe-program.cjs');
   const programState = paths.programDir ? program.readProgram(paths.programDir) : null;
   const closedInterfaces = programState ? program.loadClosedInterfaces(paths.programDir, programState) : [];
+  // 1.21: what the closed phases told the next ones (dossier handoff), so it is read, not rediscovered.
+  let handoffs = [];
+  try {
+    const dossierRoot = path.join(path.dirname(paths.plan || path.join(projectRoot, '.oxe', 'PLAN.md')), 'dossier');
+    handoffs = programState ? program.loadClosedHandoffs(dossierRoot, programState) : [];
+  } catch {
+    handoffs = [];
+  }
   // 1.21 (OXB-020): what the repo enforces on its own goes into every node prompt, collected once per run.
   let repoRules = [];
   try {
@@ -491,6 +499,7 @@ function buildNodeContextProvider(projectRoot, activeSession) {
           content: readTextIfExists(path.resolve(root, file)),
         }))),
       repoRules,
+      handoffs,
       gitStatus,
       lessons,
     };
@@ -2113,6 +2122,31 @@ function programCloseGateReasons(projectRoot, activeSession, ctx) {
     } catch { /* o close já está bloqueado pelo gate */ }
   }
   return out;
+}
+
+/** `oxe-cc runtime scorecard [--write]` (1.21): maturity metrics from the project's own records. */
+function runtimeScorecard(projectRoot, activeSession, options = {}) {
+  const card = require('./oxe-scorecard.cjs').scorecardForProject(projectRoot, () => readEvents(projectRoot, activeSession));
+  if (options.write) {
+    const file = path.join(projectRoot, '.oxe', 'release', 'scorecard-report.json');
+    ensureDirForFile(file);
+    fs.writeFileSync(file, `${JSON.stringify(card, null, 2)}\n`, 'utf8');
+    card.path = file;
+  }
+  // The release report of the OXE package: one result per real project (upsert by name).
+  if (options.releaseReport) {
+    const file = path.resolve(options.releaseReport);
+    const name = options.name || path.basename(path.resolve(projectRoot));
+    const doc = readJsonQuiet(file) || { schema_version: 1, results: [] };
+    if (!Array.isArray(doc.results)) doc.results = [];
+    doc.results = doc.results.filter((r) => r && r.name !== name);
+    doc.results.push({ name, ok: card.ok, project_root: path.resolve(projectRoot), report: card });
+    doc.generated_at = new Date().toISOString();
+    ensureDirForFile(file);
+    fs.writeFileSync(file, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+    card.release_report = file;
+  }
+  return card;
 }
 
 /** `oxe-cc runtime ci --attach <run|url>` (1.21): ties a CI run to the active phase for `kind: ci` gates. */
@@ -4116,6 +4150,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 
 module.exports = {
   runtimeCiAttach,
+  runtimeScorecard,
   runtimePlanDone,
   findTaskCheckpoint,
   VALID_RUN_STATUSES,
