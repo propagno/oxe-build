@@ -58,21 +58,32 @@ function useAnsiColors() {
   return process.stdout.isTTY === true;
 }
 
+/**
+ * 1.21 (OXB-004): with `--json`, stdout carries only the JSON document. Banner, section headers and other
+ * decoration go to stderr, so `oxe-cc … --json | jq` and benchmarks can parse the output.
+ */
+const JSON_OUTPUT_MODE = process.argv.includes('--json');
+function decor(...args) {
+  if (JSON_OUTPUT_MODE) console.error(...args);
+  else console.log(...args);
+}
+
 /** Section header (CLI). */
 function printSection(title) {
   const c = useAnsiColors();
   if (!c) {
-    console.log(`\n${title}\n${'─'.repeat(50)}\n`);
+    decor(`\n${title}\n${'─'.repeat(50)}\n`);
     return;
   }
-  console.log(`\n${dim}${RULE}${reset}`);
-  console.log(`  ${cyan}${bold}${title}${reset}`);
-  console.log(`${dim}${RULE}${reset}\n`);
+  decor(`\n${dim}${RULE}${reset}`);
+  decor(`  ${cyan}${bold}${title}${reset}`);
+  decor(`${dim}${RULE}${reset}\n`);
 }
 
 /** Print branded header; skip with OXE_NO_BANNER=1. Not used for --version (scripts). */
 function printBanner() {
   if (process.env.OXE_NO_BANNER === '1' || process.env.OXE_NO_BANNER === 'true') return;
+  if (JSON_OUTPUT_MODE) return;
   const color = useAnsiColors();
   const ver = readPkgVersion();
   const bannerPath = path.join(PKG_ROOT, 'bin', 'banner.txt');
@@ -4591,13 +4602,23 @@ async function runRuntime(opts) {
     console.error(`${yellow}Diretório não encontrado: ${opts.dir}${reset}`);
     process.exit(1);
   }
-  bootstrapOxe(opts.dir, { dryRun: false, force: false });
+  // 1.21 (OXB-003/024): runtime commands never recreate files inside an existing `.oxe/` (a STATE.md the person
+  // deleted stays deleted). Read commands need an existing `.oxe/`; a write command on a fresh project initializes it.
+  const RUNTIME_READ_ONLY = new Set(['status', 'providers', 'agents', 'replay', 'gates']);
+  const readOnly = RUNTIME_READ_ONLY.has(opts.action) && !(opts.action === 'gates' && opts.subAction && opts.subAction !== 'list');
+  if (!fs.existsSync(path.join(opts.dir, '.oxe'))) {
+    if (readOnly) {
+      console.error(`${yellow}Projeto sem .oxe/: ${opts.dir}${reset} — nada para ler. Rode ${cyan}npx oxe-cc init-oxe${reset} (ou /oxe-spec) antes.`);
+      process.exit(1);
+    }
+    bootstrapOxe(opts.dir, { dryRun: false, force: false });
+  }
   const statePath = oxeHealth.oxePaths(opts.dir).state;
   const stateText = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : '';
   const activeSession = opts.activeSession || oxeHealth.parseActiveSession(stateText) || null;
   const p = oxeOperational.operationalPaths(opts.dir, activeSession);
-  console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
-  console.log(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
+  decor(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
+  decor(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
 
   if (opts.action === 'status') {
     const current = oxeOperational.readRunState(opts.dir, activeSession);
