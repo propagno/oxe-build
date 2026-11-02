@@ -454,6 +454,7 @@ function parseInstallArgs(argv) {
     else if (a === '--full') out.statusFull = true;
     else if (a === '--summary') out.statusSummary = true;
     else if (a === '--release') out.releaseDoctor = true;
+    else if (a === '--project') out.projectDoctor = true;
     else if (a === '--write-manifest') out.writeManifest = true;
     else if (!a.startsWith('-')) out.restPositional.push(a);
     else {
@@ -2016,6 +2017,26 @@ function runStatus(target, opts = {}) {
 
 /** @param {string} target */
 function runDoctor(target, options = {}) {
+    if (options.project) {
+      // 1.21 (OXB-006): the machine against the project's engines/.nvmrc/packageManager, the same check the execute
+      // preflight blocks on.
+      const env = require('./lib/oxe-project-env.cjs').checkProjectEnvironment(target);
+      if (options.json) {
+        console.log(JSON.stringify({ oxeProjectEnvSchema: 1, ...env }, null, 2));
+      } else {
+        printSection('OXE ▸ doctor --project');
+        const c = useAnsiColors();
+        const t = env.toolchain;
+        console.log(`  ${c ? green : ''}Máquina:${c ? reset : ''} node ${t.node} · npm ${t.npm || '—'} · ${t.platform}/${t.arch} · ${t.free_mb} MB livres`);
+        const w = env.wanted;
+        console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} engines ${JSON.stringify(w.engines)}${w.nvmrc ? ` · .nvmrc ${w.nvmrc}` : ''}${w.packageManager ? ` · ${w.packageManager}` : ''}`);
+        for (const p of env.problems) console.log(`  ${red}✗${reset} ${p}`);
+        for (const x of env.warnings) console.log(`  ${yellow}!${reset} ${x}`);
+        console.log(env.ok ? `  ${green}✓ ambiente compatível${reset}` : `  ${red}✗ ambiente incompatível — o runtime execute fica bloqueado (project_env)${reset}`);
+      }
+      process.exitCode = env.ok ? 0 : 1;
+      return;
+    }
     if (options.release) {
       if (!options.json) printSection('OXE ▸ doctor --release');
       const c = useAnsiColors();

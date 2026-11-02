@@ -96,3 +96,18 @@ Num repositório com suíte própria (typecheck, lint, testes de governança com
   - todo checkpoint leva o trailer `OXE-Task: Tn`;
   - o `plan lint` valida o `pattern`.
 - **Pack:** o `plan lint` e o preflight usam o mesmo validador. `symbols` só é exigido quando a tarefa escreve um arquivo de código; tarefas de CSS, config ou docs não precisam declarar symbols.
+
+## Ambiente e incerteza (1.21)
+
+- **`oxe-cc doctor --project`** compara a máquina com o que o projeto pede. O preflight do execute faz a mesma checagem e bloqueia com `project_env:<motivo>`. Entram:
+  - `engines` (node/npm), `.nvmrc`/`.node-version` e `packageManager` com lockfile;
+  - o **`engines` das dependências diretas no `package-lock.json`**;
+  - a memória livre.
+
+  Com `"project_env_check": "warn"` no config, a divergência é só reportada; isso é para quando ela foi aceita de propósito, com dono. Com `false`, a checagem é pulada. A evidência do verify registra o toolchain usado.
+- **Spike:** quando a confiança do plano está abaixo do limiar por causa de uma pergunta técnica em aberto, planeje uma tarefa `"kind": "spike"` com `"question"`:
+  - o spike escreve só `.oxe/spikes/<Tn>.md`, com as linhas `Pergunta:`, `Resposta:` (ou `Decisão:`) e `Evidência:`;
+  - o verify dele é o próprio relatório;
+  - no pack, declare-o com `mode: docs_only`;
+  - ao concluir, a resposta vira a decisão `D-SPIKE-Tn` em `decisions.ndjson` e aparece no dossiê;
+  - replaneje com a evidência antes de executar as tarefas de código.

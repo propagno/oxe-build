@@ -55,6 +55,7 @@ function validatePlanJson(doc) {
     if (task.done_commit != null && typeof task.done_commit !== 'string') errors.push(`${at}.done_commit: sha do checkpoint`);
     if (task.commit != null && (typeof task.commit !== 'string' || !task.commit.trim())) errors.push(`${at}.commit: mensagem do checkpoint`);
     if (task.kind != null && !['code', 'spike'].includes(task.kind)) errors.push(`${at}.kind: code | spike`);
+    if (task.question != null && typeof task.question !== 'string') errors.push(`${at}.question: texto`);
     if (task.gate != null && (typeof task.gate !== 'object' || Array.isArray(task.gate) || typeof task.gate.reason !== 'string')) errors.push(`${at}.gate: { kind?, reason }`);
     if (task.blocked_by != null && !isStringArray(task.blocked_by)) errors.push(`${at}.blocked_by: lista de dependências externas`);
     if (task.verify != null) {
@@ -106,14 +107,19 @@ function validatePlanJson(doc) {
 
 /** PLAN.json → mesmo formato de `sdk.parsePlan` (o graph compiler e o verify não mudam). */
 function planJsonToParsedPlan(doc) {
+  const spikeLib = require('./oxe-spike.cjs');
   const tasks = doc.tasks.map((task) => {
     const commands = task.verify && Array.isArray(task.verify.commands) ? task.verify.commands.map((c) => c.trim()).filter(Boolean) : [];
+    // OXB-007: a spike writes only its report and is verified by it (question, answer, evidence).
+    const spike = task.kind === 'spike';
+    if (spike) commands.push(spikeLib.spikeVerifyCommand(task.id));
+    const files = Array.isArray(task.files) && task.files.length ? [...task.files] : spike ? [spikeLib.spikeReportPath(task.id)] : [];
     return {
       id: task.id,
       title: task.title,
       wave: task.wave,
       dependsOn: Array.isArray(task.depends_on) ? [...task.depends_on] : [],
-      files: Array.isArray(task.files) ? [...task.files] : [],
+      files,
       verifyCommand: commands.length ? [...new Set(commands)].join(' && ') : null,
       aceite: Array.isArray(task.acceptance) ? [...task.acceptance] : [],
       decisions: Array.isArray(task.decisions) ? [...task.decisions] : [],
@@ -124,6 +130,7 @@ function planJsonToParsedPlan(doc) {
         ...(typeof task.commit === 'string' && task.commit.trim() ? { commit: task.commit.trim() } : {}),
         ...(task.done_commit ? { done_commit: task.done_commit } : {}),
         ...(task.kind ? { kind: task.kind } : {}),
+        ...(typeof task.question === 'string' ? { question: task.question } : {}),
         ...(task.gate ? { gate: task.gate } : {}),
         ...(Array.isArray(task.blocked_by) && task.blocked_by.length ? { blocked_by: [...task.blocked_by] } : {}),
       },
@@ -222,6 +229,8 @@ function lintPlan(input) {
   const warnings = [];
   const tasks = input.plan && Array.isArray(input.plan.tasks) ? input.plan.tasks : [];
   if (tasks.length === 0) errors.push('plano sem tarefas');
+  const { lintSpikeTask } = require('./oxe-spike.cjs');
+  for (const task of tasks) if (!task.done) errors.push(...lintSpikeTask(task));
   if (input.plan && input.plan.source === 'PLAN.md') {
     warnings.push('PLAN.json ausente: o runtime usa o parser heurístico do PLAN.md (grave PLAN.json no /oxe-plan)');
   }
@@ -337,6 +346,7 @@ function lintPlan(input) {
       }
     }
     // OXB-022: the very rules the execute preflight applies — nothing passes here and blocks there.
+    // (spikes declare a docs_only pack entry: they write only their report in .oxe/spikes/)
     const { validatePackTask } = require('./oxe-rationality.cjs');
     const pending = new Set(tasks.filter((task) => !task.done).map((task) => task.id));
     for (const entry of pack) {

@@ -34,6 +34,15 @@ const ALLOWED_CONFIG_KEYS = [
   'permissions',
   'azure',
   'runtime',
+  // 1.19–1.21: aceite congelado, gatekeeper, gates do projeto, regras do repo, checkpoints e ambiente.
+  'acceptance_tests_required',
+  'policy_rules',
+  'checkpoint_commits',
+  'phase_gates',
+  'phase_gates_runner',
+  'repo_rules',
+  'commit_convention',
+  'project_env_check',
 ];
 
 /**

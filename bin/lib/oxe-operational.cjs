@@ -1215,6 +1215,16 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
     const blockers = [];
     const warnings = [];
     let report = null;
+    // 1.21 (OXB-006): the machine's toolchain against the project's engines/.nvmrc/packageManager, before any paid turn.
+    // `project_env_check`: true/"block" (default) blocks; "warn" reports only (a mismatch accepted on purpose); false skips.
+    const envMode = readProjectConfig(projectRoot).project_env_check;
+    if (envMode !== false) {
+      try {
+        const env = require('./oxe-project-env.cjs').checkProjectEnvironment(projectRoot);
+        for (const problem of env.problems) (envMode === 'warn' ? warnings : blockers).push(`project_env:${problem}`);
+        for (const warning of env.warnings) warnings.push(`project_env:${warning}`);
+      } catch { /* a leitura do ambiente nunca derruba o preflight */ }
+    }
     if (health && typeof health.buildHealthReport === 'function') {
       report = health.buildHealthReport(projectRoot);
       if (report.planSelfEvaluation && report.planSelfEvaluation.executable === false) {
@@ -1223,8 +1233,9 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
         // The gate also fails on an incomplete self-evaluation (rubric, vector): say which, or "91%<=90%" reads as a bug.
         const evaluationWarnings = Array.isArray(report.planSelfEvaluation.warnings) ? report.planSelfEvaluation.warnings : [];
         const belowThreshold = confidence == null || confidence <= threshold;
+        // OXB-007: below the threshold, the way forward is a spike that answers the open question, not a blind execute.
         blockers.push(belowThreshold || !evaluationWarnings.length
-          ? `plan_confidence:${confidence == null ? 'missing' : `${confidence}%`}<=${threshold}%`
+          ? `plan_confidence:${confidence == null ? 'missing' : `${confidence}%`}<=${threshold}% — reduza a incerteza com uma tarefa "kind": "spike" (pergunta + evidência em .oxe/spikes/) e reavalie o plano`
           : `plan_self_evaluation_incomplete:${evaluationWarnings.length} — ${evaluationWarnings.join('; ')}`);
       }
       if (report.executionRationality && report.executionRationality.applicable && !report.executionRationalityReady) {
@@ -1400,6 +1411,14 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
               appendEvent(projectRoot, activeSession, { type: 'GateResolved', run_id: current.run_id, work_item_id: event.work_item_id, payload: { gate: 'checkpoint', commit: cp.commit, files: cp.files } });
             }
           } catch { /* checkpoint nunca derruba a execução */ }
+        }
+        // OXB-007: a spike's answer becomes an append-only decision the dossier shows.
+        const planTask = planTaskById.get(event.work_item_id);
+        if (planTask && planTask.meta && planTask.meta.kind === 'spike') {
+          try {
+            const decision = require('./oxe-spike.cjs').recordSpikeDecision(projectRoot, runPaths.programDir || path.join(projectRoot, '.oxe', 'program'), planTask);
+            if (decision) appendEvent(projectRoot, activeSession, { type: 'GateResolved', run_id: current.run_id, work_item_id: event.work_item_id, payload: { gate: 'spike', decision: decision.id, answer: decision.title } });
+          } catch { /* a decisão é auxiliar; o relatório do spike fica em .oxe/spikes/ */ }
         }
         // OXB-025: a tarefa concluída fica `done` no PLAN.json — o próximo compile não a paga de novo.
         try {
@@ -2030,6 +2049,8 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
       gaps: report.gaps,
       regression: regressionSummary,
       gates: gateSummary,
+      // OXB-006: the evidence says which toolchain produced it.
+      toolchain: { node: process.versions.node, platform: process.platform, arch: process.arch },
     },
   });
   const projected = projectRuntimeArtifacts(projectRoot, activeSession, { runState: next, write: true });
