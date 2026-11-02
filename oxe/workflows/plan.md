@@ -12,7 +12,7 @@ Além do `PLAN.md`, este passo deve gerar no mesmo escopo resolvido da sessão o
 
 Esses artefatos são obrigatórios para considerar o plano executável. Quando algo não se aplicar, marcar explicitamente `not_applicable`; nunca omitir o arquivo.
 
-**PLAN.json, aceite congelado e programa por fases (obrigatório com runtime):** seguir `oxe/workflows/references/plan-json-acceptance-program.md` — gravar `PLAN.json` (schema `oxe/schemas/plan.schema.json`), **escrever os testes de aceite dos A\* antes da execução** em `acceptance_tests` (o executor não pode alterá-los; o verify reprova `acceptance_tampered`), planejar só a fase ativa do `PROGRAM.json` e passar em `oxe-cc plan lint` antes de declarar o plano pronto.
+**PLAN.json, aceite congelado e programa por fases (obrigatório com runtime):** seguir `oxe/workflows/references/plan-json-acceptance-program.md` — gravar `PLAN.json` (schema `oxe/schemas/plan.schema.json`), **escrever os testes de aceite dos A\* antes da execução** em `acceptance_tests` (o executor não pode alterá-los; o verify reprova `acceptance_tampered`), planejar só a fase ativa do `PROGRAM.json` e passar em `oxe-cc plan lint` antes de declarar o plano pronto. **Declarar os `phase_gates` do repositório** (typecheck, lint, suíte de governança, CI): sem eles, o verify verde da fase não garante a CI verde (1.21, mesma referência).
 
 Base: `SPEC.md` do escopo resolvido da sessão (critérios com IDs **A1**, **A2**, …) + `.oxe/codebase/*` + código quando necessário (Grep/Read pontual).
 

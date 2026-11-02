@@ -423,6 +423,13 @@ function buildNodeContextProvider(projectRoot, activeSession) {
   const program = require('./oxe-program.cjs');
   const programState = paths.programDir ? program.readProgram(paths.programDir) : null;
   const closedInterfaces = programState ? program.loadClosedInterfaces(paths.programDir, programState) : [];
+  // 1.21 (OXB-020): what the repo enforces on its own goes into every node prompt, collected once per run.
+  let repoRules = [];
+  try {
+    repoRules = require('./oxe-repo-rules.cjs').collectRepoRules(projectRoot, { config: readProjectConfig(projectRoot) });
+  } catch {
+    repoRules = [];
+  }
   const runtimeForExports = loadRuntimeModule();
   let planAcceptance = [];
   try {
@@ -483,6 +490,7 @@ function buildNodeContextProvider(projectRoot, activeSession) {
           command: entry.command,
           content: readTextIfExists(path.resolve(root, file)),
         }))),
+      repoRules,
       gitStatus,
       lessons,
     };
@@ -1859,8 +1867,17 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
   const regressionChecks = programState && options.regression !== false
     ? programLib.loadRegressionChecks(artifactPaths.programDir, programState, programPhaseId)
     : [];
-  const runSuite = regressionChecks.length
-    ? { ...suite, checks: [...(suite.checks || []).filter((check) => !check.regression_phase), ...regressionChecks] }
+  // 1.21 (OXB-020): the project's own gates (typecheck, lint, governance suite, CI) run once per phase verify.
+  const gatesLib = require('./oxe-phase-gates.cjs');
+  const projectConfig = readProjectConfig(projectRoot);
+  const phaseGates = options.gates === false ? [] : gatesLib.readPhaseGates({ phase_gates: parsedPlan.phaseGates }, projectConfig);
+  const gateCheckList = gatesLib.gateChecks(phaseGates, 'phase_verify', {
+    programDir: artifactPaths.programDir || path.join(projectRoot, '.oxe', 'program'),
+    phase: programPhaseId,
+    defaultRunner: projectConfig.phase_gates_runner || null,
+  });
+  const runSuite = regressionChecks.length || gateCheckList.length
+    ? { ...suite, checks: [...(suite.checks || []).filter((check) => !check.regression_phase && !check.phase_gate), ...regressionChecks, ...gateCheckList] }
     : suite;
   touchProgramPhase(projectRoot, activeSession, 'verifying', { run_id: current.run_id || null });
   const registry = buildRuntimePluginRegistry(projectRoot);
@@ -1913,6 +1930,22 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
       for (const id of reconciled.resolved) appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', run_id: current.run_id, payload: { id } });
     }
   } catch { /* reconciliação é auxiliar ao verify */ }
+  // A red project gate becomes a CR with its output (one open CR per gate; it closes when the gate goes green).
+  const gateSummary = summarizeGates(gateCheckList, report.check_results);
+  if (gateSummary.failed.length) {
+    try {
+      const recorded = gatesLib.recordGateFailures({
+        programDir: artifactPaths.programDir || path.join(projectRoot, '.oxe', 'program'),
+        program: programState,
+        plan: parsedPlan,
+        checkResults: report.check_results,
+      });
+      gateSummary.changes = recorded.created.map((cr) => cr.id);
+      for (const cr of recorded.created) {
+        appendEvent(projectRoot, activeSession, { type: 'ChangeRequested', run_id: current.run_id, payload: { id: cr.id, class: cr.class, phase: cr.phase, criteria: [], gate: cr.gate, by: cr.by } });
+      }
+    } catch { /* o CR é auxiliar; o gate vermelho já reprova o verify */ }
+  }
   const next = writeRunState(projectRoot, activeSession, {
     ...current,
     status: nextStatus,
@@ -1924,6 +1957,7 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     verification_evidence_coverage: report.evidence_coverage,
     verification_gaps: report.gaps,
     verification_regression: regressionSummary,
+    verification_gates: gateSummary,
   });
   appendEvent(projectRoot, activeSession, {
     type: 'VerificationCompleted',
@@ -1936,6 +1970,7 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
       error: report.manifest && report.manifest.summary ? report.manifest.summary.error : 0,
       gaps: report.gaps,
       regression: regressionSummary,
+      gates: gateSummary,
     },
   });
   const projected = projectRuntimeArtifacts(projectRoot, activeSession, { runState: next, write: true });
@@ -1944,8 +1979,82 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     run: projected.run,
     report,
     regression: regressionSummary,
+    gates: gateSummary,
     projected,
   };
+}
+
+/**
+ * Gate reasons for `program close` (1.21): every `phase_verify` gate green in the run's last verify, and every
+ * `program_close` gate (CI, slow suites) green now. Red close gates open their CR like the verify ones.
+ */
+function programCloseGateReasons(projectRoot, activeSession, ctx) {
+  const out = { reasons: [], results: [] };
+  if (ctx.skip) return out;
+  const gatesLib = require('./oxe-phase-gates.cjs');
+  const config = readProjectConfig(projectRoot);
+  const parsers = loadSdkParsers();
+  const planText = readTextIfExists(ctx.paths.plan);
+  let plan = null;
+  try {
+    plan = parsers && planText ? parsePlanArtifact(parsers, planText, ctx.paths.plan) : null;
+  } catch {
+    plan = null;
+  }
+  const gates = gatesLib.readPhaseGates({ phase_gates: plan && plan.phaseGates }, config);
+  if (!gates.length) return out;
+  const verifyGates = gates.filter((g) => g.when === 'phase_verify');
+  const ran = (ctx.run && ctx.run.verification_gates) || null;
+  for (const g of verifyGates) {
+    if (!ran || !(ran.passed || []).includes(g.id)) {
+      out.reasons.push(ran && (ran.failed || []).includes(g.id)
+        ? `gate do projeto vermelho no último verify: ${g.id}`
+        : `gate do projeto não rodou no verify da fase: ${g.id} (rode oxe-cc runtime verify)`);
+    }
+  }
+  const programDir = ctx.paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const checks = gatesLib.gateChecks(gates, 'program_close', { programDir, phase: ctx.phase.id, defaultRunner: config.phase_gates_runner || null });
+  for (const check of checks) {
+    const res = spawnSync(check.command, { cwd: projectRoot, shell: true, encoding: 'utf8', timeout: check.timeout_ms, maxBuffer: 4 * 1024 * 1024, windowsHide: true });
+    const result = { check_id: check.id, status: res.status === 0 ? 'pass' : 'fail', stdout: res.stdout || '', stderr: res.stderr || '', error: res.error ? String(res.error) : null };
+    out.results.push(result);
+    if (result.status !== 'pass') out.reasons.push(`gate do projeto vermelho no close: ${check.phase_gate} — ${gatesLib.firstErrorLines(result, 3).split(/\r?\n/).join(' · ') || 'sem saída'}`);
+  }
+  if (out.results.some((r) => r.status === 'pass')) {
+    try {
+      const reconciled = require('./oxe-change.cjs').reconcileChanges(programDir, ctx.phase.id, plan, out.results);
+      for (const id of reconciled.resolved) appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', run_id: ctx.run && ctx.run.run_id, payload: { id } });
+    } catch { /* auxiliar */ }
+  }
+  if (out.results.some((r) => r.status !== 'pass')) {
+    try {
+      const recorded = gatesLib.recordGateFailures({ programDir, program: ctx.state, plan, checkResults: out.results });
+      for (const cr of recorded.created) appendEvent(projectRoot, activeSession, { type: 'ChangeRequested', run_id: ctx.run && ctx.run.run_id, payload: { id: cr.id, class: cr.class, phase: cr.phase, criteria: [], gate: cr.gate, by: cr.by } });
+    } catch { /* o close já está bloqueado pelo gate */ }
+  }
+  return out;
+}
+
+/** `oxe-cc runtime ci --attach <run|url>` (1.21): ties a CI run to the active phase for `kind: ci` gates. */
+function runtimeCiAttach(projectRoot, activeSession, options = {}) {
+  const programLib = require('./oxe-program.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const program = programLib.readProgram(programDir);
+  const phase = options.phase || (program && program.active_phase) || null;
+  return require('./oxe-phase-gates.cjs').attachCiRun(programDir, { run: options.run, repo: options.repo, head: options.head, phase });
+}
+
+/** Pass/fail of the phase gates in one verify (1.21). */
+function summarizeGates(gateChecks, checkResults) {
+  const byId = new Map((checkResults || []).map((r) => [r.check_id, r]));
+  const summary = { total: gateChecks.length, passed: [], failed: [], changes: [] };
+  for (const check of gateChecks) {
+    const result = byId.get(check.id);
+    if (result && result.status === 'pass') summary.passed.push(check.phase_gate);
+    else summary.failed.push(check.phase_gate);
+  }
+  return summary;
 }
 
 
@@ -2053,6 +2162,9 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     requireAcceptanceTests: Boolean(options.requireAcceptanceTests || config.acceptance_tests_required),
   });
   if (spec) result.warnings.push(...lintPlanForCommonPitfalls(plan, spec, projectRoot, specText));
+  // 1.21 (OXB-020): a repo with gate scripts or governance tests but no phase_gates gets a warning.
+  const gatesLib = require('./oxe-phase-gates.cjs');
+  result.warnings.push(...gatesLib.lintPhaseGates(projectRoot, gatesLib.readPhaseGates({ phase_gates: plan.phaseGates }, config)));
   let dryVerify = null;
   if (options.dryVerify) {
     // OXB-009: cada verify deve estar vermelho pelo motivo certo (alvo ausente), não por comando quebrado.
@@ -2497,6 +2609,9 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   if (!phase) throw new Error('Nenhuma fase ativa. Rode `oxe-cc runtime program start`.');
   const run = options.runState || readRunState(projectRoot, activeSession);
   const gateInput = phaseGateInputFromRun(run);
+  // 1.21 (OXB-020): the phase verify must have run every declared project gate green, and the close-time gates
+  // (e.g. CI) run now — before the dossier, so a gate CR that just went green no longer counts as open.
+  const closeGates = programCloseGateReasons(projectRoot, activeSession, { phase, run, paths, state, skip: options.gates === false });
   // 1.20: um critério UAT com sign-off conta como verificado; o dossiê precisa estar sem drift e com handoff.
   const dossier = options.dossier === false ? null : runtimeDossier(projectRoot, activeSession, { phase: phase.id, runState: run });
   if (dossier && gateInput.verify_status === 'blocked' && dossier.pending.length === 0) {
@@ -2516,6 +2631,10 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     if (deferred.length) gate.deferred = deferred;
     if (!dossier.handoff_filled) gate.reasons.push(`handoff vazio: preencha "O que a próxima fase deve saber" em ${path.relative(projectRoot, path.join(dossier.dir, 'plan.md'))}`);
     gate.ok = gate.reasons.length === 0;
+  }
+  if (closeGates.reasons.length) {
+    gate.reasons.push(...closeGates.reasons);
+    gate.ok = false;
   }
   if (!gate.ok) {
     appendEvent(projectRoot, activeSession, {
@@ -3877,6 +3996,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeCiAttach,
   VALID_RUN_STATUSES,
   VALID_APPROVAL_POLICIES,
   VALID_CAPABILITY_TYPES,

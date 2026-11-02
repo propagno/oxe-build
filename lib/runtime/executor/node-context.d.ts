@@ -33,7 +33,18 @@ export interface NodeExecutionContext {
      * executable form: implement against them; they are frozen and cannot be edited.
      */
     acceptanceTests?: AcceptanceTestSnapshot[];
+    /**
+     * Rules the repository enforces on its own (1.21, OXB-020): policy rules, directives from AGENTS.md/CLAUDE.md and
+     * the titles of its governance tests (design-lint, allowlists, catalogs). Written right the first time, they never
+     * come back as a red CI.
+     */
+    repoRules?: RepoRule[];
     lessons?: string[];
+}
+export interface RepoRule {
+    /** Where the rule comes from (`tests/design-lint.test.ts`, `AGENTS.md`, `.oxe/config.json`). */
+    source: string;
+    text: string;
 }
 export interface AcceptanceTestSnapshot {
     criterion: string;
@@ -57,6 +68,7 @@ export interface NodeContextBudget {
     lessons: number;
     interfaces?: number;
     acceptance?: number;
+    repoRules?: number;
 }
 export declare const DEFAULT_NODE_CONTEXT_BUDGET: NodeContextBudget;
 export declare function truncate(text: string, limit: number): string;

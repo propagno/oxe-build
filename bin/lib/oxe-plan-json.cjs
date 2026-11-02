@@ -75,6 +75,19 @@ function validatePlanJson(doc) {
       if (entry.version != null && !(Number.isInteger(entry.version) && entry.version >= 1)) errors.push(`${at}.version: inteiro ≥ 1`);
     });
   }
+  if (doc.phase_gates != null) {
+    if (!Array.isArray(doc.phase_gates)) errors.push('$.phase_gates: lista');
+    else doc.phase_gates.forEach((gate, i) => {
+      const at = `$.phase_gates[${i}]`;
+      if (!gate || typeof gate !== 'object' || Array.isArray(gate)) return errors.push(`${at}: deve ser objeto`);
+      if (typeof gate.id !== 'string' || !/^[A-Za-z][\w-]*$/.test(gate.id)) errors.push(`${at}.id: identificador (ex.: "typecheck")`);
+      if (gate.kind != null && !['command', 'ci'].includes(gate.kind)) errors.push(`${at}.kind: command | ci`);
+      if (gate.kind !== 'ci' && (typeof gate.command !== 'string' || !gate.command.trim())) errors.push(`${at}.command: obrigatório (exceto kind: ci)`);
+      if (gate.when != null && !['phase_verify', 'program_close'].includes(gate.when)) errors.push(`${at}.when: phase_verify | program_close`);
+      if (gate.runner != null && (typeof gate.runner !== 'string' || !gate.runner.includes('{command}'))) errors.push(`${at}.runner: modelo com {command}`);
+      if (gate.timeout_ms != null && !(Number.isInteger(gate.timeout_ms) && gate.timeout_ms > 0)) errors.push(`${at}.timeout_ms: inteiro > 0`);
+    });
+  }
   return errors;
 }
 
@@ -115,7 +128,9 @@ function planJsonToParsedPlan(doc) {
     resolves: Array.isArray(entry.resolves) ? [...entry.resolves] : [],
     version: Number.isInteger(entry.version) ? entry.version : 1,
   }));
-  return { tasks, waves, totalTasks: tasks.length, source: 'PLAN.json', phase: doc.phase || null, acceptanceTests };
+  // Gates do projeto (1.21, OXB-020): rodam uma vez no verify da fase; normalizados por oxe-phase-gates.cjs.
+  const phaseGates = Array.isArray(doc.phase_gates) ? doc.phase_gates.map((gate) => ({ ...gate })) : [];
+  return { tasks, waves, totalTasks: tasks.length, source: 'PLAN.json', phase: doc.phase || null, acceptanceTests, phaseGates };
 }
 
 /**

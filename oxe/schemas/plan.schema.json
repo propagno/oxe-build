@@ -10,6 +10,23 @@
     "schema_version": { "const": 1 },
     "phase": { "type": ["string", "null"], "pattern": "^F\\d+$", "description": "Fase do PROGRAM.json que este plano implementa." },
     "summary": { "type": "string" },
+    "phase_gates": {
+      "description": "Gates do projeto (typecheck, lint, suíte de governança, CI) que rodam UMA vez no verify da fase, não por tarefa. Um gate vermelho abre um CR constraint automático com a saída; ele fecha quando o mesmo gate fica verde (1.21, OXB-020). Também aceitos em .oxe/config.json phase_gates.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Za-z][\\w-]*$" },
+          "kind": { "enum": ["command", "ci"], "default": "command" },
+          "command": { "type": "string", "description": "Obrigatório para kind command (ex.: npm run typecheck)." },
+          "runner": { "type": "string", "description": "Envoltório com {command}, ex.: um heavy-lock. Padrão: config.json phase_gates_runner." },
+          "when": { "enum": ["phase_verify", "program_close"], "default": "phase_verify" },
+          "repo": { "type": "string", "description": "owner/repo do run de CI (kind ci)." },
+          "description": { "type": "string" }
+        }
+      }
+    },
     "acceptance_tests": {
       "description": "Testes de aceite escritos pelo /oxe-plan ANTES da execução. O runtime congela o hash no compile; o executor não pode escrevê-los e o verify reprova se mudarem (acceptance_tampered).",
       "type": "array",

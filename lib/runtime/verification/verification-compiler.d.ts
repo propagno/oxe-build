@@ -31,6 +31,10 @@ export interface AcceptanceCheck {
      * A green exit code without these named tests is `proof_not_executed`.
      */
     proves?: string[];
+    /** Own timeout (ms) for slow project gates such as a full typecheck (1.21); otherwise the suite timeout. */
+    timeout_ms?: number;
+    /** Id of the project phase gate this check runs (1.21, OXB-020). */
+    phase_gate?: string;
 }
 export interface FrozenFile {
     path: string;

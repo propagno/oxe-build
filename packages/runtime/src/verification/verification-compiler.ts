@@ -59,6 +59,10 @@ export interface AcceptanceCheck {
    * A green exit code without these named tests is `proof_not_executed`.
    */
   proves?: string[];
+  /** Own timeout (ms) for slow project gates such as a full typecheck (1.21); otherwise the suite timeout. */
+  timeout_ms?: number;
+  /** Id of the project phase gate this check runs (1.21, OXB-020). */
+  phase_gate?: string;
 }
 
 export interface FrozenFile {
@@ -308,6 +312,7 @@ export async function runCheck(
   cwd: string,
   timeoutMs = 60_000
 ): Promise<CheckResult> {
+  if (typeof check.timeout_ms === 'number' && check.timeout_ms > 0) timeoutMs = check.timeout_ms;
   const frozen = check.frozen_files ?? [];
   if (frozen.length > 0) {
     const missing = frozen.filter((f) => !fs.existsSync(path.resolve(cwd, f.path)));

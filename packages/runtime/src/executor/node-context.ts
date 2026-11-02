@@ -35,7 +35,19 @@ export interface NodeExecutionContext {
    * executable form: implement against them; they are frozen and cannot be edited.
    */
   acceptanceTests?: AcceptanceTestSnapshot[];
+  /**
+   * Rules the repository enforces on its own (1.21, OXB-020): policy rules, directives from AGENTS.md/CLAUDE.md and
+   * the titles of its governance tests (design-lint, allowlists, catalogs). Written right the first time, they never
+   * come back as a red CI.
+   */
+  repoRules?: RepoRule[];
   lessons?: string[];
+}
+
+export interface RepoRule {
+  /** Where the rule comes from (`tests/design-lint.test.ts`, `AGENTS.md`, `.oxe/config.json`). */
+  source: string;
+  text: string;
 }
 
 export interface AcceptanceTestSnapshot {
@@ -63,6 +75,7 @@ export interface NodeContextBudget {
   lessons: number;
   interfaces?: number;
   acceptance?: number;
+  repoRules?: number;
 }
 
 export const DEFAULT_NODE_CONTEXT_BUDGET: NodeContextBudget = {
@@ -74,6 +87,7 @@ export const DEFAULT_NODE_CONTEXT_BUDGET: NodeContextBudget = {
   lessons: 1500,
   interfaces: 4000,
   acceptance: 6000,
+  repoRules: 3500,
 };
 
 export function truncate(text: string, limit: number): string {
@@ -108,6 +122,16 @@ export function renderNodeContext(ctx: NodeExecutionContext | null | undefined, 
         lines.push('```', body, '```');
       }
     }
+  }
+
+  const rules = (ctx.repoRules ?? []).filter((r) => r && r.text && r.text.trim());
+  if (rules.length > 0) {
+    lines.push('', '## Regras do repositório');
+    lines.push('O próprio repositório cobra estas regras (testes de governança, políticas, AGENTS.md/CLAUDE.md) no gate da fase e na CI. Escreva de acordo desde a primeira vez; não afrouxe nenhum desses testes nem edite listas de exceção para passar.');
+    const bySource = new Map<string, string[]>();
+    for (const rule of rules) bySource.set(rule.source, [...(bySource.get(rule.source) ?? []), rule.text.trim()]);
+    const body = [...bySource.entries()].map(([source, texts]) => [`- \`${source}\``, ...texts.map((t) => `  - ${t}`)].join('\n')).join('\n');
+    lines.push(truncate(body, budget.repoRules ?? DEFAULT_NODE_CONTEXT_BUDGET.repoRules!));
   }
 
   if (ctx.implementationContract) {

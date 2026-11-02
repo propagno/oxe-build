@@ -53,3 +53,29 @@ Antes de declarar o plano pronto, rodar **`oxe-cc plan lint`** e corrigir todos 
 - **Retry informado e régua suspeita:** a nova tentativa recebe o comando, o motivo e a saída do verify falho. Duas falhas idênticas param a tarefa como `verify_suspect`: revise o comando (`plan lint --dry-verify`) antes de reexecutar.
 - **Checkpoint e rollback:** `runtime execute --checkpoint-commits` faz um commit local por tarefa concluída, só do escopo dela. `runtime rollback --task Tn` mostra o que voltaria ao último checkpoint, e `--yes` aplica.
 - **Execução interrompida** (OOM, terminal fechado): `runtime recover` reconhece o journal sem dono e o marca `interrupted`, que é retomável.
+
+## Gates do projeto e regras do repositório (1.21)
+
+Num repositório com suíte própria (typecheck, lint, testes de governança como design-lint, allowlists, catálogos, cobertura), o phase gate **é a suíte do repo**. Os testes da feature verdes não bastam.
+
+- **`phase_gates`** no PLAN.json (ou em `.oxe/config.json`; o plano vence no mesmo id):
+  ```json
+  "phase_gates": [
+    { "id": "typecheck", "command": "npm run typecheck", "timeout_ms": 900000 },
+    { "id": "governance", "command": "npx vitest run tests/design-lint.test.ts tests/integration/fs-allowlist.test.ts" },
+    { "id": "ci", "kind": "ci", "when": "program_close", "repo": "owner/repo" }
+  ]
+  ```
+  - Rodam **uma vez** no `runtime verify` da fase, não por tarefa, como checks `gate-<id>`. Um gate vermelho reprova o verify.
+  - O `runner` do gate, ou o `phase_gates_runner` do config, envolve o comando, por exemplo num heavy-lock: `"node {env:TEMP}/lock.mjs -- {command}"`.
+  - **Gate vermelho vira CR `constraint` automático** (`by: phase_gate:<id>`), com o trecho da saída como evidência. Ele fecha sozinho quando o mesmo gate fica verde. Não abra um CR manual para isso nem duplique.
+  - `when: program_close` roda no `runtime program close`. O close também exige que todos os gates `phase_verify` estejam verdes no último verify.
+  - **CI como gate:** `oxe-cc runtime ci --attach <run-id|url> [--head <sha>]` anexa o run à fase. O gate `kind: ci` só fica verde com `success` nessa head (`gh run view`).
+  - `--no-gates` pula os gates no verify ou no close. Use só para diagnóstico; nunca para fechar uma fase.
+- **O `plan lint` avisa** quando o repositório tem scripts `typecheck`/`lint` ou testes de governança e o plano não declara `phase_gates`.
+- **Regras do repositório no prompt do executor:** cada nó recebe `## Regras do repositório`, com:
+  - as `policy_rules` do config;
+  - as diretivas (never/always/must/nunca/sempre…) de `AGENTS.md`/`CLAUDE.md`;
+  - os títulos dos testes de governança.
+
+  `config.repo_rules.tests` acrescenta arquivos, `repo_rules.sources` acrescenta outros markdowns, e `repo_rules.disabled: true` desliga.

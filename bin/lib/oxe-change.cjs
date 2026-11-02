@@ -123,6 +123,7 @@ function recordChange(input) {
     status: 'open',
     amend_to: cls === 'spec_gap' ? Number(input.amendTo) || 2 : null,
     evidence: input.evidence || null,
+    ...(input.gate ? { gate: String(input.gate) } : {}),
   };
   appendNdjson(changesFile(programDir), cr);
   const impacted = impactedTasks(plan, criteria);
@@ -153,7 +154,8 @@ function setChangeStatus(programDir, id, status, extra = {}) {
 }
 
 /**
- * CRs abertos que a verificação resolveu: algum `check-accept-*` verde cujo teste declara `resolves: [CR]`.
+ * CRs abertos que a verificação resolveu: algum `check-accept-*` verde cujo teste declara `resolves: [CR]`,
+ * ou, para um CR aberto por gate do projeto (`gate`), o próprio `gate-<id>` verde.
  * @returns {{ resolved: string[], open: object[] }}
  */
 function reconcileChanges(programDir, phaseId, plan, checkResults) {
@@ -169,6 +171,10 @@ function reconcileChanges(programDir, phaseId, plan, checkResults) {
     if (cr.status !== 'open' || (phaseId && cr.phase && cr.phase !== phaseId)) continue;
     if (resolvedBy.has(cr.id)) {
       setChangeStatus(programDir, cr.id, 'resolved', { resolution: `teste de aceite ${resolvedBy.get(cr.id)} verde`, by: 'verify' });
+      resolved.push(cr.id);
+    } else if (cr.gate && passing.has(`gate-${cr.gate}`)) {
+      // 1.21: a CR raised by a red phase gate closes when that same gate goes green.
+      setChangeStatus(programDir, cr.id, 'resolved', { resolution: `gate do projeto ${cr.gate} verde`, by: 'verify' });
       resolved.push(cr.id);
     }
   }

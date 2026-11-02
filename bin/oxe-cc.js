@@ -4098,6 +4098,10 @@ function parseRuntimeArgs(argv) {
     else if (a === '--risk' && argv[i + 1]) out.risk = String(argv[++i]);
     else if (a === '--yes') out.yes = true;
     else if (a === '--checkpoint-commits') out.checkpointCommits = true;
+    else if (a === '--attach' && argv[i + 1]) out.attach = String(argv[++i]);
+    else if (a === '--repo' && argv[i + 1]) out.repo = String(argv[++i]);
+    else if (a === '--head' && argv[i + 1]) out.head = String(argv[++i]);
+    else if (a === '--no-gates') out.noGates = true;
     else if (a === '--force') out.force = true;
     else if (a === '--no-commit') out.noCommit = true;
     else if (a === '--message' && argv[i + 1]) out.message = String(argv[++i]);
@@ -4966,6 +4970,7 @@ async function runRuntime(opts) {
         const result = oxeOperational.runtimeProgramClose(opts.dir, activeSession, {
           phase: opts.phase || null,
           commit: !opts.noCommit,
+          gates: !opts.noGates,
           message: opts.message || undefined,
           deferSignoff: opts.deferSignoff,
           by: opts.by || undefined,
@@ -5094,6 +5099,7 @@ async function runRuntime(opts) {
   if (opts.action === 'verify') {
     try {
       const verified = await oxeOperational.runRuntimeVerify(opts.dir, activeSession, {
+        gates: !opts.noGates,
         runId: opts.runId || undefined,
         task: opts.task || undefined,
         workItemId: opts.task || undefined,
@@ -5108,6 +5114,11 @@ async function runRuntime(opts) {
         const reg = verified.regression;
         const color = reg.failed.length ? red : green;
         console.log(`  ${c ? color : ''}Regressão (${reg.phases.join(', ')}):${c ? reset : ''} ${reg.passed}/${reg.total} verdes${reg.failed.length ? ` — falhas: ${reg.failed.map((f) => f.check_id).join(', ')}` : ''}`);
+      }
+      if (verified.gates && verified.gates.total) {
+        const g = verified.gates;
+        const color = g.failed.length ? red : green;
+        console.log(`  ${c ? color : ''}Gates do projeto:${c ? reset : ''} ${g.passed.length}/${g.total} verdes${g.failed.length ? ` — vermelhos: ${g.failed.join(', ')}` : ''}${g.changes && g.changes.length ? ` · CR aberto: ${g.changes.join(', ')}` : ''}`);
       }
       console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${verified.run.run_id}`);
       console.log(`  ${c ? green : ''}Status:${c ? reset : ''} ${verified.report.status}`);
@@ -5240,6 +5251,22 @@ async function runRuntime(opts) {
       return;
     } catch (err) {
       console.error(`${red}${err && err.message ? err.message : 'Falha ao executar runtime.'}${reset}`);
+      process.exit(1);
+    }
+  }
+
+  if (opts.action === 'ci' && opts.attach) {
+    try {
+      const record = oxeOperational.runtimeCiAttach(opts.dir, activeSession, { run: opts.attach, repo: opts.repo || null, head: opts.head || null, phase: opts.phase || null });
+      if (opts.jsonOutput) {
+        console.log(JSON.stringify(record, null, 2));
+        return;
+      }
+      console.log(`  ${c ? green : ''}✓${c ? reset : ''} CI ${record.run}${record.repo ? ` (${record.repo})` : ''} anexado à fase ${record.phase || '—'}${record.head ? ` · head ${record.head}` : ''}`);
+      console.log(`  ${c ? dim : ''}Um phase_gate kind "ci" só fica verde quando este run terminar com success.${c ? reset : ''}`);
+      return;
+    } catch (err) {
+      console.error(`${red}${err && err.message ? err.message : 'Falha ao anexar o run de CI.'}${reset}`);
       process.exit(1);
     }
   }
