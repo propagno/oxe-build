@@ -127,3 +127,17 @@ Num repositório com suíte própria (typecheck, lint, testes de governança com
 
 - **Release:** a partir da 1.21.0, o `doctor --release` exige `.oxe/release/scorecard-report.json` com **≥ 2 projetos reais**, cada um com ≥ 10 tarefas e dentro das metas. Gere com `oxe-cc runtime scorecard --dir <projeto> --release-report <oxe-build>/.oxe/release/scorecard-report.json --name <projeto>`.
 - **Worktrees:** o `dispose` do `git_worktree` desfaz, sem segui-los, os links que saem do worktree (junction de `node_modules`, links de workspace) antes do `worktree remove --force`. Assim, o diretório real nunca é apagado junto.
+
+## Execução com o plano como fonte (1.21.1)
+
+- **O grafo é projeção:** o `runtime execute` recompila sozinho quando o PLAN.json, o PLAN.md, a SPEC ou o pack mudaram desde o último compile. Tarefas `done` nunca são refeitas.
+  - Para refazer uma tarefa, **reabra-a**: um CR `defect`/`spec_gap` (`runtime feedback`) reabre as tarefas impactadas; `oxe-cc plan reopen Tn` reabre à mão.
+- **A verificação do critério roda na tarefa que o completa:** o "Como verificar" de um critério com várias tarefas roda só no verify da última delas. Se várias terminam em paralelo, a verificação fica para o verify da fase.
+  - Não ponha o teste de aceite do critério no `verify.commands` de uma tarefa intermediária: ele só pode passar quando o critério inteiro estiver pronto. O `plan lint` avisa.
+- **Trabalho que chega por outro caminho:**
+  - `"blocked_by": ["owner/repo#594"]` trava só a tarefa, sem gate humano. Quando o PR é mergeado, o compile seguinte a destrava sozinho (via `gh`).
+  - `"kind": "verify_only"` (ou `external_delivery`) roda só o verify, sem agente e sem custo, e conclui quando o verify passa.
+- **Ambiente dos processos filhos:** executor, ferramentas, verify e gates não herdam `OXESPACE_*` nem segredos (`TOKEN`, `SECRET`, `PASSWORD`, `API_KEY`, `CREDENTIAL`, `PRIVATE_KEY`).
+  - Para ajustar: `env_scrub` (regex extras) e `env_allow` (nomes) no config.
+  - `oxe-cc doctor --project` mostra o que será removido.
+- **Modo inplace:** quando uma tarefa falha de vez, a tentativa é guardada em `.oxe/runs/<run>/attempts/<task>-failed/` (patch e arquivos novos) e o escopo dela é restaurado. Arquivos que você já tinha alterado antes do execute não são tocados. Cada tentativa tem seu log em `attempts/<task>-<n>.log`, e `--wave N` roda só a onda N.

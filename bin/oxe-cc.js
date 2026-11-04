@@ -2032,6 +2032,7 @@ function runDoctor(target, options = {}) {
         console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} engines ${JSON.stringify(w.engines)}${w.nvmrc ? ` · .nvmrc ${w.nvmrc}` : ''}${w.packageManager ? ` · ${w.packageManager}` : ''}`);
         for (const p of env.problems) console.log(`  ${red}✗${reset} ${p}`);
         for (const x of env.warnings) console.log(`  ${yellow}!${reset} ${x}`);
+        if (env.scrubbed_env && env.scrubbed_env.length) console.log(`  ${c ? dim : ''}Removidas dos processos filhos (executor, verify, gates):${c ? reset : ''} ${env.scrubbed_env.join(', ')}`);
         console.log(env.ok ? `  ${green}✓ ambiente compatível${reset}` : `  ${red}✗ ambiente incompatível — o runtime execute fica bloqueado (project_env)${reset}`);
       }
       process.exitCode = env.ok ? 0 : 1;
@@ -5255,6 +5256,7 @@ async function runRuntime(opts) {
         adapter: adapterId,
         adapterOptions,
         checkpointCommits: opts.checkpointCommits || undefined,
+        wave: opts.wave != null && !Number.isNaN(opts.wave) ? opts.wave : undefined,
         budgetTurns: opts.budgetTurns || undefined,
         budgetUsd: opts.budgetUsd || undefined,
         budgetReset: opts.budgetReset || undefined,
@@ -6092,6 +6094,27 @@ async function main() {
     });
     if (exitCode !== 0) process.exit(exitCode);
     return;
+  }
+
+  if (command === 'plan' && argv[0] === 'reopen') {
+    // oxe-cc plan reopen T<n> [--dir <pasta>]
+    const rest = argv.slice(1);
+    let dir = process.cwd();
+    let task = null;
+    for (let i = 0; i < rest.length; i += 1) {
+      const a = rest[i];
+      if (a === '--dir' && rest[i + 1]) dir = path.resolve(rest[++i]);
+      else if (/^Td+$/.test(a)) task = a;
+      else if (!a.startsWith('-')) dir = path.resolve(a);
+    }
+    try {
+      const out = oxeOperational.runtimePlanReopen(dir, null, { task });
+      console.log(`  ${out.changed ? '✓' : '·'} ${out.task} ${out.changed ? 'reaberta (o próximo execute a refaz)' : 'não estava done'}`);
+      process.exit(0);
+    } catch (err) {
+      console.error(`${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exit(1);
+    }
   }
 
   if (command === 'plan' && argv[0] === 'done') {

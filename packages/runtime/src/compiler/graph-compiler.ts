@@ -44,6 +44,24 @@ export interface VerifyContract {
   command: string | null;
 }
 
+/** External dependencies of a task (PLAN.json `blocked_by`). */
+function taskExternalDependencies(task: ParsedTask): string[] {
+  const meta = (task.meta ?? {}) as Record<string, unknown>;
+  return Array.isArray(meta.blocked_by) ? (meta.blocked_by as unknown[]).map(String).filter(Boolean) : [];
+}
+
+/** A task delivered by another path: only its verify runs (`kind: verify_only` | `external_delivery`). */
+function taskIsVerifyOnly(task: ParsedTask): boolean {
+  const kind = ((task.meta ?? {}) as Record<string, unknown>).kind;
+  return kind === 'verify_only' || kind === 'external_delivery';
+}
+
+/** Human gate declared on the task (PLAN.json `gate`); null when none. External dependencies are not human gates. */
+function taskHumanGate(task: ParsedTask): string | null {
+  const gate = ((task.meta ?? {}) as Record<string, unknown>).gate as { kind?: string; reason?: string } | undefined;
+  return gate && (gate.reason || gate.kind) ? `${gate.kind ?? 'human'}: ${gate.reason ?? 'aprovação humana'}` : null;
+}
+
 /** Gate declared on the task (PLAN.json `gate` / `blocked_by`), as a human-readable reason; null when none. */
 function taskGate(task: ParsedTask): string | null {
   const meta = (task.meta ?? {}) as Record<string, unknown>;
@@ -60,6 +78,17 @@ export interface NodePolicy {
   max_retries: number;
   /** Why this node waits for a gate (task-level gate or external dependency). */
   gate_reason?: string;
+  /**
+   * External work this node waits for (PLAN.json `blocked_by`, e.g. "owner/repo#594"). 1.21.1 (OXB-047): it blocks
+   * only this node, never as a human gate — those were recreated as pending "security" gates on every execute and the
+   * preflight then blocked the whole run.
+   */
+  external_dependency?: string[];
+  /**
+   * No agent, no cost: the node only runs its verify (`kind: verify_only` / `external_delivery`, work delivered by
+   * another path). Green completes it; red leaves it waiting.
+   */
+  verify_only?: boolean;
 }
 
 export interface GraphNode {
@@ -144,10 +173,13 @@ export function compile(
         command: task.verifyCommand,
       },
       policy: {
-        // 1.20c (OXB-005): a task-level gate or an external dependency (`blocked_by`) stops the scheduler before it.
-        requires_human_approval: require_approval_for_all || gateReason !== null,
+        // 1.20c (OXB-005): a task-level gate stops the scheduler before it. 1.21.1 (OXB-047): an external dependency
+        // (`blocked_by`) blocks only this node and never becomes a human gate.
+        requires_human_approval: require_approval_for_all || taskHumanGate(task) !== null,
         max_retries: default_max_retries,
         ...(gateReason ? { gate_reason: gateReason } : {}),
+        ...(taskExternalDependencies(task).length ? { external_dependency: taskExternalDependencies(task) } : {}),
+        ...(taskIsVerifyOnly(task) ? { verify_only: true } : {}),
       },
     };
 

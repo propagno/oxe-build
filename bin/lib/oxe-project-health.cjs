@@ -40,6 +40,11 @@ const ALLOWED_CONFIG_KEYS = [
   'checkpoint_commits',
   'phase_gates',
   'phase_gates_runner',
+  // 1.21.1
+  'external_dependency_check',
+  'env_scrub',
+  'env_allow',
+  'isolate_failed_attempts',
   'repo_rules',
   'commit_convention',
   'project_env_check',

@@ -53,8 +53,9 @@ function validatePlanJson(doc) {
     if (task.done != null && typeof task.done !== 'boolean') errors.push(`${at}.done: boolean`);
     if (task.done_at != null && typeof task.done_at !== 'string') errors.push(`${at}.done_at: data ISO`);
     if (task.done_commit != null && typeof task.done_commit !== 'string') errors.push(`${at}.done_commit: sha do checkpoint`);
+    if (task.reopened != null && !Array.isArray(task.reopened)) errors.push(`${at}.reopened: histórico de reaberturas`);
     if (task.commit != null && (typeof task.commit !== 'string' || !task.commit.trim())) errors.push(`${at}.commit: mensagem do checkpoint`);
-    if (task.kind != null && !['code', 'spike'].includes(task.kind)) errors.push(`${at}.kind: code | spike`);
+    if (task.kind != null && !['code', 'spike', 'verify_only', 'external_delivery'].includes(task.kind)) errors.push(`${at}.kind: code | spike | verify_only | external_delivery`);
     if (task.question != null && typeof task.question !== 'string') errors.push(`${at}.question: texto`);
     if (task.gate != null && (typeof task.gate !== 'object' || Array.isArray(task.gate) || typeof task.gate.reason !== 'string')) errors.push(`${at}.gate: { kind?, reason }`);
     if (task.blocked_by != null && !isStringArray(task.blocked_by)) errors.push(`${at}.blocked_by: lista de dependências externas`);
@@ -359,7 +360,70 @@ function lintPlan(input) {
   return { ok: errors.length === 0, errors, warnings };
 }
 
+/**
+ * 1.21.1 (OXB-053/046): the task(s) that complete each criterion. A criterion's own verification (the SPEC
+ * "Como verificar" / its phase-wide acceptance test) can only pass after the LAST of its tasks: in the oxespace 1.5.0
+ * F1 the A4 test checked every dialog in src/ and ran in the verify of T8 and T9 too, failing 12 times (US$ 37.52).
+ * The closer is the single task of the criterion that no other task of the same criterion depends on (transitively).
+ * With several such sinks the criterion is only checked at phase verify.
+ * @returns {Map<string, { closer: string|null, tasks: string[], sinks: string[] }>}
+ */
+function criterionClosers(tasks) {
+  const list = Array.isArray(tasks) ? tasks : [];
+  const byId = new Map(list.map((t) => [t.id, t]));
+  const deps = (t) => (Array.isArray(t.dependsOn) ? t.dependsOn : Array.isArray(t.depends_on) ? t.depends_on : []);
+  const ancestors = new Map();
+  const ancestorsOf = (id, seen = new Set()) => {
+    if (ancestors.has(id)) return ancestors.get(id);
+    const out = new Set();
+    for (const d of deps(byId.get(id) || {})) {
+      if (seen.has(d)) continue;
+      seen.add(d);
+      out.add(d);
+      for (const a of ancestorsOf(d, seen)) out.add(a);
+    }
+    ancestors.set(id, out);
+    return out;
+  };
+  const result = new Map();
+  const criteria = new Set(list.flatMap((t) => (Array.isArray(t.aceite) ? t.aceite : Array.isArray(t.acceptance) ? t.acceptance : [])));
+  for (const criterion of criteria) {
+    const members = list.filter((t) => (t.aceite || t.acceptance || []).includes(criterion)).map((t) => t.id);
+    const sinks = members.filter((id) => !members.some((other) => other !== id && ancestorsOf(other).has(id)));
+    result.set(criterion, { closer: sinks.length === 1 ? sinks[0] : null, tasks: members, sinks });
+  }
+  return result;
+}
+
+/**
+ * 1.21.1: reopens a done task (rework after a CR or a failed phase verify). Since execute recompiles from the plan and
+ * skips done tasks, "run it again" means reopening it explicitly — never a stale graph re-running finished work.
+ * @returns {boolean} whether PLAN.json changed
+ */
+function markPlanTaskOpen(planMdPath, taskId, info = {}) {
+  const jsonPath = planJsonPathFor(planMdPath);
+  if (!jsonPath || !fs.existsSync(jsonPath)) return false;
+  let doc;
+  try {
+    doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+  } catch {
+    return false;
+  }
+  const task = Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
+  if (!task || task.done !== true) return false;
+  task.done = false;
+  task.reopened = [...(Array.isArray(task.reopened) ? task.reopened : []), { at: new Date().toISOString(), by: info.by || null, previous_commit: task.done_commit || null }];
+  delete task.done_at;
+  delete task.done_commit;
+  const tmp = `${jsonPath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+  fs.renameSync(tmp, jsonPath);
+  return true;
+}
+
 module.exports = {
+  markPlanTaskOpen,
+  criterionClosers,
   markPlanTaskDone,
   planJsonPathFor,
   validatePlanJson,

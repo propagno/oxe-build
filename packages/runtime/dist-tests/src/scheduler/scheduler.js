@@ -386,6 +386,13 @@ class Scheduler {
         let lastVerifySignature = null;
         let verifySuspect = false;
         const maxAttempts = node.policy.max_retries + 1;
+        // 1.21.1 (OXB-047): work that arrives by another path never pays an agent and never becomes a human gate.
+        // An explicit human gate (PLAN.json `gate`) still comes first: the attempt loop requests it as before.
+        const humanGatePending = node.policy.requires_human_approval && !this.hasApprovedGate(node, ctx);
+        if (!humanGatePending && (node.policy.verify_only || (node.policy.external_dependency?.length ?? 0) > 0)) {
+            await this.runExternalNode(node, ctx, status, completed, failed, blocked);
+            return;
+        }
         const quotaBlocked = this.consumeQuotaForNode(ctx, node);
         if (quotaBlocked) {
             this.blockNode(nodeId, ctx, status, blocked, 'quota_exceeded', quotaBlocked);
@@ -528,7 +535,7 @@ class Scheduler {
                     this.emit(ctx, {
                         type: 'RetryScheduled',
                         work_item_id: nodeId,
-                        payload: { next_attempt: attempt + 1, reason: lastResult.failure_class, backoff_ms: backoffMs },
+                        payload: { next_attempt: attempt + 1, reason: lastResult.failure_class, backoff_ms: backoffMs, output_tail: tailLines(lastResult.output || '', 60) },
                     });
                 }
             }
@@ -554,7 +561,7 @@ class Scheduler {
                     this.emit(ctx, {
                         type: 'RetryScheduled',
                         work_item_id: nodeId,
-                        payload: { next_attempt: attempt + 1, reason: 'env', backoff_ms: backoffMs },
+                        payload: { next_attempt: attempt + 1, reason: 'env', backoff_ms: backoffMs, output_tail: tailLines(lastResult.output || '', 60) },
                     });
                 }
             }
@@ -569,7 +576,7 @@ class Scheduler {
         this.emit(ctx, {
             type: 'WorkItemBlocked',
             work_item_id: nodeId,
-            payload: { failure_class: verifySuspect ? 'verify_suspect' : lastResult?.failure_class ?? 'env', max_attempts: maxAttempts },
+            payload: { failure_class: verifySuspect ? 'verify_suspect' : lastResult?.failure_class ?? 'env', max_attempts: maxAttempts, output_tail: tailLines(lastResult?.output || '', 60) },
         });
         status.set(nodeId, 'failed');
         failed.push(nodeId);
@@ -795,6 +802,39 @@ class Scheduler {
             detail: { gate_id: gate.gate_id, scope: gate.scope, action: gate.action },
         });
         return gate.gate_id;
+    }
+    /**
+     * A node delivered by another path (`verify_only`) or waiting on external work (`external_dependency`): no agent.
+     * verify_only runs only the node's verify — green completes it; red (or no verify) leaves it waiting. A node with an
+     * external dependency and no verify_only waits without a gate, so the rest of the run (and the next preflight) goes on.
+     */
+    async runExternalNode(node, ctx, status, completed, failed, blocked) {
+        const deps = node.policy.external_dependency ?? [];
+        if (node.policy.verify_only && node.verify?.command) {
+            const attemptId = `${node.id}-verify-only`;
+            const workspaceManager = ctx.pluginRegistry?.workspaceProviderFor(node.workspace_strategy) ?? ctx.workspaceManager;
+            const lease = await workspaceManager.allocate({ work_item_id: node.id, attempt_number: 1, strategy: node.workspace_strategy, mutation_scope: node.mutation_scope });
+            try {
+                const verdict = await this.verifyNode(node, lease, ctx, attemptId, 1);
+                if (verdict && verdict.status !== 'failed') {
+                    this.emit(ctx, {
+                        type: 'WorkItemCompleted',
+                        work_item_id: node.id,
+                        attempt_id: attemptId,
+                        payload: { attempt_number: 1, evidence: [], completed_by: 'verify_only', external_dependency: deps },
+                    });
+                    status.set(node.id, 'completed');
+                    completed.push(node.id);
+                    this.recordProgress();
+                    return;
+                }
+            }
+            finally {
+                await workspaceManager.dispose(lease.workspace_id).catch(() => undefined);
+            }
+        }
+        this.blockNode(node.id, ctx, status, blocked, 'external_dependency', deps.length ? deps.join(', ') : 'verify_only: entrega externa ainda não verificada');
+        void failed;
     }
     blockNode(nodeId, ctx, status, blocked, reason, detail = null) {
         this.emit(ctx, {

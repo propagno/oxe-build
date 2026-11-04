@@ -1,0 +1,273 @@
+# Backlog do oxe-build: validação pela OXESpace 1.5.0
+
+Este backlog continua o de `docs/oxevoice/BACKLOG.md`: a numeração segue a partir do OXB-031. A fonte é a implementação de ponta a ponta da OXESpace 1.5.0 com o oxe-cc 1.21. São 8 fases, 60 tarefas e um time de agentes (TECH LEAD, BACKEND, FRONTEND, MOBILE, DESIGN, HML e SRE) trabalhando num repositório grande, com trem de merge e CI pesada.
+
+Registro mantido pelo TECH LEAD do oxespace. Cada entrada traz evidência, impacto e uma proposta que vai além do conserto pontual. Os status possíveis são `aberto`, `em andamento`, `resolvido (<commit>)` e `proposta`.
+
+O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
+
+---
+
+## OXB-031: a versão 1.21 não está no npm, e cada time instala de um jeito
+
+- **Status:** aberto.
+- **Evidência (04/11):**
+  - `npm view oxe-cc version` = 1.16.0;
+  - global instalado = 1.12.0;
+  - o 1.21.0 só existe no repositório local.
+  - A instalação no oxespace foi feita com `node <oxe-build>/bin/oxe-cc.js install --oxe-only --local --dir <worktree>`.
+- **Impacto:** cada agente do time precisa saber o caminho local. O `npx oxe-cc` de qualquer sessão roda uma versão velha sem programa por fases, e o doctor não avisa.
+- **Proposta:** publicar a 1.21 (ou um canal `next`), e o `doctor` comparar a versão que gerou o `.oxe/` com a que está rodando, avisando no mismatch.
+
+## OXB-032: o ROADMAP e a SPEC vivem em `.oxe/`, que o repositório não versiona
+
+- **Status:** aberto.
+- **Evidência:** o oxespace ignora `.oxe/` no `.gitignore`, como o próprio template sugere. O `program init` lê `.oxe/ROADMAP.md`. Para o time revisar o plano num PR, foi preciso copiar a SPEC e o ROADMAP para `docs/roadmap-1.5/oxe/` à mão, e cada edição exige recopiar (aconteceu 3 vezes no mesmo dia).
+- **Impacto:** cópias divergem, e o PR revisado pode não ser o que o runtime executa.
+- **Proposta:** um `roadmap_ref`/`spec_ref` no `config.json` apontando para caminhos versionados (ex.: `docs/roadmap-1.5/oxe/ROADMAP.md`), e o runtime lê de lá. Se for preciso manter a cópia em `.oxe/`, o `doctor` acusa a divergência por hash.
+
+## OXB-033: as fases são estritamente seriais; um time com frentes paralelas fica parado
+
+- **Status:** proposta.
+- **Evidência:**
+  - na 1.5.0, a F3 (worktrees, backend) não depende da F2 (Settings, frontend);
+  - a F7 (modos) quase não depende de F4–F6.
+  - Mesmo assim, o `program-model` só deixa começar uma fase depois de todas as anteriores fecharem.
+- **Impacto:** com 5 papéis, a execução fica limitada ao ritmo da fase mais lenta, o que contraria a regra do time de "ninguém parado quando uma linha bloqueia".
+- **Proposta:** dependência entre fases como DAG (`depends_on` por fase no ROADMAP), com fases independentes rodando em paralelo em worktrees separadas. O `program close` continua exigindo os gates de cada fase.
+
+## OXB-034: editar o ROADMAP depois do `program start` exige `init --force`
+
+- **Status:** aberto (risco a confirmar).
+- **Evidência:** a revisão do coordenador acrescentou A40 e A41 à F8 com a F1 já iniciada. O caminho disponível foi `runtime program init --force`.
+- **Impacto:** não está claro se o `--force` preserva o estado das fases já iniciadas ou fechadas. Se não preservar, uma emenda de escopo apaga o progresso.
+- **Proposta:** um `runtime program amend` que aplica a emenda ao ROADMAP sem perder o estado. Nas fases fechadas, a emenda vira um CR `spec_gap` versionado em vez de sobrescrever.
+
+## OXB-035: tarefas que o time já faz fora do executor não têm lugar no plano
+
+- **Status:** aberto.
+- **Evidência:** na F1, três tarefas são PRs que outros agentes já tinham em voo (pareamento, tela de falha do banco, S7.1). Outra (os tokens C4, PR #604) foi feita pelo FRONTEND antes de o PLAN.json existir. O `blocked_by` cobre "espere um PR externo", mas não "esta tarefa do plano foi entregue por outro caminho; verifique e marque como feita".
+- **Impacto:** o plano ou duplica o trabalho ou mente sobre o que o executor fez.
+- **Proposta:** `kind: external_delivery` com `pr: <repo#n>`. O verify roda os testes congelados contra a main depois do merge, e a tarefa fica `done` com `completed_by: external`, contando no scorecard à parte.
+
+## OXB-036: decisões de orçamento mudam no meio do programa
+
+- **Status:** proposta.
+- **Evidência:**
+  - o usuário aprovou um teto de US$ 275 por fases e, horas depois, removeu o teto ("o valor final é o produto funcional").
+  - Hoje o orçamento vive em flags do `execute` ou no `budget` de cada PLAN.json.
+- **Impacto:** é preciso editar cada PLAN.json, e o ledger não registra quem mudou a política nem quando.
+- **Proposta:** `budget_policy` no `PROGRAM.json` (`cap` | `track_only`), com histórico de quem decidiu. No modo `track_only`, o scheduler mantém só a proteção contra laço (régua de suspeita + turnos máximos por tentativa) e o scorecard reporta o gasto.
+
+## OXB-037: o critério A* da SPEC é grosso demais para a UI, e o OXE não tem subcritérios
+
+- **Status:** proposta.
+- **Evidência:** o DESIGN entregou critérios de aceite por tela (`team/plans/1.5.0-ui-acceptance.md`, com G1–G9 globais mais vários ACs observáveis por tela), organizados por onda de backend. A SPEC da 1.5.0 tem 41 A*, cada um cobrindo várias telas. O `idList` do program-model só reconhece `A<n>`, e o lint não tem como ligar um teste congelado a "A19, tela X, estado Y".
+- **Impacto:** ou a SPEC cresce para centenas de A*, ou a ligação critério → teste fica implícita, e o OXB-030 (termo do critério que o teste não exercita) volta pela porta da UI.
+- **Proposta:** subcritérios `A19.3` na SPEC, aceitos pelo parser, pelo lint (cobertura por subcritério) e pelo dossiê (techspec por subcritério). Junto, critérios globais (`G*`) que valem para toda tarefa de UI da fase, como contraste, teclado e 900 px.
+
+## OXB-038: qualquer `A<n>` em texto vira critério da SPEC (colisão de namespace)
+
+- **Status:** aberto.
+- **Evidência:** o `idList` do program-model (`\b[A-Z]{1,4}-?\d+[a-z]?\b`, filtrado por `^A`) trata como critério da SPEC qualquer token `A8` no ROADMAP, inclusive em ids de outros documentos. Os ACs de UI do DESIGN usavam `A1–A12` por tela, e precisaram ser renomeados para `UA1…` antes de aparecer em planos e `proves`.
+- **Impacto:** um id externo citado no texto de uma fase vira critério fantasma, ou mascara um A* real que faltava.
+- **Proposta:** ids da SPEC só valem nos campos estruturados (a linha `**Critérios de aceite:**` e a tabela da SPEC), nunca em prosa. O lint também acusa colisão entre os A* da SPEC e ids de documentos de entrada (`inputs:` da SPEC).
+
+## OXB-039: o `npm ci` da worktree remove em silêncio a dependência nativa, mesmo com Node certo
+
+- **Status:** aberto (o OXB do OxeVoice tratou só a checagem de engines).
+- **Evidência (04/11):**
+  - Na worktree do plano (`oxespace-150`), com Node 22.22.2 compatível, o `npm ci` rodou `node-gyp rebuild` no `better-sqlite3@13` (`gypfile:false`, com prebuilds).
+  - O `node-gyp rebuild` falhou, e o npm marcou o pacote como "failed optional dependency" e o apagou.
+  - O `postinstall` (`rebuild:native`) quebrou depois com `Cannot find module 'better-sqlite3'`.
+  - O `doctor --project` disse "ambiente compatível".
+  - Contorno: copiar o pacote com os prebuilds de outra worktree.
+- **Impacto:** cada worktree de tarefa do executor que rodar `npm ci` perde o SQLite. Os testes de banco (`test:electron`) quebram por um motivo de ambiente que parece código, ou somem.
+- **Proposta:**
+  - o `doctor --project` e o preflight checam se cada dependência do lockfile **está de fato presente** depois da instalação, comparando o lockfile com `node_modules`, inclusive as opcionais;
+  - o setup de worktree do executor oferece `deps_strategy: link | copy-from:<path> | ci` (link com junction desfeita no dispose, o que a 1.21 já faz);
+  - o executor reaproveita um `node_modules` validado em vez de instalar por tarefa.
+
+## OXB-040: o dry-verify chama de "comando quebrado" um vermelho legítimo quando a tarefa mistura arquivo novo e arquivo existente
+
+- **Status:** aberto.
+- **Evidência:** no `plan lint --dry-verify` da F1, 6 de 7 erros eram vermelhos corretos marcados como `broken_command`.
+  - **Dois caminhos excludentes no `classifyFailure`:** o caminho `assertion_red` exige `targetsExist` (todos os arquivos da tarefa e das dependências pendentes existem). O caminho `missing_target` exige que a saída mencione um alvo. Uma tarefa que **altera arquivos existentes e cria um teste novo** (T6) não cabe em nenhum dos dois.
+  - **Propagação:** o erro passa para as tarefas que dependem dela (T8–T11), via `pendingDependencyFiles`.
+  - **Diretório não reconhecido:** `ENOENT scandir src\design\icons` não é reconhecido como alvo ausente, porque só o basename de arquivo é comparado (e com separador `\` no Windows).
+  - **Aspas no Windows:** `--jq '.[0].conclusion'` quebrou, porque o runner não passa as aspas simples pelo shell do Windows. Era um erro real do plano, mas a mensagem não diz isso.
+- **Impacto:** o planner contorna o classificador, tirando testes próprios do escopo da tarefa ou importando um módulo só para provocar "missing target". Isso distorce o plano para agradar a ferramenta.
+- **Proposta:**
+  - classificar por arquivo: `assertion_red` quando as asserções falham sobre arquivos existentes, mesmo que outros alvos da tarefa ainda não existam;
+  - reconhecer diretórios-alvo (o prefixo comum dos `files`) e normalizar os separadores;
+  - avisar sobre aspas simples em comandos quando a plataforma é win32.
+
+## OXB-041: o `plan lint` dá "ok" sem PLAN.md e sem os pacotes racionais, e o execute recusa depois
+
+- **Status:** aberto.
+- **Evidência:**
+  - Com só o `PLAN.json` (mais os testes congelados), o `plan lint` e o `plan lint --dry-verify` deram "✓ ok".
+  - O `runtime execute` parou em seguida com "PLAN.md ausente".
+  - Ao criar o PLAN.md e o IMPLEMENTATION-PACK, o mesmo `plan lint` passou a acusar 6 erros que já existiam antes: `symbols` ausentes em 5 tarefas e `VISUAL-INPUTS.json` ausente.
+- **Impacto:** o "ok" do lint não quer dizer "pronto para executar". O lint é mais brando quando faltam artefatos do que quando eles existem, e isso contraria o OXB-028 ("um validador só").
+- **Proposta:**
+  - o lint exige os mesmos artefatos que o preflight (PLAN.md ou geração automática a partir do PLAN.json, os pacotes e VISUAL-INPUTS quando a SPEC declarar entradas visuais);
+  - ou o runtime gera o PLAN.md como projeção do PLAN.json, como já faz com o STATE.md;
+  - os pacotes deveriam poder ser derivados do PLAN.json (paths, checks, símbolos lidos do código) por um `oxe-cc plan pack`, em vez de escritos à mão.
+
+## OXB-042: o executor repassa o ambiente inteiro do terminal aos filhos; só o dry-verify limpa
+
+- **Status:** resolvido (1.21.1). Um scrub só para todos os filhos do runtime (`childProcessEnv`), com `env_scrub`/`env_allow` no config e lista no `doctor --project`.
+- **Evidência:**
+  - `bin/lib/oxe-verify-dryrun.cjs` tem o `scrubbedEnv`, que remove `OXESPACE_*` e `TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL`.
+  - O executor usa o `childProcessEnv`, que só remove `NODE_TEST_CONTEXT`.
+  - O terminal do oxespace carrega `OXESPACE_MCP_TOKEN`, `OXESPACE_EXECUTION_TOKEN`, `OXESPACE_AGENT_HOOK_PORT` e outras, do app ao vivo.
+  - Os filhos `claude -p` e os comandos de verify herdariam tudo isso: testes falariam com o app ao vivo do usuário, e tokens iriam para processos do executor.
+- **Impacto:** segurança (vazamento de token) e falsos resultados, com o teste batendo no app real. Depende de cada time lembrar o `unset`.
+- **Proposta:**
+  - um `childProcessEnv` único, com o mesmo scrub do dry-verify;
+  - `env_scrub` no `config.json` (padrões extras, ex.: `AI_MEMORY_*`) e `env_allow` para o que o executor precisa de fato (PATH, HOME, as credenciais do próprio provider);
+  - o `doctor --project` avisa quando o ambiente atual tem variáveis que casam com os padrões de scrub.
+
+## OXB-043: o `.oxe/` na raiz do repositório pode estar velho e não há aviso
+
+- **Status:** proposta.
+- **Evidência:**
+  - o checkout principal do usuário tem um `.oxe/` de setembro, com o STATE.md apontando para `docs/plans/delegation-worktree-continuity` e um ACTIVE-RUN.json de template, gerado pela 1.12/1.16;
+  - a 1.5.0 roda num `.oxe/` próprio na worktree `oxespace-150`.
+  - Nada no OXE diz qual `.oxe/` é o ativo nem acusa o velho.
+- **Impacto:** um agente que rode `oxe-cc status` no checkout principal recebe um próximo passo de um plano morto.
+- **Proposta:** o `doctor`/`status` mostram a versão que gerou o `.oxe/`, a data da última run e o programa ativo, e marcam `stale` quando a versão é anterior à instalada ou quando não há atividade há N dias. Com várias worktrees, `oxe-cc status --all-worktrees` lista cada `.oxe/` e o seu estado.
+
+## OXB-044: o preflight do execute cobra a rubrica de autoavaliação do PLAN.md que o lint não olha
+
+- **Status:** aberto (variante do OXB-041).
+- **Evidência:** com o `plan lint --dry-verify` em "ok", o `runtime execute` parou em `plan_self_evaluation_incomplete:9`. Faltavam no PLAN.md: "Alternativas descartadas", "Condição para replanejar", o bloco `<confidence_vector>` e as 6 linhas da rubrica.
+- **Impacto:** é a terceira volta lint → execute → corrigir para o mesmo plano, e cada volta custa uma verificação completa (minutos, com o lock pesado da máquina).
+- **Proposta:** o `plan lint` roda o mesmo `runtime_execute_preflight` em modo seco e lista todos os bloqueios de uma vez. A autoavaliação vira campo do PLAN.json (`self_evaluation`), e o PLAN.md passa a ser só uma projeção.
+- **Adendo ao OXB-044:** na volta seguinte, o preflight acusou mais 2 itens que não estavam na lista anterior: `<global score>` e a dimensão `open_gaps` com esse nome exato. Na primeira volta ele só validou a presença do bloco, não o conteúdo. A validação é incremental: cada correção revela a camada seguinte.
+
+## OXB-045: o checkpoint commit saiu como "feat: {message}" (template não preenchido)
+
+- **Status:** aberto.
+- **Evidência:** com `commit_convention.template = "{type}({scope}): {message}"` e sem `commit` nas tarefas (`require_task_message: false`), os três checkpoints da F1 (T4, T5, T6) foram gravados literalmente como `feat: {message}`. O `plan lint` valida o `pattern`, mas não acusou que a mensagem final não teria conteúdo.
+- **Impacto:** o histórico fica ilegível. O time precisa reescrever as mensagens antes de abrir os PRs, e o `OXE-Task` some se alguém fizer squash à mão.
+- **Proposta:** sem `commit` na tarefa, usar o título da tarefa como `{message}`. Se o placeholder sobrar na mensagem final, falhar o checkpoint. O lint simula a mensagem de cada tarefa contra o `pattern`.
+
+## OXB-046: o planner usou um teste de aceite de fase inteira como verify de tarefa, e o retry não percebeu
+
+- **Status:** resolvido (1.21.1). A verificação do critério roda só na tarefa que o completa, e o lint avisa quando um verify intermediário roda o teste de aceite do critério. A comparação por conjunto de testes na régua de suspeita fica para depois.
+- **Evidência:** o teste congelado do A4 confere todos os diálogos do `src/` e foi posto no verify de T8 e T9, que migram só parte deles. As duas tarefas gastaram 3 tentativas cada (US$ 13,59 no total) contra um vermelho impossível de resolver dentro do escopo delas. O retry informado reenviou a mesma saída. A régua de suspeita só para com duas falhas *idênticas*, e a contagem de arquivos mudava a cada tentativa.
+- **Impacto:** custo e turnos gastos em trabalho que não podia ficar verde. Ao mesmo tempo, T9 tinha uma regressão real: um teste existente quebrou por uma mudança de comportamento pedida pelo plano, mas fora do escopo de escrita da tarefa.
+- **Proposta:**
+  - o dry-verify roda o verify de cada tarefa com **só os arquivos dela** num estado "feito hipotético" e acusa as asserções que dependem de arquivos de outras tarefas;
+  - o lint avisa quando um teste de aceite usado no verify de uma tarefa lê arquivos (glob/walk) fora do write set dela;
+  - a régua de suspeita compara o *conjunto* de testes vermelhos, não o texto inteiro da saída.
+
+## OXB-047: `blocked_by` externo vira gate "security" pendente e trava o execute inteiro
+
+- **Status:** resolvido (1.21.1). `blocked_by` vira `external_dependency` (sem gate humano), o preflight ignora os gates antigos dessas tarefas, `kind: verify_only`/`external_delivery` roda sem agente, e o compile destrava PRs mergeados via `gh`.
+- **Evidência:**
+  - As tarefas T1–T3 tinham `blocked_by: ["propagno/oxespace#594", …]`.
+  - Na primeira execução, o scheduler as pulou e as outras rodaram, como diz a referência ("a tarefa espera um gate, e as demais seguem").
+  - Na execução seguinte, o preflight bloqueou tudo com `pending_gates:3`. Os 3 gates tinham sido criados com o escopo `security`, porque o `inferGateScope` cai em `security` quando a tarefa só coleta evidência.
+  - Não existe tarefa "só verificar": qualquer tarefa da onda vira um `claude -p` pago.
+- **Impacto:** em um time onde parte da fase chega por PRs de outros papéis, o executor fica parado até o último PR externo entrar, ou o planner precisa de contornos. O contorno usado foi mover as tarefas externas para uma última onda sem `blocked_by`, rodar `execute --wave N` uma onda por vez e rejeitar os gates velhos com motivo registrado.
+- **Proposta:**
+  - O gate de dependência externa não entra em `pending_gates` do preflight; só trava a própria tarefa.
+  - O escopo desse gate passa a ser `external_dependency`, não `security`.
+  - Um `kind: verify_only` roda só o verify, sem agente e sem custo, cuja tarefa conclui quando o verify passa.
+  - O `blocked_by` é consultado no GitHub a cada execute: quando o PR entra, a tarefa destrava sozinha.
+
+## OXB-048: a tarefa ficou verde no executor e o PR quebrou no typecheck e na suíte vizinha
+
+- **Status:** aberto.
+- **Evidência:** a F1-T4 (`workspaces.color`, migração 093) concluiu na 1ª tentativa, run `oxe-run-mw28b0n9-3s0gda` (ledger `.oxe/runs/oxe-run-mw28b0n9-3s0gda.budget.json` na worktree oxespace-150, US$ 3,34 em 10 turnos). A revisão do BACKEND achou dois bloqueios:
+  - `tests/integration/migrations.test.ts` fixa `EXPECTED_SCHEMA_VERSION = 92`, e 6 testes caem;
+  - o typecheck quebra, porque `Workspace.color` passou a ser obrigatório e `mock-ipc.ts` e `ThreadGrid.tsx` não o setam.
+  - O verify da tarefa só rodava os testes novos. Os `phase_gates` (typecheck, governança) rodam uma vez só, no verify da fase.
+- **Impacto:** com 1.5.0 em PRs por tarefa, o PR sai antes do verify da fase. A CI e o revisor pegam o que o executor deveria ter pegado, e isso é exatamente o `post_green_crs` do scorecard.
+- **Proposta:**
+  - **gates leves por tarefa** (`task_gates`): typecheck incremental mais os testes relacionados (`vitest related <files>`), ambos baratos, rodados no verify de cada tarefa que escreve código;
+  - o planner declara `affected_suites` por tarefa (migração → `tests/integration/migrations.test.ts`);
+  - o lint avisa quando uma tarefa toca `electron/main/db/migrations/` sem a suíte de migrações no verify.
+
+## OXB-049: a âncora existia, mas o executor desenhou os próprios ícones
+
+- **Status:** aberto (erro de planejamento mais falta de enforcement).
+- **Evidência:** a F1-T5 (ícones) passou no teste congelado: um módulo por ícone, `currentColor`, `aria-hidden`. A revisão do DESIGN mostrou que 4 ícones eram cópias do Lucide sem as marcas do Mandacaru, e que o History era o relógio, não o scrubber aprovado. O desenho aprovado estava em `playground/src/components/icons.ts`, mas a âncora RA-01 apontava para o HANDOFF, não para esse arquivo, e o teste não comparava geometria.
+- **Impacto:** um "verde" que não é o produto aprovado. Foi preciso o CR-02, com um teste que compara as formas desenhadas com o arquivo aprovado.
+- **Proposta:** uma âncora com `action: copy` vira check automático no verify: os símbolos e trechos copiados precisam bater com a fonte (hash ou geometria). O lint também avisa quando uma tarefa de UI com `VISUAL-INPUTS` crítico não tem teste que compare saída com a fonte visual.
+
+## OXB-050: dentro de uma onda, as tarefas que escrevem rodam em série, e o modo paralelo não prepara dependências
+
+- **Status:** aberto (levantado pelo coordenador, a partir da pergunta do usuário sobre por que só havia um processo rodando).
+- **Evidência:**
+  - Em `lib/runtime/scheduler/scheduler.js` (runWave, ~l. 360), só rodam juntos os nós que passam no `isConcurrentSafe` (leitura). Todo nó com `mutation_scope` cai em `for (const id of mutations) await runNode(…)`, sempre no mesmo checkout, mesmo quando os escopos de escrita são disjuntos (ex.: T8 em `src/components/Threads/*` e T9 em `src/components/OxeQuery/*`).
+  - O modo paralelo existe (`--agents-plan` com `plan-agents.json` mais `MultiAgentCoordinator`, `mode: parallel`, uma worktree por agente via `GitWorktreeManager`). Só que a worktree nova nasce sem `node_modules`: o `GitWorktreeManager` não instala nem linka dependências, e só desfaz links no dispose. Os verifies (vitest, test:electron) quebram ali.
+  - Somam-se o OXB-039 (o `npm ci` perde o `better-sqlite3`) e a memória da máquina: 2–4 GB livres, com a sessão já morta uma vez por pressão de memória.
+- **Impacto:** a F1 roda tarefa por tarefa. É o mesmo gargalo do OXB-033, só que dentro da onda.
+- **Proposta:**
+  1. o scheduler roda em paralelo os nós de uma onda com `mutation_scope` disjuntos, cada um num lease de worktree, e junta tudo pelo `workspaceMergeReport`;
+  2. o `GitWorktreeManager` aceita `deps_strategy` (`link` para um `node_modules` validado com junction desfeita no dispose, `copy-from`, ou `ci` com verificação de presença dos pacotes, OXB-039);
+  3. a concorrência é limitada pela memória (`max_parallel` mais a memória mínima por agente), consultando o heavy-lock do projeto quando houver.
+
+## OXB-051: no modo inplace, a tentativa falha de uma tarefa contamina a seguinte; e `--wave N` não limita a onda
+
+- **Status:** resolvido (1.21.1). A tentativa falha é guardada em `attempts/<task>-failed/` e o escopo é restaurado (o sujo prévio fica intocado); há log por tentativa e o `--wave N` é real. O `scope_violation` explícito fica para depois.
+- **Evidência:**
+  - **Contaminação entre tarefas:** a T9 falhou e deixou as alterações dela (arquivos do OxeQuery) no checkout. A T8, na mesma onda, também falhou nas 3 tentativas. Rodados à mão no mesmo estado, os comandos de verify da T8 passam, então a falha veio do estado misto do checkout, não do código da T8.
+  - **`--wave 1` não limita:** `runtime execute --wave 1` também rodou a T8 e a T9 (onda 2) e gastou mais US$ 5,78 nelas.
+  - **Gates recriados:** as tarefas sem `files` (entregas externas) voltaram a gerar gates `security` pendentes a cada run (adendo ao OXB-047).
+- **Impacto:** retries pagos que não podem passar, e um diagnóstico que só sai rodando o verify à mão. O contorno foi guardar a tentativa da T9 como patch, reverter os arquivos dela e simplificar a tarefa.
+- **Proposta:**
+  - no modo inplace, uma tarefa que falha tem o escopo dela revertido (stash próprio do OXE ou um branch `oxe/attempt/<task>`) antes da próxima rodar, e a tentativa fica guardada para o retry informado;
+  - o verify de uma tarefa reprova por escopo, com uma mensagem explícita (`scope_violation: <arquivos fora do write set>`), em vez de cair no retry genérico;
+  - o `--wave N` restringe de fato a uma onda;
+  - a saída do verify de cada tentativa vai para `.oxe/runs/<run>/attempts/<task>-<n>.log`, porque hoje o journal guarda só o estado, não o motivo.
+
+## OXB-052: o checkpoint commitou 1 dos 4 arquivos da tarefa; o resto ficou solto e reprovou as próximas
+
+- **Status:** resolvido (1.21.1). O checkpoint usa o escopo atual (grafo + plano) e acusa `checkpoint_incomplete`. A causa era o grafo velho (OXB-053).
+- **Evidência:**
+  - Na run 3 da F1, a T4 (com o CR-03) passou o verify e gerou o checkpoint `583ee693`, com só `electron/main/ipc/validation.ts`.
+  - O executor também alterou `electron/main/e2e/mock-ipc.ts`, `src/components/Threads/ThreadGrid.tsx` e `tests/integration/migrations.test.ts`. Os três estão no `files` da T4 e no `exact_paths` do pack, e ficaram sem commit.
+  - A T8, que também mexe em `src/components/Threads/`, e a T9 falharam 3 vezes cada (US$ 2,10 e US$ 9,42).
+  - Com o resto da T4 commitado à mão, os verifies das duas passam como estão (31/31 e 118/118). Elas foram fechadas com `oxe-cc plan done`.
+- **Impacto:** o checkpoint perde trabalho verificado. O verify verde roda sobre arquivos que não vão para o commit, e o PR montado a partir do checkpoint sai sem o que fez o verify passar. Com o OXB-051, isso vira uma cascata de retries pagos.
+- **Proposta:**
+  - o checkpoint commita `git diff --name-only` ∩ `write_set` da tarefa, todos os arquivos, e falha alto se sobrar alteração do escopo fora do commit;
+  - o verify roda sobre a árvore do commit (ex.: `git stash -k` do OXE, ou uma worktree no checkpoint), não sobre o checkout sujo;
+  - o journal registra os arquivos de cada checkpoint, para auditoria.
+
+## OXB-053: o execute reusa o grafo antigo e refaz tarefas `done`; o aceite do critério roda no verify de cada tarefa
+
+- **Status:** resolvido (1.21.1). O execute recompila quando o hash do PLAN.json/PLAN.md/SPEC/pack muda, e a verificação do critério roda só na última tarefa dele.
+- **Evidência:**
+  - **Tarefas `done` refeitas:** depois do `oxe-cc plan done T8/T9` (com T4–T6 já `done` no PLAN.json), o `runtime execute` seguinte refez T4, T5, T6, T8 e T9 com o grafo compilado antes. Foram US$ 9,52 sem nenhuma mudança de arquivo. Só um `runtime compile` explícito montou o grafo novo, com 7 nós, pulando as `done`. A rota sugerida pelo `feedback` cita `compile`, mas o `execute` sozinho não avisa que o grafo está velho.
+  - **Aceite de fase no verify de tarefa:** a causa real das 12 falhas da T8 e da T9 em 4 runs era o aceite congelado do A4, que o runtime roda no verify de **toda** tarefa ligada ao A4. Esse teste confere todos os diálogos do `src/`, então só pode passar depois da última tarefa do critério (T10). Trocar o `verify.commands` da tarefa não muda nada. A única saída foi tirar o A4 das tarefas intermediárias.
+- **Impacto:** US$ 37,52 em retries que não podiam passar (T8 + T9 nas runs 1–4) mais US$ 9,52 em tarefas já prontas. A mensagem de falha nunca dizia "aceite A4 de fase".
+- **Proposta:**
+  - o `execute` compara o hash do PLAN.json com o do grafo compilado e recompila sozinho, ou recusa com "grafo desatualizado";
+  - o aceite de um critério roda **só** quando todas as tarefas do critério estão prontas, ou na fase, e não no verify de cada tarefa. O lint mostra em que momento cada aceite congelado vai rodar.
+
+## Evidência positiva (F1, run 7): onde o OXE funcionou bem
+
+- Com o grafo recompilado, a árvore limpa antes da execução, o aceite de fase fora das tarefas intermediárias (OXB-053), o processo destacado do Claude Code e no máximo 2 workers de vitest, a run 7 concluiu T7, T8, T10, T11 e T2 sem retries desperdiçados.
+  - Custo: US$ 19,56.
+  - Os checkpoints commitaram todos os arquivos, com `git status` limpo depois.
+  - As mensagens de commit vieram do campo `commit` de cada tarefa.
+  - Os 3 "falhos" (T1, T3 e T12) eram entregas externas ainda não mergeadas. Foram o comportamento esperado, e a ferramenta deveria classificá-los como "aguardando externo" (OXB-047).
+- O ciclo CR via `runtime feedback` funcionou bem para transformar revisão humana em teste congelado: revisão → `feedback --class defect` → teste que reproduz → reabrir a tarefa → redo. Foram 7 CRs na F1 (CR-01 a CR-07, um deles `spec_gap` com teste v2).
+- Lição para o planner (vai para LESSONS): no modo inplace, comece cada execute com a árvore limpa. Guarde as tentativas falhas como patch e reverta, até o OXB-051 ser corrigido.
+
+## OXB-054: o scorecard mostra 0,95 de 1ª tentativa numa fase em que metade das tarefas falhou várias vezes
+
+- **Status:** resolvido (1.21.1). A 1ª tentativa é medida por tarefa sobre todas as execuções, com falhas, falhas tardias e entregas externas à parte.
+- **Evidência:**
+  - O `runtime scorecard` da F1 (run oxe-run-mw28b0n9-3s0gda) dá `first_attempt_rate` = 0,95, dentro da meta.
+  - Na mesma run, T8 e T9 falharam 3 tentativas em cada uma de 4 execuções.
+  - Os registros mostram retries em T4, T6, T8, T9 e T10.
+  - Os outros números do scorecard parecem certos: `turns_on_finished_work` = 68, ou seja, tarefas `done` refeitas (OXB-053), e `post_green_crs` = 11, defeitos achados por revisão ou CI depois do verde.
+- **Impacto:** a métrica de maturidade que o `doctor --release` exige passa justamente na fase com mais retries. Isso enfraquece o critério de release do próprio oxe-build.
+- **Proposta:** calcular o `first_attempt_rate` por tarefa sobre todas as execuções da run (uma tarefa só conta se a 1ª tentativa da 1ª execução passou), excluir as tarefas fechadas à mão (`plan done`) e reportar à parte as tarefas externas.

@@ -4,6 +4,41 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.21.1] — 2026-11-04
+
+### P0 da auditoria do OXESpace 1.5.0 (TECH LEAD, `docs/oxespace-1.5/BACKLOG.md`)
+
+Esta versão corrige o que mais custou e travou o TECH LEAD na F1 da 1.5.0, run `oxe-run-mw28b0n9-3s0gda`. Cada correção vem com um teste que reproduz a evidência dele (`tests/oxe-1211-p0.test.cjs`).
+
+- **O grafo é projeção do plano (OXB-053/052):**
+  - o compile grava o hash do PLAN.json, do PLAN.md, da SPEC e do pack, e o `execute` **recompila sozinho** quando algo mudou, sem refazer tarefas `done`;
+  - o checkpoint usa o escopo atual da tarefa (grafo + plano) e acusa (`checkpoint_incomplete`) qualquer arquivo do escopo que ficou fora do commit.
+
+  Na F1, um CR mudou a T4 depois do compile, e o checkpoint gravou 1 de 4 arquivos. O execute ainda refez tarefas prontas (US$ 9,52).
+- **A verificação do critério só na tarefa que o completa (OXB-053/046):**
+  - o "Como verificar" de um critério entra só no verify da última tarefa dele; com várias tarefas terminando em paralelo, a verificação fica no verify da fase;
+  - o `plan lint` mostra onde cada critério é verificado e avisa quando o verify de uma tarefa intermediária roda o teste de aceite do critério.
+
+  O teste do A4, que confere todos os diálogos do `src/`, rodava em T8 e T9 e falhou 12 vezes (US$ 37,52).
+- **Dependência externa não é gate humano (OXB-047):**
+  - `blocked_by` trava só a própria tarefa, como `external_dependency`, sem gate pendente que bloqueie o preflight da run;
+  - os gates antigos dessas tarefas são ignorados pelo preflight;
+  - `kind: verify_only` / `external_delivery` roda só o verify, sem agente e sem custo, e conclui com `completed_by: verify_only`;
+  - o compile consulta o GitHub (`gh pr view`) e destrava refs `owner/repo#n` já mergeadas (`external_dependency_check: false` desliga).
+- **Um único scrub de ambiente (OXB-042):** os filhos do executor (CLI, ferramentas, verify, gates) não herdam mais `OXESPACE_*` nem variáveis com `TOKEN`, `SECRET`, `PASSWORD`, `API_KEY`, `CREDENTIAL` ou `PRIVATE_KEY`.
+  - O adapter `claude` mantém só as credenciais do próprio provider.
+  - O `config.json` aceita `env_scrub` (regex extras) e `env_allow` (nomes).
+  - O `doctor --project` lista o que será removido.
+- **Isolamento inplace e `--wave` real (OXB-051):**
+  - quando uma tarefa falha de vez, a tentativa é guardada (`.oxe/runs/<run>/attempts/<task>-failed/`: patch e arquivos novos) e o escopo dela é restaurado antes da próxima tarefa;
+  - arquivos que já estavam alterados antes do execute nunca são tocados (`isolate_failed_attempts: false` desliga);
+  - cada tentativa falha tem seu log (`attempts/<task>-<n>.log`);
+  - `runtime execute --wave N` roda só a onda N.
+- **Retrabalho explícito:** um CR `defect` ou `spec_gap` reabre as tarefas impactadas (`done` → aberta, com histórico em `reopened`), e `oxe-cc plan reopen Tn` faz o mesmo à mão. Como o execute recompila a partir do plano, refazer uma tarefa passa a exigir reabri-la.
+- **Scorecard honesto (OXB-054):** a 1ª tentativa é medida por tarefa, sobre todas as execuções da run. Uma tarefa que falhou, mesmo que depois tenha passado ou sido fechada à mão, conta como falha. As entregas externas ficam fora da taxa e aparecem à parte no `sample`.
+
+---
+
 ## [1.21.0] — 2026-11-03
 
 Esta versão consolida a 1.19 e a 1.20, que não foram publicadas, e acrescenta a 1.21. O objetivo é levar o OXE de "não mente sobre o que está pronto" para uma **maturidade medida**: aplicações de várias fases, corrigidas por um caminho único, dentro do orçamento e coerentes com as regras do repositório. Tudo foi validado construindo o OxeVoice 1.5 (F1) no oxespace e dois projetos de referência reais. Os 30 achados (OXB-001 a 030) estão em `docs/oxevoice/BACKLOG.md`.

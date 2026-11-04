@@ -18,7 +18,7 @@ function scrubbedEnv(env = process.env) {
   const out = {};
   for (const [key, value] of Object.entries(env)) {
     if (/^OXESPACE_/i.test(key)) continue;
-    if (/TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL/i.test(key)) continue;
+    if (/TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL|PRIVATE_KEY/i.test(key)) continue;
     // Inherited from a parent `node --test`, it makes a child `node --test` speak the runner protocol and exit 0:
     // a red verify read as already green.
     if (key === 'NODE_TEST_CONTEXT') continue;

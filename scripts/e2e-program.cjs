@@ -349,6 +349,8 @@ async function runMockScenario(name, mutate, variant = null) {
         mutationCaught = !step.closed.closed && failed.some((f) => expected.test(f));
         // Correção: interface certa + aceite original restaurado; re-executa e fecha.
         writeFile(path.join(dir, acceptancePath('A4')), ACCEPTANCE.A4);
+        // 1.21.1: the rework reopens the task that delivered the wrong interface (execute never re-runs done tasks).
+        operational.runtimePlanReopen(dir, null, { task: phase.tasks[phase.tasks.length - 1].id });
         const reexecuted = await operational.runRuntimeExecute(dir, null, { skipPreflight: true, executor: scriptedExecutor(phase) });
         if (reexecuted.result.status !== 'completed') records.push({ phase: phase.id, reexecute_status: reexecuted.result.status });
         const reverified = await operational.runRuntimeVerify(dir, null, { timeoutMs: 120_000 });
@@ -360,6 +362,7 @@ async function runMockScenario(name, mutate, variant = null) {
         mutationCaught = !step.closed.closed && regFailed.some((id) => id.startsWith('reg-f1-'));
         // Repara o store e re-executa a fase (o que o próximo /oxe-execute faria), depois fecha.
         writeFile(path.join(dir, 'src', 'store.js'), PHASES[0].tasks[1].source['src/store.js']);
+        operational.runtimePlanReopen(dir, null, { task: phase.tasks[phase.tasks.length - 1].id });
         const reexecuted = await operational.runRuntimeExecute(dir, null, { skipPreflight: true, executor: scriptedExecutor(phase) });
         if (reexecuted.result.status !== 'completed') {
           records.push({ phase: phase.id, reexecute_status: reexecuted.result.status, failed: reexecuted.result.failed });

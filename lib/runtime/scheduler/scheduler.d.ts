@@ -94,6 +94,12 @@ export declare class Scheduler {
     /** An approval already granted for this node in this run must not be requested again on re-execution. */
     private hasApprovedGate;
     private requestGateForNode;
+    /**
+     * A node delivered by another path (`verify_only`) or waiting on external work (`external_dependency`): no agent.
+     * verify_only runs only the node's verify — green completes it; red (or no verify) leaves it waiting. A node with an
+     * external dependency and no verify_only waits without a gate, so the rest of the run (and the next preflight) goes on.
+     */
+    private runExternalNode;
     private blockNode;
     private consumeQuotaForNode;
     private consumeRetryQuota;
