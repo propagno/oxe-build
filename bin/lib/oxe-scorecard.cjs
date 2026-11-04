@@ -70,22 +70,45 @@ function computeScorecard(input) {
   const changes = foldChanges(input.changeLines).filter((cr) => after(cr.at));
   const ledgers = (Array.isArray(input.ledgers) ? input.ledgers : []).filter((l) => after(l.updated_at || l.started_at));
 
-  // first-attempt rate and turns paid after a task had completed (same run)
+  // 1.21.1 (OXB-054): first-attempt rate PER TASK over every execute of the run. A task counts as first-attempt only if
+  // its first terminal outcome is a completion of attempt 1 with no failed attempt before it; a task that failed and
+  // was later closed (retry, another execute, or `plan done`) counts as a failure. Only completions used to enter the
+  // denominator, so a phase where half the tasks failed three times still read 0.95. Work delivered by another path
+  // (verify_only / external dependency) is reported apart, never in the rate.
   const completedAt = new Map();
+  const outcome = new Map(); // run::task → 'first' | 'late' | 'failed'
+  const failedBefore = new Set();
+  const NOT_ATTEMPTED = new Set(['external_dependency', 'budget_exhausted', 'pending_gate', 'policy_denied', 'quota_exceeded']);
   let completed = 0;
-  let firstAttempt = 0;
+  let external = 0;
   let turnsOnFinished = 0;
   for (const e of events) {
-    const key = `${e.run_id || ''}::${e.work_item_id || ''}`;
-    if (e.type === 'WorkItemCompleted' && e.work_item_id) {
+    if (!e.work_item_id) continue;
+    const key = `${e.run_id || ''}::${e.work_item_id}`;
+    const p = e.payload || {};
+    if (e.type === 'ExecutorUsage') {
+      if (completedAt.has(key)) turnsOnFinished += Number(p.turns) || 0;
+      if (p.success === false && !completedAt.has(key)) failedBefore.add(key);
+    } else if (e.type === 'RetryScheduled') {
+      if (!completedAt.has(key)) failedBefore.add(key);
+    } else if (e.type === 'WorkItemBlocked') {
+      if (NOT_ATTEMPTED.has(p.reason) || p.max_attempts == null) continue;
+      failedBefore.add(key);
+      if (!outcome.has(key)) outcome.set(key, 'failed');
+    } else if (e.type === 'WorkItemCompleted') {
+      if (p.completed_by === 'verify_only') {
+        external += 1;
+        if (!completedAt.has(key)) completedAt.set(key, e.timestamp || '');
+        continue;
+      }
       completed += 1;
-      const attempt = e.payload && (e.payload.attempt_number ?? e.payload.attempt);
-      if (Number(attempt) === 1) firstAttempt += 1;
+      const attempt = Number(p.attempt_number ?? p.attempt);
+      if (!outcome.has(key)) outcome.set(key, attempt === 1 && !failedBefore.has(key) ? 'first' : 'late');
       if (!completedAt.has(key)) completedAt.set(key, e.timestamp || '');
-    } else if (e.type === 'ExecutorUsage' && e.work_item_id && completedAt.has(key)) {
-      turnsOnFinished += Number(e.payload && e.payload.turns) || 0;
     }
   }
+  const judged = [...outcome.values()];
+  const firstAttempt = judged.filter((v) => v === 'first').length;
 
   const overruns = ledgers.filter((l) => (l.limit_turns != null && l.used_turns > l.limit_turns) || (l.limit_usd != null && l.used_usd > l.limit_usd + 1e-9)).length;
 
@@ -98,7 +121,7 @@ function computeScorecard(input) {
   const postGreen = changes.filter((cr) => (cr.class === 'defect' || cr.class === 'constraint') && !cr.gate && firstGreen && String(cr.at || '') > firstGreen).length;
 
   const metrics = {
-    first_attempt_rate: completed ? Math.round((firstAttempt / completed) * 100) / 100 : null,
+    first_attempt_rate: judged.length ? Math.round((firstAttempt / judged.length) * 100) / 100 : null,
     turns_on_finished_work: turnsOnFinished,
     budget_overruns: overruns,
     crs_closed_without_proof: withoutProof,
@@ -109,7 +132,17 @@ function computeScorecard(input) {
     oxeScorecardSchema: 1,
     generated_at: new Date().toISOString(),
     since,
-    sample: { completed_tasks: completed, change_requests: changes.length, resolved_crs: resolved.length, budget_ledgers: ledgers.length, events: events.length },
+    sample: {
+      completed_tasks: completed,
+      tasks_judged: judged.length,
+      tasks_failed: judged.filter((v) => v === 'failed').length,
+      tasks_completed_late: judged.filter((v) => v === 'late').length,
+      external_deliveries: external,
+      change_requests: changes.length,
+      resolved_crs: resolved.length,
+      budget_ledgers: ledgers.length,
+      events: events.length,
+    },
     metrics: results,
     ok: results.every((r) => r.ok !== false),
   };

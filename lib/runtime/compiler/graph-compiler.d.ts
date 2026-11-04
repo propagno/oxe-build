@@ -39,6 +39,17 @@ export interface NodePolicy {
     max_retries: number;
     /** Why this node waits for a gate (task-level gate or external dependency). */
     gate_reason?: string;
+    /**
+     * External work this node waits for (PLAN.json `blocked_by`, e.g. "owner/repo#594"). 1.21.1 (OXB-047): it blocks
+     * only this node, never as a human gate — those were recreated as pending "security" gates on every execute and the
+     * preflight then blocked the whole run.
+     */
+    external_dependency?: string[];
+    /**
+     * No agent, no cost: the node only runs its verify (`kind: verify_only` / `external_delivery`, work delivered by
+     * another path). Green completes it; red leaves it waiting.
+     */
+    verify_only?: boolean;
 }
 export interface GraphNode {
     id: string;

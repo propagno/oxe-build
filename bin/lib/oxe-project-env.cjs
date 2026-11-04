@@ -157,10 +157,19 @@ function checkProjectEnvironment(projectRoot, machine = {}) {
   const minFreeMb = machine.minFreeMb != null ? machine.minFreeMb : Number(process.env.OXE_EXECUTOR_MIN_FREE_MB) || 0;
   if (minFreeMb && freeMb < minFreeMb) warnings.push(`memória livre ${freeMb} MB < ${minFreeMb} MB (OXE_EXECUTOR_MIN_FREE_MB): o executor vai pausar`);
 
+  // OXB-042: what the runtime strips from every child process (names only, never values).
+  let scrubbedEnv = [];
+  try {
+    const runtime = require('../../lib/runtime/index.js');
+    if (typeof runtime.scrubbedEnvNames === 'function') scrubbedEnv = runtime.scrubbedEnvNames(machine.env || process.env);
+  } catch {
+    scrubbedEnv = [];
+  }
   return {
     ok: problems.length === 0,
     problems,
     warnings,
+    scrubbed_env: scrubbedEnv,
     toolchain: { node, npm: npm || null, platform: process.platform, arch: process.arch, free_mb: freeMb },
     wanted: { engines, nvmrc: nvmrc || null, packageManager: (pkg && pkg.packageManager) || null },
   };

@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { spawn, spawnSync } from 'child_process';
 import type { ChatMessage, CompletionResponse, StreamCompletionOptions, ToolCall, ToolSchema } from '../stream-completion';
-import { childProcessEnv } from '../shell-argv';
+import { childProcessEnv, PROVIDER_CREDENTIAL_ENV } from '../shell-argv';
 import type { AdapterDetection, ExecutorAdapter } from './types';
 
 /**
@@ -178,7 +178,7 @@ export class ClaudeCliAdapter implements ExecutorAdapter {
     const res = spawnSync(spawnable.file, spawnable.args, {
       encoding: 'utf8',
       timeout: 15_000,
-      env: childProcessEnv(),
+      env: childProcessEnv(process.env, { allow: PROVIDER_CREDENTIAL_ENV }),
       windowsVerbatimArguments: spawnable.windowsVerbatimArguments,
     });
     if (res.status !== 0) {
@@ -249,7 +249,7 @@ export class ClaudeCliAdapter implements ExecutorAdapter {
     return new Promise((resolve, reject) => {
       const proc = spawn(spawnable.file, spawnable.args, {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: childProcessEnv(),
+        env: childProcessEnv(process.env, { allow: PROVIDER_CREDENTIAL_ENV }),
         windowsVerbatimArguments: spawnable.windowsVerbatimArguments,
       });
       let out = '';

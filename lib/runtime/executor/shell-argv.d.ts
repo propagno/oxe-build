@@ -12,5 +12,19 @@ export interface ShellInvocation {
     windowsVerbatimArguments: boolean;
 }
 export declare function shellInvocation(command: string, platform?: NodeJS.Platform): ShellInvocation;
-/** Environment for a child verify/test process: never inherit the parent's node:test context. */
-export declare function childProcessEnv(base?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
+/** What the host CLI needs to authenticate itself (allowed only where the caller asks for provider credentials). */
+export declare const PROVIDER_CREDENTIAL_ENV: string[];
+/** Project policy (`config.json` `env_scrub` regex strings, `env_allow` names), set once per execute/verify. */
+export declare function configureChildEnv(policy?: {
+    scrub?: string[];
+    allow?: string[];
+}): void;
+/**
+ * Environment for a child process: never the parent's node:test context, never the live app's or other secrets.
+ * `allow` keeps named variables (e.g. the provider credentials of the executor CLI) despite the scrub.
+ */
+export declare function childProcessEnv(base?: NodeJS.ProcessEnv, options?: {
+    allow?: string[];
+}): NodeJS.ProcessEnv;
+/** Names of the variables `childProcessEnv` would remove from `base` (for `doctor --project`). */
+export declare function scrubbedEnvNames(base?: NodeJS.ProcessEnv): string[];
