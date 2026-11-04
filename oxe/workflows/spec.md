@@ -413,7 +413,10 @@ Complemento adaptativo para a Fase 1. Quando o domínio for confirmado (via scan
 - Agrupar requisitos v1 em fases por **dependência técnica** e **valor entregável**
 - Cada fase deve ter resultado demonstrável (não apenas código interno)
 - Fase 1 = o que `/oxe-plan` implementará no próximo ciclo
-- Fases 2+ = ciclos futuros de spec→plan→execute→verify
+- Fases 2+ = ciclos futuros de plan→execute→verify **dentro do mesmo programa** (não reabrir a SPEC a cada fase)
+- Cada fase declara **Requisitos** (R*), **Critérios de aceite** (A*) e **Escopo** — o runtime lê exatamente esses campos; um A* pertence a uma única fase
+
+**Programa por fases (aplicações com 2+ fases):** depois da aprovação, rodar `oxe-cc runtime program init` (lê o `ROADMAP.md` e grava `.oxe/program/PROGRAM.json`) e `oxe-cc runtime program start`. A partir daí cada fase é um ciclo completo que fecha pelo gate `oxe-cc runtime program close`: verify concluído, **regressão das fases anteriores verde**, contratos do IMPLEMENTATION-PACK cumpridos e commit local da fase. As interfaces entregues por uma fase entram no contexto da seguinte. ROADMAP de fase única dispensa o programa.
 
 **Escrever `ROADMAP.md`** usando `oxe/templates/ROADMAP.template.md` no escopo ativo:
 

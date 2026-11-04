@@ -5,6 +5,65 @@ import crypto from 'crypto';
 import type { WorkspaceManager, WorkspaceRequest } from '../workspace-manager';
 import type { WorkspaceLease, SnapshotRef } from '../../models/workspace';
 
+function isInside(root: string, target: string): boolean {
+  const rel = path.relative(root, target);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * Removes (without following) every symlink/junction under `root` whose target is outside `root`. Walks real
+ * directories only (lstat), skips `.git`, and is bounded so a large installed node_modules cannot stall dispose.
+ * @returns the links removed (absolute paths)
+ */
+export function unlinkExternalLinks(root: string, limits: { maxDepth?: number; maxEntries?: number } = {}): string[] {
+  const maxDepth = limits.maxDepth ?? 5;
+  const maxEntries = limits.maxEntries ?? 50_000;
+  const removed: string[] = [];
+  const realRoot = (() => { try { return fs.realpathSync(root); } catch { return path.resolve(root); } })();
+  let seen = 0;
+  const walk = (dir: string, depth: number): void => {
+    if (depth > maxDepth || seen > maxEntries) return;
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      seen += 1;
+      if (seen > maxEntries) return;
+      if (entry.name === '.git') continue;
+      const full = path.join(dir, entry.name);
+      let stat: fs.Stats;
+      try {
+        stat = fs.lstatSync(full);
+      } catch {
+        continue;
+      }
+      if (stat.isSymbolicLink()) {
+        let target = '';
+        try {
+          target = path.resolve(path.dirname(full), fs.readlinkSync(full));
+        } catch {
+          target = '';
+        }
+        if (!target || !(isInside(realRoot, target) || isInside(path.resolve(root), target))) {
+          try {
+            fs.unlinkSync(full);
+          } catch {
+            try { fs.rmdirSync(full); } catch { continue; } // a Windows directory junction
+          }
+          removed.push(full);
+        }
+        continue;
+      }
+      if (stat.isDirectory()) walk(full, depth + 1);
+    }
+  };
+  walk(root, 0);
+  return removed;
+}
+
 export class GitWorktreeManager implements WorkspaceManager {
   readonly isolation_level = 'isolated' as const;
   private leases = new Map<string, WorkspaceLease>();
@@ -59,6 +118,10 @@ export class GitWorktreeManager implements WorkspaceManager {
   async dispose(id: string): Promise<void> {
     const lease = this.leases.get(id);
     if (!lease) return;
+    // A forced worktree remove follows links: a node_modules junction or a workspace link (@scope/pkg → the main
+    // repo's packages/) took the REAL directory with it. Links that leave the worktree are unlinked first, never
+    // followed, so only the worktree's own files are removed.
+    if (lease.root_path) unlinkExternalLinks(lease.root_path);
     try {
       this.git(['worktree', 'remove', lease.root_path, '--force']);
     } catch {

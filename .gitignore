@@ -26,6 +26,9 @@ node_modules/
 .yarn/install-state.gz
 .pnp.*
 
+# Pacotes VSIX são artefatos de release (anexados ao GitHub Release), não fonte
+vscode-extension/*.vsix
+
 # Cobertura e relatórios de teste (não entram em `npm publish` — ver campo `files` em package.json)
 coverage/
 .nyc_output/

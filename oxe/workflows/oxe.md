@@ -22,6 +22,7 @@ Ponto de entrada inteligente do OXE. Faz uma de três coisas dependendo do input
 
 Aplicar a lógica completa de `oxe/workflows/next.md`:
 
+0. Se existir `.oxe/program/PROGRAM.json` com fase aberta → seguir a **fase ativa** (`oxe-cc runtime program status`): `pending` → `runtime program start`; `planning` → **plan** só da fase (a menos que `PLAN.json` já declare essa fase → **execute**); `executing` → **execute**; `verifying` com verify verde → `runtime program close`, com verify reprovado → **execute**. Sempre dizer "Fase k/N — Fx". O PLAN/run de uma fase fechada nunca é reaproveitado.
 1. Se `.oxe/` ou `STATE.md` não existir → **scan** (`npx oxe-cc@latest` primeiro se OXE não instalado)
 2. Se `.oxe/codebase/` incompleto e não for quick isolado → **scan**
 3. Se `quick_active` ou `QUICK.md` sem `PLAN.md` → avaliar promoção (ver `next.md`)

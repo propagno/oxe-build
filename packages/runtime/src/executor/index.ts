@@ -1,6 +1,16 @@
 export { LlmTaskExecutor } from './llm-task-executor';
-export type { LlmProviderConfig, LlmExecutorEvent, LlmExecutorEventType } from './llm-task-executor';
+export type { LlmProviderConfig, LlmExecutorEvent, LlmExecutorEventType, LlmTaskExecutorOptions, ExecutorUsage, CompletionFn } from './llm-task-executor';
+export { renderNodeContext, truncate as truncateContext, DEFAULT_NODE_CONTEXT_BUDGET } from './node-context';
+export type { NodeExecutionContext, NodeContextProvider, WorkspaceFileSnapshot, NodeContextBudget } from './node-context';
+export { ClaudeCliAdapter, buildBridgePrompt, parseBridgeReply, resolveExecutable, buildSpawnable } from './adapters/claude-cli';
+export type { ClaudeCliAdapterOptions } from './adapters/claude-cli';
+export { HttpOpenAiAdapter } from './adapters/http-openai';
+export { createExecutorAdapter, detectExecutorAdapters, isExecutorAdapterId, EXECUTOR_ADAPTER_IDS } from './adapters/registry';
+export type { ExecutorAdapter, ExecutorAdapterId, AdapterDetection } from './adapters/types';
 export { buildNodePrompt } from './node-prompt-builder';
+export { buildChatCompletionsUrl } from './stream-completion';
 export { selectToolsForActions } from './action-tool-map';
-export { BUILT_IN_TOOLS, ALL_BUILT_IN_SCHEMAS } from './built-in-tools';
+export { BUILT_IN_TOOLS, ALL_BUILT_IN_SCHEMAS, resolveWithin, PathContainmentError } from './built-in-tools';
+export { shellInvocation, childProcessEnv } from './shell-argv';
+export type { ShellInvocation } from './shell-argv';
 export type { BuiltInToolHandler } from './built-in-tools';

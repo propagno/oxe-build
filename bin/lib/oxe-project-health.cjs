@@ -34,6 +34,15 @@ const ALLOWED_CONFIG_KEYS = [
   'permissions',
   'azure',
   'runtime',
+  // 1.19–1.21: aceite congelado, gatekeeper, gates do projeto, regras do repo, checkpoints e ambiente.
+  'acceptance_tests_required',
+  'policy_rules',
+  'checkpoint_commits',
+  'phase_gates',
+  'phase_gates_runner',
+  'repo_rules',
+  'commit_convention',
+  'project_env_check',
 ];
 
 /**
@@ -2055,6 +2064,104 @@ function planReviewWarnings(stateText, p) {
  * @param {string} target
  * @param {{ discuss_before_plan?: boolean }} cfg
  */
+/**
+ * Programa por fases (1.19): com PROGRAM.json, o próximo passo é o da fase ativa — "Fase 2/4 —
+ * planejar" — e nunca reaproveita o PLAN/run da fase anterior. Programa concluído → roteamento normal.
+ */
+function suggestProgramStep(target, activeSession, activeRun) {
+  let status;
+  try {
+    status = operational.runtimeProgramStatus(target, activeSession);
+  } catch {
+    return null;
+  }
+  if (!status || !status.exists || !status.progress || !status.progress.phase) return null;
+  const { state, progress } = status;
+  const phase = progress.phase;
+  const label = `Fase ${progress.index}/${progress.total} — ${phase.id} (${phase.title})`;
+  const programArtifacts = ['.oxe/program/PROGRAM.json'];
+  if (!state.active_phase || phase.status === 'pending') {
+    return {
+      step: 'program-start',
+      cursorCmd: `oxe-cc runtime program start --phase ${phase.id}`,
+      reason: `${label}: pronta para iniciar (${progress.closed} fase(s) fechada(s)).`,
+      artifacts: programArtifacts,
+      program: { phase: phase.id, index: progress.index, total: progress.total },
+    };
+  }
+  const program = { phase: phase.id, index: progress.index, total: progress.total };
+  let openChanges = [];
+  try {
+    openChanges = operational.runtimeChanges(target, activeSession).filter((cr) => cr.status === 'open' && cr.class !== 'new_scope' && (!cr.phase || cr.phase === phase.id));
+  } catch {
+    openChanges = [];
+  }
+  if (openChanges.length && phase.status !== 'executing') {
+    return {
+      step: 'plan',
+      cursorCmd: '/oxe-plan --replan',
+      reason: `${label}: ${openChanges.length} change request(s) aberto(s) — ${openChanges.map((cr) => `${cr.id} ${cr.class}`).join(', ')}. Planeje o teste de aceite que resolve cada um (resolves) e só as tarefas impactadas.`,
+      artifacts: ['.oxe/program/changes.ndjson'],
+      program,
+    };
+  }
+  if (phase.status === 'planning') {
+    // Só o PLAN.json declara a fase: um PLAN.md antigo é o plano da fase anterior.
+    const planJsonPath = path.join(path.dirname(status.paths.plan || path.join(target, '.oxe', 'PLAN.md')), 'PLAN.json');
+    let planPhase = null;
+    try {
+      planPhase = JSON.parse(fs.readFileSync(planJsonPath, 'utf8')).phase || null;
+    } catch {
+      planPhase = null;
+    }
+    if (planPhase === phase.id) {
+      return { step: 'execute', cursorCmd: '/oxe-execute', reason: `${label}: plano da fase pronto — executar.`, artifacts: ['.oxe/PLAN.json'], program };
+    }
+    return {
+      step: 'plan',
+      cursorCmd: '/oxe-plan',
+      reason: `${label}: planejar só esta fase (A*: ${phase.acceptance.join(', ') || '—'}) e gravar PLAN.json com "phase": "${phase.id}".`,
+      artifacts: programArtifacts,
+      program,
+    };
+  }
+  if (phase.status === 'executing') {
+    return { step: 'execute', cursorCmd: '/oxe-execute', reason: `${label}: em execução — concluir e verificar.`, artifacts: programArtifacts, program };
+  }
+  if (phase.status === 'verifying') {
+    const runChecks = activeRun && Array.isArray(activeRun.verification_check_results) ? activeRun.verification_check_results : [];
+    const onlyManualPending = activeRun && activeRun.status === 'blocked' && runChecks.length > 0
+      && runChecks.every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));
+    if (onlyManualPending) {
+      const manual = runChecks.filter((c) => c.status === 'skip').map((c) => String(c.acceptance_ref || c.check_id).toUpperCase());
+      return {
+        step: 'signoff',
+        cursorCmd: `oxe-cc runtime signoff --phase ${phase.id} --criteria ${manual.join(',')} --by <quem>`,
+        reason: `${label}: checks automáticos verdes; falta o UAT/aceite humano de ${manual.join(', ')} (sign-off com evidência).`,
+        artifacts: programArtifacts,
+        program,
+      };
+    }
+    if (activeRun && activeRun.status === 'completed') {
+      return {
+        step: 'program-close',
+        cursorCmd: 'oxe-cc runtime program close',
+        reason: `${label}: verify verde — fechar a fase (regressão, contratos e commit).`,
+        artifacts: programArtifacts,
+        program,
+      };
+    }
+    return {
+      step: 'execute',
+      cursorCmd: '/oxe-execute',
+      reason: `${label}: verify reprovou (${activeRun ? activeRun.status : 'sem run'}) — corrigir e verificar de novo; regressões de fases anteriores contam.`,
+      artifacts: programArtifacts,
+      program,
+    };
+  }
+  return null;
+}
+
 function suggestNextStep(target, cfg = {}) {
   const base = oxePaths(target);
   const stateText = fs.existsSync(base.state) ? fs.readFileSync(base.state, 'utf8') : '';
@@ -2098,6 +2205,9 @@ function suggestNextStep(target, cfg = {}) {
     };
   }
 
+  const programStep = suggestProgramStep(target, activeSession, activeRun);
+  if (programStep) return programStep;
+
   if (!mapsComplete && !has(p.quick) && !has(p.spec) && !has(p.plan)) {
     return {
       step: 'oxe',
@@ -2107,7 +2217,8 @@ function suggestNextStep(target, cfg = {}) {
     };
   }
 
-  if (!mapsComplete && !has(p.quick)) {
+  // Com PLAN pronto, mapas ausentes não justificam scan (greenfield nunca tem codebase a mapear).
+  if (!mapsComplete && !has(p.quick) && !has(p.plan)) {
     return {
       step: 'scan',
       cursorCmd: '/oxe-scan',

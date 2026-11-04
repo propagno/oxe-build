@@ -44,9 +44,22 @@ export interface VerifyContract {
   command: string | null;
 }
 
+/** Gate declared on the task (PLAN.json `gate` / `blocked_by`), as a human-readable reason; null when none. */
+function taskGate(task: ParsedTask): string | null {
+  const meta = (task.meta ?? {}) as Record<string, unknown>;
+  const gate = meta.gate as { kind?: string; reason?: string } | undefined;
+  const blockedBy = Array.isArray(meta.blocked_by) ? (meta.blocked_by as unknown[]).map(String).filter(Boolean) : [];
+  const parts: string[] = [];
+  if (gate && (gate.reason || gate.kind)) parts.push(`${gate.kind ?? 'human'}: ${gate.reason ?? 'aprovação humana'}`);
+  if (blockedBy.length) parts.push(`depende de ${blockedBy.join(', ')}`);
+  return parts.length ? parts.join(' · ') : null;
+}
+
 export interface NodePolicy {
   requires_human_approval: boolean;
   max_retries: number;
+  /** Why this node waits for a gate (task-level gate or external dependency). */
+  gate_reason?: string;
 }
 
 export interface GraphNode {
@@ -110,15 +123,18 @@ export function compile(
   const edges: GraphEdge[] = [];
   const waveMap = new Map<number, string[]>();
 
+  // A done task is not re-run; a dependency on it is already satisfied (replan keeps finished work).
+  const skipped = new Set(skip_done_tasks ? plan.tasks.filter((t) => t.done).map((t) => t.id) : []);
   for (const task of plan.tasks) {
-    if (skip_done_tasks && task.done) continue;
+    if (skipped.has(task.id)) continue;
 
     const waveNumber = task.wave ?? 1;
+    const gateReason = taskGate(task);
     const node: GraphNode = {
       id: task.id,
       title: task.title,
       wave: waveNumber,
-      depends_on: task.dependsOn,
+      depends_on: task.dependsOn.filter((dep) => !skipped.has(dep)),
       workspace_strategy: default_workspace_strategy,
       mutation_scope: task.files,
       actions: buildActions(task),
@@ -128,14 +144,17 @@ export function compile(
         command: task.verifyCommand,
       },
       policy: {
-        requires_human_approval: require_approval_for_all,
+        // 1.20c (OXB-005): a task-level gate or an external dependency (`blocked_by`) stops the scheduler before it.
+        requires_human_approval: require_approval_for_all || gateReason !== null,
         max_retries: default_max_retries,
+        ...(gateReason ? { gate_reason: gateReason } : {}),
       },
     };
 
     nodes.set(task.id, node);
 
     for (const dep of task.dependsOn) {
+      if (skipped.has(dep)) continue;
       edges.push({ from: dep, to: task.id, type: 'dependency' });
     }
 

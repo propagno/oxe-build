@@ -29,6 +29,16 @@ function verifyIcon(status: string): string {
   }
 }
 
+/** One `ExecutorUsage` event: an executor attempt's turns, tool calls and cost. */
+export interface ExecutorUsageRow {
+  work_item_id: string;
+  attempt?: number | null;
+  turns?: number | null;
+  tool_calls?: number | null;
+  cost_usd?: number | null;
+  adapter?: string | null;
+}
+
 export class ProjectionEngine {
   projectPlan(state: RunState, graph: ExecutionGraph): string {
     const run = state.run;
@@ -204,7 +214,7 @@ export class ProjectionEngine {
     return lines.join('\n');
   }
 
-  projectRunSummary(state: RunState): string {
+  projectRunSummary(state: RunState, usage: ExecutorUsageRow[] = []): string {
     const run = state.run;
     const completed = [...state.completedWorkItems];
     const failed = [...state.failedWorkItems];
@@ -234,6 +244,29 @@ export class ProjectionEngine {
     }
     if (blocked.length > 0) {
       lines.push(`**⊘ Blocked:** ${blocked.join(', ')}`);
+    }
+
+    if (usage.length > 0) {
+      const byItem = new Map<string, { attempts: number; turns: number; tools: number; cost: number | null }>();
+      for (const row of usage) {
+        const entry = byItem.get(row.work_item_id) ?? { attempts: 0, turns: 0, tools: 0, cost: null };
+        entry.attempts += 1;
+        entry.turns += row.turns ?? 0;
+        entry.tools += row.tool_calls ?? 0;
+        if (typeof row.cost_usd === 'number') entry.cost = (entry.cost ?? 0) + row.cost_usd;
+        byItem.set(row.work_item_id, entry);
+      }
+      const money = (v: number | null) => (v == null ? '—' : `$${v.toFixed(2)}`);
+      const total = { attempts: 0, turns: 0, tools: 0, cost: null as number | null };
+      lines.push('', '### Executor usage', '', '| Task | Attempts | Turns | Tool calls | Cost |', '|---|---|---|---|---|');
+      for (const [id, e] of byItem) {
+        lines.push(`| ${id} | ${e.attempts} | ${e.turns} | ${e.tools} | ${money(e.cost)} |`);
+        total.attempts += e.attempts;
+        total.turns += e.turns;
+        total.tools += e.tools;
+        if (e.cost != null) total.cost = (total.cost ?? 0) + e.cost;
+      }
+      lines.push(`| **Total** | ${total.attempts} | ${total.turns} | ${total.tools} | ${money(total.cost)} |`);
     }
 
     return lines.join('\n');

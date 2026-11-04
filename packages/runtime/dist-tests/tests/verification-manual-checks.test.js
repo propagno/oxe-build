@@ -1,0 +1,204 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const node_test_1 = require("node:test");
+const strict_1 = __importDefault(require("node:assert/strict"));
+const os_1 = __importDefault(require("os"));
+const path_1 = __importDefault(require("path"));
+const fs_1 = __importDefault(require("fs"));
+const verification_compiler_1 = require("../src/verification/verification-compiler");
+const verification_manifest_1 = require("../src/verification/verification-manifest");
+const promotion_pipeline_1 = require("../src/delivery/promotion-pipeline");
+// Regressão do e2e "linkly": prosa de "Como verificar" era executada como comando shell e
+// `package.json` (um path entre crases) virava `&& package.json`.
+const spec = {
+    objective: 'linkly',
+    criteria: [
+        { id: 'A1', criterion: 'botão visível', howToVerify: 'Abrir o app e conferir visualmente que o botão aparece' },
+        { id: 'A2', criterion: 'POST cria link', howToVerify: '`npm test` — `test/api.test.js` caso "POST /links cria link"' },
+        { id: 'A3', criterion: 'scripts.test', howToVerify: 'Inspeção de `package.json` (`scripts.test`)' },
+        { id: 'A4', criterion: 'oculto', howToVerify: '# pendente' },
+    ],
+};
+const emptyPlan = { tasks: [] };
+function manualResult(id, ref) {
+    return {
+        check_id: id,
+        acceptance_ref: ref,
+        status: 'skip',
+        stdout: '',
+        stderr: '',
+        exit_code: null,
+        duration_ms: 0,
+        error: null,
+        skip_reason: 'needs_structured_check',
+    };
+}
+function passResult(id) {
+    return { check_id: id, acceptance_ref: null, status: 'pass', stdout: 'ok', stderr: '', exit_code: 0, duration_ms: 1, error: null };
+}
+(0, node_test_1.describe)('verification — critérios manuais nunca viram comando', () => {
+    (0, node_test_1.test)('extractCommandFromHowToVerify: só spans que parecem comando', () => {
+        strict_1.default.equal((0, verification_compiler_1.extractCommandFromHowToVerify)('Abrir o app e conferir visualmente'), null);
+        strict_1.default.equal((0, verification_compiler_1.extractCommandFromHowToVerify)('`npm test` — `test/api.test.js` caso X'), 'npm test');
+        strict_1.default.equal((0, verification_compiler_1.extractCommandFromHowToVerify)('Inspeção de `package.json` (`scripts.test`)'), null);
+        strict_1.default.equal((0, verification_compiler_1.extractCommandFromHowToVerify)('npm test'), 'npm test');
+        strict_1.default.equal((0, verification_compiler_1.extractCommandFromHowToVerify)('`node --test test/a.test.js` e `npm run lint`'), 'node --test test/a.test.js && npm run lint');
+        strict_1.default.equal((0, verification_compiler_1.extractCommandFromHowToVerify)('# manual'), null);
+        strict_1.default.equal((0, verification_compiler_1.extractCommandFromHowToVerify)(''), null);
+    });
+    (0, node_test_1.test)('compile: prosa e paths viram checks manual com command null', () => {
+        const suite = (0, verification_compiler_1.compile)(spec, emptyPlan);
+        const byId = Object.fromEntries(suite.checks.map((c) => [c.id, c]));
+        strict_1.default.equal(byId['check-a1'].type, 'manual');
+        strict_1.default.equal(byId['check-a1'].command, null);
+        strict_1.default.equal(byId['check-a2'].command, 'npm test');
+        strict_1.default.equal(byId['check-a2'].type, 'unit');
+        strict_1.default.equal(byId['check-a3'].type, 'manual');
+        strict_1.default.equal(byId['check-a3'].command, null);
+        strict_1.default.equal(byId['check-a4'].command, null);
+    });
+    (0, node_test_1.test)('compile: a tarefa vinculada continua a mandar no comando', () => {
+        const suite = (0, verification_compiler_1.compile)(spec, { tasks: [{ id: 'T1', verifyCommand: 'node --test test/ui.test.js', aceite: ['A1'] }] });
+        const a1 = suite.checks.find((c) => c.id === 'check-a1');
+        strict_1.default.equal(a1.command, 'node --test test/ui.test.js');
+        strict_1.default.equal(a1.type, 'unit');
+    });
+    // Benchmark 1.17 (linkly): A12 dizia "`npm test` verde", mas o comando vinculado (T1) só checa
+    // package.json e não imprime nada → o tipo 'unit' vindo da prosa gerava no_test_report (falso vermelho).
+    (0, node_test_1.test)('compile: o tipo vem do comando executado, não da prosa do critério', async () => {
+        const tmp = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-type-'));
+        try {
+            const suite = (0, verification_compiler_1.compile)({ objective: 'x', criteria: [{ id: 'A12', criterion: 'pkg ok', howToVerify: 'Inspeção de `package.json` + `npm test` verde' }] }, 
+            // Literal do T1 do linkly: `node --test` aparece só dentro da string do `node -e`.
+            { tasks: [{ id: 'T1', verifyCommand: `node -e "const t='node --test \\"test/*.test.js\\"';process.exit(t?0:1)"`, aceite: ['A12'] }] });
+            const a12 = suite.checks.find((c) => c.id === 'check-a12');
+            strict_1.default.equal(a12.type, 'custom');
+            const result = await (0, verification_compiler_1.runCheck)(a12, tmp);
+            strict_1.default.equal(result.status, 'pass', String(result.error));
+        }
+        finally {
+            fs_1.default.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
+    // Benchmark 1.17 (linkly): a T3 desviou do IMPLEMENTATION-PACK e o verify não percebeu.
+    (0, node_test_1.test)('compile + runCheck: caminhos do pack viram check contract que falha quando faltam', async () => {
+        const tmp = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-pack-'));
+        try {
+            const suite = (0, verification_compiler_1.compile)({ objective: 'x', criteria: [] }, { tasks: [{ id: 'T3', verifyCommand: null, aceite: [], filesExist: ['src/store.js', 'src/store.js'] }] });
+            const check = suite.checks.find((c) => c.id === 'check-pack-t3');
+            strict_1.default.equal(check.type, 'contract');
+            strict_1.default.deepEqual(check.files_exist, ['src/store.js']);
+            const missing = await (0, verification_compiler_1.runCheck)(check, tmp);
+            strict_1.default.equal(missing.status, 'fail');
+            strict_1.default.equal(missing.error, 'files_missing: src/store.js');
+            fs_1.default.mkdirSync(path_1.default.join(tmp, 'src'));
+            fs_1.default.writeFileSync(path_1.default.join(tmp, 'src', 'store.js'), 'module.exports = {};\n');
+            const present = await (0, verification_compiler_1.runCheck)(check, tmp);
+            strict_1.default.equal(present.status, 'pass', String(present.error));
+            strict_1.default.match(present.stdout, /files_exist ok: src\/store\.js/);
+        }
+        finally {
+            fs_1.default.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
+    // Benchmark 1.18 (linkly): test/api.test.js lia `.oxe/investigations/fixtures/…` — verde no
+    // workspace, quebrado em clone limpo/CI (`.oxe/` no .gitignore). O verify dizia 25/25.
+    (0, node_test_1.test)('runCheck contract: código do produto que lê .oxe/ reprova; docs podem citar', async () => {
+        const tmp = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-leak-'));
+        try {
+            fs_1.default.mkdirSync(path_1.default.join(tmp, 'test'));
+            fs_1.default.writeFileSync(path_1.default.join(tmp, 'test', 'api.test.js'), "const f = new URL('../.oxe/investigations/fixtures/x.json', import.meta.url);\n");
+            fs_1.default.writeFileSync(path_1.default.join(tmp, 'README.md'), 'Estado local em `.oxe/` (não versionado).\n');
+            fs_1.default.writeFileSync(path_1.default.join(tmp, 'test', 'ok.test.js'), "const dotoxe = 'my.oxe/x'; // não é o diretório .oxe\n");
+            const suite = (0, verification_compiler_1.compile)({ objective: 'x', criteria: [] }, { tasks: [
+                    { id: 'T6', verifyCommand: null, aceite: [], filesExist: ['test/api.test.js', 'README.md'] },
+                    { id: 'T7', verifyCommand: null, aceite: [], filesExist: ['README.md', 'test/ok.test.js'] },
+                ] });
+            const leak = await (0, verification_compiler_1.runCheck)(suite.checks.find((c) => c.id === 'check-pack-t6'), tmp);
+            strict_1.default.equal(leak.status, 'fail');
+            strict_1.default.equal(leak.error, 'oxe_internal_reference: test/api.test.js');
+            const docs = await (0, verification_compiler_1.runCheck)(suite.checks.find((c) => c.id === 'check-pack-t7'), tmp);
+            strict_1.default.equal(docs.status, 'pass', String(docs.error));
+        }
+        finally {
+            fs_1.default.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
+    (0, node_test_1.test)('buildManifest: o motivo da falha chega ao manifest', () => {
+        const failed = { ...passResult('c1'), status: 'fail', error: 'no_tests_executed' };
+        const manifest = (0, verification_manifest_1.buildManifest)('r', [failed, passResult('c2')]);
+        strict_1.default.equal(manifest.checks[0].error, 'no_tests_executed');
+        strict_1.default.equal(manifest.checks[1].error, null);
+    });
+    (0, node_test_1.test)('runCheck: check manual → skip com needs_structured_check', async () => {
+        const check = {
+            id: 'check-a1',
+            type: 'manual',
+            command: null,
+            evidence_type_expected: 'stdout',
+            acceptance_ref: 'A1',
+            description: 'manual',
+        };
+        const result = await (0, verification_compiler_1.runCheck)(check, os_1.default.tmpdir());
+        strict_1.default.equal(result.status, 'skip');
+        strict_1.default.equal(result.skip_reason, 'needs_structured_check');
+    });
+    (0, node_test_1.test)('verifyRun: critérios manuais deixam a run partial com gaps nomeados', async () => {
+        const tmp = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-manual-'));
+        try {
+            const suite = (0, verification_compiler_1.compile)({ objective: 'x', criteria: [spec.criteria[0]] }, emptyPlan);
+            const result = await (0, verification_compiler_1.verifyRun)({ projectRoot: tmp, runId: 'run-manual', workItemId: 'run', cwd: tmp, suite });
+            strict_1.default.equal(result.status, 'partial');
+            strict_1.default.equal(result.gaps.length, 1);
+            strict_1.default.match(result.gaps[0], /A1/);
+            strict_1.default.equal(result.manifest?.summary.all_passed, false);
+            strict_1.default.equal(result.manifest?.summary.manual, 1);
+            strict_1.default.equal((0, verification_compiler_1.summarizeSuite)(result.check_results).manual, 1);
+        }
+        finally {
+            fs_1.default.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
+    (0, node_test_1.test)('buildManifest: skip manual não é all_passed; skip deliberado continua passando', () => {
+        const withManual = (0, verification_manifest_1.buildManifest)('r', [passResult('c1'), manualResult('c2', 'A2')]);
+        strict_1.default.equal(withManual.summary.all_passed, false);
+        strict_1.default.equal(withManual.summary.manual, 1);
+        const plainSkip = (0, verification_manifest_1.buildManifest)('r', [passResult('c1'), { ...manualResult('c2', 'A2'), skip_reason: 'no_command' }]);
+        strict_1.default.equal(plainSkip.summary.all_passed, true);
+        strict_1.default.equal(plainSkip.summary.manual, 0);
+    });
+    // Benchmark 1.17 (linkly): cobertura 89% bloqueava o promote sem dizer quais checks faltavam.
+    (0, node_test_1.test)('MergeGateEvaluator: bloqueio por cobertura nomeia os checks sem evidência', () => {
+        const manifest = (0, verification_manifest_1.buildManifest)('r', [passResult('c1'), passResult('c2')]);
+        manifest.checks[0].evidence_refs = ['ev-1'];
+        manifest.checks[1].evidence_refs = [];
+        const coverage = (0, verification_manifest_1.summarizeEvidenceCoverage)(manifest);
+        strict_1.default.deepEqual(coverage.checks_without_evidence, ['c2']);
+        const runResult = { run_id: 'r', status: 'completed', completed: ['T1'], failed: [], blocked: [] };
+        const report = new promotion_pipeline_1.MergeGateEvaluator().evaluate(runResult, manifest, null, [], coverage, 100);
+        strict_1.default.equal(report.verdict, 'blocked');
+        strict_1.default.ok(report.reasons.some((r) => /coverage below threshold: 50%\/100% — no evidence: c2/.test(r)), report.reasons.join(' | '));
+    });
+    (0, node_test_1.test)('MergeGateEvaluator bloqueia promoção quando há critério manual', () => {
+        const manifest = (0, verification_manifest_1.buildManifest)('r', [passResult('c1'), manualResult('c2', 'A2')]);
+        const runResult = { run_id: 'r', status: 'completed', completed: ['T1'], failed: [], blocked: [] };
+        const report = new promotion_pipeline_1.MergeGateEvaluator().evaluate(runResult, manifest, null, [], null, 0);
+        strict_1.default.equal(report.verdict, 'blocked');
+        strict_1.default.ok(report.reasons.some((r) => /without executable check/.test(r)), report.reasons.join(' | '));
+    });
+});
+(0, node_test_1.describe)('critério declarado manual/UAT (OxeVoice F1, A8)', () => {
+    (0, node_test_1.test)('nunca é "provado" pelo verify de uma tarefa que o referencia', () => {
+        const suite = (0, verification_compiler_1.compile)({ objective: null, criteria: [{ id: 'A8', criterion: 'ditado real no Windows', howToVerify: 'UAT manual no Windows' }] }, { tasks: [{ id: 'T7', verifyCommand: 'node -e "process.exit(0)"', aceite: ['A8'] }] });
+        const check = suite.checks.find((c) => c.id === 'check-a8');
+        strict_1.default.equal(check.type, 'manual');
+        strict_1.default.equal(check.command, null);
+    });
+    (0, node_test_1.test)('critério com comando na SPEC continua executável mesmo citando "manual"', () => {
+        const suite = (0, verification_compiler_1.compile)({ objective: null, criteria: [{ id: 'A1', criterion: 'x', howToVerify: 'manual: `node --test t.js`' }] }, { tasks: [] });
+        strict_1.default.equal(suite.checks.find((c) => c.id === 'check-a1').command, 'node --test t.js');
+    });
+});

@@ -1,0 +1,244 @@
+# Backlog do oxe-build: validação pelo OxeVoice
+
+Construímos o **OxeVoice 1.5** (voz nativa cross-OS no oxespace) usando o oxe-build de ponta a ponta, no fluxo recomendado pelo manual:
+
+```text
+/oxe-spec → runtime program init/start → /oxe-plan (PLAN.json + aceite congelado) → plan lint
+          → runtime execute (claude -p) → runtime verify → runtime program close
+```
+
+Todo problema que aparece no caminho vira uma entrada aqui. Cada entrada tem a evidência, o impacto e uma proposta que vai além do conserto pontual. Não basta remover o sintoma: a pergunta é o que o fluxo deveria ser.
+
+Status possíveis: `aberto`, `em andamento`, `resolvido (<commit>)`, `proposta`.
+
+---
+
+## OXB-001: o executor escrevia o próprio teste de aceite (falso verde)
+
+- **Status:** resolvido (1.19, aceite congelado).
+- **Evidência:** e2e real `e2e-program --real` de 2026-10-31.
+  - O executor entendeu "createApi devolve handle" como `{ handle }` e escreveu um teste que concordava com essa leitura.
+  - O verify deu verde, e o oráculo independente reprovou a F2.
+- **Correção:** `PLAN.json.acceptance_tests`.
+  - O teste é escrito no `/oxe-plan` e tem o hash congelado no compile.
+  - Vai para o prompt como SPEC executável, e o executor tem a escrita negada.
+  - O verify reprova com `acceptance_tampered` ou `acceptance_missing`.
+  - `e2e-program` ganhou os cenários `misread-interface` e `tampered-acceptance`.
+- **Fora da caixa:**
+  - Separar os papéis **autor do aceite** e **implementador**, com agentes e modelos diferentes. O aceite pode ser gerado por um "adversarial spec agent" que tenta quebrar as interpretações ambíguas da SPEC antes do plano fechar.
+  - Medir **ambiguidade da SPEC**: quantas leituras distintas N agentes produzem para o mesmo A*. Um A* com divergência alta bloqueia o plano até ser esclarecido.
+
+## OXB-002: `writeRunState` descartava campos sem avisar
+
+- **Status:** resolvido (1.19).
+- **Evidência:** `acceptance_lock` e `verification_regression` sumiam da run, porque a função grava só uma lista fixa de campos. O lock nunca era persistido, e o teste de mutação do aceite fechava a fase.
+- **Fora da caixa:** dar à run state um schema versionado e validado (o mesmo validador do PLAN.json), com teste de round-trip. Campo desconhecido vira erro em dev e aviso em produção, nunca perda silenciosa.
+
+## OXB-003: comandos do runtime recriam arquivos `.oxe/` que o usuário apagou
+
+- **Status:** resolvido (1.21, 9d74d99). Comandos de runtime não recriam arquivos dentro de um `.oxe/` existente. Os de leitura (status, providers, agents, replay, gates list) falham sem `.oxe/` com a dica do `init-oxe`. `tests/oxe-cli-purity.test.cjs`.
+- **Evidência:** `runtime providers` na raiz do repo recriou o `.oxe/STATE.md` a partir do template.
+- **Fora da caixa:** comandos de leitura nunca escrevem. Separar `runtime` em leitura (puro) e escrita (com journal), e escrever só no que o comando declara como efeito colateral.
+
+## OXB-004: `runtime verify --json` emite o banner antes do JSON
+
+- **Status:** resolvido (1.21, 9d74d99). Com `--json`, banner, cabeçalhos e linhas de projeto/sessão vão para o stderr, e o stdout é só JSON. Ainda não há schema versionado por comando; hoje o contrato é o teste de parse.
+- **Evidência:** a saída não é JSON válido, então os benchmarks leem a run do disco.
+- **Fora da caixa:** toda saída `--json` vira contrato versionado (`oxe*Schema`), testado por um snapshot de schema no CI. O banner vai para stderr.
+
+## OXB-005: sem gate humano por tarefa nem execução parcial por onda
+
+- **Status:** resolvido (1.20c). O `PLAN.json` aceita `gate: {kind, reason}` e `blocked_by: ["oxespace#B21"]` por tarefa: o scheduler para antes dela com `GateRequested`, e as outras tarefas seguem.
+- **Evidência:** na F1 do OxeVoice, o wiring dos hot files (de outras equipes) depende de um ASK ao coordenador e do merge do B21. O `runtime execute` roda todas as ondas, e `requires_human_approval` é global (`graph-compiler.ts`).
+- **Contorno:** a T7 virou "proposta de diff" (`docs/voice/HOTFILES-PROPOSAL.md`), e a aplicação entra por `/oxe-plan --replan` depois do ASK.
+- **Fora da caixa:**
+  - `PLAN.json` com `gate: { kind: 'human'|'external', reason, until? }` por tarefa, em que o scheduler para antes dela e emite `GateRequested`;
+  - **dependências externas declarativas** (`blocked_by: ["oxespace#B21"]`), consultadas no GitHub/CI; a tarefa destrava quando o PR externo entra.
+
+## OXB-006: o ambiente do projeto não faz parte do preflight
+
+- **Status:** resolvido (1.21, fe515dd). `oxe-cc doctor --project` e o preflight comparam a máquina com `engines`, `.nvmrc`, `packageManager` e o **engines das dependências diretas no lockfile**. No oxespace, ele aponta `jsdom@30.1.3` pedindo Node `^22.22.2` com a máquina em 22.17.1. `project_env_check: warn|false` relaxa a checagem.
+- **Evidência:** no worktree do oxespace, o `npm ci` com o Node 22.17/npm 10.9 da máquina rodou `node-gyp rebuild` no `better-sqlite3` 13, mesmo com `gypfile:false` e prebuilds. Falhou, e o pacote foi removido em silêncio como "optional failed". As dependências pedem Node `^22.22.2 || ^24.15`. A causa só apareceu no verify nativo.
+- **Fora da caixa:** um `oxe-cc doctor --project` que lê `engines`, `.nvmrc`, `packageManager` e o lockfile, compara com a máquina e bloqueia o `execute` com um diagnóstico acionável. Um `environment` no PROGRAM.json fixa o toolchain por fase, e a evidência do verify registra a versão usada.
+
+## OXB-007: o gate de confiança não tem um caminho de "spike" no fluxo
+
+- **Status:** resolvido (1.21, fe515dd). A tarefa `kind: spike` tem `question`, escreve só `.oxe/spikes/<Tn>.md` e é verificada pelo relatório. A resposta vira a decisão `D-SPIKE-Tn`. O bloqueio de `plan_confidence` agora aponta o spike.
+- **Evidência:** o preflight bloqueou o execute com `plan_confidence:88%<=90%`, e com razão: a incerteza era se o PowerShell 5.1 consegue escutar eventos WinRT.
+  - O spike manual respondeu que **não consegue** (`Register-ObjectEvent` → "não pode assinar eventos Windows RT").
+  - Ele também confirmou o mapeamento do 0x80045509.
+  - O plano mudou (loop de `RecognizeAsync`, sem parciais) e foi para 91% com evidência.
+  - Sem o spike, o executor teria descoberto isso no meio da T4, com custo pago e retries.
+- **Fora da caixa:** o gate de confiança gera **tarefas de spike** automáticas.
+  - Cada "principal incerteza" do plano vira uma tarefa `read_code`/`collect_evidence` com orçamento pequeno e uma pergunta binária.
+  - O resultado (`SPIKE-<n>.json`, com a evidência) recalcula a confiança e atualiza o PLAN por replan antes da onda 1.
+  - A confiança deixa de ser um número declarado e passa a ser **derivada das incertezas que restam abertas**.
+
+## OXB-008: o blocker de confiança dizia "91%<=90%"
+
+- **Status:** resolvido (mensagem). O preflight agora diz `plan_self_evaluation_incomplete:<n> — <avisos>` quando o percentual passa do limiar mas a rubrica, o vetor ou as alternativas estão incompletos.
+- **Fora da caixa:** o `/oxe-plan` gera a rubrica, o vetor e as âncoras a partir do PLAN.json (são dados, não prosa). O `plan lint` aponta o que falta antes do preflight, e o markdown vira apenas projeção.
+
+## OXB-009: um comando de verificação quebrado no plano custava retries pagos
+
+- **Status:** resolvido (`oxe-cc plan lint --dry-verify`).
+- **Evidência:** o verify da T1 da F1 (esbuild com 2 entradas e sem `outdir`) reprovou 3 tentativas do executor com código correto: 13 turnos, US$ 0,75, tudo jogado fora. O retry não distingue "o código está errado" de "a régua está errada".
+- **Correção:** antes de executar, cada verify roda uma vez e precisa ficar **vermelho pelo motivo certo**, isto é, falhar porque o alvo da tarefa ainda não existe.
+  - Um comando quebrado é erro de lint.
+  - Um verify que já passa vira aviso, porque não prova nada.
+- **Fora da caixa:**
+  - Um retry com **diagnóstico da régua**: quando a mesma falha se repete com saída idêntica entre tentativas, o runtime para e classifica (`verify_command_suspect`) em vez de pagar a próxima tentativa.
+  - O executor pode apresentar uma objeção estruturada ao verify ("o comando falha por X, não pelo meu código"), e ela vira um gate para o planner.
+
+## OXB-010: o `recover` não reconhece um journal `running` deixado por um processo morto
+
+- **Status:** resolvido (1.20c). O journal tem lease (`owner_pid` + `heartbeat_at`). Um `running` com dono morto, sem dono ou com heartbeat de mais de 6 h vira `interrupted`, que é retomável e preserva o que foi concluído.
+- **Evidência:** depois do OOM, o `runtime recover` informou `Journal: running` e só deixou a run em `planned`, sem reconciliar a tentativa interrompida.
+- **Fora da caixa:** um lease com heartbeat no journal. Um journal `running` cujo PID não existe mais ou cujo heartbeat venceu vira `interrupted`, e o recover retoma da tarefa interrompida, com o custo das tentativas anteriores preservado.
+
+## OXB-011: falso verde num critério UAT e suíte em cache com regras velhas
+
+- **Status:** resolvido.
+- **Evidência:** no verify da F1, o `check-a8` ("ditado real no Windows", UAT manual) **passou** usando o verify da T7, que só confere se o documento de UAT existe.
+  - Depois da correção, a suíte persistida continuou com a regra antiga, porque o cache era indexado só pelos hashes de SPEC/PLAN.
+  - No mesmo verify, `check-pack-t5` reprovou com `oxe_internal_reference` por uma menção a `.oxe/` que já existia no `origin/main` (o oxespace integra o OXE).
+- **Correção:**
+  - um critério declarado `manual`/`UAT`/homologação sem comando próprio vira check `manual` (nunca é "provado" pelo comando de uma tarefa);
+  - `VERIFICATION_COMPILER_VERSION` entra no `plan_hash` da suíte;
+  - `oxe_internal_reference` só conta referências **novas** em relação ao `HEAD`.
+  - Agora a F1 fica `blocked`, com 22/23 verdes e o A8 pendente de UAT, que é o estado correto.
+- **Fora da caixa:** o critério UAT exige **sign-off humano** registrado (quem, quando, evidência) para a fase fechar (1.20b).
+
+---
+
+## Melhorias de fluxo em observação durante o OxeVoice
+
+Hipóteses a confirmar com dados das fases:
+
+- **Custo e turnos por fase:** o coordenador do oxespace pede um ASK quando uma fase passa de 2× os turnos planejados. Proposta: o PLAN.json declara `budget.turns` por tarefa, o runtime aplica o limite e emite `BudgetExceeded`, que vira gate humano.
+- **Coordenação multi-time:** o oxespace tem "hot files" disputados por outras equipes. Proposta: o PLAN.json declara `contested_paths`, o scheduler serializa as tarefas que tocam esses arquivos e o `program close` exige um ASK registrado antes do PR.
+- **Validação cross-OS:** voz nativa depende do SO. Proposta: um verify por matriz (`runs_on: [windows, macos, linux]`) delegado ao CI, em que a fase só fecha com evidência das 3 plataformas.
+
+## OXB-012: flags da CLI no parser errado, sem teste pela linha de comando
+
+- **Status:** resolvido.
+- **Evidência:** as flags de `runtime program/dossier/signoff/feedback` (1.19–1.20) foram inseridas no `parseContextArgs`, e não no `parseRuntimeArgs`. Os testes chamavam o operational direto, e o e2e também, então nada falhou.
+  - Pela CLI real, `feedback --class` dava "Opção desconhecida".
+  - O `feedback <dir>` tratava o diretório como subcomando e gravou um CR no `.oxe` do repositório errado.
+- **Correção:** as flags foram movidas para o parser certo, só `list` é subcomando do `feedback`, e o `tests/oxe-runtime-program-cli.test.cjs` exercita os comandos pela CLI de verdade.
+- **Fora da caixa:** um teste gerado a partir da tabela de uso (`usage()`): todo comando e flag documentado é chamado pela CLI num projeto temporário, então documentação e parser não divergem.
+
+## OXB-013: o retry era cego (o executor nunca via por que o verify falhou)
+
+- **Status:** resolvido (1.20c).
+- **Evidência:** na F1, a T1 falhou 3 vezes no verify. Cada nova tentativa recebeu só "Verification failed: checks did not pass", e o executor nunca viu o erro do esbuild.
+- **Correção:**
+  - **Retry informado:** a próxima tentativa recebe o comando, o motivo e as últimas 40 linhas da saída, mais a instrução de parar e explicar se o próprio comando estiver errado.
+  - **Régua suspeita:** a mesma falha, com saída normalizada (sem tempos, timestamps, hashes e caminhos temporários), em duas tentativas faz a tarefa parar com `verify_suspect` e emite `VerifyCommandSuspect`, sem pagar as tentativas restantes.
+  - **Checkpoint por tarefa** (`--checkpoint-commits` ou `checkpoint_commits`): commit local só do escopo da tarefa concluída.
+  - `runtime rollback --task Tn [--yes]` devolve o escopo ao último checkpoint (dry-run por padrão).
+
+## OXB-014: CR de `constraint` sem critério não tinha como ser provado
+
+- **Status:** resolvido.
+- **Evidência:** o CR-03 do OxeVoice ("eslint react-hooks/refs com zero warnings") não pertence a nenhum A*. Como o teste de aceite congelado exigia `criterion` e gerava um check por critério, o CR nunca poderia fechar por evidência.
+- **Correção:** a entrada `acceptance_tests[]` pode ter um `id` próprio (check `check-accept-<id>`). O `criterion` passa a ser opcional quando há `id` + `resolves`. O lock, o reconcile do CR e o schema usam `id || criterion`.
+
+## OXB-015: num replan, tarefas concluídas disputavam escopo com as novas
+
+- **Status:** resolvido. O lint ignora as tarefas `done` na checagem de escopo e de onda, porque elas não rodam de novo.
+
+## OXB-016: o dry-verify não reconhecia o vermelho certo de uma tarefa de correção
+
+- **Status:** resolvido. Quando os alvos já existem (correção, não criação), uma falha de asserção do runner é `assertion_red`, que é vermelho pelo motivo certo. Erros de ferramenta continuam sendo `broken_command`.
+
+## OXB-017: o replan reexecutava as tarefas concluídas
+
+- **Status:** resolvido. A opção `skip_done_tasks` existia, mas vinha desligada por padrão. Agora o compile a partir do PLAN.json pula as tarefas `done`, e as dependências nelas contam como satisfeitas. Sem isso, o rework da F1 pagaria de novo por T1–T7.
+
+## OXB-018: o dry-verify não via o comando efetivo do nó
+
+- **Status:** resolvido.
+- **Evidência:** no rework da F1, o verify inline da T11 era `ipc-v2.test.ts && ipc.test.ts`. O segundo segmento era o "Como verificar" antigo do A6, que o compile anexa a partir da SPEC: na emenda eu mudei o texto do A6, mas não a coluna de verificação. O dry-verify testou só o comando da tarefa, e o primeiro segmento, vermelho pelo motivo certo, escondia o segundo quebrado.
+  - A **régua suspeita** (1.20c) pegou o problema na 2ª tentativa idêntica (`test_file_missing`) e parou a tarefa, sem pagar a 3ª: o primeiro caso real dela.
+- **Correção:** o dry-verify roda o comando efetivo (tarefa + "Como verificar" dos critérios dela), **segmento a segmento** do `&&`, e fica com o pior veredito.
+
+## OXB-019: o lock do aceite descartava `resolves` e `version`
+
+- **Status:** resolvido.
+- **Evidência:** no verify do rework da F1, os `check-accept-*` ficaram verdes, mas nenhum CR foi marcado como resolvido. O `attachAcceptanceLock` reconstruía as entradas sem `resolves`/`version`, e o reconcile não via a ligação teste → CR.
+- **Correção:** os campos são preservados. Um teste de ponta a ponta (feedback → compile → verify → CR resolvido) cobre o caminho real, que os testes unitários do reconcile não exercitavam.
+
+## OXB-020: o aceite congelado não cobre os gates do projeto (typecheck e suíte de governança)
+
+- **Status:** resolvido (1.21, 2783eb7). `phase_gates` rodam no verify da fase, e um gate vermelho abre um CR que fecha quando o gate fica verde. Há também gate de CI via `runtime ci --attach`, e o executor recebe as regras do repositório no contexto.
+- **Evidência:** no rework da F1, todos os aceites ficaram verdes (vitest), mas o `npm run typecheck` completo (heavy-lock) reprovou. O namespace `voice` não foi registrado nos tipos do i18next. O vitest transpila sem checar tipos, e o executor só rodou os testes da própria tarefa.
+- **Fora da caixa:** o PLAN.json ganha `phase_gates` (typecheck, lint, bundle budget), comandos do projeto que o `program close` executa (via heavy-lock quando o projeto tem um). Também devem rodar no **verify da fase**, não por tarefa, para não custar turno nem memória a cada tentativa. Uma falha vira CR `defect` automático, com a saída do comando.
+
+## OXB-021: commits de checkpoint fora da convenção do projeto
+
+- **Status:** resolvido (1.21, 8d78c39). `commit_convention` (template, pattern, trailers, `commit` por tarefa) mais o trailer `OXE-Task: Tn`.
+- **Evidência:** os commits `oxe(Tn): <título em pt-BR>` do `--checkpoint-commits` não seguem Conventional Commits em inglês, a regra do oxespace. No PR #417, ficou anotado que serão squashados.
+- **Fora da caixa:** um `commit_convention` no PLAN.json ou no `config.json` (template, idioma, sufixo `Co-Authored-By`), com o título do commit gerado pela tarefa (`feat(voice): ...`). O `plan lint` valida o template.
+
+### OXB-020: evidência adicional (CI do PR #417)
+
+A CI do oxespace reprovou 9 testes de **governança do repositório** (`design-lint` com ratchets de primitivos, tokens e motion; `i18n-catalog`; `mcp-coverage`; `fs-allowlist`), e nenhum de voz. O plano só exercitava os aceites da feature.
+
+**Lição:** num repositório com suíte de governança, o phase gate é **a suíte do repo**, normalmente via CI, porque a local não cabe na máquina. Os ratchets do repo também deveriam entrar no **contexto do executor**, por exemplo um `## Regras do repositório` gerado de `design-lint`/`AGENTS.md`/`CLAUDE.md`, para que ele escreva certo na primeira vez.
+
+## OXB-022: o `plan lint` aprova uma tarefa que o preflight do execute bloqueia
+
+- **Status:** resolvido (1.21, 8d78c39). O lint e o preflight usam o mesmo `validatePackTask`, e `symbols` só é exigido para arquivo de código.
+- **Evidência:** no rework de governança da F1, a T12 (só `voice.css`) passou no `plan lint --dry-verify`, mas o `runtime execute` parou no preflight com `execution_rationality: IMPLEMENTATION-PACK.json tarefa T12 sem symbols`. Uma tarefa só de CSS, config ou docs não tem symbol de código para declarar, então a regra força juntá-la a outra tarefa (T12 foi fundida na T13).
+- **Fora da caixa:** o lint e o preflight devem partilhar **um único validador** (`validatePack`), para que nada passe num e falhe no outro. Os `symbols` passam a ser exigidos só quando `mutation_scope: code` e o arquivo é de código (`.ts/.js/.tsx/.cjs`). Para estilo, config e docs, valem `selectors`/`keys` opcionais, que o contract-exports ignora.
+
+## OXB-023: não há teto de turnos por run
+
+- **Status:** resolvido (1.21, 8d78c39). `--budget-turns`/`--budget-usd`/`--max-retries` e `budget` no PLAN.json. O ledger por run soma entre execuções, e o scheduler para entre tentativas e limita a próxima aos turnos restantes.
+- **Evidência:** o coordenador fixou um teto de 20 turnos `claude -p` para o rework. O runtime só tem `--max-turns` por tentativa, com `max_retries = 2` fixo no compile (`default_max_retries`). No pior caso, 3 tarefas × 3 tentativas × 6 turnos dariam 54 turnos, e o teto ficou a cargo de um monitor manual dos eventos `ExecutorUsage`.
+- **Fora da caixa:** `--budget-turns N` / `--budget-usd X` no execute, e `budget` no PLAN.json, contados no journal. Ao atingir o teto, o scheduler para **entre tentativas** com `BudgetExhausted` (gate ao planner), sem matar uma tentativa no meio. Também `--max-retries` na CLI, e o `oxe-cc runtime status` mostrando o consumo contra o teto.
+
+## OXB-024: `runtime compile/execute` cria arquivos de init como efeito colateral
+
+- **Status:** resolvido (1.21, 9d74d99), junto com o OXB-003.
+- **Evidência:** cada `runtime compile`/`execute` imprime `init .oxe/README.md` e tenta recriar `STATE.md`/`config.json`. Num projeto já inicializado, um comando de runtime não deveria escrever arquivos de bootstrap.
+- **Correção proposta:** só o `init-oxe` faz bootstrap. O runtime exige um `.oxe` válido e falha com a dica `oxe-cc init-oxe`.
+
+## OXB-025: execute concluído não marca `done` no PLAN.json
+
+- **Status:** resolvido (1.21, 8d78c39). `done`/`done_at`/`done_commit` gravados no PLAN.json, `oxe-cc plan done Tn`, e lint com erro para tarefa pendente com checkpoint e verify verde.
+- **Evidência:** a T13 e a T14 passaram no verify e ganharam checkpoint commit, mas continuaram sem `done: true` no PLAN.json. No compile seguinte, que só acrescentava a T15 do CR-13, elas voltaram ao grafo (3 nós em vez de 1). O `plan lint` avisou que a verificação delas "já passa antes da tarefa", que é o sintoma. Sem a correção manual, a run teria pago de novo duas tarefas prontas.
+- **Correção proposta:** ao fechar uma tarefa com verify verde, o runtime grava `done: true`, `done_at` e `done_commit` (o checkpoint) no PLAN.json, sob lock. O compile também passa a ignorar tarefas cujo checkpoint está no histórico e cujo verify continua verde. Quando a verificação de uma tarefa pendente já passa e ela tem checkpoint, o lint vira erro com a dica "marcar done".
+
+## OXB-026: estourar o limite de turnos descarta o trabalho sem rodar o verify
+
+- **Status:** resolvido (1.21, 8d78c39). Depois de um turn limit com escrita no escopo, o runtime roda o verify: verde conclui (`verify_after_turn_limit`). O último turno pede para fechar e reportar.
+- **Evidência:** na T15 (CR-13), a tentativa 1 terminou com `completed_by: turn_limit_exhausted`, `failure_class: llm` e a mensagem do próprio executor: "All 35 tests pass across the five files. Running the final verification command…". O diff estava no working tree, mas o scheduler agendou o retry **sem rodar o verify**. A tentativa 2 recomeçou um trabalho já concluído e pagou até 5 turnos a mais, chegando exatamente ao teto de 20 do coordenador.
+- **Fora da caixa:** o verify é o juiz, não o fim de conversa do LLM. Quando um turn limit termina com diff no escopo, o scheduler roda o verify antes de classificar a tentativa: verde conclui a tarefa (`completed_by: verify_after_turn_limit`), vermelho entra no retry informado. Também vale reservar o último turno para "pare e reporte", em vez de um turno de verificação redundante; o executor não precisa rodar o comando final, o runtime roda.
+
+## OXB-027: o dry-verify chamava de "comando quebrado" o teste que importa um módulo de dependência pendente
+
+- **Status:** resolvido (1.21).
+- **Evidência:** no projeto de referência `mdlint`, os testes de aceite da T2 à T5 importam `src/parse.js`, que é da T1, ainda não executada. O `plan lint --dry-verify` classificou os quatro como `broken_command` e bloqueou o plano, embora fossem vermelhos pelo motivo certo.
+- **Correção:** a classificação considera também os arquivos das dependências pendentes (transitivas) da tarefa. Um módulo que nenhuma tarefa cria continua sendo plano quebrado. Teste: `tests/oxe-dryrun-dependency.test.cjs`.
+
+## OXB-028: o lint aprovava um plano que o preflight bloqueava por falta de âncoras e de fixture pack
+
+- **Status:** resolvido (1.21).
+- **Evidência:** nos projetos de referência (greenfield), o `plan lint` deu ok e o preflight do execute bloqueou com `REFERENCE-ANCHORS.md ausente` e, depois, com `FIXTURE-PACK.json inválido ou ausente`. É a mesma classe de divergência do OXB-022.
+- **Correção:** o `plan lint` roda a mesma racionalidade de execução do preflight. Com IMPLEMENTATION-PACK, os gaps viram erro (`preflight: …`); sem pack, viram aviso. Num projeto novo, declare `REFERENCE-ANCHORS.md` com `status="not_applicable"` e o `FIXTURE-PACK.json` com `status: not_applicable` e o motivo.
+
+## OXB-029: o normalizador do run state descartava `verification_gates`, e nenhum close com gates passava
+
+- **Status:** resolvido (1.21).
+- **Evidência:** no projeto de referência `ledger-api`, o F1 ficou com verify `passed` e gates 2/2, mas o `program close` reprovou com "gate do projeto não rodou no verify da fase". O `writeRunState` normaliza o run state por lista de campos, e o `verification_gates` não estava nela. O teste unitário da Onda A checava o retorno do verify, não o run persistido que o close lê.
+- **Correção:** o campo foi incluído no normalizador, e o teste e2e dos gates agora relê o run do disco. **Lição:** todo campo que um comando grava e outro lê precisa de um teste que passe pelo disco, não só pelo valor de retorno.
+
+## OXB-030: o critério citava 413, o teste congelado não exercitava e a fase fechou verde (falso verde pego pelo oráculo)
+
+- **Status:** resolvido (1.21).
+- **Evidência:** no projeto de referência `ledger-api` (run 1, arquivado em `oxe-reference/ledger-api-run1`), as 10 tarefas passaram na 1ª tentativa, os gates ficaram 2/2 e as duas fases fecharam. O **oráculo independente reprovou a F2**: depois de um corpo grande demais (413), o servidor gerado deixava a conexão meio aberta, e o `server.close()` nunca terminava. Isso trava o shutdown e vaza um socket a cada requisição. O critério A10 dizia "erros 400/401/404/405/413", mas o teste congelado escrito pelo planner não exercitava o 413 pela API.
+- **Correção no OXE:** o `plan lint` passa a cobrar que os termos verificáveis do critério (códigos 1xx–5xx, `code spans`, "literais") apareçam no teste de aceite ligado a ele. É erro com `acceptance_tests_required` e aviso sem. Rodado sobre o run 1, o lint aponta exatamente `A10: … não exercita "413"`.
+- **Correção no projeto:** o A10 passou a enviar um corpo bruto grande, exigir 413 em JSON e exigir que o servidor feche em até 3 s. Ele é verde na implementação de referência e vermelho no código do run 1 ("server.close() did not finish"). O projeto foi reconstruído do zero com o OXE corrigido.
+- **Lição:** o oráculo independente é o que torna o falso verde visível. O scorecard conta esse caso, e o release não esconde: o run 1 não entra no scorecard, e a correção virou regra do lint.

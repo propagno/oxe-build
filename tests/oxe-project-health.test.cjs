@@ -9,6 +9,8 @@ const path = require('path');
 const h = require('../bin/lib/oxe-project-health.cjs');
 const REPO_ROOT = path.join(__dirname, '..');
 
+const READY_PLAN = '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 91%\n- **Base da confiança:**\n  - Completude dos requisitos: 23/25\n  - Dependências conhecidas: 14/15\n  - Risco técnico: 18/20\n  - Impacto no código existente: 14/15\n  - Clareza da validação / testes: 13/15\n  - Lacunas externas / decisões pendentes: 9/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n<confidence_vector cycle=\"C-01\" generated_at=\"2026-04-22T12:00:00Z\">\n  <dim name=\"requirements\" score=\"0.92\" weight=\"25\" note=\"ok\" />\n  <dim name=\"dependencies\" score=\"0.93\" weight=\"15\" note=\"ok\" />\n  <dim name=\"technical_risk\" score=\"0.90\" weight=\"20\" note=\"controlado\" />\n  <dim name=\"code_impact\" score=\"0.93\" weight=\"15\" note=\"claro\" />\n  <dim name=\"validation\" score=\"0.87\" weight=\"15\" note=\"bom\" />\n  <dim name=\"open_gaps\" score=\"0.90\" weight=\"10\" note=\"sem gaps\" />\n  <global score=\"0.91\" gate=\"proceed\" />\n</confidence_vector>\n';
+
 function writeRationalityPacks(oxeDir, taskIds = ['T1']) {
   fs.writeFileSync(
     path.join(oxeDir, 'IMPLEMENTATION-PACK.md'),
@@ -459,12 +461,67 @@ describe('oxe-project-health', () => {
     fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# S\n## Critérios de aceite\n| A1 | x | y |\n', 'utf8');
     fs.writeFileSync(
       path.join(oxe, 'PLAN.md'),
-      '## Autoavaliação do Plano\n- **Melhor plano atual:** sim\n- **Confiança:** 91%\n- **Base da confiança:**\n  - Completude dos requisitos: 23/25\n  - Dependências conhecidas: 14/15\n  - Risco técnico: 18/20\n  - Impacto no código existente: 14/15\n  - Clareza da validação / testes: 13/15\n  - Lacunas externas / decisões pendentes: 9/10\n- **Principais incertezas:** nenhuma\n- **Alternativas descartadas:** nenhuma\n- **Condição para replanejar:** falha em A1\n\n<confidence_vector cycle=\"C-01\" generated_at=\"2026-04-22T12:00:00Z\">\n  <dim name=\"requirements\" score=\"0.92\" weight=\"25\" note=\"ok\" />\n  <dim name=\"dependencies\" score=\"0.93\" weight=\"15\" note=\"ok\" />\n  <dim name=\"technical_risk\" score=\"0.90\" weight=\"20\" note=\"controlado\" />\n  <dim name=\"code_impact\" score=\"0.93\" weight=\"15\" note=\"claro\" />\n  <dim name=\"validation\" score=\"0.87\" weight=\"15\" note=\"bom\" />\n  <dim name=\"open_gaps\" score=\"0.90\" weight=\"10\" note=\"sem gaps\" />\n  <global score=\"0.91\" gate=\"proceed\" />\n</confidence_vector>\n',
+      READY_PLAN,
       'utf8'
     );
     writeRationalityPacks(oxe, ['T1']);
     const s = h.suggestNextStep(dir, { discuss_before_plan: false });
     assert.strictEqual(s.step, 'execute');
+  });
+
+  // Benchmark 1.17 (linkly): projeto greenfield sem mapas do codebase, com SPEC+PLAN prontos, recebia `scan`.
+  test('suggestNextStep execute with ready plan even without codebase maps (greenfield)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(oxe, { recursive: true });
+    fs.writeFileSync(
+      path.join(oxe, 'STATE.md'),
+      '## Fase atual\n\n`plan_ready`\n\n## Revisão do plano (opcional — dashboard / aprovação)\n\n- **plan_review_status:** `approved`\n',
+      'utf8'
+    );
+    fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# S\n## Critérios de aceite\n| A1 | x | y |\n', 'utf8');
+    fs.writeFileSync(path.join(oxe, 'PLAN.md'), READY_PLAN, 'utf8');
+    writeRationalityPacks(oxe, ['T1']);
+    const s = h.suggestNextStep(dir, { discuss_before_plan: false });
+    assert.strictEqual(s.step, 'execute', s.reason);
+  });
+
+  // 1.19: com PROGRAM.json o router fala a fase — "Fase 2/3 — planejar" — e não reaproveita o
+  // PLAN.md da fase anterior.
+  test('suggestNextStep segue a fase ativa do programa', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-h-'));
+    const oxe = path.join(dir, '.oxe');
+    fs.mkdirSync(path.join(oxe, 'program'), { recursive: true });
+    fs.writeFileSync(path.join(oxe, 'STATE.md'), '## Fase atual\n\n`plan_ready`\n', 'utf8');
+    fs.writeFileSync(path.join(oxe, 'SPEC.md'), '# S\n## Critérios de aceite\n| A1 | x | y |\n', 'utf8');
+    fs.writeFileSync(path.join(oxe, 'PLAN.md'), READY_PLAN, 'utf8');
+    const phase = (id, status, acceptance) => ({
+      id, title: `t${id}`, requirements: [], acceptance, scope: null, status,
+      plan_ref: null, run_id: null, started_at: null, closed_at: null, closed_commit: null, regression_ref: null, interfaces_ref: null,
+    });
+    const write = (activePhase, phases) => fs.writeFileSync(
+      path.join(oxe, 'program', 'PROGRAM.json'),
+      JSON.stringify({ schema_version: 1, roadmap_ref: null, active_phase: activePhase, phases, created_at: '', updated_at: '' }),
+      'utf8'
+    );
+
+    write(null, [phase('F1', 'closed', ['A1']), phase('F2', 'pending', ['A2']), phase('F3', 'pending', ['A3'])]);
+    let s = h.suggestNextStep(dir, {});
+    assert.strictEqual(s.step, 'program-start', s.reason);
+    assert.match(s.reason, /Fase 2\/3 — F2/);
+
+    write('F2', [phase('F1', 'closed', ['A1']), phase('F2', 'planning', ['A2']), phase('F3', 'pending', ['A3'])]);
+    s = h.suggestNextStep(dir, {});
+    assert.strictEqual(s.step, 'plan', 'PLAN.md antigo (fase 1) não vale como plano da fase 2');
+    assert.match(s.reason, /A\*: A2/);
+
+    fs.writeFileSync(path.join(oxe, 'PLAN.json'), JSON.stringify({ schema_version: 1, phase: 'F2', tasks: [] }), 'utf8');
+    s = h.suggestNextStep(dir, {});
+    assert.strictEqual(s.step, 'execute', s.reason);
+
+    write(null, [phase('F1', 'closed', ['A1'])]);
+    s = h.suggestNextStep(dir, {});
+    assert.notStrictEqual(s.step, 'program-start', 'programa concluído volta ao roteamento normal');
   });
 
   test('suggestNextStep respects pending checkpoint approval', () => {

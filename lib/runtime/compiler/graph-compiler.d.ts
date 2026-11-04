@@ -37,6 +37,8 @@ export interface VerifyContract {
 export interface NodePolicy {
     requires_human_approval: boolean;
     max_retries: number;
+    /** Why this node waits for a gate (task-level gate or external dependency). */
+    gate_reason?: string;
 }
 export interface GraphNode {
     id: string;

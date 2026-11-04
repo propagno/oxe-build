@@ -58,7 +58,34 @@ function releasePaths(projectRoot) {
     recoveryFixtureReport: path.join(releaseDir, 'recovery-fixture-report.json'),
     multiAgentSoakReport: path.join(releaseDir, 'multi-agent-soak-report.json'),
     multiAgentRealReport: path.join(releaseDir, 'multi-agent-real-report.json'),
+    scorecardReport: path.join(releaseDir, 'scorecard-report.json'),
   };
+}
+
+/** Minimum real-project evidence behind a maturity claim (1.21): tasks per project and projects per release. */
+const SCORECARD_MIN_TASKS = 10;
+const SCORECARD_MIN_PROJECTS = 2;
+
+/**
+ * The real-project scorecard cannot be produced in CI (it needs a real executor), so it is also accepted from the
+ * tracked `release-evidence/scorecard-report.json`; the local `.oxe/release/` copy wins when both exist.
+ */
+function scorecardReportPath(projectRoot) {
+  const local = releasePaths(projectRoot).scorecardReport;
+  if (fs.existsSync(local)) return local;
+  return path.join(projectRoot, 'release-evidence', 'scorecard-report.json');
+}
+
+function loadScorecardReport(projectRoot) {
+  const reportPath = scorecardReportPath(projectRoot);
+  const raw = readJsonIfExists(reportPath);
+  const summary = readReportSummary(reportPath, null, (item) => {
+    const card = item && item.report;
+    return Boolean(item && item.ok && card && card.ok && card.sample && card.sample.completed_tasks >= SCORECARD_MIN_TASKS);
+  });
+  // The OXE version that produced the evidence: a scorecard of an older release does not prove this one.
+  summary.oxe_version = raw && typeof raw.oxe_version === 'string' ? raw.oxe_version : null;
+  return summary;
 }
 
 function ensureDirForFile(filePath) {
@@ -392,6 +419,7 @@ function buildReleaseManifest(projectRoot, options = {}) {
   const recovery = loadRecoveryFixtureReport(projectRoot);
   const multiAgent = loadMultiAgentSoakReport(projectRoot);
   const multiAgentReal = loadMultiAgentRealReport(projectRoot);
+  const scorecard = loadScorecardReport(projectRoot);
   const manifest = {
     schema_version: 1,
     generated_at: new Date().toISOString(),
@@ -429,6 +457,7 @@ function buildReleaseManifest(projectRoot, options = {}) {
       recovery_fixtures: recovery,
       multi_agent_soak: multiAgent,
       multi_agent_real: multiAgentReal,
+      scorecard,
     },
   };
   if (options.writeManifest) {
@@ -505,6 +534,19 @@ function evaluateReleaseManifest(manifest, options = {}) {
   if (releaseVersion && semver.gte(releaseVersion, '1.9.1')) {
     if (!manifest.reports.multi_agent_real.present || !manifest.reports.multi_agent_real.ok) {
       blockers.push('multi-agent real report incompleto ou com falhas');
+    }
+  }
+  // 1.21: a maturity claim needs the scorecard of real projects (not fixtures), each within its targets.
+  if (releaseVersion && semver.gte(releaseVersion, '1.21.0')) {
+    const card = manifest.reports.scorecard;
+    const passing = card && Array.isArray(card.results) ? card.results.length - card.failures.length : 0;
+    if (!card || !card.present) blockers.push('scorecard report ausente (oxe-cc runtime scorecard --dir <projeto real> --release-report .oxe/release/scorecard-report.json)');
+    else if (card.failures.length) blockers.push(`scorecard fora das metas ou com menos de ${SCORECARD_MIN_TASKS} tarefas: ${card.failures.join(', ')}`);
+    else if (passing < SCORECARD_MIN_PROJECTS) blockers.push(`scorecard com ${passing} projeto(s) real(is); a release exige ${SCORECARD_MIN_PROJECTS}`);
+    else {
+      const evidence = card.oxe_version && semver.valid(card.oxe_version) ? card.oxe_version : null;
+      const sameLine = evidence && semver.major(evidence) === semver.major(releaseVersion) && semver.minor(evidence) === semver.minor(releaseVersion);
+      if (!sameLine) blockers.push(`scorecard produzido pelo OXE ${card.oxe_version || 'desconhecido'}; a release ${releaseVersion} exige evidência da mesma linha (${semver.major(releaseVersion)}.${semver.minor(releaseVersion)}.x)`);
     }
   }
   if (versions.banner.mode === 'unknown') {

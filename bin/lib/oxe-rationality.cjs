@@ -34,14 +34,70 @@ function parseAttrs(fragment) {
   return attrs;
 }
 
+// Synonyms planners write for a task that changes nothing (benchmark 1.17: `read_only` blocked the
+// whole run in preflight although the intent was unambiguous).
+const NON_MUTATING_MODE_ALIASES = new Set([
+  'read_only', 'read-only', 'readonly', 'verify_only', 'verify-only', 'verification', 'validation', 'no_mutation', 'none',
+]);
+
 function normalizeTaskMode(value) {
   const mode = String(value || '').trim().toLowerCase();
   if (!mode) return 'mutating';
+  if (NON_MUTATING_MODE_ALIASES.has(mode)) return 'not_applicable';
   return mode;
+}
+
+const PACK_MODES = new Set(['mutating', 'docs_only', 'not_applicable', 'external', 'docs-only']);
+/** Files whose public surface `symbols` describe; styles, config and docs have none to declare (OXB-022). */
+const CODE_FILE_RE = /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|cs|rb|php|swift|scala|vue|svelte)$/i;
+
+/**
+ * One IMPLEMENTATION-PACK task, checked by the same rules in `plan lint` and in the execute preflight (OXB-022:
+ * the lint approved a CSS-only task that the preflight then blocked for missing `symbols`). `symbols` is required
+ * only when the task writes a code file.
+ * @returns {{ id: string, mutating: boolean, gaps: string[] }}
+ */
+function validatePackTask(task) {
+  const gaps = [];
+  const id = String(task && task.id || task && task.task_id || '').trim();
+  if (!id) return { id: '', mutating: false, gaps: ['IMPLEMENTATION-PACK.json com task sem id'] };
+  const mode = normalizeTaskMode(task && task.mode);
+  const exactPaths = Array.isArray(task && task.exact_paths) ? task.exact_paths.map((entry) => String(entry || '').trim()).filter(Boolean) : [];
+  const symbols = Array.isArray(task && task.symbols) ? task.symbols : [];
+  const contracts = Array.isArray(task && task.contracts) ? task.contracts : [];
+  const expectedChecks = Array.isArray(task && task.expected_checks) ? task.expected_checks : [];
+  const openGaps = Array.isArray(task && task.critical_gaps) ? task.critical_gaps : [];
+  if (!PACK_MODES.has(mode)) gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} com mode inválido: ${mode}`);
+  if (task && task.ready === false) gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} marcada como not ready`);
+  if (openGaps.length) gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} com critical_gaps abertos`);
+  const mutating = isMutatingMode(mode);
+  if (mutating) {
+    if (!exactPaths.length) gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} sem exact_paths`);
+    if (exactPaths.some((entry) => entry.includes('...'))) gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} com exact_paths ambíguos (...)`);
+    if (String(task && task.write_set || '').trim().toLowerCase() !== 'closed') gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} com write_set aberto`);
+    if (!symbols.length && exactPaths.some((entry) => CODE_FILE_RE.test(entry))) {
+      gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} sem symbols (escreve arquivo de código: ${exactPaths.filter((e) => CODE_FILE_RE.test(e)).slice(0, 3).join(', ')})`);
+    }
+    if (!contracts.length) gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} sem contracts`);
+    if (!expectedChecks.length) gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} sem expected_checks`);
+  }
+  return { id, mutating, gaps };
 }
 
 function isMutatingMode(mode) {
   return !new Set(['docs_only', 'not_applicable', 'external', 'docs-only']).has(normalizeTaskMode(mode));
+}
+
+/** Task ids a fixture covers: `task_id: "T2,T6"`, `task_ids: [...]` or `tasks: [...]`. */
+function fixtureTaskIds(fixture) {
+  if (!fixture || typeof fixture !== 'object') return [];
+  const raw = [];
+  for (const key of ['task_id', 'taskId', 'task_ids', 'tasks']) {
+    const value = fixture[key];
+    if (Array.isArray(value)) raw.push(...value.map(String));
+    else if (value != null) raw.push(...String(value).split(/[,\s]+/));
+  }
+  return Array.from(new Set(raw.map((id) => id.trim()).filter(Boolean)));
 }
 
 function isTaskRiskKeyword(task) {
@@ -70,7 +126,7 @@ function parsePlanTasks(planPath) {
     const id = String(parts[i] || '').trim();
     const rest = String(parts[i + 1] || '').split(/^###\s+T\d+/m)[0];
     const title = (((rest.match(/^([^\n]+)/) || [null, ''])[1]) || '').trim();
-    const filesLine = (((rest.match(/\*\*Arquivos\s+prov[aá]veis:\*\*\s*([^\n]+)/i) || [null, ''])[1]) || '').trim();
+    const filesLine = (((rest.match(/\*\*Arquivos(?:\s+(?:prov[aá]veis|alvo))?:\*\*\s*([^\n]+)/i) || [null, ''])[1]) || '').trim();
     const backtickPaths = Array.from(filesLine.matchAll(/`([^`]+)`/g)).map((match) => match[1].trim()).filter(Boolean);
     const files = backtickPaths.length
       ? backtickPaths
@@ -114,7 +170,6 @@ function summarizeImplementationPack(filePath, planTasks) {
   const data = parsed.data && typeof parsed.data === 'object' ? parsed.data : {};
   const tasks = Array.isArray(data.tasks) ? data.tasks : [];
   const byId = new Map(tasks.map((task) => [String(task && task.id || task && task.task_id || '').trim(), task]).filter((entry) => entry[0]));
-  const allowedModes = new Set(['mutating', 'docs_only', 'not_applicable', 'external', 'docs-only']);
   for (const planTask of planTasks) {
     if (!byId.has(planTask.id)) {
       criticalGaps.push(`IMPLEMENTATION-PACK.json sem contrato para ${planTask.id}`);
@@ -122,47 +177,9 @@ function summarizeImplementationPack(filePath, planTasks) {
   }
   let mutatingTasks = 0;
   for (const task of tasks) {
-    const id = String(task && task.id || task && task.task_id || '').trim();
-    const mode = normalizeTaskMode(task && task.mode);
-    const exactPaths = Array.isArray(task && task.exact_paths) ? task.exact_paths.map((entry) => String(entry || '').trim()).filter(Boolean) : [];
-    const symbols = Array.isArray(task && task.symbols) ? task.symbols : [];
-    const contracts = Array.isArray(task && task.contracts) ? task.contracts : [];
-    const expectedChecks = Array.isArray(task && task.expected_checks) ? task.expected_checks : [];
-    const gaps = Array.isArray(task && task.critical_gaps) ? task.critical_gaps : [];
-    if (!id) {
-      criticalGaps.push('IMPLEMENTATION-PACK.json com task sem id');
-      continue;
-    }
-    if (!allowedModes.has(mode)) {
-      criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} com mode inválido: ${mode}`);
-    }
-    if (task && task.ready === false) {
-      criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} marcada como not ready`);
-    }
-    if (gaps.length) {
-      criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} com critical_gaps abertos`);
-    }
-    if (isMutatingMode(mode)) {
-      mutatingTasks += 1;
-      if (!exactPaths.length) {
-        criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} sem exact_paths`);
-      }
-      if (exactPaths.some((entry) => entry.includes('...'))) {
-        criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} com exact_paths ambíguos (...)`);
-      }
-      if (String(task && task.write_set || '').trim().toLowerCase() !== 'closed') {
-        criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} com write_set aberto`);
-      }
-      if (!symbols.length) {
-        criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} sem symbols`);
-      }
-      if (!contracts.length) {
-        criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} sem contracts`);
-      }
-      if (!expectedChecks.length) {
-        criticalGaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} sem expected_checks`);
-      }
-    }
+    const checked = validatePackTask(task);
+    if (checked.mutating) mutatingTasks += 1;
+    criticalGaps.push(...checked.gaps);
   }
   if (data.ready === false) {
     criticalGaps.push('IMPLEMENTATION-PACK.json com ready=false');
@@ -421,10 +438,10 @@ function summarizeFixturePack(filePath, planTasks, implementationPack) {
   const fixtures = Array.isArray(data.fixtures) ? data.fixtures : [];
   const byTask = new Map();
   for (const fixture of fixtures) {
-    const taskId = String(fixture && fixture.task_id || fixture && fixture.taskId || '').trim();
-    if (!taskId) continue;
-    if (!byTask.has(taskId)) byTask.set(taskId, []);
-    byTask.get(taskId).push(fixture);
+    for (const taskId of fixtureTaskIds(fixture)) {
+      if (!byTask.has(taskId)) byTask.set(taskId, []);
+      byTask.get(taskId).push(fixture);
+    }
   }
   if (data.ready === false) {
     criticalGaps.push('FIXTURE-PACK.json com ready=false');
@@ -437,15 +454,20 @@ function summarizeFixturePack(filePath, planTasks, implementationPack) {
     const taskId = String(task && task.id || task && task.task_id || '').trim();
     if (!taskId) continue;
     const planTask = planTasks.find((candidate) => candidate.id === taskId);
+    // The pack's explicit `requires_fixture` wins; the keyword heuristic only fills the gap when
+    // the planner said nothing (it used to override an explicit `false`).
     const requiresFixture = task && task.requires_fixture === true
-      || (planTask ? isTaskRiskKeyword(planTask) : false);
+      || (task && task.requires_fixture !== false && planTask ? isTaskRiskKeyword(planTask) : false);
     if (!requiresFixture) continue;
     const entries = byTask.get(taskId) || [];
     if (!entries.length) {
       criticalGaps.push(`FIXTURE-PACK.json sem fixture para ${taskId}`);
       continue;
     }
-    const readyFixture = entries.find((entry) => String(entry && entry.status || '').toLowerCase() === 'ready');
+    const statusOf = (entry) => String(entry && entry.status || '').toLowerCase();
+    // A fixture deliberately marked not_applicable satisfies the requirement without checks.
+    if (entries.some((entry) => statusOf(entry) === 'not_applicable')) continue;
+    const readyFixture = entries.find((entry) => statusOf(entry) === 'ready');
     if (!readyFixture) {
       criticalGaps.push(`FIXTURE-PACK.json sem fixture ready para ${taskId}`);
       continue;
@@ -522,7 +544,9 @@ function buildExecutionRationality(paths = {}) {
 }
 
 module.exports = {
+  validatePackTask,
   buildExecutionRationality,
+  fixtureTaskIds,
   parsePlanTasks,
   readExternalRefs,
   summarizeImplementationPack,

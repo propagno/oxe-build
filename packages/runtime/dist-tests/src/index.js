@@ -14,7 +14,7 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.summarizeSuite = exports.verifyRun = exports.executeSuite = exports.runSuite = exports.runCheck = exports.compileVerification = void 0;
+exports.sha256File = exports.looksLikeShellCommand = exports.extractCommandFromHowToVerify = exports.summarizeSuite = exports.verifyRun = exports.executeSuite = exports.runSuite = exports.runCheck = exports.compileVerification = void 0;
 // R1 Public ABI — OXE Runtime Foundation
 __exportStar(require("./models/index"), exports);
 __exportStar(require("./events/index"), exports);
@@ -32,7 +32,12 @@ Object.defineProperty(exports, "runSuite", { enumerable: true, get: function () 
 Object.defineProperty(exports, "executeSuite", { enumerable: true, get: function () { return verification_compiler_1.executeSuite; } });
 Object.defineProperty(exports, "verifyRun", { enumerable: true, get: function () { return verification_compiler_1.verifyRun; } });
 Object.defineProperty(exports, "summarizeSuite", { enumerable: true, get: function () { return verification_compiler_1.summarizeSuite; } });
+Object.defineProperty(exports, "extractCommandFromHowToVerify", { enumerable: true, get: function () { return verification_compiler_1.extractCommandFromHowToVerify; } });
+Object.defineProperty(exports, "looksLikeShellCommand", { enumerable: true, get: function () { return verification_compiler_1.looksLikeShellCommand; } });
+Object.defineProperty(exports, "sha256File", { enumerable: true, get: function () { return verification_compiler_1.sha256File; } });
+__exportStar(require("./verification/test-report-parsers"), exports);
 __exportStar(require("./verification/verification-manifest"), exports);
+__exportStar(require("./verification/contract-exports"), exports);
 __exportStar(require("./policy/index"), exports);
 __exportStar(require("./gate/index"), exports);
 __exportStar(require("./projection/index"), exports);
@@ -46,3 +51,5 @@ __exportStar(require("./decision/index"), exports);
 __exportStar(require("./audit/index"), exports);
 // R5 Public ABI — LLM Task Executor
 __exportStar(require("./executor/index"), exports);
+// 1.19 — Program (ROADMAP phases)
+__exportStar(require("./program/index"), exports);

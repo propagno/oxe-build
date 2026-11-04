@@ -52,12 +52,17 @@ const VALID_RUN_TRANSITIONS = {
     cancelled: [],
 };
 function assertWorkItemTransition(itemId, from, to, eventType) {
+    // Replaying the same event twice (legacy duplicated logs) must be a no-op, not a corrupt log.
+    if (from === to)
+        return;
     const allowed = VALID_WORK_ITEM_TRANSITIONS[from] ?? [];
     if (!allowed.includes(to)) {
         throw new Error(`[state-machine] Invalid work item transition for "${itemId}": ${from} → ${to} (event: ${eventType})`);
     }
 }
 function assertRunTransition(from, to, eventType) {
+    if (from === to)
+        return;
     const allowed = VALID_RUN_TRANSITIONS[from] ?? [];
     if (!allowed.includes(to)) {
         throw new Error(`[state-machine] Invalid run transition: ${from} → ${to} (event: ${eventType})`);

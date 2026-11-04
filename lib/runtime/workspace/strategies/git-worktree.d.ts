@@ -1,5 +1,14 @@
 import type { WorkspaceManager, WorkspaceRequest } from '../workspace-manager';
 import type { WorkspaceLease, SnapshotRef } from '../../models/workspace';
+/**
+ * Removes (without following) every symlink/junction under `root` whose target is outside `root`. Walks real
+ * directories only (lstat), skips `.git`, and is bounded so a large installed node_modules cannot stall dispose.
+ * @returns the links removed (absolute paths)
+ */
+export declare function unlinkExternalLinks(root: string, limits?: {
+    maxDepth?: number;
+    maxEntries?: number;
+}): string[];
 export declare class GitWorktreeManager implements WorkspaceManager {
     private readonly projectRoot;
     readonly isolation_level: "isolated";

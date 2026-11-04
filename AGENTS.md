@@ -4,7 +4,7 @@ Este repositório empacota o fluxo **OXE** (spec-driven, artefatos em `.oxe/`). 
 
 - **npm:** `npx oxe-cc@latest` · pacote `oxe-cc` · [README.md](README.md)
 - **Workflows canónicos:** [oxe/workflows/](oxe/workflows/) — editar aqui primeiro; todas as integrações apontam para estes ficheiros. Referência **legado / brownfield:** [oxe/workflows/references/legacy-brownfield.md](oxe/workflows/references/legacy-brownfield.md).
-- **CLI:** `oxe-cc install | doctor | doctor --release | status | init-oxe | update | uninstall` + `oxe-cc runtime <status|compile|verify|gates|replay|recover|ci|promote|agents>` — ver [README.md](README.md#cli-oxe-cc).
+- **CLI:** `oxe-cc install | doctor | doctor --release | status | init-oxe | update | uninstall` + `oxe-cc runtime <status|compile|execute|verify|gates|replay|recover|ci|promote|agents|program|feedback|signoff|dossier|rollback|scorecard>` + `oxe-cc plan lint|done` — ver [README.md](README.md#cli-oxe-cc).
 - **SDK:** `require('oxe-cc')` expõe `runDoctorChecks`, `health`, `workflows`, `install`, `manifest`, `agents`, `verifyRun` e bridges `operational.*` do runtime enterprise — ver [lib/sdk/README.md](lib/sdk/README.md).
 
 ---
@@ -99,4 +99,4 @@ Os wrappers por runtime podem carregar metadata cognitiva (`oxe_reasoning_mode`,
 
 Para `execute` e `verify`, o comportamento atual esperado é **runtime-first**: se `oxe-cc runtime` estiver disponível, preferir `runtime compile/project/verify/gates` e tratar markdown como projeção derivada; se o runtime não puder ser executado, declarar `fallback legado` explicitamente.
 
-Para publicação, o gate local esperado passa por `npm test`, `npm run release:pack-check` e `oxe-cc doctor --release --write-manifest`. Essa verificação deve falhar se houver drift de versão, topo inválido no `CHANGELOG`, ausência da árvore canónica `oxe/`, `workflow-runtime-contracts.json` inválido, wrapper dirty após sync, runtime não compilado, pacote npm com artefatos indevidos ou ausência dos relatórios `.oxe/release/*.json` exigidos pela release, incluindo `runtime-real-report.json` e, a partir da `1.9.1`, `multi-agent-real-report.json`.
+Para publicação, o gate local esperado passa por `npm test`, `npm run release:pack-check` e `oxe-cc doctor --release --write-manifest`. Essa verificação deve falhar se houver drift de versão, topo inválido no `CHANGELOG`, ausência da árvore canónica `oxe/`, `workflow-runtime-contracts.json` inválido, wrapper dirty após sync, runtime não compilado, pacote npm com artefatos indevidos ou ausência dos relatórios `.oxe/release/*.json` exigidos pela release, incluindo `runtime-real-report.json` a partir da `1.9.1`, `multi-agent-real-report.json` e, a partir da `1.21.0`, `scorecard-report.json` com o scorecard de **2 projetos reais** dentro das metas (`scripts/reference-projects.cjs` + `oxe-cc runtime scorecard --release-report`).

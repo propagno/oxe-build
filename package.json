@@ -1,6 +1,6 @@
 {
   "name": "oxe-cc",
-  "version": "1.16.0",
+  "version": "1.21.0",
   "description": "OXE — spec-driven workflows in .oxe/ with runtime enterprise, evidence-first verification and multi-runtime integrations (npx)",
   "license": "MIT",
   "author": "",
@@ -83,12 +83,13 @@
     "test:recovery-fixtures": "node scripts/run-recovery-fixtures.cjs",
     "test:multi-agent-soak": "node scripts/run-multi-agent-soak.cjs",
     "test:multi-agent-real": "node scripts/run-multi-agent-real.cjs",
+    "test:e2e-linkly": "node scripts/e2e-linkly.cjs",
     "test:runtime-llm": "node scripts/test-runtime-llm.cjs",
     "benchmark:autonomy": "node scripts/benchmark-autonomy.cjs",
     "lint": "node scripts/quality-check.cjs lint",
     "format": "node scripts/quality-check.cjs format",
     "format:check": "node scripts/quality-check.cjs format-check",
-    "test": "npm run lint && npm run format:check && npm run build:runtime && npm run test:root && npm run test:sdk-types && npm run test:packed-consumer && npm run test:runtime && npm run test:runtime-smoke && npm run test:runtime-real && npm run test:recovery-fixtures && npm run test:multi-agent-soak && npm run test:multi-agent-real",
+    "test": "npm run lint && npm run format:check && npm run build:runtime && npm run test:root && npm run test:sdk-types && npm run test:packed-consumer && npm run test:runtime && npm run test:runtime-smoke && npm run test:runtime-real && npm run test:recovery-fixtures && npm run test:multi-agent-soak && npm run test:multi-agent-real && npm run test:e2e-linkly && npm run test:e2e-program && npm run test:reference-projects",
     "test:coverage": "c8 --reporter=text-summary --reporter=json-summary npm test && node scripts/coverage-ratchet.cjs",
     "scan:assets": "node scripts/oxe-assets-scan.cjs",
     "release:pack-check": "node scripts/release-pack-check.cjs",
@@ -96,7 +97,9 @@
     "build:vscode-ext": "npm run package --workspace oxe-agents",
     "quality:report": "node scripts/quality-report.cjs finalize",
     "prepack": "npm run generate:sdk-types && npm run build:runtime",
-    "prepublishOnly": "npm test && npm run scan:assets && npm run build:vscode-ext && npm run release:manifest && npm run release:pack-check && node bin/oxe-cc.js --version"
+    "prepublishOnly": "npm test && npm run scan:assets && npm run build:vscode-ext && npm run release:manifest && npm run release:pack-check && node bin/oxe-cc.js --version",
+    "test:e2e-program": "node scripts/e2e-program.cjs",
+    "test:reference-projects": "node scripts/reference-projects.cjs --solution --fresh"
   },
   "c8": {
     "all": true,

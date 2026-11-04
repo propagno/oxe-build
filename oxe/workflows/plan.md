@@ -12,6 +12,8 @@ Além do `PLAN.md`, este passo deve gerar no mesmo escopo resolvido da sessão o
 
 Esses artefatos são obrigatórios para considerar o plano executável. Quando algo não se aplicar, marcar explicitamente `not_applicable`; nunca omitir o arquivo.
 
+**PLAN.json, aceite congelado e programa por fases (obrigatório com runtime):** seguir `oxe/workflows/references/plan-json-acceptance-program.md` — gravar `PLAN.json` (schema `oxe/schemas/plan.schema.json`), **escrever os testes de aceite dos A\* antes da execução** em `acceptance_tests` (o executor não pode alterá-los; o verify reprova `acceptance_tampered`), planejar só a fase ativa do `PROGRAM.json` e passar em `oxe-cc plan lint` antes de declarar o plano pronto. **Declarar os `phase_gates` do repositório** (typecheck, lint, suíte de governança, CI): sem eles, o verify verde da fase não garante a CI verde (1.21, mesma referência).
+
 Base: `SPEC.md` do escopo resolvido da sessão (critérios com IDs **A1**, **A2**, …) + `.oxe/codebase/*` + código quando necessário (Grep/Read pontual).
 
 Se o usuário pedir **--replan** (ou replanejamento implícito após `verify_failed`):
@@ -210,7 +212,7 @@ Cada tarefa `Tn` do `PLAN.md` pode ser executada pelo `LlmTaskExecutor` quando c
 |--------------------|------------------------|
 | `id` | ID da tarefa (ex.: `T3`) |
 | `title` | Título da tarefa |
-| `mutation_scope` | Arquivos que serão modificados (em **Arquivos prováveis**) |
+| `mutation_scope` | Arquivos que serão modificados (em **Arquivos alvo** ou **Arquivos prováveis**) |
 | `actions[].type` | Tipo de ação (derivado de **Implementar**) |
 | `verify.must_pass` | Critérios de aceite (de **Verificar** + **Aceite vinculado**) |
 | `verify.command` | Comando em **Verificar → Comando:** |
@@ -490,7 +492,7 @@ Antes de finalizar a resposta ao utilizador, o agente **deve** percorrer este ga
 13. **Mudanças de risco:** tarefas com risco relevante (migração, auth, schema, contrato público, segurança) devem incluir contenção, rollback, fallback ou verificação reforçada.
 14. **Cobertura R-ID:** se `SPEC.md` contiver tabela de requisitos com IDs `R-NN` e status `v1`/`v2`, cada R-ID em escopo deve ter ao menos um critério A* mapeado em **Aceite vinculado:** de alguma tarefa — rastrear `R-NN → A* → Tn`. R-IDs com `v1`/`v2` sem nenhuma tarefa associada = falha do gate; documentar como gap explícito quando intencional (ex.: `<!-- R-03: adiado para próximo ciclo -->`).
 15. **Contexto estruturado:** se houver pack do workflow `plan`, as lacunas e conflitos críticos do pack aparecem na autoavaliação do plano ou são explicitamente dados como resolvidos durante a leitura direta.
-16. **Implementation contract:** toda tarefa mutável deve aparecer em `IMPLEMENTATION-PACK.json` com `exact_paths`, `symbols`, `contracts`, `write_set: "closed"`, `expected_checks` e `ready: true`. Path com `...`, símbolo indefinido ou contrato ausente = falha do gate.
+16. **Implementation contract:** toda tarefa mutável deve aparecer em `IMPLEMENTATION-PACK.json` com `exact_paths`, `symbols`, `contracts`, `write_set: "closed"`, `expected_checks` e `ready: true`. Path com `...`, símbolo indefinido ou contrato ausente = falha do gate. `mode` aceita só `mutating`, `docs_only`, `external` ou `not_applicable` (tarefa de validação sem escrita = `not_applicable`).
 17. **Reference anchors:** toda referência `external-ref`, "copiar do predecessor", "usar layout X" ou equivalente deve aparecer em `REFERENCE-ANCHORS.md` com `status: resolved`. Âncora crítica em `missing|stale|conflicting` = falha do gate.
 17a. **Visual anchors:** se a SPEC ou UI-SPEC depender de imagem/screenshot/mockup, todo requisito visual crítico deve ter `VISUAL-INPUTS` pronto e anchor visual `resolved`. `chat_attachment_only` sem extração textual suficiente = falha do gate.
 18. **Fixture coverage:** toda tarefa de parser/layout/integração/transformação/fila/migração/builder deve ter fixture `ready` em `FIXTURE-PACK.json`, salvo `not_applicable` explicitamente justificado. Ausência de fixture em tarefa de risco = falha do gate.

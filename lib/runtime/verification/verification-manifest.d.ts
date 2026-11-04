@@ -13,6 +13,10 @@ export interface ManifestCheck {
     failure_class: VerificationFailureClass | null;
     evidence_refs: string[];
     duration_ms: number;
+    skip_reason?: string | null;
+    tests_executed?: number | null;
+    /** Why a check did not pass (e.g. `no_tests_executed`, `test_file_missing: …`). */
+    error?: string | null;
 }
 export interface VerificationManifest {
     manifest_id: string;
@@ -29,6 +33,8 @@ export interface VerificationManifest {
         fail: number;
         skip: number;
         error: number;
+        /** Skipped checks whose criterion has no executable verification. */
+        manual?: number;
         all_passed: boolean;
     };
 }
@@ -48,9 +54,13 @@ export interface ResidualRiskLedger {
 }
 export interface EvidenceCoverageSummary {
     total_checks: number;
+    /** Checks that actually ran (status other than skip). */
+    executed_checks?: number;
     checks_with_evidence: number;
     total_evidence_refs: number;
     coverage_percent: number;
+    /** Ids of checks that ran but produced no evidence — what the coverage gate is missing. */
+    checks_without_evidence?: string[];
 }
 export declare function classifyFailure(result: CheckResult): FailureClass | null;
 export declare function buildManifest(runId: string, results: CheckResult[], options?: {

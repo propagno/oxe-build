@@ -94,6 +94,8 @@ function assertWorkItemTransition(
   to: WorkItemStatus,
   eventType: string
 ): void {
+  // Replaying the same event twice (legacy duplicated logs) must be a no-op, not a corrupt log.
+  if (from === to) return;
   const allowed = VALID_WORK_ITEM_TRANSITIONS[from] ?? [];
   if (!(allowed as readonly string[]).includes(to)) {
     throw new Error(
@@ -103,6 +105,7 @@ function assertWorkItemTransition(
 }
 
 function assertRunTransition(from: RunStatus, to: RunStatus, eventType: string): void {
+  if (from === to) return;
   const allowed = VALID_RUN_TRANSITIONS[from] ?? [];
   if (!(allowed as readonly string[]).includes(to)) {
     throw new Error(

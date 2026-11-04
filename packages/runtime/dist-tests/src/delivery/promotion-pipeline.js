@@ -25,7 +25,9 @@ class MergeGateEvaluator {
             reasons.push(`${runResult.blocked.length} task(s) blocked: ${runResult.blocked.join(', ')}`);
         }
         if (manifest && !manifest.summary.all_passed) {
-            reasons.push(`Verification: ${manifest.summary.fail} check(s) failed, ${manifest.summary.error} error(s)`);
+            const manual = manifest.summary.manual ?? 0;
+            reasons.push(`Verification: ${manifest.summary.fail} check(s) failed, ${manifest.summary.error} error(s)` +
+                (manual > 0 ? `, ${manual} criterion(s) without executable check` : ''));
         }
         if (riskLedger) {
             const critical = riskLedger.risks.filter((r) => r.severity === 'critical' || r.severity === 'high');
@@ -37,7 +39,9 @@ class MergeGateEvaluator {
             reasons.push(`${pendingGates.length} pending gate(s)`);
         }
         if (evidenceCoverage && evidenceCoverage.coverage_percent < minimumCoverage) {
-            reasons.push(`Evidence coverage below threshold: ${evidenceCoverage.coverage_percent}%/${minimumCoverage}%`);
+            const missing = evidenceCoverage.checks_without_evidence ?? [];
+            reasons.push(`Evidence coverage below threshold: ${evidenceCoverage.coverage_percent}%/${minimumCoverage}%`
+                + (missing.length > 0 ? ` — no evidence: ${missing.join(', ')}` : ''));
         }
         const hasBlockers = reasons.length > 0 || blockingRisks.length > 0;
         const verdict = hasBlockers ? 'blocked' : 'approved';

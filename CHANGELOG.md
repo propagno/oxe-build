@@ -4,6 +4,147 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.21.0] — 2026-11-03
+
+Esta versão consolida a 1.19 e a 1.20, que não foram publicadas, e acrescenta a 1.21. O objetivo é levar o OXE de "não mente sobre o que está pronto" para uma **maturidade medida**: aplicações de várias fases, corrigidas por um caminho único, dentro do orçamento e coerentes com as regras do repositório. Tudo foi validado construindo o OxeVoice 1.5 (F1) no oxespace e dois projetos de referência reais. Os 30 achados (OXB-001 a 030) estão em `docs/oxevoice/BACKLOG.md`.
+
+### Programa por fases e aceite congelado (1.19)
+
+- **Programa por fases:** `runtime program init|start|close|status` leva o `ROADMAP.md` ao `PROGRAM.json`. O gate de fase exige verify, regressão das fases fechadas (`reg-<fase>-*`) e os contratos de exports do pack, e termina com o commit local da fase. O prompt das fases seguintes recebe as interfaces das fases fechadas.
+- **`PLAN.json` canônico** (`oxe/schemas/plan.schema.json`, validador próprio): `oxe-cc plan lint [--dry-verify]`. O dry-verify roda o comando efetivo segmento a segmento e separa o vermelho certo do comando quebrado.
+- **Aceite congelado:** os testes de aceite são escritos pelo planner e congelados por hash no compile. O executor não pode escrevê-los, e o verify reprova com `acceptance_tampered`, `acceptance_missing` ou `proof_not_executed` (o teste nomeado precisa ter rodado).
+
+### Dossiê vivo, ciclo de correção e retomada (1.20)
+
+- **Dossiê por fase** (`runtime dossier`): `context`, `architecture`, `techspec` com Prova, `plan` com diário e handoff, `decisions` e `notes`. O texto humano é preservado entre marcadores, e o dossiê aponta drift de arquitetura e prova não executada. O `STATE.md` passa a ser uma projeção.
+- **Change requests** (`runtime feedback --class defect|spec_gap|constraint|new_scope`): toda pushback entra em `changes.ndjson`.
+  - Defeitos reabrem a fase.
+  - Uma emenda de SPEC é versionada.
+  - Uma restrição vira `policy_rules`.
+  - **Um CR só fecha quando um teste congelado com `resolves` fica verde.**
+- **Sign-off de UAT** (`runtime signoff`), além de `program close --defer-signoff --by --risk` com o risco registrado.
+- **Retomada robusta:**
+  - **retry informado:** a nova tentativa recebe o comando, o motivo e a saída da falha;
+  - **régua de suspeita:** duas falhas idênticas param a tarefa;
+  - **checkpoint e rollback:** `--checkpoint-commits` faz commit por tarefa, e `runtime rollback --task Tn` volta ao checkpoint;
+  - **lease do journal:** um dono morto vira `interrupted`, que é retomável;
+  - **gate por tarefa:** `gate` e `blocked_by` no PLAN.json.
+
+### Maturidade operacional (1.21)
+
+- **Gates do projeto** (`phase_gates`): typecheck, lint, a suíte de governança do repositório e a CI (`runtime ci --attach <run>`) rodam uma vez no verify da fase.
+  - Um gate vermelho abre um CR com a saída, e o CR fecha quando o mesmo gate fica verde.
+  - O `program close` exige os gates verdes.
+  - O executor recebe `## Regras do repositório`: as `policy_rules`, as diretivas de AGENTS.md/CLAUDE.md e os títulos dos testes de governança.
+- **Execução honesta e com orçamento:**
+  - **Turn limit verificado:** quando a tentativa esgota os turnos depois de escrever no escopo, o runtime roda o verify antes de classificá-la, em vez de descartar trabalho pronto.
+  - **Orçamento por run:** `--budget-turns`/`--budget-usd`/`--max-retries` ou `budget` no PLAN.json. O ledger soma entre execuções; o scheduler para entre tentativas (`BudgetExhausted`) e limita a próxima aos turnos que restam.
+  - **`done` persistido:** `done`/`done_at`/`done_commit` vão para o PLAN.json, e `oxe-cc plan done Tn` marca uma tarefa à mão.
+  - **Convenção de commit:** `commit_convention` (template, pattern, trailers, `commit` por tarefa) mais o trailer `OXE-Task: Tn`.
+  - **Um validador só:** o `plan lint` e o preflight usam o mesmo validador de pack, e o lint antecipa os gaps de racionalidade do preflight. `symbols` só é exigido para arquivo de código.
+- **CLI previsível:** comandos de runtime não recriam arquivos apagados do `.oxe/`, e o `--json` deixa só JSON no stdout (decoração vai para o stderr).
+- **Ambiente e incerteza:**
+  - `oxe-cc doctor --project` e o preflight comparam a máquina com `engines`, `.nvmrc`, `packageManager` e com o engines das dependências diretas no lockfile (`project_env_check: warn|false`).
+  - Uma tarefa `kind: spike` responde uma pergunta técnica com evidência e vira a decisão `D-SPIKE-Tn`.
+- **Coesão entre fases:** o handoff "O que a próxima fase deve saber" de cada fase fechada entra no prompt das fases seguintes.
+- **Maturidade medida** (`runtime scorecard [--since]`): mede 1ª tentativa, turnos pagos depois de concluir, estouro de orçamento, CR fechado sem prova e CR aberto depois do verde. **A partir da 1.21.0, o `doctor --release` exige o scorecard de 2 projetos reais**, cada um com ≥ 10 tarefas e dentro das metas.
+  - `scripts/reference-projects.cjs` constrói os projetos de referência (`ledger-api`, `mdlint`) de ponta a ponta com executor real e oráculo independente.
+- **Critério coberto pelo teste (OXB-030):** o `plan lint` cobra que os termos verificáveis de um critério (códigos 1xx–5xx, `code spans`, "literais") apareçam no teste congelado que o prova. Surgiu de um falso verde real no projeto de referência `ledger-api`, pego pelo oráculo independente.
+- **Projetos de referência reais:** `ledger-api` e `mdlint`, com 2 fases cada e 20/20 tarefas na 1ª tentativa (78 turnos, US$ 3,58), oráculo verde e scorecard dentro das metas (`release-evidence/`). O modo offline `--solution` (`npm run test:reference-projects`, no `npm test`) roda o fluxo inteiro com a solução conhecida no lugar do modelo: a cada execução, valida que os testes congelados do planner e os oráculos estão corretos.
+- **Auditoria de dependências:** as vulnerabilidades altas de desenvolvimento foram corrigidas (`npm audit fix`). O gate de CI passa a separar produção (`npm audit --omit=dev`, bloqueia em qualquer nível) de desenvolvimento (`--audit-level=high`). As 9 moderadas restantes estão em ferramentas de lint e cobertura e só se corrigem com upgrade major.
+- **Segurança:** o dispose do `git_worktree` desfaz os links que saem do worktree antes do `worktree remove --force`, para que a remoção nunca apague o diretório real. O dry-verify e os gates de close não herdam `NODE_TEST_CONTEXT`, que dava falso verde.
+
+---
+
+## [1.18.0] — 2026-10-31
+
+### Executor nativo do host e contexto do nó
+
+- **ExecutorAdapter (`claude` | `http`):** o loop de tools da 1.17 é comum aos adapters, que só fornecem a
+  função de completion. Continuam valendo a allowlist, a contenção de caminhos e a regra `no_tool_call` ⇒ falha.
+- **Adapter `claude`:** roda um `claude -p --output-format json --tools ''` por turno, sem ponte HTTP,
+  porta nem API key. O processo morre ao fim de cada turno. Resposta fora do protocolo é retentada
+  até 2 vezes e depois falha como `llm`. No Windows, `.cmd` é suportado via `cmd.exe` verbatim.
+- **`runtime execute --adapter claude|http`:** sem flag, usa o adapter persistido; senão `http` se houver
+  API key; senão `claude` se o binário for detectado. `--api-key` só é exigido para `http`.
+  `runtime providers` lista os adapters detectados (`--json`).
+- **NodeExecutionContext:** o prompt do nó passa a levar:
+  - o corpo da tarefa no PLAN;
+  - o contrato do IMPLEMENTATION-PACK;
+  - o FIXTURE-PACK;
+  - o snapshot dos arquivos do escopo;
+  - o `git status`;
+  - as lições.
+
+  Cada seção tem orçamento e truncamento explícito.
+- **Telemetria `ExecutorUsage`:** turnos, tool calls por ferramenta, custo e motivo da falha por tentativa.
+  Vai para a tabela *Executor usage* do RUN-SUMMARY.
+- **Verify:** código do produto que lê `.oxe/` (artefato interno, fora do git) reprova o contrato
+  com `oxe_internal_reference`. Isso fecha um falso verde visto no benchmark.
+- **`scripts/e2e-linkly.cjs --real`:** benchmark real com oráculo de referência independente.
+  Resultado: replay do linkly com 8/8 tarefas na 1ª tentativa, US$ 1,66 (1.17: US$ 4,88).
+
+---
+
+## [1.17.1] — 2026-10-31
+
+### Achados do benchmark real da 1.17
+
+O benchmark ponta a ponta da 1.17.0 (replay do linkly: 8/8 tarefas na 1ª tentativa,
+oráculo independente 18/18, US$ 4,88 contra US$ 6,57 da 1.16) expôs estes defeitos, agora corrigidos:
+
+- **Falso vermelho:** o tipo do check passa a vir do comando executado, ignorando argumentos entre aspas.
+  Um `node -e "…'node --test'…"` deixa de exigir relatório de teste.
+- **Suíte velha:** `runtime verify` recompila a suíte persistida quando o hash de SPEC/PLAN muda
+  e emite o evento `VerificationSuiteRecompiled`. Não é mais preciso apagá-la à mão de `.oxe/runs/<id>.json`.
+- **Contrato do IMPLEMENTATION-PACK verificado:** os `exact_paths` de tarefas `mutating` viram checks `contract`.
+  Um arquivo ausente falha a run com `files_missing`.
+- **Gate de cobertura explicável:** o resumo traz `checks_without_evidence`, e o merge gate nomeia os checks que faltam.
+- **Manifest** carrega o motivo da falha (`error`) de cada check.
+- **Re-verify verde** de uma run executada restaura `completed` em vez de deixá-la `running`.
+- **Preflight:** os modos `read_only`, `verify-only` e equivalentes são normalizados para `not_applicable`.
+- **parsePlan:** descarta spans de escopo que não são caminhos e junta todas as linhas `Comando:` da tarefa.
+- **Router:** com PLAN pronto, sugere `execute` mesmo sem mapas do codebase (projetos greenfield).
+
+---
+
+## [1.17.0] — 2026-10-31
+
+### Integridade da verificação: sem falso verde
+
+Um teste ponta a ponta real (app "linkly") mostrou o runtime reportando 18/18
+checks aprovados com tarefas falhadas e um arquivo de teste inexistente. Esta
+versão fecha essas causas e mede o falso verde com um oráculo independente
+(`npm run test:e2e-linkly`: 50% na 1.16.0, 0% agora).
+
+- **Verify baseado em testes executados** — arquivo de teste ausente, zero
+  testes executados ou ausência de relatório de teste reprovam o check; parsers
+  para TAP/node, jest, vitest, mocha, pytest e JUnit. "Como verificar" em prosa
+  vira check manual: a run fica `partial` e o merge gate bloqueia com motivo.
+  Cobertura de evidência conta só checks executados.
+- **Escopo de mutação** — `parsePlan` lê `Arquivos`, `Arquivos alvo` e
+  `Arquivos prováveis`; tarefa mutável sem escopo roda em série e emite
+  `PolicyWarning`. O Gap B só anexa trechos que parecem comando.
+- **Eventos e estado** — cada evento é gravado uma vez com id estável; logs
+  antigos duplicados são deduplicados. ACTIVE-RUN recebe status, falhas e
+  `canonical_state` ao fim do execute; STATE.md e VERIFY.md são projetados em
+  blocos `<!-- oxe:runtime:begin/end -->` que preservam o texto manual.
+- **Executor** — tools fora da allowlist da tarefa são negadas; caminhos ficam
+  contidos no workspace; resposta só em texto numa tarefa que precisa escrever
+  é falha; URL da API preserva `/v1`; comandos no Windows usam
+  `cmd.exe /d /s /c` sem reescrita de aspas.
+- **Scheduler** — abort por timeout preserva o que foi concluído; `recover`
+  aceita runs pausadas, bloqueadas, abortadas ou falhas; gate aprovado não é
+  pedido de novo; workspace é liberado pelo provider que o alocou.
+- **Preflight de fixtures** alinhado ao gate do plano (`task_id` em lista,
+  `not_applicable`, `requires_fixture:false`).
+- **Instalação** — flag `--claude`; VSIX escolhido por semver; extensão VS Code
+  só quando a integração VS Code é pedida; doctor detecta `.claude/` local;
+  `*.vsix` fora do git.
+- **CI** — job Windows para o runtime e o e2e-linkly.
+
+---
+
 ## [1.16.0] — 2026-07-18
 
 ### Segurança, pacote verificável e engenharia de release

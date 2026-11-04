@@ -16,7 +16,11 @@ export {
   executeSuite,
   verifyRun,
   summarizeSuite,
+  extractCommandFromHowToVerify,
+  looksLikeShellCommand,
+  sha256File,
 } from './verification/verification-compiler';
+export * from './verification/test-report-parsers';
 export type {
   CheckType,
   AcceptanceCheck,
@@ -24,8 +28,11 @@ export type {
   CheckResult,
   ExecutedVerificationSuite,
   VerifyRunResult,
+  FrozenFile,
+  AcceptanceTestLike,
 } from './verification/verification-compiler';
 export * from './verification/verification-manifest';
+export * from './verification/contract-exports';
 export * from './policy/index';
 export * from './gate/index';
 export * from './projection/index';
@@ -42,3 +49,6 @@ export * from './audit/index';
 
 // R5 Public ABI — LLM Task Executor
 export * from './executor/index';
+
+// 1.19 — Program (ROADMAP phases)
+export * from './program/index';

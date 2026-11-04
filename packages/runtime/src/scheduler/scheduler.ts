@@ -25,7 +25,7 @@ import { listMemos } from '../decision/decision-memo';
 import type { RollbackPlan } from '../decision/decision-memo';
 import { runCapabilityAsync } from '../plugins/capability-adapter';
 import { verifyRun } from '../verification/verification-compiler';
-import type { AcceptanceCheckSuite } from '../verification/verification-compiler';
+import type { AcceptanceCheckSuite, CheckResult } from '../verification/verification-compiler';
 
 export interface TaskResult {
   success: boolean;
@@ -41,8 +41,20 @@ export interface TaskExecutor {
     lease: WorkspaceLease,
     runId: string,
     attemptNumber: number,
-    options?: { previousError?: string | null }
+    options?: { previousError?: string | null; maxTurns?: number | null }
   ): Promise<TaskResult>;
+}
+
+/**
+ * Turn/cost ceiling of a run (1.21, OXB-023), kept by the caller from the executor's usage. The scheduler checks it
+ * between attempts — never killing one mid-way — and caps the next attempt to the turns that are left, so the run
+ * cannot go past the turn ceiling.
+ */
+export interface RunBudget {
+  /** Why no further attempt may start, or null while there is budget. */
+  exhausted(): string | null;
+  /** Turns still allowed (the next attempt's cap), or null when turns are unlimited. */
+  remainingTurns(): number | null;
 }
 
 export interface SchedulerOptions {
@@ -61,6 +73,7 @@ export interface SchedulerContext {
   pluginRegistry?: PluginRegistry;
   auditTrail?: AuditTrail;
   quota?: RunQuota;
+  budget?: RunBudget;
   policyActor?: string;
   onEvent?: (event: OxeEvent) => void;
   options?: SchedulerOptions;
@@ -169,14 +182,12 @@ export class Scheduler {
 
       // Global run timeout
       if (Date.now() - this.runStartMs > maxRunMs) {
-        this.emit(ctx, { type: 'RunAborted', payload: { reason: 'global_timeout' } });
-        return { run_id: ctx.runId, status: 'aborted', completed: [], failed: [], blocked: [], reason: 'global_timeout' };
+        return this.abortRun(ctx, 'global_timeout', completed, failed, blocked);
       }
 
       // Stale progress timeout (no task completed in staleMs)
       if (Date.now() - this.lastProgressMs > staleMs) {
-        this.emit(ctx, { type: 'RunAborted', payload: { reason: 'no_progress_timeout' } });
-        return { run_id: ctx.runId, status: 'aborted', completed: [], failed: [], blocked: [], reason: 'no_progress_timeout' };
+        return this.abortRun(ctx, 'no_progress_timeout', completed, failed, blocked);
       }
 
       // Respect pause: persist journal and return paused result
@@ -260,7 +271,11 @@ export class Scheduler {
       },
     });
 
-    this.journal.scheduler_state = this.cancelled ? 'cancelled' : finalStatus === 'blocked' ? 'blocked' : 'completed';
+    this.journal.scheduler_state = this.cancelled
+      ? 'cancelled'
+      : finalStatus === 'blocked' || finalStatus === 'failed'
+        ? finalStatus
+        : 'completed';
     this.journal.completed_work_items = completed.slice();
     this.journal.failed_work_items = failed.slice();
     this.journal.blocked_work_items = blocked.slice();
@@ -282,7 +297,9 @@ export class Scheduler {
    */
   async recover(runId: string, ctx: SchedulerContext, graph: ExecutionGraph): Promise<RunResult | null> {
     const journal = loadJournal(ctx.projectRoot, runId);
-    if (!journal || journal.scheduler_state !== 'paused') return null;
+    // Paused, blocked (gates since approved), aborted (timeout) and failed runs can all be resumed;
+    // only completed/cancelled runs have nothing left to do.
+    if (!journal || !RECOVERABLE_JOURNAL_STATES.has(journal.scheduler_state)) return null;
 
     // Restore state from journal
     this.cancelled = false;
@@ -386,7 +403,11 @@ export class Scheduler {
       },
     });
 
-    this.journal.scheduler_state = this.cancelled ? 'cancelled' : finalStatus === 'blocked' ? 'blocked' : 'completed';
+    this.journal.scheduler_state = this.cancelled
+      ? 'cancelled'
+      : finalStatus === 'blocked' || finalStatus === 'failed'
+        ? finalStatus
+        : 'completed';
     this.journal.completed_work_items = completed.slice();
     this.journal.failed_work_items = failed.slice();
     this.journal.blocked_work_items = blocked.slice();
@@ -406,6 +427,9 @@ export class Scheduler {
   private isConcurrentSafe(nodeId: string, graph: ExecutionGraph, ctx: SchedulerContext): boolean {
     const node = graph.nodes.get(nodeId)!;
     if (node.mutation_scope.length > 0) return false;
+    // A node that may write files but declares no scope is not provably safe to run in parallel
+    // (an empty scope used to mean "run everything in parallel, in place").
+    if (nodeMayMutate(node)) return false;
     const primaryAction = pickPrimaryAction(node, ctx.pluginRegistry);
     if (!primaryAction) return true;
     const provider = ctx.pluginRegistry?.toolProviderFor(primaryAction.type);
@@ -445,6 +469,20 @@ export class Scheduler {
       });
     }
 
+    for (const id of eligible) {
+      const node = graph.nodes.get(id)!;
+      if (node.mutation_scope.length === 0 && nodeMayMutate(node)) {
+        this.emit(ctx, {
+          type: 'PolicyWarning',
+          work_item_id: id,
+          payload: {
+            reason: 'empty_mutation_scope',
+            detail: 'node may write files but declares no mutation_scope; running serially and without scope checks',
+          },
+        });
+      }
+    }
+
     const readOnly = eligible.filter((id) => this.isConcurrentSafe(id, graph, ctx));
     const mutations = eligible.filter((id) => !readOnly.includes(id));
 
@@ -480,8 +518,13 @@ export class Scheduler {
     });
 
     let lease: WorkspaceLease | null = null;
+    // Dispose through the manager that allocated the lease (plugin provider or default).
+    let leaseManager: WorkspaceManager | null = null;
     let lastResult: TaskResult | null = null;
     let lastError: string | null = null;
+    // 1.20c: the same verify failure twice (normalized output) = suspect ruler or stuck executor: stop paying retries.
+    let lastVerifySignature: string | null = null;
+    let verifySuspect = false;
     const maxAttempts = node.policy.max_retries + 1;
     const quotaBlocked = this.consumeQuotaForNode(ctx, node);
     if (quotaBlocked) {
@@ -526,11 +569,25 @@ export class Scheduler {
           });
         }
 
-        if (policyDecision?.gate_required || node.policy.requires_human_approval) {
+        if ((policyDecision?.gate_required || node.policy.requires_human_approval) && !this.hasApprovedGate(node, ctx)) {
           const gateId = await this.requestGateForNode(node, ctx, policyDecision);
           this.blockNode(nodeId, ctx, status, blocked, 'pending_gate', gateId);
           return;
         }
+
+        // OXB-023: the run's turn/cost ceiling is checked before every attempt, never in the middle of one.
+        const budgetReason = ctx.budget?.exhausted() ?? null;
+        if (budgetReason) {
+          this.emit(ctx, {
+            type: 'BudgetExhausted',
+            work_item_id: nodeId,
+            attempt_id: attemptId,
+            payload: { reason: budgetReason, attempt_number: attempt },
+          });
+          this.blockNode(nodeId, ctx, status, blocked, 'budget_exhausted', budgetReason);
+          return;
+        }
+        const turnsLeft = ctx.budget?.remainingTurns() ?? null;
 
         const wsReq: WorkspaceRequest = {
           work_item_id: nodeId,
@@ -539,6 +596,7 @@ export class Scheduler {
           mutation_scope: node.mutation_scope,
         };
         const workspaceManager = ctx.pluginRegistry?.workspaceProviderFor(node.workspace_strategy) ?? ctx.workspaceManager;
+        leaseManager = workspaceManager;
         lease = await workspaceManager.allocate(wsReq);
         this.emit(ctx, {
           type: 'WorkspaceAllocated',
@@ -547,23 +605,56 @@ export class Scheduler {
           payload: { workspace_id: lease.workspace_id, strategy: lease.strategy },
         });
 
-        lastResult = await this.executeNode(node, lease, ctx, attempt, attemptId, { previousError: lastError });
+        lastResult = await this.executeNode(node, lease, ctx, attempt, attemptId, {
+          previousError: lastError,
+          ...(turnsLeft != null ? { maxTurns: turnsLeft } : {}),
+        });
 
-        if (lastResult.success) {
+        // OXB-026: the verify judges the work, not the end of the LLM conversation. An attempt that ran out of turns
+        // after writing in its scope is verified before it is classified: green completes the task, red goes to the
+        // informed retry. Discarding it unverified paid a whole second attempt for finished work.
+        const turnLimitWithWork = !lastResult.success
+          && lastResult.completed_by === 'turn_limit_exhausted'
+          && Boolean(node.verify?.command)
+          && (lastResult.evidence?.length ?? 0) > 0;
+
+        if (lastResult.success || turnLimitWithWork) {
           const verifyResult = await this.verifyNode(node, lease, ctx, attemptId, attempt);
           if (verifyResult && verifyResult.status === 'failed') {
+            // Informed retry: the next attempt sees the command, the reason and the output — not just "failed".
             lastResult = {
               success: false,
               failure_class: 'verify',
               evidence: lastResult.evidence,
-              output: `Verification failed: ${(verifyResult.gaps || []).join('; ') || 'checks did not pass'}`,
+              output: describeVerifyFailure(node.verify.command, verifyResult.check, verifyResult.gaps),
             };
+            const signature = verifyFailureSignature(verifyResult.check);
+            if (signature && signature === lastVerifySignature) {
+              verifySuspect = true;
+              this.emit(ctx, {
+                type: 'VerifyCommandSuspect',
+                work_item_id: nodeId,
+                attempt_id: attemptId,
+                payload: {
+                  attempt_number: attempt,
+                  command: node.verify.command,
+                  excerpt: tailLines(`${verifyResult.check?.error ?? ''}\n${verifyResult.check?.stderr ?? ''}\n${verifyResult.check?.stdout ?? ''}`, 12),
+                  reason: 'identical_verify_failure',
+                },
+              });
+              break;
+            }
+            lastVerifySignature = signature;
           } else {
             this.emit(ctx, {
               type: 'WorkItemCompleted',
               work_item_id: nodeId,
               attempt_id: attemptId,
-              payload: { attempt_number: attempt, evidence: lastResult.evidence },
+              payload: {
+                attempt_number: attempt,
+                evidence: lastResult.evidence,
+                ...(turnLimitWithWork ? { completed_by: 'verify_after_turn_limit' } : {}),
+              },
             });
             status.set(nodeId, 'completed');
             completed.push(nodeId);
@@ -621,10 +712,11 @@ export class Scheduler {
         }
       } finally {
         if (lease) {
-          await ctx.workspaceManager.dispose(lease.workspace_id).catch((e: unknown) =>
+          await (leaseManager ?? ctx.workspaceManager).dispose(lease.workspace_id).catch((e: unknown) =>
             this.emit(ctx!, { type: 'WorkspaceDisposeFailed', payload: { workspace_id: lease?.workspace_id, error: String(e) } })
           );
           lease = null;
+          leaseManager = null;
         }
       }
     }
@@ -632,10 +724,30 @@ export class Scheduler {
     this.emit(ctx, {
       type: 'WorkItemBlocked',
       work_item_id: nodeId,
-      payload: { failure_class: lastResult?.failure_class ?? 'env', max_attempts: maxAttempts },
+      payload: { failure_class: verifySuspect ? 'verify_suspect' : lastResult?.failure_class ?? 'env', max_attempts: maxAttempts },
     });
     status.set(nodeId, 'failed');
     failed.push(nodeId);
+  }
+
+  /** Abort keeps the progress made so far: an aborted run is recoverable, not a blank slate. */
+  private abortRun(
+    ctx: SchedulerContext,
+    reason: string,
+    completed: string[],
+    failed: string[],
+    blocked: string[]
+  ): RunResult {
+    this.emit(ctx, { type: 'RunAborted', payload: { reason, completed: completed.slice(), failed: failed.slice(), blocked: blocked.slice() } });
+    if (this.journal) {
+      this.journal.scheduler_state = 'aborted';
+      this.journal.completed_work_items = completed.slice();
+      this.journal.failed_work_items = failed.slice();
+      this.journal.blocked_work_items = blocked.slice();
+      this.journal.partial_result = { run_id: ctx.runId, completed, failed, blocked };
+      saveJournal(ctx.projectRoot, ctx.runId, this.journal);
+    }
+    return { run_id: ctx.runId, status: 'aborted', completed, failed, blocked, reason };
   }
 
   pause(): void {
@@ -679,7 +791,7 @@ export class Scheduler {
     ctx: SchedulerContext,
     attempt: number,
     attemptId: string,
-    options: { previousError?: string | null } = {},
+    options: { previousError?: string | null; maxTurns?: number | null } = {},
   ): Promise<TaskResult> {
     const primaryAction = pickPrimaryAction(node, ctx.pluginRegistry);
     const provider = primaryAction ? ctx.pluginRegistry?.toolProviderFor(primaryAction.type) : null;
@@ -758,7 +870,7 @@ export class Scheduler {
     ctx: SchedulerContext,
     attemptId: string,
     attempt: number,
-  ): Promise<{ status: string; gaps?: string[] } | null> {
+  ): Promise<{ status: string; gaps?: string[]; check?: CheckResult } | null> {
     if (!node.verify?.command) return null;
     this.emit(ctx, {
       type: 'VerificationStarted',
@@ -778,7 +890,7 @@ export class Scheduler {
       spec_hash: '',
       plan_hash: '',
     };
-    let result: { status: string; gaps?: string[] };
+    let result: { status: string; gaps?: string[]; check_results?: CheckResult[] };
     try {
       result = await verifyRun({
         suite,
@@ -805,7 +917,7 @@ export class Scheduler {
       attempt_id: attemptId,
       payload: { status: result.status },
     });
-    return result;
+    return { status: result.status, gaps: result.gaps, check: result.check_results?.[0] };
   }
 
   private evaluatePolicyForNode(node: GraphNode, ctx: SchedulerContext): PersistedPolicyDecision | null {
@@ -837,6 +949,14 @@ export class Scheduler {
     return persisted;
   }
 
+  /** An approval already granted for this node in this run must not be requested again on re-execution. */
+  private hasApprovedGate(node: GraphNode, ctx: SchedulerContext): boolean {
+    if (!ctx.gateManager) return false;
+    return ctx.gateManager
+      .listResolved()
+      .some((gate) => gate.work_item_id === node.id && gate.decision === 'approved' && (gate.run_id == null || gate.run_id === ctx.runId));
+  }
+
   private async requestGateForNode(
     node: GraphNode,
     ctx: SchedulerContext,
@@ -854,8 +974,8 @@ export class Scheduler {
       action: primaryAction?.type ?? 'custom',
       description: `Gate required before executing ${node.id}`,
       evidence_refs: [],
-      risks: [decision?.reason ?? 'human approval required'],
-      rationale: decision?.reason ?? 'node policy requires approval',
+      risks: [decision?.reason ?? node.policy.gate_reason ?? 'human approval required'],
+      rationale: decision?.reason ?? node.policy.gate_reason ?? 'node policy requires approval',
       policy_decision_id: decision?.decision_id ?? null,
     });
     if (this.journal && !this.journal.pending_gates.includes(gate.gate_id)) {
@@ -916,6 +1036,13 @@ export class Scheduler {
   }
 }
 
+const RECOVERABLE_JOURNAL_STATES = new Set<RunJournal['scheduler_state']>(['paused', 'interrupted', 'blocked', 'aborted', 'failed']);
+
+/** Nodes whose actions may write to the workspace (anything beyond reading and collecting evidence). */
+function nodeMayMutate(node: GraphNode): boolean {
+  return node.actions.some((action) => action.type !== 'read_code' && action.type !== 'collect_evidence');
+}
+
 function inferSideEffectClass(node: GraphNode): PolicyContext['side_effect_class'] {
   if (node.mutation_scope.length > 0) return 'write_fs';
   if (node.actions.some((action) => action.type === 'run_tests' || action.type === 'run_lint')) return 'spawn_process';
@@ -935,4 +1062,36 @@ function inferGateScope(node: GraphNode): 'critical_mutation' | 'security' | 'pl
   if (node.mutation_scope.length > 0) return 'critical_mutation';
   if (node.actions.some((action) => action.type === 'collect_evidence')) return 'security';
   return 'plan_approval';
+}
+
+/** Last `n` non-empty lines of a text. */
+export function tailLines(text: string, n: number): string {
+  return String(text || '').split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-n).join('\n');
+}
+
+/** What the next attempt needs to know about a failed task verify (1.20c informed retry). */
+export function describeVerifyFailure(command: string | null | undefined, check: CheckResult | undefined, gaps?: string[]): string {
+  const reason = check?.error || (check?.exit_code != null ? `exit code ${check.exit_code}` : (gaps || []).join('; ') || 'checks did not pass');
+  const output = tailLines(`${check?.stdout ?? ''}\n${check?.stderr ?? ''}`, 40);
+  return [
+    'Verification failed after your previous attempt.',
+    `Command: ${command ?? '(none)'}`,
+    `Reason: ${reason}`,
+    output ? `Output (last lines):\n${output.slice(-4000)}` : 'Output: (empty)',
+    'Fix the code so this exact command passes. If you are certain the command itself is wrong (not the code), stop and call finish_task explaining why — do not work around it.',
+  ].join('\n');
+}
+
+/** Normalized failure fingerprint: timings, timestamps, hashes and temp paths removed. */
+export function verifyFailureSignature(check: CheckResult | undefined): string | null {
+  if (!check) return null;
+  const raw = `${check.error ?? ''}\n${check.stderr ?? ''}\n${check.stdout ?? ''}`;
+  const normalized = raw
+    .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, '<ts>')
+    .replace(/\b\d+(\.\d+)?\s?(ms|s)\b/g, '<t>')
+    .replace(/\b[0-9a-f]{7,64}\b/gi, '<hash>')
+    .replace(/[A-Za-z]:\\[^\s'"]*|\/tmp\/[^\s'"]*/g, '<path>')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized ? normalized.slice(-1200) : null;
 }
