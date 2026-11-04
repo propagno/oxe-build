@@ -43,6 +43,7 @@ Todos os artefatos abaixo devem existir em `.oxe/release/`:
 - `recovery-fixture-report.json`
 - `multi-agent-soak-report.json`
 - `multi-agent-real-report.json` para versões `>=1.9.1`
+- `scorecard-report.json` para versões `>=1.21.0`: um resultado por **projeto real** (≥ 2), cada um com ≥ 10 tarefas concluídas e todas as metas do scorecard atendidas (1ª tentativa ≥ 80%, zero turnos pagos por trabalho concluído, zero estouro de orçamento, zero CR fechado sem prova, zero CR aberto depois do verde). Gere com `node scripts/reference-projects.cjs` (projetos de referência) ou `oxe-cc runtime scorecard --dir <projeto> --release-report .oxe/release/scorecard-report.json --name <projeto>`.
 
 Na linha `>=1.10.0`, `runtime-real-report.json` deve cobrir cenários representativos além do happy path simples: multi-wave, multi-file, verify parcial, gate pendente e promoção bloqueada. O `multi-agent-real-report.json` deve provar merge com evidência, diff summary, arquivos aplicados e verify status por task; o release doctor valida esse conteúdo, não apenas a presença do arquivo.
 

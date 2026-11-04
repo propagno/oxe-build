@@ -15,7 +15,7 @@ Desenvolvimento assistido por IA com especificação, contexto persistente, exec
 npx oxe-cc@latest
 ```
 
-**Versão:** `1.18.0` · **Node.js:** `>=18`
+**Versão:** `1.21.0` · **Node.js:** `>=18`
 
 </div>
 
@@ -63,20 +63,28 @@ O framework não substitui a IDE, o modelo ou o processo da equipe. Ele oferece 
 
 ## Evidência operacional do projeto
 
-O OXE procura demonstrar suas próprias promessas no pipeline do repositório. O snapshot abaixo vem da validação local registrada em **18 de julho de 2026**; não representa métricas de adoção externa ou produtividade humana.
+O OXE procura demonstrar suas próprias promessas no pipeline do repositório. O snapshot abaixo vem da validação local da **1.21.0**, registrada em **3 de novembro de 2026**. Não representa métricas de adoção externa nem de produtividade humana.
 
 | Indicador verificável | Resultado |
 |---|---:|
-| Quality gates obrigatórios | **10/10 aprovados** |
-| Testes raiz validados no Node 18 | **628/628** |
-| Testes do runtime TypeScript | **384/384** |
+| Testes raiz | **749/749** |
+| Testes do runtime TypeScript | **482/482** |
 | Cenários smoke, runtime real, recovery e multiagente | **30/30** |
-| Cobertura de linhas/statements | **83,05%** |
-| Cobertura de funções | **92,48%** |
-| Cobertura de branches | **61,76%** |
-| Vulnerabilidades reportadas por `npm audit` | **0** |
-| Participantes ativados em VS Code Extension Host real | **13/13** |
-| Arquivos validados no tarball npm | **507** |
+| Benchmarks e2e com oráculo (`e2e-linkly`, `e2e-program`) | **2/2 · 4/4**, falso verde 0 |
+| Cobertura de linhas/statements | **81,78%** |
+| Cobertura de funções | **93,35%** |
+| Cobertura de branches | **65,02%** |
+| Vulnerabilidades em dependências de produção (`npm audit --omit=dev`) | **0** |
+| Arquivos validados no tarball npm | **553** |
+
+**Projetos reais de referência** (`scripts/reference-projects.cjs`, executor `claude -p`, evidência em [`release-evidence/`](release-evidence/)):
+
+| Projeto | Fases | Tarefas na 1ª tentativa | Turnos | Custo | Oráculo independente | Scorecard |
+|---|---:|---:|---:|---:|---|---|
+| `ledger-api` (API HTTP em Node puro) | 2/2 | **10/10** | 36 | US$ 1,65 | verde | dentro das metas |
+| `mdlint` (linter de Markdown em CLI) | 2/2 | **10/10** | 42 | US$ 1,93 | verde | dentro das metas |
+
+A primeira execução do `ledger-api` teve um **falso verde**, e o oráculo pegou: o servidor gerado deixava a conexão aberta depois de responder 413, e o critério citava o 413 sem que o teste congelado o exercitasse. Disso saiu o OXB-030, uma regra do `plan lint` que cobra no teste congelado os termos verificáveis do critério. O projeto foi reconstruído do zero, e esse run não entra no scorecard.
 
 Esses números são recalculados pelos gates do repositório. Consulte [QUALITY-GATES.md](docs/QUALITY-GATES.md) e [RELEASE-READINESS.md](docs/RELEASE-READINESS.md) para o contrato completo. Métricas de produto devem ser interpretadas como sinais: cobertura não substitui bons critérios, contagem de testes não mede valor entregue e número de agentes não equivale a produtividade.
 
@@ -333,6 +341,34 @@ oxe-cc runtime program status
 
 `npm run test:e2e-program` roda o benchmark do app "taskboard": 3 fases, oráculo independente por fase e uma mutação que quebra a fase 1 durante a fase 3. Com `--real --adapter claude`, ele também mede custo e turnos por fase.
 
+### Aceite congelado, correção e maturidade medida (1.19–1.21)
+
+Ir de SPEC a verify é a parte fácil. O OXE cobre também o que acontece quando o resultado não está certo, completo ou do jeito que o usuário queria, e mede se o fluxo está entregando:
+
+- **Aceite congelado:** o planner escreve os testes de aceite antes da execução. O runtime congela o hash deles; o executor não pode editá-los, e o verify exige que o teste nomeado tenha rodado (`proof_not_executed`).
+- **Gates do projeto** (`phase_gates`): typecheck, lint, a suíte de governança do repositório e a CI (`runtime ci --attach <run>`) rodam no verify da fase. Um gate vermelho abre sozinho um change request com a saída, e o executor recebe as regras do repositório no prompt.
+- **Ciclo de correção** (`runtime feedback`): toda pushback vira um CR classificado (`defect`, `spec_gap`, `constraint` ou `new_scope`) e reabre só o que foi impactado. **O CR só fecha quando um teste congelado ligado a ele fica verde.**
+- **Dossiê vivo por fase** (`runtime dossier`): contexto, arquitetura, techspec com Prova, diário com handoff, decisões e notas. O texto humano é preservado, e o dossiê aponta drift.
+- **Execução honesta e com orçamento:**
+  - `--budget-turns`/`--budget-usd`: o teto nunca é ultrapassado; o runtime para entre tentativas;
+  - verify mesmo quando a tentativa esgota os turnos;
+  - `done` persistido no PLAN.json;
+  - checkpoint por tarefa na convenção de commit do projeto, com `runtime rollback --task Tn`.
+- **Ambiente e incerteza:** `oxe-cc doctor --project` compara a máquina com `engines`, `.nvmrc` e o lockfile. Uma tarefa `kind: spike` responde uma pergunta técnica com evidência antes do código.
+- **Maturidade medida** (`runtime scorecard`):
+
+  | Métrica | Meta |
+  |---|---|
+  | Tarefas concluídas na 1ª tentativa | ≥ 80% |
+  | Turnos pagos por trabalho já concluído | 0 |
+  | Estouro de orçamento | 0 |
+  | CR fechado sem prova | 0 |
+  | CR aberto depois de um verify verde | 0 |
+
+  O release só sai com o scorecard de dois projetos reais dentro das metas. `scripts/reference-projects.cjs` constrói esses projetos de ponta a ponta com executor real e oráculo independente.
+
+Detalhes em [plan-json-acceptance-program.md](oxe/workflows/references/plan-json-acceptance-program.md).
+
 ---
 
 ## Sessões, workstreams e milestones
@@ -482,6 +518,14 @@ oxe-cc azure operations list
 | `oxe-cc install` | instala núcleo e integrações |
 | `oxe-cc doctor` | valida estrutura, configuração e saúde lógica |
 | `oxe-cc doctor --release --write-manifest` | executa o gate de release e grava o manifesto |
+| `oxe-cc doctor --project` | compara a máquina com `engines`, `.nvmrc` e o lockfile do projeto |
+| `oxe-cc plan lint [--dry-verify]` | valida o PLAN.json, os gates, o pack e se cada verify está vermelho pelo motivo certo |
+| `oxe-cc plan done Tn` | marca uma tarefa concluída (com o checkpoint) no PLAN.json |
+| `oxe-cc runtime program init\|start\|close\|status` | programa por fases a partir do ROADMAP |
+| `oxe-cc runtime feedback\|signoff\|dossier` | change requests, sign-off de UAT e dossiê vivo da fase |
+| `oxe-cc runtime execute --budget-turns N --checkpoint-commits` | executa com teto de turnos e checkpoint por tarefa |
+| `oxe-cc runtime ci --attach <run>` | anexa um run de CI à fase (gate `kind: ci`) |
+| `oxe-cc runtime scorecard [--since <data>]` | mede a maturidade a partir dos registros do runtime |
 | `oxe-cc status --full` | mostra próximo passo, coverage matrix e active run |
 | `oxe-cc status --json` | saída estruturada para hosts e CI |
 | `oxe-cc map --json` | catálogo dos artefatos existentes e lazy |

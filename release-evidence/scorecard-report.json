@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "name": "ledger-api",
+      "ok": true,
+      "report": {
+        "oxeScorecardSchema": 1,
+        "generated_at": "2026-11-04T01:26:29.737Z",
+        "since": null,
+        "sample": {
+          "completed_tasks": 10,
+          "change_requests": 0,
+          "resolved_crs": 0,
+          "budget_ledgers": 2,
+          "events": 98
+        },
+        "metrics": [
+          {
+            "metric": "first_attempt_rate",
+            "value": 1,
+            "target": ">= 0.8",
+            "ok": true
+          },
+          {
+            "metric": "turns_on_finished_work",
+            "value": 0,
+            "target": "= 0",
+            "ok": true
+          },
+          {
+            "metric": "budget_overruns",
+            "value": 0,
+            "target": "= 0",
+            "ok": true
+          },
+          {
+            "metric": "crs_closed_without_proof",
+            "value": 0,
+            "target": "= 0",
+            "ok": true
+          },
+          {
+            "metric": "post_green_crs",
+            "value": 0,
+            "target": "= 0",
+            "ok": true
+          }
+        ],
+        "ok": true
+      }
+    },
+    {
+      "name": "mdlint",
+      "ok": true,
+      "report": {
+        "oxeScorecardSchema": 1,
+        "generated_at": "2026-11-04T01:26:30.099Z",
+        "since": null,
+        "sample": {
+          "completed_tasks": 10,
+          "change_requests": 0,
+          "resolved_crs": 0,
+          "budget_ledgers": 2,
+          "events": 98
+        },
+        "metrics": [
+          {
+            "metric": "first_attempt_rate",
+            "value": 1,
+            "target": ">= 0.8",
+            "ok": true
+          },
+          {
+            "metric": "turns_on_finished_work",
+            "value": 0,
+            "target": "= 0",
+            "ok": true
+          },
+          {
+            "metric": "budget_overruns",
+            "value": 0,
+            "target": "= 0",
+            "ok": true
+          },
+          {
+            "metric": "crs_closed_without_proof",
+            "value": 0,
+            "target": "= 0",
+            "ok": true
+          },
+          {
+            "metric": "post_green_crs",
+            "value": 0,
+            "target": "= 0",
+            "ok": true
+          }
+        ],
+        "ok": true
+      }
+    }
+  ],
+  "generated_at": "2026-11-04T01:26:30.101Z",
+  "oxe_version": "1.21.0"
+}

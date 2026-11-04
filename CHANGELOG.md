@@ -4,6 +4,58 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.21.0] — 2026-11-03
+
+Esta versão consolida a 1.19 e a 1.20, que não foram publicadas, e acrescenta a 1.21. O objetivo é levar o OXE de "não mente sobre o que está pronto" para uma **maturidade medida**: aplicações de várias fases, corrigidas por um caminho único, dentro do orçamento e coerentes com as regras do repositório. Tudo foi validado construindo o OxeVoice 1.5 (F1) no oxespace e dois projetos de referência reais. Os 30 achados (OXB-001 a 030) estão em `docs/oxevoice/BACKLOG.md`.
+
+### Programa por fases e aceite congelado (1.19)
+
+- **Programa por fases:** `runtime program init|start|close|status` leva o `ROADMAP.md` ao `PROGRAM.json`. O gate de fase exige verify, regressão das fases fechadas (`reg-<fase>-*`) e os contratos de exports do pack, e termina com o commit local da fase. O prompt das fases seguintes recebe as interfaces das fases fechadas.
+- **`PLAN.json` canônico** (`oxe/schemas/plan.schema.json`, validador próprio): `oxe-cc plan lint [--dry-verify]`. O dry-verify roda o comando efetivo segmento a segmento e separa o vermelho certo do comando quebrado.
+- **Aceite congelado:** os testes de aceite são escritos pelo planner e congelados por hash no compile. O executor não pode escrevê-los, e o verify reprova com `acceptance_tampered`, `acceptance_missing` ou `proof_not_executed` (o teste nomeado precisa ter rodado).
+
+### Dossiê vivo, ciclo de correção e retomada (1.20)
+
+- **Dossiê por fase** (`runtime dossier`): `context`, `architecture`, `techspec` com Prova, `plan` com diário e handoff, `decisions` e `notes`. O texto humano é preservado entre marcadores, e o dossiê aponta drift de arquitetura e prova não executada. O `STATE.md` passa a ser uma projeção.
+- **Change requests** (`runtime feedback --class defect|spec_gap|constraint|new_scope`): toda pushback entra em `changes.ndjson`.
+  - Defeitos reabrem a fase.
+  - Uma emenda de SPEC é versionada.
+  - Uma restrição vira `policy_rules`.
+  - **Um CR só fecha quando um teste congelado com `resolves` fica verde.**
+- **Sign-off de UAT** (`runtime signoff`), além de `program close --defer-signoff --by --risk` com o risco registrado.
+- **Retomada robusta:**
+  - **retry informado:** a nova tentativa recebe o comando, o motivo e a saída da falha;
+  - **régua de suspeita:** duas falhas idênticas param a tarefa;
+  - **checkpoint e rollback:** `--checkpoint-commits` faz commit por tarefa, e `runtime rollback --task Tn` volta ao checkpoint;
+  - **lease do journal:** um dono morto vira `interrupted`, que é retomável;
+  - **gate por tarefa:** `gate` e `blocked_by` no PLAN.json.
+
+### Maturidade operacional (1.21)
+
+- **Gates do projeto** (`phase_gates`): typecheck, lint, a suíte de governança do repositório e a CI (`runtime ci --attach <run>`) rodam uma vez no verify da fase.
+  - Um gate vermelho abre um CR com a saída, e o CR fecha quando o mesmo gate fica verde.
+  - O `program close` exige os gates verdes.
+  - O executor recebe `## Regras do repositório`: as `policy_rules`, as diretivas de AGENTS.md/CLAUDE.md e os títulos dos testes de governança.
+- **Execução honesta e com orçamento:**
+  - **Turn limit verificado:** quando a tentativa esgota os turnos depois de escrever no escopo, o runtime roda o verify antes de classificá-la, em vez de descartar trabalho pronto.
+  - **Orçamento por run:** `--budget-turns`/`--budget-usd`/`--max-retries` ou `budget` no PLAN.json. O ledger soma entre execuções; o scheduler para entre tentativas (`BudgetExhausted`) e limita a próxima aos turnos que restam.
+  - **`done` persistido:** `done`/`done_at`/`done_commit` vão para o PLAN.json, e `oxe-cc plan done Tn` marca uma tarefa à mão.
+  - **Convenção de commit:** `commit_convention` (template, pattern, trailers, `commit` por tarefa) mais o trailer `OXE-Task: Tn`.
+  - **Um validador só:** o `plan lint` e o preflight usam o mesmo validador de pack, e o lint antecipa os gaps de racionalidade do preflight. `symbols` só é exigido para arquivo de código.
+- **CLI previsível:** comandos de runtime não recriam arquivos apagados do `.oxe/`, e o `--json` deixa só JSON no stdout (decoração vai para o stderr).
+- **Ambiente e incerteza:**
+  - `oxe-cc doctor --project` e o preflight comparam a máquina com `engines`, `.nvmrc`, `packageManager` e com o engines das dependências diretas no lockfile (`project_env_check: warn|false`).
+  - Uma tarefa `kind: spike` responde uma pergunta técnica com evidência e vira a decisão `D-SPIKE-Tn`.
+- **Coesão entre fases:** o handoff "O que a próxima fase deve saber" de cada fase fechada entra no prompt das fases seguintes.
+- **Maturidade medida** (`runtime scorecard [--since]`): mede 1ª tentativa, turnos pagos depois de concluir, estouro de orçamento, CR fechado sem prova e CR aberto depois do verde. **A partir da 1.21.0, o `doctor --release` exige o scorecard de 2 projetos reais**, cada um com ≥ 10 tarefas e dentro das metas.
+  - `scripts/reference-projects.cjs` constrói os projetos de referência (`ledger-api`, `mdlint`) de ponta a ponta com executor real e oráculo independente.
+- **Critério coberto pelo teste (OXB-030):** o `plan lint` cobra que os termos verificáveis de um critério (códigos 1xx–5xx, `code spans`, "literais") apareçam no teste congelado que o prova. Surgiu de um falso verde real no projeto de referência `ledger-api`, pego pelo oráculo independente.
+- **Projetos de referência reais:** `ledger-api` e `mdlint`, com 2 fases cada e 20/20 tarefas na 1ª tentativa (78 turnos, US$ 3,58), oráculo verde e scorecard dentro das metas (`release-evidence/`).
+- **Auditoria de dependências:** as vulnerabilidades altas de desenvolvimento foram corrigidas (`npm audit fix`). O gate de CI passa a separar produção (`npm audit --omit=dev`, bloqueia em qualquer nível) de desenvolvimento (`--audit-level=high`). As 9 moderadas restantes estão em ferramentas de lint e cobertura e só se corrigem com upgrade major.
+- **Segurança:** o dispose do `git_worktree` desfaz os links que saem do worktree antes do `worktree remove --force`, para que a remoção nunca apague o diretório real. O dry-verify e os gates de close não herdam `NODE_TEST_CONTEXT`, que dava falso verde.
+
+---
+
 ## [1.18.0] — 2026-10-31
 
 ### Executor nativo do host e contexto do nó
