@@ -14,7 +14,8 @@
  *
  * Usage:
  *   node scripts/reference-projects.cjs [--project ledger-api|mdlint|all] [--root <dir>] [--model sonnet]
- *        [--max-turns 10] [--budget-turns 80] [--fresh]
+ *        [--max-turns 10] [--budget-turns 80] [--fresh] [--plan-only] [--solution]
+ *   --solution runs offline (CI): a scripted executor writes the known-good solution; no model, no release report.
  * Resumable: a phase already closed is skipped; `--fresh` deletes the project directory first.
  * Output: .oxe/release/reference-projects-report.json and scorecard-report.json (oxe-build).
  */
@@ -33,12 +34,17 @@ function arg(name, fallback) {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
 }
 const PROJECT = arg('--project', 'all');
-const ROOT = path.resolve(arg('--root', path.join(os.homedir(), 'Estudos', 'oxe-reference')));
+const ROOT = path.resolve(arg('--root', process.argv.includes('--solution') ? fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-reference-solution-')) : path.join(os.homedir(), 'Estudos', 'oxe-reference')));
 const MODEL = arg('--model', 'sonnet');
 const MAX_TURNS = Number(arg('--max-turns', '10'));
 const BUDGET_TURNS = Number(arg('--budget-turns', '80'));
 const FRESH = process.argv.includes('--fresh');
 const PLAN_ONLY = process.argv.includes('--plan-only');
+// --solution: offline mode for CI. A scripted executor writes the known-good solution
+// (scripts/reference-projects/solutions/<name>/) for each task, so the whole flow runs without a model and the
+// planner's frozen tests and oracles are checked against a correct implementation. Never feeds the release report.
+const SOLUTION = process.argv.includes('--solution');
+const RELEASE_REPORT = !SOLUTION && !process.argv.includes('--no-release-report');
 const RELEASE_DIR = path.join(REPO, '.oxe', 'release');
 
 function writeFile(file, content) {
@@ -246,6 +252,24 @@ function oracle(dir, phases) {
   }
 }
 
+// ── scripted executor (offline mode) ────────────────────────────────────────────
+
+function solutionExecutor(def, phase) {
+  const base = path.join(__dirname, 'reference-projects', 'solutions', def.name);
+  return {
+    async execute(node, lease) {
+      const task = phase.tasks.find((t) => t.id === node.id);
+      if (!task) return { success: false, failure_class: 'env', evidence: [], output: `tarefa desconhecida ${node.id}` };
+      for (const rel of task.files) {
+        const from = path.join(base, rel);
+        if (!fs.existsSync(from)) return { success: false, failure_class: 'env', evidence: [], output: `solução sem ${rel}` };
+        writeFile(path.join(lease.root_path, rel), fs.readFileSync(from, 'utf8'));
+      }
+      return { success: true, failure_class: null, evidence: [...task.files], output: 'solution', completed_by: 'finish_task' };
+    },
+  };
+}
+
 // ── one phase ───────────────────────────────────────────────────────────────────
 
 function writeHandoff(dir, def, phase) {
@@ -292,10 +316,11 @@ async function runPhase(def, dir, phase, priorPhases) {
   let verified = null;
   for (let round = 1; round <= 2; round += 1) {
     operational.compileExecutionGraphFromArtifacts(dir, null, { runState: round === 1 ? undefined : null });
+    const executorOptions = SOLUTION
+      ? { executor: solutionExecutor(def, phase) }
+      : { adapter: 'claude', adapterOptions: { model: MODEL }, providerConfig: { baseUrl: '', apiKey: '', model: MODEL, maxTurns: MAX_TURNS } };
     const executed = await operational.runRuntimeExecute(dir, null, {
-      adapter: 'claude',
-      adapterOptions: { model: MODEL },
-      providerConfig: { baseUrl: '', apiKey: '', model: MODEL, maxTurns: MAX_TURNS },
+      ...executorOptions,
       checkpointCommits: true,
       budgetTurns: BUDGET_TURNS,
       onProgress: (event) => {
@@ -343,7 +368,7 @@ async function runProject(def) {
     phases.push(rec);
     if (!rec.closed) break;
   }
-  const card = operational.runtimeScorecard(dir, null, { write: true, releaseReport: path.join(RELEASE_DIR, 'scorecard-report.json'), name: def.name });
+  const card = operational.runtimeScorecard(dir, null, { write: true, ...(RELEASE_REPORT ? { releaseReport: path.join(RELEASE_DIR, 'scorecard-report.json'), name: def.name } : {}) });
   const usage = operational.readExecutorUsageRows(dir, null, null) || [];
   const cost = usage.reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
   const turns = usage.reduce((s, r) => s + (Number(r.turns) || 0), 0);
@@ -367,7 +392,7 @@ async function main() {
     const def = require(path.join(__dirname, 'reference-projects', `${name}.cjs`));
     results.push(await runProject(def));
   }
-  const reportPath = path.join(RELEASE_DIR, 'reference-projects-report.json');
+  const reportPath = RELEASE_REPORT ? path.join(RELEASE_DIR, 'reference-projects-report.json') : path.join(ROOT, 'reference-projects-report.json');
   const previous = fs.existsSync(reportPath) ? JSON.parse(fs.readFileSync(reportPath, 'utf8')) : { results: [] };
   const merged = [...(previous.results || []).filter((r) => !names.includes(r.name)), ...results];
   writeFile(reportPath, `${JSON.stringify({ schema_version: 1, generated_at: new Date().toISOString(), model: MODEL, results: merged }, null, 2)}\n`);
