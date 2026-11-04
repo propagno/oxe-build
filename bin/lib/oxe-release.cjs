@@ -66,11 +66,26 @@ function releasePaths(projectRoot) {
 const SCORECARD_MIN_TASKS = 10;
 const SCORECARD_MIN_PROJECTS = 2;
 
+/**
+ * The real-project scorecard cannot be produced in CI (it needs a real executor), so it is also accepted from the
+ * tracked `release-evidence/scorecard-report.json`; the local `.oxe/release/` copy wins when both exist.
+ */
+function scorecardReportPath(projectRoot) {
+  const local = releasePaths(projectRoot).scorecardReport;
+  if (fs.existsSync(local)) return local;
+  return path.join(projectRoot, 'release-evidence', 'scorecard-report.json');
+}
+
 function loadScorecardReport(projectRoot) {
-  return readReportSummary(releasePaths(projectRoot).scorecardReport, null, (item) => {
+  const reportPath = scorecardReportPath(projectRoot);
+  const raw = readJsonIfExists(reportPath);
+  const summary = readReportSummary(reportPath, null, (item) => {
     const card = item && item.report;
     return Boolean(item && item.ok && card && card.ok && card.sample && card.sample.completed_tasks >= SCORECARD_MIN_TASKS);
   });
+  // The OXE version that produced the evidence: a scorecard of an older release does not prove this one.
+  summary.oxe_version = raw && typeof raw.oxe_version === 'string' ? raw.oxe_version : null;
+  return summary;
 }
 
 function ensureDirForFile(filePath) {
@@ -528,6 +543,11 @@ function evaluateReleaseManifest(manifest, options = {}) {
     if (!card || !card.present) blockers.push('scorecard report ausente (oxe-cc runtime scorecard --dir <projeto real> --release-report .oxe/release/scorecard-report.json)');
     else if (card.failures.length) blockers.push(`scorecard fora das metas ou com menos de ${SCORECARD_MIN_TASKS} tarefas: ${card.failures.join(', ')}`);
     else if (passing < SCORECARD_MIN_PROJECTS) blockers.push(`scorecard com ${passing} projeto(s) real(is); a release exige ${SCORECARD_MIN_PROJECTS}`);
+    else {
+      const evidence = card.oxe_version && semver.valid(card.oxe_version) ? card.oxe_version : null;
+      const sameLine = evidence && semver.major(evidence) === semver.major(releaseVersion) && semver.minor(evidence) === semver.minor(releaseVersion);
+      if (!sameLine) blockers.push(`scorecard produzido pelo OXE ${card.oxe_version || 'desconhecido'}; a release ${releaseVersion} exige evidência da mesma linha (${semver.major(releaseVersion)}.${semver.minor(releaseVersion)}.x)`);
+    }
   }
   if (versions.banner.mode === 'unknown') {
     warnings.push('banner.txt sem placeholder v{version} nem versão fixa detectável');

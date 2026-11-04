@@ -19,6 +19,9 @@ function scrubbedEnv(env = process.env) {
   for (const [key, value] of Object.entries(env)) {
     if (/^OXESPACE_/i.test(key)) continue;
     if (/TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL/i.test(key)) continue;
+    // Inherited from a parent `node --test`, it makes a child `node --test` speak the runner protocol and exit 0:
+    // a red verify read as already green.
+    if (key === 'NODE_TEST_CONTEXT') continue;
     out[key] = value;
   }
   return out;
@@ -96,12 +99,33 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
   const results = [];
   const errors = [];
   const warnings = [];
-  for (const task of plan && Array.isArray(plan.tasks) ? plan.tasks : []) {
+  const allTasks = plan && Array.isArray(plan.tasks) ? plan.tasks : [];
+  const byId = new Map(allTasks.map((t) => [t.id, t]));
+  /** Files of the pending tasks this one depends on (transitively): their absence is the right red too (OXB-027). */
+  const pendingDependencyFiles = (task) => {
+    const out = new Set();
+    const seen = new Set();
+    const stack = [...(task.dependsOn || [])];
+    while (stack.length) {
+      const id = stack.pop();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const dep = byId.get(id);
+      if (!dep || dep.done) continue;
+      for (const f of dep.files || []) if (f) out.add(f);
+      stack.push(...(dep.dependsOn || []));
+    }
+    return [...out];
+  };
+  for (const task of allTasks) {
     if (task.done || !task.verifyCommand) continue;
-    const targets = (task.files || []).filter(Boolean);
+    const ownTargets = (task.files || []).filter(Boolean);
+    // OXB-027: a test of T2 that requires T1's module fails with "Cannot find module" for T1's file while T1 has not
+    // run: red for the right reason (a pending dependency), not a broken command.
+    const targets = [...ownTargets, ...pendingDependencyFiles(task)];
     // OXB-018: each `a && b` segment runs alone. A first segment red for the right reason used to hide a broken
     // second one (the SPEC "Como verificar" the compile appends), which surfaced only once the task made the first pass.
-    const targetsExist = targets.length > 0 && targets.every((f) => require('fs').existsSync(path.resolve(projectRoot, f)));
+    const targetsExist = ownTargets.length > 0 && targets.every((f) => require('fs').existsSync(path.resolve(projectRoot, f)));
     const segments = splitSegments(task.verifyCommand);
     let verdict = null;
     let code = null;

@@ -93,6 +93,25 @@ describe('release exige scorecard de projetos reais (≥ 1.21.0)', () => {
     assert.deepEqual(blockersFor('1.20.0', { present: false, failures: ['report_missing'], results: [] }), [], 'antes da 1.21 não exige');
     assert.match(blockersFor('1.21.0', { present: false, failures: ['report_missing'], results: [] })[0], /scorecard report ausente/);
     assert.match(blockersFor('1.21.0', { present: true, failures: [], results: [ok('a')] })[0], /1 projeto\(s\) real\(is\); a release exige 2/);
-    assert.deepEqual(blockersFor('1.21.0', { present: true, failures: [], results: [ok('a'), ok('b')] }), []);
+    assert.match(blockersFor('1.21.0', { present: true, failures: [], results: [ok('a'), ok('b')], oxe_version: '1.20.0' })[0], /produzido pelo OXE 1\.20\.0/);
+    assert.deepEqual(blockersFor('1.21.0', { present: true, failures: [], results: [ok('a'), ok('b')], oxe_version: '1.21.0' }), []);
+  });
+});
+
+describe('scorecard --since', () => {
+  it('mede só o que aconteceu a partir da data (histórico anterior à 1.21 não conta)', () => {
+    const events = [
+      { type: 'WorkItemCompleted', run_id: 'r', work_item_id: 'T1', payload: { attempt_number: 2 }, timestamp: '2026-11-01T10:00:00Z' },
+      { type: 'VerificationCompleted', payload: { status: 'passed' }, timestamp: '2026-11-01T11:00:00Z' },
+      { type: 'WorkItemCompleted', run_id: 'r2', work_item_id: 'T9', payload: { attempt_number: 1 }, timestamp: '2026-11-03T10:00:00Z' },
+    ];
+    const changeLines = [{ kind: 'cr', id: 'CR-01', class: 'constraint', at: '2026-11-01T12:00:00Z', status: 'open' }];
+    const all = scorecard.computeScorecard({ events, changeLines, ledgers: [] });
+    assert.equal(all.ok, false);
+    const recent = scorecard.computeScorecard({ events, changeLines, ledgers: [], since: '2026-11-02' });
+    assert.equal(recent.sample.completed_tasks, 1);
+    assert.equal(recent.metrics.find((m) => m.metric === 'first_attempt_rate').value, 1);
+    assert.equal(recent.metrics.find((m) => m.metric === 'post_green_crs').value, 0);
+    assert.equal(recent.since, '2026-11-02T00:00:00.000Z');
   });
 });

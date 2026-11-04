@@ -134,6 +134,8 @@ describe('phase gates no verify (ponta a ponta)', () => {
     fs.rmSync(path.join(tmp, 't', 'red'));
     const green = await op.runRuntimeVerify(tmp, null);
     assert.deepEqual(green.gates.passed, ['typecheck']);
+    // The program close reads the gates from the persisted run (reference project: the normalizer dropped them).
+    assert.deepEqual(op.readRunState(tmp, null).verification_gates.passed, ['typecheck']);
     assert.equal(op.runtimeChanges(tmp, null).find((c) => c.id === cr.id).status, 'resolved');
   });
 

@@ -2104,7 +2104,9 @@ function programCloseGateReasons(projectRoot, activeSession, ctx) {
   const programDir = ctx.paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const checks = gatesLib.gateChecks(gates, 'program_close', { programDir, phase: ctx.phase.id, defaultRunner: config.phase_gates_runner || null });
   for (const check of checks) {
-    const res = spawnSync(check.command, { cwd: projectRoot, shell: true, encoding: 'utf8', timeout: check.timeout_ms, maxBuffer: 4 * 1024 * 1024, windowsHide: true });
+    const gateEnv = { ...process.env };
+    delete gateEnv.NODE_TEST_CONTEXT; // a parent node --test would make a child node --test exit 0 (false green)
+    const res = spawnSync(check.command, { cwd: projectRoot, shell: true, encoding: 'utf8', timeout: check.timeout_ms, maxBuffer: 4 * 1024 * 1024, windowsHide: true, env: gateEnv });
     const result = { check_id: check.id, status: res.status === 0 ? 'pass' : 'fail', stdout: res.stdout || '', stderr: res.stderr || '', error: res.error ? String(res.error) : null };
     out.results.push(result);
     if (result.status !== 'pass') out.reasons.push(`gate do projeto vermelho no close: ${check.phase_gate} — ${gatesLib.firstErrorLines(result, 3).split(/\r?\n/).join(' · ') || 'sem saída'}`);
@@ -2126,7 +2128,7 @@ function programCloseGateReasons(projectRoot, activeSession, ctx) {
 
 /** `oxe-cc runtime scorecard [--write]` (1.21): maturity metrics from the project's own records. */
 function runtimeScorecard(projectRoot, activeSession, options = {}) {
-  const card = require('./oxe-scorecard.cjs').scorecardForProject(projectRoot, () => readEvents(projectRoot, activeSession));
+  const card = require('./oxe-scorecard.cjs').scorecardForProject(projectRoot, () => readEvents(projectRoot, activeSession), { since: options.since || null });
   if (options.write) {
     const file = path.join(projectRoot, '.oxe', 'release', 'scorecard-report.json');
     ensureDirForFile(file);
@@ -2142,6 +2144,7 @@ function runtimeScorecard(projectRoot, activeSession, options = {}) {
     doc.results = doc.results.filter((r) => r && r.name !== name);
     doc.results.push({ name, ok: card.ok, project_root: path.resolve(projectRoot), report: card });
     doc.generated_at = new Date().toISOString();
+    doc.oxe_version = readJsonQuiet(path.join(__dirname, '..', '..', 'package.json')).version;
     ensureDirForFile(file);
     fs.writeFileSync(file, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
     card.release_report = file;
@@ -2276,6 +2279,13 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     requireAcceptanceTests: Boolean(options.requireAcceptanceTests || config.acceptance_tests_required),
   });
   if (spec) result.warnings.push(...lintPlanForCommonPitfalls(plan, spec, projectRoot, specText));
+  // OXB-030: a criterion's verifiable terms (status codes, `code`, "literals") must be exercised by its frozen test.
+  // Strict (error) when the project requires acceptance tests; a warning otherwise.
+  if (spec) {
+    const uncovered = require('./oxe-criterion-coverage.cjs').uncoveredCriterionTerms({ spec, plan, projectRoot });
+    (config.acceptance_tests_required || options.requireAcceptanceTests ? result.errors : result.warnings).push(...uncovered);
+    result.ok = result.errors.length === 0;
+  }
   // 1.21 (OXB-020): a repo with gate scripts or governance tests but no phase_gates gets a warning.
   const gatesLib = require('./oxe-phase-gates.cjs');
   result.warnings.push(...gatesLib.lintPhaseGates(projectRoot, gatesLib.readPhaseGates({ phase_gates: plan.phaseGates }, config)));
@@ -2313,6 +2323,30 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
   }
   // OXB-021: checkpoint messages follow the project's commit convention.
   result.errors.push(...require('./oxe-commit-convention.cjs').lintCommitConvention(plan, config));
+  // OXB-028: the execute preflight's execution-rationality gaps (anchors, fixture pack, pack coverage, visual inputs)
+  // are lint errors too — a greenfield plan without REFERENCE-ANCHORS/FIXTURE-PACK passed lint and blocked execute.
+  try {
+    const health = require('./oxe-project-health.cjs');
+    const p = health.oxePaths(projectRoot);
+    const rationality = require('./oxe-rationality.cjs').buildExecutionRationality({
+      plan: paths.plan || p.plan,
+      planAgents: p.planAgents,
+      implementationPackJson: paths.implementationPack || p.implementationPackJson,
+      implementationPackMd: p.implementationPackMd,
+      referenceAnchors: p.referenceAnchors,
+      fixturePackJson: p.fixturePackJson,
+      fixturePackMd: p.fixturePackMd,
+      spec: paths.spec || p.spec,
+      visualInputsJson: p.visualInputsJson,
+      visualInputsMd: p.visualInputsMd,
+    });
+    // With an IMPLEMENTATION-PACK the project is on the execution-rationality track: a gap blocks execute, so it is
+    // an error here. Without one (an early or markdown-only plan) it is a heads-up.
+    const target = pack ? result.errors : result.warnings;
+    for (const gap of rationality.criticalExecutionGaps || []) {
+      if (!result.errors.includes(gap) && !result.warnings.includes(gap)) target.push(`preflight: ${gap}`);
+    }
+  } catch { /* a racionalidade é do preflight; o lint só antecipa */ }
   result.ok = result.errors.length === 0;
   return { ...result, source: plan.source, tasks: plan.tasks.length, phase: phase ? phase.id : null, plan_json: hasJson ? jsonPath : null, dry_verify: dryVerify ? dryVerify.results : null };
 }
@@ -3698,6 +3732,8 @@ function writeRunState(projectRoot, activeSession, runState = {}) {
     // 1.19: hash dos testes de aceite do plano congelado no compile; resumo da regressão de fases.
     acceptance_lock: runState.acceptance_lock && typeof runState.acceptance_lock === 'object' ? runState.acceptance_lock : null,
     verification_regression: runState.verification_regression && typeof runState.verification_regression === 'object' ? runState.verification_regression : null,
+    // 1.21: phase gates of the last verify — program close reads them (dropping it here made every close fail).
+    verification_gates: runState.verification_gates && typeof runState.verification_gates === 'object' ? runState.verification_gates : null,
     ci_checks: runState.ci_checks && typeof runState.ci_checks === 'object' ? runState.ci_checks : null,
     delivery: runState.delivery && typeof runState.delivery === 'object' ? runState.delivery : null,
     recovery_summary: runState.recovery_summary && typeof runState.recovery_summary === 'object' ? runState.recovery_summary : null,

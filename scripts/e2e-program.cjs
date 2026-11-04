@@ -225,6 +225,9 @@ function makeProject(name) {
   writeFile(path.join(dir, '.gitignore'), '.oxe/\nnode_modules/\n');
   writeFile(path.join(dir, '.oxe', 'STATE.md'), '# OXE — Estado\n\n## Fase atual\n\n`spec_ready`\n');
   writeFile(path.join(dir, '.oxe', 'ROADMAP.md'), roadmapMd());
+  // Greenfield fixture: no external reference and no fixture data — declared, as the preflight requires (OXB-028).
+  writeFile(path.join(dir, '.oxe', 'REFERENCE-ANCHORS.md'), '# REFERENCE-ANCHORS\n\n<reference_anchors version="1" ready="true" status="not_applicable">\n</reference_anchors>\n');
+  writeFile(path.join(dir, '.oxe', 'FIXTURE-PACK.json'), JSON.stringify({ schema_version: '1', ready: true, fixtures: [], status: 'not_applicable', reason: 'testes de aceite trazem os próprios dados' }, null, 2));
   if (git(dir, ['init', '-q']).status === 0) {
     git(dir, ['config', 'user.email', 'oxe-e2e@local']);
     git(dir, ['config', 'user.name', 'OXE e2e']);

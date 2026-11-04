@@ -63,9 +63,12 @@ function foldChanges(lines) {
  * @param {{ events: object[], changeLines: object[], ledgers: object[] }} input
  */
 function computeScorecard(input) {
-  const events = Array.isArray(input.events) ? input.events : [];
-  const changes = foldChanges(input.changeLines);
-  const ledgers = Array.isArray(input.ledgers) ? input.ledgers : [];
+  // `since` (ISO date/time): measure only the work done from then on — e.g. a project's history from before 1.21.
+  const since = input.since ? new Date(input.since).toISOString() : null;
+  const after = (ts) => !since || String(ts || '') >= since;
+  const events = (Array.isArray(input.events) ? input.events : []).filter((e) => after(e.timestamp));
+  const changes = foldChanges(input.changeLines).filter((cr) => after(cr.at));
+  const ledgers = (Array.isArray(input.ledgers) ? input.ledgers : []).filter((l) => after(l.updated_at || l.started_at));
 
   // first-attempt rate and turns paid after a task had completed (same run)
   const completedAt = new Map();
@@ -105,13 +108,14 @@ function computeScorecard(input) {
   return {
     oxeScorecardSchema: 1,
     generated_at: new Date().toISOString(),
+    since,
     sample: { completed_tasks: completed, change_requests: changes.length, resolved_crs: resolved.length, budget_ledgers: ledgers.length, events: events.length },
     metrics: results,
     ok: results.every((r) => r.ok !== false),
   };
 }
 
-function scorecardForProject(projectRoot, readEvents) {
+function scorecardForProject(projectRoot, readEvents, options = {}) {
   const events = typeof readEvents === 'function' ? readEvents() : [];
   let changeLines = [];
   try {
@@ -121,7 +125,7 @@ function scorecardForProject(projectRoot, readEvents) {
   } catch {
     changeLines = [];
   }
-  return computeScorecard({ events, changeLines, ledgers: readLedgers(projectRoot) });
+  return computeScorecard({ events, changeLines, ledgers: readLedgers(projectRoot), since: options.since || null });
 }
 
 module.exports = { TARGETS, computeScorecard, scorecardForProject, foldChanges };

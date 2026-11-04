@@ -216,3 +216,29 @@ A CI do oxespace reprovou 9 testes de **governança do repositório** (`design-l
 - **Status:** resolvido (1.21, 8d78c39). Depois de um turn limit com escrita no escopo, o runtime roda o verify: verde conclui (`verify_after_turn_limit`). O último turno pede para fechar e reportar.
 - **Evidência:** na T15 (CR-13), a tentativa 1 terminou com `completed_by: turn_limit_exhausted`, `failure_class: llm` e a mensagem do próprio executor: "All 35 tests pass across the five files. Running the final verification command…". O diff estava no working tree, mas o scheduler agendou o retry **sem rodar o verify**. A tentativa 2 recomeçou um trabalho já concluído e pagou até 5 turnos a mais, chegando exatamente ao teto de 20 do coordenador.
 - **Fora da caixa:** o verify é o juiz, não o fim de conversa do LLM. Quando um turn limit termina com diff no escopo, o scheduler roda o verify antes de classificar a tentativa: verde conclui a tarefa (`completed_by: verify_after_turn_limit`), vermelho entra no retry informado. Também vale reservar o último turno para "pare e reporte", em vez de um turno de verificação redundante; o executor não precisa rodar o comando final, o runtime roda.
+
+## OXB-027: o dry-verify chamava de "comando quebrado" o teste que importa um módulo de dependência pendente
+
+- **Status:** resolvido (1.21).
+- **Evidência:** no projeto de referência `mdlint`, os testes de aceite da T2 à T5 importam `src/parse.js`, que é da T1, ainda não executada. O `plan lint --dry-verify` classificou os quatro como `broken_command` e bloqueou o plano, embora fossem vermelhos pelo motivo certo.
+- **Correção:** a classificação considera também os arquivos das dependências pendentes (transitivas) da tarefa. Um módulo que nenhuma tarefa cria continua sendo plano quebrado. Teste: `tests/oxe-dryrun-dependency.test.cjs`.
+
+## OXB-028: o lint aprovava um plano que o preflight bloqueava por falta de âncoras e de fixture pack
+
+- **Status:** resolvido (1.21).
+- **Evidência:** nos projetos de referência (greenfield), o `plan lint` deu ok e o preflight do execute bloqueou com `REFERENCE-ANCHORS.md ausente` e, depois, com `FIXTURE-PACK.json inválido ou ausente`. É a mesma classe de divergência do OXB-022.
+- **Correção:** o `plan lint` roda a mesma racionalidade de execução do preflight. Com IMPLEMENTATION-PACK, os gaps viram erro (`preflight: …`); sem pack, viram aviso. Num projeto novo, declare `REFERENCE-ANCHORS.md` com `status="not_applicable"` e o `FIXTURE-PACK.json` com `status: not_applicable` e o motivo.
+
+## OXB-029: o normalizador do run state descartava `verification_gates`, e nenhum close com gates passava
+
+- **Status:** resolvido (1.21).
+- **Evidência:** no projeto de referência `ledger-api`, o F1 ficou com verify `passed` e gates 2/2, mas o `program close` reprovou com "gate do projeto não rodou no verify da fase". O `writeRunState` normaliza o run state por lista de campos, e o `verification_gates` não estava nela. O teste unitário da Onda A checava o retorno do verify, não o run persistido que o close lê.
+- **Correção:** o campo foi incluído no normalizador, e o teste e2e dos gates agora relê o run do disco. **Lição:** todo campo que um comando grava e outro lê precisa de um teste que passe pelo disco, não só pelo valor de retorno.
+
+## OXB-030: o critério citava 413, o teste congelado não exercitava e a fase fechou verde (falso verde pego pelo oráculo)
+
+- **Status:** resolvido (1.21).
+- **Evidência:** no projeto de referência `ledger-api` (run 1, arquivado em `oxe-reference/ledger-api-run1`), as 10 tarefas passaram na 1ª tentativa, os gates ficaram 2/2 e as duas fases fecharam. O **oráculo independente reprovou a F2**: depois de um corpo grande demais (413), o servidor gerado deixava a conexão meio aberta, e o `server.close()` nunca terminava. Isso trava o shutdown e vaza um socket a cada requisição. O critério A10 dizia "erros 400/401/404/405/413", mas o teste congelado escrito pelo planner não exercitava o 413 pela API.
+- **Correção no OXE:** o `plan lint` passa a cobrar que os termos verificáveis do critério (códigos 1xx–5xx, `code spans`, "literais") apareçam no teste de aceite ligado a ele. É erro com `acceptance_tests_required` e aviso sem. Rodado sobre o run 1, o lint aponta exatamente `A10: … não exercita "413"`.
+- **Correção no projeto:** o A10 passou a enviar um corpo bruto grande, exigir 413 em JSON e exigir que o servidor feche em até 3 s. Ele é verde na implementação de referência e vermelho no código do run 1 ("server.close() did not finish"). O projeto foi reconstruído do zero com o OXE corrigido.
+- **Lição:** o oráculo independente é o que torna o falso verde visível. O scorecard conta esse caso, e o release não esconde: o run 1 não entra no scorecard, e a correção virou regra do lint.

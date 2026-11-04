@@ -2541,7 +2541,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime rollback --task T3 [--yes]
   npx oxe-cc runtime execute ... [--checkpoint-commits] [--budget-turns N] [--budget-usd X] [--budget-reset] [--max-retries N]
   npx oxe-cc runtime verify [--no-gates]
-  npx oxe-cc runtime scorecard [--write] [--release-report <arquivo> --name <projeto>] [--json]
+  npx oxe-cc runtime scorecard [--since <data>] [--write] [--release-report <arquivo> --name <projeto>] [--json]
   npx oxe-cc runtime ci --attach <run-id|url> [--repo owner/repo] [--head <sha>]
   npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"] [--no-gates]
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
@@ -4141,6 +4141,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--budget-usd' && argv[i + 1]) out.budgetUsd = Number(argv[++i]);
     else if (a === '--budget-reset') out.budgetReset = true;
     else if (a === '--release-report' && argv[i + 1]) out.releaseReport = String(argv[++i]);
+    else if (a === '--since' && argv[i + 1]) out.since = String(argv[++i]);
     else if (a === '--name' && argv[i + 1]) out.name = String(argv[++i]);
     else if (a === '--max-retries' && argv[i + 1]) out.maxRetries = Number(argv[++i]);
     else if (a === '--force') out.force = true;
@@ -5318,7 +5319,7 @@ async function runRuntime(opts) {
   }
 
   if (opts.action === 'scorecard') {
-    const card = oxeOperational.runtimeScorecard(opts.dir, activeSession, { write: Boolean(opts.writeReport), releaseReport: opts.releaseReport || null, name: opts.name || null });
+    const card = oxeOperational.runtimeScorecard(opts.dir, activeSession, { write: Boolean(opts.writeReport), releaseReport: opts.releaseReport || null, name: opts.name || null, since: opts.since || null });
     if (opts.jsonOutput) {
       console.log(JSON.stringify(card, null, 2));
     } else {
