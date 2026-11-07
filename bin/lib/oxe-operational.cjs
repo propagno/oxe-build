@@ -587,6 +587,7 @@ function normalizeRuntimeEventType(type) {
     ChangeResolved: 'ChangeResolved',
     VerifyCommandSuspect: 'VerifyCommandSuspect',
     BudgetExhausted: 'BudgetExhausted',
+    ScopeViolation: 'ScopeViolation',
   };
   if (directMap[raw]) return directMap[raw];
   const lower = raw.toLowerCase();
@@ -1418,6 +1419,25 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
       ? (gitLines(projectRoot, ['status', '--porcelain', '-uall', '--', ...allPlanFiles]) || []).map((l) => l.slice(3).replace(/^"|"$/g, '').split(' -> ').pop())
       : []);
     const isolateFailures = readProjectConfig(projectRoot).isolate_failed_attempts !== false;
+    // OXB-067/068: per-task and per-attempt tree snapshots, and the paths each task touched outside its scope.
+    const gitRepo = Boolean(gitLines(projectRoot, ['rev-parse', '--is-inside-work-tree']));
+    const taskBaseline = new Map();
+    const attemptBaseline = new Map();
+    const scopeViolations = new Map();
+    const graphNodeOf = (id) => {
+      const nodes = current && current.compiled_graph && current.compiled_graph.nodes;
+      return nodes ? (Array.isArray(nodes) ? nodes.find((n) => n && n.id === id) : nodes[id]) || null : null;
+    };
+    const isVerifyOnlyNode = (id) => {
+      const node = graphNodeOf(id);
+      return Boolean(node && node.policy && node.policy.verify_only);
+    };
+    const scopeOfTask = (id) => {
+      if (isVerifyOnlyNode(id)) return []; // enforced empty scope (OXB-068)
+      const planTask = planTaskById.get(id);
+      const planFiles = planTask && Array.isArray(planTask.files) ? planTask.files.map((p) => String(p).replace(/\\/g, '/')) : [];
+      return [...new Set([...taskScopeFiles(current, id), ...planFiles])].filter((p) => p && !p.includes('*'));
+    };
     budgetLedger = budgetLib.openBudget(projectRoot, current.run_id, {
       turns: options.budgetTurns,
       usd: options.budgetUsd,
@@ -1514,12 +1534,50 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
           fs.writeFileSync(logFile, `${event.payload.output_tail}${segmentsLog}\n`, 'utf8');
         } catch { /* log auxiliar */ }
       }
-      // OXB-051: a task that failed for good is isolated (inplace): its attempt is saved and its scope restored, so the
-      // next task does not run on top of it. Files that were dirty before this execute are never touched.
-      if (isolateFailures && event && event.type === 'WorkItemBlocked' && event.work_item_id && event.payload && event.payload.max_attempts != null) {
+      // OXB-067/068: what each attempt touched outside the task's files. Snapshots when the task starts and when each
+      // attempt starts; at the end of an attempt, any path changed outside the scope is a ScopeViolation (reported
+      // whether the attempt passed or not). A verify_only / external_delivery task has an enforced EMPTY scope.
+      const taskId = event && event.work_item_id;
+      const inplaceRun = Boolean(runtime.InplaceWorkspaceManager && workspaceManager instanceof runtime.InplaceWorkspaceManager);
+      let outsideNow = [];
+      if (taskId && inplaceRun && gitRepo) {
         try {
-          const iso = isolateFailedTask(projectRoot, current, event.work_item_id, { task: planTaskById.get(event.work_item_id), preDirty, inplace: Boolean(runtime.InplaceWorkspaceManager && workspaceManager instanceof runtime.InplaceWorkspaceManager) });
-          if (iso.files.length) appendEvent(projectRoot, activeSession, { type: 'RollbackExecuted', run_id: current.run_id, work_item_id: event.work_item_id, payload: { reason: 'failed_attempt_isolated', files: iso.files, saved_to: iso.savedTo } });
+          if (event.type === 'WorkItemReady') taskBaseline.set(taskId, treeSnapshot(projectRoot));
+          if (event.type === 'AttemptStarted') attemptBaseline.set(taskId, treeSnapshot(projectRoot));
+          const attemptEnded = event.type === 'RetryScheduled' || event.type === 'WorkItemCompleted' || event.type === 'WorkItemBlocked';
+          if (attemptEnded && taskBaseline.has(taskId)) {
+            const scope = new Set(scopeOfTask(taskId));
+            const base = event.type === 'RetryScheduled' ? attemptBaseline.get(taskId) || taskBaseline.get(taskId) : taskBaseline.get(taskId);
+            outsideNow = changedSinceSnapshot(projectRoot, base).filter((p) => !scope.has(p));
+            if (outsideNow.length) {
+              const all = new Set([...(scopeViolations.get(taskId) || []), ...outsideNow]);
+              scopeViolations.set(taskId, [...all].sort());
+              appendEvent(projectRoot, activeSession, {
+                type: 'ScopeViolation',
+                run_id: current.run_id,
+                work_item_id: taskId,
+                payload: { task: taskId, paths: outsideNow, outcome: event.type === 'WorkItemCompleted' ? 'passed' : 'failed', verify_only: isVerifyOnlyNode(taskId) },
+              });
+            }
+          }
+        } catch { /* rastreio de escopo nunca derruba a execução */ }
+      }
+      // OXB-051/067: a task that failed for good is isolated (inplace): its attempt is saved and restored — its files AND
+      // anything it changed outside them that was clean before the task — so the next task does not run on top of it.
+      // Files that were dirty before (this execute or the task) are never reverted; they are copied for review.
+      const failedForGood = event && event.type === 'WorkItemBlocked' && event.payload && (event.payload.max_attempts != null || isVerifyOnlyNode(taskId));
+      const verifyOnlyWrote = event && event.type === 'WorkItemCompleted' && isVerifyOnlyNode(taskId) && outsideNow.length > 0;
+      if (isolateFailures && taskId && (failedForGood || verifyOnlyWrote)) {
+        try {
+          const base = taskBaseline.get(taskId) || new Map();
+          const outside = (scopeViolations.get(taskId) || []).filter((p) => !preDirty.has(p));
+          const extraPaths = outside.filter((p) => !base.has(p));
+          const dirtyBefore = outside.filter((p) => base.has(p));
+          const scopeFor = isVerifyOnlyNode(taskId) ? { files: [] } : planTaskById.get(taskId);
+          const iso = isolateFailedTask(projectRoot, current, taskId, { task: scopeFor, preDirty, inplace: inplaceRun, extraPaths, dirtyBefore, verifyOnly: isVerifyOnlyNode(taskId) });
+          if (iso.files.length || iso.notRestored.length) {
+            appendEvent(projectRoot, activeSession, { type: 'RollbackExecuted', run_id: current.run_id, work_item_id: taskId, payload: { reason: verifyOnlyWrote ? 'verify_only_wrote_files' : 'failed_attempt_isolated', files: iso.files, outside_scope: extraPaths, not_restored: iso.notRestored, saved_to: iso.savedTo } });
+          }
         } catch { /* isolamento nunca derruba a execução */ }
       }
       if (event && event.type === 'WorkItemCompleted' && event.work_item_id) {
@@ -1536,6 +1594,11 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
               }
             }
           } catch { /* checkpoint nunca derruba a execução */ }
+        }
+        // OXB-067: a passing task that also edited files outside its scope — never committed silently, never dropped.
+        const outsideAtCompletion = scopeViolations.get(event.work_item_id) || [];
+        if (outsideAtCompletion.length && !isVerifyOnlyNode(event.work_item_id)) {
+          appendEvent(projectRoot, activeSession, { type: 'PolicyWarning', run_id: current.run_id, work_item_id: event.work_item_id, payload: { reason: 'checkpoint_incomplete', scope_violation: outsideAtCompletion, commit: checkpoint } });
         }
         // OXB-007: a spike's answer becomes an append-only decision the dossier shows.
         const planTask = planTaskById.get(event.work_item_id);
@@ -2769,21 +2832,57 @@ function taskScopeFiles(runState, taskId) {
  * OXB-051: saves a failed task's changes (tracked diff as a patch, new files as copies) under
  * `.oxe/runs/<run>/attempts/<task>-failed/` and restores its scope, inplace only. `preDirty` files are left alone.
  */
+/**
+ * 1.21.2 (OXB-067/068): working-tree snapshot (path → content hash) of every changed path, `.oxe/` excluded. Taken when
+ * a task starts and when each attempt starts, so the runtime knows exactly which paths an attempt touched — including
+ * those outside the task's `files` (oxespace 1.5.0 T13 left ThreadView.tsx edited after its rollback).
+ */
+function treeSnapshot(projectRoot) {
+  const snapshot = new Map();
+  const lines = gitLines(projectRoot, ['status', '--porcelain', '-uall']) || [];
+  const files = lines.map((l) => l.slice(3).replace(/^"|"$/g, '').split(' -> ').pop()).filter((f) => f && !f.startsWith('.oxe/'));
+  const present = [];
+  for (const f of files) {
+    let isFile = false;
+    try { isFile = fs.statSync(path.join(projectRoot, f)).isFile(); } catch { isFile = false; }
+    if (isFile) present.push(f);
+    else snapshot.set(f, 'deleted');
+  }
+  for (let i = 0; i < present.length; i += 200) {
+    const chunk = present.slice(i, i + 200);
+    const res = spawnSync('git', ['hash-object', '--', ...chunk], { cwd: projectRoot, encoding: 'utf8', windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+    const hashes = String(res.stdout || '').split(/\r?\n/).filter(Boolean);
+    chunk.forEach((f, k) => snapshot.set(f, hashes[k] || 'unknown'));
+  }
+  return snapshot;
+}
+
+/** Paths whose state differs from `before` (new changes, further edits, or reverted to HEAD). */
+function changedSinceSnapshot(projectRoot, before) {
+  const now = treeSnapshot(projectRoot);
+  const changed = new Set();
+  for (const [f, h] of now) if (!before || before.get(f) !== h) changed.add(f);
+  if (before) for (const f of before.keys()) if (!now.has(f)) changed.add(f);
+  return [...changed].sort();
+}
+
 function isolateFailedTask(projectRoot, runState, taskId, options = {}) {
   const nodes = runState && runState.compiled_graph && runState.compiled_graph.nodes;
   const node = nodes ? (Array.isArray(nodes) ? nodes.find((n) => n && n.id === taskId) : nodes[taskId]) : null;
   // Only where the attempt ran in the shared checkout (the execute's real workspace, not the node's nominal strategy).
-  if (options.inplace === false) return { files: [], savedTo: null };
+  if (options.inplace === false) return { files: [], savedTo: null, notRestored: [] };
   void node;
-  if (!gitLines(projectRoot, ['rev-parse', '--is-inside-work-tree'])) return { files: [], savedTo: null };
+  if (!gitLines(projectRoot, ['rev-parse', '--is-inside-work-tree'])) return { files: [], savedTo: null, notRestored: [] };
   const planFiles = options.task && Array.isArray(options.task.files) ? options.task.files.map((p) => String(p).replace(/\\/g, '/')) : [];
-  const scope = [...new Set([...taskScopeFiles(runState, taskId), ...planFiles])].filter((p) => p && !p.includes('*'));
-  if (!scope.length) return { files: [], savedTo: null };
+  // OXB-067: paths the task changed OUTSIDE its files (clean before the task) are saved and restored as well.
+  const extra = Array.isArray(options.extraPaths) ? options.extraPaths : [];
+  const scope = [...new Set([...taskScopeFiles(runState, taskId), ...planFiles, ...extra])].filter((p) => p && !p.includes('*'));
+  if (!scope.length) return { files: [], savedTo: null, notRestored: [] };
   const preDirty = options.preDirty || new Set();
   const changed = (gitLines(projectRoot, ['status', '--porcelain', '-uall', '--', ...scope]) || [])
     .map((line) => ({ code: line.slice(0, 2), file: line.slice(3).replace(/^"|"$/g, '').split(' -> ').pop() }))
     .filter((c) => !preDirty.has(c.file));
-  if (!changed.length) return { files: [], savedTo: null };
+  if (!changed.length) return { files: [], savedTo: null, notRestored: [] };
   const dir = path.join(projectRoot, '.oxe', 'runs', runState.run_id || 'run', 'attempts', `${taskId}-failed`);
   fs.mkdirSync(dir, { recursive: true });
   const tracked = changed.filter((c) => c.code !== '??').map((c) => c.file);
@@ -2801,7 +2900,17 @@ function isolateFailedTask(projectRoot, runState, taskId, options = {}) {
       fs.rmSync(from, { force: true });
     } catch { /* best effort */ }
   }
-  return { files: changed.map((c) => c.file), savedTo: path.relative(projectRoot, dir).replace(/\\/g, '/') };
+  // Paths the task touched that were already dirty before it: copied for review, never reverted (they hold other work).
+  const notRestored = (Array.isArray(options.dirtyBefore) ? options.dirtyBefore : []).filter((rel) => {
+    try {
+      ensureDirForFile(path.join(dir, 'dirty-before', rel));
+      fs.copyFileSync(path.join(projectRoot, rel), path.join(dir, 'dirty-before', rel));
+      return true;
+    } catch {
+      return true;
+    }
+  });
+  return { files: changed.map((c) => c.file), savedTo: path.relative(projectRoot, dir).replace(/\\/g, '/'), notRestored };
 }
 
 /** Latest checkpoint commit of a task: the `OXE-Task: Tn` trailer (1.21) or the legacy `oxe(Tn):` subject. */

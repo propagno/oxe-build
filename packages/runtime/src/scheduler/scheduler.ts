@@ -473,7 +473,10 @@ export class Scheduler {
 
     for (const id of eligible) {
       const node = graph.nodes.get(id)!;
-      if (node.mutation_scope.length === 0 && nodeMayMutate(node)) {
+      // OXB-068: a verify_only / external-dependency node has an enforced empty scope (checked by the caller), not a
+      // "may write files" warning.
+      const externalNode = Boolean(node.policy.verify_only) || (node.policy.external_dependency?.length ?? 0) > 0;
+      if (node.mutation_scope.length === 0 && nodeMayMutate(node) && !externalNode) {
         this.emit(ctx, {
           type: 'PolicyWarning',
           work_item_id: id,

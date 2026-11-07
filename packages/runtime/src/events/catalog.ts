@@ -36,6 +36,7 @@ export const EVENT_TYPES = [
   'ChangeResolved',
   'VerifyCommandSuspect',
   'BudgetExhausted',
+  'ScopeViolation',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

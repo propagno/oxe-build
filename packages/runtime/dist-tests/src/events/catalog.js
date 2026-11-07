@@ -40,6 +40,7 @@ exports.EVENT_TYPES = [
     'ChangeResolved',
     'VerifyCommandSuspect',
     'BudgetExhausted',
+    'ScopeViolation',
 ];
 function isValidEventType(type) {
     return exports.EVENT_TYPES.includes(type);

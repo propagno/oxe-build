@@ -286,10 +286,19 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-067: o rollback de uma tentativa falha deixa edições fora do escopo
 
-- **Status:** aberto (P1).
+- **Status:** resolvido (1.21.2). O runtime tira um snapshot da árvore (caminho → hash) quando a tarefa começa e a cada tentativa. Quando a tentativa termina, todo caminho alterado fora de `files` emite `ScopeViolation {task, paths, outcome}`, tenha ela passado ou não. Se a tarefa falhar de vez, esses caminhos são salvos (patch e arquivos novos em `attempts/<Tn>-failed/`) e restaurados junto com o escopo. O que já estava sujo antes da tarefa nunca é revertido; vai para `dirty-before/`. Se a tarefa passar, o checkpoint não leva o arquivo de fora e o `checkpoint_incomplete` lista o arquivo em `scope_violation`. Teste: `tests/oxe-1212.test.cjs`.
 - **Evidência:** na mesma run, o RollbackExecuted restaurou os 8 arquivos do escopo da T13.
   - O executor também tinha editado `src/components/Threads/ThreadView.tsx`, que estava fora de `files`, porque o plano o esqueceu.
   - Essa edição ficou na árvore.
 - **Proposta:**
   - salvar em `attempts/<Tn>-failed` e restaurar também os arquivos alterados fora do escopo;
   - emitir `scope_violation` nos eventos quando o executor edita fora de `files`.
+
+## OXB-068: a tarefa verify_only emite o aviso "may write files" e não tem escopo vazio obrigatório
+
+- **Status:** resolvido (1.21.2).
+- **Evidência (TECH LEAD, 07/11, `npx oxe-cc@1.21.1 runtime execute --wave 5` em oxespace-150):** todo nó `verify_only` emitiu `PolicyWarning empty_mutation_scope: "node may write files but declares no mutation_scope; running serially and without scope checks"`. Por definição, uma tarefa verify_only ou external_delivery não deve escrever arquivo.
+- **Correção:**
+  - o nó verify_only ou com dependência externa tem escopo vazio obrigatório: qualquer arquivo que o verify dele escreva emite `ScopeViolation` com `verify_only: true` e é desfeito, pelo mesmo mecanismo do OXB-067;
+  - o aviso `empty_mutation_scope` não é mais emitido para esses nós.
+- **Teste:** `tests/oxe-1212.test.cjs`.
