@@ -5,6 +5,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.Scheduler = void 0;
 exports.tailLines = tailLines;
+exports.splitVerifySegments = splitVerifySegments;
+exports.buildVerifyLog = buildVerifyLog;
 exports.describeVerifyFailure = describeVerifyFailure;
 exports.verifyFailureSignature = verifyFailureSignature;
 const path_1 = __importDefault(require("path"));
@@ -483,7 +485,8 @@ class Scheduler {
                             success: false,
                             failure_class: 'verify',
                             evidence: lastResult.evidence,
-                            output: describeVerifyFailure(node.verify.command, verifyResult.check, verifyResult.gaps),
+                            output: describeVerifyFailure(node.verify.command, verifyResult.check, verifyResult.gaps, verifyResult.segment),
+                            verify_log: buildVerifyLog(verifyResult.segments),
                         };
                         const signature = verifyFailureSignature(verifyResult.check);
                         if (signature && signature === lastVerifySignature) {
@@ -535,7 +538,7 @@ class Scheduler {
                     this.emit(ctx, {
                         type: 'RetryScheduled',
                         work_item_id: nodeId,
-                        payload: { next_attempt: attempt + 1, reason: lastResult.failure_class, backoff_ms: backoffMs, output_tail: tailLines(lastResult.output || '', 60) },
+                        payload: { next_attempt: attempt + 1, reason: lastResult.failure_class, backoff_ms: backoffMs, output_tail: tailLines(lastResult.output || '', 60), ...(lastResult.verify_log ? { verify_log: lastResult.verify_log } : {}) },
                     });
                 }
             }
@@ -576,7 +579,7 @@ class Scheduler {
         this.emit(ctx, {
             type: 'WorkItemBlocked',
             work_item_id: nodeId,
-            payload: { failure_class: verifySuspect ? 'verify_suspect' : lastResult?.failure_class ?? 'env', max_attempts: maxAttempts, output_tail: tailLines(lastResult?.output || '', 60) },
+            payload: { failure_class: verifySuspect ? 'verify_suspect' : lastResult?.failure_class ?? 'env', max_attempts: maxAttempts, output_tail: tailLines(lastResult?.output || '', 60), ...(lastResult?.verify_log ? { verify_log: lastResult.verify_log } : {}) },
         });
         status.set(nodeId, 'failed');
         failed.push(nodeId);
@@ -696,48 +699,79 @@ class Scheduler {
             work_item_id: node.id,
             payload: { command: node.verify.command, attempt_number: attempt },
         });
-        const suite = {
-            checks: [{
-                    id: `inline-${node.id}`,
-                    type: 'custom',
-                    command: node.verify.command,
-                    evidence_type_expected: 'stdout',
-                    acceptance_ref: null,
-                    description: `Verify ${node.id}`,
-                }],
-            compiled_at: new Date().toISOString(),
-            spec_hash: '',
-            plan_hash: '',
-        };
-        let result;
-        try {
-            result = await (0, verification_compiler_1.verifyRun)({
-                suite,
-                cwd: lease.root_path,
-                timeoutMs: ctx.options?.verifyTimeoutMs ?? 60000,
-                runId: ctx.runId,
-                workItemId: node.id,
-                attemptNumber: attempt,
-                projectRoot: ctx.projectRoot,
-                pluginRegistry: ctx.pluginRegistry,
-            });
+        // 1.21.2 (OXB-066): each top-level `&&` segment runs on its own, in order, stopping at the first failure. As one
+        // command, `vitest … && tsc --noEmit` failed in tsc but the retry only carried the passing vitest output: the
+        // executor never saw the type error (oxespace 1.5.0 T13: 4 attempts, US$ 4.54, 0 completed).
+        const segments = splitVerifySegments(node.verify.command);
+        const ran = [];
+        const gaps = [];
+        let status = 'passed';
+        let failing = null;
+        for (let index = 0; index < segments.length; index++) {
+            const command = segments[index];
+            const suite = {
+                checks: [{
+                        id: segments.length > 1 ? `inline-${node.id}-s${index + 1}` : `inline-${node.id}`,
+                        type: 'custom',
+                        command,
+                        evidence_type_expected: 'stdout',
+                        acceptance_ref: null,
+                        description: `Verify ${node.id}${segments.length > 1 ? ` [${index + 1}/${segments.length}]` : ''}`,
+                    }],
+                compiled_at: new Date().toISOString(),
+                spec_hash: '',
+                plan_hash: '',
+            };
+            let result;
+            try {
+                result = await (0, verification_compiler_1.verifyRun)({
+                    suite,
+                    cwd: lease.root_path,
+                    timeoutMs: ctx.options?.verifyTimeoutMs ?? 60000,
+                    runId: ctx.runId,
+                    workItemId: node.id,
+                    attemptNumber: attempt,
+                    projectRoot: ctx.projectRoot,
+                    pluginRegistry: ctx.pluginRegistry,
+                });
+            }
+            catch (err) {
+                this.emit(ctx, {
+                    type: 'VerificationCompleted',
+                    work_item_id: node.id,
+                    attempt_id: attemptId,
+                    payload: { status: 'error', error: String(err), failed_segment: { index: index + 1, total: segments.length, command, exit_code: null } },
+                });
+                return null;
+            }
+            const segmentRun = { index: index + 1, total: segments.length, command, status: result.status, check: result.check_results?.[0] };
+            ran.push(segmentRun);
+            gaps.push(...(result.gaps ?? []));
+            if (result.status === 'failed') {
+                status = 'failed';
+                failing = segmentRun;
+                break;
+            }
+            if (result.status !== 'passed' && status === 'passed')
+                status = result.status;
         }
-        catch (err) {
-            this.emit(ctx, {
-                type: 'VerificationCompleted',
-                work_item_id: node.id,
-                attempt_id: attemptId,
-                payload: { status: 'error', error: String(err) },
-            });
-            return null;
-        }
+        const failedSegment = failing
+            ? { index: failing.index, total: failing.total, command: failing.command, exit_code: failing.check?.exit_code ?? null }
+            : null;
         this.emit(ctx, {
             type: 'VerificationCompleted',
             work_item_id: node.id,
             attempt_id: attemptId,
-            payload: { status: result.status },
+            payload: { status, ...(failedSegment ? { failed_segment: failedSegment } : {}) },
         });
-        return { status: result.status, gaps: result.gaps, check: result.check_results?.[0] };
+        const last = ran[ran.length - 1];
+        return {
+            status,
+            gaps,
+            check: failing ? failing.check : last?.check,
+            segment: failedSegment,
+            segments: ran,
+        };
     }
     evaluatePolicyForNode(node, ctx) {
         if (!ctx.policyEngine)
@@ -905,13 +939,56 @@ function inferGateScope(node) {
 function tailLines(text, n) {
     return String(text || '').split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-n).join('\n');
 }
-/** What the next attempt needs to know about a failed task verify (1.20c informed retry). */
-function describeVerifyFailure(command, check, gaps) {
+/**
+ * Top-level `&&` segments of a verify command (quoted text is not split). Same rule as the dry-verify (OXB-018), so
+ * what the planner checks before execution is what runs after.
+ */
+function splitVerifySegments(command) {
+    const out = [];
+    let current = '';
+    let quote = null;
+    for (let i = 0; i < command.length; i += 1) {
+        const ch = command[i];
+        if (quote) {
+            if (ch === quote)
+                quote = null;
+        }
+        else if (ch === '"' || ch === "'") {
+            quote = ch;
+        }
+        else if (ch === '&' && command[i + 1] === '&') {
+            if (current.trim())
+                out.push(current.trim());
+            current = '';
+            i += 1;
+            continue;
+        }
+        current += ch;
+    }
+    if (current.trim())
+        out.push(current.trim());
+    return out.length ? out : [command];
+}
+/** Every segment's output with a header per segment, for the attempt log (`attempts/<Tn>-<n>.log`). */
+function buildVerifyLog(segments, maxLinesPerSegment = 120) {
+    return (segments ?? []).map((s) => {
+        const check = s.check;
+        const exit = check?.exit_code != null ? `exit ${check.exit_code}` : check?.error ? check.error : s.status;
+        const body = tailLines(`${check?.stdout ?? ''}\n${check?.stderr ?? ''}`, maxLinesPerSegment);
+        return `=== [${s.index}/${s.total}] ${s.command} — ${s.status} (${exit}) ===\n${body || '(sem saída)'}`;
+    }).join('\n\n');
+}
+function describeVerifyFailure(command, check, gaps, segment) {
     const reason = check?.error || (check?.exit_code != null ? `exit code ${check.exit_code}` : (gaps || []).join('; ') || 'checks did not pass');
+    // Only the failing segment's output: the tail of a passing earlier segment never reaches the executor (OXB-066).
     const output = tailLines(`${check?.stdout ?? ''}\n${check?.stderr ?? ''}`, 40);
+    const failingLine = segment && segment.total > 1
+        ? [`Failing segment [${segment.index}/${segment.total}]: ${segment.command}`, `(segments before it passed; the output below is only from this segment)`]
+        : [];
     return [
         'Verification failed after your previous attempt.',
         `Command: ${command ?? '(none)'}`,
+        ...failingLine,
         `Reason: ${reason}`,
         output ? `Output (last lines):\n${output.slice(-4000)}` : 'Output: (empty)',
         'Fix the code so this exact command passes. If you are certain the command itself is wrong (not the code), stop and call finish_task explaining why — do not work around it.',

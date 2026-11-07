@@ -1509,7 +1509,9 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
           const attempt = event.type === 'RetryScheduled' ? Number(event.payload.next_attempt) - 1 : Number(event.payload.max_attempts) || 'final';
           const logFile = path.join(projectRoot, '.oxe', 'runs', current.run_id, 'attempts', `${event.work_item_id}-${attempt}.log`);
           ensureDirForFile(logFile);
-          fs.writeFileSync(logFile, `${event.payload.output_tail}\n`, 'utf8');
+          // OXB-066: the retry text (failing segment only) plus every verify segment's output under its own header.
+          const segmentsLog = event.payload.verify_log ? `\n\n--- verify: saída de cada segmento ---\n${event.payload.verify_log}` : '';
+          fs.writeFileSync(logFile, `${event.payload.output_tail}${segmentsLog}\n`, 'utf8');
         } catch { /* log auxiliar */ }
       }
       // OXB-051: a task that failed for good is isolated (inplace): its attempt is saved and its scope restored, so the

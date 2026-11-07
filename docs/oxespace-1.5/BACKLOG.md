@@ -271,3 +271,25 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
   - Os outros números do scorecard parecem certos: `turns_on_finished_work` = 68, ou seja, tarefas `done` refeitas (OXB-053), e `post_green_crs` = 11, defeitos achados por revisão ou CI depois do verde.
 - **Impacto:** a métrica de maturidade que o `doctor --release` exige passa justamente na fase com mais retries. Isso enfraquece o critério de release do próprio oxe-build.
 - **Proposta:** calcular o `first_attempt_rate` por tarefa sobre todas as execuções da run (uma tarefa só conta se a 1ª tentativa da 1ª execução passou), excluir as tarefas fechadas à mão (`plan done`) e reportar à parte as tarefas externas.
+
+## OXB-066: o feedback do verify esconde o segmento que falhou num comando `a && b`
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 07/11, na 1.21.1 via `npx oxe-cc@1.21.1`. O verify da tarefa roda cada segmento `&&` sozinho, parando no primeiro que falha. O retry e o `output_tail` nomeiam o segmento que falhou (`Failing segment [2/2]: …`) e trazem só a saída dele. O `VerificationCompleted` leva `failed_segment {index,total,command,exit_code}`, e `attempts/<Tn>-<n>.log` guarda todos os segmentos com cabeçalho. Teste: `packages/runtime/tests/verify-segments.test.ts`.
+- **Evidência:** a run oxe-run-mw28b0n9-3s0gda, tarefa T13, tinha o verify `npx vitest run … && npx tsc --noEmit -p tsconfig.json`.
+  - O vitest passou (39/39) e o tsc falhou.
+  - O `output_tail` do WorkItemBlocked e todos os `attempts/T13-n.log` só têm a saída do vitest, mais "Fix the code so this exact command passes". O erro do tsc nunca aparece.
+  - Foram 4 tentativas, US$ 4,54 e 0 concluídas: o executor nunca viu o erro.
+- **Proposta:**
+  - no verify, rodar cada segmento do `&&` sozinho, como o dry-verify já faz (OXB-018);
+  - dizer qual segmento falhou;
+  - mandar ao executor o fim da saída desse segmento, nunca o fim do fluxo inteiro.
+
+## OXB-067: o rollback de uma tentativa falha deixa edições fora do escopo
+
+- **Status:** aberto (P1).
+- **Evidência:** na mesma run, o RollbackExecuted restaurou os 8 arquivos do escopo da T13.
+  - O executor também tinha editado `src/components/Threads/ThreadView.tsx`, que estava fora de `files`, porque o plano o esqueceu.
+  - Essa edição ficou na árvore.
+- **Proposta:**
+  - salvar em `attempts/<Tn>-failed` e restaurar também os arquivos alterados fora do escopo;
+  - emitir `scope_violation` nos eventos quando o executor edita fora de `files`.

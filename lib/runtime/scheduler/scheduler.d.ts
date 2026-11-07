@@ -16,6 +16,8 @@ export interface TaskResult {
     evidence: string[];
     output: string;
     completed_by?: string;
+    /** Every verify segment's output with headers (1.21.2, OXB-066), for the attempt log. */
+    verify_log?: string;
 }
 export interface TaskExecutor {
     execute(node: GraphNode, lease: WorkspaceLease, runId: string, attemptNumber: number, options?: {
@@ -108,6 +110,39 @@ export declare class Scheduler {
 /** Last `n` non-empty lines of a text. */
 export declare function tailLines(text: string, n: number): string;
 /** What the next attempt needs to know about a failed task verify (1.20c informed retry). */
-export declare function describeVerifyFailure(command: string | null | undefined, check: CheckResult | undefined, gaps?: string[]): string;
+/** One `&&` segment of a task verify, as run (1.21.2, OXB-066). */
+export interface VerifySegmentRun {
+    index: number;
+    total: number;
+    command: string;
+    status: string;
+    check?: CheckResult;
+}
+export interface VerifyNodeResult {
+    status: string;
+    gaps?: string[];
+    /** The failing segment's check (or the last one run). */
+    check?: CheckResult;
+    /** The segment that failed, when the verify has segments and one failed. */
+    segment?: {
+        index: number;
+        total: number;
+        command: string;
+        exit_code: number | null;
+    } | null;
+    segments?: VerifySegmentRun[];
+}
+/**
+ * Top-level `&&` segments of a verify command (quoted text is not split). Same rule as the dry-verify (OXB-018), so
+ * what the planner checks before execution is what runs after.
+ */
+export declare function splitVerifySegments(command: string): string[];
+/** Every segment's output with a header per segment, for the attempt log (`attempts/<Tn>-<n>.log`). */
+export declare function buildVerifyLog(segments: VerifySegmentRun[] | undefined, maxLinesPerSegment?: number): string;
+export declare function describeVerifyFailure(command: string | null | undefined, check: CheckResult | undefined, gaps?: string[], segment?: {
+    index: number;
+    total: number;
+    command: string;
+} | null): string;
 /** Normalized failure fingerprint: timings, timestamps, hashes and temp paths removed. */
 export declare function verifyFailureSignature(check: CheckResult | undefined): string | null;
