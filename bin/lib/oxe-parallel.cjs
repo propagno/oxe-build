@@ -35,6 +35,7 @@ function parallelConfig(projectRoot, options = {}) {
   const p = config.parallel && typeof config.parallel === 'object' ? config.parallel : {};
   const envMin = Number(process.env.OXE_EXECUTOR_MIN_FREE_MB) || 0;
   return {
+    projectRoot,
     maxParallel: Math.max(1, Number(options.maxParallel) || Number(p.max) || 2),
     minFreeMb: Number(p.min_free_mb) || envMin || 0,
     deps: {
@@ -111,6 +112,8 @@ function childEnv() {
 
 /** Prepares a fresh worktree's dependencies. Throws (the lease is disposed) when the result is not usable. */
 function prepareDeps(cfg, root) {
+  // OXB-163: machine-local files (worktree.copy_local) first — they matter even with deps_strategy none.
+  if (cfg.projectRoot) { try { require('./oxe-local-config.cjs').copyLocalFiles(cfg.projectRoot, root); } catch { /* auxiliar */ } }
   const strategy = cfg.deps.strategy;
   if (!strategy || strategy === 'none') return;
   const target = path.join(root, 'node_modules');

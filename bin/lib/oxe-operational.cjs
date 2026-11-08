@@ -1265,7 +1265,7 @@ function applyTaskGatesToGraph(projectRoot, artifactPaths, compiledGraph) {
   for (const node of nodeList) {
     const task = node && byId.get(node.id);
     if (!task) continue;
-    const commands = gatesLib.taskGateCommands(task, gates, config);
+    const commands = gatesLib.taskGateCommands({ ...task, verifyCommand: node.verify && node.verify.command }, gates, config);
     if (!commands.length) continue;
     node.verify = node.verify && typeof node.verify === 'object' ? node.verify : {};
     node.verify.command = gatesLib.withTaskGates(node.verify.command, commands);
@@ -4128,6 +4128,8 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     if (!add.ok) throw new Error(`não foi possível criar a worktree de ${branch}: ${add.stderr.trim()}`);
     gitRun(projectRoot, ['config', `branch.${branch}.oxePromote`, 'true']);
     work = wt;
+    // OXB-163: machine-local files (worktree.copy_local) pr:ready needs (gradle's local.properties, .env.local).
+    try { result.local_copied = require('./oxe-local-config.cjs').copyLocalFiles(projectRoot, wt).copied; } catch { /* auxiliar */ }
     result.worktree = path.relative(projectRoot, wt).replace(/\\/g, '/');
     // pr:ready needs the dependencies: a junction to the program's node_modules (or deps_link_from), never an install.
     let linked = false;
@@ -4655,6 +4657,9 @@ function runtimeProgramInitFrom(projectRoot, activeSession, options = {}) {
   if (!srcConfig.spec_ref && copyFile(src.spec, path.join(dstOxe, 'SPEC.md'))) copied.push('SPEC.md');
   if (!srcConfig.roadmap_ref && copyFile(src.roadmap, path.join(dstOxe, 'ROADMAP.md'))) copied.push('ROADMAP.md');
   if (!fs.existsSync(path.join(dstOxe, 'STATE.md'))) fs.writeFileSync(path.join(dstOxe, 'STATE.md'), `# STATE\n\nWorktree de fase paralela (de ${fromRoot}).\n`);
+  // OXB-163: machine-local files (gitignored) the new worktree needs to build: worktree.copy_local.
+  const localCopy = require('./oxe-local-config.cjs').copyLocalFiles(fromRoot, projectRoot);
+  for (const f of localCopy.copied) copied.push(`${f} (local da máquina)`);
   for (const name of ['changes.ndjson', 'signoffs.ndjson', 'decisions.ndjson']) if (copyFile(path.join(src.programDir, name), path.join(dstProgramDir, name))) copied.push(`program/${name}`);
   const closed = srcState.phases.filter((p) => p.status === 'closed').map((p) => p.id);
   for (const sub of ['regression', 'interfaces']) {

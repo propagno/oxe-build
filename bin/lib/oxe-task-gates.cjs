@@ -72,7 +72,12 @@ function taskGateCommands(task, gates, config = {}) {
     if (gate.runner) command = gate.runner.replace(/\{command\}/g, command);
     out.push({ id: `task-gate-${gate.id}`, command });
   }
-  const suites = Array.isArray(task.affected_suites) ? task.affected_suites.filter(Boolean).map(String) : [];
+  // OXB-162: a suite the task's own verify already runs is not run twice (F4-T1: the same four files ran in segment
+  // 2/4 and again in the suite segment 4/4).
+  const verifyText = [task.verifyCommand, task.verify && task.verify.command, ...((task.verify && Array.isArray(task.verify.commands)) ? task.verify.commands : [])]
+    .filter(Boolean).join(' ').replace(/\\/g, '/');
+  const named = (s) => { const p = s.replace(/\\/g, '/').replace(/^\.\//, ''); return verifyText.split(/[\s"']+/).some((tok) => tok.replace(/^\.\//, '') === p); };
+  const suites = (Array.isArray(task.affected_suites) ? task.affected_suites.filter(Boolean).map(String) : []).filter((s) => !named(s));
   const template = typeof config.task_suite_command === 'string' && config.task_suite_command.includes('{suites}') ? config.task_suite_command : null;
   if (suites.length && template) out.push({ id: 'affected-suites', command: template.replace(/\{suites\}/g, suites.map(quoteArg).join(' ')) });
   return out;

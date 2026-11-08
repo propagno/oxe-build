@@ -113,3 +113,20 @@ describe('OXB-048: task_gates', () => {
     assert.ok(out.warnings.some((w) => /T5: affected_suites declarado, mas .* task_suite_command/.test(w)));
   });
 });
+
+describe('OXB-162: the suite segment skips files the task verify already runs', () => {
+  it('suites named in the verify are dropped; the rest still run; all named → no suite segment', () => {
+    const config = { task_suite_command: 'npx vitest run {suites}' };
+    const verify = 'npx vitest run tests/integration/migrations.test.ts tests/integration/thread-worktree-lifecycle.test.ts';
+    const task = { id: 'T1', files: ['electron/main/db/migrations/093.ts'], affected_suites: ['tests/integration/migrations.test.ts', 'tests/integration/thread-worktree-lifecycle.test.ts', 'tests/integration/backup.test.ts'], verify: { command: verify } };
+    const cmds = gates.taskGateCommands(task, [], config);
+    assert.equal(cmds.length, 1);
+    assert.match(cmds[0].command, /^npx vitest run ["']?tests\/integration\/backup\.test\.ts["']?$/);
+    assert.doesNotMatch(cmds[0].command, /migrations|lifecycle/);
+    const all = gates.taskGateCommands({ ...task, affected_suites: task.affected_suites.slice(0, 2) }, [], config);
+    assert.deepEqual(all, []);
+    // the graph path passes the node's verify as verifyCommand
+    const viaNode = gates.taskGateCommands({ id: 'T1', files: task.files, affected_suites: ['./tests/integration/migrations.test.ts'], verifyCommand: verify }, [], config);
+    assert.deepEqual(viaNode, []);
+  });
+});

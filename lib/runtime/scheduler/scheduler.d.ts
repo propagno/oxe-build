@@ -142,8 +142,9 @@ export declare class Scheduler {
     private consumeRetryQuota;
     private emit;
 }
-/** Last `n` non-empty lines of a text. */
 export declare function tailLines(text: string, n: number): string;
+/** OXB-162: the test files a segment names (`x.test.ts`, `y.spec.js`, JVM `--tests` excluded). */
+export declare function segmentTestFiles(command: string): string[];
 /** What the next attempt needs to know about a failed task verify (1.20c informed retry). */
 /** One `&&` segment of a task verify, as run (1.21.2, OXB-066). */
 export interface VerifySegmentRun {
@@ -152,6 +153,8 @@ export interface VerifySegmentRun {
     command: string;
     status: string;
     check?: CheckResult;
+    /** OXB-162: failed after an earlier segment of the same attempt passed the same files; rerun once. */
+    flaky_suspect?: boolean;
 }
 export interface VerifyNodeResult {
     status: string;

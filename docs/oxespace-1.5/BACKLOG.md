@@ -1075,3 +1075,33 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - `--hold-deps` (também no `execute --promote-each`) espera o merge em vez de empilhar. Emite `TaskPromoteHeld`, refaz o fetch da base a cada minuto e desiste depois de 6 h, com o PR nomeado.
   - Com o pr:ready vermelho, a mensagem e os comandos impressos mantêm `--base main`, nunca a branch da dependência.
   - Teste: `tests/oxe-1212-promote-stacked.test.cjs`.
+
+## OXB-162: a suíte repetia os arquivos do verify, falhava, e a cauda da saída escondia o erro
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (F4-T1, run oxe-run-mw855cc1-yap7sx, rc.24, tentativa 3, US$ 5,29).
+  - O que aconteceu: o segmento 2/4 rodou quatro arquivos vitest e passou. O segmento 4/4 (`task_suite_command` com `affected_suites`) rodou os mesmos quatro arquivos e falhou, e a tarefa foi bloqueada. A cauda da saída tinha só os avisos "LF will be replaced by CRLF" do git.
+  - O segmento da suíte não repete as `affected_suites` que o verify da própria tarefa já roda. Se todas já rodam, o segmento não existe.
+  - Um segmento que falha sobre o mesmo comando, ou sobre arquivos de teste que um segmento anterior **da mesma tentativa** passou, roda de novo uma vez e é marcado `flaky_suspect` (evento `VerifyCommandSuspect` com `reason: flaky_suspect`, e a marca no log da tentativa). Se passar, a tarefa segue. Se falhar de novo, a tarefa falha como antes.
+  - A cauda da saída descarta as linhas de fim de linha do git. Quando o resumo empurra o bloco do teste que falhou para fora da cauda, o último bloco (FAIL/×/not ok/AssertionError) entra antes dela.
+  - Teste: `packages/runtime/tests/verify-flaky.test.ts` e `tests/oxe-1212-task-gates.test.cjs`.
+
+## OXB-163: a worktree nova sem a config local da máquina (local.properties)
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11: o dry-verify da F10 reprovou todo `:app:testDebugUnitTest` com "SDK location not found … local.properties", porque a worktree nova não tem o `mobile/android/local.properties` (gitignored) com o `sdk.dir`.
+  - Arquivos listados em `worktree.copy_local` são copiados pelo `program init --from`, pela worktree temporária do `promote` e pelas worktrees do `--parallel-mutating`.
+    - Por padrão nada é copiado, porque um arquivo local pode ter segredos. Só vai o que o projeto lista.
+    - Um arquivo versionado ou que já existe no destino nunca é sobrescrito.
+  - No dry-verify, "SDK location not found", `ANDROID_HOME`, `ANDROID_SDK_ROOT` e `sdk.dir` viram o veredito `environment` (erro de ambiente, com a dica de `copy_local` ou `ANDROID_HOME`), não `broken_command`. Esse veredito não fica no cache de retomada.
+  - Teste: `tests/oxe-1212-local-config.test.cjs`.
+
+## OXB-164: promote reaproveita a própria branch publicada sem PR, limpa depois de ser morto e mostra progresso
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (rc.26).
+  - **Branch publicada sem PR:** a recusa obrigava a inventar nomes, e `oxe/promote-tN` velhas acumulavam (o time não apaga branches).
+    - Agora a branch é refeita e publicada com `--force-with-lease` sobre o sha atual, se: foi criada por um promote (a marca `branch.<b>.oxePromote` ou um evento `TaskPromote*` com ela), todos os commits depois da base são do promote, e o `gh pr list --head <b> --state all` não acha PR.
+    - Com PR (qualquer estado), sem resposta do gh, ou com commits de outra origem, ela continua recusada.
+  - **Promote morto no meio:** um promote morto durante o pr:ready deixou `.oxe/promote-ws/t3-*` com o junction do node_modules.
+    - O promote grava `<worktree>.pid`. O próximo promote varre as worktrees de pid morto (sem pid: mais de 30 min): desfaz os links **primeiro**, confere que não sobrou link, e só então remove.
+    - Ctrl+C ou SIGTERM durante o promote limpam a própria worktree. Um kill duro (Windows) é varrido no próximo promote.
+  - **pr:ready longo (10+ min):** roda com progresso no stderr. Uma linha por script npm que começa (`pr:ready: lint ok (42s) · ▶ typecheck`), batimento a cada minuto e o veredito com o tempo. `OXE_PROGRESS=0` desliga, e `OXE_PROGRESS_HEARTBEAT_MS` ajusta o batimento.
+  - Teste: `tests/oxe-1212-promote-reuse.test.cjs`.

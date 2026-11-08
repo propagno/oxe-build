@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.Scheduler = void 0;
 exports.scopesOverlap = scopesOverlap;
 exports.tailLines = tailLines;
+exports.segmentTestFiles = segmentTestFiles;
 exports.splitVerifySegments = splitVerifySegments;
 exports.buildVerifyLog = buildVerifyLog;
 exports.describeVerifyFailure = describeVerifyFailure;
@@ -874,7 +875,45 @@ class Scheduler {
                 });
                 return null;
             }
-            const segmentRun = { index: index + 1, total: segments.length, command, status: result.status, check: result.check_results?.[0] };
+            let segmentRun = { index: index + 1, total: segments.length, command, status: result.status, check: result.check_results?.[0] };
+            // OXB-162: the same command, or test files an earlier segment of THIS attempt already passed, failing now is a
+            // flaky suspect: rerun once; green → continue (marked), red → the task fails as before.
+            if (result.status === 'failed') {
+                const files = segmentTestFiles(command);
+                const earlier = ran.find((r) => r.status === 'passed' && (r.command === command || (files.length > 0 && files.every((f) => segmentTestFiles(r.command).includes(f)))));
+                if (earlier) {
+                    let rerun = null;
+                    try {
+                        rerun = await (0, verification_compiler_1.verifyRun)({
+                            suite: { ...suite, checks: suite.checks.map((c) => ({ ...c, id: `${c.id}-rerun` })) },
+                            cwd: lease.root_path,
+                            timeoutMs: ctx.options?.verifyTimeoutMs ?? 600000,
+                            runId: ctx.runId,
+                            workItemId: node.id,
+                            attemptNumber: attempt,
+                            projectRoot: ctx.projectRoot,
+                            pluginRegistry: ctx.pluginRegistry,
+                        });
+                    }
+                    catch {
+                        rerun = null;
+                    }
+                    const green = rerun?.status === 'passed';
+                    this.emit(ctx, {
+                        type: 'VerifyCommandSuspect',
+                        work_item_id: node.id,
+                        attempt_id: attemptId,
+                        payload: { attempt_number: attempt, command, reason: 'flaky_suspect', passed_before_in: earlier.index, rerun: green ? 'passed' : 'failed', excerpt: tailLines(`${segmentRun.check?.stdout ?? ''}\n${segmentRun.check?.stderr ?? ''}`, 12) },
+                    });
+                    if (green && rerun) {
+                        result = rerun;
+                        segmentRun = { ...segmentRun, status: 'passed', check: rerun.check_results?.[0], flaky_suspect: true };
+                    }
+                    else {
+                        segmentRun = { ...segmentRun, flaky_suspect: true };
+                    }
+                }
+            }
             ran.push(segmentRun);
             gaps.push(...(result.gaps ?? []));
             if (result.status === 'failed') {
@@ -1066,8 +1105,36 @@ function inferGateScope(node) {
     return 'plan_approval';
 }
 /** Last `n` non-empty lines of a text. */
+/** OXB-162: git's line-ending notices — they filled F4-T1's whole output tail and hid the failing test. */
+const GIT_EOL_NOTICE_RE = /^\s*warning: (in the working copy of .*(LF|CRLF) will be replaced|(LF|CRLF) will be replaced by (CRLF|LF))/i;
+/** A failing-test block start (vitest/jest/node:test/mocha/JUnit). */
+const FAIL_BLOCK_RE = /^\s*(FAIL\b|×|✗|✖|not ok\b|\d+\) |●\s)/;
+const FAIL_ERROR_RE = /AssertionError|Error: expect/;
 function tailLines(text, n) {
-    return String(text || '').split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-n).join('\n');
+    const lines = String(text || '').split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.trim() && !GIT_EOL_NOTICE_RE.test(l));
+    const tail = lines.slice(-n);
+    // OXB-162: the last failing-test block, when the tail (summary lines, noise) does not reach it.
+    let lastFail = -1;
+    for (let i = lines.length - 1; i >= 0; i -= 1)
+        if (FAIL_BLOCK_RE.test(lines[i])) {
+            lastFail = i;
+            break;
+        }
+    if (lastFail < 0)
+        for (let i = lines.length - 1; i >= 0; i -= 1)
+            if (FAIL_ERROR_RE.test(lines[i])) {
+                lastFail = i;
+                break;
+            }
+    if (lastFail >= 0 && lastFail < lines.length - n) {
+        const block = lines.slice(lastFail, Math.min(lastFail + Math.max(10, Math.floor(n / 2)), lines.length - n));
+        return [...block, '…', ...tail.slice(-Math.max(1, n - block.length - 1))].join('\n');
+    }
+    return tail.join('\n');
+}
+/** OXB-162: the test files a segment names (`x.test.ts`, `y.spec.js`, JVM `--tests` excluded). */
+function segmentTestFiles(command) {
+    return [...new Set((String(command).match(/[\w./\\-]+\.(?:test|spec)\.[cm]?[jt]sx?\b/g) || []).map((f) => f.replace(/\\/g, '/').replace(/^\.\//, '')))].sort();
 }
 /**
  * Top-level `&&` segments of a verify command (quoted text is not split). Same rule as the dry-verify (OXB-018), so
@@ -1105,7 +1172,7 @@ function buildVerifyLog(segments, maxLinesPerSegment = 120) {
         const check = s.check;
         const exit = check?.exit_code != null ? `exit ${check.exit_code}` : check?.error ? check.error : s.status;
         const body = tailLines(`${check?.stdout ?? ''}\n${check?.stderr ?? ''}`, maxLinesPerSegment);
-        return `=== [${s.index}/${s.total}] ${s.command} — ${s.status} (${exit}) ===\n${body || '(sem saída)'}`;
+        return `=== [${s.index}/${s.total}] ${s.command} — ${s.status} (${exit})${s.flaky_suspect ? ' · flaky_suspect (repetido: passou antes nesta tentativa)' : ''} ===\n${body || '(sem saída)'}`;
     }).join('\n\n');
 }
 function describeVerifyFailure(command, check, gaps, segment) {

@@ -81,6 +81,8 @@ function targetForms(file, projectRoot = null) {
 
 function classifyFailure(output, targets, options = {}) {
   const text = String(output || '');
+  // OXB-163: the machine's environment (no Android SDK location in a fresh worktree), not the plan.
+  if (require('./oxe-local-config.cjs').LOCAL_ENV_ERROR_RE.test(text)) return 'environment';
   // `\` and `\\` (JSON-escaped paths in some runners) both become `/`.
   const normalized = text.replace(/\\+/g, '/');
   // OXB-040: per file. "Missing target" when the output names a target (or its directory) that does not exist yet;
@@ -167,7 +169,7 @@ function junitReportsSince(root, since) {
   return parts.join('\n');
 }
 
-const SEVERITY = { external_pending: 0, already_green: 0, missing_target: 1, assertion_red: 1, timeout: 3, broken_command: 4, not_a_command: 5, unsafe_command: 6 };
+const SEVERITY = { external_pending: 0, already_green: 0, missing_target: 1, assertion_red: 1, timeout: 3, environment: 3.5, broken_command: 4, not_a_command: 5, unsafe_command: 6 };
 const unsafeLib = require('./oxe-unsafe-commands.cjs');
 /** OXB-147: a segment the dry-verify must never run (it would change node_modules / git) or cannot run (prose). */
 const refusal = (segment) => (unsafeLib.unsafeReason(segment) ? 'unsafe_command' : unsafeLib.looksLikeProse(segment) ? 'not_a_command' : null);
@@ -519,6 +521,7 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
     if (singleQuoted) warnings.push(`${task.id}: o verify usa aspas simples — no Windows (cmd.exe) elas não agrupam o argumento; use aspas duplas`);
     if (verdict === 'unsafe_command' || verdict === 'not_a_command') errors.push(...unsafeLib.verifyCommandProblems(task.id, task.verifyCommand, splitSegments));
     else if (verdict === 'broken_command') errors.push(`${task.id}: comando de verificação falha por outro motivo que não o alvo ausente — corrija o plano antes de executar${singleQuoted ? ' (provável causa: aspas simples no Windows — troque por aspas duplas)' : ''}: ${excerpt}`);
+    else if (verdict === 'environment') errors.push(`${task.id}: erro de AMBIENTE, não do plano: ${excerpt} — numa worktree nova falta a config local da máquina (ex.: mobile/android/local.properties com sdk.dir). Liste-a em "worktree": { "copy_local": [...] } no .oxe/config.json (o program init --from e o promote copiam) ou defina ANDROID_HOME`);
     else if (verdict === 'timeout') errors.push(`${task.id}: comando de verificação passou de ${Math.round(timeoutMs / 1000)}s sem terminar`);
     else if (verdict === 'already_green') warnings.push(`${task.id}: verificação já passa antes da tarefa — não prova o trabalho dela`);
   }
