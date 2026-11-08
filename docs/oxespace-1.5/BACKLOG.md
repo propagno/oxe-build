@@ -1143,3 +1143,11 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - Um caminho do escopo que não existe nem no disco nem no git vira `scope_absent` no resultado, não erro.
   - O promote não usa o escopo como pathspec: escolhe commits.
   - Teste: `tests/oxe-1212-checkpoint-phase.test.cjs` (escopo com caminhos que a T7 já removeu, arquivo novo, alterado, apagado e uma remoção já staged, tudo num commit; e `scope_absent`).
+
+## OXB-169: promote na ordem dos commits (tarefas commitadas fora da ordem do plano)
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (F2, rc.29): o retry de checkpoint commitou a T4 e a T5 **depois** da T6 e da T7, e o `promote T4` sobre a oxe/f2-t3 deu conflito em `tests/integration/fs-allowlist.test.ts`. O diff da T4 já supunha as remoções da T6 e da T7. Os quatro commits em ordem de commit aplicaram limpos (PR #727).
+  - `runtime promote --tasks T4,T5,T6,T7` monta **uma** branch com os commits das tarefas na ordem do histórico, não na do plano. Leva os testes congelados de todas e um corpo de PR com cada tarefa. As dependências fora do conjunto continuam empilhando (OXB-161).
+  - Promote de uma tarefa só: se commits de outras tarefas, não promovidos, vêm **antes** dos dela e mexem nos mesmos arquivos, sai um aviso com a sugestão `--tasks …`. A mensagem de conflito também nomeia as tarefas e o comando combinado.
+  - `plan lint` avisa quando o commit de uma tarefa veio antes do de uma tarefa da qual ela depende.
+  - Teste: `tests/oxe-1212-promote-commit-order.test.cjs` (T2 commitada antes da T1: a T1 sozinha conflita e o aviso nomeia a T2; `--tasks T1,T2` aplica sem conflito, em ordem de commit; aviso do lint).

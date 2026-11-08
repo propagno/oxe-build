@@ -5702,9 +5702,9 @@ async function runRuntime(opts) {
     return;
   }
 
-  if (opts.action === 'promote' && opts.task) {
+  if (opts.action === 'promote' && (opts.task || opts.tasks)) {
     try {
-      const out = oxeOperational.runtimePromote(opts.dir, activeSession, { task: opts.task, base: opts.baseBranch || null, branch: opts.branch, remote: opts.remote || 'origin', openPr: Boolean(opts.openPr), prReady: !opts.noPrReady, inPlace: Boolean(opts.inPlace), holdDeps: Boolean(opts.holdDeps) });
+      const out = oxeOperational.runtimePromote(opts.dir, activeSession, { task: opts.task, tasks: opts.tasks || null, base: opts.baseBranch || null, branch: opts.branch, remote: opts.remote || 'origin', openPr: Boolean(opts.openPr), prReady: !opts.noPrReady, inPlace: Boolean(opts.inPlace), holdDeps: Boolean(opts.holdDeps) });
       if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimePromoteSchema: 1, ...out }, null, 2));
       else if (out.conflict) console.log(`  ${red}✗${reset} ${out.error}`);
       else {

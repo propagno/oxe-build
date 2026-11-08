@@ -678,6 +678,30 @@ function promoteStack(projectRoot, activeSession, task, ctx) {
   return { baseSha, stack, warnings };
 }
 
+/**
+ * OXB-169: tasks whose commits (in range, not in this promote) come BEFORE this promote's first commit and touch the
+ * same files — the diff being promoted was made on top of them.
+ * @returns {Array<{ task: string, sha: string, files: string[] }>}
+ */
+function promoteAssumedTasks(projectRoot, range, ordered, idSet, phaseCtx) {
+  if (!ordered.length) return [];
+  const all = gitLines(projectRoot, ['rev-list', '--reverse', '--topo-order', range]) || [];
+  const firstIdx = all.indexOf(ordered[0]);
+  if (firstIdx <= 0) return [];
+  const filesOf = (sha) => gitLines(projectRoot, ['show', '--name-only', '--format=', sha]) || [];
+  const ours = new Set(ordered.flatMap(filesOf));
+  const out = [];
+  for (const sha of all.slice(0, firstIdx)) {
+    const body = (gitRun(projectRoot, ['log', '-1', '--format=%B', sha]).stdout) || '';
+    const m = /^OXE-Task: (?:(F\d+)\/)?(T\d+)\s*$/m.exec(body);
+    if (!m || idSet.has(m[2])) continue;
+    if (phaseCtx && phaseCtx.phase && m[1] && m[1] !== phaseCtx.phase) continue;
+    const shared = filesOf(sha).filter((f) => ours.has(f));
+    if (shared.length) out.push({ task: m[2], sha, files: shared });
+  }
+  return out;
+}
+
 /** OXB-160: the tests' own tree for a frozen test file: up to its tests/test/__tests__/spec/e2e dir, else its own dir. */
 function promoteTestRoot(file) {
   const parts = String(file).replace(/\\/g, '/').split('/');
@@ -3280,6 +3304,21 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     }
     result.ok = result.errors.length === 0;
   }
+  // OXB-169: a task committed BEFORE a task it depends on — the promote stacks by plan order and its cherry-pick
+  // conflicts; promote them together (--tasks) in commit order.
+  try {
+    const { doc: pj } = readPlanJsonDoc(projectRoot, activeSession);
+    const done = new Map(((pj && pj.tasks) || []).filter((t) => t && t.done && t.done_commit).map((t) => [t.id, t]));
+    for (const t of done.values()) {
+      for (const dep of t.depends_on || []) {
+        const d = done.get(dep);
+        if (!d || d.done_commit === t.done_commit) continue;
+        if (gitRun(projectRoot, ['merge-base', '--is-ancestor', t.done_commit, d.done_commit]).ok) {
+          result.warnings.push(`${t.id} depende de ${dep}, mas o commit de ${t.id} (${String(t.done_commit).slice(0, 8)}) veio antes do de ${dep} (${String(d.done_commit).slice(0, 8)}) — o promote encadeado pode conflitar; promova junto: oxe-cc runtime promote --tasks ${dep},${t.id}`);
+        }
+      }
+    }
+  } catch { /* auxiliar */ }
   result.ok = result.errors.length === 0;
   return { ...result, source: plan.source, tasks: plan.tasks.length, phase: phase ? phase.id : null, plan_json: hasJson ? jsonPath : null, dry_verify: dryVerify ? dryVerify.results : null };
 }
@@ -4053,8 +4092,12 @@ function runtimeSync(projectRoot, activeSession, options = {}) {
  * when there is one; writes the PR body from the task and its CRs. Push + `gh pr create` only with `--open-pr`.
  */
 function runtimePromote(projectRoot, activeSession, options = {}) {
-  const taskId = String(options.task || '').trim().toUpperCase();
-  if (!/^T\d+$/.test(taskId)) throw new Error('informe a tarefa: oxe-cc runtime promote T<n> --base main');
+  // OXB-169: `--tasks T4,T5,T6,T7` builds ONE branch from the tasks' commits in commit order (the execute may commit
+  // them out of plan order — a checkpoint retry committed T4/T5 after T6/T7, and T4's diff assumed theirs).
+  const taskIds = [...new Set((options.tasks ? (Array.isArray(options.tasks) ? options.tasks : String(options.tasks).split(',')) : [options.task])
+    .map((t) => String(t || '').trim().toUpperCase()).filter(Boolean))];
+  if (!taskIds.length || !taskIds.every((t) => /^T\d+$/.test(t))) throw new Error('informe a tarefa: oxe-cc runtime promote T<n> --base main  (ou --tasks T4,T5,…)');
+  const taskId = taskIds.join('-');
   if (!gitLines(projectRoot, ['rev-parse', '--git-dir'])) throw new Error('runtime promote exige um repositório git');
   // OXB-157: `--base main` used the LOCAL main (11 days old) — the PR conflicted on files identical on origin/main.
   const resolvedBase = resolvePromoteBase(projectRoot, options.base, String(options.remote || 'origin'), options);
@@ -4069,27 +4112,44 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   let baseSha = (gitLines(projectRoot, ['rev-parse', '--verify', `${base}^{commit}`]) || [])[0];
   if (!baseSha) throw new Error(`base desconhecida: ${base}`);
   const { doc } = readPlanJsonDoc(projectRoot, activeSession);
-  const task = doc && Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
-  if (!task) throw new Error(`${taskId} não está no PLAN.json`);
-  if (task.done !== true) throw new Error(`${taskId} não está done — só uma tarefa concluída e verde é promovida`);
+  const planTasks = taskIds.map((id) => {
+    const t = doc && Array.isArray(doc.tasks) ? doc.tasks.find((x) => x && x.id === id) : null;
+    if (!t) throw new Error(`${id} não está no PLAN.json`);
+    if (t.done !== true) throw new Error(`${id} não está done — só uma tarefa concluída e verde é promovida`);
+    return t;
+  });
+  const idSet = new Set(taskIds);
+  // One task: itself. Several: their union — files, criteria, and the dependencies OUTSIDE the set (for stacking).
+  const task = planTasks.length === 1 ? planTasks[0] : {
+    id: taskId,
+    title: planTasks.map((t) => `${t.id} ${t.title || ''}`.trim()).join(' · '),
+    files: [...new Set(planTasks.flatMap((t) => t.files || []))],
+    acceptance: [...new Set(planTasks.flatMap((t) => t.acceptance || []))],
+    depends_on: [...new Set(planTasks.flatMap((t) => t.depends_on || []))].filter((d) => !idSet.has(d)),
+    done: true,
+  };
   // Commits of the task not yet in the base: its checkpoints and the frozen tests of its criteria.
   const range = `${baseSha}..HEAD`;
   // OXB-166: by phase + task; with a done_commit, the phase-less legacy trailers are not searched at all.
   const phaseCtx = taskPhaseContext(projectRoot, activeSession);
-  const shas = new Set(task.done_commit && phaseCtx.phase
-    ? (gitLines(projectRoot, ['log', '--format=%H', '-E', `--grep=^OXE-Task: ${phaseCtx.phase}/${taskId}$`, range]) || [])
-    : taskCommitShas(projectRoot, taskId, range, phaseCtx));
-  if (task.done_commit) {
-    const inRange = gitLines(projectRoot, ['rev-list', range]) || [];
-    const full = (gitLines(projectRoot, ['rev-parse', '--verify', `${task.done_commit}^{commit}`]) || [])[0];
-    if (full && inRange.includes(full)) shas.add(full);
+  const shas = new Set();
+  const inRangeAll = gitLines(projectRoot, ['rev-list', range]) || [];
+  for (const t of planTasks) {
+    const own = t.done_commit && phaseCtx.phase
+      ? (gitLines(projectRoot, ['log', '--format=%H', '-E', `--grep=^OXE-Task: ${phaseCtx.phase}/${t.id}$`, range]) || [])
+      : taskCommitShas(projectRoot, t.id, range, phaseCtx);
+    for (const sha of own) shas.add(sha);
+    if (t.done_commit) {
+      const full = (gitLines(projectRoot, ['rev-parse', '--verify', `${t.done_commit}^{commit}`]) || [])[0];
+      if (full && inRangeAll.includes(full)) shas.add(full);
+    }
   }
   const criteria = new Set(Array.isArray(task.acceptance) ? task.acceptance : []);
   // OXB-156: the PR carries (a) the task's OWN commits (OXE-Task trailer / done_commit) and (b) the frozen tests it
   // proves, taken as FILES from the program tip (+ the local fixtures they import) — never the program branch's import
   // commits, which also carry other tasks' and parked tests (F2-T1: a conflict on tests/acceptance/parked-f3/…).
   const testFiles = [...new Set((Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])
-    .filter((a) => a && (a.task === taskId || (!a.task && criteria.has(a.criterion))))
+    .filter((a) => a && ((a.task && idSet.has(a.task)) || (!a.task && criteria.has(a.criterion))))
     .flatMap((a) => a.files || []))];
   if (!shas.size && !testFiles.length) throw new Error(`${taskId}: nenhum commit da tarefa fora de ${base} (sem trailer OXE-Task/done_commit em ${base}..HEAD) — já está na base?`);
   const programTip = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
@@ -4109,6 +4169,9 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     return [...out];
   })();
   const ordered = (gitLines(projectRoot, ['rev-list', '--reverse', '--topo-order', range]) || []).filter((sha) => shas.has(sha));
+  // OXB-169: other tasks' unpromoted commits BEFORE this task's, on the same files — this diff assumes them; the
+  // cherry-pick will likely conflict. Name them and the combined promote.
+  const assumed = promoteAssumedTasks(projectRoot, range, ordered, idSet, phaseCtx);
   const original = (gitLines(projectRoot, ['rev-parse', '--abbrev-ref', 'HEAD']) || [])[0];
   const originalSha = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
   const branch = String(options.branch || `oxe/promote-${taskId.toLowerCase()}`).trim();
@@ -4143,6 +4206,9 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   const stack = stackInfo.stack;
   const buildSha = stack ? stack.sha : baseSha;
   resolvedBase.warnings = [...(resolvedBase.warnings || []), ...stackInfo.warnings];
+  if (assumed.length && !stack) {
+    resolvedBase.warnings.push(`${taskId} vem depois de ${assumed.map((a) => `${a.task} (${a.sha.slice(0, 8)})`).join(', ')} no histórico e mexe nos mesmos arquivos (${[...new Set(assumed.flatMap((a) => a.files))].slice(0, 4).join(', ')}) — o cherry-pick pode conflitar; promova junto: oxe-cc runtime promote --tasks ${[...new Set([...assumed.map((a) => a.task), ...taskIds])].join(',')}`);
+  }
   const result = { task: taskId, base, base_sha: baseSha, ...(stack ? { stacked_on: { task: stack.task, branch: stack.branch, pr: stack.pr || null, sha: stack.sha } } : {}), base_requested: resolvedBase.requested, warnings: resolvedBase.warnings, branch, commits: ordered, conflict: null, pr_ready: null, body_file: null, pr: null, commands: [], worktree: null, ...(replacedBranch ? { replaced_branch: replacedBranch } : {}), ...(forceLease ? { replaced_remote: forceLease } : {}) };
   // Where the branch is built: a temporary worktree (default) or, with --in-place, the program checkout.
   let work = projectRoot;
@@ -4202,7 +4268,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
         const files = gitLines(work, ['diff', '--name-only', '--diff-filter=U']) || [];
         gitRun(work, ['cherry-pick', '--abort']);
         result.conflict = { commit: sha, files };
-        result.error = `conflito no cherry-pick de ${sha.slice(0, 8)} (${files.join(', ') || 'sem arquivos'}) — branch ${branch} descartada; resolva à mão ou rode runtime sync --from ${base} antes`;
+        result.error = `conflito no cherry-pick de ${sha.slice(0, 8)} (${files.join(', ') || 'sem arquivos'}) — branch ${branch} descartada; ${assumed.length ? `a tarefa depende de commits de ${assumed.map((a) => a.task).join(', ')} feitos antes dela: promova junto (--tasks ${[...new Set([...assumed.map((a) => a.task), ...taskIds])].join(',')}) — ` : ''}ou resolva à mão / rode runtime sync --from ${base} antes`;
         break;
       }
     }
