@@ -2608,6 +2608,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime verify [--no-gates]
   npx oxe-cc runtime scorecard [--since <data>] [--write] [--release-report <arquivo> --name <projeto>] [--json]
   npx oxe-cc runtime ci --attach <run-id|url> [--repo owner/repo] [--head <sha>]
+  npx oxe-cc runtime program budget [--mode cap|track_only] [--budget-usd N] [--budget-turns N] --by <papel> --reason "…"
   npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"] [--no-gates] [--accept-drift <glob> --by <papel> --reason "…"]
   npx oxe-cc runtime sync --from origin/main [--no-fetch] [--no-reverify]   (merge local; reverify das tarefas done tocadas pela base)
   npx oxe-cc runtime promote T<n> --base main [--branch <nome>] [--open-pr] [--remote origin] [--no-pr-ready]
@@ -5148,6 +5149,18 @@ async function runRuntime(opts) {
       }
       if (sub === 'start') {
         printStatus(oxeOperational.runtimeProgramStart(opts.dir, activeSession, opts.phase || null));
+        return;
+      }
+      // OXB-036: program budget policy (cap | track_only) with history.
+      if (sub === 'budget') {
+        const out = oxeOperational.runtimeProgramBudget(opts.dir, activeSession, { mode: opts.mode, usd: opts.budgetUsd, turns: opts.budgetTurns, by: opts.by, reason: opts.reason });
+        if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeProgramBudgetSchema: 1, ...out }, null, 2)); return; }
+        const p = out.policy;
+        if (!p) console.log(`  ${c ? dim : ''}Sem política de orçamento no programa${c ? reset : ''} — vale o budget de cada PLAN.json / flags. Defina: oxe-cc runtime program budget --mode cap --budget-usd 275 --by <papel> --reason "…"`);
+        else {
+          console.log(`  ${c ? green : ''}${out.changed ? '✓ ' : ''}Orçamento do programa:${c ? reset : ''} ${p.mode === 'track_only' ? 'track_only (sem teto; o gasto é registrado)' : `cap${p.usd ? ` US$ ${p.usd}` : ''}${p.turns ? ` ${p.turns} turnos` : ''}`} — ${p.decided_by}, ${String(p.decided_at).slice(0, 16).replace('T', ' ')}`);
+          for (const h of (p.history || []).slice(-5)) console.log(`    ${String(h.at).slice(0, 16).replace('T', ' ')} ${h.mode}${h.usd ? ` US$ ${h.usd}` : ''}${h.turns ? ` ${h.turns}t` : ''} — ${h.by}: ${h.reason}`);
+        }
         return;
       }
       if (sub === 'close') {

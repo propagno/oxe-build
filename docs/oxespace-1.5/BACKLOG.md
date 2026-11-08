@@ -65,7 +65,12 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-036: decisões de orçamento mudam no meio do programa
 
-- **Status:** proposta.
+- **Status:** resolvido (1.21.2).
+  - `oxe-cc runtime program budget --mode cap|track_only [--budget-usd N] [--budget-turns N] --by <papel> --reason "…"` grava a política em `PROGRAM.json` (`budget_policy`) com o histórico (quem, o quê, quando, por quê) e um `program_edit` em `changes.ndjson`. Sem `--mode`, mostra a política e as últimas decisões.
+  - **`cap`:** o teto vale para toda run de toda fase, acima do teto anterior do ledger e do `budget` do PLAN.json, sem editar cada plano.
+  - **`track_only`:** sem teto, e o teto anterior da mesma run cai na hora. O ledger continua registrando o gasto (para o scorecard), e as proteções contra laço (régua de suspeita, turnos máximos por tentativa) continuam.
+  - Uma flag explícita do execute (`--budget-usd`/`--budget-turns`) sempre vale.
+  - Teste: `tests/oxe-1212-budget-policy.test.cjs`.
 - **Evidência:**
   - o usuário aprovou um teto de US$ 275 por fases e, horas depois, removeu o teto ("o valor final é o produto funcional").
   - Hoje o orçamento vive em flags do `execute` ou no `budget` de cada PLAN.json.

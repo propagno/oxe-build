@@ -1572,11 +1572,18 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
       const planFiles = planTask && Array.isArray(planTask.files) ? planTask.files.map((p) => String(p).replace(/\\/g, '/')) : [];
       return [...new Set([...taskScopeFiles(current, id), ...planFiles])].filter((p) => p && !p.includes('*'));
     };
+    // OXB-036: the program's budget policy applies to every phase without editing each PLAN.json.
+    let programBudgetPolicy = null;
+    try {
+      const programState = runPaths.programDir ? require('./oxe-program.cjs').readProgram(runPaths.programDir) : null;
+      programBudgetPolicy = programState && programState.budget_policy && programState.budget_policy.mode ? programState.budget_policy : null;
+    } catch { programBudgetPolicy = null; }
     budgetLedger = budgetLib.openBudget(projectRoot, current.run_id, {
       turns: options.budgetTurns,
       usd: options.budgetUsd,
       reset: Boolean(options.budgetReset),
       plan: planBudget,
+      policy: programBudgetPolicy,
     });
     const maxRetriesOverride = options.maxRetries != null && Number.isInteger(Number(options.maxRetries)) && Number(options.maxRetries) >= 0
       ? Number(options.maxRetries)
@@ -3763,6 +3770,37 @@ function runtimePlanAppend(projectRoot, activeSession, options = {}) {
   });
 }
 
+/**
+ * OXB-036: `oxe-cc runtime program budget --mode cap|track_only [--budget-usd N] [--budget-turns N] --by <papel>
+ * --reason "…"`: the program's budget policy (PROGRAM.json `budget_policy`), with the history of who decided what and
+ * when. Without --mode it only reports the policy. `track_only` keeps the loop guards (suspicion rule, max turns per
+ * attempt) and the spend record, with no cap; `cap` with usd/turns caps every run of every phase.
+ */
+function runtimeProgramBudget(projectRoot, activeSession, options = {}) {
+  const programLib = require('./oxe-program.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const state = programLib.readProgram(paths.programDir);
+  if (!state) throw new Error('Sem programa. Rode `oxe-cc runtime program init`.');
+  if (!options.mode) return { policy: state.budget_policy || null, changed: false };
+  const mode = String(options.mode).trim();
+  if (!['cap', 'track_only'].includes(mode)) throw new Error('--mode cap | track_only');
+  const { by, reason } = requireEditReason({ by: options.by, reason: options.reason });
+  const num = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
+  const usd = num(options.usd);
+  const turns = num(options.turns);
+  if (mode === 'cap' && !(usd > 0) && !(turns > 0)) throw new Error('--mode cap exige --budget-usd N e/ou --budget-turns N');
+  if (mode === 'track_only' && (usd != null || turns != null)) throw new Error('track_only não tem teto — tire --budget-usd/--budget-turns (ou use --mode cap)');
+  const at = new Date().toISOString();
+  const prev = state.budget_policy || null;
+  const entry = { mode, usd: mode === 'cap' ? usd : null, turns: mode === 'cap' ? turns : null, by, reason, at };
+  const next = { ...state, budget_policy: { mode, usd: entry.usd, turns: entry.turns, decided_by: by, decided_at: at, history: [...((prev && prev.history) || []), entry] }, updated_at: at };
+  programLib.writeProgram(paths.programDir, next);
+  changeLib.appendNdjson(changeLib.changesFile(paths.programDir), { kind: 'program_edit', action: 'budget_policy', before: prev ? { mode: prev.mode, usd: prev.usd, turns: prev.turns } : null, after: { mode, usd: entry.usd, turns: entry.turns }, by, reason, at });
+  appendEvent(projectRoot, activeSession, { type: 'BudgetPolicyChanged', payload: { mode, usd: entry.usd, turns: entry.turns, by } });
+  return { policy: next.budget_policy, changed: true, export: autoExportProgram(projectRoot, activeSession) };
+}
+
 /** OXB-058: doctor — .oxe/ gitignored with no versioned export means SPEC/ROADMAP/PROGRAM edits leave no history. */
 function oxeHistoryWarning(projectRoot) {
   if (programExportDir(projectRoot)) return null;
@@ -5754,6 +5792,7 @@ module.exports = {
   runtimePhaseWork,
   resolvePreconditions,
   runtimePlanAppend,
+  runtimeProgramBudget,
   runtimeSpecAmend,
   runtimeSpecAdd,
   runtimeProgramPhaseAdd,

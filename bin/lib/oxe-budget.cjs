@@ -46,14 +46,24 @@ function writeLedger(projectRoot, ledger) {
 function openBudget(projectRoot, runId, limits = {}) {
   const existing = limits.reset ? null : readLedger(projectRoot, runId);
   const planLimits = limits.plan && typeof limits.plan === 'object' ? limits.plan : {};
-  const turns = positive(limits.turns) ?? (existing ? existing.limit_turns : null) ?? positive(planLimits.turns);
-  const usd = positive(limits.usd) ?? (existing ? existing.limit_usd : null) ?? positive(planLimits.usd);
-  if (turns == null && usd == null) return null;
+  // OXB-036: the program's budget policy (PROGRAM.json budget_policy) is the user's decision for every phase:
+  // track_only = no cap (only explicit CLI flags cap; spend is still recorded); cap with usd/turns = the cap, over the
+  // ledger's previous limit and the PLAN.json budget. CLI flags always win.
+  const policy = limits.policy && typeof limits.policy === 'object' ? limits.policy : null;
+  const trackOnly = Boolean(policy && policy.mode === 'track_only');
+  const turns = trackOnly
+    ? positive(limits.turns)
+    : positive(limits.turns) ?? positive(policy && policy.turns) ?? (existing ? existing.limit_turns : null) ?? positive(planLimits.turns);
+  const usd = trackOnly
+    ? positive(limits.usd)
+    : positive(limits.usd) ?? positive(policy && policy.usd) ?? (existing ? existing.limit_usd : null) ?? positive(planLimits.usd);
+  if (turns == null && usd == null && !trackOnly && !(existing && existing.policy === 'track_only')) return null;
   const now = new Date().toISOString();
   const ledger = {
     run_id: runId,
     limit_turns: turns ?? null,
     limit_usd: usd ?? null,
+    policy: policy ? policy.mode : (existing && existing.policy) || 'cap',
     used_turns: existing ? Number(existing.used_turns) || 0 : 0,
     used_usd: existing ? Number(existing.used_usd) || 0 : 0,
     attempts: existing && Array.isArray(existing.attempts) ? existing.attempts : [],
