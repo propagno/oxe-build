@@ -78,6 +78,8 @@ export interface AcceptanceTestLike {
   command: string;
   files: FrozenFile[];
   proves?: string[];
+  /** OXB-072: own timeout (e.g. `npm run test:electron`, an Electron cold start). */
+  timeout_ms?: number;
 }
 
 export interface AcceptanceCheckSuite {
@@ -99,6 +101,8 @@ export interface CheckResult {
   evidence_refs?: string[];
   /** Why a check was skipped (`needs_structured_check` = criterion has no executable verification). */
   skip_reason?: string | null;
+  /** OXB-072: killed by the check timeout (status `error`, never `fail`). */
+  timed_out?: boolean;
   /** Test cases the runner reported; null when the output has no recognizable test report. */
   tests_executed?: number | null;
   /** Evidence id of the structured summary record (kept out of `evidence_refs` so coverage counts real output only). */
@@ -295,6 +299,7 @@ export function compile(
       description: `Teste de aceite congelado de ${entry.criterion || entry.id}`,
       frozen_files: entry.files.map((f) => ({ path: f.path, sha256: f.sha256 ?? null })),
       ...(Array.isArray(entry.proves) && entry.proves.length ? { proves: [...entry.proves] } : {}),
+      ...(typeof entry.timeout_ms === 'number' && entry.timeout_ms > 0 ? { timeout_ms: entry.timeout_ms } : {}),
     });
   }
 
@@ -428,6 +433,23 @@ export async function runCheck(
     const report = parseTestReport(`${stdout}\n${stderr}`);
     let status: VerificationStatus = result.status === 0 ? 'pass' : 'fail';
     let error: string | null = result.error ? String(result.error) : null;
+    // OXB-072: a check killed by its timeout did not fail — it did not finish. `error` + `timed_out`, with the limit
+    // and how to raise it (an Electron cold start plus vitest easily passes the old 60 s).
+    const timedOut = Boolean(result.error && /ETIMEDOUT/.test(String((result.error as NodeJS.ErrnoException).code || result.error.message)));
+    if (timedOut) {
+      return {
+        check_id: check.id,
+        acceptance_ref: check.acceptance_ref,
+        status: 'error',
+        stdout,
+        stderr,
+        exit_code: null,
+        duration_ms,
+        error: `timeout: passou de ${Math.round(timeoutMs / 1000)}s sem terminar — aumente verify_timeout_ms (config) ou o timeout_ms do teste de aceite`,
+        tests_executed: report.tests_executed,
+        timed_out: true,
+      };
+    }
 
     // Exit code 0 is not proof: `node --test` exits 0 when a listed file is missing, and a
     // unit check that executed zero tests verified nothing.

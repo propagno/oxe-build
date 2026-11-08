@@ -2253,7 +2253,8 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     pluginRegistry: registry || undefined,
     evidenceStore,
     attemptNumber: options.attemptNumber || 1,
-    timeoutMs: options.timeoutMs,
+    // OXB-072: --timeout-ms > config verify_timeout_ms > 10 min. The runtime's 60 s default timed out Electron suites.
+    timeoutMs: options.timeoutMs || (Number(projectConfig.verify_timeout_ms) > 0 ? Number(projectConfig.verify_timeout_ms) : 600_000),
   });
   // A passing re-verify of a fully executed run restores `completed` (a previous failed verify
   // must not leave it stuck in `running`).
@@ -2469,22 +2470,36 @@ function attachAcceptanceLock(parsedPlan, runState, projectRoot) {
   const lock = runState && runState.acceptance_lock && Array.isArray(runState.acceptance_lock.tests)
     ? runState.acceptance_lock
     : freezeAcceptanceTests(projectRoot, parsedPlan);
-  const keyOf = (entry) => entry.id || entry.criterion;
-  const byCriterion = new Map(lock.tests.map((entry) => [keyOf(entry), entry]));
-  parsedPlan.acceptanceTests = parsedPlan.acceptanceTests.map((entry) => {
-    const locked = byCriterion.get(keyOf(entry));
-    const hashes = new Map(locked ? locked.files.map((f) => [f.path, f.sha256]) : []);
-    return {
-      id: entry.id || null,
-      criterion: entry.criterion,
-      command: entry.command,
-      files: entry.files.map((file) => ({ path: file, sha256: hashes.has(file) ? hashes.get(file) : null })),
-      proves: Array.isArray(entry.proves) ? entry.proves : [],
-      // OXB-019: o lock reconstrói a entrada — sem estes campos o CR nunca fechava e a emenda nunca era vista.
-      resolves: Array.isArray(entry.resolves) ? entry.resolves : [],
-      version: Number.isInteger(entry.version) ? entry.version : 1,
-    };
-  });
+  // OXB-071: the lock is looked up by FILE. Keyed by id/criterion, two tests of the same criterion without an id
+  // collapsed (A8 ×2), and a test the plan gained after the run's first compile (a CR's test, a plan edit + recompile)
+  // was "acceptance_not_frozen … (não existia no compile)" although it is in PLAN.json acceptance_tests.
+  const hashes = new Map();
+  for (const t of lock.tests) for (const f of t.files || []) if (f && f.path && !hashes.has(f.path)) hashes.set(f.path, f.sha256);
+  const runtime = loadRuntimeModule();
+  const lateFrozen = [];
+  for (const entry of parsedPlan.acceptanceTests) {
+    for (const file of entry.files || []) {
+      if (hashes.has(file)) continue;
+      // Declared by the current plan but unknown to this run's lock: frozen NOW (later edits count as tampering).
+      const sha = runtime && typeof runtime.sha256File === 'function' ? runtime.sha256File(path.resolve(projectRoot, file)) : null;
+      hashes.set(file, sha);
+      if (sha) lateFrozen.push({ id: entry.id || null, criterion: entry.criterion, command: entry.command, files: [{ path: file, sha256: sha }], late_frozen_at: new Date().toISOString() });
+    }
+  }
+  if (lateFrozen.length && runState && runState.acceptance_lock && Array.isArray(runState.acceptance_lock.tests)) {
+    runState.acceptance_lock = { ...runState.acceptance_lock, tests: [...runState.acceptance_lock.tests, ...lateFrozen] };
+  }
+  parsedPlan.acceptanceTests = parsedPlan.acceptanceTests.map((entry) => ({
+    id: entry.id || null,
+    criterion: entry.criterion,
+    command: entry.command,
+    files: entry.files.map((file) => ({ path: file, sha256: hashes.has(file) ? hashes.get(file) : null })),
+    proves: Array.isArray(entry.proves) ? entry.proves : [],
+    // OXB-019: o lock reconstrói a entrada — sem estes campos o CR nunca fechava e a emenda nunca era vista.
+    resolves: Array.isArray(entry.resolves) ? entry.resolves : [],
+    version: Number.isInteger(entry.version) ? entry.version : 1,
+    ...(entry.timeout_ms ? { timeout_ms: entry.timeout_ms } : {}),
+  }));
   return parsedPlan;
 }
 

@@ -401,3 +401,17 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 - **Status:** resolvido (1.21.2). O resumo de um gate vermelho (CR e motivo do close) pega as linhas que reprovam: eslint `N:M error` (com o arquivo do bloco), tsc `error TS`, FAIL/×/not ok/AssertionError, npm ERR! e linhas que começam com "error". Warnings do eslint nunca entram, e a contagem ("✖ 219 problems (2 errors, …)") fecha o trecho. Sem marcador, usa as últimas linhas da saída. Teste: `tests/oxe-1212-gate-summary.test.cjs` (o caso do CR-16). Registrado pelo TECH LEAD em 08/11: o CR-16 (gate lint) trouxe o primeiro warning de 217 ("285:3 warning … Cannot access refs during render"); a falha real eram 2 linhas `error` (no-explicit-any) no fim.
 - **Proposta:** o resumo usa as linhas que reprovam (eslint `error`, tsc `error TS`, vitest `FAIL`/`×`, ou as últimas linhas de um exit ≠ 0), nunca o começo do stream.
 - **Nota (baixa prioridade):** gate `requires: ["build"]`, ou um aviso do lint quando o gate lê saída de build que nada produz (o gate bundle falhou com ENOENT out/main).
+
+## OXB-071: `acceptance_not_frozen` em testes congelados adicionados depois do compile
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (rc.3, verify da F1): 10 testes congelados (a4, a5, a6, a8 ×2, a9, cr03, cr05–07, cr06…) saíram como "acceptance_not_frozen … (não existia no compile)". Eles tinham entrado depois, por CR ou edição do plano, e estão no `acceptance_tests` do PLAN.json.
+  - O lock da run passa a ser consultado por arquivo, não por `id`/`criterion`. Antes, dois testes do mesmo critério sem `id` colidiam (A8 ×2).
+  - Um arquivo que o plano atual declara mas o lock da run não conhece é congelado no momento do verify, com o hash atual, e entra no lock (`late_frozen_at`). Uma edição posterior dele sai como `acceptance_tampered`.
+  - Teste: `tests/oxe-1212-verify-lock-timeout.test.cjs`.
+
+## OXB-072: `spawnSync cmd.exe ETIMEDOUT` nos checks do verify
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11: check-a5, check-a8 (`npm run test:electron`) e check-task-t13 caíram por timeout. O cold start do Electron mais o vitest passam de 1–2 min.
+  - O limite por check no `runtime verify` vem de `--timeout-ms`, depois de config `verify_timeout_ms` e por fim do padrão de 10 min (antes, 60 s do runtime). Um teste de aceite pode declarar `timeout_ms` no PLAN.json.
+  - Um check morto pelo timeout sai como `status: error` com `timed_out: true` e a mensagem "timeout: passou de Ns sem terminar — aumente verify_timeout_ms (config) ou o timeout_ms do teste de aceite", nunca como FAIL.
+  - Teste: `tests/oxe-1212-verify-lock-timeout.test.cjs`.

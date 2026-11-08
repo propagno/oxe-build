@@ -156,6 +156,7 @@ function compile(spec, plan) {
             description: `Teste de aceite congelado de ${entry.criterion || entry.id}`,
             frozen_files: entry.files.map((f) => ({ path: f.path, sha256: f.sha256 ?? null })),
             ...(Array.isArray(entry.proves) && entry.proves.length ? { proves: [...entry.proves] } : {}),
+            ...(typeof entry.timeout_ms === 'number' && entry.timeout_ms > 0 ? { timeout_ms: entry.timeout_ms } : {}),
         });
     }
     return {
@@ -280,6 +281,23 @@ async function runCheck(check, cwd, timeoutMs = 60000) {
         const report = (0, test_report_parsers_1.parseTestReport)(`${stdout}\n${stderr}`);
         let status = result.status === 0 ? 'pass' : 'fail';
         let error = result.error ? String(result.error) : null;
+        // OXB-072: a check killed by its timeout did not fail — it did not finish. `error` + `timed_out`, with the limit
+        // and how to raise it (an Electron cold start plus vitest easily passes the old 60 s).
+        const timedOut = Boolean(result.error && /ETIMEDOUT/.test(String(result.error.code || result.error.message)));
+        if (timedOut) {
+            return {
+                check_id: check.id,
+                acceptance_ref: check.acceptance_ref,
+                status: 'error',
+                stdout,
+                stderr,
+                exit_code: null,
+                duration_ms,
+                error: `timeout: passou de ${Math.round(timeoutMs / 1000)}s sem terminar — aumente verify_timeout_ms (config) ou o timeout_ms do teste de aceite`,
+                tests_executed: report.tests_executed,
+                timed_out: true,
+            };
+        }
         // Exit code 0 is not proof: `node --test` exits 0 when a listed file is missing, and a
         // unit check that executed zero tests verified nothing.
         if (status === 'pass' && report.missing_files.length > 0) {

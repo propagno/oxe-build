@@ -61,7 +61,8 @@
           "id": { "type": "string", "description": "Id próprio de uma prova transversal (ex.: CR de constraint sem critério A*); exige resolves." },
           "files": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
           "command": { "type": "string", "minLength": 1 },
-          "proves": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Nomes dos testes (ou `arquivo › nome`) que precisam aparecer como aprovados na saída do runner — Prova executada." }
+          "proves": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Nomes dos testes (ou `arquivo › nome`) que precisam aparecer como aprovados na saída do runner — Prova executada." },
+          "timeout_ms": { "type": "integer", "minimum": 1, "description": "Limite próprio do check (ex.: suíte Electron). Padrão: config verify_timeout_ms ou 10 min (OXB-072)." }
         }
       }
     },

@@ -151,6 +151,8 @@ function planJsonToParsedPlan(doc) {
     proves: Array.isArray(entry.proves) ? entry.proves.map((name) => String(name).trim()).filter(Boolean) : [],
     resolves: Array.isArray(entry.resolves) ? [...entry.resolves] : [],
     version: Number.isInteger(entry.version) ? entry.version : 1,
+    // OXB-072: own timeout for a slow suite (e.g. Electron).
+    ...(Number.isInteger(entry.timeout_ms) && entry.timeout_ms > 0 ? { timeout_ms: entry.timeout_ms } : {}),
   }));
   // Gates do projeto (1.21, OXB-020): rodam uma vez no verify da fase; normalizados por oxe-phase-gates.cjs.
   const phaseGates = Array.isArray(doc.phase_gates) ? doc.phase_gates.map((gate) => ({ ...gate })) : [];
