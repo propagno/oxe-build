@@ -249,3 +249,48 @@ describe('OXB-065: plain output when stdout is not a TTY; NDJSON task events', (
     assert.equal(lines[3].failed_segment, undefined);
   });
 });
+
+describe('OXB-055: wrapper hashes ignore line endings', () => {
+  const release = require('../bin/lib/oxe-release.cjs');
+  it('a CRLF checkout and the LF the sync writes hash the same; a content change does not', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-eol-'));
+    dirs.push(dir);
+    fs.writeFileSync(path.join(dir, 'crlf.md'), '---\r\ndescription: x\r\n---\r\nbody\r\n');
+    fs.writeFileSync(path.join(dir, 'lf.md'), '---\ndescription: x\n---\nbody\n');
+    fs.writeFileSync(path.join(dir, 'other.md'), '---\ndescription: y\n---\nbody\n');
+    assert.equal(release.sha256TextEol(path.join(dir, 'crlf.md')), release.sha256TextEol(path.join(dir, 'lf.md')));
+    assert.notEqual(release.sha256TextEol(path.join(dir, 'lf.md')), release.sha256TextEol(path.join(dir, 'other.md')));
+  });
+});
+
+describe('OXB-056: the CLI runs without npm install', () => {
+  const { lite } = require('../bin/lib/oxe-semver.cjs');
+  const semver = require('semver');
+  it('the built-in fallback agrees with semver on what the CLI uses', () => {
+    const vs = ['1.21.1', '1.21.2', '1.9.1', '1.21.0-rc.1', '1.21.0', '2.0.0', '0.10.3'];
+    for (const a of vs) {
+      assert.equal(lite.valid(a), semver.valid(a), a);
+      assert.equal(lite.major(a), semver.major(a));
+      assert.equal(lite.minor(a), semver.minor(a));
+      for (const b of vs) {
+        assert.equal(lite.gt(a, b), semver.gt(a, b), `${a} > ${b}`);
+        assert.equal(lite.gte(a, b), semver.gte(a, b), `${a} >= ${b}`);
+      }
+    }
+    assert.deepEqual([...vs].sort(lite.rcompare), [...vs].sort(semver.rcompare));
+    assert.equal(lite.valid('not-a-version'), null);
+    assert.equal(lite.coerce('v1.21').version, semver.coerce('v1.21').version);
+    assert.equal(lite.coerce('"1.21.1"').version, '1.21.1');
+  });
+
+  it('a copy of bin/ with no node_modules prints --version', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-fresh-'));
+    dirs.push(dir);
+    const root = path.join(__dirname, '..');
+    fs.cpSync(path.join(root, 'bin'), path.join(dir, 'bin'), { recursive: true });
+    fs.copyFileSync(path.join(root, 'package.json'), path.join(dir, 'package.json'));
+    const r = spawnSync(process.execPath, [path.join(dir, 'bin', 'oxe-cc.js'), '--version'], { cwd: dir, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /oxe-cc v\d+\.\d+\.\d+/);
+  });
+});

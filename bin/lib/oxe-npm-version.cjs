@@ -1,6 +1,6 @@
 'use strict';
 
-const semver = require('semver');
+const semver = require('./oxe-semver.cjs').loadSemver();
 const { runPackageManagerSync } = require('./oxe-process.cjs');
 
 /**

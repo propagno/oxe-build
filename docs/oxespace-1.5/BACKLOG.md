@@ -274,13 +274,13 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-055: no Windows, o `doctor --release` acusa "wrappers dirty" com `core.autocrlf=true`
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21.2). O hash de cada wrapper no `doctor --release` normaliza CRLF→LF antes do sha256 (`sha256TextEol` em `bin/lib/oxe-release.cjs`): o mesmo conteúdo com outro fim de linha não acusa mais "wrappers dirty"; uma mudança de conteúdo continua acusando. Teste: `tests/oxe-1212.test.cjs`.
 - **Evidência (publicação da 1.21.1, 04/11):** num checkout com `core.autocrlf=true`, os wrappers vêm com CRLF e o `sync-runtime-metadata` os reescreve com LF. O hash de antes e depois diverge sem nenhuma mudança de conteúdo, e o `prepublishOnly` bloqueou com "wrappers ficam dirty após sync". O CI, em Linux, não vê isso.
 - **Proposta:** normalizar o EOL antes de calcular o hash dos wrappers.
 
 ## OXB-056: a CLI não roda sem `npm install` (o `semver` é carregado no startup)
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21.2). `bin/lib/oxe-semver.cjs` usa o pacote `semver` quando ele existe e, sem `npm install`, um fallback mínimo (valid, coerce, compare, gt/gte, rcompare, major/minor) que concorda com o `semver` nas versões X.Y.Z[-pre]. `oxe-npm-version`, `oxe-release` e `oxe-install-resolve` passam por ele. Uma cópia de `bin/` sem `node_modules` roda `--version`. Teste: `tests/oxe-1212.test.cjs`.
 - **Evidência (TECH LEAD, 04/11):** numa worktree limpa em v1.21.1, `node bin/oxe-cc.js --version` falhou com "Cannot find module 'semver'", a partir de `bin/lib/oxe-npm-version.cjs`.
 - **Proposta:** carregar o `semver` só na checagem de versão do npm, sob demanda, e falhar sem barulho quando ele não existir.
 
