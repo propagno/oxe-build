@@ -2865,6 +2865,8 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       resume: Boolean(options.resume),
       only: options.only,
       changed: Boolean(options.changed),
+      // OXB-095: config parallel.max / min_free_mb (OXB-050) bound the concurrent dry-verify commands.
+      parallel: (() => { const pc = require('./oxe-parallel.cjs').parallelConfig(projectRoot, { maxParallel: options.dryVerifyParallel }); return { max: pc.maxParallel, minFreeMb: pc.minFreeMb }; })(),
     });
     result.errors.push(...dryVerify.errors);
     result.warnings.push(...dryVerify.warnings);

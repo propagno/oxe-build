@@ -704,13 +704,19 @@ Cada bloco tem uma meta medível:
 
 ## OXB-095: comandos de tarefas diferentes em paralelo no dry-verify
 
-- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
-  - Limitado por `parallel.max` e `min_free_mb` do config.
+- **Status:** resolvido (1.21.2).
+  - No dry-verify, os lotes de vitest e os comandos que sobram (cada comando distinto uma vez) rodam em paralelo num pool. O limite é `parallel.max` do config (padrão 2), e um processo novo só começa com memória livre ≥ `parallel.min_free_mb`; o primeiro sempre começa.
+  - Os vereditos continuam por tarefa, na ordem do plano. O progresso sai à medida que cada comando termina (`[n/N] … exit 1 3s`, e `(paralelo)` na linha da tarefa). Com `max: 1`, o caminho continua serial.
+  - O pool roda num processo auxiliar (`oxe-parallel-run.cjs`), então a API do `plan lint` continua síncrona.
+  - Teste: `tests/oxe-1212-dryrun-parallel.test.cjs`: 3 comandos de 1 s com max 3 terminam em menos de 2,6 s, com os mesmos vereditos do modo serial.
 
 ## OXB-096: teste congelado de tarefa FUTURA: só coleta e um motivo de vermelho certo
 
-- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
-  - Checado uma vez por árvore, sem rodar a suíte inteira.
+- **Status:** resolvido (1.21.2) com base nos dados da F2 (364 comandos, 318 distintos: 304 vitest simples, 28 `npm run test:electron -- <arquivo>`, 14 typecheck, 13 lint, 5 outros).
+  - Um comando idêntico (typecheck, lint ou um teste de integração compartilhado) roda **uma vez por rodada**, e cada tarefa é classificada contra os próprios alvos. Entre rodadas, o cache por árvore (`--resume`, OXB-084) já evita repetir.
+  - `npm run <script> -- <arquivos>` entra no lote como o vitest direto (a chave é o script). lint, typecheck, build e check nunca entram em lote.
+  - O teste congelado de tarefa futura cai no lote de vitest e falha no import (vermelho certo) sem rodar a suíte inteira. Arquivo repetido no mesmo lote roda uma vez só.
+  - Teste: `tests/oxe-1212-vitest-batch.test.cjs`.
 
 ## OXB-097: `oxe-cc plan build --from <arquivos de papel…>`
 

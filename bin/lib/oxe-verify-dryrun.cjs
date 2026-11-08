@@ -189,6 +189,7 @@ function batchVitestSegments(projectRoot, tasks, options = {}) {
     }
   }
   const maxFiles = options.maxFiles || 60;
+  const batches = [];
   for (const g of groups.values()) {
     if (g.members.length < 2) continue;
     // chunks of up to maxFiles distinct files
@@ -205,21 +206,31 @@ function batchVitestSegments(projectRoot, tasks, options = {}) {
     for (const chunk of chunks) {
       if (chunk.length < 2) continue;
       const allFiles = [...new Set(chunk.flatMap((m) => m.files))];
-      const report = path.join(require('os').tmpdir(), `oxe-vitest-${process.pid}-${Date.now().toString(36)}.json`);
-      const cmd = `${vb.commandOf(g.prefix, g.flags, allFiles)} --reporter=json --outputFile.json=${report.replace(/\\/g, '/')}`;
-      if (options.progress) options.progress(`[lote] ${g.prefix} · ${allFiles.length} arquivo(s) de ${[...new Set(chunk.map((m) => m.task))].join(', ')} ...`);
+      const report = path.join(require('os').tmpdir(), `oxe-vitest-${process.pid}-${Date.now().toString(36)}-${batches.length}.json`);
+      batches.push({ chunk, report, label: `[lote] ${g.prefix} · ${allFiles.length} arquivo(s) de ${[...new Set(chunk.map((m) => m.task))].join(', ')}`, command: `${vb.commandOf(g.prefix, g.flags, allFiles)} --reporter=json --outputFile.json=${report.replace(/\\/g, '/')}` });
+    }
+  }
+  // OXB-095: batches run concurrently (parallel.max, min_free_mb) when allowed.
+  const timeout = (options.timeoutMs || 180_000) * 3;
+  if (options.parallel && options.parallel.max > 1 && batches.length > 1) {
+    require('./oxe-parallel-run.cjs').runParallel(batches.map((b, i) => ({ id: i, command: b.command, label: b.label, timeoutMs: timeout })), { max: options.parallel.max, minFreeMb: options.parallel.minFreeMb, cwd: projectRoot, timeoutMs: timeout, env: scrubbedEnv(), onProgress: options.progress });
+  } else {
+    for (const b of batches) {
+      if (options.progress) options.progress(`${b.label} ...`);
       const started = Date.now();
-      runCommand(cmd, projectRoot, (options.timeoutMs || 180_000) * 3);
-      let json = null;
-      try { json = JSON.parse(fs.readFileSync(report, 'utf8')); } catch { json = null; }
-      try { fs.rmSync(report, { force: true }); } catch { /* */ }
-      if (options.progress) options.progress(`[lote] ${json ? 'ok' : 'sem relatório JSON — cada comando roda sozinho'} ${Math.round((Date.now() - started) / 1000)}s`);
-      if (!json) continue;
-      const byFile = vb.resultsByFile(json, projectRoot);
-      for (const m of chunk) {
-        const r = vb.segmentResult(byFile, m.files);
-        if (r) out.set(`${m.task}\u0000${m.segment}`, r);
-      }
+      runCommand(b.command, projectRoot, timeout);
+      if (options.progress) options.progress(`[lote] ${Math.round((Date.now() - started) / 1000)}s`);
+    }
+  }
+  for (const b of batches) {
+    let json = null;
+    try { json = JSON.parse(fs.readFileSync(b.report, 'utf8')); } catch { json = null; }
+    try { fs.rmSync(b.report, { force: true }); } catch { /* */ }
+    if (!json) { if (options.progress) options.progress(`${b.label}: sem relatório JSON — cada comando roda sozinho`); continue; }
+    const byFile = vb.resultsByFile(json, projectRoot);
+    for (const m of b.chunk) {
+      const r = vb.segmentResult(byFile, m.files);
+      if (r) out.set(`${m.task}\u0000${m.segment}`, r);
     }
   }
   return out;
@@ -269,7 +280,28 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
   // OXB-094: vitest segments that share runner and flags run as ONE process (JSON reporter → result per file); a
   // segment the batch cannot answer (no JSON, file not in the report) runs alone as before.
   const sameCommand = new Map();
-  const batched = options.batch === false ? new Map() : batchVitestSegments(projectRoot, selected, { timeoutMs, progress, cache: options.resume && cache, tree, maxFiles: options.batchMaxFiles });
+  const batched = options.batch === false ? new Map() : batchVitestSegments(projectRoot, selected, { timeoutMs, progress, cache: options.resume && cache, tree, maxFiles: options.batchMaxFiles, parallel: options.parallel });
+  // OXB-095: what the batches did not answer runs concurrently (each distinct command once), bounded by parallel.max
+  // and min_free_mb; results feed the per-task loop below, in plan order, as if run there.
+  if (options.parallel && options.parallel.max > 1) {
+    const pending = [];
+    const seen = new Set();
+    for (const task of selected) {
+      const meta = task.meta || {};
+      if (Array.isArray(meta.blocked_by) && meta.blocked_by.filter(Boolean).length) continue;
+      for (const segment of splitSegments(task.verifyCommand)) {
+        if (seen.has(segment) || batched.has(`${task.id}\u0000${segment}`)) continue;
+        if (options.resume && tree && cache.entries[segmentKey(tree, task.id, segment)]) continue;
+        seen.add(segment);
+        pending.push({ id: pending.length, command: segment, label: `${task.id} ${segment.slice(0, 70)}` });
+      }
+    }
+    if (pending.length > 1) {
+      if (progress) progress(`dry-verify paralelo: ${pending.length} comando(s), até ${options.parallel.max} por vez`);
+      const results = require('./oxe-parallel-run.cjs').runParallel(pending, { max: options.parallel.max, minFreeMb: options.parallel.minFreeMb, cwd: projectRoot, timeoutMs, env: scrubbedEnv(), onProgress: progress });
+      for (const r of results) if (r && !r.timedOut) sameCommand.set(pending[r.id].command, { code: r.code, output: r.output, parallel: true });
+    }
+  }
   if (progress) progress(`dry-verify: ${totalSegments} comando(s) em ${selected.length} tarefa(s)${skipped.length ? ` · fora: ${skipped.length}` : ''}${tree ? (options.resume ? ' · --resume' : '') : ''}`);
   for (const task of selected) {
     // OXB-063: work delivered by another path, still waiting on an open external dependency, cannot be green yet —
@@ -312,7 +344,7 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
       } else if (fromBatch) {
         run = fromBatch;
         v = run.code === 0 ? 'already_green' : classifyFailure(run.output, targets, { targetsExist, someTargetsExist, missingTargets, projectRoot });
-        if (progress) progress(`${label} ... ${v === 'missing_target' || v === 'assertion_red' ? 'ok' : v} (lote)`);
+        if (progress) progress(`${label} ... ${v === 'missing_target' || v === 'assertion_red' ? 'ok' : v} (${run.parallel ? 'paralelo' : 'lote'})`);
         if (key) {
           cache.entries[key] = { task: task.id, verdict: v, code: run.code, output: String(run.output || '').slice(-4000), at: new Date().toISOString(), secs: 0, batched: true };
           writeCache(cachePath, cache);
