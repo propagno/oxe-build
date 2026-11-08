@@ -1018,3 +1018,15 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
     - Nada além disso: testes de outras tarefas e estacionados, `.oxe/` e commits de outras fases ficam fora.
   - O corpo do PR lista as duas partes. Vale também para o `--promote-each`.
   - Teste: `tests/oxe-1212-sync-promote.test.cjs`, com um commit de import que conflitaria e agora fica fora.
+
+## OXB-157: `--base main` do promote usava o main LOCAL
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11.
+  - O que aconteceu: `runtime promote T1 --base main --open-pr` deu conflito de cherry-pick em arquivos iguais entre o pai da T1 e o origin/main.
+  - A causa: `main` resolveu para a branch local (061c12cc, de 28/10), não para o origin/main (f1d2c7ff).
+  - `--base <nome>` agora vira `<remote>/<nome>`, depois de um fetch dessa ref. Uma ref remota ou um sha é usado como veio.
+  - Sem `--base`, a base é a branch padrão do remoto (`refs/remotes/origin/HEAD`). O `--promote-each` segue a mesma regra.
+  - A saída mostra a base resolvida com o sha (`a partir de origin/main @ <sha>`) e avisa quando a branch local de mesmo nome está atrás do remoto.
+  - O `gh pr create --base` recebe o nome da branch no remoto (`main`), nunca `origin/main`.
+  - O `status` avisa quando uma tarefa foi concluída na run mas não está `done` no PLAN.json (PLAN.json regenerado): "T1 concluída(s) na run mas não no PLAN.json … oxe-cc plan done T1".
+  - Teste: `tests/oxe-1212-sync-promote.test.cjs` e `tests/oxe-1212-state-coherent.test.cjs`.

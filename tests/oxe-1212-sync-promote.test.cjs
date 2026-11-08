@@ -162,6 +162,7 @@ describe('OXB-060: runtime promote T<n> --base main', () => {
     write(dir, 'package.json', JSON.stringify({ scripts: { 'pr:ready': `node -e "process.exit(require('fs').readFileSync('src/a.js','utf8').includes('10')?0:1)"` } }));
     git(dir, 'add', 'package.json');
     git(dir, 'commit', '-qm', 'chore: pr:ready on main');
+    git(dir, 'push', '-q', 'origin', 'main'); // OXB-157: the base is origin/main
     git(dir, 'checkout', '-q', 'oxe/f1-plan');
     const out = op.runtimePromote(dir, null, { task: 'T1', base: 'main' });
     assert.equal(out.pr_ready.ok, true, out.pr_ready.tail);
@@ -186,6 +187,7 @@ describe('OXB-060: runtime promote T<n> --base main', () => {
     write(dir, 'src/a.js', 'module.exports = 77;\n');
     git(dir, 'add', '-A');
     git(dir, 'commit', '-qm', 'main edits a.js');
+    git(dir, 'push', '-q', 'origin', 'main'); // OXB-157: the base is origin/main
     git(dir, 'checkout', '-q', 'oxe/f1-plan');
     const out = op.runtimePromote(dir, null, { task: 'T1', base: 'main' });
     assert.deepEqual(out.conflict.files, ['src/a.js']);
@@ -199,7 +201,8 @@ describe('OXB-060: runtime promote T<n> --base main', () => {
     assert.throws(() => op.runtimePromote(dir, null, { task: 'T3', base: 'main' }), /não está done/);
     const r = spawnSync(process.execPath, [CLI, 'runtime', 'promote', 'T2', '--base', 'main', '--dir', dir], { encoding: 'utf8', env: { ...process.env, OXE_NO_PROMPT: '1' } });
     assert.equal(r.status, 0, r.stderr + r.stdout);
-    assert.match(r.stdout, /T2 -> branch oxe\/promote-t2 a partir de main|T2 → branch oxe\/promote-t2 a partir de main/);
+    // OXB-157: `--base main` resolves to origin/main, shown with its sha
+    assert.match(r.stdout, /T2 (->|→) branch oxe\/promote-t2 a partir de origin\/main @ [0-9a-f]{10}/);
     assert.match(r.stdout, /gh pr create --base main --head oxe\/promote-t2 .*--body-file/);
     const s = spawnSync(process.execPath, [CLI, 'runtime', 'sync', '--from', 'main', '--no-fetch', '--dir', dir], { encoding: 'utf8', env: { ...process.env, OXE_NO_PROMPT: '1' } });
     assert.equal(s.status, 0, s.stderr + s.stdout);
@@ -348,5 +351,28 @@ describe('OXB-156: a task PR carries only its own commits and its own frozen tes
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('OXB-157: the promote base is the remote branch, not a stale local one', () => {
+  it('`main` resolves to origin/main (fetched); a stale local main is warned about; sha/remote refs pass through', () => {
+    const { dir } = setup();
+    // origin/main moves ahead (another clone pushes), local main stays behind
+    const other = path.join(path.dirname(dir), 'other');
+    git(path.dirname(dir), 'clone', '-q', path.join(path.dirname(dir), 'origin.git'), other);
+    git(other, 'config', 'user.email', 't@t'); git(other, 'config', 'user.name', 't');
+    git(other, 'checkout', '-q', '-B', 'main', 'origin/main');
+    fs.writeFileSync(path.join(other, 'NEWS.md'), 'x\n');
+    git(other, 'add', '-A'); git(other, 'commit', '-qm', 'news'); git(other, 'push', '-q', 'origin', 'main');
+    const res = op.resolvePromoteBase(dir, 'main', 'origin');
+    assert.equal(res.ref, 'origin/main');
+    assert.match(res.warnings.join('\n'), /a branch local main está 1 commit\(s\) atrás de origin\/main/);
+    assert.equal(op.resolvePromoteBase(dir, 'origin/main', 'origin').ref, 'origin/main');
+    const sha = git(dir, 'rev-parse', 'main');
+    assert.equal(op.resolvePromoteBase(dir, sha, 'origin').ref, sha);
+    const out = op.runtimePromote(dir, null, { task: 'T1', base: 'main' });
+    assert.equal(out.base, 'origin/main');
+    assert.equal(out.base_sha, git(dir, 'rev-parse', 'origin/main'));
+    assert.match(git(dir, 'log', '--format=%s', 'oxe/promote-t1'), /news/, 'built on the fresh remote base');
   });
 });

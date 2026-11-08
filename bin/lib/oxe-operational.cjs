@@ -582,6 +582,36 @@ function runtimePrintPrompt(projectRoot, activeSession, options = {}) {
 }
 
 /**
+ * OXB-157: the base a task PR is built on. A plain name (`main`) is the REMOTE branch (`origin/main`, fetched first),
+ * not a possibly stale local branch; a remote ref (`origin/x`) or a sha is used as given. No base: the remote's default
+ * branch. Warns when the local branch of that name is behind its remote.
+ * @returns {{ ref: string, requested: string|null, warnings: string[] }}
+ */
+function resolvePromoteBase(projectRoot, requested, remote = 'origin', options = {}) {
+  const warnings = [];
+  const remotes = gitLines(projectRoot, ['remote']) || [];
+  const hasRemote = remotes.includes(remote);
+  let name = requested ? String(requested).trim() : '';
+  if (!name) {
+    const head = hasRemote ? (gitLines(projectRoot, ['symbolic-ref', '--short', `refs/remotes/${remote}/HEAD`]) || [])[0] : null;
+    name = head ? head.replace(new RegExp(`^${remote}/`), '') : 'main';
+  }
+  if (/^[0-9a-f]{7,40}$/i.test(name) || remotes.some((r) => name.startsWith(`${r}/`)) || !hasRemote) return { ref: name, requested: requested || null, warnings };
+  if (options.fetch !== false) gitRun(projectRoot, ['fetch', '-q', remote, name]);
+  const remoteRef = `${remote}/${name}`;
+  if (!gitLines(projectRoot, ['rev-parse', '--verify', '-q', `${remoteRef}^{commit}`])) {
+    warnings.push(`${remoteRef} não existe — usando a branch local ${name}`);
+    return { ref: name, requested: requested || null, warnings };
+  }
+  const localSha = (gitLines(projectRoot, ['rev-parse', '--verify', '-q', `refs/heads/${name}`]) || [])[0];
+  if (localSha) {
+    const behind = Number(((gitLines(projectRoot, ['rev-list', '--count', `${localSha}..${remoteRef}`]) || [])[0]) || 0);
+    if (behind > 0) warnings.push(`a branch local ${name} está ${behind} commit(s) atrás de ${remoteRef} — a base usada é ${remoteRef}`);
+  }
+  return { ref: remoteRef, requested: requested || null, warnings };
+}
+
+/**
  * OXB-151: `runtime promote <task> --open-pr` in a detached child (its own worktree: the program tree is untouched),
  * output in .oxe/promote/<task>.log; the PR link lands in the TaskPromoted event.
  */
@@ -589,7 +619,7 @@ function spawnPromote(projectRoot, activeSession, taskId, opts = {}, runId = nul
   const logDir = path.join(projectRoot, '.oxe', 'promote');
   fs.mkdirSync(logDir, { recursive: true });
   const log = fs.openSync(path.join(logDir, `${taskId}.log`), 'a');
-  const args = [path.join(__dirname, '..', 'oxe-cc.js'), 'runtime', 'promote', taskId, '--base', opts.base || 'main', '--remote', opts.remote || 'origin', '--open-pr', '--dir', projectRoot];
+  const args = [path.join(__dirname, '..', 'oxe-cc.js'), 'runtime', 'promote', taskId, ...(opts.base ? ['--base', opts.base] : []), '--remote', opts.remote || 'origin', '--open-pr', '--dir', projectRoot];
   if (activeSession) args.push('--session', activeSession);
   const child = spawn(process.execPath, args, { cwd: projectRoot, detached: true, stdio: ['ignore', log, log], windowsHide: true, env: { ...process.env, OXE_NO_PROMPT: '1' } });
   child.unref();
@@ -3740,8 +3770,10 @@ function runtimeSync(projectRoot, activeSession, options = {}) {
 function runtimePromote(projectRoot, activeSession, options = {}) {
   const taskId = String(options.task || '').trim().toUpperCase();
   if (!/^T\d+$/.test(taskId)) throw new Error('informe a tarefa: oxe-cc runtime promote T<n> --base main');
-  const base = String(options.base || 'main').trim();
   if (!gitLines(projectRoot, ['rev-parse', '--git-dir'])) throw new Error('runtime promote exige um repositório git');
+  // OXB-157: `--base main` used the LOCAL main (11 days old) — the PR conflicted on files identical on origin/main.
+  const resolvedBase = resolvePromoteBase(projectRoot, options.base, String(options.remote || 'origin'), options);
+  const base = resolvedBase.ref;
   // OXB-151: by default promote works in its OWN temporary worktree — the program tree (checkout, index, node_modules)
   // is never touched, so it is safe while `runtime execute` runs there. --in-place keeps the old behavior.
   const inPlace = options.inPlace === true;
@@ -3798,7 +3830,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     const existing = remoteHead.ok ? remoteHead.stdout.trim().split(/\s+/)[0] : '';
     if (existing) throw new Error(`a branch ${branch} já existe em ${remote} (${existing.slice(0, 8)}) — o promote não sobrescreve nem faz force-push; use --branch <outra>`);
   }
-  const result = { task: taskId, base, branch, commits: ordered, conflict: null, pr_ready: null, body_file: null, pr: null, commands: [], worktree: null };
+  const result = { task: taskId, base, base_sha: baseSha, base_requested: resolvedBase.requested, warnings: resolvedBase.warnings, branch, commits: ordered, conflict: null, pr_ready: null, body_file: null, pr: null, commands: [], worktree: null };
   // Where the branch is built: a temporary worktree (default) or, with --in-place, the program checkout.
   let work = projectRoot;
   let cleanup = () => {};
@@ -3913,9 +3945,11 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   writeTextAtomic(bodyFile, body);
   result.body_file = path.relative(projectRoot, bodyFile).replace(/\\/g, '/');
   const title = `${taskId}: ${task.title || 'promote'}`;
+  // OXB-157: the PR targets the branch NAME on the remote (`main`), not the local tracking ref (`origin/main`).
+  const prBase = base.replace(new RegExp(`^${remote}/`), '');
   result.commands = [
     `git push -u ${remote} ${branch}`,
-    `gh pr create --base ${base} --head ${branch} --title ${JSON.stringify(title)} --body-file ${result.body_file}`,
+    `gh pr create --base ${prBase} --head ${branch} --title ${JSON.stringify(title)} --body-file ${result.body_file}`,
   ];
   if (options.openPr) {
     if (result.pr_ready && !result.pr_ready.ok) {
@@ -3924,7 +3958,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       const push = gitRun(projectRoot, ['push', '-u', remote, branch]);
       if (!push.ok) result.error = `push falhou: ${push.stderr.trim().split(/\r?\n/).slice(-2).join(' · ')}`;
       else {
-        const gh = (options.ghSpawn || spawnSync)('gh', ['pr', 'create', '--base', base, '--head', branch, '--title', title, '--body-file', bodyFile], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+        const gh = (options.ghSpawn || spawnSync)('gh', ['pr', 'create', '--base', prBase, '--head', branch, '--title', title, '--body-file', bodyFile], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
         if (gh.status === 0) result.pr = String(gh.stdout || '').trim().split(/\r?\n/).pop();
         else result.error = `gh pr create falhou: ${String(gh.stderr || gh.stdout || '').trim().split(/\r?\n/).slice(-2).join(' · ')}`;
       }
@@ -4443,7 +4477,15 @@ function runtimePhaseWork(projectRoot, activeSession) {
   } else if (pending.length) {
     nextSteps.push(`oxe-cc runtime execute  (pendentes: ${pending.join(', ')})`);
   }
-  return { total: tasks.length, done, external_pending: external, pending, waiting, complete, program: Boolean(program), phase, multi_agent: multiAgent, next_steps: nextSteps };
+  // OXB-157: a task the run completed (or with a checkpoint trailer) that PLAN.json does not mark done — e.g. a
+  // regenerated PLAN.json that dropped the done writeback.
+  const runDoneNotInPlan = [];
+  try {
+    const run = readRunState(projectRoot, activeSession) || {};
+    const completed = new Set([...(Array.isArray(run.completed) ? run.completed : []), ...((run.canonical_state && run.canonical_state.completedWorkItems) || [])]);
+    for (const id of pending) if (completed.has(id)) runDoneNotInPlan.push(id);
+  } catch { /* auxiliar */ }
+  return { total: tasks.length, done, external_pending: external, pending, waiting, complete, program: Boolean(program), phase, multi_agent: multiAgent, next_steps: nextSteps, run_done_not_in_plan: runDoneNotInPlan };
 }
 
 /** A task whose work was delivered outside this repo's executor (another PR, a check only). */
@@ -6435,6 +6477,7 @@ module.exports = {
   runtimeDeployAttach,
   runtimeSignal,
   runtimePrintPrompt,
+  resolvePromoteBase,
   spawnPromote,
   readNdjsonQuiet,
   coherentStateProjection,

@@ -4774,6 +4774,8 @@ async function runRuntime(opts) {
       if (phaseWork.external_pending.length) parts.push(`${phaseWork.external_pending.length} aguardando entrega externa (${phaseWork.external_pending.join(', ')})`);
       if (phaseWork.pending.length) parts.push(`${phaseWork.pending.length} pendente(s) (${phaseWork.pending.join(', ')})`);
       console.log(`  ${c ? green : ''}Trabalho${phaseWork.phase ? ` da fase ${phaseWork.phase}` : ''}:${c ? reset : ''} ${parts.join(' · ')} de ${phaseWork.total}`);
+      // OXB-157: done in the run but not in PLAN.json.
+      if ((phaseWork.run_done_not_in_plan || []).length) console.log(`  ${c ? yellow : ''}AVISO${c ? reset : ''} ${phaseWork.run_done_not_in_plan.join(', ')} concluída(s) na run mas não no PLAN.json — o PLAN.json foi regenerado? marque com oxe-cc plan done <Tn>`);
       // OXB-085: tasks held by a precondition (PR merged, commit on main, file existing).
       for (const [id, labels] of Object.entries(phaseWork.waiting || {})) console.log(`  ${c ? yellow : ''}${id} aguardando:${c ? reset : ''} ${labels.join(', ')}`);
       if (phaseWork.next_steps.length) console.log(`  ${c ? cyan : ''}Próxima ação:${c ? reset : ''} ${phaseWork.next_steps.join('  →  ')}`);
@@ -5476,7 +5478,7 @@ async function runRuntime(opts) {
         parallelMutating: Boolean(opts.parallelMutating),
         verifyTimeoutMs: opts.verifyTimeoutMs || undefined,
         // OXB-151: each task done green is promoted (own worktree, PR opened) in the background.
-        promoteEach: opts.promoteEach ? { base: opts.baseBranch || 'main', remote: opts.remote || 'origin' } : null,
+        promoteEach: opts.promoteEach ? { base: opts.baseBranch || null, remote: opts.remote || 'origin' } : null,
         maxParallel: opts.maxParallel || undefined,
         agentsPlanPath: opts.agentsPlanPath || undefined,
         onProgress: (event) => {
@@ -5694,11 +5696,12 @@ async function runRuntime(opts) {
 
   if (opts.action === 'promote' && opts.task) {
     try {
-      const out = oxeOperational.runtimePromote(opts.dir, activeSession, { task: opts.task, base: opts.baseBranch || 'main', branch: opts.branch, remote: opts.remote || 'origin', openPr: Boolean(opts.openPr), prReady: !opts.noPrReady, inPlace: Boolean(opts.inPlace) });
+      const out = oxeOperational.runtimePromote(opts.dir, activeSession, { task: opts.task, base: opts.baseBranch || null, branch: opts.branch, remote: opts.remote || 'origin', openPr: Boolean(opts.openPr), prReady: !opts.noPrReady, inPlace: Boolean(opts.inPlace) });
       if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimePromoteSchema: 1, ...out }, null, 2));
       else if (out.conflict) console.log(`  ${red}✗${reset} ${out.error}`);
       else {
-        console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.task} → branch ${out.branch} a partir de ${out.base} (${out.commits.length} commit(s), cherry-pick -x)`);
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.task} → branch ${out.branch} a partir de ${out.base} @ ${String(out.base_sha || "").slice(0, 10)} (${out.commits.length} commit(s), cherry-pick -x)`);
+        for (const w of out.warnings || []) console.log(`  ${c ? yellow : ""}AVISO${c ? reset : ""} ${w}`);
         if (out.pr_ready) console.log(`  pr:ready: ${out.pr_ready.ok ? 'OK verde' : 'FAIL vermelho'}${out.pr_ready.ok ? '' : `
 ${out.pr_ready.tail}`}`);
         console.log(`  Corpo do PR: ${out.body_file}`);
