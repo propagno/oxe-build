@@ -528,6 +528,7 @@ oxe-cc azure operations list
 | `oxe-cc runtime execute --budget-turns N --checkpoint-commits` | executa com teto de turnos e checkpoint por tarefa |
 | `oxe-cc runtime ci --attach <run>` | anexa um run de CI à fase (gate `kind: ci`) |
 | `oxe-cc runtime scorecard [--since <data>]` | mede a maturidade a partir dos registros do runtime |
+| `oxe-cc runtime execute --parallel-mutating --checkpoint-commits` | roda ao mesmo tempo as tarefas de uma onda com escopos disjuntos, cada uma numa worktree; integra só os arquivos do escopo, verifica de novo e commita uma por vez (`parallel.max`, `deps_strategy`) |
 | `oxe-cc runtime execute --json` | uma linha NDJSON por evento de tarefa (`task`, `attempt`, `status`, `cost_usd`, `failed_segment`); a última linha é o resultado |
 | `oxe-cc … --plain` | saída ASCII (OK/FAIL/BLOCKED), sem banner nem box drawing; é o padrão quando o stdout não é um TTY (`OXE_PLAIN=0` desliga) |
 | `oxe-cc status --full` | mostra próximo passo, coverage matrix e active run |

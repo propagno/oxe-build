@@ -40,6 +40,33 @@ export interface SchedulerOptions {
     maxRunDurationMs?: number;
     staleProgressMs?: number;
 }
+/** OXB-050: what integrating a worktree's work into the program checkout did. */
+export interface ParallelIntegration {
+    ok: boolean;
+    /** In-scope files copied into the program checkout (relative paths). */
+    files: string[];
+    /** Files the attempt changed outside its mutation_scope (never copied). */
+    outside: string[];
+    error?: string;
+}
+/**
+ * OXB-050 (opt-in `--parallel-mutating`): the mutating nodes of a wave with disjoint `mutation_scope` run at the same
+ * time, each in its own isolated workspace (`manager`, a git worktree with prepared dependencies). A node whose verify
+ * passes there is integrated into the program checkout under a lock — in-scope files only — and verified again on the
+ * integrated tree before it completes. Concurrency is bounded by `maxParallel` and by free memory per agent.
+ */
+export interface ParallelMutatingOptions {
+    maxParallel: number;
+    /** Free memory (MB) required to START another parallel node (one always runs). */
+    minFreeMb?: number;
+    freeMb?: () => number;
+    manager: WorkspaceManager;
+    integrate: (node: GraphNode, lease: WorkspaceLease) => ParallelIntegration | Promise<ParallelIntegration>;
+    /** Undo an integration whose verify on the integrated tree failed. */
+    discard: (files: string[]) => void | Promise<void>;
+}
+/** Two scopes may touch the same file: equal paths, one a directory prefix of the other, or a glob in either. */
+export declare function scopesOverlap(a: string[], b: string[]): boolean;
 export interface SchedulerContext {
     projectRoot: string;
     sessionId: string | null;
@@ -55,6 +82,7 @@ export interface SchedulerContext {
     policyActor?: string;
     onEvent?: (event: OxeEvent) => void;
     options?: SchedulerOptions;
+    parallel?: ParallelMutatingOptions;
 }
 export interface RunResult {
     run_id: string;
@@ -73,6 +101,9 @@ export declare class Scheduler {
     private runStartMs;
     private lastProgressMs;
     private recordProgress;
+    /** OXB-050: integrations into the program checkout happen one at a time (copy, verify, checkpoint). */
+    private integrationChain;
+    private withIntegrationLock;
     private executeRollback;
     run(graph: ExecutionGraph, ctx: SchedulerContext): Promise<RunResult>;
     /**
@@ -82,6 +113,8 @@ export declare class Scheduler {
     recover(runId: string, ctx: SchedulerContext, graph: ExecutionGraph): Promise<RunResult | null>;
     private isConcurrentSafe;
     private runWave;
+    /** OXB-050: a pool over the wave's mutating nodes — disjoint scopes only, `maxParallel`, memory per agent. */
+    private runMutationsInParallel;
     private runNode;
     /** Abort keeps the progress made so far: an aborted run is recoverable, not a blank slate. */
     private abortRun;

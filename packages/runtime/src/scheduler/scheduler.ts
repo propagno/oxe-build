@@ -64,6 +64,54 @@ export interface SchedulerOptions {
   staleProgressMs?: number;    // default: 5 min without any task completing
 }
 
+/** OXB-050: what integrating a worktree's work into the program checkout did. */
+export interface ParallelIntegration {
+  ok: boolean;
+  /** In-scope files copied into the program checkout (relative paths). */
+  files: string[];
+  /** Files the attempt changed outside its mutation_scope (never copied). */
+  outside: string[];
+  error?: string;
+}
+
+/**
+ * OXB-050 (opt-in `--parallel-mutating`): the mutating nodes of a wave with disjoint `mutation_scope` run at the same
+ * time, each in its own isolated workspace (`manager`, a git worktree with prepared dependencies). A node whose verify
+ * passes there is integrated into the program checkout under a lock — in-scope files only — and verified again on the
+ * integrated tree before it completes. Concurrency is bounded by `maxParallel` and by free memory per agent.
+ */
+export interface ParallelMutatingOptions {
+  maxParallel: number;
+  /** Free memory (MB) required to START another parallel node (one always runs). */
+  minFreeMb?: number;
+  freeMb?: () => number;
+  manager: WorkspaceManager;
+  integrate: (node: GraphNode, lease: WorkspaceLease) => ParallelIntegration | Promise<ParallelIntegration>;
+  /** Undo an integration whose verify on the integrated tree failed. */
+  discard: (files: string[]) => void | Promise<void>;
+}
+
+/** Two scopes may touch the same file: equal paths, one a directory prefix of the other, or a glob in either. */
+export function scopesOverlap(a: string[], b: string[]): boolean {
+  if (!a.length || !b.length) return true;
+  const norm = (p: string) => String(p).replace(/\\/g, '/').replace(/\/+$/, '');
+  const base = (p: string) => norm(p).split(/[*?[{]/)[0].replace(/\/[^/]*$/, (m) => (/[*?[{]/.test(norm(p)) ? '' : m));
+  for (const x of a) {
+    for (const y of b) {
+      const nx = norm(x);
+      const ny = norm(y);
+      if (nx === ny) return true;
+      const gx = /[*?[{]/.test(nx);
+      const gy = /[*?[{]/.test(ny);
+      const px = gx ? base(nx) : nx;
+      const py = gy ? base(ny) : ny;
+      if (!px || !py) return true;
+      if (px === py || px.startsWith(`${py}/`) || py.startsWith(`${px}/`)) return true;
+    }
+  }
+  return false;
+}
+
 export interface SchedulerContext {
   projectRoot: string;
   sessionId: string | null;
@@ -79,6 +127,7 @@ export interface SchedulerContext {
   policyActor?: string;
   onEvent?: (event: OxeEvent) => void;
   options?: SchedulerOptions;
+  parallel?: ParallelMutatingOptions;
 }
 
 export interface RunResult {
@@ -103,6 +152,14 @@ export class Scheduler {
 
   private recordProgress(): void {
     this.lastProgressMs = Date.now();
+  }
+
+  /** OXB-050: integrations into the program checkout happen one at a time (copy, verify, checkpoint). */
+  private integrationChain: Promise<unknown> = Promise.resolve();
+  private withIntegrationLock<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.integrationChain.then(fn, fn);
+    this.integrationChain = run.catch(() => undefined);
+    return run;
   }
 
   private async executeRollback(plan: RollbackPlan, ctx: SchedulerContext): Promise<void> {
@@ -497,12 +554,60 @@ export class Scheduler {
       );
     }
 
+    if (ctx.parallel && mutations.length > 1) {
+      await this.runMutationsInParallel(mutations, graph, ctx, status, completed, failed, blocked);
+      return failed.length > 0;
+    }
+
     for (const id of mutations) {
       if (this.cancelled) break;
       await this.runNode(id, graph, ctx, status, completed, failed, blocked);
     }
 
     return failed.length > 0;
+  }
+
+  /** OXB-050: a pool over the wave's mutating nodes — disjoint scopes only, `maxParallel`, memory per agent. */
+  private async runMutationsInParallel(
+    mutations: string[],
+    graph: ExecutionGraph,
+    ctx: SchedulerContext,
+    status: Map<string, NodeStatus>,
+    completed: string[],
+    failed: string[],
+    blocked: string[]
+  ): Promise<void> {
+    const parallel = ctx.parallel!;
+    const max = Math.max(1, Math.floor(parallel.maxParallel || 1));
+    const pending = [...mutations];
+    const running = new Map<string, { scope: string[]; done: Promise<void> }>();
+    let memoryWarned = false;
+    while ((pending.length > 0 || running.size > 0) && !this.cancelled) {
+      for (const id of [...pending]) {
+        if (running.size >= max) break;
+        const scope = graph.nodes.get(id)!.mutation_scope;
+        if ([...running.values()].some((r) => scopesOverlap(r.scope, scope))) continue;
+        if (running.size > 0 && parallel.minFreeMb && parallel.freeMb && parallel.freeMb() < parallel.minFreeMb) {
+          if (!memoryWarned) {
+            memoryWarned = true;
+            this.emit(ctx, { type: 'PolicyWarning', work_item_id: id, payload: { reason: 'parallel_memory', detail: `memória livre abaixo de ${parallel.minFreeMb} MB: o próximo agente espera um terminar` } });
+          }
+          break;
+        }
+        pending.splice(pending.indexOf(id), 1);
+        const done = this.runNode(id, graph, ctx, status, completed, failed, blocked, { parallel: true })
+          .catch(() => undefined)
+          .finally(() => { running.delete(id); });
+        running.set(id, { scope, done });
+      }
+      if (running.size === 0) {
+        // Nothing could start (should not happen: one always runs) — fall back to the next one, alone.
+        const id = pending.shift();
+        if (id) await this.runNode(id, graph, ctx, status, completed, failed, blocked);
+        continue;
+      }
+      await Promise.race([...running.values()].map((r) => r.done));
+    }
   }
 
   private async runNode(
@@ -512,9 +617,11 @@ export class Scheduler {
     status: Map<string, NodeStatus>,
     completed: string[],
     failed: string[],
-    blocked: string[]
+    blocked: string[],
+    mode: { parallel?: boolean } = {}
   ): Promise<void> {
     const node = graph.nodes.get(nodeId)!;
+    const parallelNode = Boolean(mode.parallel && ctx.parallel);
     status.set(nodeId, 'running');
     this.emit(ctx, {
       type: 'WorkItemReady',
@@ -607,7 +714,9 @@ export class Scheduler {
           strategy: node.workspace_strategy,
           mutation_scope: node.mutation_scope,
         };
-        const workspaceManager = ctx.pluginRegistry?.workspaceProviderFor(node.workspace_strategy) ?? ctx.workspaceManager;
+        const workspaceManager = parallelNode
+          ? ctx.parallel!.manager
+          : ctx.pluginRegistry?.workspaceProviderFor(node.workspace_strategy) ?? ctx.workspaceManager;
         leaseManager = workspaceManager;
         lease = await workspaceManager.allocate(wsReq);
         this.emit(ctx, {
@@ -658,6 +767,50 @@ export class Scheduler {
               break;
             }
             lastVerifySignature = signature;
+          } else if (parallelNode) {
+            // OXB-050: green in its worktree → integrate (in-scope files only) and verify again on the integrated tree,
+            // under the integration lock; only then the task completes (and its checkpoint is committed).
+            const attemptLease = lease;
+            const outcome = await this.withIntegrationLock(async () => {
+              const integration = await ctx.parallel!.integrate(node, attemptLease);
+              if (integration.outside.length) {
+                this.emit(ctx, {
+                  type: 'ScopeViolation',
+                  work_item_id: nodeId,
+                  attempt_id: attemptId,
+                  payload: { task: nodeId, paths: integration.outside, outcome: 'not_integrated', workspace: 'worktree' },
+                });
+              }
+              if (!integration.ok) return { ok: false as const, output: `integration_failed: ${integration.error ?? 'unknown'}` };
+              const integrated = await this.verifyNode(node, { ...attemptLease, root_path: ctx.projectRoot }, ctx, attemptId, attempt);
+              if (integrated && integrated.status === 'failed') {
+                await ctx.parallel!.discard(integration.files);
+                return {
+                  ok: false as const,
+                  output: `Verify on the integrated tree failed (it passed in the task's worktree; another task's change may conflict).\n${describeVerifyFailure(node.verify.command, integrated.check, integrated.gaps, integrated.segment)}`,
+                };
+              }
+              this.emit(ctx, {
+                type: 'WorkItemCompleted',
+                work_item_id: nodeId,
+                attempt_id: attemptId,
+                payload: {
+                  attempt_number: attempt,
+                  evidence: lastResult!.evidence,
+                  workspace: 'worktree',
+                  integrated_files: integration.files,
+                  ...(turnLimitWithWork ? { completed_by: 'verify_after_turn_limit' } : {}),
+                },
+              });
+              return { ok: true as const, output: '' };
+            });
+            if (outcome.ok) {
+              status.set(nodeId, 'completed');
+              completed.push(nodeId);
+              this.recordProgress();
+              return;
+            }
+            lastResult = { success: false, failure_class: 'verify', evidence: lastResult.evidence, output: outcome.output };
           } else {
             this.emit(ctx, {
               type: 'WorkItemCompleted',

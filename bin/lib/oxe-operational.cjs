@@ -1565,6 +1565,24 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
       const nodes = typeof graph.nodes.values === 'function' ? [...graph.nodes.values()] : Object.values(graph.nodes);
       for (const node of nodes) if (node && node.policy) node.policy.max_retries = maxRetriesOverride;
     }
+    // OXB-050: `--parallel-mutating` — refused before any paid turn unless it is safe (see oxe-parallel.cjs).
+    let parallelOptions = null;
+    if (options.parallelMutating) {
+      const parallelLib = require('./oxe-parallel.cjs');
+      const pcfg = parallelLib.parallelConfig(projectRoot, options);
+      const allNodes = graph && graph.nodes ? (typeof graph.nodes.values === 'function' ? [...graph.nodes.values()] : Object.values(graph.nodes)) : [];
+      const inWaves = new Set((graph.waves || []).flatMap((w) => w.node_ids || []));
+      const mutating = allNodes.filter((n) => n && inWaves.has(n.id) && Array.isArray(n.mutation_scope) && n.mutation_scope.length);
+      const errors = parallelLib.parallelPreconditions(projectRoot, pcfg, {
+        nodes: mutating,
+        checkpointCommits: Boolean(options.checkpointCommits || readProjectConfig(projectRoot).checkpoint_commits),
+        dirty: dirtyProjectPaths(projectRoot),
+      });
+      if (errors.length) throw new Error(`--parallel-mutating recusado:\n  - ${errors.join('\n  - ')}`);
+      // Leftovers of a crashed run: links removed first, then the worktree (never a forced remove over a junction).
+      if (typeof runtime.sweepStaleWorkspaces === 'function') runtime.sweepStaleWorkspaces(projectRoot);
+      parallelOptions = parallelLib.createParallelOptions(runtime, projectRoot, pcfg, { workingTreeChanges });
+    }
 
   // Detect plan-agents.json: explicit override > session path > root path
   const rootAgentPlan = path.join(projectRoot, '.oxe', 'plan-agents.json');
@@ -1603,7 +1621,9 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
       // attempt starts; at the end of an attempt, any path changed outside the scope is a ScopeViolation (reported
       // whether the attempt passed or not). A verify_only / external_delivery task has an enforced EMPTY scope.
       const taskId = event && event.work_item_id;
-      const inplaceRun = Boolean(runtime.InplaceWorkspaceManager && workspaceManager instanceof runtime.InplaceWorkspaceManager);
+      // OXB-050: with --parallel-mutating the mutating tasks run in worktrees and only in-scope files are integrated
+      // (scope enforced by the integration); snapshots of the shared checkout would see other tasks' integrations.
+      const inplaceRun = !parallelOptions && Boolean(runtime.InplaceWorkspaceManager && workspaceManager instanceof runtime.InplaceWorkspaceManager);
       let outsideNow = [];
       if (taskId && inplaceRun && gitRepo) {
         try {
@@ -1632,7 +1652,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
       // Files that were dirty before (this execute or the task) are never reverted; they are copied for review.
       const failedForGood = event && event.type === 'WorkItemBlocked' && event.payload && (event.payload.max_attempts != null || isVerifyOnlyNode(taskId));
       const verifyOnlyWrote = event && event.type === 'WorkItemCompleted' && isVerifyOnlyNode(taskId) && outsideNow.length > 0;
-      if (isolateFailures && taskId && (failedForGood || verifyOnlyWrote)) {
+      if (isolateFailures && inplaceRun && taskId && (failedForGood || verifyOnlyWrote)) {
         try {
           const base = taskBaseline.get(taskId) || new Map();
           const outside = (scopeViolations.get(taskId) || []).filter((p) => !preDirty.has(p));
@@ -1727,6 +1747,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     throw new Error('Runtime não exporta Scheduler. Verifique a versão do runtime.');
   }
   const scheduler = new runtime.Scheduler();
+  if (parallelOptions) ctx.parallel = parallelOptions;
   const result = await scheduler.run(graph, ctx);
   classifyBlockedResult(result, graph);
   const syncedRun = syncRunStateAfterExecute(projectRoot, activeSession, current, result, 'single');

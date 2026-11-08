@@ -64,11 +64,43 @@ export function unlinkExternalLinks(root: string, limits: { maxDepth?: number; m
   return removed;
 }
 
+/**
+ * OXB-050: leftover worktrees of a crashed or aborted run (`.oxe/workspaces/ws-*`). Each one has its external links
+ * (node_modules junction, workspace links) removed FIRST, then `git worktree remove --force`, then `worktree prune`.
+ * A forced remove with the junction still in place deletes the real node_modules — never in this order.
+ * @returns the workspace directories removed
+ */
+export function sweepStaleWorkspaces(projectRoot: string, options: { keep?: Set<string> } = {}): string[] {
+  const root = path.join(projectRoot, '.oxe', 'workspaces');
+  const removed: string[] = [];
+  let entries: string[] = [];
+  try { entries = fs.readdirSync(root); } catch { return removed; }
+  for (const name of entries) {
+    if (!name.startsWith('ws-') || options.keep?.has(name)) continue;
+    const dir = path.join(root, name);
+    unlinkExternalLinks(dir);
+    try {
+      execFileSync('git', ['worktree', 'remove', dir, '--force'], { cwd: projectRoot, stdio: 'ignore', windowsHide: true });
+    } catch {
+      // not a registered worktree (half-created): its links are already gone, remove the plain directory
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { continue; }
+    }
+    removed.push(dir);
+  }
+  try { execFileSync('git', ['worktree', 'prune'], { cwd: projectRoot, stdio: 'ignore', windowsHide: true }); } catch { /* best effort */ }
+  return removed;
+}
+
+export interface GitWorktreeOptions {
+  /** OXB-050: prepares a fresh worktree (dependencies: link / copy-from / ci) before the executor runs in it. */
+  prepare?: (root: string, lease: WorkspaceLease) => void | Promise<void>;
+}
+
 export class GitWorktreeManager implements WorkspaceManager {
   readonly isolation_level = 'isolated' as const;
   private leases = new Map<string, WorkspaceLease>();
 
-  constructor(private readonly projectRoot: string) {}
+  constructor(private readonly projectRoot: string, private readonly options: GitWorktreeOptions = {}) {}
 
   async allocate(req: WorkspaceRequest): Promise<WorkspaceLease> {
     const suffix = crypto.randomBytes(4).toString('hex');
@@ -94,6 +126,14 @@ export class GitWorktreeManager implements WorkspaceManager {
       ttl_minutes: 45,
     };
     this.leases.set(wsId, lease);
+    if (this.options.prepare) {
+      try {
+        await this.options.prepare(worktreePath, lease);
+      } catch (err) {
+        await this.dispose(wsId);
+        throw err;
+      }
+    }
     return lease;
   }
 

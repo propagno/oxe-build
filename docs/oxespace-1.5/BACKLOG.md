@@ -225,7 +225,14 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-050: dentro de uma onda, as tarefas que escrevem rodam em série, e o modo paralelo não prepara dependências
 
-- **Status:** aberto (levantado pelo coordenador, a partir da pergunta do usuário sobre por que só havia um processo rodando).
+- **Status:** resolvido (1.21.2), opt-in com `runtime execute --parallel-mutating` (o padrão continua serial).
+  - O scheduler roda em paralelo, num pool, os nós mutáveis de uma onda: até `parallel.max` (padrão 2), só com `mutation_scope` disjunto (mesmo arquivo, diretório × arquivo e glob contam como sobreposição) e só com memória livre ≥ `parallel.min_free_mb` para iniciar mais um.
+  - Cada nó roda numa worktree própria (`GitWorktreeManager` com `prepare` de dependências).
+  - Verify verde na worktree → integração sob lock: só os arquivos do escopo são copiados para a checkout do programa. O que ficou fora do escopo vira `ScopeViolation` (`not_integrated`). O verify roda de novo no tree integrado e só então sai o `WorkItemCompleted`, com o checkpoint. Se o verify integrado der vermelho, a integração é desfeita e a tentativa vai para o retry.
+  - `deps_strategy`: `link` (junction para o node_modules de `deps_link_from`, explícito, nunca um caminho de `deps_protected`), `copy-from`, `ci` (npm ci + checagem de presença da OXB-039) ou `none`.
+  - Recusado antes de qualquer turno pago: sem `--checkpoint-commits`; com working tree sujo; sem `deps_strategy`/`deps_link_from`; com fonte protegida; e, no `link`, tarefa que muda package.json/lockfile ou instala no verify ("use deps_strategy copy-from ou ci").
+  - Os links saem sempre antes do remove: no dispose, e numa varredura de leases velhos no início de cada execute paralelo (`sweepStaleWorkspaces`: unlink, depois `worktree remove`, depois `prune`).
+  - Teste: `tests/oxe-1212-parallel-mutating.test.cjs` (concorrência medida = 2; escopos sobrepostos nunca juntos; integração + commit por tarefa; edição fora do escopo não integrada; verify integrado vermelho desfeito; recusas; varredura com junction sem perder o node_modules real).
 - **Evidência:**
   - Em `lib/runtime/scheduler/scheduler.js` (runWave, ~l. 360), só rodam juntos os nós que passam no `isConcurrentSafe` (leitura). Todo nó com `mutation_scope` cai em `for (const id of mutations) await runNode(…)`, sempre no mesmo checkout, mesmo quando os escopos de escrita são disjuntos (ex.: T8 em `src/components/Threads/*` e T9 em `src/components/OxeQuery/*`).
   - O modo paralelo existe (`--agents-plan` com `plan-agents.json` mais `MultiAgentCoordinator`, `mode: parallel`, uma worktree por agente via `GitWorktreeManager`). Só que a worktree nova nasce sem `node_modules`: o `GitWorktreeManager` não instala nem linka dependências, e só desfaz links no dispose. Os verifies (vitest, test:electron) quebram ali.

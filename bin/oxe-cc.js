@@ -2561,7 +2561,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime feedback --class <defect|spec_gap|constraint|new_scope> --summary "..." [--criteria A4] [--tasks T7[,T8]] [--by <quem>] [--amend-to 2] [--additive]
   npx oxe-cc runtime feedback list [--json]
   npx oxe-cc runtime rollback --task T3 [--yes]
-  npx oxe-cc runtime execute ... [--checkpoint-commits] [--budget-turns N] [--budget-usd X] [--budget-reset] [--max-retries N] [--wave N] [--strict-external] [--json → NDJSON por evento de tarefa]
+  npx oxe-cc runtime execute ... [--checkpoint-commits] [--budget-turns N] [--budget-usd X] [--budget-reset] [--max-retries N] [--wave N] [--strict-external] [--parallel-mutating [--max-parallel N]] [--json → NDJSON por evento de tarefa]
   (qualquer comando) --plain  saída ASCII sem banner (padrão quando o stdout não é TTY; OXE_PLAIN=0 desliga)
   npx oxe-cc runtime verify [--no-gates]
   npx oxe-cc runtime scorecard [--since <data>] [--write] [--release-report <arquivo> --name <projeto>] [--json]
@@ -4178,6 +4178,8 @@ function parseRuntimeArgs(argv) {
     else if (a === '--budget-usd' && argv[i + 1]) out.budgetUsd = Number(argv[++i]);
     else if (a === '--budget-reset') out.budgetReset = true;
     else if (a === '--strict-external') out.strictExternal = true;
+    else if (a === '--parallel-mutating') out.parallelMutating = true;
+    else if (a === '--max-parallel' && argv[i + 1]) out.maxParallel = Number(argv[++i]);
     else if (a === '--release-report' && argv[i + 1]) out.releaseReport = String(argv[++i]);
     else if (a === '--since' && argv[i + 1]) out.since = String(argv[++i]);
     else if (a === '--name' && argv[i + 1]) out.name = String(argv[++i]);
@@ -5331,6 +5333,8 @@ async function runRuntime(opts) {
         budgetUsd: opts.budgetUsd || undefined,
         budgetReset: opts.budgetReset || undefined,
         maxRetries: opts.maxRetries != null && !Number.isNaN(opts.maxRetries) ? opts.maxRetries : undefined,
+        parallelMutating: Boolean(opts.parallelMutating),
+        maxParallel: opts.maxParallel || undefined,
         agentsPlanPath: opts.agentsPlanPath || undefined,
         onProgress: (event) => {
           // OXB-065: with --json, one NDJSON line per task event on stdout; the final result is the last line.
