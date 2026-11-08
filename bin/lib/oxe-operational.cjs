@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { spawnSync, spawn } = require('child_process');
 
 const VALID_RUN_STATUSES = new Set([
@@ -1825,7 +1826,9 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
 
   // OXB-167: a task whose verify passed but whose checkpoint commit failed (a hook, a lock) gets the commit retried
   // first — no executor turn, no new verify; done only if the commit lands with its scope's changes.
-  retryFailedCheckpoints(projectRoot, activeSession, options);
+  const checkpointRetry = retryFailedCheckpoints(projectRoot, activeSession, options);
+  // OXB-170: an interrupted task's leftovers are ITS work when it runs again (not "dirty before it").
+  const interruptedWork = new Map((checkpointRetry.interrupted || []).map((w) => [w.task, w.files]));
 
   // Resolve compiled graph from run state or compile on demand
   let current = options.runState || readRunState(projectRoot, activeSession);
@@ -2035,7 +2038,11 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
       if (taskId && event.type === 'WorkItemReady') scratchLib.ensureScratchDir(projectRoot, taskId);
       if (taskId && inplaceRun && gitRepo) {
         try {
-          if (event.type === 'WorkItemReady') taskBaseline.set(taskId, treeSnapshot(projectRoot));
+          if (event.type === 'WorkItemReady') {
+            const snap = treeSnapshot(projectRoot);
+            for (const f of interruptedWork.get(taskId) || []) snap.delete(f);
+            taskBaseline.set(taskId, snap);
+          }
           if (event.type === 'AttemptStarted') attemptBaseline.set(taskId, treeSnapshot(projectRoot));
           const attemptEnded = event.type === 'RetryScheduled' || event.type === 'WorkItemCompleted' || event.type === 'WorkItemBlocked';
           if (attemptEnded && taskBaseline.has(taskId)) {
@@ -2089,7 +2096,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
         // 1.20c: checkpoint de filesystem por tarefa concluída (opt-in), na convenção de commit do projeto (OXB-021).
         if (checkpointCommits) {
           try {
-            const cp = commitTaskCheckpoint(projectRoot, current, event.work_item_id, { task: planTaskById.get(event.work_item_id), phase: phaseCtxForCommits.phase });
+            const cp = commitTaskCheckpoint(projectRoot, current, event.work_item_id, { task: planTaskById.get(event.work_item_id), phase: phaseCtxForCommits.phase, baseline: taskBaseline.get(event.work_item_id) || null });
             if (cp.committed) {
               checkpoint = cp.commit;
               appendEvent(projectRoot, activeSession, { type: 'GateResolved', run_id: current.run_id, work_item_id: event.work_item_id, payload: { gate: 'checkpoint', commit: cp.commit, files: cp.files, leftover: cp.leftover } });
@@ -2098,7 +2105,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
                 checkpointFailure = { reason: `checkpoint incompleto: ${cp.leftover.length} arquivo(s) do escopo fora do commit (${cp.leftover.slice(0, 5).join(', ')})`, commit: cp.commit, leftover: cp.leftover };
               }
             } else if (cp.failed) {
-              checkpointFailure = { reason: cp.reason };
+              checkpointFailure = { reason: cp.reason, ...(cp.snapshot ? { snapshot: cp.snapshot } : {}) };
             }
           } catch (err) {
             checkpointFailure = { reason: `checkpoint falhou: ${err && err.message ? err.message : err}` };
@@ -5084,7 +5091,7 @@ function treeSnapshot(projectRoot) {
   }
   for (let i = 0; i < present.length; i += 200) {
     const chunk = present.slice(i, i + 200);
-    const res = spawnSync('git', ['hash-object', '--', ...chunk], { cwd: projectRoot, encoding: 'utf8', windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+    const res = spawnSync('git', ['hash-object', '-w', '--', ...chunk], { cwd: projectRoot, encoding: 'utf8', windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
     const hashes = String(res.stdout || '').split(/\r?\n/).filter(Boolean);
     chunk.forEach((f, k) => snapshot.set(f, hashes[k] || 'unknown'));
   }
@@ -5253,33 +5260,91 @@ function runtimePlanReopen(projectRoot, activeSession, options = {}) {
   return { task: taskId, changed };
 }
 
-/** OXB-167: retries the checkpoint of tasks marked `checkpoint_failed` in PLAN.json. */
+/**
+ * OXB-170: work an interrupted task left in the tree (a run killed while T8 was in progress). The last run's tasks with
+ * an AttemptStarted and no completion/block after it, and the dirty paths in their scope. Reported before any
+ * checkpoint retry, and those paths are never folded into another task's commit.
+ * @returns {Array<{ task: string, run_id: string|null, files: string[] }>}
+ */
+function interruptedTaskWork(projectRoot, activeSession) {
+  let events = [];
+  try { events = readEvents(projectRoot, activeSession); } catch { events = []; }
+  const lastRun = [...events].reverse().find((e) => e && e.run_id && e.type === 'AttemptStarted');
+  if (!lastRun) return [];
+  const runId = lastRun.run_id;
+  const state = new Map();
+  for (const e of events) {
+    if (!e || e.run_id !== runId || !e.work_item_id) continue;
+    if (e.type === 'AttemptStarted') state.set(e.work_item_id, 'running');
+    else if (['WorkItemCompleted', 'WorkItemBlocked', 'WorkItemFailed', 'RetryScheduled'].includes(e.type)) state.set(e.work_item_id, 'ended');
+  }
+  const running = [...state].filter(([, s]) => s === 'running').map(([id]) => id);
+  if (!running.length) return [];
+  let doc = null;
+  try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
+  const out = [];
+  for (const id of running) {
+    const t = doc && Array.isArray(doc.tasks) ? doc.tasks.find((x) => x && x.id === id) : null;
+    if (!t || t.done === true) continue;
+    const scope = (t.files || []).map((p) => String(p).replace(/\\/g, '/')).filter((p) => p && !p.includes('*'));
+    const files = scope.length ? changedPathsUnder(projectRoot, scope) : [];
+    if (files.length) out.push({ task: id, run_id: runId, files });
+  }
+  return out;
+}
+
+/** OXB-167/170: retries the checkpoint of tasks marked `checkpoint_failed` in PLAN.json. */
 function retryFailedCheckpoints(projectRoot, activeSession, options = {}) {
   const out = [];
   let doc = null;
   try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
   const pending = doc && Array.isArray(doc.tasks) ? doc.tasks.filter((t) => t && t.done !== true && t.checkpoint_failed) : [];
+  // OXB-170: an interrupted task's leftovers are attributed first (event), whatever is retried.
+  const interrupted = interruptedTaskWork(projectRoot, activeSession).filter((w) => !pending.some((t) => t.id === w.task));
+  if (interrupted.length) appendEvent(projectRoot, activeSession, { type: 'InterruptedWorkFound', payload: { tasks: interrupted } });
+  out.interrupted = interrupted;
   if (!pending.length) return out;
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const ctx = taskPhaseContext(projectRoot, activeSession);
   const planJsonLib = require('./oxe-plan-json.cjs');
+  const foreign = new Map();
+  for (const w of interrupted) for (const f of w.files) foreign.set(f, w.task);
+  // the scope of every other pending task: with no snapshot, a path shared with one of them is not ours to commit
+  const otherScopes = (id) => new Map((doc.tasks || []).filter((t) => t && t.id !== id && t.done !== true)
+    .flatMap((t) => (t.files || []).map((f) => [String(f).replace(/\\/g, '/'), t.id])));
   for (const task of pending) {
     let cp = null;
-    try { cp = commitTaskCheckpoint(projectRoot, { run_id: task.checkpoint_failed.run_id || null }, task.id, { task, phase: ctx.phase }); } catch (err) { cp = { committed: false, failed: true, reason: String(err && err.message || err) }; }
+    const snapshot = task.checkpoint_failed.snapshot || null;
+    try {
+      if (snapshot) {
+        // the task's OWN content, saved when its checkpoint failed — whatever the tree holds now
+        cp = commitExactContent(projectRoot, snapshot, checkpointMessageFor(projectRoot, { run_id: task.checkpoint_failed.run_id || null }, task.id, task, ctx.phase), {});
+      } else {
+        // legacy record (rc ≤ 29, no snapshot): refuse paths another task may own (interrupted, or in its scope)
+        const scope = (task.files || []).map((p) => String(p).replace(/\\/g, '/')).filter((p) => p && !p.includes('*'));
+        const changed = changedPathsUnder(projectRoot, scope);
+        const others = otherScopes(task.id);
+        const shared = changed.filter((p) => foreign.has(p) || others.has(p) || [...others.keys()].some((k) => p.startsWith(`${k.replace(/\/$/, '')}/`)));
+        if (shared.length) {
+          cp = { committed: false, failed: true, reason: `retry recusado: ${shared.slice(0, 6).map((p) => `${p} (${foreign.get(p) || others.get(p) || 'outra tarefa'})`).join(', ')} também ${shared.length > 1 ? 'são' : 'é'} de outra tarefa pendente/interrompida — o commit misturaria o trabalho dela (OXB-170); revise e rode oxe-cc plan done ${task.id} --commit <sha> depois de commitar à mão` };
+        } else {
+          cp = commitTaskCheckpoint(projectRoot, { run_id: task.checkpoint_failed.run_id || null }, task.id, { task, phase: ctx.phase });
+        }
+      }
+    } catch (err) { cp = { committed: false, failed: true, reason: String(err && err.message || err) }; }
     const earlier = task.checkpoint_failed.commit || null;
     if (cp.committed && !(cp.leftover && cp.leftover.length)) {
       planJsonLib.markPlanTaskDone(paths.plan, task.id, { commit: cp.commit });
       out.push({ task: task.id, commit: cp.commit, ok: true });
     } else if (!cp.committed && !cp.failed && earlier) {
-      // nothing left to commit: the earlier (partial) checkpoint now holds everything
       planJsonLib.markPlanTaskDone(paths.plan, task.id, { commit: earlier });
       out.push({ task: task.id, commit: earlier, ok: true });
     } else {
       out.push({ task: task.id, ok: false, reason: cp.reason || 'checkpoint incompleto' });
     }
   }
-  if (out.length) appendEvent(projectRoot, activeSession, { type: 'CheckpointRetried', payload: { results: out } });
-  if (typeof options.onCheckpointRetry === 'function') options.onCheckpointRetry(out);
+  if (out.length) appendEvent(projectRoot, activeSession, { type: 'CheckpointRetried', payload: { results: out, interrupted } });
+  if (typeof options.onCheckpointRetry === 'function') options.onCheckpointRetry(out, interrupted);
   return out;
 }
 
@@ -5306,48 +5371,171 @@ function changedEntriesUnder(projectRoot, files) {
   return out;
 }
 
+const gitOut = (projectRoot, args, input) => spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024, ...(input != null ? { input } : {}) });
+
+/** A blob for the current file content (stored), or null when the file does not exist. */
+function storeBlob(projectRoot, rel) {
+  if (!fs.existsSync(path.join(projectRoot, rel))) return null;
+  const r = gitOut(projectRoot, ['hash-object', '-w', '--', rel]);
+  return r.status === 0 ? r.stdout.trim() : null;
+}
+
+/**
+ * OXB-170: what THIS task wrote, per changed path: `{ path: blob | 'deleted' }`. A path that was clean when the task
+ * started is the task's as it is now. A path that was already dirty (another task's interrupted edits) carries only
+ * the task's own diff: HEAD + (content at task start → content now), by git merge-file. A path the task did not touch
+ * after its start is not the task's. A merge conflict there is an error — never folded.
+ */
+function taskOwnContent(projectRoot, changed, baseline) {
+  const entries = {};
+  const problems = [];
+  for (const rel of changed) {
+    const before = baseline && baseline.has(rel) ? baseline.get(rel) : undefined;
+    const nowBlob = storeBlob(projectRoot, rel);
+    if (before === undefined) { entries[rel] = nowBlob || 'deleted'; continue; }
+    // dirty before the task started
+    if ((before === 'deleted' && !nowBlob) || (nowBlob && before === nowBlob)) continue; // untouched by the task
+    if (!nowBlob) { entries[rel] = 'deleted'; continue; }
+    if (before === 'deleted' || before === 'unknown') { problems.push(`${rel}: estava apagado/ilegível antes da tarefa e foi recriado — não dá para separar`); continue; }
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-own-'));
+    try {
+      const headFile = path.join(tmp, 'head');
+      const baseFile = path.join(tmp, 'base');
+      const nowFile = path.join(tmp, 'now');
+      const head = spawnSync('git', ['show', `HEAD:${rel}`], { cwd: projectRoot, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+      fs.writeFileSync(headFile, head.status === 0 ? head.stdout : Buffer.alloc(0));
+      fs.writeFileSync(baseFile, spawnSync('git', ['cat-file', 'blob', before], { cwd: projectRoot, windowsHide: true, maxBuffer: 64 * 1024 * 1024 }).stdout || Buffer.alloc(0));
+      fs.copyFileSync(path.join(projectRoot, rel), nowFile);
+      const merged = spawnSync('git', ['merge-file', '-p', headFile, baseFile, nowFile], { cwd: projectRoot, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+      if (merged.status !== 0) { problems.push(`${rel}: a mudança da tarefa sobrepõe edições de outra tarefa que já estavam na árvore — não dá para separar`); continue; }
+      const blob = gitOut(projectRoot, ['hash-object', '-w', '--stdin'], merged.stdout);
+      entries[rel] = blob.stdout.trim();
+    } finally {
+      try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* */ }
+    }
+  }
+  return { entries, problems };
+}
+
+function modeFor(projectRoot, rel) {
+  const ls = gitOut(projectRoot, ['ls-tree', 'HEAD', '--', rel]).stdout.trim();
+  if (ls) return ls.split(/\s+/)[0];
+  try { if (process.platform !== 'win32' && (fs.statSync(path.join(projectRoot, rel)).mode & 0o111)) return '100755'; } catch { /* */ }
+  return '100644';
+}
+
+/** OXB-170: the checkpoint message (convention + phase/run trailers). */
+function checkpointMessageFor(projectRoot, runState, taskId, planTask, phase, config = null) {
+  const node = (runState && runState.compiled_graph && runState.compiled_graph.nodes && runState.compiled_graph.nodes[taskId]) || {};
+  const t = planTask || {};
+  return require('./oxe-commit-convention.cjs').checkpointMessage({
+    id: taskId,
+    title: t.title || node.title || taskId,
+    commit: t.meta && t.meta.commit ? t.meta.commit : t.commit,
+    phase: phase || null,
+    run_id: (runState && runState.run_id) || null,
+  }, config || readProjectConfig(projectRoot));
+}
+
+/**
+ * OXB-170: commits EXACTLY `entries` ({ path: blob | 'deleted' }) on top of HEAD, through the index — the working tree
+ * is never touched (another task's partial edits stay there for its retry). The person's staged changes on other
+ * paths are kept. Hooks run (a plain `git commit`). With config `checkpoint_check`, the command runs on the new
+ * commit's own tree (a temporary worktree); red → the commit is undone and the checkpoint fails.
+ */
+function commitExactContent(projectRoot, entries, message, options = {}) {
+  const paths = Object.keys(entries || {});
+  if (!paths.length) return { committed: false, reason: 'nada da tarefa para commitar' };
+  const oldHead = gitOut(projectRoot, ['rev-parse', 'HEAD']).stdout.trim();
+  const saved = gitOut(projectRoot, ['write-tree']);
+  if (saved.status !== 0) return { committed: false, failed: true, reason: `índice com conflito: ${saved.stderr.trim()}` };
+  const restore = () => {
+    gitOut(projectRoot, ['read-tree', saved.stdout.trim()]);
+    // these paths in the index follow the (new) HEAD, so nothing appears staged/reverted
+    const known = paths.filter((p) => gitOut(projectRoot, ['ls-files', '--error-unmatch', '--', p]).status === 0 || gitOut(projectRoot, ['cat-file', '-e', `HEAD:${p}`]).status === 0);
+    if (known.length) gitOut(projectRoot, ['reset', '-q', 'HEAD', '--', ...known]);
+  };
+  const rt = gitOut(projectRoot, ['read-tree', 'HEAD']);
+  if (rt.status !== 0) return { committed: false, failed: true, reason: `read-tree falhou: ${rt.stderr.trim()}` };
+  for (const p of paths) {
+    const v = entries[p];
+    const r = v === 'deleted'
+      ? gitOut(projectRoot, ['update-index', '--force-remove', '--', p])
+      : gitOut(projectRoot, ['update-index', '--add', '--cacheinfo', `${modeFor(projectRoot, p)},${v},${p}`]);
+    if (r.status !== 0) { restore(); return { committed: false, failed: true, reason: `update-index ${p}: ${r.stderr.trim()}` }; }
+  }
+  const commit = gitOut(projectRoot, ['commit', '-q', '-F', '-'], message);
+  if (commit.status !== 0) {
+    restore();
+    return { committed: false, failed: true, reason: `git commit falhou: ${String(commit.stderr || commit.stdout).trim().split(/\r?\n/).slice(-8).join(' · ')}`, snapshot: entries };
+  }
+  const head = gitOut(projectRoot, ['rev-parse', 'HEAD']).stdout.trim();
+  const check = checkpointCheck(projectRoot, head, options);
+  if (check && !check.ok) {
+    gitOut(projectRoot, ['update-ref', '-m', 'oxe: checkpoint_check vermelho', 'HEAD', oldHead, head]);
+    restore();
+    return { committed: false, failed: true, reason: `checkpoint_check vermelho na árvore do commit (\`${check.command}\`): ${check.tail}`, snapshot: entries };
+  }
+  restore();
+  // what went in is what was meant to
+  const leftover = paths.filter((p) => {
+    const inCommit = gitOut(projectRoot, ['rev-parse', '-q', '--verify', `HEAD:${p}`]).stdout.trim();
+    return entries[p] === 'deleted' ? Boolean(inCommit) : inCommit !== entries[p];
+  });
+  const committedFiles = (gitOut(projectRoot, ['show', '--name-only', '--format=', 'HEAD']).stdout || '').split(/\r?\n/).filter(Boolean);
+  return { committed: true, commit: head, files: committedFiles, leftover, ...(check ? { check: { command: check.command, ok: true } } : {}) };
+}
+
+/**
+ * OXB-170: config `checkpoint_check` (e.g. "npm run typecheck"): runs on the commit's own tree — a temporary detached
+ * worktree with a junction to node_modules (unlinked before removal, never a forced removal with it in place).
+ */
+function checkpointCheck(projectRoot, sha, options = {}) {
+  const cfg = readProjectConfig(projectRoot) || {};
+  const command = options.checkpointCheck != null ? options.checkpointCheck : cfg.checkpoint_check;
+  if (!command || typeof command !== 'string') return null;
+  const wt = path.join(projectRoot, '.oxe', 'checkpoint-ws', `${String(sha).slice(0, 10)}-${Date.now().toString(36)}`);
+  fs.mkdirSync(path.dirname(wt), { recursive: true });
+  const add = gitOut(projectRoot, ['worktree', 'add', '-q', '--detach', wt, sha]);
+  if (add.status !== 0) return { ok: false, command, tail: `worktree add falhou: ${add.stderr.trim()}` };
+  let res = null;
+  try {
+    const nm = path.join(projectRoot, 'node_modules');
+    if (fs.existsSync(nm)) fs.symlinkSync(fs.realpathSync(nm), path.join(wt, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    try { require('./oxe-local-config.cjs').copyLocalFiles(projectRoot, wt); } catch { /* */ }
+    res = runChildCommand(wt, command, Number(cfg.checkpoint_check_timeout_ms) > 0 ? Number(cfg.checkpoint_check_timeout_ms) : 900_000);
+  } finally {
+    try {
+      const rt = loadRuntimeModule();
+      if (rt && typeof rt.unlinkExternalLinks === 'function') rt.unlinkExternalLinks(wt);
+      else if (fs.existsSync(path.join(wt, 'node_modules'))) fs.unlinkSync(path.join(wt, 'node_modules'));
+    } catch { /* */ }
+    let linkLeft = false;
+    try { linkLeft = fs.lstatSync(path.join(wt, 'node_modules')).isSymbolicLink(); } catch { linkLeft = false; }
+    if (!linkLeft) gitOut(projectRoot, ['worktree', 'remove', '--force', wt]);
+    gitOut(projectRoot, ['worktree', 'prune']);
+  }
+  return { ok: Boolean(res && res.ok), command, tail: String((res && res.tail) || '').split(/\r?\n/).slice(-6).join(' · ') };
+}
+
 function commitTaskCheckpoint(projectRoot, runState, taskId, options = {}) {
   // OXB-052: the scope is the graph's AND the current plan's (a CR may have added files after the compile).
   const planFiles = options.task && Array.isArray(options.task.files) ? options.task.files.map((p) => String(p).replace(/\\/g, '/')).filter((p) => p && !p.includes('*')) : [];
   const files = [...new Set([...taskScopeFiles(runState, taskId), ...planFiles])];
   if (!files.length) return { committed: false, reason: 'tarefa sem escopo declarado' };
   if (!gitLines(projectRoot, ['rev-parse', '--is-inside-work-tree'])) return { committed: false, reason: 'sem repositório git' };
-  // OXB-168: the commit is built from what CHANGED under the scope, never from the scope itself. In a removal phase a
-  // scope path may be gone from the tree AND the index (T7 deleted services/documentation and committed first; T4's
-  // scope still named it), and one unknown pathspec made git reject T4's whole commit.
-  const entries = changedEntriesUnder(projectRoot, files);
-  const changed = [...new Set(entries.map((e) => e.path))];
-  // a deletion already staged (`git rm`) is not in the index any more: `git add -- <it>` fails, the commit takes it
-  const toAdd = [...new Set(entries.filter((e) => !(e.code[0] === 'D' && e.code[1] === ' ')).map((e) => e.path))];
+  // OXB-168: built from what CHANGED under the scope, never from the scope as pathspecs (a path another task already
+  // removed made git reject the whole commit).
+  const changed = changedPathsUnder(projectRoot, files);
   const scopeAbsent = files.filter((p) => !fs.existsSync(path.join(projectRoot, p)) && !(gitLines(projectRoot, ['ls-files', '--', p]) || []).length && !changed.some((c) => c === p || c.startsWith(`${p.replace(/\/$/, '')}/`)));
   if (!changed.length) return { committed: false, reason: 'nada mudou no escopo da tarefa', scope_absent: scopeAbsent };
-  const node = (runState && runState.compiled_graph && runState.compiled_graph.nodes && runState.compiled_graph.nodes[taskId]) || {};
-  // OXB-021: the message follows the project's commit_convention (or the task's own `commit`), with an OXE-Task trailer.
-  const planTask = options.task || {};
-  const message = require('./oxe-commit-convention.cjs').checkpointMessage({
-    id: taskId,
-    title: planTask.title || node.title || taskId,
-    commit: planTask.meta && planTask.meta.commit ? planTask.meta.commit : planTask.commit,
-    phase: options.phase || null,
-    run_id: (runState && runState.run_id) || null,
-  }, options.config || readProjectConfig(projectRoot));
-  // `add -A` on the changed paths stages new, modified AND deleted files; every one of them is known to git now.
-  const add = toAdd.length ? spawnSync('git', ['add', '-A', '--', ...toAdd], { cwd: projectRoot, encoding: 'utf8', windowsHide: true }) : { status: 0 };
-  if (add.status !== 0) {
-    spawnSync('git', ['reset', '-q', '--', ...changed], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
-    return { committed: false, failed: true, reason: `git add falhou: ${String(add.stderr).trim().split(/\r?\n/).slice(-8).join(' · ')}`, scope_absent: scopeAbsent };
-  }
-  const commit = spawnSync('git', ['commit', '-q', '-F', '-', '--', ...changed], { cwd: projectRoot, encoding: 'utf8', windowsHide: true, input: message });
-  if (commit.status !== 0) {
-    // OXB-167: nothing is left half-staged — the working tree keeps the task's changes, the index goes back.
-    spawnSync('git', ['reset', '-q', '--', ...changed], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
-    return { committed: false, failed: true, reason: `git commit falhou: ${String(commit.stderr || commit.stdout).trim().split(/\r?\n/).slice(-8).join(' · ')}`, scope_absent: scopeAbsent };
-  }
-  const head = gitLines(projectRoot, ['rev-parse', 'HEAD']);
-  // Every changed file of the task's scope must be in the checkpoint; anything left over is reported, never silent.
-  const leftover = changedPathsUnder(projectRoot, files);
-  const committedFiles = gitLines(projectRoot, ['show', '--name-only', '--format=', 'HEAD']) || [];
-  return { committed: true, commit: head && head[0], files: committedFiles, scope: files, leftover, ...(scopeAbsent.length ? { scope_absent: scopeAbsent } : {}) };
+  // OXB-170: only what THIS task wrote — paths already dirty when it started carry only its own diff.
+  const own = taskOwnContent(projectRoot, changed, options.baseline || null);
+  if (own.problems.length) return { committed: false, failed: true, reason: own.problems.join(' · '), snapshot: own.entries, scope_absent: scopeAbsent };
+  if (!Object.keys(own.entries).length) return { committed: false, reason: 'nada mudou no escopo da tarefa (o que está sujo já estava antes dela)', scope_absent: scopeAbsent };
+  const message = checkpointMessageFor(projectRoot, runState, taskId, options.task || {}, options.phase, options.config || null);
+  const res = commitExactContent(projectRoot, own.entries, message, options);
+  return { ...res, scope: files, ...(scopeAbsent.length ? { scope_absent: scopeAbsent } : {}), snapshot: res.committed ? undefined : own.entries };
 }
 
 /**

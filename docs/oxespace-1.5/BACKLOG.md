@@ -1151,3 +1151,24 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - Promote de uma tarefa só: se commits de outras tarefas, não promovidos, vêm **antes** dos dela e mexem nos mesmos arquivos, sai um aviso com a sugestão `--tasks …`. A mensagem de conflito também nomeia as tarefas e o comando combinado.
   - `plan lint` avisa quando o commit de uma tarefa veio antes do de uma tarefa da qual ela depende.
   - Teste: `tests/oxe-1212-promote-commit-order.test.cjs` (T2 commitada antes da T1: a T1 sozinha conflita e o aviso nomeia a T2; `--tasks T1,T2` aplica sem conflito, em ordem de commit; aviso do lint).
+
+## OXB-170: o checkpoint levava as mudanças de outra tarefa (P0, correção)
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11.
+  - O que aconteceu: a rc.28 foi morta com a T8 (remoção do RTK) em andamento. O retry de checkpoint da rc.29 commitou a T4 (0f72f6c7) e a T5 (335fc004) **com as edições parciais da T8**: entradas rtk do fs-allowlist e 12 linhas de locale.
+  - Consequência: o PR #727 reprovou no typecheck do CI (TS2345 nas chaves rtk). O verify da tarefa (só vitest) não pegou.
+  - **O commit leva só o conteúdo da tarefa, pelo índice.** O working tree nunca é tocado, e as edições de outra tarefa ficam lá para o retry dela.
+    - Arquivo limpo no início da tarefa: entra como está.
+    - Arquivo já sujo no início (edições de outra tarefa): entra só o diff da tarefa, `HEAD + (conteúdo no início → conteúdo agora)` por `git merge-file`. Se as mudanças se sobrepõem, a tarefa falha alto e nada é misturado.
+    - O snapshot da árvore guarda os blobs (`hash-object -w`) para isso.
+    - O que a pessoa tinha staged em outros caminhos é preservado.
+    - Os hooks rodam, porque é um `git commit` normal.
+  - **Retry:** o `checkpoint_failed` guarda um `snapshot` (caminho → blob) do conteúdo da tarefa no momento da falha, e o retry commita **exatamente** esse conteúdo, seja o que for que a árvore tenha agora.
+    - Registro antigo, sem snapshot (rc ≤ 29): o retry recusa caminhos de outra tarefa pendente ou interrompida, com a dica de commitar à mão e rodar `plan done`.
+  - **Relançamento:** a tarefa que tinha `AttemptStarted` sem fim na última run e deixou sujeira no próprio escopo é atribuída antes de qualquer checkpoint (evento `InterruptedWorkFound`).
+    - Quando ela roda de novo, essas edições contam como **dela**: saem do baseline, e o commit dela as leva.
+  - **`checkpoint_check`** (config, por exemplo `npm run typecheck`): roda na árvore do próprio commit, numa worktree temporária. Vermelho desfaz o commit, e a tarefa fica `checkpoint_failed`. É opt-in, porque custa um typecheck por tarefa.
+  - Teste: `tests/oxe-1212-checkpoint-phase.test.cjs`.
+    - A com checkpoint falho, B interrompida com edição no mesmo arquivo, relançamento: o commit de A não tem nada de B, B vê as próprias edições parciais e o commit dela as leva.
+    - Checkpoint ao vivo sobre arquivo já sujo.
+    - `checkpoint_check` vermelho desfaz o commit.

@@ -187,3 +187,83 @@ describe('OXB-168: the checkpoint commits what changed, not the scope as pathspe
     assert.deepEqual(cp.scope_absent, ['gone/x.ts']);
   });
 });
+
+describe('OXB-170: a checkpoint holds only its own task\'s hunks', () => {
+  // shared.txt: A (T1) changes line 1, B (T2, interrupted) changed line 9 — far apart, same file.
+  const SHARED = Array.from({ length: 10 }, (_, i) => `line ${i}`).join('\n') + '\n';
+  const withLine = (text, n, v) => text.split('\n').map((l, i) => (i === n ? v : l)).join('\n');
+
+  it('retry after an interrupted B: A\'s commit has none of B\'s hunks; B runs again and still sees its partial edits, and its commit carries them', async () => {
+    const plan = { schema_version: 1, tasks: [
+      { id: 'T1', title: 'A', wave: 1, files: ['shared.txt', 'a.txt'], verify: { commands: [ok] } },
+      { id: 'T2', title: 'B', wave: 2, depends_on: ['T1'], files: ['shared.txt', 'b.txt'], verify: { commands: [ok] } },
+    ] };
+    const dir = project({ plan, files: { 'shared.txt': SHARED, 'a.txt': 'a0\n', 'b.txt': 'b0\n' } });
+    // run 1: A passes its verify but its checkpoint fails (hook); wave 1 only
+    hook(dir, 1);
+    const execA = { async execute(node) {
+      if (node.id === 'T1') { fs.writeFileSync(path.join(dir, 'shared.txt'), withLine(SHARED, 1, 'line 1 by A')); fs.writeFileSync(path.join(dir, 'a.txt'), 'a1\n'); }
+      return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' };
+    } };
+    await op.runRuntimeExecute(dir, null, { executor: execA, skipPreflight: true, checkpointCommits: true, wave: 1 });
+    assert.ok(planOf(dir).tasks[0].checkpoint_failed.snapshot, 'the task\'s own content is saved with the failure');
+    // B starts and is killed mid-way: its partial edits on shared.txt (line 9) and b.txt stay in the tree
+    const run = op.readRunState(dir, null).run_id;
+    fs.writeFileSync(path.join(dir, 'shared.txt'), withLine(fs.readFileSync(path.join(dir, 'shared.txt'), 'utf8'), 9, 'line 9 by B (partial)'));
+    fs.writeFileSync(path.join(dir, 'b.txt'), 'b-partial\n');
+    fs.appendFileSync(path.join(dir, '.oxe', 'OXE-EVENTS.ndjson'), JSON.stringify({ type: 'AttemptStarted', run_id: run, work_item_id: 'T2', timestamp: new Date().toISOString(), payload: { attempt_number: 1 } }) + '\n');
+    hook(dir, null);
+    // run 2 (relaunch): A's checkpoint is retried first; then B runs
+    let bSaw = null;
+    const execB = { async execute(node) {
+      if (node.id === 'T2') {
+        bSaw = fs.readFileSync(path.join(dir, 'shared.txt'), 'utf8');
+        fs.writeFileSync(path.join(dir, 'b.txt'), 'b1\n');
+      }
+      return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' };
+    } };
+    await op.runRuntimeExecute(dir, null, { executor: execB, skipPreflight: true, checkpointCommits: true });
+    const p = planOf(dir);
+    const a = p.tasks.find((t) => t.id === 'T1');
+    assert.equal(a.done, true, JSON.stringify(a.checkpoint_failed));
+    const aShared = git(dir, 'show', `${a.done_commit}:shared.txt`).stdout;
+    assert.match(aShared, /line 1 by A/);
+    assert.doesNotMatch(aShared, /by B/, 'none of B\'s hunks in A\'s commit');
+    assert.deepEqual(git(dir, 'show', '--name-only', '--format=', a.done_commit).stdout.trim().split(/\r?\n/).sort(), ['a.txt', 'shared.txt']);
+    assert.match(bSaw, /line 9 by B \(partial\)/, 'B\'s retry sees its partial edits');
+    const b = p.tasks.find((t) => t.id === 'T2');
+    assert.equal(b.done, true, JSON.stringify(b.checkpoint_failed));
+    assert.match(git(dir, 'show', `${b.done_commit}:shared.txt`).stdout, /line 9 by B \(partial\)/, 'B\'s commit carries its own earlier edits');
+    assert.ok(op.readEvents(dir, null).some((e) => e.type === 'InterruptedWorkFound' && e.payload.tasks[0].task === 'T2'));
+    assert.equal(git(dir, 'status', '--porcelain').stdout.trim(), '');
+  });
+
+  it('live checkpoint: a file already dirty with another task\'s edits gets only this task\'s diff', async () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T1', title: 'A', wave: 1, files: ['shared.txt'], verify: { commands: [ok] } }] };
+    const dir = project({ plan, files: { 'shared.txt': SHARED } });
+    fs.writeFileSync(path.join(dir, 'shared.txt'), withLine(SHARED, 9, 'line 9 by someone else'));
+    const exec = { async execute() {
+      fs.writeFileSync(path.join(dir, 'shared.txt'), withLine(fs.readFileSync(path.join(dir, 'shared.txt'), 'utf8'), 1, 'line 1 by A'));
+      return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' };
+    } };
+    await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, checkpointCommits: true });
+    const head = git(dir, 'show', 'HEAD:shared.txt').stdout;
+    assert.match(head, /line 1 by A/);
+    assert.doesNotMatch(head, /someone else/);
+    assert.match(fs.readFileSync(path.join(dir, 'shared.txt'), 'utf8'), /line 9 by someone else/, 'the other edit stays in the tree, unstaged');
+    assert.equal(git(dir, 'diff', '--cached', '--name-only').stdout.trim(), '');
+  });
+
+  it('checkpoint_check runs on the commit\'s own tree; red undoes the commit and the task is not done', async () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T1', title: 'A', wave: 1, files: ['a.txt'], verify: { commands: [ok] } }] };
+    const dir = project({ plan, files: { 'a.txt': 'a0\n' }, config: { checkpoint_check: 'node -e "process.exit(require(\'fs\').readFileSync(\'a.txt\',\'utf8\').includes(\'bad\')?1:0)"' } });
+    const before = git(dir, 'rev-parse', 'HEAD').stdout.trim();
+    const exec = { async execute() { fs.writeFileSync(path.join(dir, 'a.txt'), 'bad\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    const res = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, checkpointCommits: true });
+    assert.match(res.result.checkpoint_failed[0].reason, /checkpoint_check vermelho/);
+    assert.equal(git(dir, 'rev-parse', 'HEAD').stdout.trim(), before, 'commit undone');
+    assert.equal(planOf(dir).tasks[0].done, false);
+    assert.equal(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), 'bad\n', 'work kept in the tree');
+    assert.ok(!fs.existsSync(path.join(dir, '.oxe', 'checkpoint-ws')) || fs.readdirSync(path.join(dir, '.oxe', 'checkpoint-ws')).length === 0);
+  });
+});
