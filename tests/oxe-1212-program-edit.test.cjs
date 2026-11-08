@@ -240,3 +240,71 @@ describe('OXB-058: the CLI', () => {
     assert.match(r.stdout, /T3 reaberta/);
   });
 });
+
+describe('OXB-075: spec add requirement with bullet-style requirements', () => {
+  const BULLETS = SPEC.replace(/## Requisitos[\s\S]*?(?=## Critérios)/, '## Requisitos\n\n- **R1** — Base:\n  - detalhe da base\n- **R2** — Instalador (A40)\n\n');
+  it('appends a bullet in the same style after the last one; the gap check sees the bullets', () => {
+    const dir = project({ spec: BULLETS });
+    assert.throws(() => op.runtimeSpecAdd(dir, null, { kind: 'requirement', id: 'R5', text: 'x', by: 'tl', reason: 'fase do celular' }), /R5 deixa um buraco na numeração \(o próximo é R3\)/);
+    assert.throws(() => op.runtimeSpecAdd(dir, null, { kind: 'requirement', id: 'R2', text: 'x', by: 'tl', reason: 'fase do celular' }), /R2 já existe/);
+    op.runtimeSpecAdd(dir, null, { kind: 'requirement', id: 'R3', text: 'Remoções do cockpit.', criteria: 'A42', by: 'tl', reason: 'fase do celular' });
+    const spec = read(dir, '.oxe/SPEC.md');
+    assert.match(spec, /- \*\*R2\*\* — Instalador \(A40\)\n- \*\*R3\*\* — Remoções do cockpit \(A42\)\n/);
+    assert.doesNotMatch(spec, /\| R-ID \|/, 'no second, table-format list');
+    assert.deepEqual(specEdit.requirementIds(spec), ['R1', 'R2', 'R3']);
+  });
+});
+
+describe('OXB-076: program phase edit and program criterion move', () => {
+  const planWith = (tasks, tests) => ({ schema_version: 1, tasks, acceptance_tests: tests });
+
+  it('phase edit on a phase not started: title, requirements and acceptance in PROGRAM.json and ROADMAP together, logged', () => {
+    const dir = project();
+    const out = op.runtimeProgramPhaseEdit(dir, null, { phase: 'F8', title: 'Instalador e celular', addRequirements: 'R2', addAcceptance: 'A42', by: 'tl' });
+    assert.deepEqual(out.after.acceptance, ['A40', 'A41', 'A42']);
+    const program = JSON.parse(read(dir, '.oxe/program/PROGRAM.json'));
+    assert.equal(program.phases[1].title, 'Instalador e celular');
+    assert.deepEqual(program.phases[1].requirements, ['R2']);
+    const roadmap = read(dir, '.oxe/ROADMAP.md');
+    assert.match(roadmap, /## Fase 8 — Instalador e celular\n\n\*\*Requisitos:\*\* R2\n\*\*Critérios de aceite:\*\* A40, A41, A42/);
+    assert.ok(out.warnings.some((w) => /A42 não está/.test(w)));
+    assert.equal(ndjson(dir).at(-1).action, 'phase_edit');
+  });
+
+  it('refuses adding to a started phase, editing a closed one, and adding a criterion another phase owns', () => {
+    const dir = project({ phases: [phase('F7', { acceptance: ['A1'], status: 'closed' }), phase('F8', { acceptance: ['A40', 'A41'], status: 'executing', plan_ref: '.oxe/PLAN.md' })] });
+    assert.throws(() => op.runtimeProgramPhaseEdit(dir, null, { phase: 'F8', addAcceptance: 'A42', by: 'tl' }), /F8 já começou/);
+    assert.throws(() => op.runtimeProgramPhaseEdit(dir, null, { phase: 'F7', title: 'x', by: 'tl' }), /F7 está fechada/);
+    const free = project();
+    assert.throws(() => op.runtimeProgramPhaseEdit(free, null, { phase: 'F8', addAcceptance: 'A1', by: 'tl' }), /A1 já pertence a F7 — use oxe-cc program criterion move A1 --from F7 --to F8/);
+  });
+
+  it('criterion move A1 F7 (active, planned) → F8: leaves the plan (its test and its only task), both ROADMAP sections, its CR follows', () => {
+    const dir = project({ phases: [phase('F7', { title: 'Base', acceptance: ['A1', 'A40'], status: 'executing', plan_ref: '.oxe/PLAN.md', started_at: 'x' }), phase('F8', { title: 'Instalador', acceptance: ['A41'] })] });
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify(planWith(
+      [{ id: 'T1', title: 'base', wave: 1, files: ['a.js'], acceptance: ['A1'] }, { id: 'T2', title: 'inst', wave: 1, files: ['b.js'], acceptance: ['A40'] }],
+      [{ criterion: 'A1', files: ['t/a1.test.js'], command: 'x' }, { criterion: 'A40', files: ['t/a40.test.js'], command: 'y' }],
+    )));
+    change.recordChange({ programDir: path.join(dir, '.oxe', 'program'), program: null, plan: { tasks: [] }, class: 'spec_gap', summary: 'A1 muda de fase depois', criteria: 'A1', phase: 'F7', amendTo: 2 });
+    const out = op.runtimeProgramCriterionMove(dir, null, { id: 'A1', from: 'F7', to: 'F8', by: 'tl' });
+    assert.deepEqual([out.from, out.to, out.plan_removed_tasks, out.moved_change_records], ['F7', 'F8', ['T1'], 1]);
+    const plan = JSON.parse(read(dir, '.oxe/PLAN.json'));
+    assert.deepEqual(plan.tasks.map((t) => t.id), ['T2']);
+    assert.deepEqual(plan.acceptance_tests.map((t) => t.criterion), ['A40']);
+    const program = JSON.parse(read(dir, '.oxe/program/PROGRAM.json'));
+    assert.deepEqual([program.phases[0].acceptance, program.phases[1].acceptance], [['A40'], ['A41', 'A1']]);
+    const roadmap = read(dir, '.oxe/ROADMAP.md');
+    assert.match(roadmap, /## Fase 7 — Base[\s\S]*\*\*Critérios de aceite:\*\* A40\n[\s\S]*## Fase 8 — Instalador[\s\S]*\*\*Critérios de aceite:\*\* A41, A1/);
+    assert.equal(ndjson(dir).find((r) => r.kind === 'cr').phase, 'F8');
+    assert.equal(ndjson(dir).at(-1).action, 'criterion_move');
+  });
+
+  it('criterion move refuses (and writes nothing) when a pending task depends on the task that would leave', () => {
+    const dir = project({ phases: [phase('F7', { acceptance: ['A1', 'A40'], status: 'executing', plan_ref: '.oxe/PLAN.md' }), phase('F8', { acceptance: ['A41'] })] });
+    const planText = JSON.stringify(planWith([{ id: 'T1', title: 'base', wave: 1, files: ['a.js'], acceptance: ['A1'] }, { id: 'T2', title: 'x', wave: 2, files: ['b.js'], acceptance: ['A40'], depends_on: ['T1'] }], []));
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), planText);
+    assert.throws(() => op.runtimeProgramCriterionMove(dir, null, { id: 'A1', from: 'F7', to: 'F8', by: 'tl' }), /T2 depende\(m\) de T1/);
+    assert.equal(read(dir, '.oxe/PLAN.json'), planText);
+    assert.equal(read(dir, '.oxe/ROADMAP.md'), ROADMAP);
+  });
+});

@@ -2573,6 +2573,8 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc spec add criterion A<n> --text "…" --verify "…" --by <papel> --reason "…" [--allow-gap]
   npx oxe-cc spec add requirement R<n> --text "…" [--criteria A<n>,…] [--before "### Fora do escopo"] --by <papel> --reason "…"
   npx oxe-cc program phase add --after Fn --title "…" [--requirements R14] [--acceptance A42,A43] [--scope "…"] --by <papel>
+  npx oxe-cc program phase edit Fn [--title "…"] [--add-requirements R17] [--remove-requirements R2] [--add-acceptance A58] [--remove-acceptance A3] [--scope "…"] --by <papel>
+  npx oxe-cc program criterion move A<n> --from Fn --to Fm --by <papel>
   npx oxe-cc program export [<pasta>]   (padrão: program.export_dir do .oxe/config.json)
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
     npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
@@ -6125,7 +6127,7 @@ async function main() {
   }
   // OXB-058: `oxe-cc program <status|init|start|close>` is `runtime program …`; `phase add` and `export` are handled
   // below with `spec`.
-  if (command === 'program' && !(argv[0] === 'phase' || argv[0] === 'export')) {
+  if (command === 'program' && !(argv[0] === 'phase' || argv[0] === 'export' || argv[0] === 'criterion')) {
     command = 'runtime';
     argv.unshift('program');
   }
@@ -6242,15 +6244,21 @@ async function main() {
 
   // OXB-058: `oxe-cc spec amend|add …` and `oxe-cc program phase add|export …`.
   if (command === 'spec' || command === 'program') {
-    const sub = command === 'spec' ? argv[0] : argv[0] === 'phase' ? 'phase add' : 'export';
-    const rest = command === 'program' && argv[0] === 'phase' ? argv.slice(2) : argv.slice(1);
-    if (command === 'program' && argv[0] === 'phase' && argv[1] !== 'add') {
+    // OXB-076: `program phase edit Fn …` and `program criterion move A<n> --from Fn --to Fm`.
+    const sub = command === 'spec' ? argv[0]
+      : argv[0] === 'phase' ? `phase ${argv[1]}`
+        : argv[0] === 'criterion' ? `criterion ${argv[1]}`
+          : 'export';
+    const rest = command === 'program' && (argv[0] === 'phase' || argv[0] === 'criterion') ? argv.slice(2) : argv.slice(1);
+    if (command === 'program' && !['phase add', 'phase edit', 'criterion move', 'export'].includes(sub)) {
       console.error(`${red}Use:${reset} oxe-cc program phase add --after Fn --title "…" [--requirements R14] [--acceptance A42,A43] [--scope "…"] --by <papel>`);
+      console.error(`     oxe-cc program phase edit Fn [--title "…"] [--add-requirements R17] [--remove-requirements R2] [--add-acceptance A58] [--remove-acceptance A3] [--scope "…"] --by <papel>`);
+      console.error(`     oxe-cc program criterion move A<n> --from Fn --to Fm --by <papel>`);
       process.exit(1);
     }
     const o = { dir: process.cwd(), session: null, json: false };
     const positional = [];
-    const VALUE_FLAGS = { '--by': 'by', '--reason': 'reason', '--text': 'text', '--append': 'append', '--verify': 'verify', '--phase': 'phase', '--criteria': 'criteria', '--before': 'before', '--version': 'version', '--after': 'after', '--title': 'title', '--requirements': 'requirements', '--acceptance': 'acceptance', '--scope': 'scope' };
+    const VALUE_FLAGS = { '--by': 'by', '--reason': 'reason', '--text': 'text', '--append': 'append', '--verify': 'verify', '--phase': 'phase', '--criteria': 'criteria', '--before': 'before', '--version': 'version', '--after': 'after', '--title': 'title', '--requirements': 'requirements', '--acceptance': 'acceptance', '--scope': 'scope', '--add-requirements': 'addRequirements', '--remove-requirements': 'removeRequirements', '--add-acceptance': 'addAcceptance', '--remove-acceptance': 'removeAcceptance', '--from': 'from', '--to': 'to' };
     for (let i = 0; i < rest.length; i += 1) {
       const a = rest[i];
       if (VALUE_FLAGS[a] && rest[i + 1] != null) o[VALUE_FLAGS[a]] = String(rest[++i]);
@@ -6282,6 +6290,20 @@ async function main() {
           if (out.moved_change_records) console.log(`  ${out.moved_change_records} registro(s) de mudança acompanharam a fase renumerada`);
           for (const w of out.warnings) console.log(`  ${yellow}!${reset} ${w}`);
           for (const l of out.leftovers) console.log(`  ${yellow}!${reset} ${l}`);
+        }
+      } else if (sub === 'phase edit') {
+        out = oxeOperational.runtimeProgramPhaseEdit(o.dir, o.session, { ...o, phase: positional[0] || o.phase });
+        if (!o.json) {
+          console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.phase} editada: R ${out.after.requirements.join(', ') || '—'} · A ${out.after.acceptance.join(', ') || '—'}${out.after.title !== out.before.title ? ` · título "${out.after.title}"` : ''}`);
+          if (out.plan_removed_tests.length || out.plan_removed_tasks.length) console.log(`  plano atual: testes removidos ${out.plan_removed_tests.join(', ') || '—'} · tarefas removidas ${out.plan_removed_tasks.join(', ') || '—'}`);
+          for (const w of out.warnings) console.log(`  ${yellow}!${reset} ${w}`);
+        }
+      } else if (sub === 'criterion move') {
+        out = oxeOperational.runtimeProgramCriterionMove(o.dir, o.session, { ...o, id: positional[0] });
+        if (!o.json) {
+          console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.criterion}: ${out.from} → ${out.to}${out.moved_change_records ? ` · ${out.moved_change_records} CR(s) acompanharam` : ''}`);
+          if (out.plan_removed_tests.length || out.plan_removed_tasks.length) console.log(`  plano atual: testes removidos ${out.plan_removed_tests.join(', ') || '—'} · tarefas removidas ${out.plan_removed_tasks.join(', ') || '—'}`);
+          for (const w of out.warnings) console.log(`  ${yellow}!${reset} ${w}`);
         }
       } else if (sub === 'export') {
         out = oxeOperational.runtimeProgramExport(o.dir, o.session, { dir: positional[0] || null });

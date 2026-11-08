@@ -439,3 +439,19 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
   - Config `deps_optional_ignore` silencia o aviso por nome.
   - Conferido (só leitura) no oxespace-150: o ambiente sai `ok`, com aviso só para os 3 opcionais.
   - Teste: `tests/oxe-1212-deps-present.test.cjs`.
+
+## OXB-075: `spec add requirement` não enxerga requisitos em bullets
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11, no primeiro uso real dos comandos da OXB-058: a SPEC do 1.5.0 lista requisitos como `- **R10** — texto (A…)`, e o comando dizia "o próximo é R1".
+  - Os requisitos são lidos nos dois formatos: tabela `| R-ID |` e bullets `- **R<n>** —`, com linhas de continuação indentadas.
+  - O novo entra no formato que a SPEC já usa: um bullet no mesmo estilo, depois do bloco do último. O id é checado (único e sem buraco) contra os dois formatos.
+  - Teste: `tests/oxe-1212-program-edit.test.cjs`.
+
+## OXB-076: não havia como editar uma fase existente
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11: dobrar A53–A60 em fases pendentes e mover a A3 da F1 para a F11 exigiu editar o PROGRAM.json e o ROADMAP à mão.
+  - `oxe-cc program phase edit Fn [--title] [--add-requirements] [--remove-requirements] [--add-acceptance] [--remove-acceptance] [--scope] --by` edita o PROGRAM.json e a seção do ROADMAP juntos (título no cabeçalho e as linhas **Requisitos**, **Critérios de aceite** e **Escopo**), registra um `program_edit` com antes e depois e atualiza o export.
+  - Adicionar só vale numa fase não iniciada. Uma fase fechada é recusada (use CR). Um critério que pertence a outra fase aponta para o `criterion move`.
+  - Remover da fase ativa tira o critério do plano atual: os testes de aceite dele, ele das tarefas, e a tarefa pendente que ficar sem critério. É recusado se outra tarefa depende dela ou se ela já tem checkpoint.
+  - `oxe-cc program criterion move A<n> --from Fn --to Fm` checa as duas edições antes de escrever. Escreve PROGRAM, ROADMAP e plano juntos, e os CRs só daquele critério acompanham a fase.
+  - Teste: `tests/oxe-1212-program-edit.test.cjs`.

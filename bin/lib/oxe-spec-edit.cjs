@@ -79,9 +79,32 @@ function criteriaIds(specText) {
   return idsInTables(lines, findTables(lines, isCriteriaHeader), 'A');
 }
 
+// OXB-075: requirements written as bullets — `- **R10** — text (A1, A2)`, possibly with indented continuation lines.
+const REQ_BULLET_RE = /^(\s*)([-*])\s+\*\*(R\d+)\*\*\s*([—–:-])\s*/;
+
+/** Bullet requirements: ids, and the line after the last bullet's block (its indented continuation included). */
+function bulletRequirements(lines) {
+  const ids = [];
+  let last = -1;
+  let indent = '';
+  let marker = '-';
+  let sep = '—';
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = REQ_BULLET_RE.exec(lines[i]);
+    if (!m) continue;
+    ids.push(m[3].toUpperCase());
+    last = i;
+    [, indent, marker, , sep] = m;
+  }
+  if (last < 0) return { ids, insertAt: -1, indent, marker, sep };
+  let end = last + 1;
+  while (end < lines.length && lines[end].trim() && /^\s+/.test(lines[end]) && !REQ_BULLET_RE.test(lines[end])) end += 1;
+  return { ids, insertAt: end, indent, marker, sep };
+}
+
 function requirementIds(specText) {
   const lines = String(specText || '').split(EOL_RE);
-  return idsInTables(lines, findTables(lines, isRequirementsHeader), 'R');
+  return [...new Set([...idsInTables(lines, findTables(lines, isRequirementsHeader), 'R'), ...bulletRequirements(lines).ids])];
 }
 
 /**
@@ -138,10 +161,17 @@ function addRequirement(specText, id, change = {}) {
   const lines = String(specText).split(EOL_RE);
   if (!change.text) throw new Error('informe --text <requisito>');
   const tables = findTables(lines, isRequirementsHeader);
-  const key = checkNewId(idsInTables(lines, tables, 'R'), id, 'R', change.allowGap);
+  const bullets = bulletRequirements(lines);
+  const key = checkNewId([...new Set([...idsInTables(lines, tables, 'R'), ...bullets.ids])], id, 'R', change.allowGap);
   const criteria = (Array.isArray(change.criteria) ? change.criteria : String(change.criteria || '').split(','))
     .map((c) => c.trim().toUpperCase()).filter(Boolean).join(', ');
   const values = [key, String(change.text).trim(), change.version || 'v1', criteria || '—'];
+  // OXB-075: the SPEC lists requirements as bullets → append a bullet in the same style, after the last one's block.
+  if (!tables.length && bullets.insertAt >= 0) {
+    const row = `${bullets.indent}${bullets.marker} **${key}** ${bullets.sep} ${String(change.text).trim().replace(/\s*\.$/, '')}${criteria ? ` (${criteria})` : ''}`;
+    lines.splice(bullets.insertAt, 0, row);
+    return { text: lines.join(eol), id: key, before: null, after: row };
+  }
   if (tables.length) {
     const t = tables[tables.length - 1];
     const cells = values.slice(0, Math.max(2, t.header.length));
@@ -197,6 +227,39 @@ function insertRoadmapPhase(roadmapText, after, phase) {
   return { text: lines.join(eol), renumbered };
 }
 
+/**
+ * OXB-076: rewrites one phase's section in the ROADMAP — header title, `**Requisitos:**`, `**Critérios de aceite:**`
+ * and `**Escopo:**` (a missing line is added after the last field line). Only the fields given change.
+ * @param {{ title?: string, requirements?: string[], acceptance?: string[], scope?: string }} fields
+ */
+function editRoadmapPhase(roadmapText, phaseId, fields) {
+  const eol = eolOf(roadmapText);
+  const lines = String(roadmapText).split(EOL_RE);
+  const n = Number(String(phaseId).replace(/\D/g, ''));
+  const start = lines.findIndex((l) => { const m = PHASE_HEADING.exec(l); return m && Number(m[4]) === n; });
+  if (start < 0) throw new Error(`ROADMAP sem "## Fase ${n}"`);
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) if (/^##\s/.test(lines[i]) || /^---\s*$/.test(lines[i])) { end = i; break; }
+  if (fields.title != null) {
+    const m = PHASE_HEADING.exec(lines[start]);
+    lines[start] = `${m[1]}${m[2]}${m[3]}${m[4]} — ${String(fields.title).trim()}`;
+  }
+  const setField = (labelRe, label, value) => {
+    for (let i = start + 1; i < end; i += 1) {
+      if (labelRe.test(lines[i])) { lines[i] = `**${label}:** ${value}`; return; }
+    }
+    let at = start + 1;
+    for (let i = start + 1; i < end; i += 1) if (/^\*\*[^*]+:\*\*/.test(lines[i])) at = i + 1;
+    if (at === start + 1 && lines[at] !== undefined && !lines[at].trim()) at += 1;
+    lines.splice(at, 0, `**${label}:** ${value}`);
+    end += 1;
+  };
+  if (fields.requirements) setField(/^\*\*(Requisitos|Requirements):\*\*/i, 'Requisitos', fields.requirements.join(', ') || '—');
+  if (fields.acceptance) setField(/^\*\*(Crit[ée]rios de aceite|Acceptance(?: criteria)?):\*\*/i, 'Critérios de aceite', fields.acceptance.join(', ') || '—');
+  if (fields.scope != null) setField(/^\*\*(Escopo|Scope):\*\*/i, 'Escopo', String(fields.scope).trim());
+  return { text: lines.join(eol) };
+}
+
 /** Textual mentions of renumbered phases left in a document ("F8", "Fase 8", "phase F8"). */
 function leftoverPhaseMentions(text, renumbered, file) {
   const out = [];
@@ -219,6 +282,7 @@ module.exports = {
   criteriaIds,
   requirementIds,
   insertRoadmapPhase,
+  editRoadmapPhase,
   leftoverPhaseMentions,
   checkNewId,
 };

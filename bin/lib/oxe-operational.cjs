@@ -3395,6 +3395,143 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   return result;
 }
 
+/**
+ * OXB-076: what removing criteria from the CURRENT plan means — their acceptance tests go, they leave the tasks'
+ * `acceptance`, and a pending task left with no criterion goes too. Refused when another pending task depends on a
+ * task that would go, or when such a task has a checkpoint (its work exists). Returns the new doc (not written).
+ */
+function planWithoutCriteria(doc, criteria) {
+  const drop = new Set(criteria);
+  const next = JSON.parse(JSON.stringify(doc));
+  next.acceptance_tests = (next.acceptance_tests || []).filter((t) => !t || !drop.has(t.criterion));
+  const removedTasks = [];
+  for (const task of next.tasks || []) {
+    if (!Array.isArray(task.acceptance) || !task.acceptance.some((a) => drop.has(a))) continue;
+    task.acceptance = task.acceptance.filter((a) => !drop.has(a));
+    if (!task.acceptance.length && task.done !== true) removedTasks.push(task.id);
+  }
+  const blockers = [];
+  for (const id of removedTasks) {
+    const task = next.tasks.find((t) => t.id === id);
+    if (task.done_commit) blockers.push(`${id} tem checkpoint (${String(task.done_commit).slice(0, 8)})`);
+    const dependents = next.tasks.filter((t) => t.id !== id && !removedTasks.includes(t.id) && (t.depends_on || t.dependsOn || []).includes(id));
+    if (dependents.length) blockers.push(`${dependents.map((t) => t.id).join(', ')} depende(m) de ${id}`);
+  }
+  if (blockers.length) throw new Error(`não dá para tirar ${criteria.join(', ')} do plano atual: ${blockers.join('; ')} — ajuste o plano (/oxe-plan) antes`);
+  next.tasks = (next.tasks || []).filter((t) => !removedTasks.includes(t.id));
+  return { doc: next, removedTasks, removedTests: (doc.acceptance_tests || []).filter((t) => t && drop.has(t.criterion)).map((t) => t.id || t.criterion) };
+}
+
+/**
+ * OXB-076: `oxe-cc program phase edit Fn [--title] [--add-requirements] [--remove-requirements] [--add-acceptance]
+ * [--remove-acceptance] [--scope] --by …`: edits PROGRAM.json and the ROADMAP section together, logs a program_edit
+ * and refreshes the export. Adding goes only into a phase that has not started (pending, no plan/run). Removing from
+ * the active phase also takes the criterion out of the current plan (planWithoutCriteria); a closed phase is refused.
+ */
+function runtimeProgramPhaseEdit(projectRoot, activeSession, options = {}, internal = {}) {
+  const specEdit = require('./oxe-spec-edit.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const programLib = require('./oxe-program.cjs');
+  const { by, reason } = requireEditReason({ by: options.by, reason: options.reason || `edição da fase ${options.phase}` });
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const state = internal.state || programLib.readProgram(programDir);
+  if (!state) throw new Error('Sem programa. Rode `oxe-cc runtime program init`.');
+  const norm = (id) => { const k = String(id || '').trim().toUpperCase().replace(/^(?:FASE|PHASE)\s*/, 'F'); return /^\d+$/.test(k) ? `F${k}` : k; };
+  const phaseId = norm(options.phase);
+  const next = JSON.parse(JSON.stringify(state));
+  const phase = next.phases.find((p) => p.id.toUpperCase() === phaseId);
+  if (!phase) throw new Error(`fase ${options.phase} não existe no programa`);
+  const list = (v) => (Array.isArray(v) ? v : String(v || '').split(',')).map((x) => x.trim().toUpperCase()).filter(Boolean);
+  const addReq = list(options.addRequirements);
+  const remReq = list(options.removeRequirements);
+  const addAcc = list(options.addAcceptance);
+  const remAcc = list(options.removeAcceptance);
+  if (!addReq.length && !remReq.length && !addAcc.length && !remAcc.length && options.title == null && options.scope == null) {
+    throw new Error('nada a editar: use --title, --scope, --add-requirements, --remove-requirements, --add-acceptance ou --remove-acceptance');
+  }
+  const notStarted = phase.status === 'pending' && !phase.plan_ref && !phase.run_id && !phase.started_at && state.active_phase !== phase.id;
+  if (phase.status === 'closed') throw new Error(`${phase.id} está fechada — mude o escopo de uma fase fechada com um CR (runtime feedback), não editando a fase`);
+  if ((addReq.length || addAcc.length) && !notStarted) throw new Error(`${phase.id} já começou (${phase.status}${phase.plan_ref ? ', com plano' : ''}) — critérios e requisitos novos entram numa fase ainda não iniciada (ou via CR)`);
+  for (const a of addAcc) {
+    const other = next.phases.find((p) => p.id !== phase.id && (p.acceptance || []).includes(a));
+    if (other && !internal.moving) throw new Error(`${a} já pertence a ${other.id} — use oxe-cc program criterion move ${a} --from ${other.id} --to ${phase.id}`);
+  }
+  const missingRem = remAcc.filter((a) => !(phase.acceptance || []).includes(a));
+  if (missingRem.length) throw new Error(`${missingRem.join(', ')} não está(ão) em ${phase.id}`);
+  // Removing from a phase that already has a plan: the criterion leaves the current plan as well.
+  let planChange = null;
+  if (remAcc.length && !notStarted && state.active_phase === phase.id) {
+    const jsonPath = require('./oxe-plan-json.cjs').planJsonPathFor(paths.plan);
+    if (jsonPath && fs.existsSync(jsonPath)) {
+      planChange = { jsonPath, ...planWithoutCriteria(JSON.parse(fs.readFileSync(jsonPath, 'utf8')), remAcc) };
+    }
+  }
+  const before = { title: phase.title, requirements: [...(phase.requirements || [])], acceptance: [...(phase.acceptance || [])], scope: phase.scope || null };
+  if (options.title != null) phase.title = String(options.title).trim();
+  if (options.scope != null) phase.scope = String(options.scope).trim() || null;
+  phase.requirements = [...new Set([...(phase.requirements || []).filter((r) => !remReq.includes(r)), ...addReq])];
+  phase.acceptance = [...new Set([...(phase.acceptance || []).filter((a) => !remAcc.includes(a)), ...addAcc])];
+  next.updated_at = new Date().toISOString();
+  const specText = readTextIfExists(paths.spec) || '';
+  const warnings = [];
+  const knownA = new Set(specEdit.criteriaIds(specText));
+  const knownR = new Set(specEdit.requirementIds(specText));
+  for (const a of addAcc) if (knownA.size && !knownA.has(a)) warnings.push(`${a} não está na tabela de critérios da SPEC (oxe-cc spec add criterion ${a} …)`);
+  for (const r of addReq) if (knownR.size && !knownR.has(r)) warnings.push(`${r} não está nos requisitos da SPEC (oxe-cc spec add requirement ${r} …)`);
+  const roadmapText = internal.roadmapText != null ? internal.roadmapText : readTextIfExists(paths.roadmap);
+  if (!roadmapText) throw new Error(`ROADMAP.md não encontrado (${paths.roadmap})`);
+  const roadmap = specEdit.editRoadmapPhase(roadmapText, phase.id, {
+    ...(options.title != null ? { title: phase.title } : {}),
+    ...(addReq.length || remReq.length ? { requirements: phase.requirements } : {}),
+    ...(addAcc.length || remAcc.length ? { acceptance: phase.acceptance } : {}),
+    ...(options.scope != null ? { scope: phase.scope || '' } : {}),
+  });
+  const record = { kind: 'program_edit', action: internal.action || 'phase_edit', phase: phase.id, before, after: { title: phase.title, requirements: phase.requirements, acceptance: phase.acceptance, scope: phase.scope || null }, ...(planChange ? { plan_removed_tasks: planChange.removedTasks, plan_removed_tests: planChange.removedTests } : {}), by, reason, at: new Date().toISOString() };
+  if (internal.dryRun) return { state: next, roadmapText: roadmap.text, planChange, record, warnings };
+  programLib.writeProgram(programDir, next);
+  writeTextAtomic(paths.roadmap, roadmap.text);
+  if (planChange) writeTextAtomic(planChange.jsonPath, `${JSON.stringify(planChange.doc, null, 2)}\n`);
+  changeLib.appendNdjson(changeLib.changesFile(programDir), record);
+  appendEvent(projectRoot, activeSession, { type: 'ProgramPhaseEdited', payload: { phase: phase.id, by } });
+  return { phase: phase.id, before: record.before, after: record.after, plan_removed_tasks: planChange ? planChange.removedTasks : [], plan_removed_tests: planChange ? planChange.removedTests : [], warnings, export: autoExportProgram(projectRoot, activeSession) };
+}
+
+/**
+ * OXB-076: `oxe-cc program criterion move A3 --from F1 --to F11 --by …`: both edits are checked before anything is
+ * written (remove from --from, with the plan clean-up when it is the active phase; add to --to, which must not have
+ * started), then PROGRAM.json, ROADMAP and the plan are written together, with one program_edit record.
+ */
+function runtimeProgramCriterionMove(projectRoot, activeSession, options = {}) {
+  const changeLib = require('./oxe-change.cjs');
+  const programLib = require('./oxe-program.cjs');
+  const id = String(options.id || '').trim().toUpperCase();
+  if (!/^A\d+$/.test(id)) throw new Error('informe o critério: oxe-cc program criterion move A<n> --from Fn --to Fm');
+  const { by, reason } = requireEditReason({ by: options.by, reason: options.reason || `mover ${id} de ${options.from} para ${options.to}` });
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const removal = runtimeProgramPhaseEdit(projectRoot, activeSession, { phase: options.from, removeAcceptance: id, by, reason }, { dryRun: true, moving: true });
+  const addition = runtimeProgramPhaseEdit(projectRoot, activeSession, { phase: options.to, addAcceptance: id, by, reason }, { dryRun: true, moving: true, state: removal.state, roadmapText: removal.roadmapText });
+  programLib.writeProgram(programDir, addition.state);
+  writeTextAtomic(paths.roadmap, addition.roadmapText);
+  if (removal.planChange) writeTextAtomic(removal.planChange.jsonPath, `${JSON.stringify(removal.planChange.doc, null, 2)}\n`);
+  // The criterion's open CRs follow it to the new phase.
+  const from = removal.record.phase;
+  const to = addition.record.phase;
+  const changesPath = changeLib.changesFile(programDir);
+  let moved = 0;
+  if (fs.existsSync(changesPath)) {
+    const records = changeLib.readNdjson(changesPath).map((r) => {
+      if (r && r.kind === 'cr' && r.phase === from && Array.isArray(r.criteria) && r.criteria.length === 1 && r.criteria[0] === id) { moved += 1; return { ...r, phase: to }; }
+      return r;
+    });
+    if (moved) writeTextAtomic(changesPath, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  }
+  changeLib.appendNdjson(changesPath, { kind: 'program_edit', action: 'criterion_move', criterion: id, from, to, ...(removal.planChange ? { plan_removed_tasks: removal.planChange.removedTasks, plan_removed_tests: removal.planChange.removedTests } : {}), moved_change_records: moved, by, reason, at: new Date().toISOString() });
+  appendEvent(projectRoot, activeSession, { type: 'ProgramCriterionMoved', payload: { criterion: id, from, to, by } });
+  return { criterion: id, from, to, plan_removed_tasks: removal.planChange ? removal.planChange.removedTasks : [], plan_removed_tests: removal.planChange ? removal.planChange.removedTests : [], moved_change_records: moved, warnings: [...removal.warnings, ...addition.warnings], export: autoExportProgram(projectRoot, activeSession) };
+}
+
 /** OXB-058: doctor — .oxe/ gitignored with no versioned export means SPEC/ROADMAP/PROGRAM edits leave no history. */
 function oxeHistoryWarning(projectRoot) {
   if (programExportDir(projectRoot)) return null;
@@ -5294,6 +5431,8 @@ module.exports = {
   runtimeSpecAdd,
   runtimeProgramPhaseAdd,
   runtimeProgramExport,
+  runtimeProgramPhaseEdit,
+  runtimeProgramCriterionMove,
   oxeHistoryWarning,
   runtimeSync,
   runtimePromote,
