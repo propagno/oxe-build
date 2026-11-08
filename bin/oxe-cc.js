@@ -4232,6 +4232,8 @@ function parseRuntimeArgs(argv) {
     else if (a === '--ref' && argv[i + 1]) out.ref = String(argv[++i]);
     else if (a === '--any-label') out.anyLabel = true;
     else if (a === '--print-prompt') out.printPrompt = true;
+    else if (a === '--in-place') out.inPlace = true;
+    else if (a === '--promote-each') out.promoteEach = true;
     else if (a === '--allow-undelivered') out.allowUndelivered = true;
     else if (a === '--strict-delivery') out.strictDelivery = true;
     else if (a === '--dry-run') out.dryRun = true;
@@ -5466,6 +5468,8 @@ async function runRuntime(opts) {
         budgetReset: opts.budgetReset || undefined,
         maxRetries: opts.maxRetries != null && !Number.isNaN(opts.maxRetries) ? opts.maxRetries : undefined,
         parallelMutating: Boolean(opts.parallelMutating),
+        // OXB-151: each task done green is promoted (own worktree, PR opened) in the background.
+        promoteEach: opts.promoteEach ? { base: opts.baseBranch || 'main', remote: opts.remote || 'origin' } : null,
         maxParallel: opts.maxParallel || undefined,
         agentsPlanPath: opts.agentsPlanPath || undefined,
         onProgress: (event) => {
@@ -5674,7 +5678,7 @@ async function runRuntime(opts) {
 
   if (opts.action === 'promote' && opts.task) {
     try {
-      const out = oxeOperational.runtimePromote(opts.dir, activeSession, { task: opts.task, base: opts.baseBranch || 'main', branch: opts.branch, remote: opts.remote || 'origin', openPr: Boolean(opts.openPr), prReady: !opts.noPrReady });
+      const out = oxeOperational.runtimePromote(opts.dir, activeSession, { task: opts.task, base: opts.baseBranch || 'main', branch: opts.branch, remote: opts.remote || 'origin', openPr: Boolean(opts.openPr), prReady: !opts.noPrReady, inPlace: Boolean(opts.inPlace) });
       if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimePromoteSchema: 1, ...out }, null, 2));
       else if (out.conflict) console.log(`  ${red}✗${reset} ${out.error}`);
       else {

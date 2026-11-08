@@ -281,3 +281,27 @@ describe('OXB-080: frozen tests parked for later phases are not architecture dri
     assert.deepEqual([waiver.phase, waiver.globs, waiver.by], ['F1', ['docs/**'], 'tech-lead']);
   });
 });
+
+describe('OXB-151: promote in its own worktree, safe while execute runs in the program tree', () => {
+  it('the program checkout, index, uncommitted work and node_modules are untouched; the temporary worktree is gone', () => {
+    const { dir } = setup();
+    // a running execute: uncommitted work and a staged file in the program tree, plus a node_modules
+    write(dir, 'src/inflight.js', 'module.exports = "T2 in progress";\n');
+    write(dir, 'src/staged.js', 'module.exports = 1;\n');
+    git(dir, 'add', 'src/staged.js');
+    fs.mkdirSync(path.join(dir, 'node_modules', 'dep'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'node_modules', 'dep', 'index.js'), 'module.exports = 42;\n');
+    const head = git(dir, 'rev-parse', 'HEAD');
+    const status = git(dir, 'status', '--porcelain');
+    const out = op.runtimePromote(dir, null, { task: 'T1', base: 'main' });
+    assert.equal(out.error, undefined, out.error);
+    assert.equal(out.commits.length, 2);
+    assert.match(out.worktree, /^\.oxe\/promote-ws\/t1-/);
+    assert.equal(git(dir, 'rev-parse', '--abbrev-ref', 'HEAD'), 'oxe/f1-plan');
+    assert.equal(git(dir, 'rev-parse', 'HEAD'), head);
+    assert.equal(git(dir, 'status', '--porcelain'), status, 'uncommitted and staged work untouched');
+    assert.ok(fs.existsSync(path.join(dir, 'node_modules', 'dep', 'index.js')), 'the real node_modules survives the worktree removal');
+    assert.ok(!fs.existsSync(path.join(dir, out.worktree)), 'temporary worktree removed');
+    assert.match(git(dir, 'log', '-1', '--format=%B', 'oxe/promote-t1'), /cherry picked from commit/);
+  });
+});

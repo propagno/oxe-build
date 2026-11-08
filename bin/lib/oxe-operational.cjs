@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawnSync, spawn } = require('child_process');
 
 const VALID_RUN_STATUSES = new Set([
   'planned',
@@ -579,6 +579,22 @@ function runtimePrintPrompt(projectRoot, activeSession, options = {}) {
   const table = sections.map((s) => `| ${s.name} | ${s.chars} | ~${tokens(s.chars)} |${s.raw_chars != null ? ` ${s.raw_chars} |` : ' — |'}`).join('\n');
   fs.writeFileSync(file, [`# Prompt de ${taskId} (1ª chamada)`, '', `Total: ${full.length} chars (~${tokens(full.length)} tokens). O loop de ferramentas soma a isto os resultados (cada um limitado a 40k chars; antigos são omitidos a partir de 600k; acima de 1.2M a chamada nem sai).`, '', '| Seção | chars no prompt | tokens (est.) | dado bruto (chars) |', '|---|---|---|---|', table, '', '---', '', full, ''].join('\n'), 'utf8');
   return { task: taskId, file, total_chars: full.length, est_tokens: tokens(full.length), sections };
+}
+
+/**
+ * OXB-151: `runtime promote <task> --open-pr` in a detached child (its own worktree: the program tree is untouched),
+ * output in .oxe/promote/<task>.log; the PR link lands in the TaskPromoted event.
+ */
+function spawnPromote(projectRoot, activeSession, taskId, opts = {}, runId = null) {
+  const logDir = path.join(projectRoot, '.oxe', 'promote');
+  fs.mkdirSync(logDir, { recursive: true });
+  const log = fs.openSync(path.join(logDir, `${taskId}.log`), 'a');
+  const args = [path.join(__dirname, '..', 'oxe-cc.js'), 'runtime', 'promote', taskId, '--base', opts.base || 'main', '--remote', opts.remote || 'origin', '--open-pr', '--dir', projectRoot];
+  if (activeSession) args.push('--session', activeSession);
+  const child = spawn(process.execPath, args, { cwd: projectRoot, detached: true, stdio: ['ignore', log, log], windowsHide: true, env: { ...process.env, OXE_NO_PROMPT: '1' } });
+  child.unref();
+  appendEvent(projectRoot, activeSession, { type: 'TaskPromoteQueued', run_id: runId, work_item_id: taskId, payload: { base: opts.base || 'main', log: path.relative(projectRoot, path.join(logDir, `${taskId}.log`)).replace(/\\/g, '/') } });
+  return child.pid;
 }
 
 /**
@@ -1853,6 +1869,10 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
         try {
           require('./oxe-plan-json.cjs').markPlanTaskDone(runPaths.plan, event.work_item_id, { commit: checkpoint });
         } catch { /* o done é auxiliar; o journal continua sendo a verdade da run */ }
+        // OXB-151: --promote-each — the task enters the merge train at once, without waiting for the whole plan.
+        if (options.promoteEach) {
+          try { spawnPromote(projectRoot, activeSession, event.work_item_id, options.promoteEach, current.run_id); } catch { /* o promote é auxiliar */ }
+        }
       }
     },
   });
@@ -3706,8 +3726,13 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   if (!/^T\d+$/.test(taskId)) throw new Error('informe a tarefa: oxe-cc runtime promote T<n> --base main');
   const base = String(options.base || 'main').trim();
   if (!gitLines(projectRoot, ['rev-parse', '--git-dir'])) throw new Error('runtime promote exige um repositório git');
-  const dirty = dirtyProjectPaths(projectRoot);
-  if (dirty.length) throw new Error(`working tree com mudanças fora de .oxe/ (${dirty.slice(0, 5).join(', ')}) — faça commit ou stash antes do promote`);
+  // OXB-151: by default promote works in its OWN temporary worktree — the program tree (checkout, index, node_modules)
+  // is never touched, so it is safe while `runtime execute` runs there. --in-place keeps the old behavior.
+  const inPlace = options.inPlace === true;
+  if (inPlace) {
+    const dirty = dirtyProjectPaths(projectRoot);
+    if (dirty.length) throw new Error(`working tree com mudanças fora de .oxe/ (${dirty.slice(0, 5).join(', ')}) — faça commit ou stash antes do promote`);
+  }
   const baseSha = (gitLines(projectRoot, ['rev-parse', '--verify', `${base}^{commit}`]) || [])[0];
   if (!baseSha) throw new Error(`base desconhecida: ${base}`);
   const { doc } = readPlanJsonDoc(projectRoot, activeSession);
@@ -3740,33 +3765,72 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     const existing = remoteHead.ok ? remoteHead.stdout.trim().split(/\s+/)[0] : '';
     if (existing) throw new Error(`a branch ${branch} já existe em ${remote} (${existing.slice(0, 8)}) — o promote não sobrescreve nem faz force-push; use --branch <outra>`);
   }
-  const back = () => gitRun(projectRoot, ['checkout', '-q', original && original !== 'HEAD' ? original : originalSha]);
-  const result = { task: taskId, base, branch, commits: ordered, conflict: null, pr_ready: null, body_file: null, pr: null, commands: [] };
-  const co = gitRun(projectRoot, ['checkout', '-q', '-b', branch, baseSha]);
-  if (!co.ok) throw new Error(`não foi possível criar ${branch}: ${co.stderr.trim()}`);
+  const result = { task: taskId, base, branch, commits: ordered, conflict: null, pr_ready: null, body_file: null, pr: null, commands: [], worktree: null };
+  // Where the branch is built: a temporary worktree (default) or, with --in-place, the program checkout.
+  let work = projectRoot;
+  let cleanup = () => {};
+  if (inPlace) {
+    const back = () => gitRun(projectRoot, ['checkout', '-q', original && original !== 'HEAD' ? original : originalSha]);
+    const co = gitRun(projectRoot, ['checkout', '-q', '-b', branch, baseSha]);
+    if (!co.ok) throw new Error(`não foi possível criar ${branch}: ${co.stderr.trim()}`);
+    cleanup = back;
+  } else {
+    const wt = path.join(projectRoot, '.oxe', 'promote-ws', `${taskId.toLowerCase()}-${Date.now().toString(36)}`);
+    fs.mkdirSync(path.dirname(wt), { recursive: true });
+    const add = gitRun(projectRoot, ['worktree', 'add', '-q', '-b', branch, wt, baseSha]);
+    if (!add.ok) throw new Error(`não foi possível criar a worktree de ${branch}: ${add.stderr.trim()}`);
+    work = wt;
+    result.worktree = path.relative(projectRoot, wt).replace(/\\/g, '/');
+    // pr:ready needs the dependencies: a junction to the program's node_modules (or deps_link_from), never an install.
+    let linked = false;
+    try {
+      const pc = require('./oxe-parallel.cjs').parallelConfig(projectRoot);
+      const from = pc.deps && pc.deps.from ? pc.deps.from : projectRoot;
+      const src = path.join(from, 'node_modules');
+      if (fs.existsSync(src) && !fs.existsSync(path.join(wt, 'node_modules'))) {
+        fs.symlinkSync(fs.realpathSync(src), path.join(wt, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+        linked = true;
+      }
+    } catch { /* pr:ready reports the missing deps */ }
+    cleanup = () => {
+      // Links first (a junction must never be followed by a recursive delete), then the worktree — never --force.
+      try {
+        const rt = loadRuntimeModule();
+        if (rt && typeof rt.unlinkExternalLinks === 'function') rt.unlinkExternalLinks(wt);
+        else if (linked) fs.unlinkSync(path.join(wt, 'node_modules'));
+      } catch { /* */ }
+      const rm = gitRun(projectRoot, ['worktree', 'remove', wt]);
+      if (!rm.ok) result.cleanup_warning = `worktree ${result.worktree} não removida (${rm.stderr.trim().split(/\r?\n/).pop()}) — remova à mão depois de conferir que não há links dentro`;
+      gitRun(projectRoot, ['worktree', 'prune']);
+    };
+  }
   try {
     for (const sha of ordered) {
-      const pick = gitRun(projectRoot, ['cherry-pick', '-x', sha]);
+      const pick = gitRun(work, ['cherry-pick', '-x', sha]);
       if (!pick.ok) {
-        const files = gitLines(projectRoot, ['diff', '--name-only', '--diff-filter=U']) || [];
-        gitRun(projectRoot, ['cherry-pick', '--abort']);
-        back();
-        gitRun(projectRoot, ['branch', '-D', branch]);
+        const files = gitLines(work, ['diff', '--name-only', '--diff-filter=U']) || [];
+        gitRun(work, ['cherry-pick', '--abort']);
         result.conflict = { commit: sha, files };
         result.error = `conflito no cherry-pick de ${sha.slice(0, 8)} (${files.join(', ') || 'sem arquivos'}) — branch ${branch} descartada; resolva à mão ou rode runtime sync --from ${base} antes`;
-        appendEvent(projectRoot, activeSession, { type: 'TaskPromoteFailed', work_item_id: taskId, payload: { base, commit: sha, files } });
-        return result;
+        break;
       }
     }
     // The project's own PR checks, on the promoted branch.
-    let pkg = null;
-    try { pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8')); } catch { pkg = null; }
-    if (pkg && pkg.scripts && pkg.scripts['pr:ready'] && options.prReady !== false) {
-      const ready = runChildCommand(projectRoot, 'npm run pr:ready', 1_800_000);
-      result.pr_ready = { ok: ready.ok, tail: ready.tail };
+    if (!result.conflict) {
+      let pkg = null;
+      try { pkg = JSON.parse(fs.readFileSync(path.join(work, 'package.json'), 'utf8')); } catch { pkg = null; }
+      if (pkg && pkg.scripts && pkg.scripts['pr:ready'] && options.prReady !== false) {
+        const ready = runChildCommand(work, 'npm run pr:ready', 1_800_000);
+        result.pr_ready = { ok: ready.ok, tail: ready.tail };
+      }
     }
   } finally {
-    if (!result.conflict) back();
+    cleanup();
+  }
+  if (result.conflict) {
+    gitRun(projectRoot, ['branch', '-D', branch]);
+    appendEvent(projectRoot, activeSession, { type: 'TaskPromoteFailed', work_item_id: taskId, payload: { base, commit: result.conflict.commit, files: result.conflict.files } });
+    return result;
   }
   // PR body: the task, its files and criteria, the CRs on those criteria.
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
@@ -6314,6 +6378,7 @@ module.exports = {
   runtimeDeployAttach,
   runtimeSignal,
   runtimePrintPrompt,
+  spawnPromote,
   readNdjsonQuiet,
   coherentStateProjection,
   runtimeSpecAmend,

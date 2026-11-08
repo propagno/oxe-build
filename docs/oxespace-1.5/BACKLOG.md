@@ -963,3 +963,13 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
     - Em JS/TS, nada muda.
   - **Verify com Gradle/Maven:** o comando não imprime os testes um a um, porque o JUnit os grava em `build/test-results/**.xml` (ou `target/surefire-reports`). Os relatórios que **esse** comando escreveu (pelo mtime) são anexados à saída. A contagem e o `proves` passam a ver cada teste, e o `proof_not_executed` lista os que passaram.
   - Teste: `tests/oxe-1212-jvm-tests.test.cjs` e `packages/runtime/tests/junit-files.test.ts`. A descoberta foi conferida no arquivo real da F10: 3 testes.
+
+## OXB-151: promover tarefa enquanto o execute roda no mesmo tree
+
+- **Status:** resolvido (1.21.2). Pergunta do TECH LEAD em 08/11, com a F2 executando: cada tarefa pronta deve entrar no trem de merge na hora, sem esperar as 25.
+  - **Antes era inseguro:** o `runtime promote` fazia `git checkout -b` no próprio tree do programa, cherry-pick e `pr:ready` ali, e voltava. Com um execute rodando, os arquivos trocavam por baixo do executor.
+  - **Agora, por padrão,** o promote monta a branch numa **worktree temporária** a partir da base (`.oxe/promote-ws/…`): faz o cherry-pick -x, roda o `pr:ready` com o node_modules por junção (o do programa ou `deps_link_from`, nunca uma instalação), e então o push e o PR.
+  - A worktree é removida com segurança: os links são desfeitos antes, e nunca há `remove --force` atravessando junção.
+  - O checkout, o índice, o trabalho não commitado e o node_modules do programa não são tocados, e o tree sujo deixa de ser motivo de recusa. `--in-place` mantém o comportamento antigo.
+  - `runtime execute --promote-each [--base main]` dispara, a cada tarefa concluída verde, um `runtime promote Tn --open-pr` em segundo plano. Cada um usa sua própria worktree, o log vai para `.oxe/promote/Tn.log` e fica o evento `TaskPromoteQueued`, depois `TaskPromoted` com o link do PR.
+  - Teste: `tests/oxe-1212-sync-promote.test.cjs` (tree do programa sujo e com arquivo no índice continua idêntico, e o node_modules real sobrevive).
