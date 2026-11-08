@@ -5217,14 +5217,44 @@ function retryFailedCheckpoints(projectRoot, activeSession, options = {}) {
   return out;
 }
 
+/**
+ * OXB-168: paths changed under `files` (git status -z: new, modified, deleted, both sides of a rename). git status
+ * accepts pathspecs that match nothing; `git add`/`git commit -- <path>` do not.
+ */
+function changedPathsUnder(projectRoot, files) {
+  return [...new Set(changedEntriesUnder(projectRoot, files).map((e) => e.path))];
+}
+
+/** OXB-168: the same, with each path's two-letter status (`D ` = deletion already staged). */
+function changedEntriesUnder(projectRoot, files) {
+  const res = spawnSync('git', ['status', '--porcelain=v1', '-z', '-uall', '--', ...files], { cwd: projectRoot, encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+  const parts = String(res.stdout || '').split('\0');
+  const out = [];
+  for (let i = 0; i < parts.length; i += 1) {
+    const entry = parts[i];
+    if (!entry || entry.length < 4) continue;
+    const code = entry.slice(0, 2);
+    out.push({ path: entry.slice(3), code });
+    if (/[RC]/.test(code) && parts[i + 1]) { out.push({ path: parts[i + 1], code: 'D ' }); i += 1; } // rename/copy: the source follows
+  }
+  return out;
+}
+
 function commitTaskCheckpoint(projectRoot, runState, taskId, options = {}) {
   // OXB-052: the scope is the graph's AND the current plan's (a CR may have added files after the compile).
   const planFiles = options.task && Array.isArray(options.task.files) ? options.task.files.map((p) => String(p).replace(/\\/g, '/')).filter((p) => p && !p.includes('*')) : [];
   const files = [...new Set([...taskScopeFiles(runState, taskId), ...planFiles])];
   if (!files.length) return { committed: false, reason: 'tarefa sem escopo declarado' };
   if (!gitLines(projectRoot, ['rev-parse', '--is-inside-work-tree'])) return { committed: false, reason: 'sem repositório git' };
-  const changed = (gitLines(projectRoot, ['status', '--porcelain', '-uall', '--', ...files]) || []);
-  if (!changed.length) return { committed: false, reason: 'nada mudou no escopo da tarefa' };
+  // OXB-168: the commit is built from what CHANGED under the scope, never from the scope itself. In a removal phase a
+  // scope path may be gone from the tree AND the index (T7 deleted services/documentation and committed first; T4's
+  // scope still named it), and one unknown pathspec made git reject T4's whole commit.
+  const entries = changedEntriesUnder(projectRoot, files);
+  const changed = [...new Set(entries.map((e) => e.path))];
+  // a deletion already staged (`git rm`) is not in the index any more: `git add -- <it>` fails, the commit takes it
+  const toAdd = [...new Set(entries.filter((e) => !(e.code[0] === 'D' && e.code[1] === ' ')).map((e) => e.path))];
+  const scopeAbsent = files.filter((p) => !fs.existsSync(path.join(projectRoot, p)) && !(gitLines(projectRoot, ['ls-files', '--', p]) || []).length && !changed.some((c) => c === p || c.startsWith(`${p.replace(/\/$/, '')}/`)));
+  if (!changed.length) return { committed: false, reason: 'nada mudou no escopo da tarefa', scope_absent: scopeAbsent };
   const node = (runState && runState.compiled_graph && runState.compiled_graph.nodes && runState.compiled_graph.nodes[taskId]) || {};
   // OXB-021: the message follows the project's commit_convention (or the task's own `commit`), with an OXE-Task trailer.
   const planTask = options.task || {};
@@ -5235,19 +5265,23 @@ function commitTaskCheckpoint(projectRoot, runState, taskId, options = {}) {
     phase: options.phase || null,
     run_id: (runState && runState.run_id) || null,
   }, options.config || readProjectConfig(projectRoot));
-  const add = spawnSync('git', ['add', '--', ...files.filter((f) => fs.existsSync(path.join(projectRoot, f)) || changed.some((l) => l.includes(f)))], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
-  if (add.status !== 0) return { committed: false, failed: true, reason: `git add falhou: ${String(add.stderr).trim()}` };
-  const commit = spawnSync('git', ['commit', '-q', '-F', '-', '--', ...files], { cwd: projectRoot, encoding: 'utf8', windowsHide: true, input: message });
+  // `add -A` on the changed paths stages new, modified AND deleted files; every one of them is known to git now.
+  const add = toAdd.length ? spawnSync('git', ['add', '-A', '--', ...toAdd], { cwd: projectRoot, encoding: 'utf8', windowsHide: true }) : { status: 0 };
+  if (add.status !== 0) {
+    spawnSync('git', ['reset', '-q', '--', ...changed], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+    return { committed: false, failed: true, reason: `git add falhou: ${String(add.stderr).trim().split(/\r?\n/).slice(-8).join(' · ')}`, scope_absent: scopeAbsent };
+  }
+  const commit = spawnSync('git', ['commit', '-q', '-F', '-', '--', ...changed], { cwd: projectRoot, encoding: 'utf8', windowsHide: true, input: message });
   if (commit.status !== 0) {
     // OXB-167: nothing is left half-staged — the working tree keeps the task's changes, the index goes back.
-    spawnSync('git', ['reset', '-q', '--', ...files], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
-    return { committed: false, failed: true, reason: `git commit falhou: ${String(commit.stderr || commit.stdout).trim().split(/\r?\n/).slice(-8).join(' · ')}` };
+    spawnSync('git', ['reset', '-q', '--', ...changed], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+    return { committed: false, failed: true, reason: `git commit falhou: ${String(commit.stderr || commit.stdout).trim().split(/\r?\n/).slice(-8).join(' · ')}`, scope_absent: scopeAbsent };
   }
   const head = gitLines(projectRoot, ['rev-parse', 'HEAD']);
   // Every changed file of the task's scope must be in the checkpoint; anything left over is reported, never silent.
-  const leftover = (gitLines(projectRoot, ['status', '--porcelain', '-uall', '--', ...files]) || []).map((l) => l.slice(3).replace(/^"|"$/g, '').split(' -> ').pop());
+  const leftover = changedPathsUnder(projectRoot, files);
   const committedFiles = gitLines(projectRoot, ['show', '--name-only', '--format=', 'HEAD']) || [];
-  return { committed: true, commit: head && head[0], files: committedFiles, scope: files, leftover };
+  return { committed: true, commit: head && head[0], files: committedFiles, scope: files, leftover, ...(scopeAbsent.length ? { scope_absent: scopeAbsent } : {}) };
 }
 
 /**

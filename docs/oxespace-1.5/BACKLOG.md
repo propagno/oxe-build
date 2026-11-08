@@ -1133,3 +1133,13 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - **O próximo execute** tenta o commit dessas tarefas **antes de tudo**, sem turno do executor e sem verify novo. Se o commit entra, a tarefa fica done com o sha (evento `CheckpointRetried`). Senão, ela segue pendente.
   - Teste: `tests/oxe-1212-checkpoint-phase.test.cjs` (hook de pre-commit que reprova, índice limpo, retry sem executor, done com o sha).
   - Também: o teste da OXB-153 era instável sob carga (o limite de 400 ms também estourava na 2ª chamada). Agora o limite é 2 s.
+
+## OXB-168: checkpoint rejeitado por caminho do escopo que outra tarefa já removeu (BLOQUEANTE)
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11, depois que a OXB-167 trouxe a causa à tona. O `checkpoint_failed` da T4 (run oxe-run-mw83vtdy-8uzesq) dizia: `git commit falhou: error: pathspec 'electron/main/mcp-internal/documentation-handler.ts' did not match any file(s) known to git · …`.
+  - O commit usava o **escopo** da tarefa como pathspec. Numa fase de remoção, a T7 já tinha apagado e commitado `services/documentation`, o escopo da T4 ainda citava esses caminhos, e o git rejeita o commit inteiro por um único pathspec desconhecido.
+  - O commit agora sai do que **mudou** sob o escopo. O `git status -z` (que aceita pathspec sem correspondência) dá os arquivos novos, alterados, apagados e os dois lados de um rename. Depois vêm `git add -A` e `git commit` só nesses caminhos.
+  - Uma remoção já staged (`git rm`) não passa pelo `add`, que falharia, e entra no commit.
+  - Um caminho do escopo que não existe nem no disco nem no git vira `scope_absent` no resultado, não erro.
+  - O promote não usa o escopo como pathspec: escolhe commits.
+  - Teste: `tests/oxe-1212-checkpoint-phase.test.cjs` (escopo com caminhos que a T7 já removeu, arquivo novo, alterado, apagado e uma remoção já staged, tudo num commit; e `scope_absent`).

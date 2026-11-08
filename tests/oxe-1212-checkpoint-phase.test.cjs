@@ -151,3 +151,39 @@ describe('OXB-165: run-level timeout', () => {
     assert.deepEqual(res2.result.completed.sort(), ['T1', 'T2']);
   });
 });
+
+describe('OXB-168: the checkpoint commits what changed, not the scope as pathspecs', () => {
+  it('a scope path an earlier task already deleted (and committed) does not reject the commit; deletions and new files go in', async () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T4', title: 'remove preview', wave: 1, files: ['src/a.js', 'src/b.js', 'src/c.js', 'src/new.ts', 'services/documentation/runtime.ts', 'electron/main/mcp-internal/documentation-handler.ts'], verify: { commands: [ok] } }] };
+    const dir = project({ plan, files: { 'src/a.js': 'a0\n', 'src/b.js': 'b0\n', 'src/c.js': 'c0\n', 'services/documentation/runtime.ts': 'r\n', 'electron/main/mcp-internal/documentation-handler.ts': 'h\n' } });
+    // T7 (R9) removed services/documentation and the handler first, committed
+    git(dir, 'rm', '-q', '-r', 'services/documentation', 'electron/main/mcp-internal/documentation-handler.ts');
+    git(dir, 'commit', '-qm', 'feat: T7 remove documentation\n\nOXE-Task: T7');
+    const executor = {
+      async execute() {
+        fs.writeFileSync(path.join(dir, 'src', 'a.js'), 'a1\n');
+        fs.writeFileSync(path.join(dir, 'src', 'new.ts'), 'export {};\n');
+        fs.rmSync(path.join(dir, 'src', 'b.js'));
+        git(dir, 'rm', '-q', 'src/c.js'); // a deletion already staged
+        return { success: true, failure_class: null, evidence: ['src/a.js'], output: 'ok', completed_by: 'finish_task' };
+      },
+    };
+    const res = await op.runRuntimeExecute(dir, null, { executor, skipPreflight: true, checkpointCommits: true });
+    assert.equal(res.result.checkpoint_failed, undefined, JSON.stringify(res.result.checkpoint_failed));
+    const t4 = planOf(dir).tasks[0];
+    assert.equal(t4.done, true);
+    assert.equal(t4.done_commit, git(dir, 'rev-parse', 'HEAD').stdout.trim());
+    const st = git(dir, 'show', '--name-status', '--format=', 'HEAD').stdout.trim().split(/\r?\n/).map((l) => l.replace(/\t/, ' ')).sort();
+    assert.deepEqual(st, ['A src/new.ts', 'D src/b.js', 'D src/c.js', 'M src/a.js']);
+    assert.equal(git(dir, 'status', '--porcelain').stdout.trim(), '', 'nothing left behind');
+  });
+
+  it('commitTaskCheckpoint reports scope_absent instead of failing', () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T5', title: 'x', wave: 1, files: ['src/a.js', 'gone/x.ts'], verify: { commands: [ok] } }] };
+    const dir = project({ plan, files: { 'src/a.js': 'a0\n' } });
+    fs.writeFileSync(path.join(dir, 'src', 'a.js'), 'a1\n');
+    const cp = op.commitTaskCheckpoint(dir, { run_id: 'r1', compiled_graph: { nodes: {} } }, 'T5', { task: plan.tasks[0] });
+    assert.equal(cp.committed, true, cp.reason);
+    assert.deepEqual(cp.scope_absent, ['gone/x.ts']);
+  });
+});
