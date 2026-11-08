@@ -319,10 +319,31 @@ function markPlanTaskDoneUnlocked(jsonPath, taskId, info) {
   task.done = true;
   task.done_at = info.at || new Date().toISOString();
   if (info.commit) task.done_commit = info.commit;
+  delete task.checkpoint_failed;
   const tmp = `${jsonPath}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
   fs.renameSync(tmp, jsonPath);
   return true;
+}
+
+/** OXB-167: the task passed its verify but its checkpoint commit failed — not done; the next execute retries the commit. */
+function markPlanTaskCheckpointFailed(planMdPath, taskId, info = {}) {
+  const jsonPath = planJsonPathFor(planMdPath);
+  if (!jsonPath || !fs.existsSync(jsonPath)) return false;
+  return withPlanLock(jsonPath, () => {
+    let doc;
+    try { doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8')); } catch { return false; }
+    const task = Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
+    if (!task) return false;
+    task.done = false;
+    delete task.done_at;
+    delete task.done_commit;
+    task.checkpoint_failed = { at: new Date().toISOString(), reason: String(info.reason || '').slice(0, 800), ...(info.commit ? { commit: info.commit } : {}), ...(info.leftover ? { leftover: info.leftover.slice(0, 50) } : {}), ...(info.run_id ? { run_id: info.run_id } : {}) };
+    const tmp = `${jsonPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, jsonPath);
+    return true;
+  });
 }
 
 function hasCycle(tasks) {
@@ -596,6 +617,7 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
 }
 
 module.exports = {
+  markPlanTaskCheckpointFailed,
   withPlanLock,
   ACCEPT_RE,
   externalRefs,

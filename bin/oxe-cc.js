@@ -4233,6 +4233,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--any-label') out.anyLabel = true;
     else if (a === '--print-prompt') out.printPrompt = true;
     else if (a === '--llm-timeout-ms' && argv[i + 1]) out.llmTimeoutMs = Number(argv[++i]);
+    else if (a === '--max-run-ms' && argv[i + 1]) out.maxRunMs = Number(argv[++i]);
     else if (a === '--verify-timeout-ms' && argv[i + 1]) out.verifyTimeoutMs = Number(argv[++i]);
     else if (a === '--in-place') out.inPlace = true;
     else if (a === '--promote-each') out.promoteEach = true;
@@ -5479,6 +5480,7 @@ async function runRuntime(opts) {
         maxRetries: opts.maxRetries != null && !Number.isNaN(opts.maxRetries) ? opts.maxRetries : undefined,
         parallelMutating: Boolean(opts.parallelMutating),
         verifyTimeoutMs: opts.verifyTimeoutMs || undefined,
+        maxRunMs: opts.maxRunMs || undefined,
         // OXB-151: each task done green is promoted (own worktree, PR opened) in the background.
         promoteEach: opts.promoteEach ? { base: opts.baseBranch || null, remote: opts.remote || 'origin', holdDeps: Boolean(opts.holdDeps) } : null,
         maxParallel: opts.maxParallel || undefined,
@@ -5561,6 +5563,10 @@ async function runRuntime(opts) {
       for (const id of externalPending.filter((x) => waiting[x])) console.log(`  ${c ? '\x1b[33m' : ''}${id} aguardando:${c ? reset : ''} ${waiting[id].join(', ')} — roda no próximo execute depois disso`);
       // OXB-064: exit 0 when everything runnable in scope completed; tasks outside --wave never count;
       // external_pending only fails the run with --strict-external (exit 3).
+      // OXB-167: verify green but the checkpoint commit failed — NOT done; the work is in the tree, not in a commit.
+      const cpFailed = Array.isArray(r.checkpoint_failed) ? r.checkpoint_failed : [];
+      for (const f of cpFailed) console.log(`  ${c ? red : ''}✗ checkpoint de ${f.task} falhou${c ? reset : ''} — ${f.reason}. A tarefa NÃO ficou done; o próximo execute tenta o commit de novo antes de tudo.`);
+      if (cpFailed.length) process.exitCode = 1;
       if (failed.length > 0 || blocked.length > 0 || (r.status === 'blocked' && result.mode !== 'single' && result.mode !== 'parallel')) process.exitCode = 1;
       else if (opts.strictExternal && externalPending.length > 0) process.exitCode = 3;
       return;

@@ -1105,3 +1105,31 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
     - Ctrl+C ou SIGTERM durante o promote limpam a própria worktree. Um kill duro (Windows) é varrido no próximo promote.
   - **pr:ready longo (10+ min):** roda com progresso no stderr. Uma linha por script npm que começa (`pr:ready: lint ok (42s) · ▶ typecheck`), batimento a cada minuto e o veredito com o tempo. `OXE_PROGRESS=0` desliga, e `OXE_PROGRESS_HEARTBEAT_MS` ajusta o batimento.
   - Teste: `tests/oxe-1212-promote-reuse.test.cjs`.
+
+## OXB-165: o execute abortava com `global_timeout` aos 30 min
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11: o `maxRunDurationMs ?? 30 min` do scheduler não tinha CLI nem config, e a run abortava na primeira fronteira de onda depois de 30 min.
+  - O padrão do execute agora é sem limite (a guarda de progresso parado cobre os travamentos). `--max-run-ms` e `executor.max_run_ms` definem um.
+  - O `TaskPromoteFailed` passou a ter `reason`.
+  - Teste: `tests/oxe-1212-checkpoint-phase.test.cjs`.
+
+## OXB-166: o trailer da tarefa colidia entre fases (BLOQUEANTE)
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11: o `runtime promote T4/T5/T6` da F2 (rc.26) fez cherry-pick de faeded75, 56b39b46 e 966eb527, que são a T4, a T5 e a T6 **da F1** (04/11, `OXE-Task: T4`…), e deu conflito. Os ids T recomeçam a cada fase.
+  - O checkpoint agora leva `OXE-Task: F2/T4` (a fase do PLAN.json ou a fase ativa do programa) e `OXE-Run: <run>`. Sem fase em jogo, continua `OXE-Task: T4`.
+  - A busca (promote, `findTaskCheckpoint` e o lint "já tem checkpoint") vai por fase + tarefa. Um trailer sem fase só conta quando não há fase, ou quando foi feito depois do início da fase (as runs dela, rc ≤ 26).
+  - Com `done_commit`, o promote nem procura trailers sem fase: usa o `done_commit` e os commits `F2/T4`.
+  - Teste: `tests/oxe-1212-checkpoint-phase.test.cjs`, incluindo o promote da T4 da F2 com a T4 da F1 no histórico.
+
+## OXB-167: tarefa `done` sem commit de checkpoint, um verde falso (BLOQUEANTE)
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11: a run oxe-run-mw83vtdy-8uzesq marcou a T4 (R0c) e a T5 (R12) `done: true` com `done_commit: null`. As mudanças (2 arquivos novos, SkillsBrowser apagado e mais 12) ficaram staged e unstaged na árvore enquanto a T6 e a T7 commitavam por cima.
+  - A falha do commit (por exemplo, um hook de pre-commit) era engolida, e a tarefa ia para `done` do mesmo jeito.
+  - **Invariante:** com checkpoint commits ligados, uma tarefa só fica `done` quando o commit dela existe e contém as mudanças do escopo. Escopo sem mudança continua `done` sem commit, como antes.
+  - **Commit que falha** (add/commit/hook) **ou que fica incompleto** (arquivo do escopo fora dele):
+    - a tarefa **não** fica done e o PLAN.json ganha `checkpoint_failed` (motivo, run, commit parcial e o que sobrou);
+    - o índice volta (`git reset -- <escopo>`), sem nada meio staged, e o trabalho continua na árvore;
+    - sai o evento `CheckpointFailed`, o resultado tem `status: checkpoint_failed` e `checkpoint_failed[]`, e a CLI imprime ✗ com o motivo e sai com código 1.
+  - **O próximo execute** tenta o commit dessas tarefas **antes de tudo**, sem turno do executor e sem verify novo. Se o commit entra, a tarefa fica done com o sha (evento `CheckpointRetried`). Senão, ela segue pendente.
+  - Teste: `tests/oxe-1212-checkpoint-phase.test.cjs` (hook de pre-commit que reprova, índice limpo, retry sem executor, done com o sha).
+  - Também: o teste da OXB-153 era instável sob carga (o limite de 400 ms também estourava na 2ª chamada). Agora o limite é 2 s.

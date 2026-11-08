@@ -1799,6 +1799,10 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     }
   }
 
+  // OXB-167: a task whose verify passed but whose checkpoint commit failed (a hook, a lock) gets the commit retried
+  // first — no executor turn, no new verify; done only if the commit lands with its scope's changes.
+  retryFailedCheckpoints(projectRoot, activeSession, options);
+
   // Resolve compiled graph from run state or compile on demand
   let current = options.runState || readRunState(projectRoot, activeSession);
     // A run de uma fase já fechada nunca é reaproveitada: a fase nova compila o seu próprio PLAN.
@@ -1892,6 +1896,8 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     }
     touchProgramPhase(projectRoot, activeSession, 'executing', { run_id: current.run_id });
     const checkpointCommits = Boolean(options.checkpointCommits || readProjectConfig(projectRoot).checkpoint_commits);
+    const checkpointFailures = [];
+    const phaseCtxForCommits = taskPhaseContext(projectRoot, activeSession);
     const preflight = buildRuntimeExecutePreflight(projectRoot, activeSession, current);
     if (!preflight.ok && !options.skipPreflight) {
       const reason = preflight.blockers[0] || 'runtime_execute_preflight_failed';
@@ -1964,6 +1970,9 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
   // Build ctx with GateManager (Gap 1)
   // OXB-155: the per-task verify of execute honors --verify-timeout-ms > config verify_timeout_ms > 10 min (it was a
   // fixed 60 s: F2-T2's `npm run typecheck` timed out twice with verify_timeout_ms: 900000 in the config).
+  const execMaxRunMs = Number(options.maxRunMs) > 0
+    ? Number(options.maxRunMs)
+    : Number(((readProjectConfig(projectRoot) || {}).executor || {}).max_run_ms) > 0 ? Number(readProjectConfig(projectRoot).executor.max_run_ms) : Number.MAX_SAFE_INTEGER;
   const execVerifyTimeoutMs = Number(options.verifyTimeoutMs) > 0
     ? Number(options.verifyTimeoutMs)
     : Number(readProjectConfig(projectRoot).verify_timeout_ms) > 0 ? Number(readProjectConfig(projectRoot).verify_timeout_ms) : 600_000;
@@ -1972,7 +1981,9 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     executor,
     workspaceManager,
     pluginRegistry: options.pluginRegistry || buildRuntimePluginRegistry(projectRoot),
-    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, ...(options.schedulerOptions || {}) },
+    // OXB-165: no run-level timeout by default (the scheduler's 30 min aborted at the first wave past it); the
+    // stale-progress guard covers hangs. --max-run-ms > config executor.max_run_ms.
+    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, ...(options.schedulerOptions || {}) },
     // The scheduler already persists every event through the runtime bus (events/bus.ts →
     // appendEvent). This hook only forwards progress; writing here again duplicated the log.
     onEvent: (event) => {
@@ -2048,18 +2059,30 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
       }
       if (event && event.type === 'WorkItemCompleted' && event.work_item_id) {
         let checkpoint = null;
+        // OXB-167: with checkpoint commits on, a task is done only when its checkpoint exists and holds its scope's
+        // changes (T4/T5 of oxe-run-mw83vtdy-8uzesq: done, done_commit null, the changes left staged in the tree).
+        let checkpointFailure = null;
         // 1.20c: checkpoint de filesystem por tarefa concluída (opt-in), na convenção de commit do projeto (OXB-021).
         if (checkpointCommits) {
           try {
-            const cp = commitTaskCheckpoint(projectRoot, current, event.work_item_id, { task: planTaskById.get(event.work_item_id) });
+            const cp = commitTaskCheckpoint(projectRoot, current, event.work_item_id, { task: planTaskById.get(event.work_item_id), phase: phaseCtxForCommits.phase });
             if (cp.committed) {
               checkpoint = cp.commit;
               appendEvent(projectRoot, activeSession, { type: 'GateResolved', run_id: current.run_id, work_item_id: event.work_item_id, payload: { gate: 'checkpoint', commit: cp.commit, files: cp.files, leftover: cp.leftover } });
               if (cp.leftover && cp.leftover.length) {
                 appendEvent(projectRoot, activeSession, { type: 'PolicyWarning', run_id: current.run_id, work_item_id: event.work_item_id, payload: { reason: 'checkpoint_incomplete', leftover: cp.leftover, commit: cp.commit } });
+                checkpointFailure = { reason: `checkpoint incompleto: ${cp.leftover.length} arquivo(s) do escopo fora do commit (${cp.leftover.slice(0, 5).join(', ')})`, commit: cp.commit, leftover: cp.leftover };
               }
+            } else if (cp.failed) {
+              checkpointFailure = { reason: cp.reason };
             }
-          } catch { /* checkpoint nunca derruba a execução */ }
+          } catch (err) {
+            checkpointFailure = { reason: `checkpoint falhou: ${err && err.message ? err.message : err}` };
+          }
+          if (checkpointFailure) {
+            checkpointFailures.push({ task: event.work_item_id, ...checkpointFailure });
+            appendEvent(projectRoot, activeSession, { type: 'CheckpointFailed', run_id: current.run_id, work_item_id: event.work_item_id, payload: { task: event.work_item_id, ...checkpointFailure } });
+          }
         }
         // OXB-067: a passing task that also edited files outside its scope — never committed silently, never dropped.
         const outsideAtCompletion = scopeViolations.get(event.work_item_id) || [];
@@ -2075,8 +2098,10 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
           } catch { /* a decisão é auxiliar; o relatório do spike fica em .oxe/spikes/ */ }
         }
         // OXB-025: a tarefa concluída fica `done` no PLAN.json — o próximo compile não a paga de novo.
+        // OXB-167: … unless its checkpoint failed: then `checkpoint_failed` (the next execute retries the commit first).
         try {
-          require('./oxe-plan-json.cjs').markPlanTaskDone(runPaths.plan, event.work_item_id, { commit: checkpoint });
+          if (checkpointFailure) require('./oxe-plan-json.cjs').markPlanTaskCheckpointFailed(runPaths.plan, event.work_item_id, { ...checkpointFailure, run_id: current.run_id });
+          else require('./oxe-plan-json.cjs').markPlanTaskDone(runPaths.plan, event.work_item_id, { commit: checkpoint });
         } catch { /* o done é auxiliar; o journal continua sendo a verdade da run */ }
         // OXB-151: --promote-each — the task enters the merge train at once, without waiting for the whole plan.
         if (options.promoteEach) {
@@ -2135,6 +2160,12 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
   if (parallelOptions) ctx.parallel = parallelOptions;
   const result = await scheduler.run(graph, ctx);
   classifyBlockedResult(result, graph);
+  if (checkpointFailures.length) {
+    // OXB-167: fail loud — the task passed its verify but is NOT done: its work is not in a commit.
+    result.checkpoint_failed = checkpointFailures;
+    result.completed = (result.completed || []).filter((id) => !checkpointFailures.some((f) => f.task === id));
+    if (result.status === 'completed' || result.status === 'completed_with_external_pending') result.status = 'checkpoint_failed';
+  }
   const syncedRun = syncRunStateAfterExecute(projectRoot, activeSession, current, result, 'single');
     return { mode: 'single', agentPlan: null, result, run: syncedRun, preflight, budget: budgetLedger };
   }
@@ -4043,7 +4074,11 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   if (task.done !== true) throw new Error(`${taskId} não está done — só uma tarefa concluída e verde é promovida`);
   // Commits of the task not yet in the base: its checkpoints and the frozen tests of its criteria.
   const range = `${baseSha}..HEAD`;
-  const shas = new Set(gitLines(projectRoot, ['log', '--format=%H', '-E', `--grep=^OXE-Task: ${taskId}$`, range]) || []);
+  // OXB-166: by phase + task; with a done_commit, the phase-less legacy trailers are not searched at all.
+  const phaseCtx = taskPhaseContext(projectRoot, activeSession);
+  const shas = new Set(task.done_commit && phaseCtx.phase
+    ? (gitLines(projectRoot, ['log', '--format=%H', '-E', `--grep=^OXE-Task: ${phaseCtx.phase}/${taskId}$`, range]) || [])
+    : taskCommitShas(projectRoot, taskId, range, phaseCtx));
   if (task.done_commit) {
     const inRange = gitLines(projectRoot, ['rev-list', range]) || [];
     const full = (gitLines(projectRoot, ['rev-parse', '--verify', `${task.done_commit}^{commit}`]) || [])[0];
@@ -4222,7 +4257,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   }
   if (result.conflict) {
     gitRun(projectRoot, ['branch', '-D', branch]);
-    appendEvent(projectRoot, activeSession, { type: 'TaskPromoteFailed', work_item_id: taskId, payload: { base, commit: result.conflict.commit, files: result.conflict.files } });
+    appendEvent(projectRoot, activeSession, { type: 'TaskPromoteFailed', work_item_id: taskId, payload: { base, reason: result.error || 'conflict', commit: result.conflict.commit, files: result.conflict.files } });
     return result;
   }
   // PR body: the task, its files and criteria, the CRs on those criteria.
@@ -5046,14 +5081,62 @@ function isolateFailedTask(projectRoot, runState, taskId, options = {}) {
   return { files: changed.map((c) => c.file), savedTo: path.relative(projectRoot, dir).replace(/\\/g, '/'), notRestored };
 }
 
-/** Latest checkpoint commit of a task: the `OXE-Task: Tn` trailer (1.21) or the legacy `oxe(Tn):` subject. */
-function findTaskCheckpoint(projectRoot, taskId) {
-  if (!/^T\d+$/.test(String(taskId || ''))) return null;
-  for (const grep of [`^OXE-Task: ${taskId}$`, `^oxe\\(${taskId}\\):`]) {
-    const lines = gitLines(projectRoot, ['log', '-n', '1', '--format=%H', '-E', `--grep=${grep}`]);
-    if (lines && lines[0]) return lines[0];
+/**
+ * OXB-166: the phase whose tasks the commits belong to — PLAN.json `phase` or the program's active phase — and when
+ * that phase started (its runs). T-ids restart per phase: F1's T4 and F2's T4 are different tasks.
+ */
+function taskPhaseContext(projectRoot, activeSession) {
+  let phase = null;
+  let since = null;
+  try {
+    const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+    if (doc && typeof doc.phase === 'string' && /^F\d+$/.test(doc.phase)) phase = doc.phase;
+  } catch { /* sem PLAN.json */ }
+  try {
+    const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+    const program = require('./oxe-program.cjs').readProgram(paths.programDir || path.join(projectRoot, '.oxe', 'program'));
+    if (program) {
+      phase = phase || program.active_phase || null;
+      const p = phase ? (program.phases || []).find((x) => x.id === phase) : null;
+      if (p) since = p.started_at || null;
+    }
+  } catch { /* sem programa */ }
+  return { phase, since };
+}
+
+/**
+ * OXB-166: commits of a task in `range` (default: the whole history). The phase-qualified trailer
+ * (`OXE-Task: F2/T4`) always counts; a phase-less one (`OXE-Task: T4`, rc ≤ 26, or the legacy `oxe(T4):` subject)
+ * counts only with no phase in play, or when committed after the phase started (its own runs) — F2's promote of T4
+ * picked F1's T4 of 2026-11-04 and conflicted.
+ * @returns {string[]} newest first
+ */
+function taskCommitShas(projectRoot, taskId, range, ctx = {}) {
+  const log = (grep) => (gitLines(projectRoot, ['log', '--format=%H %ct', '-E', `--grep=${grep}`, ...(range ? [range] : [])]) || [])
+    .map((l) => l.split(' ')).filter((x) => x[0]);
+  const out = [];
+  if (ctx.phase) for (const [sha] of log(`^OXE-Task: ${ctx.phase}/${taskId}$`)) out.push(sha);
+  const sinceMs = ctx.since ? Date.parse(ctx.since) : NaN;
+  if (!ctx.phase || Number.isFinite(sinceMs)) {
+    for (const grep of [`^OXE-Task: ${taskId}$`, ...(ctx.legacySubject ? [`^oxe\\(${taskId}\\):`] : [])]) {
+      for (const [sha, ct] of log(grep)) {
+        if (ctx.phase && Number(ct) * 1000 + 1000 < sinceMs) continue;
+        if (!out.includes(sha)) out.push(sha);
+      }
+    }
   }
-  return null;
+  return out;
+}
+
+/** Latest checkpoint commit of a task: the `OXE-Task` trailer (1.21; with the phase from OXB-166) or the legacy `oxe(Tn):` subject. */
+function findTaskCheckpoint(projectRoot, taskId, ctx = null) {
+  if (!/^T\d+$/.test(String(taskId || ''))) return null;
+  const c = ctx || taskPhaseContext(projectRoot, null);
+  const shas = taskCommitShas(projectRoot, taskId, null, { ...c, legacySubject: true });
+  if (!shas.length) return null;
+  // newest of all candidates
+  const order = gitLines(projectRoot, ['rev-list', '--no-walk=sorted', ...shas]) || shas;
+  return order[0] || null;
 }
 
 /** `oxe-cc plan done Tn [--commit sha]`: marks a finished task in PLAN.json (default commit: its checkpoint). */
@@ -5104,6 +5187,36 @@ function runtimePlanReopen(projectRoot, activeSession, options = {}) {
   return { task: taskId, changed };
 }
 
+/** OXB-167: retries the checkpoint of tasks marked `checkpoint_failed` in PLAN.json. */
+function retryFailedCheckpoints(projectRoot, activeSession, options = {}) {
+  const out = [];
+  let doc = null;
+  try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
+  const pending = doc && Array.isArray(doc.tasks) ? doc.tasks.filter((t) => t && t.done !== true && t.checkpoint_failed) : [];
+  if (!pending.length) return out;
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const ctx = taskPhaseContext(projectRoot, activeSession);
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  for (const task of pending) {
+    let cp = null;
+    try { cp = commitTaskCheckpoint(projectRoot, { run_id: task.checkpoint_failed.run_id || null }, task.id, { task, phase: ctx.phase }); } catch (err) { cp = { committed: false, failed: true, reason: String(err && err.message || err) }; }
+    const earlier = task.checkpoint_failed.commit || null;
+    if (cp.committed && !(cp.leftover && cp.leftover.length)) {
+      planJsonLib.markPlanTaskDone(paths.plan, task.id, { commit: cp.commit });
+      out.push({ task: task.id, commit: cp.commit, ok: true });
+    } else if (!cp.committed && !cp.failed && earlier) {
+      // nothing left to commit: the earlier (partial) checkpoint now holds everything
+      planJsonLib.markPlanTaskDone(paths.plan, task.id, { commit: earlier });
+      out.push({ task: task.id, commit: earlier, ok: true });
+    } else {
+      out.push({ task: task.id, ok: false, reason: cp.reason || 'checkpoint incompleto' });
+    }
+  }
+  if (out.length) appendEvent(projectRoot, activeSession, { type: 'CheckpointRetried', payload: { results: out } });
+  if (typeof options.onCheckpointRetry === 'function') options.onCheckpointRetry(out);
+  return out;
+}
+
 function commitTaskCheckpoint(projectRoot, runState, taskId, options = {}) {
   // OXB-052: the scope is the graph's AND the current plan's (a CR may have added files after the compile).
   const planFiles = options.task && Array.isArray(options.task.files) ? options.task.files.map((p) => String(p).replace(/\\/g, '/')).filter((p) => p && !p.includes('*')) : [];
@@ -5112,18 +5225,24 @@ function commitTaskCheckpoint(projectRoot, runState, taskId, options = {}) {
   if (!gitLines(projectRoot, ['rev-parse', '--is-inside-work-tree'])) return { committed: false, reason: 'sem repositório git' };
   const changed = (gitLines(projectRoot, ['status', '--porcelain', '-uall', '--', ...files]) || []);
   if (!changed.length) return { committed: false, reason: 'nada mudou no escopo da tarefa' };
-  const node = runState.compiled_graph.nodes[taskId] || {};
+  const node = (runState && runState.compiled_graph && runState.compiled_graph.nodes && runState.compiled_graph.nodes[taskId]) || {};
   // OXB-021: the message follows the project's commit_convention (or the task's own `commit`), with an OXE-Task trailer.
   const planTask = options.task || {};
   const message = require('./oxe-commit-convention.cjs').checkpointMessage({
     id: taskId,
     title: planTask.title || node.title || taskId,
     commit: planTask.meta && planTask.meta.commit ? planTask.meta.commit : planTask.commit,
+    phase: options.phase || null,
+    run_id: (runState && runState.run_id) || null,
   }, options.config || readProjectConfig(projectRoot));
   const add = spawnSync('git', ['add', '--', ...files.filter((f) => fs.existsSync(path.join(projectRoot, f)) || changed.some((l) => l.includes(f)))], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
-  if (add.status !== 0) return { committed: false, reason: `git add falhou: ${String(add.stderr).trim()}` };
+  if (add.status !== 0) return { committed: false, failed: true, reason: `git add falhou: ${String(add.stderr).trim()}` };
   const commit = spawnSync('git', ['commit', '-q', '-F', '-', '--', ...files], { cwd: projectRoot, encoding: 'utf8', windowsHide: true, input: message });
-  if (commit.status !== 0) return { committed: false, reason: `git commit falhou: ${String(commit.stderr || commit.stdout).trim()}` };
+  if (commit.status !== 0) {
+    // OXB-167: nothing is left half-staged — the working tree keeps the task's changes, the index goes back.
+    spawnSync('git', ['reset', '-q', '--', ...files], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+    return { committed: false, failed: true, reason: `git commit falhou: ${String(commit.stderr || commit.stdout).trim().split(/\r?\n/).slice(-8).join(' · ')}` };
+  }
   const head = gitLines(projectRoot, ['rev-parse', 'HEAD']);
   // Every changed file of the task's scope must be in the checkpoint; anything left over is reported, never silent.
   const leftover = (gitLines(projectRoot, ['status', '--porcelain', '-uall', '--', ...files]) || []).map((l) => l.slice(3).replace(/^"|"$/g, '').split(' -> ').pop());
@@ -6825,6 +6944,9 @@ module.exports = {
   runtimeScorecard,
   runtimePlanDone,
   findTaskCheckpoint,
+  taskCommitShas,
+  taskPhaseContext,
+  retryFailedCheckpoints,
   VALID_RUN_STATUSES,
   VALID_APPROVAL_POLICIES,
   VALID_CAPABILITY_TYPES,

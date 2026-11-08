@@ -257,7 +257,7 @@ process.stdin.resume();process.stdin.on('data',()=>{});process.stdin.on('end',()
   const reply=JSON.stringify({content:'ok',tool_calls:[{name:'finish_task',arguments:{summary:'done'}}]});
   process.stdout.write(JSON.stringify({type:'result',subtype:'success',is_error:false,result:reply,total_cost_usd:0.01}));
 });`, 'utf8');
-        const a = new claude_cli_1.ClaudeCliAdapter({ command: process.execPath, prefixArgs: [shim], timeoutMs: 400 });
+        const a = new claude_cli_1.ClaudeCliAdapter({ command: process.execPath, prefixArgs: [shim], timeoutMs: 2000 }); // 400 ms flaked under a loaded full suite: the 2nd (answering) call also timed out
         const events = [];
         const ex = new llm_task_executor_1.LlmTaskExecutor({ ...provider, maxTurns: 4 }, null, (e) => events.push(e), a.createCompletion());
         const ws = fs_1.default.mkdtempSync(path_1.default.join(tmp, 'ws-'));
