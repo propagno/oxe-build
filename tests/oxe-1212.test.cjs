@@ -192,3 +192,60 @@ describe('OXB-064: o resultado separa o que bloqueou de verdade do que não era 
     assert.ok(res.result.failed.includes('T1') || res.result.blocked.length > 0);
   });
 });
+
+describe('OXB-065: plain output when stdout is not a TTY; NDJSON task events', () => {
+  const out = require('../bin/lib/oxe-cli-output.cjs');
+  const CLI = path.join(__dirname, '..', 'bin', 'oxe-cc.js');
+
+  it('glyphs become ASCII words, box drawing becomes ASCII, accents stay UTF-8', () => {
+    const text = out.toPlain('  → T3 [verify] ✓\n  → T4 ✗\n ↺ retry 2\n ⛔ orçamento esgotado\n━━━━\n✅ ok — feito…');
+    assert.match(text, /-> T3 \[verify\] OK/);
+    assert.match(text, /-> T4 FAIL/);
+    assert.match(text, /RETRY retry 2/);
+    assert.match(text, /BLOCKED orçamento esgotado/);
+    assert.match(text, /^----$/m);
+    assert.match(text, / ok - feito\.\.\./);
+    assert.ok(/^[\x00-\x7F]*$/.test(text.replace(/[çãéíóõúâêô]/gi, '')), text);
+  });
+
+  it('plain unless stdout is a TTY; OXE_PLAIN and --plain override', () => {
+    assert.equal(out.isPlainMode({ env: {}, argv: [], isTTY: false }), true);
+    assert.equal(out.isPlainMode({ env: {}, argv: [], isTTY: true }), false);
+    assert.equal(out.isPlainMode({ env: {}, argv: ['--plain'], isTTY: true }), true);
+    assert.equal(out.isPlainMode({ env: { OXE_PLAIN: '0' }, argv: [], isTTY: false }), false);
+  });
+
+  it('the CLI piped to a file prints no banner and no box drawing, and keeps the accents', () => {
+    const dir = project({ plan: { schema_version: 1, tasks: [] } });
+    const r = spawnSync(process.execPath, [CLI, 'runtime', 'scorecard', '--dir', dir], { encoding: 'utf8', env: { ...process.env, OXE_PLAIN: '' } });
+    assert.ok(!/[━─═│]/.test(r.stdout), r.stdout);
+    assert.ok(!/multi-IDE/.test(r.stdout), 'no banner');
+    assert.match(r.stdout, /concluídas/);
+    assert.ok(!/[✓✗]/.test(r.stdout), r.stdout);
+  });
+
+  it('--plain is accepted by any command (removed before the parsers)', () => {
+    const r = spawnSync(process.execPath, [CLI, '--version', '--plain'], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+  });
+
+  it('execute --json emits one NDJSON line per task event', () => {
+    const lines = [];
+    const emit = out.createTaskNdjsonEmitter((l) => lines.push(JSON.parse(l)));
+    emit({ type: 'AttemptStarted', work_item_id: 'T1', payload: { attempt_number: 1 } });
+    emit({ type: 'executor_usage', nodeId: 'T1', detail: { cost_usd: 0.25 } });
+    emit({ type: 'VerificationCompleted', work_item_id: 'T1', payload: { failed_segment: { index: 2, total: 2, command: 'npx tsc', exit_code: 2 } } });
+    emit({ type: 'RetryScheduled', work_item_id: 'T1', payload: { next_attempt: 2, reason: 'verify' } });
+    emit({ type: 'AttemptStarted', work_item_id: 'T1', payload: { attempt_number: 2 } });
+    emit({ type: 'executor_usage', nodeId: 'T1', detail: { cost_usd: 0.1 } });
+    emit({ type: 'WorkItemCompleted', work_item_id: 'T1', payload: { attempt_number: 2 } });
+    emit({ type: 'WorkItemBlocked', work_item_id: 'T2', payload: { reason: 'human_gate' } });
+    emit({ type: 'turn_start', nodeId: 'T1', detail: { turn: 0 } });
+    assert.deepEqual(lines.map((l) => [l.task, l.attempt, l.status]), [['T1', 1, 'running'], ['T1', 1, 'retry'], ['T1', 2, 'running'], ['T1', 2, 'completed'], ['T2', 0, 'blocked']]);
+    assert.deepEqual(lines[1].failed_segment, { index: 2, total: 2, command: 'npx tsc', exit_code: 2 });
+    assert.equal(lines[1].cost_usd, 0.25);
+    assert.equal(lines[3].cost_usd, 0.1);
+    assert.equal(lines[3].total_cost_usd, 0.35);
+    assert.equal(lines[3].failed_segment, undefined);
+  });
+});

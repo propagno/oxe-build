@@ -63,6 +63,22 @@ function useAnsiColors() {
  * decoration go to stderr, so `oxe-cc … --json | jq` and benchmarks can parse the output.
  */
 const JSON_OUTPUT_MODE = process.argv.includes('--json');
+
+/**
+ * 1.21.2 (OXB-065): plain output. When stdout is not a TTY (redirected to a log, read by an agent loop) or with
+ * `--plain`, the CLI prints no banner and no box drawing, and status glyphs become ASCII words (OK, FAIL, BLOCKED…).
+ * A reader that decodes with a legacy code page (pwsh `*>> log`) then still greps "OK T3"; accents stay real UTF-8.
+ * `OXE_PLAIN=0` forces the decorated output, `OXE_PLAIN=1` forces plain.
+ */
+const cliOutput = require('./lib/oxe-cli-output.cjs');
+const PLAIN_OUTPUT_MODE = cliOutput.isPlainMode();
+if (process.argv.includes('--plain')) process.argv = process.argv.filter((a) => a !== '--plain');
+if (PLAIN_OUTPUT_MODE) {
+  // stdout in --json mode carries data (JSON/NDJSON): its strings are not rewritten. Decoration on stderr is.
+  if (!JSON_OUTPUT_MODE) cliOutput.installPlainWriter(process.stdout);
+  cliOutput.installPlainWriter(process.stderr);
+}
+
 function decor(...args) {
   if (JSON_OUTPUT_MODE) console.error(...args);
   else console.log(...args);
@@ -83,7 +99,7 @@ function printSection(title) {
 /** Print branded header; skip with OXE_NO_BANNER=1. Not used for --version (scripts). */
 function printBanner() {
   if (process.env.OXE_NO_BANNER === '1' || process.env.OXE_NO_BANNER === 'true') return;
-  if (JSON_OUTPUT_MODE) return;
+  if (JSON_OUTPUT_MODE || PLAIN_OUTPUT_MODE) return;
   const color = useAnsiColors();
   const ver = readPkgVersion();
   const bannerPath = path.join(PKG_ROOT, 'bin', 'banner.txt');
@@ -2540,7 +2556,8 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime feedback --class <defect|spec_gap|constraint|new_scope> --summary "..." [--criteria A4] [--by <quem>] [--amend-to 2]
   npx oxe-cc runtime feedback list [--json]
   npx oxe-cc runtime rollback --task T3 [--yes]
-  npx oxe-cc runtime execute ... [--checkpoint-commits] [--budget-turns N] [--budget-usd X] [--budget-reset] [--max-retries N] [--wave N] [--strict-external]
+  npx oxe-cc runtime execute ... [--checkpoint-commits] [--budget-turns N] [--budget-usd X] [--budget-reset] [--max-retries N] [--wave N] [--strict-external] [--json → NDJSON por evento de tarefa]
+  (qualquer comando) --plain  saída ASCII sem banner (padrão quando o stdout não é TTY; OXE_PLAIN=0 desliga)
   npx oxe-cc runtime verify [--no-gates]
   npx oxe-cc runtime scorecard [--since <data>] [--write] [--release-report <arquivo> --name <projeto>] [--json]
   npx oxe-cc runtime ci --attach <run-id|url> [--repo owner/repo] [--head <sha>]
@@ -5250,6 +5267,8 @@ async function runRuntime(opts) {
         ? { model: opts.model || process.env.OXE_CLAUDE_MODEL || null }
         : {};
       if (!opts.jsonOutput) console.log(`  ${c ? green : ''}Adapter:${c ? reset : ''} ${adapterId}${adapterId === 'claude' ? ` (claude -p${adapterOptions.model ? ` --model ${adapterOptions.model}` : ''})` : ` (${baseUrl})`}`);
+      const emitTaskNdjson = cliOutput.createTaskNdjsonEmitter((line) => process.stdout.write(`${line}
+`));
       const result = await oxeOperational.runRuntimeExecute(opts.dir, activeSession, {
         runId: opts.runId || undefined,
         heartbeatTimeoutMs: opts.heartbeatTimeoutMs || undefined,
@@ -5264,6 +5283,11 @@ async function runRuntime(opts) {
         maxRetries: opts.maxRetries != null && !Number.isNaN(opts.maxRetries) ? opts.maxRetries : undefined,
         agentsPlanPath: opts.agentsPlanPath || undefined,
         onProgress: (event) => {
+          // OXB-065: with --json, one NDJSON line per task event on stdout; the final result is the last line.
+          if (opts.jsonOutput) {
+            emitTaskNdjson(event);
+            return;
+          }
           if (event.type === 'turn_start') {
             const turn = event.detail?.turn ?? 0;
             if (turn === 0) process.stdout.write(`  → ${event.nodeId} `);
@@ -5284,12 +5308,16 @@ async function runRuntime(opts) {
           }
         },
       });
+      const r = result.result || {};
       if (opts.jsonOutput) {
-        console.log(JSON.stringify(result, null, 2));
-        if (result.result && ((result.result.failed && result.result.failed.length > 0) || result.result.status === 'blocked')) process.exitCode = 1;
+        process.stdout.write(`${JSON.stringify({ type: 'result', ...result })}\n`);
+        const jFailed = Array.isArray(r.failed) ? r.failed : [];
+        const jBlocked = Array.isArray(r.blocked) ? r.blocked : [];
+        const jExternal = Array.isArray(r.external_pending) ? r.external_pending : [];
+        if (jFailed.length > 0 || jBlocked.length > 0 || (r.status === 'blocked' && result.mode !== 'single' && result.mode !== 'parallel')) process.exitCode = 1;
+        else if (opts.strictExternal && jExternal.length > 0) process.exitCode = 3;
         return;
       }
-      const r = result.result || {};
       const completed = Array.isArray(r.completed) ? r.completed : [];
       const failed = Array.isArray(r.failed) ? r.failed : [];
       const blocked = Array.isArray(r.blocked) ? r.blocked : [];

@@ -526,6 +526,8 @@ oxe-cc azure operations list
 | `oxe-cc runtime execute --budget-turns N --checkpoint-commits` | executa com teto de turnos e checkpoint por tarefa |
 | `oxe-cc runtime ci --attach <run>` | anexa um run de CI à fase (gate `kind: ci`) |
 | `oxe-cc runtime scorecard [--since <data>]` | mede a maturidade a partir dos registros do runtime |
+| `oxe-cc runtime execute --json` | uma linha NDJSON por evento de tarefa (`task`, `attempt`, `status`, `cost_usd`, `failed_segment`); a última linha é o resultado |
+| `oxe-cc … --plain` | saída ASCII (OK/FAIL/BLOCKED), sem banner nem box drawing; é o padrão quando o stdout não é um TTY (`OXE_PLAIN=0` desliga) |
 | `oxe-cc status --full` | mostra próximo passo, coverage matrix e active run |
 | `oxe-cc status --json` | saída estruturada para hosts e CI |
 | `oxe-cc map --json` | catálogo dos artefatos existentes e lazy |

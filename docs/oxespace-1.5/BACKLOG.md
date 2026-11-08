@@ -321,7 +321,7 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-065: encoding da saída quando o stdout não é um TTY (Windows)
 
-- **Status:** aberto. Detalhes em `HANDOFF-1.21.2.md` §5.
+- **Status:** resolvido (1.21.2). Quando o stdout não é um TTY (ou com `--plain`), a CLI não imprime banner nem box drawing e troca os glifos por palavras ASCII (`OK`, `FAIL`, `BLOCKED`, `RETRY`, `->`); os acentos continuam UTF-8 real. `OXE_PLAIN=0` força a saída decorada. O `runtime execute --json` imprime uma linha NDJSON por evento de tarefa (`{type:"task", task, attempt, status, cost_usd, total_cost_usd, failed_segment?}`), e a última linha é `{type:"result", …}`. Teste: `tests/oxe-1212.test.cjs`. No pwsh 7, `[Console]::OutputEncoding = [Text.UTF8Encoding]::new()` antes do `*>> log` faz os acentos chegarem certos no log.
 
 ## OXB-066: o feedback do verify esconde o segmento que falhou num comando `a && b`
 
