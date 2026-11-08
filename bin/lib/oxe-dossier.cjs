@@ -87,7 +87,16 @@ function taskJournal(plan, events, checkResults) {
 }
 
 /** Arquivos do contrato (pack exact_paths) × arquivos tocados (git) → drift de arquitetura. */
-function architectureDrift(pack, plan, changes, hashFile) {
+/** Glob (`**`, `*`, `?`) or path prefix. */
+function globMatch(file, pattern) {
+  const p = String(pattern || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!p) return false;
+  if (!/[*?]/.test(p)) return file === p || file.startsWith(p.endsWith('/') ? p : `${p}/`);
+  const re = new RegExp(`^${p.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*\/?/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\u0000/g, '.*')}$`);
+  return re.test(file);
+}
+
+function architectureDrift(pack, plan, changes, hashFile, options = {}) {
   const norm = (p) => String(p).replace(/\\/g, '/');
   const contracted = new Map();
   // O contrato é o pack (exact_paths) mais os arquivos declarados nas tarefas do plano.
@@ -102,13 +111,20 @@ function architectureDrift(pack, plan, changes, hashFile) {
     for (const f of a.files || []) frozen.set(norm(typeof f === 'string' ? f : f.path), typeof f === 'string' ? null : f.sha256 || null);
   }
   const touched = new Map((changes || []).map((c) => [norm(c.path), c.status]));
-  const outside = [...touched.keys()].filter((p) => !contracted.has(p) && !frozen.has(p) && !p.startsWith('.oxe/'));
+  const candidates = [...touched.keys()].filter((p) => !contracted.has(p) && !frozen.has(p) && !p.startsWith('.oxe/'));
+  // OXB-080: frozen tests the planner committed ahead of time for a LATER phase (added/modified under the acceptance
+  // test directory, not part of this plan) are "parked", not drift; an audited waiver (--accept-drift) covers the rest.
+  const parkedGlobs = Array.isArray(options.parkedGlobs) ? options.parkedGlobs : [];
+  const waivedGlobs = Array.isArray(options.waivedGlobs) ? options.waivedGlobs : [];
+  const parked = candidates.filter((p) => touched.get(p) !== 'D' && parkedGlobs.some((g) => globMatch(p, g)));
+  const waived = candidates.filter((p) => !parked.includes(p) && waivedGlobs.some((g) => globMatch(p, g)));
+  const outside = candidates.filter((p) => !parked.includes(p) && !waived.includes(p));
   const untouched = [...contracted.keys()].filter((p) => !touched.has(p));
   // Aceite "alterado" = hash atual diferente do congelado no compile (não "aparece no diff": o planner o commita).
   const frozenChanged = [...frozen.entries()]
     .filter(([p, sha]) => sha && typeof hashFile === 'function' && hashFile(p) !== sha)
     .map(([p]) => p);
-  return { contracted, touched, outside, untouched, frozenChanged };
+  return { contracted, touched, outside, untouched, frozenChanged, parked, waived };
 }
 
 function handoffFilled(humanText) {
@@ -135,7 +151,7 @@ function buildDossier(input) {
   const phaseCriteria = criteria.filter((c) => inPhase(c.id));
   const decisions = [...decisionsFromSpec(input.specText), ...(input.decisions || [])];
   const journal = taskJournal(plan, input.events || [], checks);
-  const drift = architectureDrift(input.pack, plan, input.changes, input.hashFile);
+  const drift = architectureDrift(input.pack, plan, input.changes, input.hashFile, { parkedGlobs: input.parkedGlobs, waivedGlobs: input.waivedGlobs });
   const signoffs = input.signoffs || [];
 
   // --- techspec: critério → teste congelado → prova → resultado
@@ -192,6 +208,12 @@ function buildDossier(input) {
     '',
     '## Fora do contrato (tocados sem estar no pack)',
     drift.outside.length ? drift.outside.map((p) => `- \`${p}\` (${drift.touched.get(p)})`).join('\n') : '_(nenhum)_',
+    '',
+    '## Testes congelados estacionados (para fases seguintes)',
+    drift.parked.length ? drift.parked.map((p) => `- \`${p}\` (${drift.touched.get(p)})`).join('\n') : '_(nenhum)_',
+    '',
+    '## Fora do contrato aceitos (--accept-drift, registrado)',
+    drift.waived.length ? drift.waived.map((p) => `- \`${p}\` (${drift.touched.get(p)})`).join('\n') : '_(nenhum)_',
     '',
     '## Testes de aceite congelados alterados',
     drift.frozenChanged.length ? drift.frozenChanged.map((p) => `- \`${p}\``).join('\n') : '_(nenhum — íntegros)_',

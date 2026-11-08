@@ -2567,7 +2567,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime verify [--no-gates]
   npx oxe-cc runtime scorecard [--since <data>] [--write] [--release-report <arquivo> --name <projeto>] [--json]
   npx oxe-cc runtime ci --attach <run-id|url> [--repo owner/repo] [--head <sha>]
-  npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"] [--no-gates]
+  npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"] [--no-gates] [--accept-drift <glob> --by <papel> --reason "…"]
   npx oxe-cc runtime sync --from origin/main [--no-fetch] [--no-reverify]   (merge local; reverify das tarefas done tocadas pela base)
   npx oxe-cc runtime promote T<n> --base main [--branch <nome>] [--open-pr] [--remote origin] [--no-pr-ready]
   npx oxe-cc spec amend A<n> (--text "…"|--append "…"|--verify "…") --by <papel> --reason "…" [--additive] [--phase Fn]
@@ -4171,6 +4171,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--additive') out.additive = true;
     else if (a === '--defer-signoff') out.deferSignoff = true;
     else if (a === '--risk' && argv[i + 1]) out.risk = String(argv[++i]);
+    else if (a === '--accept-drift' && argv[i + 1]) out.acceptDrift = [...(out.acceptDrift || []), String(argv[++i])];
     else if (a === '--yes') out.yes = true;
     else if (a === '--checkpoint-commits') out.checkpointCommits = true;
     else if (a === '--attach' && argv[i + 1]) out.attach = String(argv[++i]);
@@ -5111,6 +5112,8 @@ async function runRuntime(opts) {
           message: opts.message || undefined,
           deferSignoff: opts.deferSignoff,
           by: opts.by || undefined,
+          acceptDrift: opts.acceptDrift || undefined,
+          reason: opts.reason || undefined,
           risk: opts.risk || undefined,
         });
         if (opts.jsonOutput) {

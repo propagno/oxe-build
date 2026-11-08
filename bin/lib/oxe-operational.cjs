@@ -2809,6 +2809,15 @@ function runtimeDossier(projectRoot, activeSession, options = {}) {
     run,
     events,
     changes: phaseChanges(projectRoot, base),
+    // OXB-080: frozen tests parked for later phases (config `parked_tests`, default tests/acceptance/**) and the phase's
+    // audited drift waivers (`program close --accept-drift <glob> --by --reason`).
+    parkedGlobs: (() => {
+      const cfg = readProjectConfig(projectRoot) || {};
+      return Array.isArray(cfg.parked_tests) ? cfg.parked_tests.map(String) : ['tests/acceptance/**'];
+    })(),
+    waivedGlobs: readNdjsonQuiet(path.join(programDir, 'changes.ndjson'))
+      .filter((r) => r && r.kind === 'drift_waiver' && (!phaseId || r.phase === phaseId))
+      .flatMap((r) => r.globs || []),
     hashFile: (rel) => { const rt = loadRuntimeModule(); return rt && typeof rt.sha256File === 'function' ? rt.sha256File(path.resolve(projectRoot, rel)) : null; },
     decisions: readNdjsonQuiet(path.join(programDir, 'decisions.ndjson')),
     notes: readNdjsonQuiet(path.join(programDir, 'notes.ndjson')).filter((n) => !phaseId || !n.phase || n.phase === phaseId),
@@ -4092,6 +4101,16 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   }
   // 1.21 (OXB-020): the phase verify must have run every declared project gate green, and the close-time gates
   // (e.g. CI) run now — before the dossier, so a gate CR that just went green no longer counts as open.
+  // OXB-080: an audited waiver for files outside the contract (logged before the dossier reads it).
+  const acceptDrift = (Array.isArray(options.acceptDrift) ? options.acceptDrift : options.acceptDrift ? [options.acceptDrift] : []).map(String).filter(Boolean);
+  if (acceptDrift.length) {
+    const by = String(options.by || '').trim();
+    const reason = String(options.reason || '').trim();
+    if (!by || reason.length < 8) throw new Error('--accept-drift exige --by <papel> e --reason "…" (a exceção fica registrada)');
+    const changeLib = require('./oxe-change.cjs');
+    changeLib.appendNdjson(changeLib.changesFile(paths.programDir || path.join(projectRoot, '.oxe', 'program')), { kind: 'drift_waiver', phase: phase.id, globs: acceptDrift, by, reason, at: new Date().toISOString() });
+    appendEvent(projectRoot, activeSession, { type: 'DriftWaived', payload: { phase: phase.id, globs: acceptDrift, by } });
+  }
   const closeGates = programCloseGateReasons(projectRoot, activeSession, { phase, run, paths, state, skip: options.gates === false });
   // 1.20: um critério UAT com sign-off conta como verificado; o dossiê precisa estar sem drift e com handoff.
   const dossier = options.dossier === false ? null : runtimeDossier(projectRoot, activeSession, { phase: phase.id, runState: run });

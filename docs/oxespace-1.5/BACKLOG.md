@@ -477,3 +477,18 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
   - **Agora:** o verify considera a execução concluída também quando o trabalho do plano (PLAN.json, OXB-059) está todo feito ou só aguarda entrega externa. Ele também grava o próprio resultado (`verification_status`, `verified_at`), e o close usa esse resultado.
   - As edições de programa em outras fases (`phase add/edit`, `criterion move`) não tocam o estado do verify da fase ativa. O `criterion move` só muda o PLAN.json quando a fase de origem é a ativa.
   - Teste: `tests/oxe-1212-verify-scope.test.cjs`.
+
+## OXB-080: testes congelados estacionados para fases seguintes contam como `architecture_drift`
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (close da F1 na rc.9): testes revisados para trabalho posterior (o F2 antigo e o bug do plan-label), commitados de propósito na branch do programa, bloqueavam o close.
+  - Arquivos adicionados ou modificados sob os globs de `parked_tests` (padrão `tests/acceptance/**`) que não são do plano atual saem como "Testes congelados estacionados (para fases seguintes)" no `architecture.md`, não como drift.
+  - `program close --accept-drift <glob> --by <papel> --reason "…"` registra uma exceção auditada (`drift_waiver` no changes.ndjson). Os arquivos cobertos saem em "Fora do contrato aceitos".
+  - O resto continua sendo drift.
+  - Teste: `tests/oxe-1212-sync-promote.test.cjs`.
+
+## OXB-081: o `runtime verify` teria derrubado o anexo de CI
+
+- **Status:** não é defeito (diagnosticado em 08/11, só leitura do oxespace-150).
+  - O CR-31 ("nenhum run de CI anexado à fase F1") foi aberto pelo verify às 06:10:16. O primeiro anexo em `program/ci.ndjson` é de 06:18:59, e o segundo de 06:40:05.
+  - O verify rodou antes do anexo existir. O `ci.ndjson` é append-only, e nenhum comando o apaga: os dois registros continuam lá.
+  - O CR-31 fechou sozinho (06:39:38, "gate do projeto ci verde") quando o gate ficou verde.

@@ -36,6 +36,7 @@ Copie `oxe/templates/config.template.json` para **`.oxe/config.json`** no seu pr
 | `deps_strategy` | string | Para as worktrees do modo paralelo: `link` (junction para o node_modules de `deps_link_from`, removida antes de todo dispose), `copy-from`, `ci` (com a checagem de presença da OXB-039) ou `none`. Obrigatório no modo paralelo. No `link`, uma tarefa que muda package.json/lockfile ou instala no verify é recusada. |
 | `deps_link_from` | string | A checkout cujo node_modules validado as worktrees usam (ex.: `"."`, a checkout do programa). Explícito, nunca inferido. |
 | `deps_protected` | array | Caminhos que nunca podem ser `deps_link_from` (ex.: a checkout principal da pessoa). |
+| `parked_tests` | array | Opcional (OXB-080). Globs de testes congelados que o planner commita adiantado para fases seguintes. No dossiê eles saem como "estacionados", não como drift. Padrão: `["tests/acceptance/**"]`. |
 | `program` | object | Opcional. `program.export_dir`: pasta versionada (fora de `.oxe/`) onde `oxe-cc program export` grava SPEC.md, ROADMAP.md, PROGRAM.json e changes.ndjson. Com ela definida, `spec amend`/`spec add`/`program phase add` atualizam o export, e o `doctor` deixa de avisar sobre `.oxe/` no .gitignore. |
 | `install` | object | Opcional. Preferências de **instalação** quando corre `npx oxe-cc` **sem** flags de CLI. Ver tabela abaixo. |
 

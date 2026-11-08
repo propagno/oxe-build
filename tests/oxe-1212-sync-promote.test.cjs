@@ -249,3 +249,35 @@ describe('OXB-078: an orphaned gate CR can be closed', () => {
     assert.throws(() => op.runtimeChangeSetStatus(dir, null, { id: 'CR-01', status: 'resolved', by: 'tl', reason: 'de novo, por engano' }), /já está withdrawn/);
   });
 });
+
+describe('OXB-080: frozen tests parked for later phases are not architecture drift', () => {
+  const dossier = require('../bin/lib/oxe-dossier.cjs');
+  const plan = { tasks: [{ id: 'T1', files: ['src/a.js'] }], acceptanceTests: [{ criterion: 'A1', files: [{ path: 'tests/acceptance/f1/a1.test.ts', sha256: null }] }] };
+  const changes = [
+    { path: 'src/a.js', status: 'M' },
+    { path: 'tests/acceptance/f1/a1.test.ts', status: 'A' },
+    { path: 'tests/acceptance/f2/a10-agent-activity-read-model.test.ts', status: 'A' },
+    { path: 'tests/acceptance/bugs/claude-plan-label.test.ts', status: 'A' },
+    { path: 'scripts/stray.mjs', status: 'A' },
+    { path: 'docs/notes.md', status: 'A' },
+  ];
+  it('tests under tests/acceptance/** outside the plan are "parked"; a waiver covers a glob; the rest is still drift', () => {
+    const d = dossier.architectureDrift(null, plan, changes, null, { parkedGlobs: ['tests/acceptance/**'], waivedGlobs: ['docs/**'] });
+    assert.deepEqual(d.parked.sort(), ['tests/acceptance/bugs/claude-plan-label.test.ts', 'tests/acceptance/f2/a10-agent-activity-read-model.test.ts']);
+    assert.deepEqual(d.waived, ['docs/notes.md']);
+    assert.deepEqual(d.outside, ['scripts/stray.mjs']);
+    const none = dossier.architectureDrift(null, plan, changes, null, {});
+    assert.equal(none.outside.length, 4, 'without globs nothing changes');
+  });
+
+  it('program close --accept-drift requires --by and --reason and logs a drift_waiver', () => {
+    const { dir } = setup();
+    const programDir = path.join(dir, '.oxe', 'program');
+    fs.mkdirSync(programDir, { recursive: true });
+    fs.writeFileSync(path.join(programDir, 'PROGRAM.json'), JSON.stringify({ schema_version: 1, active_phase: 'F1', phases: [{ id: 'F1', title: 'F1', requirements: [], acceptance: ['A1'], status: 'executing', plan_ref: null, run_id: null }] }));
+    assert.throws(() => op.runtimeProgramClose(dir, null, { acceptDrift: ['docs/**'], gates: false }), /--accept-drift exige --by/);
+    op.runtimeProgramClose(dir, null, { acceptDrift: ['docs/**'], by: 'tech-lead', reason: 'docs do merge de release, revisadas no PR #675', gates: false });
+    const waiver = fs.readFileSync(path.join(programDir, 'changes.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((r) => r.kind === 'drift_waiver');
+    assert.deepEqual([waiver.phase, waiver.globs, waiver.by], ['F1', ['docs/**'], 'tech-lead']);
+  });
+});
