@@ -36,6 +36,7 @@ function windowsCommand(command) {
 }
 
 function runCommand(command, cwd, timeoutMs) {
+  const started = Date.now();
   const decode = require('./oxe-console-decode.cjs').decodeConsoleOutput;
   const isWin = process.platform === 'win32';
   const res = spawnSync(isWin ? 'cmd.exe' : 'sh', isWin ? ['/d', '/s', '/c', windowsCommand(command)] : ['-c', command], {
@@ -49,7 +50,7 @@ function runCommand(command, cwd, timeoutMs) {
   return {
     code: res.status,
     timedOut: Boolean(res.error && /ETIMEDOUT/.test(String(res.error.code || res.error.message))),
-    output: `${decode(res.stdout)}\n${decode(res.stderr)}`,
+    output: `${decode(res.stdout)}\n${decode(res.stderr)}${/\b(gradlew(\.bat)?|gradle|mvnw?(\.cmd)?)\b/.test(command) ? `\n${junitReportsSince(cwd, started)}` : ''}`,
   };
 }
 
@@ -89,9 +90,81 @@ function classifyFailure(output, targets, options = {}) {
   if (MISSING_TARGET_RE.test(text) && missing.some((file) => targetForms(file, options.projectRoot || null).some((form) => normalized.includes(form)))) {
     return 'missing_target';
   }
+  // OXB-154 (compiled languages): a stub that runs (Kotlin TODO(), NotImplementedError, UnsupportedOperationException
+  // "TODO", a "not implemented" marker) is the work not done yet — the right red.
+  if (STUB_RE.test(text) && !CONFIG_ERROR_RE.test(text)) return 'missing_target';
+  // A compile error on symbols the task's pack declares (Kotlin "Unresolved reference", Java "cannot find symbol",
+  // tsc "has no exported member"/"Cannot find name") is the right red too — only when EVERY such symbol is the task's.
+  const missingSymbols = compileMissingSymbols(text);
+  const own = new Set(options.symbols || []);
+  if (missingSymbols.length && own.size && missingSymbols.every((s) => own.has(s))) return 'missing_target';
+  // JUnit results (the XML the build wrote): compile succeeded; failures that are assertions in a test file the task
+  // proves are the right red.
+  const junit = junitFailures(text);
+  if (junit.length && junit.every((f) => f.assertion || f.stub)) {
+    const proved = (options.provedFiles || []).map((p) => path.posix.basename(String(p).replace(/\\/g, '/')).replace(/\.[^.]+$/, ''));
+    if (!proved.length || junit.every((f) => proved.some((b) => f.className.endsWith(b) || f.className.split('.').pop() === b))) return 'assertion_red';
+  }
   const someOwnExist = options.someTargetsExist != null ? options.someTargetsExist : options.targetsExist;
   if (someOwnExist && ASSERTION_RE.test(text) && !TOOL_ERROR_RE.test(text)) return 'assertion_red';
   return 'broken_command';
+}
+
+/** OXB-154: stubs that run — the planned skeleton, not a broken command. */
+const STUB_RE = /kotlin\.NotImplementedError|An operation is not implemented|NotImplementedError|UnsupportedOperationException[^\n]{0,80}\b(TODO|not implemented)|\bnot implemented yet\b/i;
+/** Build configuration problems: never the right red. */
+const CONFIG_ERROR_RE = /Task '[^']+' not found|Could not resolve (all )?(dependencies|plugin)|A problem occurred configuring|Plugin \[id: [^\]]+\] was not found|Unknown (option|argument)/i;
+
+/** Symbols a compiler says are missing (Kotlin, Java, TypeScript). */
+function compileMissingSymbols(text) {
+  const out = new Set();
+  for (const m of String(text).matchAll(/Unresolved reference:?\s*'?([A-Za-z_$][\w$]*)'?/g)) out.add(m[1]);
+  for (const m of String(text).matchAll(/cannot find symbol[\s\S]{0,240}?symbol:\s*(?:class|method|variable|interface)\s+([A-Za-z_$][\w$]*)/g)) out.add(m[1]);
+  for (const m of String(text).matchAll(/has no exported member(?: named)? '([A-Za-z_$][\w$]*)'|Cannot find name '([A-Za-z_$][\w$]*)'|Property '([A-Za-z_$][\w$]*)' does not exist/g)) out.add(m[1] || m[2] || m[3]);
+  return [...out];
+}
+
+/** Failed testcases of JUnit XML in the output: { className, assertion, stub }. */
+function junitFailures(text) {
+  const out = [];
+  for (const m of String(text).matchAll(/<testcase\b([^>]*)>([\s\S]*?)<\/testcase>/g)) {
+    const fail = /<(failure|error)\b([^>]*)>?([\s\S]*?)(?:<\/(?:failure|error)>|$)/.exec(m[2]);
+    if (!fail) continue;
+    const className = (/classname="([^"]*)"/.exec(m[1]) || [])[1] || '';
+    const body = `${fail[2]} ${fail[3]}`;
+    out.push({
+      className,
+      assertion: /AssertionFailedError|AssertionError|ComparisonFailure|kotlin\.test|expected:\s*<|Expected\s*:/.test(body),
+      stub: STUB_RE.test(body),
+    });
+  }
+  return out;
+}
+
+/** OXB-154: JUnit XML files under test-results/ or surefire-reports/ written since `since` (dry-verify of gradle/maven). */
+function junitReportsSince(root, since) {
+  const parts = [];
+  let budget = 8 * 1024 * 1024;
+  const walk = (dir, depth, inReports) => {
+    if (depth > 8 || budget <= 0) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (['node_modules', '.git', '.gradle', '.oxe'].includes(e.name)) continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full, depth + 1, inReports || e.name === 'test-results' || e.name === 'surefire-reports');
+      else if (inReports && /\.xml$/i.test(e.name)) {
+        try {
+          const st = fs.statSync(full);
+          if (st.mtimeMs + 1000 < since || st.size > budget) continue;
+          parts.push(fs.readFileSync(full, 'utf8'));
+          budget -= st.size;
+        } catch { /* */ }
+      }
+    }
+  };
+  walk(root, 0, false);
+  return parts.join('\n');
 }
 
 const SEVERITY = { external_pending: 0, already_green: 0, missing_target: 1, assertion_red: 1, timeout: 3, broken_command: 4, not_a_command: 5, unsafe_command: 6 };
@@ -275,6 +348,10 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
   const warnings = [];
   const allTasks = plan && Array.isArray(plan.tasks) ? plan.tasks : [];
   const byId = new Map(allTasks.map((t) => [t.id, t]));
+  // OXB-154: the frozen test files each task proves (acceptance_tests with its task id or its criteria).
+  const provedFilesOf = (task) => (Array.isArray(plan && plan.acceptanceTests) ? plan.acceptanceTests : [])
+    .filter((a) => a && ((a.task && a.task === task.id) || (!a.task && (task.aceite || []).includes(a.criterion))))
+    .flatMap((a) => (a.files || []).map((f) => (typeof f === 'string' ? f : f.path)));
   /** Files of the pending tasks this one depends on (transitively): their absence is the right red too (OXB-027). */
   const pendingDependencyFiles = (task) => {
     const out = new Set();
@@ -401,7 +478,7 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
         if (progress) progress(`${label} ... ${v} (já rodado nesta árvore)`);
       } else if (fromBatch) {
         run = fromBatch;
-        v = run.code === 0 ? 'already_green' : classifyFailure(run.output, targets, { targetsExist, someTargetsExist, missingTargets, projectRoot });
+        v = run.code === 0 ? 'already_green' : classifyFailure(run.output, targets, { targetsExist, someTargetsExist, missingTargets, projectRoot, symbols: task.packSymbols || [], provedFiles: provedFilesOf(task) });
         if (progress) progress(`${label} ... ${v === 'missing_target' || v === 'assertion_red' ? 'ok' : v} (${run.parallel ? 'paralelo' : 'lote'})`);
         if (key) {
           cache.entries[key] = { task: task.id, verdict: v, code: run.code, output: String(run.output || '').slice(-4000), at: new Date().toISOString(), secs: 0, batched: true };
@@ -414,7 +491,7 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
         // OXB-096 (F2: 14× `npm run typecheck`, 13× `npm run lint`): the same command on the same tree has the same
         // output — the next tasks reuse it (each still classified against its own targets).
         if (!run.timedOut) sameCommand.set(segment, { code: run.code, output: run.output });
-        v = run.timedOut ? 'timeout' : run.code === 0 ? 'already_green' : classifyFailure(run.output, targets, { targetsExist, someTargetsExist, missingTargets, projectRoot });
+        v = run.timedOut ? 'timeout' : run.code === 0 ? 'already_green' : classifyFailure(run.output, targets, { targetsExist, someTargetsExist, missingTargets, projectRoot, symbols: task.packSymbols || [], provedFiles: provedFilesOf(task) });
         const secs = Math.round((Date.now() - started) / 1000);
         if (progress) progress(`${label} ... ${v === 'missing_target' || v === 'assertion_red' ? 'ok' : v} ${secs}s`);
         if (key) {
@@ -449,4 +526,4 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
   return { ok: errors.length === 0, results, errors, warnings, reused, skipped, tree, ...(depsBroken ? { deps_broken: depsBroken } : {}) };
 }
 
-module.exports = { dryRunVerifyCommands, classifyFailure, hasSingleQuotedArgument, treeHash, depsProblem, windowsCommand };
+module.exports = { compileMissingSymbols, junitFailures, dryRunVerifyCommands, classifyFailure, hasSingleQuotedArgument, treeHash, depsProblem, windowsCommand };

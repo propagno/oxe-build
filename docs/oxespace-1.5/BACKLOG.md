@@ -993,13 +993,15 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 
 ## OXB-154: teste congelado que falha na compilação, e o acoplamento de compilação entre tarefas
 
-- **Status:** aberto. Registrado pelo TECH LEAD em 08/11 (F10, Kotlin/gradle).
-  - Um erro de compilação sobre símbolo que a tarefa vai criar (`Unresolved reference`, `cannot find symbol`, tsc sem o export) é o vermelho certo, não `broken_command`.
-  - Em gradle/maven/tsc do projeto todo, os testes de todas as tarefas compilam juntos.
-- **Proposta:**
-  - mapear esses erros para `missing_target` quando o símbolo está nos symbols do pack;
-  - o lint avisa do acoplamento;
-  - `oxe-cc plan skeleton` gera stubs a partir do pack.
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (F10, Kotlin/gradle), com um adendo quando o esqueleto da API já compilava.
+  - **No dry-verify, o vermelho certo de linguagem compilada:**
+    - erro de compilação em símbolo ainda não criado vira `missing_target`, mas só quando **todos** os símbolos citados estão nos `symbols` do pack da tarefa (Kotlin `Unresolved reference`, Java `cannot find symbol … symbol: method x`, tsc `has no exported member` / `Cannot find name` / `Property … does not exist`);
+    - stub que executa vira `missing_target`: `kotlin.NotImplementedError` / "An operation is not implemented", `UnsupportedOperationException` com TODO e "not implemented yet";
+    - falha de asserção JUnit num arquivo de teste que a tarefa **prova** vira `assertion_red` (`AssertionFailedError`, `AssertionError`, `ComparisonFailure`, kotlin.test, `expected: <…>`). O JUnit XML que o gradle/maven gravou é lido também no dry-verify, como no verify desde a OXB-150.
+  - Continuam `broken_command`: erro de configuração do gradle (task inexistente, dependência ou plugin não resolvido), erro de compilação em símbolo fora do pack e asserção em teste que a tarefa não prova.
+  - **Acoplamento:** o lint avisa quando várias tarefas pendentes compilam juntas no mesmo comando de projeto inteiro (gradle/maven/tsc sem arquivo). Os testes congelados de uma não compilam enquanto faltarem os símbolos das outras, e a dica é commitar antes um esqueleto com TODO.
+  - Ainda não feito: o gerador `plan skeleton`. Sem as assinaturas no pack, um stub gerado não compila contra os testes.
+  - Teste: `tests/oxe-1212-compiled-right-red.test.cjs`.
 
 ## OXB-155: o verify por tarefa do execute ignorava `verify_timeout_ms` (60 s fixos)
 
@@ -1030,3 +1032,10 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - O `gh pr create --base` recebe o nome da branch no remoto (`main`), nunca `origin/main`.
   - O `status` avisa quando uma tarefa foi concluída na run mas não está `done` no PLAN.json (PLAN.json regenerado): "T1 concluída(s) na run mas não no PLAN.json … oxe-cc plan done T1".
   - Teste: `tests/oxe-1212-sync-promote.test.cjs` e `tests/oxe-1212-state-coherent.test.cjs`.
+
+## OXB-158: o promote rodava o pr:ready antes do push e não abria o PR
+
+- **Status:** resolvido (1.21.2). Visto no `--promote-each` da F2-T2: o pr:ready passou nos checks mas não conseguiu postar o status no GitHub ("aba53690 is not on GitHub yet: push it first") e saiu com erro. O promote tratou isso como `pr:ready vermelho` e não abriu o PR.
+  - Com `--open-pr`, a branch agora é publicada **antes** do pr:ready, que posta o status no sha publicado. Depois vem o PR.
+  - Quando só o post do status falha (e, tirando essas linhas e as linhas do próprio npm, nada mais reporta falha), o resultado é `pr_ready.ok` com `status_post_failed`, e o PR abre. Quando um check reprova, o PR não abre, e a mensagem avisa que a branch já está no remoto.
+  - Teste: `tests/oxe-1212-sync-promote.test.cjs` (pr:ready que só passa com a branch no remoto; falha só de status; falha de check).

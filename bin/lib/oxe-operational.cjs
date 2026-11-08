@@ -330,6 +330,8 @@ function attachImplementationPackContracts(parsedPlan, packPath) {
       .filter((value) => looksLikeFilePath(value) && !value.includes('*') && !value.includes('...') && !removed.has(value));
     if (files.length > 0) task.filesExist = [...new Set(files)];
     const exportsExpected = packSymbolExports(entry).filter((e) => !removed.has(e.file));
+    // OXB-154: every symbol the pack declares (any kind) — the dry-verify reads a compile error on them as the right red.
+    task.packSymbols = (Array.isArray(entry.symbols) ? entry.symbols : []).map((sym) => String((sym && (sym.name || sym)) || '').trim()).filter((n) => /^[A-Za-z_$][\w$]*$/.test(n));
     if (exportsExpected.length > 0) task.exportsExpected = exportsExpected;
     if ((removal.removedPaths.length || removal.symbolsRemoved.length) && !task.done) {
       const cmd = require('./oxe-pack-removed.cjs').checkCommand(packPath, task.id);
@@ -2927,6 +2929,24 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       result.errors.push(...unsafe.verifyCommandProblems(task.id, task.verifyCommand, split));
     }
     for (const at of plan.acceptanceTests || []) result.errors.push(...unsafe.verifyCommandProblems(`teste de aceite ${at.criterion || at.id || '?'}`, at.command, split));
+    // OXB-154: a whole-project compile (gradle/maven/tsc without file args) shared by several pending tasks: every task's
+    // frozen tests compile together, so one task cannot go green while another's symbols are missing.
+    {
+      const coupled = new Map();
+      for (const task of plan.tasks || []) {
+        if (task.done) continue;
+        for (const seg of String(task.verifyCommand || '').split('&&').map((x) => x.trim())) {
+          if (/\b(gradlew(\.bat)?|gradle|mvnw?(\.cmd)?)\b/.test(seg) || /\btsc\b(?![^&|]*\.(ts|tsx)\b)/.test(seg)) {
+            const key = seg.replace(/--tests\s+\S+/g, '').replace(/\s+/g, ' ');
+            if (!coupled.has(key)) coupled.set(key, []);
+            coupled.get(key).push(task.id);
+          }
+        }
+      }
+      for (const [cmd, ids] of coupled) {
+        if (ids.length > 1) result.warnings.push(`acoplamento de compilação: ${ids.join(', ')} compilam juntos em \`${cmd.slice(0, 80)}\` — os testes congelados de uma tarefa não compilam enquanto faltarem os símbolos das outras; commite antes um esqueleto (stubs com TODO) dos symbols do pack`);
+      }
+    }
     // OXB-152: on Windows a `./script.sh` verify needs a .cmd/.bat sibling (gradlew/mvnw are mapped automatically).
     if (process.platform === 'win32' || options.platform === 'win32') {
       for (const task of plan.tasks || []) {
@@ -3901,13 +3921,28 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       }
       result.frozen_tests = added;
     }
+    // OXB-158: with --open-pr the branch is pushed FIRST — pr:ready posts its GitHub status on the pushed sha (before,
+    // it passed its checks, failed to post "… is not on GitHub yet: push it first", and the PR was never opened).
+    if (!result.conflict && options.openPr && !result.error) {
+      const push = gitRun(work, ['push', '-u', remote, branch]);
+      if (!push.ok) result.error = `push falhou: ${push.stderr.trim().split(/\r?\n/).slice(-2).join(' · ')}`;
+      else result.pushed = true;
+    }
     // The project's own PR checks, on the promoted branch.
-    if (!result.conflict) {
+    if (!result.conflict && !result.error) {
       let pkg = null;
       try { pkg = JSON.parse(fs.readFileSync(path.join(work, 'package.json'), 'utf8')); } catch { pkg = null; }
       if (pkg && pkg.scripts && pkg.scripts['pr:ready'] && options.prReady !== false) {
         const ready = runChildCommand(work, 'npm run pr:ready', 1_800_000);
-        result.pr_ready = { ok: ready.ok, tail: ready.tail };
+        // OXB-158: "the checks failed" is not "only posting the status failed".
+        // Only the status post failed when the output says so AND, without those lines, nothing else reports a failure.
+        const tail = String(ready.tail || '');
+        const STATUS_LINE = /not on GitHub yet|push it first|(post|create|set)\w*\s+(the\s+)?(commit\s+)?status/i;
+        // npm's own wrapper lines ("npm error Lifecycle script … failed", "npm error code 1") say "failed" for ANY
+        // non-zero exit: they are not a check result.
+        const otherLines = tail.split(/\r?\n/).filter((l) => !STATUS_LINE.test(l) && !/^\s*npm (ERR!|error|warn)\b/i.test(l)).join('\n');
+        const statusOnly = !ready.ok && STATUS_LINE.test(tail) && !/\bFAIL\b|\bfailed\b|✗|×|error TS\d+|\d+ (failing|failed)/i.test(otherLines);
+        result.pr_ready = { ok: ready.ok || statusOnly, tail: ready.tail, ...(statusOnly ? { status_post_failed: true } : {}) };
       }
     }
   } finally {
@@ -3951,11 +3986,12 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     `git push -u ${remote} ${branch}`,
     `gh pr create --base ${prBase} --head ${branch} --title ${JSON.stringify(title)} --body-file ${result.body_file}`,
   ];
-  if (options.openPr) {
+  if (options.openPr && !result.error) {
     if (result.pr_ready && !result.pr_ready.ok) {
-      result.error = `pr:ready vermelho em ${branch} — PR não aberto (corrija e rode os comandos abaixo)`;
+      result.error = `pr:ready vermelho em ${branch} — PR não aberto (a branch já está em ${remote}; corrija e rode os comandos abaixo)`;
     } else {
-      const push = gitRun(projectRoot, ['push', '-u', remote, branch]);
+      // pushed before pr:ready (OXB-158); --in-place pushes here as before
+      const push = result.pushed ? { ok: true } : gitRun(projectRoot, ['push', '-u', remote, branch]);
       if (!push.ok) result.error = `push falhou: ${push.stderr.trim().split(/\r?\n/).slice(-2).join(' · ')}`;
       else {
         const gh = (options.ghSpawn || spawnSync)('gh', ['pr', 'create', '--base', prBase, '--head', branch, '--title', title, '--body-file', bodyFile], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });

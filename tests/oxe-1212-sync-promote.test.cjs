@@ -376,3 +376,46 @@ describe('OXB-157: the promote base is the remote branch, not a stale local one'
     assert.match(git(dir, 'log', '--format=%s', 'oxe/promote-t1'), /news/, 'built on the fresh remote base');
   });
 });
+
+describe('OXB-158: --open-pr pushes before pr:ready; a status-post failure is not a red pr:ready', () => {
+  const withPrReady = (dir, script) => {
+    write(dir, 'pr-ready.js', script);
+    write(dir, 'package.json', JSON.stringify({ scripts: { 'pr:ready': 'node pr-ready.js' } }));
+    git(dir, 'add', '-A'); git(dir, 'commit', '-qm', 'chore: pr:ready');
+    git(dir, 'checkout', '-q', 'main');
+    write(dir, 'pr-ready.js', script);
+    write(dir, 'package.json', JSON.stringify({ scripts: { 'pr:ready': 'node pr-ready.js' } }));
+    git(dir, 'add', '-A'); git(dir, 'commit', '-qm', 'chore: pr:ready on main'); git(dir, 'push', '-q', 'origin', 'main');
+    git(dir, 'checkout', '-q', 'oxe/f1-plan');
+  };
+  const gh = (calls) => (cmd, args) => { calls.push(args.join(' ')); return { status: 0, stdout: 'https://github.com/x/y/pull/9\n', stderr: '' }; };
+
+  it('pr:ready sees the branch on the remote (pushed first) and the PR opens', () => {
+    const { dir } = setup();
+    // passes only when the current branch is already on origin (it posts a status on the pushed sha)
+    withPrReady(dir, "const {execSync}=require('child_process');const b=execSync('git rev-parse --abbrev-ref HEAD').toString().trim();const r=execSync('git ls-remote --heads origin '+b).toString();if(!r.trim()){console.error(b+' is not on GitHub yet: push it first');process.exit(1)}console.log('checks ok, status posted');");
+    const calls = [];
+    const out = op.runtimePromote(dir, null, { task: 'T1', base: 'main', openPr: true, ghSpawn: gh(calls) });
+    assert.equal(out.error, undefined, out.error);
+    assert.equal(out.pr_ready.ok, true, out.pr_ready.tail);
+    assert.equal(out.pr, 'https://github.com/x/y/pull/9');
+    assert.ok(calls.some((c) => /^pr create --base main /.test(c)), calls.join('\n'));
+  });
+
+  it('only the status post failed: the PR still opens (status_post_failed); a real check failure does not open it', () => {
+    let { dir } = setup();
+    withPrReady(dir, "console.log('lint ok');console.log('tests ok');console.error('gh: abc123 is not on GitHub yet: push it first');process.exit(1);");
+    let calls = [];
+    let out = op.runtimePromote(dir, null, { task: 'T1', base: 'main', openPr: true, ghSpawn: gh(calls) });
+    assert.equal(out.pr_ready.status_post_failed, true);
+    assert.equal(out.pr, 'https://github.com/x/y/pull/9');
+    ({ dir } = setup());
+    withPrReady(dir, "console.error('FAIL tests/acceptance/x.test.ts');process.exit(1);");
+    calls = [];
+    out = op.runtimePromote(dir, null, { task: 'T1', base: 'main', openPr: true, ghSpawn: gh(calls) });
+    assert.equal(out.pr_ready.ok, false);
+    assert.equal(out.pr, null);
+    assert.match(out.error, /pr:ready vermelho .* PR não aberto \(a branch já está em origin/);
+    assert.ok(!calls.some((c) => /pr create/.test(c)));
+  });
+});
