@@ -492,3 +492,40 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
   - O CR-31 ("nenhum run de CI anexado à fase F1") foi aberto pelo verify às 06:10:16. O primeiro anexo em `program/ci.ndjson` é de 06:18:59, e o segundo de 06:40:05.
   - O verify rodou antes do anexo existir. O `ci.ndjson` é append-only, e nenhum comando o apaga: os dois registros continuam lá.
   - O CR-31 fechou sozinho (06:39:38, "gate do projeto ci verde") quando o gate ficou verde.
+
+## OXB-082: `program phase edit Fn --scope` deixa os bullets do escopo antigo no ROADMAP
+
+- **Status:** aberto. Registrado pelo TECH LEAD em 08/11 (planejamento da F2 na rc.10): a F3 ficou com a linha `**Escopo:**` nova (H1/H2) e os bullets antigos ("O OxePost para agentes, T64…"), contraditórios. Foi preciso editar à mão e registrar um program_edit.
+- **Proposta:** o `--scope` substitui o escopo inteiro da seção (linha e bullets), ou `program phase scope Fn --file scope.md`.
+
+## OXB-083: `program export <pasta>` lia o posicional como saída, e todo outro comando o lê como projeto
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11: `oxe-cc program export .` gravou SPEC.md, ROADMAP.md, PROGRAM.json e changes.ndjson na raiz da worktree do programa, sujando-a, e ignorou o `program.export_dir`.
+  - O posicional agora é a pasta do projeto, como nos outros comandos. A saída é `--out <pasta>`, e o padrão é o `program.export_dir`.
+  - A raiz do projeto é recusada como saída. Um posicional sem `.oxe/` (o uso antigo, `program export docs/oxe`) falha dizendo para usar `--out docs/oxe`.
+  - Teste: `tests/oxe-1212-program-edit.test.cjs`.
+
+## OXB-084: `plan lint --dry-verify` ficava mudo por muito tempo, e uma rodada interrompida não retomava
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11: num plano de 18 tarefas (~220 comandos de verify), o log ficou só com a linha de início por mais de 30 min. O processo morreu duas vezes pelo reaper de memória do host, e cada reinício voltava do zero.
+  - **Progresso:** uma linha por comando no stderr (`[n/N] T5 <cmd> ... ok 12s`), com cabeçalho do total. O `--json` no stdout continua limpo, e `--quiet` desliga o progresso.
+  - **Retomada:** cada resultado é gravado em `.oxe/cache/dry-verify.json` logo depois do comando, com a chave pela árvore (HEAD + diff de conteúdo + hash dos arquivos não rastreados). `--resume` pula o que já deu vermelho certo ou já verde nessa árvore. Timeout e comando quebrado rodam de novo. Mudou a árvore, nada é reaproveitado.
+  - **Subconjunto:** `--only T5,T6` roda só essas tarefas. `--changed` roda só as tarefas cujo verify ou arquivos mudaram desde o último dry-run. Uma rodada parcial avisa quais tarefas ficaram de fora.
+  - `--resume`, `--only` e `--changed` já ligam o `--dry-verify`.
+  - Teste: `tests/oxe-1212-dryrun-resume.test.cjs`.
+
+## OXB-085: uma tarefa não podia depender de algo fora do plano
+
+- **Status:** aberto. Registrado pelo TECH LEAD em 08/11: a T13 (remover o AI Memory) tinha que esperar o merge de um PR de workflow (#686). Só cabia nas `notes`, e o TL segurava o lançamento à mão.
+- **Proposta:** `blocked_by: [{ kind: "pr", ref: "#686", until: "merged" }]` (também commit na main ou arquivo existente), checado pelo execute antes de começar a tarefa, com o status "aguardando #686".
+
+## OXB-086: juntar planos por papel
+
+- **Status:** aberto. Registrado pelo TECH LEAD em 08/11: BACKEND e FRONTEND escreveram cada um um arquivo de tarefas para as mesmas remoções (rid R5, ids R5 e FE-R5). O merge precisou de um script de 150 linhas (união de arquivos e verify, deps por rid, ondas por profundidade, `proves` em dois formatos).
+  - Duas armadilhas de schema: `criteria` em prosa reprovava no "lista de A<n>" sem dica, e `proves` em forma de dicionário.
+- **Proposta:** `oxe-cc plan merge a.json b.json --key rid` com um schema de plano por papel documentado. O erro do lint nomeia o valor e diz "criteria são ids A; a prosa vai em notes".
+
+## OXB-087: acrescentar tarefas a uma fase depois que o execute começou
+
+- **Status:** aberto. Registrado pelo TECH LEAD em 08/11: o HML achou 4 lacunas (G1–G4) com o plano da F2 congelado e o execute encadeado. A única saída era um segundo plano na mesma fase depois do fim da primeira run.
+- **Proposta:** `plan append --from extra.json` durante a run (as tarefas novas entram nas ondas depois das que estão rodando, com o mesmo lint), e o close da fase exige os dois lotes.

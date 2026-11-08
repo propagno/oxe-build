@@ -2576,7 +2576,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc program phase add --after Fn --title "…" [--requirements R14] [--acceptance A42,A43] [--scope "…"] --by <papel>
   npx oxe-cc program phase edit Fn [--title "…"] [--add-requirements R17] [--remove-requirements R2] [--add-acceptance A58] [--remove-acceptance A3] [--scope "…"] --by <papel>
   npx oxe-cc program criterion move A<n> --from Fn --to Fm --by <papel>
-  npx oxe-cc program export [<pasta>]   (padrão: program.export_dir do .oxe/config.json)
+  npx oxe-cc program export [<projeto>] [--out <pasta>]   (saída padrão: program.export_dir do .oxe/config.json)
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
     npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
     npx oxe-cc plugins <list|install|remove> [opções]
@@ -6273,7 +6273,7 @@ async function main() {
     }
     const o = { dir: process.cwd(), session: null, json: false };
     const positional = [];
-    const VALUE_FLAGS = { '--by': 'by', '--reason': 'reason', '--text': 'text', '--append': 'append', '--verify': 'verify', '--phase': 'phase', '--criteria': 'criteria', '--before': 'before', '--version': 'version', '--after': 'after', '--title': 'title', '--requirements': 'requirements', '--acceptance': 'acceptance', '--scope': 'scope', '--add-requirements': 'addRequirements', '--remove-requirements': 'removeRequirements', '--add-acceptance': 'addAcceptance', '--remove-acceptance': 'removeAcceptance', '--from': 'from', '--to': 'to' };
+    const VALUE_FLAGS = { '--by': 'by', '--reason': 'reason', '--text': 'text', '--append': 'append', '--verify': 'verify', '--phase': 'phase', '--criteria': 'criteria', '--before': 'before', '--version': 'version', '--after': 'after', '--title': 'title', '--requirements': 'requirements', '--acceptance': 'acceptance', '--scope': 'scope', '--add-requirements': 'addRequirements', '--remove-requirements': 'removeRequirements', '--add-acceptance': 'addAcceptance', '--remove-acceptance': 'removeAcceptance', '--from': 'from', '--to': 'to', '--out': 'out' };
     for (let i = 0; i < rest.length; i += 1) {
       const a = rest[i];
       if (VALUE_FLAGS[a] && rest[i + 1] != null) o[VALUE_FLAGS[a]] = String(rest[++i]);
@@ -6321,7 +6321,15 @@ async function main() {
           for (const w of out.warnings) console.log(`  ${yellow}!${reset} ${w}`);
         }
       } else if (sub === 'export') {
-        out = oxeOperational.runtimeProgramExport(o.dir, o.session, { dir: positional[0] || null });
+        // OXB-083: the positional is the PROJECT dir, as in every other command; the output is --out (default export_dir).
+        if (positional[0]) {
+          const projectDir = path.resolve(positional[0]);
+          if (!fs.existsSync(path.join(projectDir, '.oxe')) && fs.existsSync(path.join(o.dir, '.oxe'))) {
+            throw new Error(`${positional[0]} não é um projeto OXE (sem .oxe/). O posicional é a pasta do projeto; para escolher a saída use --out ${positional[0]}`);
+          }
+          o.dir = projectDir;
+        }
+        out = oxeOperational.runtimeProgramExport(o.dir, o.session, { dir: o.out || null });
         if (!o.json) {
           console.log(`  ${c ? green : ''}✓${c ? reset : ''} exportado para ${out.dir}: ${out.written.map((w) => path.basename(w)).join(', ')}`);
           if (out.missing.length) console.log(`  ${c ? dim : ''}ausentes:${c ? reset : ''} ${out.missing.join(', ')}`);
@@ -6396,11 +6404,20 @@ async function main() {
     let maxTasksPerWave = 0;
     let dryVerify = false;
     let noPreflight = false;
+    // OXB-084: --resume (skip commands already run on the same tree), --only T5,T6, --changed, --quiet.
+    let resume = false;
+    let changed = false;
+    let quiet = false;
+    let only = null;
     for (let i = 0; i < rest.length; i += 1) {
       const a = rest[i];
       if (a === '--json') json = true;
       else if (a === '--dry-verify') dryVerify = true;
       else if (a === '--no-preflight') noPreflight = true;
+      else if (a === '--resume') { resume = true; dryVerify = true; }
+      else if (a === '--changed') { changed = true; dryVerify = true; }
+      else if (a === '--quiet') quiet = true;
+      else if (a === '--only' && rest[i + 1]) { only = String(rest[++i]).split(',').map((s) => s.trim()).filter(Boolean); dryVerify = true; }
       else if (a === '--session' && rest[i + 1]) session = String(rest[++i]).replace(/\\/g, '/');
       else if (a === '--max-tasks-per-wave' && rest[i + 1]) maxTasksPerWave = Number(rest[++i]) || 0;
       else if (a === '--dir' && rest[i + 1]) dir = path.resolve(rest[++i]);
@@ -6417,7 +6434,9 @@ async function main() {
     }
     let result;
     try {
-      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave, dryVerify, preflight: !noPreflight });
+      // Progress goes to stderr, so --json on stdout stays parseable.
+      const onProgress = quiet ? null : (line) => process.stderr.write(`  ${line}\n`);
+      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave, dryVerify, preflight: !noPreflight, onProgress, resume, changed, only });
     } catch (err) {
       console.error(`${red}✗${reset} ${err && err.message ? err.message : err}`);
       process.exit(1);

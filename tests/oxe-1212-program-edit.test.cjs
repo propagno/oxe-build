@@ -193,10 +193,11 @@ describe('OXB-058: program export and the doctor warning', () => {
     assert.equal(out.dir, 'mirror');
     assert.equal(out.written.length, 4);
     assert.throws(() => op.runtimeProgramExport(dir, null, { dir: '.oxe/x' }), /dentro de \.oxe/);
+    assert.throws(() => op.runtimeProgramExport(dir, null, { dir: '.' }), /raiz do projeto/, 'OXB-083: never into the project root');
   });
 
   it('warns when .oxe/ is gitignored and no export_dir is set, with the exact command', () => {
-    assert.match(op.oxeHistoryWarning(project()), /oxe-cc program export docs\/oxe/);
+    assert.match(op.oxeHistoryWarning(project()), /oxe-cc program export --out docs\/oxe/);
     assert.equal(op.oxeHistoryWarning(project({ config: { program: { export_dir: 'docs/oxe' } } })), null);
     assert.equal(op.oxeHistoryWarning(project({ gitignoreOxe: false })), null);
   });
@@ -216,9 +217,18 @@ describe('OXB-058: the CLI', () => {
     r = run(dir, 'program', 'phase', 'add', '--after', 'F7', '--title', 'Celular', '--acceptance', 'A42', '--by', 'tl');
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /fase F8 inserida depois de F7 · renumeradas: F8->F9|fase F8 inserida depois de F7 · renumeradas: F8→F9/);
-    r = run(dir, 'program', 'export', 'docs/oxe');
+    r = run(dir, 'program', 'export', '--out', 'docs/oxe');
     assert.equal(r.status, 0, r.stderr);
     assert.ok(fs.existsSync(path.join(dir, 'docs', 'oxe', 'changes.ndjson')));
+    // OXB-083: the positional is the project dir; the output defaults to program.export_dir, never the repo root.
+    fs.writeFileSync(path.join(dir, '.oxe', 'config.json'), JSON.stringify({ program: { export_dir: 'docs/roadmap/oxe' } }));
+    r = spawnSync(process.execPath, [CLI, 'program', 'export', '.'], { cwd: dir, encoding: 'utf8', env: { ...process.env, OXE_NO_PROMPT: '1' } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(fs.existsSync(path.join(dir, 'docs', 'roadmap', 'oxe', 'PROGRAM.json')));
+    assert.ok(!fs.existsSync(path.join(dir, 'PROGRAM.json')) && !fs.existsSync(path.join(dir, 'SPEC.md')), 'nothing in the project root');
+    r = spawnSync(process.execPath, [CLI, 'program', 'export', 'docs/oxe'], { cwd: dir, encoding: 'utf8', env: { ...process.env, OXE_NO_PROMPT: '1' } });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /use --out docs\/oxe/);
     r = run(dir, 'program', 'status', '--json');
     assert.equal(r.status, 0, r.stderr);
     assert.deepEqual(JSON.parse(r.stdout).state.phases.map((p) => p.id), ['F7', 'F8', 'F9']);

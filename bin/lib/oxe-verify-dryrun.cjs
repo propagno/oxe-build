@@ -10,6 +10,8 @@
  */
 
 const { spawnSync } = require('child_process');
+const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 
 const MISSING_TARGET_RE = /cannot find module|failed to resolve import|does the file exist|enoent|no such file|could not resolve|module not found|não encontrad|cannot open file|file not found|not found/i;
@@ -121,8 +123,62 @@ function hasSingleQuotedArgument(command) {
   return /(^|\s)'[^']*'(\s|$)/.test(outsideDouble);
 }
 
+function git(projectRoot, args, input) {
+  const res = spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8', windowsHide: true, input, maxBuffer: 64 * 1024 * 1024 });
+  return res.status === 0 ? String(res.stdout || '') : null;
+}
+
+/**
+ * OXB-084: identity of the working tree the commands run against: HEAD + the content diff + the untracked files'
+ * blob hashes (.oxe/ excluded, it changes with the cache itself). Null outside git (no resume there).
+ */
+function treeHash(projectRoot) {
+  const head = git(projectRoot, ['rev-parse', '--verify', '-q', 'HEAD']);
+  if (head === null && git(projectRoot, ['rev-parse', '--is-inside-work-tree']) === null) return null;
+  const h = crypto.createHash('sha256');
+  h.update(String(head || 'no-head').trim());
+  h.update(git(projectRoot, ['diff', 'HEAD', '--binary', '--', '.', ':(exclude).oxe']) || '');
+  const untracked = (git(projectRoot, ['ls-files', '--others', '--exclude-standard', '--', '.', ':(exclude).oxe']) || '').split('\n').map((l) => l.trim()).filter(Boolean).sort();
+  if (untracked.length) {
+    h.update(untracked.join('\n'));
+    h.update(git(projectRoot, ['hash-object', '--stdin-paths'], untracked.join('\n')) || '');
+  }
+  return h.digest('hex').slice(0, 24);
+}
+
+function readCache(file) {
+  try {
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return doc && typeof doc === 'object' && doc.entries ? doc : { schema_version: 1, entries: {}, tasks: {} };
+  } catch {
+    return { schema_version: 1, entries: {}, tasks: {} };
+  }
+}
+
+function writeCache(file, doc) {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(doc, null, 2));
+    fs.renameSync(tmp, file);
+  } catch { /* the cache is an optimization: never fails the lint */ }
+}
+
+const segmentKey = (tree, taskId, segment) => crypto.createHash('sha256').update(`${tree}\0${taskId}\0${segment}`).digest('hex').slice(0, 24);
+const taskDefinitionHash = (task) => crypto.createHash('sha256').update(JSON.stringify([task.verifyCommand || '', [...(task.files || [])].sort()])).digest('hex').slice(0, 16);
+/** Results worth reusing on the same tree: the right red and the already green. A timeout or a broken command reruns. */
+const REUSABLE = new Set(['missing_target', 'assertion_red', 'already_green']);
+
 function dryRunVerifyCommands(projectRoot, plan, options = {}) {
   const timeoutMs = options.timeoutMs || 180_000;
+  // OXB-084: progress per command, resume on the same tree, and a subset (--only / --changed).
+  const progress = typeof options.onProgress === 'function' ? options.onProgress : null;
+  const cachePath = options.cachePath || null;
+  const cache = cachePath ? readCache(cachePath) : null;
+  const tree = cachePath ? treeHash(projectRoot) : null;
+  const only = Array.isArray(options.only) && options.only.length ? new Set(options.only.map((id) => String(id).trim().toUpperCase())) : null;
+  let reused = 0;
+  const skipped = [];
   const platform = options.platform || process.platform;
   const results = [];
   const errors = [];
@@ -145,8 +201,17 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
     }
     return [...out];
   };
-  for (const task of allTasks) {
-    if (task.done || !task.verifyCommand) continue;
+  const selected = allTasks.filter((task) => {
+    if (task.done || !task.verifyCommand) return false;
+    if (only && !only.has(String(task.id).toUpperCase())) { skipped.push(task.id); return false; }
+    // --changed: the task's verify or files differ from the last dry run (or it never ran).
+    if (options.changed && cache && cache.tasks && cache.tasks[task.id] === taskDefinitionHash(task)) { skipped.push(task.id); return false; }
+    return true;
+  });
+  const totalSegments = selected.reduce((n, task) => n + ((task.meta && Array.isArray(task.meta.blocked_by) && task.meta.blocked_by.filter(Boolean).length) ? 0 : splitSegments(task.verifyCommand).length), 0);
+  let index = 0;
+  if (progress) progress(`dry-verify: ${totalSegments} comando(s) em ${selected.length} tarefa(s)${skipped.length ? ` · fora: ${skipped.length}` : ''}${tree ? (options.resume ? ' · --resume' : '') : ''}`);
+  for (const task of selected) {
     // OXB-063: work delivered by another path, still waiting on an open external dependency, cannot be green yet —
     // its verify is not run and the verdict is `external_pending` (never an error). Once unblocked it runs as usual.
     const meta = task.meta || {};
@@ -172,8 +237,30 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
     let code = null;
     let excerpt = '';
     for (const segment of segments) {
-      const run = runCommand(segment, projectRoot, timeoutMs);
-      const v = run.timedOut ? 'timeout' : run.code === 0 ? 'already_green' : classifyFailure(run.output, targets, { targetsExist, someTargetsExist, missingTargets, projectRoot });
+      index += 1;
+      const label = `[${index}/${totalSegments}] ${task.id} ${segment.length > 70 ? `${segment.slice(0, 67)}...` : segment}`;
+      const key = tree ? segmentKey(tree, task.id, segment) : null;
+      const cached = options.resume && key && cache.entries[key] && REUSABLE.has(cache.entries[key].verdict) ? cache.entries[key] : null;
+      let run;
+      let v;
+      if (cached) {
+        reused += 1;
+        run = { code: cached.code, output: cached.output || '' };
+        v = cached.verdict;
+        if (progress) progress(`${label} ... ${v} (já rodado nesta árvore)`);
+      } else {
+        if (progress) progress(`${label} ...`);
+        const started = Date.now();
+        run = runCommand(segment, projectRoot, timeoutMs);
+        v = run.timedOut ? 'timeout' : run.code === 0 ? 'already_green' : classifyFailure(run.output, targets, { targetsExist, someTargetsExist, missingTargets, projectRoot });
+        const secs = Math.round((Date.now() - started) / 1000);
+        if (progress) progress(`${label} ... ${v === 'missing_target' || v === 'assertion_red' ? 'ok' : v} ${secs}s`);
+        if (key) {
+          // Written after each command, so an interrupted run (memory reaper, Ctrl+C) resumes where it stopped.
+          cache.entries[key] = { task: task.id, verdict: v, code: run.code, output: String(run.output || '').slice(-4000), at: new Date().toISOString(), secs };
+          writeCache(cachePath, cache);
+        }
+      }
       // The worst segment decides; among equals, a red one beats green (a red segment proves the task is not done).
       if (verdict === null || SEVERITY[v] > SEVERITY[verdict]) {
         verdict = v;
@@ -183,6 +270,11 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
       }
     }
     results.push({ task: task.id, verdict, code, excerpt, segments: segments.length });
+    if (cache && cachePath) {
+      cache.tasks = cache.tasks || {};
+      cache.tasks[task.id] = taskDefinitionHash(task);
+      writeCache(cachePath, cache);
+    }
     // OXB-040: cmd.exe does not group arguments with single quotes (`--jq '.[0].conclusion'` reaches gh split).
     const singleQuoted = platform === 'win32' && hasSingleQuotedArgument(task.verifyCommand);
     if (singleQuoted) warnings.push(`${task.id}: o verify usa aspas simples — no Windows (cmd.exe) elas não agrupam o argumento; use aspas duplas`);
@@ -190,7 +282,8 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
     else if (verdict === 'timeout') errors.push(`${task.id}: comando de verificação passou de ${Math.round(timeoutMs / 1000)}s sem terminar`);
     else if (verdict === 'already_green') warnings.push(`${task.id}: verificação já passa antes da tarefa — não prova o trabalho dela`);
   }
-  return { ok: errors.length === 0, results, errors, warnings };
+  if (skipped.length) warnings.push(`dry-verify parcial: ${skipped.length} tarefa(s) fora desta rodada (${skipped.join(', ')})`);
+  return { ok: errors.length === 0, results, errors, warnings, reused, skipped, tree };
 }
 
-module.exports = { dryRunVerifyCommands, classifyFailure, hasSingleQuotedArgument };
+module.exports = { dryRunVerifyCommands, classifyFailure, hasSingleQuotedArgument, treeHash };

@@ -2670,7 +2670,16 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
         return { ...task, verifyCommand: [task.verifyCommand, ...extra].filter(Boolean).join(' && ') };
       }),
     };
-    dryVerify = require('./oxe-verify-dryrun.cjs').dryRunVerifyCommands(projectRoot, effective, { timeoutMs: options.dryVerifyTimeoutMs });
+    // OXB-084: progress per command, a resume cache keyed by the tree, and --only / --changed.
+    const cacheDir = paths.programDir ? path.dirname(paths.programDir) : path.join(projectRoot, '.oxe');
+    dryVerify = require('./oxe-verify-dryrun.cjs').dryRunVerifyCommands(projectRoot, effective, {
+      timeoutMs: options.dryVerifyTimeoutMs,
+      onProgress: options.onProgress,
+      cachePath: options.dryVerifyCache === false ? null : path.join(cacheDir, 'cache', 'dry-verify.json'),
+      resume: Boolean(options.resume),
+      only: options.only,
+      changed: Boolean(options.changed),
+    });
     result.errors.push(...dryVerify.errors);
     result.warnings.push(...dryVerify.warnings);
     // OXB-025: a pending task whose verify already passes AND that has a checkpoint is finished work the run
@@ -3024,8 +3033,10 @@ function programExportDir(projectRoot) {
  */
 function runtimeProgramExport(projectRoot, activeSession, options = {}) {
   const dirArg = options.dir || programExportDir(projectRoot);
-  if (!dirArg) throw new Error('informe a pasta: oxe-cc program export <pasta> (ou configure "program": { "export_dir": "…" } no .oxe/config.json)');
+  if (!dirArg) throw new Error('informe a pasta: oxe-cc program export --out <pasta> (ou configure "program": { "export_dir": "…" } no .oxe/config.json)');
   const target = path.resolve(projectRoot, dirArg);
+  // OXB-083: never drop SPEC/ROADMAP/PROGRAM/changes into the project root (it dirtied the program worktree).
+  if (path.relative(path.resolve(projectRoot), target) === '') throw new Error('a pasta de export não pode ser a raiz do projeto: use uma subpasta versionada (ex.: --out docs/oxe)');
   const rel = path.relative(path.join(projectRoot, '.oxe'), target);
   if (!rel.startsWith('..') && !path.isAbsolute(rel)) throw new Error('a pasta de export não pode ficar dentro de .oxe/ (ela existe para ser versionada)');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
@@ -3574,7 +3585,7 @@ function oxeHistoryWarning(projectRoot) {
   if (!fs.existsSync(path.join(projectRoot, '.oxe'))) return null;
   const res = spawnSync('git', ['check-ignore', '-q', '.oxe/SPEC.md'], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
   if (res.status !== 0) return null;
-  return '.oxe/ está no .gitignore e não há export versionado: emendas de SPEC/ROADMAP/PROGRAM ficam sem histórico. Rode `oxe-cc program export docs/oxe` e configure "program": { "export_dir": "docs/oxe" } no .oxe/config.json';
+  return '.oxe/ está no .gitignore e não há export versionado: emendas de SPEC/ROADMAP/PROGRAM ficam sem histórico. Rode `oxe-cc program export --out docs/oxe` e configure "program": { "export_dir": "docs/oxe" } no .oxe/config.json';
 }
 
 /**
