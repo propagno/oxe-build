@@ -54,6 +54,9 @@ export interface ExecutorUsage {
     reads?: string[];
     writes?: string[];
 }
+/** OXB-148: a single tool result kept in the conversation (the rest is cut with a note). */
+export declare const TOOL_RESULT_MAX_CHARS = 40000;
+export declare function capToolResult(text: string, max?: number): string;
 /** Sent before the last turn (OXB-026): finishing and reporting beats spending it on a verification the runtime repeats. */
 export declare const LAST_TURN_NOTICE: string;
 export declare class LlmTaskExecutor implements TaskExecutor {

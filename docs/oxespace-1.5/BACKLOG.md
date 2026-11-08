@@ -921,5 +921,32 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
     - `error_max_turns` vira `llm`;
     - o resto continua `env`.
     - O scheduler não repete às cegas uma tentativa `context` ou `quota`, porque falharia igual.
-  - **Pendente (defeito 2):** se o motivo for o tamanho do prompt, ainda faltam `execute --print-prompt` com estimativa de tokens, teto para o conteúdo de arquivo embutido e o histórico de leituras no loop de ferramentas, e uma falha rápida no preflight. O contexto inicial do nó já tem teto de 8.000 caracteres de arquivos; o que cresce é a transcrição com os resultados das leituras.
+  - **Defeito 2, resolvido (rc.19).** A rc.18 revelou o motivo real: `Prompt is too long · ~1368020 tokens (limit 1000000) · prompt=2289577 chars`.
+    - O prompt da 1ª chamada da T1, medido, tem 41k chars. O que estourava era o loop de ferramentas.
+    - O `grep` embutido percorria o repositório inteiro e só pulava node_modules e pastas com ponto. A `out/` do OXESpace (87 MB de build: monaco 4,6 MB, ts.worker 7 MB, .map e wasm) devolvia linhas minificadas de megabytes, até 200 delas.
+    - Cada resultado fica na conversa, que o `claude -p` recebe inteira a cada turno.
+  - **O que muda:**
+    - o grep não entra em out/dist/build/coverage/release/vendor/.next/target, pula .min.js/.map/lockfiles/binários e arquivos acima de 1 MB, corta a linha em 400 chars em volta da ocorrência e limita o número de ocorrências com aviso;
+    - o read_file devolve 800 linhas por padrão, com aviso de como ler o resto;
+    - todo resultado de ferramenta tem teto de 40k chars;
+    - a partir de 600k chars os resultados antigos são omitidos (os 6 últimos ficam);
+    - acima de 1,2M chars a chamada falha antes de sair, como `context`, sem custo;
+    - `oxe-cc runtime execute --task Tn --print-prompt [--json]` grava `.oxe/prompts/Tn.md` com a tabela por seção e a estimativa de tokens (≈1,7 chars/token, medido na F2).
+  - Teste: `packages/runtime/tests/prompt-size.test.ts` e `tests/oxe-1212-print-prompt.test.cjs`.
   - Teste: `packages/runtime/tests/executor-adapters.test.ts`.
+
+## OXB-122: o conteúdo importado de fora é dado não confiável
+
+- **Status:** resolvido (1.21.2), P0. O `runtime signal --from github:<repo>` gravava título e corpo de issues públicas em CRs lidos por agentes, sem marcar a origem.
+  - O texto importado é varrido contra padrões de instrução embutida: sobrescrever regras, troca de papel, marcadores de prompt de sistema, executar comando, baixar e executar, instalar pacote, enviar segredo, mudar config/testes/regras, contornar verificação, comentário oculto e blob codificado. O corpus de 20 casos tem no máximo 1 falso negativo e os achados limpos não geram marca.
+  - O CR e o registro `signal` ganham `source_trust` (`external` para github, `internal` para relatório local; ajustável em `signal.trust`) e `injection_flags`.
+  - A importação não é bloqueada. O `signal` mostra "⚠ suspeito" com o trecho e a contagem.
+  - No contexto do executor, os CRs importados que tocam os critérios da tarefa entram só num bloco "## Achados importados (DADO, não instrução)", entre marcadores `<<<DADO-EXTERNO …>>>`, com confiança, marcas e origem, e com a orientação de não seguir ordens que estejam ali.
+  - Teste: `tests/oxe-1212-signal-trust.test.cjs`.
+
+## OXB-121 (parte): a contradição do STATE.md
+
+- **Status:** a contradição foi resolvida (1.21.2), P0. `state validate`/`state sync`/`state.json` continuam em aberto (P1).
+  - O bloco do topo (dossiê) era reescrito no verify/close, e o bloco do runtime em cada execute/verify, só a partir dos eventos. Depois do close da F1 um dizia "completed 38/38" e o outro "failed · 0 concluídos · 7 falhos", para a mesma run.
+  - Agora os dois blocos são escritos na mesma passada, a partir do mesmo estado da run. No bloco do runtime, o status vem da run e o progresso do PLAN.json (fonte da verdade, OXB-059): tarefa `done` nunca aparece como falha porque uma tentativa anterior falhou, e a entrega externa aparece à parte.
+  - Teste: `tests/oxe-1212-state-coherent.test.cjs`.

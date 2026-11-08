@@ -3,7 +3,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.LlmTaskExecutor = exports.LAST_TURN_NOTICE = void 0;
+exports.LlmTaskExecutor = exports.LAST_TURN_NOTICE = exports.TOOL_RESULT_MAX_CHARS = void 0;
+exports.capToolResult = capToolResult;
 exports.partitionToolCalls = partitionToolCalls;
 const stream_completion_1 = require("./stream-completion");
 const built_in_tools_1 = require("./built-in-tools");
@@ -14,6 +15,14 @@ function normalizeRel(p) {
     return path_1.default.normalize(String(p || '')).replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
 }
 const ACTION_LOG_CAP = 300;
+/** OXB-148: a single tool result kept in the conversation (the rest is cut with a note). */
+exports.TOOL_RESULT_MAX_CHARS = 40000;
+function capToolResult(text, max = exports.TOOL_RESULT_MAX_CHARS) {
+    const t = String(text ?? '');
+    if (t.length <= max)
+        return t;
+    return `${t.slice(0, max)}\n[… resultado cortado: ${t.length} chars, mostrados ${max}. Peça um trecho menor (offset/limit, path mais estreito).]`;
+}
 function logAction(list, value) {
     if (!list || list.length >= ACTION_LOG_CAP || typeof value !== 'string' || !value)
         return;
@@ -245,7 +254,8 @@ class LlmTaskExecutor {
             role: 'tool',
             tool_call_id: tc.id,
             name: tc.function.name,
-            content: result,
+            // OXB-148: one oversized result (a grep over minified bundles, a whole big file) no longer floods the prompt.
+            content: capToolResult(result),
         };
     }
     isProtected(target, cwd) {

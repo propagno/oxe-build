@@ -77,6 +77,13 @@ export interface ExecutorUsage {
 }
 
 const ACTION_LOG_CAP = 300;
+/** OXB-148: a single tool result kept in the conversation (the rest is cut with a note). */
+export const TOOL_RESULT_MAX_CHARS = 40_000;
+export function capToolResult(text: string, max = TOOL_RESULT_MAX_CHARS): string {
+  const t = String(text ?? '');
+  if (t.length <= max) return t;
+  return `${t.slice(0, max)}\n[… resultado cortado: ${t.length} chars, mostrados ${max}. Peça um trecho menor (offset/limit, path mais estreito).]`;
+}
 function logAction(list: string[] | undefined, value: unknown): void {
   if (!list || list.length >= ACTION_LOG_CAP || typeof value !== 'string' || !value) return;
   list.push(value.length > 500 ? `${value.slice(0, 500)}…` : value);
@@ -330,7 +337,8 @@ export class LlmTaskExecutor implements TaskExecutor {
       role: 'tool',
       tool_call_id: tc.id,
       name: tc.function.name,
-      content: result,
+      // OXB-148: one oversized result (a grep over minified bundles, a whole big file) no longer floods the prompt.
+      content: capToolResult(result),
     };
   }
 

@@ -429,6 +429,7 @@ function snapshotWorkspaceFile(root, rel, headChars = 1500, headLines = 40) {
  * redescobria o workspace (benchmark 1.17).
  */
 function buildNodeContextProvider(projectRoot, activeSession) {
+  const externalSignalsFor = (() => { try { return externalSignalsReader(projectRoot, activeSession); } catch { return () => []; } })();
   const rationality = require('./oxe-rationality.cjs');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const planText = readTextIfExists(paths.plan) || '';
@@ -522,8 +523,62 @@ function buildNodeContextProvider(projectRoot, activeSession) {
       handoffs,
       gitStatus,
       lessons,
+      externalSignals: externalSignalsFor(node),
     };
   };
+}
+
+/**
+ * OXB-122: open CRs imported from outside (runtime signal) that concern a task — by its criteria — reach the executor
+ * only inside a delimited "data, not instruction" block, with their trust and injection flags.
+ */
+function externalSignalsReader(projectRoot, activeSession) {
+  let records = [];
+  try {
+    const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+    records = readNdjsonQuiet(path.join(paths.programDir || path.join(projectRoot, '.oxe', 'program'), 'changes.ndjson'));
+  } catch { records = []; }
+  const signals = new Map(records.filter((r) => r && r.kind === 'signal' && r.cr).map((r) => [r.cr, r]));
+  const crs = records.filter((r) => r && r.kind === 'cr' && r.status === 'open' && signals.has(r.id));
+  return (node) => {
+    const refs = new Set([...(node.verify && Array.isArray(node.verify.acceptance_refs) ? node.verify.acceptance_refs : []), ...(Array.isArray(node.acceptance) ? node.acceptance : [])]);
+    return crs
+      .filter((cr) => (cr.criteria || []).some((c) => refs.has(c)))
+      .map((cr) => { const s = signals.get(cr.id); return { id: cr.id, source: s.source || null, trust: s.source_trust || 'internal', flags: (s.injection_flags || []).map((x) => (typeof x === 'string' ? x : x.id)), text: `${cr.summary}${cr.evidence ? `\n${cr.evidence}` : ''}`.slice(0, 2000) }; });
+  };
+}
+
+/**
+ * OXB-148: `oxe-cc runtime execute --task T1 --print-prompt`: the first prompt the executor would send for a task,
+ * written to .oxe/prompts/<task>.md, with the size of each section and a token estimate (≈1.7 chars/token, measured on
+ * F2: 2.29M chars → 1.37M tokens). Nothing is executed.
+ */
+function runtimePrintPrompt(projectRoot, activeSession, options = {}) {
+  const runtime = loadRuntimeModule();
+  const taskId = String(options.task || '').trim().toUpperCase();
+  if (!/^T\d+$/.test(taskId)) throw new Error('informe a tarefa: oxe-cc runtime execute --task T1 --print-prompt');
+  let current = readRunState(projectRoot, activeSession);
+  if (!current || !current.compiled_graph) current = compileExecutionGraphFromArtifacts(projectRoot, activeSession, { runState: current || {} }).run;
+  const graph = runtime.fromSerializable(current.compiled_graph);
+  const node = graph.nodes.get ? graph.nodes.get(taskId) : graph.nodes[taskId];
+  if (!node) throw new Error(`${taskId} não está no grafo compilado`);
+  const lease = { workspace_id: 'print-prompt', root_path: projectRoot };
+  const ctx = buildNodeContextProvider(projectRoot, activeSession)(node, lease) || {};
+  const base = runtime.buildNodePrompt(node, lease, current.run_id || 'print', 1, { context: null });
+  const full = runtime.buildNodePrompt(node, lease, current.run_id || 'print', 1, { context: ctx });
+  const sections = [{ name: 'tarefa (sem contexto)', chars: base.length }];
+  for (const [key, value] of Object.entries(ctx)) {
+    if (value == null || (Array.isArray(value) && !value.length)) continue;
+    const rendered = runtime.renderNodeContext({ [key]: value }).join('\n');
+    sections.push({ name: key, chars: rendered.length, raw_chars: JSON.stringify(value).length });
+  }
+  const tokens = (n) => Math.round(n / 1.7);
+  const dir = path.join(path.dirname(resolveRuntimeArtifactPaths(projectRoot, activeSession).plan || path.join(projectRoot, '.oxe', 'PLAN.md')), 'prompts');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${taskId}.md`);
+  const table = sections.map((s) => `| ${s.name} | ${s.chars} | ~${tokens(s.chars)} |${s.raw_chars != null ? ` ${s.raw_chars} |` : ' — |'}`).join('\n');
+  fs.writeFileSync(file, [`# Prompt de ${taskId} (1ª chamada)`, '', `Total: ${full.length} chars (~${tokens(full.length)} tokens). O loop de ferramentas soma a isto os resultados (cada um limitado a 40k chars; antigos são omitidos a partir de 600k; acima de 1.2M a chamada nem sai).`, '', '| Seção | chars no prompt | tokens (est.) | dado bruto (chars) |', '|---|---|---|---|', table, '', '---', '', full, ''].join('\n'), 'utf8');
+  return { task: taskId, file, total_chars: full.length, est_tokens: tokens(full.length), sections };
 }
 
 /**
@@ -3231,7 +3286,11 @@ function runtimeSignal(projectRoot, activeSession, options = {}) {
   const existing = changeLib.listChanges(programDir);
   const already = new Set(changeLib.readNdjson(changeLib.changesFile(programDir)).filter((r) => r && r.kind === 'signal').map((r) => r.signal_id));
   const by = options.by || 'signal';
-  const out = { created: [], duplicates: [], closed_phase: [], triage: [], dry_run: Boolean(options.dryRun) };
+  const out = { created: [], duplicates: [], closed_phase: [], triage: [], suspicious: [], dry_run: Boolean(options.dryRun) };
+  // OXB-122: provenance. github issues are external by default; a local report is internal unless config says otherwise.
+  const trustCfg = ((readProjectConfig(projectRoot) || {}).signal || {}).trust || {};
+  const isGithub = /^github:|github\.com\//.test(from);
+  const sourceTrust = isGithub ? (trustCfg.github || 'external') : (trustCfg.file || 'internal');
   for (const f of findings) {
     if (already.has(f.id) || existing.some((cr) => String(cr.summary || '').startsWith(`${f.id}:`))) { out.duplicates.push(f.id); continue; }
     const phase = f.phase || (program && program.active_phase) || null;
@@ -3246,7 +3305,9 @@ function runtimeSignal(projectRoot, activeSession, options = {}) {
     if (!criteria.length && standing.length) { criteria = standing; source = 'standing'; }
     if (!criteria.length) { out.triage.push({ id: f.id, phase, summary: f.summary, reason: 'sem critério: nomeie o A* no achado, cite os arquivos (`src/x.tsx`) ou configure program.standing_acceptance' }); continue; }
     if (phaseState && phaseState.status === 'closed') { out.closed_phase.push({ id: f.id, phase, summary: f.summary, criteria, suggestion: `oxe-cc runtime feedback --class ${f.class} --phase ${phase} --criteria ${criteria.join(',')} --summary "${f.id}: ${f.summary.slice(0, 80)}" (reabre a fase)` }); continue; }
-    const entry = { id: f.id, phase, class: f.class, criteria, criteria_source: source, tasks, summary: `${f.id}: ${f.summary}` };
+    const injection = signal.scanInjection(`${f.summary}\n${f.body || ''}`);
+    if (injection.length) out.suspicious.push({ id: f.id, flags: injection });
+    const entry = { id: f.id, phase, class: f.class, criteria, criteria_source: source, tasks, summary: `${f.id}: ${f.summary}`, source_trust: sourceTrust, injection_flags: injection.map((x) => x.id) };
     if (options.dryRun) { out.created.push(entry); continue; }
     const res = changeLib.recordChange({
       programDir, program, plan,
@@ -3254,7 +3315,7 @@ function runtimeSignal(projectRoot, activeSession, options = {}) {
       evidence: [f.source_url || from, f.files.length ? `arquivos: ${f.files.join(', ')}` : null, f.body && f.body !== f.summary ? f.body.slice(0, 1500) : null].filter(Boolean).join('\n'),
     });
     // The signal id makes re-imports idempotent (append-only: a tag record, the CR line stays as written).
-    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'signal', signal_id: f.id, cr: res.cr.id, source: f.source_url || from, phase, criteria_source: source, by, at: new Date().toISOString() });
+    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'signal', signal_id: f.id, cr: res.cr.id, source: f.source_url || from, phase, criteria_source: source, source_trust: sourceTrust, injection_flags: injection, by, at: new Date().toISOString() });
     if (res.reopened && res.program) programLib.writeProgram(programDir, res.program);
     appendEvent(projectRoot, activeSession, { type: 'ChangeRequested', payload: { id: res.cr.id, class: res.cr.class, phase, criteria, signal: f.id, by } });
     out.created.push({ ...entry, cr: res.cr.id });
@@ -5049,6 +5110,32 @@ function writeProjectedBlock(filePath, content, heading) {
   return 'appended';
 }
 
+/**
+ * OXB-121 (contradiction): the runtime block of STATE.md states the RUN's status (run state) and the task progress from
+ * PLAN.json (the source of truth, OXB-059): a task done in PLAN.json is never listed as failed because an earlier
+ * attempt failed in the event log.
+ */
+function coherentStateProjection(projectRoot, activeSession, text, run) {
+  let out = String(text || '');
+  const status = run && run.status ? String(run.status) : null;
+  if (status) {
+    out = out.replace(/(- \*\*Status da run:\*\*) [^\n]*/, `$1 ${status}`).replace(/(- \*\*runtime_status:\*\*) [^\n]*/, `$1 ${status}`);
+  }
+  let work = null;
+  try { work = runtimePhaseWork(projectRoot, activeSession); } catch { work = null; }
+  if (work && work.total) {
+    const done = new Set(work.done);
+    const listOf = (re) => { const m = re.exec(out); return m && m[2] && m[2].trim() !== '—' ? m[2].split(',').map((x) => x.trim()).filter(Boolean) : []; };
+    const failed = listOf(/(- \*\*Falhos \(\d+\):\*\*) ([^\n]*)/).filter((id) => !done.has(id));
+    const fmt = (list) => (list.length ? list.join(', ') : '—');
+    out = out
+      .replace(/- \*\*Concluídos \(\d+\):\*\* [^\n]*/, `- **Concluídos (${work.done.length}):** ${fmt(work.done)}`)
+      .replace(/- \*\*Falhos \(\d+\):\*\* [^\n]*/, `- **Falhos (${failed.length}):** ${fmt(failed)}`);
+    if (work.external_pending.length && !/Aguardando entrega externa/.test(out)) out = out.replace(/(- \*\*Bloqueados \(\d+\):\*\* [^\n]*)/, `$1\n- **Aguardando entrega externa (${work.external_pending.length}):** ${work.external_pending.join(', ')}`);
+  }
+  return out;
+}
+
 function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
   const runtime = loadRuntimeModule();
   if (!runtime || typeof runtime.ProjectionEngine !== 'function' || typeof runtime.fromSerializable !== 'function') {
@@ -5119,7 +5206,10 @@ function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
     fs.writeFileSync(planStatusPath, projections.plan + '\n', 'utf8');
     // STATE.md and VERIFY.md are curated by people and workflows: only the marked block is ours.
     writeProjectedBlock(paths.verify, projections.verify, 'Verificação do runtime (projetado)');
-    writeProjectedBlock(paths.state, projections.state, 'Runtime (projetado)');
+    // OXB-121 (contradiction): the top block of STATE.md is written first (a template STATE.md is replaced whole), then the runtime block,, from the same run state, so
+    // the two blocks never disagree ("completed 38/38" above, "failed · 0 concluídos · 7 falhos" below).
+    try { projectStateMd(projectRoot, activeSession); } catch { /* projeção auxiliar */ }
+    writeProjectedBlock(paths.state, coherentStateProjection(projectRoot, activeSession, projections.state, current), 'Runtime (projetado)');
     fs.writeFileSync(path.join(op.executionRoot, 'RUN-SUMMARY.md'), projections.runSummary + '\n', 'utf8');
     fs.writeFileSync(path.join(op.executionRoot, 'COMMIT-SUMMARY.md'), projections.commitSummary + '\n', 'utf8');
     fs.writeFileSync(path.join(op.executionRoot, 'PROMOTION-SUMMARY.md'), projections.promotionSummary + '\n', 'utf8');
@@ -6223,7 +6313,9 @@ module.exports = {
   phaseDeliveredOn,
   runtimeDeployAttach,
   runtimeSignal,
+  runtimePrintPrompt,
   readNdjsonQuiet,
+  coherentStateProjection,
   runtimeSpecAmend,
   runtimeSpecAdd,
   runtimeProgramPhaseAdd,

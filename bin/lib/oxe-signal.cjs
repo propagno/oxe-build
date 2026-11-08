@@ -128,4 +128,37 @@ function criteriaFromFiles(plan, files) {
   return { criteria: [...out], tasks };
 }
 
-module.exports = { parseReport, githubFindings, criteriaFromFiles, FINDING_ID_RE };
+/**
+ * OXB-122: imported text (issues, reports, PR comments) is DATA. Patterns of instructions aimed at an agent are flagged
+ * (never silently dropped: the import goes on, marked, and the snippet is shown).
+ */
+const INJECTION_PATTERNS = [
+  { id: 'override', re: /\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(previous|prior|above|all|earlier|the)\b[^.\n]{0,30}\b(instructions?|rules?|prompts?|guidelines?|context)\b/i },
+  { id: 'override_pt', re: /\b(ignore|desconsidere|esqueça|esqueca)\b[^.\n]{0,40}\b(instruç(ões|ão)|instrucoes|regras?|orientaç(ões|ão)|o que foi dito)\b/i },
+  // (JS \b is ASCII-only: no \b next to accented letters or '#')
+  { id: 'role', re: /(?:\b(?:you are now|act as|pretend (?:to be|you are)|from now on,? you)\b|(?:^|\s)(?:você|voce) agora (?:é|e)(?=\s|$|[,:.])|a partir de agora,? (?:você|voce))/i },
+  { id: 'system_prompt', re: /(?:\bsystem prompt\b|\bdeveloper message\b|<\/?system>|\[\/?INST\]|(?:^|\n)\s*###\s*(?:system|assistant)\b|<\|im_start\|>)/i },
+  { id: 'exec', re: /\b(run|execute|exec|rode|execute este|executar)\b[^.\n]{0,40}\b(command|comando|script|shell|bash|powershell|cmd)\b/i },
+  { id: 'fetch_exec', re: /\b(curl|wget|iwr|invoke-webrequest|invoke-expression|iex)\b[^\n]{0,80}(\|\s*(sh|bash|iex)|-o\s|>\s)|powershell(\.exe)?\s+-(e|enc|encodedcommand)\b/i },
+  { id: 'install', re: /\b(npm|pnpm|yarn|pip|pip3|gem|cargo|go)\s+(install|i|add|get)\s+[^\s]+/i },
+  { id: 'exfiltrate', re: /\b(send|upload|post|exfiltrate|envie|mande|enviar)\b[^.\n]{0,60}\b(token|secret|password|senha|api[_ -]?key|credential|credencia|\.env|ssh key|chave)\b/i },
+  { id: 'config_change', re: /\b(change|modify|edit|disable|turn off|remove|altere|desative|desligue|remova)\b[^.\n]{0,40}\b(config(uration)?|settings|policy|policies|rules|hooks?|tests?|checks?|lint|ci|permissions?|configuração|regras|testes)\b[^.\n]{0,40}\b(to|para|so that|de modo)\b/i },
+  { id: 'bypass', re: /\b(bypass|skip|circumvent|contorne|pule)\b[^.\n]{0,40}\b(verification|verify|tests?|checks?|review|approval|gates?|safety|security|verificação|aprovação|testes)\b/i },
+  { id: 'hidden', re: /<!--[\s\S]{0,400}?(instruc|instruction|ignore|agent|assistant|claude|gpt)[\s\S]{0,400}?-->|\u200b|\u202e/i },
+  { id: 'encoded_blob', re: /[A-Za-z0-9+/]{120,}={0,2}/ },
+];
+
+/** @returns {{ id: string, snippet: string }[]} */
+function scanInjection(text) {
+  const t = String(text || '');
+  const flags = [];
+  for (const p of INJECTION_PATTERNS) {
+    const m = p.re.exec(t);
+    if (!m) continue;
+    const at = Math.max(0, m.index - 30);
+    flags.push({ id: p.id, snippet: t.slice(at, m.index + Math.min(m[0].length, 120) + 30).replace(/\s+/g, ' ').trim() });
+  }
+  return flags;
+}
+
+module.exports = { parseReport, githubFindings, criteriaFromFiles, FINDING_ID_RE, scanInjection, INJECTION_PATTERNS };

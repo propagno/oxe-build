@@ -29,12 +29,21 @@ export interface ClaudeCliAdapterOptions {
     freeMemory?: () => number;
     /** Poll interval of the memory gate (default 5 s). */
     memoryPollMs?: number;
+    /** OXB-148: hard limit of a bridge prompt in chars (default 1.2M); over it the turn fails fast as `context`. */
+    maxPromptChars?: number;
 }
 interface Spawnable {
     file: string;
     args: string[];
     windowsVerbatimArguments: boolean;
 }
+/**
+ * OXB-148: F2-T1's 2.29M-char prompt was ~1.37M tokens (≈1.7 chars/token for code + Portuguese). The window is 1M
+ * tokens; 1.2M chars keeps a margin. Tool results older than the last few are elided from 600k chars on.
+ */
+export declare const DEFAULT_MAX_PROMPT_CHARS = 1200000;
+/** Elides the oldest tool results (keeping the last few) until the conversation fits the soft budget. */
+export declare function fitTranscript(messages: ChatMessage[], hardLimit?: number): ChatMessage[];
 /** First matching executable on PATH (on Windows also tries .exe/.cmd/.bat), or null. */
 export declare function resolveExecutable(command: string, platform?: NodeJS.Platform, envPath?: string): string | null;
 /** `.cmd`/`.bat` shims need cmd.exe; everything else is spawned directly (no shell, no re-quoting). */

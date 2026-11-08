@@ -4231,6 +4231,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--attach' && argv[i + 1]) out.attach = String(argv[++i]);
     else if (a === '--ref' && argv[i + 1]) out.ref = String(argv[++i]);
     else if (a === '--any-label') out.anyLabel = true;
+    else if (a === '--print-prompt') out.printPrompt = true;
     else if (a === '--allow-undelivered') out.allowUndelivered = true;
     else if (a === '--strict-delivery') out.strictDelivery = true;
     else if (a === '--dry-run') out.dryRun = true;
@@ -5398,6 +5399,20 @@ async function runRuntime(opts) {
     }
   }
 
+  // OXB-148: runtime execute --task T1 --print-prompt (nothing runs)
+  if (opts.action === 'execute' && opts.printPrompt) {
+    try {
+      const out = oxeOperational.runtimePrintPrompt(opts.dir, activeSession, { task: opts.task });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimePromptSchema: 1, ...out }, null, 2)); return; }
+      console.log(`  ${out.task}: ${out.total_chars} chars (~${out.est_tokens} tokens) → ${path.relative(opts.dir, out.file)}`);
+      for (const s of out.sections) console.log(`    ${s.name.padEnd(24)} ${String(s.chars).padStart(9)} chars${s.raw_chars != null ? `  (bruto ${s.raw_chars})` : ''}`);
+      return;
+    } catch (err) {
+      console.error(`${red}${err && err.message ? err.message : err}${reset}`);
+      process.exit(1);
+    }
+  }
+
   if (opts.action === 'execute') {
     try {
       // Resolve provider: flag > env vars > persisted .oxe/config.json runtime.provider
@@ -5558,6 +5573,9 @@ async function runRuntime(opts) {
       for (const d of out.duplicates) console.log(`  ${c ? dim : ''}= ${d} já importado${c ? reset : ''}`);
       for (const x of out.closed_phase) console.log(`  ${c ? yellow : ''}! ${x.id}: ${x.phase} está fechada — não virou CR aqui. Para reabrir: ${x.suggestion}${c ? reset : ''}`);
       for (const t of out.triage) console.log(`  ${c ? yellow : ''}? ${t.id} (${t.phase || '—'}): ${t.reason}${c ? reset : ''}`);
+      // OXB-122: imported text with instruction-like content is marked (not dropped) and shown.
+      for (const s of out.suspicious) console.log(`  ${c ? red : ''}⚠ ${s.id} suspeito (${s.flags.map((x) => x.id).join(', ')}):${c ? reset : ''} ${s.flags[0].snippet.slice(0, 140)}`);
+      if (out.suspicious.length) console.log(`  ${out.suspicious.length} suspeito(s): o texto entra no contexto do executor só como dado delimitado`);
       console.log(`  ${out.dry_run ? 'dry-run: ' : ''}${out.created.length} CR(s)${out.dry_run ? ' seriam criados' : ' criados'} · ${out.duplicates.length} já importados · ${out.closed_phase.length} de fase fechada · ${out.triage.length} para triagem`);
       return;
     } catch (err) {

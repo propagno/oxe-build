@@ -3,7 +3,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ClaudeCliAdapter = void 0;
+exports.ClaudeCliAdapter = exports.DEFAULT_MAX_PROMPT_CHARS = void 0;
+exports.fitTranscript = fitTranscript;
 exports.resolveExecutable = resolveExecutable;
 exports.buildSpawnable = buildSpawnable;
 exports.renderTranscript = renderTranscript;
@@ -24,6 +25,31 @@ function singleFlight(work) {
 }
 const CLAUDE_FLAGS = ['-p', '--output-format', 'json', '--tools', '', '--no-session-persistence', '--strict-mcp-config'];
 const DEFAULT_TIMEOUT_MS = 5 * 60000;
+/**
+ * OXB-148: F2-T1's 2.29M-char prompt was ~1.37M tokens (≈1.7 chars/token for code + Portuguese). The window is 1M
+ * tokens; 1.2M chars keeps a margin. Tool results older than the last few are elided from 600k chars on.
+ */
+exports.DEFAULT_MAX_PROMPT_CHARS = 1200000;
+const ELIDE_FROM_CHARS = 600000;
+const KEEP_RECENT_TOOL_RESULTS = 6;
+/** Elides the oldest tool results (keeping the last few) until the conversation fits the soft budget. */
+function fitTranscript(messages, hardLimit = exports.DEFAULT_MAX_PROMPT_CHARS) {
+    const size = (ms) => ms.reduce((n, m) => n + String(m.content ?? '').length, 0);
+    const soft = Math.min(ELIDE_FROM_CHARS, hardLimit);
+    if (size(messages) <= soft)
+        return messages;
+    const out = messages.map((m) => ({ ...m }));
+    const toolIdx = out.map((m, i) => (m.role === 'tool' ? i : -1)).filter((i) => i >= 0);
+    const elidable = toolIdx.slice(0, Math.max(0, toolIdx.length - KEEP_RECENT_TOOL_RESULTS));
+    for (const i of elidable) {
+        if (size(out) <= soft)
+            break;
+        const len = String(out[i].content ?? '').length;
+        if (len > 400)
+            out[i].content = `[resultado antigo omitido para caber na janela: ${len} chars — leia de novo se precisar]`;
+    }
+    return out;
+}
 let callSeq = 0;
 /** First matching executable on PATH (on Windows also tries .exe/.cmd/.bat), or null. */
 function resolveExecutable(command, platform = process.platform, envPath = process.env.PATH ?? '') {
@@ -181,8 +207,14 @@ class ClaudeCliAdapter {
         const retries = this.options.parseRetries ?? 2;
         let costUsd = 0;
         let lastText = '';
+        // OXB-148: the whole conversation is re-sent on every turn. Old tool results are elided first; a prompt still over
+        // the hard limit fails fast as `context` without paying for a call that cannot fit.
+        const messages = fitTranscript(opts.messages, this.options.maxPromptChars ?? exports.DEFAULT_MAX_PROMPT_CHARS);
         for (let attempt = 0; attempt <= retries; attempt++) {
-            const prompt = buildBridgePrompt(opts.messages, opts.tools ?? [], attempt > 0);
+            const prompt = buildBridgePrompt(messages, opts.tools ?? [], attempt > 0);
+            if (prompt.length > (this.options.maxPromptChars ?? exports.DEFAULT_MAX_PROMPT_CHARS)) {
+                throw cliFailure({ code: null, stdout: '', stderr: '', envelope: { is_error: true, subtype: 'prompt_over_limit', result: `Prompt is too long (estimated before the call, limit ${this.options.maxPromptChars ?? exports.DEFAULT_MAX_PROMPT_CHARS} chars)` }, promptChars: prompt.length });
+            }
             const reply = await singleFlight(async () => {
                 await this.waitForMemory();
                 return this.runOnce(prompt, opts.timeoutMs);
