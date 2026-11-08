@@ -92,10 +92,35 @@ describe('OXB-084: plan lint --dry-verify progress, resume and subsets', () => {
       { id: 'T1', title: 'a', wave: 1, files: ['src/a.js'], acceptance: ['A1'], verify: { commands: ['node missing.js a'] } },
       { id: 'T2', title: 'b', wave: 1, files: ['src/b.js'], acceptance: ['A1'], verify: { commands: ['node missing.js b'] } },
     ] }));
-    const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'oxe-cc.js'), 'plan', 'lint', '--only', 'T2', '--no-preflight', '--json', dir], { encoding: 'utf8', env: { ...process.env, OXE_NO_PROMPT: '1' } });
+    const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'oxe-cc.js'), 'plan', 'lint', '--only', 'T2', '--dry-verify-anyway', '--no-preflight', '--json', dir], { encoding: 'utf8', env: { ...process.env, OXE_NO_PROMPT: '1' } });
     const out = JSON.parse(r.stdout);
     assert.deepEqual(out.dry_verify.map((x) => x.task), ['T2']);
     assert.match(r.stderr, /\[1\/1\] T2 node missing\.js b \.\.\. ok \d+s/);
     assert.ok(fs.existsSync(path.join(dir, '.oxe', 'cache', 'dry-verify.json')));
+  });
+});
+
+describe('OXB-089: structural checks before the dry-verify', () => {
+  it('with structural errors the dry-verify does not run (says so); --dry-verify-anyway runs it', () => {
+    const dir = repo();
+    fs.writeFileSync(path.join(dir, '.oxe', 'STATE.md'), '# STATE\n');
+    fs.writeFileSync(path.join(dir, '.oxe', 'SPEC.md'), '# SPEC\n\n## Critérios de aceite\n\n| ID | Critério | Como verificar |\n|---|---|---|\n| A1 | a | b |\n');
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.md'), '# PLAN\n');
+    fs.writeFileSync(path.join(dir, '.oxe', 'config.json'), JSON.stringify({ external_dependency_check: false }));
+    // Two tasks of one wave writing the same file: structural.
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify({ schema_version: 1, tasks: [
+      { id: 'T1', title: 'a', wave: 1, files: ['src/a.js'], acceptance: ['A1'], verify: { commands: ['node missing.js a'] } },
+      { id: 'T2', title: 'b', wave: 1, files: ['src/a.js'], acceptance: ['A1'], verify: { commands: ['node missing.js b'] } },
+    ] }));
+    const lines = [];
+    const op = require('../bin/lib/oxe-operational.cjs');
+    const skipped = op.runtimePlanLint(dir, null, { preflight: false, dryVerify: true, onProgress: (l) => lines.push(l) });
+    assert.ok(skipped.errors.some((e) => /T1 e T2 escrevem src\/a\.js/.test(e)));
+    assert.match(skipped.dry_verify_skipped, /erro\(s\) estrutura\(is\); dry-verify não rodou/);
+    assert.equal(skipped.dry_verify, null);
+    assert.deepEqual(runs(dir), [], 'no verify command ran');
+    assert.match(lines.join('\n'), /dry-verify: não rodou/);
+    const anyway = op.runtimePlanLint(dir, null, { preflight: false, dryVerify: true, dryVerifyAnyway: true });
+    assert.equal(anyway.dry_verify.length, 2);
   });
 });

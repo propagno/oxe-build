@@ -207,8 +207,10 @@ function amendmentRequirements(programDir) {
     const version = cr.amend_to || 2;
     const additive = cr.amendment === 'additive';
     for (const a of cr.criteria || []) {
-      const cur = out.get(a) || { required: 1, staleBelow: 1, additive: true };
+      const cur = out.get(a) || { required: 1, staleBelow: 1, additive: true, crs: [], last_at: null };
       cur.required = Math.max(cur.required, version);
+      if (cr.id && !cur.crs.includes(cr.id)) cur.crs.push(cr.id);
+      if (cr.at && (!cur.last_at || cr.at > cur.last_at)) cur.last_at = cr.at;
       if (!additive) cur.staleBelow = Math.max(cur.staleBelow, version);
       cur.additive = cur.staleBelow < cur.required;
       out.set(a, cur);

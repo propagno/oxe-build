@@ -5119,6 +5119,10 @@ async function runRuntime(opts) {
       }
       const { state, progress } = status;
       console.log(`  ${c ? green : ''}Programa:${c ? reset : ''} ${progress.closed}/${progress.total} fases fechadas`);
+      // OXB-090: amendments to criteria of closed phases (after the close): reopen?
+      const byPhase = new Map();
+      for (const x of status.amended_closed || []) { if (!byPhase.has(x.phase)) byPhase.set(x.phase, []); byPhase.get(x.phase).push(`${x.criterion}@v${x.version}${x.crs.length ? ` (${x.crs.join(', ')})` : ''}`); }
+      for (const [ph, list] of byPhase) console.log(`  ${c ? yellow : ''}${ph} fechada com emenda depois do close — reaberto?${c ? reset : ''} ${list.join(', ')}  →  oxe-cc runtime feedback --class spec_gap --phase ${ph} … (reabre) ou siga se a emenda vale só para as fases seguintes`);
       for (const phase of state.phases) {
         const active = state.active_phase === phase.id ? ' ◀ ativa' : '';
         const mark = phase.status === 'closed' ? '✓' : phase.status === 'pending' ? '·' : '▶';
@@ -6562,6 +6566,7 @@ async function main() {
     let noPreflight = false;
     // OXB-084: --resume (skip commands already run on the same tree), --only T5,T6, --changed, --quiet.
     let resume = false;
+    let dryVerifyAnyway = false;
     let changed = false;
     let quiet = false;
     let only = null;
@@ -6571,6 +6576,7 @@ async function main() {
       else if (a === '--dry-verify') dryVerify = true;
       else if (a === '--no-preflight') noPreflight = true;
       else if (a === '--resume') { resume = true; dryVerify = true; }
+      else if (a === '--dry-verify-anyway') { dryVerifyAnyway = true; dryVerify = true; }
       else if (a === '--changed') { changed = true; dryVerify = true; }
       else if (a === '--quiet') quiet = true;
       else if (a === '--only' && rest[i + 1]) { only = String(rest[++i]).split(',').map((s) => s.trim()).filter(Boolean); dryVerify = true; }
@@ -6592,7 +6598,7 @@ async function main() {
     try {
       // Progress goes to stderr, so --json on stdout stays parseable.
       const onProgress = quiet ? null : (line) => process.stderr.write(`  ${line}\n`);
-      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave, dryVerify, preflight: !noPreflight, onProgress, resume, changed, only });
+      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave, dryVerify, preflight: !noPreflight, onProgress, resume, changed, only, dryVerifyAnyway });
     } catch (err) {
       console.error(`${red}✗${reset} ${err && err.message ? err.message : err}`);
       process.exit(1);

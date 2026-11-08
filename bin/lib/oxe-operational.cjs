@@ -2677,9 +2677,18 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     : null;
   const config = readJsonQuiet(path.join(projectRoot, '.oxe', 'config.json')) || {};
   const maxTasksPerWave = Number(options.maxTasksPerWave || config.plan_max_tasks_per_wave || 0) || 0;
+  // OXB-090: the plan of the active phase answers only for amendments of ITS criteria. F2's lint failed on 14 v2
+  // amendments (CR-21..32) of criteria of F1 (closed), F3, F8, F9, F11 …: their tests are written when their phase is
+  // planned. Without a program, every amendment counts (as before).
+  let amendments = paths.programDir ? require('./oxe-change.cjs').amendmentRequirements(paths.programDir) : new Map();
+  if (phase && Array.isArray(phase.acceptance) && phase.acceptance.length) {
+    const critIds = require('./oxe-criteria-ids.cjs');
+    const own = new Set(phase.acceptance);
+    amendments = new Map([...amendments].filter(([criterion]) => critIds.inPhase(criterion, own) && !critIds.isGlobal(criterion) || own.has(criterion)));
+  }
   const result = planJson.lintPlan({
     plan, spec, pack, phase, maxTasksPerWave, projectRoot,
-    amendments: paths.programDir ? require('./oxe-change.cjs').amendmentRequirements(paths.programDir) : new Map(),
+    amendments,
     requireAcceptanceTests: Boolean(options.requireAcceptanceTests || config.acceptance_tests_required),
   });
   if (spec) result.warnings.push(...lintPlanForCommonPitfalls(plan, spec, projectRoot, specText));
@@ -2735,7 +2744,57 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
   const gatesLib = require('./oxe-phase-gates.cjs');
   result.warnings.push(...gatesLib.lintPhaseGates(projectRoot, gatesLib.readPhaseGates({ phase_gates: plan.phaseGates }, config)));
   let dryVerify = null;
-  if (options.dryVerify) {
+  // OXB-021: checkpoint messages follow the project's commit convention.
+  result.errors.push(...require('./oxe-commit-convention.cjs').lintCommitConvention(plan, config));
+  // OXB-028: the execute preflight's execution-rationality gaps (anchors, fixture pack, pack coverage, visual inputs)
+  // are lint errors too — a greenfield plan without REFERENCE-ANCHORS/FIXTURE-PACK passed lint and blocked execute.
+  try {
+    const health = require('./oxe-project-health.cjs');
+    const p = health.oxePaths(projectRoot);
+    const rationality = require('./oxe-rationality.cjs').buildExecutionRationality({
+      plan: paths.plan || p.plan,
+      planAgents: p.planAgents,
+      implementationPackJson: paths.implementationPack || p.implementationPackJson,
+      implementationPackMd: p.implementationPackMd,
+      referenceAnchors: p.referenceAnchors,
+      fixturePackJson: p.fixturePackJson,
+      fixturePackMd: p.fixturePackMd,
+      spec: paths.spec || p.spec,
+      visualInputsJson: p.visualInputsJson,
+      visualInputsMd: p.visualInputsMd,
+    });
+    // OXB-041: the preflight blocks on these whenever it applies (a PLAN.md exists), pack or not — so lint does too.
+    // (Before, without an IMPLEMENTATION-PACK they were warnings: lint said "ok" and execute refused.)
+    const target = rationality.applicable || pack ? result.errors : result.warnings;
+    for (const gap of rationality.criticalExecutionGaps || []) {
+      if (!result.errors.includes(gap) && !result.warnings.includes(gap)) target.push(`preflight: ${gap}`);
+    }
+  } catch { /* a racionalidade é do preflight; o lint só antecipa */ }
+  // OXB-041/044: "lint ok" means "execute will not refuse". The same preflight the execute runs, in dry mode, with
+  // every blocker listed at once (self-evaluation rubric and confidence_vector included).
+  if (options.preflight !== false && config.plan_lint_preflight !== false) {
+    if (!planText) {
+      result.errors.push(`preflight: PLAN.md ausente — o runtime execute recusa sem ele (ele traz a autoavaliação); gere-o no /oxe-plan junto com o PLAN.json`);
+    }
+    try {
+      const pre = buildRuntimeExecutePreflight(projectRoot, activeSession, readRunState(projectRoot, activeSession), { nativeCheck: false });
+      for (const blocker of pre.blockers) {
+        if (/^execution_rationality:/.test(blocker)) continue; // listed in full above
+        if (/^pending_gates:/.test(blocker)) { result.warnings.push(`preflight: ${blocker} (gates humanos pendentes no run atual — o execute para neles)`); continue; }
+        result.errors.push(`preflight: ${blocker}`);
+      }
+    } catch { /* o preflight nunca derruba o lint */ }
+  }
+  // OXB-089: the dry-verify runs LAST, and only when the structural checks pass — 78 structural errors (acceptance
+  // files in a task's scope, two tasks writing one file, tasks missing from the pack) came out after 97 minutes of
+  // dry-verify. --dry-verify-anyway runs it regardless.
+  const structuralErrors = result.errors.length;
+  if (options.dryVerify && structuralErrors && !options.dryVerifyAnyway) {
+    result.dry_verify_skipped = `${structuralErrors} erro(s) estrutura(is); dry-verify não rodou (corrija-os ou use --dry-verify-anyway)`;
+    result.warnings.push(result.dry_verify_skipped);
+    if (typeof options.onProgress === 'function') options.onProgress(`dry-verify: não rodou — ${result.dry_verify_skipped}`);
+  }
+  if (options.dryVerify && (!structuralErrors || options.dryVerifyAnyway)) {
     // OXB-063: a dependency whose PR is already merged no longer counts as pending (same check as the compile).
     if (config.external_dependency_check !== false && options.externalCheck !== false) {
       try { resolveMergedDependencies(plan, options.ghSpawn); } catch { /* sem gh: a dependência continua pendente */ }
@@ -2782,47 +2841,6 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       if (sha) result.errors.push(`${entry.task}: já tem checkpoint ${sha.slice(0, 8)} e o verify passa — marque "done": true (oxe-cc plan done ${entry.task}); senão o execute paga a tarefa de novo`);
     }
     result.ok = result.errors.length === 0;
-  }
-  // OXB-021: checkpoint messages follow the project's commit convention.
-  result.errors.push(...require('./oxe-commit-convention.cjs').lintCommitConvention(plan, config));
-  // OXB-028: the execute preflight's execution-rationality gaps (anchors, fixture pack, pack coverage, visual inputs)
-  // are lint errors too — a greenfield plan without REFERENCE-ANCHORS/FIXTURE-PACK passed lint and blocked execute.
-  try {
-    const health = require('./oxe-project-health.cjs');
-    const p = health.oxePaths(projectRoot);
-    const rationality = require('./oxe-rationality.cjs').buildExecutionRationality({
-      plan: paths.plan || p.plan,
-      planAgents: p.planAgents,
-      implementationPackJson: paths.implementationPack || p.implementationPackJson,
-      implementationPackMd: p.implementationPackMd,
-      referenceAnchors: p.referenceAnchors,
-      fixturePackJson: p.fixturePackJson,
-      fixturePackMd: p.fixturePackMd,
-      spec: paths.spec || p.spec,
-      visualInputsJson: p.visualInputsJson,
-      visualInputsMd: p.visualInputsMd,
-    });
-    // OXB-041: the preflight blocks on these whenever it applies (a PLAN.md exists), pack or not — so lint does too.
-    // (Before, without an IMPLEMENTATION-PACK they were warnings: lint said "ok" and execute refused.)
-    const target = rationality.applicable || pack ? result.errors : result.warnings;
-    for (const gap of rationality.criticalExecutionGaps || []) {
-      if (!result.errors.includes(gap) && !result.warnings.includes(gap)) target.push(`preflight: ${gap}`);
-    }
-  } catch { /* a racionalidade é do preflight; o lint só antecipa */ }
-  // OXB-041/044: "lint ok" means "execute will not refuse". The same preflight the execute runs, in dry mode, with
-  // every blocker listed at once (self-evaluation rubric and confidence_vector included).
-  if (options.preflight !== false && config.plan_lint_preflight !== false) {
-    if (!planText) {
-      result.errors.push(`preflight: PLAN.md ausente — o runtime execute recusa sem ele (ele traz a autoavaliação); gere-o no /oxe-plan junto com o PLAN.json`);
-    }
-    try {
-      const pre = buildRuntimeExecutePreflight(projectRoot, activeSession, readRunState(projectRoot, activeSession), { nativeCheck: false });
-      for (const blocker of pre.blockers) {
-        if (/^execution_rationality:/.test(blocker)) continue; // listed in full above
-        if (/^pending_gates:/.test(blocker)) { result.warnings.push(`preflight: ${blocker} (gates humanos pendentes no run atual — o execute para neles)`); continue; }
-        result.errors.push(`preflight: ${blocker}`);
-      }
-    } catch { /* o preflight nunca derruba o lint */ }
   }
   result.ok = result.errors.length === 0;
   return { ...result, source: plan.source, tasks: plan.tasks.length, phase: phase ? phase.id : null, plan_json: hasJson ? jsonPath : null, dry_verify: dryVerify ? dryVerify.results : null };
@@ -4267,7 +4285,20 @@ function runtimeProgramStatus(projectRoot, activeSession) {
   const where = { roadmap: paths.roadmap, programDir: paths.programDir, plan: paths.plan };
   if (!state) return { exists: false, state: null, progress: null, paths: where };
   const runtime = requireProgramRuntime();
-  return { exists: true, state, progress: runtime.programProgress(state), paths: where };
+  // OXB-090: a SPEC amendment to a criterion of a closed phase, recorded after its close, is reported here (once),
+  // not as a plan error of the active phase: the closed phase may need reopening (runtime feedback).
+  const amendedClosed = [];
+  try {
+    const reqs = require('./oxe-change.cjs').amendmentRequirements(paths.programDir);
+    for (const p of state.phases) {
+      if (p.status !== 'closed') continue;
+      for (const a of p.acceptance || []) {
+        const r = reqs.get(a);
+        if (r && r.required > 1 && (!p.closed_at || !r.last_at || r.last_at > p.closed_at)) amendedClosed.push({ phase: p.id, criterion: a, version: r.required, crs: r.crs || [] });
+      }
+    }
+  } catch { /* auxiliar */ }
+  return { exists: true, state, progress: runtime.programProgress(state), paths: where, amended_closed: amendedClosed };
 }
 
 function runtimeProgramInit(projectRoot, activeSession, options = {}) {

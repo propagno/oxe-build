@@ -125,7 +125,7 @@ describe('OXB-063: dry-verify não roda o verify de tarefa externa pendente', ()
       ],
     };
     const dir = project({ plan });
-    const lint = op.runtimePlanLint(dir, null, { dryVerify: true });
+    const lint = op.runtimePlanLint(dir, null, { dryVerify: true, dryVerifyAnyway: true });
     const verdicts = Object.fromEntries((lint.dry_verify || []).map((r) => [r.task, r.verdict]));
     assert.deepEqual(verdicts, { T1: 'external_pending', T12: 'external_pending' });
     assert.ok(!lint.errors.some((e) => /^T1:|^T12:/.test(e)), lint.errors.join('\n'));
@@ -136,7 +136,7 @@ describe('OXB-063: dry-verify não roda o verify de tarefa externa pendente', ()
     const plan = { schema_version: 1, tasks: [{ id: 'T3', title: 'tokens', wave: 1, kind: 'verify_only', files: [], blocked_by: ['o/r#604'], verify: { commands: ['node -e "process.exit(0)"'] } }] };
     const dir = project({ plan, config: { external_dependency_check: true } });
     const merged = () => ({ status: 0, stdout: 'MERGED\n' });
-    const lint = op.runtimePlanLint(dir, null, { dryVerify: true, ghSpawn: merged });
+    const lint = op.runtimePlanLint(dir, null, { dryVerify: true, dryVerifyAnyway: true, ghSpawn: merged });
     assert.equal((lint.dry_verify || []).find((r) => r.task === 'T3').verdict, 'already_green');
   });
 });
