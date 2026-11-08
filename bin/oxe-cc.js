@@ -5703,6 +5703,8 @@ async function runRuntime(opts) {
       else if (out.conflict) console.log(`  ${red}✗${reset} ${out.error}`);
       else {
         console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.task} → branch ${out.branch} a partir de ${out.base} @ ${String(out.base_sha || "").slice(0, 10)} (${out.commits.length} commit(s), cherry-pick -x)`);
+        if (out.swept && out.swept.length) console.log(`  limpas ${out.swept.length} worktree(s) de promote interrompido: ${out.swept.join(', ')}`);
+        if (out.replaced_remote) console.log(`  branch ${out.branch} (do promote, sem PR) refeita: force-push com lease sobre ${String(out.replaced_remote).slice(0, 8)}`);
         if (out.stacked_on) console.log(`  empilhada sobre ${out.stacked_on.task} (${out.stacked_on.pr || out.stacked_on.branch}, ainda não mergeada) — o PR vai contra ${String(out.base).replace(/^[^/]+\//, '')} e traz os commits dela até o merge`);
         for (const w of out.warnings || []) console.log(`  ${c ? yellow : ""}AVISO${c ? reset : ""} ${w}`);
         if (out.pr_ready) console.log(`  pr:ready: ${out.pr_ready.ok ? 'OK verde' : 'FAIL vermelho'}${out.pr_ready.ok ? '' : `

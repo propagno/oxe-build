@@ -701,11 +701,13 @@ function resolveImportAt(projectRoot, rev, base0) {
  * not checked out anywhere, and either carries the promote mark (`branch.<b>.oxePromote`) or every commit past the
  * base is a promote commit (cherry-pick -x, or the frozen-tests commit).
  */
-function ownUnpushedPromoteBranch(projectRoot, branch, remote, baseSha) {
+function ownUnpushedPromoteBranch(projectRoot, branch, remote, baseSha, opts = {}) {
   const sha = (gitLines(projectRoot, ['rev-parse', `refs/heads/${branch}`]) || [])[0] || null;
-  const ls = gitRun(projectRoot, ['ls-remote', '--heads', remote, branch]);
-  if (ls.ok && ls.stdout.trim()) return { ok: false, why: `está em ${remote}` };
-  if (gitRun(projectRoot, ['rev-parse', '--abbrev-ref', `${branch}@{upstream}`]).ok) return { ok: false, why: 'tem upstream' };
+  if (!opts.allowRemote) {
+    const ls = gitRun(projectRoot, ['ls-remote', '--heads', remote, branch]);
+    if (ls.ok && ls.stdout.trim()) return { ok: false, why: `está em ${remote}` };
+    if (gitRun(projectRoot, ['rev-parse', '--abbrev-ref', `${branch}@{upstream}`]).ok) return { ok: false, why: 'tem upstream' };
+  }
   const wts = (gitRun(projectRoot, ['worktree', 'list', '--porcelain']).stdout || '').split(/\r?\n/);
   if (wts.includes(`branch refs/heads/${branch}`)) return { ok: false, why: 'está em uso numa worktree' };
   const marked = (gitRun(projectRoot, ['config', '--get', `branch.${branch}.oxePromote`]).stdout || '').trim() === 'true';
@@ -713,6 +715,30 @@ function ownUnpushedPromoteBranch(projectRoot, branch, remote, baseSha) {
   const bodies = (gitRun(projectRoot, ['log', '--format=%s%n%b%x00', `${baseSha}..${branch}`]).stdout || '').split('\0').map((x) => x.trim()).filter(Boolean);
   const promoteLike = bodies.every((b) => /\(cherry picked from commit [0-9a-f]{7,40}\)/.test(b) || /^test\(acceptance\): frozen tests of /.test(b));
   return promoteLike ? { ok: true, sha } : { ok: false, why: 'tem commits que não são do promote' };
+}
+
+/**
+ * OXB-162: a branch on the remote is the promote's own, safe to rebuild with a force-push, when: it was made by a
+ * promote (the local mark `branch.<b>.oxePromote`, or a TaskPromoted/TaskPromoteQueued/TaskPromoteFailed of this
+ * project naming it), every commit past the base is a promote commit, and it has NO pull request (any state) —
+ * checked with `gh pr list --head`; without an answer from gh it is refused.
+ */
+function ownPushedPromoteBranch(projectRoot, activeSession, branch, remote, remoteSha, baseSha, options = {}) {
+  const marked = (gitRun(projectRoot, ['config', '--get', `branch.${branch}.oxePromote`]).stdout || '').trim() === 'true';
+  let promoted = false;
+  try { promoted = readEvents(projectRoot, activeSession).some((e) => e && /^TaskPromote/.test(String(e.type)) && e.payload && e.payload.branch === branch); } catch { promoted = false; }
+  if (!marked && !promoted) return { ok: false, why: 'não foi criada por um promote deste projeto' };
+  gitRun(projectRoot, ['fetch', '-q', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
+  const have = gitRun(projectRoot, ['cat-file', '-e', `${remoteSha}^{commit}`]).ok;
+  if (!have) return { ok: false, why: 'não consegui ler a branch remota' };
+  const bodies = (gitRun(projectRoot, ['log', '--format=%s%n%b%x00', `${baseSha}..${remoteSha}`]).stdout || '').split('\0').map((x) => x.trim()).filter(Boolean);
+  if (!bodies.every((b) => /\(cherry picked from commit [0-9a-f]{7,40}\)/.test(b) || /^test\(acceptance\): frozen tests of /.test(b))) return { ok: false, why: 'tem commits que não são do promote' };
+  const gh = (options.ghSpawn || spawnSync)('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,state,url'], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+  if (!gh || gh.status !== 0) return { ok: false, why: 'não consegui confirmar pelo gh que ela não tem PR' };
+  let prs = [];
+  try { prs = JSON.parse(String(gh.stdout || '[]')); } catch { return { ok: false, why: 'resposta do gh ilegível' }; }
+  if (Array.isArray(prs) && prs.length) return { ok: false, why: `tem PR (${prs.map((p) => `#${p.number} ${p.state}`).join(', ')})` };
+  return { ok: true };
 }
 
 /**
@@ -3807,6 +3833,68 @@ function runChildCommand(projectRoot, command, timeoutMs = 600_000) {
   return { ok: res.status === 0, status: res.status, tail: output.split(/\r?\n/).filter(Boolean).slice(-15).join('\n') };
 }
 
+/**
+ * OXB-162: a long project command with progress on stderr (one line per npm script that starts, plus a heartbeat),
+ * through bin/lib/oxe-progress-run.cjs. `quiet` keeps the progress off the terminal (tests, --json).
+ */
+function runProgressCommand(cwd, command, timeoutMs = 1_800_000, options = {}) {
+  applyChildEnvPolicy(cwd);
+  const rt = loadRuntimeModule();
+  const env = rt && typeof rt.childProcessEnv === 'function'
+    ? rt.childProcessEnv(process.env)
+    : (() => { const e = { ...process.env }; delete e.NODE_TEST_CONTEXT; return e; })();
+  const heartbeat = Number(options.heartbeatMs || process.env.OXE_PROGRESS_HEARTBEAT_MS) || 60_000;
+  const res = spawnSync(process.execPath, [path.join(__dirname, 'oxe-progress-run.cjs'), options.label || 'pr:ready', String(timeoutMs), String(heartbeat), '--', command], {
+    cwd, env, encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024, timeout: timeoutMs + 120_000,
+    stdio: ['ignore', 'pipe', options.quiet ? 'pipe' : 'inherit'],
+  });
+  try {
+    const out = JSON.parse(String(res.stdout || '').trim());
+    return { ok: out.status === 0, status: out.status, tail: out.tail, timed_out: out.timed_out, scripts: out.scripts };
+  } catch {
+    return runChildCommand(cwd, command, timeoutMs);
+  }
+}
+
+/**
+ * OXB-162: promote worktrees a killed promote left behind (`.oxe/promote-ws/<task>-*`). A live promote writes
+ * `<dir>.pid` next to its worktree; a dir whose pid is gone (or with no pid file, older than 30 min) is swept:
+ * external links (the node_modules junction) unlinked FIRST, then the worktree removed, then pruned.
+ */
+function sweepStalePromoteWorkspaces(projectRoot, options = {}) {
+  const root = path.join(projectRoot, '.oxe', 'promote-ws');
+  const removed = [];
+  let names = [];
+  try { names = fs.readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name); } catch { return removed; }
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return Boolean(e && e.code === 'EPERM'); } };
+  for (const name of names) {
+    const dir = path.join(root, name);
+    const pidFile = `${dir}.pid`;
+    let pid = null;
+    try { pid = Number(JSON.parse(fs.readFileSync(pidFile, 'utf8')).pid) || null; } catch { pid = null; }
+    if (pid && pid !== process.pid && alive(pid)) continue;
+    if (!pid) {
+      let age = 0;
+      try { age = Date.now() - fs.statSync(dir).mtimeMs; } catch { age = 0; }
+      if (age < (options.minAgeMs != null ? options.minAgeMs : 30 * 60_000)) continue;
+    }
+    try {
+      const rt = loadRuntimeModule();
+      if (rt && typeof rt.unlinkExternalLinks === 'function') rt.unlinkExternalLinks(dir);
+      else { const nm = path.join(dir, 'node_modules'); if (fs.lstatSync(nm).isSymbolicLink()) fs.unlinkSync(nm); }
+    } catch { /* */ }
+    let linkLeft = false;
+    try { linkLeft = fs.lstatSync(path.join(dir, 'node_modules')).isSymbolicLink(); } catch { linkLeft = false; }
+    if (linkLeft) continue; // never a forced removal with the junction in place
+    const rm = gitRun(projectRoot, ['worktree', 'remove', '--force', dir]);
+    if (!rm.ok) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { continue; } }
+    try { fs.rmSync(pidFile, { force: true }); } catch { /* */ }
+    removed.push(path.relative(projectRoot, dir).replace(/\\/g, '/'));
+  }
+  if (removed.length) gitRun(projectRoot, ['worktree', 'prune']);
+  return removed;
+}
+
 function readPlanJsonDoc(projectRoot, activeSession) {
   const planJsonLib = require('./oxe-plan-json.cjs');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
@@ -3994,18 +4082,25 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   // OXB-160: a local branch an earlier (failed) promote left behind — created by the promote, never pushed — is
   // reused: dropped and rebuilt. Any other existing branch is refused, as before.
   let replacedBranch = null;
+  // OXB-162: the promote's own branch already on the remote with NO PR (a run that died, or pr:ready red) is rebuilt
+  // and force-pushed with a lease on the sha it has now. A branch with a PR, or with commits that are not the
+  // promote's, is refused as before.
+  const remoteHead0 = gitRun(projectRoot, ['ls-remote', '--heads', remote, branch]);
+  const remoteSha = remoteHead0.ok ? remoteHead0.stdout.trim().split(/\s+/)[0] : '';
+  let forceLease = null;
+  if (remoteSha) {
+    const own = ownPushedPromoteBranch(projectRoot, activeSession, branch, remote, remoteSha, baseSha, options);
+    if (!own.ok) throw new Error(`a branch ${branch} já existe em ${remote} (${remoteSha.slice(0, 8)}) — ${own.why}; o promote não sobrescreve; use --branch <outra>`);
+    forceLease = remoteSha;
+  }
   if (gitLines(projectRoot, ['rev-parse', '--verify', '-q', `refs/heads/${branch}`])) {
-    const own = ownUnpushedPromoteBranch(projectRoot, branch, remote, baseSha);
+    const own = ownUnpushedPromoteBranch(projectRoot, branch, remote, baseSha, { allowRemote: Boolean(forceLease) });
     if (!own.ok) throw new Error(`a branch ${branch} já existe${own.why ? ` (${own.why})` : ''} — use --branch <outra> ou apague-a`);
     const del = gitRun(projectRoot, ['branch', '-D', branch]);
     if (!del.ok) throw new Error(`a branch ${branch} (de um promote anterior) não pôde ser recriada: ${del.stderr.trim()}`);
     replacedBranch = own.sha;
   }
-  if (options.openPr) {
-    const remoteHead = gitRun(projectRoot, ['ls-remote', '--heads', remote, branch]);
-    const existing = remoteHead.ok ? remoteHead.stdout.trim().split(/\s+/)[0] : '';
-    if (existing) throw new Error(`a branch ${branch} já existe em ${remote} (${existing.slice(0, 8)}) — o promote não sobrescreve nem faz force-push; use --branch <outra>`);
-  }
+  const pushArgs = () => ['push', ...(forceLease ? [`--force-with-lease=${branch}:${forceLease}`] : []), '-u', remote, branch];
   // OXB-161: a dependency promoted but not merged yet → the branch is built ON TOP of its promote branch (stacked);
   // the PR still targets the base, carrying the dependency's commits until it merges. --hold-deps waits instead.
   const stackInfo = promoteStack(projectRoot, activeSession, task, { base, baseSha, remote, options });
@@ -4013,7 +4108,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   const stack = stackInfo.stack;
   const buildSha = stack ? stack.sha : baseSha;
   resolvedBase.warnings = [...(resolvedBase.warnings || []), ...stackInfo.warnings];
-  const result = { task: taskId, base, base_sha: baseSha, ...(stack ? { stacked_on: { task: stack.task, branch: stack.branch, pr: stack.pr || null, sha: stack.sha } } : {}), base_requested: resolvedBase.requested, warnings: resolvedBase.warnings, branch, commits: ordered, conflict: null, pr_ready: null, body_file: null, pr: null, commands: [], worktree: null, ...(replacedBranch ? { replaced_branch: replacedBranch } : {}) };
+  const result = { task: taskId, base, base_sha: baseSha, ...(stack ? { stacked_on: { task: stack.task, branch: stack.branch, pr: stack.pr || null, sha: stack.sha } } : {}), base_requested: resolvedBase.requested, warnings: resolvedBase.warnings, branch, commits: ordered, conflict: null, pr_ready: null, body_file: null, pr: null, commands: [], worktree: null, ...(replacedBranch ? { replaced_branch: replacedBranch } : {}), ...(forceLease ? { replaced_remote: forceLease } : {}) };
   // Where the branch is built: a temporary worktree (default) or, with --in-place, the program checkout.
   let work = projectRoot;
   let cleanup = () => {};
@@ -4026,6 +4121,9 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   } else {
     const wt = path.join(projectRoot, '.oxe', 'promote-ws', `${taskId.toLowerCase()}-${Date.now().toString(36)}`);
     fs.mkdirSync(path.dirname(wt), { recursive: true });
+    // OXB-162: worktrees of killed promotes (their junction unlinked first), and this one's pid for the next sweep.
+    result.swept = sweepStalePromoteWorkspaces(projectRoot);
+    fs.writeFileSync(`${wt}.pid`, JSON.stringify({ pid: process.pid, task: taskId, at: new Date().toISOString() }));
     const add = gitRun(projectRoot, ['worktree', 'add', '-q', '-b', branch, wt, buildSha]);
     if (!add.ok) throw new Error(`não foi possível criar a worktree de ${branch}: ${add.stderr.trim()}`);
     gitRun(projectRoot, ['config', `branch.${branch}.oxePromote`, 'true']);
@@ -4050,10 +4148,16 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
         else if (linked) fs.unlinkSync(path.join(wt, 'node_modules'));
       } catch { /* */ }
       const rm = gitRun(projectRoot, ['worktree', 'remove', wt]);
+      if (rm.ok) { try { fs.rmSync(`${wt}.pid`, { force: true }); } catch { /* */ } }
       if (!rm.ok) result.cleanup_warning = `worktree ${result.worktree} não removida (${rm.stderr.trim().split(/\r?\n/).pop()}) — remova à mão depois de conferir que não há links dentro`;
       gitRun(projectRoot, ['worktree', 'prune']);
     };
   }
+  // OXB-162: Ctrl+C / SIGTERM while the promote runs still unlinks and removes its worktree (a hard kill is swept by
+  // the next promote).
+  const onSignal = (sig) => { try { cleanup(); } catch { /* */ } process.exit(sig === 'SIGINT' ? 130 : 143); };
+  const signals = ['SIGINT', 'SIGTERM'];
+  for (const sig of signals) process.once(sig, onSignal);
   try {
     for (const sha of ordered) {
       const pick = gitRun(work, ['cherry-pick', '-x', sha]);
@@ -4089,7 +4193,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     // OXB-158: with --open-pr the branch is pushed FIRST — pr:ready posts its GitHub status on the pushed sha (before,
     // it passed its checks, failed to post "… is not on GitHub yet: push it first", and the PR was never opened).
     if (!result.conflict && options.openPr && !result.error) {
-      const push = gitRun(work, ['push', '-u', remote, branch]);
+      const push = gitRun(work, pushArgs());
       if (!push.ok) result.error = `push falhou: ${push.stderr.trim().split(/\r?\n/).slice(-2).join(' · ')}`;
       else result.pushed = true;
     }
@@ -4098,7 +4202,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       let pkg = null;
       try { pkg = JSON.parse(fs.readFileSync(path.join(work, 'package.json'), 'utf8')); } catch { pkg = null; }
       if (pkg && pkg.scripts && pkg.scripts['pr:ready'] && options.prReady !== false) {
-        const ready = runChildCommand(work, 'npm run pr:ready', 1_800_000);
+        const ready = runProgressCommand(work, 'npm run pr:ready', 1_800_000, { quiet: options.quietProgress === true || process.env.OXE_PROGRESS === '0' });
         // OXB-158: "the checks failed" is not "only posting the status failed".
         // Only the status post failed when the output says so AND, without those lines, nothing else reports a failure.
         const tail = String(ready.tail || '');
@@ -4111,6 +4215,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       }
     }
   } finally {
+    for (const sig of signals) process.removeListener(sig, onSignal);
     cleanup();
   }
   if (result.conflict) {
@@ -4160,7 +4265,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       result.error = `pr:ready vermelho em ${branch} — PR não aberto (a branch já está em ${remote}; corrija e rode os comandos abaixo — o PR vai contra ${prBase}${stack ? `, não contra a branch de ${stack.task}` : ''})`;
     } else {
       // pushed before pr:ready (OXB-158); --in-place pushes here as before
-      const push = result.pushed ? { ok: true } : gitRun(projectRoot, ['push', '-u', remote, branch]);
+      const push = result.pushed ? { ok: true } : gitRun(projectRoot, pushArgs());
       if (!push.ok) result.error = `push falhou: ${push.stderr.trim().split(/\r?\n/).slice(-2).join(' · ')}`;
       else {
         const gh = (options.ghSpawn || spawnSync)('gh', ['pr', 'create', '--base', prBase, '--head', branch, '--title', title, '--body-file', bodyFile], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });

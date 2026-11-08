@@ -171,14 +171,19 @@ describe('OXB-060: runtime promote T<n> --base main', () => {
   it('--open-pr pushes and calls gh with --body-file; refuses a branch already on the remote', () => {
     const { dir } = setup();
     const calls = [];
-    const ghSpawn = (cmd, args) => { calls.push([cmd, ...args]); return { status: 0, stdout: 'https://github.com/x/y/pull/1\n', stderr: '' }; };
+    const ghSpawn = (cmd, args) => {
+      calls.push([cmd, ...args]);
+      // OXB-164: the branch now has a PR → a second promote refuses to rebuild it
+      if (args[1] === 'list') return { status: 0, stdout: JSON.stringify([{ number: 1, state: 'OPEN' }]), stderr: '' };
+      return { status: 0, stdout: 'https://github.com/x/y/pull/1\n', stderr: '' };
+    };
     const out = op.runtimePromote(dir, null, { task: 'T2', base: 'main', openPr: true, ghSpawn });
     assert.equal(out.error, undefined, out.error);
     assert.equal(out.pr, 'https://github.com/x/y/pull/1');
     assert.ok(git(dir, 'ls-remote', '--heads', 'origin', 'oxe/promote-t2'));
     assert.ok(calls[0].includes('--body-file') && !calls[0].includes('--body') && !calls[0].includes('--label'));
     git(dir, 'branch', '-D', 'oxe/promote-t2');
-    assert.throws(() => op.runtimePromote(dir, null, { task: 'T2', base: 'main', openPr: true, ghSpawn }), /já existe em origin.*não sobrescreve nem faz force-push/);
+    assert.throws(() => op.runtimePromote(dir, null, { task: 'T2', base: 'main', openPr: true, ghSpawn }), /já existe em origin .*tem PR \(#1 OPEN\); o promote não sobrescreve/);
   });
 
   it('a conflict discards the branch and returns to the program branch', () => {
