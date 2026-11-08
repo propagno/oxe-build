@@ -431,3 +431,11 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
   - O `proof_not_executed` do verify passou a listar os testes que passaram.
   - Conferido (só leitura) no PLAN.json do oxespace-150: pega exatamente A8/cr15 e A5/cr10–14 (4 + 4 provas), e nenhuma das outras 11 entradas com `proves`.
   - Teste: `tests/oxe-1212-verify-lock-timeout.test.cjs`.
+
+## OXB-074: falso positivo na checagem de presença (opcionais nativos do ssh2)
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (rc.6): o `plan lint` falhou com buildcheck, cpu-features e nan (os aceleradores opcionais do ssh2, cujo build C++ falha no Windows e que o npm descarta como "failed optional dependency"). O ssh2 funciona sem eles, e o native_check do app passa.
+  - Um pacote `optional: true` ausente vira aviso ("opcional(is) ausente(s) …"). Só um não opcional ausente bloqueia. A quebra nativa real (o better-sqlite3 da OXB-039) é tarefa do `native_check` do projeto.
+  - Config `deps_optional_ignore` silencia o aviso por nome.
+  - Conferido (só leitura) no oxespace-150: o ambiente sai `ok`, com aviso só para os 3 opcionais.
+  - Teste: `tests/oxe-1212-deps-present.test.cjs`.

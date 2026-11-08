@@ -217,8 +217,19 @@ function checkProjectEnvironment(projectRoot, machine = {}) {
   // the plan worktree ran node-gyp on better-sqlite3, the build failed, npm dropped it as a "failed optional
   // dependency", and doctor said "compatible". Only when node_modules exists (an uninstalled checkout is not this case).
   const missingDeps = lockDoc ? missingLockfilePackages(projectRoot, lockDoc, machine) : [];
-  if (missingDeps.length) {
-    problems.push(`${missingDeps.length} pacote(s) do package-lock ausentes em node_modules: ${missingDeps.slice(0, 6).join(', ')}${missingDeps.length > 6 ? '…' : ''} — o install descartou dependência(s) (um módulo nativo cujo build falhou some como "failed optional dependency"); reinstale ou copie/linke um node_modules validado antes do execute`);
+  // OXB-074: an OPTIONAL package npm dropped after a failed build is legitimate (ssh2's cpu-features/buildcheck/nan on
+  // Windows): a warning, silenced by config `deps_optional_ignore`. Only a missing non-optional package blocks; real
+  // native breakage of something the app uses is the project's `native_check` job (it caught better-sqlite3).
+  const oxeConfig = readJson(path.join(projectRoot, '.oxe', 'config.json')) || {};
+  const ignoreOptional = new Set(Array.isArray(oxeConfig.deps_optional_ignore) ? oxeConfig.deps_optional_ignore.map(String) : []);
+  const nameOf = (entry) => entry.replace(/ \(optional\)$/, '').replace(/@[^@]*$/, '');
+  const requiredMissing = missingDeps.filter((d) => !/ \(optional\)$/.test(d));
+  const optionalMissing = missingDeps.filter((d) => / \(optional\)$/.test(d) && !ignoreOptional.has(nameOf(d)));
+  if (requiredMissing.length) {
+    problems.push(`${requiredMissing.length} pacote(s) do package-lock ausentes em node_modules: ${requiredMissing.slice(0, 6).join(', ')}${requiredMissing.length > 6 ? '…' : ''} — o install descartou dependência(s); reinstale ou copie/linke um node_modules validado antes do execute`);
+  }
+  if (optionalMissing.length) {
+    warnings.push(`opcional(is) ausente(s) em node_modules: ${optionalMissing.slice(0, 6).join(', ')}${optionalMissing.length > 6 ? '…' : ''} — o npm descarta um opcional cujo build falhou; se o app usa algum deles, declare native_check (silencie com deps_optional_ignore)`);
   }
   // OXB-039: node_modules older than the lockfile (npm writes node_modules/.package-lock.json on every install).
   const stale = installStaleness(projectRoot);

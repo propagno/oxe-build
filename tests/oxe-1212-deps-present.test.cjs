@@ -48,11 +48,23 @@ describe('OXB-039: lockfile packages present in node_modules', () => {
     assert.deepEqual(winMissing, ['better-sqlite3@13.0.1 (optional)', '@esbuild/win32-x64@0.21.5 (optional)']);
   });
 
-  it('doctor --project / the execute preflight are no longer "compatible" with the package gone', () => {
-    const dir = project({ installed: ['zod', 'vitest'], lock: LOCK });
+  it('a missing NON-optional package blocks doctor --project / the execute preflight', () => {
+    const dir = project({ installed: ['vitest', 'better-sqlite3'], lock: LOCK });
     const out = env.checkProjectEnvironment(dir, { platform: 'linux', arch: 'x64', env: {}, freeMb: 4096, minFreeMb: 0 });
     assert.equal(out.ok, false);
-    assert.match(out.problems.join('\n'), /1 pacote\(s\) do package-lock ausentes em node_modules: better-sqlite3@13\.0\.1 \(optional\)/);
+    assert.match(out.problems.join('\n'), /1 pacote\(s\) do package-lock ausentes em node_modules: zod@3\.23\.8/);
+  });
+
+  it('OXB-074: a missing OPTIONAL package is a warning (ssh2 cpu-features on Windows), silenced by deps_optional_ignore', () => {
+    const lock = { ...LOCK, packages: { ...LOCK.packages, 'node_modules/cpu-features': { version: '0.0.10', optional: true }, 'node_modules/buildcheck': { version: '0.0.7', optional: true } } };
+    const dir = project({ installed: ['zod', 'vitest', 'better-sqlite3'], lock });
+    const machine = { platform: 'linux', arch: 'x64', env: {}, freeMb: 4096, minFreeMb: 0 };
+    const out = env.checkProjectEnvironment(dir, machine);
+    assert.equal(out.ok, true, out.problems.join('\n'));
+    assert.match(out.warnings.join('\n'), /opcional\(is\) ausente\(s\) em node_modules: cpu-features@0\.0\.10 \(optional\), buildcheck@0\.0\.7 \(optional\)/);
+    fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.oxe', 'config.json'), JSON.stringify({ deps_optional_ignore: ['cpu-features', 'buildcheck'] }));
+    assert.ok(!env.checkProjectEnvironment(dir, machine).warnings.some((w) => /opcional/.test(w)));
   });
 
   it('a full install is ok; NODE_ENV=production omits dev; no node_modules is not this check', () => {
