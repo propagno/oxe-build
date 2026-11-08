@@ -75,7 +75,12 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-039: o `npm ci` da worktree remove em silêncio a dependência nativa, mesmo com Node certo
 
-- **Status:** aberto (o OXB do OxeVoice tratou só a checagem de engines).
+- **Status:** resolvido (1.21.2). O `doctor --project` e o preflight (logo, o execute e o `plan lint`) fazem três checagens:
+  - **presença:** cada entrada do package-lock (v2/v3) precisa estar em `node_modules`, opcionais incluídas. O pacote nativo descartado como "failed optional dependency" vira problema. Ficam de fora opcionais de outro OS/CPU, `dev` com NODE_ENV=production, peer opcionais e checkout sem node_modules;
+  - **atualidade:** aviso quando `node_modules/.package-lock.json` é mais velho que o `package-lock.json`;
+  - **native_check do projeto:** config `native_check` (ex.: `node scripts/run-native-verification.mjs`) roda com a política de env do runtime; uma falha bloqueia com as últimas linhas. O `npm ci` não é proibido; a instalação é verificada depois.
+  - Teste: `tests/oxe-1212-deps-present.test.cjs`.
+  - O `deps_strategy` por worktree fica para a OXB-050.
 - **Evidência (04/11):**
   - Na worktree do plano (`oxespace-150`), com Node 22.22.2 compatível, o `npm ci` rodou `node-gyp rebuild` no `better-sqlite3@13` (`gypfile:false`, com prebuilds).
   - O `node-gyp rebuild` falhou, e o npm marcou o pacote como "failed optional dependency" e o apagou.
