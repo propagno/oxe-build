@@ -19,6 +19,20 @@
         "max_retries": { "type": "integer", "minimum": 0 }
       }
     },
+    "task_gates": {
+      "description": "Gates leves que rodam no verify de CADA tarefa que escreve código (typecheck incremental, testes relacionados), além do verify da própria tarefa (1.21.2, OXB-048). {files} vira os arquivos da tarefa que casam com applies_to. Também aceitos em .oxe/config.json task_gates; o plano vence no mesmo id.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "command"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Za-z][\\w-]*$" },
+          "command": { "type": "string", "description": "Ex.: npx tsc --noEmit --incremental, ou npx vitest related --run {files}." },
+          "applies_to": { "type": "string", "description": "Regex dos arquivos da tarefa a que o gate se aplica. Padrão: arquivos de código." },
+          "runner": { "type": "string", "description": "Envoltório com {command}, ex.: um heavy-lock." }
+        }
+      }
+    },
     "phase_gates": {
       "description": "Gates do projeto (typecheck, lint, suíte de governança, CI) que rodam UMA vez no verify da fase, não por tarefa. Um gate vermelho abre um CR constraint automático com a saída; ele fecha quando o mesmo gate fica verde (1.21, OXB-020). Também aceitos em .oxe/config.json phase_gates.",
       "type": "array",
@@ -64,6 +78,7 @@
           "wave": { "type": "integer", "minimum": 1 },
           "depends_on": { "type": "array", "items": { "type": "string", "pattern": "^T\\d+$" }, "uniqueItems": true },
           "files": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+          "affected_suites": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Suítes vizinhas que a tarefa pode quebrar (ex.: uma migração → tests/integration/migrations.test.ts). Rodam no verify via config.json task_suite_command (OXB-048)." },
           "verify": {
             "type": "object",
             "additionalProperties": true,

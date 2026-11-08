@@ -181,7 +181,13 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-048: a tarefa ficou verde no executor e o PR quebrou no typecheck e na suíte vizinha
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21.2).
+  - `task_gates` (PLAN.json e/ou config.json; o plano vence no mesmo id): `{ id, command, applies_to?, runner? }`. Cada gate é acrescentado ao verify de toda tarefa que escreve código (não roda em done, external_delivery, verify_only, spike nem em tarefa só de docs). `{files}` vira os arquivos da tarefa que casam com `applies_to` (padrão: código). Com o verify por segmento (OXB-066), o retry diz qual gate falhou.
+  - `affected_suites` por tarefa roda via config `task_suite_command` (`npx vitest run {suites}`).
+  - O `plan lint` valida `task_gates`. Com config `suite_rules: [{ paths, suite, reason }]`, ele avisa quando uma tarefa toca `paths` (ex.: `electron/main/db/migrations/`) sem a suíte no verify nem em `affected_suites`. Também avisa sobre `affected_suites` sem `task_suite_command`.
+  - Mudar `task_gates` no config recompila o grafo (entra no source hash).
+  - Teste: `tests/oxe-1212-task-gates.test.cjs` (o caso da T4: o gate de typecheck vermelho reprova a 1ª tentativa e o retry nomeia o segmento [2/2]).
+  - Sugestão para o oxespace: `"task_gates": [{ "id": "tsc", "command": "npx tsc --noEmit --incremental" }]`, `"task_suite_command": "npx vitest run {suites}"` e `"suite_rules": [{ "paths": "^electron/main/db/migrations/", "suite": "tests/integration/migrations.test.ts" }]`.
 - **Evidência:** a F1-T4 (`workspaces.color`, migração 093) concluiu na 1ª tentativa, run `oxe-run-mw28b0n9-3s0gda` (ledger `.oxe/runs/oxe-run-mw28b0n9-3s0gda.budget.json` na worktree oxespace-150, US$ 3,34 em 10 turnos). A revisão do BACKEND achou dois bloqueios:
   - `tests/integration/migrations.test.ts` fixa `EXPECTED_SCHEMA_VERSION = 92`, e 6 testes caem;
   - o typecheck quebra, porque `Workspace.color` passou a ser obrigatório e `mock-ipc.ts` e `ThreadGrid.tsx` não o setam.

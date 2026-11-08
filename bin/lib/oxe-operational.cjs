@@ -965,6 +965,31 @@ function lintPlanForCommonPitfalls(parsedPlan, parsedSpec, projectRoot, rawSpecT
  * `source_hash` differs runs a graph that no longer matches the plan: in the oxespace 1.5.0 F1 a CR added three files
  * to T4 after the compile, the checkpoint committed only the old scope and done tasks ran again (OXB-052/053).
  */
+/** OXB-048: appends the task gates of PLAN.json / config.json to each code task's verify command in the graph. */
+function applyTaskGatesToGraph(projectRoot, artifactPaths, compiledGraph) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const gatesLib = require('./oxe-task-gates.cjs');
+  const jsonPath = planJsonLib.planJsonPathFor(artifactPaths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath) || !compiledGraph || !compiledGraph.nodes) return;
+  let doc;
+  try { doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8')); } catch { return; }
+  const config = readProjectConfig(projectRoot) || {};
+  const gates = gatesLib.collectTaskGates(config, doc);
+  const anySuites = (doc.tasks || []).some((t) => t && Array.isArray(t.affected_suites) && t.affected_suites.length);
+  if (!gates.length && !anySuites) return;
+  const byId = new Map((doc.tasks || []).filter(Boolean).map((t) => [t.id, t]));
+  const nodeList = Array.isArray(compiledGraph.nodes) ? compiledGraph.nodes : Object.values(compiledGraph.nodes);
+  for (const node of nodeList) {
+    const task = node && byId.get(node.id);
+    if (!task) continue;
+    const commands = gatesLib.taskGateCommands(task, gates, config);
+    if (!commands.length) continue;
+    node.verify = node.verify && typeof node.verify === 'object' ? node.verify : {};
+    node.verify.command = gatesLib.withTaskGates(node.verify.command, commands);
+    node.verify.task_gates = commands.map((c) => c.id);
+  }
+}
+
 function planSourceHash(projectRoot, activeSession) {
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const planJsonPath = require('./oxe-plan-json.cjs').planJsonPathFor(paths.plan);
@@ -974,6 +999,9 @@ function planSourceHash(projectRoot, activeSession) {
     hash.update(readTextIfExists(file) || '');
     hash.update('\n\u0000\n');
   }
+  // OXB-048: the task gates live partly in config.json; changing them must recompile the graph.
+  const config = readProjectConfig(projectRoot) || {};
+  hash.update(JSON.stringify({ task_gates: config.task_gates || null, task_suite_command: config.task_suite_command || null }));
   return hash.digest('hex').slice(0, 16);
 }
 
@@ -1080,6 +1108,9 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
       }
     }
   }
+
+  // OXB-048: light task gates (incremental typecheck, related tests, affected suites) on every code task's verify.
+  applyTaskGatesToGraph(projectRoot, artifactPaths, compiledGraph);
 
   const current = options.runState || readRunState(projectRoot, activeSession) || {};
   const runId = current.run_id || makeRunId();
@@ -2477,6 +2508,14 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     requireAcceptanceTests: Boolean(options.requireAcceptanceTests || config.acceptance_tests_required),
   });
   if (spec) result.warnings.push(...lintPlanForCommonPitfalls(plan, spec, projectRoot, specText));
+  // OXB-048: task_gates shape; a task touching a suite rule's paths without that suite.
+  try {
+    const rawPlan = JSON.parse(fs.readFileSync(require('./oxe-plan-json.cjs').planJsonPathFor(paths.plan), 'utf8'));
+    const gateLint = require('./oxe-task-gates.cjs').lintTaskGates(rawPlan, config);
+    result.errors.push(...gateLint.errors);
+    result.warnings.push(...gateLint.warnings);
+    if (gateLint.errors.length) result.ok = false;
+  } catch { /* sem PLAN.json: nada a checar */ }
   // OXB-053/046: when each criterion's check runs, and the planner error of putting a criterion-wide acceptance test
   // in the verify of a task that does not complete the criterion (it can only fail there).
   {

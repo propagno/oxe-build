@@ -26,6 +26,9 @@ Copie `oxe/templates/config.template.json` para **`.oxe/config.json`** no seu pr
 | `plugins` | array | Caminhos de plugins customizados em `.oxe/plugins/` (strings relativas). Padrão: `[]`. Ver [`PLUGINS.md`](PLUGINS.md). |
 | `workstreams` | array | Lista de nomes de workstreams ativos (strings). Usado como referência pelo agente em **`/oxe-workstream`**. Padrão: `[]`. |
 | `milestones` | array | Lista de milestones ativos (objetos `{ "id": "M-01", "name": "..." }`). Usado como referência pelo agente em **`/oxe-milestone`**. Padrão: `[]`. |
+| `task_gates` | array | Opcional (OXB-048). Gates leves no verify de cada tarefa que escreve código: `{ "id": "tsc", "command": "npx tsc --noEmit --incremental" }`, `{ "id": "related", "command": "npx vitest related --run {files}", "applies_to": "\\.tsx?$" }`. O PLAN.json `task_gates` vence no mesmo id. |
+| `task_suite_command` | string | Modelo com `{suites}` para rodar as `affected_suites` da tarefa (ex.: `npx vitest run {suites}`). |
+| `suite_rules` | array | `[{ "paths": "^electron/main/db/migrations/", "suite": "tests/integration/migrations.test.ts", "reason": "…" }]`: o `plan lint` avisa quando uma tarefa toca `paths` sem a suíte no verify nem em `affected_suites`. |
 | `program` | object | Opcional. `program.export_dir`: pasta versionada (fora de `.oxe/`) onde `oxe-cc program export` grava SPEC.md, ROADMAP.md, PROGRAM.json e changes.ndjson. Com ela definida, `spec amend`/`spec add`/`program phase add` atualizam o export, e o `doctor` deixa de avisar sobre `.oxe/` no .gitignore. |
 | `install` | object | Opcional. Preferências de **instalação** quando corre `npx oxe-cc` **sem** flags de CLI. Ver tabela abaixo. |
 
