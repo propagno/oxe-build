@@ -5127,7 +5127,8 @@ async function runRuntime(opts) {
         const active = state.active_phase === phase.id ? ' ◀ ativa' : '';
         const mark = phase.status === 'closed' ? '✓' : phase.status === 'pending' ? '·' : '▶';
         const commit = phase.closed_commit ? `  ${c ? dim : ''}${String(phase.closed_commit).slice(0, 8)}${c ? reset : ''}` : '';
-        console.log(`  ${mark} ${phase.id.padEnd(4)} ${phase.status.padEnd(10)} ${phase.title}${active}${commit}`);
+        const deps = Array.isArray(phase.depends_on) ? `  ${c ? dim : ''}← ${phase.depends_on.length ? phase.depends_on.join(', ') : 'independente'}${c ? reset : ''}` : '';
+        console.log(`  ${mark} ${phase.id.padEnd(4)} ${phase.status.padEnd(10)} ${phase.title}${active}${commit}${deps}${phase.adopted_from ? `  ${c ? dim : ''}(adotada de ${phase.adopted_from})${c ? reset : ''}` : ''}`);
       }
       if (progress.phase && progress.phase.status !== 'closed') {
         const nextStep = progress.phase.status === 'pending'
@@ -5153,6 +5154,14 @@ async function runRuntime(opts) {
       }
       if (sub === 'start') {
         printStatus(oxeOperational.runtimeProgramStart(opts.dir, activeSession, opts.phase || null));
+        return;
+      }
+      // OXB-033: adopt the phases closed in another worktree.
+      if (sub === 'adopt') {
+        const out = oxeOperational.runtimeProgramAdopt(opts.dir, activeSession, { from: opts.from || opts.fromEventId, phase: opts.phase || null, by: opts.by, reason: opts.reason });
+        if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeProgramAdoptSchema: 1, adopted: out.adopted, skipped: out.skipped }, null, 2)); return; }
+        console.log(out.adopted.length ? `  ${c ? green : ''}✓${c ? reset : ''} adotadas: ${out.adopted.join(', ')}` : `  ${c ? dim : ''}nenhuma fase fechada nova para adotar${c ? reset : ''}`);
+        for (const s of out.skipped) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${s}`);
         return;
       }
       // OXB-036: program budget policy (cap | track_only) with history.
@@ -6341,7 +6350,7 @@ async function main() {
     }
     const o = { dir: process.cwd(), session: null, json: false };
     const positional = [];
-    const VALUE_FLAGS = { '--by': 'by', '--reason': 'reason', '--text': 'text', '--append': 'append', '--verify': 'verify', '--phase': 'phase', '--criteria': 'criteria', '--before': 'before', '--version': 'version', '--after': 'after', '--title': 'title', '--requirements': 'requirements', '--acceptance': 'acceptance', '--scope': 'scope', '--add-requirements': 'addRequirements', '--remove-requirements': 'removeRequirements', '--add-acceptance': 'addAcceptance', '--remove-acceptance': 'removeAcceptance', '--from': 'from', '--to': 'to', '--out': 'out', '--scope-file': 'scopeFile' };
+    const VALUE_FLAGS = { '--by': 'by', '--reason': 'reason', '--text': 'text', '--append': 'append', '--verify': 'verify', '--phase': 'phase', '--criteria': 'criteria', '--before': 'before', '--version': 'version', '--after': 'after', '--title': 'title', '--requirements': 'requirements', '--acceptance': 'acceptance', '--scope': 'scope', '--add-requirements': 'addRequirements', '--remove-requirements': 'removeRequirements', '--add-acceptance': 'addAcceptance', '--remove-acceptance': 'removeAcceptance', '--from': 'from', '--to': 'to', '--out': 'out', '--scope-file': 'scopeFile', '--depends-on': 'dependsOn' };
     for (let i = 0; i < rest.length; i += 1) {
       const a = rest[i];
       if (VALUE_FLAGS[a] && rest[i + 1] != null) o[VALUE_FLAGS[a]] = String(rest[++i]);

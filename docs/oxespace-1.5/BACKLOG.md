@@ -36,7 +36,16 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-033: as fases são estritamente seriais; um time com frentes paralelas fica parado
 
-- **Status:** proposta.
+- **Status:** resolvido (1.21.2).
+  - `**Depende de:** F1, F3` numa seção do ROADMAP vira `depends_on` da fase. O texto entre parênteses é comentário. Sem a linha, vale o padrão serial: todas as fases anteriores.
+  - O `program init` recusa ciclo, auto-dependência e fase inexistente.
+  - `program start Fn` exige fechadas só as dependências da fase. Com F1 fechada, a F3 começa com a F2 aberta, e a mensagem diz de quem a fase depende.
+  - Um `.oxe/` continua tendo uma fase ativa: fases independentes rodam em paralelo em worktrees separadas, cada uma com o seu `.oxe/`.
+  - `oxe-cc runtime program adopt --from <worktree> [--phase Fn]` traz para cá a fase fechada lá: status, dados do close, regressão congelada e interfaces. Uma fase ativa aqui nunca é sobrescrita, e um ROADMAP divergente entre as worktrees é recusado. Fica um `program_edit` (`phase_adopt`).
+  - A regressão de uma fase passa a incluir **toda** fase fechada além dela, já que com DAG uma fase posterior pode fechar antes. No serial, nada muda.
+  - `program phase edit Fn --depends-on F1,F3` (ou `none`, ou `roadmap` para o padrão serial) muda PROGRAM.json e ROADMAP juntos, só em fase não iniciada e com checagem de ciclo. O `program phase add` renumera também as dependências.
+  - O `program status` mostra `← F1` (ou `independente`) e `(adotada de …)`.
+  - Teste: `tests/oxe-1212-phase-dag.test.cjs`.
 - **Evidência:**
   - na 1.5.0, a F3 (worktrees, backend) não depende da F2 (Settings, frontend);
   - a F7 (modos) quase não depende de F4–F6.

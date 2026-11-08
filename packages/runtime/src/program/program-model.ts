@@ -22,6 +22,11 @@ export interface ProgramPhase {
   regression_ref: string | null;
   /** `.oxe/program/interfaces/<id>.json` — real exports of the contracted files. */
   interfaces_ref: string | null;
+  /**
+   * OXB-033: phases this one depends on (ROADMAP `**Depende de:** F1, F2`). Absent/null = every earlier phase (the
+   * serial default). Independent phases can run at the same time, each in its own worktree (its own .oxe/).
+   */
+  depends_on?: string[] | null;
 }
 
 export interface ProgramState {
@@ -73,7 +78,7 @@ const parentCriterion = (id: string) => id.replace(/^(A\d+)\.\d+$/, '$1');
  * `## Fase N — Título` (or `## Phase N - Title`) blocks with `**Requisitos:**`,
  * `**Critérios de aceite:**` and `**Escopo:**` lines, as in `oxe/templates/ROADMAP.template.md`.
  */
-export function parseRoadmapPhases(markdown: string): Array<Pick<ProgramPhase, 'id' | 'title' | 'requirements' | 'acceptance' | 'scope'>> {
+export function parseRoadmapPhases(markdown: string): Array<Pick<ProgramPhase, 'id' | 'title' | 'requirements' | 'acceptance' | 'scope' | 'depends_on'>> {
   const text = String(markdown || '').replace(/<!--[\s\S]*?-->/g, '');
   const heading = /^##\s+(?:Fase|Phase)\s+(\d+)\s*(?:[—–:-]\s*)?(.*)$/gim;
   const marks = [...text.matchAll(heading)];
@@ -84,14 +89,50 @@ export function parseRoadmapPhases(markdown: string): Array<Pick<ProgramPhase, '
       return hit ? hit[1].trim() : '';
     };
     const scope = field(/\*\*(?:Escopo|Scope):\*\*\s*(.+)/i);
+    const depsRaw = /\*\*(?:Depende de|Depends on|Dependências|Dependencies):\*\*\s*(.+)/i.exec(body);
+    const depends_on = depsRaw
+      ? [...new Set((depsRaw[1].replace(/\([^()]*\)/g, ' ').match(/\b(?:F|Fase\s*|Phase\s*)(\d+)\b/gi) || []).map((v) => `F${Number(v.replace(/\D/g, ''))}`))]
+      : null;
     return {
       id: `F${Number(m[1])}`,
       title: m[2].trim() || `Fase ${Number(m[1])}`,
       requirements: idList(field(/\*\*(?:Requisitos|Requirements):\*\*\s*(.+)/i)).filter((v) => /^R/.test(v)),
       acceptance: criterionIdsInField(field(/\*\*(?:Crit[ée]rios de aceite|Acceptance(?: criteria)?):\*\*\s*(.+)/i)),
       scope: scope || null,
+      ...(depends_on ? { depends_on } : {}),
     };
   });
+}
+
+/** Phases a phase needs closed before it starts: its `depends_on`, or every earlier phase when it declares none. */
+export function phaseDependencies(state: ProgramState, phase: ProgramPhase): ProgramPhase[] {
+  const index = state.phases.indexOf(phase);
+  if (Array.isArray(phase.depends_on)) return phase.depends_on.map((id) => findPhase(state, id)).filter((p): p is ProgramPhase => Boolean(p));
+  return state.phases.slice(0, index < 0 ? 0 : index);
+}
+
+/** Dependency problems of a program: unknown phase, self-dependency, cycle. */
+export function validatePhaseDependencies(phases: Array<Pick<ProgramPhase, 'id' | 'depends_on'>>): string[] {
+  const ids = new Set(phases.map((p) => p.id));
+  const errors: string[] = [];
+  for (const p of phases) {
+    for (const d of p.depends_on ?? []) {
+      if (d === p.id) errors.push(`${p.id} depende de si mesma`);
+      else if (!ids.has(d)) errors.push(`${p.id} depende de ${d}, que não existe no ROADMAP`);
+    }
+  }
+  const deps = new Map(phases.map((p, i) => [p.id, p.depends_on ?? phases.slice(0, i).map((q) => q.id)]));
+  const state = new Map<string, number>();
+  const visit = (id: string, chain: string[]): boolean => {
+    if (state.get(id) === 1) { errors.push(`ciclo de dependência entre fases: ${[...chain, id].join(' → ')}`); return true; }
+    if (state.get(id) === 2) return false;
+    state.set(id, 1);
+    for (const d of deps.get(id) ?? []) if (deps.has(d) && visit(d, [...chain, id])) return true;
+    state.set(id, 2);
+    return false;
+  };
+  for (const p of phases) if (visit(p.id, [])) break;
+  return [...new Set(errors)];
 }
 
 export function createProgram(roadmapMarkdown: string, roadmapRef: string | null = null): ProgramState {
@@ -102,6 +143,8 @@ export function createProgram(roadmapMarkdown: string, roadmapRef: string | null
     if (ids.has(phase.id)) throw new ProgramTransitionError(`fase duplicada no ROADMAP: ${phase.id}`);
     ids.add(phase.id);
   }
+  const depErrors = validatePhaseDependencies(parsed);
+  if (depErrors.length) throw new ProgramTransitionError(depErrors.join('; '));
   const ts = now();
   return {
     schema_version: 1,
@@ -157,14 +200,18 @@ export function programProgress(state: ProgramState): { index: number; total: nu
   };
 }
 
-/** Phases run in roadmap order: a phase starts only when every earlier phase is closed. */
+/**
+ * A phase starts only when the phases it depends on are closed: its `depends_on` (OXB-033), or every earlier phase
+ * (roadmap order) when it declares none. One .oxe/ has one active phase; independent phases run in parallel in
+ * separate worktrees and come back with `program adopt`.
+ */
 export function startPhase(state: ProgramState, id?: string | null): ProgramState {
   const next = clone(state);
   const target = id ? findPhase(next, id) : nextOpenPhase(next);
   if (!target) throw new ProgramTransitionError(id ? `fase inexistente: ${id}` : 'todas as fases estão fechadas');
   if (target.status === 'closed') throw new ProgramTransitionError(`fase ${target.id} já está fechada`);
-  const open = next.phases.slice(0, next.phases.indexOf(target)).filter((p) => p.status !== 'closed');
-  if (open.length) throw new ProgramTransitionError(`feche antes: ${open.map((p) => p.id).join(', ')}`);
+  const open = phaseDependencies(next, target).filter((p) => p.status !== 'closed');
+  if (open.length) throw new ProgramTransitionError(`feche antes: ${open.map((p) => p.id).join(', ')}${Array.isArray(target.depends_on) ? ` (${target.id} depende de ${target.depends_on.join(', ')})` : ''}`);
   const current = activePhase(next);
   if (current && current.id !== target.id && current.status !== 'closed') {
     throw new ProgramTransitionError(`fase ${current.id} ainda está ativa`);

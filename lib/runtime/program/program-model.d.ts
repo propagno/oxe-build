@@ -20,6 +20,11 @@ export interface ProgramPhase {
     regression_ref: string | null;
     /** `.oxe/program/interfaces/<id>.json` — real exports of the contracted files. */
     interfaces_ref: string | null;
+    /**
+     * OXB-033: phases this one depends on (ROADMAP `**Depende de:** F1, F2`). Absent/null = every earlier phase (the
+     * serial default). Independent phases can run at the same time, each in its own worktree (its own .oxe/).
+     */
+    depends_on?: string[] | null;
 }
 export interface ProgramState {
     schema_version: 1;
@@ -54,7 +59,11 @@ export declare function criterionIdsInField(text: string): string[];
  * `## Fase N — Título` (or `## Phase N - Title`) blocks with `**Requisitos:**`,
  * `**Critérios de aceite:**` and `**Escopo:**` lines, as in `oxe/templates/ROADMAP.template.md`.
  */
-export declare function parseRoadmapPhases(markdown: string): Array<Pick<ProgramPhase, 'id' | 'title' | 'requirements' | 'acceptance' | 'scope'>>;
+export declare function parseRoadmapPhases(markdown: string): Array<Pick<ProgramPhase, 'id' | 'title' | 'requirements' | 'acceptance' | 'scope' | 'depends_on'>>;
+/** Phases a phase needs closed before it starts: its `depends_on`, or every earlier phase when it declares none. */
+export declare function phaseDependencies(state: ProgramState, phase: ProgramPhase): ProgramPhase[];
+/** Dependency problems of a program: unknown phase, self-dependency, cycle. */
+export declare function validatePhaseDependencies(phases: Array<Pick<ProgramPhase, 'id' | 'depends_on'>>): string[];
 export declare function createProgram(roadmapMarkdown: string, roadmapRef?: string | null): ProgramState;
 export declare function findPhase(state: ProgramState, id: string): ProgramPhase | null;
 export declare function activePhase(state: ProgramState): ProgramPhase | null;
@@ -67,7 +76,11 @@ export declare function programProgress(state: ProgramState): {
     closed: number;
     phase: ProgramPhase | null;
 };
-/** Phases run in roadmap order: a phase starts only when every earlier phase is closed. */
+/**
+ * A phase starts only when the phases it depends on are closed: its `depends_on` (OXB-033), or every earlier phase
+ * (roadmap order) when it declares none. One .oxe/ has one active phase; independent phases run in parallel in
+ * separate worktrees and come back with `program adopt`.
+ */
 export declare function startPhase(state: ProgramState, id?: string | null): ProgramState;
 export declare function setPhaseStatus(state: ProgramState, id: string, status: Exclude<PhaseStatus, 'closed' | 'pending'>, patch?: Partial<Pick<ProgramPhase, 'plan_ref' | 'run_id'>>): ProgramState;
 export declare function evaluatePhaseGate(input: PhaseGateInput): PhaseGateResult;

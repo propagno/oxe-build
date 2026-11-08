@@ -3306,6 +3306,12 @@ function runtimeProgramPhaseAdd(projectRoot, activeSession, options = {}) {
     renumbered.push({ from: p.id, to });
     p.id = to;
   }
+  // OXB-033: dependencies follow the renumbering.
+  const depMap = new Map(renumbered.map((r) => [r.from, r.to]));
+  for (const p of next.phases) if (Array.isArray(p.depends_on)) p.depends_on = p.depends_on.map((d) => depMap.get(d) || d);
+  if (depMap.size) {
+    roadmapEdit.text = roadmapEdit.text.replace(/^(\*\*(?:Depende de|Depends on|Dependências|Dependencies):\*\*)(.*)$/gim, (_m, label, rest) => `${label}${rest.replace(/\bF(\d+)\b/g, (id) => depMap.get(id) || id)}`);
+  }
   next.phases.splice(idx + 1, 0, {
     id: newId, title, requirements, acceptance, scope: options.scope ? String(options.scope) : null,
     status: 'pending', plan_ref: null, run_id: null, started_at: null, closed_at: null, closed_commit: null, regression_ref: null, interfaces_ref: null,
@@ -3638,7 +3644,13 @@ function runtimeProgramPhaseEdit(projectRoot, activeSession, options = {}, inter
     options = { ...options, scope: parsed.scope || (options.scope != null ? options.scope : (phase.scope || '')) };
     scopeBullets = parsed.bullets;
   }
-  if (!addReq.length && !remReq.length && !addAcc.length && !remAcc.length && options.title == null && options.scope == null) {
+  // OXB-033: --depends-on F1,F3 (or "none": no dependency; "roadmap": back to the serial default).
+  let dependsOn;
+  if (options.dependsOn != null) {
+    const raw = String(options.dependsOn).trim().toLowerCase();
+    dependsOn = raw === 'roadmap' ? null : raw === 'none' || raw === '' ? [] : [...new Set(String(options.dependsOn).split(',').map((x) => norm(x)).filter(Boolean))];
+  }
+  if (!addReq.length && !remReq.length && !addAcc.length && !remAcc.length && options.title == null && options.scope == null && dependsOn === undefined) {
     throw new Error('nada a editar: use --title, --scope, --add-requirements, --remove-requirements, --add-acceptance ou --remove-acceptance');
   }
   const notStarted = phase.status === 'pending' && !phase.plan_ref && !phase.run_id && !phase.started_at && state.active_phase !== phase.id;
@@ -3663,6 +3675,12 @@ function runtimeProgramPhaseEdit(projectRoot, activeSession, options = {}, inter
   const before = { title: phase.title, requirements: [...(phase.requirements || [])], acceptance: [...(phase.acceptance || [])], scope: phase.scope || null };
   if (options.title != null) phase.title = String(options.title).trim();
   if (options.scope != null) phase.scope = String(options.scope).trim() || null;
+  if (dependsOn !== undefined) {
+    if (phase.status !== 'pending' || phase.started_at) throw new Error(`${phase.id} já começou — dependências mudam só em fase não iniciada`);
+    if (dependsOn === null) delete phase.depends_on; else phase.depends_on = dependsOn;
+    const depErrors = requireProgramRuntime().validatePhaseDependencies(next.phases);
+    if (depErrors.length) throw new Error(depErrors.join('; '));
+  }
   phase.requirements = [...new Set([...(phase.requirements || []).filter((r) => !remReq.includes(r)), ...addReq])];
   phase.acceptance = [...new Set([...(phase.acceptance || []).filter((a) => !remAcc.includes(a)), ...addAcc])];
   next.updated_at = new Date().toISOString();
@@ -3679,6 +3697,7 @@ function runtimeProgramPhaseEdit(projectRoot, activeSession, options = {}, inter
     ...(addReq.length || remReq.length ? { requirements: phase.requirements } : {}),
     ...(addAcc.length || remAcc.length ? { acceptance: phase.acceptance } : {}),
     ...(options.scope != null ? { scope: phase.scope || '', keepBullets: Boolean(options.keepBullets), scopeBullets } : {}),
+    ...(dependsOn !== undefined ? { dependsOn } : {}),
   });
   if (roadmap.removed_bullets && roadmap.removed_bullets.length) warnings.push(`escopo antigo substituído: ${roadmap.removed_bullets.length} bullet(s) removido(s) do ROADMAP (${roadmap.removed_bullets.map((b) => b.slice(0, 50)).join(' | ')}) — use --keep-bullets para mantê-los`);
   const record = { kind: 'program_edit', action: internal.action || 'phase_edit', phase: phase.id, before, after: { title: phase.title, requirements: phase.requirements, acceptance: phase.acceptance, scope: phase.scope || null }, ...(roadmap.removed_bullets && roadmap.removed_bullets.length ? { scope_bullets_removed: roadmap.removed_bullets } : {}), ...(scopeBullets ? { scope_bullets: scopeBullets } : {}), ...(planChange ? { plan_removed_tasks: planChange.removedTasks, plan_removed_tests: planChange.removedTests } : {}), by, reason, at: new Date().toISOString() };
@@ -3850,6 +3869,55 @@ function runtimeProgramBudget(projectRoot, activeSession, options = {}) {
   changeLib.appendNdjson(changeLib.changesFile(paths.programDir), { kind: 'program_edit', action: 'budget_policy', before: prev ? { mode: prev.mode, usd: prev.usd, turns: prev.turns } : null, after: { mode, usd: entry.usd, turns: entry.turns }, by, reason, at });
   appendEvent(projectRoot, activeSession, { type: 'BudgetPolicyChanged', payload: { mode, usd: entry.usd, turns: entry.turns, by } });
   return { policy: next.budget_policy, changed: true, export: autoExportProgram(projectRoot, activeSession) };
+}
+
+/**
+ * OXB-033: `oxe-cc runtime program adopt --from <worktree>`: an independent phase ran and closed in another worktree
+ * (its own .oxe/); adopt brings its close into this program — status, close data, frozen regression and interfaces —
+ * so the phases that depend on it can start here, and its regression joins theirs. Only phases closed THERE and not
+ * closed HERE; an active phase here is never overwritten.
+ */
+function runtimeProgramAdopt(projectRoot, activeSession, options = {}) {
+  const programLib = require('./oxe-program.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const { by, reason } = requireEditReason({ by: options.by || 'program adopt', reason: options.reason || `fases fechadas em ${options.from}` });
+  if (!options.from) throw new Error('informe a worktree: oxe-cc runtime program adopt --from <pasta> [--phase Fn]');
+  const fromRoot = path.resolve(projectRoot, String(options.from));
+  const theirsPaths = resolveRuntimeArtifactPaths(fromRoot, activeSession);
+  const theirs = programLib.readProgram(theirsPaths.programDir);
+  if (!theirs) throw new Error(`${options.from} não tem programa (.oxe/program/PROGRAM.json)`);
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const ours = programLib.readProgram(paths.programDir);
+  if (!ours) throw new Error('Sem programa aqui. Rode `oxe-cc runtime program init`.');
+  const wanted = options.phase ? String(options.phase).toUpperCase() : null;
+  const next = JSON.parse(JSON.stringify(ours));
+  const adopted = [];
+  const skipped = [];
+  for (const tp of theirs.phases) {
+    if (tp.status !== 'closed' || (wanted && tp.id !== wanted)) continue;
+    const mine = next.phases.find((p) => p.id === tp.id);
+    if (!mine) { skipped.push(`${tp.id}: não existe neste programa`); continue; }
+    if (mine.status === 'closed') continue;
+    if (next.active_phase === tp.id) { skipped.push(`${tp.id}: está ativa aqui — feche ou abandone aqui antes`); continue; }
+    if (mine.title !== tp.title || JSON.stringify(mine.acceptance || []) !== JSON.stringify(tp.acceptance || [])) { skipped.push(`${tp.id}: o ROADMAP diverge entre as worktrees (título ou critérios) — alinhe antes de adotar`); continue; }
+    for (const key of ['status', 'plan_ref', 'run_id', 'started_at', 'closed_at', 'closed_commit', 'base_commit', 'regression_ref', 'interfaces_ref']) if (tp[key] !== undefined) mine[key] = tp[key];
+    mine.adopted_from = path.relative(projectRoot, fromRoot).replace(/\\/g, '/') || '.';
+    for (const sub of ['regression', 'interfaces']) {
+      const src = path.join(theirsPaths.programDir, sub, `${tp.id}.json`);
+      if (fs.existsSync(src)) {
+        const dst = path.join(paths.programDir, sub, `${tp.id}.json`);
+        fs.mkdirSync(path.dirname(dst), { recursive: true });
+        fs.copyFileSync(src, dst);
+      }
+    }
+    adopted.push(tp.id);
+  }
+  if (!adopted.length) return { adopted, skipped, state: ours };
+  next.updated_at = new Date().toISOString();
+  programLib.writeProgram(paths.programDir, next);
+  changeLib.appendNdjson(changeLib.changesFile(paths.programDir), { kind: 'program_edit', action: 'phase_adopt', phases: adopted, from: next.phases.find((p) => p.id === adopted[0]).adopted_from, by, reason, at: new Date().toISOString() });
+  appendEvent(projectRoot, activeSession, { type: 'PhaseAdopted', payload: { phases: adopted, from: options.from } });
+  return { adopted, skipped, state: next, export: autoExportProgram(projectRoot, activeSession) };
 }
 
 /** OXB-058: doctor — .oxe/ gitignored with no versioned export means SPEC/ROADMAP/PROGRAM edits leave no history. */
@@ -5867,6 +5935,7 @@ module.exports = {
   resolvePreconditions,
   runtimePlanAppend,
   runtimeProgramBudget,
+  runtimeProgramAdopt,
   runtimeSpecAmend,
   runtimeSpecAdd,
   runtimeProgramPhaseAdd,

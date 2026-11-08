@@ -277,6 +277,13 @@ function editRoadmapPhase(roadmapText, phaseId, fields) {
   if (fields.requirements) setField(/^\*\*(Requisitos|Requirements):\*\*/i, 'Requisitos', fields.requirements.join(', ') || '—');
   if (fields.acceptance) setField(/^\*\*(Crit[ée]rios de aceite|Acceptance(?: criteria)?):\*\*/i, 'Critérios de aceite', fields.acceptance.join(', ') || '—');
   if (fields.scope != null) setField(/^\*\*(Escopo|Scope):\*\*/i, 'Escopo', String(fields.scope).trim());
+  // OXB-033: `**Depende de:**` — null removes the line (serial default), [] writes "—" (no dependency).
+  if (fields.dependsOn !== undefined) {
+    const re = /^\*\*(Depende de|Depends on|Dependências|Dependencies):\*\*/i;
+    if (fields.dependsOn === null) {
+      for (let i = start + 1; i < end; i += 1) if (re.test(lines[i])) { lines.splice(i, 1); end -= 1; break; }
+    } else setField(re, 'Depende de', fields.dependsOn.length ? fields.dependsOn.join(', ') : '—');
+  }
   // OXB-082: a new scope REPLACES the section's scope bullets (the list right after the field lines). Keeping the old
   // bullets under a new **Escopo:** left F3 contradicting itself. `keepBullets` keeps them; `scopeBullets` sets new ones.
   let removedBullets = [];
