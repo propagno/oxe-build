@@ -486,9 +486,14 @@ function lintPlan(input) {
   const pack = input.pack && Array.isArray(input.pack.tasks) ? input.pack.tasks : null;
   if (pack) {
     const packIds = new Set(pack.map((t) => String((t && (t.id || t.task_id)) || '').trim()));
+    // OXB-088: a pack of another phase (F1's stale pack under F2's plan: T1–T13 passed only because ids matched).
+    const packPhase = input.pack && typeof input.pack.phase === 'string' ? input.pack.phase : null;
+    const planPhase = (input.plan && input.plan.phase) || (phase && phase.id) || null;
+    const otherPhase = packPhase && planPhase && packPhase !== planPhase ? packPhase : null;
+    if (otherPhase) warnings.push(`IMPLEMENTATION-PACK é da fase ${otherPhase}, e o plano é da ${planPhase} — gere o pack desta fase`);
     for (const task of tasks) {
       if ((task.files || []).length && !task.done && !packIds.has(task.id)) {
-        errors.push(`${task.id}: tarefa mutável sem entrada no IMPLEMENTATION-PACK`);
+        errors.push(`${task.id}: tarefa mutável sem entrada no IMPLEMENTATION-PACK${otherPhase ? ` (o pack é da fase ${otherPhase})` : ''}`);
       }
     }
     // OXB-022: the very rules the execute preflight applies — nothing passes here and blocks there.

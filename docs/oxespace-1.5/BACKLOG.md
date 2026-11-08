@@ -601,8 +601,15 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-088: uma tarefa de remoção não satisfaz a regra de `symbols` do IMPLEMENTATION-PACK
 
-- **Status:** aberto. Registrado pelo TECH LEAD em 08/11 (lint da F2 na rc.10): a F2 tem 16 tarefas de remoção. O `oxe-rationality.cjs:78` exige ao menos 1 símbolo quando `exact_paths` tem arquivo de código, mas o contrato de uma remoção é o que NÃO pode mais existir, e o check `exports_missing` só prova presença.
-- **Proposta:** `removed_paths` (não existem depois da tarefa) e `symbols_removed: [{ name, path }]` no pack, checados estaticamente nos dois sentidos. O lint também avisa quando o pack é de outra fase ("tarefa T14 sem entrada no IMPLEMENTATION-PACK (o pack é da fase F1)").
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (lint da F2 na rc.10): a F2 tem 16 tarefas de remoção, e a regra "≥ 1 símbolo por arquivo de código" do pack não tinha como ser cumprida por um contrato de ausência.
+  - O pack ganhou dois campos por tarefa: `removed_paths` (caminhos que não podem existir depois da tarefa) e `symbols_removed: [{ name, path }]` (export ausente, ou arquivo removido).
+  - Os caminhos de código cobertos por eles não exigem `symbols`. `symbols` só é exigido para o que a tarefa acrescenta ou mantém, e a mensagem sugere os campos de remoção.
+  - **Checagem estática nos dois sentidos:**
+    - a presença continua com `files_exist`/`exports_expected`, mas um caminho removido nunca vira `files_exist`;
+    - a ausência é um check no verify da tarefa (`oxe-pack-removed.cjs --pack … --task T14`), que lê os exports reais do módulo.
+    - Antes da tarefa, o check é o vermelho certo (assertion), inclusive no dry-verify.
+  - O lint avisa quando o pack é de outra fase (`IMPLEMENTATION-PACK é da fase F1, e o plano é da F2`), e o erro de tarefa fora do pack diz isso: `T14: tarefa mutável sem entrada no IMPLEMENTATION-PACK (o pack é da fase F1)`.
+  - Teste: `tests/oxe-1212-pack-removal.test.cjs`.
 
 ## OXB-089: o lint rodava o dry-verify de 220 comandos antes de mostrar erros estruturais
 

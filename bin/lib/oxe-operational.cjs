@@ -322,12 +322,20 @@ function attachImplementationPackContracts(parsedPlan, packPath) {
   for (const task of parsedPlan.tasks) {
     const entry = byId.get(task.id);
     if (!entry || String(entry.mode || '').trim().toLowerCase() !== 'mutating') continue;
+    // OXB-088: what the task removes must NOT exist after it (never a files_exist).
+    const removal = require('./oxe-pack-removed.cjs').removalOf(entry);
+    const removed = new Set(removal.removedPaths);
     const files = (Array.isArray(entry.exact_paths) ? entry.exact_paths : [])
       .map((value) => String(value || '').trim())
-      .filter((value) => looksLikeFilePath(value) && !value.includes('*') && !value.includes('...'));
+      .filter((value) => looksLikeFilePath(value) && !value.includes('*') && !value.includes('...') && !removed.has(value));
     if (files.length > 0) task.filesExist = [...new Set(files)];
-    const exportsExpected = packSymbolExports(entry);
+    const exportsExpected = packSymbolExports(entry).filter((e) => !removed.has(e.file));
     if (exportsExpected.length > 0) task.exportsExpected = exportsExpected;
+    if ((removal.removedPaths.length || removal.symbolsRemoved.length) && !task.done) {
+      const cmd = require('./oxe-pack-removed.cjs').checkCommand(packPath, task.id);
+      if (!String(task.verifyCommand || '').includes(cmd)) task.verifyCommand = [task.verifyCommand, cmd].filter(Boolean).join(' && ');
+      task.meta = { ...(task.meta || {}), removal_check: true };
+    }
   }
   return parsedPlan;
 }
@@ -2666,6 +2674,8 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
   // OXB-049: copy anchors join the task's verify (the dry-verify runs the effective command); unusable ones warn.
   const anchorCopy = require('./oxe-anchor-copy.cjs');
   anchorCopy.attachAnchorCopyChecks(plan, paths.plan);
+  // OXB-088: the removal checks of the pack join the task's verify (the dry-verify runs the effective command).
+  attachImplementationPackContracts(plan, paths.implementationPack);
   const anchorWarnings = anchorCopy.lintCopyAnchors(readTextIfExists(path.join(path.dirname(paths.plan), 'REFERENCE-ANCHORS.md')) || '', plan.tasks.map((t) => t.id));
   const specText = readTextIfExists(paths.spec);
   const spec = specText ? parsers.parseSpec(specText) : null;
