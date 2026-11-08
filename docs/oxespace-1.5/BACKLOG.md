@@ -598,3 +598,28 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
   - **Concorrência:** as escritas no PLAN.json (o `done` gravado pelo execute e o `plan append`) passam pela mesma trava (`PLAN.json.lock`, assumida se tiver mais de 30 s), então uma não apaga a outra.
   - O execute em andamento termina o próprio grafo. O próximo `runtime execute` recompila a mesma run, pula as tarefas feitas e roda o lote. A fase só fecha com todas as tarefas de todos os lotes feitas.
   - Teste: `tests/oxe-1212-plan-append.test.cjs`.
+
+## OXB-088: uma tarefa de remoção não satisfaz a regra de `symbols` do IMPLEMENTATION-PACK
+
+- **Status:** aberto. Registrado pelo TECH LEAD em 08/11 (lint da F2 na rc.10): a F2 tem 16 tarefas de remoção. O `oxe-rationality.cjs:78` exige ao menos 1 símbolo quando `exact_paths` tem arquivo de código, mas o contrato de uma remoção é o que NÃO pode mais existir, e o check `exports_missing` só prova presença.
+- **Proposta:** `removed_paths` (não existem depois da tarefa) e `symbols_removed: [{ name, path }]` no pack, checados estaticamente nos dois sentidos. O lint também avisa quando o pack é de outra fase ("tarefa T14 sem entrada no IMPLEMENTATION-PACK (o pack é da fase F1)").
+
+## OXB-089: o lint rodava o dry-verify de 220 comandos antes de mostrar erros estruturais
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11: 78 erros estruturais (teste de aceite no escopo da tarefa, duas tarefas da mesma onda no mesmo arquivo, tarefas fora do pack) saíram só no fim, 97 minutos depois.
+  - O dry-verify agora roda por último, e só quando as checagens estruturais (schema, lint, pack, racionalidade e preflight) passam. Senão, o lint diz "N erro(s) estrutura(is); dry-verify não rodou" (no resultado e no progresso).
+  - `--dry-verify-anyway` roda mesmo assim.
+  - Teste: `tests/oxe-1212-dryrun-resume.test.cjs`.
+
+## OXB-090: o lint da fase ativa reprovava por emendas de critérios de outras fases
+
+- **Status:** resolvido (1.21.2, rc.13). Registrado pelo TECH LEAD em 08/11, e bloqueava a F2: 14 erros `A8@v2: emenda sem teste de aceite` por emendas (CR-21..32) de critérios de F1 (fechada), F3, F8, F9 e F11. Os critérios da F2 eram só A48 e A57.
+  - A checagem de emenda do `plan lint` cobre só os critérios da fase ativa (PROGRAM.json). Sem programa, nada muda.
+  - O `program status` mostra uma vez a emenda feita num critério de fase fechada depois do close: "F1 fechada com emenda depois do close — reaberto? A8@v2 (CR-21)".
+  - A rc.13 saiu com o filtro do lint, e só ele, sobre a rc.12.
+  - Teste: `tests/oxe-1212-amend-scope.test.cjs`.
+
+## OXB-091: um critério que vale em todo close de fase
+
+- **Status:** aberto. Registrado pelo TECH LEAD em 08/11: A70 ("visual totalmente polido, erros na interface não serão admitidos", palavra do usuário) é um gate de UI por fase (baselines nas duas plataformas, axe limpo, sign-off do DESIGN, HML caixa-preta). `program phase edit F4 --add-acceptance A70` falha com "A70 já pertence a F3".
+- **Proposta:** critério permanente (`program.standing_acceptance: ["A70"]` ou `spec add criterion --standing`), exigido em todo close por sign-off da fase mais evidência, nunca "A* da fase sem tarefa" no lint, e com sign-off registrado por fase.
