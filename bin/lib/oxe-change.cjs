@@ -107,7 +107,7 @@ function recordChange(input) {
   if (summary.length < 8) throw new Error('descreva o problema (--summary) em uma frase');
   const by = String(input.by || '').trim() || 'usuário';
   const criteria = (Array.isArray(input.criteria) ? input.criteria : String(input.criteria || '').split(','))
-    .map((c) => c.trim().toUpperCase()).filter((c) => /^A\d+$/.test(c));
+    .map((c) => c.trim().toUpperCase()).filter((c) => /^(?:A\d+(?:\.\d+)?|G\d+)$/.test(c));
   if ((cls === 'defect' || cls === 'spec_gap') && criteria.length === 0) {
     throw new Error(`um CR ${cls} precisa apontar os critérios afetados (--criteria A4[,A5]); defeito sem critério é escopo novo`);
   }

@@ -6,6 +6,7 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ProgramTransitionError = void 0;
+exports.criterionIdsInField = criterionIdsInField;
 exports.parseRoadmapPhases = parseRoadmapPhases;
 exports.createProgram = createProgram;
 exports.findPhase = findPhase;
@@ -26,6 +27,17 @@ function idList(text) {
     return [...new Set((String(text || '').match(/\b[A-Z]{1,4}-?\d+[a-z]?\b/g) || []).map((v) => v.trim()))];
 }
 /**
+ * OXB-038: criterion ids of a structured field. Parentheses and code spans are commentary ("A1, A2 (ver UI A3)"):
+ * an id there is not the phase's. OXB-037: subcriteria A19.3 and global criteria G1 are ids too.
+ */
+function criterionIdsInField(text) {
+    let t = String(text || '').replace(/`[^`]*`/g, ' ');
+    for (let i = 0; i < 5 && /\([^()]*\)/.test(t); i += 1)
+        t = t.replace(/\([^()]*\)/g, ' ');
+    return [...new Set(t.match(/\b(?:A\d+(?:\.\d+)?|G\d+)\b/g) || [])];
+}
+const parentCriterion = (id) => id.replace(/^(A\d+)\.\d+$/, '$1');
+/**
  * `## Fase N — Título` (or `## Phase N - Title`) blocks with `**Requisitos:**`,
  * `**Critérios de aceite:**` and `**Escopo:**` lines, as in `oxe/templates/ROADMAP.template.md`.
  */
@@ -44,7 +56,7 @@ function parseRoadmapPhases(markdown) {
             id: `F${Number(m[1])}`,
             title: m[2].trim() || `Fase ${Number(m[1])}`,
             requirements: idList(field(/\*\*(?:Requisitos|Requirements):\*\*\s*(.+)/i)).filter((v) => /^R/.test(v)),
-            acceptance: idList(field(/\*\*(?:Crit[ée]rios de aceite|Acceptance(?: criteria)?):\*\*\s*(.+)/i)).filter((v) => /^A/.test(v)),
+            acceptance: criterionIdsInField(field(/\*\*(?:Crit[ée]rios de aceite|Acceptance(?: criteria)?):\*\*\s*(.+)/i)),
             scope: scope || null,
         };
     });
@@ -191,5 +203,6 @@ function acceptanceOutsidePhase(phase, planAcceptance) {
     if (!phase.acceptance.length)
         return [];
     const allowed = new Set(phase.acceptance);
-    return [...new Set(planAcceptance)].filter((ref) => !allowed.has(ref));
+    // A subcriterion belongs to its parent's phase; a global G* to every phase (OXB-037).
+    return [...new Set(planAcceptance)].filter((ref) => !allowed.has(ref) && !allowed.has(parentCriterion(ref)) && !/^G\d+$/.test(ref));
 }

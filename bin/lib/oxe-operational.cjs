@@ -1221,11 +1221,14 @@ function scopeSpecToActivePhase(artifactPaths, parsedSpec, parsedPlan) {
   if (!phase || !Array.isArray(phase.acceptance) || !phase.acceptance.length) return { spec: parsedSpec, outOfPhase: null };
   const keep = new Set(phase.acceptance);
   for (const task of (parsedPlan && parsedPlan.tasks) || []) for (const a of task.aceite || []) keep.add(a);
+  // OXB-037: the subcriteria of the phase's criteria and the global G* are the phase's too.
+  const ids = require('./oxe-criteria-ids.cjs');
+  for (const c of parsedSpec.criteria) if (ids.inPhase(c.id, keep)) keep.add(c.id);
   const dropped = parsedSpec.criteria.filter((c) => !keep.has(c.id));
   if (!dropped.length) return { spec: parsedSpec, outOfPhase: null };
   const phaseOf = new Map();
   for (const p of state.phases) for (const a of p.acceptance || []) if (!phaseOf.has(a)) phaseOf.set(a, p.id);
-  const phases = [...new Set(dropped.map((c) => phaseOf.get(c.id) || 'sem fase'))]
+  const phases = [...new Set(dropped.map((c) => phaseOf.get(c.id) || phaseOf.get(ids.parentOf(c.id)) || 'sem fase'))]
     .sort((a, b) => (Number(String(a).slice(1)) || 999) - (Number(String(b).slice(1)) || 999));
   return { spec: { ...parsedSpec, criteria: parsedSpec.criteria.filter((c) => keep.has(c.id)) }, outOfPhase: { count: dropped.length, phases } };
 }
@@ -2694,6 +2697,13 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     (config.acceptance_tests_required || options.requireAcceptanceTests ? result.errors : result.warnings).push(...uncovered);
     result.ok = result.errors.length === 0;
   }
+  // OXB-038: phase criteria the SPEC does not declare, and input documents reusing the SPEC's A ids.
+  try {
+    const programState = paths.programDir ? require('./oxe-program.cjs').readProgram(paths.programDir) : null;
+    const activeOnly = programState && programState.active_phase ? { ...programState, phases: programState.phases.filter((p) => p.id === programState.active_phase) } : null;
+    if (activeOnly) result.warnings.push(...roadmapCriteriaWarnings(specText || '', activeOnly));
+    result.warnings.push(...specInputCollisions(projectRoot, specText || ''));
+  } catch { /* aviso auxiliar */ }
   // 1.21 (OXB-020): a repo with gate scripts or governance tests but no phase_gates gets a warning.
   const gatesLib = require('./oxe-phase-gates.cjs');
   result.warnings.push(...gatesLib.lintPhaseGates(projectRoot, gatesLib.readPhaseGates({ phase_gates: plan.phaseGates }, config)));
@@ -2991,7 +3001,7 @@ function runtimeSignoff(projectRoot, activeSession, options = {}) {
   const by = String(options.by || '').trim();
   if (!by) throw new Error('Sign-off exige --by <quem aceitou>.');
   const criteria = (Array.isArray(options.criteria) ? options.criteria : String(options.criteria || '').split(','))
-    .map((c) => c.trim()).filter((c) => /^A\d+$/.test(c));
+    .map((c) => c.trim().toUpperCase()).filter((c) => /^(?:A\d+(?:\.\d+)?|G\d+)$/.test(c));
   if (!criteria.length) throw new Error('Sign-off exige --criteria A8[,A9].');
   const record = { phase: phaseId, criteria, by, at: new Date().toISOString(), note: options.note || null, evidence: options.evidence || null };
   const file = path.join(paths.programDir, 'signoffs.ndjson');
@@ -4219,7 +4229,48 @@ function runtimeProgramInit(projectRoot, activeSession, options = {}) {
     type: 'ProgramCreated',
     payload: { phases: state.phases.map((phase) => phase.id), roadmap: state.roadmap_ref },
   });
-  return runtimeProgramStatus(projectRoot, activeSession);
+  return { ...runtimeProgramStatus(projectRoot, activeSession), warnings: roadmapCriteriaWarnings(readTextIfExists(paths.spec) || '', state) };
+}
+
+/**
+ * OXB-038: a phase criterion the SPEC does not declare is a phantom (an id of another document, e.g. the DESIGN's
+ * per-screen A1–A12, read as a SPEC criterion). Reported by program init and plan lint.
+ */
+function roadmapCriteriaWarnings(specText, state) {
+  const known = new Set(require('./oxe-spec-edit.cjs').criteriaIds(specText));
+  if (!known.size || !state || !Array.isArray(state.phases)) return [];
+  const out = [];
+  for (const phase of state.phases) {
+    const phantom = (phase.acceptance || []).filter((a) => !known.has(a));
+    if (phantom.length) out.push(`${phase.id}: ${phantom.join(', ')} não ${phantom.length > 1 ? 'são critérios' : 'é critério'} da SPEC — id de outro documento? Na linha **Critérios de aceite:** ficam só ids da tabela da SPEC; referências a outros documentos vão entre parênteses`);
+  }
+  return out;
+}
+
+/**
+ * OXB-038: the SPEC's input documents (`inputs:` in its front matter) that use the same A<n> ids as the SPEC criteria.
+ * The DESIGN's UI acceptance used A1–A12 per screen; they had to be renamed (UA1…) before reaching plans and proves.
+ */
+function specInputCollisions(projectRoot, specText) {
+  const text = String(specText || '');
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  if (!fm) return [];
+  const inputs = [];
+  const inline = /^inputs:\s*\[(.*)\]\s*$/m.exec(fm[1]);
+  if (inline) inputs.push(...inline[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean));
+  const block = /^inputs:\s*\r?\n((?:\s+-\s+.*\r?\n?)+)/m.exec(fm[1]);
+  if (block) inputs.push(...block[1].split(/\r?\n/).map((l) => l.replace(/^\s+-\s+/, '').trim().replace(/^['"]|['"]$/g, '')).filter(Boolean));
+  const known = new Set(require('./oxe-spec-edit.cjs').criteriaIds(text).filter((id) => /^A\d+$/.test(id)));
+  if (!known.size) return [];
+  const out = [];
+  for (const input of inputs) {
+    if (/^[a-z]+:\/\//i.test(input)) continue;
+    let doc = '';
+    try { doc = fs.readFileSync(path.resolve(projectRoot, input), 'utf8'); } catch { continue; }
+    const used = [...new Set((doc.match(/\bA\d+\b/g) || []).filter((id) => known.has(id)))];
+    if (used.length) out.push(`${input} usa ${used.slice(0, 8).join(', ')}${used.length > 8 ? ` (+${used.length - 8})` : ''}, os mesmos ids de critérios da SPEC — renomeie lá (ex.: UA1) para não virarem critérios fantasma em planos e proves`);
+  }
+  return out;
 }
 
 function runtimeProgramStart(projectRoot, activeSession, phaseId = null) {

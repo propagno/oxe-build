@@ -14,7 +14,8 @@ const fs = require('fs');
 const path = require('path');
 
 const TASK_ID_RE = /^T\d+$/;
-const ACCEPT_RE = /^A\d+$/;
+// 1.21.2 (OXB-037): A<n>, subcriteria A<n>.<m> and global criteria G<n>.
+const ACCEPT_RE = require('./oxe-criteria-ids.cjs').CRITERION_ID_RE;
 const DECISION_RE = /^D-\d+$/;
 const COMPLEXITY = new Set(['XS', 'S', 'M', 'L', 'XL']);
 
@@ -386,17 +387,28 @@ function lintPlan(input) {
   }
 
   const phase = input.phase || null;
+  const critIds = require('./oxe-criteria-ids.cjs');
+  // OXB-037: global criteria G* hold for every UI task of the phase — each must be covered by some UI task.
+  const globals = criteria.filter(critIds.isGlobal);
+  const uiTasks = tasks.filter((t) => critIds.isUiTask(t) && !t.done);
+  if (globals.length && uiTasks.length) {
+    const uiCovered = new Set(uiTasks.flatMap((t) => t.aceite || []));
+    const missingG = globals.filter((g) => !uiCovered.has(g));
+    if (missingG.length) warnings.push(`critérios globais sem tarefa de UI que os cubra: ${missingG.join(', ')} (o plano tem ${uiTasks.length} tarefa(s) de UI: ${uiTasks.map((t) => t.id).join(', ')})`);
+  }
   if (phase && Array.isArray(phase.acceptance) && phase.acceptance.length) {
     const allowed = new Set(phase.acceptance);
-    const outside = [...covered].filter((ref) => !allowed.has(ref));
+    // A subcriterion belongs to its parent's phase; a G* is global.
+    const outside = [...covered].filter((ref) => !critIds.inPhase(ref, allowed));
     if (outside.length) errors.push(`fase ${phase.id}: o plano usa A* de outras fases: ${outside.join(', ')}`);
-    const missing = phase.acceptance.filter((ref) => !covered.has(ref));
+    // A parent with subcriteria declared in the SPEC is covered when each subcriterion is (OXB-037).
+    const missing = critIds.uncovered(phase.acceptance.filter((ref) => !critIds.isGlobal(ref)), covered, criteria);
     if (missing.length) errors.push(`fase ${phase.id}: A* da fase sem tarefa: ${missing.join(', ')}`);
     if (input.plan && input.plan.phase && input.plan.phase !== phase.id) {
       errors.push(`PLAN.json declara fase ${input.plan.phase}, mas a fase ativa é ${phase.id}`);
     }
   } else if (criteria.length) {
-    const missing = criteria.filter((ref) => !covered.has(ref));
+    const missing = critIds.uncovered(criteria.filter((ref) => !critIds.isGlobal(ref) && !critIds.isSub(ref)), covered, criteria);
     if (missing.length) warnings.push(`A* da SPEC sem tarefa: ${missing.join(', ')}`);
   }
 

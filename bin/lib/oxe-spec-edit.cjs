@@ -76,7 +76,17 @@ function checkNewId(existing, id, prefix, allowGap) {
 
 function criteriaIds(specText) {
   const lines = String(specText || '').split(EOL_RE);
-  return idsInTables(lines, findTables(lines, isCriteriaHeader), 'A');
+  const tables = findTables(lines, isCriteriaHeader);
+  // OXB-037: A<n>, its subcriteria A<n>.<m> and the global G<n>.
+  const ids = [];
+  for (const t of tables) {
+    for (let i = t.firstRow; i <= t.lastRow; i += 1) {
+      const cells = splitRow(lines[i]);
+      const id = cells && cells[0] ? cells[0].replace(/\*/g, '').trim().toUpperCase() : '';
+      if (/^(?:A\d+(?:\.\d+)?|G\d+)$/.test(id)) ids.push(id);
+    }
+  }
+  return ids;
 }
 
 // OXB-075: requirements written as bullets — `- **R10** — text (A1, A2)`, possibly with indented continuation lines.
@@ -143,7 +153,17 @@ function addCriterion(specText, id, change = {}) {
   if (!tables.length) throw new Error('SPEC sem tabela de critérios de aceite (| ID | Critério | Como verificar |)');
   if (!change.text) throw new Error('informe --text <critério>');
   if (!change.verify) throw new Error('informe --verify <como verificar> (critério sem verificação não fecha)');
-  const key = checkNewId(idsInTables(lines, tables, 'A'), id, 'A', change.allowGap);
+  // OXB-037: a subcriterion A19.3 needs its parent; a subcriterion or a global G<n> only has to be new.
+  const wanted = String(id || '').trim().toUpperCase();
+  let key;
+  if (/^A\d+\.\d+$/.test(wanted) || /^G\d+$/.test(wanted)) {
+    const all = criteriaIds(lines.join('\n'));
+    if (all.includes(wanted)) throw new Error(`${wanted} já existe na SPEC`);
+    if (/^A\d+\.\d+$/.test(wanted) && !all.includes(wanted.replace(/\.\d+$/, ''))) throw new Error(`${wanted}: o critério pai ${wanted.replace(/\.\d+$/, '')} não existe na SPEC`);
+    key = wanted;
+  } else {
+    key = checkNewId(idsInTables(lines, tables, 'A'), id, 'A', change.allowGap);
+  }
   const t = tables[tables.length - 1];
   const cells = [key, String(change.text).trim(), String(change.verify).trim()];
   while (cells.length < t.header.length) cells.push('');

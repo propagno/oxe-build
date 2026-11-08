@@ -46,6 +46,11 @@ export interface PhaseGateResult {
 export declare class ProgramTransitionError extends Error {
 }
 /**
+ * OXB-038: criterion ids of a structured field. Parentheses and code spans are commentary ("A1, A2 (ver UI A3)"):
+ * an id there is not the phase's. OXB-037: subcriteria A19.3 and global criteria G1 are ids too.
+ */
+export declare function criterionIdsInField(text: string): string[];
+/**
  * `## Fase N — Título` (or `## Phase N - Title`) blocks with `**Requisitos:**`,
  * `**Critérios de aceite:**` and `**Escopo:**` lines, as in `oxe/templates/ROADMAP.template.md`.
  */

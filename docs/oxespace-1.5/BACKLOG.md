@@ -38,14 +38,19 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-034: editar o ROADMAP depois do `program start` exige `init --force`
 
-- **Status:** aberto (risco a confirmar).
+- **Status:** resolvido (1.21.2) pelos itens OXB-058, OXB-075 e OXB-076, sem `init --force`.
+  - `oxe-cc spec amend|add`, `oxe-cc program phase add|edit` e `oxe-cc program criterion move` emendam SPEC, ROADMAP e PROGRAM.json juntos e preservam o estado das fases. Fase iniciada não ganha critério novo, e fase fechada é recusada (a mudança vira CR).
+  - Cada emenda fica registrada em `changes.ndjson` (`spec_gap` ou `program_edit`, com o antes e o depois).
 - **Evidência:** a revisão do coordenador acrescentou A40 e A41 à F8 com a F1 já iniciada. O caminho disponível foi `runtime program init --force`.
 - **Impacto:** não está claro se o `--force` preserva o estado das fases já iniciadas ou fechadas. Se não preservar, uma emenda de escopo apaga o progresso.
 - **Proposta:** um `runtime program amend` que aplica a emenda ao ROADMAP sem perder o estado. Nas fases fechadas, a emenda vira um CR `spec_gap` versionado em vez de sobrescrever.
 
 ## OXB-035: tarefas que o time já faz fora do executor não têm lugar no plano
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21.2) pelos itens OXB-047, OXB-061 e OXB-064.
+  - `kind: external_delivery` (ou `verify_only`) com `blocked_by: ["owner/repo#n"]`: a tarefa não roda o executor, só o verify. Ela é destravada quando o PR é mergeado e conta como feita por fora.
+  - Ela nunca é reaberta por CR, e o execute termina `completed_with_external_pending` enquanto o PR está aberto.
+  - Na F1 da 1.5.0, as tarefas entregues por outros agentes usaram esse caminho.
 - **Evidência:** na F1, três tarefas são PRs que outros agentes já tinham em voo (pareamento, tela de falha do banco, S7.1). Outra (os tokens C4, PR #604) foi feita pelo FRONTEND antes de o PLAN.json existir. O `blocked_by` cobre "espere um PR externo", mas não "esta tarefa do plano foi entregue por outro caminho; verifique e marque como feita".
 - **Impacto:** o plano ou duplica o trabalho ou mente sobre o que o executor fez.
 - **Proposta:** `kind: external_delivery` com `pr: <repo#n>`. O verify roda os testes congelados contra a main depois do merge, e a tarefa fica `done` com `completed_by: external`, contando no scorecard à parte.
@@ -61,14 +66,25 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-037: o critério A* da SPEC é grosso demais para a UI, e o OXE não tem subcritérios
 
-- **Status:** proposta.
+- **Status:** resolvido (1.21.2).
+  - **Subcritérios `A19.3`:** valem na tabela de critérios da SPEC, no ROADMAP, no `acceptance` e nos `acceptance_tests` do PLAN.json, no `--criteria` de CR e sign-off e no `spec add criterion A19.3` (que exige o pai e não conta como buraco na numeração).
+    - Um subcritério pertence à fase do pai.
+    - Se a SPEC declara subcritérios de A19, A19 só fica coberto quando cada A19.x está coberto, e o lint lista os que faltam (`A* da fase sem tarefa: A19.2`).
+    - O verify da fase mantém os subcritérios dos critérios da fase.
+  - **Critérios globais `G<n>`:** valem para toda fase (nunca "de outra fase") e para toda tarefa de UI (arquivos .tsx/.jsx/.vue/.svelte/.css/.scss/.html). O lint avisa quando um G* não é coberto por nenhuma tarefa de UI do plano.
+  - Fica para depois: techspec por subcritério no dossiê.
+  - Teste: `tests/oxe-1212-criteria-ids.test.cjs`.
 - **Evidência:** o DESIGN entregou critérios de aceite por tela (`team/plans/1.5.0-ui-acceptance.md`, com G1–G9 globais mais vários ACs observáveis por tela), organizados por onda de backend. A SPEC da 1.5.0 tem 41 A*, cada um cobrindo várias telas. O `idList` do program-model só reconhece `A<n>`, e o lint não tem como ligar um teste congelado a "A19, tela X, estado Y".
 - **Impacto:** ou a SPEC cresce para centenas de A*, ou a ligação critério → teste fica implícita, e o OXB-030 (termo do critério que o teste não exercita) volta pela porta da UI.
 - **Proposta:** subcritérios `A19.3` na SPEC, aceitos pelo parser, pelo lint (cobertura por subcritério) e pelo dossiê (techspec por subcritério). Junto, critérios globais (`G*`) que valem para toda tarefa de UI da fase, como contraste, teclado e 900 px.
 
 ## OXB-038: qualquer `A<n>` em texto vira critério da SPEC (colisão de namespace)
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21.2).
+  - Na linha `**Critérios de aceite:**` do ROADMAP, o texto entre parênteses e em código é comentário. Só os ids exatos (`A<n>`, `A<n>.<m>`, `G<n>`) fora dele contam: `A1, A19 (telas do DESIGN: A3, A7)` dá A1 e A19.
+  - O `program init` e o `plan lint` (fase ativa) avisam quando um critério de fase não está na tabela da SPEC ("id de outro documento?").
+  - O `plan lint` lê os documentos de `inputs:` do front matter da SPEC e avisa quando eles usam os mesmos `A<n>` dos critérios da SPEC, sugerindo renomear lá (ex.: UA1).
+  - Teste: `tests/oxe-1212-criteria-ids.test.cjs`.
 - **Evidência:** o `idList` do program-model (`\b[A-Z]{1,4}-?\d+[a-z]?\b`, filtrado por `^A`) trata como critério da SPEC qualquer token `A8` no ROADMAP, inclusive em ids de outros documentos. Os ACs de UI do DESIGN usavam `A1–A12` por tela, e precisaram ser renomeados para `UA1…` antes de aparecer em planos e `proves`.
 - **Impacto:** um id externo citado no texto de uma fase vira critério fantasma, ou mascara um A* real que faltava.
 - **Proposta:** ids da SPEC só valem nos campos estruturados (a linha `**Critérios de aceite:**` e a tabela da SPEC), nunca em prosa. O lint também acusa colisão entre os A* da SPEC e ids de documentos de entrada (`inputs:` da SPEC).

@@ -5099,7 +5099,9 @@ async function runRuntime(opts) {
         return;
       }
       if (sub === 'init') {
-        printStatus(oxeOperational.runtimeProgramInit(opts.dir, activeSession, { force: opts.force }));
+        const initOut = oxeOperational.runtimeProgramInit(opts.dir, activeSession, { force: opts.force });
+        printStatus(initOut);
+        if (!opts.jsonOutput) for (const w of initOut.warnings || []) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${w}`);
         return;
       }
       if (sub === 'start') {
