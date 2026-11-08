@@ -2608,6 +2608,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime verify [--no-gates]
   npx oxe-cc runtime scorecard [--since <data>] [--write] [--release-report <arquivo> --name <projeto>] [--json]
   npx oxe-cc runtime ci --attach <run-id|url> [--repo owner/repo] [--head <sha>]
+  npx oxe-cc runtime deploy --attach <env> --version <v> --ref <tag|url> [--check "<cmd>"]… [--phase Fn]   (registra e verifica; nunca faz o deploy)
   npx oxe-cc runtime program budget [--mode cap|track_only] [--budget-usd N] [--budget-turns N] --by <papel> --reason "…"
   npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"] [--no-gates] [--accept-drift <glob> --by <papel> --reason "…"]
   npx oxe-cc runtime sync --from origin/main [--no-fetch] [--no-reverify]   (merge local; reverify das tarefas done tocadas pela base)
@@ -4218,6 +4219,9 @@ function parseRuntimeArgs(argv) {
     else if (a === '--yes') out.yes = true;
     else if (a === '--checkpoint-commits') out.checkpointCommits = true;
     else if (a === '--attach' && argv[i + 1]) out.attach = String(argv[++i]);
+    else if (a === '--ref' && argv[i + 1]) out.ref = String(argv[++i]);
+    else if (a === '--check' && argv[i + 1]) (out.deployChecks = out.deployChecks || []).push(String(argv[++i]));
+    else if (a === '--version' && argv[i + 1] && !String(argv[i + 1]).startsWith('-')) out.deployVersion = String(argv[++i]);
     else if (a === '--repo' && argv[i + 1]) out.repo = String(argv[++i]);
     else if (a === '--head' && argv[i + 1]) out.head = String(argv[++i]);
     else if (a === '--no-gates') out.noGates = true;
@@ -5519,6 +5523,23 @@ async function runRuntime(opts) {
     }
     if (!card.ok) process.exitCode = 1;
     return;
+  }
+
+  // OXB-093: runtime deploy --attach <env> --version <v> --ref <tag|url> [--check "<cmd>"]… (never deploys).
+  if (opts.action === 'deploy') {
+    try {
+      if (!opts.attach) throw new Error('use: oxe-cc runtime deploy --attach <env> --version <v> --ref <tag|release url> [--check "<cmd>"]… [--phase Fn] [--by <papel>]');
+      const record = oxeOperational.runtimeDeployAttach(opts.dir, activeSession, { env: opts.attach, version: opts.deployVersion, ref: opts.ref || null, checks: opts.deployChecks || [], phase: opts.phase || null, by: opts.by || null });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeDeploySchema: 1, ...record }, null, 2)); if (!record.ok) process.exitCode = 1; return; }
+      console.log(`  ${record.ok ? (c ? green : '') + '✓' : (c ? red : '') + '✗'}${c ? reset : ''} deploy ${record.env} ${record.version} anexado à fase ${record.phase || '—'}${record.ref ? ` · ${record.ref}` : ''}`);
+      for (const ch of record.checks) console.log(`    ${ch.ok ? '✓' : '✗'} [${ch.id}] ${ch.command} · exit ${ch.exit} · ${ch.secs}s${ch.excerpt ? `\n      ${ch.excerpt.split('\n').join('\n      ')}` : ''}`);
+      if (!record.checks.length) console.log(`  ${c ? dim : ''}Sem --check: só o registro. Um phase_gate kind "deploy" com checks exigidos continua vermelho até eles rodarem.${c ? reset : ''}`);
+      if (!record.ok) process.exitCode = 1;
+      return;
+    } catch (err) {
+      console.error(`${red}${err && err.message ? err.message : 'Falha ao anexar o deploy.'}${reset}`);
+      process.exit(1);
+    }
   }
 
   if (opts.action === 'ci' && opts.attach) {

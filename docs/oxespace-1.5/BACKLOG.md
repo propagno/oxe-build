@@ -644,3 +644,21 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
   - **No verify:** ele fica no escopo de toda fase.
   - O `program phase edit --add-acceptance A70` é recusado com a explicação.
   - Teste: `tests/oxe-1212-standing.test.cjs`.
+
+## OXB-092: sinais de produção viram intenção nova (ADLC)
+
+- **Status:** aberto, versão mínima aprovada pelo TECH LEAD em 08/11. Proposta do oxe-build depois da pergunta do usuário "o oxe-build é um ADLC?": o ciclo só fechava pela mão de alguém, porque nada transformava um incidente ou issue em pedido de mudança.
+- **Escopo agora:**
+  - `oxe-cc runtime signal --from <arquivo>|<url de issue do GitHub>`. A fonte de hoje é o relatório do HML: cada achado HML-Fn-x vira um CR (`defect`/`spec_gap`) **naquela fase**, ligado ao critério pela rastreabilidade A* → T → arquivos. É a regra de zero defeito de UI (A70).
+  - Também issues do GitHub com o label bug.
+  - Sem integração ao vivo.
+- **Depois do 1.5.0:** crash reports do app (o caminho opt-in de diagnóstico) e a sugestão "reabrir a fase?" para fases fechadas.
+
+## OXB-093: gate de deploy
+
+- **Status:** resolvido (1.21.2). Aprovado pelo TECH LEAD em 08/11 para a F11: o release 1.5.0 é um deploy (tag → workflow de release → GitHub release com instaladores e latest.yml → APK), com checks pós-deploy (install-over a partir da 1.4.3 em Windows/Linux, a passada empacotada do HML #702 e a spec A40 de upgrade com dados).
+  - `oxe-cc runtime deploy --attach <env> --version <v> --ref <tag|url do release> [--check "<cmd>"]… [--phase Fn] [--by <papel>]` registra o deploy em `program/deploy.ndjson` como evidência da fase e roda os checks pós-deploy, cada um com id, exit, horário e duração. A saída é 1 se algum check ficar vermelho.
+  - **Nunca faz o deploy.** Um `--check` que faria o deploy é recusado (git tag/push, gh release create/upload/edit, npm publish, release.mjs, gh workflow run, docker push, kubectl apply/rollout, terraform apply). Tags e aprovações ficam com TL e coordenador.
+  - `phase_gates: [{ "id": "release", "kind": "deploy", "env": "github-release", "version": "1.5.0", "checks": ["install-over", "hml-packaged"] }]` roda no `program close`. O gate é verde quando a fase tem deploy daquele ambiente/versão, sem check vermelho (vale o resultado mais recente de cada comando, então um re-attach conserta) e com todos os checks exigidos já rodados (casados por trecho do comando).
+  - A evidência entra no dossiê da fase como `deploy.md` (ambiente, versão, ref e a tabela de checks).
+  - Teste: `tests/oxe-1212-deploy-gate.test.cjs`.

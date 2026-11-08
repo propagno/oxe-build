@@ -2558,6 +2558,25 @@ function runtimeCiAttach(projectRoot, activeSession, options = {}) {
   return require('./oxe-phase-gates.cjs').attachCiRun(programDir, { run: options.run, repo: options.repo, head: options.head, phase });
 }
 
+/**
+ * OXB-093: `oxe-cc runtime deploy --attach <env> --version <v> --ref <tag|url> [--check "<cmd>"]… [--phase Fn]`.
+ * Records the deploy as evidence of the phase and runs the post-deploy checks (each with exit, id and time). Never
+ * deploys. A `phase_gates` entry `{ kind: "deploy", env, version?, checks? }` makes the close require it.
+ */
+function runtimeDeployAttach(projectRoot, activeSession, options = {}) {
+  const programLib = require('./oxe-program.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const program = programLib.readProgram(programDir);
+  const phase = options.phase || (program && program.active_phase) || null;
+  applyChildEnvPolicy(projectRoot);
+  const rt = loadRuntimeModule();
+  const envVars = rt && typeof rt.childProcessEnv === 'function' ? rt.childProcessEnv(process.env) : { ...process.env };
+  const record = require('./oxe-phase-gates.cjs').attachDeploy(programDir, { env: options.env, version: options.version, ref: options.ref, phase, by: options.by || null, checks: options.checks || [], cwd: projectRoot, spawn: options.spawn, env_vars: envVars });
+  appendEvent(projectRoot, activeSession, { type: 'DeployAttached', payload: { phase, env: record.env, version: record.version, ref: record.ref, ok: record.ok, checks: record.checks.map((c) => ({ id: c.id, ok: c.ok, exit: c.exit })) } });
+  return record;
+}
+
 /** Pass/fail of the phase gates in one verify (1.21). */
 function summarizeGates(gateChecks, checkResults) {
   const byId = new Map((checkResults || []).map((r) => [r.check_id, r]));
@@ -2955,6 +2974,7 @@ function runtimeDossier(projectRoot, activeSession, options = {}) {
     decisions: readNdjsonQuiet(path.join(programDir, 'decisions.ndjson')),
     notes: readNdjsonQuiet(path.join(programDir, 'notes.ndjson')).filter((n) => !phaseId || !n.phase || n.phase === phaseId),
     signoffs: readNdjsonQuiet(path.join(programDir, 'signoffs.ndjson')).filter((s) => !phaseId || s.phase === phaseId),
+    deploys: readNdjsonQuiet(path.join(programDir, 'deploy.ndjson')).filter((d) => !phaseId || !d.phase || d.phase === phaseId),
   });
   // Gatekeeper: regras do projeto (config.json policy_rules) sobre os arquivos tocados na fase.
   const changeLib = require('./oxe-change.cjs');
@@ -5936,6 +5956,7 @@ module.exports = {
   runtimePlanAppend,
   runtimeProgramBudget,
   runtimeProgramAdopt,
+  runtimeDeployAttach,
   runtimeSpecAmend,
   runtimeSpecAdd,
   runtimeProgramPhaseAdd,

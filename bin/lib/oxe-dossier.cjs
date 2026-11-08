@@ -249,6 +249,26 @@ function buildDossier(input) {
     manualPending.length ? manualPending.map((id) => `- **${id}** — critério manual/UAT sem sign-off (\`oxe-cc runtime signoff --phase ${phase.id} --criteria ${id}\`)`).join('\n') : '_(nenhum)_',
   ].join('\n');
 
+  // OXB-093: deploys attached to the phase (`runtime deploy --attach`) and their post-deploy checks.
+  if ((input.deploys || []).length) {
+    files['deploy.md'] = [
+      `# Deploy — ${phase.id}`,
+      '',
+      'Evidência anexada (o oxe-build nunca faz o deploy: só registra e verifica).',
+      '',
+      ...input.deploys.flatMap((d) => [
+        `## ${d.env} · ${d.version} — ${d.ok ? 'verificado' : 'com check vermelho'}`,
+        '',
+        `- **Ref:** ${d.ref || '—'} · **Anexado:** ${dateOf(d.at)}${d.by ? ` por ${d.by}` : ''}`,
+        '',
+        (d.checks || []).length
+          ? table(['Check', 'Comando', 'Exit', 'Quando', 'Duração'], d.checks.map((c) => [c.id, `\`${c.command}\``, String(c.exit), dateOf(c.at), `${c.secs}s`]))
+          : '_(sem checks pós-deploy)_',
+        '',
+      ]),
+    ].join('\n');
+  }
+
   files['decisions.md'] = [
     `# Decisões — ${phase.id}`,
     '',
