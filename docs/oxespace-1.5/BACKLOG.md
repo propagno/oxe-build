@@ -78,7 +78,7 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 - **Status:** resolvido (1.21.2). O `doctor --project` e o preflight (logo, o execute e o `plan lint`) fazem três checagens:
   - **presença:** cada entrada do package-lock (v2/v3) precisa estar em `node_modules`, opcionais incluídas. O pacote nativo descartado como "failed optional dependency" vira problema. Ficam de fora opcionais de outro OS/CPU, `dev` com NODE_ENV=production, peer opcionais e checkout sem node_modules;
   - **atualidade:** aviso quando `node_modules/.package-lock.json` é mais velho que o `package-lock.json`;
-  - **native_check do projeto:** config `native_check` (ex.: `node scripts/run-native-verification.mjs`) roda com a política de env do runtime; uma falha bloqueia com as últimas linhas. O `npm ci` não é proibido; a instalação é verificada depois.
+  - **native_check do projeto:** config `native_check` (ex.: `node scripts/run-native-verification.mjs`) roda com a política de env do runtime; uma falha bloqueia com as últimas linhas. O `npm ci` não é proibido; a instalação é verificada depois. Ele roda no `doctor --project` e uma vez no preflight de cada execute, nunca no `plan lint` (o script do oxespace abre o Electron).
   - Teste: `tests/oxe-1212-deps-present.test.cjs`.
   - O `deps_strategy` por worktree fica para a OXB-050.
 - **Evidência (04/11):**

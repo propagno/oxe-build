@@ -1338,7 +1338,7 @@ async function resolveRuntimeGate(projectRoot, activeSession, options = {}) {
 }
 
   // Gap 5: route execution to MultiAgentCoordinator when plan-agents.json exists
-function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
+function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, options = {}) {
     const health = loadProjectHealth();
     const blockers = [];
     const warnings = [];
@@ -1348,7 +1348,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
     const envMode = readProjectConfig(projectRoot).project_env_check;
     if (envMode !== false) {
       try {
-        const env = require('./oxe-project-env.cjs').checkProjectEnvironment(projectRoot);
+        const env = require('./oxe-project-env.cjs').checkProjectEnvironment(projectRoot, { nativeCheck: options.nativeCheck !== false });
         for (const problem of env.problems) (envMode === 'warn' ? warnings : blockers).push(`project_env:${problem}`);
         for (const warning of env.warnings) warnings.push(`project_env:${warning}`);
       } catch { /* a leitura do ambiente nunca derruba o preflight */ }
@@ -2662,7 +2662,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       result.errors.push(`preflight: PLAN.md ausente — o runtime execute recusa sem ele (ele traz a autoavaliação); gere-o no /oxe-plan junto com o PLAN.json`);
     }
     try {
-      const pre = buildRuntimeExecutePreflight(projectRoot, activeSession, readRunState(projectRoot, activeSession));
+      const pre = buildRuntimeExecutePreflight(projectRoot, activeSession, readRunState(projectRoot, activeSession), { nativeCheck: false });
       for (const blocker of pre.blockers) {
         if (/^execution_rationality:/.test(blocker)) continue; // listed in full above
         if (/^pending_gates:/.test(blocker)) { result.warnings.push(`preflight: ${blocker} (gates humanos pendentes no run atual — o execute para neles)`); continue; }

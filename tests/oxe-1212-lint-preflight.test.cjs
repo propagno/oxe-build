@@ -122,3 +122,16 @@ describe('phantom changes under core.autocrlf=true (found by e2e-program after O
     assert.deepEqual(op.projectStatusPaths(dir).sort(), ['src/new.js', 'src/store.js']);
   });
 });
+
+describe('OXB-039 + 041: native_check runs in the execute preflight, not in plan lint', () => {
+  it('a failing native_check blocks the preflight but is not run by lint', () => {
+    const dir = project({ planMd: SELF_EVAL });
+    fs.writeFileSync(path.join(dir, 'native.js'), "require('fs').writeFileSync('ran.txt', 'x'); process.exit(1);\n");
+    fs.writeFileSync(path.join(dir, '.oxe', 'config.json'), JSON.stringify({ external_dependency_check: false, native_check: 'node native.js' }));
+    const lint = op.runtimePlanLint(dir, null, {});
+    assert.ok(!lint.errors.some((e) => /native_check/.test(e)), lint.errors.join('\n'));
+    assert.equal(fs.existsSync(path.join(dir, 'ran.txt')), false, 'lint did not launch the native check');
+    const pre = op.buildRuntimeExecutePreflight(dir, null, null);
+    assert.ok(pre.blockers.some((b) => /native_check falhou/.test(b)), pre.blockers.join('\n'));
+  });
+});
