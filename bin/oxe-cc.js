@@ -4231,6 +4231,8 @@ function parseRuntimeArgs(argv) {
     else if (a === '--attach' && argv[i + 1]) out.attach = String(argv[++i]);
     else if (a === '--ref' && argv[i + 1]) out.ref = String(argv[++i]);
     else if (a === '--any-label') out.anyLabel = true;
+    else if (a === '--allow-undelivered') out.allowUndelivered = true;
+    else if (a === '--strict-delivery') out.strictDelivery = true;
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--check' && argv[i + 1]) (out.deployChecks = out.deployChecks || []).push(String(argv[++i]));
     else if (a === '--version' && argv[i + 1] && !String(argv[i + 1]).startsWith('-')) out.deployVersion = String(argv[++i]);
@@ -5160,6 +5162,16 @@ async function runRuntime(opts) {
     try {
       if (sub === 'status') {
         printStatus(oxeOperational.runtimeProgramStatus(opts.dir, activeSession));
+        return;
+      }
+      if (sub === 'init' && opts.fromEventId) {
+        // OXB-033: prepare THIS worktree's .oxe/ from the program's one (parallel phase).
+        const out = oxeOperational.runtimeProgramInitFrom(opts.dir, activeSession, { from: opts.fromEventId, phase: opts.phase || null, base: opts.baseBranch || null, force: opts.force, allowUndelivered: Boolean(opts.allowUndelivered), strictDelivery: Boolean(opts.strictDelivery), by: opts.by || null });
+        if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeProgramInitFromSchema: 1, copied: out.copied, delivery: out.delivery, started: out.started }, null, 2)); return; }
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} .oxe/ preparado de ${opts.fromEventId}: ${out.copied.length} item(ns)`);
+        for (const d of out.delivery) console.log(`  ${d.missing.length ? (c ? yellow : '') + '!' : (c ? green : '') + '✓'}${c ? reset : ''} ${d.phase} entregue na base: ${d.delivered.length}/${d.checked} commit(s)${d.missing.length ? ` — sem equivalente na base: ${d.missing.map((m) => `${m.sha.slice(0, 8)} ${m.subject.slice(0, 50)}`).join('; ')} (a regressão congelada de ${d.phase} roda no verify desta fase)` : ''}${d.note ? ` (${d.note})` : ''}`);
+        if (out.started) console.log(`  ${c ? green : ''}✓${c ? reset : ''} fase ${out.started} iniciada nesta worktree`);
+        printStatus(out);
         return;
       }
       if (sub === 'init') {

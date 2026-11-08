@@ -893,3 +893,19 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
     - com `sync_deps: "install"`, roda uma instalação que não apaga nada (`npm install`/`pnpm install`/`yarn install`, nunca `npm ci`) mais o `post_install`;
     - no padrão `"stop"`, não roda o re-verify sobre a árvore velha e sai com erro "dependências mudaram: rode npm install && <post_install> … e depois oxe-cc runtime verify".
   - Teste: `tests/oxe-1212-unsafe-verify.test.cjs`.
+
+## OXB-149: preparar o `.oxe/` de uma worktree de fase paralela (F4 junto com a F2)
+
+- **Status:** resolvido (1.21.2). Pedido do TECH LEAD em 08/11, no primeiro uso real da OXB-033.
+  - Copiar o PROGRAM.json levava junto a fase ativa (F2), e `program start --phase F4` recusava. Não havia comando suportado para isso.
+  - `oxe-cc runtime program init --from <worktree do programa> [--phase Fn] [--base <ref>] [--strict-delivery] [--force]`, rodado na worktree NOVA.
+  - **Copia:** SPEC e ROADMAP (a não ser que `spec_ref`/`roadmap_ref` apontem para arquivo versionado), config, PROGRAM.json **sem fase ativa** (com `forked_from`), changes/signoffs/decisions, e a regressão, as interfaces e o dossiê (handoff) das fases fechadas.
+  - **Nunca copia:** PLAN, pack, runs, eventos, caches e workspaces. Cada um é por worktree.
+  - Com `--phase`, as dependências da fase precisam estar fechadas na origem, e a fase não pode estar ativa lá. A **entrega** de cada dependência na base é conferida do jeito do promote:
+    - cada commit próprio da fase (first-parent, sem merge, base_commit..closed_commit) é procurado na base como ancestral, pelo trailer `cherry picked from commit <sha>` ou como patch equivalente;
+    - os imports de testes congelados (`parked_tests`, padrão `tests/acceptance/**`) não contam, porque o main recebe a versão do PR.
+    - O relatório lista o que não tem equivalente.
+    - Ele não bloqueia por padrão: commits que chegaram por outro PR, com outro patch, não são rastreáveis, e a rede de segurança é a regressão congelada da dependência, que roda no verify da fase nova. `--strict-delivery` bloqueia.
+    - Smoke no oxespace-150 (F1, origin/main): 19 commits de código, 7 com equivalente, 12 sem e 21 imports de teste ignorados.
+  - Depois, a fase é iniciada na worktree nova. O `program adopt` agora também traz o dossiê da fase adotada.
+  - Teste: `tests/oxe-1212-program-fork.test.cjs`.

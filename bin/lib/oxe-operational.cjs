@@ -4042,6 +4042,114 @@ function runtimeProgramBudget(projectRoot, activeSession, options = {}) {
 }
 
 /**
+ * OXB-033: is a closed phase's work on `base`? Its own commits (first-parent, non-merge, base_commit..closed_commit, not
+ * only .oxe/) must each be on base — as an ancestor, as a `cherry picked from commit <sha>` trailer (how
+ * `runtime promote` delivers through PRs), or as an equivalent patch (`git cherry`). F1's close commit is never an
+ * ancestor of main in the promote flow, so ancestry alone is the wrong test.
+ * @returns {{ checked: number, delivered: string[], missing: Array<{sha:string, subject:string}>, note: string|null }}
+ */
+function phaseDeliveredOn(repoRoot, phase, base, options = {}) {
+  const out = { checked: 0, delivered: [], missing: [], skipped_frozen: 0, note: null };
+  // Frozen acceptance tests imported into the program branch (config parked_tests, default tests/acceptance/**) are the
+  // plan's evidence, not work to promote: main gets the PR's own version of them.
+  const cfg = readProjectConfig(repoRoot) || {};
+  const frozenGlobs = (options.frozenGlobs || (Array.isArray(cfg.parked_tests) ? cfg.parked_tests : ['tests/acceptance/**'])).map((g) => require('./oxe-policy-rules.cjs').globToRegex(g));
+  const isFrozen = (f) => frozenGlobs.some((re) => re.test(f));
+  if (!phase.base_commit || !phase.closed_commit) { out.note = `${phase.id} sem base_commit/closed_commit — entrega não verificável`; return out; }
+  const commits = (gitLines(repoRoot, ['rev-list', '--first-parent', '--no-merges', `${phase.base_commit}..${phase.closed_commit}`]) || []);
+  const picked = new Set();
+  for (const line of gitLines(repoRoot, ['log', base, '--format=%B', '--grep=cherry picked from commit']) || []) {
+    const m = /cherry picked from commit ([0-9a-f]{7,40})/.exec(line);
+    if (m) picked.add(m[1]);
+  }
+  const equivalent = new Set((gitLines(repoRoot, ['cherry', base, phase.closed_commit, phase.base_commit]) || []).filter((l) => l.startsWith('-')).map((l) => l.slice(2).trim()));
+  for (const sha of commits) {
+    const files = (gitLines(repoRoot, ['diff-tree', '--no-commit-id', '--name-only', '-r', sha]) || []).filter((f) => !f.startsWith('.oxe/'));
+    if (!files.length) continue;
+    if (files.every(isFrozen)) { out.skipped_frozen += 1; continue; }
+    out.checked += 1;
+    const ok = spawnSync('git', ['merge-base', '--is-ancestor', sha, base], { cwd: repoRoot, windowsHide: true }).status === 0
+      || [...picked].some((p) => sha.startsWith(p) || p.startsWith(sha))
+      || equivalent.has(sha);
+    if (ok) out.delivered.push(sha);
+    else out.missing.push({ sha, subject: ((gitLines(repoRoot, ['log', '-1', '--format=%s', sha]) || [])[0] || '').slice(0, 80) });
+  }
+  return out;
+}
+
+/**
+ * OXB-033: `oxe-cc runtime program init --from <program worktree> [--phase Fn] [--base <ref>] [--allow-undelivered]`, run
+ * in a NEW worktree: prepares its own .oxe/ from the program's one, to run an independent phase in parallel.
+ *   copied:  SPEC/ROADMAP (unless spec_ref/roadmap_ref point to tracked files), config.json, program/PROGRAM.json (with
+ *            NO active phase), changes/signoffs/decisions ndjson, regression/ and interfaces/ of closed phases, and their
+ *            dossier (the handoffs "O que a próxima fase deve saber").
+ *   never:   PLAN/pack/runs/events/caches/workspaces (all per worktree).
+ * With --phase, each dependency of the phase must be closed there AND delivered on --base (default HEAD): every commit
+ * of the dependency on base by ancestry, cherry-pick trailer or equivalent patch (phaseDeliveredOn); then the phase
+ * starts here.
+ */
+function runtimeProgramInitFrom(projectRoot, activeSession, options = {}) {
+  const programLib = require('./oxe-program.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  if (!options.from) throw new Error('informe a worktree do programa: oxe-cc runtime program init --from <pasta> [--phase Fn]');
+  const fromRoot = path.resolve(projectRoot, String(options.from));
+  if (path.resolve(fromRoot) === path.resolve(projectRoot)) throw new Error('--from é a worktree do programa; rode o init na worktree NOVA');
+  const src = resolveRuntimeArtifactPaths(fromRoot, activeSession);
+  const srcState = programLib.readProgram(src.programDir);
+  if (!srcState) throw new Error(`${options.from} não tem programa (.oxe/program/PROGRAM.json)`);
+  const dstOxe = path.join(projectRoot, '.oxe');
+  const dstProgramDir = path.join(dstOxe, 'program');
+  if (programLib.readProgram(dstProgramDir) && !options.force) throw new Error('esta worktree já tem programa — use --force para recriar a partir de --from');
+  const runtime = requireProgramRuntime();
+  const wanted = options.phase ? runtime.findPhase(srcState, options.phase) : null;
+  if (options.phase && !wanted) throw new Error(`fase ${options.phase} não existe no programa de ${options.from}`);
+  // Delivery of the dependencies on this worktree's base.
+  const base = String(options.base || 'HEAD');
+  const delivery = [];
+  if (wanted) {
+    if (srcState.active_phase === wanted.id) throw new Error(`${wanted.id} está ativa em ${options.from} — uma fase roda numa worktree só`);
+    if (wanted.status === 'closed') throw new Error(`${wanted.id} já está fechada`);
+    for (const dep of runtime.phaseDependencies(srcState, wanted)) {
+      if (dep.status !== 'closed') throw new Error(`${wanted.id} depende de ${dep.id}, que não está fechada em ${options.from}`);
+      const d = phaseDeliveredOn(projectRoot, dep, base);
+      delivery.push({ phase: dep.id, ...d });
+      // Commits that reached the base through other PRs (different patch) cannot be matched: the report lists them, and
+      // the safety net is the frozen regression of the closed phases, which runs in this phase's verify. --strict-delivery blocks.
+      if (d.missing.length && options.strictDelivery && !options.allowUndelivered) {
+        throw new Error(`${dep.id} não está toda em ${base}: ${d.missing.length} de ${d.checked} commit(s) da fase sem equivalente (${d.missing.slice(0, 4).map((m) => `${m.sha.slice(0, 8)} ${m.subject}`).join('; ')}) — mergeie os PRs promovidos, ou rode sem --strict-delivery (a regressão congelada da fase roda no verify desta)`);
+      }
+    }
+  }
+  const copyFile = (from, to) => { if (from && fs.existsSync(from)) { fs.mkdirSync(path.dirname(to), { recursive: true }); fs.copyFileSync(from, to); return true; } return false; };
+  const copyDir = (from, to) => { if (from && fs.existsSync(from)) { fs.mkdirSync(to, { recursive: true }); fs.cpSync(from, to, { recursive: true }); return true; } return false; };
+  fs.mkdirSync(dstProgramDir, { recursive: true });
+  const copied = [];
+  const srcConfig = readProjectConfig(fromRoot) || {};
+  if (copyFile(path.join(fromRoot, '.oxe', 'config.json'), path.join(dstOxe, 'config.json'))) copied.push('config.json');
+  if (!srcConfig.spec_ref && copyFile(src.spec, path.join(dstOxe, 'SPEC.md'))) copied.push('SPEC.md');
+  if (!srcConfig.roadmap_ref && copyFile(src.roadmap, path.join(dstOxe, 'ROADMAP.md'))) copied.push('ROADMAP.md');
+  if (!fs.existsSync(path.join(dstOxe, 'STATE.md'))) fs.writeFileSync(path.join(dstOxe, 'STATE.md'), `# STATE\n\nWorktree de fase paralela (de ${fromRoot}).\n`);
+  for (const name of ['changes.ndjson', 'signoffs.ndjson', 'decisions.ndjson']) if (copyFile(path.join(src.programDir, name), path.join(dstProgramDir, name))) copied.push(`program/${name}`);
+  const closed = srcState.phases.filter((p) => p.status === 'closed').map((p) => p.id);
+  for (const sub of ['regression', 'interfaces']) {
+    for (const id of closed) if (copyFile(path.join(src.programDir, sub, `${id}.json`), path.join(dstProgramDir, sub, `${id}.json`))) copied.push(`program/${sub}/${id}.json`);
+  }
+  const srcDossier = path.join(path.dirname(src.plan || path.join(fromRoot, '.oxe', 'PLAN.md')), 'dossier');
+  for (const id of closed) if (copyDir(path.join(srcDossier, id), path.join(dstOxe, 'dossier', id))) copied.push(`dossier/${id}`);
+  const state = JSON.parse(JSON.stringify(srcState));
+  state.active_phase = null;
+  state.forked_from = { root: fromRoot, active_there: srcState.active_phase || null, at: new Date().toISOString() };
+  state.updated_at = new Date().toISOString();
+  programLib.writeProgram(dstProgramDir, state);
+  copied.push('program/PROGRAM.json (sem fase ativa)');
+  changeLib.appendNdjson(changeLib.changesFile(dstProgramDir), { kind: 'program_edit', action: 'program_fork', from: fromRoot, phase: wanted ? wanted.id : null, base, delivery: delivery.map((d) => ({ phase: d.phase, checked: d.checked, missing: d.missing.map((m) => m.sha) })), allow_undelivered: Boolean(options.allowUndelivered), by: options.by || 'program init --from', at: new Date().toISOString() });
+  appendEvent(projectRoot, activeSession, { type: 'ProgramForked', payload: { from: fromRoot, phase: wanted ? wanted.id : null } });
+  let started = null;
+  if (wanted) started = runtimeProgramStart(projectRoot, activeSession, wanted.id);
+  return { copied, delivery, started: started ? started.state.active_phase : null, ...runtimeProgramStatus(projectRoot, activeSession) };
+}
+
+/**
  * OXB-033: `oxe-cc runtime program adopt --from <worktree>`: an independent phase ran and closed in another worktree
  * (its own .oxe/); adopt brings its close into this program — status, close data, frozen regression and interfaces —
  * so the phases that depend on it can start here, and its regression joins theirs. Only phases closed THERE and not
@@ -4072,6 +4180,11 @@ function runtimeProgramAdopt(projectRoot, activeSession, options = {}) {
     if (mine.title !== tp.title || JSON.stringify(mine.acceptance || []) !== JSON.stringify(tp.acceptance || [])) { skipped.push(`${tp.id}: o ROADMAP diverge entre as worktrees (título ou critérios) — alinhe antes de adotar`); continue; }
     for (const key of ['status', 'plan_ref', 'run_id', 'started_at', 'closed_at', 'closed_commit', 'base_commit', 'regression_ref', 'interfaces_ref']) if (tp[key] !== undefined) mine[key] = tp[key];
     mine.adopted_from = path.relative(projectRoot, fromRoot).replace(/\\/g, '/') || '.';
+    // the phase's dossier (handoff for the phases that depend on it)
+    try {
+      const fromDossier = path.join(path.dirname(theirsPaths.plan || path.join(fromRoot, '.oxe', 'PLAN.md')), 'dossier', tp.id);
+      if (fs.existsSync(fromDossier)) fs.cpSync(fromDossier, path.join(path.dirname(paths.plan || path.join(projectRoot, '.oxe', 'PLAN.md')), 'dossier', tp.id), { recursive: true });
+    } catch { /* auxiliar */ }
     for (const sub of ['regression', 'interfaces']) {
       const src = path.join(theirsPaths.programDir, sub, `${tp.id}.json`);
       if (fs.existsSync(src)) {
@@ -6106,6 +6219,8 @@ module.exports = {
   runtimePlanAppend,
   runtimeProgramBudget,
   runtimeProgramAdopt,
+  runtimeProgramInitFrom,
+  phaseDeliveredOn,
   runtimeDeployAttach,
   runtimeSignal,
   readNdjsonQuiet,
