@@ -2197,6 +2197,11 @@ function runDoctor(target, options = {}) {
   } else {
     console.log(`${dim}Obs.:${reset} .oxe/config.json ausente (opcional — ver oxe/templates/CONFIG.md)`);
   }
+  // OXB-058: a gitignored .oxe/ with no versioned export leaves SPEC/ROADMAP/PROGRAM edits without history.
+  try {
+    const historyWarning = oxeOperational.oxeHistoryWarning(target);
+    if (historyWarning) console.log(`${yellow}AVISO${reset} ${historyWarning}`);
+  } catch { /* opcional */ }
 
   const cbDir = path.join(target, '.oxe', 'codebase');
   const expectedMaps = [
@@ -2562,6 +2567,11 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime scorecard [--since <data>] [--write] [--release-report <arquivo> --name <projeto>] [--json]
   npx oxe-cc runtime ci --attach <run-id|url> [--repo owner/repo] [--head <sha>]
   npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"] [--no-gates]
+  npx oxe-cc spec amend A<n> (--text "…"|--append "…"|--verify "…") --by <papel> --reason "…" [--additive] [--phase Fn]
+  npx oxe-cc spec add criterion A<n> --text "…" --verify "…" --by <papel> --reason "…" [--allow-gap]
+  npx oxe-cc spec add requirement R<n> --text "…" [--criteria A<n>,…] [--before "### Fora do escopo"] --by <papel> --reason "…"
+  npx oxe-cc program phase add --after Fn --title "…" [--requirements R14] [--acceptance A42,A43] [--scope "…"] --by <papel>
+  npx oxe-cc program export [<pasta>]   (padrão: program.export_dir do .oxe/config.json)
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
     npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
     npx oxe-cc plugins <list|install|remove> [opções]
@@ -6043,11 +6053,19 @@ async function main() {
     argv[0] === 'capabilities' ||
     argv[0] === 'plugins' ||
     argv[0] === 'plan' ||
+    argv[0] === 'spec' ||
+    argv[0] === 'program' ||
     argv[0] === 'verify' ||
     argv[0] === 'install'
   ) {
     command = argv[0];
     argv.shift();
+  }
+  // OXB-058: `oxe-cc program <status|init|start|close>` is `runtime program …`; `phase add` and `export` are handled
+  // below with `spec`.
+  if (command === 'program' && !(argv[0] === 'phase' || argv[0] === 'export')) {
+    command = 'runtime';
+    argv.unshift('program');
   }
 
   const coreRegistry = createCoreCommandRegistry({
@@ -6160,6 +6178,68 @@ async function main() {
     return;
   }
 
+  // OXB-058: `oxe-cc spec amend|add …` and `oxe-cc program phase add|export …`.
+  if (command === 'spec' || command === 'program') {
+    const sub = command === 'spec' ? argv[0] : argv[0] === 'phase' ? 'phase add' : 'export';
+    const rest = command === 'program' && argv[0] === 'phase' ? argv.slice(2) : argv.slice(1);
+    if (command === 'program' && argv[0] === 'phase' && argv[1] !== 'add') {
+      console.error(`${red}Use:${reset} oxe-cc program phase add --after Fn --title "…" [--requirements R14] [--acceptance A42,A43] [--scope "…"] --by <papel>`);
+      process.exit(1);
+    }
+    const o = { dir: process.cwd(), session: null, json: false };
+    const positional = [];
+    const VALUE_FLAGS = { '--by': 'by', '--reason': 'reason', '--text': 'text', '--append': 'append', '--verify': 'verify', '--phase': 'phase', '--criteria': 'criteria', '--before': 'before', '--version': 'version', '--after': 'after', '--title': 'title', '--requirements': 'requirements', '--acceptance': 'acceptance', '--scope': 'scope' };
+    for (let i = 0; i < rest.length; i += 1) {
+      const a = rest[i];
+      if (VALUE_FLAGS[a] && rest[i + 1] != null) o[VALUE_FLAGS[a]] = String(rest[++i]);
+      else if (a === '--dir' && rest[i + 1]) o.dir = path.resolve(rest[++i]);
+      else if (a === '--session' && rest[i + 1]) o.session = String(rest[++i]).replace(/\\/g, '/');
+      else if (a === '--additive') o.additive = true;
+      else if (a === '--allow-gap') o.allowGap = true;
+      else if (a === '--json') o.json = true;
+      else if (a.startsWith('-')) { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+      else positional.push(a);
+    }
+    const c = useAnsiColors();
+    try {
+      let out;
+      if (command === 'spec' && sub === 'amend') {
+        out = oxeOperational.runtimeSpecAmend(o.dir, o.session, { ...o, id: positional[0] });
+        if (!o.json) {
+          console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.id} → v${out.version} (${out.cr.id}, ${out.cr.amendment}) na fase ${out.phase || '—'}`);
+          console.log(`  antes:  ${out.before}\n  depois: ${out.after}`);
+          if (out.reopened_tasks && out.reopened_tasks.length) console.log(`  Reabertas: ${out.reopened_tasks.join(', ')}`);
+        }
+      } else if (command === 'spec' && sub === 'add') {
+        out = oxeOperational.runtimeSpecAdd(o.dir, o.session, { ...o, kind: positional[0], id: positional[1] });
+        if (!o.json) console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.id} adicionado à SPEC: ${out.after}`);
+      } else if (sub === 'phase add') {
+        out = oxeOperational.runtimeProgramPhaseAdd(o.dir, o.session, o);
+        if (!o.json) {
+          console.log(`  ${c ? green : ''}✓${c ? reset : ''} fase ${out.phase} inserida depois de ${out.after}${out.renumbered.length ? ` · renumeradas: ${out.renumbered.map((r) => `${r.from}→${r.to}`).join(', ')}` : ''}`);
+          if (out.moved_change_records) console.log(`  ${out.moved_change_records} registro(s) de mudança acompanharam a fase renumerada`);
+          for (const w of out.warnings) console.log(`  ${yellow}!${reset} ${w}`);
+          for (const l of out.leftovers) console.log(`  ${yellow}!${reset} ${l}`);
+        }
+      } else if (sub === 'export') {
+        out = oxeOperational.runtimeProgramExport(o.dir, o.session, { dir: positional[0] || null });
+        if (!o.json) {
+          console.log(`  ${c ? green : ''}✓${c ? reset : ''} exportado para ${out.dir}: ${out.written.map((w) => path.basename(w)).join(', ')}`);
+          if (out.missing.length) console.log(`  ${c ? dim : ''}ausentes:${c ? reset : ''} ${out.missing.join(', ')}`);
+        }
+      } else {
+        console.error(`${red}Use:${reset} oxe-cc spec amend A<n> (--text|--append|--verify) --by <papel> --reason "…" [--additive] | oxe-cc spec add criterion A<n> --text "…" --verify "…" | oxe-cc spec add requirement R<n> --text "…" [--criteria A<n>] [--before "<cabeçalho>"]`);
+        process.exit(1);
+      }
+      if (o.json) console.log(JSON.stringify({ oxeProgramEditSchema: 1, ...out, program: undefined }, null, 2));
+      else if (out && out.export && out.export.written) console.log(`  ${c ? dim : ''}export atualizado:${c ? reset : ''} ${out.export.dir}`);
+      process.exit(0);
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exit(1);
+    }
+  }
+
   if (command === 'plan' && argv[0] === 'reopen') {
     // oxe-cc plan reopen T<n> [--dir <pasta>]
     const rest = argv.slice(1);
@@ -6168,7 +6248,7 @@ async function main() {
     for (let i = 0; i < rest.length; i += 1) {
       const a = rest[i];
       if (a === '--dir' && rest[i + 1]) dir = path.resolve(rest[++i]);
-      else if (/^Td+$/.test(a)) task = a;
+      else if (/^T\d+$/.test(a)) task = a;
       else if (!a.startsWith('-')) dir = path.resolve(a);
     }
     try {

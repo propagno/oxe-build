@@ -2799,6 +2799,7 @@ function runtimeFeedback(projectRoot, activeSession, options = {}) {
     programDir, program, plan,
     class: options.class, summary: options.summary, criteria: options.criteria, by: options.by,
     phase: options.phase, amendTo: options.amendTo, evidence: options.evidence, additive: Boolean(options.additive),
+    specEdit: options.specEdit || null,
   });
   if (result.reopened && result.program) programLib.writeProgram(programDir, result.program);
   // 1.21.1: a defect or spec_gap reopens tasks (done → open), so the next execute redoes exactly them.
@@ -2823,6 +2824,226 @@ function runtimeFeedback(projectRoot, activeSession, options = {}) {
   });
   try { projectStateMd(projectRoot, activeSession); } catch { /* projeção auxiliar */ }
   return result;
+}
+
+// ── OXB-058: SPEC / ROADMAP / PROGRAM edits with an audit trail ─────────────────────────────────────────────
+
+function writeTextAtomic(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, text, 'utf8');
+  fs.renameSync(tmp, file);
+}
+
+function requireEditReason(options) {
+  const by = String(options.by || '').trim();
+  const reason = String(options.reason || '').trim();
+  if (!by) throw new Error('informe quem pede a mudança (--by <papel>)');
+  if (reason.length < 8) throw new Error('informe o motivo em uma frase (--reason "...")');
+  return { by, reason };
+}
+
+/** Phase of the program whose acceptance lists `criterion` (any status), or null. */
+function phaseOfCriterion(program, criterion) {
+  if (!program || !Array.isArray(program.phases)) return null;
+  const hit = program.phases.find((p) => Array.isArray(p.acceptance) && p.acceptance.includes(criterion));
+  return hit ? hit.id : null;
+}
+
+/** Export configured in config.json (`program.export_dir`, relative to the project), or null. */
+function programExportDir(projectRoot) {
+  const config = readProjectConfig(projectRoot) || {};
+  const dir = config.program && typeof config.program.export_dir === 'string' ? config.program.export_dir.trim() : '';
+  return dir || null;
+}
+
+/**
+ * `oxe-cc program export [<dir>]`: copies SPEC.md, ROADMAP.md, PROGRAM.json and changes.ndjson to a tracked folder
+ * (same file names), so a project that gitignores .oxe/ keeps a versioned trail. Default dir: `program.export_dir`.
+ */
+function runtimeProgramExport(projectRoot, activeSession, options = {}) {
+  const dirArg = options.dir || programExportDir(projectRoot);
+  if (!dirArg) throw new Error('informe a pasta: oxe-cc program export <pasta> (ou configure "program": { "export_dir": "…" } no .oxe/config.json)');
+  const target = path.resolve(projectRoot, dirArg);
+  const rel = path.relative(path.join(projectRoot, '.oxe'), target);
+  if (!rel.startsWith('..') && !path.isAbsolute(rel)) throw new Error('a pasta de export não pode ficar dentro de .oxe/ (ela existe para ser versionada)');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const sources = [
+    ['SPEC.md', paths.spec],
+    ['ROADMAP.md', paths.roadmap],
+    ['PROGRAM.json', path.join(programDir, 'PROGRAM.json')],
+    ['changes.ndjson', path.join(programDir, 'changes.ndjson')],
+  ];
+  fs.mkdirSync(target, { recursive: true });
+  const written = [];
+  const missing = [];
+  for (const [name, src] of sources) {
+    if (src && fs.existsSync(src)) {
+      fs.copyFileSync(src, path.join(target, name));
+      written.push(path.relative(projectRoot, path.join(target, name)).replace(/\\/g, '/'));
+    } else {
+      missing.push(name);
+    }
+  }
+  return { dir: path.relative(projectRoot, target).replace(/\\/g, '/') || '.', written, missing };
+}
+
+/** After an edit: refresh the configured export (never fails the edit). */
+function autoExportProgram(projectRoot, activeSession) {
+  if (!programExportDir(projectRoot)) return null;
+  try { return runtimeProgramExport(projectRoot, activeSession, {}); } catch (err) { return { error: err.message }; }
+}
+
+/**
+ * `oxe-cc spec amend <A-id> --by <papel> --reason <texto> (--text|--append|--verify) [--additive]`: edits the criterion
+ * row in SPEC.md, for a criterion of ANY phase (planned or not), and records a spec_gap CR with the version bump and the
+ * row before/after. `--additive` has the OXB-062 semantics (the earlier acceptance tests stay valid).
+ */
+function runtimeSpecAmend(projectRoot, activeSession, options = {}) {
+  const specEdit = require('./oxe-spec-edit.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const programLib = require('./oxe-program.cjs');
+  const { by, reason } = requireEditReason(options);
+  const id = String(options.id || '').trim().toUpperCase();
+  if (!/^A\d+$/.test(id)) throw new Error('informe o critério: oxe-cc spec amend A<n> …');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const specText = readTextIfExists(paths.spec);
+  if (!specText) throw new Error(`SPEC.md não encontrada (${paths.spec})`);
+  const edit = specEdit.amendCriterion(specText, id, { text: options.text, append: options.append, verify: options.verify });
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const program = programLib.readProgram(programDir);
+  const current = changeLib.amendmentRequirements(programDir).get(id);
+  const version = (current ? current.required : 1) + 1;
+  const phase = options.phase || phaseOfCriterion(program, id) || (program && program.active_phase) || null;
+  const result = runtimeFeedback(projectRoot, activeSession, {
+    class: 'spec_gap', summary: reason, criteria: id, by, phase, amendTo: version, additive: Boolean(options.additive),
+    specEdit: { file: path.relative(projectRoot, paths.spec).replace(/\\/g, '/'), before: edit.before, after: edit.after },
+  });
+  writeTextAtomic(paths.spec, edit.text);
+  appendEvent(projectRoot, activeSession, { type: 'SpecAmended', payload: { id, version, cr: result.cr.id, additive: Boolean(options.additive), phase } });
+  return { ...result, id, version, phase, before: edit.before, after: edit.after, export: autoExportProgram(projectRoot, activeSession) };
+}
+
+/**
+ * `oxe-cc spec add criterion A42 --text … --verify …` / `spec add requirement R14 --text … [--criteria A42,A43]
+ * [--before "### Fora do escopo"]`: new ids, checked for uniqueness and gaps, each recorded in changes.ndjson.
+ */
+function runtimeSpecAdd(projectRoot, activeSession, options = {}) {
+  const specEdit = require('./oxe-spec-edit.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const { by, reason } = requireEditReason(options);
+  const kind = String(options.kind || '').toLowerCase();
+  if (kind !== 'criterion' && kind !== 'requirement') throw new Error('use: oxe-cc spec add criterion A<n> … | spec add requirement R<n> …');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const specText = readTextIfExists(paths.spec);
+  if (!specText) throw new Error(`SPEC.md não encontrada (${paths.spec})`);
+  const edit = kind === 'criterion'
+    ? specEdit.addCriterion(specText, options.id, { text: options.text, verify: options.verify, allowGap: options.allowGap })
+    : specEdit.addRequirement(specText, options.id, { text: options.text, version: options.version, criteria: options.criteria, before: options.before, allowGap: options.allowGap });
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const record = {
+    kind: 'spec_edit',
+    action: kind === 'criterion' ? 'add_criterion' : 'add_requirement',
+    id: edit.id,
+    by,
+    reason,
+    at: new Date().toISOString(),
+    file: path.relative(projectRoot, paths.spec).replace(/\\/g, '/'),
+    before: null,
+    after: edit.after,
+  };
+  writeTextAtomic(paths.spec, edit.text);
+  changeLib.appendNdjson(changeLib.changesFile(programDir), record);
+  appendEvent(projectRoot, activeSession, { type: 'SpecEdited', payload: { action: record.action, id: edit.id, by } });
+  return { ...record, export: autoExportProgram(projectRoot, activeSession) };
+}
+
+/**
+ * `oxe-cc program phase add --after Fn --title … --requirements R14 --acceptance A42,A43 [--scope …]`: inserts phase
+ * F(n+1) in ROADMAP.md and PROGRAM.json and renumbers the later phases (+1). It refuses when a phase it would renumber
+ * has started (status ≠ pending, plan_ref, run_id or started_at). Change records that pointed at a renumbered phase
+ * follow it; leftover textual mentions in SPEC, ROADMAP and LESSONS are reported.
+ */
+function runtimeProgramPhaseAdd(projectRoot, activeSession, options = {}) {
+  const specEdit = require('./oxe-spec-edit.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const programLib = require('./oxe-program.cjs');
+  const { by, reason } = requireEditReason({ by: options.by, reason: options.reason || `nova fase depois de ${options.after}: ${options.title || ''}` });
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const state = programLib.readProgram(programDir);
+  if (!state) throw new Error('Sem programa. Rode `oxe-cc runtime program init`.');
+  const afterId = String(options.after || '').trim().toUpperCase().replace(/^(?:FASE|PHASE)\s*/, 'F');
+  const afterNorm = /^\d+$/.test(afterId) ? `F${afterId}` : afterId;
+  const idx = state.phases.findIndex((p) => p.id.toUpperCase() === afterNorm);
+  if (idx < 0) throw new Error(`fase ${options.after} não existe no programa`);
+  const title = String(options.title || '').trim();
+  if (!title) throw new Error('informe --title <nome da fase>');
+  const list = (v) => (Array.isArray(v) ? v : String(v || '').split(',')).map((x) => x.trim().toUpperCase()).filter(Boolean);
+  const requirements = list(options.requirements);
+  const acceptance = list(options.acceptance);
+  const later = state.phases.slice(idx + 1);
+  const started = later.filter((p) => p.status !== 'pending' || p.plan_ref || p.run_id || p.started_at || state.active_phase === p.id);
+  if (started.length) {
+    throw new Error(`não dá para inserir depois de ${afterNorm}: ${started.map((p) => `${p.id} (${p.status}${p.plan_ref ? ', com plano' : ''}${p.run_id ? ', com run' : ''})`).join(', ')} já começou — renumerar quebraria plano, runs e regressão. Insira depois da última fase iniciada.`);
+  }
+  const roadmapText = readTextIfExists(paths.roadmap);
+  if (!roadmapText) throw new Error(`ROADMAP.md não encontrado (${paths.roadmap})`);
+  const roadmapEdit = specEdit.insertRoadmapPhase(roadmapText, afterNorm, { title, requirements, acceptance, scope: options.scope });
+  const n = Number(afterNorm.slice(1));
+  const newId = `F${n + 1}`;
+  const renumbered = [];
+  const next = JSON.parse(JSON.stringify(state));
+  for (const p of next.phases.slice(idx + 1)) {
+    const to = `F${Number(p.id.slice(1)) + 1}`;
+    renumbered.push({ from: p.id, to });
+    p.id = to;
+  }
+  next.phases.splice(idx + 1, 0, {
+    id: newId, title, requirements, acceptance, scope: options.scope ? String(options.scope) : null,
+    status: 'pending', plan_ref: null, run_id: null, started_at: null, closed_at: null, closed_commit: null, regression_ref: null, interfaces_ref: null,
+  });
+  next.updated_at = new Date().toISOString();
+  // Ids the new phase cites must exist in the SPEC (add them with `spec add`).
+  const specText = readTextIfExists(paths.spec) || '';
+  const warnings = [];
+  const knownA = new Set(specEdit.criteriaIds(specText));
+  const knownR = new Set(specEdit.requirementIds(specText));
+  for (const a of acceptance) if (!knownA.has(a)) warnings.push(`${a} não está na tabela de critérios da SPEC (oxe-cc spec add criterion ${a} …)`);
+  if (knownR.size) for (const r of requirements) if (!knownR.has(r)) warnings.push(`${r} não está na tabela de requisitos da SPEC (oxe-cc spec add requirement ${r} …)`);
+  // Change records follow their phase (rewritten in place: the phase id is a reference, not history).
+  const changesPath = changeLib.changesFile(programDir);
+  const map = new Map(renumbered.map((r) => [r.from, r.to]));
+  let movedRecords = 0;
+  if (map.size && fs.existsSync(changesPath)) {
+    const records = changeLib.readNdjson(changesPath);
+    const rewritten = records.map((r) => {
+      if (r && r.phase && map.has(r.phase)) { movedRecords += 1; return { ...r, phase: map.get(r.phase) }; }
+      return r;
+    });
+    if (movedRecords) writeTextAtomic(changesPath, rewritten.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  }
+  programLib.writeProgram(programDir, next);
+  writeTextAtomic(paths.roadmap, roadmapEdit.text);
+  changeLib.appendNdjson(changesPath, { kind: 'program_edit', action: 'phase_add', phase: newId, after: afterNorm, title, requirements, acceptance, renumbered, by, reason, at: new Date().toISOString() });
+  const lessonsPath = path.join(projectRoot, '.oxe', 'LESSONS.md');
+  const leftovers = [
+    ...specEdit.leftoverPhaseMentions(specText, renumbered, 'SPEC.md'),
+    ...specEdit.leftoverPhaseMentions(roadmapEdit.text, renumbered, 'ROADMAP.md'),
+    ...specEdit.leftoverPhaseMentions(readTextIfExists(lessonsPath) || '', renumbered, 'LESSONS.md'),
+  ];
+  appendEvent(projectRoot, activeSession, { type: 'ProgramPhaseAdded', payload: { phase: newId, after: afterNorm, renumbered, by } });
+  return { phase: newId, after: afterNorm, renumbered, moved_change_records: movedRecords, warnings, leftovers, export: autoExportProgram(projectRoot, activeSession) };
+}
+
+/** OXB-058: doctor — .oxe/ gitignored with no versioned export means SPEC/ROADMAP/PROGRAM edits leave no history. */
+function oxeHistoryWarning(projectRoot) {
+  if (programExportDir(projectRoot)) return null;
+  if (!fs.existsSync(path.join(projectRoot, '.oxe'))) return null;
+  const res = spawnSync('git', ['check-ignore', '-q', '.oxe/SPEC.md'], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+  if (res.status !== 0) return null;
+  return '.oxe/ está no .gitignore e não há export versionado: emendas de SPEC/ROADMAP/PROGRAM ficam sem histórico. Rode `oxe-cc program export docs/oxe` e configure "program": { "export_dir": "docs/oxe" } no .oxe/config.json';
 }
 
 /**
@@ -4684,6 +4905,11 @@ module.exports = {
   projectStatusPaths,
   runtimePlanReopen,
   runtimePhaseWork,
+  runtimeSpecAmend,
+  runtimeSpecAdd,
+  runtimeProgramPhaseAdd,
+  runtimeProgramExport,
+  oxeHistoryWarning,
   resolveMergedDependencies,
   isolateFailedTask,
   planSourceHash,

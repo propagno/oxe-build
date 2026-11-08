@@ -290,7 +290,14 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-058: emendar um critério de fase ainda não planejada, e a trilha de auditoria
 
-- **Status:** aberto. Detalhes e aceite em `HANDOFF-1.21.2.md` §10.
+- **Status:** resolvido (1.21.2).
+  - `oxe-cc spec amend A<n> (--text|--append|--verify) --by --reason [--additive] [--phase]`: edita a linha do critério de qualquer fase e registra um CR `spec_gap` com a versão incrementada, o `amendment` (semântica da OXB-062) e `spec_edit {before, after}`.
+  - `oxe-cc spec add criterion A<n> --text --verify` e `spec add requirement R<n> --text [--criteria] [--before "<cabeçalho>"]`: ids únicos e sem buraco (`--allow-gap` para pular de propósito), cada um com um registro `spec_edit` (by, reason, at, after) em changes.ndjson.
+  - `oxe-cc program phase add --after Fn --title [--requirements] [--acceptance] [--scope]`: insere a seção no ROADMAP e a fase no PROGRAM.json e renumera só as fases `pending` sem plan_ref/run_id/started_at. Recusa se alguma já começou. Os registros de changes.ndjson da fase renumerada acompanham a fase. Avisa sobre menções textuais restantes em SPEC, ROADMAP e LESSONS, e sobre ids que a fase cita mas a SPEC não tem.
+  - `oxe-cc program export [<pasta>]` (padrão: `program.export_dir` no config) grava SPEC.md, ROADMAP.md, PROGRAM.json e changes.ndjson com os mesmos nomes. Com `export_dir` definido, as edições acima atualizam o export sozinhas.
+  - O `doctor` avisa quando `.oxe/` está no .gitignore e não há `export_dir`, com o comando exato.
+  - Teste: `tests/oxe-1212-program-edit.test.cjs` (cenário de 07/11: cláusulas da A40, fase do celular F8 com A42 e a F8 antiga virando F9).
+  - De quebra: o `oxe-cc plan reopen T<n>` da CLI nunca reconhecia o id (regex `/^Td+$/`); corrigido, com teste.
 
 ## OXB-059: o `runtime status` depois que o trabalho da fase terminou
 

@@ -129,6 +129,8 @@ function recordChange(input) {
     amendment: cls === 'spec_gap' ? (input.additive ? 'additive' : 'changing') : null,
     evidence: input.evidence || null,
     ...(input.gate ? { gate: String(input.gate) } : {}),
+    // OXB-058: the SPEC edit this CR made (`spec amend`): the row before and after, for the audit trail.
+    ...(input.specEdit ? { spec_edit: input.specEdit } : {}),
   };
   appendNdjson(changesFile(programDir), cr);
   const impacted = impactedTasks(plan, criteria);
@@ -255,4 +257,4 @@ function checkPolicyRules(projectRoot, rules, files) {
   return violations;
 }
 
-module.exports = { CLASSES, listChanges, recordChange, setChangeStatus, reconcileChanges, requiredVersions, amendmentRequirements, checkPolicyRules, impactedTasks, changesFile };
+module.exports = { CLASSES, appendNdjson, readNdjson, listChanges, recordChange, setChangeStatus, reconcileChanges, requiredVersions, amendmentRequirements, checkPolicyRules, impactedTasks, changesFile };
