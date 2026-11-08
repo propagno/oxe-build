@@ -53,3 +53,22 @@ describe('OXB-070: a failed gate is summarized by the lines that make it fail', 
     assert.doesNotMatch(cr.summary, /warning/);
   });
 });
+
+describe('OXB-045: the checkpoint commit never carries an unfilled template placeholder', () => {
+  const conv = require('../bin/lib/oxe-commit-convention.cjs');
+  const config = { commit_convention: { template: '{type}({scope}): {message}', type: 'feat', pattern: '^(feat|fix|test|docs|chore|refactor)(\([^)]+\))?: .+', require_task_message: false } };
+
+  it('{message} is the task title (F1: three checkpoints were "feat: {message}")', () => {
+    assert.equal(conv.checkpointSubject({ id: 'T4', title: 'add workspace color column' }, config), 'feat: add workspace color column');
+    const msg = conv.checkpointMessage({ id: 'T4', title: 'add workspace color column' }, config);
+    assert.doesNotMatch(msg, /\{\w+\}/);
+    assert.match(msg, /OXE-Task: T4/);
+  });
+
+  it('lint reports an unknown placeholder and simulates every task message against the pattern', () => {
+    const errors = conv.lintCommitConvention({ tasks: [{ id: 'T4', title: 'x' }] }, { commit_convention: { template: '{type}: {msg}', pattern: '^feat: .{3,}' } });
+    assert.ok(errors.some((e) => /placeholder desconhecido: \{msg\}/.test(e)), errors.join('\n'));
+    assert.ok(errors.some((e) => /T4: mensagem do checkpoint "feat: x" não segue/.test(e)), errors.join('\n'));
+    assert.doesNotMatch(conv.checkpointSubject({ id: 'T4', title: 'x' }, { commit_convention: { template: '{type}: {msg}' } }), /\{/);
+  });
+});

@@ -167,7 +167,7 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-045: o checkpoint commit saiu como "feat: {message}" (template não preenchido)
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21.2). `{message}`, `{subject}` e `{summary}` viram o título da tarefa. Um placeholder desconhecido nunca chega ao histórico: cai no título. O `plan lint` acusa o placeholder desconhecido no template e simula a mensagem de cada tarefa contra o `pattern`. Teste: `tests/oxe-1212-gate-summary.test.cjs`.
 - **Evidência:** com `commit_convention.template = "{type}({scope}): {message}"` e sem `commit` nas tarefas (`require_task_message: false`), os três checkpoints da F1 (T4, T5, T6) foram gravados literalmente como `feat: {message}`. O `plan lint` valida o `pattern`, mas não acusou que a mensagem final não teria conteúdo.
 - **Impacto:** o histórico fica ilegível. O time precisa reescrever as mensagens antes de abrir os PRs, e o `OXE-Task` some se alguém fizer squash à mão.
 - **Proposta:** sem `commit` na tarefa, usar o título da tarefa como `{message}`. Se o placeholder sobrar na mensagem final, falhar o checkpoint. O lint simula a mensagem de cada tarefa contra o `pattern`.
