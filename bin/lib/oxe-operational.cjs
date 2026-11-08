@@ -583,6 +583,101 @@ function runtimePrintPrompt(projectRoot, activeSession, options = {}) {
   return { task: taskId, file, total_chars: full.length, est_tokens: tokens(full.length), sections };
 }
 
+const sleepMs = (ms) => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* */ } };
+
+/**
+ * OXB-161: the promote state of each dependency of `task` (PLAN.json depends_on): its latest TaskPromoted branch/PR,
+ * and whether that is merged into the base — by `gh pr view` when there is a PR, else by git (the branch is an
+ * ancestor of the base, or `git cherry` finds every commit already there). A dependency whose promote is still
+ * running (TaskPromoteQueued after its last result, from --promote-each) is waited for.
+ */
+function promoteDependencies(projectRoot, activeSession, task, ctx) {
+  const deps = Array.isArray(task.depends_on) ? task.depends_on : [];
+  if (!deps.length) return [];
+  const { remote, options } = ctx;
+  const waitUntil = Date.now() + (Number(options.depPromoteWaitMs) >= 0 && options.depPromoteWaitMs != null ? Number(options.depPromoteWaitMs) : 30 * 60_000);
+  const scan = () => {
+    const events = readEvents(projectRoot, activeSession);
+    const state = new Map();
+    events.forEach((e, i) => {
+      if (!e || !deps.includes(e.work_item_id)) return;
+      const st = state.get(e.work_item_id) || {};
+      if (e.type === 'TaskPromoteQueued') st.queued = i;
+      if (e.type === 'TaskPromoted' || e.type === 'TaskPromoteFailed') st.done = i;
+      if (e.type === 'TaskPromoted' && e.payload && e.payload.branch) st.promoted = { index: i, branch: e.payload.branch, pr: e.payload.pr || null };
+      state.set(e.work_item_id, st);
+    });
+    return state;
+  };
+  let state = scan();
+  const running = () => deps.filter((d) => { const st = state.get(d); return st && st.queued != null && (st.done == null || st.done < st.queued); });
+  while (running().length && Date.now() < waitUntil) { sleepMs(Math.min(5000, Math.max(0, waitUntil - Date.now()))); state = scan(); }
+  const out = [];
+  for (const dep of deps) {
+    const st = state.get(dep) || {};
+    if (!st.promoted) { out.push({ task: dep, promoted: false, running: running().includes(dep) }); continue; }
+    const { branch, pr } = st.promoted;
+    gitRun(projectRoot, ['fetch', '-q', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
+    const ref = gitLines(projectRoot, ['rev-parse', '--verify', '-q', `refs/remotes/${remote}/${branch}`]) ? `refs/remotes/${remote}/${branch}`
+      : gitLines(projectRoot, ['rev-parse', '--verify', '-q', `refs/heads/${branch}`]) ? `refs/heads/${branch}` : null;
+    const sha = ref ? (gitLines(projectRoot, ['rev-parse', ref]) || [])[0] : null;
+    let merged = null;
+    let prState = null;
+    if (pr) {
+      const gh = (options.ghSpawn || spawnSync)('gh', ['pr', 'view', String(pr), '--json', 'state'], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+      if (gh && gh.status === 0) { try { prState = String(JSON.parse(gh.stdout).state || '').toUpperCase(); } catch { prState = null; } }
+      if (prState === 'MERGED') merged = true;
+    }
+    if (merged == null && sha) {
+      if (gitRun(projectRoot, ['merge-base', '--is-ancestor', sha, ctx.baseSha]).ok) merged = true;
+      else {
+        const cherry = (gitRun(projectRoot, ['cherry', ctx.baseSha, sha]).stdout || '').split(/\r?\n/).filter(Boolean);
+        merged = cherry.every((l) => l.startsWith('-'));
+      }
+    }
+    if (merged == null) merged = prState === 'MERGED';
+    out.push({ task: dep, promoted: true, branch, pr, ref, sha, merged, pr_state: prState, index: st.promoted.index });
+  }
+  return out;
+}
+
+/** OXB-161: which promote branch to stack on (or wait for, with --hold-deps). */
+function promoteStack(projectRoot, activeSession, task, ctx) {
+  const { options, remote } = ctx;
+  let baseSha = ctx.baseSha;
+  const warnings = [];
+  let deps = promoteDependencies(projectRoot, activeSession, task, { ...ctx, baseSha });
+  let unmerged = deps.filter((d) => d.promoted && d.merged === false && d.sha);
+  if (unmerged.length && options.holdDeps) {
+    const until = Date.now() + (Number(options.holdTimeoutMs) > 0 ? Number(options.holdTimeoutMs) : 6 * 3600_000);
+    const baseName = ctx.base.replace(new RegExp(`^${remote}/`), '');
+    appendEvent(projectRoot, activeSession, { type: 'TaskPromoteHeld', work_item_id: task.id, payload: { waiting_for: unmerged.map((d) => ({ task: d.task, pr: d.pr, branch: d.branch })) } });
+    while (unmerged.length && Date.now() < until) {
+      sleepMs(Math.min(Number(options.holdPollMs) > 0 ? Number(options.holdPollMs) : 60_000, Math.max(0, until - Date.now())));
+      gitRun(projectRoot, ['fetch', '-q', remote, baseName]);
+      baseSha = (gitLines(projectRoot, ['rev-parse', '--verify', `${ctx.base}^{commit}`]) || [])[0] || baseSha;
+      deps = promoteDependencies(projectRoot, activeSession, task, { ...ctx, baseSha, options: { ...options, depPromoteWaitMs: 0 } });
+      unmerged = deps.filter((d) => d.promoted && d.merged === false && d.sha);
+    }
+    if (unmerged.length) throw new Error(`${task.id} aguarda o merge de ${unmerged.map((d) => `${d.task}${d.pr ? ` (${d.pr})` : ` (${d.branch})`}`).join(', ')} em ${ctx.base} — --hold-deps esgotou a espera; rode de novo depois do merge, ou sem --hold-deps para empilhar`);
+    return { baseSha, stack: null, warnings };
+  }
+  for (const d of deps) {
+    if (!d.promoted) warnings.push(`${task.id} depende de ${d.task}, que ${d.running ? 'ainda está sendo promovida' : 'não foi promovida'}: a branch sai de ${ctx.base}; se ${d.task} não estiver lá, o pr:ready pode falhar`);
+    else if (d.merged === false && d.pr_state === 'CLOSED') warnings.push(`o PR de ${d.task} (${d.pr}) foi fechado sem merge — empilhando sobre a branch dele mesmo assim`);
+  }
+  if (!unmerged.length) return { baseSha, stack: null, warnings };
+  // the one branch that already contains the others (a stacked chain), else the latest promoted
+  const contains = (a, b) => a.sha === b.sha || gitRun(projectRoot, ['merge-base', '--is-ancestor', b.sha, a.sha]).ok;
+  let stack = unmerged.find((c) => unmerged.every((o) => contains(c, o)));
+  if (!stack) {
+    stack = [...unmerged].sort((a, b) => b.index - a.index)[0];
+    const left = unmerged.filter((o) => !contains(stack, o));
+    warnings.push(`${task.id} depende de várias tarefas não mergeadas em branches separadas; empilhada sobre ${stack.task} — ${left.map((o) => o.task).join(', ')} fica(m) de fora até o merge (o pr:ready pode falhar)`);
+  }
+  return { baseSha, stack, warnings };
+}
+
 /** OXB-160: the tests' own tree for a frozen test file: up to its tests/test/__tests__/spec/e2e dir, else its own dir. */
 function promoteTestRoot(file) {
   const parts = String(file).replace(/\\/g, '/').split('/');
@@ -660,6 +755,7 @@ function spawnPromote(projectRoot, activeSession, taskId, opts = {}, runId = nul
   const log = fs.openSync(path.join(logDir, `${taskId}.log`), 'a');
   const args = [path.join(__dirname, '..', 'oxe-cc.js'), 'runtime', 'promote', taskId, ...(opts.base ? ['--base', opts.base] : []), '--remote', opts.remote || 'origin', '--open-pr', '--dir', projectRoot];
   if (activeSession) args.push('--session', activeSession);
+  if (opts.holdDeps) args.push('--hold-deps');
   const child = spawn(process.execPath, args, { cwd: projectRoot, detached: true, stdio: ['ignore', log, log], windowsHide: true, env: { ...process.env, OXE_NO_PROMPT: '1' } });
   child.unref();
   appendEvent(projectRoot, activeSession, { type: 'TaskPromoteQueued', run_id: runId, work_item_id: taskId, payload: { base: opts.base || 'main', log: path.relative(projectRoot, path.join(logDir, `${taskId}.log`)).replace(/\\/g, '/') } });
@@ -3851,7 +3947,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     const dirty = dirtyProjectPaths(projectRoot);
     if (dirty.length) throw new Error(`working tree com mudanças fora de .oxe/ (${dirty.slice(0, 5).join(', ')}) — faça commit ou stash antes do promote`);
   }
-  const baseSha = (gitLines(projectRoot, ['rev-parse', '--verify', `${base}^{commit}`]) || [])[0];
+  let baseSha = (gitLines(projectRoot, ['rev-parse', '--verify', `${base}^{commit}`]) || [])[0];
   if (!baseSha) throw new Error(`base desconhecida: ${base}`);
   const { doc } = readPlanJsonDoc(projectRoot, activeSession);
   const task = doc && Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
@@ -3910,20 +4006,27 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     const existing = remoteHead.ok ? remoteHead.stdout.trim().split(/\s+/)[0] : '';
     if (existing) throw new Error(`a branch ${branch} já existe em ${remote} (${existing.slice(0, 8)}) — o promote não sobrescreve nem faz force-push; use --branch <outra>`);
   }
-  const result = { task: taskId, base, base_sha: baseSha, base_requested: resolvedBase.requested, warnings: resolvedBase.warnings, branch, commits: ordered, conflict: null, pr_ready: null, body_file: null, pr: null, commands: [], worktree: null, ...(replacedBranch ? { replaced_branch: replacedBranch } : {}) };
+  // OXB-161: a dependency promoted but not merged yet → the branch is built ON TOP of its promote branch (stacked);
+  // the PR still targets the base, carrying the dependency's commits until it merges. --hold-deps waits instead.
+  const stackInfo = promoteStack(projectRoot, activeSession, task, { base, baseSha, remote, options });
+  baseSha = stackInfo.baseSha;
+  const stack = stackInfo.stack;
+  const buildSha = stack ? stack.sha : baseSha;
+  resolvedBase.warnings = [...(resolvedBase.warnings || []), ...stackInfo.warnings];
+  const result = { task: taskId, base, base_sha: baseSha, ...(stack ? { stacked_on: { task: stack.task, branch: stack.branch, pr: stack.pr || null, sha: stack.sha } } : {}), base_requested: resolvedBase.requested, warnings: resolvedBase.warnings, branch, commits: ordered, conflict: null, pr_ready: null, body_file: null, pr: null, commands: [], worktree: null, ...(replacedBranch ? { replaced_branch: replacedBranch } : {}) };
   // Where the branch is built: a temporary worktree (default) or, with --in-place, the program checkout.
   let work = projectRoot;
   let cleanup = () => {};
   if (inPlace) {
     const back = () => gitRun(projectRoot, ['checkout', '-q', original && original !== 'HEAD' ? original : originalSha]);
-    const co = gitRun(projectRoot, ['checkout', '-q', '-b', branch, baseSha]);
+    const co = gitRun(projectRoot, ['checkout', '-q', '-b', branch, buildSha]);
     if (!co.ok) throw new Error(`não foi possível criar ${branch}: ${co.stderr.trim()}`);
     gitRun(projectRoot, ['config', `branch.${branch}.oxePromote`, 'true']);
     cleanup = back;
   } else {
     const wt = path.join(projectRoot, '.oxe', 'promote-ws', `${taskId.toLowerCase()}-${Date.now().toString(36)}`);
     fs.mkdirSync(path.dirname(wt), { recursive: true });
-    const add = gitRun(projectRoot, ['worktree', 'add', '-q', '-b', branch, wt, baseSha]);
+    const add = gitRun(projectRoot, ['worktree', 'add', '-q', '-b', branch, wt, buildSha]);
     if (!add.ok) throw new Error(`não foi possível criar a worktree de ${branch}: ${add.stderr.trim()}`);
     gitRun(projectRoot, ['config', `branch.${branch}.oxePromote`, 'true']);
     work = wt;
@@ -4024,6 +4127,10 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     '',
     `Promovida de \`${original}\` por \`oxe-cc runtime promote\` (cherry-pick -x de ${ordered.length} commit(s)).`,
     '',
+    ...(stack ? [
+      `> **Empilhada sobre ${stack.task}** (${stack.pr ? `PR ${stack.pr}, ` : ''}branch \`${stack.branch}\`), ainda não mergeada em \`${base}\`: este PR traz os commits dela até ela entrar. Mergeie ${stack.task} primeiro; depois disso o diff deste PR encolhe para os commits de ${taskId}.`,
+      '',
+    ] : []),
     '### Arquivos',
     ...(task.files || []).map((f) => `- \`${f}\``),
     '',
@@ -4050,7 +4157,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   ];
   if (options.openPr && !result.error) {
     if (result.pr_ready && !result.pr_ready.ok) {
-      result.error = `pr:ready vermelho em ${branch} — PR não aberto (a branch já está em ${remote}; corrija e rode os comandos abaixo)`;
+      result.error = `pr:ready vermelho em ${branch} — PR não aberto (a branch já está em ${remote}; corrija e rode os comandos abaixo — o PR vai contra ${prBase}${stack ? `, não contra a branch de ${stack.task}` : ''})`;
     } else {
       // pushed before pr:ready (OXB-158); --in-place pushes here as before
       const push = result.pushed ? { ok: true } : gitRun(projectRoot, ['push', '-u', remote, branch]);
@@ -4062,7 +4169,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       }
     }
   }
-  appendEvent(projectRoot, activeSession, { type: 'TaskPromoted', work_item_id: taskId, payload: { base, branch, commits: ordered, pr_ready: result.pr_ready ? result.pr_ready.ok : null, pr: result.pr } });
+  appendEvent(projectRoot, activeSession, { type: 'TaskPromoted', work_item_id: taskId, payload: { base, branch, commits: ordered, pr_ready: result.pr_ready ? result.pr_ready.ok : null, pr: result.pr, ...(stack ? { stacked_on: result.stacked_on } : {}) } });
   return result;
 }
 

@@ -1063,3 +1063,15 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
     - O promote agora recria a própria branch quando ela não está no remoto, não tem upstream, não está em uso numa worktree **e** foi criada pelo promote: marca `branch.<b>.oxePromote`, ou todos os commits depois da base são cherry-picks `-x` ou o commit dos testes congelados.
     - Qualquer outra branch com o mesmo nome continua recusada e não é tocada.
   - Teste: `tests/oxe-1212-promote-fixtures.test.cjs`.
+
+## OXB-161: promote ciente das dependências (PRs empilhados)
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11: `runtime promote T3 --open-pr` (rc.25) montou `oxe/promote-t3` sobre `origin/main`, e o typecheck do pr:ready reprovou. A T3 importa `writePrivateJson`, que a T1 cria, e o PR da T1 (#720) ainda não tinha sido mergeado. Numa cadeia estrita, toda tarefa depois da primeira falhava assim.
+  - Para cada tarefa em `depends_on`, o promote lê o último `TaskPromoted` (branch e PR) e verifica se ele já está na base. Usa o `gh pr view --json state` (MERGED) e, sem gh, o git: a branch é ancestral da base, ou o `git cherry` acha todos os commits dela lá (squash/cherry-pick).
+  - Uma dependência promovida e **não mergeada** faz a branch nascer em cima da branch de promote dela. O PR continua contra a base (`gh pr create --base main`) e traz os commits da dependência até ela entrar. O trem mergeia a T1 primeiro, e o diff da T3 encolhe para os commits dela.
+  - `stacked_on` (tarefa, branch, PR e sha) vai no resultado, no evento `TaskPromoted` e no corpo do PR, que avisa para mergear a dependência antes.
+  - Com várias dependências não mergeadas, a escolhida é a branch que já contém as outras. Sem uma assim, fica a promovida por último, com aviso das que ficaram de fora.
+  - Dependência mergeada: a branch sai da base, como antes. Dependência nunca promovida: aviso, e a branch sai da base. Promote da dependência ainda rodando (`--promote-each`): espera até 30 min.
+  - `--hold-deps` (também no `execute --promote-each`) espera o merge em vez de empilhar. Emite `TaskPromoteHeld`, refaz o fetch da base a cada minuto e desiste depois de 6 h, com o PR nomeado.
+  - Com o pr:ready vermelho, a mensagem e os comandos impressos mantêm `--base main`, nunca a branch da dependência.
+  - Teste: `tests/oxe-1212-promote-stacked.test.cjs`.
