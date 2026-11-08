@@ -52,17 +52,38 @@ const ASSERTION_RE = /AssertionError|expected .+ to (be|equal|deeply equal|match
  * "Red for the right reason": the failure complains about something the task creates (missing target) or, when the
  * task changes files that already exist, the test runner's own assertions fail (the behavior is not there yet).
  */
+const TOOL_ERROR_RE = /Must use|Unknown (option|argument)|command not found|is not recognized|Cannot find module '(?!\.)/i;
+
+/** A target and its directories, with `/` separators (Windows prints `src\design\icons`). */
+function targetForms(file, projectRoot = null) {
+  const norm = String(file).replace(/\\/g, '/');
+  const forms = [norm];
+  const base = path.posix.basename(norm).replace(/\.(c|m)?[jt]sx?$/, '');
+  if (base.length > 2) forms.push(base);
+  // OXB-040: a missing target DIRECTORY ("ENOENT scandir src\design\icons") is the right red too — only directories
+  // that do not exist yet (an existing `src/design` in a message proves nothing).
+  let dir = path.posix.dirname(norm);
+  while (dir && dir !== '.' && dir !== '/' && dir.includes('/')) {
+    if (!projectRoot || !require('fs').existsSync(path.resolve(projectRoot, dir))) forms.push(dir);
+    dir = path.posix.dirname(dir);
+  }
+  return forms;
+}
+
 function classifyFailure(output, targets, options = {}) {
   const text = String(output || '');
-  if (options.targetsExist && ASSERTION_RE.test(text) && !/Must use|Unknown (option|argument)|command not found|is not recognized|Cannot find module '(?!\.)/i.test(text)) {
-    return 'assertion_red';
+  // `\` and `\\` (JSON-escaped paths in some runners) both become `/`.
+  const normalized = text.replace(/\\+/g, '/');
+  // OXB-040: per file. "Missing target" when the output names a target (or its directory) that does not exist yet;
+  // "assertion red" when the runner's assertions fail and SOME of the task's own files already exist — a task that
+  // changes existing files and adds a new test fit neither path before (both required ALL or NONE to exist).
+  const missing = (options.missingTargets || targets).filter(Boolean);
+  if (MISSING_TARGET_RE.test(text) && missing.some((file) => targetForms(file, options.projectRoot || null).some((form) => normalized.includes(form)))) {
+    return 'missing_target';
   }
-  if (!MISSING_TARGET_RE.test(text)) return 'broken_command';
-  const mentioned = targets.some((file) => {
-    const base = path.basename(file).replace(/\.(c|m)?[jt]sx?$/, '');
-    return text.includes(file) || (base.length > 2 && text.includes(base));
-  });
-  return mentioned ? 'missing_target' : 'broken_command';
+  const someOwnExist = options.someTargetsExist != null ? options.someTargetsExist : options.targetsExist;
+  if (someOwnExist && ASSERTION_RE.test(text) && !TOOL_ERROR_RE.test(text)) return 'assertion_red';
+  return 'broken_command';
 }
 
 const SEVERITY = { external_pending: 0, already_green: 0, missing_target: 1, assertion_red: 1, timeout: 3, broken_command: 4 };
@@ -94,8 +115,15 @@ function splitSegments(command) {
  * @param {{ tasks: Array<{id:string, files?:string[], verifyCommand?:string|null, done?:boolean}> }} plan
  * @returns {{ ok: boolean, results: Array<{task:string, verdict:string, code:number|null, excerpt:string}>, errors: string[], warnings: string[] }}
  */
+/** `'…'` used as a shell argument (not an apostrophe inside double quotes). */
+function hasSingleQuotedArgument(command) {
+  const outsideDouble = String(command || '').replace(/"[^"]*"/g, '""');
+  return /(^|\s)'[^']*'(\s|$)/.test(outsideDouble);
+}
+
 function dryRunVerifyCommands(projectRoot, plan, options = {}) {
   const timeoutMs = options.timeoutMs || 180_000;
+  const platform = options.platform || process.platform;
   const results = [];
   const errors = [];
   const warnings = [];
@@ -134,14 +162,18 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
     const targets = [...ownTargets, ...pendingDependencyFiles(task)];
     // OXB-018: each `a && b` segment runs alone. A first segment red for the right reason used to hide a broken
     // second one (the SPEC "Como verificar" the compile appends), which surfaced only once the task made the first pass.
-    const targetsExist = ownTargets.length > 0 && targets.every((f) => require('fs').existsSync(path.resolve(projectRoot, f)));
+    const exists = (f) => require('fs').existsSync(path.resolve(projectRoot, f));
+    const targetsExist = ownTargets.length > 0 && targets.every(exists);
+    // OXB-040: per file — the targets still missing, and whether any of the task's own files already exists.
+    const missingTargets = targets.filter((f) => !exists(f));
+    const someTargetsExist = ownTargets.some(exists);
     const segments = splitSegments(task.verifyCommand);
     let verdict = null;
     let code = null;
     let excerpt = '';
     for (const segment of segments) {
       const run = runCommand(segment, projectRoot, timeoutMs);
-      const v = run.timedOut ? 'timeout' : run.code === 0 ? 'already_green' : classifyFailure(run.output, targets, { targetsExist });
+      const v = run.timedOut ? 'timeout' : run.code === 0 ? 'already_green' : classifyFailure(run.output, targets, { targetsExist, someTargetsExist, missingTargets, projectRoot });
       // The worst segment decides; among equals, a red one beats green (a red segment proves the task is not done).
       if (verdict === null || SEVERITY[v] > SEVERITY[verdict]) {
         verdict = v;
@@ -151,11 +183,14 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
       }
     }
     results.push({ task: task.id, verdict, code, excerpt, segments: segments.length });
-    if (verdict === 'broken_command') errors.push(`${task.id}: comando de verificação falha por outro motivo que não o alvo ausente — corrija o plano antes de executar: ${excerpt}`);
+    // OXB-040: cmd.exe does not group arguments with single quotes (`--jq '.[0].conclusion'` reaches gh split).
+    const singleQuoted = platform === 'win32' && hasSingleQuotedArgument(task.verifyCommand);
+    if (singleQuoted) warnings.push(`${task.id}: o verify usa aspas simples — no Windows (cmd.exe) elas não agrupam o argumento; use aspas duplas`);
+    if (verdict === 'broken_command') errors.push(`${task.id}: comando de verificação falha por outro motivo que não o alvo ausente — corrija o plano antes de executar${singleQuoted ? ' (provável causa: aspas simples no Windows — troque por aspas duplas)' : ''}: ${excerpt}`);
     else if (verdict === 'timeout') errors.push(`${task.id}: comando de verificação passou de ${Math.round(timeoutMs / 1000)}s sem terminar`);
     else if (verdict === 'already_green') warnings.push(`${task.id}: verificação já passa antes da tarefa — não prova o trabalho dela`);
   }
   return { ok: errors.length === 0, results, errors, warnings };
 }
 
-module.exports = { dryRunVerifyCommands, classifyFailure };
+module.exports = { dryRunVerifyCommands, classifyFailure, hasSingleQuotedArgument };

@@ -90,7 +90,13 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-040: o dry-verify chama de "comando quebrado" um vermelho legítimo quando a tarefa mistura arquivo novo e arquivo existente
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21.2).
+  - A classificação passou a ser por arquivo: `missing_target` quando a saída cita um alvo que ainda não existe (ou um diretório-alvo ainda inexistente, com `\` e `\\` normalizados para `/`), e `assertion_red` quando as asserções do runner falham e ALGUM arquivo próprio da tarefa já existe. Antes, exigia todos.
+  - A T6 (altera arquivo existente e cria um novo) e as dependentes dela deixaram de virar `broken_command`.
+  - Um diretório que já existe mencionado num "not found" não conta.
+  - Erros de ferramenta (Unknown option etc.) continuam `broken_command`.
+  - No win32, um verify com aspas simples gera aviso, e o `broken_command` diz a causa provável ("troque por aspas duplas").
+  - Teste: `tests/oxe-1212-dryrun-classify.test.cjs`.
 - **Evidência:** no `plan lint --dry-verify` da F1, 6 de 7 erros eram vermelhos corretos marcados como `broken_command`.
   - **Dois caminhos excludentes no `classifyFailure`:** o caminho `assertion_red` exige `targetsExist` (todos os arquivos da tarefa e das dependências pendentes existem). O caminho `missing_target` exige que a saída mencione um alvo. Uma tarefa que **altera arquivos existentes e cria um teste novo** (T6) não cabe em nenhum dos dois.
   - **Propagação:** o erro passa para as tarefas que dependem dela (T8–T11), via `pendingDependencyFiles`.
