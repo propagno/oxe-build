@@ -141,6 +141,7 @@ Num repositório com suíte própria (typecheck, lint, testes de governança com
   - Não ponha o teste de aceite do critério no `verify.commands` de uma tarefa intermediária: ele só pode passar quando o critério inteiro estiver pronto. O `plan lint` avisa.
 - **Trabalho que chega por outro caminho:**
   - `"blocked_by": ["owner/repo#594"]` trava só a tarefa, sem gate humano. Quando o PR é mergeado, o compile seguinte a destrava sozinho (via `gh`).
+  - **Pré-condição (1.21.2, OXB-085):** quando a tarefa é trabalho deste plano mas só pode começar depois de algo de fora, use um objeto: `"blocked_by": [{ "kind": "pr", "ref": "#686", "until": "merged" }]`. Também valem `{ "kind": "commit", "ref": "<sha>", "branch": "origin/main" }` e `{ "kind": "file", "ref": "caminho" }`. O execute checa antes de começar a tarefa e mostra `T13 aguardando: #686 (PR mergeado)`. A tarefa continua pendente (não é entrega externa), e a fase não fecha sem ela. Um texto em `blocked_by` continua significando "entregue por outro caminho".
   - `"kind": "verify_only"` (ou `external_delivery`) roda só o verify, sem agente e sem custo, e conclui quando o verify passa.
 - **Ambiente dos processos filhos:** executor, ferramentas, verify e gates não herdam `OXESPACE_*` nem segredos (`TOKEN`, `SECRET`, `PASSWORD`, `API_KEY`, `CREDENTIAL`, `PRIVATE_KEY`).
   - Para ajustar: `env_scrub` (regex extras) e `env_allow` (nomes) no config.

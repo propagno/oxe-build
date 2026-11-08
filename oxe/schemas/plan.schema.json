@@ -92,7 +92,7 @@
           "decisions": { "type": "array", "items": { "type": "string", "pattern": "^D-\\d+$" } },
           "complexity": { "enum": ["XS", "S", "M", "L", "XL"] },
           "gate": { "type": "object", "required": ["reason"], "properties": { "kind": { "enum": ["human", "external"] }, "reason": { "type": "string" } }, "description": "O scheduler para antes da tarefa e pede aprovação (GateRequested)." },
-          "blocked_by": { "type": "array", "items": { "type": "string" }, "description": "Dependências externas (ex.: \"oxespace#B21\"); a tarefa espera um gate até serem resolvidas." },
+          "blocked_by": { "type": "array", "items": { "oneOf": [ { "type": "string" }, { "type": "object", "required": ["kind", "ref"], "properties": { "kind": { "enum": ["pr", "commit", "file"] }, "ref": { "type": "string" }, "until": { "enum": ["merged", "closed", "on_branch", "exists"] }, "branch": { "type": "string" } } } ] }, "description": "Texto (ex.: \"owner/repo#594\"): trabalho entregue por outro caminho. Objeto { kind: pr|commit|file, ref, until? } (OXB-085): pré-condição que a tarefa espera antes de começar (PR mergeado, commit na main, arquivo existente); a tarefa continua sendo trabalho deste plano." },
           "done": { "type": "boolean" }
         }
       }

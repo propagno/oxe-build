@@ -4708,6 +4708,8 @@ async function runRuntime(opts) {
       if (phaseWork.external_pending.length) parts.push(`${phaseWork.external_pending.length} aguardando entrega externa (${phaseWork.external_pending.join(', ')})`);
       if (phaseWork.pending.length) parts.push(`${phaseWork.pending.length} pendente(s) (${phaseWork.pending.join(', ')})`);
       console.log(`  ${c ? green : ''}Trabalho${phaseWork.phase ? ` da fase ${phaseWork.phase}` : ''}:${c ? reset : ''} ${parts.join(' · ')} de ${phaseWork.total}`);
+      // OXB-085: tasks held by a precondition (PR merged, commit on main, file existing).
+      for (const [id, labels] of Object.entries(phaseWork.waiting || {})) console.log(`  ${c ? yellow : ''}${id} aguardando:${c ? reset : ''} ${labels.join(', ')}`);
       if (phaseWork.next_steps.length) console.log(`  ${c ? cyan : ''}Próxima ação:${c ? reset : ''} ${phaseWork.next_steps.join('  →  ')}`);
     };
     if (!current) {
@@ -5413,8 +5415,13 @@ async function runRuntime(opts) {
       if (blocked.length > 0)
         console.log(`  ${c ? '\x1b[33m' : ''}Bloqueados:${c ? reset : ''} ${blocked.length} — ${blocked.join(', ')}`);
       const externalPending = Array.isArray(r.external_pending) ? r.external_pending : [];
-      if (externalPending.length > 0)
-        console.log(`  ${c ? dim : ''}Aguardando entrega externa:${c ? reset : ''} ${externalPending.length} — ${externalPending.join(', ')}`);
+      // OXB-085: a task held by a precondition is this plan's work waiting to start, not an external delivery.
+      let waiting = {};
+      try { waiting = (oxeOperational.runtimePhaseWork(opts.dir, activeSession) || {}).waiting || {}; } catch { waiting = {}; }
+      const delivered = externalPending.filter((id) => !waiting[id]);
+      if (delivered.length > 0)
+        console.log(`  ${c ? dim : ''}Aguardando entrega externa:${c ? reset : ''} ${delivered.length} — ${delivered.join(', ')}`);
+      for (const id of externalPending.filter((x) => waiting[x])) console.log(`  ${c ? '\x1b[33m' : ''}${id} aguardando:${c ? reset : ''} ${waiting[id].join(', ')} — roda no próximo execute depois disso`);
       // OXB-064: exit 0 when everything runnable in scope completed; tasks outside --wave never count;
       // external_pending only fails the run with --strict-external (exit 3).
       if (failed.length > 0 || blocked.length > 0 || (r.status === 'blocked' && result.mode !== 'single' && result.mode !== 'parallel')) process.exitCode = 1;

@@ -18,6 +18,40 @@ const ACCEPT_RE = /^A\d+$/;
 const DECISION_RE = /^D-\d+$/;
 const COMPLEXITY = new Set(['XS', 'S', 'M', 'L', 'XL']);
 
+
+/** OXB-085: preconditions a task waits on before starting (PLAN.json `blocked_by` objects). */
+const PRECONDITION_KINDS = { pr: ['merged', 'closed'], commit: ['on_branch'], file: ['exists'] };
+
+function preconditionProblem(entry) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return 'texto ("owner/repo#123") ou { kind: "pr"|"commit"|"file", ref, until? }';
+  if (!PRECONDITION_KINDS[entry.kind]) return `kind "${entry.kind}" desconhecido — use pr, commit ou file`;
+  if (typeof entry.ref !== 'string' || !entry.ref.trim()) return `${entry.kind}: ref obrigatório (ex.: ${entry.kind === 'pr' ? '"#686"' : entry.kind === 'commit' ? '"a1b2c3d"' : '"src/x.ts"'})`;
+  if (entry.until != null && !PRECONDITION_KINDS[entry.kind].includes(entry.until)) return `${entry.kind}: until "${entry.until}" inválido — use ${PRECONDITION_KINDS[entry.kind].join(' | ')}`;
+  if (entry.branch != null && (entry.kind !== 'commit' || typeof entry.branch !== 'string')) return 'branch só vale para kind "commit" (texto)';
+  return null;
+}
+
+function preconditionLabel(p) {
+  if (p.kind === 'pr') return `${p.ref} (${p.until === 'closed' ? 'PR fechado' : 'PR mergeado'})`;
+  if (p.kind === 'commit') return `commit ${p.ref.slice(0, 12)} em ${p.branch || 'origin/main'}`;
+  return `arquivo ${p.ref}`;
+}
+
+/** String entries of `blocked_by`: work delivered by another path (the task is externally delivered). */
+function externalRefs(task) {
+  return (Array.isArray(task && task.blocked_by) ? task.blocked_by : []).filter((e) => typeof e === 'string' && e.trim()).map((e) => e.trim());
+}
+
+/** Object entries of `blocked_by`, normalized, with a label for the status ("aguardando #686 (PR mergeado)"). */
+function taskPreconditions(task) {
+  return (Array.isArray(task && task.blocked_by) ? task.blocked_by : [])
+    .filter((e) => e && typeof e === 'object' && !Array.isArray(e) && !preconditionProblem(e))
+    .map((e) => {
+      const p = { kind: e.kind, ref: e.ref.trim(), until: e.until || PRECONDITION_KINDS[e.kind][0], ...(e.branch ? { branch: e.branch } : {}) };
+      return { ...p, label: preconditionLabel(p) };
+    });
+}
+
 function planJsonPathFor(planMdPath) {
   return planMdPath ? path.join(path.dirname(planMdPath), 'PLAN.json') : null;
 }
@@ -58,7 +92,16 @@ function validatePlanJson(doc) {
     if (task.kind != null && !['code', 'spike', 'verify_only', 'external_delivery'].includes(task.kind)) errors.push(`${at}.kind: code | spike | verify_only | external_delivery`);
     if (task.question != null && typeof task.question !== 'string') errors.push(`${at}.question: texto`);
     if (task.gate != null && (typeof task.gate !== 'object' || Array.isArray(task.gate) || typeof task.gate.reason !== 'string')) errors.push(`${at}.gate: { kind?, reason }`);
-    if (task.blocked_by != null && !isStringArray(task.blocked_by)) errors.push(`${at}.blocked_by: lista de dependências externas`);
+    // OXB-085: an entry is a string (work delivered by another path, e.g. "owner/repo#594") or a precondition object
+    // { kind: "pr"|"commit"|"file", ref, until? } the task waits on before it starts (it is still this plan's work).
+    if (task.blocked_by != null) {
+      if (!Array.isArray(task.blocked_by)) errors.push(`${at}.blocked_by: lista de dependências externas`);
+      else task.blocked_by.forEach((entry, k) => {
+        if (typeof entry === 'string') { if (!entry.trim()) errors.push(`${at}.blocked_by[${k}]: texto vazio`); return; }
+        const problem = preconditionProblem(entry);
+        if (problem) errors.push(`${at}.blocked_by[${k}]: ${problem}`);
+      });
+    }
     if (task.verify != null) {
       if (typeof task.verify !== 'object' || Array.isArray(task.verify)) errors.push(`${at}.verify: objeto`);
       else if (task.verify.commands != null && !isStringArray(task.verify.commands)) errors.push(`${at}.verify.commands: lista de comandos`);
@@ -147,7 +190,8 @@ function planJsonToParsedPlan(doc) {
         ...(task.kind ? { kind: task.kind } : {}),
         ...(typeof task.question === 'string' ? { question: task.question } : {}),
         ...(task.gate ? { gate: task.gate } : {}),
-        ...(Array.isArray(task.blocked_by) && task.blocked_by.length ? { blocked_by: [...task.blocked_by] } : {}),
+        ...(externalRefs(task).length ? { blocked_by: externalRefs(task) } : {}),
+        ...(taskPreconditions(task).length ? { waits_on: taskPreconditions(task) } : {}),
       },
     };
   });
@@ -474,6 +518,9 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
 }
 
 module.exports = {
+  externalRefs,
+  taskPreconditions,
+  preconditionProblem,
   declaredTestTitles,
   markPlanTaskOpen,
   criterionClosers,

@@ -519,8 +519,15 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-085: uma tarefa não podia depender de algo fora do plano
 
-- **Status:** aberto. Registrado pelo TECH LEAD em 08/11: a T13 (remover o AI Memory) tinha que esperar o merge de um PR de workflow (#686). Só cabia nas `notes`, e o TL segurava o lançamento à mão.
-- **Proposta:** `blocked_by: [{ kind: "pr", ref: "#686", until: "merged" }]` (também commit na main ou arquivo existente), checado pelo execute antes de começar a tarefa, com o status "aguardando #686".
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11: a T13 (remover o AI Memory) tinha que esperar o merge de um PR de workflow (#686). Só cabia nas `notes`, e o TL segurava o lançamento à mão.
+  - `blocked_by` agora aceita também uma pré-condição em forma de objeto:
+    - `{ "kind": "pr", "ref": "#686", "until": "merged"|"closed" }`. O ref pode ser `#n` (do repositório atual), `owner/repo#n` ou a URL do PR.
+    - `{ "kind": "commit", "ref": "<sha>", "branch": "origin/main" }`, cujo padrão é origin/main, main, origin/master ou master. A checagem é local, então rode `git fetch` antes.
+    - `{ "kind": "file", "ref": "caminho" }`.
+  - O compile (execute) e o `plan lint` checam a pré-condição antes de começar a tarefa. Se não estiver satisfeita, só essa tarefa fica parada, com o motivo `depende de #686 (PR mergeado)`. O execute e o `status` mostram `T13 aguardando: #686 (PR mergeado)`.
+  - A tarefa continua sendo trabalho do plano: fica `pending`, nunca conta como entrega externa, os `task_gates` continuam valendo para ela e a fase não fecha sem ela. Um texto em `blocked_by` continua significando "entregue por outro caminho".
+  - O lint rejeita objetos inválidos com a dica (kind desconhecido, ref ausente, until inválido).
+  - Teste: `tests/oxe-1212-preconditions.test.cjs`.
 
 ## OXB-086: juntar planos por papel
 

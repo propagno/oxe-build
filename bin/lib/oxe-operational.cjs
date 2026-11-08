@@ -1036,6 +1036,58 @@ function resolveMergedDependencies(parsedPlan, spawn = spawnSync) {
   return parsedPlan;
 }
 
+/**
+ * OXB-085: the preconditions of each pending task (PLAN.json `blocked_by` objects: a PR merged, a commit on a branch,
+ * a file existing). Unmet ones become `blocked_by` labels of the node, so the scheduler holds only that task with
+ * "aguardando <label>"; met ones go to `preconditions_met`. A PR check respects `external_dependency_check: false`
+ * (then it stays pending). The task is still this plan's work: never counted as externally delivered.
+ */
+function resolvePreconditions(projectRoot, parsedPlan, options = {}) {
+  const spawn = options.ghSpawn || spawnSync;
+  const prCheck = options.prCheck !== false;
+  for (const task of parsedPlan && Array.isArray(parsedPlan.tasks) ? parsedPlan.tasks : []) {
+    const meta = task.meta || {};
+    if (!Array.isArray(meta.waits_on) || !meta.waits_on.length || task.done) continue;
+    const pending = [];
+    const met = [];
+    for (const p of meta.waits_on) {
+      let ok = false;
+      if (p.kind === 'file') ok = fs.existsSync(path.resolve(projectRoot, p.ref));
+      else if (p.kind === 'commit') {
+        const branches = p.branch ? [p.branch] : ['origin/main', 'main', 'origin/master', 'master'];
+        for (const b of branches) {
+          if (!gitLines(projectRoot, ['rev-parse', '--verify', '-q', b])) continue;
+          const r = spawnSync('git', ['merge-base', '--is-ancestor', p.ref, b], { cwd: projectRoot, windowsHide: true });
+          ok = r.status === 0;
+          break;
+        }
+      } else if (p.kind === 'pr' && prCheck) {
+        const m = /^(?:https?:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/|([\w.-]+\/[\w.-]+)?#)(\d+)$/.exec(p.ref);
+        if (m) {
+          const repo = m[1] || m[2] || null;
+          const key = `${repo || projectRoot}#${m[3]}`;
+          let state = mergedPrCache.get(key);
+          if (state === undefined) {
+            try {
+              const res = spawn('gh', ['pr', 'view', m[3], ...(repo ? ['-R', repo] : []), '--json', 'state', '-q', '.state'], { cwd: projectRoot, encoding: 'utf8', timeout: 15000, windowsHide: true });
+              state = res && res.status === 0 ? String(res.stdout || '').trim() : null;
+            } catch { state = null; }
+            mergedPrCache.set(key, state);
+          }
+          ok = p.until === 'closed' ? state === 'MERGED' || state === 'CLOSED' : state === 'MERGED';
+        }
+      }
+      (ok ? met : pending).push(p);
+    }
+    task.meta = {
+      ...meta,
+      ...(pending.length ? { blocked_by: [...(meta.blocked_by || []), ...pending.map((p) => p.label)], precondition_pending: pending.map((p) => p.label) } : {}),
+      ...(met.length ? { preconditions_met: met.map((p) => p.label) } : {}),
+    };
+  }
+  return parsedPlan;
+}
+
 function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options = {}) {
   const runtime = loadRuntimeModule();
   const parsers = loadSdkParsers();
@@ -1053,9 +1105,11 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
   const parsedSpec = parsers.parseSpec(specText);
   const parsedPlan = parsePlanArtifact(parsers, planText, artifactPaths.plan);
   // OXB-047: an external dependency whose PR is already merged no longer blocks its task (checked on every compile).
-  if (readProjectConfig(projectRoot).external_dependency_check !== false && options.externalCheck !== false) {
+  const externalCheck = readProjectConfig(projectRoot).external_dependency_check !== false && options.externalCheck !== false;
+  if (externalCheck) {
     resolveMergedDependencies(parsedPlan, options.ghSpawn);
   }
+  resolvePreconditions(projectRoot, parsedPlan, { ghSpawn: options.ghSpawn, prCheck: externalCheck });
   // PLAN.json marca `done` explicitamente: num replan as tarefas concluídas não voltam a rodar (OXB-017).
   const compilerOptions = { ...(parsedPlan.source === 'PLAN.json' ? { skip_done_tasks: true } : {}), ...(options.compilerOptions || {}) };
   const graph = runtime.compile(parsedPlan, parsedSpec, compilerOptions);
@@ -2649,6 +2703,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     if (config.external_dependency_check !== false && options.externalCheck !== false) {
       try { resolveMergedDependencies(plan, options.ghSpawn); } catch { /* sem gh: a dependência continua pendente */ }
     }
+    resolvePreconditions(projectRoot, plan, { ghSpawn: options.ghSpawn, prCheck: config.external_dependency_check !== false && options.externalCheck !== false });
     // OXB-009: cada verify deve estar vermelho pelo motivo certo (alvo ausente), não por comando quebrado.
     // OXB-018: roda o comando EFETIVO do nó — o da tarefa mais o "Como verificar" dos critérios dela, que o compile
     // anexa (gap B). Um "Como verificar" velho na SPEC quebrava o verify inline sem o dry-run perceber.
@@ -3616,11 +3671,17 @@ function runtimePhaseWork(projectRoot, activeSession) {
   const done = [];
   const external = [];
   const pending = [];
+  const waiting = {};
   for (const t of tasks) {
     if (t.done === true) done.push(t.id);
     // Waiting on another path (an external PR); a verify_only task still has a check to run, so it is pending.
-    else if (t.kind === 'external_delivery' || (Array.isArray(t.blocked_by) && t.blocked_by.length) || (t.policy && Array.isArray(t.policy.external_dependency) && t.policy.external_dependency.length)) external.push(t.id);
-    else pending.push(t.id);
+    // OXB-085: a precondition object in blocked_by keeps the task pending (it is this plan's work), listed in `waiting`.
+    else if (t.kind === 'external_delivery' || planJsonLib.externalRefs(t).length || (t.policy && Array.isArray(t.policy.external_dependency) && t.policy.external_dependency.length)) external.push(t.id);
+    else {
+      pending.push(t.id);
+      const pre = planJsonLib.taskPreconditions(t);
+      if (pre.length) waiting[t.id] = pre.map((p) => p.label);
+    }
   }
   let program = null;
   try {
@@ -3642,7 +3703,7 @@ function runtimePhaseWork(projectRoot, activeSession) {
   } else if (pending.length) {
     nextSteps.push(`oxe-cc runtime execute  (pendentes: ${pending.join(', ')})`);
   }
-  return { total: tasks.length, done, external_pending: external, pending, complete, program: Boolean(program), phase, multi_agent: multiAgent, next_steps: nextSteps };
+  return { total: tasks.length, done, external_pending: external, pending, waiting, complete, program: Boolean(program), phase, multi_agent: multiAgent, next_steps: nextSteps };
 }
 
 /** A task whose work was delivered outside this repo's executor (another PR, a check only). */
@@ -3650,8 +3711,10 @@ function isExternallyDelivered(rawTask, parsedTask) {
   const raw = rawTask || {};
   const meta = (parsedTask && parsedTask.meta) || {};
   if (raw.kind === 'external_delivery' || raw.kind === 'verify_only') return true;
-  if (Array.isArray(raw.blocked_by) && raw.blocked_by.length) return true;
-  if (Array.isArray(meta.blocked_by) && meta.blocked_by.length) return true;
+  // OXB-085: only string entries mean "delivered by another path"; a precondition object is a wait, not a delivery.
+  if (require('./oxe-plan-json.cjs').externalRefs(raw).length) return true;
+  const pendingLabels = new Set(meta.precondition_pending || []);
+  if (Array.isArray(meta.blocked_by) && meta.blocked_by.some((ref) => !pendingLabels.has(ref))) return true;
   if (Array.isArray(meta.external_resolved) && meta.external_resolved.length) return true;
   const policy = raw.policy || {};
   return Boolean(policy.verify_only || (Array.isArray(policy.external_dependency) && policy.external_dependency.length));
@@ -5528,6 +5591,7 @@ module.exports = {
   projectStatusPaths,
   runtimePlanReopen,
   runtimePhaseWork,
+  resolvePreconditions,
   runtimeSpecAmend,
   runtimeSpecAdd,
   runtimeProgramPhaseAdd,

@@ -52,7 +52,8 @@ function collectTaskGates(config, planDoc) {
 function taskWritesCode(task) {
   if (!task || task.done === true) return false;
   if (['external_delivery', 'verify_only', 'spike'].includes(task.kind)) return false;
-  if (Array.isArray(task.blocked_by) && task.blocked_by.length) return false;
+  // OXB-085: string entries = delivered elsewhere; a precondition object still writes code once it starts.
+  if (Array.isArray(task.blocked_by) && task.blocked_by.some((e) => typeof e === 'string' && e.trim())) return false;
   return (task.files || []).some((f) => CODE_FILE_RE.test(String(f)));
 }
 
