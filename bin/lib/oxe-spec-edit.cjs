@@ -257,7 +257,53 @@ function editRoadmapPhase(roadmapText, phaseId, fields) {
   if (fields.requirements) setField(/^\*\*(Requisitos|Requirements):\*\*/i, 'Requisitos', fields.requirements.join(', ') || '—');
   if (fields.acceptance) setField(/^\*\*(Crit[ée]rios de aceite|Acceptance(?: criteria)?):\*\*/i, 'Critérios de aceite', fields.acceptance.join(', ') || '—');
   if (fields.scope != null) setField(/^\*\*(Escopo|Scope):\*\*/i, 'Escopo', String(fields.scope).trim());
-  return { text: lines.join(eol) };
+  // OXB-082: a new scope REPLACES the section's scope bullets (the list right after the field lines). Keeping the old
+  // bullets under a new **Escopo:** left F3 contradicting itself. `keepBullets` keeps them; `scopeBullets` sets new ones.
+  let removedBullets = [];
+  if (fields.scope != null && !fields.keepBullets) {
+    let i = start + 1;
+    while (i < end && (/^\*\*[^*]+:\*\*/.test(lines[i]) || !lines[i].trim())) i += 1;
+    const listStart = i;
+    let listEnd = listStart;
+    while (listEnd < end) {
+      const l = lines[listEnd];
+      if (/^\s*[-*+]\s+/.test(l) || (/^\s{2,}\S/.test(l) && listEnd > listStart)) { listEnd += 1; continue; }
+      // A blank line inside the list (another bullet follows) belongs to it.
+      if (!l.trim() && listEnd > listStart && listEnd + 1 < end && /^\s*[-*+]\s+/.test(lines[listEnd + 1])) { listEnd += 1; continue; }
+      break;
+    }
+    if (listEnd > listStart) {
+      removedBullets = lines.slice(listStart, listEnd).filter((l) => /^\s*[-*+]\s+/.test(l)).map((l) => l.trim());
+      const replacement = Array.isArray(fields.scopeBullets) ? fields.scopeBullets.map((b) => `- ${String(b).replace(/^\s*[-*+]\s+/, '').trim()}`) : [];
+      // No new list: the blank line after the old one goes too (no double blank before the next block).
+      if (!replacement.length && listEnd < end && !lines[listEnd].trim()) listEnd += 1;
+      lines.splice(listStart, listEnd - listStart, ...replacement);
+      end += replacement.length - (listEnd - listStart);
+    } else if (Array.isArray(fields.scopeBullets) && fields.scopeBullets.length) {
+      let at = start + 1;
+      for (let k = start + 1; k < end; k += 1) if (/^\*\*[^*]+:\*\*/.test(lines[k])) at = k + 1;
+      const block = ['', ...fields.scopeBullets.map((b) => `- ${String(b).replace(/^\s*[-*+]\s+/, '').trim()}`)];
+      lines.splice(at, 0, ...block);
+      end += block.length;
+    }
+  }
+  return { text: lines.join(eol), removed_bullets: removedBullets };
+}
+
+/**
+ * OXB-082: `--scope-file scope.md`: the non-bullet lines are the **Escopo:** text (joined), the bullets are the new list.
+ * @returns {{ scope: string, bullets: string[] }}
+ */
+function parseScopeFile(text) {
+  const lines = String(text || '').replace(/<!--[\s\S]*?-->/g, '').split(EOL_RE);
+  const bullets = [];
+  const prose = [];
+  for (const l of lines) {
+    if (/^\s*[-*+]\s+/.test(l)) bullets.push(l.replace(/^\s*[-*+]\s+/, '').trim());
+    else if (/^\s{2,}\S/.test(l) && bullets.length) bullets[bullets.length - 1] += ` ${l.trim()}`;
+    else if (l.trim() && !/^#/.test(l.trim())) prose.push(l.trim().replace(/^\*\*(Escopo|Scope):\*\*\s*/i, ''));
+  }
+  return { scope: prose.join(' ').trim(), bullets };
 }
 
 /** Textual mentions of renumbered phases left in a document ("F8", "Fase 8", "phase F8"). */
@@ -283,6 +329,7 @@ module.exports = {
   requirementIds,
   insertRoadmapPhase,
   editRoadmapPhase,
+  parseScopeFile,
   leftoverPhaseMentions,
   checkNewId,
 };

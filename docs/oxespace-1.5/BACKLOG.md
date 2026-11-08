@@ -495,8 +495,11 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-082: `program phase edit Fn --scope` deixa os bullets do escopo antigo no ROADMAP
 
-- **Status:** aberto. Registrado pelo TECH LEAD em 08/11 (planejamento da F2 na rc.10): a F3 ficou com a linha `**Escopo:**` nova (H1/H2) e os bullets antigos ("O OxePost para agentes, T64…"), contraditórios. Foi preciso editar à mão e registrar um program_edit.
-- **Proposta:** o `--scope` substitui o escopo inteiro da seção (linha e bullets), ou `program phase scope Fn --file scope.md`.
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (planejamento da F2 na rc.10): a F3 ficou com a linha `**Escopo:**` nova (H1/H2) e os bullets antigos ("O OxePost para agentes, T64…"), contraditórios. Foi preciso editar à mão e registrar um program_edit.
+  - `--scope` agora substitui o escopo inteiro: a linha e a lista de bullets logo depois dos campos da seção (com continuações e linhas em branco internas). O que vem depois, como `### Notas`, fica intacto.
+  - Os bullets removidos aparecem num aviso e no registro `program_edit` (`scope_bullets_removed`). `--keep-bullets` mantém o comportamento antigo.
+  - `--scope-file escopo.md`: as linhas que não são bullet viram o texto do `**Escopo:**` e os bullets viram a lista nova, num passo só.
+  - Teste: `tests/oxe-1212-program-edit.test.cjs`.
 
 ## OXB-083: `program export <pasta>` lia o posicional como saída, e todo outro comando o lê como projeto
 

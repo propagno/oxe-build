@@ -3494,6 +3494,16 @@ function runtimeProgramPhaseEdit(projectRoot, activeSession, options = {}, inter
   const remReq = list(options.removeRequirements);
   const addAcc = list(options.addAcceptance);
   const remAcc = list(options.removeAcceptance);
+  // OXB-082: --scope-file scope.md gives the scope line and its bullets in one go.
+  let scopeBullets = null;
+  if (options.scopeFile) {
+    const file = path.resolve(projectRoot, String(options.scopeFile));
+    if (!fs.existsSync(file)) throw new Error(`--scope-file não encontrado: ${options.scopeFile}`);
+    const parsed = specEdit.parseScopeFile(fs.readFileSync(file, 'utf8'));
+    if (!parsed.scope && !parsed.bullets.length) throw new Error(`--scope-file vazio: ${options.scopeFile}`);
+    options = { ...options, scope: parsed.scope || (options.scope != null ? options.scope : (phase.scope || '')) };
+    scopeBullets = parsed.bullets;
+  }
   if (!addReq.length && !remReq.length && !addAcc.length && !remAcc.length && options.title == null && options.scope == null) {
     throw new Error('nada a editar: use --title, --scope, --add-requirements, --remove-requirements, --add-acceptance ou --remove-acceptance');
   }
@@ -3532,9 +3542,10 @@ function runtimeProgramPhaseEdit(projectRoot, activeSession, options = {}, inter
     ...(options.title != null ? { title: phase.title } : {}),
     ...(addReq.length || remReq.length ? { requirements: phase.requirements } : {}),
     ...(addAcc.length || remAcc.length ? { acceptance: phase.acceptance } : {}),
-    ...(options.scope != null ? { scope: phase.scope || '' } : {}),
+    ...(options.scope != null ? { scope: phase.scope || '', keepBullets: Boolean(options.keepBullets), scopeBullets } : {}),
   });
-  const record = { kind: 'program_edit', action: internal.action || 'phase_edit', phase: phase.id, before, after: { title: phase.title, requirements: phase.requirements, acceptance: phase.acceptance, scope: phase.scope || null }, ...(planChange ? { plan_removed_tasks: planChange.removedTasks, plan_removed_tests: planChange.removedTests } : {}), by, reason, at: new Date().toISOString() };
+  if (roadmap.removed_bullets && roadmap.removed_bullets.length) warnings.push(`escopo antigo substituído: ${roadmap.removed_bullets.length} bullet(s) removido(s) do ROADMAP (${roadmap.removed_bullets.map((b) => b.slice(0, 50)).join(' | ')}) — use --keep-bullets para mantê-los`);
+  const record = { kind: 'program_edit', action: internal.action || 'phase_edit', phase: phase.id, before, after: { title: phase.title, requirements: phase.requirements, acceptance: phase.acceptance, scope: phase.scope || null }, ...(roadmap.removed_bullets && roadmap.removed_bullets.length ? { scope_bullets_removed: roadmap.removed_bullets } : {}), ...(scopeBullets ? { scope_bullets: scopeBullets } : {}), ...(planChange ? { plan_removed_tasks: planChange.removedTasks, plan_removed_tests: planChange.removedTests } : {}), by, reason, at: new Date().toISOString() };
   if (internal.dryRun) return { state: next, roadmapText: roadmap.text, planChange, record, warnings };
   programLib.writeProgram(programDir, next);
   writeTextAtomic(paths.roadmap, roadmap.text);

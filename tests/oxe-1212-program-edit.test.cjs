@@ -318,3 +318,32 @@ describe('OXB-076: program phase edit and program criterion move', () => {
     assert.equal(read(dir, '.oxe/ROADMAP.md'), ROADMAP);
   });
 });
+
+describe('OXB-082: phase edit --scope replaces the scope bullets', () => {
+  const WITH_BULLETS = ROADMAP.replace('**Escopo:** instalador\n', '**Escopo:** instalador\n\n- O OxePost para agentes, T64.\n- A loja de\n  plugins (continuação).\n\n- O selo R18.\n\n### Notas\n\nfica\n');
+  it('--scope drops the old bullets (logged and warned); --keep-bullets keeps them; the next section is untouched', () => {
+    const dir = project({ roadmap: WITH_BULLETS });
+    const out = op.runtimeProgramPhaseEdit(dir, null, { phase: 'F8', scope: 'H1 e H2', by: 'tl', reason: 'escopo novo da F8' });
+    const roadmap = read(dir, '.oxe/ROADMAP.md');
+    assert.match(roadmap, /\*\*Escopo:\*\* H1 e H2\n\n### Notas\n\nfica\n/);
+    assert.doesNotMatch(roadmap, /OxePost|loja de|plugins|selo R18/);
+    assert.match(roadmap, /## Fase 7 — Base\n\n\*\*Requisitos:\*\* R1\n\*\*Critérios de aceite:\*\* A1\n\*\*Escopo:\*\* base\n/);
+    assert.ok(out.warnings.some((w) => /3 bullet\(s\) removido\(s\)/.test(w)), out.warnings.join('\n'));
+    const rec = ndjson(dir).find((r) => r.kind === 'program_edit');
+    assert.equal(rec.scope_bullets_removed.length, 3);
+    const keep = project({ roadmap: WITH_BULLETS });
+    op.runtimeProgramPhaseEdit(keep, null, { phase: 'F8', scope: 'H1 e H2', keepBullets: true, by: 'tl', reason: 'escopo novo da F8' });
+    assert.match(read(keep, '.oxe/ROADMAP.md'), /\*\*Escopo:\*\* H1 e H2\n\n- O OxePost/);
+  });
+
+  it('--scope-file sets the line and the new bullets in one go (also via the CLI)', () => {
+    const dir = project({ roadmap: WITH_BULLETS });
+    fs.writeFileSync(path.join(dir, 'scope.md'), '# Escopo da F8\n\nCaptura H1 e H2.\n\n- H1, captura HTTP.\n- H2, painel\n  e aba Rede.\n');
+    const r = spawnSync(process.execPath, [CLI, 'program', 'phase', 'edit', 'F8', '--scope-file', path.join(dir, 'scope.md'), '--by', 'tl', '--reason', 'escopo novo da F8', '--dir', dir], { encoding: 'utf8', env: { ...process.env, OXE_NO_PROMPT: '1' } });
+    assert.equal(r.status, 0, r.stderr);
+    const roadmap = read(dir, '.oxe/ROADMAP.md');
+    assert.match(roadmap, /\*\*Escopo:\*\* Captura H1 e H2\.\n\n- H1, captura HTTP\.\n- H2, painel e aba Rede\.\n\n### Notas/);
+    assert.doesNotMatch(roadmap, /OxePost/);
+    assert.equal(JSON.parse(read(dir, '.oxe/program/PROGRAM.json')).phases.find((p) => p.id === 'F8').scope, 'Captura H1 e H2.');
+  });
+});
