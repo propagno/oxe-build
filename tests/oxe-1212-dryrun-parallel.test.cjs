@@ -17,19 +17,19 @@ function project() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-par-'));
   dirs.push(dir);
   // sleeps 1s, then fails naming its missing target (the right red)
-  fs.writeFileSync(path.join(dir, 'slow.js'), "setTimeout(() => { console.error('Error: Cannot find module ./src/' + process.argv[2] + '.ts'); process.exit(1); }, 1000);\n");
+  fs.writeFileSync(path.join(dir, 'slow.js'), "setTimeout(() => { console.error('Error: Cannot find module ./src/' + process.argv[2] + '.ts'); process.exit(1); }, 1500);\n");
   return dir;
 }
 const plan = { tasks: ['alpha', 'bravo', 'charlie'].map((n, i) => ({ id: `T${i + 1}`, files: [`src/${n}.ts`], verifyCommand: `node slow.js ${n}` })) };
 
 describe('OXB-095: parallel dry-verify', () => {
-  it('3 one-second commands with max 3 take well under 3s; verdicts are the same as serial, in plan order', () => {
+  it('3 commands of 1.5s with max 3 take well under the 4.5s of serial; verdicts are the same as serial, in plan order', () => {
     const dir = project();
     const lines = [];
     const t0 = Date.now();
     const r = dryRunVerifyCommands(dir, plan, { parallel: { max: 3, minFreeMb: 0 }, onProgress: (l) => lines.push(l) });
     const ms = Date.now() - t0;
-    assert.ok(ms < 2600, `took ${ms}ms`);
+    assert.ok(ms < 3800, `took ${ms}ms (serial would be ≥ 4500ms)`);
     assert.deepEqual(r.results.map((x) => [x.task, x.verdict]), [['T1', 'missing_target'], ['T2', 'missing_target'], ['T3', 'missing_target']]);
     assert.ok(lines.some((l) => /dry-verify paralelo: 3 comando\(s\), até 3 por vez/.test(l)), lines.join('\n'));
     assert.ok(lines.some((l) => /\(paralelo\)$/.test(l)));
@@ -39,7 +39,7 @@ describe('OXB-095: parallel dry-verify', () => {
     const dir = project();
     const t0 = Date.now();
     dryRunVerifyCommands(dir, plan, { parallel: { max: 1 } });
-    assert.ok(Date.now() - t0 >= 2900);
+    assert.ok(Date.now() - t0 >= 4400);
   });
 
   it('runParallel: results by id, exit codes, timeout, and the memory gate never starves the first job', () => {

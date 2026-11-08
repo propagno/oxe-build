@@ -877,3 +877,19 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - O verify checa as regras de ação contra o que a run registrou. Uma violação vira CR `constraint` (`by: policy_rule:<id>`) com a regra e o comando ou caminho, um por regra+ação, sem duplicar.
   - As regras de conteúdo (`{ id, forbid, paths }`) continuam como antes.
   - Teste: `tests/oxe-1212-policy-rules.test.cjs`.
+
+## OXB-147: o dry-verify rodou um `npm ci` e apagou o node_modules
+
+- **Status:** resolvido (1.21.2). Achado da F2 em 08/11: entre 12:29 e ~13:58 o `node_modules` do oxespace-150 perdeu o vitest e ficou com 557 diretórios.
+  - **Causa:** o verify da T18 tinha, como "comandos", três linhas de evidência de CI escritas em prosa, uma delas `npm ci --ignore-scripts (on CI: …)`. O dry-verify roda todo verify da tarefa, então rodou um `npm ci` de verdade, que apaga o `node_modules` antes de instalar. Com o resto da frase como argumento, a instalação não terminou.
+  - Nenhum caminho do oxe-build roda npm nem mexe no `node_modules`. A limpeza das worktrees paralelas foi descartada: nenhuma rodou nessa janela.
+  - **(a) Comando destrutivo ou em prosa no verify:**
+    - é erro estrutural do `plan lint`, com a mensagem `Tn: comando de verify em prosa ou destrutivo: <cmd> — <motivo>`, e por isso o dry-verify nem começa;
+    - é bloqueio do preflight do execute (`unsafe_verify:`);
+    - o próprio dry-verify nunca executa o segmento (veredito `unsafe_command`/`not_a_command`).
+    - Destrutivo: npm ci/install/uninstall/prune/rebuild/update, pnpm/yarn install|add|remove, `rm -rf node_modules`, rimraf, e git stash/checkout/switch/reset --hard/clean/pull/push/commit/tag.
+  - **(b)** O `node_modules` é comparado com o package-lock (só os pacotes obrigatórios) no início do dry-verify e a cada troca de onda, também entre os grupos paralelos. Uma árvore quebrada para a rodada com um motivo só ("N pacote(s) ausente(s) … rode npm install"), em vez de centenas de vermelhos enganosos.
+  - **(c)** O `runtime sync` detecta package.json ou lockfile vindos no merge:
+    - com `sync_deps: "install"`, roda uma instalação que não apaga nada (`npm install`/`pnpm install`/`yarn install`, nunca `npm ci`) mais o `post_install`;
+    - no padrão `"stop"`, não roda o re-verify sobre a árvore velha e sai com erro "dependências mudaram: rode npm install && <post_install> … e depois oxe-cc runtime verify".
+  - Teste: `tests/oxe-1212-unsafe-verify.test.cjs`.

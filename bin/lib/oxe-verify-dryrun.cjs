@@ -88,7 +88,10 @@ function classifyFailure(output, targets, options = {}) {
   return 'broken_command';
 }
 
-const SEVERITY = { external_pending: 0, already_green: 0, missing_target: 1, assertion_red: 1, timeout: 3, broken_command: 4 };
+const SEVERITY = { external_pending: 0, already_green: 0, missing_target: 1, assertion_red: 1, timeout: 3, broken_command: 4, not_a_command: 5, unsafe_command: 6 };
+const unsafeLib = require('./oxe-unsafe-commands.cjs');
+/** OXB-147: a segment the dry-verify must never run (it would change node_modules / git) or cannot run (prose). */
+const refusal = (segment) => (unsafeLib.unsafeReason(segment) ? 'unsafe_command' : unsafeLib.looksLikeProse(segment) ? 'not_a_command' : null);
 
 /** Top-level `&&` segments of a command (quoted text is not split). */
 function splitSegments(command) {
@@ -236,6 +239,20 @@ function batchVitestSegments(projectRoot, tasks, options = {}) {
   return out;
 }
 
+/**
+ * OXB-147: node_modules against package-lock.json (required packages only). A tree that breaks before or during the
+ * run stops it with one clear reason instead of hundreds of misleading reds. null when fine or not applicable.
+ */
+function depsProblem(projectRoot) {
+  const lockPath = path.join(projectRoot, 'package-lock.json');
+  if (!fs.existsSync(lockPath) || !fs.existsSync(path.join(projectRoot, 'node_modules'))) return null;
+  let lock;
+  try { lock = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch { return null; }
+  const missing = require('./oxe-project-env.cjs').missingLockfilePackages(projectRoot, lock).filter((m) => !/\(optional\)$/.test(String(m)));
+  if (!missing.length) return null;
+  return `node_modules diverge do package-lock: ${missing.length} pacote(s) ausente(s) (${missing.slice(0, 5).join(', ')}${missing.length > 5 ? '…' : ''}) — rode npm install (nunca npm ci com o app/IDE abertos)`;
+}
+
 function dryRunVerifyCommands(projectRoot, plan, options = {}) {
   const timeoutMs = options.timeoutMs || 180_000;
   // OXB-084: progress per command, resume on the same tree, and a subset (--only / --changed).
@@ -280,30 +297,60 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
   // OXB-094: vitest segments that share runner and flags run as ONE process (JSON reporter → result per file); a
   // segment the batch cannot answer (no JSON, file not in the report) runs alone as before.
   const sameCommand = new Map();
+  // OXB-147: never start on a broken dependency tree.
+  if (options.depsCheck) {
+    const broken = depsProblem(projectRoot);
+    if (broken) {
+      if (progress) progress(`dry-verify não rodou: ${broken}`);
+      return { ok: false, results: [], errors: [`dependências: ${broken}; dry-verify não rodou`], warnings, reused, skipped, tree, deps_broken: broken };
+    }
+  }
   const batched = options.batch === false ? new Map() : batchVitestSegments(projectRoot, selected, { timeoutMs, progress, cache: options.resume && cache, tree, maxFiles: options.batchMaxFiles, parallel: options.parallel });
   // OXB-095: what the batches did not answer runs concurrently (each distinct command once), bounded by parallel.max
   // and min_free_mb; results feed the per-task loop below, in plan order, as if run there.
+  // OXB-147: wave of each task, and the deps check at each wave boundary (also between parallel groups).
+  let depsBroken = null;
+  const waveCheck = (wave) => {
+    if (!options.depsCheck || depsBroken) return depsBroken;
+    depsBroken = depsProblem(projectRoot);
+    if (depsBroken) {
+      errors.push(`dependências: ${depsBroken} — quebrou durante a rodada (antes da onda ${wave}); o resto do dry-verify não rodou`);
+      if (progress) progress(`dry-verify parado: ${depsBroken}`);
+    }
+    return depsBroken;
+  };
   if (options.parallel && options.parallel.max > 1) {
-    const pending = [];
     const seen = new Set();
+    const byWave = new Map();
     for (const task of selected) {
       const meta = task.meta || {};
       if (Array.isArray(meta.blocked_by) && meta.blocked_by.filter(Boolean).length) continue;
       for (const segment of splitSegments(task.verifyCommand)) {
-        if (seen.has(segment) || batched.has(`${task.id}\u0000${segment}`)) continue;
+        if (seen.has(segment) || batched.has(`${task.id}\u0000${segment}`) || refusal(segment)) continue;
         if (options.resume && tree && cache.entries[segmentKey(tree, task.id, segment)]) continue;
         seen.add(segment);
-        pending.push({ id: pending.length, command: segment, label: `${task.id} ${segment.slice(0, 70)}` });
+        const w = task.wave != null ? task.wave : 0;
+        if (!byWave.has(w)) byWave.set(w, []);
+        byWave.get(w).push({ command: segment, label: `${task.id} ${segment.slice(0, 70)}` });
       }
     }
-    if (pending.length > 1) {
-      if (progress) progress(`dry-verify paralelo: ${pending.length} comando(s), até ${options.parallel.max} por vez`);
+    const waves = [...byWave.keys()].sort((a, b) => a - b);
+    waves.forEach((w, wi) => {
+      if (depsBroken || (wi > 0 && waveCheck(w))) return;
+      const pending = byWave.get(w).map((p, i) => ({ id: i, ...p }));
+      if (pending.length < 2) return;
+      if (progress) progress(`dry-verify paralelo: ${pending.length} comando(s)${waves.length > 1 ? ` da onda ${w}` : ''}, até ${options.parallel.max} por vez`);
       const results = require('./oxe-parallel-run.cjs').runParallel(pending, { max: options.parallel.max, minFreeMb: options.parallel.minFreeMb, cwd: projectRoot, timeoutMs, env: scrubbedEnv(), onProgress: progress });
       for (const r of results) if (r && !r.timedOut) sameCommand.set(pending[r.id].command, { code: r.code, output: r.output, parallel: true });
-    }
+    });
   }
   if (progress) progress(`dry-verify: ${totalSegments} comando(s) em ${selected.length} tarefa(s)${skipped.length ? ` · fora: ${skipped.length}` : ''}${tree ? (options.resume ? ' · --resume' : '') : ''}`);
+  let lastWave = null;
   for (const task of selected) {
+    if (depsBroken) break;
+    // OXB-147: at each wave boundary, node_modules is checked again; a tree that broke mid-run stops the rest.
+    if (lastWave !== null && task.wave != null && task.wave !== lastWave && waveCheck(task.wave)) break;
+    lastWave = task.wave != null ? task.wave : lastWave;
     // OXB-063: work delivered by another path, still waiting on an open external dependency, cannot be green yet —
     // its verify is not run and the verdict is `external_pending` (never an error). Once unblocked it runs as usual.
     const meta = task.meta || {};
@@ -336,7 +383,12 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
       let run;
       let v;
       const fromBatch = !cached ? (batched.get(`${task.id}\u0000${segment}`) || sameCommand.get(segment) || null) : null;
-      if (cached) {
+      const refused = refusal(segment);
+      if (refused) {
+        run = { code: null, output: refused === 'unsafe_command' ? `não executado: ${unsafeLib.unsafeReason(segment)}` : 'não executado: é texto, não comando' };
+        v = refused;
+        if (progress) progress(`${label} ... ${refused} (não executado)`);
+      } else if (cached) {
         reused += 1;
         run = { code: cached.code, output: cached.output || '' };
         v = cached.verdict;
@@ -382,12 +434,13 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
     // OXB-040: cmd.exe does not group arguments with single quotes (`--jq '.[0].conclusion'` reaches gh split).
     const singleQuoted = platform === 'win32' && hasSingleQuotedArgument(task.verifyCommand);
     if (singleQuoted) warnings.push(`${task.id}: o verify usa aspas simples — no Windows (cmd.exe) elas não agrupam o argumento; use aspas duplas`);
-    if (verdict === 'broken_command') errors.push(`${task.id}: comando de verificação falha por outro motivo que não o alvo ausente — corrija o plano antes de executar${singleQuoted ? ' (provável causa: aspas simples no Windows — troque por aspas duplas)' : ''}: ${excerpt}`);
+    if (verdict === 'unsafe_command' || verdict === 'not_a_command') errors.push(...unsafeLib.verifyCommandProblems(task.id, task.verifyCommand, splitSegments));
+    else if (verdict === 'broken_command') errors.push(`${task.id}: comando de verificação falha por outro motivo que não o alvo ausente — corrija o plano antes de executar${singleQuoted ? ' (provável causa: aspas simples no Windows — troque por aspas duplas)' : ''}: ${excerpt}`);
     else if (verdict === 'timeout') errors.push(`${task.id}: comando de verificação passou de ${Math.round(timeoutMs / 1000)}s sem terminar`);
     else if (verdict === 'already_green') warnings.push(`${task.id}: verificação já passa antes da tarefa — não prova o trabalho dela`);
   }
   if (skipped.length) warnings.push(`dry-verify parcial: ${skipped.length} tarefa(s) fora desta rodada (${skipped.join(', ')})`);
-  return { ok: errors.length === 0, results, errors, warnings, reused, skipped, tree };
+  return { ok: errors.length === 0, results, errors, warnings, reused, skipped, tree, ...(depsBroken ? { deps_broken: depsBroken } : {}) };
 }
 
-module.exports = { dryRunVerifyCommands, classifyFailure, hasSingleQuotedArgument, treeHash };
+module.exports = { dryRunVerifyCommands, classifyFailure, hasSingleQuotedArgument, treeHash, depsProblem };

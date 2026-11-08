@@ -1435,6 +1435,18 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
         for (const warning of env.warnings) warnings.push(`project_env:${warning}`);
       } catch { /* a leitura do ambiente nunca derruba o preflight */ }
     }
+    // OXB-147: never run a verify that reinstalls packages or changes git state, or a sentence as a command.
+    try {
+      const parsers = loadSdkParsers();
+      const p = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+      const planDoc = parsers ? require('./oxe-plan-json.cjs').readPlanArtifact(p.plan, readTextIfExists(p.plan) || '', parsers.parsePlan) : null;
+      const unsafe = require('./oxe-unsafe-commands.cjs');
+      const split = require('./oxe-vitest-batch.cjs').splitSegments;
+      for (const task of (planDoc && planDoc.tasks) || []) {
+        if (task.done || !task.verifyCommand) continue;
+        for (const problem of unsafe.verifyCommandProblems(task.id, task.verifyCommand, split)) blockers.push(`unsafe_verify:${problem}`);
+      }
+    } catch { /* plan reading problems are reported by the lint */ }
     if (health && typeof health.buildHealthReport === 'function') {
       report = health.buildHealthReport(projectRoot);
       if (report.planSelfEvaluation && report.planSelfEvaluation.executable === false) {
@@ -2796,6 +2808,16 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     result.ok = result.errors.length === 0;
   }
   result.warnings.push(...anchorWarnings);
+  // OXB-147: a verify that would change node_modules / git, or a sentence instead of a command, is a structural error.
+  {
+    const unsafe = require('./oxe-unsafe-commands.cjs');
+    const split = require('./oxe-vitest-batch.cjs').splitSegments;
+    for (const task of plan.tasks || []) {
+      if (task.done || !task.verifyCommand) continue;
+      result.errors.push(...unsafe.verifyCommandProblems(task.id, task.verifyCommand, split));
+    }
+    for (const at of plan.acceptanceTests || []) result.errors.push(...unsafe.verifyCommandProblems(`teste de aceite ${at.criterion || at.id || '?'}`, at.command, split));
+  }
   // OXB-118: rules that look guarded but are only text.
   try {
     const pol = require('./oxe-policy-rules.cjs').summary(config.policy_rules);
@@ -2899,6 +2921,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       resume: Boolean(options.resume),
       only: options.only,
       changed: Boolean(options.changed),
+      depsCheck: true,
       // OXB-095: config parallel.max / min_free_mb (OXB-050) bound the concurrent dry-verify commands.
       parallel: (() => { const pc = require('./oxe-parallel.cjs').parallelConfig(projectRoot, { maxParallel: options.dryVerifyParallel }); return { max: pc.maxParallel, minFreeMb: pc.minFreeMb }; })(),
     });
@@ -3538,6 +3561,34 @@ function runtimeSync(projectRoot, activeSession, options = {}) {
   }
   result.merged = true;
   result.head_after = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
+  // OXB-147: the merge brought new dependencies (F2: 195 files incl. a new package-lock.json; nothing reinstalled and
+  // the dry-verify ran on a stale node_modules). config `sync_deps`: "install" runs a NON-destructive install (npm
+  // install / pnpm install / yarn — never `npm ci`, which deletes node_modules) + `post_install`; "stop" (default)
+  // does not re-verify on the stale tree and tells what to run.
+  const depFiles = upstream.filter((f) => /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock)$/.test(f) && !/node_modules\//.test(f));
+  let depsStale = false;
+  if (depFiles.length) {
+    const cfg = readProjectConfig(projectRoot) || {};
+    const manager = fs.existsSync(path.join(projectRoot, 'pnpm-lock.yaml')) ? 'pnpm install' : fs.existsSync(path.join(projectRoot, 'yarn.lock')) ? 'yarn install' : 'npm install';
+    const post = typeof cfg.post_install === 'string' && cfg.post_install.trim() ? cfg.post_install.trim() : null;
+    const command = [manager, post].filter(Boolean).join(' && ');
+    if (cfg.sync_deps === 'install') {
+      let ok = true;
+      let tail = '';
+      for (const c of [manager, post].filter(Boolean)) {
+        const r = runChildCommand(projectRoot, c);
+        if (!r.ok) { ok = false; tail = r.tail; break; }
+      }
+      result.deps = { changed: depFiles, action: 'installed', command, ok, ...(ok ? {} : { tail }) };
+      if (!ok) { depsStale = true; result.error = `dependências mudaram (${depFiles.join(', ')}) e \`${command}\` falhou — corrija e rode oxe-cc runtime verify`; }
+    } else {
+      depsStale = true;
+      result.deps = { changed: depFiles, action: 'stop', command };
+      result.error = `dependências mudaram: rode ${command} (${depFiles.join(', ')} vieram no merge) e depois oxe-cc runtime verify — o re-verify não rodou num node_modules velho`;
+    }
+    appendEvent(projectRoot, activeSession, { type: 'ProgramSyncDepsChanged', payload: { from, files: depFiles, action: result.deps.action, ok: result.deps.ok !== false } });
+  }
+  if (depsStale) options = { ...options, verify: false };
   const { jsonPath, doc, paths } = readPlanJsonDoc(projectRoot, activeSession);
   if (doc && Array.isArray(doc.tasks)) {
     const changed = new Set(upstream);
