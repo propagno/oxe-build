@@ -4232,6 +4232,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--ref' && argv[i + 1]) out.ref = String(argv[++i]);
     else if (a === '--any-label') out.anyLabel = true;
     else if (a === '--print-prompt') out.printPrompt = true;
+    else if (a === '--llm-timeout-ms' && argv[i + 1]) out.llmTimeoutMs = Number(argv[++i]);
     else if (a === '--in-place') out.inPlace = true;
     else if (a === '--promote-each') out.promoteEach = true;
     else if (a === '--allow-undelivered') out.allowUndelivered = true;
@@ -5448,9 +5449,13 @@ async function runRuntime(opts) {
         console.error(`  Ou persista com: oxe-cc runtime configure --model <modelo> --api-key-env ANTHROPIC_API_KEY`);
         process.exit(1);
       }
-      const providerConfig = { baseUrl, apiKey, model, maxTurns };
+      // OXB-153: per-call timeout — --llm-timeout-ms > config executor.timeout_ms > 20 min (it was a fixed 5 min).
+      let execCfg = {};
+      try { execCfg = (JSON.parse(fs.readFileSync(path.join(opts.dir, '.oxe', 'config.json'), 'utf8')) || {}).executor || {}; } catch { execCfg = {}; }
+      const llmTimeoutMs = Number(opts.llmTimeoutMs) > 0 ? Number(opts.llmTimeoutMs) : Number(execCfg.timeout_ms) > 0 ? Number(execCfg.timeout_ms) : 20 * 60_000;
+      const providerConfig = { baseUrl, apiKey, model, maxTurns, timeoutMs: llmTimeoutMs };
       const adapterOptions = adapterId === 'claude'
-        ? { model: opts.model || process.env.OXE_CLAUDE_MODEL || null }
+        ? { model: opts.model || process.env.OXE_CLAUDE_MODEL || null, timeoutMs: llmTimeoutMs }
         : {};
       if (!opts.jsonOutput) console.log(`  ${c ? green : ''}Adapter:${c ? reset : ''} ${adapterId}${adapterId === 'claude' ? ` (claude -p${adapterOptions.model ? ` --model ${adapterOptions.model}` : ''})` : ` (${baseUrl})`}`);
       const emitTaskNdjson = cliOutput.createTaskNdjsonEmitter((line) => process.stdout.write(`${line}
@@ -5481,6 +5486,15 @@ async function runRuntime(opts) {
           if (event.type === 'turn_start') {
             const turn = event.detail?.turn ?? 0;
             if (turn === 0) process.stdout.write(`  → ${event.nodeId} `);
+            // OXB-153: a long turn shows its elapsed time every minute.
+            if (global.__oxeTurnTimer) clearInterval(global.__oxeTurnTimer);
+            const started = Date.now();
+            global.__oxeTurnTimer = setInterval(() => process.stdout.write(` [turno ${turn + 1}: ${Math.round((Date.now() - started) / 60000)} min]`), 60_000);
+            global.__oxeTurnTimer.unref();
+          } else if (event.type === 'turn_complete') {
+            if (global.__oxeTurnTimer) { clearInterval(global.__oxeTurnTimer); global.__oxeTurnTimer = null; }
+          } else if (event.type === 'turn_timeout') {
+            process.stdout.write(` ⏱ chamada excedeu ${Math.round((event.detail?.elapsed_ms || 0) / 60000)} min — continuando a mesma tentativa (${event.detail?.retry}/2)`);
           } else if (event.type === 'tool_call') {
             process.stdout.write('.');
           } else if (event.type === 'executor_usage' && typeof event.detail?.cost_usd === 'number') {

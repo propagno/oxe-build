@@ -28,7 +28,8 @@ export type LlmExecutorEventType =
   | 'tool_denied'
   | 'executor_complete'
   /** Once per attempt: turns, tool calls and backend-reported cost. */
-  | 'executor_usage';
+  | 'executor_usage'
+  | 'turn_timeout';
 
 /** Injectable completion function (defaults to the HTTP OpenAI-compatible client). */
 export type CompletionFn = typeof streamCompletion;
@@ -77,6 +78,11 @@ export interface ExecutorUsage {
 }
 
 const ACTION_LOG_CAP = 300;
+/** OXB-153: consecutive call timeouts tolerated inside one attempt before it fails as `timeout`. */
+const MAX_CALL_TIMEOUTS_IN_A_ROW = 2;
+const TIMEOUT_CONTINUE_NOTICE =
+  'A chamada anterior excedeu o tempo limite antes de responder. Os arquivos já escritos continuam no workspace. ' +
+  'Continue de onde parou, em passos menores: escreva um arquivo por vez (ou partes de um arquivo grande) e chame finish_task ao terminar.';
 /** OXB-148: a single tool result kept in the conversation (the rest is cut with a note). */
 export const TOOL_RESULT_MAX_CHARS = 40_000;
 export function capToolResult(text: string, max = TOOL_RESULT_MAX_CHARS): string {
@@ -156,6 +162,7 @@ export class LlmTaskExecutor implements TaskExecutor {
     };
 
     let turn = 0;
+    let timeoutsInARow = 0;
     for (; turn < maxTurns; turn++) {
       this.emit({ type: 'turn_start', nodeId: node.id, attempt, detail: { turn } });
       // OXB-026: the last turn finishes and reports; the runtime runs the task's verify itself afterwards.
@@ -164,6 +171,7 @@ export class LlmTaskExecutor implements TaskExecutor {
       }
 
       let response;
+      const turnStarted = Date.now();
       try {
         response = await this.complete({
           baseUrl: this.provider.baseUrl,
@@ -179,15 +187,25 @@ export class LlmTaskExecutor implements TaskExecutor {
         const kind = (err as { kind?: unknown }).kind;
         const spent = (err as { costUsd?: unknown }).costUsd;
         if (typeof spent === 'number' && spent > 0) usage.cost_usd = (usage.cost_usd ?? 0) + spent;
-        const failureClass = kind === 'context' || kind === 'quota' || kind === 'llm' ? kind : 'env';
+        // OXB-153: a call that timed out keeps the attempt — the files it already wrote stay, and the next call
+        // continues from the same conversation (with a nudge) instead of restarting the task from scratch.
+        if (kind === 'timeout' && timeoutsInARow < MAX_CALL_TIMEOUTS_IN_A_ROW) {
+          timeoutsInARow += 1;
+          this.emit({ type: 'turn_timeout', nodeId: node.id, attempt, detail: { turn, elapsed_ms: Date.now() - turnStarted, retry: timeoutsInARow } });
+          messages.push({ role: 'user', content: TIMEOUT_CONTINUE_NOTICE });
+          turn -= 1; // the timed-out call is not a model turn
+          continue;
+        }
+        const failureClass = kind === 'context' || kind === 'quota' || kind === 'llm' || kind === 'timeout' ? kind : 'env';
         return done({ success: false, failure_class: failureClass, evidence: evidencePaths, output: String((err as Error)?.message ?? err) });
       }
       usage.turns += 1;
+      timeoutsInARow = 0;
       if (typeof response.usage?.cost_usd === 'number') usage.cost_usd = (usage.cost_usd ?? 0) + response.usage.cost_usd;
       usage.tool_calls += response.tool_calls.length;
       for (const tc of response.tool_calls) usage.tools[tc.function.name] = (usage.tools[tc.function.name] ?? 0) + 1;
 
-      this.emit({ type: 'turn_complete', nodeId: node.id, attempt, detail: { turn, finish_reason: response.finish_reason } });
+      this.emit({ type: 'turn_complete', nodeId: node.id, attempt, detail: { turn, finish_reason: response.finish_reason, elapsed_ms: Date.now() - turnStarted } });
 
       if (response.content) finalOutput = response.content;
 

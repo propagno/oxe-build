@@ -242,3 +242,41 @@ const provider = { baseUrl: '', apiKey: '', model: '', maxTurns: 4 };
         strict_1.default.equal(usage.detail.cost_usd, 0.05);
     });
 });
+(0, node_test_1.describe)('OXB-153: a claude call that times out continues the same attempt', () => {
+    let tmp;
+    (0, node_test_1.before)(() => { tmp = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-adapter-timeout-')); });
+    (0, node_test_1.after)(() => { fs_1.default.rmSync(tmp, { recursive: true, force: true }); });
+    (0, node_test_1.test)('1st call hangs past timeoutMs; the 2nd answers finish_task: success in ONE attempt, with a turn_timeout event', async () => {
+        const counter = path_1.default.join(tmp, 'calls.txt');
+        const shim = path_1.default.join(tmp, 'slow.js');
+        // first call never answers in time; next calls finish the task (the bridge expects {"content","tool_calls"} JSON in result)
+        fs_1.default.writeFileSync(shim, `
+const fs=require('fs');const n=(fs.existsSync(${JSON.stringify(counter)})?Number(fs.readFileSync(${JSON.stringify(counter)},'utf8')):0)+1;fs.writeFileSync(${JSON.stringify(counter)},String(n));
+process.stdin.resume();process.stdin.on('data',()=>{});process.stdin.on('end',()=>{
+  if(n===1){setTimeout(()=>{},60000);return;}
+  const reply=JSON.stringify({content:'ok',tool_calls:[{name:'finish_task',arguments:{summary:'done'}}]});
+  process.stdout.write(JSON.stringify({type:'result',subtype:'success',is_error:false,result:reply,total_cost_usd:0.01}));
+});`, 'utf8');
+        const a = new claude_cli_1.ClaudeCliAdapter({ command: process.execPath, prefixArgs: [shim], timeoutMs: 400 });
+        const events = [];
+        const ex = new llm_task_executor_1.LlmTaskExecutor({ ...provider, maxTurns: 4 }, null, (e) => events.push(e), a.createCompletion());
+        const ws = fs_1.default.mkdtempSync(path_1.default.join(tmp, 'ws-'));
+        const res = await ex.execute(node([{ type: 'generate_patch', targets: ['out.txt'] }]), lease(ws), 'run-1', 1);
+        strict_1.default.equal(res.success, true, res.output);
+        strict_1.default.equal(res.completed_by, 'finish_task');
+        const t = events.filter((e) => e.type === 'turn_timeout');
+        strict_1.default.equal(t.length, 1);
+        strict_1.default.equal(t[0].detail.retry, 1);
+    });
+    (0, node_test_1.test)('timeouts in a row beyond the limit fail the attempt as `timeout` (not `env`)', async () => {
+        const shim = path_1.default.join(tmp, 'always-slow.js');
+        fs_1.default.writeFileSync(shim, `process.stdin.resume();process.stdin.on('data',()=>{});process.stdin.on('end',()=>{setTimeout(()=>{},60000)});`, 'utf8');
+        const a = new claude_cli_1.ClaudeCliAdapter({ command: process.execPath, prefixArgs: [shim], timeoutMs: 300 });
+        const ex = new llm_task_executor_1.LlmTaskExecutor({ ...provider, maxTurns: 4 }, null, null, a.createCompletion());
+        const ws = fs_1.default.mkdtempSync(path_1.default.join(tmp, 'ws-'));
+        const res = await ex.execute(node([{ type: 'generate_patch', targets: ['out.txt'] }]), lease(ws), 'run-1', 1);
+        strict_1.default.equal(res.success, false);
+        strict_1.default.equal(res.failure_class, 'timeout');
+        strict_1.default.match(res.output, /claude -p excedeu 300 ms/);
+    });
+});

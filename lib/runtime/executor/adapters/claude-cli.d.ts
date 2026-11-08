@@ -53,7 +53,7 @@ export declare function buildBridgePrompt(messages: ChatMessage[], tools?: ToolS
 /** Parse the model's reply into content + tool calls; null when it is not the expected JSON. */
 /** An adapter failure with what the CLI said, classified (context / quota / llm / env) and the cost already spent. */
 export interface CliFailure extends Error {
-    kind: 'context' | 'quota' | 'llm' | 'env';
+    kind: 'context' | 'quota' | 'llm' | 'env' | 'timeout';
     costUsd: number;
     subtype: string | null;
     exitCode: number | null;

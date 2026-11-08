@@ -973,3 +973,17 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - O checkout, o índice, o trabalho não commitado e o node_modules do programa não são tocados, e o tree sujo deixa de ser motivo de recusa. `--in-place` mantém o comportamento antigo.
   - `runtime execute --promote-each [--base main]` dispara, a cada tarefa concluída verde, um `runtime promote Tn --open-pr` em segundo plano. Cada um usa sua própria worktree, o log vai para `.oxe/promote/Tn.log` e fica o evento `TaskPromoteQueued`, depois `TaskPromoted` com o link do PR.
   - Teste: `tests/oxe-1212-sync-promote.test.cjs` (tree do programa sujo e com arquivo no índice continua idêntico, e o node_modules real sobrevive).
+
+## OXB-152: launchers POSIX no Windows e mensagem de erro legível
+
+- **Status:** aberto. Registrado pelo TECH LEAD em 08/11 (F10): `./mobile/android/gradlew …` deu `broken_command` no Windows ("'.' não é reconhecido…"), e a mensagem chegou corrompida ("n�o").
+- **Proposta:** no win32, o verify e o dry-verify mapeiam `./<caminho>/gradlew`, `mvnw` e `.sh` para o irmão `.bat`/`.cmd` quando existir; sem ele, o lint avisa com a dica. A saída do console é decodificada na code page OEM.
+
+## OXB-153: o timeout de 5 min por chamada do `claude -p` era fixo e recomeçava a tarefa
+
+- **Status:** resolvido (1.21.2), bloqueio da F4. Na run oxe-run-mw855cc1-yap7sx, a T1 (F4-P1: lugares + migração 095) falhou na 1ª tentativa depois de 9 turnos e 54 chamadas de ferramenta, US$ 5,84, com `claude -p excedeu 300000 ms` classificado como `env`. A 2ª tentativa recomeçou do zero.
+  - O `DEFAULT_TIMEOUT_MS` do adaptador era 5 min, e nem o config nem a CLI o alcançavam.
+  - **(a)** `--llm-timeout-ms` no execute, `executor.timeout_ms` no config, padrão de 20 min. Vale para o adaptador `claude` e para o `http`.
+  - **(b)** O timeout de uma chamada vira a classe `timeout`, e a **mesma tentativa continua**: os arquivos já escritos ficam, e a conversa segue com uma mensagem pedindo para continuar em passos menores (até 2 timeouts seguidos). Só depois disso a tentativa falha como `timeout`, não `env`.
+  - **(c)** Um turno longo mostra o tempo decorrido a cada minuto (`[turno N: X min]`), e o timeout aparece como `⏱ … continuando a mesma tentativa`. O evento `turn_complete` traz `elapsed_ms`.
+  - Teste: `packages/runtime/tests/executor-adapters.test.ts`.

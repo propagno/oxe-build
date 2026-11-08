@@ -16,7 +16,7 @@ export interface LlmProviderConfig {
 }
 export type LlmExecutorEventType = 'turn_start' | 'turn_complete' | 'tool_call' | 'tool_result' | 'tool_denied' | 'executor_complete'
 /** Once per attempt: turns, tool calls and backend-reported cost. */
- | 'executor_usage';
+ | 'executor_usage' | 'turn_timeout';
 /** Injectable completion function (defaults to the HTTP OpenAI-compatible client). */
 export type CompletionFn = typeof streamCompletion;
 export interface LlmExecutorEvent {

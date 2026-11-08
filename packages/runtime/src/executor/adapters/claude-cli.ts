@@ -59,7 +59,8 @@ interface CliReply {
 }
 
 const CLAUDE_FLAGS = ['-p', '--output-format', 'json', '--tools', '', '--no-session-persistence', '--strict-mcp-config'];
-const DEFAULT_TIMEOUT_MS = 5 * 60_000;
+/** OXB-153: one turn that writes a big module or a migration takes more than 5 min (F4-P1: 9 turns, then killed). */
+const DEFAULT_TIMEOUT_MS = 20 * 60_000;
 /**
  * OXB-148: F2-T1's 2.29M-char prompt was ~1.37M tokens (≈1.7 chars/token for code + Portuguese). The window is 1M
  * tokens; 1.2M chars keeps a margin. Tool results older than the last few are elided from 600k chars on.
@@ -151,7 +152,7 @@ export function buildBridgePrompt(messages: ChatMessage[], tools: ToolSchema[] =
 
 /** Parse the model's reply into content + tool calls; null when it is not the expected JSON. */
 /** An adapter failure with what the CLI said, classified (context / quota / llm / env) and the cost already spent. */
-export interface CliFailure extends Error { kind: 'context' | 'quota' | 'llm' | 'env'; costUsd: number; subtype: string | null; exitCode: number | null; }
+export interface CliFailure extends Error { kind: 'context' | 'quota' | 'llm' | 'env' | 'timeout'; costUsd: number; subtype: string | null; exitCode: number | null; }
 
 const CONTEXT_RE = /prompt is too long|too many tokens|context (window|length)|input is too long|maximum context|exceeds? the (model'?s? )?(context|token)/i;
 const QUOTA_RE = /usage limit|rate.?limit|limit reached|quota|credit balance|overloaded|resets? (at|in)|try again (later|in)|429/i;
@@ -322,7 +323,11 @@ export class ClaudeCliAdapter implements ExecutorAdapter {
       let err = '';
       const timer = setTimeout(() => {
         proc.kill();
-        reject(new Error(`claude -p excedeu ${limit} ms`));
+        // OXB-153: a per-call timeout is its own class — the attempt continues instead of restarting from zero.
+        const e = new Error(`claude -p excedeu ${limit} ms (timeout por chamada; executor.timeout_ms / --llm-timeout-ms)`) as Error & { kind: string; costUsd: number };
+        e.kind = 'timeout';
+        e.costUsd = 0;
+        reject(e);
       }, limit);
       proc.stdout.on('data', (chunk) => { out += chunk; });
       proc.stderr.on('data', (chunk) => { err += chunk; });
