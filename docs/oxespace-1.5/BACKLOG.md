@@ -294,7 +294,7 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-059: o `runtime status` depois que o trabalho da fase terminou
 
-- **Status:** aberto. Detalhes em `HANDOFF-1.21.2.md` §9.
+- **Status:** resolvido (1.21.2). O `runtime status` lê o trabalho da fase no PLAN.json (`runtimePhaseWork`): concluídas, aguardando entrega externa e pendentes. Quando não sobra nada pendente, um run que falhou ou bloqueou aparece como "superado: o trabalho do plano foi concluído depois deste run", o promotion readiness mostra n/a, e a próxima ação é `runtime verify` → `runtime dossier --phase Fn` → `runtime program close --phase Fn` (com programa). Com trabalho pendente, a próxima ação é o `runtime execute` com a lista. O status multi-agent e a sugestão de plan-agents.json só aparecem quando existe `plan-agents.json`. O `--json` traz `phaseWork`, `runSuperseded` e `nextAction`. Teste: `tests/oxe-1212.test.cjs`.
 
 ## OXB-060: a branch do programa diverge da main; promote por tarefa
 

@@ -374,3 +374,53 @@ describe('OXB-062: an additive amendment keeps the earlier acceptance tests vali
     assert.match(lint(dir, [{ criterion: 'A8', files: ['v1.test.js'], command: 'node --test v1.test.js' }, ...tests]), /v1 \(v1\.test\.js\) está stale/);
   });
 });
+
+describe('OXB-059: runtime status after the phase work is done', () => {
+  const CLI = path.join(__dirname, '..', 'bin', 'oxe-cc.js');
+  const plan = {
+    schema_version: 1,
+    tasks: [
+      { id: 'T1', title: 'código', wave: 1, files: ['src/a.js'], verify: { commands: [fail] } },
+      { id: 'T2', title: 'entregue por fora', wave: 1, kind: 'external_delivery', files: [], blocked_by: ['propagno/oxespace#643'], verify: { commands: [fail] } },
+    ],
+  };
+  const status = (dir, json) => spawnSync(process.execPath, [CLI, 'runtime', 'status', ...(json ? ['--json'] : []), '--dir', dir], { encoding: 'utf8', env: { ...process.env, OXE_NO_PROMPT: '1' } });
+
+  it('a failed run superseded by the plan shows the phase-close path, and no multi-agent advice without plan-agents.json', async () => {
+    const dir = project({ plan });
+    const res = await op.runRuntimeExecute(dir, null, { executor: writer(dir, {}), skipPreflight: true, maxRetries: 0 });
+    assert.ok(res.result.failed.includes('T1'));
+    op.runtimePlanDone(dir, null, { task: 'T1', commit: 'abc1234' });
+    const r = status(dir, false);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /superado: o trabalho do plano foi concluído depois deste run/);
+    assert.match(r.stdout, /1 concluída\(s\) · 1 aguardando entrega externa \(T2\) de 2/);
+    assert.match(r.stdout, /Próxima ação: oxe-cc runtime verify/);
+    assert.doesNotMatch(r.stdout, /Multi-agent|plan-agents\.json/);
+    const j = JSON.parse(status(dir, true).stdout);
+    assert.equal(j.runSuperseded, true);
+    assert.deepEqual(j.phaseWork.external_pending, ['T2']);
+    assert.deepEqual(j.nextAction, ['oxe-cc runtime verify']);
+    assert.equal(j.multiAgent, null);
+  });
+
+  it('with work left, the next action is execute and the run is not superseded', async () => {
+    const dir = project({ plan });
+    await op.runRuntimeExecute(dir, null, { executor: writer(dir, {}), skipPreflight: true, maxRetries: 0 });
+    const j = JSON.parse(status(dir, true).stdout);
+    assert.equal(j.runSuperseded, false);
+    assert.deepEqual(j.phaseWork.pending, ['T1']);
+    assert.match(j.nextAction[0], /runtime execute/);
+  });
+
+  it('with a program, the close path is verify → dossier → program close of the active phase', () => {
+    const dir = project({ plan: { schema_version: 1, tasks: [{ id: 'T1', title: 'x', wave: 1, files: ['a.js'], done: true }] } });
+    const programDir = path.join(dir, '.oxe', 'program');
+    fs.mkdirSync(programDir, { recursive: true });
+    fs.writeFileSync(path.join(programDir, 'PROGRAM.json'), JSON.stringify({ schema_version: 1, active_phase: 'F1', phases: [{ id: 'F1', title: 'f1', status: 'executing' }] }));
+    const work = op.runtimePhaseWork(dir, null);
+    assert.equal(work.program, true);
+    assert.deepEqual(work.next_steps, ['oxe-cc runtime verify', 'oxe-cc runtime dossier --phase F1', 'oxe-cc runtime program close --phase F1']);
+    assert.equal(work.complete, true);
+  });
+});

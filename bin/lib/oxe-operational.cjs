@@ -2825,6 +2825,52 @@ function runtimeFeedback(projectRoot, activeSession, options = {}) {
   return result;
 }
 
+/**
+ * OXB-059: where the phase's work stands, from PLAN.json (the source of truth), not from the last run. When every task
+ * is done or waits only on an external delivery, the next step is closing the phase, whatever the last run said.
+ * @returns {{ total: number, done: string[], external_pending: string[], pending: string[], complete: boolean,
+ *   program: boolean, phase: string|null, multi_agent: boolean, next_steps: string[] }}
+ */
+function runtimePhaseWork(projectRoot, activeSession) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  let tasks = [];
+  if (jsonPath && fs.existsSync(jsonPath)) {
+    try { tasks = (JSON.parse(fs.readFileSync(jsonPath, 'utf8')).tasks || []).filter(Boolean); } catch { tasks = []; }
+  }
+  const done = [];
+  const external = [];
+  const pending = [];
+  for (const t of tasks) {
+    if (t.done === true) done.push(t.id);
+    // Waiting on another path (an external PR); a verify_only task still has a check to run, so it is pending.
+    else if (t.kind === 'external_delivery' || (Array.isArray(t.blocked_by) && t.blocked_by.length) || (t.policy && Array.isArray(t.policy.external_dependency) && t.policy.external_dependency.length)) external.push(t.id);
+    else pending.push(t.id);
+  }
+  let program = null;
+  try {
+    const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+    program = require('./oxe-program.cjs').readProgram(programDir);
+  } catch { program = null; }
+  const phase = program && program.active_phase ? program.active_phase : null;
+  const agentPlans = [path.join(projectRoot, '.oxe', 'plan-agents.json')];
+  if (activeSession) agentPlans.push(path.join(projectRoot, '.oxe', activeSession, 'plan', 'plan-agents.json'));
+  const multiAgent = agentPlans.some((p) => fs.existsSync(p));
+  const complete = tasks.length > 0 && pending.length === 0;
+  const nextSteps = [];
+  if (complete) {
+    nextSteps.push('oxe-cc runtime verify');
+    if (program) {
+      nextSteps.push(`oxe-cc runtime dossier${phase ? ` --phase ${phase}` : ''}`);
+      nextSteps.push(`oxe-cc runtime program close${phase ? ` --phase ${phase}` : ''}`);
+    }
+  } else if (pending.length) {
+    nextSteps.push(`oxe-cc runtime execute  (pendentes: ${pending.join(', ')})`);
+  }
+  return { total: tasks.length, done, external_pending: external, pending, complete, program: Boolean(program), phase, multi_agent: multiAgent, next_steps: nextSteps };
+}
+
 /** A task whose work was delivered outside this repo's executor (another PR, a check only). */
 function isExternallyDelivered(rawTask, parsedTask) {
   const raw = rawTask || {};
@@ -4637,6 +4683,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 module.exports = {
   projectStatusPaths,
   runtimePlanReopen,
+  runtimePhaseWork,
   resolveMergedDependencies,
   isolateFailedTask,
   planSourceHash,

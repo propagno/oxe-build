@@ -4668,11 +4668,26 @@ async function runRuntime(opts) {
 
   if (opts.action === 'status') {
     const current = oxeOperational.readRunState(opts.dir, activeSession);
+    // OXB-059: the phase's work comes from PLAN.json; the last run may be superseded by what was done after it.
+    let phaseWork = null;
+    try { phaseWork = oxeOperational.runtimePhaseWork(opts.dir, activeSession); } catch { phaseWork = null; }
+    const printPhaseWork = () => {
+      if (!phaseWork || !phaseWork.total) return;
+      const parts = [`${phaseWork.done.length} concluída(s)`];
+      if (phaseWork.external_pending.length) parts.push(`${phaseWork.external_pending.length} aguardando entrega externa (${phaseWork.external_pending.join(', ')})`);
+      if (phaseWork.pending.length) parts.push(`${phaseWork.pending.length} pendente(s) (${phaseWork.pending.join(', ')})`);
+      console.log(`  ${c ? green : ''}Trabalho${phaseWork.phase ? ` da fase ${phaseWork.phase}` : ''}:${c ? reset : ''} ${parts.join(' · ')} de ${phaseWork.total}`);
+      if (phaseWork.next_steps.length) console.log(`  ${c ? cyan : ''}Próxima ação:${c ? reset : ''} ${phaseWork.next_steps.join('  →  ')}`);
+    };
     if (!current) {
-      if (opts.jsonOutput) console.log(JSON.stringify({ run: null, status: 'absent' }, null, 2));
-      else console.log(`  ${yellow}Nenhum ACTIVE-RUN encontrado.${reset}`);
+      if (opts.jsonOutput) console.log(JSON.stringify({ run: null, status: 'absent', ...(phaseWork && phaseWork.total ? { phaseWork } : {}) }, null, 2));
+      else {
+        console.log(`  ${yellow}Nenhum ACTIVE-RUN encontrado.${reset}`);
+        printPhaseWork();
+      }
       return;
     }
+    const runSuperseded = Boolean(phaseWork && phaseWork.complete && !/^completed/.test(String(current.status || '')) && current.status !== 'running');
     const report = oxeHealth.buildHealthReport(opts.dir);
     const gates = oxeOperational.readRuntimeGates
       ? oxeOperational.readRuntimeGates(opts.dir, activeSession, { runId: current.run_id })
@@ -4680,7 +4695,8 @@ async function runRuntime(opts) {
     const runtimeMode = oxeOperational.buildRuntimeModeStatus
       ? oxeOperational.buildRuntimeModeStatus(current)
       : null;
-    const multiAgent = oxeOperational.readRuntimeMultiAgentStatus
+    // OXB-059: multi-agent status (and its "execute with plan-agents.json" advice) only when the project uses it.
+    const multiAgent = oxeOperational.readRuntimeMultiAgentStatus && (!phaseWork || phaseWork.multi_agent)
       ? oxeOperational.readRuntimeMultiAgentStatus(opts.dir, activeSession, { runId: current.run_id })
       : null;
     if (opts.jsonOutput) {
@@ -4697,6 +4713,9 @@ async function runRuntime(opts) {
             recoveryState: report.recoveryState || null,
             providerCatalog: report.providerCatalog || null,
             multiAgent: multiAgent || null,
+            phaseWork: phaseWork || null,
+            runSuperseded,
+            nextAction: phaseWork && phaseWork.next_steps.length ? phaseWork.next_steps : null,
           },
           null,
           2
@@ -4705,7 +4724,9 @@ async function runRuntime(opts) {
       return;
     }
     console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${current.run_id}`);
-    console.log(`  ${c ? green : ''}Estado:${c ? reset : ''} ${current.status}`);
+    if (runSuperseded) console.log(`  ${c ? green : ''}Estado:${c ? reset : ''} ${c ? dim : ''}${current.status} — superado: o trabalho do plano foi concluído depois deste run${c ? reset : ''}`);
+    else console.log(`  ${c ? green : ''}Estado:${c ? reset : ''} ${current.status}`);
+    printPhaseWork();
     console.log(`  ${c ? green : ''}Cursor:${c ? reset : ''} onda=${current.cursor && current.cursor.wave != null ? current.cursor.wave : '—'} tarefa=${current.cursor && current.cursor.task ? current.cursor.task : '—'} modo=${current.cursor && current.cursor.mode ? current.cursor.mode : '—'}`);
     console.log(`  ${c ? green : ''}Arquivo:${c ? reset : ''} ${path.join(p.runsDir, `${current.run_id}.json`)}`);
     if (current.compiled_graph && current.compiled_graph.metadata) {
@@ -4738,7 +4759,9 @@ async function runRuntime(opts) {
       const blockers = Array.isArray(report.promotionReadiness.blockers) ? report.promotionReadiness.blockers : [];
       // Only show blockers that are not solely due to unconfigured policy
       const meaningfulBlockers = blockers.filter(b => b !== 'policy_uncovered_mutations' || report.policyCoverage.coveragePercent > 0);
-      const promoLabel = promoStatus === 'blocked' && meaningfulBlockers.length === 0
+      const promoLabel = runSuperseded
+        ? `${c ? dim : ''}n/a (run superado — rode runtime verify)${c ? reset : ''}`
+        : promoStatus === 'blocked' && meaningfulBlockers.length === 0
         ? `${c ? dim : ''}n/a (execução não concluída)${c ? reset : ''}`
         : `${promoStatus}${meaningfulBlockers.length ? ` · ${meaningfulBlockers.join(', ')}` : ''}`;
       console.log(`  ${c ? green : ''}Promotion readiness:${c ? reset : ''} ${promoLabel}`);
