@@ -36,9 +36,10 @@ async function pool(input) {
   const runOne = (i) => new Promise((resolve) => {
     const job = jobs[i];
     const started = Date.now();
-    const child = spawn(isWin ? 'cmd.exe' : 'sh', isWin ? ['/d', '/s', '/c', job.command] : ['-c', job.command], { cwd, windowsHide: true, windowsVerbatimArguments: isWin, env: process.env });
-    let output = '';
-    const cap = (d) => { output += d; if (output.length > 8 * 1024 * 1024) output = output.slice(-4 * 1024 * 1024); };
+    const child = spawn(isWin ? 'cmd.exe' : 'sh', isWin ? ['/d', '/s', '/c', require('./oxe-verify-dryrun.cjs').windowsCommand(job.command)] : ['-c', job.command], { cwd, windowsHide: true, windowsVerbatimArguments: isWin, env: process.env });
+    const chunks = [];
+    let size = 0;
+    const cap = (d) => { chunks.push(d); size += d.length; while (size > 8 * 1024 * 1024 && chunks.length > 1) size -= chunks.shift().length; };
     child.stdout.on('data', cap);
     child.stderr.on('data', cap);
     let timedOut = false;
@@ -46,6 +47,7 @@ async function pool(input) {
     child.on('close', (code) => {
       clearTimeout(timer);
       const secs = Math.round((Date.now() - started) / 1000);
+      const output = require('./oxe-console-decode.cjs').decodeConsoleOutput(Buffer.concat(chunks));
       results[i] = { id: job.id, code: timedOut ? null : code, output, timedOut, secs };
       done += 1;
       process.stderr.write(`[${done}/${jobs.length}] ${job.label || job.command.slice(0, 70)} ... ${timedOut ? 'timeout' : code === 0 ? 'exit 0' : `exit ${code}`} ${secs}s\n`);

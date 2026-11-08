@@ -29,11 +29,17 @@ function scrubbedEnv(env = process.env) {
   return out;
 }
 
+/** OXB-152: same Windows mapping as the runtime (gradlew/mvnw → .bat/.cmd) and a UTF-8 console for readable errors. */
+function windowsCommand(command) {
+  const mapped = String(command).replace(/(^|&&\s*|\|\|\s*|&\s*|;\s*)(?:\.\/)?((?:[\w.@-]+\/)*)(gradlew|mvnw)(?=\s|$)/g, (_m, lead, dir, name) => `${lead}${dir.replace(/\//g, '\\')}${name}${name === 'gradlew' ? '.bat' : '.cmd'}`);
+  return mapped;
+}
+
 function runCommand(command, cwd, timeoutMs) {
+  const decode = require('./oxe-console-decode.cjs').decodeConsoleOutput;
   const isWin = process.platform === 'win32';
-  const res = spawnSync(isWin ? 'cmd.exe' : 'sh', isWin ? ['/d', '/s', '/c', command] : ['-c', command], {
+  const res = spawnSync(isWin ? 'cmd.exe' : 'sh', isWin ? ['/d', '/s', '/c', windowsCommand(command)] : ['-c', command], {
     cwd,
-    encoding: 'utf8',
     timeout: timeoutMs,
     windowsHide: true,
     windowsVerbatimArguments: isWin,
@@ -43,7 +49,7 @@ function runCommand(command, cwd, timeoutMs) {
   return {
     code: res.status,
     timedOut: Boolean(res.error && /ETIMEDOUT/.test(String(res.error.code || res.error.message))),
-    output: `${res.stdout || ''}\n${res.stderr || ''}`,
+    output: `${decode(res.stdout)}\n${decode(res.stderr)}`,
   };
 }
 
@@ -443,4 +449,4 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
   return { ok: errors.length === 0, results, errors, warnings, reused, skipped, tree, ...(depsBroken ? { deps_broken: depsBroken } : {}) };
 }
 
-module.exports = { dryRunVerifyCommands, classifyFailure, hasSingleQuotedArgument, treeHash, depsProblem };
+module.exports = { dryRunVerifyCommands, classifyFailure, hasSingleQuotedArgument, treeHash, depsProblem, windowsCommand };

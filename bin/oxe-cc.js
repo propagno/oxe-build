@@ -4233,6 +4233,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--any-label') out.anyLabel = true;
     else if (a === '--print-prompt') out.printPrompt = true;
     else if (a === '--llm-timeout-ms' && argv[i + 1]) out.llmTimeoutMs = Number(argv[++i]);
+    else if (a === '--verify-timeout-ms' && argv[i + 1]) out.verifyTimeoutMs = Number(argv[++i]);
     else if (a === '--in-place') out.inPlace = true;
     else if (a === '--promote-each') out.promoteEach = true;
     else if (a === '--allow-undelivered') out.allowUndelivered = true;
@@ -5473,6 +5474,7 @@ async function runRuntime(opts) {
         budgetReset: opts.budgetReset || undefined,
         maxRetries: opts.maxRetries != null && !Number.isNaN(opts.maxRetries) ? opts.maxRetries : undefined,
         parallelMutating: Boolean(opts.parallelMutating),
+        verifyTimeoutMs: opts.verifyTimeoutMs || undefined,
         // OXB-151: each task done green is promoted (own worktree, PR opened) in the background.
         promoteEach: opts.promoteEach ? { base: opts.baseBranch || 'main', remote: opts.remote || 'origin' } : null,
         maxParallel: opts.maxParallel || undefined,

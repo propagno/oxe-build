@@ -11,6 +11,13 @@ export interface ShellInvocation {
     args: string[];
     windowsVerbatimArguments: boolean;
 }
+/**
+ * OXB-152: POSIX launchers written in plans (`./mobile/android/gradlew -p … test`, `./mvnw`) fail in cmd.exe ("'.' não é
+ * reconhecido"). On Windows they map to their batch siblings (`mobile\android\gradlew.bat`, `mvnw.cmd`).
+ */
+export declare function windowsLaunchers(command: string): string;
+/** OXB-152: cmd.exe's own messages come in the OEM code page; valid UTF-8 stays UTF-8, anything else is read as cp850. */
+export declare function decodeConsoleOutput(buf: Buffer | string | null | undefined): string;
 export declare function shellInvocation(command: string, platform?: NodeJS.Platform): ShellInvocation;
 /** What the host CLI needs to authenticate itself (allowed only where the caller asks for provider credentials). */
 export declare const PROVIDER_CREDENTIAL_ENV: string[];

@@ -976,8 +976,11 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 
 ## OXB-152: launchers POSIX no Windows e mensagem de erro legível
 
-- **Status:** aberto. Registrado pelo TECH LEAD em 08/11 (F10): `./mobile/android/gradlew …` deu `broken_command` no Windows ("'.' não é reconhecido…"), e a mensagem chegou corrompida ("n�o").
-- **Proposta:** no win32, o verify e o dry-verify mapeiam `./<caminho>/gradlew`, `mvnw` e `.sh` para o irmão `.bat`/`.cmd` quando existir; sem ele, o lint avisa com a dica. A saída do console é decodificada na code page OEM.
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (F10): `./mobile/android/gradlew …` deu `broken_command` no Windows ("'.' não é reconhecido…"), e a mensagem chegou corrompida ("n�o").
+  - No win32, o verify (runtime), o dry-verify e o executor paralelo mapeiam `./<caminho>/gradlew` para `<caminho>\gradlew.bat` e `mvnw` para `mvnw.cmd`, em cada segmento.
+  - Um `./script.sh` sem `.cmd`/`.bat` irmão gera aviso no lint.
+  - A saída do console é decodificada como UTF-8 quando é válida; senão, como cp850, a code page OEM em que o cmd escreve as próprias mensagens. O `chcp 65001` não resolveu: o cmd mantém a OEM em pipe.
+  - Teste: `tests/oxe-1212-win-launchers.test.cjs`.
 
 ## OXB-153: o timeout de 5 min por chamada do `claude -p` era fixo e recomeçava a tarefa
 
@@ -987,3 +990,31 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - **(b)** O timeout de uma chamada vira a classe `timeout`, e a **mesma tentativa continua**: os arquivos já escritos ficam, e a conversa segue com uma mensagem pedindo para continuar em passos menores (até 2 timeouts seguidos). Só depois disso a tentativa falha como `timeout`, não `env`.
   - **(c)** Um turno longo mostra o tempo decorrido a cada minuto (`[turno N: X min]`), e o timeout aparece como `⏱ … continuando a mesma tentativa`. O evento `turn_complete` traz `elapsed_ms`.
   - Teste: `packages/runtime/tests/executor-adapters.test.ts`.
+
+## OXB-154: teste congelado que falha na compilação, e o acoplamento de compilação entre tarefas
+
+- **Status:** aberto. Registrado pelo TECH LEAD em 08/11 (F10, Kotlin/gradle).
+  - Um erro de compilação sobre símbolo que a tarefa vai criar (`Unresolved reference`, `cannot find symbol`, tsc sem o export) é o vermelho certo, não `broken_command`.
+  - Em gradle/maven/tsc do projeto todo, os testes de todas as tarefas compilam juntos.
+- **Proposta:**
+  - mapear esses erros para `missing_target` quando o símbolo está nos symbols do pack;
+  - o lint avisa do acoplamento;
+  - `oxe-cc plan skeleton` gera stubs a partir do pack.
+
+## OXB-155: o verify por tarefa do execute ignorava `verify_timeout_ms` (60 s fixos)
+
+- **Status:** resolvido (1.21.2), bloqueio da F2. Na run oxe-run-mw83vtdy-8uzesq, a T2 (G7) falhou duas vezes no segmento 2/5 `npm run typecheck` com timeout de 60 s, mesmo com `verify_timeout_ms: 900000` no config. Depois veio o `VerifyCommandSuspect identical_verify_failure` e a tarefa ficou bloqueada.
+  - A OXB-072 tinha corrigido só o `runtime verify`; o execute não passava o timeout ao scheduler.
+  - Agora o execute passa `--verify-timeout-ms` > `verify_timeout_ms` do config > 10 min para o verify de cada tarefa.
+  - Um verify que estoura o tempo **não** conta como `identical_verify_failure` (quem falhou foi o relógio, não o código), então não consome o ciclo de correção.
+  - Teste: `tests/oxe-1212-exec-verify-timeout.test.cjs`.
+
+## OXB-156: o PR de uma tarefa levava todos os commits do programa
+
+- **Status:** resolvido (1.21.2), bloqueio da F2. `runtime promote T1 --base main` deu `conflito no cherry-pick de 3f0ee63e (tests/acceptance/parked-f3/…)`. O branch do programa tinha 50 commits além do main (close da F1, imports de testes congelados, syncs), e o promote juntava os que tocavam os arquivos de teste da tarefa: os imports levavam junto testes de outras tarefas e estacionados.
+  - O PR agora leva exatamente:
+    - (a) os commits **da tarefa** (trailer `OXE-Task` ou `done_commit`), por cherry-pick -x;
+    - (b) os testes congelados que ela prova (as entradas de `acceptance_tests` com `task` igual, ou com os critérios dela quando a entrada não diz a tarefa), mais as fixtures locais que eles importam, **como arquivos** do tip do programa, num commit `test(acceptance): frozen tests of Tn`. Os iguais na base são pulados.
+    - Nada além disso: testes de outras tarefas e estacionados, `.oxe/` e commits de outras fases ficam fora.
+  - O corpo do PR lista as duas partes. Vale também para o `--promote-each`.
+  - Teste: `tests/oxe-1212-sync-promote.test.cjs`, com um commit de import que conflitaria e agora fica fora.

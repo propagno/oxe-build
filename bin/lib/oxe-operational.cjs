@@ -1768,12 +1768,17 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
       : (fs.existsSync(rootAgentPlan) ? rootAgentPlan : null);
 
   // Build ctx with GateManager (Gap 1)
+  // OXB-155: the per-task verify of execute honors --verify-timeout-ms > config verify_timeout_ms > 10 min (it was a
+  // fixed 60 s: F2-T2's `npm run typecheck` timed out twice with verify_timeout_ms: 900000 in the config).
+  const execVerifyTimeoutMs = Number(options.verifyTimeoutMs) > 0
+    ? Number(options.verifyTimeoutMs)
+    : Number(readProjectConfig(projectRoot).verify_timeout_ms) > 0 ? Number(readProjectConfig(projectRoot).verify_timeout_ms) : 600_000;
   const ctx = createExecutionContext(projectRoot, activeSession, {
     runId: current.run_id,
     executor,
     workspaceManager,
     pluginRegistry: options.pluginRegistry || buildRuntimePluginRegistry(projectRoot),
-    schedulerOptions: options.schedulerOptions || {},
+    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, ...(options.schedulerOptions || {}) },
     // The scheduler already persists every event through the runtime bus (events/bus.ts →
     // appendEvent). This hook only forwards progress; writing here again duplicated the log.
     onEvent: (event) => {
@@ -2892,6 +2897,17 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       result.errors.push(...unsafe.verifyCommandProblems(task.id, task.verifyCommand, split));
     }
     for (const at of plan.acceptanceTests || []) result.errors.push(...unsafe.verifyCommandProblems(`teste de aceite ${at.criterion || at.id || '?'}`, at.command, split));
+    // OXB-152: on Windows a `./script.sh` verify needs a .cmd/.bat sibling (gradlew/mvnw are mapped automatically).
+    if (process.platform === 'win32' || options.platform === 'win32') {
+      for (const task of plan.tasks || []) {
+        for (const seg of String(task.verifyCommand || '').split('&&').map((x) => x.trim())) {
+          const m = /^(?:\.\/)?((?:[\w.@-]+\/)*[\w.@-]+)\.sh\b/.exec(seg);
+          if (!m) continue;
+          const base = path.resolve(projectRoot, m[1]);
+          if (!fs.existsSync(`${base}.cmd`) && !fs.existsSync(`${base}.bat`)) result.warnings.push(`${task.id}: ${m[1]}.sh não roda no cmd do Windows e não há ${m[1].replace(/\//g, '\\')}.cmd/.bat — use um script node/npm ou crie o .cmd`);
+        }
+      }
+    }
   }
   // OXB-118: rules that look guarded but are only text.
   try {
@@ -3748,11 +3764,28 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     if (full && inRange.includes(full)) shas.add(full);
   }
   const criteria = new Set(Array.isArray(task.acceptance) ? task.acceptance : []);
-  const testFiles = (Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])
-    .filter((a) => a && criteria.has(a.criterion))
-    .flatMap((a) => a.files || []);
-  if (testFiles.length) for (const sha of gitLines(projectRoot, ['log', '--format=%H', range, '--', ...testFiles]) || []) shas.add(sha);
-  if (!shas.size) throw new Error(`${taskId}: nenhum commit da tarefa fora de ${base} (sem trailer OXE-Task/done_commit em ${base}..HEAD) — já está na base?`);
+  // OXB-156: the PR carries (a) the task's OWN commits (OXE-Task trailer / done_commit) and (b) the frozen tests it
+  // proves, taken as FILES from the program tip (+ the local fixtures they import) — never the program branch's import
+  // commits, which also carry other tasks' and parked tests (F2-T1: a conflict on tests/acceptance/parked-f3/…).
+  const testFiles = [...new Set((Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])
+    .filter((a) => a && (a.task === taskId || (!a.task && criteria.has(a.criterion))))
+    .flatMap((a) => a.files || []))];
+  if (!shas.size && !testFiles.length) throw new Error(`${taskId}: nenhum commit da tarefa fora de ${base} (sem trailer OXE-Task/done_commit em ${base}..HEAD) — já está na base?`);
+  const programTip = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
+  // local fixtures the frozen tests import (relative specifiers), one level deep
+  const withFixtures = (() => {
+    const out = new Set(testFiles);
+    for (const file of testFiles) {
+      const text = (gitRun(projectRoot, ['show', `${programTip}:${file}`]).stdout) || '';
+      for (const m of text.matchAll(/(?:from\s+|require\(\s*|import\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g)) {
+        const base0 = path.posix.normalize(path.posix.join(path.posix.dirname(file), m[1]));
+        for (const cand of [base0, ...['.ts', '.tsx', '.js', '.mjs', '.cjs', '.json'].map((e) => base0 + e), ...['/index.ts', '/index.js'].map((e) => base0 + e)]) {
+          if (gitRun(projectRoot, ['cat-file', '-e', `${programTip}:${cand}`]).ok) { if (!/\/src\//.test(`/${cand}`)) out.add(cand); break; }
+        }
+      }
+    }
+    return [...out];
+  })();
   const ordered = (gitLines(projectRoot, ['rev-list', '--reverse', '--topo-order', range]) || []).filter((sha) => shas.has(sha));
   const original = (gitLines(projectRoot, ['rev-parse', '--abbrev-ref', 'HEAD']) || [])[0];
   const originalSha = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
@@ -3815,6 +3848,27 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
         break;
       }
     }
+    // OXB-156 (b): the task's frozen tests as files from the program tip; identical-on-base ones are skipped.
+    if (!result.conflict && withFixtures.length) {
+      const added = [];
+      for (const file of withFixtures) {
+        const tip = gitRun(projectRoot, ['show', `${programTip}:${file}`]);
+        if (!tip.ok) continue;
+        const onBase = gitRun(projectRoot, ['show', `${baseSha}:${file}`]);
+        const current = fs.existsSync(path.join(work, file)) ? fs.readFileSync(path.join(work, file), 'utf8') : null;
+        if ((onBase.ok && onBase.stdout === tip.stdout) || current === tip.stdout) continue;
+        const r = spawnSync('git', ['show', `${programTip}:${file}`], { cwd: projectRoot, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+        fs.mkdirSync(path.dirname(path.join(work, file)), { recursive: true });
+        fs.writeFileSync(path.join(work, file), r.stdout);
+        added.push(file);
+      }
+      if (added.length) {
+        gitRun(work, ['add', '--', ...added]);
+        const c = gitRun(work, ['commit', '-q', '-m', `test(acceptance): frozen tests of ${taskId}`, '-m', `From the program branch at ${String(programTip).slice(0, 10)}: ${added.join(', ')}`]);
+        if (!c.ok) result.error = `commit dos testes congelados falhou: ${c.stderr.trim().split(/\r?\n/).pop()}`;
+      }
+      result.frozen_tests = added;
+    }
     // The project's own PR checks, on the promoted branch.
     if (!result.conflict) {
       let pkg = null;
@@ -3847,8 +3901,11 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     `### Critérios: ${[...criteria].join(', ') || '—'}`,
     ...(crs.length ? ['', '### Change requests', ...crs.map((cr) => `- ${cr.id} (${cr.class}, ${cr.status}): ${cr.summary}`)] : []),
     '',
-    '### Commits',
-    ...ordered.map((sha) => `- ${sha.slice(0, 10)} ${(gitLines(projectRoot, ['log', '-1', '--format=%s', sha]) || [''])[0]}`),
+    '### Commits da tarefa',
+    ...(ordered.length ? ordered.map((sha) => `- ${sha.slice(0, 10)} ${(gitLines(projectRoot, ['log', '-1', '--format=%s', sha]) || [''])[0]}`) : ['- —']),
+    '',
+    '### Testes congelados (arquivos do tip do programa)',
+    ...((result.frozen_tests || []).length ? result.frozen_tests.map((f) => `- \`${f}\``) : ['- — (já na base, ou nenhum)']),
     ...(result.pr_ready ? ['', `### pr:ready: ${result.pr_ready.ok ? 'verde' : 'VERMELHO'}`] : []),
     '',
   ].join('\n');

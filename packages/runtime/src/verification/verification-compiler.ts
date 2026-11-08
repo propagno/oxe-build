@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { spawnSync } from 'child_process';
 import { parseTestReport, extractTestFileArgs, missingProofs, extractTestResults } from './test-report-parsers';
-import { shellInvocation, childProcessEnv } from '../executor/shell-argv';
+import { shellInvocation, childProcessEnv, decodeConsoleOutput } from '../executor/shell-argv';
 import { checkExpectedExports } from './contract-exports';
 import type { ExpectedExport } from './contract-exports';
 import type { EvidenceType } from '../models/evidence';
@@ -421,7 +421,6 @@ export async function runCheck(
     const result = spawnSync(shell.file, shell.args, {
       cwd,
       env: childProcessEnv(),
-      encoding: 'utf8',
       timeout: timeoutMs,
       maxBuffer: 2 * 1024 * 1024,
       windowsVerbatimArguments: shell.windowsVerbatimArguments,
@@ -431,8 +430,8 @@ export async function runCheck(
     // OXB-150: gradle/maven report per-test results in JUnit XML files (build/test-results, target/surefire-reports),
     // not on stdout; the reports this command wrote are appended so counts and `proves` see each test.
     const junitXml = /\b(gradlew(\.bat)?|gradle|mvnw?(\.cmd)?)\b/.test(check.command) ? junitReportsSince(cwd, start) : '';
-    const stdout = (result.stdout ?? '') + (junitXml ? `\n${junitXml}` : '');
-    const stderr = result.stderr ?? '';
+    const stdout = decodeConsoleOutput(result.stdout as unknown as Buffer) + (junitXml ? `\n${junitXml}` : '');
+    const stderr = decodeConsoleOutput(result.stderr as unknown as Buffer);
     const report = parseTestReport(`${stdout}\n${stderr}`);
     let status: VerificationStatus = result.status === 0 ? 'pass' : 'fail';
     let error: string | null = result.error ? String(result.error) : null;

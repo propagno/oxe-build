@@ -37,6 +37,8 @@ export interface RunBudget {
     remainingTurns(): number | null;
 }
 export interface SchedulerOptions {
+    /** OXB-155: per-segment timeout of the task verify (the caller passes config verify_timeout_ms; default 10 min). */
+    verifyTimeoutMs?: number;
     maxRunDurationMs?: number;
     staleProgressMs?: number;
 }

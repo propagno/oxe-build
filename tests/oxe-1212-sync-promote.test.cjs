@@ -136,11 +136,13 @@ describe('OXB-060: runtime promote T<n> --base main', () => {
     const { dir } = setup();
     const out = op.runtimePromote(dir, null, { task: 'T1', base: 'main' });
     assert.equal(out.error, undefined, out.error);
-    assert.equal(out.commits.length, 2, 'the A1 test commit and the T1 checkpoint');
+    // OXB-156: only the task's own checkpoint is cherry-picked; its frozen test comes as a file from the program tip
+    assert.equal(out.commits.length, 1, 'the T1 checkpoint only');
+    assert.ok(out.frozen_tests.length >= 1, JSON.stringify(out));
     assert.equal(git(dir, 'rev-parse', '--abbrev-ref', 'HEAD'), 'oxe/f1-plan');
     const log = git(dir, 'log', '--format=%s%n%b', 'main..oxe/promote-t1');
     assert.match(log, /feat: T1 a/);
-    assert.match(log, /test\(a1\)/);
+    assert.match(log, /test\(acceptance\): frozen tests of T1/);
     assert.match(log, /cherry picked from commit/);
     assert.doesNotMatch(log, /T2/);
     assert.equal(git(dir, 'show', 'oxe/promote-t1:src/b.js'), 'module.exports = 2;', 'T2 hunks do not leak');
@@ -295,13 +297,56 @@ describe('OXB-151: promote in its own worktree, safe while execute runs in the p
     const status = git(dir, 'status', '--porcelain');
     const out = op.runtimePromote(dir, null, { task: 'T1', base: 'main' });
     assert.equal(out.error, undefined, out.error);
-    assert.equal(out.commits.length, 2);
+    assert.equal(out.commits.length, 1);
     assert.match(out.worktree, /^\.oxe\/promote-ws\/t1-/);
     assert.equal(git(dir, 'rev-parse', '--abbrev-ref', 'HEAD'), 'oxe/f1-plan');
     assert.equal(git(dir, 'rev-parse', 'HEAD'), head);
     assert.equal(git(dir, 'status', '--porcelain'), status, 'uncommitted and staged work untouched');
     assert.ok(fs.existsSync(path.join(dir, 'node_modules', 'dep', 'index.js')), 'the real node_modules survives the worktree removal');
     assert.ok(!fs.existsSync(path.join(dir, out.worktree)), 'temporary worktree removed');
-    assert.match(git(dir, 'log', '-1', '--format=%B', 'oxe/promote-t1'), /cherry picked from commit/);
+    assert.match(git(dir, 'log', '--format=%B', 'main..oxe/promote-t1'), /cherry picked from commit/);
+  });
+});
+
+describe('OXB-156: a task PR carries only its own commits and its own frozen tests', () => {
+  it('import commits with other tasks\' / parked tests are not cherry-picked; T1\'s test comes as a file; no conflict', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-p156-'));
+    const g = (...a) => git(dir, ...a);
+    g('init', '-q', '-b', 'main'); g('config', 'user.email', 't@t'); g('config', 'user.name', 't');
+    write(dir, '.gitignore', '.oxe/\n');
+    write(dir, 'tests/acceptance/parked-f3/x.test.ts', 'main version\n');
+    write(dir, 'src/keep.js', 'module.exports = 0;\n');
+    g('add', '-A'); g('commit', '-qm', 'base');
+    g('checkout', '-qb', 'program');
+    // one import commit: T1's frozen test AND a parked F3 test that main changed differently (would conflict)
+    write(dir, 'tests/acceptance/f2/r0a.test.ts', "import { fx } from './fixtures/r0a';\nit('removes the memory', () => {});\n");
+    write(dir, 'tests/acceptance/f2/fixtures/r0a.ts', 'export const fx = 1;\n');
+    write(dir, 'tests/acceptance/parked-f3/x.test.ts', 'program version\n');
+    g('add', '-A'); g('commit', '-qm', 'test(acceptance): imports #678 #679');
+    // T1's own checkpoint
+    write(dir, 'src/removed.js', 'module.exports = "gone";\n');
+    g('add', '-A'); g('commit', '-qm', 'feat: T1 remove memory', '-m', 'OXE-Task: T1');
+    g('checkout', '-q', 'main');
+    write(dir, 'tests/acceptance/parked-f3/x.test.ts', 'main changed it\n');
+    g('add', '-A'); g('commit', '-qm', 'main moves on');
+    g('checkout', '-q', 'program');
+    fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
+    write(dir, '.oxe/STATE.md', '# S\n');
+    write(dir, '.oxe/PLAN.md', '# PLAN\n');
+    write(dir, '.oxe/PLAN.json', JSON.stringify({ schema_version: 1, tasks: [{ id: 'T1', title: 'remove memory', wave: 1, files: ['src/removed.js'], acceptance: ['A48'], done: true }], acceptance_tests: [{ criterion: 'A48', task: 'T1', files: ['tests/acceptance/f2/r0a.test.ts'], command: 'vitest run tests/acceptance/f2/r0a.test.ts' }, { criterion: 'A60', files: ['tests/acceptance/parked-f3/x.test.ts'], command: 'x' }] }));
+    try {
+      const out = op.runtimePromote(dir, null, { task: 'T1', base: 'main' });
+      assert.equal(out.error, undefined, out.error);
+      assert.equal(out.conflict, null);
+      assert.equal(out.commits.length, 1, 'only T1\'s checkpoint');
+      assert.deepEqual(out.frozen_tests.sort(), ['tests/acceptance/f2/fixtures/r0a.ts', 'tests/acceptance/f2/r0a.test.ts']);
+      assert.equal(git(dir, 'show', 'oxe/promote-t1:tests/acceptance/parked-f3/x.test.ts'), 'main changed it', 'parked tests stay out');
+      assert.match(git(dir, 'show', 'oxe/promote-t1:src/removed.js'), /gone/);
+      const body = fs.readFileSync(path.join(dir, out.body_file), 'utf8');
+      assert.match(body, /### Commits da tarefa\n- [0-9a-f]{10} feat: T1 remove memory/);
+      assert.match(body, /### Testes congelados \(arquivos do tip do programa\)\n- `tests\/acceptance\/f2\/r0a\.test\.ts`/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

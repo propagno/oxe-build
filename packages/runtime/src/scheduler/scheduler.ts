@@ -60,6 +60,8 @@ export interface RunBudget {
 }
 
 export interface SchedulerOptions {
+  /** OXB-155: per-segment timeout of the task verify (the caller passes config verify_timeout_ms; default 10 min). */
+  verifyTimeoutMs?: number;
   maxRunDurationMs?: number;   // default: 30 min
   staleProgressMs?: number;    // default: 5 min without any task completing
 }
@@ -750,7 +752,9 @@ export class Scheduler {
               output: describeVerifyFailure(node.verify.command, verifyResult.check, verifyResult.gaps, verifyResult.segment),
               verify_log: buildVerifyLog(verifyResult.segments),
             };
-            const signature = verifyFailureSignature(verifyResult.check);
+            // OXB-155: a verify that timed out did not fail — the clock did. It is never "identical_verify_failure".
+            const verifyTimedOut = Boolean((verifyResult.check as { timed_out?: boolean } | undefined)?.timed_out);
+            const signature = verifyTimedOut ? null : verifyFailureSignature(verifyResult.check);
             if (signature && signature === lastVerifySignature) {
               verifySuspect = true;
               this.emit(ctx, {
@@ -1073,7 +1077,7 @@ export class Scheduler {
         result = await verifyRun({
           suite,
           cwd: lease.root_path,
-          timeoutMs: (ctx.options as Record<string, unknown>)?.verifyTimeoutMs as number ?? 60_000,
+          timeoutMs: (ctx.options as Record<string, unknown>)?.verifyTimeoutMs as number ?? 600_000,
           runId: ctx.runId,
           workItemId: node.id,
           attemptNumber: attempt,

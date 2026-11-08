@@ -270,7 +270,6 @@ async function runCheck(check, cwd, timeoutMs = 60000) {
         const result = (0, child_process_1.spawnSync)(shell.file, shell.args, {
             cwd,
             env: (0, shell_argv_1.childProcessEnv)(),
-            encoding: 'utf8',
             timeout: timeoutMs,
             maxBuffer: 2 * 1024 * 1024,
             windowsVerbatimArguments: shell.windowsVerbatimArguments,
@@ -279,8 +278,8 @@ async function runCheck(check, cwd, timeoutMs = 60000) {
         // OXB-150: gradle/maven report per-test results in JUnit XML files (build/test-results, target/surefire-reports),
         // not on stdout; the reports this command wrote are appended so counts and `proves` see each test.
         const junitXml = /\b(gradlew(\.bat)?|gradle|mvnw?(\.cmd)?)\b/.test(check.command) ? junitReportsSince(cwd, start) : '';
-        const stdout = (result.stdout ?? '') + (junitXml ? `\n${junitXml}` : '');
-        const stderr = result.stderr ?? '';
+        const stdout = (0, shell_argv_1.decodeConsoleOutput)(result.stdout) + (junitXml ? `\n${junitXml}` : '');
+        const stderr = (0, shell_argv_1.decodeConsoleOutput)(result.stderr);
         const report = (0, test_report_parsers_1.parseTestReport)(`${stdout}\n${stderr}`);
         let status = result.status === 0 ? 'pass' : 'fail';
         let error = result.error ? String(result.error) : null;

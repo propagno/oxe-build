@@ -12,9 +12,33 @@ export interface ShellInvocation {
   windowsVerbatimArguments: boolean;
 }
 
+/**
+ * OXB-152: POSIX launchers written in plans (`./mobile/android/gradlew -p … test`, `./mvnw`) fail in cmd.exe ("'.' não é
+ * reconhecido"). On Windows they map to their batch siblings (`mobile\android\gradlew.bat`, `mvnw.cmd`).
+ */
+export function windowsLaunchers(command: string): string {
+  return String(command).replace(/(^|&&\s*|\|\|\s*|&\s*|;\s*)(?:\.\/)?((?:[\w.@-]+\/)*)(gradlew|mvnw)(?=\s|$)/g, (_m, lead: string, dir: string, name: string) =>
+    `${lead}${dir.replace(/\//g, '\\')}${name}${name === 'gradlew' ? '.bat' : '.cmd'}`);
+}
+
+const CP850_HIGH = "ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜø£Ø×ƒáíóúñÑªº¿®¬½¼¡«»░▒▓│┤ÁÂÀ©╣║╗╝¢¥┐└┴┬├─┼ãÃ╚╔╩╦╠═╬¤ðÐÊËÈıÍÎÏ┘┌█▄¦Ì▀ÓßÔÒõÕµþÞÚÛÙýÝ¯´­±‗¾¶§÷¸°¨·¹³²■ ";
+
+/** OXB-152: cmd.exe's own messages come in the OEM code page; valid UTF-8 stays UTF-8, anything else is read as cp850. */
+export function decodeConsoleOutput(buf: Buffer | string | null | undefined): string {
+  if (buf == null) return '';
+  if (typeof buf === 'string') return buf;
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    let out = '';
+    for (const byte of buf) out += byte < 0x80 ? String.fromCharCode(byte) : CP850_HIGH[byte - 0x80];
+    return out;
+  }
+}
+
 export function shellInvocation(command: string, platform: NodeJS.Platform = process.platform): ShellInvocation {
   if (platform === 'win32') {
-    return { file: 'cmd.exe', args: ['/d', '/s', '/c', `"${command}"`], windowsVerbatimArguments: true };
+    return { file: 'cmd.exe', args: ['/d', '/s', '/c', `"${windowsLaunchers(command)}"`], windowsVerbatimArguments: true };
   }
   return { file: 'sh', args: ['-c', command], windowsVerbatimArguments: false };
 }
