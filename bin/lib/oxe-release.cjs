@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const semver = require('semver');
+const semver = require('./oxe-semver.cjs').loadSemver();
 
 const oxeManifest = require('./oxe-manifest.cjs');
 const runtimeSemantics = require('./oxe-runtime-semantics.cjs');
@@ -185,6 +185,15 @@ function hashObject(value) {
   return hash;
 }
 
+/**
+ * OXB-055: a wrapper's hash ignores line endings. With core.autocrlf=true the checkout has CRLF and the sync writes
+ * LF: same content, different bytes, and the release gate used to report "wrappers dirty" on Windows only.
+ */
+function sha256TextEol(filePath) {
+  const text = fs.readFileSync(filePath, 'utf8').replace(/\r\n/g, '\n');
+  return require('crypto').createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
 function collectWrapperHashes(projectRoot) {
   const wrappers = {};
   for (const target of WRAPPER_TARGETS) {
@@ -206,7 +215,7 @@ function collectWrapperHashes(projectRoot) {
         const filePath = path.join(dir, name);
         return {
           path: path.relative(projectRoot, filePath).replace(/\\/g, '/'),
-          hash: oxeManifest.sha256File(filePath),
+          hash: sha256TextEol(filePath),
         };
       });
     wrappers[target.key] = {
@@ -575,6 +584,7 @@ function inspectReleaseReadiness(projectRoot, options = {}) {
 }
 
 module.exports = {
+  sha256TextEol,
   REQUIRED_RUNTIMES,
   REQUIRED_RUNTIME_REAL_SCENARIOS_1_10,
   WRAPPER_TARGETS,
