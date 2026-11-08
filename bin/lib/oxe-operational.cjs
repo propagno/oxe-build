@@ -1153,6 +1153,35 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
   };
 }
 
+/**
+ * OXB-069: with a program, the phase verify checks the ACTIVE phase's criteria (PROGRAM.json `acceptance`, plus any
+ * criterion the plan's tasks reference). With F1 active, VERIFY.md listed 38 "não é executável" gaps for F2–F9
+ * criteria that have no plan yet, and the coverage counted them. The rest becomes one "not planned yet" line.
+ * @returns {{ spec: object, outOfPhase: { count: number, phases: string[] } | null }}
+ */
+function scopeSpecToActivePhase(artifactPaths, parsedSpec, parsedPlan) {
+  if (!parsedSpec || !Array.isArray(parsedSpec.criteria) || !artifactPaths.programDir) return { spec: parsedSpec, outOfPhase: null };
+  let state = null;
+  try { state = require('./oxe-program.cjs').readProgram(artifactPaths.programDir); } catch { state = null; }
+  const phase = state && state.active_phase ? state.phases.find((p) => p.id === state.active_phase) : null;
+  if (!phase || !Array.isArray(phase.acceptance) || !phase.acceptance.length) return { spec: parsedSpec, outOfPhase: null };
+  const keep = new Set(phase.acceptance);
+  for (const task of (parsedPlan && parsedPlan.tasks) || []) for (const a of task.aceite || []) keep.add(a);
+  const dropped = parsedSpec.criteria.filter((c) => !keep.has(c.id));
+  if (!dropped.length) return { spec: parsedSpec, outOfPhase: null };
+  const phaseOf = new Map();
+  for (const p of state.phases) for (const a of p.acceptance || []) if (!phaseOf.has(a)) phaseOf.set(a, p.id);
+  const phases = [...new Set(dropped.map((c) => phaseOf.get(c.id) || 'sem fase'))]
+    .sort((a, b) => (Number(String(a).slice(1)) || 999) - (Number(String(b).slice(1)) || 999));
+  return { spec: { ...parsedSpec, criteria: parsedSpec.criteria.filter((c) => keep.has(c.id)) }, outOfPhase: { count: dropped.length, phases } };
+}
+
+function describePhaseRange(phases) {
+  const nums = phases.map((p) => Number(String(p).replace(/^F/, ''))).filter((n) => Number.isInteger(n));
+  const contiguous = nums.length === phases.length && nums.length > 1 && nums.every((n, i) => i === 0 || n === nums[i - 1] + 1);
+  return contiguous ? `F${nums[0]}–F${nums[nums.length - 1]}` : phases.join(', ');
+}
+
 function compileVerificationSuiteFromArtifacts(projectRoot, activeSession, options = {}) {
   const runtime = loadRuntimeModule();
   const parsers = loadSdkParsers();
@@ -1174,7 +1203,8 @@ function compileVerificationSuiteFromArtifacts(projectRoot, activeSession, optio
     current,
     projectRoot,
   );
-  const suite = runtime.compileVerification(parsers.parseSpec(specText), parsedPlan, options.compilerOptions || {});
+  const scoped = scopeSpecToActivePhase(artifactPaths, parsers.parseSpec(specText), parsedPlan);
+  const suite = runtime.compileVerification(scoped.spec, parsedPlan, options.compilerOptions || {});
   const runId = current.run_id || makeRunId();
   const next = writeRunState(projectRoot, activeSession, {
     ...current,
@@ -2152,12 +2182,14 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
   if (!specText || !planText) {
     throw new Error('SPEC.md e PLAN.md são obrigatórios para runtime verify.');
   }
-  const parsedSpec = parsers.parseSpec(specText);
   const parsedPlan = attachAcceptanceLock(
     attachImplementationPackContracts(parsePlanArtifact(parsers, planText, artifactPaths.plan), artifactPaths.implementationPack),
     current,
     projectRoot,
   );
+  // OXB-069: only the active phase's criteria (the rest is one "not planned yet" line).
+  const phaseScope = scopeSpecToActivePhase(artifactPaths, parsers.parseSpec(specText), parsedPlan);
+  const parsedSpec = phaseScope.spec;
   // A suíte persistida no compile fica velha se SPEC/PLAN mudarem depois: recompila pelo hash.
   const freshSuite = runtime.compileVerification(parsedSpec, parsedPlan, options.compilerOptions || {});
   const persistedSuite = current.verification_suite;
@@ -2237,6 +2269,9 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     : report.status === 'failed'
       ? 'failed'
       : 'blocked';
+  if (phaseScope.outOfPhase) {
+    report.gaps = [...(report.gaps || []), `Fora da fase ${programPhaseId}: ${phaseScope.outOfPhase.count} critério(s) de ${describePhaseRange(phaseScope.outOfPhase.phases)} ainda não planejados — não verificados nesta fase`];
+  }
   const regressionSummary = summarizeRegression(regressionChecks, report.check_results);
   // 1.20b: um CR aberto fecha só com evidência — o teste congelado que o declara em `resolves` ficou verde.
   try {

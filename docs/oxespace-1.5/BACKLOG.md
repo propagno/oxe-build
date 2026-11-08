@@ -376,3 +376,17 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
   - o nó verify_only ou com dependência externa tem escopo vazio obrigatório: qualquer arquivo que o verify dele escreva emite `ScopeViolation` com `verify_only: true` e é desfeito, pelo mesmo mecanismo do OXB-067;
   - o aviso `empty_mutation_scope` não é mais emitido para esses nós.
 - **Teste:** `tests/oxe-1212.test.cjs`.
+
+## OXB-069: o verify da fase checa os critérios de todas as fases
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (rc.2, oxespace-150 F1, run oxe-run-mw28b0n9-3s0gda): com a F1 ativa, o VERIFY.md listou "GAP Critério A7 … A47: Como verificar não é executável" para 38 critérios de F2–F9, ainda sem plano, e a cobertura ficou em 90%.
+  - Com programa e fase ativa, a suíte do verify (no compile e no `runtime verify`) usa só os critérios do `acceptance` da fase no PROGRAM.json, mais os que as tarefas do plano referenciam.
+  - Os outros viram uma linha só: "Fora da fase F1: 38 critério(s) de F2–F9 ainda não planejados — não verificados nesta fase".
+  - Sem programa, nada muda.
+  - Teste: `tests/oxe-1212-verify-scope.test.cjs`.
+
+## OXB-070: o resumo do CR de um gate mostra as linhas erradas
+
+- **Status:** aberto. Registrado pelo TECH LEAD em 08/11: o CR-16 (gate lint) trouxe o primeiro warning de 217 ("285:3 warning … Cannot access refs during render"); a falha real eram 2 linhas `error` (no-explicit-any) no fim.
+- **Proposta:** o resumo usa as linhas que reprovam (eslint `error`, tsc `error TS`, vitest `FAIL`/`×`, ou as últimas linhas de um exit ≠ 0), nunca o começo do stream.
+- **Nota (baixa prioridade):** gate `requires: ["build"]`, ou um aviso do lint quando o gate lê saída de build que nada produz (o gate bundle falhou com ENOENT out/main).
