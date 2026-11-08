@@ -272,6 +272,57 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 - **Impacto:** a métrica de maturidade que o `doctor --release` exige passa justamente na fase com mais retries. Isso enfraquece o critério de release do próprio oxe-build.
 - **Proposta:** calcular o `first_attempt_rate` por tarefa sobre todas as execuções da run (uma tarefa só conta se a 1ª tentativa da 1ª execução passou), excluir as tarefas fechadas à mão (`plan done`) e reportar à parte as tarefas externas.
 
+## OXB-055: no Windows, o `doctor --release` acusa "wrappers dirty" com `core.autocrlf=true`
+
+- **Status:** aberto.
+- **Evidência (publicação da 1.21.1, 04/11):** num checkout com `core.autocrlf=true`, os wrappers vêm com CRLF e o `sync-runtime-metadata` os reescreve com LF. O hash de antes e depois diverge sem nenhuma mudança de conteúdo, e o `prepublishOnly` bloqueou com "wrappers ficam dirty após sync". O CI, em Linux, não vê isso.
+- **Proposta:** normalizar o EOL antes de calcular o hash dos wrappers.
+
+## OXB-056: a CLI não roda sem `npm install` (o `semver` é carregado no startup)
+
+- **Status:** aberto.
+- **Evidência (TECH LEAD, 04/11):** numa worktree limpa em v1.21.1, `node bin/oxe-cc.js --version` falhou com "Cannot find module 'semver'", a partir de `bin/lib/oxe-npm-version.cjs`.
+- **Proposta:** carregar o `semver` só na checagem de versão do npm, sob demanda, e falhar sem barulho quando ele não existir.
+
+## OXB-057: a versão publicada era só a tag no git, e o npm continuava na 1.16.0
+
+- **Status:** resolvido (1.21.1 publicada no npm em 05/11).
+
+## OXB-058: emendar um critério de fase ainda não planejada, e a trilha de auditoria
+
+- **Status:** aberto. Detalhes e aceite em `HANDOFF-1.21.2.md` §10.
+
+## OXB-059: o `runtime status` depois que o trabalho da fase terminou
+
+- **Status:** aberto. Detalhes em `HANDOFF-1.21.2.md` §9.
+
+## OXB-060: a branch do programa diverge da main; promote por tarefa
+
+- **Status:** aberto. Detalhes em `HANDOFF-1.21.2.md` §11.
+
+## OXB-061: o `runtime feedback` reabre todas as tarefas do critério
+
+- **Status:** aberto. Detalhes em `HANDOFF-1.21.2.md` §7.
+
+## OXB-062: uma emenda aditiva marca todos os testes do critério como desatualizados
+
+- **Status:** aberto. Detalhes em `HANDOFF-1.21.2.md` §8.
+
+## OXB-063: o `plan lint --dry-verify` roda o verify de tarefas externas
+
+- **Status:** resolvido (1.21.2).
+  - Uma tarefa com `blocked_by` em aberto recebe o veredito `external_pending`: o verify dela não roda e ela gera aviso, não erro.
+  - Antes do dry-run, o lint consulta o GitHub como o compile, então um PR já mergeado destrava a tarefa e o verify volta a rodar normalmente.
+  - Teste: `tests/oxe-1212.test.cjs`.
+
+## OXB-064: exit code 1 quando sobram só tarefas externas ou fora da onda
+
+- **Status:** aberto. Detalhes em `HANDOFF-1.21.2.md` §4.
+
+## OXB-065: encoding da saída quando o stdout não é um TTY (Windows)
+
+- **Status:** aberto. Detalhes em `HANDOFF-1.21.2.md` §5.
+
 ## OXB-066: o feedback do verify esconde o segmento que falhou num comando `a && b`
 
 - **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 07/11, na 1.21.1 via `npx oxe-cc@1.21.1`. O verify da tarefa roda cada segmento `&&` sozinho, parando no primeiro que falha. O retry e o `output_tail` nomeiam o segmento que falhou (`Failing segment [2/2]: …`) e trazem só a saída dele. O `VerificationCompleted` leva `failed_segment {index,total,command,exit_code}`, e `attempts/<Tn>-<n>.log` guarda todos os segmentos com cabeçalho. Teste: `packages/runtime/tests/verify-segments.test.ts`.

@@ -65,7 +65,7 @@ function classifyFailure(output, targets, options = {}) {
   return mentioned ? 'missing_target' : 'broken_command';
 }
 
-const SEVERITY = { already_green: 0, missing_target: 1, assertion_red: 1, timeout: 3, broken_command: 4 };
+const SEVERITY = { external_pending: 0, already_green: 0, missing_target: 1, assertion_red: 1, timeout: 3, broken_command: 4 };
 
 /** Top-level `&&` segments of a command (quoted text is not split). */
 function splitSegments(command) {
@@ -119,6 +119,15 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
   };
   for (const task of allTasks) {
     if (task.done || !task.verifyCommand) continue;
+    // OXB-063: work delivered by another path, still waiting on an open external dependency, cannot be green yet —
+    // its verify is not run and the verdict is `external_pending` (never an error). Once unblocked it runs as usual.
+    const meta = task.meta || {};
+    const openDeps = Array.isArray(meta.blocked_by) ? meta.blocked_by.filter(Boolean) : [];
+    if (openDeps.length) {
+      results.push({ task: task.id, verdict: 'external_pending', code: null, excerpt: `aguardando ${openDeps.join(', ')}`, segments: 0 });
+      warnings.push(`${task.id}: verify não rodado — aguardando ${openDeps.join(', ')} (external_pending; roda quando a dependência for mergeada)`);
+      continue;
+    }
     const ownTargets = (task.files || []).filter(Boolean);
     // OXB-027: a test of T2 that requires T1's module fails with "Cannot find module" for T1's file while T1 has not
     // run: red for the right reason (a pending dependency), not a broken command.

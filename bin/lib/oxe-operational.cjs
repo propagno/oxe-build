@@ -2511,6 +2511,10 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
   result.warnings.push(...gatesLib.lintPhaseGates(projectRoot, gatesLib.readPhaseGates({ phase_gates: plan.phaseGates }, config)));
   let dryVerify = null;
   if (options.dryVerify) {
+    // OXB-063: a dependency whose PR is already merged no longer counts as pending (same check as the compile).
+    if (config.external_dependency_check !== false && options.externalCheck !== false) {
+      try { resolveMergedDependencies(plan, options.ghSpawn); } catch { /* sem gh: a dependência continua pendente */ }
+    }
     // OXB-009: cada verify deve estar vermelho pelo motivo certo (alvo ausente), não por comando quebrado.
     // OXB-018: roda o comando EFETIVO do nó — o da tarefa mais o "Como verificar" dos critérios dela, que o compile
     // anexa (gap B). Um "Como verificar" velho na SPEC quebrava o verify inline sem o dry-run perceber.
@@ -2585,14 +2589,17 @@ function gitLines(projectRoot, args) {
 function phaseChanges(projectRoot, base) {
   const changes = new Map();
   if (base) {
-    for (const line of gitLines(projectRoot, ['diff', '--name-status', base, 'HEAD']) || []) {
+    // --relative: paths relative to the project directory, only under it (a project inside a bigger repository).
+    for (const line of gitLines(projectRoot, ['diff', '--relative', '--name-status', base, 'HEAD']) || []) {
       const [status, ...rest] = line.split('\t');
       changes.set(rest[rest.length - 1], status.charAt(0));
     }
   }
-  for (const line of gitLines(projectRoot, ['status', '--porcelain', '-uall']) || []) {
+  const prefix = ((gitLines(projectRoot, ['rev-parse', '--show-prefix']) || [])[0] || '').replace(/\\/g, '/');
+  for (const line of gitLines(projectRoot, ['status', '--porcelain', '-uall', '--', '.']) || []) {
     const status = line.slice(0, 2).trim() || 'M';
-    const file = line.slice(3).replace(/^"|"$/g, '').split(' -> ').pop();
+    let file = line.slice(3).replace(/^"|"$/g, '').split(' -> ').pop().replace(/\\/g, '/');
+    if (prefix && file.startsWith(prefix)) file = file.slice(prefix.length);
     if (!changes.has(file)) changes.set(file, status === '??' ? 'A' : status.charAt(0));
   }
   return [...changes.entries()].map(([file, status]) => ({ path: file.replace(/\\/g, '/'), status }));
@@ -2837,10 +2844,22 @@ function taskScopeFiles(runState, taskId) {
  * a task starts and when each attempt starts, so the runtime knows exactly which paths an attempt touched — including
  * those outside the task's `files` (oxespace 1.5.0 T13 left ThreadView.tsx edited after its rollback).
  */
+/**
+ * Changed paths under the project directory only, relative to it. `git status` prints paths relative to the
+ * repository root and, without a pathspec, scans the whole repository: a project inside a big repository (a monorepo,
+ * or a home directory under git) made every snapshot scan all of it — minutes per event.
+ */
+function projectStatusPaths(projectRoot) {
+  const prefix = ((gitLines(projectRoot, ['rev-parse', '--show-prefix']) || [])[0] || '').replace(/\\/g, '/');
+  const lines = gitLines(projectRoot, ['status', '--porcelain', '-uall', '--', '.']) || [];
+  return lines
+    .map((l) => l.slice(3).replace(/^"|"$/g, '').split(' -> ').pop().replace(/\\/g, '/'))
+    .map((f) => (prefix && f.startsWith(prefix) ? f.slice(prefix.length) : f));
+}
+
 function treeSnapshot(projectRoot) {
   const snapshot = new Map();
-  const lines = gitLines(projectRoot, ['status', '--porcelain', '-uall']) || [];
-  const files = lines.map((l) => l.slice(3).replace(/^"|"$/g, '').split(' -> ').pop()).filter((f) => f && !f.startsWith('.oxe/'));
+  const files = projectStatusPaths(projectRoot).filter((f) => f && !f.startsWith('.oxe/'));
   const present = [];
   for (const f of files) {
     let isFile = false;
@@ -4518,6 +4537,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  projectStatusPaths,
   runtimePlanReopen,
   resolveMergedDependencies,
   isolateFailedTask,

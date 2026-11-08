@@ -114,3 +114,41 @@ describe('OXB-068: tarefa verify_only tem escopo vazio obrigatório', () => {
     assert.ok(!events.some((e) => e.type === 'PolicyWarning' && e.payload && e.payload.reason === 'empty_mutation_scope'));
   });
 });
+
+describe('OXB-063: dry-verify não roda o verify de tarefa externa pendente', () => {
+  it('external_delivery com blocked_by aberto vira external_pending (aviso), e o lint não falha por ela', () => {
+    const plan = {
+      schema_version: 1,
+      tasks: [
+        { id: 'T1', title: 'pareamento (PR externo)', wave: 1, kind: 'external_delivery', files: [], blocked_by: ['propagno/oxespace#601'], verify: { commands: ['gh pr view 601 --json state'] } },
+        { id: 'T12', title: 'baselines', wave: 1, kind: 'verify_only', files: [], blocked_by: ['propagno/oxespace#643'], verify: { commands: ['node -e "process.exit(1)"'] } },
+      ],
+    };
+    const dir = project({ plan });
+    const lint = op.runtimePlanLint(dir, null, { dryVerify: true });
+    const verdicts = Object.fromEntries((lint.dry_verify || []).map((r) => [r.task, r.verdict]));
+    assert.deepEqual(verdicts, { T1: 'external_pending', T12: 'external_pending' });
+    assert.ok(!lint.errors.some((e) => /^T1:|^T12:/.test(e)), lint.errors.join('\n'));
+    assert.match(lint.warnings.join('\n'), /T1: verify não rodado — aguardando propagno\/oxespace#601/);
+  });
+
+  it('com o PR mergeado, o verify volta a rodar como sempre', () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T3', title: 'tokens', wave: 1, kind: 'verify_only', files: [], blocked_by: ['o/r#604'], verify: { commands: ['node -e "process.exit(0)"'] } }] };
+    const dir = project({ plan, config: { external_dependency_check: true } });
+    const merged = () => ({ status: 0, stdout: 'MERGED\n' });
+    const lint = op.runtimePlanLint(dir, null, { dryVerify: true, ghSpawn: merged });
+    assert.equal((lint.dry_verify || []).find((r) => r.task === 'T3').verdict, 'already_green');
+  });
+});
+
+describe('snapshot limitado ao projeto (projeto dentro de um repositório maior)', () => {
+  it('só vê o que mudou sob o diretório do projeto, com caminhos relativos a ele', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-mono-'));
+    dirs.push(repo);
+    git(repo, 'init', '-q');
+    fs.mkdirSync(path.join(repo, 'apps', 'web', 'src'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'apps', 'web', 'src', 'a.js'), 'x');
+    fs.writeFileSync(path.join(repo, 'outside.txt'), 'y');
+    assert.deepEqual(op.projectStatusPaths(path.join(repo, 'apps', 'web')), ['src/a.js']);
+  });
+});
