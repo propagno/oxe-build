@@ -1006,7 +1006,9 @@ function planSourceHash(projectRoot, activeSession) {
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const planJsonPath = require('./oxe-plan-json.cjs').planJsonPathFor(paths.plan);
   const hash = require('crypto').createHash('sha256');
-  for (const file of [planJsonPath, paths.plan, paths.spec, paths.implementationPack]) {
+  // OXB-049: REFERENCE-ANCHORS.md feeds the tasks' copy checks — changing it recompiles the graph.
+  const anchorsPath = paths.plan ? path.join(path.dirname(paths.plan), 'REFERENCE-ANCHORS.md') : null;
+  for (const file of [planJsonPath, paths.plan, paths.spec, paths.implementationPack, anchorsPath]) {
     hash.update(`${file ? path.basename(file) : '-'}\n`);
     hash.update(readTextIfExists(file) || '');
     hash.update('\n\u0000\n');
@@ -2638,7 +2640,8 @@ function readProtectedAcceptancePaths(projectRoot, activeSession) {
 
 /** PLAN.json canônico (1.19) quando existir ao lado do PLAN.md; senão o parser markdown. */
 function parsePlanArtifact(parsers, planText, planPath) {
-  return require('./oxe-plan-json.cjs').readPlanArtifact(planPath, planText, parsers.parsePlan);
+  // OXB-049: a reference anchor with action copy becomes part of its task's verify (copy matches the source).
+  return require('./oxe-anchor-copy.cjs').attachAnchorCopyChecks(require('./oxe-plan-json.cjs').readPlanArtifact(planPath, planText, parsers.parsePlan), planPath);
 }
 
 /**
@@ -2660,6 +2663,10 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
   } catch (err) {
     return { ok: false, errors: [err.message], warnings: [], source: hasJson ? 'PLAN.json' : 'PLAN.md', tasks: 0, phase: null };
   }
+  // OXB-049: copy anchors join the task's verify (the dry-verify runs the effective command); unusable ones warn.
+  const anchorCopy = require('./oxe-anchor-copy.cjs');
+  anchorCopy.attachAnchorCopyChecks(plan, paths.plan);
+  const anchorWarnings = anchorCopy.lintCopyAnchors(readTextIfExists(path.join(path.dirname(paths.plan), 'REFERENCE-ANCHORS.md')) || '', plan.tasks.map((t) => t.id));
   const specText = readTextIfExists(paths.spec);
   const spec = specText ? parsers.parseSpec(specText) : null;
   const pack = readJsonQuiet(paths.implementationPack);
@@ -2716,6 +2723,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     (config.acceptance_tests_required || options.requireAcceptanceTests ? result.errors : result.warnings).push(...uncovered);
     result.ok = result.errors.length === 0;
   }
+  result.warnings.push(...anchorWarnings);
   // OXB-038: phase criteria the SPEC does not declare, and input documents reusing the SPEC's A ids.
   try {
     const programState = paths.programDir ? require('./oxe-program.cjs').readProgram(paths.programDir) : null;

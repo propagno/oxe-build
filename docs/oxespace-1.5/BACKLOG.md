@@ -251,7 +251,17 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-049: a âncora existia, mas o executor desenhou os próprios ícones
 
-- **Status:** aberto (erro de planejamento mais falta de enforcement).
+- **Status:** resolvido (1.21.2), na parte de enforcement. O erro de planejamento (a âncora apontava para o HANDOFF) continua sendo do planner, mas o lint agora o expõe.
+  - Uma âncora com `<action>copy</action>` e `target="<arquivo que a tarefa escreve>"` vira check automático no verify da tarefa (e no verify da fase): `node oxe-anchor-copy.cjs --anchors … --id RA-01`.
+    - Com `symbols="History,Mic"`, compara cada declaração copiada com a da fonte (`path`).
+    - `compare="geometry"` (padrão quando a fonte tem SVG) compara a geometria em ordem: d, points, viewBox, cx/cy/r e outras. Formatação, aspas e imports não contam.
+    - `compare="exact"` compara o texto normalizado da declaração.
+    - Sem `symbols`, as linhas de `snippet_ref` (ou o arquivo inteiro) precisam estar no alvo.
+  - A falha nomeia o símbolo e o primeiro traço diferente (`RA-01 History: a geometria difere da fonte …`). No dry-verify, um alvo ausente é o vermelho certo, e uma cópia errada sobre um arquivo existente conta como assertion.
+  - Mudar o REFERENCE-ANCHORS.md recompila o grafo.
+  - O lint avisa quando uma âncora copy não tem `target` (não dá para comparar) ou aponta para uma tarefa fora do plano.
+  - O template do REFERENCE-ANCHORS ganhou `target`, `symbols`, `compare` e a regra.
+  - Teste: `tests/oxe-1212-anchor-copy.test.cjs`.
 - **Evidência:** a F1-T5 (ícones) passou no teste congelado: um módulo por ícone, `currentColor`, `aria-hidden`. A revisão do DESIGN mostrou que 4 ícones eram cópias do Lucide sem as marcas do Mandacaru, e que o History era o relógio, não o scrubber aprovado. O desenho aprovado estava em `playground/src/components/icons.ts`, mas a âncora RA-01 apontava para o HANDOFF, não para esse arquivo, e o teste não comparava geometria.
 - **Impacto:** um "verde" que não é o produto aprovado. Foi preciso o CR-02, com um teste que compara as formas desenhadas com o arquivo aprovado.
 - **Proposta:** uma âncora com `action: copy` vira check automático no verify: os símbolos e trechos copiados precisam bater com a fonte (hash ou geometria). O lint também avisa quando uma tarefa de UI com `VISUAL-INPUTS` crítico não tem teste que compare saída com a fonte visual.
