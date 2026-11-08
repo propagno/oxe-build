@@ -557,6 +557,8 @@ class Scheduler {
                     && lastResult.completed_by === 'turn_limit_exhausted'
                     && Boolean(node.verify?.command)
                     && (lastResult.evidence?.length ?? 0) > 0;
+                // OXB-171: what the agent itself said (before a verify failure replaces the output).
+                const agentOutput = String(lastResult.output || '');
                 if (lastResult.success || turnLimitWithWork) {
                     const verifyResult = await this.verifyNode(node, lease, ctx, attemptId, attempt);
                     if (verifyResult && verifyResult.status === 'failed') {
@@ -587,6 +589,20 @@ class Scheduler {
                             break;
                         }
                         lastVerifySignature = signature;
+                        // OXB-171: the frozen test needs a file outside the task's scope (plan lint) and it is THAT test failing, or
+                        // the agent said the change it needs is out of scope → stop now: a retry cannot pass.
+                        const scopeReason = scopeInsufficientReason(nodeId, ctx, `${verifyResult.check?.stdout ?? ''}\n${verifyResult.check?.stderr ?? ''}`, agentOutput);
+                        if (scopeReason) {
+                            lastResult = { ...lastResult, failure_class: 'scope_insufficient' };
+                            this.emit(ctx, {
+                                type: 'ScopeInsufficient',
+                                work_item_id: nodeId,
+                                attempt_id: attemptId,
+                                payload: { task: nodeId, attempt_number: attempt, ...scopeReason, output_tail: tailLines(`${verifyResult.check?.stdout ?? ''}\n${verifyResult.check?.stderr ?? ''}`, 40) },
+                            });
+                            lastError = lastResult.output || 'scope_insufficient';
+                            break;
+                        }
                     }
                     else if (parallelNode) {
                         // OXB-050: green in its worktree → integrate (in-scope files only) and verify again on the integrated tree,
@@ -652,6 +668,19 @@ class Scheduler {
                     }
                 }
                 lastError = lastResult.output || (lastResult.failure_class ?? 'unknown error');
+                // OXB-171: the agent stopped saying the needed change is outside its files — a retry has the same files.
+                if (!lastResult.success && lastResult.failure_class !== 'scope_insufficient' && OUT_OF_SCOPE_RE.test(agentOutput)) {
+                    lastResult = { ...lastResult, failure_class: 'scope_insufficient' };
+                    this.emit(ctx, {
+                        type: 'ScopeInsufficient',
+                        work_item_id: nodeId,
+                        attempt_id: attemptId,
+                        payload: { task: nodeId, attempt_number: attempt, reason: 'agent_reported_out_of_scope', output_tail: tailLines(agentOutput, 40) },
+                    });
+                    break;
+                }
+                if (lastResult.failure_class === 'scope_insufficient')
+                    break;
                 if (lastResult.failure_class === 'policy')
                     break;
                 // OXB-148: a prompt that does not fit, or a provider usage limit, fails the same way on a blind retry.
@@ -924,8 +953,9 @@ class Scheduler {
             if (result.status !== 'passed' && status === 'passed')
                 status = result.status;
         }
+        // OXB-171: the failing segment's own output tail rides in the event (the cause was only found by rerunning by hand).
         const failedSegment = failing
-            ? { index: failing.index, total: failing.total, command: failing.command, exit_code: failing.check?.exit_code ?? null }
+            ? { index: failing.index, total: failing.total, command: failing.command, exit_code: failing.check?.exit_code ?? null, output_tail: tailLines(`${failing.check?.stdout ?? ''}\n${failing.check?.stderr ?? ''}\n${failing.check?.error ?? ''}`, 40) }
             : null;
         this.emit(ctx, {
             type: 'VerificationCompleted',
@@ -1105,6 +1135,20 @@ function inferGateScope(node) {
     return 'plan_approval';
 }
 /** Last `n` non-empty lines of a text. */
+/** OXB-171: an agent that says the change it needs is outside its files (pt/en). */
+const OUT_OF_SCOPE_RE = /\b(out of (my |the task'?s? )?scope|outside (of )?(my |the task'?s? )?(scope|files)|not in (my |the task'?s? )?(files|scope)|fora do (meu |)escopo|fora dos arquivos( da tarefa)?|não está (no|nos) (escopo|arquivos)( da tarefa)?|scope_insufficient)\b/i;
+function scopeInsufficientReason(nodeId, ctx, verifyOutput, agentOutput) {
+    const req = ctx.options?.outOfScopeRequirements?.[nodeId];
+    if (req && req.files.length) {
+        const out = String(verifyOutput || '').replace(/\\/g, '/');
+        const named = req.tests.filter((t) => out.includes(t) || out.includes(t.split('/').pop() || t));
+        if (named.length)
+            return { reason: 'frozen_test_needs_out_of_scope_file', files: req.files, tests: named };
+    }
+    if (OUT_OF_SCOPE_RE.test(agentOutput))
+        return { reason: 'agent_reported_out_of_scope' };
+    return null;
+}
 /** OXB-162: git's line-ending notices — they filled F4-T1's whole output tail and hid the failing test. */
 const GIT_EOL_NOTICE_RE = /^\s*warning: (in the working copy of .*(LF|CRLF) will be replaced|(LF|CRLF) will be replaced by (CRLF|LF))/i;
 /** A failing-test block start (vitest/jest/node:test/mocha/JUnit). */

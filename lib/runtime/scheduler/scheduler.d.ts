@@ -39,6 +39,15 @@ export interface RunBudget {
 export interface SchedulerOptions {
     /** OXB-155: per-segment timeout of the task verify (the caller passes config verify_timeout_ms; default 10 min). */
     verifyTimeoutMs?: number;
+    /**
+     * OXB-171: per task, the files its frozen acceptance tests import/read that are outside its `files` (from the
+     * plan lint), and those tests. A verify failure that names one of the tests stops after attempt 1 as
+     * `scope_insufficient` instead of retrying a task that cannot pass.
+     */
+    outOfScopeRequirements?: Record<string, {
+        files: string[];
+        tests: string[];
+    }>;
     maxRunDurationMs?: number;
     staleProgressMs?: number;
 }

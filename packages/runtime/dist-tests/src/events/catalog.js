@@ -42,6 +42,7 @@ exports.EVENT_TYPES = [
     'BudgetExhausted',
     'ScopeViolation',
     'ScratchIgnored',
+    'ScopeInsufficient',
 ];
 function isValidEventType(type) {
     return exports.EVENT_TYPES.includes(type);

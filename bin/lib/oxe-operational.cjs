@@ -1997,6 +1997,13 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
   // Build ctx with GateManager (Gap 1)
   // OXB-155: the per-task verify of execute honors --verify-timeout-ms > config verify_timeout_ms > 10 min (it was a
   // fixed 60 s: F2-T2's `npm run typecheck` timed out twice with verify_timeout_ms: 900000 in the config).
+  // OXB-171: frozen tests that need files outside their task's scope — a failure on them stops at attempt 1.
+  let execScopeGaps = {};
+  try {
+    const { doc: pj } = readPlanJsonDoc(projectRoot, activeSession);
+    const cfgExec = (readProjectConfig(projectRoot) || {}).executor || {};
+    if (pj && cfgExec.scope_insufficient !== 'retry') execScopeGaps = require('./oxe-test-scope.cjs').scopeGaps(projectRoot, pj);
+  } catch { execScopeGaps = {}; }
   const execMaxRunMs = Number(options.maxRunMs) > 0
     ? Number(options.maxRunMs)
     : Number(((readProjectConfig(projectRoot) || {}).executor || {}).max_run_ms) > 0 ? Number(readProjectConfig(projectRoot).executor.max_run_ms) : Number.MAX_SAFE_INTEGER;
@@ -2010,7 +2017,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     pluginRegistry: options.pluginRegistry || buildRuntimePluginRegistry(projectRoot),
     // OXB-165: no run-level timeout by default (the scheduler's 30 min aborted at the first wave past it); the
     // stale-progress guard covers hangs. --max-run-ms > config executor.max_run_ms.
-    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, ...(options.schedulerOptions || {}) },
+    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, outOfScopeRequirements: execScopeGaps, ...(options.schedulerOptions || {}) },
     // The scheduler already persists every event through the runtime bus (events/bus.ts →
     // appendEvent). This hook only forwards progress; writing here again duplicated the log.
     onEvent: (event) => {
@@ -3324,6 +3331,17 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
           result.warnings.push(`${t.id} depende de ${dep}, mas o commit de ${t.id} (${String(t.done_commit).slice(0, 8)}) veio antes do de ${dep} (${String(d.done_commit).slice(0, 8)}) — o promote encadeado pode conflitar; promova junto: oxe-cc runtime promote --tasks ${dep},${t.id}`);
         }
       }
+    }
+  } catch { /* auxiliar */ }
+  // OXB-171: the product files a task's frozen tests import/read must be in its scope (or a dependency's); T8 of F2
+  // retried 3× a test on shared/types/ipc.ts that was outside its files. config lint.test_scope: "error" makes it fatal.
+  try {
+    const { doc: pj } = readPlanJsonDoc(projectRoot, activeSession);
+    if (pj) {
+      const testScope = require('./oxe-test-scope.cjs');
+      const msgs = testScope.scopeGapMessages(testScope.scopeGaps(projectRoot, pj));
+      const cfgLint = (readProjectConfig(projectRoot) || {}).lint || {};
+      (cfgLint.test_scope === 'error' ? result.errors : result.warnings).push(...msgs);
     }
   } catch { /* auxiliar */ }
   result.ok = result.errors.length === 0;

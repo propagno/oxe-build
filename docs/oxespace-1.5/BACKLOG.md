@@ -1172,3 +1172,17 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
     - A com checkpoint falho, B interrompida com edição no mesmo arquivo, relançamento: o commit de A não tem nada de B, B vê as próprias edições parciais e o commit dela as leva.
     - Checkpoint ao vivo sobre arquivo já sujo.
     - `checkpoint_check` vermelho desfaz o commit.
+
+## OXB-171: o teste congelado precisava de arquivo fora do escopo da tarefa (P0)
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (F2, run oxe-run-mw83vtdy-8uzesq).
+  - A T8 (R4) falhou 3 tentativas em `tests/acceptance/f2/r4-removal.test.ts` "its IPC channel groups are gone". O teste importa `shared/types/ipc.ts`, que não estava nos files da T8.
+  - Outras 9 tarefas da F2 tinham o mesmo buraco, e o lint ficou verde. Os eventos não traziam a saída (o `failed_segment` só tinha comando e exit code).
+  - **`plan lint`:** resolve os imports estáticos relativos de cada teste congelado e os caminhos literais que ele lê, e compara com os files da tarefa (e das tarefas de que ela depende).
+    - Imports: `import`, `import()`, `require`, `vi.mock`. A resolução segue node/TS (extensões, `.js`→`.ts`, `dir/index.*`).
+    - Leituras: `readFileSync`/`existsSync`/… com literal, `path.join(__dirname|process.cwd(), …)` e `new URL(…, import.meta.url)`.
+    - Fixtures e helpers da árvore dos testes não contam. Aliases (`@/…`) não são resolvidos.
+    - O aviso é "T8: o teste congelado … importa shared/types/ipc.ts, fora de files — …", com a dica de correção. `lint.test_scope: "error"` torna fatal.
+  - **Execute:** quando o teste que falha é um desses (o nome dele aparece na saída) e ele precisa de arquivo fora do escopo, a tarefa para na **1ª tentativa** com `scope_insufficient` (evento `ScopeInsufficient` com os arquivos, os testes e a saída). Também para quando o próprio agente diz que a mudança está fora do escopo. `executor.scope_insufficient: "retry"` desliga.
+  - **Eventos:** o `failed_segment` do `VerificationCompleted` agora leva as ~40 últimas linhas do segmento. RetryScheduled e WorkItemBlocked já levavam a cauda, agora sem o ruído do git (OXB-162).
+  - Teste: `tests/oxe-1212-test-scope.test.cjs` (o formato da F2 no lint; dependência dona do arquivo sem aviso; fixture que para em 1 tentativa com `scope_insufficient` e cauda; agente que reporta fora do escopo).
