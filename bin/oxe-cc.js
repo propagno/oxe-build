@@ -2010,7 +2010,7 @@ function runStatus(target, opts = {}) {
 
   // Explicit blockage diagnosis
   const packageMode = report.workspaceMode === 'product_package';
-  const specMissing = !fs.existsSync(path.join(target, '.oxe', 'SPEC.md'));
+  const specMissing = !fs.existsSync(oxeHealth.oxePaths(target).spec);
   const planMissing = !fs.existsSync(path.join(target, '.oxe', 'PLAN.md'));
   const verifyMissing = !fs.existsSync(path.join(target, '.oxe', 'VERIFY.md'));
   if (packageMode) {
@@ -2233,6 +2233,10 @@ function runDoctor(target, options = {}) {
       for (const r of info.reasons) if (info.stale || /sem registro/.test(r)) console.log(`  ${dim}${r}${reset}`);
       if (info.version && info.running && info.version !== info.running) console.log(`  ${dim}Versão do projeto ≠ versão em execução: use npx oxe-cc@${info.version} (ou atualize o projeto com oxe-cc update) para não rodar um fluxo de outra versão.${reset}`);
     }
+  } catch { /* opcional */ }
+  // OXB-032: spec_ref/roadmap_ref that are missing, or a .oxe/ copy that diverges from them.
+  try {
+    for (const w of require('./lib/oxe-artifact-refs.cjs').refWarnings(target)) console.log(`${yellow}AVISO${reset} ${w}`);
   } catch { /* opcional */ }
   // OXB-058: a gitignored .oxe/ with no versioned export leaves SPEC/ROADMAP/PROGRAM edits without history.
   try {

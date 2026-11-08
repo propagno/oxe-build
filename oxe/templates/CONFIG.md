@@ -37,6 +37,9 @@ Copie `oxe/templates/config.template.json` para **`.oxe/config.json`** no seu pr
 | `deps_link_from` | string | A checkout cujo node_modules validado as worktrees usam (ex.: `"."`, a checkout do programa). Explícito, nunca inferido. |
 | `deps_protected` | array | Caminhos que nunca podem ser `deps_link_from` (ex.: a checkout principal da pessoa). |
 | `parked_tests` | array | Opcional (OXB-080). Globs de testes congelados que o planner commita adiantado para fases seguintes. No dossiê eles saem como "estacionados", não como drift. Padrão: `["tests/acceptance/**"]`. |
+| `spec_ref` | string | Opcional (OXB-032). Caminho versionado da SPEC, relativo à raiz (ex.: `docs/roadmap/oxe/SPEC.md`). O runtime lê e emenda esse arquivo em vez de `.oxe/SPEC.md`, e o `doctor` avisa se uma cópia em `.oxe/` divergir. |
+| `roadmap_ref` | string | Opcional (OXB-032). O mesmo para o ROADMAP (`program init`, `program phase add/edit`). |
+| `oxe_stale_days` | number | Opcional (OXB-043). Dias sem atividade para o `.oxe/` ser marcado stale no `status` e no `doctor`. Padrão: 14. |
 | `program` | object | Opcional. `program.export_dir`: pasta versionada (fora de `.oxe/`) onde `oxe-cc program export` grava SPEC.md, ROADMAP.md, PROGRAM.json e changes.ndjson. Com ela definida, `spec amend`/`spec add`/`program phase add` atualizam o export, e o `doctor` deixa de avisar sobre `.oxe/` no .gitignore. |
 | `install` | object | Opcional. Preferências de **instalação** quando corre `npx oxe-cc` **sem** flags de CLI. Ver tabela abaixo. |
 

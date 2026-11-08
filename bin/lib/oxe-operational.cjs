@@ -252,6 +252,18 @@ function preferExistingPath(primaryPath, fallbackPath) {
 }
 
 function resolveRuntimeArtifactPaths(projectRoot, activeSession) {
+  // OXB-032: spec_ref / roadmap_ref in config.json point SPEC and ROADMAP to versioned files (a session's own copy wins).
+  const refsLib = require('./oxe-artifact-refs.cjs');
+  const refs = refsLib.artifactRefs(projectRoot);
+  const withRefs = (p, sessionRoot) => ({
+    ...p,
+    spec: sessionRoot && p.spec && path.resolve(p.spec).startsWith(path.resolve(sessionRoot)) ? p.spec : refsLib.refOr(refs.spec, p.spec),
+    roadmap: sessionRoot && p.roadmap && path.resolve(p.roadmap).startsWith(path.resolve(sessionRoot)) ? p.roadmap : refsLib.refOr(refs.roadmap, p.roadmap),
+  });
+  return withRefs(resolveRuntimeArtifactPathsRaw(projectRoot, activeSession), activeSession ? path.join(projectRoot, '.oxe', ...String(activeSession).split('/')) : null);
+}
+
+function resolveRuntimeArtifactPathsRaw(projectRoot, activeSession) {
   const health = loadProjectHealth();
   if (!health || typeof health.oxePaths !== 'function' || typeof health.scopedOxePaths !== 'function') {
     const oxeDir = path.join(projectRoot, '.oxe');
@@ -3117,7 +3129,8 @@ function runtimeProgramExport(projectRoot, activeSession, options = {}) {
   const missing = [];
   for (const [name, src] of sources) {
     if (src && fs.existsSync(src)) {
-      fs.copyFileSync(src, path.join(target, name));
+      // OXB-032: with spec_ref/roadmap_ref pointing into the export dir, the file already is the versioned copy.
+      if (path.resolve(src) !== path.resolve(path.join(target, name))) fs.copyFileSync(src, path.join(target, name));
       written.push(path.relative(projectRoot, path.join(target, name)).replace(/\\/g, '/'));
     } else {
       missing.push(name);

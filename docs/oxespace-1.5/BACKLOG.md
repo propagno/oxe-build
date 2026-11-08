@@ -24,7 +24,12 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-032: o ROADMAP e a SPEC vivem em `.oxe/`, que o repositório não versiona
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21.2).
+  - `spec_ref` e `roadmap_ref` no `.oxe/config.json` (caminhos relativos à raiz, ex.: `docs/roadmap-1.5/oxe/SPEC.md`) fazem o runtime ler **e emendar** esses arquivos em vez de `.oxe/SPEC.md` e `.oxe/ROADMAP.md`. Isso vale para compile, verify, lint, `program init`, `spec amend|add`, `program phase add|edit` e `status`. Uma SPEC própria da sessão continua tendo precedência.
+  - O PR revisado passa a ser o que o runtime executa. Nenhuma cópia é criada em `.oxe/`.
+  - O `doctor` avisa quando um ref configurado não existe (o runtime volta para `.oxe/`) e quando uma cópia em `.oxe/` diverge do ref, comparando o conteúdo por hash e ignorando CRLF.
+  - O `program export` para a pasta do ref não copia um arquivo sobre ele mesmo.
+  - Teste: `tests/oxe-1212-artifact-refs.test.cjs`.
 - **Evidência:** o oxespace ignora `.oxe/` no `.gitignore`, como o próprio template sugere. O `program init` lê `.oxe/ROADMAP.md`. Para o time revisar o plano num PR, foi preciso copiar a SPEC e o ROADMAP para `docs/roadmap-1.5/oxe/` à mão, e cada edição exige recopiar (aconteceu 3 vezes no mesmo dia).
 - **Impacto:** cópias divergem, e o PR revisado pode não ser o que o runtime executa.
 - **Proposta:** um `roadmap_ref`/`spec_ref` no `config.json` apontando para caminhos versionados (ex.: `docs/roadmap-1.5/oxe/ROADMAP.md`), e o runtime lê de lá. Se for preciso manter a cópia em `.oxe/`, o `doctor` acusa a divergência por hash.

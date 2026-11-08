@@ -655,6 +655,9 @@ function isStaleLessons(retroDate, maxAgeDays) {
  */
 function oxePaths(target) {
   const oxe = path.join(target, '.oxe');
+  // OXB-032: SPEC from a versioned path when .oxe/config.json sets spec_ref.
+  const refs = require('./oxe-artifact-refs.cjs');
+  const specRef = refs.artifactRefs(target).spec;
   return {
     oxe,
     installDir: path.join(oxe, 'install'),
@@ -683,7 +686,7 @@ function oxePaths(target) {
     events: path.join(oxe, 'OXE-EVENTS.ndjson'),
     copilotManifest: path.join(oxe, 'install', 'copilot-vscode.json'),
     runtimeSemanticsManifest: path.join(oxe, 'install', 'runtime-semantics.json'),
-    spec: path.join(oxe, 'SPEC.md'),
+    spec: refs.refOr(specRef, path.join(oxe, 'SPEC.md')),
     plan: path.join(oxe, 'PLAN.md'),
     implementationPackMd: path.join(oxe, 'IMPLEMENTATION-PACK.md'),
     implementationPackJson: path.join(oxe, 'IMPLEMENTATION-PACK.json'),
