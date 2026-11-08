@@ -224,6 +224,13 @@ describe('OXB-065: plain output when stdout is not a TTY; NDJSON task events', (
     assert.ok(!/[✓✗]/.test(r.stdout), r.stdout);
   });
 
+  it('plain output carries no ANSI color codes, even from lines that print colors unconditionally', () => {
+    assert.equal(out.toPlain('  \x1b[33mNenhum ACTIVE-RUN\x1b[0m ✓'), '  Nenhum ACTIVE-RUN OK');
+    const dir = project({ plan: { schema_version: 1, tasks: [] } });
+    const r = spawnSync(process.execPath, [CLI, 'runtime', 'status', '--dir', dir], { encoding: 'utf8', env: { ...process.env, OXE_PLAIN: '' } });
+    assert.ok(!/\x1b\[/.test(r.stdout), JSON.stringify(r.stdout));
+  });
+
   it('--plain is accepted by any command (removed before the parsers)', () => {
     const r = spawnSync(process.execPath, [CLI, '--version', '--plain'], { encoding: 'utf8' });
     assert.equal(r.status, 0, r.stderr);

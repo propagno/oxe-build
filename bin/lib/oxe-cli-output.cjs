@@ -29,7 +29,8 @@ const PLAIN_GLYPHS = [
 ];
 
 function toPlain(text) {
-  let out = String(text);
+  // Colors too: some lines use the ANSI constants without asking useAnsiColors(); a log gets no escape codes.
+  let out = String(text).replace(/\x1b\[[0-9;]*m/g, '');
   for (const [re, rep] of PLAIN_GLYPHS) out = out.replace(re, rep);
   return out;
 }
