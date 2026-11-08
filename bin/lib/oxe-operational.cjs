@@ -1663,12 +1663,15 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
   }
   const scheduler = new runtime.Scheduler();
   const result = await scheduler.run(graph, ctx);
+  classifyBlockedResult(result, graph);
   const syncedRun = syncRunStateAfterExecute(projectRoot, activeSession, current, result, 'single');
     return { mode: 'single', agentPlan: null, result, run: syncedRun, preflight, budget: budgetLedger };
   }
 
 const EXECUTE_RESULT_STATUS = {
   completed: 'completed',
+  // OXB-064: everything runnable done; external deliveries still pending (the run stays open for them).
+  completed_with_external_pending: 'blocked',
   failed: 'failed',
   blocked: 'blocked',
   paused: 'paused',
@@ -2953,6 +2956,32 @@ function runtimePlanDone(projectRoot, activeSession, options = {}) {
   const commit = options.commit || findTaskCheckpoint(projectRoot, taskId);
   const changed = planJsonLib.markPlanTaskDone(paths.plan, taskId, { commit });
   return { task: taskId, commit: commit || null, changed };
+}
+
+/**
+ * 1.21.2 (OXB-064): splits the scheduler's `blocked` into what really blocked this execute and what was never its
+ * job — tasks outside `--wave N` (`out_of_scope`) and tasks waiting on external work (`external_pending`). `--wave 2`
+ * ended "Completados: 1 · Bloqueados: 3 — T1, T3, T12" with exit 1 although everything runnable had completed.
+ */
+function classifyBlockedResult(result, graph) {
+  if (!result || !Array.isArray(result.blocked)) return result;
+  const selected = new Set((graph && Array.isArray(graph.waves) ? graph.waves : []).flatMap((w) => w.node_ids || []));
+  const nodeOf = (id) => (graph && graph.nodes && typeof graph.nodes.get === 'function' ? graph.nodes.get(id) : graph && graph.nodes ? graph.nodes[id] : null);
+  const outOfScope = [];
+  const external = [];
+  const real = [];
+  for (const id of result.blocked) {
+    const node = nodeOf(id);
+    const policy = node && node.policy ? node.policy : {};
+    if (selected.size && !selected.has(id)) outOfScope.push(id);
+    else if (policy.verify_only || (Array.isArray(policy.external_dependency) && policy.external_dependency.length)) external.push(id);
+    else real.push(id);
+  }
+  result.blocked = real;
+  result.external_pending = external;
+  result.out_of_scope = outOfScope;
+  if (!real.length && !(result.failed || []).length && result.status === 'blocked') result.status = external.length ? 'completed_with_external_pending' : 'completed';
+  return result;
 }
 
 /** `oxe-cc plan reopen Tn`: reopens a done task so the next execute redoes it (rework without a CR). */

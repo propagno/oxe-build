@@ -2540,7 +2540,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime feedback --class <defect|spec_gap|constraint|new_scope> --summary "..." [--criteria A4] [--by <quem>] [--amend-to 2]
   npx oxe-cc runtime feedback list [--json]
   npx oxe-cc runtime rollback --task T3 [--yes]
-  npx oxe-cc runtime execute ... [--checkpoint-commits] [--budget-turns N] [--budget-usd X] [--budget-reset] [--max-retries N]
+  npx oxe-cc runtime execute ... [--checkpoint-commits] [--budget-turns N] [--budget-usd X] [--budget-reset] [--max-retries N] [--wave N] [--strict-external]
   npx oxe-cc runtime verify [--no-gates]
   npx oxe-cc runtime scorecard [--since <data>] [--write] [--release-report <arquivo> --name <projeto>] [--json]
   npx oxe-cc runtime ci --attach <run-id|url> [--repo owner/repo] [--head <sha>]
@@ -4141,6 +4141,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--budget-turns' && argv[i + 1]) out.budgetTurns = Number(argv[++i]);
     else if (a === '--budget-usd' && argv[i + 1]) out.budgetUsd = Number(argv[++i]);
     else if (a === '--budget-reset') out.budgetReset = true;
+    else if (a === '--strict-external') out.strictExternal = true;
     else if (a === '--release-report' && argv[i + 1]) out.releaseReport = String(argv[++i]);
     else if (a === '--since' && argv[i + 1]) out.since = String(argv[++i]);
     else if (a === '--name' && argv[i + 1]) out.name = String(argv[++i]);
@@ -5312,7 +5313,13 @@ async function runRuntime(opts) {
         console.log(`  ${c ? red : ''}Falhos:${c ? reset : ''} ${failed.length} — ${failed.join(', ')}`);
       if (blocked.length > 0)
         console.log(`  ${c ? '\x1b[33m' : ''}Bloqueados:${c ? reset : ''} ${blocked.length} — ${blocked.join(', ')}`);
-      if (failed.length > 0 || r.status === 'blocked') process.exitCode = 1;
+      const externalPending = Array.isArray(r.external_pending) ? r.external_pending : [];
+      if (externalPending.length > 0)
+        console.log(`  ${c ? dim : ''}Aguardando entrega externa:${c ? reset : ''} ${externalPending.length} — ${externalPending.join(', ')}`);
+      // OXB-064: exit 0 when everything runnable in scope completed; tasks outside --wave never count;
+      // external_pending only fails the run with --strict-external (exit 3).
+      if (failed.length > 0 || blocked.length > 0 || (r.status === 'blocked' && result.mode !== 'single' && result.mode !== 'parallel')) process.exitCode = 1;
+      else if (opts.strictExternal && externalPending.length > 0) process.exitCode = 3;
       return;
     } catch (err) {
       console.error(`${red}${err && err.message ? err.message : 'Falha ao executar runtime.'}${reset}`);

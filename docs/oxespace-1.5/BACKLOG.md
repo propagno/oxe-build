@@ -317,7 +317,7 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-064: exit code 1 quando sobram só tarefas externas ou fora da onda
 
-- **Status:** aberto. Detalhes em `HANDOFF-1.21.2.md` §4.
+- **Status:** resolvido (1.21.2). O resultado do execute separa `blocked` (o que bloqueou de verdade) de `external_pending` (tarefas que aguardam entrega externa) e `out_of_scope` (fora do `--wave`). Sai com 0 quando tudo o que dava para rodar no escopo concluiu. `external_pending` aparece numa linha própria ("Aguardando entrega externa"), e com `--strict-external` sai com 3. Teste: `tests/oxe-1212.test.cjs`.
 
 ## OXB-065: encoding da saída quando o stdout não é um TTY (Windows)
 

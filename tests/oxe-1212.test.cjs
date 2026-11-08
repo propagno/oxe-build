@@ -152,3 +152,43 @@ describe('snapshot limitado ao projeto (projeto dentro de um repositório maior)
     assert.deepEqual(op.projectStatusPaths(path.join(repo, 'apps', 'web')), ['src/a.js']);
   });
 });
+
+describe('OXB-064: o resultado separa o que bloqueou de verdade do que não era desta execução', () => {
+  it('--wave 2 com tarefas externas na onda 5: nada em blocked; external fica fora da onda (out_of_scope)', async () => {
+    const plan = {
+      schema_version: 1,
+      tasks: [
+        { id: 'T7', title: 'lint', wave: 2, files: ['src/a.js'], verify: { commands: [ok] } },
+        { id: 'T1', title: 'pareamento', wave: 5, kind: 'external_delivery', files: [], blocked_by: ['propagno/oxespace#601'], verify: { commands: [ok] } },
+      ],
+    };
+    const dir = project({ plan });
+    const res = await op.runRuntimeExecute(dir, null, { executor: writer(dir, { T7: { 'src/a.js': 'a' } }), skipPreflight: true, wave: 2 });
+    assert.deepEqual(res.result.completed, ['T7']);
+    assert.deepEqual(res.result.blocked, []);
+    assert.deepEqual(res.result.failed, []);
+  });
+
+  it('sem --wave: a tarefa externa pendente vai para external_pending, e o status não é blocked', async () => {
+    const plan = {
+      schema_version: 1,
+      tasks: [
+        { id: 'T7', title: 'lint', wave: 1, files: ['src/a.js'], verify: { commands: [ok] } },
+        // The PR is not merged yet: its verify (e.g. `gh pr view … --jq .state` = MERGED) is still red.
+        { id: 'T12', title: 'baselines', wave: 1, kind: 'external_delivery', files: [], blocked_by: ['propagno/oxespace#643'], verify: { commands: [fail] } },
+      ],
+    };
+    const dir = project({ plan });
+    const res = await op.runRuntimeExecute(dir, null, { executor: writer(dir, { T7: { 'src/a.js': 'a' } }), skipPreflight: true });
+    assert.deepEqual(res.result.blocked, []);
+    assert.deepEqual(res.result.external_pending, ['T12']);
+    assert.equal(res.result.status, 'completed_with_external_pending');
+  });
+
+  it('uma tarefa comum que falhou continua bloqueando', async () => {
+    const plan = { schema_version: 1, budget: { max_retries: 0 }, tasks: [{ id: 'T1', title: 'a', wave: 1, files: ['src/a.js'], verify: { commands: [fail] } }, { id: 'T2', title: 'b', wave: 2, depends_on: ['T1'], files: ['src/b.js'], verify: { commands: [ok] } }] };
+    const dir = project({ plan });
+    const res = await op.runRuntimeExecute(dir, null, { executor: writer(dir, {}), skipPreflight: true });
+    assert.ok(res.result.failed.includes('T1') || res.result.blocked.length > 0);
+  });
+});
