@@ -583,6 +583,43 @@ function runtimePrintPrompt(projectRoot, activeSession, options = {}) {
   return { task: taskId, file, total_chars: full.length, est_tokens: tokens(full.length), sections };
 }
 
+/** OXB-160: the tests' own tree for a frozen test file: up to its tests/test/__tests__/spec/e2e dir, else its own dir. */
+function promoteTestRoot(file) {
+  const parts = String(file).replace(/\\/g, '/').split('/');
+  const i = parts.slice(0, -1).findIndex((p) => /^(tests?|__tests__|specs?|e2e)$/i.test(p));
+  return i >= 0 ? parts.slice(0, i + 1).join('/') : parts.slice(0, -1).join('/');
+}
+
+/** OXB-160: a relative import resolved like node/TS at `rev` — the file, then with extensions, then dir/index.* — to a blob only. */
+function resolveImportAt(projectRoot, rev, base0) {
+  const exts = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.json'];
+  const isBlob = (p) => { const r = gitRun(projectRoot, ['cat-file', '-t', `${rev}:${p}`]); return r.ok && r.stdout.trim() === 'blob'; };
+  const stripped = base0.replace(/\.(js|jsx|mjs|cjs)$/, ''); // TS: "./helper.js" may be helper.ts
+  for (const cand of [base0, ...exts.map((e) => base0 + e), ...(stripped !== base0 ? exts.map((e) => stripped + e) : []), ...exts.map((e) => `${base0}/index${e}`)]) {
+    if (isBlob(cand)) return cand;
+  }
+  return null;
+}
+
+/**
+ * OXB-160: an existing local branch is the promote's own leftover when it is not on the remote, has no upstream, is
+ * not checked out anywhere, and either carries the promote mark (`branch.<b>.oxePromote`) or every commit past the
+ * base is a promote commit (cherry-pick -x, or the frozen-tests commit).
+ */
+function ownUnpushedPromoteBranch(projectRoot, branch, remote, baseSha) {
+  const sha = (gitLines(projectRoot, ['rev-parse', `refs/heads/${branch}`]) || [])[0] || null;
+  const ls = gitRun(projectRoot, ['ls-remote', '--heads', remote, branch]);
+  if (ls.ok && ls.stdout.trim()) return { ok: false, why: `está em ${remote}` };
+  if (gitRun(projectRoot, ['rev-parse', '--abbrev-ref', `${branch}@{upstream}`]).ok) return { ok: false, why: 'tem upstream' };
+  const wts = (gitRun(projectRoot, ['worktree', 'list', '--porcelain']).stdout || '').split(/\r?\n/);
+  if (wts.includes(`branch refs/heads/${branch}`)) return { ok: false, why: 'está em uso numa worktree' };
+  const marked = (gitRun(projectRoot, ['config', '--get', `branch.${branch}.oxePromote`]).stdout || '').trim() === 'true';
+  if (marked) return { ok: true, sha };
+  const bodies = (gitRun(projectRoot, ['log', '--format=%s%n%b%x00', `${baseSha}..${branch}`]).stdout || '').split('\0').map((x) => x.trim()).filter(Boolean);
+  const promoteLike = bodies.every((b) => /\(cherry picked from commit [0-9a-f]{7,40}\)/.test(b) || /^test\(acceptance\): frozen tests of /.test(b));
+  return promoteLike ? { ok: true, sha } : { ok: false, why: 'tem commits que não são do promote' };
+}
+
 /**
  * OXB-157: the base a task PR is built on. A plain name (`main`) is the REMOTE branch (`origin/main`, fetched first),
  * not a possibly stale local branch; a remote ref (`origin/x`) or a sha is used as given. No base: the remote's default
@@ -711,6 +748,7 @@ function normalizeRuntimeEventType(type) {
     VerifyCommandSuspect: 'VerifyCommandSuspect',
     BudgetExhausted: 'BudgetExhausted',
     ScopeViolation: 'ScopeViolation',
+    ScratchIgnored: 'ScratchIgnored',
   };
   if (directMap[raw]) return directMap[raw];
   const lower = raw.toLowerCase();
@@ -1684,6 +1722,8 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     // OXB-067/068: per-task and per-attempt tree snapshots, and the paths each task touched outside its scope.
     const gitRepo = Boolean(gitLines(projectRoot, ['rev-parse', '--is-inside-work-tree']));
     const taskBaseline = new Map();
+    const scratchLib = require('./oxe-scratch.cjs');
+    const isScratchPath = scratchLib.makeScratchMatcher(projectRoot);
     const attemptBaseline = new Map();
     const scopeViolations = new Map();
     const graphNodeOf = (id) => {
@@ -1834,6 +1874,8 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
       // (scope enforced by the integration); snapshots of the shared checkout would see other tasks' integrations.
       const inplaceRun = !parallelOptions && Boolean(runtime.InplaceWorkspaceManager && workspaceManager instanceof runtime.InplaceWorkspaceManager);
       let outsideNow = [];
+      // OXB-159: each task's scratch dir (.oxe/tmp/<task>, named in the prompt); removed when the task passes.
+      if (taskId && event.type === 'WorkItemReady') scratchLib.ensureScratchDir(projectRoot, taskId);
       if (taskId && inplaceRun && gitRepo) {
         try {
           if (event.type === 'WorkItemReady') taskBaseline.set(taskId, treeSnapshot(projectRoot));
@@ -1843,6 +1885,13 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
             const scope = new Set(scopeOfTask(taskId));
             const base = event.type === 'RetryScheduled' ? attemptBaseline.get(taskId) || taskBaseline.get(taskId) : taskBaseline.get(taskId);
             outsideNow = changedSinceSnapshot(projectRoot, base).filter((p) => !scope.has(p));
+            // OXB-159: scratch an attempt left in the repo root (*.log, *.tsbuildinfo, executor.scratch_ignore) is not
+            // a scope violation; the files it created are removed.
+            const split = scratchLib.splitScratch(projectRoot, outsideNow, taskBaseline.get(taskId), isScratchPath);
+            outsideNow = split.outside;
+            if (split.scratch.length) {
+              appendEvent(projectRoot, activeSession, { type: 'ScratchIgnored', run_id: current.run_id, work_item_id: taskId, payload: { task: taskId, paths: split.scratch, removed: split.removed } });
+            }
             if (outsideNow.length) {
               const all = new Set([...(scopeViolations.get(taskId) || []), ...outsideNow]);
               scopeViolations.set(taskId, [...all].sort());
@@ -1859,6 +1908,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
       // OXB-051/067: a task that failed for good is isolated (inplace): its attempt is saved and restored — its files AND
       // anything it changed outside them that was clean before the task — so the next task does not run on top of it.
       // Files that were dirty before (this execute or the task) are never reverted; they are copied for review.
+      if (taskId && event.type === 'WorkItemCompleted') scratchLib.removeScratchDir(projectRoot, taskId);
       const failedForGood = event && event.type === 'WorkItemBlocked' && event.payload && (event.payload.max_attempts != null || isVerifyOnlyNode(taskId));
       const verifyOnlyWrote = event && event.type === 'WorkItemCompleted' && isVerifyOnlyNode(taskId) && outsideNow.length > 0;
       if (isolateFailures && inplaceRun && taskId && (failedForGood || verifyOnlyWrote)) {
@@ -3824,16 +3874,17 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     .flatMap((a) => a.files || []))];
   if (!shas.size && !testFiles.length) throw new Error(`${taskId}: nenhum commit da tarefa fora de ${base} (sem trailer OXE-Task/done_commit em ${base}..HEAD) — já está na base?`);
   const programTip = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
-  // local fixtures the frozen tests import (relative specifiers), one level deep
+  // local fixtures the frozen tests import (relative specifiers), one level deep — OXB-160: only what resolves INSIDE
+  // the tests' own tree (fixtures, helpers), resolved like node/TS (file, extensions, then dir/index.*) and only to a
+  // file: product modules the test imports (`../../../shared/types/ipc`, a directory) are never copied.
   const withFixtures = (() => {
     const out = new Set(testFiles);
     for (const file of testFiles) {
+      const root = promoteTestRoot(file);
       const text = (gitRun(projectRoot, ['show', `${programTip}:${file}`]).stdout) || '';
       for (const m of text.matchAll(/(?:from\s+|require\(\s*|import\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g)) {
-        const base0 = path.posix.normalize(path.posix.join(path.posix.dirname(file), m[1]));
-        for (const cand of [base0, ...['.ts', '.tsx', '.js', '.mjs', '.cjs', '.json'].map((e) => base0 + e), ...['/index.ts', '/index.js'].map((e) => base0 + e)]) {
-          if (gitRun(projectRoot, ['cat-file', '-e', `${programTip}:${cand}`]).ok) { if (!/\/src\//.test(`/${cand}`)) out.add(cand); break; }
-        }
+        const cand = resolveImportAt(projectRoot, programTip, path.posix.normalize(path.posix.join(path.posix.dirname(file), m[1])));
+        if (cand && (cand + '/').startsWith(root + '/') && !/\/src\//.test(`/${cand}`)) out.add(cand);
       }
     }
     return [...out];
@@ -3842,15 +3893,24 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   const original = (gitLines(projectRoot, ['rev-parse', '--abbrev-ref', 'HEAD']) || [])[0];
   const originalSha = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
   const branch = String(options.branch || `oxe/promote-${taskId.toLowerCase()}`).trim();
-  if (gitLines(projectRoot, ['rev-parse', '--verify', '-q', `refs/heads/${branch}`])) throw new Error(`a branch ${branch} já existe — use --branch <outra> ou apague-a`);
   // Never a force-push: a branch already on the remote with commits we do not have is refused before anything changes.
   const remote = String(options.remote || 'origin');
+  // OXB-160: a local branch an earlier (failed) promote left behind — created by the promote, never pushed — is
+  // reused: dropped and rebuilt. Any other existing branch is refused, as before.
+  let replacedBranch = null;
+  if (gitLines(projectRoot, ['rev-parse', '--verify', '-q', `refs/heads/${branch}`])) {
+    const own = ownUnpushedPromoteBranch(projectRoot, branch, remote, baseSha);
+    if (!own.ok) throw new Error(`a branch ${branch} já existe${own.why ? ` (${own.why})` : ''} — use --branch <outra> ou apague-a`);
+    const del = gitRun(projectRoot, ['branch', '-D', branch]);
+    if (!del.ok) throw new Error(`a branch ${branch} (de um promote anterior) não pôde ser recriada: ${del.stderr.trim()}`);
+    replacedBranch = own.sha;
+  }
   if (options.openPr) {
     const remoteHead = gitRun(projectRoot, ['ls-remote', '--heads', remote, branch]);
     const existing = remoteHead.ok ? remoteHead.stdout.trim().split(/\s+/)[0] : '';
     if (existing) throw new Error(`a branch ${branch} já existe em ${remote} (${existing.slice(0, 8)}) — o promote não sobrescreve nem faz force-push; use --branch <outra>`);
   }
-  const result = { task: taskId, base, base_sha: baseSha, base_requested: resolvedBase.requested, warnings: resolvedBase.warnings, branch, commits: ordered, conflict: null, pr_ready: null, body_file: null, pr: null, commands: [], worktree: null };
+  const result = { task: taskId, base, base_sha: baseSha, base_requested: resolvedBase.requested, warnings: resolvedBase.warnings, branch, commits: ordered, conflict: null, pr_ready: null, body_file: null, pr: null, commands: [], worktree: null, ...(replacedBranch ? { replaced_branch: replacedBranch } : {}) };
   // Where the branch is built: a temporary worktree (default) or, with --in-place, the program checkout.
   let work = projectRoot;
   let cleanup = () => {};
@@ -3858,12 +3918,14 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     const back = () => gitRun(projectRoot, ['checkout', '-q', original && original !== 'HEAD' ? original : originalSha]);
     const co = gitRun(projectRoot, ['checkout', '-q', '-b', branch, baseSha]);
     if (!co.ok) throw new Error(`não foi possível criar ${branch}: ${co.stderr.trim()}`);
+    gitRun(projectRoot, ['config', `branch.${branch}.oxePromote`, 'true']);
     cleanup = back;
   } else {
     const wt = path.join(projectRoot, '.oxe', 'promote-ws', `${taskId.toLowerCase()}-${Date.now().toString(36)}`);
     fs.mkdirSync(path.dirname(wt), { recursive: true });
     const add = gitRun(projectRoot, ['worktree', 'add', '-q', '-b', branch, wt, baseSha]);
     if (!add.ok) throw new Error(`não foi possível criar a worktree de ${branch}: ${add.stderr.trim()}`);
+    gitRun(projectRoot, ['config', `branch.${branch}.oxePromote`, 'true']);
     work = wt;
     result.worktree = path.relative(projectRoot, wt).replace(/\\/g, '/');
     // pr:ready needs the dependencies: a junction to the program's node_modules (or deps_link_from), never an install.
@@ -4448,11 +4510,23 @@ function runtimeProgramAdopt(projectRoot, activeSession, options = {}) {
     adopted.push(tp.id);
   }
   if (!adopted.length) return { adopted, skipped, state: ours };
+  // OXB-159: the adopted worktree's CRs come along; an id already taken here by another CR is renamed CR-<fase>-n and
+  // the copied regression/interfaces/dossier of the adopted phases follow the rename.
+  const fromRel = path.relative(projectRoot, fromRoot).replace(/\\/g, '/') || '.';
+  const crMerge = changeLib.mergeChanges(paths.programDir, theirsPaths.programDir, { phase: adopted[0], from: fromRel });
+  if (Object.keys(crMerge.renamed).length) {
+    const dossierRoot = path.join(path.dirname(paths.plan || path.join(projectRoot, '.oxe', 'PLAN.md')), 'dossier');
+    const walk = (dir) => { let out = []; try { for (const e of fs.readdirSync(dir, { withFileTypes: true })) out = out.concat(e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]); } catch { /* */ } return out; };
+    for (const id of adopted) {
+      for (const sub of ['regression', 'interfaces']) changeLib.renameCrRefs(path.join(paths.programDir, sub, `${id}.json`), crMerge.renamed);
+      for (const f of walk(path.join(dossierRoot, id))) if (/\.(md|json)$/i.test(f)) changeLib.renameCrRefs(f, crMerge.renamed);
+    }
+  }
   next.updated_at = new Date().toISOString();
   programLib.writeProgram(paths.programDir, next);
-  changeLib.appendNdjson(changeLib.changesFile(paths.programDir), { kind: 'program_edit', action: 'phase_adopt', phases: adopted, from: next.phases.find((p) => p.id === adopted[0]).adopted_from, by, reason, at: new Date().toISOString() });
+  changeLib.appendNdjson(changeLib.changesFile(paths.programDir), { kind: 'program_edit', action: 'phase_adopt', phases: adopted, from: next.phases.find((p) => p.id === adopted[0]).adopted_from, crs_merged: crMerge.merged, crs_renamed: crMerge.renamed, by, reason, at: new Date().toISOString() });
   appendEvent(projectRoot, activeSession, { type: 'PhaseAdopted', payload: { phases: adopted, from: options.from } });
-  return { adopted, skipped, state: next, export: autoExportProgram(projectRoot, activeSession) };
+  return { adopted, skipped, crs_merged: crMerge.merged, crs_renamed: crMerge.renamed, state: next, export: autoExportProgram(projectRoot, activeSession) };
 }
 
 /** OXB-058: doctor — .oxe/ gitignored with no versioned export means SPEC/ROADMAP/PROGRAM edits leave no history. */
@@ -4595,7 +4669,7 @@ function selectTasksToReopen(planMdPath, parsedPlan, changeResult, requested) {
 function runtimeChangeSetStatus(projectRoot, activeSession, options = {}) {
   const changeLib = require('./oxe-change.cjs');
   const id = String(options.id || '').trim().toUpperCase();
-  if (!/^CR-\d+$/.test(id)) throw new Error('informe o CR: oxe-cc runtime feedback resolve|withdraw CR-<n> --by <papel> --reason "…"');
+  if (!require('./oxe-criteria-ids.cjs').CR_ID_RE.test(id)) throw new Error('informe o CR: oxe-cc runtime feedback resolve|withdraw CR-<n> --by <papel> --reason "…"');
   const status = options.status === 'resolved' ? 'resolved' : 'withdrawn';
   const by = String(options.by || '').trim();
   const reason = String(options.reason || '').trim();

@@ -56,9 +56,78 @@ function listChanges(programDir) {
   return [...byId.values()];
 }
 
-function nextId(changes) {
-  const max = changes.reduce((m, c) => Math.max(m, Number(String(c.id).replace(/\D/g, '')) || 0), 0);
-  return `CR-${String(max + 1).padStart(2, '0')}`;
+/**
+ * OXB-159: next CR id. Without a prefix, `CR-NN` over the plain ids only. With a prefix (a phase id — used in a forked
+ * worktree, where the program tree keeps numbering its own CRs in parallel), `CR-<prefix>-<n>`, which cannot collide.
+ */
+function nextId(changes, prefix) {
+  const p = prefix ? String(prefix).toUpperCase().replace(/[^A-Z0-9.]/g, '') : '';
+  const re = p ? new RegExp(`^CR-${p.replace(/\./g, '\\.')}-(\\d+)$`) : /^CR-(\d+)$/;
+  const max = changes.reduce((m, c) => { const hit = re.exec(String(c.id)); return hit ? Math.max(m, Number(hit[1])) : m; }, 0);
+  return p ? `CR-${p}-${max + 1}` : `CR-${String(max + 1).padStart(2, '0')}`;
+}
+
+/** The phase prefix for new CR ids: set in a forked worktree (`program init --from`), or by `program.cr_id_prefix`. */
+function idPrefixFor(program, phaseId) {
+  if (program && program.cr_id_prefix) return String(program.cr_id_prefix);
+  if (program && program.forked_from) return phaseId || 'X';
+  return '';
+}
+
+/**
+ * OXB-159: `program adopt` brings the CR records of the adopted worktree (CRs, status changes, signals) into this
+ * program. A record already here (copied at the fork, or merged before) is skipped; a CR whose id is already taken
+ * here by a DIFFERENT CR is renamed to `CR-<phase>-<n>` and its status records follow (`origin_id` keeps the trail).
+ * @returns {{ merged: number, renamed: Record<string,string> }}
+ */
+function mergeChanges(ourDir, theirDir, options = {}) {
+  const ours = readNdjson(changesFile(ourDir));
+  const theirs = readNdjson(changesFile(theirDir));
+  const key = (r) => `${r.kind}|${r.id || ''}|${r.at || ''}|${r.status || r.action || ''}`;
+  const have = new Set();
+  for (const r of ours) {
+    have.add(key(r));
+    if (r.origin_id) have.add(key({ ...r, id: r.origin_id }));
+  }
+  const crById = new Map(ours.filter((r) => r.kind === 'cr').map((r) => [r.id, r]));
+  // a fork CR merged earlier under a new id: reuse the mapping
+  const renamed = {};
+  for (const r of ours) if (r.kind === 'cr' && r.origin_id && r.origin_root === options.from) renamed[r.origin_id] = r.id;
+  const pending = [];
+  let merged = 0;
+  for (const r of theirs) {
+    if (r.kind === 'program_edit' && r.action === 'program_fork') continue; // the fork's own bookkeeping
+    if (have.has(key(r))) continue;
+    let rec = { ...r };
+    if (r.kind === 'cr') {
+      const taken = crById.get(r.id);
+      if (taken && !(taken.at === r.at && taken.summary === r.summary)) {
+        const id = nextId([...crById.values(), ...pending], r.phase || options.phase || 'X');
+        renamed[r.id] = id;
+        rec = { ...r, id, origin_id: r.id, origin_root: options.from || null };
+      }
+      crById.set(rec.id, rec);
+      pending.push(rec);
+    } else if (r.id && renamed[r.id]) {
+      rec = { ...r, id: renamed[r.id], origin_id: r.id };
+    }
+    if (Array.isArray(rec.resolves)) rec.resolves = rec.resolves.map((x) => renamed[x] || x);
+    appendNdjson(changesFile(ourDir), rec);
+    have.add(key(rec));
+    merged += 1;
+  }
+  return { merged, renamed };
+}
+
+/** Rewrites CR ids in a copied JSON/markdown file (`resolves`, mentions) after a rename. */
+function renameCrRefs(file, renamed) {
+  const ids = Object.keys(renamed || {});
+  if (!ids.length || !fs.existsSync(file)) return false;
+  const text = fs.readFileSync(file, 'utf8');
+  const re = new RegExp(`\\b(${ids.map((i) => i.replace(/[.]/g, '\\.')).join('|')})\\b(?!-)`, 'g');
+  const next = text.replace(re, (m) => renamed[m] || m);
+  if (next !== text) fs.writeFileSync(file, next);
+  return next !== text;
 }
 
 /** Tarefas ligadas aos critérios do CR (rastreabilidade A* → T). */
@@ -115,7 +184,7 @@ function recordChange(input) {
   const phaseId = input.phase || (program && program.active_phase) || null;
   const cr = {
     kind: 'cr',
-    id: nextId(existing),
+    id: nextId(existing, idPrefixFor(program, phaseId)),
     class: cls,
     summary,
     criteria,
@@ -265,4 +334,4 @@ function checkPolicyRules(projectRoot, rules, files) {
   return violations;
 }
 
-module.exports = { CLASSES, appendNdjson, readNdjson, listChanges, recordChange, setChangeStatus, reconcileChanges, requiredVersions, amendmentRequirements, checkPolicyRules, impactedTasks, changesFile };
+module.exports = { nextId, idPrefixFor, mergeChanges, renameCrRefs, CLASSES, appendNdjson, readNdjson, listChanges, recordChange, setChangeStatus, reconcileChanges, requiredVersions, amendmentRequirements, checkPolicyRules, impactedTasks, changesFile };

@@ -24,6 +24,8 @@ export function buildNodePrompt(
 
   if (node.mutation_scope.length > 0) {
     lines.push(`**Escopo de mutação:** ${node.mutation_scope.join(', ')}`);
+    // OXB-159: scratch goes to the task's own dir, never the repo root (a root *.log counted as out of scope).
+    lines.push(`**Arquivos temporários:** use \`.oxe/tmp/${node.id}/\` (logs, saídas redirecionadas, rascunhos) — nunca a raiz do repositório; escrever fora do escopo e de \`.oxe/tmp/\` conta como violação de escopo.`);
   }
 
   if (attempt > 1 && options.previousError) {

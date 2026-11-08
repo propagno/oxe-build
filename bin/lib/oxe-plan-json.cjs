@@ -128,7 +128,7 @@ function validatePlanJson(doc) {
       if (!isStringArray(entry.files) || entry.files.length === 0) errors.push(`${at}.files: lista com ao menos 1 caminho`);
       if (typeof entry.command !== 'string' || !entry.command.trim()) errors.push(`${at}.command: obrigatório`);
       if (entry.proves != null && !isStringArray(entry.proves)) errors.push(`${at}.proves: lista de nomes de teste${entry.proves && typeof entry.proves === 'object' && !Array.isArray(entry.proves) ? ' — o formato { arquivo: [títulos] } é de plano por papel: junte com oxe-cc plan merge' : ''}`);
-      if (entry.resolves != null && !isStringArray(entry.resolves, /^CR-\d+$/)) errors.push(`${at}.resolves: lista de CR-NN`);
+      if (entry.resolves != null && !isStringArray(entry.resolves, require('./oxe-criteria-ids.cjs').CR_ID_RE)) errors.push(`${at}.resolves: lista de CR-NN (ou CR-<fase>-N)`);
       if (entry.version != null && !(Number.isInteger(entry.version) && entry.version >= 1)) errors.push(`${at}.version: inteiro ≥ 1`);
     });
   }

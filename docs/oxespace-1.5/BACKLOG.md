@@ -1039,3 +1039,27 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - Com `--open-pr`, a branch agora é publicada **antes** do pr:ready, que posta o status no sha publicado. Depois vem o PR.
   - Quando só o post do status falha (e, tirando essas linhas e as linhas do próprio npm, nada mais reporta falha), o resultado é `pr_ready.ok` com `status_post_failed`, e o PR abre. Quando um check reprova, o PR não abre, e a mensagem avisa que a branch já está no remoto.
   - Teste: `tests/oxe-1212-sync-promote.test.cjs` (pr:ready que só passa com a branch no remoto; falha só de status; falha de check).
+
+## OXB-159: id de CR que colide entre worktrees e rascunho do executor na raiz
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (oxespace-150-f4, rc.23).
+  - **CR-35 duplicado:** o `runtime feedback` na worktree da F4 registrou "CR-35 (spec_gap) na fase F4", e o tronco já tinha o CR-35 da F7. As duas worktrees numeravam a partir da mesma cópia do `changes.ndjson`.
+    - Numa worktree criada por `program init --from`, o id agora vem com a fase: `CR-F4-1`. O tronco continua com `CR-NN`. `program.cr_id_prefix` força um prefixo. O cálculo do próximo número só lê ids do mesmo formato (antes, `CR-F4-3` seria lido como 43).
+    - `program adopt` traz os registros de CR da worktree adotada: CRs, mudanças de status e sinais. O que já existe aqui (a cópia do fork ou um merge anterior) é ignorado, e adotar de novo não duplica nada.
+    - Se o id já está em uso aqui por **outro** CR (o caso da rc.23), o CR é renomeado para `CR-<fase>-n` e guarda `origin_id`. Os status dele seguem a renomeação, e o `resolves` da regressão, as interfaces e o dossiê da fase adotada são reescritos. A saída lista `CR-35 -> CR-F4-1`.
+    - `resolves` no PLAN.json e o `feedback resolve|withdraw` aceitam `CR-<fase>-n`.
+  - **Rascunho na raiz:** as tentativas da F4-T1 gravaram `a13-filtered.log`, `a13-out.log` e `tsconfig.tsbuildinfo` na raiz do repositório, o que virou ScopeViolation.
+    - Cada tarefa tem `.oxe/tmp/<tarefa>/`, que o git ignora (um `.gitignore` próprio) e que é apagada quando a tarefa passa. O prompt da tarefa cita esse caminho.
+    - `*.log` e `*.tsbuildinfo` na raiz (configurável por `executor.scratch_ignore`) não contam como violação. O evento é `ScratchIgnored`. Os arquivos que a tentativa criou (novos e não versionados) são removidos. Os que já existiam ou estavam sujos antes da tarefa não são tocados.
+  - Teste: `tests/oxe-1212-cr-ids-scratch.test.cjs`.
+
+## OXB-160: promote com EISDIR ao copiar "fixtures", e a branch local que um promote anterior deixou
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11: `runtime promote T3 --open-pr` (rc.24, oxespace-150) falhou com `EISDIR: illegal operation on a directory, read`.
+  - O teste congelado da T3 importa `../../../shared/types/ipc`, que é um diretório (`index.ts`). O copiador de fixtures da OXB-156 aceitava qualquer caminho que existisse no git (inclusive uma árvore) e seguia imports de módulos do produto.
+    - Agora só copia o que resolve **dentro da árvore dos testes** (até a pasta `tests`/`test`/`__tests__`/`spec`/`e2e` do arquivo).
+    - A resolução segue node/TS: o arquivo, depois as extensões, depois `.js`→`.ts`, depois `dir/index.*`. Só aceita um blob: um diretório nunca é lido, e código do produto nunca é copiado do tip do programa.
+  - **Branch que sobrou:** uma `oxe/promote-t3` deixada por um promote que falhou (local e nunca publicada) fazia o próximo promote recusar.
+    - O promote agora recria a própria branch quando ela não está no remoto, não tem upstream, não está em uso numa worktree **e** foi criada pelo promote: marca `branch.<b>.oxePromote`, ou todos os commits depois da base são cherry-picks `-x` ou o commit dos testes congelados.
+    - Qualquer outra branch com o mesmo nome continua recusada e não é tocada.
+  - Teste: `tests/oxe-1212-promote-fixtures.test.cjs`.

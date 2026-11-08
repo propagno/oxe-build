@@ -5194,8 +5194,9 @@ async function runRuntime(opts) {
       // OXB-033: adopt the phases closed in another worktree.
       if (sub === 'adopt') {
         const out = oxeOperational.runtimeProgramAdopt(opts.dir, activeSession, { from: opts.from || opts.fromEventId, phase: opts.phase || null, by: opts.by, reason: opts.reason });
-        if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeProgramAdoptSchema: 1, adopted: out.adopted, skipped: out.skipped }, null, 2)); return; }
+        if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeProgramAdoptSchema: 1, adopted: out.adopted, skipped: out.skipped, crs_merged: out.crs_merged || 0, crs_renamed: out.crs_renamed || {} }, null, 2)); return; }
         console.log(out.adopted.length ? `  ${c ? green : ''}✓${c ? reset : ''} adotadas: ${out.adopted.join(', ')}` : `  ${c ? dim : ''}nenhuma fase fechada nova para adotar${c ? reset : ''}`);
+        if (out.crs_merged) console.log(`  CRs trazidos: ${out.crs_merged}${Object.keys(out.crs_renamed || {}).length ? ` · renomeados (id já usado aqui): ${Object.entries(out.crs_renamed).map(([o, n]) => `${o} -> ${n}`).join(', ')}` : ''}`);
         for (const s of out.skipped) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${s}`);
         return;
       }

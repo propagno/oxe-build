@@ -79,5 +79,9 @@ function standingAcceptance(projectRoot) {
   } catch { return []; }
 }
 
+/** OXB-159: CR ids — `CR-07` (program tree) or `CR-F4-1` (scoped to a phase: forked worktrees, adopted renames). */
+const CR_ID_RE = /^CR-(?:[A-Z][A-Z0-9.]*-)?\d+$/;
+
 module.exports = {
+  CR_ID_RE,
   standingAcceptance, CRITERION_ID_RE, CRITERION_TOKEN_RE, isCriterionId, isGlobal, isSub, parentOf, idsInField, inPhase, subcriteriaOf, uncovered, isUiTask, UI_FILE_RE };
