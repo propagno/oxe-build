@@ -1186,3 +1186,44 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - **Execute:** quando o teste que falha é um desses (o nome dele aparece na saída) e ele precisa de arquivo fora do escopo, a tarefa para na **1ª tentativa** com `scope_insufficient` (evento `ScopeInsufficient` com os arquivos, os testes e a saída). Também para quando o próprio agente diz que a mudança está fora do escopo. `executor.scope_insufficient: "retry"` desliga.
   - **Eventos:** o `failed_segment` do `VerificationCompleted` agora leva as ~40 últimas linhas do segmento. RetryScheduled e WorkItemBlocked já levavam a cauda, agora sem o ruído do git (OXB-162).
   - Teste: `tests/oxe-1212-test-scope.test.cjs` (o formato da F2 no lint; dependência dona do arquivo sem aviso; fixture que para em 1 tentativa com `scope_insufficient` e cauda; agente que reporta fora do escopo).
+
+## OXB-172: tarefa done antes dos testes que importam os arquivos dela passarem
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11.
+  - O que aconteceu na F10: T1 e T2 ficaram done com o verify verde. Depois, o pr:ready do `promote --tasks T1,T2` reprovou 2 testes de `tests/integration/remote-gateway-protocol.native.test.ts`, que nenhuma das duas listava. Corrigir custou um CR, uma tarefa nova e um segundo promote.
+  - O PR #727 da F2 mostrou o mesmo padrão, com 7 vermelhos.
+  - Com `checkpoint_related_tests` ligado, o checkpoint roda os testes relacionados **aos arquivos que a própria tarefa mudou** (`vitest related`, não o diff do programa inteiro), na árvore do commit, junto com o `checkpoint_check`. Vermelho desfaz o commit, e a tarefa fica `checkpoint_failed` com os testes nomeados.
+    - **Teste no escopo da tarefa:** `kind: related_tests`. O próximo execute roda a tarefa com esse teste somado ao verify dela, e o agente vê a falha.
+    - **Teste fora do escopo:** `kind: scope_insufficient`, com o arquivo nomeado (evento `ScopeInsufficient` `at: checkpoint`). A tarefa **espera**, sem re-rodar às cegas, até uma edição do plano ou um CR. `plan reopen` limpa a marca.
+    - Interface: `checkpoint_related_tests: true` ou `{ command, run_command, max_files (40), timeout_ms (10 min) }`.
+  - Teste: `tests/oxe-1212-checkpoint-phase.test.cjs`.
+    - Uma tarefa muda um módulo importado por um teste fora do verify e do escopo dela: commit desfeito, `scope_insufficient` com o teste nomeado, a tarefa espera, e o `plan reopen` limpa.
+    - O mesmo teste no escopo: `related_tests` e o teste no verify do próximo compile.
+    - Desligado por padrão.
+
+## OXB-173: `feedback --tasks` reabria tarefa done com commit, e ids posicionais renumeravam o trabalho interrompido
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (CRs em fases em execução na rc.30).
+  - **`--tasks` liga, não reabre.**
+    - O que aconteceu: o CR-36 da F2 sobre a T5 (335fc004) e o CR-F10-2 sobre a T1/T2 (1a9e55f6, c2e73cc8) viraram as tarefas para `done=false` sem aviso.
+    - Agora `runtime feedback --tasks T5` só **liga** o CR às tarefas: elas vão em `tasks` no CR e em `linked_tasks` no resultado, e continuam done. Só reabre com `--reopen`, e a saída nomeia o que reabriu ("o próximo execute refaz").
+    - Sem `--tasks`, segue o comportamento da 1.21.1/OXB-061: reabre a tarefa que fecha o critério.
+  - **Ids posicionais.**
+    - O que aconteceu: o CR36 entrou como T8 enquanto a T8 (R4) tinha trabalho interrompido na árvore. A atribuição da rc.30 é por id.
+    - O trabalho interrompido agora é atribuído pelo **título** que a run interrompida compilou para aquele id: o `InterruptedWorkFound` traz `renumbered: { from, title, to }`. Se ninguém tem o título, nada é atribuído, e esses caminhos ficam recusados para as outras tarefas.
+    - O `checkpoint_failed` guarda o título, e um retry de snapshot num id cujo título mudou é recusado.
+    - O `plan lint` avisa quando uma tarefa pendente tem título diferente do que a run compilou para o mesmo id ("ids renumerados … acrescente tarefas no fim").
+  - Testes:
+    - `tests/oxe-1212.test.cjs`: feedback numa tarefa done mantém done, e `--reopen` reabre.
+    - `tests/oxe-1212-checkpoint-phase.test.cjs`: um CR36 inserido antes da R4 interrompida; os restos ficam com a R4 (agora T3), o commit do novo T2 não os leva, e o lint avisa.
+
+## OXB-174: os restos da própria tarefa, de tentativas falhas, ficavam fora do commit dela (P0, regressão da OXB-170)
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (F10, run oxe-run-mw8cmpin-0373tc).
+  - O que aconteceu: a T3 falhou 3× na rc.30, e as edições dela em desktop.ts e filters.ts (no escopo) ficaram na árvore. O relançamento completou a T3 sem mexer nesses arquivos de novo.
+  - O checkpoint 447aafdd levou só o teste. Os dois arquivos estavam sujos no início da tentativa nova, então "início → agora" deu diff vazio.
+  - No início de uma tarefa com tentativas anteriores **não concluídas** (falhou ou foi interrompida, em qualquer run), os caminhos sujos do escopo dela contam como **dela** quando:
+    - ela os escreveu nessas tentativas (`ExecutorUsage.writes`); ou
+    - nenhuma outra tarefa pendente os tem no escopo.
+  - Caminho que o trabalho interrompido de **outra** tarefa segura continua recusado (OXB-170). Evento: `OwnLeftoversAttributed`.
+  - Teste: `tests/oxe-1212-checkpoint-phase.test.cjs` (a A falha com edições no escopo e a run seguinte a completa sem tocá-las: o commit as contém; os restos interrompidos da B num arquivo compartilhado continuam fora do commit da A).

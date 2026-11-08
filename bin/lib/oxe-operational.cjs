@@ -1284,6 +1284,20 @@ function applyTaskGatesToGraph(projectRoot, artifactPaths, compiledGraph) {
   const config = readProjectConfig(projectRoot) || {};
   const gates = gatesLib.collectTaskGates(config, doc);
   const anySuites = (doc.tasks || []).some((t) => t && Array.isArray(t.affected_suites) && t.affected_suites.length);
+  // OXB-172: the related tests that went red at the checkpoint run in the task's verify next time.
+  const relatedRed = new Map((doc.tasks || []).filter((t) => t && !t.done && t.checkpoint_failed && t.checkpoint_failed.kind === 'related_tests' && Array.isArray(t.checkpoint_failed.related_red) && t.checkpoint_failed.related_red.length).map((t) => [t.id, t.checkpoint_failed.related_red]));
+  if (relatedRed.size) {
+    const nodes0 = Array.isArray(compiledGraph.nodes) ? compiledGraph.nodes : Object.values(compiledGraph.nodes);
+    for (const node of nodes0) {
+      const files = node && relatedRed.get(node.id);
+      if (!files) continue;
+      const rt0 = (readProjectConfig(projectRoot) || {}).checkpoint_related_tests;
+      const runTpl = rt0 && typeof rt0 === 'object' && typeof rt0.run_command === 'string' && rt0.run_command.includes('{files}') ? rt0.run_command : 'npx vitest run {files}';
+      const cmd = runTpl.replace('{files}', files.join(' '));
+      node.verify = node.verify && typeof node.verify === 'object' ? node.verify : {};
+      if (!String(node.verify.command || '').includes(cmd)) node.verify.command = [node.verify.command, cmd].filter(Boolean).join(' && ');
+    }
+  }
   if (!gates.length && !anySuites) return;
   const byId = new Map((doc.tasks || []).filter(Boolean).map((t) => [t.id, t]));
   const nodeList = Array.isArray(compiledGraph.nodes) ? compiledGraph.nodes : Object.values(compiledGraph.nodes);
@@ -1828,7 +1842,14 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
   // first — no executor turn, no new verify; done only if the commit lands with its scope's changes.
   const checkpointRetry = retryFailedCheckpoints(projectRoot, activeSession, options);
   // OXB-170: an interrupted task's leftovers are ITS work when it runs again (not "dirty before it").
-  const interruptedWork = new Map((checkpointRetry.interrupted || []).map((w) => [w.task, w.files]));
+  const interruptedWork = new Map((checkpointRetry.interrupted || []).filter((w) => w.task).map((w) => [w.task, w.files]));
+  // OXB-174: plus the task's own leftovers from its earlier failed/interrupted attempts (any run).
+  try {
+    for (const [id, files] of ownLeftoversByTask(projectRoot, activeSession, checkpointRetry.interrupted || [])) {
+      interruptedWork.set(id, [...new Set([...(interruptedWork.get(id) || []), ...files])]);
+    }
+    if (interruptedWork.size) appendEvent(projectRoot, activeSession, { type: 'OwnLeftoversAttributed', payload: { tasks: [...interruptedWork].map(([task, files]) => ({ task, files })) } });
+  } catch { /* auxiliar */ }
 
   // Resolve compiled graph from run state or compile on demand
   let current = options.runState || readRunState(projectRoot, activeSession);
@@ -2112,7 +2133,8 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
                 checkpointFailure = { reason: `checkpoint incompleto: ${cp.leftover.length} arquivo(s) do escopo fora do commit (${cp.leftover.slice(0, 5).join(', ')})`, commit: cp.commit, leftover: cp.leftover };
               }
             } else if (cp.failed) {
-              checkpointFailure = { reason: cp.reason, ...(cp.snapshot ? { snapshot: cp.snapshot } : {}) };
+              checkpointFailure = { reason: cp.reason, ...(cp.snapshot ? { snapshot: cp.snapshot } : {}), ...(cp.kind ? { kind: cp.kind } : {}), ...(cp.related_red ? { related_red: cp.related_red } : {}) };
+              if (cp.kind === 'scope_insufficient') appendEvent(projectRoot, activeSession, { type: 'ScopeInsufficient', run_id: current.run_id, work_item_id: event.work_item_id, payload: { task: event.work_item_id, reason: 'related_tests_outside_scope', tests: cp.related_red || [], at: 'checkpoint' } });
             }
           } catch (err) {
             checkpointFailure = { reason: `checkpoint falhou: ${err && err.message ? err.message : err}` };
@@ -2138,7 +2160,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
         // OXB-025: a tarefa concluída fica `done` no PLAN.json — o próximo compile não a paga de novo.
         // OXB-167: … unless its checkpoint failed: then `checkpoint_failed` (the next execute retries the commit first).
         try {
-          if (checkpointFailure) require('./oxe-plan-json.cjs').markPlanTaskCheckpointFailed(runPaths.plan, event.work_item_id, { ...checkpointFailure, run_id: current.run_id });
+          if (checkpointFailure) require('./oxe-plan-json.cjs').markPlanTaskCheckpointFailed(runPaths.plan, event.work_item_id, { ...checkpointFailure, run_id: current.run_id, title: (planTaskById.get(event.work_item_id) || {}).title || null });
           else require('./oxe-plan-json.cjs').markPlanTaskDone(runPaths.plan, event.work_item_id, { commit: checkpoint });
         } catch { /* o done é auxiliar; o journal continua sendo a verdade da run */ }
         // OXB-151: --promote-each — the task enters the merge train at once, without waiting for the whole plan.
@@ -3333,6 +3355,22 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       }
     }
   } catch { /* auxiliar */ }
+  // OXB-173: ids are positional; a pending task whose title changed since the run compiled it was renumbered — the
+  // run's attempts, interrupted work and checkpoint snapshots are keyed by id.
+  try {
+    const rs = readRunState(projectRoot, activeSession);
+    const nodes = rs && rs.compiled_graph && rs.compiled_graph.nodes;
+    const titles = {};
+    for (const n of nodes ? (Array.isArray(nodes) ? nodes : Object.values(nodes)) : []) if (n && n.id) titles[n.id] = n.title || '';
+    const { doc: pj0 } = readPlanJsonDoc(projectRoot, activeSession);
+    for (const t of (pj0 && pj0.tasks) || []) {
+      if (!t || t.done || titles[t.id] == null) continue;
+      if (String(titles[t.id]).trim().toLowerCase() !== String(t.title || '').trim().toLowerCase()) {
+        const moved = Object.entries(titles).find(([, ti]) => String(ti).trim().toLowerCase() === String(t.title || '').trim().toLowerCase());
+        result.warnings.push(`${t.id}: o título mudou desde a run ${rs.run_id} ("${titles[t.id]}" → "${t.title}")${moved ? `; "${t.title}" era ${moved[0]}` : ''} — ids renumerados: tentativas, trabalho interrompido e snapshots são por id. Prefira ids estáveis (acrescente tarefas no fim, ex.: T${(pj0.tasks || []).length + 1}); o execute atribui o trabalho interrompido pelo título`);
+      }
+    }
+  } catch { /* auxiliar */ }
   // OXB-171: the product files a task's frozen tests import/read must be in its scope (or a dependency's); T8 of F2
   // retried 3× a test on shared/types/ipc.ts that was outside its files. config lint.test_scope: "error" makes it fatal.
   try {
@@ -3583,6 +3621,7 @@ function runtimeFeedback(projectRoot, activeSession, options = {}) {
     class: options.class, summary: options.summary, criteria: options.criteria, by: options.by,
     phase: options.phase, amendTo: options.amendTo, evidence: options.evidence, additive: Boolean(options.additive),
     specEdit: options.specEdit || null,
+    tasks: options.tasks ? (Array.isArray(options.tasks) ? options.tasks : String(options.tasks).split(',')).map((t) => String(t).trim().toUpperCase()).filter((t) => /^T\d+$/.test(t)) : [],
   });
   if (result.reopened && result.program) programLib.writeProgram(programDir, result.program);
   // 1.21.1: a defect or spec_gap reopens tasks (done → open), so the next execute redoes exactly them.
@@ -3591,12 +3630,17 @@ function runtimeFeedback(projectRoot, activeSession, options = {}) {
   // (external_delivery / verify_only / blocked_by an external PR) is never reopened: its work is not in this repo.
   const reopenedTasks = [];
   const selection = selectTasksToReopen(paths.plan, plan, result, options.tasks);
-  if (result.cr.class === 'defect' || result.cr.class === 'spec_gap') {
+  // OXB-173: `--tasks` LINKS the CR to the tasks; it reopens them only with `--reopen` (F2 CR-36 flipped T5, done with
+  // 335fc004, to open in silence — the next execute would have paid for merge-ready work again).
+  const explicitTasks = Boolean(options.tasks && String(options.tasks).trim());
+  const mayReopen = !explicitTasks || options.reopen === true;
+  if ((result.cr.class === 'defect' || result.cr.class === 'spec_gap') && mayReopen) {
     const planJsonLib = require('./oxe-plan-json.cjs');
     for (const taskId of selection.targets) {
       if (planJsonLib.markPlanTaskOpen(paths.plan, taskId, { by: result.cr.id })) reopenedTasks.push(taskId);
     }
   }
+  if (explicitTasks && !mayReopen) result.linked_tasks = selection.targets;
   result.reopened_tasks = reopenedTasks;
   result.impacted_not_reopened = (result.impacted || []).filter((id) => !reopenedTasks.includes(id) && !selection.external.includes(id));
   result.external_not_reopened = selection.external;
@@ -3915,6 +3959,16 @@ function gitRun(projectRoot, args, extra = {}) {
 /** Dirty paths of the project outside .oxe/ (the runtime's own state never blocks a sync or promote). */
 function dirtyProjectPaths(projectRoot) {
   return projectStatusPaths(projectRoot).filter((p) => !p.startsWith('.oxe/'));
+}
+
+/** runChildCommand, plus the whole (bounded) output — OXB-172 reads the failing test files from it. */
+function runChildCommandFull(projectRoot, command, timeoutMs = 600_000) {
+  applyChildEnvPolicy(projectRoot);
+  const rt = loadRuntimeModule();
+  const env = rt && typeof rt.childProcessEnv === 'function' ? rt.childProcessEnv(process.env) : (() => { const e = { ...process.env }; delete e.NODE_TEST_CONTEXT; return e; })();
+  const res = spawnSync(command, { cwd: projectRoot, shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true, env });
+  const output = `${res.stdout || ''}\n${res.stderr || ''}`;
+  return { ok: res.status === 0, status: res.status, tail: output.split(/\r?\n/).filter(Boolean).slice(-15).join('\n'), output: output.slice(-200_000) };
 }
 
 function runChildCommand(projectRoot, command, timeoutMs = 600_000) {
@@ -5300,13 +5354,86 @@ function interruptedTaskWork(projectRoot, activeSession) {
   if (!running.length) return [];
   let doc = null;
   try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
+  // OXB-173: ids are positional — inserting a task mid-chain renumbers the later ones. The title the interrupted run
+  // compiled for the id decides which task of the CURRENT plan owns the leftovers (F2: CR36 landed as T8 while T8 = R4
+  // had interrupted work in the tree).
+  let runTitles = {};
+  try {
+    const rs = readRunState(projectRoot, activeSession);
+    const nodes = rs && rs.run_id === runId && rs.compiled_graph && rs.compiled_graph.nodes;
+    for (const n of nodes ? (Array.isArray(nodes) ? nodes : Object.values(nodes)) : []) if (n && n.id) runTitles[n.id] = n.title || null;
+  } catch { runTitles = {}; }
+  const norm = (x) => String(x || '').trim().toLowerCase();
   const out = [];
-  for (const id of running) {
-    const t = doc && Array.isArray(doc.tasks) ? doc.tasks.find((x) => x && x.id === id) : null;
-    if (!t || t.done === true) continue;
+  for (const runningId of running) {
+    const tasks = doc && Array.isArray(doc.tasks) ? doc.tasks.filter(Boolean) : [];
+    let t = tasks.find((x) => x.id === runningId) || null;
+    const was = runTitles[runningId];
+    let renumbered = null;
+    if (was && t && norm(t.title) !== norm(was)) {
+      const same = tasks.filter((x) => norm(x.title) === norm(was));
+      renumbered = { from: runningId, title: was, to: same.length === 1 ? same[0].id : null };
+      t = same.length === 1 ? same[0] : null;
+    }
+    if (!t || t.done === true) {
+      if (renumbered && !renumbered.to) out.push({ task: null, run_id: runId, files: [], renumbered, unattributed: true });
+      continue;
+    }
+    const id = t.id;
     const scope = (t.files || []).map((p) => String(p).replace(/\\/g, '/')).filter((p) => p && !p.includes('*'));
     const files = scope.length ? changedPathsUnder(projectRoot, scope) : [];
-    if (files.length) out.push({ task: id, run_id: runId, files });
+    if (files.length) out.push({ task: id, run_id: runId, files, ...(renumbered ? { renumbered } : {}) });
+  }
+  return out;
+}
+
+/**
+ * OXB-174: a task's OWN leftovers from its earlier attempts that never completed (failed 3× and left its edits, or
+ * interrupted), in any run. At its next start those in-scope dirty paths are its work, not "dirty before it": F10's T3
+ * failed 3× on rc.30, the relaunch completed it without touching desktop.ts / filters.ts again, and its checkpoint left
+ * them out. A path counts when the task wrote it in those attempts (ExecutorUsage.writes) or no other pending task's
+ * scope claims it — never a path another task's interrupted work holds (OXB-170).
+ * @returns {Map<string, string[]>}
+ */
+function ownLeftoversByTask(projectRoot, activeSession, interrupted = []) {
+  const out = new Map();
+  let events = [];
+  try { events = readEvents(projectRoot, activeSession); } catch { events = []; }
+  let doc = null;
+  try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
+  const tasks = doc && Array.isArray(doc.tasks) ? doc.tasks.filter(Boolean) : [];
+  if (!tasks.length || !events.length) return out;
+  const lastStart = new Map();
+  const lastDone = new Map();
+  const writes = new Map();
+  events.forEach((e, i) => {
+    if (!e || !e.work_item_id) return;
+    if (e.type === 'AttemptStarted') lastStart.set(e.work_item_id, i);
+    if (e.type === 'WorkItemCompleted') lastDone.set(e.work_item_id, i);
+    if (e.type === 'ExecutorUsage' && e.payload && Array.isArray(e.payload.writes)) {
+      if (!writes.has(e.work_item_id)) writes.set(e.work_item_id, new Set());
+      for (const w of e.payload.writes) writes.get(e.work_item_id).add(String(w).replace(/\\/g, '/').replace(/^\.\//, ''));
+    }
+  });
+  const claimed = new Map();
+  for (const w of interrupted || []) for (const f of w.files || []) claimed.set(f, w.task);
+  const scopes = new Map(tasks.filter((t) => t.done !== true).map((t) => [t.id, (t.files || []).map((p) => String(p).replace(/\\/g, '/')).filter((p) => p && !p.includes('*'))]));
+  const inScope = (scope, p) => scope.some((e) => e === p || p.startsWith(`${e.replace(/\/$/, '')}/`));
+  for (const t of tasks) {
+    if (t.done === true) continue;
+    const started = lastStart.get(t.id);
+    if (started == null || (lastDone.has(t.id) && lastDone.get(t.id) > started)) continue; // never ran, or completed since
+    const scope = scopes.get(t.id) || [];
+    if (!scope.length) continue;
+    const dirty = changedPathsUnder(projectRoot, scope);
+    const wrote = writes.get(t.id) || new Set();
+    const own = dirty.filter((p) => {
+      const holder = claimed.get(p);
+      if (holder && holder !== t.id) return false;
+      if (wrote.has(p)) return true;
+      return ![...scopes].some(([id, sc]) => id !== t.id && inScope(sc, p));
+    });
+    if (own.length) out.set(t.id, own);
   }
   return out;
 }
@@ -5316,7 +5443,8 @@ function retryFailedCheckpoints(projectRoot, activeSession, options = {}) {
   const out = [];
   let doc = null;
   try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
-  const pending = doc && Array.isArray(doc.tasks) ? doc.tasks.filter((t) => t && t.done !== true && t.checkpoint_failed) : [];
+  // OXB-172: a related-tests red is work for the task (or a scope gap), not a commit to retry.
+  const pending = doc && Array.isArray(doc.tasks) ? doc.tasks.filter((t) => t && t.done !== true && t.checkpoint_failed && !t.checkpoint_failed.related_red) : [];
   // OXB-170: an interrupted task's leftovers are attributed first (event), whatever is retried.
   const interrupted = interruptedTaskWork(projectRoot, activeSession).filter((w) => !pending.some((t) => t.id === w.task));
   if (interrupted.length) appendEvent(projectRoot, activeSession, { type: 'InterruptedWorkFound', payload: { tasks: interrupted } });
@@ -5326,13 +5454,18 @@ function retryFailedCheckpoints(projectRoot, activeSession, options = {}) {
   const ctx = taskPhaseContext(projectRoot, activeSession);
   const planJsonLib = require('./oxe-plan-json.cjs');
   const foreign = new Map();
-  for (const w of interrupted) for (const f of w.files) foreign.set(f, w.task);
+  for (const w of interrupted) for (const f of w.files) foreign.set(f, w.task || 'tarefa interrompida');
   // the scope of every other pending task: with no snapshot, a path shared with one of them is not ours to commit
   const otherScopes = (id) => new Map((doc.tasks || []).filter((t) => t && t.id !== id && t.done !== true)
     .flatMap((t) => (t.files || []).map((f) => [String(f).replace(/\\/g, '/'), t.id])));
   for (const task of pending) {
     let cp = null;
     const snapshot = task.checkpoint_failed.snapshot || null;
+    // OXB-173: the snapshot belongs to the task with that TITLE; a renumbered id must not commit another task's work.
+    if (task.checkpoint_failed.title && String(task.checkpoint_failed.title).trim().toLowerCase() !== String(task.title || '').trim().toLowerCase()) {
+      out.push({ task: task.id, ok: false, reason: `id renumerado: o checkpoint pendente era de "${task.checkpoint_failed.title}", e ${task.id} agora é "${task.title}" — não commitado; mova o checkpoint_failed para a tarefa certa ou rode plan reopen` });
+      continue;
+    }
     try {
       if (snapshot) {
         // the task's OWN content, saved when its checkpoint failed — whatever the tree holds now
@@ -5488,10 +5621,29 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
     return { committed: false, failed: true, reason: `git commit falhou: ${String(commit.stderr || commit.stdout).trim().split(/\r?\n/).slice(-8).join(' · ')}`, snapshot: entries };
   }
   const head = gitOut(projectRoot, ['rev-parse', 'HEAD']).stdout.trim();
-  const check = checkpointCheck(projectRoot, head, options);
+  const check = checkpointCheck(projectRoot, head, { ...options, changedFiles: paths.filter((p) => entries[p] !== 'deleted') });
   if (check && !check.ok) {
     gitOut(projectRoot, ['update-ref', '-m', 'oxe: checkpoint_check vermelho', 'HEAD', oldHead, head]);
     restore();
+    if (check.kind === 'related') {
+      // OXB-172: tests that import the task's changed files went red. In the task's scope → its work (the next execute
+      // runs them in its verify); outside it → scope_insufficient, naming the test (OXB-171).
+      const scope = (options.scope || []).map((p) => String(p).replace(/\\/g, '/'));
+      const inScope = (f) => scope.some((e) => e === f || f.startsWith(`${e.replace(/\/$/, '')}/`));
+      const failing = check.failing_tests || [];
+      const outside = failing.filter((t) => !inScope(t.file));
+      const named = failing.map((t) => `${t.file}${t.names.length ? ` (${t.names.slice(0, 2).join('; ')})` : ''}`).join(', ') || check.tail;
+      return {
+        committed: false,
+        failed: true,
+        kind: outside.length ? 'scope_insufficient' : 'related_tests',
+        related_red: failing.map((t) => t.file),
+        reason: outside.length
+          ? `scope_insufficient: testes que importam os arquivos da tarefa ficaram vermelhos fora do escopo dela — ${named}. Inclua ${outside.map((t) => t.file).join(', ')} nos files (ou abra um CR/tarefa), depois rode oxe-cc plan reopen`
+          : `testes relacionados vermelhos (\`${check.command.slice(0, 120)}\`): ${named} — entram no verify da tarefa no próximo execute`,
+        snapshot: entries,
+      };
+    }
     return { committed: false, failed: true, reason: `checkpoint_check vermelho na árvore do commit (\`${check.command}\`): ${check.tail}`, snapshot: entries };
   }
   restore();
@@ -5510,8 +5662,12 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
  */
 function checkpointCheck(projectRoot, sha, options = {}) {
   const cfg = readProjectConfig(projectRoot) || {};
-  const command = options.checkpointCheck != null ? options.checkpointCheck : cfg.checkpoint_check;
-  if (!command || typeof command !== 'string') return null;
+  const typecheck = options.checkpointCheck != null ? options.checkpointCheck : cfg.checkpoint_check;
+  // OXB-172: the tests that import the task's OWN changed files (vitest related), not only the task's verify.
+  const related = relatedTestsCommand(cfg, options.changedFiles || []);
+  const commands = [...(typecheck && typeof typecheck === 'string' ? [{ kind: 'check', command: typecheck, timeout: Number(cfg.checkpoint_check_timeout_ms) > 0 ? Number(cfg.checkpoint_check_timeout_ms) : 900_000 }] : []), ...(related ? [related] : [])];
+  if (!commands.length) return null;
+  const command = commands.map((c) => c.command).join(' ; ');
   const wt = path.join(projectRoot, '.oxe', 'checkpoint-ws', `${String(sha).slice(0, 10)}-${Date.now().toString(36)}`);
   fs.mkdirSync(path.dirname(wt), { recursive: true });
   const add = gitOut(projectRoot, ['worktree', 'add', '-q', '--detach', wt, sha]);
@@ -5521,7 +5677,11 @@ function checkpointCheck(projectRoot, sha, options = {}) {
     const nm = path.join(projectRoot, 'node_modules');
     if (fs.existsSync(nm)) fs.symlinkSync(fs.realpathSync(nm), path.join(wt, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
     try { require('./oxe-local-config.cjs').copyLocalFiles(projectRoot, wt); } catch { /* */ }
-    res = runChildCommand(wt, command, Number(cfg.checkpoint_check_timeout_ms) > 0 ? Number(cfg.checkpoint_check_timeout_ms) : 900_000);
+    for (const c of commands) {
+      const r = runChildCommandFull(wt, c.command, c.timeout);
+      res = { ok: r.ok, tail: r.tail, kind: c.kind, command: c.command, output: r.output, skipped: c.skipped || [] };
+      if (!r.ok) break;
+    }
   } finally {
     try {
       const rt = loadRuntimeModule();
@@ -5533,7 +5693,38 @@ function checkpointCheck(projectRoot, sha, options = {}) {
     if (!linkLeft) gitOut(projectRoot, ['worktree', 'remove', '--force', wt]);
     gitOut(projectRoot, ['worktree', 'prune']);
   }
-  return { ok: Boolean(res && res.ok), command, tail: String((res && res.tail) || '').split(/\r?\n/).slice(-6).join(' · ') };
+  const out = { ok: Boolean(res && res.ok), command: (res && res.command) || command, kind: res && res.kind, tail: String((res && res.tail) || '').split(/\r?\n/).slice(-6).join(' · ') };
+  if (res && !res.ok && res.kind === 'related') out.failing_tests = failingTestFiles(res.output || res.tail || '');
+  if (res && res.skipped && res.skipped.length) out.related_skipped = res.skipped;
+  return out;
+}
+
+/**
+ * OXB-172: config `checkpoint_related_tests`: true | { command, max_files, timeout_ms }. The command gets the task's own
+ * changed code files ({files}); default `npx vitest related --run {files}`; at most max_files (40) files.
+ */
+function relatedTestsCommand(cfg, changedFiles) {
+  const opt = cfg && cfg.checkpoint_related_tests;
+  if (!opt) return null;
+  const o = typeof opt === 'object' ? opt : {};
+  const code = [...new Set((changedFiles || []).map((f) => String(f).replace(/\\/g, '/')).filter((f) => /\.(c|m)?[jt]sx?$/.test(f)))];
+  if (!code.length) return null;
+  const max = Number(o.max_files) > 0 ? Number(o.max_files) : 40;
+  const files = code.slice(0, max);
+  const template = typeof o.command === 'string' && o.command.includes('{files}') ? o.command : 'npx vitest related --run {files}';
+  const quote = (f) => (/[\s"']/.test(f) ? JSON.stringify(f) : f);
+  return { kind: 'related', command: template.replace('{files}', files.map(quote).join(' ')), timeout: Number(o.timeout_ms) > 0 ? Number(o.timeout_ms) : 600_000, skipped: code.slice(max) };
+}
+
+/** OXB-172: the test files a vitest/jest run reports as failing (FAIL / × / ❯ lines). */
+function failingTestFiles(output) {
+  const out = new Map();
+  for (const m of String(output).matchAll(/^\s*(?:FAIL|×|✗|❯)\s+([\w./\\@-]+\.(?:test|spec)\.[cm]?[jt]sx?)(?:\s*>\s*([^\n]+))?/gm)) {
+    const file = m[1].replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!out.has(file)) out.set(file, []);
+    if (m[2] && !/\(\d+ tests?/.test(m[2])) out.get(file).push(m[2].trim().slice(0, 120));
+  }
+  return [...out].map(([file, names]) => ({ file, names: [...new Set(names)].slice(0, 5) }));
 }
 
 function commitTaskCheckpoint(projectRoot, runState, taskId, options = {}) {
@@ -5552,7 +5743,7 @@ function commitTaskCheckpoint(projectRoot, runState, taskId, options = {}) {
   if (own.problems.length) return { committed: false, failed: true, reason: own.problems.join(' · '), snapshot: own.entries, scope_absent: scopeAbsent };
   if (!Object.keys(own.entries).length) return { committed: false, reason: 'nada mudou no escopo da tarefa (o que está sujo já estava antes dela)', scope_absent: scopeAbsent };
   const message = checkpointMessageFor(projectRoot, runState, taskId, options.task || {}, options.phase, options.config || null);
-  const res = commitExactContent(projectRoot, own.entries, message, options);
+  const res = commitExactContent(projectRoot, own.entries, message, { ...options, scope: files });
   return { ...res, scope: files, ...(scopeAbsent.length ? { scope_absent: scopeAbsent } : {}), snapshot: res.committed ? undefined : own.entries };
 }
 

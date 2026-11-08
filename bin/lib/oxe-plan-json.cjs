@@ -219,7 +219,8 @@ function planJsonToParsedPlan(doc) {
         ...(task.kind ? { kind: task.kind } : {}),
         ...(typeof task.question === 'string' ? { question: task.question } : {}),
         ...(task.gate ? { gate: task.gate } : {}),
-        ...(externalRefs(task).length ? { blocked_by: externalRefs(task) } : {}),
+        // OXB-172: a task whose related tests went red OUTSIDE its scope waits (a CR / a plan edit), never re-runs blind.
+        ...((externalRefs(task).length || (task.checkpoint_failed && task.checkpoint_failed.kind === 'scope_insufficient')) ? { blocked_by: [...externalRefs(task), ...(task.checkpoint_failed && task.checkpoint_failed.kind === 'scope_insufficient' ? [`scope_insufficient: ${(task.checkpoint_failed.related_red || []).join(', ')}`] : [])] } : {}),
         ...(taskPreconditions(task).length ? { waits_on: taskPreconditions(task) } : {}),
       },
     };
@@ -338,7 +339,7 @@ function markPlanTaskCheckpointFailed(planMdPath, taskId, info = {}) {
     task.done = false;
     delete task.done_at;
     delete task.done_commit;
-    task.checkpoint_failed = { at: new Date().toISOString(), reason: String(info.reason || '').slice(0, 800), ...(info.commit ? { commit: info.commit } : {}), ...(info.leftover ? { leftover: info.leftover.slice(0, 50) } : {}), ...(info.run_id ? { run_id: info.run_id } : {}), ...(info.snapshot ? { snapshot: info.snapshot } : {}) };
+    task.checkpoint_failed = { at: new Date().toISOString(), reason: String(info.reason || '').slice(0, 800), ...(info.commit ? { commit: info.commit } : {}), ...(info.leftover ? { leftover: info.leftover.slice(0, 50) } : {}), ...(info.run_id ? { run_id: info.run_id } : {}), ...(info.snapshot ? { snapshot: info.snapshot } : {}), ...(info.kind ? { kind: info.kind } : {}), ...(info.related_red ? { related_red: info.related_red } : {}), ...(info.title ? { title: info.title } : {}) };
     const tmp = `${jsonPath}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
     fs.renameSync(tmp, jsonPath);
@@ -605,7 +606,8 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
     return false;
   }
   const task = Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
-  if (!task || task.done !== true) return false;
+  if (!task || (task.done !== true && !task.checkpoint_failed)) return false;
+  delete task.checkpoint_failed; // OXB-172: reopen also clears a failed checkpoint (scope fixed by a plan edit / CR)
   task.done = false;
   task.reopened = [...(Array.isArray(task.reopened) ? task.reopened : []), { at: new Date().toISOString(), by: info.by || null, previous_commit: task.done_commit || null }];
   delete task.done_at;

@@ -198,6 +198,8 @@ function recordChange(input) {
     amendment: cls === 'spec_gap' ? (input.additive ? 'additive' : 'changing') : null,
     evidence: input.evidence || null,
     ...(input.gate ? { gate: String(input.gate) } : {}),
+    // OXB-173: the tasks the CR is about (`--tasks`), linked whether or not they are reopened.
+    ...(Array.isArray(input.tasks) && input.tasks.length ? { tasks: input.tasks } : {}),
     // OXB-058: the SPEC edit this CR made (`spec amend`): the row before and after, for the audit trail.
     ...(input.specEdit ? { spec_edit: input.specEdit } : {}),
   };

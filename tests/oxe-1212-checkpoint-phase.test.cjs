@@ -267,3 +267,150 @@ describe('OXB-170: a checkpoint holds only its own task\'s hunks', () => {
     assert.ok(!fs.existsSync(path.join(dir, '.oxe', 'checkpoint-ws')) || fs.readdirSync(path.join(dir, '.oxe', 'checkpoint-ws')).length === 0);
   });
 });
+
+describe('OXB-172: the checkpoint runs the tests related to the task\'s own changed files', () => {
+  // fake "vitest related": tests/integration/remote.test.js imports src/proto.js and fails on v2
+  const RELATED = [
+    "const fs = require('fs');",
+    "const files = process.argv.slice(2);",
+    "if (files.join(' ') !== 'src/proto.js') { console.log('unexpected files: ' + files.join(' ')); process.exit(3); }", // only the task's own changed files
+    "if (files.includes('src/proto.js') && fs.readFileSync('src/proto.js', 'utf8').includes('v2')) {",
+    "  console.log(' FAIL  tests/integration/remote.test.js > remote gateway handshake');",
+    "  console.log(' ❯ tests/integration/remote.test.js (2 tests | 2 failed)');",
+    "  process.exit(1);",
+    "}",
+    '',
+  ].join('\n');
+  const cfg = { checkpoint_related_tests: { command: 'node related.js {files}', run_command: 'node related-run.js {files}' } };
+  const exec = (dir) => ({ async execute() { fs.writeFileSync(path.join(dir, 'src', 'proto.js'), 'module.exports = "v2";\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } });
+
+  it('a test outside the task\'s verify and scope goes red → checkpoint_failed scope_insufficient naming it, not done, and the task waits', async () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T1', title: 'protocol v2', wave: 1, files: ['src/proto.js'], verify: { commands: [ok] } }] };
+    const dir = project({ plan, files: { 'src/proto.js': 'module.exports = "v1";\n', 'tests/integration/remote.test.js': "require('../../src/proto.js');\n", 'related.js': RELATED }, config: cfg });
+    const before = git(dir, 'rev-parse', 'HEAD').stdout.trim();
+    const res = await op.runRuntimeExecute(dir, null, { executor: exec(dir), skipPreflight: true, checkpointCommits: true });
+    assert.equal(git(dir, 'rev-parse', 'HEAD').stdout.trim(), before, 'commit undone');
+    const t1 = planOf(dir).tasks[0];
+    assert.equal(t1.done, false);
+    assert.equal(t1.checkpoint_failed.kind, 'scope_insufficient');
+    assert.deepEqual(t1.checkpoint_failed.related_red, ['tests/integration/remote.test.js']);
+    assert.match(t1.checkpoint_failed.reason, /remote gateway handshake/);
+    assert.match(res.result.checkpoint_failed[0].reason, /scope_insufficient: .*tests\/integration\/remote\.test\.js/);
+    assert.ok(op.readEvents(dir, null).some((e) => e.type === 'ScopeInsufficient' && e.payload.at === 'checkpoint'));
+    // next execute: the task waits (no blind re-run)
+    let calls = 0;
+    await op.runRuntimeExecute(dir, null, { executor: { async execute() { calls += 1; return { success: true, failure_class: null, evidence: [], output: 'ok' }; } }, skipPreflight: true, checkpointCommits: true });
+    assert.equal(calls, 0, 'scope_insufficient waits for a plan edit / CR');
+    // plan reopen clears it
+    assert.equal(op.runtimePlanReopen(dir, null, { task: 'T1' }).changed, true);
+    assert.equal(planOf(dir).tasks[0].checkpoint_failed, undefined);
+  });
+
+  it('the red test inside the task\'s scope → related_tests; the next execute runs it in the task\'s verify', async () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T1', title: 'protocol v2', wave: 1, files: ['src/proto.js', 'tests/integration/remote.test.js'], verify: { commands: [ok] } }] };
+    const dir = project({ plan, files: { 'src/proto.js': 'module.exports = "v1";\n', 'tests/integration/remote.test.js': "require('../../src/proto.js');\n", 'related.js': RELATED }, config: cfg });
+    await op.runRuntimeExecute(dir, null, { executor: exec(dir), skipPreflight: true, checkpointCommits: true });
+    const t1 = planOf(dir).tasks[0];
+    assert.equal(t1.done, false);
+    assert.equal(t1.checkpoint_failed.kind, 'related_tests');
+    const compiled = op.compileExecutionGraphFromArtifacts(dir, null, {}).run.compiled_graph;
+    const nodes = Array.isArray(compiled.nodes) ? compiled.nodes : Object.values(compiled.nodes);
+    assert.match(nodes.find((n) => n.id === 'T1').verify.command, /node related-run\.js tests\/integration\/remote\.test\.js/);
+  });
+
+  it('off by default: no related run, the task is done as before', async () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T1', title: 'protocol v2', wave: 1, files: ['src/proto.js'], verify: { commands: [ok] } }] };
+    const dir = project({ plan, files: { 'src/proto.js': 'module.exports = "v1";\n', 'related.js': RELATED } });
+    await op.runRuntimeExecute(dir, null, { executor: exec(dir), skipPreflight: true, checkpointCommits: true });
+    assert.equal(planOf(dir).tasks[0].done, true);
+  });
+});
+
+describe('OXB-173: task ids are positional — interrupted work follows the task, not the id', () => {
+  const SHARED = Array.from({ length: 10 }, (_, i) => `line ${i}`).join('\n') + '\n';
+  const withLine = (text, n, v) => text.split('\n').map((l, i) => (i === n ? v : l)).join('\n');
+
+  it('a task inserted before an interrupted one: the leftovers stay with the original task (now T3), never with the new T2', async () => {
+    const plan1 = { schema_version: 1, tasks: [
+      { id: 'T1', title: 'A', wave: 1, files: ['a.txt'], verify: { commands: [ok] } },
+      { id: 'T2', title: 'R4 remove rtk', wave: 2, depends_on: ['T1'], files: ['shared.txt', 'r4.txt'], verify: { commands: [ok] } },
+    ] };
+    const dir = project({ plan: plan1, files: { 'shared.txt': SHARED, 'a.txt': 'a0\n', 'r4.txt': 'r0\n', 'cr36.txt': 'c0\n' } });
+    const execA = { async execute(node) { if (node.id === 'T1') fs.writeFileSync(path.join(dir, 'a.txt'), 'a1\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    await op.runRuntimeExecute(dir, null, { executor: execA, skipPreflight: true, checkpointCommits: true, wave: 1 });
+    // R4 (T2) starts and is killed: partial edits in the tree
+    const run = op.readRunState(dir, null).run_id;
+    fs.writeFileSync(path.join(dir, 'shared.txt'), withLine(SHARED, 9, 'line 9 by R4 (partial)'));
+    fs.writeFileSync(path.join(dir, 'r4.txt'), 'r-partial\n');
+    fs.appendFileSync(path.join(dir, '.oxe', 'OXE-EVENTS.ndjson'), JSON.stringify({ type: 'AttemptStarted', run_id: run, work_item_id: 'T2', timestamp: new Date().toISOString(), payload: { attempt_number: 1 } }) + '\n');
+    // CR36 is inserted mid-chain: it becomes T2, R4 becomes T3 (and CR36 also touches shared.txt)
+    const p = planOf(dir);
+    p.tasks = [p.tasks[0],
+      { id: 'T2', title: 'CR36 menu fix', wave: 2, depends_on: ['T1'], files: ['shared.txt', 'cr36.txt'], verify: { commands: [ok] } },
+      { id: 'T3', title: 'R4 remove rtk', wave: 3, depends_on: ['T2'], files: ['shared.txt', 'r4.txt'], verify: { commands: [ok] } }];
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify(p, null, 2));
+    const lint = op.runtimePlanLint(dir, null, {});
+    assert.ok(lint.warnings.some((w) => /T2: o título mudou desde a run .*"R4 remove rtk" → "CR36 menu fix"/.test(w)), lint.warnings.join('\n'));
+    let r4Saw = null;
+    const exec2 = { async execute(node) {
+      if (node.id === 'T2') { fs.writeFileSync(path.join(dir, 'cr36.txt'), 'c1\n'); fs.writeFileSync(path.join(dir, 'shared.txt'), withLine(fs.readFileSync(path.join(dir, 'shared.txt'), 'utf8'), 1, 'line 1 by CR36')); }
+      if (node.id === 'T3') { r4Saw = fs.readFileSync(path.join(dir, 'r4.txt'), 'utf8'); fs.writeFileSync(path.join(dir, 'r4.txt'), 'r1\n'); }
+      return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' };
+    } };
+    await op.runRuntimeExecute(dir, null, { executor: exec2, skipPreflight: true, checkpointCommits: true });
+    const found = op.readEvents(dir, null).find((e) => e.type === 'InterruptedWorkFound');
+    assert.equal(found.payload.tasks[0].task, 'T3');
+    assert.deepEqual(found.payload.tasks[0].renumbered, { from: 'T2', title: 'R4 remove rtk', to: 'T3' });
+    const tasks = planOf(dir).tasks;
+    const t2 = tasks.find((t) => t.id === 'T2');
+    const t3 = tasks.find((t) => t.id === 'T3');
+    assert.equal(t2.done, true);
+    const t2Shared = git(dir, 'show', `${t2.done_commit}:shared.txt`).stdout;
+    assert.match(t2Shared, /line 1 by CR36/);
+    assert.doesNotMatch(t2Shared, /by R4/, 'the new T2 (CR36) never gets R4\'s leftovers');
+    assert.equal(r4Saw, 'r-partial\n', 'R4 (now T3) still sees its partial edits');
+    assert.equal(t3.done, true);
+    assert.match(git(dir, 'show', `${t3.done_commit}:shared.txt`).stdout, /line 9 by R4 \(partial\)/, 'R4\'s commit carries its own leftovers');
+  });
+});
+
+describe('OXB-174: a task\'s own leftovers from its earlier failed attempts go into its commit', () => {
+  const gate = 'node -e "process.exit(require(\'fs\').existsSync(\'.oxe/go\')?0:1)"';
+  it('A fails with in-scope edits; the next run completes A without touching them again → A\'s commit contains them', async () => {
+    const plan = { schema_version: 1, budget: { max_retries: 0 }, tasks: [{ id: 'T3', title: 'BE-A67-c5', wave: 1, files: ['src/desktop.ts', 'src/filters.ts', 'tests/topics.test.js'], verify: { commands: [gate] } }] };
+    const dir = project({ plan, files: { 'src/desktop.ts': 'd0\n', 'src/filters.ts': 'f0\n', 'tests/topics.test.js': 't0\n' }, config: { isolate_failed_attempts: false } });
+    const failing = { async execute() { fs.writeFileSync(path.join(dir, 'src', 'desktop.ts'), 'd1\n'); fs.writeFileSync(path.join(dir, 'src', 'filters.ts'), 'f1\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    await op.runRuntimeExecute(dir, null, { executor: failing, skipPreflight: true, checkpointCommits: true });
+    assert.notEqual(planOf(dir).tasks[0].done, true);
+    assert.equal(fs.readFileSync(path.join(dir, 'src', 'desktop.ts'), 'utf8'), 'd1\n', 'the failed attempt left its edits');
+    fs.writeFileSync(path.join(dir, '.oxe', 'go'), '');
+    const second = { async execute() { fs.writeFileSync(path.join(dir, 'tests', 'topics.test.js'), 't1\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    await op.runRuntimeExecute(dir, null, { executor: second, skipPreflight: true, checkpointCommits: true });
+    const t3 = planOf(dir).tasks[0];
+    assert.equal(t3.done, true, JSON.stringify(t3.checkpoint_failed));
+    assert.deepEqual(git(dir, 'show', '--name-only', '--format=', t3.done_commit).stdout.trim().split(/\r?\n/).sort(), ['src/desktop.ts', 'src/filters.ts', 'tests/topics.test.js']);
+    assert.equal(git(dir, 'status', '--porcelain').stdout.trim(), '');
+  });
+
+  it('another task\'s interrupted leftovers in a shared file are still refused', async () => {
+    const plan = { schema_version: 1, budget: { max_retries: 0 }, tasks: [
+      { id: 'T1', title: 'A', wave: 1, files: ['src/a.ts', 'src/shared.ts'], verify: { commands: [gate] } },
+      { id: 'T2', title: 'B', wave: 2, files: ['src/shared.ts', 'src/b.ts'], verify: { commands: [ok] } },
+    ] };
+    const dir = project({ plan, files: { 'src/a.ts': 'a0\n', 'src/shared.ts': 's0\n', 'src/b.ts': 'b0\n' }, config: { isolate_failed_attempts: false } });
+    const failing = { async execute(node) { if (node.id === 'T1') fs.writeFileSync(path.join(dir, 'src', 'a.ts'), 'a1\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    await op.runRuntimeExecute(dir, null, { executor: failing, skipPreflight: true, checkpointCommits: true, wave: 1 });
+    // B starts and is killed with an edit on the shared file
+    const run = op.readRunState(dir, null).run_id;
+    fs.writeFileSync(path.join(dir, 'src', 'shared.ts'), 's-by-B\n');
+    fs.appendFileSync(path.join(dir, '.oxe', 'OXE-EVENTS.ndjson'), JSON.stringify({ type: 'AttemptStarted', run_id: run, work_item_id: 'T2', timestamp: new Date().toISOString(), payload: { attempt_number: 1 } }) + '\n');
+    fs.writeFileSync(path.join(dir, '.oxe', 'go'), '');
+    const second = { async execute() { return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    await op.runRuntimeExecute(dir, null, { executor: second, skipPreflight: true, checkpointCommits: true, wave: 1 });
+    const t1 = planOf(dir).tasks.find((t) => t.id === 'T1');
+    assert.equal(t1.done, true, JSON.stringify(t1.checkpoint_failed));
+    const files = git(dir, 'show', '--name-only', '--format=', t1.done_commit).stdout.trim().split(/\r?\n/);
+    assert.deepEqual(files, ['src/a.ts'], 'A takes its own a.ts, never B\'s shared.ts');
+    assert.equal(fs.readFileSync(path.join(dir, 'src', 'shared.ts'), 'utf8'), 's-by-B\n');
+  });
+});

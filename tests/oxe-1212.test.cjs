@@ -325,9 +325,9 @@ describe('OXB-061: feedback reopens only the closer task (or --tasks), never an 
     assert.deepEqual(doneOf(dir), { T4: true, T5: true, T6: true, T7: false });
   });
 
-  it('--tasks T4 reopens T4 (explicit, not external); an external one is still skipped; an unknown id is reported', () => {
+  it('--tasks T4 --reopen reopens T4 (explicit, not external); an external one is still skipped; an unknown id is reported', () => {
     const dir = project({ plan: plan() });
-    const out = op.runtimeFeedback(dir, null, { class: 'defect', summary: 'a base de A1 está errada', criteria: 'A1', by: 'review', tasks: 'T4,T5,T99' });
+    const out = op.runtimeFeedback(dir, null, { class: 'defect', summary: 'a base de A1 está errada', criteria: 'A1', by: 'review', tasks: 'T4,T5,T99', reopen: true });
     assert.deepEqual(out.reopened_tasks, ['T4']);
     assert.deepEqual(out.external_not_reopened, ['T5']);
     assert.deepEqual(out.unknown_tasks, ['T99']);
@@ -429,5 +429,21 @@ describe('OXB-059: runtime status after the phase work is done', () => {
     assert.equal(work.program, true);
     assert.deepEqual(work.next_steps, ['oxe-cc runtime verify', 'oxe-cc runtime dossier --phase F1', 'oxe-cc runtime program close --phase F1']);
     assert.equal(work.complete, true);
+  });
+});
+
+describe('OXB-173: feedback --tasks links the CR, it does not reopen a done task', () => {
+  it('--tasks T5 on a task done with a commit: linked, still done, no reopen; --reopen reopens and names it', () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T5', title: 'R12', wave: 1, files: ['src/t5.js'], acceptance: ['A1'], done: true, done_commit: '335fc004' }] };
+    const dir = project({ plan });
+    const out = op.runtimeFeedback(dir, null, { class: 'defect', summary: 'CR-36 sobre a T5 já pronta', criteria: 'A1', by: 'tl', tasks: 'T5' });
+    assert.deepEqual(out.reopened_tasks, []);
+    assert.deepEqual(out.linked_tasks, ['T5']);
+    assert.deepEqual(out.cr.tasks, ['T5']);
+    const t5 = JSON.parse(read(dir, '.oxe/PLAN.json')).tasks[0];
+    assert.equal(t5.done, true);
+    assert.equal(t5.done_commit, '335fc004');
+    const again = op.runtimeFeedback(dir, null, { class: 'defect', summary: 'agora reabre de verdade', criteria: 'A1', by: 'tl', tasks: 'T5', reopen: true });
+    assert.deepEqual(again.reopened_tasks, ['T5']);
   });
 });

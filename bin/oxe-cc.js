@@ -4237,6 +4237,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--verify-timeout-ms' && argv[i + 1]) out.verifyTimeoutMs = Number(argv[++i]);
     else if (a === '--in-place') out.inPlace = true;
     else if (a === '--promote-each') out.promoteEach = true;
+    else if (a === '--reopen') out.reopen = true;
     else if (a === '--hold-deps' || a === '--promote-hold-deps') out.holdDeps = true;
     else if (a === '--allow-undelivered') out.allowUndelivered = true;
     else if (a === '--strict-delivery') out.strictDelivery = true;
@@ -5113,13 +5114,14 @@ async function runRuntime(opts) {
       const result = oxeOperational.runtimeFeedback(opts.dir, activeSession, {
         class: opts.changeClass, summary: opts.summary, criteria: opts.criteria, by: opts.by,
         phase: opts.phase || null, amendTo: opts.amendTo || null, evidence: opts.evidence || null,
-        tasks: opts.tasks || null, additive: Boolean(opts.additive),
+        tasks: opts.tasks || null, additive: Boolean(opts.additive), reopen: Boolean(opts.reopen),
       });
       if (opts.jsonOutput) {
         console.log(JSON.stringify({ oxeRuntimeFeedbackSchema: 1, ...result, program: undefined }, null, 2));
       } else {
         console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${result.cr.id} (${result.cr.class}) registrado na fase ${result.cr.phase || '—'}${result.reopened ? ' — fase REABERTA' : ''}`);
-        if (result.reopened_tasks && result.reopened_tasks.length) console.log(`  ${c ? yellow : ''}Reabertas:${c ? reset : ''} ${result.reopened_tasks.join(', ')}`);
+        if (result.reopened_tasks && result.reopened_tasks.length) console.log(`  ${c ? yellow : ''}Reabertas:${c ? reset : ''} ${result.reopened_tasks.join(', ')} (o próximo execute refaz)`);
+        if (result.linked_tasks && result.linked_tasks.length) console.log(`  Ligadas ao ${result.cr.id}, NÃO reabertas: ${result.linked_tasks.join(', ')} — use --reopen para que o próximo execute as refaça`);
         if (result.impacted_not_reopened && result.impacted_not_reopened.length) console.log(`  ${c ? dim : ''}Impactadas, não reabertas:${c ? reset : ''} ${result.impacted_not_reopened.join(', ')} (use --tasks para reabrir outras)`);
         if (result.external_not_reopened && result.external_not_reopened.length) console.log(`  ${c ? dim : ''}Entregues por fora, nunca reabertas:${c ? reset : ''} ${result.external_not_reopened.join(', ')}`);
         if (result.unknown_tasks && result.unknown_tasks.length) console.log(`  ${c ? yellow : ''}Tarefas desconhecidas em --tasks:${c ? reset : ''} ${result.unknown_tasks.join(', ')}`);
