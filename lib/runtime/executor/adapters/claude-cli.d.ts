@@ -42,6 +42,25 @@ export declare function buildSpawnable(executable: string, args: string[], platf
 export declare function renderTranscript(messages: ChatMessage[]): string;
 export declare function buildBridgePrompt(messages: ChatMessage[], tools?: ToolSchema[], retryHint?: boolean): string;
 /** Parse the model's reply into content + tool calls; null when it is not the expected JSON. */
+/** An adapter failure with what the CLI said, classified (context / quota / llm / env) and the cost already spent. */
+export interface CliFailure extends Error {
+    kind: 'context' | 'quota' | 'llm' | 'env';
+    costUsd: number;
+    subtype: string | null;
+    exitCode: number | null;
+}
+export declare function cliFailure(input: {
+    code: number | null;
+    stdout: string;
+    stderr: string;
+    envelope: {
+        result?: unknown;
+        total_cost_usd?: unknown;
+        subtype?: unknown;
+        is_error?: unknown;
+    } | null;
+    promptChars?: number;
+}): CliFailure;
 export declare function parseBridgeReply(text: string): {
     content: string;
     tool_calls: ToolCall[];
@@ -59,5 +78,6 @@ export declare class ClaudeCliAdapter implements ExecutorAdapter {
     /** Pauses the executor while free memory is below the floor; gives up (env failure) after `memoryWaitMs`. */
     private waitForMemory;
     private runOnce;
+    private runOnceRaw;
 }
 export {};

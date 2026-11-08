@@ -207,3 +207,38 @@ const provider = { baseUrl: '', apiKey: '', model: '', maxTurns: 4 };
         strict_1.default.deepEqual(ids, ['claude:false', 'http:true']);
     });
 });
+(0, node_test_1.describe)('OXB-148: claude -p failure reasons come from stdout, classified', () => {
+    let tmp;
+    const shim = (body) => {
+        const p = path_1.default.join(tmp, `fail-${Math.random().toString(36).slice(2)}.js`);
+        fs_1.default.writeFileSync(p, `process.stdin.resume(); process.stdin.on('end', () => { ${body} }); process.stdin.on('data', () => {});`, 'utf8');
+        return new claude_cli_1.ClaudeCliAdapter({ command: process.execPath, prefixArgs: [p], parseRetries: 0 });
+    };
+    const call = (a) => a.createCompletion()({ baseUrl: '', apiKey: '', model: '', messages: [{ role: 'user', content: 'x' }], tools: [] });
+    (0, node_test_1.before)(() => { tmp = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-adapter-fail-')); });
+    (0, node_test_1.after)(() => { fs_1.default.rmSync(tmp, { recursive: true, force: true }); });
+    (0, node_test_1.test)('exit 1 with empty stderr: the JSON stdout reason (subtype, result) is in the error, prompt-too-long is `context`', async () => {
+        const a = shim(`process.stdout.write(JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'Prompt is too long', total_cost_usd: 0.21 })); process.exit(1);`);
+        await strict_1.default.rejects(call(a), (err) => {
+            strict_1.default.equal(err.kind, 'context');
+            strict_1.default.equal(err.costUsd, 0.21);
+            strict_1.default.match(err.message, /claude exit 1 · subtype=error_during_execution · result=Prompt is too long · prompt=\d+ chars/);
+            return true;
+        });
+    });
+    (0, node_test_1.test)('a usage limit is `quota`; max turns is `llm`; anything else stays `env` with the stdout tail', async () => {
+        await strict_1.default.rejects(call(shim(`process.stdout.write(JSON.stringify({ is_error: true, result: 'Claude AI usage limit reached|1762650000' })); process.exit(1);`)), (e) => e.kind === 'quota');
+        await strict_1.default.rejects(call(shim(`process.stdout.write(JSON.stringify({ is_error: true, subtype: 'error_max_turns', result: '' })); process.exit(1);`)), (e) => e.kind === 'llm');
+        await strict_1.default.rejects(call(shim(`process.stdout.write('boom: not json'); process.exit(1);`)), (e) => e.kind === 'env' && /stdout=boom: not json/.test(e.message));
+    });
+    (0, node_test_1.test)('the executor records the class and the cost of the failed call', async () => {
+        const a = shim(`process.stdout.write(JSON.stringify({ is_error: true, result: 'Prompt is too long', total_cost_usd: 0.05 })); process.exit(1);`);
+        const events = [];
+        const ex = new llm_task_executor_1.LlmTaskExecutor(provider, null, (e) => events.push(e), a.createCompletion());
+        const ws = fs_1.default.mkdtempSync(path_1.default.join(tmp, 'ws-'));
+        const res = await ex.execute(node([{ type: 'generate_patch', targets: ['out.txt'] }]), lease(ws), 'run-1', 1);
+        strict_1.default.equal(res.failure_class, 'context');
+        const usage = events.find((e) => e.type === 'executor_usage');
+        strict_1.default.equal(usage.detail.cost_usd, 0.05);
+    });
+});

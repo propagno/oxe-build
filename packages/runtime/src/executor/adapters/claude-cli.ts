@@ -125,6 +125,37 @@ export function buildBridgePrompt(messages: ChatMessage[], tools: ToolSchema[] =
 }
 
 /** Parse the model's reply into content + tool calls; null when it is not the expected JSON. */
+/** An adapter failure with what the CLI said, classified (context / quota / llm / env) and the cost already spent. */
+export interface CliFailure extends Error { kind: 'context' | 'quota' | 'llm' | 'env'; costUsd: number; subtype: string | null; exitCode: number | null; }
+
+const CONTEXT_RE = /prompt is too long|too many tokens|context (window|length)|input is too long|maximum context|exceeds? the (model'?s? )?(context|token)/i;
+const QUOTA_RE = /usage limit|rate.?limit|limit reached|quota|credit balance|overloaded|resets? (at|in)|try again (later|in)|429/i;
+
+export function cliFailure(input: { code: number | null; stdout: string; stderr: string; envelope: { result?: unknown; total_cost_usd?: unknown; subtype?: unknown; is_error?: unknown } | null; promptChars?: number }): CliFailure {
+  const env = input.envelope;
+  const subtype = env && typeof env.subtype === 'string' ? env.subtype : null;
+  const result = env ? String(env.result ?? '') : '';
+  const stdoutTail = env ? '' : String(input.stdout || '').trim().slice(-400);
+  const stderr = String(input.stderr || '').trim().slice(0, 400);
+  const text = [subtype, result, stdoutTail, stderr].filter(Boolean).join(' · ');
+  const kind: CliFailure['kind'] = CONTEXT_RE.test(text) ? 'context' : QUOTA_RE.test(text) ? 'quota' : subtype === 'error_max_turns' ? 'llm' : 'env';
+  const parts = [
+    `claude exit ${input.code ?? '?'}`,
+    subtype ? `subtype=${subtype}` : null,
+    result ? `result=${result.slice(0, 400)}` : null,
+    stdoutTail ? `stdout=${stdoutTail}` : null,
+    stderr ? `stderr=${stderr}` : null,
+    input.promptChars ? `prompt=${input.promptChars} chars (~${Math.round(input.promptChars / 4)} tokens)` : null,
+    `kind=${kind}`,
+  ].filter(Boolean);
+  const error = new Error(parts.join(' · ')) as CliFailure;
+  error.kind = kind;
+  error.costUsd = env && typeof env.total_cost_usd === 'number' ? env.total_cost_usd : 0;
+  error.subtype = subtype;
+  error.exitCode = input.code;
+  return error;
+}
+
 export function parseBridgeReply(text: string): { content: string; tool_calls: ToolCall[] } | null {
   const raw = String(text ?? '');
   const start = raw.indexOf('{');
@@ -236,6 +267,10 @@ export class ClaudeCliAdapter implements ExecutorAdapter {
   }
 
   private runOnce(prompt: string, timeoutMs?: number): Promise<CliReply> {
+    return this.runOnceRaw(prompt, timeoutMs);
+  }
+
+  private runOnceRaw(prompt: string, timeoutMs?: number): Promise<CliReply> {
     const executable = this.executable();
     if (!executable) return Promise.reject(new Error(`${this.command} não encontrado no PATH`));
     const model = this.options.model ? ['--model', this.options.model] : [];
@@ -266,14 +301,13 @@ export class ClaudeCliAdapter implements ExecutorAdapter {
       });
       proc.on('close', (code) => {
         clearTimeout(timer);
-        if (code !== 0) return reject(new Error(`claude exit ${code}: ${err.slice(0, 400)}`));
-        let envelope: { result?: unknown; total_cost_usd?: unknown; is_error?: unknown };
-        try {
-          envelope = JSON.parse(out);
-        } catch {
-          return reject(new Error(`claude devolveu saída não-JSON: ${out.slice(0, 400)}`));
+        // OXB-148: `claude -p --output-format json` puts the real reason in STDOUT (is_error, subtype, result), also on a
+        // non-zero exit with an empty stderr. F2's T1 failed 3/3 as "claude exit 1: " with nothing to act on.
+        let envelope: { result?: unknown; total_cost_usd?: unknown; is_error?: unknown; subtype?: unknown } | null = null;
+        try { envelope = JSON.parse(out); } catch { envelope = null; }
+        if (code !== 0 || !envelope || envelope.is_error) {
+          return reject(cliFailure({ code, stdout: out, stderr: err, envelope, promptChars: prompt.length }));
         }
-        if (envelope.is_error) return reject(new Error(`claude reportou erro: ${String(envelope.result ?? '').slice(0, 400)}`));
         resolve({
           text: String(envelope.result ?? ''),
           costUsd: typeof envelope.total_cost_usd === 'number' ? envelope.total_cost_usd : 0,

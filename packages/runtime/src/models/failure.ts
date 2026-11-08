@@ -10,4 +10,6 @@ export type FailureClass =
   | 'evidence_missing' // required evidence was not collected
   | 'verify'           // inline verification command failed after execution
   | 'llm'              // LLM exhausted turn budget without calling finish_task
+  | 'context'          // OXB-148: the prompt does not fit the model window — retrying the same prompt cannot help
+  | 'quota'            // OXB-148: provider usage limit / rate limit — retrying now only burns attempts
   | null;              // success — no failure

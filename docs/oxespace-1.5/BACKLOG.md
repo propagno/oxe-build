@@ -909,3 +909,17 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
     - Smoke no oxespace-150 (F1, origin/main): 19 commits de código, 7 com equivalente, 12 sem e 21 imports de teste ignorados.
   - Depois, a fase é iniciada na worktree nova. O `program adopt` agora também traz o dossiê da fase adotada.
   - Teste: `tests/oxe-1212-program-fork.test.cjs`.
+
+## OXB-148: o adaptador do `claude -p` descartava o motivo da falha
+
+- **Status:** defeito 1 resolvido (1.21.2). Bloqueio da F2 em 08/11: a run oxe-run-mw83vtdy-8uzesq teve a T1 falhando 3 de 3 vezes como `env`, com a mensagem `claude exit 1: ` e o stderr vazio. As 24 tarefas seguintes ficaram bloqueadas.
+  - **Causa da opacidade:** com saída não zero, o adaptador olhava só o stderr. O `claude -p --output-format json` põe o motivo no STDOUT (`is_error`, `subtype`, `result`), inclusive com exit 1.
+  - **Agora:** o erro carrega `claude exit N · subtype=… · result=… · stdout=…/stderr=… · prompt=N chars (~tokens) · kind=…` e o custo já gasto, que entra no uso da tentativa.
+  - **Classificação:**
+    - prompt grande demais vira `context`;
+    - limite de uso, cota ou rate limit vira `quota`;
+    - `error_max_turns` vira `llm`;
+    - o resto continua `env`.
+    - O scheduler não repete às cegas uma tentativa `context` ou `quota`, porque falharia igual.
+  - **Pendente (defeito 2):** se o motivo for o tamanho do prompt, ainda faltam `execute --print-prompt` com estimativa de tokens, teto para o conteúdo de arquivo embutido e o histórico de leituras no loop de ferramentas, e uma falha rápida no preflight. O contexto inicial do nó já tem teto de 8.000 caracteres de arquivos; o que cresce é a transcrição com os resultados das leituras.
+  - Teste: `packages/runtime/tests/executor-adapters.test.ts`.

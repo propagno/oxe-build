@@ -168,7 +168,12 @@ export class LlmTaskExecutor implements TaskExecutor {
           timeoutMs: this.provider.timeoutMs,
         });
       } catch (err) {
-        return done({ success: false, failure_class: 'env', evidence: evidencePaths, output: String(err) });
+        // OXB-148: the adapter classifies its failure (context / quota / llm / env) and reports what it already cost.
+        const kind = (err as { kind?: unknown }).kind;
+        const spent = (err as { costUsd?: unknown }).costUsd;
+        if (typeof spent === 'number' && spent > 0) usage.cost_usd = (usage.cost_usd ?? 0) + spent;
+        const failureClass = kind === 'context' || kind === 'quota' || kind === 'llm' ? kind : 'env';
+        return done({ success: false, failure_class: failureClass, evidence: evidencePaths, output: String((err as Error)?.message ?? err) });
       }
       usage.turns += 1;
       if (typeof response.usage?.cost_usd === 'number') usage.cost_usd = (usage.cost_usd ?? 0) + response.usage.cost_usd;

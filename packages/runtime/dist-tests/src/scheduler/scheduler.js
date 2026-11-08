@@ -651,6 +651,9 @@ class Scheduler {
                 lastError = lastResult.output || (lastResult.failure_class ?? 'unknown error');
                 if (lastResult.failure_class === 'policy')
                     break;
+                // OXB-148: a prompt that does not fit, or a provider usage limit, fails the same way on a blind retry.
+                if (lastResult.failure_class === 'context' || lastResult.failure_class === 'quota')
+                    break;
                 if (attempt < maxAttempts) {
                     const retryBlocked = this.consumeRetryQuota(ctx);
                     if (retryBlocked) {
