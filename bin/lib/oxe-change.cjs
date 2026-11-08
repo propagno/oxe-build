@@ -79,7 +79,9 @@ function routeFor(cr, impacted) {
     case 'spec_gap':
       return [
         `emendar a SPEC: ${cr.criteria.map((a) => `${a} → v${cr.amend_to || 2}`).join(', ')} (motivo: ${cr.summary})`,
-        `reescrever o teste de aceite com "version": ${cr.amend_to || 2} e "resolves": ["${cr.id}"]; os de versão anterior ficam stale no plan lint`,
+        cr.amendment === 'additive'
+          ? `adicionar um teste de aceite novo com "version": ${cr.amend_to || 2} e "resolves": ["${cr.id}"]; a emenda é aditiva, os testes anteriores continuam valendo`
+          : `reescrever o teste de aceite com "version": ${cr.amend_to || 2} e "resolves": ["${cr.id}"]; os de versão anterior ficam stale no plan lint`,
         `replan em modo merge das tarefas ${impacted.join(', ') || '(nenhuma ligada)'}`,
       ];
     case 'constraint':
@@ -122,6 +124,9 @@ function recordChange(input) {
     at: new Date().toISOString(),
     status: 'open',
     amend_to: cls === 'spec_gap' ? Number(input.amendTo) || 2 : null,
+    // OXB-062: an additive amendment only adds to the criterion (the earlier tests stay valid); a changing one
+    // rewrites it (the earlier tests go stale).
+    amendment: cls === 'spec_gap' ? (input.additive ? 'additive' : 'changing') : null,
     evidence: input.evidence || null,
     ...(input.gate ? { gate: String(input.gate) } : {}),
   };
@@ -182,6 +187,29 @@ function reconcileChanges(programDir, phaseId, plan, checkResults) {
   return { resolved, open };
 }
 
+/**
+ * OXB-062: per criterion, the version a new acceptance test must carry (`required`, the latest amendment) and the
+ * version below which the earlier tests are stale (`staleBelow`, the latest CHANGING amendment; 1 when every
+ * amendment was additive, so nothing goes stale).
+ * @returns {Map<string, { required: number, staleBelow: number, additive: boolean }>}
+ */
+function amendmentRequirements(programDir) {
+  const out = new Map();
+  for (const cr of listChanges(programDir)) {
+    if (cr.class !== 'spec_gap') continue;
+    const version = cr.amend_to || 2;
+    const additive = cr.amendment === 'additive';
+    for (const a of cr.criteria || []) {
+      const cur = out.get(a) || { required: 1, staleBelow: 1, additive: true };
+      cur.required = Math.max(cur.required, version);
+      if (!additive) cur.staleBelow = Math.max(cur.staleBelow, version);
+      cur.additive = cur.staleBelow < cur.required;
+      out.set(a, cur);
+    }
+  }
+  return out;
+}
+
 /** Emendas de SPEC (spec_gap): versão mínima exigida por critério. */
 function requiredVersions(programDir) {
   const out = new Map();
@@ -227,4 +255,4 @@ function checkPolicyRules(projectRoot, rules, files) {
   return violations;
 }
 
-module.exports = { CLASSES, listChanges, recordChange, setChangeStatus, reconcileChanges, requiredVersions, checkPolicyRules, impactedTasks, changesFile };
+module.exports = { CLASSES, listChanges, recordChange, setChangeStatus, reconcileChanges, requiredVersions, amendmentRequirements, checkPolicyRules, impactedTasks, changesFile };

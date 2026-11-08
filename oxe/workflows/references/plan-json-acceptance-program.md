@@ -132,6 +132,7 @@ Num repositório com suíte própria (typecheck, lint, testes de governança com
 
 - **O grafo é projeção:** o `runtime execute` recompila sozinho quando o PLAN.json, o PLAN.md, a SPEC ou o pack mudaram desde o último compile. Tarefas `done` nunca são refeitas.
   - Para refazer uma tarefa, **reabra-a**: um CR `defect`/`spec_gap` (`runtime feedback`) reabre só a tarefa que fecha o critério, ou as que `--tasks T7[,T8]` nomear. As outras impactadas aparecem como "impactadas, não reabertas", e uma tarefa entregue por fora (`external_delivery`, `verify_only`, `blocked_by`) nunca é reaberta. `oxe-cc plan reopen Tn` reabre à mão.
+  - Uma emenda de critério (`spec_gap`) é `changing` por padrão: todo teste de aceite de versão anterior fica stale. Com `--additive`, a emenda só acrescenta ao critério: os testes anteriores continuam valendo, e só o teste novo leva `"version"` e `"resolves"`.
 - **A verificação do critério roda na tarefa que o completa:** o "Como verificar" de um critério com várias tarefas roda só no verify da última delas. Se várias terminam em paralelo, a verificação fica para o verify da fase.
   - Não ponha o teste de aceite do critério no `verify.commands` de uma tarefa intermediária: ele só pode passar quando o critério inteiro estiver pronto. O `plan lint` avisa.
 - **Trabalho que chega por outro caminho:**

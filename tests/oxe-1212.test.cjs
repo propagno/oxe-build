@@ -296,32 +296,81 @@ describe('OXB-056: the CLI runs without npm install', () => {
 });
 
 describe('OXB-061: feedback reopens only the closer task (or --tasks), never an external delivery', () => {
-  // CR-15 (criterion A8): T4 had been delivered to main by an external PR (#605) and the CR did not touch it.
+  // CR-15 (criterion A8): T4 was an ordinary task, built by the executor and merged by its PR #605; the CR did not
+  // touch it. T5 stands for a task that really was delivered by another path (external_delivery).
   const plan = () => ({
     schema_version: 1,
     tasks: [
-      { id: 'T4', title: 'entregue por fora', wave: 1, kind: 'external_delivery', blocked_by: ['propagno/oxespace#605'], files: [], acceptance: ['A1'], done: true },
+      { id: 'T4', title: 'código comum, PR #605', wave: 1, files: ['src/t4.js'], acceptance: ['A1'], done: true, done_commit: 'ccc' },
+      { id: 'T5', title: 'entregue por fora', wave: 1, kind: 'external_delivery', blocked_by: ['propagno/oxespace#700'], files: [], acceptance: ['A1'], done: true },
       { id: 'T6', title: 'base', wave: 1, files: ['src/base.js'], acceptance: ['A1'], done: true, done_commit: 'aaa' },
-      { id: 'T7', title: 'fecha A1', wave: 2, files: ['src/a1.js'], acceptance: ['A1'], dependsOn: ['T4', 'T6'], done: true, done_commit: 'bbb' },
+      { id: 'T7', title: 'fecha A1', wave: 2, files: ['src/a1.js'], acceptance: ['A1'], dependsOn: ['T4', 'T5', 'T6'], done: true, done_commit: 'bbb' },
     ],
   });
   const doneOf = (dir) => Object.fromEntries(JSON.parse(read(dir, '.oxe/PLAN.json')).tasks.map((t) => [t.id, t.done]));
 
-  it('without --tasks: only the closer (T7); T6 listed as impacted, T4 never reopened', () => {
+  it('without --tasks: only the closer (T7); T4 and T6 listed as impacted; the external T5 never reopened', () => {
     const dir = project({ plan: plan() });
     const out = op.runtimeFeedback(dir, null, { class: 'defect', summary: 'a tinta sancionada do CR-15 falta', criteria: 'A1', by: 'review' });
     assert.deepEqual(out.reopened_tasks, ['T7']);
-    assert.deepEqual(out.impacted_not_reopened, ['T6']);
-    assert.deepEqual(out.external_not_reopened, ['T4']);
-    assert.deepEqual(doneOf(dir), { T4: true, T6: true, T7: false });
+    assert.deepEqual(out.impacted_not_reopened, ['T4', 'T6']);
+    assert.deepEqual(out.external_not_reopened, ['T5']);
+    assert.deepEqual(doneOf(dir), { T4: true, T5: true, T6: true, T7: false });
   });
 
-  it('--tasks names what to reopen; an external one is still skipped and an unknown id is reported', () => {
+  it('--tasks T4 reopens T4 (explicit, not external); an external one is still skipped; an unknown id is reported', () => {
     const dir = project({ plan: plan() });
-    const out = op.runtimeFeedback(dir, null, { class: 'defect', summary: 'a base de A1 está errada', criteria: 'A1', by: 'review', tasks: 'T6,T4,T99' });
-    assert.deepEqual(out.reopened_tasks, ['T6']);
-    assert.deepEqual(out.external_not_reopened, ['T4']);
+    const out = op.runtimeFeedback(dir, null, { class: 'defect', summary: 'a base de A1 está errada', criteria: 'A1', by: 'review', tasks: 'T4,T5,T99' });
+    assert.deepEqual(out.reopened_tasks, ['T4']);
+    assert.deepEqual(out.external_not_reopened, ['T5']);
     assert.deepEqual(out.unknown_tasks, ['T99']);
-    assert.deepEqual(doneOf(dir), { T4: true, T6: false, T7: true });
+    assert.deepEqual(doneOf(dir), { T4: false, T5: true, T6: true, T7: true });
+  });
+});
+
+describe('OXB-062: an additive amendment keeps the earlier acceptance tests valid', () => {
+  const change = require('../bin/lib/oxe-change.cjs');
+  const planJson = require('../bin/lib/oxe-plan-json.cjs');
+  const doc = (tests) => ({
+    schema_version: 1,
+    tasks: [{ id: 'T1', title: 'x', wave: 1, acceptance: ['A8'], verify: { commands: ['x'] } }],
+    acceptance_tests: tests,
+  });
+  const old = [1, 2, 3, 4].map((n) => ({ criterion: 'A8', files: [`a8-${n}.test.js`], command: `node --test a8-${n}.test.js` }));
+  const lint = (programDir, tests) => planJson.lintPlan({ plan: planJson.planJsonToParsedPlan(doc(tests)), amendments: change.amendmentRequirements(programDir) }).errors.join('\n');
+  const programDir = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-amend-')); dirs.push(d); return d; };
+
+  it('additive: the four A8 v1 tests stay valid; only the missing new test is an error', () => {
+    const dir = programDir();
+    const r = change.recordChange({ programDir: dir, program: null, plan: { tasks: [] }, class: 'spec_gap', summary: 'A8 ganha a tinta sancionada do CR-15', criteria: 'A8', amendTo: 2, additive: true });
+    assert.equal(r.cr.amendment, 'additive');
+    assert.match(r.route.join('\n'), /aditiva, os testes anteriores continuam valendo/);
+    assert.match(lint(dir, old), /A8@v2: emenda aditiva sem teste novo/);
+    const withNew = [...old, { criterion: 'A8', files: ['a8-tint.test.js'], command: 'node --test a8-tint.test.js', version: 2, resolves: [r.cr.id] }];
+    assert.doesNotMatch(lint(dir, withNew), /stale|A8@v2/);
+  });
+
+  it('changing (the default): every earlier test is stale, as before', () => {
+    const dir = programDir();
+    const r = change.recordChange({ programDir: dir, program: null, plan: { tasks: [] }, class: 'spec_gap', summary: 'A8 muda o comportamento da tinta', criteria: 'A8', amendTo: 2 });
+    assert.equal(r.cr.amendment, 'changing');
+    assert.match(lint(dir, old), /A8: teste de aceite v1 está stale — a SPEC foi emendada para v2/);
+    const withNew = [...old, { criterion: 'A8', files: ['a8-v2.test.js'], command: 'node --test a8-v2.test.js', version: 2, resolves: [r.cr.id] }];
+    const errors = lint(dir, withNew);
+    assert.equal((errors.match(/está stale/g) || []).length, 4, errors);
+  });
+
+  it('an additive amendment after a changing one: only tests below the changing version are stale', () => {
+    const dir = programDir();
+    change.recordChange({ programDir: dir, program: null, plan: { tasks: [] }, class: 'spec_gap', summary: 'A8 muda o comportamento', criteria: 'A8', amendTo: 2 });
+    change.recordChange({ programDir: dir, program: null, plan: { tasks: [] }, class: 'spec_gap', summary: 'A8 ganha mais um caso', criteria: 'A8', amendTo: 3, additive: true });
+    const req = change.amendmentRequirements(dir).get('A8');
+    assert.deepEqual([req.required, req.staleBelow], [3, 2]);
+    const tests = [
+      { criterion: 'A8', files: ['v2.test.js'], command: 'node --test v2.test.js', version: 2 },
+      { criterion: 'A8', files: ['v3.test.js'], command: 'node --test v3.test.js', version: 3 },
+    ];
+    assert.doesNotMatch(lint(dir, tests), /stale/);
+    assert.match(lint(dir, [{ criterion: 'A8', files: ['v1.test.js'], command: 'node --test v1.test.js' }, ...tests]), /v1 \(v1\.test\.js\) está stale/);
   });
 });

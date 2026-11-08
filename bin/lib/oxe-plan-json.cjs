@@ -326,11 +326,26 @@ function lintPlan(input) {
     if (!verbose) warnings.push(`teste de aceite ${entry.criterion}: 'proves' exige saída com nomes de teste — use um reporter verbose (ex.: vitest --reporter=verbose)`);
   }
   // Emenda de SPEC (CR spec_gap): teste de aceite de versão anterior está stale até ser reescrito.
-  const required = input.requiredVersions instanceof Map ? input.requiredVersions : new Map();
-  for (const [criterion, version] of required) {
-    const entry = acceptanceTests.find((a) => a.criterion === criterion);
-    if (!entry) errors.push(`${criterion}@v${version}: emenda sem teste de aceite (escreva-o com "version": ${version})`);
-    else if ((entry.version || 1) < version) errors.push(`${criterion}: teste de aceite v${entry.version || 1} está stale — a SPEC foi emendada para v${version}`);
+  // OXB-062: `amendments` tells an additive amendment (earlier tests stay valid, one new test carries the version)
+  // from a changing one (every earlier test is stale). Plain `requiredVersions` means changing.
+  const amendments = input.amendments instanceof Map
+    ? input.amendments
+    : new Map([...(input.requiredVersions instanceof Map ? input.requiredVersions : new Map())].map(([c, v]) => [c, { required: v, staleBelow: v }]));
+  for (const [criterion, req] of amendments) {
+    const entries = acceptanceTests.filter((a) => a.criterion === criterion);
+    if (!entries.some((e) => (e.version || 1) >= req.required)) {
+      errors.push(entries.length && req.staleBelow < req.required
+        ? `${criterion}@v${req.required}: emenda aditiva sem teste novo (adicione um teste com "version": ${req.required}; os anteriores continuam valendo)`
+        : entries.length
+          ? `${criterion}: teste de aceite v${Math.max(...entries.map((e) => e.version || 1))} está stale — a SPEC foi emendada para v${req.required}`
+          : `${criterion}@v${req.required}: emenda sem teste de aceite (escreva-o com "version": ${req.required})`);
+    }
+    for (const e of entries) {
+      const v = e.version || 1;
+      if (v < req.staleBelow && entries.some((o) => (o.version || 1) >= req.required)) {
+        errors.push(`${criterion}: teste de aceite v${v}${e.files && e.files[0] ? ` (${e.files[0]})` : ''} está stale — a SPEC foi emendada para v${req.staleBelow}`);
+      }
+    }
   }
   const scopeAcceptance = phase && Array.isArray(phase.acceptance) && phase.acceptance.length ? phase.acceptance : [...covered];
   const untested = scopeAcceptance.filter((ref) => !testedCriteria.has(ref));

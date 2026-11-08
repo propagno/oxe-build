@@ -2473,7 +2473,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
   const maxTasksPerWave = Number(options.maxTasksPerWave || config.plan_max_tasks_per_wave || 0) || 0;
   const result = planJson.lintPlan({
     plan, spec, pack, phase, maxTasksPerWave, projectRoot,
-    requiredVersions: paths.programDir ? require('./oxe-change.cjs').requiredVersions(paths.programDir) : new Map(),
+    amendments: paths.programDir ? require('./oxe-change.cjs').amendmentRequirements(paths.programDir) : new Map(),
     requireAcceptanceTests: Boolean(options.requireAcceptanceTests || config.acceptance_tests_required),
   });
   if (spec) result.warnings.push(...lintPlanForCommonPitfalls(plan, spec, projectRoot, specText));
@@ -2798,7 +2798,7 @@ function runtimeFeedback(projectRoot, activeSession, options = {}) {
   const result = changeLib.recordChange({
     programDir, program, plan,
     class: options.class, summary: options.summary, criteria: options.criteria, by: options.by,
-    phase: options.phase, amendTo: options.amendTo, evidence: options.evidence,
+    phase: options.phase, amendTo: options.amendTo, evidence: options.evidence, additive: Boolean(options.additive),
   });
   if (result.reopened && result.program) programLib.writeProgram(programDir, result.program);
   // 1.21.1: a defect or spec_gap reopens tasks (done → open), so the next execute redoes exactly them.
