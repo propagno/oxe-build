@@ -422,3 +422,12 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
   - O limite por check no `runtime verify` vem de `--timeout-ms`, depois de config `verify_timeout_ms` e por fim do padrão de 10 min (antes, 60 s do runtime). Um teste de aceite pode declarar `timeout_ms` no PLAN.json.
   - Um check morto pelo timeout sai como `status: error` com `timed_out: true` e a mensagem "timeout: passou de Ns sem terminar — aumente verify_timeout_ms (config) ou o timeout_ms do teste de aceite", nunca como FAIL.
   - Teste: `tests/oxe-1212-verify-lock-timeout.test.cjs`.
+
+## OXB-073: `proof_not_executed` com todos os testes verdes (proves parafraseado)
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (rc.4, verify da F1): check-accept-a8 (cr15-selected-workspace-tint) e check-accept-a5 (cr10-cr14-f1-close) saíram como `proof_not_executed`, embora os arquivos passem 8/8 e 4/4.
+  - **Causa:** os `proves` do PLAN.json eram paráfrases dos títulos, não os nomes dos testes. Exemplo: "the selected-state ratchet (LIMIT_SELECTED) stays at 22 or lower, never raised" × o teste "the selected-state ratchet stays at 22 or lower (never raised)". O verify estava certo; o defeito era só aparecer no verify, sem os nomes reais.
+  - O `plan lint` compara cada `proves` com os títulos de `it`/`test` declarados nos arquivos do teste de aceite. Uma prova sem teste correspondente vira erro antes da execução, com a lista dos títulos declarados.
+  - O `proof_not_executed` do verify passou a listar os testes que passaram.
+  - Conferido (só leitura) no PLAN.json do oxespace-150: pega exatamente A8/cr15 e A5/cr10–14 (4 + 4 provas), e nenhuma das outras 11 entradas com `proves`.
+  - Teste: `tests/oxe-1212-verify-lock-timeout.test.cjs`.

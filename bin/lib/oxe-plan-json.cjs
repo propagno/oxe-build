@@ -106,6 +106,20 @@ function validatePlanJson(doc) {
   return errors;
 }
 
+/**
+ * OXB-073: test titles a JS/TS test file declares (`it`/`test` with a literal title, any `.only/.skip/.each` chain).
+ * Template literals with `${…}` are skipped (their title is only known at run time).
+ */
+function declaredTestTitles(text) {
+  const out = [];
+  const re = /\b(?:it|test)(?:\.\w+)*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
+  for (const m of String(text || '').matchAll(re)) {
+    if (m[1] === '`' && m[2].includes('${')) continue;
+    out.push(m[2].replace(/\\(['"`\\])/g, '$1'));
+  }
+  return out;
+}
+
 /** PLAN.json → mesmo formato de `sdk.parsePlan` (o graph compiler e o verify não mudam). */
 function planJsonToParsedPlan(doc) {
   const spikeLib = require('./oxe-spike.cjs');
@@ -326,6 +340,27 @@ function lintPlan(input) {
     if (!entry.proves || !entry.proves.length) continue;
     const verbose = /--reporter[= ]verbose|--verbose|--test-reporter[= ](tap|spec)|node\s+--test|\s-v\b|junit/i.test(entry.command);
     if (!verbose) warnings.push(`teste de aceite ${entry.criterion}: 'proves' exige saída com nomes de teste — use um reporter verbose (ex.: vitest --reporter=verbose)`);
+    // OXB-073: each `proves` must name a test the files DECLARE. Paraphrased proves ("ratchet (LIMIT_SELECTED) stays at
+    // 22 or lower, never raised" for the test "ratchet stays at 22 or lower (never raised)") can never be found among
+    // the passed tests: the verify said proof_not_executed although every test passed.
+    if (input.projectRoot) {
+      const declared = [];
+      for (const file of entry.files || []) {
+        let text = '';
+        try { text = fs.readFileSync(path.resolve(input.projectRoot, file), 'utf8'); } catch { continue; }
+        declared.push(...declaredTestTitles(text));
+      }
+      if (declared.length) {
+        const norm = (s) => String(s).toLowerCase().replace(/[›>]/g, ' ').replace(/\s+/g, ' ').trim();
+        const haystack = declared.map(norm);
+        for (const proof of entry.proves) {
+          const wanted = norm(String(proof).includes('›') ? String(proof).split('›').slice(1).join('›') : proof);
+          if (!haystack.some((name) => name.includes(wanted))) {
+            errors.push(`teste de aceite ${entry.id || entry.criterion}: proves "${proof}" não é o nome de nenhum teste declarado em ${entry.files.join(', ')} — use o nome exato (ou um trecho dele). Testes declarados: ${declared.slice(0, 8).map((n) => `"${n}"`).join('; ')}`);
+          }
+        }
+      }
+    }
   }
   // Emenda de SPEC (CR spec_gap): teste de aceite de versão anterior está stale até ser reescrito.
   // OXB-062: `amendments` tells an additive amendment (earlier tests stay valid, one new test carries the version)
@@ -439,6 +474,7 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
 }
 
 module.exports = {
+  declaredTestTitles,
   markPlanTaskOpen,
   criterionClosers,
   markPlanTaskDone,

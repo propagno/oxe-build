@@ -103,3 +103,40 @@ describe('OXB-072: a slow check is a timeout, not a FAIL, and its limit is confi
     assert.notEqual(ok.timed_out, true, 'the 10 min default covers a 4 s suite (the old 60 s default would too, but not Electron)');
   });
 });
+
+describe('OXB-073: proves must name declared tests; the verify names what did pass', () => {
+  const planJson = require('../bin/lib/oxe-plan-json.cjs');
+  const CR15 = [
+    "const { test } = require('node:test');",
+    "test('the selected-state ratchet stays at 22 or lower (never raised)', () => {});",
+    "test('the design lint itself knows the exception, scoped the same way (--ws tint on a [data-ws] selector)', () => {});",
+  ].join('\n') + '\n';
+
+  it('plan lint: a paraphrased proves is an error that lists the declared titles; an exact name or a fragment is fine', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-pv-'));
+    dirs.push(dir);
+    fs.mkdirSync(path.join(dir, 'test'));
+    fs.writeFileSync(path.join(dir, 'test', 'cr15.test.js'), CR15);
+    const lint = (proves) => planJson.lintPlan({
+      projectRoot: dir,
+      plan: planJson.planJsonToParsedPlan({ schema_version: 1, tasks: [{ id: 'T1', title: 'x', wave: 1, acceptance: ['A8'], verify: { commands: ['x'] } }], acceptance_tests: [{ criterion: 'A8', files: ['test/cr15.test.js'], command: 'node --test test/cr15.test.js', proves }] }),
+    }).errors.join('\n');
+    const bad = lint(['the selected-state ratchet (LIMIT_SELECTED) stays at 22 or lower, never raised']);
+    assert.match(bad, /proves "the selected-state ratchet \(LIMIT_SELECTED\).*" não é o nome de nenhum teste declarado/);
+    assert.match(bad, /Testes declarados: "the selected-state ratchet stays at 22 or lower \(never raised\)"/);
+    assert.doesNotMatch(lint(['the selected-state ratchet stays at 22 or lower (never raised)', 'design lint itself knows the exception']), /proves/);
+  });
+
+  it('runtime verify: proof_not_executed lists the tests that passed', async () => {
+    const plan = {
+      schema_version: 1,
+      tasks: [{ id: 'T1', title: 'tinta', wave: 1, files: ['src/tint.js'], acceptance: ['A8'], verify: { commands: ['node -e "process.exit(0)"'] } }],
+      acceptance_tests: [{ criterion: 'A8', files: ['test/cr15.test.js'], command: 'node --test test/cr15.test.js', proves: ['ratchet (LIMIT_SELECTED) stays at 22'] }],
+    };
+    const dir = project({ plan, files: { 'test/cr15.test.js': CR15 } });
+    await op.runRuntimeExecute(dir, null, { executor: writer(dir), skipPreflight: true });
+    await op.runRuntimeVerify(dir, null, { gates: false });
+    const a8 = checks(dir).find((c) => c.check_id === 'check-accept-a8');
+    assert.match(a8.error, /^proof_not_executed: ratchet \(LIMIT_SELECTED\) stays at 22 — testes que passaram: the selected-state ratchet stays at 22 or lower \(never raised\)/);
+  });
+});

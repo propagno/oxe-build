@@ -318,7 +318,9 @@ async function runCheck(check, cwd, timeoutMs = 60000) {
 ${stderr}`);
             if (missing.length > 0) {
                 status = 'fail';
-                error = `proof_not_executed: ${missing.join(' | ')}`;
+                // OXB-073: name what DID pass — a paraphrased `proves` looked like a test that never ran.
+                const passedNames = (0, test_report_parsers_1.extractTestResults)(`${stdout}\n${stderr}`).passed.slice(0, 8);
+                error = `proof_not_executed: ${missing.join(' | ')}${passedNames.length ? ` — testes que passaram: ${passedNames.join(' | ')} (proves precisa ser o nome, ou um trecho, de um deles)` : ''}`;
             }
         }
         return {
