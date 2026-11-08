@@ -6355,6 +6355,58 @@ async function main() {
     }
   }
 
+  // OXB-086: oxe-cc plan merge a.json b.json [--key rid] [--out .oxe/PLAN.json] [--force] [--json]
+  if (command === 'plan' && argv[0] === 'merge') {
+    const rest = argv.slice(1);
+    const files = [];
+    let key = 'rid';
+    let out = null;
+    let force = false;
+    let json = false;
+    for (let i = 0; i < rest.length; i += 1) {
+      const a = rest[i];
+      if (a === '--key' && rest[i + 1]) key = String(rest[++i]);
+      else if (a === '--out' && rest[i + 1]) out = path.resolve(rest[++i]);
+      else if (a === '--force') force = true;
+      else if (a === '--json') json = true;
+      else if (a.startsWith('-')) { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+      else files.push(path.resolve(a));
+    }
+    if (files.length < 2) { console.error(`${red}Use:${reset} oxe-cc plan merge backend.json frontend.json [--key rid] [--out .oxe/PLAN.json] [--force]`); process.exit(1); }
+    const mergeLib = require('./lib/oxe-plan-merge.cjs');
+    const planJsonLib = require('./lib/oxe-plan-json.cjs');
+    let result;
+    try {
+      result = mergeLib.mergeRolePlans(files.map((file) => ({ file, doc: mergeLib.readRolePlan(file) })), { key });
+    } catch (err) {
+      console.error(`${red}✗${reset} ${err.message}`);
+      process.exit(1);
+    }
+    const lintErrors = result.errors.length ? [] : planJsonLib.validatePlanJson(result.plan);
+    const errors = [...result.errors, ...lintErrors];
+    const c = useAnsiColors();
+    if (!errors.length && out) {
+      if (fs.existsSync(out) && !force) { console.error(`${red}✗${reset} ${path.relative(process.cwd(), out) || out} já existe — use --force para substituir`); process.exit(1); }
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.writeFileSync(out, `${JSON.stringify(result.plan, null, 2)}\n`, 'utf8');
+    }
+    if (json || !out) {
+      console.log(JSON.stringify(json ? { oxePlanMergeSchema: 1, ok: errors.length === 0, errors, warnings: result.warnings, map: result.map, plan: result.plan } : result.plan, null, 2));
+      for (const w of json ? [] : result.warnings) console.error(`  ${c ? yellow : ''}!${c ? reset : ''} ${w}`);
+      for (const e of json ? [] : errors) console.error(`  ${c ? red : ''}✗${c ? reset : ''} ${e}`);
+    } else {
+      for (const w of result.warnings) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${w}`);
+      for (const e of errors) console.log(`  ${c ? red : ''}✗${c ? reset : ''} ${e}`);
+      if (!errors.length) {
+        const waves = Math.max(...result.plan.tasks.map((t) => t.wave));
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${result.plan.tasks.length} tarefas em ${waves} onda(s) → ${path.relative(process.cwd(), out) || out}`);
+        console.log(`  ${Object.entries(result.map).map(([k, id]) => `${k}→${id}`).join(' · ')}`);
+        console.log(`  Próximo: oxe-cc plan lint`);
+      }
+    }
+    process.exit(errors.length ? 1 : 0);
+  }
+
   if (command === 'plan' && argv[0] === 'reopen') {
     // oxe-cc plan reopen T<n> [--dir <pasta>]
     const rest = argv.slice(1);

@@ -81,7 +81,14 @@ function validatePlanJson(doc) {
     if (!Number.isInteger(task.wave) || task.wave < 1) errors.push(`${at}.wave: inteiro ≥ 1`);
     if (task.depends_on != null && !isStringArray(task.depends_on, TASK_ID_RE)) errors.push(`${at}.depends_on: lista de ids T<n>`);
     if (task.files != null && !isStringArray(task.files)) errors.push(`${at}.files: lista de caminhos`);
-    if (task.acceptance != null && !isStringArray(task.acceptance, ACCEPT_RE)) errors.push(`${at}.acceptance: lista de A<n>`);
+    // OXB-086: name the offending value — FRONTEND's prose criteria failed with only "lista de A<n>".
+    if (task.acceptance != null) {
+      if (!Array.isArray(task.acceptance)) errors.push(`${at}.acceptance: lista de ids A<n> (ex.: ["A12"]), não ${typeof task.acceptance === 'string' ? `o texto "${task.acceptance.slice(0, 60)}"` : typeof task.acceptance}`);
+      else {
+        const bad = task.acceptance.filter((v) => typeof v !== 'string' || !ACCEPT_RE.test(v));
+        if (bad.length) errors.push(`${at}.acceptance: ${bad.map((v) => JSON.stringify(typeof v === 'string' ? v.slice(0, 60) : v)).join(', ')} não ${bad.length > 1 ? 'são ids' : 'é id'} A<n> — critérios são ids A da SPEC; a prosa vai em "notes"`);
+      }
+    }
     if (task.decisions != null && !isStringArray(task.decisions, DECISION_RE)) errors.push(`${at}.decisions: lista de D-<n>`);
     if (task.complexity != null && !COMPLEXITY.has(task.complexity)) errors.push(`${at}.complexity: XS|S|M|L|XL`);
     if (task.done != null && typeof task.done !== 'boolean') errors.push(`${at}.done: boolean`);
@@ -119,7 +126,7 @@ function validatePlanJson(doc) {
       if (entry.criterion == null && !(hasId && Array.isArray(entry.resolves) && entry.resolves.length)) errors.push(`${at}.criterion: A<n> (ou "id" + "resolves" para uma prova transversal)`);
       if (!isStringArray(entry.files) || entry.files.length === 0) errors.push(`${at}.files: lista com ao menos 1 caminho`);
       if (typeof entry.command !== 'string' || !entry.command.trim()) errors.push(`${at}.command: obrigatório`);
-      if (entry.proves != null && !isStringArray(entry.proves)) errors.push(`${at}.proves: lista de nomes de teste`);
+      if (entry.proves != null && !isStringArray(entry.proves)) errors.push(`${at}.proves: lista de nomes de teste${entry.proves && typeof entry.proves === 'object' && !Array.isArray(entry.proves) ? ' — o formato { arquivo: [títulos] } é de plano por papel: junte com oxe-cc plan merge' : ''}`);
       if (entry.resolves != null && !isStringArray(entry.resolves, /^CR-\d+$/)) errors.push(`${at}.resolves: lista de CR-NN`);
       if (entry.version != null && !(Number.isInteger(entry.version) && entry.version >= 1)) errors.push(`${at}.version: inteiro ≥ 1`);
     });
@@ -518,6 +525,7 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
 }
 
 module.exports = {
+  ACCEPT_RE,
   externalRefs,
   taskPreconditions,
   preconditionProblem,

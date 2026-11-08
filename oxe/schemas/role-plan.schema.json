@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oxe-cc.dev/schemas/role-plan.schema.json",
+  "title": "Plano por papel (OXB-086)",
+  "description": "O plano de um papel (BACKEND, FRONTEND, …) para o trabalho de uma fase. `oxe-cc plan merge a.json b.json --key rid` junta os planos num PLAN.json: tarefas com a mesma chave viram uma só (união de files, verify, acceptance e notes), depends_on por chave, ondas pela profundidade das dependências e ids T1…Tn.",
+  "type": "object",
+  "required": ["tasks"],
+  "additionalProperties": true,
+  "properties": {
+    "role": { "type": "string", "description": "O papel que escreveu o plano (vira prefixo nas notes). Padrão: o nome do arquivo." },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["rid"],
+        "additionalProperties": true,
+        "properties": {
+          "rid": { "type": "string", "description": "A chave que junta as tarefas dos papéis (ex.: \"R5\"). Com --key, o nome do campo muda." },
+          "id": { "type": "string", "description": "Id próprio do papel (ex.: \"FE-R5\"), só para rastreio; o PLAN.json recebe T<n>." },
+          "title": { "type": "string" },
+          "files": { "type": "array", "items": { "type": "string" } },
+          "verify": {
+            "oneOf": [
+              { "type": "object", "properties": { "commands": { "type": "array", "items": { "type": "string" } } } },
+              { "type": "array", "items": { "type": "string" } },
+              { "type": "string" }
+            ]
+          },
+          "depends_on": { "type": "array", "items": { "type": "string" }, "description": "Chaves (rid) de outras tarefas, de qualquer papel." },
+          "acceptance": { "type": "array", "items": { "type": "string", "pattern": "^A\\d+$" }, "description": "Ids A<n> da SPEC. Prosa vai em notes." },
+          "criteria": { "type": "array", "items": { "type": "string" }, "description": "Sinônimo de acceptance. Valores que não são A<n> vão para notes (com aviso)." },
+          "proves": {
+            "type": "object",
+            "additionalProperties": { "type": "array", "items": { "type": "string" } },
+            "description": "{ \"<arquivo de teste congelado>\": [\"título do teste\"] }. É juntado na entrada de acceptance_tests que congela o arquivo; sem ela, cria uma quando a tarefa tem um só critério e um verify que cita o arquivo."
+          },
+          "notes": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
+          "kind": { "enum": ["code", "spike", "verify_only", "external_delivery"] },
+          "blocked_by": { "type": "array" },
+          "complexity": { "enum": ["XS", "S", "M", "L", "XL"] }
+        }
+      }
+    },
+    "acceptance_tests": { "type": "array", "description": "Como no PLAN.json (criterion, files, command, proves[]). Entradas iguais (critério + arquivos + comando) de papéis diferentes viram uma, com a união dos proves." }
+  }
+}

@@ -531,9 +531,17 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-086: juntar planos por papel
 
-- **Status:** aberto. Registrado pelo TECH LEAD em 08/11: BACKEND e FRONTEND escreveram cada um um arquivo de tarefas para as mesmas remoções (rid R5, ids R5 e FE-R5). O merge precisou de um script de 150 linhas (união de arquivos e verify, deps por rid, ondas por profundidade, `proves` em dois formatos).
-  - Duas armadilhas de schema: `criteria` em prosa reprovava no "lista de A<n>" sem dica, e `proves` em forma de dicionário.
-- **Proposta:** `oxe-cc plan merge a.json b.json --key rid` com um schema de plano por papel documentado. O erro do lint nomeia o valor e diz "criteria são ids A; a prosa vai em notes".
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11: BACKEND e FRONTEND escreveram cada um um arquivo de tarefas para as mesmas remoções (rid R5, ids R5 e FE-R5). O merge precisou de um script de 150 linhas, e bateu em `criteria` em prosa e em `proves` em forma de dicionário.
+  - `oxe-cc plan merge backend.json frontend.json [--key rid] [--out .oxe/PLAN.json] [--force] [--json]`. Sem `--out`, imprime o PLAN.json. Com `--out`, não sobrescreve sem `--force`.
+    - Tarefas com a mesma chave viram uma: união de files, verify (aceito como `{commands}`, lista ou texto), acceptance e notes (com o papel como prefixo). Os títulos diferentes vão para as notes, e os papéis ficam em `roles`.
+    - `depends_on` usa a chave e vira T ids. A onda é a profundidade na cadeia de dependências, e os ids T1…Tn seguem a onda e depois a ordem de aparição.
+    - Critério em prosa (`criteria` ou `acceptance` que não é A<n>) vai para as notes, com aviso.
+    - `proves` em dicionário (`{ arquivo: [títulos] }`) entra na entrada de `acceptance_tests` que congela o arquivo. Se ela não existe, uma nova é criada quando a tarefa tem um só critério e um verify que cita o arquivo. Senão, é erro com a causa.
+    - Entradas iguais de `acceptance_tests` (critério + arquivos + comando) viram uma, com a união dos proves.
+    - Chave ausente, dependência inexistente e ciclo são erros com o nome do arquivo e da tarefa. O resultado passa pelo schema do PLAN.json antes de ser gravado.
+  - O schema do plano por papel está em `oxe/schemas/role-plan.schema.json`.
+  - O lint do PLAN.json agora nomeia o valor ruim: `"a tela some do menu" não é id A<n> — critérios são ids A da SPEC; a prosa vai em "notes"`. Para `proves` em dicionário, a dica aponta o `plan merge`.
+  - Teste: `tests/oxe-1212-plan-merge.test.cjs`.
 
 ## OXB-087: acrescentar tarefas a uma fase depois que o execute começou
 
