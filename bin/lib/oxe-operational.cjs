@@ -3645,6 +3645,101 @@ function runtimeProgramCriterionMove(projectRoot, activeSession, options = {}) {
   return { criterion: id, from, to, plan_removed_tasks: removal.planChange ? removal.planChange.removedTasks : [], plan_removed_tests: removal.planChange ? removal.planChange.removedTests : [], moved_change_records: moved, warnings: [...removal.warnings, ...addition.warnings], export: autoExportProgram(projectRoot, activeSession) };
 }
 
+/**
+ * OXB-087: `oxe-cc plan append --from extra.json --by <papel> --reason "…"`: adds a batch of tasks to the active
+ * phase's PLAN.json, also while an execute is running. The batch's own ids are renumbered after the plan's last T<n>
+ * (its internal depends_on follow; a depends_on that is not a batch id must be a task of the plan); its waves are
+ * shifted after the plan's last wave, so they run after the tasks in flight. Its acceptance_tests are appended. The
+ * merged plan must pass the same `plan lint` (preflight off) or nothing is written. The running execute keeps its
+ * graph; the next `runtime execute` recompiles the same run (done tasks skipped) and runs the batch. The phase closes
+ * only when every task of every batch is done (PLAN.json is the source of truth, OXB-059).
+ */
+function runtimePlanAppend(projectRoot, activeSession, options = {}) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const { by, reason } = requireEditReason({ by: options.by, reason: options.reason });
+  if (!options.from) throw new Error('informe o lote: oxe-cc plan append --from extra.json --by <papel> --reason "…"');
+  const fromFile = path.resolve(projectRoot, String(options.from));
+  let extra;
+  try { extra = JSON.parse(fs.readFileSync(fromFile, 'utf8')); } catch (err) { throw new Error(`--from ${options.from}: ${err.code === 'ENOENT' ? 'arquivo não encontrado' : `JSON inválido (${err.message})`}`); }
+  const batchTasks = Array.isArray(extra) ? extra : Array.isArray(extra && extra.tasks) ? extra.tasks : null;
+  if (!batchTasks || !batchTasks.length) throw new Error(`--from ${options.from}: sem tarefas ("tasks": [ … ])`);
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('sem PLAN.json na fase ativa — o primeiro lote é o plano (oxe-cc plan merge / /oxe-plan)');
+  return planJsonLib.withPlanLock(jsonPath, () => {
+    const originalText = fs.readFileSync(jsonPath, 'utf8');
+    const doc = JSON.parse(originalText);
+    const tasks = Array.isArray(doc.tasks) ? doc.tasks : [];
+    const existing = new Set(tasks.map((t) => t && t.id));
+    const num = (id) => Number(String(id || '').replace(/^T/, '')) || 0;
+    let nextId = Math.max(0, ...tasks.map((t) => num(t && t.id))) + 1;
+    const lastWave = Math.max(0, ...tasks.map((t) => (t && Number.isInteger(t.wave) ? t.wave : 0)));
+    const minBatchWave = Math.min(...batchTasks.map((t) => (Number.isInteger(t && t.wave) && t.wave >= 1 ? t.wave : 1)));
+    const idMap = new Map();
+    batchTasks.forEach((t, i) => {
+      const own = t && t.id != null ? String(t.id) : `#${i}`;
+      if (idMap.has(own)) throw new Error(`lote: id repetido ${own}`);
+      idMap.set(own, `T${nextId++}`);
+    });
+    const errors = [];
+    const appended = batchTasks.map((t, i) => {
+      const own = t && t.id != null ? String(t.id) : `#${i}`;
+      const deps = (Array.isArray(t.depends_on) ? t.depends_on : []).map(String).map((d) => {
+        if (idMap.has(d)) return idMap.get(d);
+        if (existing.has(d)) return d;
+        errors.push(`lote ${own}: depends_on "${d}" não é do lote nem do plano`);
+        return d;
+      });
+      const wave = lastWave + ((Number.isInteger(t.wave) && t.wave >= 1 ? t.wave : 1) - minBatchWave) + 1;
+      const { id: _drop, done: _d, done_at: _da, done_commit: _dc, ...rest } = t;
+      return { ...rest, id: idMap.get(own), wave, ...(deps.length ? { depends_on: deps } : {}), batch: (doc.batches ? doc.batches.length : 1) + 1, ...(own !== idMap.get(own) && t.id != null ? { batch_ref: own } : {}) };
+    });
+    if (errors.length) throw new Error(errors.join('\n'));
+    const batchNo = (doc.batches ? doc.batches.length : 1) + 1;
+    const next = {
+      ...doc,
+      tasks: [...tasks, ...appended],
+      ...(Array.isArray(extra.acceptance_tests) && extra.acceptance_tests.length ? { acceptance_tests: [...(doc.acceptance_tests || []), ...extra.acceptance_tests] } : {}),
+      batches: [
+        ...(doc.batches || [{ batch: 1, tasks: tasks.map((t) => t.id), at: null, from: 'PLAN.json' }]),
+        { batch: batchNo, tasks: appended.map((t) => t.id), from: path.relative(projectRoot, fromFile).replace(/\\/g, '/'), by, reason, at: new Date().toISOString() },
+      ],
+    };
+    const schemaErrors = planJsonLib.validatePlanJson(next);
+    if (schemaErrors.length) throw new Error(`o lote não passa no schema do PLAN.json:\n  ${schemaErrors.join('\n  ')}`);
+    // The same lint as the first batch: an error the batch INTRODUCES rolls the append back (errors the plan already
+    // had — e.g. a missing pack the TL waived — are not the batch's and do not block it; they stay in the warnings).
+    const runLint = () => {
+      try {
+        return runtimePlanLint(projectRoot, activeSession, { preflight: false, ...(options.lintOptions || {}) });
+      } catch (err) {
+        return { ok: false, errors: [err.message], warnings: [] };
+      }
+    };
+    const baseline = new Set(runLint().errors || []);
+    const tmp = `${jsonPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, jsonPath);
+    const after = runLint();
+    const introduced = (after.errors || []).filter((e) => !baseline.has(e));
+    const lint = { ok: introduced.length === 0, errors: introduced, warnings: [...(after.warnings || []), ...[...baseline].filter((e) => (after.errors || []).includes(e)).map((e) => `já existia antes do lote: ${e}`)] };
+    if (!lint.ok) {
+      fs.writeFileSync(tmp, originalText, 'utf8');
+      fs.renameSync(tmp, jsonPath);
+      const e = new Error(`plan lint reprovou o lote (nada foi gravado):\n  ${lint.errors.join('\n  ')}`);
+      e.lint = lint;
+      throw e;
+    }
+    const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+    if (fs.existsSync(programDir)) {
+      changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'program_edit', action: 'plan_append', batch: batchNo, tasks: appended.map((t) => t.id), from: next.batches[next.batches.length - 1].from, by, reason, at: new Date().toISOString() });
+    }
+    appendEvent(projectRoot, activeSession, { type: 'PlanBatchAppended', payload: { batch: batchNo, tasks: appended.map((t) => t.id), by } });
+    return { batch: batchNo, tasks: appended.map((t) => ({ id: t.id, wave: t.wave, title: t.title, ...(t.batch_ref ? { from_id: t.batch_ref } : {}) })), warnings: lint.warnings || [] };
+  });
+}
+
 /** OXB-058: doctor — .oxe/ gitignored with no versioned export means SPEC/ROADMAP/PROGRAM edits leave no history. */
 function oxeHistoryWarning(projectRoot) {
   if (programExportDir(projectRoot)) return null;
@@ -5592,6 +5687,7 @@ module.exports = {
   runtimePlanReopen,
   runtimePhaseWork,
   resolvePreconditions,
+  runtimePlanAppend,
   runtimeSpecAmend,
   runtimeSpecAdd,
   runtimeProgramPhaseAdd,

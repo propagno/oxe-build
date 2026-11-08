@@ -6355,6 +6355,45 @@ async function main() {
     }
   }
 
+  // OXB-087: oxe-cc plan append --from extra.json --by <papel> --reason "…" [--dir] [--session] [--json]
+  if (command === 'plan' && argv[0] === 'append') {
+    const rest = argv.slice(1);
+    const o = { dir: process.cwd(), session: null, json: false };
+    for (let i = 0; i < rest.length; i += 1) {
+      const a = rest[i];
+      if (a === '--from' && rest[i + 1]) o.from = String(rest[++i]);
+      else if (a === '--by' && rest[i + 1]) o.by = String(rest[++i]);
+      else if (a === '--reason' && rest[i + 1]) o.reason = String(rest[++i]);
+      else if (a === '--dir' && rest[i + 1]) o.dir = path.resolve(rest[++i]);
+      else if (a === '--session' && rest[i + 1]) o.session = String(rest[++i]).replace(/\\/g, '/');
+      else if (a === '--json') o.json = true;
+      else if (a.startsWith('-')) { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+      else o.dir = path.resolve(a);
+    }
+    if (!o.session) {
+      try {
+        const statePath = oxeHealth.oxePaths(o.dir).state;
+        o.session = oxeHealth.parseActiveSession(fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : '') || null;
+      } catch { o.session = null; }
+    }
+    if (o.from && !path.isAbsolute(o.from)) o.from = path.resolve(process.cwd(), o.from);
+    try {
+      const out = oxeOperational.runtimePlanAppend(o.dir, o.session, o);
+      if (o.json) console.log(JSON.stringify({ oxePlanAppendSchema: 1, ok: true, ...out }, null, 2));
+      else {
+        const c = useAnsiColors();
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} lote ${out.batch}: ${out.tasks.map((t) => `${t.id}${t.from_id ? ` (${t.from_id})` : ''} onda ${t.wave}`).join(', ')}`);
+        for (const w of out.warnings) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${w}`);
+        console.log('  Um execute em andamento termina o próprio grafo; o próximo oxe-cc runtime execute roda o lote (as tarefas feitas são puladas).');
+      }
+      process.exit(0);
+    } catch (err) {
+      if (o.json) console.log(JSON.stringify({ oxePlanAppendSchema: 1, ok: false, error: err.message }, null, 2));
+      else console.error(`${red}✗${reset} ${err.message}`);
+      process.exit(1);
+    }
+  }
+
   // OXB-086: oxe-cc plan merge a.json b.json [--key rid] [--out .oxe/PLAN.json] [--force] [--json]
   if (command === 'plan' && argv[0] === 'merge') {
     const rest = argv.slice(1);

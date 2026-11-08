@@ -545,5 +545,13 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-087: acrescentar tarefas a uma fase depois que o execute começou
 
-- **Status:** aberto. Registrado pelo TECH LEAD em 08/11: o HML achou 4 lacunas (G1–G4) com o plano da F2 congelado e o execute encadeado. A única saída era um segundo plano na mesma fase depois do fim da primeira run.
-- **Proposta:** `plan append --from extra.json` durante a run (as tarefas novas entram nas ondas depois das que estão rodando, com o mesmo lint), e o close da fase exige os dois lotes.
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11: o HML achou 4 lacunas (G1–G4) com o plano da F2 congelado e o execute encadeado. A única saída era um segundo plano na mesma fase depois do fim da primeira run.
+  - `oxe-cc plan append --from extra.json --by <papel> --reason "…"` acrescenta um lote ao PLAN.json da fase ativa, também com um execute rodando.
+    - Os ids do lote são renumerados depois do último T<n> (G1 → T3), e o id original fica em `batch_ref`. Um `depends_on` interno acompanha a renumeração. Um `depends_on` que não é do lote precisa ser uma tarefa do plano.
+    - As ondas do lote são deslocadas para depois da última onda do plano, então rodam depois das tarefas em voo.
+    - Os `acceptance_tests` do lote são acrescentados.
+    - O PLAN.json passa a ter `batches` (quem, por quê, quando e de onde), e o `changes.ndjson` ganha um `program_edit` do tipo `plan_append`.
+  - **Mesmo lint:** o lote passa pelo schema e depois pelo `plan lint`. Um erro que o lote **introduz** desfaz a gravação, e nada fica no disco. Os erros que o plano já tinha não são do lote e saem como aviso.
+  - **Concorrência:** as escritas no PLAN.json (o `done` gravado pelo execute e o `plan append`) passam pela mesma trava (`PLAN.json.lock`, assumida se tiver mais de 30 s), então uma não apaga a outra.
+  - O execute em andamento termina o próprio grafo. O próximo `runtime execute` recompila a mesma run, pula as tarefas feitas e roda o lote. A fase só fecha com todas as tarefas de todos os lotes feitas.
+  - Teste: `tests/oxe-1212-plan-append.test.cjs`.

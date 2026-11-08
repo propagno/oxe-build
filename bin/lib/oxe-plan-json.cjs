@@ -252,9 +252,39 @@ function readPlanArtifact(planMdPath, planMdText, parseMarkdown) {
  * next compile skips it instead of paying for it again. Atomic write; the rest of the document is kept as is.
  * @returns {boolean} whether PLAN.json changed
  */
+/**
+ * OXB-087: PLAN.json is written by the running execute (done) and by `plan append` (new tasks) at the same time; both
+ * read-modify-write under this lock file so neither drops the other's change. A lock older than 30 s is stale.
+ */
+function withPlanLock(jsonPath, fn) {
+  const lock = `${jsonPath}.lock`;
+  const deadline = Date.now() + 10_000;
+  let fd = null;
+  while (fd === null) {
+    try {
+      fd = fs.openSync(lock, 'wx');
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      try { if (Date.now() - fs.statSync(lock).mtimeMs > 30_000) { fs.rmSync(lock, { force: true }); continue; } } catch { continue; }
+      if (Date.now() > deadline) throw new Error(`PLAN.json ocupado (${lock}) — tente de novo`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try { fs.closeSync(fd); } catch { /* */ }
+    fs.rmSync(lock, { force: true });
+  }
+}
+
 function markPlanTaskDone(planMdPath, taskId, info = {}) {
   const jsonPath = planJsonPathFor(planMdPath);
   if (!jsonPath || !fs.existsSync(jsonPath)) return false;
+  return withPlanLock(jsonPath, () => markPlanTaskDoneUnlocked(jsonPath, taskId, info));
+}
+
+function markPlanTaskDoneUnlocked(jsonPath, taskId, info) {
   let doc;
   try {
     doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
@@ -525,6 +555,7 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
 }
 
 module.exports = {
+  withPlanLock,
   ACCEPT_RE,
   externalRefs,
   taskPreconditions,
