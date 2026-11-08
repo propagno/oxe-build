@@ -5189,6 +5189,8 @@ function appendEvent(projectRoot, activeSession, event = {}) {
   if (recentEventIds.has(dedupeKey)) return entry;
   rememberEventId(dedupeKey);
   fs.appendFileSync(p.events, `${JSON.stringify(entry)}\n`, 'utf8');
+  // OXB-031/043: every runtime write records which oxe-cc wrote this .oxe/ (once per process).
+  require('./oxe-dir-info.cjs').touchMarker(projectRoot);
   return entry;
 }
 

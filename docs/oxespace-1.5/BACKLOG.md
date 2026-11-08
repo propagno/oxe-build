@@ -10,7 +10,10 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-031: a versão 1.21 não está no npm, e cada time instala de um jeito
 
-- **Status:** aberto.
+- **Status:** em andamento. A publicação da 1.21.2 espera o lançamento do OXESpace 1.5.0, por decisão do usuário. Já está feito (1.21.2):
+  - O `doctor` mostra qual oxe-cc gerou o `.oxe/` e qual está rodando. Ele avisa quando elas diferem e diz qual usar (`npx oxe-cc@<versão do projeto>` ou `oxe-cc update`). Um `.oxe/` escrito por uma versão MAIS NOVA que a em execução (o caso do global 1.12) é stale.
+  - A versão fica em `.oxe/oxe-version.json`, gravado por toda escrita do runtime, e no README gerado pelo init/update. Os comandos de leitura não gravam nada.
+  - Teste: `tests/oxe-1212-oxe-dir-info.test.cjs`.
 - **Evidência (04/11):**
   - `npm view oxe-cc version` = 1.16.0;
   - global instalado = 1.12.0;
@@ -162,7 +165,11 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-043: o `.oxe/` na raiz do repositório pode estar velho e não há aviso
 
-- **Status:** proposta.
+- **Status:** resolvido (1.21.2).
+  - O `status` e o `doctor` mostram uma linha `.oxe/:` com a versão que o gerou, a versão em execução, a última atividade (o último evento ou a data dos arquivos do núcleo) e o programa (fase ativa e fases fechadas).
+  - Fica marcado como `stale`, com o motivo e a dica, quando foi escrito por uma versão mais antiga (ou mais nova) que a em execução, ou quando está sem atividade há mais de `oxe_stale_days` (padrão 14).
+  - `oxe-cc status --all-worktrees [--json]` lista o `.oxe/` de cada worktree do repositório (branch, versão, última atividade, programa e ativo/stale) para mostrar qual é o ativo.
+  - Teste: `tests/oxe-1212-oxe-dir-info.test.cjs`.
 - **Evidência:**
   - o checkout principal do usuário tem um `.oxe/` de setembro, com o STATE.md apontando para `docs/plans/delegation-worktree-continuity` e um ACTIVE-RUN.json de template, gerado pela 1.12/1.16;
   - a 1.5.0 roda num `.oxe/` próprio na worktree `oxespace-150`.

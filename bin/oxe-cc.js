@@ -469,6 +469,7 @@ function parseInstallArgs(argv) {
     else if (a === '--hints') out.statusHints = true;
     else if (a === '--full') out.statusFull = true;
     else if (a === '--summary') out.statusSummary = true;
+    else if (a === '--all-worktrees') out.allWorktrees = true;
     else if (a === '--release') out.releaseDoctor = true;
     else if (a === '--project') out.projectDoctor = true;
     else if (a === '--write-manifest') out.writeManifest = true;
@@ -1344,7 +1345,8 @@ function writeOxeLegend(target, opts = {}) {
   const dest = path.join(oxeDir, 'README.md');
   try {
     ensureDir(oxeDir);
-    fs.writeFileSync(dest, oxeArtifactCatalog.renderLegend(), 'utf8');
+    // OXB-031/043: the generated legend carries the oxe-cc version that (re)wrote it — the lean core stays 3 files.
+    fs.writeFileSync(dest, `${oxeArtifactCatalog.renderLegend().replace(/\s*$/, '')}\n\n<!-- oxe-cc-version: ${readPkgVersion()} -->\n`, 'utf8');
     if (!opts.quiet) console.log(`${green}init${reset}  ${dest}`);
   } catch {
     /* best-effort: a missing legend is never fatal */
@@ -1841,6 +1843,26 @@ function runStatusFull(target) {
  */
 function runStatus(target, opts = {}) {
   const { config } = oxeHealth.loadOxeConfigMerged(target);
+  const dirInfo = require('./lib/oxe-dir-info.cjs');
+  const staleDays = Number.isInteger(config && config.oxe_stale_days) ? config.oxe_stale_days : 14;
+  // OXB-043: `oxe-cc status --all-worktrees` — every worktree's .oxe/ and its state, to tell the active one.
+  if (opts.allWorktrees) {
+    const rows = dirInfo.worktreesOxe(target, { staleDays });
+    if (opts.json) {
+      console.log(JSON.stringify({ oxeWorktreesSchema: 1, worktrees: rows.map((r) => ({ path: r.path, branch: r.branch, here: r.here, oxe: r.oxe.exists ? { version: r.oxe.version, last_activity: r.oxe.last_activity, idle_days: r.oxe.idle_days, program: r.oxe.program, stale: r.oxe.stale, reasons: r.oxe.reasons } : null })) }));
+      return;
+    }
+    const cc = useAnsiColors();
+    printSection('OXE ▸ worktrees');
+    if (!rows.length) console.log('  (não é um repositório git)');
+    for (const r of rows) {
+      const tag = !r.oxe.exists ? `${cc ? dim : ''}sem .oxe/${cc ? reset : ''}` : r.oxe.stale ? `${cc ? yellow : ''}stale${cc ? reset : ''}` : `${cc ? green : ''}ativo${cc ? reset : ''}`;
+      console.log(`  ${r.here ? '▸' : ' '} ${r.path} [${r.branch || '?'}] ${tag}`);
+      if (r.oxe.exists) console.log(`      ${dirInfo.oxeDirLine(r.oxe)}${r.oxe.reasons.length ? ` — ${r.oxe.reasons.join('; ')}` : ''}`);
+    }
+    return;
+  }
+  const oxeDirInfo = dirInfo.describeOxeDir(target, { staleDays });
   const report = oxeHealth.buildHealthReport(target);
   const routineHints = collectOxeRoutineHints(target, report, config);
   const next = report.next;
@@ -1862,6 +1884,7 @@ function runStatus(target, opts = {}) {
     const payload = {
       oxeStatusSchema: 5,
       projectRoot: path.resolve(target),
+      oxeDir: oxeDirInfo.exists ? { version: oxeDirInfo.version, running: oxeDirInfo.running, last_activity: oxeDirInfo.last_activity, idle_days: oxeDirInfo.idle_days, program: oxeDirInfo.program, stale: oxeDirInfo.stale, reasons: oxeDirInfo.reasons } : null,
       workspaceMode: report.workspaceMode || 'oxe_project',
       releaseReadiness: report.releaseReadiness || null,
       nextStep: report.next.step,
@@ -1950,6 +1973,10 @@ function runStatus(target, opts = {}) {
   const c = useAnsiColors();
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${target}${c ? reset : ''}`);
   console.log(`  ${c ? dim : ''}Workspace mode:${c ? reset : ''} ${report.workspaceMode || 'oxe_project'}`);
+  if (oxeDirInfo.exists) {
+    console.log(`  ${c ? dim : ''}.oxe/:${c ? reset : ''} ${dirInfo.oxeDirLine(oxeDirInfo)}`);
+    if (oxeDirInfo.stale) console.log(`  ${c ? yellow : ''}AVISO${c ? reset : ''} .oxe/ stale: ${oxeDirInfo.reasons.join('; ')} — o próximo passo abaixo pode ser de um plano morto. Com várias worktrees: ${c ? cyan : ''}oxe-cc status --all-worktrees${c ? reset : ''}`);
+  }
 
   const wfTgt = oxeWorkflows.resolveWorkflowsDir(target);
   if (!wfTgt) {
@@ -2197,6 +2224,16 @@ function runDoctor(target, options = {}) {
   } else {
     console.log(`${dim}Obs.:${reset} .oxe/config.json ausente (opcional — ver oxe/templates/CONFIG.md)`);
   }
+  // OXB-031/043: the oxe-cc that wrote this .oxe/ versus the one running now, and whether the .oxe/ is stale.
+  try {
+    const dirInfo = require('./lib/oxe-dir-info.cjs');
+    const info = dirInfo.describeOxeDir(target);
+    if (info.exists) {
+      console.log(`${info.stale ? yellow + 'AVISO' : green + 'OK'}${reset} .oxe/: ${dirInfo.oxeDirLine(info)}`);
+      for (const r of info.reasons) if (info.stale || /sem registro/.test(r)) console.log(`  ${dim}${r}${reset}`);
+      if (info.version && info.running && info.version !== info.running) console.log(`  ${dim}Versão do projeto ≠ versão em execução: use npx oxe-cc@${info.version} (ou atualize o projeto com oxe-cc update) para não rodar um fluxo de outra versão.${reset}`);
+    }
+  } catch { /* opcional */ }
   // OXB-058: a gitignored .oxe/ with no versioned export leaves SPEC/ROADMAP/PROGRAM edits without history.
   try {
     const historyWarning = oxeOperational.oxeHistoryWarning(target);
@@ -2753,6 +2790,7 @@ ${green}init-oxe${reset} (bootstrap só de .oxe/ no projeto — STATE.md, codeba
 ${green}status${reset} (coerência .oxe/ + um próximo passo sugerido; não exige pacote de workflows completo)
   --dir <pasta>   raiz do projeto (padrão: diretório atual)
   --json          imprime um único objeto JSON (próximo passo + diagnósticos) em stdout; adequado a CI
+  --all-worktrees  o .oxe/ de cada worktree do repositório (versão, última atividade, programa, stale)
   --hints         lembretes de rotina (idade scan/compact quando configurado em config.json); com --json inclui array \`hints\`
 
 ${green}capabilities${reset} (catálogo nativo de extensões do projeto)
