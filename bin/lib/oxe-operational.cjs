@@ -1332,9 +1332,13 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState) {
         const evaluationWarnings = Array.isArray(report.planSelfEvaluation.warnings) ? report.planSelfEvaluation.warnings : [];
         const belowThreshold = confidence == null || confidence <= threshold;
         // OXB-007: below the threshold, the way forward is a spike that answers the open question, not a blind execute.
-        blockers.push(belowThreshold || !evaluationWarnings.length
-          ? `plan_confidence:${confidence == null ? 'missing' : `${confidence}%`}<=${threshold}% — reduza a incerteza com uma tarefa "kind": "spike" (pergunta + evidência em .oxe/spikes/) e reavalie o plano`
-          : `plan_self_evaluation_incomplete:${evaluationWarnings.length} — ${evaluationWarnings.join('; ')}`);
+        // OXB-044: both, when both apply — reporting only the confidence hid the incomplete rubric until the next round.
+        const confidenceIssue = confidence == null
+          ? (evaluationWarnings.length ? null : `plan_confidence:missing<=${threshold}%`)
+          : belowThreshold ? `plan_confidence:${confidence}%<=${threshold}% — reduza a incerteza com uma tarefa "kind": "spike" (pergunta + evidência em .oxe/spikes/) e reavalie o plano` : null;
+        if (confidenceIssue) blockers.push(confidenceIssue);
+        if (evaluationWarnings.length) blockers.push(`plan_self_evaluation_incomplete:${evaluationWarnings.length} — ${evaluationWarnings.join('; ')}`);
+        if (!confidenceIssue && !evaluationWarnings.length) blockers.push(`plan_confidence:${confidence == null ? 'missing' : `${confidence}%`}<=${threshold}%`);
       }
       if (report.executionRationality && report.executionRationality.applicable && !report.executionRationalityReady) {
         const gaps = Array.isArray(report.criticalExecutionGaps) ? report.criticalExecutionGaps : [];
@@ -2609,13 +2613,28 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       visualInputsJson: p.visualInputsJson,
       visualInputsMd: p.visualInputsMd,
     });
-    // With an IMPLEMENTATION-PACK the project is on the execution-rationality track: a gap blocks execute, so it is
-    // an error here. Without one (an early or markdown-only plan) it is a heads-up.
-    const target = pack ? result.errors : result.warnings;
+    // OXB-041: the preflight blocks on these whenever it applies (a PLAN.md exists), pack or not — so lint does too.
+    // (Before, without an IMPLEMENTATION-PACK they were warnings: lint said "ok" and execute refused.)
+    const target = rationality.applicable || pack ? result.errors : result.warnings;
     for (const gap of rationality.criticalExecutionGaps || []) {
       if (!result.errors.includes(gap) && !result.warnings.includes(gap)) target.push(`preflight: ${gap}`);
     }
   } catch { /* a racionalidade é do preflight; o lint só antecipa */ }
+  // OXB-041/044: "lint ok" means "execute will not refuse". The same preflight the execute runs, in dry mode, with
+  // every blocker listed at once (self-evaluation rubric and confidence_vector included).
+  if (options.preflight !== false && config.plan_lint_preflight !== false) {
+    if (!planText) {
+      result.errors.push(`preflight: PLAN.md ausente — o runtime execute recusa sem ele (ele traz a autoavaliação); gere-o no /oxe-plan junto com o PLAN.json`);
+    }
+    try {
+      const pre = buildRuntimeExecutePreflight(projectRoot, activeSession, readRunState(projectRoot, activeSession));
+      for (const blocker of pre.blockers) {
+        if (/^execution_rationality:/.test(blocker)) continue; // listed in full above
+        if (/^pending_gates:/.test(blocker)) { result.warnings.push(`preflight: ${blocker} (gates humanos pendentes no run atual — o execute para neles)`); continue; }
+        result.errors.push(`preflight: ${blocker}`);
+      }
+    } catch { /* o preflight nunca derruba o lint */ }
+  }
   result.ok = result.errors.length === 0;
   return { ...result, source: plan.source, tasks: plan.tasks.length, phase: phase ? phase.id : null, plan_json: hasJson ? jsonPath : null, dry_verify: dryVerify ? dryVerify.results : null };
 }
@@ -2637,12 +2656,8 @@ function phaseChanges(projectRoot, base) {
       changes.set(rest[rest.length - 1], status.charAt(0));
     }
   }
-  const prefix = ((gitLines(projectRoot, ['rev-parse', '--show-prefix']) || [])[0] || '').replace(/\\/g, '/');
-  for (const line of gitLines(projectRoot, ['status', '--porcelain', '-uall', '--', '.']) || []) {
-    const status = line.slice(0, 2).trim() || 'M';
-    let file = line.slice(3).replace(/^"|"$/g, '').split(' -> ').pop().replace(/\\/g, '/');
-    if (prefix && file.startsWith(prefix)) file = file.slice(prefix.length);
-    if (!changes.has(file)) changes.set(file, status === '??' ? 'A' : status.charAt(0));
+  for (const change of workingTreeChanges(projectRoot)) {
+    if (!changes.has(change.path)) changes.set(change.path, change.status);
   }
   return [...changes.entries()].map(([file, status]) => ({ path: file.replace(/\\/g, '/'), status }));
 }
@@ -3460,12 +3475,39 @@ function taskScopeFiles(runState, taskId) {
  * repository root and, without a pathspec, scans the whole repository: a project inside a big repository (a monorepo,
  * or a home directory under git) made every snapshot scan all of it — minutes per event.
  */
+/**
+ * Changes in the working tree against HEAD, by CONTENT (project-scoped, paths relative to the project).
+ * `git status` compares stat data: with core.autocrlf=true a file restored by `git checkout` (CRLF) and rewritten
+ * with LF shows "M" with an empty diff — a phantom change that the dossier read as architecture drift and that
+ * blocked the phase close. `git diff HEAD` normalizes EOL; untracked files come from `ls-files --others`.
+ * @returns {Array<{ path: string, status: string }>}
+ */
+function workingTreeChanges(projectRoot) {
+  const out = new Map();
+  const hasHead = Boolean(gitLines(projectRoot, ['rev-parse', '--verify', '-q', 'HEAD']));
+  if (!hasHead) {
+    const prefix = ((gitLines(projectRoot, ['rev-parse', '--show-prefix']) || [])[0] || '').replace(/\\/g, '/');
+    for (const line of gitLines(projectRoot, ['status', '--porcelain', '-uall', '--', '.']) || []) {
+      const status = line.slice(0, 2).trim() || 'M';
+      let file = line.slice(3).replace(/^"|"$/g, '').split(' -> ').pop().replace(/\\/g, '/');
+      if (prefix && file.startsWith(prefix)) file = file.slice(prefix.length);
+      out.set(file, status === '??' ? 'A' : status.charAt(0));
+    }
+    return [...out.entries()].map(([p, st]) => ({ path: p, status: st }));
+  }
+  for (const line of gitLines(projectRoot, ['diff', '--relative', '--name-status', 'HEAD', '--', '.']) || []) {
+    const [status, ...rest] = line.split('\t');
+    out.set(rest[rest.length - 1].replace(/\\/g, '/'), status.charAt(0));
+  }
+  for (const file of gitLines(projectRoot, ['ls-files', '--others', '--exclude-standard', '--', '.']) || []) {
+    const rel = file.replace(/^"|"$/g, '').replace(/\\/g, '/');
+    if (!out.has(rel)) out.set(rel, 'A');
+  }
+  return [...out.entries()].map(([p, st]) => ({ path: p, status: st }));
+}
+
 function projectStatusPaths(projectRoot) {
-  const prefix = ((gitLines(projectRoot, ['rev-parse', '--show-prefix']) || [])[0] || '').replace(/\\/g, '/');
-  const lines = gitLines(projectRoot, ['status', '--porcelain', '-uall', '--', '.']) || [];
-  return lines
-    .map((l) => l.slice(3).replace(/^"|"$/g, '').split(' -> ').pop().replace(/\\/g, '/'))
-    .map((f) => (prefix && f.startsWith(prefix) ? f.slice(prefix.length) : f));
+  return workingTreeChanges(projectRoot).map((c) => c.path);
 }
 
 function treeSnapshot(projectRoot) {

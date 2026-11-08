@@ -1789,7 +1789,8 @@ function parsePlanSelfEvaluation(planPath) {
   if (!m) {
     return {
       ...empty,
-      warnings: ['PLAN.md sem a seção obrigatória "## Autoavaliação do Plano"'],
+      // OXB-044: the whole contract in one message (the fields used to surface one execute at a time).
+      warnings: ['PLAN.md sem a seção obrigatória "## Autoavaliação do Plano" — ela precisa de **Melhor plano atual:** sim|não, **Confiança:** NN%, **Principais incertezas:**, **Alternativas descartadas:**, **Condição para replanejar:**, a rubrica (Completude dos requisitos, Dependências conhecidas, Risco técnico, Impacto no código existente, Clareza da validação / testes, Lacunas externas / decisões pendentes) e o bloco <confidence_vector> com <global score="0.NN"> e as dimensões requirements, dependencies, technical_risk, code_impact, validation, open_gaps'],
     };
   }
   const body = m[1];
@@ -1812,7 +1813,8 @@ function parsePlanSelfEvaluation(planPath) {
   if (!/\*\*Alternativas descartadas:\*\*/i.test(body)) warnings.push('PLAN.md: autoavaliação sem "Alternativas descartadas"');
   if (!/\*\*Condição para replanejar:\*\*/i.test(body)) warnings.push('PLAN.md: autoavaliação sem "Condição para replanejar"');
   if (!confidenceVector) {
-    warnings.push('PLAN.md: autoavaliação sem bloco <confidence_vector>');
+    // OXB-044: say everything the block needs at once — listing only "missing block" made each fix reveal the next layer.
+    warnings.push('PLAN.md: autoavaliação sem bloco <confidence_vector> — ele precisa de <global score="0.NN"> (igual à Confiança ±5) e de <dimension name="…" score="…"> para requirements, dependencies, technical_risk, code_impact, validation e open_gaps');
   } else {
     const vectorBlock = confidenceVector[0];
     const vectorGlobal = vectorBlock.match(/<global\b[^>]*score="([0-9.]+)"/i);

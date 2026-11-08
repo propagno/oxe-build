@@ -181,10 +181,13 @@ describe('runtime lê PLAN.json e o CLI `plan lint`', () => {
     const tmp = project();
     const cli = path.join(__dirname, '..', 'bin', 'oxe-cc.js');
     const md = spawnSync(process.execPath, [cli, 'plan', 'lint', '--json', tmp], { encoding: 'utf8' });
-    assert.equal(md.status, 0, md.stderr);
     const mdReport = JSON.parse(md.stdout);
     assert.equal(mdReport.source, 'PLAN.md');
     assert.match(mdReport.warnings.join('\n'), /PLAN\.json ausente/);
+    // OXB-041/044: this PLAN.md has no self-evaluation, so execute would refuse it — lint says so (exit 1), and every
+    // error is a preflight one.
+    assert.equal(md.status, 1, md.stderr);
+    assert.ok(mdReport.errors.length > 0 && mdReport.errors.every((e) => /^preflight: /.test(e)), mdReport.errors.join('\n'));
 
     const bad = goodPlan();
     delete bad.phase;

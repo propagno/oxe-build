@@ -104,7 +104,11 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-041: o `plan lint` dá "ok" sem PLAN.md e sem os pacotes racionais, e o execute recusa depois
 
-- **Status:** aberto.
+- **Status:** resolvido (1.21.2), junto com o OXB-044.
+  - O `plan lint` roda o mesmo preflight do `runtime execute` (`buildRuntimeExecutePreflight`) em modo seco e lista todos os bloqueios como erro `preflight: …`: autoavaliação, confiança, ambiente do projeto, "PLAN.md ausente" (o execute recusa sem ele) e as lacunas de racionalidade (pack, symbols, VISUAL-INPUTS) sempre que o PLAN.md existe, com pack ou sem. Antes, sem IMPLEMENTATION-PACK, essas lacunas eram aviso.
+  - Gates humanos pendentes do run atual viram aviso.
+  - "lint ok" agora quer dizer "o execute não recusa". `--no-preflight` (ou config `plan_lint_preflight: false`) volta ao lint só do plano.
+  - Teste: `tests/oxe-1212-lint-preflight.test.cjs`, que inclui a paridade: os erros `preflight:` do lint são exatamente os bloqueios do preflight.
 - **Evidência:**
   - Com só o `PLAN.json` (mais os testes congelados), o `plan lint` e o `plan lint --dry-verify` deram "✓ ok".
   - O `runtime execute` parou em seguida com "PLAN.md ausente".
@@ -141,7 +145,10 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-044: o preflight do execute cobra a rubrica de autoavaliação do PLAN.md que o lint não olha
 
-- **Status:** aberto (variante do OXB-041).
+- **Status:** resolvido (1.21.2), com o OXB-041.
+  - Uma passada só lista o contrato inteiro: sem a seção, a mensagem traz todos os campos, a rubrica e o `<confidence_vector>` com `<global score>` e as 6 dimensões; sem o vetor, ela já nomeia `<global score>` e cada dimensão.
+  - O preflight passou a reportar a confiança e a autoavaliação incompleta juntas. Antes, `plan_confidence:missing` escondia a rubrica até a volta seguinte.
+  - De quebra (achado pelo e2e-program depois da OXB-067): a detecção de mudanças passou a ser por conteúdo (`git diff HEAD` + `ls-files --others`), não por `git status`. Com `core.autocrlf=true`, um arquivo restaurado pelo rollback (CRLF) e reescrito com LF aparecia como "M" com diff vazio, e o dossiê acusava architecture_drift e bloqueava o close da fase.
 - **Evidência:** com o `plan lint --dry-verify` em "ok", o `runtime execute` parou em `plan_self_evaluation_incomplete:9`. Faltavam no PLAN.md: "Alternativas descartadas", "Condição para replanejar", o bloco `<confidence_vector>` e as 6 linhas da rubrica.
 - **Impacto:** é a terceira volta lint → execute → corrigir para o mesmo plano, e cada volta custa uma verificação completa (minutos, com o lock pesado da máquina).
 - **Proposta:** o `plan lint` roda o mesmo `runtime_execute_preflight` em modo seco e lista todos os bloqueios de uma vez. A autoavaliação vira campo do PLAN.json (`self_evaluation`), e o PLAN.md passa a ser só uma projeção.

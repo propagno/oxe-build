@@ -521,7 +521,7 @@ oxe-cc azure operations list
 | `oxe-cc doctor` | valida estrutura, configuração e saúde lógica |
 | `oxe-cc doctor --release --write-manifest` | executa o gate de release e grava o manifesto |
 | `oxe-cc doctor --project` | compara a máquina com `engines`, `.nvmrc` e o lockfile do projeto |
-| `oxe-cc plan lint [--dry-verify]` | valida o PLAN.json, os gates, o pack e se cada verify está vermelho pelo motivo certo |
+| `oxe-cc plan lint [--dry-verify] [--no-preflight]` | valida o PLAN.json, os gates, o pack, o mesmo preflight do execute (autoavaliação, confiança, ambiente) e se cada verify está vermelho pelo motivo certo; "ok" quer dizer que o execute não recusa |
 | `oxe-cc plan done Tn` | marca uma tarefa concluída (com o checkpoint) no PLAN.json |
 | `oxe-cc runtime program init\|start\|close\|status` | programa por fases a partir do ROADMAP |
 | `oxe-cc runtime feedback\|signoff\|dossier` | change requests, sign-off de UAT e dossiê vivo da fase |
