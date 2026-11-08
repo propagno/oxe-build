@@ -67,6 +67,19 @@ export interface ExecutorUsage {
   /** Calls per tool name (e.g. how many `run_command`). */
   tools: Record<string, number>;
   cost_usd: number | null;
+  /**
+   * OXB-118: what the attempt did, for the project's action rules checked after the fact (a command run, a path
+   * read or written). Capped; long commands are cut.
+   */
+  commands?: string[];
+  reads?: string[];
+  writes?: string[];
+}
+
+const ACTION_LOG_CAP = 300;
+function logAction(list: string[] | undefined, value: unknown): void {
+  if (!list || list.length >= ACTION_LOG_CAP || typeof value !== 'string' || !value) return;
+  list.push(value.length > 500 ? `${value.slice(0, 500)}…` : value);
 }
 
 /** Sent before the last turn (OXB-026): finishing and reporting beats spending it on a verification the runtime repeats. */
@@ -121,7 +134,7 @@ export class LlmTaskExecutor implements TaskExecutor {
     let completedByFinishTask = false;
     let finishTaskSummary = '';
 
-    const usage: ExecutorUsage = { turns: 0, tool_calls: 0, cost_usd: null, tools: {} };
+    const usage: ExecutorUsage = { turns: 0, tool_calls: 0, cost_usd: null, tools: {}, commands: [], reads: [], writes: [] };
     const done = (result: TaskResult): TaskResult => {
       // A failed attempt keeps its reason in the event log: `env` failures (CLI crash, timeout)
       // were only visible on the console.
@@ -178,11 +191,11 @@ export class LlmTaskExecutor implements TaskExecutor {
       const [concurrent, serial] = partitionToolCalls(response.tool_calls, this.registry ?? undefined);
 
       const concurrentResults = await Promise.all(
-        concurrent.map((tc) => this.invokeToolCall(tc, cwd, node, evidencePaths, allowedTools)),
+        concurrent.map((tc) => this.invokeToolCall(tc, cwd, node, evidencePaths, allowedTools, usage)),
       );
       const serialResults: ChatMessage[] = [];
       for (const tc of serial) {
-        serialResults.push(await this.invokeToolCall(tc, cwd, node, evidencePaths, allowedTools));
+        serialResults.push(await this.invokeToolCall(tc, cwd, node, evidencePaths, allowedTools, usage));
       }
 
       messages.push(...concurrentResults, ...serialResults);
@@ -249,6 +262,7 @@ export class LlmTaskExecutor implements TaskExecutor {
     node: GraphNode,
     evidencePaths: string[],
     allowedTools: Set<string>,
+    usage?: ExecutorUsage,
   ): Promise<ChatMessage> {
     this.emit({ type: 'tool_call', nodeId: node.id, attempt: 0, detail: { tool: tc.function.name } });
 
@@ -270,6 +284,10 @@ export class LlmTaskExecutor implements TaskExecutor {
       this.emit({ type: 'tool_denied', nodeId: node.id, attempt: 0, detail: { tool: tc.function.name } });
       result = `[tool denied: ${tc.function.name} is not permitted for this task]`;
     } else if (builtIn) {
+      // OXB-118: recorded before running (a command that fails or times out still happened).
+      if (tc.function.name === 'run_command') logAction(usage?.commands, args.command);
+      else if (tc.function.name === 'read_file' || tc.function.name === 'list_dir') logAction(usage?.reads, args.path);
+      else if (writesFile) logAction(usage?.writes, args.path);
       try {
         result = await builtIn.execute(args, cwd);
         if (tc.function.name === 'write_file' || tc.function.name === 'patch_file') {

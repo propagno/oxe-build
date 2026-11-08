@@ -46,6 +46,13 @@ export interface ExecutorUsage {
     /** Calls per tool name (e.g. how many `run_command`). */
     tools: Record<string, number>;
     cost_usd: number | null;
+    /**
+     * OXB-118: what the attempt did, for the project's action rules checked after the fact (a command run, a path
+     * read or written). Capped; long commands are cut.
+     */
+    commands?: string[];
+    reads?: string[];
+    writes?: string[];
 }
 /** Sent before the last turn (OXB-026): finishing and reporting beats spending it on a verification the runtime repeats. */
 export declare const LAST_TURN_NOTICE: string;

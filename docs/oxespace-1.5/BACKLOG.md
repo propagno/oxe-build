@@ -859,3 +859,21 @@ Requisitos escritos pelo TECH LEAD, aprovados pelo usuário. O desenho e a imple
   - (c) impacto de regressão entre fases antes do execute;
   - (d) ensaio de rollback (`runtime rollback --dry-run`) antes do close;
   - (e) relatório da fase legível por humanos, em uma página, gerado no close.
+
+# Backlogs de comparação (08/11)
+
+Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
+
+## OXB-118: dizer quais regras do projeto são aplicadas, e regras de ação estruturadas
+
+- **Status:** resolvido (1.21.2), P0. Antes, as 10 `policy_rules` do OXESpace eram strings, e o `checkPolicyRules` descartava em silêncio toda regra sem `id`+`forbid`: nenhuma era aplicada.
+  - Toda regra agora tem estado: **aplicada** (forma estruturada com checagem) ou **só texto**.
+  - O `doctor` mostra "Regras do projeto: N aplicada(s), M só texto" e lista as que são só texto. O `plan lint` avisa com `policy_rule_advisory` e uma dica de conversão, e uma regex inválida é erro do lint. `oxe-cc policy list [--json]` lista tudo.
+  - **Regras de ação:**
+    - `{ id, kind: "command", deny: "<regex>" }` vale para os comandos que o executor rodou;
+    - `{ id, kind: "path", deny_read|deny_write: "<glob>" }` vale para os caminhos que ele leu ou escreveu;
+    - `{ id, kind: "env", strip: "<PREFIXO>" }` tira o prefixo do ambiente de **todo** processo filho.
+    - O executor do runtime passou a registrar, por tentativa, os comandos, as leituras e as escritas (`ExecutorUsage.commands/reads/writes`, com limite de tamanho).
+  - O verify checa as regras de ação contra o que a run registrou. Uma violação vira CR `constraint` (`by: policy_rule:<id>`) com a regra e o comando ou caminho, um por regra+ação, sem duplicar.
+  - As regras de conteúdo (`{ id, forbid, paths }`) continuam como antes.
+  - Teste: `tests/oxe-1212-policy-rules.test.cjs`.

@@ -2234,6 +2234,15 @@ function runDoctor(target, options = {}) {
       if (info.version && info.running && info.version !== info.running) console.log(`  ${dim}Versão do projeto ≠ versão em execução: use npx oxe-cc@${info.version} (ou atualize o projeto com oxe-cc update) para não rodar um fluxo de outra versão.${reset}`);
     }
   } catch { /* opcional */ }
+  // OXB-118: which project rules are enforced and which are only text.
+  try {
+    const cfgRules = (JSON.parse(fs.readFileSync(path.join(target, '.oxe', 'config.json'), 'utf8')) || {}).policy_rules;
+    const pol = require('./lib/oxe-policy-rules.cjs').summary(cfgRules);
+    if (pol.total) {
+      console.log(`${pol.advisory.length ? yellow + 'AVISO' : green + 'OK'}${reset} Regras do projeto: ${pol.enforced.length} aplicada(s), ${pol.advisory.length} só texto${pol.advisory.length ? ' — nada checa estas; converta (oxe-cc policy list)' : ''}`);
+      for (const r of pol.advisory.slice(0, 12)) console.log(`  ${dim}· ${r.text.slice(0, 110)}${reset}`);
+    }
+  } catch { /* opcional */ }
   // OXB-032: spec_ref/roadmap_ref that are missing, or a .oxe/ copy that diverges from them.
   try {
     for (const w of require('./lib/oxe-artifact-refs.cjs').refWarnings(target)) console.log(`${yellow}AVISO${reset} ${w}`);
@@ -6252,6 +6261,7 @@ async function main() {
     argv[0] === 'plan' ||
     argv[0] === 'spec' ||
     argv[0] === 'program' ||
+    argv[0] === 'policy' ||
     argv[0] === 'verify' ||
     argv[0] === 'install'
   ) {
@@ -6465,6 +6475,26 @@ async function main() {
       console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
       process.exit(1);
     }
+  }
+
+  // OXB-118: oxe-cc policy list [--json] [--dir]
+  if (command === 'policy') {
+    const rest = argv.slice(argv[0] === 'list' ? 1 : 0);
+    let dir = process.cwd();
+    let json = false;
+    for (let i = 0; i < rest.length; i += 1) {
+      if (rest[i] === '--json') json = true;
+      else if (rest[i] === '--dir' && rest[i + 1]) dir = path.resolve(rest[++i]);
+      else if (!rest[i].startsWith('-')) dir = path.resolve(rest[i]);
+    }
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'config.json'), 'utf8')) || {}; } catch { cfg = {}; }
+    const rows = require('./lib/oxe-policy-rules.cjs').classifyRules(cfg.policy_rules);
+    if (json) { console.log(JSON.stringify({ oxePolicySchema: 1, enforced: rows.filter((r) => r.state === 'enforced').length, advisory: rows.filter((r) => r.state === 'advisory').length, rules: rows.map(({ rule, ...r }) => r) }, null, 2)); process.exit(0); }
+    const c = useAnsiColors();
+    console.log(`  Regras do projeto: ${rows.filter((r) => r.state === 'enforced').length} aplicada(s), ${rows.filter((r) => r.state === 'advisory').length} só texto`);
+    for (const r of rows) console.log(`  ${r.state === 'enforced' ? (c ? green : '') + 'aplicada ' : (c ? yellow : '') + 'só texto '}${c ? reset : ''} ${r.id.padEnd(14)} ${r.kind.padEnd(8)} ${r.text.slice(0, 90)}${r.problem ? ` — ${r.problem}` : ''}`);
+    process.exit(0);
   }
 
   // OXB-087: oxe-cc plan append --from extra.json --by <papel> --reason "…" [--dir] [--session] [--json]

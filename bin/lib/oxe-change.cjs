@@ -236,7 +236,8 @@ function requiredVersions(programDir) {
 function checkPolicyRules(projectRoot, rules, files) {
   const violations = [];
   for (const rule of Array.isArray(rules) ? rules : []) {
-    if (!rule || !rule.id || !rule.forbid) continue;
+    // Content rules only (OXB-118: action rules — kind command/path/env — are checked elsewhere; strings are advisory).
+    if (!rule || !rule.id || !rule.forbid || (rule.kind && rule.kind !== 'content')) continue;
     let forbid;
     let scope = null;
     try {

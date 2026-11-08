@@ -2261,7 +2261,8 @@ function applyChildEnvPolicy(projectRoot) {
   if (!runtime || typeof runtime.configureChildEnv !== 'function') return;
   const cfg = readProjectConfig(projectRoot);
   runtime.configureChildEnv({
-    scrub: Array.isArray(cfg.env_scrub) ? cfg.env_scrub : [],
+    // OXB-118: `{ kind: "env", strip: "OXESPACE_" }` policy rules strip the prefix from every child process.
+    scrub: [...(Array.isArray(cfg.env_scrub) ? cfg.env_scrub : []), ...require('./oxe-policy-rules.cjs').envStripPatterns(cfg.policy_rules)],
     allow: Array.isArray(cfg.env_allow) ? cfg.env_allow : [],
   });
 }
@@ -2415,6 +2416,33 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
       }
     } catch { /* o CR é auxiliar; o gate vermelho já reprova o verify */ }
   }
+  // OXB-118: the project's ACTION rules (kind command / path) checked against what this run's executor recorded.
+  // A violation becomes a constraint CR naming the rule and the command/path (one open CR per rule + action).
+  try {
+    const policy = require('./oxe-policy-rules.cjs');
+    const rules = projectConfig.policy_rules;
+    if (Array.isArray(rules) && rules.length && artifactPaths.programDir) {
+      const events = readNdjsonQuiet(operationalPaths(projectRoot, activeSession).events);
+      const violations = policy.checkActionRules(rules, policy.actionsFromEvents(events, current.run_id));
+      if (violations.length) {
+        const changeLib = require('./oxe-change.cjs');
+        const open = changeLib.listChanges(artifactPaths.programDir).filter((cr) => cr.status === 'open' && /^policy_rule:/.test(String(cr.by || '')));
+        for (const v of violations) {
+          const by = `policy_rule:${v.rule}`;
+          if (open.some((cr) => cr.by === by && String(cr.evidence || '').includes(v.what))) continue;
+          const out = changeLib.recordChange({
+            programDir: artifactPaths.programDir, program: programState, plan: parsedPlan,
+            class: 'constraint',
+            summary: `regra do projeto '${v.rule}' violada${v.task ? ` em ${v.task}` : ''}: ${v.kind === 'command' ? 'comando' : v.kind === 'path_read' ? 'leitura de' : 'escrita em'} ${v.what.slice(0, 120)}`,
+            by,
+            evidence: `${v.kind}: ${v.what}\nregra: ${v.message}`,
+          });
+          open.push(out.cr);
+          appendEvent(projectRoot, activeSession, { type: 'ChangeRequested', run_id: current.run_id, payload: { id: out.cr.id, class: 'constraint', phase: out.cr.phase, criteria: [], by } });
+        }
+      }
+    }
+  } catch { /* the policy check is auxiliary to the verify */ }
   const next = writeRunState(projectRoot, activeSession, {
     ...current,
     status: nextStatus,
@@ -2768,6 +2796,12 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     result.ok = result.errors.length === 0;
   }
   result.warnings.push(...anchorWarnings);
+  // OXB-118: rules that look guarded but are only text.
+  try {
+    const pol = require('./oxe-policy-rules.cjs').summary(config.policy_rules);
+    if (pol.advisory.length) result.warnings.push(`policy_rule_advisory: ${pol.advisory.length} de ${pol.total} regra(s) do projeto são só texto, nada as checa (${pol.advisory.slice(0, 3).map((r) => `"${r.text.slice(0, 50)}"`).join('; ')}${pol.advisory.length > 3 ? '…' : ''}) — converta para { id, kind: "command", deny } / { kind: "path", deny_read|deny_write } / { kind: "env", strip } / { id, forbid } (oxe-cc policy list)`);
+    for (const r of pol.invalid) result.errors.push(`policy_rules: ${r.id} — ${r.problem}`);
+  } catch { /* auxiliar */ }
   // OXB-038: phase criteria the SPEC does not declare, and input documents reusing the SPEC's A ids.
   try {
     const programState = paths.programDir ? require('./oxe-program.cjs').readProgram(paths.programDir) : null;
@@ -6023,6 +6057,7 @@ module.exports = {
   runtimeProgramAdopt,
   runtimeDeployAttach,
   runtimeSignal,
+  readNdjsonQuiet,
   runtimeSpecAmend,
   runtimeSpecAdd,
   runtimeProgramPhaseAdd,
