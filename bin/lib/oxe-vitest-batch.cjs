@@ -12,6 +12,11 @@
 const VALUE_FLAGS = new Set(['-t', '--testNamePattern', '-c', '--config', '--project', '--root', '-r', '--dir', '--environment', '--pool', '--reporter', '--outputFile', '--maxWorkers', '--minWorkers', '--shard', '--mode', '--testTimeout', '--hookTimeout', '--retry', '--bail', '--exclude']);
 /** Flags that change WHICH tests or HOW they are reported per segment: never batched across different values. */
 const PREFIX_RE = /^((?:npx\s+(?:--yes\s+)?|pnpm\s+(?:exec\s+)?|npm\s+exec\s+(?:--\s+)?|yarn\s+)?vitest)\s+(?:run\b|--run\b)\s*(.*)$/;
+/**
+ * F2 data: 28 commands were `npm run test:electron -- <file>` (vitest under Electron's node, the script passes the files
+ * through). `npm run <script> -- <paths…>` / `pnpm run <script> <paths…>` batch the same way (key = the script).
+ */
+const SCRIPT_RE = /^((?:npm|pnpm|yarn)\s+(?:run\s+)?[\w:.-]+)\s+--\s+(.*)$/;
 
 const looksLikePath = (t) => /[\\/]/.test(t) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(t) || /\.[cm]?[jt]sx?$/.test(t);
 
@@ -19,8 +24,15 @@ const looksLikePath = (t) => /[\\/]/.test(t) || /\.(test|spec)\.[cm]?[jt]sx?$/.t
 function parseVitest(segment) {
   const text = String(segment || '').trim();
   if (/["'`|<>;&$()]/.test(text.replace(/&&/g, ''))) return null; // quoting, pipes, env: leave alone
-  const m = PREFIX_RE.exec(text);
-  if (!m) return null;
+  let m = PREFIX_RE.exec(text);
+  let prefixOut = null;
+  if (m) prefixOut = `${m[1].replace(/\s+/g, ' ')} run`;
+  else {
+    const s = SCRIPT_RE.exec(text);
+    if (!s || /^(npm|pnpm|yarn)\s+(run\s+)?(lint|typecheck|type-check|build|check)\b/.test(s[1])) return null;
+    m = s;
+    prefixOut = `${s[1].replace(/\s+/g, ' ')} --`;
+  }
   const tokens = m[2].split(/\s+/).filter(Boolean);
   const flags = [];
   const files = [];
@@ -42,7 +54,7 @@ function parseVitest(segment) {
     files.push(t.replace(/\\/g, '/'));
   }
   if (!files.length) return null;
-  const prefix = `${m[1].replace(/\s+/g, ' ')} run`;
+  const prefix = prefixOut;
   return { prefix, flags, files, key: `${prefix} ${[...flags].sort().join(' ')}`.trim() };
 }
 

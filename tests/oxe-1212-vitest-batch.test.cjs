@@ -96,3 +96,21 @@ describe('OXB-094: vitest batching', () => {
     }
   });
 });
+
+describe('OXB-094/096 (F2 data): npm run <script> -- <files> batches; identical commands run once', () => {
+  it('npm run test:electron -- <file> batches by script; lint/typecheck/build are never batched', () => {
+    assert.equal(vb.batchVerifyCommand('npm run test:electron -- tests/x.test.ts && npm run test:electron -- tests/y.test.ts'), 'npm run test:electron -- tests/x.test.ts tests/y.test.ts');
+    assert.equal(vb.parseVitest('npm run lint -- src/a.ts'), null);
+    assert.equal(vb.parseVitest('npm run typecheck'), null);
+  });
+
+  it('dry-verify: `npm run typecheck` shared by 3 tasks runs once; each task is still classified on its own', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-vb-'));
+    dirs.push(dir);
+    fs.writeFileSync(path.join(dir, 'tc.js'), "require('fs').appendFileSync('tc.log','x\\n'); console.error(\"error TS2307: Cannot find module './src/alpha'\"); process.exit(1);\n");
+    const tasks = ['T1', 'T2', 'T3'].map((id) => ({ id, files: ['src/alpha.ts'], verifyCommand: 'node tc.js' }));
+    const r = dryRunVerifyCommands(dir, { tasks });
+    assert.equal(fs.readFileSync(path.join(dir, 'tc.log'), 'utf8').trim().split('\n').length, 1);
+    assert.deepEqual(r.results.map((x) => x.verdict), ['missing_target', 'missing_target', 'missing_target']);
+  });
+});

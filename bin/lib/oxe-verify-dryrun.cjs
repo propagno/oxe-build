@@ -268,6 +268,7 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
   let index = 0;
   // OXB-094: vitest segments that share runner and flags run as ONE process (JSON reporter → result per file); a
   // segment the batch cannot answer (no JSON, file not in the report) runs alone as before.
+  const sameCommand = new Map();
   const batched = options.batch === false ? new Map() : batchVitestSegments(projectRoot, selected, { timeoutMs, progress, cache: options.resume && cache, tree, maxFiles: options.batchMaxFiles });
   if (progress) progress(`dry-verify: ${totalSegments} comando(s) em ${selected.length} tarefa(s)${skipped.length ? ` · fora: ${skipped.length}` : ''}${tree ? (options.resume ? ' · --resume' : '') : ''}`);
   for (const task of selected) {
@@ -302,7 +303,7 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
       const cached = options.resume && key && cache.entries[key] && REUSABLE.has(cache.entries[key].verdict) ? cache.entries[key] : null;
       let run;
       let v;
-      const fromBatch = !cached ? batched.get(`${task.id}\u0000${segment}`) : null;
+      const fromBatch = !cached ? (batched.get(`${task.id}\u0000${segment}`) || sameCommand.get(segment) || null) : null;
       if (cached) {
         reused += 1;
         run = { code: cached.code, output: cached.output || '' };
@@ -320,6 +321,9 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
         if (progress) progress(`${label} ...`);
         const started = Date.now();
         run = runCommand(segment, projectRoot, timeoutMs);
+        // OXB-096 (F2: 14× `npm run typecheck`, 13× `npm run lint`): the same command on the same tree has the same
+        // output — the next tasks reuse it (each still classified against its own targets).
+        if (!run.timedOut) sameCommand.set(segment, { code: run.code, output: run.output });
         v = run.timedOut ? 'timeout' : run.code === 0 ? 'already_green' : classifyFailure(run.output, targets, { targetsExist, someTargetsExist, missingTargets, projectRoot });
         const secs = Math.round((Date.now() - started) / 1000);
         if (progress) progress(`${label} ... ${v === 'missing_target' || v === 'assertion_red' ? 'ok' : v} ${secs}s`);
