@@ -2608,6 +2608,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime verify [--no-gates]
   npx oxe-cc runtime scorecard [--since <data>] [--write] [--release-report <arquivo> --name <projeto>] [--json]
   npx oxe-cc runtime ci --attach <run-id|url> [--repo owner/repo] [--head <sha>]
+  npx oxe-cc runtime signal --from <relatório do HML>|<url de issue>|github:<owner/repo> [--dry-run] [--by <papel>]   (achado → CR na fase dele)
   npx oxe-cc runtime deploy --attach <env> --version <v> --ref <tag|url> [--check "<cmd>"]… [--phase Fn]   (registra e verifica; nunca faz o deploy)
   npx oxe-cc runtime program budget [--mode cap|track_only] [--budget-usd N] [--budget-turns N] --by <papel> --reason "…"
   npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"] [--no-gates] [--accept-drift <glob> --by <papel> --reason "…"]
@@ -4220,6 +4221,8 @@ function parseRuntimeArgs(argv) {
     else if (a === '--checkpoint-commits') out.checkpointCommits = true;
     else if (a === '--attach' && argv[i + 1]) out.attach = String(argv[++i]);
     else if (a === '--ref' && argv[i + 1]) out.ref = String(argv[++i]);
+    else if (a === '--any-label') out.anyLabel = true;
+    else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--check' && argv[i + 1]) (out.deployChecks = out.deployChecks || []).push(String(argv[++i]));
     else if (a === '--version' && argv[i + 1] && !String(argv[i + 1]).startsWith('-')) out.deployVersion = String(argv[++i]);
     else if (a === '--repo' && argv[i + 1]) out.repo = String(argv[++i]);
@@ -5523,6 +5526,23 @@ async function runRuntime(opts) {
     }
     if (!card.ok) process.exitCode = 1;
     return;
+  }
+
+  // OXB-092: runtime signal --from <HML report>|<issue url>|github:<owner/repo> [--by] [--dry-run] [--any-label]
+  if (opts.action === 'signal') {
+    try {
+      const out = oxeOperational.runtimeSignal(opts.dir, activeSession, { from: opts.fromEventId || opts.from, by: opts.by || null, dryRun: Boolean(opts.dryRun), anyLabel: Boolean(opts.anyLabel) });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeSignalSchema: 1, ...out }, null, 2)); return; }
+      for (const e of out.created) console.log(`  ${c ? green : ''}${out.dry_run ? '~' : '✓'}${c ? reset : ''} ${e.cr ? `${e.cr} ` : ''}${e.class} na ${e.phase || '—'} · ${e.criteria.join(', ')} (${e.criteria_source}) · ${e.summary.slice(0, 100)}`);
+      for (const d of out.duplicates) console.log(`  ${c ? dim : ''}= ${d} já importado${c ? reset : ''}`);
+      for (const x of out.closed_phase) console.log(`  ${c ? yellow : ''}! ${x.id}: ${x.phase} está fechada — não virou CR aqui. Para reabrir: ${x.suggestion}${c ? reset : ''}`);
+      for (const t of out.triage) console.log(`  ${c ? yellow : ''}? ${t.id} (${t.phase || '—'}): ${t.reason}${c ? reset : ''}`);
+      console.log(`  ${out.dry_run ? 'dry-run: ' : ''}${out.created.length} CR(s)${out.dry_run ? ' seriam criados' : ' criados'} · ${out.duplicates.length} já importados · ${out.closed_phase.length} de fase fechada · ${out.triage.length} para triagem`);
+      return;
+    } catch (err) {
+      console.error(`${red}${err && err.message ? err.message : 'Falha ao importar sinais.'}${reset}`);
+      process.exit(1);
+    }
   }
 
   // OXB-093: runtime deploy --attach <env> --version <v> --ref <tag|url> [--check "<cmd>"]… (never deploys).

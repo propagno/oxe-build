@@ -3140,6 +3140,67 @@ function runtimeFeedback(projectRoot, activeSession, options = {}) {
   return result;
 }
 
+/**
+ * OXB-092 (minimal): `oxe-cc runtime signal --from <HML report file>|<GitHub issue URL>|github:<owner/repo>`.
+ * Each finding becomes a CR in ITS phase (HML-F<n>-x → F<n>), tied to the criterion it names, or found through
+ * A* → T → files, or the standing criteria (A70). A finding of a CLOSED phase is not turned into a CR here (that would
+ * reopen the phase): it is listed for `runtime feedback` (a "reopen?" suggestion comes after 1.5.0). Idempotent by
+ * signal id. --dry-run shows what would be created.
+ */
+function runtimeSignal(projectRoot, activeSession, options = {}) {
+  const signal = require('./oxe-signal.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const programLib = require('./oxe-program.cjs');
+  const from = String(options.from || '').trim();
+  if (!from) throw new Error('use: oxe-cc runtime signal --from <relatório do HML>|<url de issue>|github:<owner/repo> [--by <papel>] [--dry-run]');
+  let findings = signal.githubFindings(from, { ghSpawn: options.ghSpawn, anyLabel: options.anyLabel });
+  if (!findings) {
+    const file = path.resolve(projectRoot, from);
+    if (!fs.existsSync(file)) throw new Error(`--from ${from}: arquivo não encontrado (ou use uma URL de issue / github:<owner/repo>)`);
+    findings = signal.parseReport(fs.readFileSync(file, 'utf8'));
+  }
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const program = programLib.readProgram(programDir);
+  const parsers = loadSdkParsers();
+  const planText = readTextIfExists(paths.plan) || '';
+  let plan = { tasks: [] };
+  try { plan = parsers && (planText || fs.existsSync(require('./oxe-plan-json.cjs').planJsonPathFor(paths.plan) || '')) ? parsePlanArtifact(parsers, planText, paths.plan) : plan; } catch { plan = { tasks: [] }; }
+  const standing = require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot);
+  const existing = changeLib.listChanges(programDir);
+  const already = new Set(changeLib.readNdjson(changeLib.changesFile(programDir)).filter((r) => r && r.kind === 'signal').map((r) => r.signal_id));
+  const by = options.by || 'signal';
+  const out = { created: [], duplicates: [], closed_phase: [], triage: [], dry_run: Boolean(options.dryRun) };
+  for (const f of findings) {
+    if (already.has(f.id) || existing.some((cr) => String(cr.summary || '').startsWith(`${f.id}:`))) { out.duplicates.push(f.id); continue; }
+    const phase = f.phase || (program && program.active_phase) || null;
+    const phaseState = program && phase ? program.phases.find((p) => p.id === phase) : null;
+    let criteria = f.criteria.filter((c) => /^(?:A\d+(?:\.\d+)?|G\d+)$/.test(c));
+    let source = criteria.length ? 'finding' : null;
+    let tasks = [];
+    if (!criteria.length && f.files.length) {
+      const traced = signal.criteriaFromFiles(plan, f.files);
+      if (traced.criteria.length) { criteria = traced.criteria; tasks = traced.tasks; source = 'traceability'; }
+    }
+    if (!criteria.length && standing.length) { criteria = standing; source = 'standing'; }
+    if (!criteria.length) { out.triage.push({ id: f.id, phase, summary: f.summary, reason: 'sem critério: nomeie o A* no achado, cite os arquivos (`src/x.tsx`) ou configure program.standing_acceptance' }); continue; }
+    if (phaseState && phaseState.status === 'closed') { out.closed_phase.push({ id: f.id, phase, summary: f.summary, criteria, suggestion: `oxe-cc runtime feedback --class ${f.class} --phase ${phase} --criteria ${criteria.join(',')} --summary "${f.id}: ${f.summary.slice(0, 80)}" (reabre a fase)` }); continue; }
+    const entry = { id: f.id, phase, class: f.class, criteria, criteria_source: source, tasks, summary: `${f.id}: ${f.summary}` };
+    if (options.dryRun) { out.created.push(entry); continue; }
+    const res = changeLib.recordChange({
+      programDir, program, plan,
+      class: f.class, summary: entry.summary, criteria, by, phase,
+      evidence: [f.source_url || from, f.files.length ? `arquivos: ${f.files.join(', ')}` : null, f.body && f.body !== f.summary ? f.body.slice(0, 1500) : null].filter(Boolean).join('\n'),
+    });
+    // The signal id makes re-imports idempotent (append-only: a tag record, the CR line stays as written).
+    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'signal', signal_id: f.id, cr: res.cr.id, source: f.source_url || from, phase, criteria_source: source, by, at: new Date().toISOString() });
+    if (res.reopened && res.program) programLib.writeProgram(programDir, res.program);
+    appendEvent(projectRoot, activeSession, { type: 'ChangeRequested', payload: { id: res.cr.id, class: res.cr.class, phase, criteria, signal: f.id, by } });
+    out.created.push({ ...entry, cr: res.cr.id });
+  }
+  return out;
+}
+
 // ── OXB-058: SPEC / ROADMAP / PROGRAM edits with an audit trail ─────────────────────────────────────────────
 
 function writeTextAtomic(file, text) {
@@ -5957,6 +6018,7 @@ module.exports = {
   runtimeProgramBudget,
   runtimeProgramAdopt,
   runtimeDeployAttach,
+  runtimeSignal,
   runtimeSpecAmend,
   runtimeSpecAdd,
   runtimeProgramPhaseAdd,

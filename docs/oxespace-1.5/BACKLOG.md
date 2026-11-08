@@ -647,12 +647,18 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-092: sinais de produção viram intenção nova (ADLC)
 
-- **Status:** aberto, versão mínima aprovada pelo TECH LEAD em 08/11. Proposta do oxe-build depois da pergunta do usuário "o oxe-build é um ADLC?": o ciclo só fechava pela mão de alguém, porque nada transformava um incidente ou issue em pedido de mudança.
-- **Escopo agora:**
-  - `oxe-cc runtime signal --from <arquivo>|<url de issue do GitHub>`. A fonte de hoje é o relatório do HML: cada achado HML-Fn-x vira um CR (`defect`/`spec_gap`) **naquela fase**, ligado ao critério pela rastreabilidade A* → T → arquivos. É a regra de zero defeito de UI (A70).
-  - Também issues do GitHub com o label bug.
-  - Sem integração ao vivo.
-- **Depois do 1.5.0:** crash reports do app (o caminho opt-in de diagnóstico) e a sugestão "reabrir a fase?" para fases fechadas.
+- **Status:** resolvido, versão mínima (1.21.2). Proposta do oxe-build depois da pergunta do usuário "o oxe-build é um ADLC?": o ciclo só fechava pela mão de alguém. A versão mínima foi aprovada pelo TECH LEAD em 08/11.
+  - `oxe-cc runtime signal --from <relatório do HML>|<url de issue>|github:<owner/repo> [--by <papel>] [--dry-run] [--any-label]`.
+  - **Relatório do HML** (markdown ou JSON): cada achado `HML-F<n>-<m>` vira um CR (`defect`, ou `spec_gap`/`constraint` com `[spec_gap]`) **na fase F<n>**. O critério vem de um destes, nesta ordem:
+    - o A* citado no achado;
+    - a rastreabilidade A* → T → arquivos (arquivos citados entre crases → tarefas do plano que são donas deles → os critérios delas);
+    - os critérios permanentes (A70, OXB-091).
+  - Sem critério, o achado vai para triagem e nenhum CR é criado.
+  - **Issues do GitHub:** uma URL (exige o label `bug`; `--any-label` libera), ou `github:<owner/repo>`, que importa todas as abertas com o label bug. Tudo via `gh`, sem integração ao vivo.
+  - Um achado de fase **fechada** não vira CR aqui, porque isso reabriria a fase. Ele sai com o comando `runtime feedback` pronto, e a sugestão de "reabrir?" fica para depois do 1.5.0.
+  - Reimportar o mesmo relatório não duplica nada (registro `signal` com o id do achado). `--dry-run` mostra sem gravar.
+  - **Depois do 1.5.0:** crash reports do app (caminho opt-in de diagnóstico) e a sugestão de reabrir fase fechada.
+  - Teste: `tests/oxe-1212-signal.test.cjs`.
 
 ## OXB-093: gate de deploy
 
