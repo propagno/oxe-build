@@ -399,10 +399,11 @@ function lintPlan(input) {
   if (phase && Array.isArray(phase.acceptance) && phase.acceptance.length) {
     const allowed = new Set(phase.acceptance);
     // A subcriterion belongs to its parent's phase; a G* is global.
-    const outside = [...covered].filter((ref) => !critIds.inPhase(ref, allowed));
+    const standing = new Set(input.standing || []);
+    const outside = [...covered].filter((ref) => !critIds.inPhase(ref, allowed) && !standing.has(ref));
     if (outside.length) errors.push(`fase ${phase.id}: o plano usa A* de outras fases: ${outside.join(', ')}`);
     // A parent with subcriteria declared in the SPEC is covered when each subcriterion is (OXB-037).
-    const missing = critIds.uncovered(phase.acceptance.filter((ref) => !critIds.isGlobal(ref)), covered, criteria);
+    const missing = critIds.uncovered(phase.acceptance.filter((ref) => !critIds.isGlobal(ref) && !standing.has(ref)), covered, criteria);
     if (missing.length) errors.push(`fase ${phase.id}: A* da fase sem tarefa: ${missing.join(', ')}`);
     if (input.plan && input.plan.phase && input.plan.phase !== phase.id) {
       errors.push(`PLAN.json declara fase ${input.plan.phase}, mas a fase ativa é ${phase.id}`);
@@ -478,7 +479,9 @@ function lintPlan(input) {
     }
   }
   const scopeAcceptance = phase && Array.isArray(phase.acceptance) && phase.acceptance.length ? phase.acceptance : [...covered];
-  const untested = scopeAcceptance.filter((ref) => !testedCriteria.has(ref));
+  // OXB-091: a standing criterion is proven by the phase sign-off + evidence, not by a frozen test.
+  const standingSet = new Set(input.standing || []);
+  const untested = scopeAcceptance.filter((ref) => !testedCriteria.has(ref) && !standingSet.has(ref));
   if (untested.length) {
     (input.requireAcceptanceTests ? errors : warnings).push(`A* sem teste de aceite congelado: ${untested.join(', ')}`);
   }

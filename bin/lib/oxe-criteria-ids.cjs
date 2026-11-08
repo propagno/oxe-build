@@ -66,4 +66,18 @@ function uncovered(criteria, covered, specIds) {
 const UI_FILE_RE = /\.(tsx|jsx|vue|svelte|css|scss|sass|less|html)$/i;
 const isUiTask = (task) => (task && (task.files || [])).some((f) => UI_FILE_RE.test(String(f)));
 
-module.exports = { CRITERION_ID_RE, CRITERION_TOKEN_RE, isCriterionId, isGlobal, isSub, parentOf, idsInField, inPhase, subcriteriaOf, uncovered, isUiTask, UI_FILE_RE };
+/**
+ * OXB-091: standing criteria (`program.standing_acceptance` in .oxe/config.json, e.g. ["A70"] — the per-phase UI gate
+ * "visual totalmente polido"): they hold at EVERY phase close, by a sign-off of that phase with evidence; never "of
+ * another phase", never "A* da fase sem tarefa".
+ */
+function standingAcceptance(projectRoot) {
+  try {
+    const config = JSON.parse(require('fs').readFileSync(require('path').join(projectRoot, '.oxe', 'config.json'), 'utf8')) || {};
+    const list = config.program && Array.isArray(config.program.standing_acceptance) ? config.program.standing_acceptance : [];
+    return [...new Set(list.map((v) => String(v).trim().toUpperCase()).filter((v) => CRITERION_ID_RE.test(v)))];
+  } catch { return []; }
+}
+
+module.exports = {
+  standingAcceptance, CRITERION_ID_RE, CRITERION_TOKEN_RE, isCriterionId, isGlobal, isSub, parentOf, idsInField, inPhase, subcriteriaOf, uncovered, isUiTask, UI_FILE_RE };

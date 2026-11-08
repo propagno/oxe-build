@@ -6350,6 +6350,7 @@ async function main() {
       else if (a === '--additive') o.additive = true;
       else if (a === '--allow-gap') o.allowGap = true;
       else if (a === '--keep-bullets') o.keepBullets = true;
+      else if (a === '--standing') o.standing = true;
       else if (a === '--json') o.json = true;
       else if (a.startsWith('-')) { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
       else positional.push(a);

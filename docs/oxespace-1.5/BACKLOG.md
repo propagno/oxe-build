@@ -628,5 +628,10 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-091: um critério que vale em todo close de fase
 
-- **Status:** aberto. Registrado pelo TECH LEAD em 08/11: A70 ("visual totalmente polido, erros na interface não serão admitidos", palavra do usuário) é um gate de UI por fase (baselines nas duas plataformas, axe limpo, sign-off do DESIGN, HML caixa-preta). `program phase edit F4 --add-acceptance A70` falha com "A70 já pertence a F3".
-- **Proposta:** critério permanente (`program.standing_acceptance: ["A70"]` ou `spec add criterion --standing`), exigido em todo close por sign-off da fase mais evidência, nunca "A* da fase sem tarefa" no lint, e com sign-off registrado por fase.
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11: A70 ("visual totalmente polido, erros na interface não serão admitidos", palavra do usuário) é um gate de UI por fase, mas `program phase edit F4 --add-acceptance A70` falhava com "A70 já pertence a F3".
+  - `program.standing_acceptance: ["A70"]` no `.oxe/config.json`, ou `oxe-cc spec add criterion A70 … --standing`, que grava lá, torna o critério permanente.
+  - **No close:** toda fase exige um sign-off **daquela fase** com evidência (`oxe-cc runtime signoff --phase F4 --criteria A70 --by design --evidence <relatório>`). Um sign-off de outra fase ou sem evidência não conta, e não dá para adiar: "erros na interface não serão admitidos". Os sign-offs ficam registrados por fase em `signoffs.ndjson`.
+  - **No lint:** o critério permanente nunca é "de outra fase", nunca é "A* da fase sem tarefa" e não exige teste congelado (a prova é o sign-off).
+  - **No verify:** ele fica no escopo de toda fase.
+  - O `program phase edit --add-acceptance A70` é recusado com a explicação.
+  - Teste: `tests/oxe-1212-standing.test.cjs`.

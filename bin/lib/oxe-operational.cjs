@@ -1246,6 +1246,9 @@ function scopeSpecToActivePhase(artifactPaths, parsedSpec, parsedPlan) {
   // OXB-037: the subcriteria of the phase's criteria and the global G* are the phase's too.
   const ids = require('./oxe-criteria-ids.cjs');
   for (const c of parsedSpec.criteria) if (ids.inPhase(c.id, keep)) keep.add(c.id);
+  let oxeRoot = path.resolve(artifactPaths.programDir);
+  while (path.basename(oxeRoot) !== '.oxe' && path.dirname(oxeRoot) !== oxeRoot) oxeRoot = path.dirname(oxeRoot);
+  for (const s of ids.standingAcceptance(path.dirname(oxeRoot))) keep.add(s);
   const dropped = parsedSpec.criteria.filter((c) => !keep.has(c.id));
   if (!dropped.length) return { spec: parsedSpec, outOfPhase: null };
   const phaseOf = new Map();
@@ -2698,6 +2701,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
   }
   const result = planJson.lintPlan({
     plan, spec, pack, phase, maxTasksPerWave, projectRoot,
+    standing: require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot),
     amendments,
     requireAcceptanceTests: Boolean(options.requireAcceptanceTests || config.acceptance_tests_required),
   });
@@ -3247,6 +3251,15 @@ function runtimeSpecAdd(projectRoot, activeSession, options = {}) {
     after: edit.after,
   };
   writeTextAtomic(paths.spec, edit.text);
+  // OXB-091: --standing makes the new criterion hold at every phase close (program.standing_acceptance).
+  if (options.standing && kind === 'criterion') {
+    const cfgPath = path.join(projectRoot, '.oxe', 'config.json');
+    const cfg = readJsonQuiet(cfgPath) || {};
+    cfg.program = cfg.program && typeof cfg.program === 'object' ? cfg.program : {};
+    cfg.program.standing_acceptance = [...new Set([...(cfg.program.standing_acceptance || []), edit.id])];
+    writeTextAtomic(cfgPath, `${JSON.stringify(cfg, null, 2)}\n`);
+    record.standing = true;
+  }
   changeLib.appendNdjson(changeLib.changesFile(programDir), record);
   appendEvent(projectRoot, activeSession, { type: 'SpecEdited', payload: { action: record.action, id: edit.id, by } });
   return { ...record, export: autoExportProgram(projectRoot, activeSession) };
@@ -3631,6 +3644,8 @@ function runtimeProgramPhaseEdit(projectRoot, activeSession, options = {}, inter
   const notStarted = phase.status === 'pending' && !phase.plan_ref && !phase.run_id && !phase.started_at && state.active_phase !== phase.id;
   if (phase.status === 'closed') throw new Error(`${phase.id} está fechada — mude o escopo de uma fase fechada com um CR (runtime feedback), não editando a fase`);
   if ((addReq.length || addAcc.length) && !notStarted) throw new Error(`${phase.id} já começou (${phase.status}${phase.plan_ref ? ', com plano' : ''}) — critérios e requisitos novos entram numa fase ainda não iniciada (ou via CR)`);
+  const standingIds = require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot);
+  for (const a of addAcc) if (standingIds.includes(a)) throw new Error(`${a} é permanente (program.standing_acceptance): vale em todo close de fase, por sign-off com evidência — não se adiciona a uma fase`);
   for (const a of addAcc) {
     const other = next.phases.find((p) => p.id !== phase.id && (p.acceptance || []).includes(a));
     if (other && !internal.moving) throw new Error(`${a} já pertence a ${other.id} — use oxe-cc program criterion move ${a} --from ${other.id} --to ${phase.id}`);
@@ -4443,6 +4458,16 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     appendEvent(projectRoot, activeSession, { type: 'DriftWaived', payload: { phase: phase.id, globs: acceptDrift, by } });
   }
   const closeGates = programCloseGateReasons(projectRoot, activeSession, { phase, run, paths, state, skip: options.gates === false });
+  // OXB-091: every standing criterion needs a sign-off of this phase with evidence (not deferrable: "erros na
+  // interface não serão admitidos" holds at every close).
+  const standing = require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot);
+  if (standing.length) {
+    const signoffs = readNdjsonQuiet(path.join(paths.programDir, 'signoffs.ndjson')).filter((s) => s && s.phase === phase.id);
+    for (const criterion of standing) {
+      const ok = signoffs.some((s) => (s.criteria || []).includes(criterion) && s.evidence);
+      if (!ok) closeGates.reasons.push(`critério permanente ${criterion}: falta o sign-off da fase ${phase.id} com evidência (oxe-cc runtime signoff --phase ${phase.id} --criteria ${criterion} --by <papel> --evidence <relatório/link>)`);
+    }
+  }
   // 1.20: um critério UAT com sign-off conta como verificado; o dossiê precisa estar sem drift e com handoff.
   const dossier = options.dossier === false ? null : runtimeDossier(projectRoot, activeSession, { phase: phase.id, runState: run });
   if (dossier && gateInput.verify_status === 'blocked' && dossier.pending.length === 0) {
