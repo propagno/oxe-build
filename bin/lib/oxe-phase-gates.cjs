@@ -89,11 +89,45 @@ function gateChecks(gates, when, options = {}) {
     }));
 }
 
+/**
+ * OXB-070: the lines that make the gate FAIL, never the head of the stream. CR-16 (lint) quoted the first of 217
+ * warnings ("285:3 warning … Error: Cannot access refs during render") — a case-insensitive /error/ matched a warning —
+ * while the failure was 2 `error` lines at the end. Strong markers first (eslint `N:M error`, tsc `error TS`, test
+ * runner FAIL/×/not ok/AssertionError, npm ERR!, a line starting with "error"); warnings never count; with none, the
+ * last lines of the output (a non-zero exit's tail).
+ */
+const ESLINT_WARNING_RE = /^\s*\d+:\d+\s+warning\s/i;
+const FAILING_LINE_RES = [
+  /^\s*\d+:\d+\s+error\s/i, // eslint stylish
+  /error TS\d{4}/, // tsc
+  /^\s*(FAIL|×|✗|✖(?!\s+\d+\s+problems?))\s/, // vitest / jest / node:test reporters
+  /^\s*not ok\s+\d+/, // TAP
+  /AssertionError|Expected:|Received:/,
+  /^npm ERR!/,
+  /^\s*(error|ERROR)\b[:\s]/,
+];
+const SUMMARY_LINE_RE = /✖\s+\d+\s+problems?\s+\(\d+\s+errors?|Tests?\s+\d+\s+failed|Found \d+ errors?|\d+ failing/i;
+
 function firstErrorLines(result, max = 12) {
   const text = [result && result.stdout, result && result.stderr, result && result.error].filter(Boolean).join('\n');
   const lines = text.split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.trim());
-  const flagged = lines.filter((l) => /error|fail|✗|×|expected|received|TS\d{4}/i.test(l));
-  return (flagged.length ? flagged : lines.slice(-max)).slice(0, max).join('\n');
+  const picked = [];
+  let lastFile = null;
+  for (const line of lines) {
+    // eslint prints the file path on its own line, then its problems indented.
+    if (/^[^\s].*\.(c|m)?[jt]sx?$|^[A-Za-z]:\\.*\.\w+$|^\/.*\.\w+$/.test(line)) { lastFile = line.trim(); continue; }
+    if (ESLINT_WARNING_RE.test(line)) continue;
+    if (FAILING_LINE_RES.some((re) => re.test(line))) {
+      picked.push(/^\s*\d+:\d+\s+error\s/i.test(line) && lastFile ? `${lastFile}:${line.trim()}` : line.trim());
+    }
+  }
+  if (picked.length) {
+    const summary = lines.find((l) => SUMMARY_LINE_RE.test(l));
+    const out = picked.slice(0, max);
+    if (summary && !out.includes(summary.trim())) out.push(summary.trim());
+    return out.join('\n');
+  }
+  return lines.filter((l) => !ESLINT_WARNING_RE.test(l)).slice(-max).join('\n');
 }
 
 /**

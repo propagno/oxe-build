@@ -387,6 +387,6 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-070: o resumo do CR de um gate mostra as linhas erradas
 
-- **Status:** aberto. Registrado pelo TECH LEAD em 08/11: o CR-16 (gate lint) trouxe o primeiro warning de 217 ("285:3 warning … Cannot access refs during render"); a falha real eram 2 linhas `error` (no-explicit-any) no fim.
+- **Status:** resolvido (1.21.2). O resumo de um gate vermelho (CR e motivo do close) pega as linhas que reprovam: eslint `N:M error` (com o arquivo do bloco), tsc `error TS`, FAIL/×/not ok/AssertionError, npm ERR! e linhas que começam com "error". Warnings do eslint nunca entram, e a contagem ("✖ 219 problems (2 errors, …)") fecha o trecho. Sem marcador, usa as últimas linhas da saída. Teste: `tests/oxe-1212-gate-summary.test.cjs` (o caso do CR-16). Registrado pelo TECH LEAD em 08/11: o CR-16 (gate lint) trouxe o primeiro warning de 217 ("285:3 warning … Cannot access refs during render"); a falha real eram 2 linhas `error` (no-explicit-any) no fim.
 - **Proposta:** o resumo usa as linhas que reprovam (eslint `error`, tsc `error TS`, vitest `FAIL`/`×`, ou as últimas linhas de um exit ≠ 0), nunca o começo do stream.
 - **Nota (baixa prioridade):** gate `requires: ["build"]`, ou um aviso do lint quando o gate lê saída de build que nada produz (o gate bundle falhou com ENOENT out/main).
