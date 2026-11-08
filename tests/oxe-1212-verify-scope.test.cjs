@@ -78,3 +78,25 @@ describe('OXB-069: the phase verify checks only the active phase criteria', () =
     assert.doesNotMatch(text, /Fora da fase/);
   });
 });
+
+describe('OXB-079: program close right after a passed verify', () => {
+  it('an execute that ended completed_with_external_pending + a passed verify: the run is completed and the close does not say "running"', async () => {
+    const dir = project({ phases: [['F1', ['A1']]] });
+    // T2 is delivered by an external PR: red while the PR is open (no flag), green once it lands.
+    const prLanded = 'node -e "process.exit(require(\'fs\').existsSync(\'pr-landed.flag\')?0:1)"';
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify({ schema_version: 1, tasks: [
+      { id: 'T1', title: 'base', wave: 1, files: ['src/a.js'], acceptance: ['A1'], verify: { commands: ['node -e "process.exit(0)"'] } },
+      { id: 'T2', title: 'baselines', wave: 1, kind: 'external_delivery', blocked_by: ['propagno/oxespace#700'], files: [], verify: { commands: [prLanded] } },
+    ] }, null, 2));
+    const executed = await op.runRuntimeExecute(dir, null, { executor: writer(dir), skipPreflight: true });
+    assert.equal(executed.result.status, 'completed_with_external_pending');
+    fs.writeFileSync(path.join(dir, 'pr-landed.flag'), 'x');
+    await op.runRuntimeVerify(dir, null, { timeoutMs: 60_000, gates: false });
+    const run = op.readRunState(dir, null);
+    assert.equal(run.verification_status, 'passed');
+    assert.equal(run.status, 'completed', 'a finished execute + a passed verify is completed, not running');
+    const closed = op.runtimeProgramClose(dir, null, { dossier: false, gates: false });
+    const reasons = (closed.gate && closed.gate.reasons) || [];
+    assert.ok(!reasons.some((r) => /verify não concluído/.test(r)), reasons.join('\n'));
+  });
+});

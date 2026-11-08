@@ -203,3 +203,49 @@ describe('OXB-060: runtime promote T<n> --base main', () => {
     assert.equal(s.status, 0, s.stderr + s.stdout);
   });
 });
+
+describe('OXB-077: the dossier does not count what came in by merging the base', () => {
+  it('a file merged from main by runtime sync is not phase work; the phase\'s own commits still are', () => {
+    const { dir } = setup();
+    const base = git(dir, 'rev-parse', 'HEAD~3'); // the program branch point (before the A1 test and T1/T2)
+    advanceMain(dir, { '.github/workflows/visual-baselines.yml': 'name: x\n', 'docs/ci-cd.md': '# ci\n' });
+    const out = op.runtimeSync(dir, null, { from: 'origin/main', verify: false });
+    assert.equal(out.merged, true, out.error);
+    const files = op.phaseChanges(dir, base).map((c) => c.path).sort();
+    assert.ok(files.includes('src/a.js') && files.includes('src/b.js') && files.includes('tests/a1.test.js'), files.join(','));
+    assert.ok(!files.includes('.github/workflows/visual-baselines.yml') && !files.includes('docs/ci-cd.md'), files.join(','));
+  });
+});
+
+describe('OXB-078: an orphaned gate CR can be closed', () => {
+  const change = require('../bin/lib/oxe-change.cjs');
+  it('a gate CR whose gate is no longer declared is withdrawn at verify; a declared one stays open', () => {
+    const programDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-orphan-'));
+    dirs.push(programDir);
+    const gates = require('../bin/lib/oxe-phase-gates.cjs');
+    gates.recordGateFailures({ programDir, program: null, plan: { tasks: [] }, checkResults: [
+      { check_id: 'gate-bundle', status: 'fail', stdout: 'ENOENT out/main', stderr: '' },
+      { check_id: 'gate-lint', status: 'fail', stdout: '  1:1  error  x', stderr: '' },
+    ] });
+    const r = change.reconcileChanges(programDir, null, { acceptanceTests: [] }, [], { declaredGates: ['lint', 'typecheck'] });
+    assert.equal(r.resolved.length, 1);
+    const crs = change.listChanges(programDir);
+    assert.equal(crs.find((c) => c.gate === 'bundle').status, 'withdrawn');
+    assert.match(crs.find((c) => c.gate === 'bundle').resolution, /gate bundle removido do plano/);
+    assert.equal(crs.find((c) => c.gate === 'lint').status, 'open');
+    assert.deepEqual(r.open.map((c) => c.gate), ['lint']);
+  });
+
+  it('runtime feedback withdraw CR-n --by --reason, logged; refused without a reason or for a closed CR', () => {
+    const { dir } = setup();
+    const programDir = path.join(dir, '.oxe', 'program');
+    change.recordChange({ programDir, program: null, plan: { tasks: [] }, class: 'constraint', summary: 'o gate bundle precisa de build', by: 'phase_gate:bundle', gate: 'bundle' });
+    assert.throws(() => op.runtimeChangeSetStatus(dir, null, { id: 'CR-01', status: 'withdrawn', by: 'tl' }), /motivo/);
+    const out = op.runtimeChangeSetStatus(dir, null, { id: 'CR-01', status: 'withdrawn', by: 'tech-lead', reason: 'o bundle roda só na CI' });
+    assert.equal(out.status, 'withdrawn');
+    const cr = change.listChanges(programDir)[0];
+    assert.equal(cr.status, 'withdrawn');
+    assert.equal(cr.resolved_by, 'tech-lead');
+    assert.throws(() => op.runtimeChangeSetStatus(dir, null, { id: 'CR-01', status: 'resolved', by: 'tl', reason: 'de novo, por engano' }), /já está withdrawn/);
+  });
+});

@@ -2560,6 +2560,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime signoff --phase F1 --criteria A8 --by <quem> [--message <nota>] [--evidence <caminho|url>]
   npx oxe-cc runtime feedback --class <defect|spec_gap|constraint|new_scope> --summary "..." [--criteria A4] [--tasks T7[,T8]] [--by <quem>] [--amend-to 2] [--additive]
   npx oxe-cc runtime feedback list [--json]
+  npx oxe-cc runtime feedback resolve|withdraw CR-<n> --by <papel> --reason "…"
   npx oxe-cc runtime rollback --task T3 [--yes]
   npx oxe-cc runtime execute ... [--checkpoint-commits] [--budget-turns N] [--budget-usd X] [--budget-reset] [--max-retries N] [--wave N] [--strict-external] [--parallel-mutating [--max-parallel N]] [--json → NDJSON por evento de tarefa]
   (qualquer comando) --plain  saída ASCII sem banner (padrão quando o stdout não é TTY; OXE_PLAIN=0 desliga)
@@ -4228,7 +4229,11 @@ function parseRuntimeArgs(argv) {
   if (positionals[0]) out.action = positionals[0];
   if (out.action === 'feedback') {
     // Só `list` é subcomando; qualquer outro posicional é o diretório do projeto.
-    if (positionals[1] === 'list') {
+    if (positionals[1] === 'resolve' || positionals[1] === 'withdraw') {
+      out.subAction = positionals[1];
+      out.crId = positionals[2] ? String(positionals[2]).toUpperCase() : '';
+      if (positionals[3]) out.dir = path.resolve(positionals[3]);
+    } else if (positionals[1] === 'list') {
       out.subAction = 'list';
       if (positionals[2]) out.dir = path.resolve(positionals[2]);
     } else if (positionals[1]) {
@@ -5018,6 +5023,13 @@ async function runRuntime(opts) {
 
   if (opts.action === 'feedback') {
     try {
+      // OXB-078: close a CR that can no longer close by evidence (its gate was removed, its scope was dropped).
+      if (opts.subAction === 'resolve' || opts.subAction === 'withdraw') {
+        const out = oxeOperational.runtimeChangeSetStatus(opts.dir, activeSession, { id: opts.crId, status: opts.subAction === 'resolve' ? 'resolved' : 'withdrawn', by: opts.by, reason: opts.reason });
+        if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeFeedbackSchema: 1, ...out }, null, 2));
+        else console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.id} ${out.status} por ${out.by}: ${out.reason}`);
+        return;
+      }
       if (opts.subAction === 'list' || (!opts.changeClass && !opts.summary)) {
         const changes = oxeOperational.runtimeChanges(opts.dir, activeSession);
         if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeChangesSchema: 1, changes }, null, 2));

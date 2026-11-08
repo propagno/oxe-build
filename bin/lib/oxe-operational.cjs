@@ -2285,7 +2285,12 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
   const doneNodes = current.canonical_state && Array.isArray(current.canonical_state.completedWorkItems)
     ? current.canonical_state.completedWorkItems.length
     : 0;
-  const executionDone = current.status === 'completed' || (graphNodes > 0 && doneNodes >= graphNodes);
+  // OXB-079: `completed_with_external_pending` (OXB-064) is a finished execute too — `=== 'completed'` sent a passed
+  // verify back to `running`, and program close then said "verify não concluído (status: running)".
+  // The execute stores `completed_with_external_pending` as `blocked`: the plan's work (PLAN.json, OXB-059) decides.
+  let planWorkComplete = false;
+  try { planWorkComplete = runtimePhaseWork(projectRoot, activeSession).complete; } catch { planWorkComplete = false; }
+  const executionDone = /^completed/.test(String(current.status || '')) || (graphNodes > 0 && doneNodes >= graphNodes) || planWorkComplete;
   const nextStatus = report.status === 'passed'
     ? executionDone ? 'completed' : 'running'
     : report.status === 'failed'
@@ -2299,7 +2304,9 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
   try {
     const changeLib = require('./oxe-change.cjs');
     if (artifactPaths.programDir) {
-      const reconciled = changeLib.reconcileChanges(artifactPaths.programDir, programPhaseId, parsedPlan, report.check_results);
+      // OXB-078: the gates the plan/config declare now (read even with --no-gates), so an orphaned gate CR closes.
+      const declaredGates = gatesLib.readPhaseGates({ phase_gates: parsedPlan.phaseGates }, projectConfig).map((g) => g.id);
+      const reconciled = changeLib.reconcileChanges(artifactPaths.programDir, programPhaseId, parsedPlan, report.check_results, { declaredGates });
       for (const id of reconciled.resolved) appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', run_id: current.run_id, payload: { id } });
     }
   } catch { /* reconciliação é auxiliar ao verify */ }
@@ -2329,6 +2336,10 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     residual_risks: report.risk_ledger,
     verification_evidence_coverage: report.evidence_coverage,
     verification_gaps: report.gaps,
+    // OXB-079: the verify's own outcome, apart from the run status (which stays `running` while a graph node — an
+    // external delivery still pending, say — is not completed). The phase close reads this.
+    verification_status: report.status,
+    verified_at: new Date().toISOString(),
     verification_regression: regressionSummary,
     verification_gates: gateSummary,
   });
@@ -2377,6 +2388,12 @@ function programCloseGateReasons(projectRoot, activeSession, ctx) {
     plan = null;
   }
   const gates = gatesLib.readPhaseGates({ phase_gates: plan && plan.phaseGates }, config);
+  // OXB-078: a CR of a gate no longer declared is withdrawn before the close counts open CRs.
+  try {
+    const orphanDir = ctx.paths.programDir || path.join(projectRoot, '.oxe', 'program');
+    const withdrawn = require('./oxe-change.cjs').reconcileChanges(orphanDir, ctx.phase.id, plan, [], { declaredGates: gates.map((g) => g.id) });
+    for (const id of withdrawn.resolved) appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', run_id: ctx.run && ctx.run.run_id, payload: { id, reason: 'gate_removed' } });
+  } catch { /* auxiliar */ }
   if (!gates.length) return out;
   const verifyGates = gates.filter((g) => g.when === 'phase_verify');
   const ran = (ctx.run && ctx.run.verification_gates) || null;
@@ -2721,10 +2738,20 @@ function gitLines(projectRoot, args) {
 function phaseChanges(projectRoot, base) {
   const changes = new Map();
   if (base) {
+    // OXB-077: files that arrived by MERGING the base (runtime sync --from origin/main, a hand merge) are not the
+    // phase's work. Only paths touched by a non-merge commit of the phase's own (first-parent) history count; without
+    // merges in the range this is the plain diff, as before.
+    const merges = gitLines(projectRoot, ['rev-list', '--merges', '--first-parent', `${base}..HEAD`]) || [];
+    let own = null;
+    if (merges.length) {
+      own = new Set(gitLines(projectRoot, ['log', '--first-parent', '--no-merges', '--relative', '--name-only', '--format=', `${base}..HEAD`, '--', '.']) || []);
+    }
     // --relative: paths relative to the project directory, only under it (a project inside a bigger repository).
     for (const line of gitLines(projectRoot, ['diff', '--relative', '--name-status', base, 'HEAD']) || []) {
       const [status, ...rest] = line.split('\t');
-      changes.set(rest[rest.length - 1], status.charAt(0));
+      const file = rest[rest.length - 1];
+      if (own && !own.has(file)) continue;
+      changes.set(file, status.charAt(0));
     }
   }
   for (const change of workingTreeChanges(projectRoot)) {
@@ -3649,6 +3676,29 @@ function selectTasksToReopen(planMdPath, parsedPlan, changeResult, requested) {
   return { targets, external, unknown };
 }
 
+/**
+ * OXB-078: `oxe-cc runtime feedback resolve|withdraw CR-n --by <papel> --reason "…"` — for a CR that can no longer
+ * close by evidence (its gate was removed, its scope dropped). Logged like every status change (who, why, when).
+ */
+function runtimeChangeSetStatus(projectRoot, activeSession, options = {}) {
+  const changeLib = require('./oxe-change.cjs');
+  const id = String(options.id || '').trim().toUpperCase();
+  if (!/^CR-\d+$/.test(id)) throw new Error('informe o CR: oxe-cc runtime feedback resolve|withdraw CR-<n> --by <papel> --reason "…"');
+  const status = options.status === 'resolved' ? 'resolved' : 'withdrawn';
+  const by = String(options.by || '').trim();
+  const reason = String(options.reason || '').trim();
+  if (!by) throw new Error('informe quem decide (--by <papel>)');
+  if (reason.length < 8) throw new Error('informe o motivo em uma frase (--reason "…") — fica no registro do CR');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const cr = changeLib.listChanges(programDir).find((c) => c.id === id);
+  if (!cr) throw new Error(`${id} não existe`);
+  if (cr.status !== 'open') throw new Error(`${id} já está ${cr.status}`);
+  changeLib.setChangeStatus(programDir, id, status, { resolution: `${status === 'resolved' ? 'resolvido' : 'retirado'} manualmente: ${reason}`, by, manual: true });
+  appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', payload: { id, status, by, manual: true } });
+  return { id, status, by, reason, export: autoExportProgram(projectRoot, activeSession) };
+}
+
 function runtimeChanges(projectRoot, activeSession) {
   const changeLib = require('./oxe-change.cjs');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
@@ -4033,6 +4083,13 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   if (!phase) throw new Error('Nenhuma fase ativa. Rode `oxe-cc runtime program start`.');
   const run = options.runState || readRunState(projectRoot, activeSession);
   const gateInput = phaseGateInputFromRun(run);
+  // OXB-079: "verify não concluído (status: running)" right after a passed verify — the run stays `running` while an
+  // external task of the graph is pending. A passed verify counts when the plan's work is done or external-only.
+  if (gateInput.verify_status !== 'completed' && run && run.verification_status === 'passed') {
+    let work = null;
+    try { work = runtimePhaseWork(projectRoot, activeSession); } catch { work = null; }
+    if (work && work.complete) gateInput.verify_status = 'completed';
+  }
   // 1.21 (OXB-020): the phase verify must have run every declared project gate green, and the close-time gates
   // (e.g. CI) run now — before the dossier, so a gate CR that just went green no longer counts as open.
   const closeGates = programCloseGateReasons(projectRoot, activeSession, { phase, run, paths, state, skip: options.gates === false });
@@ -4966,6 +5023,9 @@ function writeRunState(projectRoot, activeSession, runState = {}) {
       ? runState.verification_evidence_coverage
       : null,
     verification_gaps: Array.isArray(runState.verification_gaps) ? runState.verification_gaps.map(String) : [],
+    // OXB-079: the verify's own outcome (program close reads it; dropping it here kept the close on `running`).
+    verification_status: typeof runState.verification_status === 'string' ? runState.verification_status : null,
+    verified_at: typeof runState.verified_at === 'string' ? runState.verified_at : null,
     // 1.19: hash dos testes de aceite do plano congelado no compile; resumo da regressão de fases.
     acceptance_lock: runState.acceptance_lock && typeof runState.acceptance_lock === 'object' ? runState.acceptance_lock : null,
     verification_regression: runState.verification_regression && typeof runState.verification_regression === 'object' ? runState.verification_regression : null,
@@ -5432,6 +5492,7 @@ module.exports = {
   runtimeProgramPhaseAdd,
   runtimeProgramExport,
   runtimeProgramPhaseEdit,
+  runtimeChangeSetStatus,
   runtimeProgramCriterionMove,
   oxeHistoryWarning,
   runtimeSync,
@@ -5464,6 +5525,7 @@ module.exports = {
   runtimeProgramInit,
   runtimeProgramStart,
   runtimeProgramClose,
+  phaseChanges,
   phaseGateInputFromRun,
   readExecutorUsageRows,
   extractPlanTaskBody,

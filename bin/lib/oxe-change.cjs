@@ -165,8 +165,10 @@ function setChangeStatus(programDir, id, status, extra = {}) {
  * ou, para um CR aberto por gate do projeto (`gate`), o próprio `gate-<id>` verde.
  * @returns {{ resolved: string[], open: object[] }}
  */
-function reconcileChanges(programDir, phaseId, plan, checkResults) {
+function reconcileChanges(programDir, phaseId, plan, checkResults, options = {}) {
   const passing = new Set((checkResults || []).filter((r) => r.status === 'pass').map((r) => r.check_id));
+  // OXB-078: a gate CR whose gate is no longer declared can never go green — it closes as "gate removido do plano".
+  const declaredGates = Array.isArray(options.declaredGates) ? new Set(options.declaredGates) : null;
   const resolvedBy = new Map();
   for (const a of (plan && plan.acceptanceTests) || []) {
     const key = a.id || a.criterion;
@@ -182,6 +184,9 @@ function reconcileChanges(programDir, phaseId, plan, checkResults) {
     } else if (cr.gate && passing.has(`gate-${cr.gate}`)) {
       // 1.21: a CR raised by a red phase gate closes when that same gate goes green.
       setChangeStatus(programDir, cr.id, 'resolved', { resolution: `gate do projeto ${cr.gate} verde`, by: 'verify' });
+      resolved.push(cr.id);
+    } else if (cr.gate && declaredGates && !declaredGates.has(cr.gate)) {
+      setChangeStatus(programDir, cr.id, 'withdrawn', { resolution: `gate ${cr.gate} removido do plano (phase_gates) — o CR não tem mais como ficar verde`, by: 'verify' });
       resolved.push(cr.id);
     }
   }

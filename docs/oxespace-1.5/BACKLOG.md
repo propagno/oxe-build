@@ -455,3 +455,25 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
   - Remover da fase ativa tira o critério do plano atual: os testes de aceite dele, ele das tarefas, e a tarefa pendente que ficar sem critério. É recusado se outra tarefa depende dela ou se ela já tem checkpoint.
   - `oxe-cc program criterion move A<n> --from Fn --to Fm` checa as duas edições antes de escrever. Escreve PROGRAM, ROADMAP e plano juntos, e os CRs só daquele critério acompanham a fase.
   - Teste: `tests/oxe-1212-program-edit.test.cjs`.
+
+## OXB-077: o dossiê conta merges da base como `architecture_drift`
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11, no close da F1: workflows e docs que vieram da main (por `runtime sync` e pelos merges à mão a93d6278/ec2dde86) apareceram como "tocados fora do contrato".
+  - Quando a faixa da fase tem merges, um arquivo commitado só conta se um commit não-merge do histórico próprio da fase (first-parent) o tocou. O que entrou só pelo merge da base não é trabalho da fase.
+  - Sem merges na faixa, nada muda.
+  - Teste: `tests/oxe-1212-sync-promote.test.cjs`.
+
+## OXB-078: um CR de gate órfão não tinha como fechar
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11: o CR-17 (`phase_gate:bundle`) continuou aberto depois que o gate `bundle` saiu do `phase_gates`, e bloqueava o close.
+  - No verify e no close, um CR de gate cujo gate não está mais declarado vira `withdrawn` ("gate … removido do plano"). A lista de declarados é lida mesmo com `--no-gates`, então um verify sem gates nunca retira CR por engano.
+  - `oxe-cc runtime feedback resolve|withdraw CR-<n> --by <papel> --reason "…"` fecha à mão, registrado (quem, por quê, quando). É recusado sem motivo ou se o CR já está fechado.
+  - Teste: `tests/oxe-1212-sync-promote.test.cjs`.
+
+## OXB-079: o close dizia "verify não concluído (status: running)" logo depois de um verify aprovado
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (verify da rc.7 aprovado às 02:53, close às 03:10).
+  - **Causa:** um execute que termina `completed_with_external_pending` (OXB-064) fica gravado na run como `blocked`. O verify só considerava `completed` uma execução concluída, então um verify aprovado devolvia a run para `running`.
+  - **Agora:** o verify considera a execução concluída também quando o trabalho do plano (PLAN.json, OXB-059) está todo feito ou só aguarda entrega externa. Ele também grava o próprio resultado (`verification_status`, `verified_at`), e o close usa esse resultado.
+  - As edições de programa em outras fases (`phase add/edit`, `criterion move`) não tocam o estado do verify da fase ativa. O `criterion move` só muda o PLAN.json quando a fase de origem é a ativa.
+  - Teste: `tests/oxe-1212-verify-scope.test.cjs`.
