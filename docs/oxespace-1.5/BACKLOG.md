@@ -692,8 +692,15 @@ Cada bloco tem uma meta medível:
 
 ## OXB-094: agrupar os comandos vitest de uma tarefa (e de uma onda no dry-verify) num processo só
 
-- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
-  - Quando compartilham runner e flags. O relatório continua por arquivo.
+- **Status:** resolvido (1.21.2).
+  - **Verify da tarefa:** os segmentos `vitest run <arquivos>` com o mesmo runner e as mesmas flags viram um processo só, sem mudar o significado (todos precisam passar). O resto do comando fica no lugar. Vale no grafo e na suíte do verify (`verify_batched_from` guarda o original).
+  - **Dry-verify:** os segmentos vitest de todas as tarefas da rodada são agrupados por runner+flags (até 60 arquivos por lote) e rodam com o reporter JSON do vitest. Cada segmento recebe o veredito do(s) seu(s) arquivo(s), como antes, com a linha `... ok (lote)`.
+    - Sem relatório JSON, ou com arquivo fora do relatório, o segmento roda sozinho.
+    - O `--resume` reaproveita os resultados do lote.
+    - `batch: false` mantém o comportamento antigo.
+  - Só formas simples são agrupadas: `[npx|pnpm|npm exec|yarn] vitest run [flags] <caminhos>`, sem aspas, pipes nem filtros que não sejam caminho.
+  - Smoke com o vitest 5 real: um processo para 3 arquivos, com import ausente → `missing_target` e arquivo verde → `already_green`.
+  - Teste: `tests/oxe-1212-vitest-batch.test.cjs`.
 
 ## OXB-095: comandos de tarefas diferentes em paralelo no dry-verify
 
@@ -769,3 +776,80 @@ Cada bloco tem uma meta medível:
 
 - **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
   - command, signoff, deploy e script próprio, sem lógica de gate fixa no código.
+
+# Melhoria contínua (08/11)
+
+Requisitos escritos pelo TECH LEAD, aprovados pelo usuário. O desenho e a implementação são próprios do oxe-build.
+
+## OXB-108: verificador anti-stub no verify da tarefa e da fase
+
+- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
+  - Para cada símbolo e arquivo criado ou alterado, checa três níveis:
+  -   - **existe**;
+  -   - **é substantivo**: corpo vazio, "not implemented", retorno só com TODO e componente placeholder são stub;
+  -   - **está ligado**: importado e usado a partir de um ponto de entrada alcançável.
+  - Uma tarefa verde nos testes congelados, mas reprovada num nível, fica vermelha, com arquivo e linha.
+
+## OXB-109: gate de rigor do teste congelado (no spec freeze e no plan lint)
+
+- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
+  - O teste precisa exercitar código real, não asserção sobre o texto-fonte.
+  - A exceção é declarada com `rigor: source-assertion` e um motivo.
+  - Opcionalmente, uma amostra de mutantes (`--mutation`). O relatório sai por arquivo de teste.
+
+## OXB-110: registro de defeitos abertos entre fases (`.oxe/OPEN-DEFECTS.json`)
+
+- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
+  - Acumula stubs, TODO/FIXME do diff, testes skip/only, verifies não rodados, CRs de sinal abertos e achados do A70.
+  - Bloqueia o close e o gate de deploy, salvo `--waive <id> --reason` registrado.
+
+## OXB-111: revisão adversarial do plano (`plan lint --review`) com PLAN-REVIEW.md
+
+- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
+  - Dá veredito por dimensão:
+  -   - cobertura;
+  -   - completude;
+  -   - acoplamento temporal não declarado;
+  -   - ligações planejadas;
+  -   - escopo;
+  -   - verificação derivada dos critérios;
+  -   - decisões;
+  -   - redução de escopo.
+  - Um FAIL bloqueia o execute, salvo waiver com motivo.
+
+## OXB-112: decisões como ids de primeira classe (`D-<fase>-<n>`)
+
+- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
+  - `oxe-cc decision add`. As tarefas citam as decisões, o verify checa a evidência e o lint aponta decisão sem tarefa.
+
+## OXB-113: monitor de folga de contexto do orquestrador
+
+- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
+  - Hooks registram o uso de contexto e avisam nos limites.
+  - `oxe-cc runtime handoff` grava um estado retomável antes da compactação.
+
+## OXB-114: verificação de UI ao vivo dentro do loop (opt-in por fase)
+
+- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
+  - Um agente verificador isolado, o único com ferramentas de browser, roda depois de cada onda que toca UI.
+  - Os achados viram CRs de sinal na fase.
+
+## OXB-115: alarme de complexidade
+
+- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
+  - Mede as funções tocadas contra uma linha de base. Passando do limite, gera uma proposta de refatoração (no modo strict, bloqueia o close).
+
+## OXB-116: diff da superfície de API por fase
+
+- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
+  - Exports, assinaturas, canais IPC e ferramentas MCP, antes e depois, no dossiê.
+  - Mudança fora dos `symbols`/`symbols_removed` do pack é sinalizada.
+
+## OXB-117: lacunas extras
+
+- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
+  - (a) custo e tempo por tarefa, CR e retry, com previsão do orçamento da fase;
+  - (b) verify instável (verde e depois vermelho na mesma árvore) entra em quarentena com evidência;
+  - (c) impacto de regressão entre fases antes do execute;
+  - (d) ensaio de rollback (`runtime rollback --dry-run`) antes do close;
+  - (e) relatório da fase legível por humanos, em uma página, gerado no close.

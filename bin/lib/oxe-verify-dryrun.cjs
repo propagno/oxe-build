@@ -169,6 +169,62 @@ const taskDefinitionHash = (task) => crypto.createHash('sha256').update(JSON.str
 /** Results worth reusing on the same tree: the right red and the already green. A timeout or a broken command reruns. */
 const REUSABLE = new Set(['missing_target', 'assertion_red', 'already_green']);
 
+/**
+ * OXB-094: runs the vitest segments of the selected tasks in batches (same runner + flags, up to maxFiles files) with
+ * the JSON reporter, and returns `taskId\0segment` → { code, output } for each segment the report answers.
+ */
+function batchVitestSegments(projectRoot, tasks, options = {}) {
+  const vb = require('./oxe-vitest-batch.cjs');
+  const out = new Map();
+  const groups = new Map();
+  for (const task of tasks) {
+    const meta = task.meta || {};
+    if (Array.isArray(meta.blocked_by) && meta.blocked_by.filter(Boolean).length) continue;
+    for (const segment of splitSegments(task.verifyCommand)) {
+      if (options.cache && options.tree && options.cache.entries[segmentKey(options.tree, task.id, segment)]) continue;
+      const v = vb.parseVitest(segment);
+      if (!v || v.flags.some((f) => /^--outputFile/.test(f))) continue;
+      if (!groups.has(v.key)) groups.set(v.key, { prefix: v.prefix, flags: v.flags, members: [] });
+      groups.get(v.key).members.push({ task: task.id, segment, files: v.files });
+    }
+  }
+  const maxFiles = options.maxFiles || 60;
+  for (const g of groups.values()) {
+    if (g.members.length < 2) continue;
+    // chunks of up to maxFiles distinct files
+    const chunks = [];
+    let cur = [];
+    let files = new Set();
+    for (const m of g.members) {
+      const add = m.files.filter((f) => !files.has(f));
+      if (cur.length && files.size + add.length > maxFiles) { chunks.push(cur); cur = []; files = new Set(); }
+      cur.push(m);
+      for (const f of m.files) files.add(f);
+    }
+    if (cur.length) chunks.push(cur);
+    for (const chunk of chunks) {
+      if (chunk.length < 2) continue;
+      const allFiles = [...new Set(chunk.flatMap((m) => m.files))];
+      const report = path.join(require('os').tmpdir(), `oxe-vitest-${process.pid}-${Date.now().toString(36)}.json`);
+      const cmd = `${vb.commandOf(g.prefix, g.flags, allFiles)} --reporter=json --outputFile.json=${report.replace(/\\/g, '/')}`;
+      if (options.progress) options.progress(`[lote] ${g.prefix} · ${allFiles.length} arquivo(s) de ${[...new Set(chunk.map((m) => m.task))].join(', ')} ...`);
+      const started = Date.now();
+      runCommand(cmd, projectRoot, (options.timeoutMs || 180_000) * 3);
+      let json = null;
+      try { json = JSON.parse(fs.readFileSync(report, 'utf8')); } catch { json = null; }
+      try { fs.rmSync(report, { force: true }); } catch { /* */ }
+      if (options.progress) options.progress(`[lote] ${json ? 'ok' : 'sem relatório JSON — cada comando roda sozinho'} ${Math.round((Date.now() - started) / 1000)}s`);
+      if (!json) continue;
+      const byFile = vb.resultsByFile(json, projectRoot);
+      for (const m of chunk) {
+        const r = vb.segmentResult(byFile, m.files);
+        if (r) out.set(`${m.task}\u0000${m.segment}`, r);
+      }
+    }
+  }
+  return out;
+}
+
 function dryRunVerifyCommands(projectRoot, plan, options = {}) {
   const timeoutMs = options.timeoutMs || 180_000;
   // OXB-084: progress per command, resume on the same tree, and a subset (--only / --changed).
@@ -210,6 +266,9 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
   });
   const totalSegments = selected.reduce((n, task) => n + ((task.meta && Array.isArray(task.meta.blocked_by) && task.meta.blocked_by.filter(Boolean).length) ? 0 : splitSegments(task.verifyCommand).length), 0);
   let index = 0;
+  // OXB-094: vitest segments that share runner and flags run as ONE process (JSON reporter → result per file); a
+  // segment the batch cannot answer (no JSON, file not in the report) runs alone as before.
+  const batched = options.batch === false ? new Map() : batchVitestSegments(projectRoot, selected, { timeoutMs, progress, cache: options.resume && cache, tree, maxFiles: options.batchMaxFiles });
   if (progress) progress(`dry-verify: ${totalSegments} comando(s) em ${selected.length} tarefa(s)${skipped.length ? ` · fora: ${skipped.length}` : ''}${tree ? (options.resume ? ' · --resume' : '') : ''}`);
   for (const task of selected) {
     // OXB-063: work delivered by another path, still waiting on an open external dependency, cannot be green yet —
@@ -243,11 +302,20 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
       const cached = options.resume && key && cache.entries[key] && REUSABLE.has(cache.entries[key].verdict) ? cache.entries[key] : null;
       let run;
       let v;
+      const fromBatch = !cached ? batched.get(`${task.id}\u0000${segment}`) : null;
       if (cached) {
         reused += 1;
         run = { code: cached.code, output: cached.output || '' };
         v = cached.verdict;
         if (progress) progress(`${label} ... ${v} (já rodado nesta árvore)`);
+      } else if (fromBatch) {
+        run = fromBatch;
+        v = run.code === 0 ? 'already_green' : classifyFailure(run.output, targets, { targetsExist, someTargetsExist, missingTargets, projectRoot });
+        if (progress) progress(`${label} ... ${v === 'missing_target' || v === 'assertion_red' ? 'ok' : v} (lote)`);
+        if (key) {
+          cache.entries[key] = { task: task.id, verdict: v, code: run.code, output: String(run.output || '').slice(-4000), at: new Date().toISOString(), secs: 0, batched: true };
+          writeCache(cachePath, cache);
+        }
       } else {
         if (progress) progress(`${label} ...`);
         const started = Date.now();

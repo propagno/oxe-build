@@ -2671,7 +2671,9 @@ function readProtectedAcceptancePaths(projectRoot, activeSession) {
 /** PLAN.json canônico (1.19) quando existir ao lado do PLAN.md; senão o parser markdown. */
 function parsePlanArtifact(parsers, planText, planPath) {
   // OXB-049: a reference anchor with action copy becomes part of its task's verify (copy matches the source).
-  return require('./oxe-anchor-copy.cjs').attachAnchorCopyChecks(require('./oxe-plan-json.cjs').readPlanArtifact(planPath, planText, parsers.parsePlan), planPath);
+  const plan = require('./oxe-anchor-copy.cjs').attachAnchorCopyChecks(require('./oxe-plan-json.cjs').readPlanArtifact(planPath, planText, parsers.parsePlan), planPath);
+  // OXB-094: a task's vitest segments with the same runner + flags run as one process (same meaning: all must pass).
+  return require('./oxe-vitest-batch.cjs').batchPlanVerifies(plan);
 }
 
 /**
