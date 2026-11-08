@@ -668,3 +668,104 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
   - `phase_gates: [{ "id": "release", "kind": "deploy", "env": "github-release", "version": "1.5.0", "checks": ["install-over", "hml-packaged"] }]` roda no `program close`. O gate é verde quando a fase tem deploy daquele ambiente/versão, sem check vermelho (vale o resultado mais recente de cada comando, então um re-attach conserta) e com todos os checks exigidos já rodados (casados por trecho do comando).
   - A evidência entra no dossiê da fase como `deploy.md` (ambiente, versão, ref e a tabela de checks).
   - Teste: `tests/oxe-1212-deploy-gate.test.cjs`.
+
+---
+
+# Roteiro de excelência (08/11)
+
+Pedido do usuário, enviado pelo TECH LEAD. Os itens estão em ordem de prioridade.
+
+- Achados do execute da F2 sempre furam a fila.
+- Um relatório por item, com testes.
+- Uma versão de teste (rc) a cada 2–3 itens.
+- Nada é publicado antes do OXESpace 1.5.0.
+
+Cada bloco tem uma meta medível:
+
+- **A. Verificação rápida:** o dry-verify da F2 (318 comandos, ~2h) cai para menos de 20 min, e o verify de uma tarefa para menos de 5 min.
+- **B. Planejamento barato:** o plano da fase sai dos arquivos de papel com UM comando, sem scripts do TL.
+- **C. Versões estáveis:** uma versão estável por fase fechada do OXESpace; RC só para hotfix.
+- **D. Ciclo sem pessoa:** a fase vai do execute ao PR mergeado sem passo humano.
+- **E. System design upstream:** a pergunta do usuário.
+- **F. Modelo flexível:** nenhum caso novo exige mudança no código do OXE.
+- **G. Escala provada:** sem código agora. O TL manda as métricas da F2.
+
+## OXB-094: agrupar os comandos vitest de uma tarefa (e de uma onda no dry-verify) num processo só
+
+- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
+  - Quando compartilham runner e flags. O relatório continua por arquivo.
+
+## OXB-095: comandos de tarefas diferentes em paralelo no dry-verify
+
+- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
+  - Limitado por `parallel.max` e `min_free_mb` do config.
+
+## OXB-096: teste congelado de tarefa FUTURA: só coleta e um motivo de vermelho certo
+
+- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
+  - Checado uma vez por árvore, sem rodar a suíte inteira.
+
+## OXB-097: `oxe-cc plan build --from <arquivos de papel…>`
+
+- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
+  - Grava PLAN.json, PLAN.md e IMPLEMENTATION-PACK juntos.
+  - Cobre o `plan merge`, monta as ondas pela sobreposição de arquivos (arquivo quente serializa sozinho) e tira os arquivos de aceite dos escopos.
+  - Os symbols saem dos imports dos testes congelados e dos caminhos deleted/edited/created do papel. Os contracts saem dos symbols.
+  - O pack e o PLAN.md levam a `phase`.
+
+## OXB-098: `oxe-cc plan check-role <arquivo>`
+
+- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
+  - Validador que os agentes rodam ANTES de passar o plano ao TL.
+  - Checa os títulos exatos dos proves, prosa × ids A, a existência dos caminhos deleted/edited num ref e a forma do verify.
+
+## OXB-099: `oxe-cc spec freeze --from <PR|sha> [--paths glob]`
+
+- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
+  - Importa os testes congelados para o programa e checa os títulos dos proves.
+  - Recusa a mudança de um arquivo já congelado sem CR e registra a origem (PR, sha).
+
+## OXB-100: dois canais, `next` (RC) e `stable`
+
+- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
+  - `stable` é promovido só depois que uma fase do OXESpace fecha naquela build.
+  - Cada versão leva CHANGELOG e nota de migração de config (`oxe-cc doctor --migrate-config`).
+
+## OXB-101: suíte de regressão com programas REAIS
+
+- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
+  - O `.oxe/` da F1 e da F2 do OXESpace congelado como fixture. Antes de cada RC rodam lint, compile, dossiê e close dry-run sobre ele.
+
+## OXB-102: ciência do merge-train
+
+- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
+  - Lê o estado do PR e os comentários `merge-train:`.
+  - Quando o PR de uma tarefa sai do trem: reabre a tarefa, faz merge da main, roda o verify de novo, push e relabel.
+  - Nunca faz push num PR na fila no meio do carro. Nunca apaga branch ou tag.
+
+## OXB-103: modo coordenador
+
+- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
+  - Pelo DAG do PROGRAM, o próximo item de preparação de cada papel (CCRs, testes congelados das próximas fases) vai para um arquivo de fila que os papéis leem.
+
+## OXB-104: artefato SYSTEM-DESIGN
+
+- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
+  - Gerado por scan/spec: componentes e processos, fluxos técnicos e de negócio, decisões no estilo ADR e diagramas Mermaid (C4 de contexto/container, sequências principais).
+  - Cada seção é ligada a ids R/A.
+
+## OXB-105: gate de drift de design no close
+
+- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
+  - Quando o diff da fase toca módulos ou fluxos do SYSTEM-DESIGN (ou de `.oxe/codebase/`) e o documento não mudou, o close falha listando as seções desatualizadas.
+  - Depois de cada close roda um `compact` automático que grava o CODEBASE-DELTA.
+
+## OXB-106: tipos de tarefa declarativos
+
+- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
+  - add, remove, move, test-only e config-only, cada um com a sua regra de pack. A OXB-088 fez só o remove.
+
+## OXB-107: gates como plugins de config
+
+- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
+  - command, signoff, deploy e script próprio, sem lógica de gate fixa no código.
