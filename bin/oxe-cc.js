@@ -2567,6 +2567,8 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime scorecard [--since <data>] [--write] [--release-report <arquivo> --name <projeto>] [--json]
   npx oxe-cc runtime ci --attach <run-id|url> [--repo owner/repo] [--head <sha>]
   npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"] [--no-gates]
+  npx oxe-cc runtime sync --from origin/main [--no-fetch] [--no-reverify]   (merge local; reverify das tarefas done tocadas pela base)
+  npx oxe-cc runtime promote T<n> --base main [--branch <nome>] [--open-pr] [--remote origin] [--no-pr-ready]
   npx oxe-cc spec amend A<n> (--text "…"|--append "…"|--verify "…") --by <papel> --reason "…" [--additive] [--phase Fn]
   npx oxe-cc spec add criterion A<n> --text "…" --verify "…" --by <papel> --reason "…" [--allow-gap]
   npx oxe-cc spec add requirement R<n> --text "…" [--criteria A<n>,…] [--before "### Fora do escopo"] --by <papel> --reason "…"
@@ -4158,6 +4160,11 @@ function parseRuntimeArgs(argv) {
     else if (a === '--summary' && argv[i + 1]) out.summary = String(argv[++i]);
     else if (a === '--amend-to' && argv[i + 1]) out.amendTo = Number(argv[++i]);
     else if (a === '--tasks' && argv[i + 1]) out.tasks = String(argv[++i]);
+    else if (a === '--branch' && argv[i + 1]) out.branch = String(argv[++i]);
+    else if (a === '--open-pr') out.openPr = true;
+    else if (a === '--no-fetch') out.noFetch = true;
+    else if (a === '--no-reverify') out.noReverify = true;
+    else if (a === '--no-pr-ready') out.noPrReady = true;
     else if (a === '--additive') out.additive = true;
     else if (a === '--defer-signoff') out.deferSignoff = true;
     else if (a === '--risk' && argv[i + 1]) out.risk = String(argv[++i]);
@@ -4223,6 +4230,10 @@ function parseRuntimeArgs(argv) {
     } else if (positionals[1]) {
       out.dir = path.resolve(positionals[1]);
     }
+  } else if (out.action === 'promote' && /^T\d+$/i.test(positionals[1] || '')) {
+    // OXB-060: `runtime promote T7 --base main` promotes one task; without a task id it is the run promotion pipeline.
+    out.task = positionals[1].toUpperCase();
+    if (positionals[2]) out.dir = path.resolve(positionals[2]);
   } else if (out.action === 'gates' || out.action === 'program') {
     if (positionals[1]) out.subAction = positionals[1];
     if (positionals[2]) out.dir = path.resolve(positionals[2]);
@@ -5456,6 +5467,53 @@ async function runRuntime(opts) {
       console.error(`${red}${err && err.message ? err.message : 'Falha ao executar checks do runtime.'}${reset}`);
       process.exit(1);
     }
+  }
+
+  if (opts.action === 'sync') {
+    // OXB-060: merge the base into the program branch and reverify the done tasks whose files changed upstream.
+    try {
+      const out = oxeOperational.runtimeSync(opts.dir, activeSession, { from: opts.fromEventId, fetch: !opts.noFetch, verify: !opts.noReverify });
+      if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeSyncSchema: 1, ...out }, null, 2));
+      else if (out.up_to_date) console.log(`  ${c ? green : ''}✓${c ? reset : ''} já contém ${out.from} — nada a mergear`);
+      else if (out.error) console.log(`  ${red}✗${reset} ${out.error}`);
+      else {
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.from} mergeado (${out.upstream_files.length} arquivo(s) mudaram na base)${out.fetched.attempted && !out.fetched.ok ? ' — fetch falhou, usada a ref local' : ''}`);
+        if (!out.needs_reverify.length) console.log('  Nenhuma tarefa done tocada pela base.');
+        else {
+          console.log('  Tarefa  Reverify');
+          for (const row of out.table) console.log(`  ${row.task.padEnd(7)} ${row.status === 'still_green' ? 'OK ainda verde' : `FAIL agora vermelho — reaberta${row.failed_segment ? ` (segmento [${row.failed_segment.index}/${row.failed_segment.total}]: ${row.failed_segment.command})` : ''}`}`);
+          const unverified = out.needs_reverify.filter((id) => !out.table.some((r) => r.task === id));
+          if (unverified.length) console.log(`  needs_reverify (sem verify rodado): ${unverified.join(', ')}`);
+        }
+      }
+      if (out.error || out.reopened.length) process.exitCode = 1;
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (opts.action === 'promote' && opts.task) {
+    try {
+      const out = oxeOperational.runtimePromote(opts.dir, activeSession, { task: opts.task, base: opts.baseBranch || 'main', branch: opts.branch, remote: opts.remote || 'origin', openPr: Boolean(opts.openPr), prReady: !opts.noPrReady });
+      if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimePromoteSchema: 1, ...out }, null, 2));
+      else if (out.conflict) console.log(`  ${red}✗${reset} ${out.error}`);
+      else {
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.task} → branch ${out.branch} a partir de ${out.base} (${out.commits.length} commit(s), cherry-pick -x)`);
+        if (out.pr_ready) console.log(`  pr:ready: ${out.pr_ready.ok ? 'OK verde' : 'FAIL vermelho'}${out.pr_ready.ok ? '' : `
+${out.pr_ready.tail}`}`);
+        console.log(`  Corpo do PR: ${out.body_file}`);
+        if (out.pr) console.log(`  PR: ${out.pr}`);
+        else if (out.error) console.log(`  ${red}✗${reset} ${out.error}`);
+        if (!out.pr) { console.log('  Para abrir o PR:'); for (const cmd of out.commands) console.log(`    ${cmd}`); }
+      }
+      if (out.error || (out.pr_ready && !out.pr_ready.ok)) process.exitCode = 1;
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+    }
+    return;
   }
 
   if (opts.action === 'promote') {

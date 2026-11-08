@@ -305,7 +305,10 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-060: a branch do programa diverge da main; promote por tarefa
 
-- **Status:** aberto. Detalhes em `HANDOFF-1.21.2.md` §11.
+- **Status:** resolvido (1.21.2).
+  - `oxe-cc runtime sync --from origin/main [--no-fetch] [--no-reverify]`: fetch do remoto e merge local (`--no-ff`, nunca push). No conflito, aborta o merge e lista os arquivos. Toda tarefa done cujos `files` mudaram na base recebe `needs_reverify`, e o verify dela roda de novo com o runner por segmento da OXB-066, sem executor. A tabela tarefa → OK ainda verde / FAIL agora vermelho mostra o segmento que falhou. Verde limpa a marca (`reverified`); vermelho reabre a tarefa. Recusa working tree sujo fora de .oxe/.
+  - `oxe-cc runtime promote T<n> --base main [--branch] [--open-pr] [--remote] [--no-pr-ready]`: branch `oxe/promote-tn` a partir da base, com cherry-pick -x (na ordem do histórico) dos commits com trailer `OXE-Task: Tn` / `done_commit` e dos commits dos testes congelados dos critérios da tarefa. No conflito, aborta, apaga a branch e volta à branch do programa. Roda o `pr:ready` do projeto na ponta da branch e reporta o resultado. O corpo do PR vai para `.oxe/promote/Tn.md` (tarefa, arquivos, critérios, CRs, commits), sempre por `--body-file`. Push e `gh pr create` só com `--open-pr`; sem ele, imprime os comandos. Nunca põe label. Com `--open-pr`, recusa se a branch já existe no remoto (nada de force-push). `runtime promote` sem id de tarefa continua sendo o pipeline de promoção do run.
+  - Teste: `tests/oxe-1212-sync-promote.test.cjs` (repos locais com um bare como origin e `gh` falso).
 
 ## OXB-061: o `runtime feedback` reabre todas as tarefas do critério
 

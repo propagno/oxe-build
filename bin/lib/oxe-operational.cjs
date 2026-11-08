@@ -3037,6 +3037,239 @@ function runtimeProgramPhaseAdd(projectRoot, activeSession, options = {}) {
   return { phase: newId, after: afterNorm, renumbered, moved_change_records: movedRecords, warnings, leftovers, export: autoExportProgram(projectRoot, activeSession) };
 }
 
+// ── OXB-060: keep the program branch in step with main; promote a task by cherry-pick ─────────────────────────
+
+function gitRun(projectRoot, args, extra = {}) {
+  const res = spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024, ...extra });
+  return { ok: res.status === 0, status: res.status, stdout: String(res.stdout || ''), stderr: String(res.stderr || ''), error: res.error || null };
+}
+
+/** Dirty paths of the project outside .oxe/ (the runtime's own state never blocks a sync or promote). */
+function dirtyProjectPaths(projectRoot) {
+  return projectStatusPaths(projectRoot).filter((p) => !p.startsWith('.oxe/'));
+}
+
+function runChildCommand(projectRoot, command, timeoutMs = 600_000) {
+  applyChildEnvPolicy(projectRoot);
+  const rt = loadRuntimeModule();
+  const env = rt && typeof rt.childProcessEnv === 'function'
+    ? rt.childProcessEnv(process.env)
+    : (() => { const e = { ...process.env }; delete e.NODE_TEST_CONTEXT; return e; })();
+  const res = spawnSync(command, { cwd: projectRoot, shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true, env });
+  const output = `${res.stdout || ''}\n${res.stderr || ''}`;
+  return { ok: res.status === 0, status: res.status, tail: output.split(/\r?\n/).filter(Boolean).slice(-15).join('\n') };
+}
+
+function readPlanJsonDoc(projectRoot, activeSession) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) return { jsonPath: null, doc: null, paths };
+  return { jsonPath, doc: JSON.parse(fs.readFileSync(jsonPath, 'utf8')), paths };
+}
+
+/**
+ * `oxe-cc runtime sync --from origin/main [--no-fetch] [--no-verify]`: merges the base into the program branch
+ * (local merge, never a push; stops and aborts on a conflict). Every done task whose `files` changed upstream is
+ * marked `needs_reverify` and its verify rerun with no executor: green clears the mark, red reopens the task.
+ */
+function runtimeSync(projectRoot, activeSession, options = {}) {
+  const from = String(options.from || '').trim();
+  if (!from) throw new Error('informe a base: oxe-cc runtime sync --from origin/main');
+  if (!gitLines(projectRoot, ['rev-parse', '--git-dir'])) throw new Error('runtime sync exige um repositório git');
+  const dirty = dirtyProjectPaths(projectRoot);
+  if (dirty.length) throw new Error(`working tree com mudanças fora de .oxe/ (${dirty.slice(0, 5).join(', ')}${dirty.length > 5 ? '…' : ''}) — faça commit ou stash antes do sync`);
+  const fetched = { attempted: false, ok: null };
+  const remoteMatch = /^([^/\s]+)\/(.+)$/.exec(from);
+  if (options.fetch !== false && remoteMatch && (gitLines(projectRoot, ['remote']) || []).includes(remoteMatch[1])) {
+    fetched.attempted = true;
+    fetched.ok = gitRun(projectRoot, ['fetch', '-q', remoteMatch[1], remoteMatch[2]]).ok;
+  }
+  const head = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
+  const target = (gitLines(projectRoot, ['rev-parse', '--verify', `${from}^{commit}`]) || [])[0];
+  if (!target) throw new Error(`base desconhecida: ${from}`);
+  const mergeBase = (gitLines(projectRoot, ['merge-base', 'HEAD', target]) || [])[0] || null;
+  const upstream = mergeBase ? (gitLines(projectRoot, ['diff', '--relative', '--name-only', mergeBase, target]) || []) : [];
+  const result = { from, head_before: head, target, merge_base: mergeBase, fetched, upstream_files: upstream, merged: false, conflicts: [], needs_reverify: [], reverified: [], reopened: [], table: [], up_to_date: false };
+  if (mergeBase === target) {
+    result.up_to_date = true;
+    return result;
+  }
+  const merge = gitRun(projectRoot, ['merge', '--no-edit', '--no-ff', '-m', `Merge ${from} into program branch (oxe-cc runtime sync)`, target]);
+  if (!merge.ok) {
+    result.conflicts = (gitLines(projectRoot, ['diff', '--name-only', '--diff-filter=U']) || []);
+    gitRun(projectRoot, ['merge', '--abort']);
+    result.error = result.conflicts.length
+      ? `conflito ao mergear ${from}: ${result.conflicts.join(', ')} — merge abortado; resolva à mão (git merge ${from}) e rode runtime sync de novo`
+      : `merge de ${from} falhou: ${(merge.stderr || merge.stdout).trim().split(/\r?\n/).slice(-3).join(' · ')}`;
+    appendEvent(projectRoot, activeSession, { type: 'ProgramSyncFailed', payload: { from, conflicts: result.conflicts } });
+    return result;
+  }
+  result.merged = true;
+  result.head_after = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
+  const { jsonPath, doc, paths } = readPlanJsonDoc(projectRoot, activeSession);
+  if (doc && Array.isArray(doc.tasks)) {
+    const changed = new Set(upstream);
+    const planJsonLib = require('./oxe-plan-json.cjs');
+    for (const task of doc.tasks) {
+      if (!task || task.done !== true) continue;
+      const touched = (task.files || []).filter((f) => changed.has(String(f).replace(/\\/g, '/')));
+      if (!touched.length) continue;
+      task.needs_reverify = { since: from, files: touched, at: new Date().toISOString() };
+      result.needs_reverify.push(task.id);
+    }
+    if (result.needs_reverify.length) writeTextAtomic(jsonPath, `${JSON.stringify(doc, null, 2)}\n`);
+    if (options.verify !== false) {
+      for (const id of result.needs_reverify) {
+        const task = doc.tasks.find((t) => t.id === id);
+        const commands = task.verify && Array.isArray(task.verify.commands) ? task.verify.commands.filter(Boolean) : [];
+        if (!commands.length) continue;
+        // Same per-segment runner as the task verify (OXB-066): each `a && b` segment alone, the first red one named.
+        const rt = loadRuntimeModule();
+        const split = rt && typeof rt.splitVerifySegments === 'function' ? rt.splitVerifySegments : (c) => [c];
+        const segments = commands.flatMap((c) => split(c));
+        let run = { ok: true };
+        for (let i = 0; i < segments.length; i += 1) {
+          const r = runChildCommand(projectRoot, segments[i]);
+          if (!r.ok) { run = { ok: false, tail: r.tail, failed_segment: { index: i + 1, total: segments.length, command: segments[i], exit_code: r.status } }; break; }
+        }
+        result.table.push({ task: id, status: run.ok ? 'still_green' : 'now_red', ...(run.failed_segment ? { failed_segment: run.failed_segment } : {}) });
+        const fresh = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+        const t = fresh.tasks.find((x) => x.id === id);
+        if (run.ok) {
+          delete t.needs_reverify;
+          t.reverified = { at: new Date().toISOString(), since: from };
+          writeTextAtomic(jsonPath, `${JSON.stringify(fresh, null, 2)}\n`);
+          result.reverified.push(id);
+        } else {
+          writeTextAtomic(jsonPath, `${JSON.stringify(fresh, null, 2)}\n`);
+          if (planJsonLib.markPlanTaskOpen(paths.plan, id, { by: `runtime sync ${from}` })) result.reopened.push({ task: id, tail: run.tail, failed_segment: run.failed_segment });
+        }
+      }
+    }
+  }
+  appendEvent(projectRoot, activeSession, { type: 'ProgramSynced', payload: { from, target, upstream_files: upstream.length, needs_reverify: result.needs_reverify, reverified: result.reverified, reopened: result.reopened.map((r) => r.task) } });
+  return result;
+}
+
+/**
+ * `oxe-cc runtime promote <Tn> --base main [--branch name] [--open-pr] [--remote origin]`: a branch from the base with
+ * the task's checkpoint commits (OXE-Task trailer / done_commit) and the commits of its frozen acceptance tests,
+ * cherry-picked with -x in history order. Stops (and cleans up) on a conflict; runs the project's `pr:ready` script
+ * when there is one; writes the PR body from the task and its CRs. Push + `gh pr create` only with `--open-pr`.
+ */
+function runtimePromote(projectRoot, activeSession, options = {}) {
+  const taskId = String(options.task || '').trim().toUpperCase();
+  if (!/^T\d+$/.test(taskId)) throw new Error('informe a tarefa: oxe-cc runtime promote T<n> --base main');
+  const base = String(options.base || 'main').trim();
+  if (!gitLines(projectRoot, ['rev-parse', '--git-dir'])) throw new Error('runtime promote exige um repositório git');
+  const dirty = dirtyProjectPaths(projectRoot);
+  if (dirty.length) throw new Error(`working tree com mudanças fora de .oxe/ (${dirty.slice(0, 5).join(', ')}) — faça commit ou stash antes do promote`);
+  const baseSha = (gitLines(projectRoot, ['rev-parse', '--verify', `${base}^{commit}`]) || [])[0];
+  if (!baseSha) throw new Error(`base desconhecida: ${base}`);
+  const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+  const task = doc && Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
+  if (!task) throw new Error(`${taskId} não está no PLAN.json`);
+  if (task.done !== true) throw new Error(`${taskId} não está done — só uma tarefa concluída e verde é promovida`);
+  // Commits of the task not yet in the base: its checkpoints and the frozen tests of its criteria.
+  const range = `${baseSha}..HEAD`;
+  const shas = new Set(gitLines(projectRoot, ['log', '--format=%H', '-E', `--grep=^OXE-Task: ${taskId}$`, range]) || []);
+  if (task.done_commit) {
+    const inRange = gitLines(projectRoot, ['rev-list', range]) || [];
+    const full = (gitLines(projectRoot, ['rev-parse', '--verify', `${task.done_commit}^{commit}`]) || [])[0];
+    if (full && inRange.includes(full)) shas.add(full);
+  }
+  const criteria = new Set(Array.isArray(task.acceptance) ? task.acceptance : []);
+  const testFiles = (Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])
+    .filter((a) => a && criteria.has(a.criterion))
+    .flatMap((a) => a.files || []);
+  if (testFiles.length) for (const sha of gitLines(projectRoot, ['log', '--format=%H', range, '--', ...testFiles]) || []) shas.add(sha);
+  if (!shas.size) throw new Error(`${taskId}: nenhum commit da tarefa fora de ${base} (sem trailer OXE-Task/done_commit em ${base}..HEAD) — já está na base?`);
+  const ordered = (gitLines(projectRoot, ['rev-list', '--reverse', '--topo-order', range]) || []).filter((sha) => shas.has(sha));
+  const original = (gitLines(projectRoot, ['rev-parse', '--abbrev-ref', 'HEAD']) || [])[0];
+  const originalSha = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
+  const branch = String(options.branch || `oxe/promote-${taskId.toLowerCase()}`).trim();
+  if (gitLines(projectRoot, ['rev-parse', '--verify', '-q', `refs/heads/${branch}`])) throw new Error(`a branch ${branch} já existe — use --branch <outra> ou apague-a`);
+  // Never a force-push: a branch already on the remote with commits we do not have is refused before anything changes.
+  const remote = String(options.remote || 'origin');
+  if (options.openPr) {
+    const remoteHead = gitRun(projectRoot, ['ls-remote', '--heads', remote, branch]);
+    const existing = remoteHead.ok ? remoteHead.stdout.trim().split(/\s+/)[0] : '';
+    if (existing) throw new Error(`a branch ${branch} já existe em ${remote} (${existing.slice(0, 8)}) — o promote não sobrescreve nem faz force-push; use --branch <outra>`);
+  }
+  const back = () => gitRun(projectRoot, ['checkout', '-q', original && original !== 'HEAD' ? original : originalSha]);
+  const result = { task: taskId, base, branch, commits: ordered, conflict: null, pr_ready: null, body_file: null, pr: null, commands: [] };
+  const co = gitRun(projectRoot, ['checkout', '-q', '-b', branch, baseSha]);
+  if (!co.ok) throw new Error(`não foi possível criar ${branch}: ${co.stderr.trim()}`);
+  try {
+    for (const sha of ordered) {
+      const pick = gitRun(projectRoot, ['cherry-pick', '-x', sha]);
+      if (!pick.ok) {
+        const files = gitLines(projectRoot, ['diff', '--name-only', '--diff-filter=U']) || [];
+        gitRun(projectRoot, ['cherry-pick', '--abort']);
+        back();
+        gitRun(projectRoot, ['branch', '-D', branch]);
+        result.conflict = { commit: sha, files };
+        result.error = `conflito no cherry-pick de ${sha.slice(0, 8)} (${files.join(', ') || 'sem arquivos'}) — branch ${branch} descartada; resolva à mão ou rode runtime sync --from ${base} antes`;
+        appendEvent(projectRoot, activeSession, { type: 'TaskPromoteFailed', work_item_id: taskId, payload: { base, commit: sha, files } });
+        return result;
+      }
+    }
+    // The project's own PR checks, on the promoted branch.
+    let pkg = null;
+    try { pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8')); } catch { pkg = null; }
+    if (pkg && pkg.scripts && pkg.scripts['pr:ready'] && options.prReady !== false) {
+      const ready = runChildCommand(projectRoot, 'npm run pr:ready', 1_800_000);
+      result.pr_ready = { ok: ready.ok, tail: ready.tail };
+    }
+  } finally {
+    if (!result.conflict) back();
+  }
+  // PR body: the task, its files and criteria, the CRs on those criteria.
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const crs = require('./oxe-change.cjs').listChanges(paths.programDir || path.join(projectRoot, '.oxe', 'program'))
+    .filter((cr) => (cr.criteria || []).some((a) => criteria.has(a)));
+  const body = [
+    `## ${taskId} — ${task.title || ''}`.trim(),
+    '',
+    `Promovida de \`${original}\` por \`oxe-cc runtime promote\` (cherry-pick -x de ${ordered.length} commit(s)).`,
+    '',
+    '### Arquivos',
+    ...(task.files || []).map((f) => `- \`${f}\``),
+    '',
+    `### Critérios: ${[...criteria].join(', ') || '—'}`,
+    ...(crs.length ? ['', '### Change requests', ...crs.map((cr) => `- ${cr.id} (${cr.class}, ${cr.status}): ${cr.summary}`)] : []),
+    '',
+    '### Commits',
+    ...ordered.map((sha) => `- ${sha.slice(0, 10)} ${(gitLines(projectRoot, ['log', '-1', '--format=%s', sha]) || [''])[0]}`),
+    ...(result.pr_ready ? ['', `### pr:ready: ${result.pr_ready.ok ? 'verde' : 'VERMELHO'}`] : []),
+    '',
+  ].join('\n');
+  const bodyFile = path.join(projectRoot, '.oxe', 'promote', `${taskId}.md`);
+  writeTextAtomic(bodyFile, body);
+  result.body_file = path.relative(projectRoot, bodyFile).replace(/\\/g, '/');
+  const title = `${taskId}: ${task.title || 'promote'}`;
+  result.commands = [
+    `git push -u ${remote} ${branch}`,
+    `gh pr create --base ${base} --head ${branch} --title ${JSON.stringify(title)} --body-file ${result.body_file}`,
+  ];
+  if (options.openPr) {
+    if (result.pr_ready && !result.pr_ready.ok) {
+      result.error = `pr:ready vermelho em ${branch} — PR não aberto (corrija e rode os comandos abaixo)`;
+    } else {
+      const push = gitRun(projectRoot, ['push', '-u', remote, branch]);
+      if (!push.ok) result.error = `push falhou: ${push.stderr.trim().split(/\r?\n/).slice(-2).join(' · ')}`;
+      else {
+        const gh = (options.ghSpawn || spawnSync)('gh', ['pr', 'create', '--base', base, '--head', branch, '--title', title, '--body-file', bodyFile], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+        if (gh.status === 0) result.pr = String(gh.stdout || '').trim().split(/\r?\n/).pop();
+        else result.error = `gh pr create falhou: ${String(gh.stderr || gh.stdout || '').trim().split(/\r?\n/).slice(-2).join(' · ')}`;
+      }
+    }
+  }
+  appendEvent(projectRoot, activeSession, { type: 'TaskPromoted', work_item_id: taskId, payload: { base, branch, commits: ordered, pr_ready: result.pr_ready ? result.pr_ready.ok : null, pr: result.pr } });
+  return result;
+}
+
 /** OXB-058: doctor — .oxe/ gitignored with no versioned export means SPEC/ROADMAP/PROGRAM edits leave no history. */
 function oxeHistoryWarning(projectRoot) {
   if (programExportDir(projectRoot)) return null;
@@ -4910,6 +5143,8 @@ module.exports = {
   runtimeProgramPhaseAdd,
   runtimeProgramExport,
   oxeHistoryWarning,
+  runtimeSync,
+  runtimePromote,
   resolveMergedDependencies,
   isolateFailedTask,
   planSourceHash,
