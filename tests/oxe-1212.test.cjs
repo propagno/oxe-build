@@ -294,3 +294,34 @@ describe('OXB-056: the CLI runs without npm install', () => {
     assert.match(r.stdout, /oxe-cc v\d+\.\d+\.\d+/);
   });
 });
+
+describe('OXB-061: feedback reopens only the closer task (or --tasks), never an external delivery', () => {
+  // CR-15 (criterion A8): T4 had been delivered to main by an external PR (#605) and the CR did not touch it.
+  const plan = () => ({
+    schema_version: 1,
+    tasks: [
+      { id: 'T4', title: 'entregue por fora', wave: 1, kind: 'external_delivery', blocked_by: ['propagno/oxespace#605'], files: [], acceptance: ['A1'], done: true },
+      { id: 'T6', title: 'base', wave: 1, files: ['src/base.js'], acceptance: ['A1'], done: true, done_commit: 'aaa' },
+      { id: 'T7', title: 'fecha A1', wave: 2, files: ['src/a1.js'], acceptance: ['A1'], dependsOn: ['T4', 'T6'], done: true, done_commit: 'bbb' },
+    ],
+  });
+  const doneOf = (dir) => Object.fromEntries(JSON.parse(read(dir, '.oxe/PLAN.json')).tasks.map((t) => [t.id, t.done]));
+
+  it('without --tasks: only the closer (T7); T6 listed as impacted, T4 never reopened', () => {
+    const dir = project({ plan: plan() });
+    const out = op.runtimeFeedback(dir, null, { class: 'defect', summary: 'a tinta sancionada do CR-15 falta', criteria: 'A1', by: 'review' });
+    assert.deepEqual(out.reopened_tasks, ['T7']);
+    assert.deepEqual(out.impacted_not_reopened, ['T6']);
+    assert.deepEqual(out.external_not_reopened, ['T4']);
+    assert.deepEqual(doneOf(dir), { T4: true, T6: true, T7: false });
+  });
+
+  it('--tasks names what to reopen; an external one is still skipped and an unknown id is reported', () => {
+    const dir = project({ plan: plan() });
+    const out = op.runtimeFeedback(dir, null, { class: 'defect', summary: 'a base de A1 está errada', criteria: 'A1', by: 'review', tasks: 'T6,T4,T99' });
+    assert.deepEqual(out.reopened_tasks, ['T6']);
+    assert.deepEqual(out.external_not_reopened, ['T4']);
+    assert.deepEqual(out.unknown_tasks, ['T99']);
+    assert.deepEqual(doneOf(dir), { T4: true, T6: false, T7: true });
+  });
+});

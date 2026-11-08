@@ -2553,7 +2553,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime program <status|init|start|close> [--phase F2] [--force] [--no-commit] [--json] [pasta-do-projeto]
   npx oxe-cc runtime dossier [--phase F1] [--base-commit <sha>] [--json] [pasta-do-projeto]
   npx oxe-cc runtime signoff --phase F1 --criteria A8 --by <quem> [--message <nota>] [--evidence <caminho|url>]
-  npx oxe-cc runtime feedback --class <defect|spec_gap|constraint|new_scope> --summary "..." [--criteria A4] [--by <quem>] [--amend-to 2]
+  npx oxe-cc runtime feedback --class <defect|spec_gap|constraint|new_scope> --summary "..." [--criteria A4] [--tasks T7[,T8]] [--by <quem>] [--amend-to 2]
   npx oxe-cc runtime feedback list [--json]
   npx oxe-cc runtime rollback --task T3 [--yes]
   npx oxe-cc runtime execute ... [--checkpoint-commits] [--budget-turns N] [--budget-usd X] [--budget-reset] [--max-retries N] [--wave N] [--strict-external] [--json → NDJSON por evento de tarefa]
@@ -4147,6 +4147,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--class' && argv[i + 1]) out.changeClass = String(argv[++i]);
     else if (a === '--summary' && argv[i + 1]) out.summary = String(argv[++i]);
     else if (a === '--amend-to' && argv[i + 1]) out.amendTo = Number(argv[++i]);
+    else if (a === '--tasks' && argv[i + 1]) out.tasks = String(argv[++i]);
     else if (a === '--defer-signoff') out.deferSignoff = true;
     else if (a === '--risk' && argv[i + 1]) out.risk = String(argv[++i]);
     else if (a === '--yes') out.yes = true;
@@ -4978,12 +4979,16 @@ async function runRuntime(opts) {
       const result = oxeOperational.runtimeFeedback(opts.dir, activeSession, {
         class: opts.changeClass, summary: opts.summary, criteria: opts.criteria, by: opts.by,
         phase: opts.phase || null, amendTo: opts.amendTo || null, evidence: opts.evidence || null,
+        tasks: opts.tasks || null,
       });
       if (opts.jsonOutput) {
         console.log(JSON.stringify({ oxeRuntimeFeedbackSchema: 1, ...result, program: undefined }, null, 2));
       } else {
         console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${result.cr.id} (${result.cr.class}) registrado na fase ${result.cr.phase || '—'}${result.reopened ? ' — fase REABERTA' : ''}`);
-        if (result.impacted.length) console.log(`  ${c ? dim : ''}Tarefas impactadas:${c ? reset : ''} ${result.impacted.join(', ')}`);
+        if (result.reopened_tasks && result.reopened_tasks.length) console.log(`  ${c ? yellow : ''}Reabertas:${c ? reset : ''} ${result.reopened_tasks.join(', ')}`);
+        if (result.impacted_not_reopened && result.impacted_not_reopened.length) console.log(`  ${c ? dim : ''}Impactadas, não reabertas:${c ? reset : ''} ${result.impacted_not_reopened.join(', ')} (use --tasks para reabrir outras)`);
+        if (result.external_not_reopened && result.external_not_reopened.length) console.log(`  ${c ? dim : ''}Entregues por fora, nunca reabertas:${c ? reset : ''} ${result.external_not_reopened.join(', ')}`);
+        if (result.unknown_tasks && result.unknown_tasks.length) console.log(`  ${c ? yellow : ''}Tarefas desconhecidas em --tasks:${c ? reset : ''} ${result.unknown_tasks.join(', ')}`);
         console.log(`  ${c ? dim : ''}Rota:${c ? reset : ''}`);
         result.route.forEach((step, i) => console.log(`    ${i + 1}. ${step}`));
       }

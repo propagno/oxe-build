@@ -302,7 +302,7 @@ O objetivo é duplo: evoluir o OXESpace e o oxe-build ao mesmo tempo.
 
 ## OXB-061: o `runtime feedback` reabre todas as tarefas do critério
 
-- **Status:** aberto. Detalhes em `HANDOFF-1.21.2.md` §7.
+- **Status:** resolvido (1.21.2). Sem `--tasks`, o CR reabre só a tarefa que fecha o critério; quando o critério tem mais de uma tarefa final, reabre essas. As outras impactadas saem em `impacted_not_reopened` ("Impactadas, não reabertas"). `--tasks T7[,T8]` escolhe quais reabrir, e um id desconhecido é reportado. Uma tarefa entregue por fora (`kind: external_delivery|verify_only`, `blocked_by`, `external_resolved` ou policy externa) nunca é reaberta e sai em `external_not_reopened`. Teste: `tests/oxe-1212.test.cjs` (cenário do CR-15: T4 por #605, T6 base, T7 closer).
 
 ## OXB-062: uma emenda aditiva marca todos os testes do critério como desatualizados
 

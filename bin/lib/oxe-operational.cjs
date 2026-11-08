@@ -2801,21 +2801,90 @@ function runtimeFeedback(projectRoot, activeSession, options = {}) {
     phase: options.phase, amendTo: options.amendTo, evidence: options.evidence,
   });
   if (result.reopened && result.program) programLib.writeProgram(programDir, result.program);
-  // 1.21.1: a defect or spec_gap reopens the impacted tasks (done → open), so the next execute redoes exactly them.
+  // 1.21.1: a defect or spec_gap reopens tasks (done → open), so the next execute redoes exactly them.
+  // OXB-061: only what the CR targets. `--tasks T7` names them; without it, the criterion's closer task (the one that
+  // proves it). The other impacted tasks are listed as "impacted, not reopened". A task delivered by another path
+  // (external_delivery / verify_only / blocked_by an external PR) is never reopened: its work is not in this repo.
   const reopenedTasks = [];
+  const selection = selectTasksToReopen(paths.plan, plan, result, options.tasks);
   if (result.cr.class === 'defect' || result.cr.class === 'spec_gap') {
     const planJsonLib = require('./oxe-plan-json.cjs');
-    for (const taskId of result.impacted || []) {
+    for (const taskId of selection.targets) {
       if (planJsonLib.markPlanTaskOpen(paths.plan, taskId, { by: result.cr.id })) reopenedTasks.push(taskId);
     }
   }
   result.reopened_tasks = reopenedTasks;
+  result.impacted_not_reopened = (result.impacted || []).filter((id) => !reopenedTasks.includes(id) && !selection.external.includes(id));
+  result.external_not_reopened = selection.external;
+  if (selection.unknown.length) result.unknown_tasks = selection.unknown;
   appendEvent(projectRoot, activeSession, {
     type: 'ChangeRequested',
-    payload: { id: result.cr.id, class: result.cr.class, phase: result.cr.phase, criteria: result.cr.criteria, reopened: result.reopened, impacted: result.impacted, reopened_tasks: reopenedTasks },
+    payload: { id: result.cr.id, class: result.cr.class, phase: result.cr.phase, criteria: result.cr.criteria, reopened: result.reopened, impacted: result.impacted, reopened_tasks: reopenedTasks, impacted_not_reopened: result.impacted_not_reopened, external_not_reopened: selection.external },
   });
   try { projectStateMd(projectRoot, activeSession); } catch { /* projeção auxiliar */ }
   return result;
+}
+
+/** A task whose work was delivered outside this repo's executor (another PR, a check only). */
+function isExternallyDelivered(rawTask, parsedTask) {
+  const raw = rawTask || {};
+  const meta = (parsedTask && parsedTask.meta) || {};
+  if (raw.kind === 'external_delivery' || raw.kind === 'verify_only') return true;
+  if (Array.isArray(raw.blocked_by) && raw.blocked_by.length) return true;
+  if (Array.isArray(meta.blocked_by) && meta.blocked_by.length) return true;
+  if (Array.isArray(meta.external_resolved) && meta.external_resolved.length) return true;
+  const policy = raw.policy || {};
+  return Boolean(policy.verify_only || (Array.isArray(policy.external_dependency) && policy.external_dependency.length));
+}
+
+/**
+ * OXB-061: which done tasks a CR reopens. Explicit `--tasks` wins; otherwise the closer of each criterion (or, when a
+ * criterion has no single closer, its sink tasks). External deliveries are filtered out in both cases.
+ * @returns {{ targets: string[], external: string[], unknown: string[] }}
+ */
+function selectTasksToReopen(planMdPath, parsedPlan, changeResult, requested) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  let rawTasks = [];
+  const jsonPath = planJsonLib.planJsonPathFor(planMdPath);
+  if (jsonPath && fs.existsSync(jsonPath)) {
+    try { rawTasks = JSON.parse(fs.readFileSync(jsonPath, 'utf8')).tasks || []; } catch { rawTasks = []; }
+  }
+  const rawById = new Map(rawTasks.filter(Boolean).map((t) => [t.id, t]));
+  const parsedTasks = (parsedPlan && Array.isArray(parsedPlan.tasks)) ? parsedPlan.tasks : [];
+  const parsedById = new Map(parsedTasks.map((t) => [t.id, t]));
+  const explicit = (Array.isArray(requested) ? requested : String(requested || '').split(','))
+    .map((t) => String(t).trim().toUpperCase()).filter((t) => /^T\d+$/.test(t));
+  let candidates;
+  const unknown = [];
+  if (explicit.length) {
+    candidates = explicit.filter((id) => {
+      const known = rawById.has(id) || parsedById.has(id);
+      if (!known) unknown.push(id);
+      return known;
+    });
+  } else {
+    const closers = planJsonLib.criterionClosers(rawTasks.length ? rawTasks : parsedTasks);
+    const set = new Set();
+    for (const criterion of (changeResult.cr && changeResult.cr.criteria) || []) {
+      const entry = closers.get(criterion);
+      if (!entry) continue;
+      if (entry.closer) set.add(entry.closer);
+      else for (const id of entry.sinks || []) set.add(id);
+    }
+    candidates = [...set];
+  }
+  const external = [];
+  const targets = [];
+  const impactedExternal = new Set();
+  for (const id of new Set([...candidates, ...((changeResult.impacted) || [])])) {
+    if (isExternallyDelivered(rawById.get(id), parsedById.get(id))) impactedExternal.add(id);
+  }
+  for (const id of candidates) {
+    if (impactedExternal.has(id)) continue;
+    targets.push(id);
+  }
+  for (const id of impactedExternal) external.push(id);
+  return { targets, external, unknown };
 }
 
 function runtimeChanges(projectRoot, activeSession) {
