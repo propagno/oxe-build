@@ -428,7 +428,10 @@ export async function runCheck(
     });
 
     const duration_ms = Date.now() - start;
-    const stdout = result.stdout ?? '';
+    // OXB-150: gradle/maven report per-test results in JUnit XML files (build/test-results, target/surefire-reports),
+    // not on stdout; the reports this command wrote are appended so counts and `proves` see each test.
+    const junitXml = /\b(gradlew(\.bat)?|gradle|mvnw?(\.cmd)?)\b/.test(check.command) ? junitReportsSince(cwd, start) : '';
+    const stdout = (result.stdout ?? '') + (junitXml ? `\n${junitXml}` : '');
     const stderr = result.stderr ?? '';
     const report = parseTestReport(`${stdout}\n${stderr}`);
     let status: VerificationStatus = result.status === 0 ? 'pass' : 'fail';
@@ -787,4 +790,32 @@ async function collectCheckEvidence(
   // The summary record is bookkeeping, not proof: it is stored but excluded from `evidence_refs`,
   // otherwise every check (even a silent exit 0) counts as "covered".
   return { refs, summaryRef: summaryEvidence.evidence_id };
+}
+
+/** OXB-150: JUnit XML files under test-results/ or surefire-reports/ written at or after `since` (ms). */
+function junitReportsSince(root: string, since: number): string {
+  const fs = require('fs') as typeof import('fs');
+  const path = require('path') as typeof import('path');
+  const parts: string[] = [];
+  let budget = 8 * 1024 * 1024;
+  const walk = (dir: string, depth: number, inReports: boolean) => {
+    if (depth > 8 || budget <= 0) return;
+    let entries: import('fs').Dirent[] = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name === '.git' || e.name === '.gradle' || e.name === '.oxe') continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full, depth + 1, inReports || e.name === 'test-results' || e.name === 'surefire-reports');
+      else if (inReports && /\.xml$/i.test(e.name)) {
+        try {
+          const st = fs.statSync(full);
+          if (st.mtimeMs + 1000 < since || st.size > budget) continue;
+          parts.push(fs.readFileSync(full, 'utf8'));
+          budget -= st.size;
+        } catch { /* unreadable */ }
+      }
+    }
+  };
+  walk(root, 0, false);
+  return parts.join('\n');
 }

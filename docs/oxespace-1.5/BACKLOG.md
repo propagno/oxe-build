@@ -950,3 +950,16 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - O bloco do topo (dossiê) era reescrito no verify/close, e o bloco do runtime em cada execute/verify, só a partir dos eventos. Depois do close da F1 um dizia "completed 38/38" e o outro "failed · 0 concluídos · 7 falhos", para a mesma run.
   - Agora os dois blocos são escritos na mesma passada, a partir do mesmo estado da run. No bloco do runtime, o status vem da run e o progresso do PLAN.json (fonte da verdade, OXB-059): tarefa `done` nunca aparece como falha porque uma tentativa anterior falhou, e a entrega externa aparece à parte.
   - Teste: `tests/oxe-1212-state-coherent.test.cjs`.
+
+## OXB-150: testes JUnit em Kotlin/Java e o JUnit XML do Gradle
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11, na worktree da F10.
+  - O `plan lint` lia `AttnUsageTest.kt` como UM teste chamado "Notice", uma string do corpo de um teste.
+  - **Descoberta:** em `.kt/.kts/.java/.groovy/.scala`, os testes são os métodos anotados com `@Test`, `@ParameterizedTest`, `@RepeatedTest` ou `@TestFactory`:
+    - `fun nome()`, ``fun `nome com espaço`()`` e `void nome()`;
+    - aceita modificadores e anotações entre `@Test` e o método;
+    - inclui o `@DisplayName("…")` quando houver;
+    - nunca usa strings literais.
+    - Em JS/TS, nada muda.
+  - **Verify com Gradle/Maven:** o comando não imprime os testes um a um, porque o JUnit os grava em `build/test-results/**.xml` (ou `target/surefire-reports`). Os relatórios que **esse** comando escreveu (pelo mtime) são anexados à saída. A contagem e o `proves` passam a ver cada teste, e o `proof_not_executed` lista os que passaram.
+  - Teste: `tests/oxe-1212-jvm-tests.test.cjs` e `packages/runtime/tests/junit-files.test.ts`. A descoberta foi conferida no arquivo real da F10: 3 testes.

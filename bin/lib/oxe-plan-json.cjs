@@ -161,7 +161,28 @@ function validatePlanJson(doc) {
  * OXB-073: test titles a JS/TS test file declares (`it`/`test` with a literal title, any `.only/.skip/.each` chain).
  * Template literals with `${…}` are skipped (their title is only known at run time).
  */
-function declaredTestTitles(text) {
+/**
+ * OXB-150: JUnit tests in Kotlin/Java are methods, not string literals: `@Test fun name()`, `@Test fun \`spaced name\`()`,
+ * `@Test void name()` (any modifiers, other annotations in between), with `@DisplayName("…")` when present. F10's
+ * AttnUsageTest.kt was read as ONE test named "Notice" (a string literal in the body).
+ */
+function declaredJvmTestTitles(text) {
+  const out = [];
+  const src = String(text || '');
+  const re = /@(?:Test|ParameterizedTest|RepeatedTest|TestFactory)\b(?:\([^)]*\))?((?:\s*@[\w.]+(?:\((?:[^()"]|"(?:\\.|[^"\\])*")*\))?)*)\s*(?:(?:public|private|protected|internal|open|override|final|suspend|static)\s+)*(?:fun\s+(?:`([^`]+)`|([A-Za-z_$][\w$]*))|(?:[\w<>[\],.?]+\s+)?([A-Za-z_$][\w$]*)\s*\()/g;
+  for (const m of src.matchAll(re)) {
+    const name = m[2] || m[3] || m[4];
+    if (name) out.push(name);
+    const display = /@DisplayName\(\s*"((?:\\.|[^"\\])*)"\s*\)/.exec(m[1] || '');
+    if (display) out.push(display[1].replace(/\\(.)/g, '$1'));
+  }
+  // @DisplayName written before @Test
+  for (const m of src.matchAll(/@DisplayName\(\s*"((?:\\.|[^"\\])*)"\s*\)\s*@(?:Test|ParameterizedTest)\b/g)) out.push(m[1].replace(/\\(.)/g, '$1'));
+  return [...new Set(out)];
+}
+
+function declaredTestTitles(text, file) {
+  if (file && /\.(kt|kts|java|groovy|scala)$/i.test(String(file))) return declaredJvmTestTitles(text);
   const out = [];
   const re = /\b(?:it|test)(?:\.\w+)*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
   for (const m of String(text || '').matchAll(re)) {
@@ -442,7 +463,7 @@ function lintPlan(input) {
       for (const file of entry.files || []) {
         let text = '';
         try { text = fs.readFileSync(path.resolve(input.projectRoot, file), 'utf8'); } catch { continue; }
-        declared.push(...declaredTestTitles(text));
+        declared.push(...declaredTestTitles(text, file));
       }
       if (declared.length) {
         const norm = (s) => String(s).toLowerCase().replace(/[›>]/g, ' ').replace(/\s+/g, ' ').trim();
