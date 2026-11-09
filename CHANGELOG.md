@@ -13,6 +13,10 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1, F2, F4 e F10) cobrou do oxe-b
   - a tentativa que termina no teto é `turns_exhausted`, com a contagem, e nunca é chamada de escopo ou de verify;
   - os turnos saem do tamanho da tarefa (`max_turns` › `size` › estimativa; S 15 · M 30 · L 60);
   - `runtime.provider.maxTurns` passa a ser o teto.
+- **Tentativa que gira sem escrever (OXB-186):**
+  - evento `ExecutorTurn` por turno (turno n/N, tool calls, arquivos escritos, tamanho do prompt, latência) e `ExecutorSlowTurn` acima de `execute.slow_turn_ms`;
+  - `execute.no_progress_turns` (padrão 8) turnos sem escrita nem `finish_task` encerram a tentativa como `no_progress`;
+  - o adaptador `claude` não força mais o modelo padrão do provider http (`claude-sonnet-4-6`) como `--model`, que foi a regressão de latência do rc.37/rc.38: sem modelo da tentativa, vale o padrão do Claude Code, como no rc.36.
 - **Falha classificada antes de cobrar tentativa (OXB-120):** falha de ambiente ou de cota pausa a run sem gastar a tentativa.
 - **Retry informado:**
   - o prompt diz o que a tentativa anterior deixou na árvore (OXB-184);
