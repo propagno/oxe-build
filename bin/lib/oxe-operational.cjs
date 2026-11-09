@@ -955,6 +955,25 @@ function runtimeComplexity(projectRoot, activeSession, options = {}) {
 }
 
 /** OXB-112: `oxe-cc decision add|list`. */
+/** OXB-183: `oxe-cc docs check [--phase Fn]` → .oxe/DOCS-CHECK.md (report only). */
+function runtimeDocsCheck(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-docs-check.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  let program = null;
+  try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; }
+  const out = lib.check(projectRoot, {
+    program,
+    phase: options.phase || null,
+    decisions: require('./oxe-decisions.cjs').list(programDir),
+    dossierRoot: path.join(path.dirname(paths.plan || path.join(projectRoot, '.oxe', 'PLAN.md')), 'dossier'),
+    codebaseDir: path.join(projectRoot, '.oxe', 'codebase'),
+    runCheck: options.runChecks === false ? null : (cmd) => runChildCommand(projectRoot, cmd, 300_000),
+  });
+  if (options.write !== false) fs.writeFileSync(path.join(projectRoot, '.oxe', 'DOCS-CHECK.md'), lib.render(out));
+  return out;
+}
+
 function runtimeDecision(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-decisions.cjs');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
@@ -8374,6 +8393,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeDocsCheck,
   runtimeReview,
   runtimePlanRead,
   planReadBlockers,

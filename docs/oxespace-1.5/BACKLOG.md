@@ -1558,3 +1558,28 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 - **O bloqueio:** um achado alto aberto bloqueia o `runtime execute` (`plan_read:<id>` no preflight) até ser respondido (OXB-180) ou receber waiver.
 - **Regras novas na tabela:** `unclear-section`, `summary-mismatch`, `open-choice` (high) e `undefined-term` (medium).
 - **Teste:** o plano com "atualizar o serviço de autenticação" faz o implementador apontar a T1. O termo "Portal Vex" faz o leitor apontá-lo. O resumo aparece, o preflight bloqueia e o waiver libera.
+
+## OXB-182: a decisão registra as alternativas que perderam e quem as descartou
+
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-decisions.cjs`.
+- **O registro:** `oxe-cc decision add … --alt "texto::motivo[::por::link]"` (repetível) grava `alternatives[]`.
+  - A recusa é do autor por padrão.
+  - Atribuí-la a outra pessoa ou papel exige um link: URL, `#123`, PR, `CR-*` ou `D-*`.
+  - Os registros antigos, sem alternativas, continuam válidos.
+- **Leitura:** `decision list` mostra cada alternativa com o motivo e quem recusou. O `plan lint` avisa quando uma tarefa propõe uma alternativa já recusada: pelo menos 60% dos termos da alternativa, com no mínimo 3. O workflow `plan.md` cita as alternativas das decisões em vez de reescrevê-las.
+- **Teste:** `tests/oxe-1212-decision-alts-docs-check.test.cjs`.
+
+## OXB-183: divergência entre os documentos fechados e o código atual
+
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-docs-check.cjs`.
+- **O comando:** `oxe-cc docs check [--phase Fn] [--json]` lê:
+  - as decisões ativas das fases fechadas;
+  - os dossiês das fases fechadas;
+  - `.oxe/codebase/*.md`.
+- **O que confere:** cada caminho e cada `caminho#símbolo` citado como estado atual. Uma linha que planeja criar o arquivo não conta. Os resultados possíveis são:
+  - "não existe mais";
+  - "mudou de lugar", quando o símbolo é definido em outro arquivo (`git grep`);
+  - "check falhou", porque o `check` de toda decisão ativa de fase fechada roda de novo.
+- **A saída:** `.oxe/DOCS-CHECK.md`. O comando não corrige nada. O workflow `compact.md` passa a rodá-lo.
+- **Fora do escopo:** o aviso no `doctor`. Rodar os `check`s das decisões a cada `doctor` seria lento demais; ele fica no `compact` e sob demanda.
+- **Teste:** "mudou de lugar" e "não existe mais" a partir de `src/a.ts#foo`; um arquivo planejado como novo não aparece; um check que falhava e agora passa; menos de 5 s.

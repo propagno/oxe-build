@@ -6488,6 +6488,7 @@ async function main() {
     argv[0] === 'policy' ||
     argv[0] === 'decision' ||
     argv[0] === 'review' ||
+    argv[0] === 'docs' ||
     argv[0] === 'state' ||
     argv[0] === 'guards' ||
     argv[0] === 'verify' ||
@@ -6843,6 +6844,27 @@ async function main() {
     return;
   }
 
+  // OXB-183: what the closed documents claim, checked against today's code.
+  if (command === 'docs') {
+    const o = { dir: process.cwd(), json: false, phase: null };
+    for (let i = argv[0] === 'check' ? 1 : 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--phase' && argv[i + 1]) o.phase = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-')) o.dir = path.resolve(a);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = oxeOperational.runtimeDocsCheck(o.dir, null, { phase: o.phase });
+      if (o.json) console.log(JSON.stringify({ oxeDocsCheckSchema: 1, ...out }, null, 2));
+      else if (!out.divergences.length) console.log(`  ${green}✓${reset} ${out.artifacts} artefato(s) fechado(s) conferem com o código`);
+      else { console.log(`  ${yellow}${out.divergences.length} divergência(s)${reset} → .oxe/DOCS-CHECK.md`); for (const d of out.divergences.slice(0, 20)) console.log(`    ${d.artifact}: ${d.cite} — ${d.why}${d.now ? ` (agora em ${d.now.join(', ')})` : ''}`); }
+      if (out.divergences.length) process.exitCode = 1;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   // OXB-112: decisions as first-class ids.
   if (command === 'decision') {
     const sub = argv[0] === 'add' || argv[0] === 'list' ? argv[0] : 'list';
@@ -6852,6 +6874,7 @@ async function main() {
       if (a === '--json') o.json = true;
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
       else if (['--title', '--text', '--phase', '--by', '--check', '--criteria'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--alt' && argv[i + 1]) (o.alternatives = o.alternatives || []).push(String(argv[++i]));
       else if (!a.startsWith('-')) o.dir = path.resolve(a);
       else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
     }
@@ -6860,7 +6883,10 @@ async function main() {
       if (o.json) { console.log(JSON.stringify({ oxeDecisionSchema: 1, ...out }, null, 2)); return; }
       if (sub === 'add') console.log(`  ${green}✓${reset} ${out.decision.id} — ${out.decision.title}${out.decision.check ? ` (evidência: \`${out.decision.check}\` no verify da fase)` : ''}`);
       else if (!out.decisions.length) console.log('  Nenhuma decisão registrada.');
-      else for (const d of out.decisions) console.log(`  ${d.id.padEnd(12)} ${d.phase || '—'}  ${d.title}${d.check ? '  [check]' : ''}`);
+      else for (const d of out.decisions) {
+        console.log(`  ${d.id.padEnd(12)} ${d.phase || '—'}  ${d.title}${d.check ? '  [check]' : ''}`);
+        for (const a of d.alternatives || []) console.log(`  ${''.padEnd(12)}   ✗ ${a.text} — ${a.reason} (por ${a.by}${a.link ? `, ${a.link}` : ''})`);
+      }
     } catch (err) {
       console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
       process.exitCode = 1;
