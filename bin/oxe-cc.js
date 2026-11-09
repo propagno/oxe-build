@@ -4217,6 +4217,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--by' && argv[i + 1]) out.by = String(argv[++i]);
     else if (a === '--answer' && argv[i + 1]) out.answer = String(argv[++i]);
     else if (a === '--freeze') out.freeze = true;
+    else if (a === '--stats') out.stats = true;
     else if (a === '--evidence' && argv[i + 1]) out.evidence = String(argv[++i]);
     else if (a === '--class' && argv[i + 1]) out.changeClass = String(argv[++i]);
     else if (a === '--summary' && argv[i + 1]) out.summary = String(argv[++i]);
@@ -5699,6 +5700,17 @@ async function runRuntime(opts) {
   }
 
   // OXB-113: resumable handoff, and the context reading a host hook sends.
+  // OXB-132: the task's context pack.
+  if (opts.action === 'context-pack') {
+    try {
+      if (!opts.task) throw new Error('use: oxe-cc runtime context-pack --task T3 [--stats]');
+      const out = oxeOperational.runtimeContextPack(opts.dir, activeSession, { task: opts.task });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeContextPackSchema: 1, ...out }, null, 2)); return; }
+      console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.file}: ${out.stats.tasks_included.join(', ')} · ${out.stats.pack_chars} de ${out.stats.full_chars} chars (−${Math.round(out.stats.reduction * 100)}%)`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
   if (opts.action === 'handoff' || opts.action === 'context') {
     try {
       if (opts.action === 'handoff') {

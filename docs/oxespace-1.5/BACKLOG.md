@@ -1603,3 +1603,12 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 - **O catálogo é fechado:** `internal` 1, `usage` 2, `validation` 3, `not_found` 4, `conflict` 5, `gate_failed` 6, `environment` 7. O stdout continua com os dados. Sem a flag, a saída humana não muda.
 - **Correção junto:** `oxe-cc plugins <subcomando desconhecido>` saía com 0. Agora é erro de uso (exit 2).
 - **Teste:** `tests/oxe-1212-cli-errors.test.cjs`. Os 37 comandos (os do `--help` e os da 1.21.2) devolvem o envelope `usage`/2 num erro de uso, sem escrever nada. O catálogo do código é o do doc. A env var funciona como a flag, e sem a flag a saída é a mesma.
+
+## OXB-132: orçamento de tamanho para workflows e prompts, com variante compacta
+
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-workflow-budget.cjs`.
+- **O orçamento:** `oxe/workflows/size-budget.json` declara o nível de cada workflow e persona: s ≤ 200 linhas, m ≤ 400, l ≤ 650. O nível fica num manifesto, e não em frontmatter, para não mudar o topo que os wrappers e o sync leem. Um teste do repositório reprova quando um arquivo passa do limite, não está declarado ou é `l` sem variante compacta.
+- **A variante compacta:** existe para cada workflow `l` (hoje `plan.md` com 557 → 144 linhas e `spec.md` com 620 → 99) em `oxe/workflows/compact/`. Ela é gerada por `scripts/build-compact-workflows.cjs` (`--check` no teste) e leva os títulos, os passos numerados e toda linha com comando `oxe-cc`, gate ou regra de bloqueio. O teste confere que ela preserva todos os comandos e gates citados na completa.
+- **A escolha:** config `context.compact: auto|on|off`. O `runtime context --used --limit` diz qual variante ler; em `auto`, é a compacta quando a folga está abaixo de 30%.
+- **`oxe-cc runtime context-pack --task T3 [--stats]`:** grava `.oxe/context-packs/T3.json` com a tarefa, as dependências transitivas, os testes de aceite dela e as entradas do IMPLEMENTATION-PACK dessas tarefas, e mostra a redução contra o PLAN.json e o pack inteiros. O teste exige ≥ 70% num plano de 30 tarefas.
+- **Teste:** `tests/oxe-1212-workflow-budget.test.cjs`.

@@ -804,7 +804,29 @@ function runtimeContextUsage(projectRoot, activeSession, options = {}) {
   appendEvent(projectRoot, activeSession, { type: 'ContextUsage', payload: lvl });
   let handoff = null;
   if (lvl.level === 'critical') handoff = runtimeHandoff(projectRoot, activeSession, { reason: 'context_critical', context: lvl }).files;
-  return { ...lvl, handoff };
+  // OXB-132: which variant of each long workflow to read with this slack (context.compact auto|on|off).
+  const budget = require('./oxe-workflow-budget.cjs');
+  const workflows = {};
+  try {
+    const declared = JSON.parse(fs.readFileSync(budget.BUDGET_FILE, 'utf8')).files;
+    for (const [rel, size] of Object.entries(declared)) if (size === 'l' && rel.startsWith('workflows/')) { const v = budget.chooseVariant(path.basename(rel), readProjectConfig(projectRoot), typeof lvl.ratio === 'number' ? 1 - lvl.ratio : null); workflows[path.basename(rel)] = { variant: v.variant, path: path.relative(path.join(__dirname, '..', '..'), v.path).replace(/\\/g, '/') }; }
+  } catch { /* auxiliar */ }
+  return { ...lvl, handoff, workflows };
+}
+
+/** OXB-132: `oxe-cc runtime context-pack --task T3 [--stats]` — the task's slice of PLAN.json + pack (and its deps). */
+function runtimeContextPack(projectRoot, activeSession, options = {}) {
+  const budget = require('./oxe-workflow-budget.cjs');
+  const { doc, paths } = readPlanJsonDoc(projectRoot, activeSession);
+  if (!doc) throw new Error('context-pack exige PLAN.json');
+  const out = budget.taskContextPack(doc, readJsonQuiet(paths.implementationPack), String(options.task || '').toUpperCase());
+  if (options.write !== false) {
+    const file = path.join(projectRoot, '.oxe', 'context-packs', `${String(options.task).toUpperCase()}.json`);
+    ensureDirForFile(file);
+    fs.writeFileSync(file, `${JSON.stringify(out.slice, null, 2)}\n`);
+    out.file = path.relative(projectRoot, file).replace(/\\/g, '/');
+  }
+  return out;
 }
 
 /** OXB-117 (a): `oxe-cc runtime cost` — cost and time per task, CR and retry, and the phase budget forecast. */
@@ -8396,6 +8418,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeContextPack,
   runtimeDocsCheck,
   runtimeReview,
   runtimePlanRead,
