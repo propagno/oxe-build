@@ -1623,3 +1623,16 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - aponta uma nota antiga sem as seções, como aviso e não como erro;
   - emite `assumption_without_risk` para a tarefa que usa uma suposição (`assumptions: ["S1"]`, ou S1 no título ou na descrição) sem um risco no PLAN.json (`risks: [{ assumption: "S1", mitigation }]`).
 - **Teste:** `tests/oxe-1212-research-provenance.test.cjs`. Três afirmações sem fonte geram três avisos; a ligação suposição → risco; a nota antiga.
+
+## OXB-129: despacho em fluxo
+
+- **Status:** resolvido (1.21.2). Opt-in com `execute.dispatch: "stream"`; o padrão continua `wave`. Implementado em `Scheduler.runStream`.
+- **O despacho:**
+  - uma tarefa fica pronta quando todas as dependências declaradas estão concluídas, e não quando a onda inteira terminou;
+  - as prontas começam na ordem do plano, até `parallel.maxParallel` (1 sem `--parallel-mutating`);
+  - duas tarefas com escopo em comum nunca rodam juntas: o arquivo quente serializa;
+  - acima do piso de memória livre, a próxima tarefa espera.
+- **Falha de dependência:** bloqueia só as dependentes (`dependency_not_met`); o resto segue.
+- **Visibilidade:** cada decisão vira o evento `DispatchState` (`started`, `running`, `waiting` com o motivo: depende de, limite, arquivo quente, memória) e fica no journal (`dispatch`).
+- **Pouso:** continua sob o lock de integração do OXB-050, um por vez, na ordem de conclusão. A ordem dos commits é a de conclusão, como no modo onda com paralelismo; ela não é reordenada para a ordem do plano.
+- **Teste:** `tests/oxe-1212-stream-dispatch.test.cjs`. Cobre: a T3 (que só depende da T2) começa antes de a T1 lenta terminar, e no modo onda ela espera; o limite de paralelismo e o arquivo quente; a falha da T1 bloqueia só a T3.

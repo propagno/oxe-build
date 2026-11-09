@@ -75,6 +75,12 @@ export interface SchedulerOptions {
    * it (its dependents end `blocked_by_deferred`). false keeps the old stop-at-the-failed-wave behavior.
    */
   deferFailed?: boolean;
+  /**
+   * OXB-129: `stream` dispatches a task as soon as all its declared dependencies completed (not when its whole wave
+   * did), within the parallel limits; a task whose scope overlaps a running one (hot file) waits. `wave` (default)
+   * keeps the wave barrier. The wave becomes a reading grouping only in stream mode.
+   */
+  dispatch?: 'wave' | 'stream';
   maxRunDurationMs?: number;   // default: 30 min
   staleProgressMs?: number;    // default: 5 min without any task completing
 }
@@ -261,7 +267,12 @@ export class Scheduler {
     const maxRunMs  = ctx.options?.maxRunDurationMs ?? 30 * 60_000;
     const staleMs   = ctx.options?.staleProgressMs  ?? 5 * 60_000;
 
-    for (const wave of graph.waves) {
+    // OXB-129: stream dispatch — no wave barrier.
+    if ((ctx.options as SchedulerOptions | undefined)?.dispatch === 'stream') {
+      await this.runStream(graph, ctx, status, completed, failed, blocked, maxRunMs);
+    }
+
+    for (const wave of (ctx.options as SchedulerOptions | undefined)?.dispatch === 'stream' ? [] : graph.waves) {
       if (this.cancelled) break;
 
       // Global run timeout
@@ -608,6 +619,71 @@ export class Scheduler {
     }
 
     return failed.length > 0;
+  }
+
+  /**
+   * OXB-129: dispatch by dependency, not by wave. A node is ready when every dependency is completed; one with a failed
+   * or blocked dependency is blocked (only its dependents — the rest goes on). Ready nodes start in plan order, up to
+   * `parallel.maxParallel` (1 without --parallel-mutating), never two with overlapping scopes (a hot file serializes),
+   * and never past the free-memory floor. Every decision is a `DispatchState` event (ready / waiting with the reason).
+   */
+  private async runStream(
+    graph: ExecutionGraph,
+    ctx: SchedulerContext,
+    status: Map<string, NodeStatus>,
+    completed: string[],
+    failed: string[],
+    blocked: string[],
+    maxRunMs: number,
+  ): Promise<void> {
+    const order = graph.waves.flatMap((w) => w.node_ids);
+    const parallel = ctx.parallel;
+    const max = parallel ? Math.max(1, Math.floor(parallel.maxParallel || 1)) : 1;
+    const running = new Map<string, { scope: string[]; done: Promise<void> }>();
+    let lastSignature = '';
+    while (!this.cancelled && !this.paused) {
+      if (Date.now() - this.runStartMs > maxRunMs) break;
+      const waiting: Array<{ id: string; reason: string }> = [];
+      const ready: string[] = [];
+      for (const id of order) {
+        if (status.get(id) !== 'pending' || running.has(id)) continue;
+        const node = graph.nodes.get(id)!;
+        const bad = node.depends_on.find((d) => status.get(d) === 'failed' || status.get(d) === 'blocked');
+        if (bad) { this.blockNode(id, ctx, status, blocked, 'dependency_not_met', bad); continue; }
+        const open = node.depends_on.filter((d) => status.get(d) !== 'completed');
+        if (open.length) { waiting.push({ id, reason: `depende de ${open.join(', ')}` }); continue; }
+        ready.push(id);
+      }
+      const started: string[] = [];
+      for (const id of ready) {
+        if (running.size >= max) { waiting.push({ id, reason: `limite de paralelismo (${max})` }); continue; }
+        const node = graph.nodes.get(id)!;
+        const hot = [...running.entries()].find(([, r]) => scopesOverlap(r.scope, node.mutation_scope) || (node.mutation_scope.length === 0 && nodeMayMutate(node)));
+        if (hot) { waiting.push({ id, reason: `arquivo quente: escopo em comum com ${hot[0]}` }); continue; }
+        if (running.size > 0 && parallel?.minFreeMb && parallel.freeMb && parallel.freeMb() < parallel.minFreeMb) { waiting.push({ id, reason: `memória livre abaixo de ${parallel.minFreeMb} MB` }); continue; }
+        const useParallel = Boolean(parallel) && max > 1;
+        const done = this.runNode(id, graph, ctx, status, completed, failed, blocked, useParallel ? { parallel: true } : {})
+          .catch(() => undefined)
+          .finally(() => { running.delete(id); });
+        running.set(id, { scope: node.mutation_scope, done });
+        started.push(id);
+      }
+      const signature = JSON.stringify([started, waiting]);
+      if (signature !== lastSignature && (started.length || waiting.length)) {
+        lastSignature = signature;
+        this.emit(ctx, { type: 'DispatchState', payload: { mode: 'stream', started, running: [...running.keys()], waiting } });
+        if (this.journal) this.journal.dispatch = { running: [...running.keys()], waiting };
+      }
+      if (running.size === 0) break;
+      await Promise.race([...running.values()].map((r) => r.done));
+      if (this.journal) {
+        this.journal.completed_work_items = completed.slice();
+        this.journal.failed_work_items = failed.slice();
+        this.journal.blocked_work_items = blocked.slice();
+        saveJournal(ctx.projectRoot, ctx.runId, this.journal);
+      }
+    }
+    if (running.size) await Promise.all([...running.values()].map((r) => r.done));
   }
 
   /** OXB-050: a pool over the wave's mutating nodes — disjoint scopes only, `maxParallel`, memory per agent. */

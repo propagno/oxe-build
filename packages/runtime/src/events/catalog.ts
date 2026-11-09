@@ -41,6 +41,7 @@ export const EVENT_TYPES = [
   'ScopeInsufficient',
   'RunPaused',
   'WorkItemDeferred',
+  'DispatchState',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

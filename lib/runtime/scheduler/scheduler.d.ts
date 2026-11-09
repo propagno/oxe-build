@@ -59,6 +59,12 @@ export interface SchedulerOptions {
      * it (its dependents end `blocked_by_deferred`). false keeps the old stop-at-the-failed-wave behavior.
      */
     deferFailed?: boolean;
+    /**
+     * OXB-129: `stream` dispatches a task as soon as all its declared dependencies completed (not when its whole wave
+     * did), within the parallel limits; a task whose scope overlaps a running one (hot file) waits. `wave` (default)
+     * keeps the wave barrier. The wave becomes a reading grouping only in stream mode.
+     */
+    dispatch?: 'wave' | 'stream';
     maxRunDurationMs?: number;
     staleProgressMs?: number;
 }
@@ -152,6 +158,13 @@ export declare class Scheduler {
     recover(runId: string, ctx: SchedulerContext, graph: ExecutionGraph): Promise<RunResult | null>;
     private isConcurrentSafe;
     private runWave;
+    /**
+     * OXB-129: dispatch by dependency, not by wave. A node is ready when every dependency is completed; one with a failed
+     * or blocked dependency is blocked (only its dependents — the rest goes on). Ready nodes start in plan order, up to
+     * `parallel.maxParallel` (1 without --parallel-mutating), never two with overlapping scopes (a hot file serializes),
+     * and never past the free-memory floor. Every decision is a `DispatchState` event (ready / waiting with the reason).
+     */
+    private runStream;
     /** OXB-050: a pool over the wave's mutating nodes — disjoint scopes only, `maxParallel`, memory per agent. */
     private runMutationsInParallel;
     private runNode;
