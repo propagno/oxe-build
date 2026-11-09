@@ -14,3 +14,5 @@ export { BUILT_IN_TOOLS, ALL_BUILT_IN_SCHEMAS, resolveWithin, PathContainmentErr
 export { shellInvocation, childProcessEnv, configureChildEnv, scrubbedEnvNames, PROVIDER_CREDENTIAL_ENV, windowsLaunchers, decodeConsoleOutput } from './shell-argv';
 export type { ShellInvocation } from './shell-argv';
 export type { BuiltInToolHandler } from './built-in-tools';
+export { setQuestionResolver } from './built-in-tools';
+export type { ExecutorQuestion, ExecutorAnswer } from './built-in-tools';

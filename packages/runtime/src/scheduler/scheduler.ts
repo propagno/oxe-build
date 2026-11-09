@@ -901,6 +901,11 @@ export class Scheduler {
           break;
         }
         if (lastResult.failure_class === 'scope_insufficient') break;
+        // OXB-125: waiting for a person's answer — never a retry
+        if (lastResult.failure_class === 'waiting_answer') {
+          this.blockNode(nodeId, ctx, status, blocked, 'waiting_answer', tailLines(lastResult.output || '', 3));
+          return;
+        }
         if (lastResult.failure_class === 'policy') break;
         // OXB-120: a provider usage limit pauses the whole run (every task would hit it), with the reset time when known.
         if (lastResult.failure_class === 'quota') {

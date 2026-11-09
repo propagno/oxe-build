@@ -4212,6 +4212,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--base-commit' && argv[i + 1]) out.base = String(argv[++i]);
     else if (a === '--criteria' && argv[i + 1]) out.criteria = String(argv[++i]);
     else if (a === '--by' && argv[i + 1]) out.by = String(argv[++i]);
+    else if (a === '--answer' && argv[i + 1]) out.answer = String(argv[++i]);
     else if (a === '--evidence' && argv[i + 1]) out.evidence = String(argv[++i]);
     else if (a === '--class' && argv[i + 1]) out.changeClass = String(argv[++i]);
     else if (a === '--summary' && argv[i + 1]) out.summary = String(argv[++i]);
@@ -4324,6 +4325,11 @@ function parseRuntimeArgs(argv) {
     // OXB-060: `runtime promote T7 --base main` promotes one task; without a task id it is the run promotion pipeline.
     out.task = positionals[1].toUpperCase();
     if (positionals[2]) out.dir = path.resolve(positionals[2]);
+  } else if (out.action === 'questions') {
+    if (positionals[1]) out.subAction = positionals[1];
+    let k = 2;
+    if (/^Q-\d+$/i.test(positionals[2] || '')) { out.questionId = positionals[2].toUpperCase(); k = 3; }
+    if (positionals[k]) out.dir = path.resolve(positionals[k]);
   } else if (out.action === 'gates' || out.action === 'program') {
     if (positionals[1]) out.subAction = positionals[1];
     if (positionals[2]) out.dir = path.resolve(positionals[2]);
@@ -5596,6 +5602,20 @@ async function runRuntime(opts) {
       console.error(`${red}${err && err.message ? err.message : 'Falha ao executar runtime.'}${reset}`);
       process.exit(1);
     }
+  }
+
+  // OXB-125: questions the executor asked the orchestrator.
+  if (opts.action === 'questions') {
+    try {
+      const sub = opts.subAction === 'answer' ? 'answer' : 'list';
+      if (sub === 'answer' && !opts.questionId) throw new Error('use: oxe-cc runtime questions answer Q-1 --answer "…"');
+      const out = oxeOperational.runtimeQuestions(opts.dir, activeSession, { action: sub, id: opts.questionId, answer: opts.answer, by: opts.by });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeQuestionsSchema: 1, ...out }, null, 2)); return; }
+      if (out.answered) { console.log(`  ${green}✓${reset} ${out.answered.id} respondida → ${out.answered.decision} (rode oxe-cc runtime execute de novo)`); return; }
+      if (!out.questions.length) console.log('  nenhuma pergunta do executor');
+      for (const q of out.questions) console.log(`  ${q.id} [${q.status}] ${q.question}${q.answer ? ` → ${q.answer}${q.answered_by ? ` (${q.answered_by})` : ''}` : ` — opções: ${(q.options || []).join(' | ')}`}`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
   }
 
   // OXB-138: the deferred ledger.

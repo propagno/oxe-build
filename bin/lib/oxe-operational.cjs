@@ -1077,6 +1077,40 @@ function spawnPromote(projectRoot, activeSession, taskId, opts = {}, runId = nul
   return child.pid;
 }
 
+/** OXB-125: the orchestrator side of `ask_orchestrator` — answers from the artifacts, queues what needs a person. */
+function installQuestionResolver(runtime, projectRoot, activeSession, getRunId) {
+  if (typeof runtime.setQuestionResolver !== 'function') return;
+  const lib = require('./oxe-questions.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const cfg = readProjectConfig(projectRoot) || {};
+  const interruptOn = (cfg.execute && Array.isArray(cfg.execute.interrupt_on)) ? cfg.execute.interrupt_on : [];
+  let phase = null;
+  try { const pg = require('./oxe-program.cjs').readProgram(programDir); phase = pg && pg.active_phase ? pg.active_phase : null; } catch { /* sem programa */ }
+  runtime.setQuestionResolver((q) => {
+    const runId = typeof getRunId === 'function' ? getRunId() : null;
+    const a = lib.resolve(programDir, q, { interruptOn, runId, phase });
+    appendEvent(projectRoot, activeSession, { type: 'ExecutorQuestion', run_id: runId, payload: { id: a.id || null, question: q.question, options: q.options, default: q.default || null, blocking: q.blocking, answer: a.wait ? null : a.answer, source: a.source || null, provisional: Boolean(a.provisional), waiting: Boolean(a.wait) } });
+    return a;
+  });
+}
+
+/** OXB-125: `oxe-cc runtime questions [list|answer Q-n --answer "…"]`. */
+function runtimeQuestions(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-questions.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  if (options.action === 'answer') {
+    let phase = null;
+    try { const pg = require('./oxe-program.cjs').readProgram(programDir); phase = pg && pg.active_phase ? pg.active_phase : null; } catch { /* */ }
+    const out = lib.answer(programDir, String(options.id || '').toUpperCase(), options.answer, options.by, phase);
+    appendEvent(projectRoot, activeSession, { type: 'ExecutorQuestionAnswered', payload: out });
+    return { answered: out };
+  }
+  const all = lib.list(programDir);
+  return { questions: all, waiting: all.filter((q) => q.status === 'waiting') };
+}
+
 /**
  * LlmTaskExecutor sobre um adapter (`claude` = `claude -p` por turno, `http` = OpenAI-compatível).
  * O uso por tentativa vira evento `ExecutorUsage`.
@@ -1085,6 +1119,7 @@ function createAdapterExecutor(runtime, projectRoot, activeSession, options, get
   const adapterId = options.adapter || 'http';
   if (typeof runtime.createExecutorAdapter !== 'function') throw new Error('Runtime não exporta createExecutorAdapter.');
   const adapter = runtime.createExecutorAdapter(adapterId, { claude: options.adapterOptions || {} });
+  installQuestionResolver(runtime, projectRoot, activeSession, getRunId);
   const provider = options.providerConfig || {};
   const progress = (event) => {
     if (event && event.type === 'executor_usage') {
@@ -2023,6 +2058,10 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
         for (const h of require('./oxe-phase-extras.cjs').regressionImpact(projectRoot, checksR, pjR)) for (const t of h.tasks) byTask.set(t, [...(byTask.get(t) || []), `${h.file} (${h.check})`]);
         for (const [t, list] of byTask) warnings.push(`regression_impact:${t} mexe em ${[...new Set(list)].slice(0, 4).join(', ')} — a regressão congelada dessas fases roda no verify; rode-a cedo`);
       }
+    } catch { /* auxiliar */ }
+    // OXB-125: a question the executor left waiting — answer it before running again.
+    try {
+      for (const q of runtimeQuestions(projectRoot, activeSession, {}).waiting.slice(0, 6)) blockers.push(`question_waiting:${q.id} — ${q.question} (oxe-cc runtime questions answer ${q.id} --answer "…")`);
     } catch { /* auxiliar */ }
     // OXB-126: a plan written against code that changed since (base_sha) — refuse with the report per task.
     try {
@@ -8178,6 +8217,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeQuestions,
   runtimePlanStaleness,
   runtimeSpecProbe,
   runtimeDeferred,

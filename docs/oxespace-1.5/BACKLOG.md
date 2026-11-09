@@ -1449,3 +1449,19 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - **`oxe-cc plan refresh --tasks T3[,T7]`** registra que a tarefa foi revisada contra o código atual (`base_sha` e `refreshed_at` na tarefa). Ids e tarefas done são preservados. O conteúdo da revisão é do planner; o comando só grava o ponto de referência.
   - **Fase em esboço:** PROGRAM.json `detail: "sketch"` na fase. Ela não executa (`phase_sketch` no preflight) até o plano ser detalhado.
   - Teste: `tests/oxe-1212-plan-staleness.test.cjs` (merge que mexe no escopo da T3 e remove um arquivo: o execute recusa nomeando a T3, e o checkpoint da T1 não conta; refresh; fase em esboço).
+
+## OXB-125: canal de pergunta do executor
+
+- **Status:** resolvido (1.21.2). Item P1 do backlog de comparação. `bin/lib/oxe-questions.cjs` e a ferramenta `ask_orchestrator` em `packages/runtime/src/executor/built-in-tools.ts`.
+  - **A ferramenta:** diante de um contrato ambíguo (duas leituras, uma âncora que não decide, um teste e o código discordando), o executor chama `ask_orchestrator` com `{question, options, default, blocking}` em vez de adivinhar.
+  - **O orquestrador responde, nesta ordem:**
+    1. a mesma pergunta já respondida por uma pessoa;
+    2. uma decisão ativa que nomeia uma das opções e compartilha os termos da pergunta (a fonte é o id da decisão);
+    3. bloqueante, ou com um termo de `execute.interrupt_on`, sem evidência: vira `Q-n` em espera, e a tarefa para com `waiting_answer`, sem retry;
+    4. senão, o default do executor, gravado como decisão provisória (`by: executor (provisória)`).
+  - **Eventos e comandos:**
+    - eventos `ExecutorQuestion` e `ExecutorQuestionAnswered`;
+    - `oxe-cc runtime questions [--json]` lista as perguntas;
+    - `oxe-cc runtime questions answer Q-n --answer "…"` responde e grava a decisão;
+    - o preflight do execute recusa enquanto houver uma pergunta em espera (`question_waiting:Q-n`).
+  - Teste: `tests/oxe-1212-questions.test.cjs`, com 4 cenários: resposta pela decisão; default provisório; bloqueante e `interrupt_on` em espera, a resposta desbloqueia e é reaproveitada; a tarefa em `waiting_answer` não é retentada.
