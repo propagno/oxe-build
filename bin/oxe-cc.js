@@ -4238,6 +4238,8 @@ function parseRuntimeArgs(argv) {
     else if (a === '--in-place') out.inPlace = true;
     else if (a === '--promote-each') out.promoteEach = true;
     else if (a === '--reopen') out.reopen = true;
+    else if (a === '--waive' && argv[i + 1]) out.waive = String(argv[++i]);
+    else if (a === '--no-defects') out.noDefects = true;
     else if (a === '--hold-deps' || a === '--promote-hold-deps') out.holdDeps = true;
     else if (a === '--allow-undelivered') out.allowUndelivered = true;
     else if (a === '--strict-delivery') out.strictDelivery = true;
@@ -5221,6 +5223,7 @@ async function runRuntime(opts) {
           phase: opts.phase || null,
           commit: !opts.noCommit,
           gates: !opts.noGates,
+          defects: !opts.noDefects,
           message: opts.message || undefined,
           deferSignoff: opts.deferSignoff,
           by: opts.by || undefined,
@@ -5575,6 +5578,23 @@ async function runRuntime(opts) {
     } catch (err) {
       console.error(`${red}${err && err.message ? err.message : 'Falha ao executar runtime.'}${reset}`);
       process.exit(1);
+    }
+  }
+
+  // OXB-110: the open-defects register of the active phase.
+  if (opts.action === 'defects') {
+    try {
+      const out = oxeOperational.runtimeDefects(opts.dir, activeSession, { waive: opts.waive || null, reason: opts.reason, by: opts.by, phase: opts.phase || null });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeDefectsSchema: 1, ...out }, null, 2)); return; }
+      const lib = require('./lib/oxe-open-defects.cjs');
+      if (opts.waive) console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${opts.waive} dispensado por ${opts.by}`);
+      if (!out.open.length) console.log(`  ${c ? green : ''}✓${c ? reset : ''} nenhum defeito aberto (${(out.register.waivers || []).length} dispensado(s))`);
+      else { console.log(`  ${c ? yellow : ''}${out.open.length} defeito(s) aberto(s)${c ? reset : ''} — bloqueiam o program close:`); for (const it of out.open) console.log(`    ${lib.describe(it)}`); }
+      return;
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+      return;
     }
   }
 
@@ -6717,9 +6737,13 @@ async function main() {
     let changed = false;
     let quiet = false;
     let only = null;
+    let mutation = false;
+    let mutationMax = 0;
     for (let i = 0; i < rest.length; i += 1) {
       const a = rest[i];
       if (a === '--json') json = true;
+      else if (a === '--mutation') mutation = true;
+      else if (a === '--mutation-max' && rest[i + 1]) { mutation = true; mutationMax = Number(rest[++i]) || 0; }
       else if (a === '--dry-verify') dryVerify = true;
       else if (a === '--no-preflight') noPreflight = true;
       else if (a === '--resume') { resume = true; dryVerify = true; }
@@ -6745,7 +6769,7 @@ async function main() {
     try {
       // Progress goes to stderr, so --json on stdout stays parseable.
       const onProgress = quiet ? null : (line) => process.stderr.write(`  ${line}\n`);
-      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave, dryVerify, preflight: !noPreflight, onProgress, resume, changed, only, dryVerifyAnyway });
+      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave, dryVerify, preflight: !noPreflight, onProgress, resume, changed, only, dryVerifyAnyway, mutation, mutationMax });
     } catch (err) {
       console.error(`${red}✗${reset} ${err && err.message ? err.message : err}`);
       process.exit(1);

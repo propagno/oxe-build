@@ -716,6 +716,37 @@ function implicitPhaseGates(projectRoot, programState, phaseId, projectConfig) {
   return [{ id: 'stub-check', when: 'phase_verify', command: `node "${script}" --phase --since ${base}`, description: 'anti-stub da fase: stubs e arquivos novos sem ligação (OXB-108)', on_fail: 'cr_defect' }];
 }
 
+/**
+ * OXB-110: `oxe-cc runtime defects [--waive <id> --reason "…" --by <papel>]` — regenerates .oxe/OPEN-DEFECTS.json for
+ * the active phase (its diff from base_commit, its tasks, the open signal / standing CRs) and lists what is open.
+ */
+function runtimeDefects(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-open-defects.cjs');
+  if (options.waive) {
+    const doc = lib.waive(projectRoot, String(options.waive), { reason: options.reason, by: options.by });
+    appendEvent(projectRoot, activeSession, { type: 'DefectWaived', payload: { id: options.waive, by: options.by } });
+    return { register: doc, open: lib.open(doc) };
+  }
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  let program = null;
+  try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; }
+  const phaseId = options.phase || (program && program.active_phase) || null;
+  const phase = program && phaseId ? (program.phases || []).find((p) => p.id === phaseId) : null;
+  let doc = null;
+  try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
+  let changes = [];
+  try { changes = require('./oxe-change.cjs').listChanges(programDir); } catch { changes = []; }
+  const register = lib.collect(projectRoot, {
+    phase: phaseId,
+    base: options.base || (phase && phase.base_commit) || null,
+    doc,
+    changes: changes.filter((c) => !phaseId || !c.phase || c.phase === phaseId),
+    standing: require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot),
+  });
+  return { register, open: lib.open(register) };
+}
+
 /** OXB-160: the tests' own tree for a frozen test file: up to its tests/test/__tests__/spec/e2e dir, else its own dir. */
 function promoteTestRoot(file) {
   const parts = String(file).replace(/\\/g, '/').split('/');
@@ -3406,6 +3437,23 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       }
     }
   } catch { /* auxiliar */ }
+  // OXB-109: rigor of the frozen tests — a test that only reads product source as text needs a declared exception;
+  // --mutation samples mutants of the files each done task's test imports (temporary worktree at HEAD).
+  try {
+    const { doc: pjr } = readPlanJsonDoc(projectRoot, activeSession);
+    if (pjr) {
+      const rigor = require('./oxe-test-rigor.cjs');
+      const cfgLint = (readProjectConfig(projectRoot) || {}).lint || {};
+      const findings = rigor.sourceAssertionFindings(projectRoot, pjr);
+      (cfgLint.test_rigor === 'error' ? result.errors : result.warnings).push(...rigor.rigorMessages(findings));
+      result.test_rigor = { source_assertions: findings };
+      if (options.mutation) {
+        const report = rigor.mutationSample(projectRoot, pjr, { max: options.mutationMax });
+        result.test_rigor.mutation = report;
+        result.warnings.push(...rigor.mutationMessages(report));
+      }
+    }
+  } catch { /* auxiliar */ }
   // OXB-171: the product files a task's frozen tests import/read must be in its scope (or a dependency's); T8 of F2
   // retried 3× a test on shared/types/ipc.ts that was outside its files. config lint.test_scope: "error" makes it fatal.
   try {
@@ -6086,6 +6134,16 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     appendEvent(projectRoot, activeSession, { type: 'DriftWaived', payload: { phase: phase.id, globs: acceptDrift, by } });
   }
   const closeGates = programCloseGateReasons(projectRoot, activeSession, { phase, run, paths, state, skip: options.gates === false });
+  // OXB-110: open defects (stubs, TODO/FIXME, skipped tests, verify missing, open signal/standing CRs) block the close
+  // — and the deploy gate the close evaluates — unless waived with a reason.
+  if (options.defects !== false) {
+    try {
+      const defects = runtimeDefects(projectRoot, activeSession, { phase: phase.id });
+      const lib = require('./oxe-open-defects.cjs');
+      for (const it of defects.open.slice(0, 15)) closeGates.reasons.push(`defeito aberto ${lib.describe(it)} — corrija, ou oxe-cc runtime defects --waive ${it.id} --by <papel> --reason "…"`);
+      if (defects.open.length > 15) closeGates.reasons.push(`e mais ${defects.open.length - 15} defeito(s) aberto(s) em .oxe/OPEN-DEFECTS.json`);
+    } catch { /* auxiliar */ }
+  }
   // OXB-091: every standing criterion needs a sign-off of this phase with evidence (not deferrable: "erros na
   // interface não serão admitidos" holds at every close).
   const standing = require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot);
@@ -7518,6 +7576,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeDefects,
   projectStatusPaths,
   runtimePlanReopen,
   runtimePhaseWork,

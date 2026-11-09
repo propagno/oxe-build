@@ -804,16 +804,28 @@ Requisitos escritos pelo TECH LEAD, aprovados pelo usuário. O desenho e a imple
 
 ## OXB-109: gate de rigor do teste congelado (no spec freeze e no plan lint)
 
-- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
-  - O teste precisa exercitar código real, não asserção sobre o texto-fonte.
-  - A exceção é declarada com `rigor: source-assertion` e um motivo.
-  - Opcionalmente, uma amostra de mutantes (`--mutation`). O relatório sai por arquivo de teste.
+- **Status:** resolvido (1.21.2), no `plan lint`. O `spec freeze` ainda não existe (OXB-099) e vai reusar o mesmo módulo (`bin/lib/oxe-test-rigor.cjs`).
+  - **Asserção sobre o texto:** o teste congelado de uma tarefa pendente que **lê código-fonte do produto como texto** (`readFileSync` de .ts/.js/.kt…) e **não importa nada do produto** testa o texto, não o comportamento. O lint diz qual arquivo ele lê e como corrigir.
+    - Exceção declarada no acceptance_tests: `"rigor": "source-assertion"` com `"rigor_reason"` (≥ 8 caracteres; o schema exige o motivo).
+    - Por padrão é aviso, porque as fases em andamento têm testes de remoção que podem ler fonte. `lint.test_rigor: "error"` torna fatal. Testes de tarefas já done não são cobrados.
+  - **`plan lint --mutation [--mutation-max N]`:** para os testes congelados das tarefas done, aplica até N mutantes (padrão 3) em cada arquivo do produto que o teste importa: `===`↔`!==`, `true`↔`false`, `<`→`>=`, `>`→`<=` e retorno → `undefined`.
+    - Um mutante que o teste ainda passa "sobrevive". O relatório sai por arquivo de teste (mortos/total e os sobreviventes com arquivo:linha) em `test_rigor.mutation` e nos avisos.
+    - Roda numa worktree temporária em HEAD, com junction do node_modules desfeito antes da remoção. A árvore real nunca é mutada.
+  - Teste: `tests/oxe-1212-test-rigor.test.cjs` (teste de texto sinalizado, teste de comportamento não; exceção; motivo obrigatório em modo error; teste forte mata os mutantes, teste fraco os deixa vivos; árvore intacta e worktree removida).
 
 ## OXB-110: registro de defeitos abertos entre fases (`.oxe/OPEN-DEFECTS.json`)
 
-- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
-  - Acumula stubs, TODO/FIXME do diff, testes skip/only, verifies não rodados, CRs de sinal abertos e achados do A70.
-  - Bloqueia o close e o gate de deploy, salvo `--waive <id> --reason` registrado.
+- **Status:** resolvido (1.21.2). `bin/lib/oxe-open-defects.cjs` e o comando `oxe-cc runtime defects`.
+  - O registro `.oxe/OPEN-DEFECTS.json` da fase ativa sai do diff dela (`base_commit` → árvore) e do programa. Cada item tem um id estável `OD-<tipo>-<hash>`.
+    - stubs nas linhas acrescentadas (OXB-108);
+    - TODO/FIXME/XXX/HACK acrescentados em código;
+    - testes `.skip`/`.only`/`.todo`, `xit`/`fit`, `@Disabled`/`@Ignore`;
+    - tarefas done sem verify;
+    - CRs de sinal abertos (`runtime signal`) e CRs abertos nos critérios permanentes (A70).
+  - Um item sai quando some da origem. O comentário `oxe-defect-ok` na linha é a exceção pontual.
+  - **`runtime program close`:** cada defeito aberto é uma razão de bloqueio, com o comando para dispensá-lo. Como o gate de deploy (`phase_gates` kind deploy) é avaliado no close, ele também fica bloqueado. `--no-defects` desliga.
+  - **`runtime defects --waive <id> --by <papel> --reason "…"`:** registra a dispensa, que continua valendo quando o registro é regenerado. Sem `--by` ou com motivo curto, recusa.
+  - Teste: `tests/oxe-1212-open-defects.test.cjs` (os cinco tipos com arquivo:linha; o close bloqueado com os ids; dispensas pela CLI que sobrevivem à regeneração; motivo obrigatório).
 
 ## OXB-111: revisão adversarial do plano (`plan lint --review`) com PLAN-REVIEW.md
 
