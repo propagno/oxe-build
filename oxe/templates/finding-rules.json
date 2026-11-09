@@ -12,6 +12,10 @@
     { "id": "build-order", "severity": "medium", "when": "falha que depende da ordem de build ou de um artefato não gerado", "applies": "code" },
     { "id": "perf-regression", "severity": "medium", "when": "piora mensurável de tempo, memória ou tamanho", "applies": "any" },
     { "id": "stale-copy", "severity": "low", "when": "texto, rótulo ou ícone desatualizado sem afetar o uso", "applies": "ui" },
-    { "id": "polish", "severity": "low", "when": "acabamento visual ou de código sem impacto no uso", "applies": "any" }
+    { "id": "polish", "severity": "low", "when": "acabamento visual ou de código sem impacto no uso", "applies": "any" },
+    { "id": "unclear-section", "severity": "high", "when": "um leitor sem contexto não consegue resumir a seção (plan lint --read)", "applies": "any" },
+    { "id": "summary-mismatch", "severity": "high", "when": "o resumo do leitor de fora não bate com a intenção do autor", "applies": "any" },
+    { "id": "open-choice", "severity": "high", "when": "quem implementa teria que escolher sozinho um esquema, assinatura, dependência ou caso de borda", "applies": "any" },
+    { "id": "undefined-term", "severity": "medium", "when": "termo do projeto usado sem definição nem link", "applies": "any" }
   ]
 }

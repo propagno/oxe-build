@@ -6487,6 +6487,7 @@ async function main() {
     argv[0] === 'program' ||
     argv[0] === 'policy' ||
     argv[0] === 'decision' ||
+    argv[0] === 'review' ||
     argv[0] === 'state' ||
     argv[0] === 'guards' ||
     argv[0] === 'verify' ||
@@ -6794,6 +6795,54 @@ async function main() {
     return;
   }
 
+  // OXB-178b/179/139/180: independent review, findings ledger, bounded rounds, author responses.
+  if (command === 'review') {
+    const sub = ['run', 'status', 'respond'].includes(argv[0]) ? argv[0] : 'status';
+    const o = { dir: process.cwd(), json: false, respond: {} };
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (['--role', '--task', '--model', '--criteria', '--id'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--allow-external') o.allowExternal = true;
+      else if (a === '--dispute') o.respond.dispute = true;
+      else if (a === '--ref' && argv[i + 1]) o.respond.ref = String(argv[++i]);
+      else if (a === '--to-owner') o.respond.toOwner = true;
+      else if (a === '--reason' && argv[i + 1]) o.respond.reason = String(argv[++i]);
+      else if (a === '--fix') o.respond.fix = true;
+      else if (a === '--commit' && argv[i + 1]) o.respond.commit = String(argv[++i]);
+      else if (a === '--note') o.respond.note = true;
+      else if (a === '--waive') o.respond.waive = true;
+      else if (a === '--owner-confirm') o.respond.ownerConfirm = true;
+      else if (a === '--owner-record' && argv[i + 1]) o.respond.ownerRecord = String(argv[++i]);
+      else if (a === '--severity' && argv[i + 1]) o.respond.severity = String(argv[++i]);
+      else if (a === '--by' && argv[i + 1]) o.respond.by = String(argv[++i]);
+      else if (!a.startsWith('-') && sub === 'respond' && !o.fid) o.fid = a;
+      else if (!a.startsWith('-') && sub === 'status' && !o.id) o.id = a;
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = await oxeOperational.runtimeReview(o.dir, null, { action: sub, role: o.role, task: o.task, model: o.model, criteria: o.criteria, id: o.id, fid: o.fid, respond: o.respond, allowExternal: o.allowExternal });
+      if (o.json) { console.log(JSON.stringify({ oxeReviewSchema: 1, ...out }, null, 2)); return; }
+      if (sub === 'respond') { console.log(`  ${green}✓${reset} ${out.fid} → ${out.status}${out.decision ? ` (${out.decision})` : ''}`); return; }
+      if (sub === 'run') {
+        console.log(`  revisão ${out.id} rodada ${out.round}: ${out.status === 'ran' ? 'rodou' : `${red}não rodou${reset} — ${out.reason}`} · ${out.clean ? 'limpa' : 'suja'}${out.converged ? ' · convergiu' : ''}`);
+        console.log(`  novos: ${out.new.length} · repetidos: ${out.repeated.length} · reabertos: ${out.reopened.length} · altos abertos: ${out.open_high.join(', ') || '—'}`);
+        if (out.decision.action === 'escalate') console.log(`  ${yellow}escalonado:${reset} ${typeof out.escalated === 'string' ? out.escalated : JSON.stringify(out.escalated)} (spec_gap, origin review_repeat) — sem nova rodada`);
+        else if (out.decision.action.startsWith('stop')) console.log(`  ${yellow}laço parado (${out.decision.action === 'stop_ping_pong' ? 'vai-e-volta' : 'limite de rodadas'})${reset}: aceitar e seguir, rodar além do limite (com motivo) ou voltar ao autor do critério`);
+        if (out.status !== 'ran') process.exitCode = 1;
+        return;
+      }
+      for (const r of out.reviews) {
+        console.log(`  ${r.id}: ${r.rounds.length} rodada(s), ${r.clean_rounds} limpa(s)${r.converged ? ', convergiu' : ''}`);
+        for (const f of r.to_owner) console.log(`    [dono] ${f.fid} (${f.severity}) ${f.text}`);
+        for (const f of r.open) console.log(`    ${f.fid} (${f.severity})${f.place ? ` ${f.place}` : ''} ${f.text}${f.reopened ? ` — ${f.reopened}` : ''}`);
+        if (r.closed.length) console.log(`    encerrados: ${r.closed.map((f) => `${f.fid}=${f.status}`).join(', ')}`);
+      }
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   // OXB-112: decisions as first-class ids.
   if (command === 'decision') {
     const sub = argv[0] === 'add' || argv[0] === 'list' ? argv[0] : 'list';
@@ -6999,6 +7048,8 @@ async function main() {
     let mutation = false;
     let mutationMax = 0;
     let review = false;
+    let planRead = false;
+    let planReadRole = null;
     let reviewWaive = null;
     let reviewBy = null;
     let reviewReason = null;
@@ -7007,6 +7058,8 @@ async function main() {
       if (a === '--json') json = true;
       else if (a === '--mutation') mutation = true;
       else if (a === '--review') review = true;
+      else if (a === '--read') planRead = true;
+      else if (a === '--role' && rest[i + 1]) planReadRole = String(rest[++i]);
       else if (a === '--waive' && rest[i + 1]) { reviewWaive = String(rest[++i]); review = true; }
       else if (a === '--by' && rest[i + 1]) reviewBy = String(rest[++i]);
       else if (a === '--reason' && rest[i + 1]) reviewReason = String(rest[++i]);
@@ -7031,6 +7084,22 @@ async function main() {
       } catch {
         session = null;
       }
+    }
+    // OXB-181: the context-free read of the spec and plan (separate processes) → PLAN-READ.md/.json.
+    if (planRead) {
+      try {
+        const out = await oxeOperational.runtimePlanRead(dir, session, { role: planReadRole });
+        if (json) { console.log(JSON.stringify({ oxePlanReadSchema: 1, ...out }, null, 2)); }
+        else {
+          for (const r of out.roles) {
+            console.log(`  ${r.role}: ${r.status === 'ran' ? 'rodou' : `não rodou (${r.reason})`} · altos abertos: ${r.open_high.join(', ') || '—'}`);
+            if (r.summary && r.summary.delivers) console.log(`    entrega (leitor): ${r.summary.delivers}`);
+          }
+          console.log('  → .oxe/PLAN-READ.md');
+        }
+        if (out.roles.some((r) => r.status !== 'ran' || r.open_high.length)) process.exitCode = 1;
+      } catch (err) { console.error(`${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+      return;
     }
     let result;
     try {

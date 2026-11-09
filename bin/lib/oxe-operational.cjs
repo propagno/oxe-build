@@ -443,6 +443,8 @@ function buildNodeContextProvider(projectRoot, activeSession) {
     : null;
   const fixturePack = readJsonQuiet(fixturePath);
   const lessons = readLessonLines(projectRoot);
+  let reviewSentinel = null;
+  try { reviewSentinel = require('./oxe-review.cjs').sentinel(projectRoot); } catch { reviewSentinel = null; }
   const packTasks = pack && Array.isArray(pack.tasks) ? pack.tasks : [];
   const fixtures = fixturePack && Array.isArray(fixturePack.fixtures) ? fixturePack.fixtures : [];
   const program = require('./oxe-program.cjs');
@@ -526,7 +528,7 @@ function buildNodeContextProvider(projectRoot, activeSession) {
       repoRules,
       handoffs,
       gitStatus,
-      lessons,
+      lessons: [...lessons, ...(reviewSentinel ? [`Marcador desta sessão de execução (não o repita em arquivos): ${reviewSentinel}`] : [])],
       externalSignals: externalSignalsFor(node),
     };
   };
@@ -1076,6 +1078,94 @@ function spawnPromote(projectRoot, activeSession, taskId, opts = {}, runId = nul
   child.unref();
   appendEvent(projectRoot, activeSession, { type: 'TaskPromoteQueued', run_id: runId, work_item_id: taskId, payload: { base: opts.base || 'main', log: path.relative(projectRoot, path.join(logDir, `${taskId}.log`)).replace(/\\/g, '/') } });
   return child.pid;
+}
+
+/**
+ * OXB-178b/179/139/180: `oxe-cc review run --role auditor|diff|reader|implementer [--task T3] [--model m]`,
+ * `review status [<id>]`, `review respond <fid> …`. A task review keeps one id per task and role (diff-T3), so its
+ * rounds accumulate in the same ledger; after each round the limit / escalation rule of OXB-139 is applied.
+ */
+async function runtimeReview(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-review.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const cfg = readProjectConfig(projectRoot).review || {};
+  if (options.action === 'status') {
+    const ids = options.id ? [options.id] : lib.listReviews(projectRoot);
+    return { reviews: ids.map((id) => lib.status(projectRoot, id)) };
+  }
+  if (options.action === 'respond') {
+    const id = options.id || lib.listReviews(projectRoot).find((r) => lib.readLedger(projectRoot, r).findings.some((f) => f.fid === options.fid));
+    if (!id) throw new Error(`achado ${options.fid} não encontrado em nenhuma revisão`);
+    const out = lib.respond(projectRoot, id, options.fid, { ...options.respond, programDir });
+    appendEvent(projectRoot, activeSession, { type: 'ReviewFindingAnswered', payload: { review: id, ...out } });
+    return { review: id, ...out };
+  }
+  const role = options.role || 'diff';
+  let task = null;
+  let diff = null;
+  let criteria = [];
+  if (options.task) {
+    const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+    task = ((doc && doc.tasks) || []).find((t) => t && t.id === String(options.task).toUpperCase()) || null;
+    if (!task) throw new Error(`tarefa ${options.task} não está no PLAN.json`);
+    criteria = task.acceptance || [];
+    const cp = (gitLines(projectRoot, ['log', '-1', '--format=%H', '-E', `--grep=^OXE-Task: (F[0-9]+/)?${task.id}$`]) || [])[0];
+    const r = cp ? spawnSync('git', ['show', '--format=%H%n%B', cp], { cwd: projectRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+      : spawnSync('git', ['diff', 'HEAD', '--', ...(task.files || []).filter((f) => !f.includes('*'))], { cwd: projectRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    diff = r.status === 0 ? r.stdout : '';
+  }
+  if (options.criteria) criteria = String(options.criteria).split(',').map((c) => c.trim()).filter(Boolean);
+  const id = options.id || (task ? `${role}-${task.id}` : `${role}-doc`);
+  const res = await lib.runReview(projectRoot, { id, role, task, criteria, diff, model: options.model || cfg.model || null, reviewer: options.reviewer, specPath: paths.spec, planPath: paths.plan, allowExternal: Boolean(options.allowExternal) });
+  const decision = lib.decideAfterRound(projectRoot, id, cfg);
+  let escalated = null;
+  if (decision.action === 'escalate') {
+    const led = lib.readLedger(projectRoot, id);
+    const items = led.findings.filter((f) => decision.persistent.includes(f.fid));
+    try {
+      const fb = runtimeFeedback(projectRoot, activeSession, { class: 'spec_gap', summary: `Revisão ${id}: achado alto repetido em ${decision.round} rodadas — o problema está a montante (critério ou decisão): ${items.map((f) => `${f.fid} ${f.text}`).join(' · ').slice(0, 600)}`, criteria: criteria.join(',') || undefined, by: 'review_repeat', evidence: `.oxe/reviews/${id}/findings.ndjson` });
+      escalated = fb && fb.cr ? fb.cr.id || fb.cr : (fb && fb.id) || null;
+      const changeLib = require('./oxe-change.cjs');
+      changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'cr_origin', cr: escalated, origin: 'review_repeat', review: id, findings: decision.persistent, at: new Date().toISOString() });
+    } catch (err) { escalated = { error: String(err && err.message || err) }; }
+  }
+  appendEvent(projectRoot, activeSession, { type: 'ReviewRound', payload: { review: id, role, round: res.round, status: res.status, clean: res.clean, converged: res.converged, open_high: res.open_high, decision: decision.action, escalated, model: options.model || cfg.model || null } });
+  return { ...res, decision, escalated };
+}
+
+/** OXB-181: `oxe-cc plan lint --read [--role reader|implementer]` → .oxe/PLAN-READ.md / .json. */
+async function runtimePlanRead(projectRoot, activeSession, options = {}) {
+  const roles = options.role ? [options.role] : ((readProjectConfig(projectRoot).plan_read || {}).roles || ['reader', 'implementer']);
+  const out = [];
+  for (const role of roles) out.push(await runtimeReview(projectRoot, activeSession, { role, id: `plan-read-${role}`, reviewer: options.reviewer, model: options.model }));
+  const lib = require('./oxe-review.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const dir = path.dirname(paths.plan || path.join(projectRoot, '.oxe', 'PLAN.md'));
+  const json = { schema: 1, at: new Date().toISOString(), roles: out.map((r) => ({ role: r.receipt.role, status: r.status, reason: r.reason, summary: r.summary, open_high: r.open_high, review: r.id })) };
+  const lines = ['# PLAN-READ', ''];
+  for (const r of json.roles) {
+    lines.push(`## ${r.role === 'reader' ? 'Leitor de fora' : 'Implementador'} — ${r.status === 'ran' ? 'rodou' : `não rodou (${r.reason})`}`, '');
+    if (r.summary) { if (r.summary.delivers) lines.push(`**O que esta fase entrega (nas palavras do leitor):** ${r.summary.delivers}`, ''); if (r.summary.works_today) lines.push(`**Como funciona hoje, segundo o documento:** ${r.summary.works_today}`, ''); }
+    const st = lib.status(projectRoot, r.review);
+    for (const f of st.to_owner) lines.push(`- [dono] ${f.fid} (${f.severity}): ${f.text}`);
+    for (const f of st.open) lines.push(`- ${f.fid} (${f.severity})${f.place ? ` ${f.place}` : ''}: ${f.text}`);
+    if (!st.open.length && !st.to_owner.length) lines.push('- nenhum achado aberto');
+    lines.push('');
+  }
+  fs.writeFileSync(path.join(dir, 'PLAN-READ.md'), lines.join('\n'));
+  fs.writeFileSync(path.join(dir, 'PLAN-READ.json'), `${JSON.stringify(json, null, 2)}\n`);
+  return json;
+}
+
+/** OXB-181: open high findings of the plan read block the execute (as the --review FAIL does). */
+function planReadBlockers(projectRoot) {
+  const lib = require('./oxe-review.cjs');
+  const out = [];
+  for (const id of lib.listReviews(projectRoot).filter((r) => r.startsWith('plan-read-'))) {
+    for (const f of lib.readLedger(projectRoot, id).findings) if ((f.status === 'open' || f.status === 'to_owner') && lib.HIGH(f.severity)) out.push(`plan_read:${f.fid} — ${f.text.slice(0, 160)} (oxe-cc review respond ${f.fid} …)`);
+  }
+  return out;
 }
 
 /** OXB-128: `oxe-cc runtime ui-evidence validate <pasta>` and `runtime signal --from <pasta> --freeze`. */
@@ -2088,6 +2178,8 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
         for (const [t, list] of byTask) warnings.push(`regression_impact:${t} mexe em ${[...new Set(list)].slice(0, 4).join(', ')} — a regressão congelada dessas fases roda no verify; rode-a cedo`);
       }
     } catch { /* auxiliar */ }
+    // OXB-181: an open high finding of the context-free plan read blocks the execute.
+    try { for (const b of planReadBlockers(projectRoot).slice(0, 8)) blockers.push(b); } catch { /* auxiliar */ }
     // OXB-125: a question the executor left waiting — answer it before running again.
     try {
       for (const q of runtimeQuestions(projectRoot, activeSession, {}).waiting.slice(0, 6)) blockers.push(`question_waiting:${q.id} — ${q.question} (oxe-cc runtime questions answer ${q.id} --answer "…")`);
@@ -8282,6 +8374,9 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeReview,
+  runtimePlanRead,
+  planReadBlockers,
   runtimeUiEvidence,
   runtimeQuestions,
   runtimePlanStaleness,

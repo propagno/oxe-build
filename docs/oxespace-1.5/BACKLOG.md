@@ -1494,3 +1494,67 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 - **Defeito real encontrado:** um execute posterior da mesma run recomeça a numeração das tentativas e sobrescrevia `attempts/T14-1.log`. O T14-1.log das 01:31 não é a 1ª tentativa das 00:4x. Agora o log anterior é mantido como `T14-1.before-<mtime>.log`.
 - **Melhoria pedida:** o prompt do retry ganha a seção "O que a tentativa anterior deixou na árvore". Ela lista os caminhos mudados pela tentativa anterior, binários incluídos, e diz que foram mantidos e que o verify os vê. O scheduler expõe `ctx.attemptChanges`, e o inplace preenche a seção a partir do snapshot da tentativa.
 - **Teste:** `tests/oxe-1212-attempt-changes.test.cjs`. Um PNG regravado na tentativa 1 está no verify, o retry o lista como mantido e a tarefa conclui na tentativa 2.
+
+## OXB-178b: revisão independente num processo separado, com recibo
+
+- **Status:** resolvido (1.21.2). Item P1 do backlog de comparação. No backlog de origem ele é o OXB-178; como esse número já era o do rerun dos vermelhos relacionados, aqui ele se chama 178b. Implementado em `bin/lib/oxe-review.cjs`.
+- **O processo:** `oxe-cc review run --role auditor|diff|reader|implementer [--task Tn] [--model m]` roda o revisor num processo novo: `claude -p` sem ferramentas e sem sessão persistida, numa pasta temporária vazia, para que o host não injete CLAUDE.md nem AGENTS.md. O ambiente vai sem OXESPACE_*. O revisor recebe só os arquivos do contrato do papel:
+  - auditor e diff: SPEC, decisões, a tarefa e o diff do checkpoint;
+  - reader e implementer: SPEC e PLAN.
+- **O que entra além disso:**
+  - os arquivos que esses artefatos citam e que existem no repositório;
+  - os de fora do repositório e as URLs ficam em `external_pending`. Só entram com `--allow-external`, como dado não confiável.
+- **O recibo** `.oxe/reviews/<id>/receipt.json` (e `receipt-<rodada>.json`) registra: papel, modelo, os pids do executor e do revisor, o hash do prompt, cada arquivo com seu sha256, os excluídos (PLAN, runs, DISCUSS, EVENTS, STATE) e as instruções do host.
+- **Sentinela:** `.oxe/reviews/.sentinel` entra no contexto de cada tarefa do executor e nunca vai para o revisor. Uma resposta que o contém torna a revisão `invalid`.
+- **Falha do revisor:** um revisor que termina sem relatório tem uma nova tentativa. Depois disso fica `not_run`, e a rodada é suja: nunca "aprovado".
+- **O verify** (`adversarial_verify`) passa a chamar `review run --role auditor` (workflow `verify.md`).
+- **Teste:** `tests/oxe-1212-review.test.cjs`. Cobre:
+  - os hashes do recibo;
+  - a ausência de PLAN e DISCUSS no que o revisor recebe;
+  - os citados dentro e fora do repositório;
+  - o vazamento do sentinela;
+  - as duas falhas que viram `not_run`.
+
+## OXB-179: registro de achados entre rodadas, com regra de convergência
+
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-review.cjs`, no `.oxe/reviews/<id>/findings.ndjson` (append-only).
+- **O achado:** id estável `<papel>-<rodada>-<n>`, lugar (arquivo e linha, ou critério ou tarefa), regra e severidade da tabela do OXB-137, e estado.
+- **"Mesmo problema, mesmo lugar":** mesma regra e mesmo arquivo, com tolerância de 12 linhas, ou mesma regra e mesmo critério ou tarefa.
+- **Transições:**
+  - um achado encerrado (contestado com evidência, registrado, confirmado pelo dono, waiver) que volta é marcado como repetido e não reabre;
+  - um achado corrigido que volta reabre como "correção falhou ou foi desfeita", com o commit da correção.
+- **Rodada e convergência:** a rodada é limpa quando não há achado alto ou maior aberto (ou com o dono) e todos os revisores rodaram. A revisão converge com duas rodadas limpas seguidas.
+- **Vai-e-volta:** um achado novo dentro de uma correção desta revisão para o laço com a pergunta de três saídas (`decision_needed`).
+- **Interface:** `oxe-cc review status [<id>]`, com os achados que estão com o dono primeiro, e o evento `ReviewRound`.
+
+## OXB-139: revisão em contexto limpo com rodadas limitadas
+
+- **Status:** resolvido (1.21.2). Ele usa o 178b e o 179.
+- **Config:** `review: { model, max_rounds: 2 }`. Uma tarefa revisada mantém um único id (`diff-T3`), e as rodadas se acumulam nele.
+- **No limite de rodadas,** quando um achado alto continua aberto desde a rodada anterior, o OXE abre um CR `spec_gap` (`by: review_repeat`, com o registro `cr_origin` e `origin: review_repeat` em `changes.ndjson`) e não faz outra rodada. Sem achado persistente, o laço para no limite com a pergunta.
+- **Revisão sem intenção:** sem tarefa nem critério, é recusada.
+- **Modelo do revisor:** `--model` ou `review.model`, diferente do do executor.
+
+## OXB-180: resposta do autor a cada achado
+
+- **Status:** resolvido (1.21.2).
+- **O comando:** `oxe-cc review respond <achado>`, com exatamente uma saída:
+  - `--dispute --ref <arquivo#símbolo|D-id>`: o arquivo tem que estar no recibo da rodada e o símbolo tem que existir; senão, o motivo é "o revisor não podia ler isto";
+  - `--to-owner --reason`: o dono decide com `--owner-confirm` ou `--owner-record "<fato>"`, que cria a decisão `D-*`;
+  - `--fix [--commit]`;
+  - `--note`: só para severidade baixa;
+  - `--waive --reason --by`.
+- **O que é recusado:**
+  - mudar a severidade (`--severity`);
+  - contestar um "não entendi" (`unclear-section`, `summary-mismatch`).
+
+## OXB-181: leitura da spec e do plano por processos sem o contexto
+
+- **Status:** resolvido (1.21.2).
+- **O comando:** `oxe-cc plan lint --read [--role reader|implementer]` roda os dois papéis em processos separados (178b), cada um com só a SPEC e o PLAN, sem DISCUSS.
+  - O **leitor de fora** resume o que a fase entrega e como funciona hoje. Ele aponta `unclear-section` (alta) e `undefined-term`.
+  - O **implementador** aponta cada `open-choice` (alta) por tarefa.
+- **A saída:** `.oxe/PLAN-READ.md` e `.json`, com os resumos no topo, mesmo sem achado.
+- **O bloqueio:** um achado alto aberto bloqueia o `runtime execute` (`plan_read:<id>` no preflight) até ser respondido (OXB-180) ou receber waiver.
+- **Regras novas na tabela:** `unclear-section`, `summary-mismatch`, `open-choice` (high) e `undefined-term` (medium).
+- **Teste:** o plano com "atualizar o serviço de autenticação" faz o implementador apontar a T1. O termo "Portal Vex" faz o leitor apontá-lo. O resumo aparece, o preflight bloqueia e o waiver libera.
