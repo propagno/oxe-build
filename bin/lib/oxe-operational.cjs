@@ -1790,6 +1790,13 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     let report = null;
     // 1.21 (OXB-006): the machine's toolchain against the project's engines/.nvmrc/packageManager, before any paid turn.
     // `project_env_check`: true/"block" (default) blocks; "warn" reports only (a mismatch accepted on purpose); false skips.
+    // OXB-111: a plan review of THIS plan with an unwaived FAIL blocks the execute.
+    try {
+      const { doc: pjr } = readPlanJsonDoc(projectRoot, activeSession);
+      const rb = require('./oxe-plan-review.cjs').blockingFails(projectRoot, pjr);
+      for (const f of rb.fails) blockers.push(`plan_review:${f.dimension} — ${(f.findings[0] && f.findings[0].text) || 'FAIL'} (oxe-cc plan lint --review; dispensa: --waive ${f.dimension} --by --reason)`);
+      if (rb.stale) warnings.push('plan_review: .oxe/PLAN-REVIEW.md é de outra versão do plano — rode oxe-cc plan lint --review de novo');
+    } catch { /* auxiliar */ }
     const envMode = readProjectConfig(projectRoot).project_env_check;
     if (envMode !== false) {
       try {
@@ -3457,6 +3464,40 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       }
     }
   } catch { /* auxiliar */ }
+  // OXB-111: adversarial review of the plan (--review): PLAN-REVIEW.md, one verdict per dimension; FAIL blocks.
+  if (options.review || options.reviewWaive) {
+    try {
+      const reviewLib = require('./oxe-plan-review.cjs');
+      if (options.reviewWaive) {
+        reviewLib.waive(projectRoot, String(options.reviewWaive), { reason: options.reason, by: options.by });
+      }
+      const { doc: pjv } = readPlanJsonDoc(projectRoot, activeSession);
+      if (pjv) {
+        const paths0 = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+        const programDir0 = paths0.programDir || path.join(projectRoot, '.oxe', 'program');
+        let program0 = null;
+        try { program0 = require('./oxe-program.cjs').readProgram(programDir0); } catch { program0 = null; }
+        const phase0 = program0 && program0.active_phase ? (program0.phases || []).find((p) => p.id === program0.active_phase) : null;
+        const rev = reviewLib.review(projectRoot, pjv, {
+          phase: phase0 ? phase0.id : (pjv.phase || null),
+          phaseCriteria: phase0 ? phase0.acceptance || [] : [],
+          standing: require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot),
+          pack: readJsonQuiet(paths0.implementationPack),
+          decisions: readNdjsonQuiet(path.join(programDir0, 'decisions.ndjson')).filter((d) => d && d.kind === 'decision'),
+        });
+        const written = reviewLib.writeReview(projectRoot, rev);
+        const waived = new Set((written.waivers || []).map((w) => w.dimension));
+        for (const d of reviewLib.DIMENSIONS) {
+          for (const f of rev.dimensions[d].findings) {
+            const line = `revisão do plano · ${reviewLib.LABEL[d]}: ${f.text}`;
+            if (f.level === 'FAIL' && !waived.has(d)) result.errors.push(`${line} (dispense com plan lint --review --waive ${d} --by <papel> --reason "…")`);
+            else result.warnings.push(line);
+          }
+        }
+        result.review = { file: '.oxe/PLAN-REVIEW.md', plan_hash: rev.plan_hash, verdicts: Object.fromEntries(reviewLib.DIMENSIONS.map((d) => [d, rev.dimensions[d].verdict])), waivers: written.waivers };
+      }
+    } catch (err) { result.errors.push(`revisão do plano: ${err && err.message ? err.message : err}`); }
+  }
   // OXB-109: rigor of the frozen tests — a test that only reads product source as text needs a declared exception;
   // --mutation samples mutants of the files each done task's test imports (temporary worktree at HEAD).
   try {

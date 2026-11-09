@@ -6739,10 +6739,18 @@ async function main() {
     let only = null;
     let mutation = false;
     let mutationMax = 0;
+    let review = false;
+    let reviewWaive = null;
+    let reviewBy = null;
+    let reviewReason = null;
     for (let i = 0; i < rest.length; i += 1) {
       const a = rest[i];
       if (a === '--json') json = true;
       else if (a === '--mutation') mutation = true;
+      else if (a === '--review') review = true;
+      else if (a === '--waive' && rest[i + 1]) { reviewWaive = String(rest[++i]); review = true; }
+      else if (a === '--by' && rest[i + 1]) reviewBy = String(rest[++i]);
+      else if (a === '--reason' && rest[i + 1]) reviewReason = String(rest[++i]);
       else if (a === '--mutation-max' && rest[i + 1]) { mutation = true; mutationMax = Number(rest[++i]) || 0; }
       else if (a === '--dry-verify') dryVerify = true;
       else if (a === '--no-preflight') noPreflight = true;
@@ -6769,7 +6777,7 @@ async function main() {
     try {
       // Progress goes to stderr, so --json on stdout stays parseable.
       const onProgress = quiet ? null : (line) => process.stderr.write(`  ${line}\n`);
-      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave, dryVerify, preflight: !noPreflight, onProgress, resume, changed, only, dryVerifyAnyway, mutation, mutationMax });
+      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave, dryVerify, preflight: !noPreflight, onProgress, resume, changed, only, dryVerifyAnyway, mutation, mutationMax, review, reviewWaive, by: reviewBy, reason: reviewReason });
     } catch (err) {
       console.error(`${red}✗${reset} ${err && err.message ? err.message : err}`);
       process.exit(1);

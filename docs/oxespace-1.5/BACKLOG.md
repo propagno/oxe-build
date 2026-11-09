@@ -829,17 +829,20 @@ Requisitos escritos pelo TECH LEAD, aprovados pelo usuário. O desenho e a imple
 
 ## OXB-111: revisão adversarial do plano (`plan lint --review`) com PLAN-REVIEW.md
 
-- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
-  - Dá veredito por dimensão:
-  -   - cobertura;
-  -   - completude;
-  -   - acoplamento temporal não declarado;
-  -   - ligações planejadas;
-  -   - escopo;
-  -   - verificação derivada dos critérios;
-  -   - decisões;
-  -   - redução de escopo.
-  - Um FAIL bloqueia o execute, salvo waiver com motivo.
+- **Status:** resolvido (1.21.2). `oxe-cc plan lint --review` grava `.oxe/PLAN-REVIEW.md` e `.json` (`bin/lib/oxe-plan-review.cjs`).
+  - A revisão é determinística: lê o PLAN.json, os critérios da fase ativa (PROGRAM.json), o pack, as decisões e os testes congelados. Dá um veredito PASS/WARN/FAIL por dimensão:
+    - **cobertura:** critério da fase sem tarefa (FAIL) ou sem teste congelado (WARN);
+    - **completude:** tarefa sem files ou tarefa de código sem verify (FAIL), tarefa sem critério (WARN);
+    - **acoplamento temporal não declarado:** duas tarefas pendentes que mexem no mesmo arquivo sem um caminho de dependência entre elas (FAIL); teste congelado que precisa de arquivo que outra tarefa entrega, sem depender dela (WARN);
+    - **ligações planejadas:** arquivo-fonte novo que nenhuma outra tarefa, pack ou teste menciona (WARN);
+    - **escopo:** glob de tudo (`**`) (FAIL), mais de 25 arquivos (WARN);
+    - **verificação derivada dos critérios:** tarefa cujo verify não roda nenhum dos testes congelados dos critérios dela (FAIL);
+    - **decisões:** tarefa que cita decisão inexistente (FAIL), decisão que nenhuma tarefa cita (WARN);
+    - **redução de escopo:** critério entregue só por tarefas de verificação ou entrega externa (WARN).
+  - Os FAIL viram erros do lint.
+  - **O execute é bloqueado** (`plan_review:<dimensão>` no preflight) enquanto a revisão for do plano atual (hash) e tiver FAIL sem dispensa. Revisão de outra versão do plano só gera aviso.
+  - **Dispensa:** `plan lint --review --waive <dimensão> --by <papel> --reason "…"`. Fica no PLAN-REVIEW e vale enquanto o plano for o mesmo.
+  - Teste: `tests/oxe-1212-plan-review.test.cjs` (cada dimensão no plano ruim; o .md; os FAIL como erros; o bloqueio no preflight; as dispensas pela CLI; o plano alterado vira aviso de revisão antiga; um plano limpo passa em tudo).
 
 ## OXB-112: decisões como ids de primeira classe (`D-<fase>-<n>`)
 
