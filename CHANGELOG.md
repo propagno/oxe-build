@@ -4,6 +4,105 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.21.2] — 2026-11-09
+
+Esta versão consolida o que o OXESpace 1.5.0 (F1, F2, F4 e F10) cobrou do oxe-build, mais o roteiro de excelência e os backlogs de comparação aprovados pelo TECH LEAD. Cada item tem uma seção em `docs/oxespace-1.5/BACKLOG.md`, com a evidência e o teste que a reproduz (`tests/oxe-1212-*.test.cjs`). Para usar só a trilha recomendada, veja [docs/HAPPY-PATH.md](docs/HAPPY-PATH.md).
+
+### Execução que não desperdiça nem esconde a causa
+- **Turnos por tarefa (OXB-185):**
+  - a tentativa que termina no teto é `turns_exhausted`, com a contagem, e nunca é chamada de escopo ou de verify;
+  - os turnos saem do tamanho da tarefa (`max_turns` › `size` › estimativa; S 15 · M 30 · L 60);
+  - `runtime.provider.maxTurns` passa a ser o teto.
+- **Falha classificada antes de cobrar tentativa (OXB-120):** falha de ambiente ou de cota pausa a run sem gastar a tentativa.
+- **Retry informado:**
+  - o prompt diz o que a tentativa anterior deixou na árvore (OXB-184);
+  - os logs de tentativa não se sobrescrevem entre execuções (OXB-184).
+- **Adiar a tarefa que não converge (OXB-138):** a tarefa vai para `runtime deferred`, e as independentes seguem.
+- **Checkpoint por tarefa correto (OXB-167–177):**
+  - o commit leva só o conteúdo da própria tarefa, inclusive num arquivo compartilhado;
+  - um checkpoint que falha para a run com aviso;
+  - os baselines são da 1ª tentativa e as interrupções valem entre runs;
+  - um vermelho relacionado é rodado de novo sozinho antes de contar (OXB-178).
+- **Sinal de atenção (OXB-145):** `.oxe/ATTENTION.md`, um hook `attention.notify` chamado uma vez por pausa e `runtime attention resolve`. O `status` mostra a atenção no topo.
+- **Opt-ins:**
+  - canal de pergunta do executor (`execute.ask_orchestrator`, OXB-125);
+  - despacho em fluxo (`execute.dispatch: "stream"`, OXB-129);
+  - estratégias de reparo retry/decompose/prune (`execute.repair`, OXB-130);
+  - subida de nível de modelo depois de falha de lógica (`models.tiers`, OXB-131).
+
+### Plano e spec
+- **`plan build`, `plan check-role` e kinds (OXB-097/098/106):**
+  - `oxe-cc plan build --from <papéis>` grava PLAN.json, PLAN.md e o pack juntos: ondas por arquivo quente, símbolos tirados dos imports dos testes congelados e a fase;
+  - `plan check-role` valida um papel antes de ele ir para o TL;
+  - kinds `add|remove|move|test-only|config-only`.
+- **`plan skeleton` (OXB-154):** stubs de compilação a partir das assinaturas do pack, para Kotlin, TS/JS, Python e Java.
+- **Plano velho (OXB-126):** `plan staleness` e `plan refresh` detectam um plano escrito contra código que mudou.
+- **Spec (OXB-123/099/143):**
+  - `spec probe` traz as bordas e as proibições de cada critério;
+  - `spec freeze --from <PR|sha>` importa os testes congelados com proves, hash e origem;
+  - `spec stress` estressa a spec com métodos fixos em leitores independentes.
+- **Decisões, pesquisa e lints (OXB-112/182/134/142/111):**
+  - decisões são ids de primeira classe, com as alternativas recusadas e quem as recusou;
+  - a pesquisa separa a afirmação com fonte da suposição (`assumption_without_risk`);
+  - o lint aponta código copiado no pack (`derivable_inlined`);
+  - `plan lint --review`.
+
+### Verify, close e evidência
+- **Na tarefa:** anti-stub (OXB-108) e rigor do teste congelado (OXB-109).
+- **Defeitos, vereditos e achados:**
+  - registro de defeitos abertos (OXB-110);
+  - veredito e sign-off presos ao commit e à versão do critério (OXB-124);
+  - severidade dos achados lida de uma tabela (OXB-137);
+  - revisão de costura (OXB-136);
+  - auditoria de dependências (OXB-127).
+- **Risco por critério (OXB-140):** o close decide **PASS / CONCERNS / FAIL**, com waivers datados por fase (opt-in).
+- **Critérios não funcionais (OXB-144):** mediana e dispersão medidas, gate no verify da fase e achado de regressão.
+- **Pacote de evidência de UI (OXB-128):** reproduzível, exigido pelo sign-off de critério permanente de UI (opt-in).
+- **SYSTEM-DESIGN (OXB-104/105):** o artefato, mais o gate `design_drift` no close.
+- **Gates como plugins de config (OXB-107):** `signoff`, `script` e `gate_plugins`.
+
+### Revisão independente (OXB-178b, 179, 139, 180, 181)
+- **O processo:** a revisão roda num processo separado (`claude -p` sem ferramentas, numa pasta vazia) e grava um recibo com os hashes do que recebeu e um sentinela contra vazamento.
+- **As rodadas:**
+  - um registro guarda os achados entre rodadas e a regra de convergência;
+  - o número de rodadas é limitado, e o escalonamento vira CR `spec_gap`;
+  - o autor responde cada achado com uma de quatro saídas;
+  - `plan lint --read` faz a leitura sem contexto, com um leitor de fora e um implementador.
+- **Custo:** nada disso roda dentro do execute; são chamadas pagas e explícitas.
+
+### Contexto e workflows
+- **Handoff e folga de contexto:** `runtime handoff`, `runtime context --used --limit` (OXB-113).
+- **Orçamento de tamanho (OXB-132):** limite por workflow e persona, variante compacta dos workflows longos e `runtime context-pack --task`.
+- **Avaliação comportamental dos workflows (OXB-141):** `oxe-cc eval workflow`, com regras determinísticas e mutações semeadas.
+- **Personalização sem cópia (OXB-146):** sobreposições por equipe e por pessoa (`.oxe/custom/`), reaplicadas no update.
+
+### Programa, coordenação e release
+- **Coordenação:**
+  - `program queue`: o próximo item de cada papel (OXB-103);
+  - `runtime train`: ciência do merge-train, nunca empurra um PR no trem (OXB-102);
+  - `program member`: programa com mais de um repositório, com os shas pousados por fase (OXB-135).
+- **Documentos e regressão:**
+  - `docs check`: os documentos fechados conferidos contra o código atual (OXB-183);
+  - `program snapshot` / `program regress`: regressão sobre o `.oxe/` de programas reais, com os snapshots fora do repositório (OXB-101).
+- **Canais:** `release channel` com `next` e `stable`, este último só depois de uma fase real fechada; o comando nunca publica (OXB-100).
+- **CLI:**
+  - `doctor --migrate-config` (OXB-100);
+  - `--json-errors`, um envelope tipado com código de saída fixo por tipo (OXB-133, `docs/cli-errors.md`);
+  - `state validate|sync` (OXB-121);
+  - `guards install` (OXB-119).
+
+### F1/F2 do OXESpace 1.5.0 (OXB-031–096, 147–166)
+Este bloco reúne retomada e pausa, verify com timeout do config, dry-verify em paralelo e em lote, cadeia de PRs empilhados, `promote --tasks`, scratch por tarefa, config local, escopo de teste por tarefa, emendas de spec, standing criteria, signal de HML e deploy gate, entre outras. A lista completa, com a evidência de cada item, está no BACKLOG.
+
+### Notas de migração
+- `runtime.provider.maxTurns` agora é **teto**, e cada tarefa recebe os turnos do seu tamanho. Para o comportamento antigo, use `execute.turns` com o mesmo valor em S, M e L.
+- O `doctor --release` exige `.oxe/release/eval-report.json`, gerado por `oxe-cc eval workflow plan.md --self-test --write-report`.
+- Com um `.oxe/SYSTEM-DESIGN.md` presente, o close ganha o gate `design_drift`; desligue com `design_drift: false`.
+- `oxe-cc plugins <subcomando desconhecido>` sai com 2.
+- Rode `oxe-cc doctor --migrate-config` no projeto para ver as notas.
+
+---
+
 ## [1.21.1] — 2026-11-04
 
 ### P0 da auditoria do OXESpace 1.5.0 (TECH LEAD, `docs/oxespace-1.5/BACKLOG.md`)

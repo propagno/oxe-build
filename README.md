@@ -15,7 +15,7 @@ Desenvolvimento assistido por IA com especificação, contexto persistente, exec
 npx oxe-cc@latest
 ```
 
-**Versão:** `1.21.1` · **Node.js:** `>=18`
+**Versão:** `1.21.2` · **Node.js:** `>=18`
 
 </div>
 
@@ -591,7 +591,7 @@ Métricas úteis para acompanhar a adoção:
 
 Não use quantidade de prompts, agentes ou linhas geradas como métrica isolada de sucesso. O objetivo é reduzir retrabalho e aumentar confiança na entrega.
 
-Guias: [adoção por papéis](docs/ROLES.md) · [adoção em equipe](docs/TEAM-ADOPTION.md) · [walkthrough](docs/WALKTHROUGH.md) · [playbook de incidentes](docs/INCIDENT-PLAYBOOK.md).
+Guias: [caminho feliz](docs/HAPPY-PATH.md) · [adoção por papéis](docs/ROLES.md) · [adoção em equipe](docs/TEAM-ADOPTION.md) · [walkthrough](docs/WALKTHROUGH.md) · [playbook de incidentes](docs/INCIDENT-PLAYBOOK.md).
 
 ---
 
@@ -649,6 +649,7 @@ O pipeline de release usa GitHub Actions fixadas por SHA, valida correspondênci
 ## Documentação complementar
 
 - [Quickstart](QUICKSTART.md)
+- [Caminho feliz (só a trilha recomendada)](docs/HAPPY-PATH.md)
 - [Walkthrough completo](docs/WALKTHROUGH.md)
 - [Papéis e responsabilidades](docs/ROLES.md)
 - [Adoção em equipe](docs/TEAM-ADOPTION.md)
