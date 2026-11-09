@@ -16,6 +16,7 @@
     { "id": "unclear-section", "severity": "high", "when": "um leitor sem contexto não consegue resumir a seção (plan lint --read)", "applies": "any" },
     { "id": "summary-mismatch", "severity": "high", "when": "o resumo do leitor de fora não bate com a intenção do autor", "applies": "any" },
     { "id": "open-choice", "severity": "high", "when": "quem implementa teria que escolher sozinho um esquema, assinatura, dependência ou caso de borda", "applies": "any" },
+    { "id": "nfr-regression", "severity": "medium", "when": "a métrica não funcional piorou mais que o limite relativo em relação à fase anterior (OXB-144)", "applies": "any" },
     { "id": "undefined-term", "severity": "medium", "when": "termo do projeto usado sem definição nem link", "applies": "any" }
   ]
 }

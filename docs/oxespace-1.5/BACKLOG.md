@@ -1709,3 +1709,13 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 - **Dossiê:** ganha `risk-matrix.md` (critério × risco × cobertura × waiver).
 - **Workflow:** `spec.md` pede a coluna Risco.
 - **Teste:** `tests/oxe-1212-risk-decision.test.cjs`. Cobre as três saídas, a regra do P0, o vencimento do waiver, a herança do padrão com aviso e o `runtime waive`.
+
+## OXB-144: critérios não funcionais com evidência medida
+
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-nfr.cjs`.
+- **A declaração:** `oxe-cc runtime nfr declare --criteria A12 --metric startup_ms --method "<cmd>" --threshold "<=1500" --samples 5 [--environment "…"]`, gravada em `.oxe/program/nfr.json`. O critério continua na tabela da SPEC; o método fica ao lado. Isso evita mexer no formato da tabela, que o `spec add` e o lint já leem.
+- **A medição:** `oxe-cc runtime nfr measure --criteria A12` roda o método N vezes. O valor de cada amostra vem da linha `<metric>=<n>` ou `<metric>: <n>`; sem ela, é o último número impresso. A medição grava a mediana, o mínimo, o máximo e a dispersão relativa em `.oxe/program/nfr-history.ndjson`, por fase.
+  - **Quando passa:** só dentro do limite e com todas as amostras medidas ("amostras insuficientes" reprova).
+  - **Regressão:** uma piora acima de `nfr.regression_pct` (padrão 10%) contra a fase anterior abre um achado `nfr-regression` (regra nova, medium), mesmo dentro do limite.
+- **No verify da fase:** cada critério NFR da fase vira um gate implícito `nfr-A12`. O dossiê ganha `nfr.md` com a série.
+- **Teste:** `tests/oxe-1212-nfr.test.cjs`. Cobre o parser, a mediana e a dispersão, o passa/reprova com 5 amostras, as amostras insuficientes, a regressão de 20% com achado e o gate implícito.

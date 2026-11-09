@@ -4231,6 +4231,11 @@ function parseRuntimeArgs(argv) {
     else if (a === '--freeze') out.freeze = true;
     else if (a === '--stats') out.stats = true;
     else if (a === '--until' && argv[i + 1]) out.until = String(argv[++i]);
+    else if (a === '--metric' && argv[i + 1]) out.metric = String(argv[++i]);
+    else if (a === '--method' && argv[i + 1]) out.method = String(argv[++i]);
+    else if (a === '--threshold' && argv[i + 1]) out.threshold = String(argv[++i]);
+    else if (a === '--samples' && argv[i + 1]) out.samples = Number(argv[++i]);
+    else if (a === '--environment' && argv[i + 1]) out.environment = String(argv[++i]);
     else if (a === '--evidence' && argv[i + 1]) out.evidence = String(argv[++i]);
     else if (a === '--class' && argv[i + 1]) out.changeClass = String(argv[++i]);
     else if (a === '--summary' && argv[i + 1]) out.summary = String(argv[++i]);
@@ -4347,6 +4352,9 @@ function parseRuntimeArgs(argv) {
     if (positionals[1]) out.subAction = positionals[1];
     if (positionals[2]) out.uiFolder = positionals[2];
     if (positionals[3]) out.dir = path.resolve(positionals[3]);
+  } else if (out.action === 'nfr') {
+    if (positionals[1]) out.subAction = positionals[1];
+    if (positionals[2]) out.dir = path.resolve(positionals[2]);
   } else if (out.action === 'attention') {
     if (positionals[1]) out.subAction = positionals[1];
     let k = 2;
@@ -5724,6 +5732,25 @@ async function runRuntime(opts) {
   }
 
   // OXB-113: resumable handoff, and the context reading a host hook sends.
+  // OXB-144: non-functional criteria with measured evidence.
+  if (opts.action === 'nfr') {
+    try {
+      const sub = ['declare', 'measure'].includes(opts.subAction) ? opts.subAction : 'list';
+      const out = oxeOperational.runtimeNfr(opts.dir, activeSession, { action: sub, criteria: opts.criteria, phase: opts.phase, metric: opts.metric, method: opts.method, threshold: opts.threshold, samples: opts.samples, environment: opts.environment });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeNfrSchema: 1, ...out }, null, 2)); if (out.measurement && !out.measurement.pass) process.exitCode = 1; return; }
+      if (out.declared && sub === 'declare') { console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.declared.criterion}: ${out.declared.metric} ${out.declared.threshold} (${out.declared.samples} amostras)`); return; }
+      if (out.measurement) {
+        const m = out.measurement;
+        console.log(`  ${m.pass ? (c ? green : '') + '✓' : (c ? red : '') + '✗'}${c ? reset : ''} ${m.criterion} ${m.metric}: mediana ${m.median} (${m.min}–${m.max}, dispersão ${m.spread}) · ${m.measured}/${m.samples} amostras · limite ${m.threshold}${m.reason ? ` — ${m.reason}` : ''}`);
+        if (m.regression) console.log(`  ${c ? yellow : ''}regressão:${c ? reset : ''} ${m.regression.worse_pct}% pior que ${m.regression.from_phase} → ${typeof out.finding === 'string' ? out.finding : 'achado'}`);
+        if (!m.pass) process.exitCode = 1;
+        return;
+      }
+      for (const [k, d] of Object.entries(out.declared)) console.log(`  ${k}: ${d.metric} ${d.threshold} · ${d.samples} amostras · ${d.method}`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
   // OXB-140: waivers of a P2/P3 gap (with an owner and the phase it comes back).
   if (opts.action === 'waive') {
     try {

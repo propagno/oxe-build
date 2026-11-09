@@ -717,9 +717,19 @@ function implicitPhaseGates(projectRoot, programState, phaseId, projectConfig) {
   if (!programState || !phaseId) return [];
   const phase = (programState.phases || []).find((p) => p.id === phaseId);
   const base = phase && phase.base_commit;
-  if (!projectConfig || projectConfig.stub_check === false || !base) return decisionPhaseGates(projectRoot, phaseId);
+  if (!projectConfig || projectConfig.stub_check === false || !base) return [...decisionPhaseGates(projectRoot, phaseId), ...nfrPhaseGates(projectRoot, phase, phaseId)];
   const script = path.join(__dirname, 'oxe-stub-check.cjs').replace(/\\/g, '/');
-  return [{ id: 'stub-check', when: 'phase_verify', command: `node "${script}" --phase --since ${base}`, description: 'anti-stub da fase: stubs e arquivos novos sem ligação (OXB-108)', on_fail: 'cr_defect' }, ...decisionPhaseGates(projectRoot, phaseId), ...depsPhaseGates(projectRoot, base)];
+  return [{ id: 'stub-check', when: 'phase_verify', command: `node "${script}" --phase --since ${base}`, description: 'anti-stub da fase: stubs e arquivos novos sem ligação (OXB-108)', on_fail: 'cr_defect' }, ...decisionPhaseGates(projectRoot, phaseId), ...depsPhaseGates(projectRoot, base), ...nfrPhaseGates(projectRoot, phase, phaseId)];
+}
+
+/** OXB-144: each non-functional criterion of the phase is measured at the phase verify (gate nfr-A<n>). */
+function nfrPhaseGates(projectRoot, phase, phaseId) {
+  try {
+    const decl = require('./oxe-nfr.cjs').readDecl(path.join(projectRoot, '.oxe', 'program')).criteria || {};
+    const mine = ((phase && phase.acceptance) || []).filter((c) => decl[c]);
+    const cli = path.join(__dirname, '..', 'oxe-cc.js').replace(/\\/g, '/');
+    return mine.map((c) => ({ id: `nfr-${c}`, when: 'phase_verify', command: `node "${cli}" runtime nfr measure --criteria ${c} --phase ${phaseId}`, description: `${c}: ${decl[c].metric} ${decl[c].threshold} (${decl[c].samples} amostras) — OXB-144`, on_fail: 'cr_defect' }));
+  } catch { return []; }
 }
 
 /** OXB-127: the dependency audit as an implicit phase gate, when the phase diff touches package.json / the lockfile. */
@@ -814,6 +824,36 @@ function runtimeContextUsage(projectRoot, activeSession, options = {}) {
     for (const [rel, size] of Object.entries(declared)) if (size === 'l' && rel.startsWith('workflows/')) { const v = budget.chooseVariant(path.basename(rel), readProjectConfig(projectRoot), typeof lvl.ratio === 'number' ? 1 - lvl.ratio : null); workflows[path.basename(rel)] = { variant: v.variant, path: path.relative(path.join(__dirname, '..', '..'), v.path).replace(/\\/g, '/') }; }
   } catch { /* auxiliar */ }
   return { ...lvl, handoff, workflows };
+}
+
+/** OXB-144: `oxe-cc runtime nfr declare|measure|list`. */
+function runtimeNfr(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-nfr.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  let program = null;
+  try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; }
+  const phase = options.phase || (program && program.active_phase) || null;
+  const criterion = String(options.criteria || '').split(',')[0].trim().toUpperCase();
+  if (options.action === 'declare') return { declared: lib.declare(programDir, criterion, options) };
+  if (options.action === 'measure') {
+    const m = lib.measure(projectRoot, programDir, criterion, { phase, config: readProjectConfig(projectRoot), run: options.run });
+    appendEvent(projectRoot, activeSession, { type: 'NfrMeasured', payload: m });
+    let finding = null;
+    if (m.regression) {
+      try {
+        const fb = runtimeFeedback(projectRoot, activeSession, { class: 'defect', criteria: criterion, rule: 'nfr-regression', summary: `${criterion} ${m.metric}: mediana ${m.regression.from} (${m.regression.from_phase}) → ${m.regression.to} (${phase}), ${m.regression.worse_pct}% pior — ainda ${m.pass ? 'dentro' : 'fora'} do limite ${m.threshold}`, by: 'nfr', evidence: '.oxe/program/nfr-history.ndjson' });
+        finding = fb && fb.cr ? fb.cr.id : null;
+      } catch (err) { finding = { error: String(err && err.message || err) }; }
+    }
+    try {
+      const dir = path.join(path.dirname(paths.plan || path.join(projectRoot, '.oxe', 'PLAN.md')), 'dossier', phase || 'run');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'nfr.md'), lib.renderSeries(programDir));
+    } catch { /* auxiliar */ }
+    return { measurement: m, finding };
+  }
+  return { declared: lib.readDecl(programDir).criteria || {}, history: lib.history(programDir) };
 }
 
 /** OXB-140: `oxe-cc runtime waive --criteria A12 --reason "…" --until F5 --by <papel>`. */
@@ -8534,6 +8574,8 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  implicitPhaseGates,
+  runtimeNfr,
   runtimeWaive,
   runtimeRepair,
   runtimeContextPack,
