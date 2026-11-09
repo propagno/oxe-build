@@ -185,9 +185,61 @@ function declaredJvmTestTitles(text) {
   return [...new Set(out)];
 }
 
+/**
+ * OXB-190: `test.each(table)('title %s', …)` / `it.each` / `describe.each` (and the tagged-template form). Each yields
+ * the template, its literal part (placeholders %s %d %i %j %o %p %# and $var removed, so a prove can name "the title"
+ * without the case), and — when the table is a literal array of strings/numbers — every expanded name.
+ */
+function eachTestTitles(text) {
+  const out = [];
+  const src = String(text || '');
+  const re = /\b(?:it|test|describe)(?:\.(?:only|skip|concurrent))?\.each\s*/g;
+  let m;
+  while ((m = re.exec(src))) {
+    let i = m.index + m[0].length;
+    let table = null;
+    if (src[i] === '(') {
+      let depth = 0;
+      let j = i;
+      let quote = null;
+      for (; j < src.length; j += 1) {
+        const c = src[j];
+        if (quote) { if (c === '\\') { j += 1; continue; } if (c === quote) quote = null; continue; }
+        if (c === '"' || c === "'" || c === '`') { quote = c; continue; }
+        if (c === '(' || c === '[' || c === '{') depth += 1;
+        else if (c === ')' || c === ']' || c === '}') { depth -= 1; if (depth === 0) break; }
+      }
+      table = src.slice(i + 1, j);
+      i = j + 1;
+    } else if (src[i] === '`') {
+      const end = src.indexOf('`', i + 1);
+      if (end < 0) continue;
+      i = end + 1;
+    } else continue;
+    const t = /^\s*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/.exec(src.slice(i));
+    if (!t) continue;
+    const template = t[2].replace(/\\(['"`\\])/g, '$1');
+    out.push(template);
+    const literal = template.replace(/%[sdifjop#%]|\$[A-Za-z_][\w.]*/g, ' ').replace(/\(\s*\)|\[\s*\]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (literal && literal !== template) out.push(literal);
+    // a literal table: [['en'], ['pt-BR']] or ['en', 'pt-BR'] → the expanded names
+    let rows = null;
+    try { rows = JSON.parse(String(table || '').trim().replace(/'((?:\\.|[^'\\])*)'/g, (_, s) => JSON.stringify(s.replace(/\\'/g, "'")))); } catch { rows = null; }
+    if (Array.isArray(rows)) {
+      for (const row of rows.slice(0, 50)) {
+        const args = Array.isArray(row) ? row : [row];
+        if (!args.every((a) => ['string', 'number', 'boolean'].includes(typeof a))) continue;
+        let k = 0;
+        out.push(template.replace(/%[sdifjop]/g, () => String(args[k++])).replace(/%#/g, String(rows.indexOf(row))));
+      }
+    }
+  }
+  return out;
+}
+
 function declaredTestTitles(text, file) {
   if (file && /\.(kt|kts|java|groovy|scala)$/i.test(String(file))) return declaredJvmTestTitles(text);
-  const out = [];
+  const out = eachTestTitles(text);
   const re = /\b(?:it|test)(?:\.\w+)*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
   for (const m of String(text || '').matchAll(re)) {
     if (m[1] === '`' && m[2].includes('${')) continue;
@@ -623,6 +675,7 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
 }
 
 module.exports = {
+  eachTestTitles,
   markPlanTaskCheckpointFailed,
   withPlanLock,
   ACCEPT_RE,

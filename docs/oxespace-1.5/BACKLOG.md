@@ -1921,3 +1921,14 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 - **Vermelho também no rerun do worktree temporário:** o arquivo roda sozinho na **árvore do projeto**, onde o verify da tarefa ficou verde. Se passa ali, é diferença de ambiente do check, não da tarefa. Ele entra em `flaky_reds` (`where: project_tree`) e o commit não é recusado. Só um vermelho que se repete nos dois lugares recusa, e a mensagem diz isso.
 - **O tamanho do conjunto relacionado:** o "Test Files … (N)" do vitest vai para `related_set_size`, no evento do checkpoint e na mensagem de recusa.
 - **Teste:** `tests/oxe-1212-checkpoint-phase.test.cjs`, no bloco OXB-189. Cobre a lista sem diretório nem e2e, o rerun com `--maxWorkers=1` e um teste que só falha dentro do worktree de checkpoint: o commit é mantido, `flaky_reds` registra `project_tree: green` e `related_set_size` fica em 29.
+
+## OXB-190: `test.each` / `it.each` fora dos testes declarados do proves
+
+- **Status:** resolvido (1.21.2).
+- **O que aconteceu:** relatado pelo TECH LEAD na oxespace-150-f4 (`crf4-4-place-copy.test.tsx`). Os dois `test.each` não apareciam em "Testes declarados", e o proves "the Which one? menu names each place with U4.1's labels" falhava. O FRONTEND usa `test.each` em seis outros planos de fase.
+- **O parser:** `declaredTestTitles` passa a ler `test.each` / `it.each` / `describe.each` (com `.only`/`.skip`/`.concurrent`), tanto com tabela entre parênteses quanto com template marcado. Ele devolve:
+  - o template (`x (%s)`);
+  - a parte literal, sem os placeholders `%s %d %i %f %j %o %p %#` e `$var`, nem os parênteses que ficam vazios (`x`);
+  - quando a tabela é um array literal de strings, números ou booleanos, cada nome expandido (`x (en)`, `x (pt-BR)`).
+- **O proves:** casa por nome exato ou por trecho de qualquer um desses nomes.
+- **Teste:** `tests/oxe-1212-each-titles.test.cjs`. O "feito quando" é `test.each([['en'],['pt-BR']])('x (%s)')` aceitar "x" e "x (en)" no `plan lint`, e um proves desconhecido continuar falhando.
