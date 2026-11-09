@@ -17,6 +17,7 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1, F2, F4 e F10) cobrou do oxe-b
   - evento `ExecutorTurn` por turno (turno n/N, tool calls, arquivos escritos, tamanho do prompt, latência) e `ExecutorSlowTurn` acima de `execute.slow_turn_ms`;
   - `execute.no_progress_turns` (padrão 8) turnos sem escrita nem `finish_task` encerram a tentativa como `no_progress`;
   - o adaptador `claude` não força mais o modelo padrão do provider http (`claude-sonnet-4-6`) como `--model`, que foi a regressão de latência do rc.37/rc.38: sem modelo da tentativa, vale o padrão do Claude Code, como no rc.36.
+- **Stub marcado como bloqueado não fecha tarefa (OXB-188):** BLOCKED / "OXB stub" / "until … lands" num comentário vira `scope_insufficient` com o arquivo fora do escopo que falta, e o checkpoint done recusa qualquer marcador de stub adicionado.
 - **Modelo explícito (OXB-187):** o execute diz qual modelo vai usar e quem o escolheu (`ExecutorModelResolved`), e avisa quando é um padrão que ninguém escolheu.
 - **Falha classificada antes de cobrar tentativa (OXB-120):** falha de ambiente ou de cota pausa a run sem gastar a tentativa.
 - **Retry informado:**

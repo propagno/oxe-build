@@ -23,6 +23,19 @@ const CODE_RE = /\.(c|m)?[jt]sx?$|\.(kt|kts|java|py|go|rs|swift|cs)$/i;
 const TEST_RE = /(^|\/)(tests?|__tests__|specs?|e2e)\/|\.(test|spec)\.[^/]+$/i;
 const norm = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '');
 
+/**
+ * OXB-188: a stub the agent itself LABELS as blocked — a comment/KDoc with BLOCKED, "OXB stub", or "until <X> lands /
+ * exists / is merged". It is not "almost done": the change it needs is outside the task's scope, so the task must
+ * stop as scope_insufficient naming the file that owns the missing symbol, never complete.
+ */
+const COMMENT_RE = /^\s*(\/\/|\/\*+|\*|#|--|<!--)|\s(\/\/|\/\*|#)\s/;
+const BLOCKED_PATTERNS = [
+  /\bBLOCKED\b/,
+  /\bOXB\b.{0,20}\bstub\b|\bstub\b.{0,20}\bOXB\b/i,
+  /\buntil\b.{1,120}\b(lands?|exists?|is (merged|added|available|implemented)|gets? (added|merged))\b/i,
+  /\baté (que )?.{1,100}\b(exist[ai]|ser (criad|mergead|implementad)|chegar)\w*/i,
+];
+
 const STUB_PATTERNS = [
   { re: /\bnot\s+implemented(\s+yet)?\b/i, why: 'marcador "not implemented"' },
   { re: /\bthrow\s+new\s+\w*Error\(\s*['"`]\s*(TODO|FIXME|stub|unimplemented)\b/i, why: 'corpo que só lança TODO/stub' },
@@ -115,12 +128,29 @@ function existsFindings(root, taskId) {
 }
 
 /** Level 2: stubs in the added lines. */
-function substantiveFindings(root, files, base, ignore) {
+/** The out-of-scope files a blocked stub points at: the files (outside the task's scope) that define the types it names. */
+function blockedTargets(root, text, scope) {
+  const names = [...new Set((String(text).match(/\b[A-Z][A-Za-z0-9]+(?:\.[a-z][A-Za-z0-9]*)?\b/g) || []).map((n) => n.split('.')[0]).filter((n) => !['BLOCKED', 'OXB', 'TODO', 'KDoc'].includes(n)))].slice(0, 6);
+  const out = [];
+  const inScope = new Set((scope || []).map(norm));
+  for (const n of names) {
+    const r = git(root, ['grep', '-l', '-E', `(class|interface|object|type|enum|struct|protocol)[[:space:]]+${n}\\b`]);
+    for (const f of String(r.stdout || '').split(/\r?\n/).filter(Boolean).map(norm)) if (!inScope.has(f) && !TEST_RE.test(f) && !out.some((o) => o.file === f)) out.push({ file: f, symbol: n });
+  }
+  for (const p of String(text).match(/[\w./-]+\.(kt|kts|java|ts|tsx|js|py|go|rs|swift)\b/g) || []) if (!inScope.has(norm(p)) && !out.some((o) => o.file === norm(p))) out.push({ file: norm(p), symbol: null });
+  return out.slice(0, 4);
+}
+
+function substantiveFindings(root, files, base, ignore, scope) {
   const out = [];
   for (const file of files) {
     if (!CODE_RE.test(file) || TEST_RE.test(file) || ignore.some((re) => re.test(file))) continue;
     for (const { line, text } of addedLines(root, file, base)) {
       if (/oxe-stub-ok/.test(text)) continue; // explicit, reviewed exception on the line
+      if (COMMENT_RE.test(text) && BLOCKED_PATTERNS.some((re) => re.test(text))) {
+        out.push({ level: 'blocked', file, line, why: 'stub marcado como bloqueado (BLOCKED / "until … lands")', text: text.trim().slice(0, 160), needs: blockedTargets(root, text, scope) });
+        continue;
+      }
       const hit = STUB_PATTERNS.find((p) => p.re.test(text));
       if (hit) out.push({ level: 'substantive', file, line, why: hit.why, text: text.trim().slice(0, 120) });
     }
@@ -161,13 +191,21 @@ function stubFindings(root, options = {}) {
   const files = [...changed.keys()];
   const out = [];
   if (levels.has('exists') && options.task) out.push(...existsFindings(root, options.task));
-  if (levels.has('substantive')) out.push(...substantiveFindings(root, files, options.since || 'HEAD', ignore));
+  if (levels.has('substantive')) out.push(...substantiveFindings(root, files, options.since || 'HEAD', ignore, options.scope || []));
   if (levels.has('wired')) out.push(...wiredFindings(root, files.filter((f) => changed.get(f)), entries, ignore));
   return out;
 }
 
 function format(findings) {
-  return findings.map((f) => `${f.file}${f.line ? `:${f.line}` : ''}  [${f.level}] ${f.why}${f.text ? `  — ${f.text}` : ''}`).join('\n');
+  return findings.map((f) => `${f.file}${f.line ? `:${f.line}` : ''}  [${f.level}] ${f.why}${f.text ? `  — ${f.text}` : ''}${f.needs && f.needs.length ? `  → precisa de ${f.needs.map((n) => `${n.file}${n.symbol ? ` (${n.symbol})` : ''}`).join(', ')}` : ''}`).join('\n');
+}
+
+/** OXB-188: the line the scheduler reads to stop with scope_insufficient (no retry), naming the files. */
+function blockedLine(findings) {
+  const b = findings.filter((f) => f.level === 'blocked');
+  if (!b.length) return null;
+  const needs = [...new Set(b.flatMap((f) => (f.needs || []).map((n) => n.file)))];
+  return `scope_insufficient: stub marcado como bloqueado em ${b.map((f) => `${f.file}:${f.line}`).join(', ')}${needs.length ? ` — a mudança precisa de ${needs.join(', ')}, fora do escopo da tarefa` : ''} (OXB-188)`;
 }
 
 if (require.main === module) {
@@ -185,10 +223,12 @@ if (require.main === module) {
   }
   const findings = stubFindings(root, { task, phase: argv.includes('--phase'), since: arg('--since'), scope, levels: arg('--levels') ? arg('--levels').split(',') : null });
   if (findings.length) {
+    const bl = blockedLine(findings);
+    if (bl) console.error(bl);
     console.error(`oxe stub-check: ${findings.length} problema(s) — a tarefa ainda não está pronta (OXB-108)\n${format(findings)}\n(exceção revisada: comente "oxe-stub-ok" na linha, ou stub_check.ignore no .oxe/config.json)`);
     process.exit(1);
   }
   console.log('oxe stub-check: ok');
 }
 
-module.exports = { stubFindings, format, addedLines, STUB_PATTERNS };
+module.exports = { blockedLine, blockedTargets, BLOCKED_PATTERNS, stubFindings, format, addedLines, STUB_PATTERNS };

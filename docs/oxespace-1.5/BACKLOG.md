@@ -1897,3 +1897,17 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - `models.tiers` e `models.overrides` avisam que cada tentativa troca de modelo.
 - **No lint:** o `plan lint` repete esses avisos (`modelo: …`) quando o config declara o adaptador ou os níveis.
 - **Teste:** `tests/oxe-1212-model-resolve.test.cjs`.
+
+## OXB-188: tarefa done com stub marcado como bloqueado
+
+- **Status:** resolvido (1.21.2). P0 da meta de zero defeito, relatado pelo TECH LEAD.
+- **O que aconteceu:** na oxespace-150-f10, A43 e A46 (rc.36), o executor deixou um stub que ele mesmo marcou como bloqueado: um KDoc "BLOCKED (OXB): CommandApi … has no markSeen" e um "OXB stub … until a CommandApi.paneConversation lands". As duas tarefas fecharam como done com o verify JVM verde. Só o teste no dispositivo pegou o problema. O arquivo necessário, `protocol/live/Commands.kt`, estava fora do escopo.
+- **Os marcadores:** o anti-stub (OXB-108) passa a apontar, nas linhas adicionadas que são comentário ou KDoc:
+  - `BLOCKED`;
+  - "OXB stub";
+  - "until … lands / exists / is merged" (e o equivalente "até … existir / ser criado").
+  O nível novo é `blocked`. A palavra em código comum (`val s = "BLOCKED"`) não conta.
+- **O arquivo que falta:** o stub-check procura, com `git grep`, quem define os tipos citados no marcador, fora do escopo da tarefa (no caso, `protocol/live/Commands.kt` por `CommandApi`), e escreve a linha `scope_insufficient: stub marcado como bloqueado em <arquivo>:<linha> — a mudança precisa de <arquivos>, fora do escopo da tarefa`.
+- **No scheduler:** essa linha no verify da tarefa encerra a tentativa como `scope_insufficient` (`reason: blocked_stub`, com os `files`), sem retry e sem done.
+- **No checkpoint:** o checkpoint de tarefa done recusa qualquer marcador de stub adicionado (`checkpoint recusado: N marcador(es) de stub adicionados`, `failed`, nada commitado), mesmo que o verify não tenha rodado o stub-check. Fica desligado só com `stub_check: false`, que é o opt-out explícito do anti-stub.
+- **Teste:** `tests/oxe-1212-blocked-stub.test.cjs`. Cobre os marcadores e o falso positivo; a tarefa que não alcança o arquivo e escreve o stub BLOCKED termina como `scope_insufficient` com `files: ["protocol/live/Commands.kt"]`, 1 chamada só e não done; e o checkpoint recusado.

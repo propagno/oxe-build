@@ -6995,6 +6995,17 @@ function commitTaskCheckpoint(projectRoot, runState, taskId, options = {}) {
   const own = taskOwnContent(projectRoot, changed, options.baseline || null);
   if (own.problems.length) return { committed: false, failed: true, reason: own.problems.join(' · '), snapshot: own.entries, scope_absent: scopeAbsent };
   if (!Object.keys(own.entries).length) return { committed: false, reason: 'nada mudou no escopo da tarefa (o que está sujo já estava antes dela)', scope_absent: scopeAbsent };
+  // OXB-188: a done checkpoint never carries an added stub marker (BLOCKED / TODO() / not implemented …).
+  if (options.stubGuard !== false) {
+    try {
+      const stub = require('./oxe-stub-check.cjs');
+      const found = stub.stubFindings(projectRoot, { levels: ['substantive'], since: 'HEAD', scope: Object.keys(own.entries) });
+      if (found.length) {
+        const bl = stub.blockedLine(found);
+        return { committed: false, failed: true, stub_markers: found.map((f) => ({ file: f.file, line: f.line, why: f.why, needs: f.needs || [] })), reason: `${bl ? `${bl} · ` : ''}checkpoint recusado: ${found.length} marcador(es) de stub adicionados (${found.slice(0, 3).map((f) => `${f.file}:${f.line} ${f.why}`).join('; ')}) — uma tarefa done não leva stub`, snapshot: own.entries, scope_absent: scopeAbsent };
+      }
+    } catch { /* o guard nunca derruba o checkpoint por erro próprio */ }
+  }
   const message = checkpointMessageFor(projectRoot, runState, taskId, options.task || {}, options.phase, options.config || null);
   const res = commitExactContent(projectRoot, own.entries, message, { ...options, scope: files });
   return { ...res, scope: files, ...(scopeAbsent.length ? { scope_absent: scopeAbsent } : {}), snapshot: res.committed ? undefined : own.entries };

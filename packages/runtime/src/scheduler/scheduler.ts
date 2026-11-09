@@ -1573,6 +1573,12 @@ function scopeInsufficientReason(nodeId: string, ctx: SchedulerContext, verifyOu
     if (named.length) return { reason: 'frozen_test_needs_out_of_scope_file', files: req.files, tests: named };
   }
   if (OUT_OF_SCOPE_RE.test(agentOutput)) return { reason: 'agent_reported_out_of_scope' };
+  // OXB-188: the agent left a stub it labels as blocked — the change it needs is outside the scope; never a retry.
+  const blocked = /scope_insufficient: stub marcado como bloqueado[^\n]*/.exec(String(verifyOutput || ''));
+  if (blocked) {
+    const files = [...new Set([...blocked[0].matchAll(/precisa de ([^,(]+(?:, [^,(]+)*), fora do escopo/g)].flatMap((m) => m[1].split(', ').map((x) => x.trim())))];
+    return { reason: 'blocked_stub', files, detail: blocked[0] };
+  }
   return null;
 }
 
