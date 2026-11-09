@@ -136,6 +136,7 @@ function createExecutionContext(projectRoot, activeSession, options = {}) {
     auditTrail: options.auditTrail || null,
     evidenceStore: options.evidenceStore || null,
     onEvent: options.onEvent || null,
+    attemptChanges: options.attemptChanges || null,
     options: options.schedulerOptions || {},
   };
 }
@@ -2283,6 +2284,8 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     const scratchLib = require('./oxe-scratch.cjs');
     const isScratchPath = scratchLib.makeScratchMatcher(projectRoot);
     const attemptBaseline = new Map();
+    const lastAttemptChanges = new Map(); // OXB-184
+    const attemptLogsThisExecute = new Set(); // OXB-184
     const scopeViolations = new Map();
     const graphNodeOf = (id) => {
       const nodes = current && current.compiled_graph && current.compiled_graph.nodes;
@@ -2434,6 +2437,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, outOfScopeRequirements: execScopeGaps, deferFailed: ((readProjectConfig(projectRoot) || {}).execute || {}).defer_failed !== false, failureClasses: ((readProjectConfig(projectRoot) || {}).execute || {}).failure_classes || undefined, ...(options.schedulerOptions || {}) },
     // The scheduler already persists every event through the runtime bus (events/bus.ts →
     // appendEvent). This hook only forwards progress; writing here again duplicated the log.
+    attemptChanges: (id) => lastAttemptChanges.get(id) || null,
     onEvent: (event) => {
       options.onProgress?.(event);
       // OXB-051: the output of every failed attempt goes to its own log (the journal kept only the state, not why).
@@ -2442,6 +2446,11 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
           const attempt = event.type === 'RetryScheduled' ? Number(event.payload.next_attempt) - 1 : Number(event.payload.max_attempts) || 'final';
           const logFile = path.join(projectRoot, '.oxe', 'runs', current.run_id, 'attempts', `${event.work_item_id}-${attempt}.log`);
           ensureDirForFile(logFile);
+          // OXB-184: a later execute of the same run restarts the attempt numbers — keep the earlier log, do not overwrite it.
+          if (fs.existsSync(logFile) && !attemptLogsThisExecute.has(logFile)) {
+            try { fs.renameSync(logFile, logFile.replace(/\.log$/, `.before-${fs.statSync(logFile).mtime.toISOString().replace(/[:.]/g, '-')}.log`)); } catch { /* */ }
+          }
+          attemptLogsThisExecute.add(logFile);
           // OXB-066: the retry text (failing segment only) plus every verify segment's output under its own header.
           const segmentsLog = event.payload.verify_log ? `\n\n--- verify: saída de cada segmento ---\n${event.payload.verify_log}` : '';
           fs.writeFileSync(logFile, `${event.payload.output_tail}${segmentsLog}\n`, 'utf8');
@@ -2466,6 +2475,15 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
             const sb = sharedBases.get(taskId);
             if (sb) for (const [p, blob] of Object.entries(sb.bases || {})) snap.set(p, blob);
             taskBaseline.set(taskId, snap);
+          }
+          // OXB-184: what this attempt changed (any path, binary included), recorded before the next attempt's snapshot.
+          if (event.type === 'RetryScheduled' && attemptBaseline.has(taskId)) {
+            try {
+              const before = attemptBaseline.get(taskId);
+              const now = treeSnapshot(projectRoot);
+              const changed = changedSinceSnapshot(projectRoot, before);
+              lastAttemptChanges.set(taskId, { kept: changed.filter((p) => now.has(p) || fs.existsSync(path.join(projectRoot, p))), gone: [] });
+            } catch { /* auxiliar */ }
           }
           if (event.type === 'AttemptStarted') attemptBaseline.set(taskId, treeSnapshot(projectRoot));
           const attemptEnded = event.type === 'RetryScheduled' || event.type === 'WorkItemCompleted' || event.type === 'WorkItemBlocked';

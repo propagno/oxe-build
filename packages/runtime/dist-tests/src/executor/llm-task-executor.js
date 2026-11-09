@@ -150,6 +150,11 @@ class LlmTaskExecutor {
             messages.push(...concurrentResults, ...serialResults);
             // Detect finish_task call — authoritative completion signal
             const allResults = [...concurrentResults, ...serialResults];
+            // OXB-125: a blocking question with no answer in the artifacts — the task waits for a person (no retry).
+            const blockedAsk = allResults.find((r) => r.name === 'ask_orchestrator' && String(r.content || '').includes('__ask_blocked__'));
+            if (blockedAsk) {
+                return done({ success: false, failure_class: 'waiting_answer', evidence: evidencePaths, output: `waiting_answer: ${String(blockedAsk.content)}` });
+            }
             const finishResult = allResults.find((r) => r.name === 'finish_task');
             if (finishResult) {
                 try {

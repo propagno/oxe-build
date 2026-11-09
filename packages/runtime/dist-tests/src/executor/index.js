@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.decodeConsoleOutput = exports.windowsLaunchers = exports.PROVIDER_CREDENTIAL_ENV = exports.scrubbedEnvNames = exports.configureChildEnv = exports.childProcessEnv = exports.shellInvocation = exports.PathContainmentError = exports.resolveWithin = exports.ALL_BUILT_IN_SCHEMAS = exports.BUILT_IN_TOOLS = exports.selectToolsForActions = exports.buildChatCompletionsUrl = exports.buildNodePrompt = exports.EXECUTOR_ADAPTER_IDS = exports.isExecutorAdapterId = exports.detectExecutorAdapters = exports.createExecutorAdapter = exports.HttpOpenAiAdapter = exports.buildSpawnable = exports.resolveExecutable = exports.parseBridgeReply = exports.buildBridgePrompt = exports.ClaudeCliAdapter = exports.DEFAULT_NODE_CONTEXT_BUDGET = exports.truncateContext = exports.renderNodeContext = exports.LlmTaskExecutor = void 0;
+exports.setQuestionResolver = exports.decodeConsoleOutput = exports.windowsLaunchers = exports.PROVIDER_CREDENTIAL_ENV = exports.scrubbedEnvNames = exports.configureChildEnv = exports.childProcessEnv = exports.shellInvocation = exports.PathContainmentError = exports.resolveWithin = exports.ALL_BUILT_IN_SCHEMAS = exports.BUILT_IN_TOOLS = exports.selectToolsForActions = exports.buildChatCompletionsUrl = exports.buildNodePrompt = exports.EXECUTOR_ADAPTER_IDS = exports.isExecutorAdapterId = exports.detectExecutorAdapters = exports.createExecutorAdapter = exports.HttpOpenAiAdapter = exports.buildSpawnable = exports.resolveExecutable = exports.parseBridgeReply = exports.buildBridgePrompt = exports.ClaudeCliAdapter = exports.DEFAULT_NODE_CONTEXT_BUDGET = exports.truncateContext = exports.renderNodeContext = exports.LlmTaskExecutor = void 0;
 var llm_task_executor_1 = require("./llm-task-executor");
 Object.defineProperty(exports, "LlmTaskExecutor", { enumerable: true, get: function () { return llm_task_executor_1.LlmTaskExecutor; } });
 var node_context_1 = require("./node-context");
@@ -39,3 +39,5 @@ Object.defineProperty(exports, "scrubbedEnvNames", { enumerable: true, get: func
 Object.defineProperty(exports, "PROVIDER_CREDENTIAL_ENV", { enumerable: true, get: function () { return shell_argv_1.PROVIDER_CREDENTIAL_ENV; } });
 Object.defineProperty(exports, "windowsLaunchers", { enumerable: true, get: function () { return shell_argv_1.windowsLaunchers; } });
 Object.defineProperty(exports, "decodeConsoleOutput", { enumerable: true, get: function () { return shell_argv_1.decodeConsoleOutput; } });
+var built_in_tools_2 = require("./built-in-tools");
+Object.defineProperty(exports, "setQuestionResolver", { enumerable: true, get: function () { return built_in_tools_2.setQuestionResolver; } });

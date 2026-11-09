@@ -128,6 +128,11 @@ export function scopesOverlap(a: string[], b: string[]): boolean {
 }
 
 export interface SchedulerContext {
+  /**
+   * OXB-184: what the previous attempt of a task changed in the tree (paths, binary or not) and whether it is still
+   * there — appended to the informed retry, so the next attempt does not redo (or wrongly assume) work.
+   */
+  attemptChanges?: (nodeId: string) => { kept: string[]; gone: string[] } | null;
   projectRoot: string;
   sessionId: string | null;
   runId: string;
@@ -760,7 +765,7 @@ export class Scheduler {
         });
 
         lastResult = await this.executeNode(node, lease, ctx, attempt, attemptId, {
-          previousError: lastError,
+          previousError: withAttemptChanges(lastError, attempt > 1 && ctx.attemptChanges ? ctx.attemptChanges(nodeId) : null),
           ...(turnsLeft != null ? { maxTurns: turnsLeft } : {}),
         });
 
@@ -1533,6 +1538,16 @@ export function splitVerifySegments(command: string): string[] {
   }
   if (current.trim()) out.push(current.trim());
   return out.length ? out : [command];
+}
+
+/** OXB-184: the retry text plus what the previous attempt left in the tree. */
+export function withAttemptChanges(previousError: string | null, changes: { kept: string[]; gone: string[] } | null): string | null {
+  if (!changes || (!changes.kept.length && !changes.gone.length)) return previousError;
+  const list = (xs: string[]) => xs.slice(0, 30).join(', ') + (xs.length > 30 ? ` (+${xs.length - 30})` : '');
+  const lines = ['', '## O que a tentativa anterior deixou na árvore'];
+  if (changes.kept.length) lines.push(`Mantidos (o verify desta tentativa os vê; não refaça sem motivo): ${list(changes.kept)}`);
+  if (changes.gone.length) lines.push(`Escritos e NÃO mantidos (refaça se ainda forem necessários): ${list(changes.gone)}`);
+  return `${previousError ?? ''}${lines.join('\n')}`;
 }
 
 /** Every segment's output with a header per segment, for the attempt log (`attempts/<Tn>-<n>.log`). */

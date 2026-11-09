@@ -1481,3 +1481,16 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 - **`runtime signal --from <pasta> --freeze`:** cada achado com roteiro vira um teste Playwright (`getByRole`) congelado em `tests/ui-regression/<id>.spec.js` (configurável por `ui_evidence.test_dir`). O teste é registrado em PLAN.json `acceptance_tests`, com `frozen`, `origin: ui_evidence` e `regression: next_phase`.
 - **Limite:** o "reprova na árvore antiga e passa na corrigida" depende do Playwright do projeto. A suíte do oxe-build valida o teste gerado (seletores e asserção), não o executa num browser.
 - **Teste:** `tests/oxe-1212-ui-evidence.test.cjs`.
+
+## OXB-184: o binário regravado por uma tentativa e o retry que não sabe disso
+
+- **Status:** a hipótese do relato não se confirmou. As duas melhorias pedidas foram feitas (1.21.2).
+- **Relato do TECH LEAD:** na oxespace-150-f10, CR-A42 (T14), run `oxe-run-mw8cmpin-0373tc`, houve 3 tentativas reprovadas em `verifyPaparazziDebug` pelo mesmo diff de 0,1%. A hipótese era que o rollback descartasse os PNGs regravados antes do verify. O TL chamou o item de OXB-179, mas esse número já é do backlog de comparação, então ele virou OXB-184.
+- **O que os artefatos mostram:**
+  - **Não houve descarte entre tentativas.** O runtime não reverte nada entre tentativas. O isolamento (OXB-051/067) só roda quando a tarefa falha de vez, depois da última tentativa. Isso confere com `T14-failed/`, salvo às 00:53:33, depois da 3ª tentativa.
+  - **Os PNGs regravados chegaram ao verify da mesma tentativa.** A 2ª tentativa regravou 10 goldens de `ComponentsSnapshotTest` (00:47, dentro do escopo). Eles estão em `T14-failed/new/`. No verify dessa tentativa os Components passaram: a falha de 15,8% em `oxeButton` sumiu.
+  - **O golden que reprovava nunca foi regravado.** `ScreensSnapshotTest_live[pt-rBR-true]_live-tasks.png` reprovou com o mesmo 0,103431% nas tentativas 2 e 3 e não aparece entre os arquivos salvos da tentativa. Ou o executor não o regravou, ou a regravação reproduziu bytes iguais aos do HEAD e a renderização variou entre o record e o verify.
+  - A correção real (c49e87e2, "the live-tasks fixture uses a real delegation state") aponta para a fixture, não para o oxe-build.
+- **Defeito real encontrado:** um execute posterior da mesma run recomeça a numeração das tentativas e sobrescrevia `attempts/T14-1.log`. O T14-1.log das 01:31 não é a 1ª tentativa das 00:4x. Agora o log anterior é mantido como `T14-1.before-<mtime>.log`.
+- **Melhoria pedida:** o prompt do retry ganha a seção "O que a tentativa anterior deixou na árvore". Ela lista os caminhos mudados pela tentativa anterior, binários incluídos, e diz que foram mantidos e que o verify os vê. O scheduler expõe `ctx.attemptChanges`, e o inplace preenche a seção a partir do snapshot da tentativa.
+- **Teste:** `tests/oxe-1212-attempt-changes.test.cjs`. Um PNG regravado na tentativa 1 está no verify, o retry o lista como mantido e a tarefa conclui na tentativa 2.

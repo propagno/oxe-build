@@ -89,6 +89,14 @@ export interface ParallelMutatingOptions {
 /** Two scopes may touch the same file: equal paths, one a directory prefix of the other, or a glob in either. */
 export declare function scopesOverlap(a: string[], b: string[]): boolean;
 export interface SchedulerContext {
+    /**
+     * OXB-184: what the previous attempt of a task changed in the tree (paths, binary or not) and whether it is still
+     * there — appended to the informed retry, so the next attempt does not redo (or wrongly assume) work.
+     */
+    attemptChanges?: (nodeId: string) => {
+        kept: string[];
+        gone: string[];
+    } | null;
     projectRoot: string;
     sessionId: string | null;
     runId: string;
@@ -204,6 +212,11 @@ export interface VerifyNodeResult {
  * what the planner checks before execution is what runs after.
  */
 export declare function splitVerifySegments(command: string): string[];
+/** OXB-184: the retry text plus what the previous attempt left in the tree. */
+export declare function withAttemptChanges(previousError: string | null, changes: {
+    kept: string[];
+    gone: string[];
+} | null): string | null;
 /** Every segment's output with a header per segment, for the attempt log (`attempts/<Tn>-<n>.log`). */
 export declare function buildVerifyLog(segments: VerifySegmentRun[] | undefined, maxLinesPerSegment?: number): string;
 export declare function describeVerifyFailure(command: string | null | undefined, check: CheckResult | undefined, gaps?: string[], segment?: {

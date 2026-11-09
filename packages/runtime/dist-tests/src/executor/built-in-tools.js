@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ALL_BUILT_IN_SCHEMAS = exports.BUILT_IN_TOOLS = exports.PathContainmentError = void 0;
 exports.resolveWithin = resolveWithin;
+exports.setQuestionResolver = setQuestionResolver;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const child_process_1 = require("child_process");
@@ -337,6 +338,41 @@ const finishTask = {
         });
     },
 };
+let questionResolver = null;
+/** The orchestrator side (oxe-cc) answers from the artifacts, records decisions, queues what needs a person. */
+function setQuestionResolver(fn) { questionResolver = fn; }
+const askOrchestrator = {
+    idempotent: false,
+    schema: {
+        type: 'function',
+        function: {
+            name: 'ask_orchestrator',
+            description: 'Ask the orchestrator when the contract is ambiguous (two readings, an anchor that does not decide, a test and the code disagreeing) instead of guessing. Give the options and your default; blocking=true when going on with the default could do harm.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    question: { type: 'string' },
+                    options: { type: 'array', items: { type: 'string' } },
+                    default: { type: 'string' },
+                    blocking: { type: 'boolean' },
+                },
+                required: ['question', 'options'],
+            },
+        },
+    },
+    async execute(args, _cwd) {
+        const q = {
+            question: String(args.question || ''),
+            options: Array.isArray(args.options) ? args.options.map(String) : [],
+            default: args.default != null ? String(args.default) : null,
+            blocking: args.blocking === true,
+        };
+        const a = questionResolver ? questionResolver(q) : (q.default && !q.blocking ? { answer: q.default, provisional: true, source: null } : { wait: true });
+        if (a.wait)
+            return JSON.stringify({ __ask_blocked__: true, id: a.id || null, question: q.question });
+        return JSON.stringify({ answer: a.answer, source: a.source || null, provisional: Boolean(a.provisional) });
+    },
+};
 // ─── Registry ─────────────────────────────────────────────────────────────────
 exports.BUILT_IN_TOOLS = {
     read_file: readFile,
@@ -346,5 +382,6 @@ exports.BUILT_IN_TOOLS = {
     grep,
     run_command: runCommand,
     finish_task: finishTask,
+    ask_orchestrator: askOrchestrator,
 };
 exports.ALL_BUILT_IN_SCHEMAS = Object.values(exports.BUILT_IN_TOOLS).map((t) => t.schema);
