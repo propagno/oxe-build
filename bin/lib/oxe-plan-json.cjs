@@ -16,7 +16,8 @@ const path = require('path');
 const TASK_ID_RE = /^T\d+$/;
 // 1.21.2 (OXB-037): A<n>, subcriteria A<n>.<m> and global criteria G<n>.
 const ACCEPT_RE = require('./oxe-criteria-ids.cjs').CRITERION_ID_RE;
-const DECISION_RE = /^D-\d+$/;
+// OXB-112: D-<n>, D-<fase>-<n> (D-F2-3) and D-SPIKE-<Tn>
+const DECISION_RE = require('./oxe-decisions.cjs').DECISION_ID_RE;
 const COMPLEXITY = new Set(['XS', 'S', 'M', 'L', 'XL']);
 
 
@@ -90,7 +91,7 @@ function validatePlanJson(doc) {
         if (bad.length) errors.push(`${at}.acceptance: ${bad.map((v) => JSON.stringify(typeof v === 'string' ? v.slice(0, 60) : v)).join(', ')} não ${bad.length > 1 ? 'são ids' : 'é id'} A<n> — critérios são ids A da SPEC; a prosa vai em "notes"`);
       }
     }
-    if (task.decisions != null && !isStringArray(task.decisions, DECISION_RE)) errors.push(`${at}.decisions: lista de D-<n>`);
+    if (task.decisions != null && !isStringArray(task.decisions, DECISION_RE)) errors.push(`${at}.decisions: lista de D-<n> / D-<fase>-<n>`);
     if (task.complexity != null && !COMPLEXITY.has(task.complexity)) errors.push(`${at}.complexity: XS|S|M|L|XL`);
     if (task.done != null && typeof task.done !== 'boolean') errors.push(`${at}.done: boolean`);
     if (task.done_at != null && typeof task.done_at !== 'string') errors.push(`${at}.done_at: data ISO`);

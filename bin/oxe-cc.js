@@ -6348,6 +6348,7 @@ async function main() {
     argv[0] === 'spec' ||
     argv[0] === 'program' ||
     argv[0] === 'policy' ||
+    argv[0] === 'decision' ||
     argv[0] === 'verify' ||
     argv[0] === 'install'
   ) {
@@ -6584,6 +6585,31 @@ async function main() {
   }
 
   // OXB-087: oxe-cc plan append --from extra.json --by <papel> --reason "…" [--dir] [--session] [--json]
+  // OXB-112: decisions as first-class ids.
+  if (command === 'decision') {
+    const sub = argv[0] === 'add' || argv[0] === 'list' ? argv[0] : 'list';
+    const o = { dir: process.cwd(), json: false };
+    for (let i = sub === argv[0] ? 1 : 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (['--title', '--text', '--phase', '--by', '--check', '--criteria'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (!a.startsWith('-')) o.dir = path.resolve(a);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = oxeOperational.runtimeDecision(o.dir, null, { action: sub, ...o });
+      if (o.json) { console.log(JSON.stringify({ oxeDecisionSchema: 1, ...out }, null, 2)); return; }
+      if (sub === 'add') console.log(`  ${green}✓${reset} ${out.decision.id} — ${out.decision.title}${out.decision.check ? ` (evidência: \`${out.decision.check}\` no verify da fase)` : ''}`);
+      else if (!out.decisions.length) console.log('  Nenhuma decisão registrada.');
+      else for (const d of out.decisions) console.log(`  ${d.id.padEnd(12)} ${d.phase || '—'}  ${d.title}${d.check ? '  [check]' : ''}`);
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (command === 'plan' && argv[0] === 'append') {
     const rest = argv.slice(1);
     const o = { dir: process.cwd(), session: null, json: false };

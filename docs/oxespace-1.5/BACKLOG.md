@@ -846,8 +846,14 @@ Requisitos escritos pelo TECH LEAD, aprovados pelo usuário. O desenho e a imple
 
 ## OXB-112: decisões como ids de primeira classe (`D-<fase>-<n>`)
 
-- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
-  - `oxe-cc decision add`. As tarefas citam as decisões, o verify checa a evidência e o lint aponta decisão sem tarefa.
+- **Status:** resolvido (1.21.2). `bin/lib/oxe-decisions.cjs` e o comando `oxe-cc decision add|list`.
+  - `oxe-cc decision add --title "…" [--text] [--phase Fn] [--by] [--check "<cmd>"] [--criteria A3]`: id `D-<fase>-<n>`, numerado por fase. A fase padrão é a ativa; sem programa, fica `D-<n>`.
+    - O registro é append-only em `.oxe/program/decisions.ndjson`, o mesmo arquivo em que os spikes gravam `D-SPIKE-Tn` e que o dossiê já mostra.
+  - O `decisions` do PLAN.json aceita `D-<n>`, `D-<fase>-<n>` e `D-SPIKE-Tn`.
+  - **Lint:** tarefa que cita decisão inexistente é **erro**. Decisão ativa da fase que nenhuma tarefa cita é aviso.
+  - **Verify:** uma decisão com `--check` vira gate implícito `decision-<id>` no verify da fase (citada por alguma tarefa, ou da fase). Vermelho reprova o verify e abre CR de defeito, como os gates do projeto.
+  - A revisão do plano (OXB-111) também julga as decisões.
+  - Teste: `tests/oxe-1212-decisions.test.cjs` (ids por fase pela CLI; o erro de decisão inexistente e o aviso de decisão não citada; o check vira gate da fase).
 
 ## OXB-113: monitor de folga de contexto do orquestrador
 

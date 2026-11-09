@@ -708,12 +708,22 @@ function promoteAssumedTasks(projectRoot, range, ordered, idSet, phaseCtx) {
  * phase's diff (its base_commit → the tree). Off with config `stub_check: false`.
  */
 function implicitPhaseGates(projectRoot, programState, phaseId, projectConfig) {
-  if (!projectConfig || projectConfig.stub_check === false || !programState || !phaseId) return [];
+  if (!programState || !phaseId) return [];
   const phase = (programState.phases || []).find((p) => p.id === phaseId);
   const base = phase && phase.base_commit;
-  if (!base) return [];
+  if (!projectConfig || projectConfig.stub_check === false || !base) return decisionPhaseGates(projectRoot, phaseId);
   const script = path.join(__dirname, 'oxe-stub-check.cjs').replace(/\\/g, '/');
-  return [{ id: 'stub-check', when: 'phase_verify', command: `node "${script}" --phase --since ${base}`, description: 'anti-stub da fase: stubs e arquivos novos sem ligação (OXB-108)', on_fail: 'cr_defect' }];
+  return [{ id: 'stub-check', when: 'phase_verify', command: `node "${script}" --phase --since ${base}`, description: 'anti-stub da fase: stubs e arquivos novos sem ligação (OXB-108)', on_fail: 'cr_defect' }, ...decisionPhaseGates(projectRoot, phaseId)];
+}
+
+/** OXB-112: the evidence of the phase's decisions (their `check`), as implicit phase gates. */
+function decisionPhaseGates(projectRoot, phaseId) {
+  try {
+    const lib = require('./oxe-decisions.cjs');
+    const programDir = path.join(projectRoot, '.oxe', 'program');
+    const { doc } = readPlanJsonDoc(projectRoot, null);
+    return lib.decisionGates(lib.list(programDir), doc, phaseId);
+  } catch { return []; }
 }
 
 /**
@@ -745,6 +755,22 @@ function runtimeDefects(projectRoot, activeSession, options = {}) {
     standing: require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot),
   });
   return { register, open: lib.open(register) };
+}
+
+/** OXB-112: `oxe-cc decision add|list`. */
+function runtimeDecision(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-decisions.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  if (options.action === 'add') {
+    let program = null;
+    try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; }
+    const rec = lib.add(programDir, { ...options, phase: options.phase || (program && program.active_phase) || null });
+    appendEvent(projectRoot, activeSession, { type: 'DecisionRecorded', payload: { id: rec.id, title: rec.title, phase: rec.phase } });
+    try { autoExportProgram(projectRoot, activeSession); } catch { /* */ }
+    return { decision: rec };
+  }
+  return { decisions: lib.list(programDir) };
 }
 
 /** OXB-160: the tests' own tree for a frozen test file: up to its tests/test/__tests__/spec/e2e dir, else its own dir. */
@@ -3462,6 +3488,19 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
         const moved = Object.entries(titles).find(([, ti]) => String(ti).trim().toLowerCase() === String(t.title || '').trim().toLowerCase());
         result.warnings.push(`${t.id}: o título mudou desde a run ${rs.run_id} ("${titles[t.id]}" → "${t.title}")${moved ? `; "${t.title}" era ${moved[0]}` : ''} — ids renumerados: tentativas, trabalho interrompido e snapshots são por id. Prefira ids estáveis (acrescente tarefas no fim, ex.: T${(pj0.tasks || []).length + 1}); o execute atribui o trabalho interrompido pelo título`);
       }
+    }
+  } catch { /* auxiliar */ }
+  // OXB-112: decisions cited by tasks must exist; the phase's decisions should be cited by some task.
+  try {
+    const { doc: pjd } = readPlanJsonDoc(projectRoot, activeSession);
+    if (pjd) {
+      const decLib = require('./oxe-decisions.cjs');
+      const pathsD = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+      let progD = null;
+      try { progD = require('./oxe-program.cjs').readProgram(pathsD.programDir || path.join(projectRoot, '.oxe', 'program')); } catch { progD = null; }
+      const dl = decLib.lintDecisions(pjd, decLib.list(pathsD.programDir || path.join(projectRoot, '.oxe', 'program')), progD ? progD.active_phase : null);
+      result.errors.push(...dl.errors);
+      result.warnings.push(...dl.warnings);
     }
   } catch { /* auxiliar */ }
   // OXB-111: adversarial review of the plan (--review): PLAN-REVIEW.md, one verdict per dimension; FAIL blocks.
@@ -7640,6 +7679,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeDecision,
   runtimeDefects,
   projectStatusPaths,
   runtimePlanReopen,
