@@ -826,6 +826,23 @@ function runtimeContextUsage(projectRoot, activeSession, options = {}) {
   return { ...lvl, handoff, workflows };
 }
 
+/** OXB-104: `oxe-cc design build` → .oxe/SYSTEM-DESIGN.md (keeps the prose of existing sections). */
+function runtimeDesignBuild(projectRoot, activeSession) {
+  const lib = require('./oxe-system-design.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const file = lib.FILE(projectRoot);
+  const text = lib.build(projectRoot, {
+    specText: readTextIfExists(paths.spec) || '',
+    decisions: require('./oxe-decisions.cjs').list(paths.programDir || path.join(projectRoot, '.oxe', 'program')),
+    existing: readTextIfExists(file) || '',
+  });
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text);
+  const sections = lib.parseSections(text);
+  appendEvent(projectRoot, activeSession, { type: 'SystemDesignBuilt', payload: { sections: sections.length } });
+  return { file: path.relative(projectRoot, file).replace(/\\/g, '/'), sections: sections.map((s) => s.id) };
+}
+
 /** OXB-099: `oxe-cc spec freeze --from <PR|sha> [--paths glob] [--criteria A12] [--cr CR-n]`. */
 function runtimeSpecFreeze(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-spec-freeze.cjs');
@@ -7213,6 +7230,13 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     const onlyManual = (run.verification_check_results || []).every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));
     if (onlyManual) gateInput.verify_status = 'completed';
   }
+  // OXB-105: the phase changed paths a SYSTEM-DESIGN section describes and the document did not change.
+  try {
+    if (readProjectConfig(projectRoot).design_drift !== false) {
+      const sd = require('./oxe-system-design.cjs').staleSections(projectRoot, phase.base_commit, { since: phase.started_at || null });
+      for (const s of sd.stale.slice(0, 10)) closeGates.reasons.push(`design_drift: a seção ${s.section} do SYSTEM-DESIGN descreve ${s.files.join(', ')}, que mudaram na fase, e o documento não mudou — atualize-o (ou rode o compact) antes do close`);
+    }
+  } catch { /* auxiliar */ }
   // OXB-140: risk priority per criterion → PASS | CONCERNS | FAIL (opt-in: program.risk_decision or a declared risk).
   let riskDecision = null;
   try {
@@ -7256,6 +7280,8 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     return { closed: false, phase: phase.id, gate, commit: null };
   }
 
+  // OXB-105: what the phase touched, for the compact (structural CODEBASE-DELTA entry).
+  try { require('./oxe-system-design.cjs').deltaEntry(projectRoot, phase.id, phase.base_commit); } catch { /* auxiliar */ }
   const regressionChecks = programLib.freezeRegressionChecks(run.verification_check_results, run.verification_suite);
   const regressionFile = programLib.writeRegression(paths.programDir, phase.id, regressionChecks, { run_id: run.run_id || null });
 
@@ -8679,6 +8705,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeDesignBuild,
   runtimeSpecFreeze,
   runtimePlanBuild,
   runtimeSpecStress,

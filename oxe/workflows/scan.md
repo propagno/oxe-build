@@ -15,6 +15,7 @@ Se **`.oxe/config.json`** tiver `scan_focus_globs` ou `scan_ignore_globs`, **pri
 - Carregar `oxe/templates/STATE.md` como base se `STATE.md` ainda não existir; se existir, preservar histórico e atualizar **Último scan** (campo **Data:** em formato ISO **YYYY-MM-DD**) e **Fase**.
 - Se existir **`.oxe/config.json`**, respeitar `scan_focus_globs`, `scan_ignore_globs`, `scan_max_age_days`, `scale_adaptive`, `profile`. **Não** sobrescrever o arquivo no scan.
 - Não apagar `SPEC.md` / `PLAN.md` se já existirem — apenas atualizar o codebase.
+- **SYSTEM-DESIGN (OXB-104):** rodar `oxe-cc design build` e preencher a prosa de cada seção de `.oxe/SYSTEM-DESIGN.md` (componentes, fluxos, ADRs, diagramas Mermaid), mantendo os marcadores `<!-- oxe-design: id=… paths=… ids=… -->`. O close da fase recusa um diff que muda caminhos de uma seção sem atualizá-la (`design_drift`; desligue com `design_drift: false`).
 - Entre scans completos, **`compact.md`** (`/oxe-compact`) pode **atualizar incrementalmente** os mesmos sete ficheiros comparando-os ao repo atual e registar mudanças em **`CODEBASE-DELTA.md`**.
 - **Prioridade de leitura de contexto:** carregar `.oxe/context/packs/scan.md` e `.oxe/context/packs/scan.json` **antes** de qualquer Glob/Grep abrangente. Se o pack existir e estiver fresco, usá-lo como mapa primário e reduzir leituras adicionais. Se stale, ausente ou incompleto, fazer fallback explícito para leitura direta e registrar o motivo.
 </context>

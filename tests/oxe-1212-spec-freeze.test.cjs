@@ -68,4 +68,10 @@ describe('OXB-099: spec freeze', () => {
     assert.deepEqual(out.frozen.map((f) => f.origin), ['#686']);
     assert.equal(sf.titlesOf(TEST).length, 2);
   });
+
+  it('--paths filters by glob (a trailing ** matches the files under it)', () => {
+    const { dir, sha } = project();
+    assert.equal(op.runtimeSpecFreeze(dir, null, { from: sha, paths: 'tests/acceptance/**' }).frozen.length, 1);
+    assert.throws(() => op.runtimeSpecFreeze(dir, null, { from: sha, paths: 'tests/other/**' }), /nenhum arquivo de teste em tests\/other/);
+  });
 });

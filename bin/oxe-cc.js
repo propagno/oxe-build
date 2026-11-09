@@ -6602,6 +6602,7 @@ async function main() {
     argv[0] === 'review' ||
     argv[0] === 'docs' ||
     argv[0] === 'eval' ||
+    argv[0] === 'design' ||
     argv[0] === 'state' ||
     argv[0] === 'guards' ||
     argv[0] === 'verify' ||
@@ -6997,6 +6998,23 @@ async function main() {
         for (const f of r.open) console.log(`    ${f.fid} (${f.severity})${f.place ? ` ${f.place}` : ''} ${f.text}${f.reopened ? ` — ${f.reopened}` : ''}`);
         if (r.closed.length) console.log(`    encerrados: ${r.closed.map((f) => `${f.fid}=${f.status}`).join(', ')}`);
       }
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // OXB-104: the SYSTEM-DESIGN artifact.
+  if (command === 'design') {
+    const o = { dir: process.cwd(), json: false };
+    for (let i = argv[0] === 'build' ? 1 : 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = oxeOperational.runtimeDesignBuild(o.dir, null);
+      if (o.json) console.log(JSON.stringify({ oxeDesignSchema: 1, ...out }, null, 2));
+      else console.log(`  ${green}✓${reset} ${out.file}: ${out.sections.length} seção(ões) ligadas a caminhos e ids R/A`);
     } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
     return;
   }

@@ -785,15 +785,26 @@ Cada bloco tem uma meta medível:
 
 ## OXB-104: artefato SYSTEM-DESIGN
 
-- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
-  - Gerado por scan/spec: componentes e processos, fluxos técnicos e de negócio, decisões no estilo ADR e diagramas Mermaid (C4 de contexto/container, sequências principais).
-  - Cada seção é ligada a ids R/A.
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-system-design.cjs`.
+- **`oxe-cc design build`** grava `.oxe/SYSTEM-DESIGN.md` com:
+  - componentes por diretório de código, cada um ligado aos R/A que o citam;
+  - um fluxo por requisito R (com os critérios dele);
+  - ADRs a partir de `decisions.ndjson`, com as alternativas recusadas;
+  - diagramas Mermaid: C4 de contexto/container e as sequências dos primeiros requisitos.
+- **Os marcadores:** cada seção leva `<!-- oxe-design: id=… paths=… ids=… -->`.
+- **Reconstrução:** rodar de novo mantém a prosa das seções existentes. O workflow `scan.md` pede para preencher a prosa.
+- **Teste:** `tests/oxe-1212-system-design.test.cjs`.
 
 ## OXB-105: gate de drift de design no close
 
-- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
-  - Quando o diff da fase toca módulos ou fluxos do SYSTEM-DESIGN (ou de `.oxe/codebase/`) e o documento não mudou, o close falha listando as seções desatualizadas.
-  - Depois de cada close roda um `compact` automático que grava o CODEBASE-DELTA.
+- **Status:** resolvido (1.21.2).
+- **O gate no close:** quando o diff da fase (base_commit → árvore) muda caminhos de uma seção do SYSTEM-DESIGN e o documento não mudou, o close falha com `design_drift`, listando a seção e os arquivos.
+  - O documento conta como mudado se aparece no diff ou se foi escrito depois do início da fase, porque `.oxe/` costuma estar fora do git.
+  - Desliga com `design_drift: false`.
+  - Só vale com o SYSTEM-DESIGN.md presente.
+- **Depois do close:** grava uma entrada estrutural em `.oxe/CODEBASE-DELTA.md` com os arquivos mudados e as seções tocadas, para o compact atualizar os mapas.
+- **Fora do escopo:** o compact em si (reescrever `.oxe/codebase/`) é um workflow de agente e não roda sozinho no close.
+- **Correção junto:** o glob `dir/**` não casava os arquivos debaixo de `dir` (também no `spec freeze --paths`).
 
 ## OXB-106: tipos de tarefa declarativos
 
