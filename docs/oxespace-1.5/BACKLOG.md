@@ -1729,3 +1729,22 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 - **A saída:** as mudanças propostas, marcadas com o método, vão para `.oxe/stress/<run>.json`.
 - **A aceitação:** `oxe-cc spec stress accept <run> --changes 1,3 --by <papel>` aceita só as escolhidas. Cada uma vira uma emenda aditiva pelo caminho do `spec amend` (CR `spec_gap` com `spec_edit`) e um registro `spec_edit` com `origin: "stress"` e o método.
 - **Teste:** `tests/oxe-1212-spec-stress.test.cjs`. Cobre a escolha reproduzível dos métodos, o isolamento do leitor (nem a seção interna nem o outro critério entram no prompt), a aceitação parcial e o registro como emenda.
+
+## OXB-142: contexto entregue aos agentes — guardar o que não se deriva do código
+
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-intent-context.cjs`.
+- **O que o context pack (`runtime context-pack --task Tn`) entrega:**
+  - **`intent`, inteiro e com a fonte:**
+    - as decisões da tarefa (citadas ou dos critérios dela), com as alternativas recusadas;
+    - as `policy_rules` cujos `paths` cobrem os arquivos dela;
+    - o texto dos critérios;
+    - o `intent`/`rationale` do pack.
+  - **`derivable`, só como ponteiros com gatilho observável:**
+    - "ao editar <arquivo>, leia o arquivo atual";
+    - "antes de mudar ou chamar <símbolo>, abra <arquivo>";
+    - "rode <comando> para conferir".
+  - **O que sai:** o código copiado (`snippet`, `code`, `content`, `excerpt`… e blocos ``` na descrição da tarefa) sai do recorte.
+- **`--explain`** mostra cada item, o tipo e o porquê.
+- **Lint:** o `plan lint` avisa `derivable_inlined` (bloco de código no PLAN.json, campo de código com mais de 200 caracteres no pack) e `intent sem fonte` (`intent`/`rationale` do pack sem `source`).
+- **Fora do escopo:** a marcação por seção nos templates não foi feita. A classificação é pelo tipo do campo, que é o que o runtime lê.
+- **Teste:** `tests/oxe-1212-intent-context.test.cjs`. Cobre a decisão com a alternativa, a regra do caminho certo (a de outro caminho fica fora), os ponteiros com gatilho, nenhum código copiado, o recorte menos da metade do pack da tarefa e o lint.

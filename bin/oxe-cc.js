@@ -4230,6 +4230,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--answer' && argv[i + 1]) out.answer = String(argv[++i]);
     else if (a === '--freeze') out.freeze = true;
     else if (a === '--stats') out.stats = true;
+    else if (a === '--explain') out.explain = true;
     else if (a === '--until' && argv[i + 1]) out.until = String(argv[++i]);
     else if (a === '--metric' && argv[i + 1]) out.metric = String(argv[++i]);
     else if (a === '--method' && argv[i + 1]) out.method = String(argv[++i]);
@@ -5799,8 +5800,9 @@ async function runRuntime(opts) {
   if (opts.action === 'context-pack') {
     try {
       if (!opts.task) throw new Error('use: oxe-cc runtime context-pack --task T3 [--stats]');
-      const out = oxeOperational.runtimeContextPack(opts.dir, activeSession, { task: opts.task });
+      const out = oxeOperational.runtimeContextPack(opts.dir, activeSession, { task: opts.task, explain: Boolean(opts.explain) });
       if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeContextPackSchema: 1, ...out }, null, 2)); return; }
+      if (out.explain) for (const x of out.explain) console.log(`    [${x.kind}] ${x.type} ${x.what} — ${x.why}`);
       console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.file}: ${out.stats.tasks_included.join(', ')} · ${out.stats.pack_chars} de ${out.stats.full_chars} chars (−${Math.round(out.stats.reduction * 100)}%)`);
       return;
     } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }

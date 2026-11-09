@@ -927,7 +927,26 @@ function runtimeContextPack(projectRoot, activeSession, options = {}) {
   const budget = require('./oxe-workflow-budget.cjs');
   const { doc, paths } = readPlanJsonDoc(projectRoot, activeSession);
   if (!doc) throw new Error('context-pack exige PLAN.json');
-  const out = budget.taskContextPack(doc, readJsonQuiet(paths.implementationPack), String(options.task || '').toUpperCase());
+  const pack = readJsonQuiet(paths.implementationPack);
+  const taskId = String(options.task || '').toUpperCase();
+  const out = budget.taskContextPack(doc, pack, taskId);
+  // OXB-142: intent in full, derivable as pointers with a trigger; no code copied from the repository.
+  const ic = require('./oxe-intent-context.cjs');
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const specText = readTextIfExists(paths.spec) || '';
+  const criteriaText = new Map([...specText.matchAll(/^\|\s*(A\d+)\s*\|\s*([^|]+?)\s*\|/gm)].map((m) => [m[1], m[2]]));
+  const packEntry = pack && Array.isArray(pack.tasks) ? pack.tasks.find((x) => x && (x.id === taskId || x.task === taskId)) : null;
+  const items = ic.build(out.slice.task, { decisions: require('./oxe-decisions.cjs').list(programDir), policyRules: (readProjectConfig(projectRoot).policy_rules || []), criteriaText, packEntry });
+  out.slice.pack = out.slice.pack.map(ic.stripInlined);
+  out.slice.task = { ...out.slice.task };
+  for (const k of ['description', 'notes', 'approach']) if (typeof out.slice.task[k] === 'string') out.slice.task[k] = out.slice.task[k].replace(/```[\s\S]*?```/g, '[código do repositório omitido — leia os arquivos da tarefa]');
+  out.slice.intent = items.filter((x) => x.kind === 'intent').map(({ kind, why, ...rest }) => rest);
+  out.slice.pointers = items.filter((x) => x.kind === 'derivable').map((x) => ({ pointer: x.pointer, trigger: x.trigger }));
+  const packChars = (packEntry ? JSON.stringify(packEntry).length : 0) + JSON.stringify(out.slice.task).length;
+  out.stats.pack_chars = JSON.stringify(out.slice).length;
+  out.stats.reduction = out.stats.full_chars ? Math.round((1 - out.stats.pack_chars / out.stats.full_chars) * 1000) / 1000 : 0;
+  out.stats.task_pack_chars_before = packChars;
+  if (options.explain) out.explain = items.map((x) => ({ kind: x.kind, type: x.type, what: x.id || x.pointer || String(x.text).slice(0, 80), why: x.why }));
   if (options.write !== false) {
     const file = path.join(projectRoot, '.oxe', 'context-packs', `${String(options.task).toUpperCase()}.json`);
     ensureDirForFile(file);
@@ -4162,6 +4181,11 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
   try {
     const { doc: pjq } = readPlanJsonDoc(projectRoot, activeSession);
     result.warnings.push(...require('./oxe-phase-extras.cjs').quarantineWarnings(projectRoot, pjq));
+  } catch { /* auxiliar */ }
+  // OXB-142: code copied into the plan/pack instead of pointed at; pack intent without a source.
+  try {
+    const { doc: pji, paths: pti } = readPlanJsonDoc(projectRoot, activeSession);
+    result.warnings.push(...require('./oxe-intent-context.cjs').lint(pji, readJsonQuiet(pti.implementationPack)));
   } catch { /* auxiliar */ }
   // OXB-185: a task whose size needs more turns than the global cap.
   try {
