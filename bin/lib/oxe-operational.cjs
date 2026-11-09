@@ -816,6 +816,18 @@ function runtimeContextUsage(projectRoot, activeSession, options = {}) {
   return { ...lvl, handoff, workflows };
 }
 
+/** OXB-140: `oxe-cc runtime waive --criteria A12 --reason "…" --until F5 --by <papel>`. */
+function runtimeWaive(projectRoot, activeSession, options = {}) {
+  const rd = require('./oxe-risk-decision.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  let program = null;
+  try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; }
+  const recs = rd.addWaiver(programDir, { ...options, phase: options.phase || (program && program.active_phase) || null });
+  appendEvent(projectRoot, activeSession, { type: 'CriterionWaived', payload: { waivers: recs } });
+  return { waivers: recs };
+}
+
 /** OXB-130: `oxe-cc runtime repair [list|apply <task> [--approve]]`. */
 function runtimeRepair(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-repair.cjs');
@@ -7056,7 +7068,23 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     const onlyManual = (run.verification_check_results || []).every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));
     if (onlyManual) gateInput.verify_status = 'completed';
   }
+  // OXB-140: risk priority per criterion → PASS | CONCERNS | FAIL (opt-in: program.risk_decision or a declared risk).
+  let riskDecision = null;
+  try {
+    const rd = require('./oxe-risk-decision.cjs');
+    const verdictsR = require('./oxe-verdicts.cjs');
+    let docR = null;
+    try { docR = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { docR = null; }
+    const specR = readTextIfExists(paths.spec) || '';
+    const freshSignoffs = readNdjsonQuiet(path.join(paths.programDir, 'signoffs.ndjson')).filter((s) => s && s.phase === phase.id && verdictsR.freshness(projectRoot, s, { doc: docR, specText: specR }).fresh);
+    riskDecision = rd.decide({ phase, program: state, specText: specR, doc: docR, verifyCompleted: gateInput.verify_status === 'completed', signoffs: freshSignoffs, waivers: rd.listWaivers(paths.programDir), config: readProjectConfig(projectRoot) });
+    if (riskDecision.enabled) {
+      closeGates.reasons.push(...riskDecision.reasons);
+      if (dossier && dossier.dir) { try { fs.writeFileSync(path.join(dossier.dir, 'risk-matrix.md'), rd.renderMatrix(riskDecision, phase.id)); } catch { /* auxiliar */ } }
+    }
+  } catch { riskDecision = null; }
   const gate = runtime.evaluatePhaseGate(gateInput);
+  if (riskDecision && riskDecision.enabled) { gate.decision = riskDecision.decision; gate.risk_matrix = riskDecision.rows; gate.risk_warnings = riskDecision.warnings; }
   if (dossier) {
     for (const issue of dossier.issues) gate.reasons.push(`dossiê: ${issue}`);
     const deferred = [];
@@ -8506,6 +8534,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeWaive,
   runtimeRepair,
   runtimeContextPack,
   runtimeDocsCheck,

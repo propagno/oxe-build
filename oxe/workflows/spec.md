@@ -599,7 +599,7 @@ Detectar e corrigir estes problemas antes de entregar a SPEC. A auto-reflexão d
 7. **Fase 4 — Roteiro:** agrupar requisitos v1 em fases (incluindo R-RB aprovados); escrever `ROADMAP.md` no escopo ativo.
 8. Escrever **`SPEC.md`** usando `oxe/templates/SPEC.template.md` no escopo ativo:
    - Frontmatter YAML (`oxe_doc: spec`, `status`, `updated`, `inputs`)
-   - Objetivo, Escopo (dentro/fora), Critérios de aceite (tabela A*), Suposições e riscos, Referências
+   - Objetivo, Escopo (dentro/fora), Critérios de aceite (tabela A*, com a coluna `Risco` P0–P3: o close da fase decide PASS, CONCERNS ou FAIL por ela, e um P2/P3 com lacuna só fecha com `oxe-cc runtime waive`), Suposições e riscos, Referências
    - Preencher explicitamente `Tipo de demanda` e `Incertezas estruturadas`
    - Preservar chaves existentes se SPEC.md já existir; atualizar `updated:`
 8b. **Auto-reflexão:** executar integralmente o bloco `<auto_reflexao>` antes de avançar. Corrigir a spec conforme necessário. Não apresentar a lista de verificação ao usuário — apenas a spec corrigida.

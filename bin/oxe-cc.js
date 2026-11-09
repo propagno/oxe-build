@@ -4230,6 +4230,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--answer' && argv[i + 1]) out.answer = String(argv[++i]);
     else if (a === '--freeze') out.freeze = true;
     else if (a === '--stats') out.stats = true;
+    else if (a === '--until' && argv[i + 1]) out.until = String(argv[++i]);
     else if (a === '--evidence' && argv[i + 1]) out.evidence = String(argv[++i]);
     else if (a === '--class' && argv[i + 1]) out.changeClass = String(argv[++i]);
     else if (a === '--summary' && argv[i + 1]) out.summary = String(argv[++i]);
@@ -5723,6 +5724,16 @@ async function runRuntime(opts) {
   }
 
   // OXB-113: resumable handoff, and the context reading a host hook sends.
+  // OXB-140: waivers of a P2/P3 gap (with an owner and the phase it comes back).
+  if (opts.action === 'waive') {
+    try {
+      const out = oxeOperational.runtimeWaive(opts.dir, activeSession, { criteria: opts.criteria, reason: opts.reason, until: opts.until, by: opts.by, phase: opts.phase });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeWaiveSchema: 1, ...out }, null, 2)); return; }
+      for (const w of out.waivers) console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${w.criterion} com waiver de ${w.by} até ${w.until}: ${w.reason}`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
   // OXB-145: what the run needs from someone.
   if (opts.action === 'attention') {
     try {

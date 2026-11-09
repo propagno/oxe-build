@@ -88,6 +88,7 @@ Complemento adaptativo para a Fase 1. Quando o domínio for confirmado (via scan
 6. **Fase 3 — Requisitos:** extrair tabela R-ID com v1/v2/fora e critérios A*; incorporar OBS pendentes; apresentar para validação.
 7. **Fase 4 — Roteiro:** agrupar requisitos v1 em fases (incluindo R-RB aprovados); escrever `ROADMAP.md` no escopo ativo.
 8. Escrever **`SPEC.md`** usando `oxe/templates/SPEC.template.md` no escopo ativo:
+   - Objetivo, Escopo (dentro/fora), Critérios de aceite (tabela A*, com a coluna `Risco` P0–P3: o close da fase decide PASS, CONCERNS ou FAIL por ela, e um P2/P3 com lacuna só fecha com `oxe-cc runtime waive`), Suposições e riscos, Referências
 8b. **Auto-reflexão:** executar integralmente o bloco `<auto_reflexao>` antes de avançar. Corrigir a spec conforme necessário. Não apresentar a lista de verificação ao usuário — apenas a spec corrigida.
 9. **Fase 5 — Aprovação:** apresentar resumo, aguardar aprovação do roteiro, redirecionar.
 10. Atualizar **`.oxe/STATE.md`** global: `phase: spec_ready`, próximo passo e referência curta à sessão ativa quando existir.

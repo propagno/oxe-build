@@ -1691,3 +1691,21 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - `oxe-cc runtime attention resolve <id> --by <papel>` (`AttentionResolved`);
   - o `oxe-cc status` mostra os avisos pendentes no topo, e no JSON em `attention`.
 - **Teste:** `tests/oxe-1212-attention.test.cjs`. Uma pausa de ambiente grava o arquivo e notifica uma vez; um aviso por tipo; o resolve apaga o arquivo; o status mostra o aviso.
+
+## OXB-140: prioridade de risco por critério e decisão da fase com três saídas
+
+- **Status:** resolvido (1.21.2). Opt-in com `program.risk_decision: true`, ou ao declarar risco em algum critério. Implementado em `bin/lib/oxe-risk-decision.cjs`.
+- **O risco:** cada critério tem P0–P3, pela coluna `Risco`/`Risk` da tabela da SPEC ou pela tag `[P1]` no texto. Um critério sem risco herda `program.default_risk` (P2) e gera aviso.
+- **A cobertura do critério na fase:**
+  - `full`: teste congelado com o verify da fase concluído, ou sign-off fresco com evidência;
+  - `partial`: só tarefa, sem prova;
+  - `none`.
+- **A decisão (`gate.decision`):**
+  - **FAIL** se algum P0/P1 não está `full`, mesmo com waiver;
+  - **FAIL** também se um P2/P3 tem lacuna sem waiver: a fase não fecha;
+  - **CONCERNS** se só P2/P3 têm lacuna e todas têm waiver;
+  - **PASS** se tudo está `full`.
+- **Waivers:** ficam em `.oxe/program/waivers.ndjson` e são criados com `oxe-cc runtime waive --criteria A12 --reason "…" --until F5 --by <dono>`. Quando a fase de `until` chega, o waiver deixa de valer e a lacuna volta.
+- **Dossiê:** ganha `risk-matrix.md` (critério × risco × cobertura × waiver).
+- **Workflow:** `spec.md` pede a coluna Risco.
+- **Teste:** `tests/oxe-1212-risk-decision.test.cjs`. Cobre as três saídas, a regra do P0, o vencimento do waiver, a herança do padrão com aviso e o `runtime waive`.
