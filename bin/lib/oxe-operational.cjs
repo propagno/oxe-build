@@ -703,6 +703,19 @@ function promoteAssumedTasks(projectRoot, range, ordered, idSet, phaseCtx) {
   return out;
 }
 
+/**
+ * OXB-108: gates the oxe-build adds to a phase verify on its own: the anti-stub check (substantive + wired) over the
+ * phase's diff (its base_commit → the tree). Off with config `stub_check: false`.
+ */
+function implicitPhaseGates(projectRoot, programState, phaseId, projectConfig) {
+  if (!projectConfig || projectConfig.stub_check === false || !programState || !phaseId) return [];
+  const phase = (programState.phases || []).find((p) => p.id === phaseId);
+  const base = phase && phase.base_commit;
+  if (!base) return [];
+  const script = path.join(__dirname, 'oxe-stub-check.cjs').replace(/\\/g, '/');
+  return [{ id: 'stub-check', when: 'phase_verify', command: `node "${script}" --phase --since ${base}`, description: 'anti-stub da fase: stubs e arquivos novos sem ligação (OXB-108)', on_fail: 'cr_defect' }];
+}
+
 /** OXB-160: the tests' own tree for a frozen test file: up to its tests/test/__tests__/spec/e2e dir, else its own dir. */
 function promoteTestRoot(file) {
   const parts = String(file).replace(/\\/g, '/').split('/');
@@ -1298,7 +1311,7 @@ function applyTaskGatesToGraph(projectRoot, artifactPaths, compiledGraph) {
       if (!String(node.verify.command || '').includes(cmd)) node.verify.command = [node.verify.command, cmd].filter(Boolean).join(' && ');
     }
   }
-  if (!gates.length && !anySuites) return;
+  if (!gates.length && !anySuites) { appendStubCheck(projectRoot, doc, compiledGraph); return; }
   const byId = new Map((doc.tasks || []).filter(Boolean).map((t) => [t.id, t]));
   const nodeList = Array.isArray(compiledGraph.nodes) ? compiledGraph.nodes : Object.values(compiledGraph.nodes);
   for (const node of nodeList) {
@@ -1310,6 +1323,23 @@ function applyTaskGatesToGraph(projectRoot, artifactPaths, compiledGraph) {
     node.verify.command = gatesLib.withTaskGates(node.verify.command, commands);
     node.verify.task_gates = commands.map((c) => c.id);
   }
+  appendStubCheck(projectRoot, doc, compiledGraph);
+}
+
+/** OXB-108: every code task's verify ends with the anti-stub check (exists + substantive, on what the task added). */
+function appendStubCheck(projectRoot, doc, compiledGraph) {
+  try {
+    if ((readProjectConfig(projectRoot) || {}).stub_check === false) return;
+    const gatesLib = require('./oxe-task-gates.cjs');
+    const stubScript = path.join(__dirname, 'oxe-stub-check.cjs').replace(/\\/g, '/');
+    const nodes = Array.isArray(compiledGraph.nodes) ? compiledGraph.nodes : Object.values(compiledGraph.nodes);
+    for (const node of nodes) {
+      const task = node && (doc.tasks || []).find((t) => t && t.id === node.id);
+      if (!task || !gatesLib.taskWritesCode(task)) continue;
+      node.verify = node.verify && typeof node.verify === 'object' ? node.verify : {};
+      if (!String(node.verify.command || '').includes('oxe-stub-check')) node.verify.command = [node.verify.command, `node "${stubScript}" --task ${node.id}`].filter(Boolean).join(' && ');
+    }
+  } catch { /* auxiliar */ }
 }
 
 function planSourceHash(projectRoot, activeSession) {
@@ -2721,7 +2751,7 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
   // 1.21 (OXB-020): the project's own gates (typecheck, lint, governance suite, CI) run once per phase verify.
   const gatesLib = require('./oxe-phase-gates.cjs');
   const projectConfig = readProjectConfig(projectRoot);
-  const phaseGates = options.gates === false ? [] : gatesLib.readPhaseGates({ phase_gates: parsedPlan.phaseGates }, projectConfig);
+  const phaseGates = options.gates === false ? [] : [...gatesLib.readPhaseGates({ phase_gates: parsedPlan.phaseGates }, projectConfig), ...implicitPhaseGates(projectRoot, programState, programPhaseId, projectConfig)];
   const gateCheckList = gatesLib.gateChecks(phaseGates, 'phase_verify', {
     programDir: artifactPaths.programDir || path.join(projectRoot, '.oxe', 'program'),
     phase: programPhaseId,
@@ -2787,7 +2817,7 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     const changeLib = require('./oxe-change.cjs');
     if (artifactPaths.programDir) {
       // OXB-078: the gates the plan/config declare now (read even with --no-gates), so an orphaned gate CR closes.
-      const declaredGates = gatesLib.readPhaseGates({ phase_gates: parsedPlan.phaseGates }, projectConfig).map((g) => g.id);
+      const declaredGates = [...gatesLib.readPhaseGates({ phase_gates: parsedPlan.phaseGates }, projectConfig), ...implicitPhaseGates(projectRoot, programState, programPhaseId, projectConfig)].map((g) => g.id);
       const reconciled = changeLib.reconcileChanges(artifactPaths.programDir, programPhaseId, parsedPlan, report.check_results, { declaredGates });
       for (const id of reconciled.resolved) appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', run_id: current.run_id, payload: { id } });
     }

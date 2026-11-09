@@ -789,12 +789,18 @@ Requisitos escritos pelo TECH LEAD, aprovados pelo usuário. O desenho e a imple
 
 ## OXB-108: verificador anti-stub no verify da tarefa e da fase
 
-- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
-  - Para cada símbolo e arquivo criado ou alterado, checa três níveis:
-  -   - **existe**;
-  -   - **é substantivo**: corpo vazio, "not implemented", retorno só com TODO e componente placeholder são stub;
-  -   - **está ligado**: importado e usado a partir de um ponto de entrada alcançável.
-  - Uma tarefa verde nos testes congelados, mas reprovada num nível, fica vermelha, com arquivo e linha.
+- **Status:** resolvido (1.21.2). Aprovado pelo usuário em 08/11 ("melhoria contínua total").
+  - `bin/lib/oxe-stub-check.cjs`, em três níveis, para cada arquivo que a tarefa criou ou alterou:
+    - **existe:** todo símbolo que a entrada da tarefa no IMPLEMENTATION-PACK declara está definido no arquivo declarado (ESM, CommonJS, class/const/fun/def…).
+    - **substantivo:** nenhum stub nas linhas que a tarefa **acrescentou** (o diff contra HEAD; um arquivo novo conta inteiro). Contam "not implemented", `throw new Error('TODO')`, retorno vazio marcado TODO, Kotlin `TODO()`, `NotImplementedError`, `todo!()`, `UnsupportedOperationException("TODO")`, componente placeholder (TODO/Placeholder/Coming soon) e função exportada vazia. TODO antigo e arquivo de teste não contam.
+    - **ligado:** um arquivo-fonte novo é importado ou usado por outro arquivo que não é teste, ou é ponto de entrada (package.json, `stub_check.entries`).
+  - **Verify da tarefa:** toda tarefa de código ganha, no fim do verify, o segmento `node …/oxe-stub-check.cjs --task Tn` (níveis existe e substantivo).
+    - Uma tarefa verde nos testes congelados, mas com stub, fica vermelha. O retry recebe `arquivo:linha [nível] motivo`.
+    - O segmento entra no grafo do execute, não no dry-verify do lint, em que o diff ainda está vazio.
+  - **Verify da fase:** um gate implícito `stub-check` roda sobre o diff da fase (`base_commit` → árvore). Vermelho vira CR de defeito, como os gates do projeto.
+    - O nível **ligado** na fase é opt-in (`stub_check.wired: true`): um módulo que uma fase entrega costuma ser ligado por uma fase seguinte.
+  - **Exceções:** um comentário `oxe-stub-ok` na linha (exceção revisada), `stub_check.ignore` (globs), e `stub_check: false` desliga tudo.
+  - Teste: `tests/oxe-1212-stub-check.test.cjs` (os três níveis com arquivo:linha; a CLI; no loop do execute, a tarefa com stub fica vermelha, o retry vê a linha e, corrigida, completa).
 
 ## OXB-109: gate de rigor do teste congelado (no spec freeze e no plan lint)
 
