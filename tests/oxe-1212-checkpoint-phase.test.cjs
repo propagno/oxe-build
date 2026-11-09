@@ -414,3 +414,45 @@ describe('OXB-174: a task\'s own leftovers from its earlier failed attempts go i
     assert.equal(fs.readFileSync(path.join(dir, 'src', 'shared.ts'), 'utf8'), 's-by-B\n');
   });
 });
+
+describe('OXB-175: related reds that are not the task\'s never undo its commit; a checkpoint failure stops the chain', () => {
+  // fake related: prints FAIL for every file listed in RED (env), exit 1 if any
+  const RELATED = "const red=String(process.env.OXE_TEST_RED||'').split(',').filter(Boolean);for(const f of red)console.log(' FAIL  '+f+' > by design');process.exit(red.length?1:0);\n";
+  // fake run on the parent: red for files in OXE_TEST_RED_BEFORE
+  const RUN = "const red=String(process.env.OXE_TEST_RED_BEFORE||'').split(',').filter(Boolean);const args=process.argv.slice(2);let bad=0;for(const f of args)if(red.includes(f)){console.log(' FAIL  '+f+' > before');bad++;}process.exit(bad?1:0);\n";
+  const cfg = { checkpoint_related_tests: { command: 'node related.js {files}', run_command: 'node related-run.js {files}' } };
+  const withEnv = async (env, fn) => { const prev = { ...process.env }; Object.assign(process.env, env); try { return await fn(); } finally { for (const k of Object.keys(env)) { if (prev[k] === undefined) delete process.env[k]; else process.env[k] = prev[k]; } } };
+  const exec = (dir, calls = []) => ({ async execute(node) { calls.push(node.id); fs.writeFileSync(path.join(dir, 'src', `${node.id.toLowerCase()}.js`), 'changed\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } });
+  const base = (extraTests = []) => ({ schema_version: 1, tasks: [
+    { id: 'T1', title: 'CR37', wave: 1, files: ['src/t1.js'], acceptance: ['A1'], verify: { commands: [ok] } },
+    { id: 'T2', title: 'later', wave: 2, depends_on: ['T1'], files: ['src/t2.js'], acceptance: ['A2'], verify: { commands: [ok] } },
+  ], acceptance_tests: [{ criterion: 'A2', task: 'T2', files: ['tests/acceptance/f2/g3-no-removed-terms.test.js'], command: 'x' }, ...extraTests] });
+  const files = { 'src/t1.js': 'v1\n', 'src/t2.js': 'v1\n', 'related.js': RELATED, 'related-run.js': RUN };
+
+  it('frozen tests of a pending task, parked folders and other phases are not the task\'s red → committed', async () => {
+    const dir = project({ plan: base(), files, config: cfg });
+    await withEnv({ OXE_TEST_RED: 'tests/acceptance/f2/g3-no-removed-terms.test.js,tests/acceptance/parked-f3/a10.test.js,tests/acceptance/bugs/claude-plan-label-live.test.js' }, () =>
+      op.runRuntimeExecute(dir, null, { executor: exec(dir), skipPreflight: true, checkpointCommits: true, wave: 1 }));
+    const t1 = planOf(dir).tasks[0];
+    assert.equal(t1.done, true, JSON.stringify(t1.checkpoint_failed));
+    assert.ok(t1.done_commit);
+  });
+
+  it('a test red on the parent commit too is not the task\'s red → committed', async () => {
+    const dir = project({ plan: base(), files, config: cfg });
+    await withEnv({ OXE_TEST_RED: 'tests/integration/legacy.test.js', OXE_TEST_RED_BEFORE: 'tests/integration/legacy.test.js' }, () =>
+      op.runRuntimeExecute(dir, null, { executor: exec(dir), skipPreflight: true, checkpointCommits: true, wave: 1 }));
+    assert.equal(planOf(dir).tasks[0].done, true);
+  });
+
+  it('a real red (green before) fails the checkpoint AND the next task never starts', async () => {
+    const dir = project({ plan: base(), files, config: cfg });
+    const calls = [];
+    const res = await withEnv({ OXE_TEST_RED: 'tests/integration/remote.test.js', OXE_TEST_RED_BEFORE: '' }, () =>
+      op.runRuntimeExecute(dir, null, { executor: exec(dir, calls), skipPreflight: true, checkpointCommits: true }));
+    assert.deepEqual(calls, ['T1'], 'T2 never starts on top of T1\'s uncommitted work');
+    assert.equal(res.result.status, 'checkpoint_failed');
+    assert.equal(res.result.stopped_after_checkpoint_failure, true);
+    assert.equal(planOf(dir).tasks[0].checkpoint_failed.kind, 'scope_insufficient');
+  });
+});

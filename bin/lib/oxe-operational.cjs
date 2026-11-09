@@ -1945,6 +1945,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     touchProgramPhase(projectRoot, activeSession, 'executing', { run_id: current.run_id });
     const checkpointCommits = Boolean(options.checkpointCommits || readProjectConfig(projectRoot).checkpoint_commits);
     const checkpointFailures = [];
+    const schedulerRef = { current: null };
     const phaseCtxForCommits = taskPhaseContext(projectRoot, activeSession);
     const preflight = buildRuntimeExecutePreflight(projectRoot, activeSession, current);
     if (!preflight.ok && !options.skipPreflight) {
@@ -2140,6 +2141,8 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
             checkpointFailure = { reason: `checkpoint falhou: ${err && err.message ? err.message : err}` };
           }
           if (checkpointFailure) {
+            // OXB-175: the chain stops here — the next task would start with this task's work uncommitted in the tree.
+            try { if (schedulerRef.current && typeof schedulerRef.current.cancel === 'function') schedulerRef.current.cancel(); } catch { /* */ }
             checkpointFailures.push({ task: event.work_item_id, ...checkpointFailure });
             appendEvent(projectRoot, activeSession, { type: 'CheckpointFailed', run_id: current.run_id, work_item_id: event.work_item_id, payload: { task: event.work_item_id, ...checkpointFailure } });
           }
@@ -2217,6 +2220,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     throw new Error('Runtime não exporta Scheduler. Verifique a versão do runtime.');
   }
   const scheduler = new runtime.Scheduler();
+  schedulerRef.current = scheduler;
   if (parallelOptions) ctx.parallel = parallelOptions;
   const result = await scheduler.run(graph, ctx);
   classifyBlockedResult(result, graph);
@@ -2224,7 +2228,8 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     // OXB-167: fail loud — the task passed its verify but is NOT done: its work is not in a commit.
     result.checkpoint_failed = checkpointFailures;
     result.completed = (result.completed || []).filter((id) => !checkpointFailures.some((f) => f.task === id));
-    if (result.status === 'completed' || result.status === 'completed_with_external_pending') result.status = 'checkpoint_failed';
+    if (['completed', 'completed_with_external_pending', 'cancelled'].includes(result.status)) result.status = 'checkpoint_failed';
+    result.stopped_after_checkpoint_failure = true;
   }
   const syncedRun = syncRunStateAfterExecute(projectRoot, activeSession, current, result, 'single');
     return { mode: 'single', agentPlan: null, result, run: syncedRun, preflight, budget: budgetLedger };
@@ -5621,7 +5626,15 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
     return { committed: false, failed: true, reason: `git commit falhou: ${String(commit.stderr || commit.stdout).trim().split(/\r?\n/).slice(-8).join(' · ')}`, snapshot: entries };
   }
   const head = gitOut(projectRoot, ['rev-parse', 'HEAD']).stdout.trim();
-  const check = checkpointCheck(projectRoot, head, { ...options, changedFiles: paths.filter((p) => entries[p] !== 'deleted') });
+  let check = checkpointCheck(projectRoot, head, { ...options, changedFiles: paths.filter((p) => entries[p] !== 'deleted') });
+  // OXB-175: a related red is the task's only when (1) the test is not a frozen acceptance test of a pending task,
+  // another phase or a parked folder, and (2) it was green on the parent commit. T9 (CR37) of F2 had e98c9d54 undone
+  // by three tests red by design (a parked F3 test, a CR repro, a later F2 task's frozen test).
+  if (check && !check.ok && check.kind === 'related' && Array.isArray(check.failing_tests) && check.failing_tests.length) {
+    const own = relatedRedsOfTask(projectRoot, oldHead, check.failing_tests, options);
+    if (!own.length) check = { ...check, ok: true, ignored_reds: check.failing_tests.map((t) => t.file) };
+    else check = { ...check, failing_tests: own, ignored_reds: check.failing_tests.filter((t) => !own.some((o) => o.file === t.file)).map((t) => t.file) };
+  }
   if (check && !check.ok) {
     gitOut(projectRoot, ['update-ref', '-m', 'oxe: checkpoint_check vermelho', 'HEAD', oldHead, head]);
     restore();
@@ -5653,7 +5666,7 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
     return entries[p] === 'deleted' ? Boolean(inCommit) : inCommit !== entries[p];
   });
   const committedFiles = (gitOut(projectRoot, ['show', '--name-only', '--format=', 'HEAD']).stdout || '').split(/\r?\n/).filter(Boolean);
-  return { committed: true, commit: head, files: committedFiles, leftover, ...(check ? { check: { command: check.command, ok: true } } : {}) };
+  return { committed: true, commit: head, files: committedFiles, leftover, ...(check ? { check: { command: check.command, ok: true, ...(check.ignored_reds && check.ignored_reds.length ? { ignored_reds: check.ignored_reds } : {}) } } : {}) };
 }
 
 /**
@@ -5714,6 +5727,73 @@ function relatedTestsCommand(cfg, changedFiles) {
   const template = typeof o.command === 'string' && o.command.includes('{files}') ? o.command : 'npx vitest related --run {files}';
   const quote = (f) => (/[\s"']/.test(f) ? JSON.stringify(f) : f);
   return { kind: 'related', command: template.replace('{files}', files.map(quote).join(' ')), timeout: Number(o.timeout_ms) > 0 ? Number(o.timeout_ms) : 600_000, skipped: code.slice(max) };
+}
+
+/**
+ * OXB-175: of the related tests that failed on the task's commit, the ones that are the task's: not a frozen acceptance
+ * test owned by a PENDING task (or with no owner in this plan — another phase), not under a parked folder, and green on
+ * the parent commit (run_command on the parent's tree). A test red before and after is not this task's red.
+ */
+function relatedRedsOfTask(projectRoot, parentSha, failing, options = {}) {
+  let doc = null;
+  try { doc = readPlanJsonDoc(projectRoot, null).doc; } catch { doc = null; }
+  const taskId = options.task && options.task.id;
+  const tasks = (doc && Array.isArray(doc.tasks) ? doc.tasks : []).filter(Boolean);
+  const doneIds = new Set(tasks.filter((t) => t.done === true).map((t) => t.id));
+  const owners = new Map(); // acceptance file → owning task ids
+  for (const a of (doc && Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])) {
+    if (!a) continue;
+    const ids = a.task ? [a.task] : tasks.filter((t) => (t.acceptance || []).includes(a.criterion)).map((t) => t.id);
+    for (const f of a.files || []) {
+      const p = String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/');
+      owners.set(p, [...(owners.get(p) || []), ...ids]);
+    }
+  }
+  const isAcceptanceDir = (p) => /(^|\/)acceptance\//.test(p);
+  const parked = (p) => /(^|\/)parked[^/]*\//i.test(p);
+  const candidates = failing.filter((t) => {
+    if (parked(t.file)) return false;
+    const own = owners.get(t.file);
+    if (own) return own.includes(taskId) || own.every((id) => doneIds.has(id)); // pending owner → red by design
+    return !isAcceptanceDir(t.file); // a frozen test of another phase / a CR repro not in this plan
+  });
+  if (!candidates.length || !parentSha) return candidates;
+  // red on the parent too → not this task's
+  const cfg = readProjectConfig(projectRoot) || {};
+  const rt0 = cfg.checkpoint_related_tests;
+  const runTpl = rt0 && typeof rt0 === 'object' && typeof rt0.run_command === 'string' && rt0.run_command.includes('{files}') ? rt0.run_command : 'npx vitest run {files}';
+  const cmd = runTpl.replace('{files}', candidates.map((t) => t.file).join(' '));
+  const before = runInCommitWorktree(projectRoot, parentSha, cmd, Number(rt0 && rt0.timeout_ms) > 0 ? Number(rt0.timeout_ms) : 600_000);
+  if (!before) return candidates;
+  if (before.ok) return candidates; // all green before: every red is this task's
+  const redBefore = new Set(failingTestFiles(before.output || '').map((t) => t.file));
+  return candidates.filter((t) => !redBefore.has(t.file));
+}
+
+/** OXB-175: runs a command on a commit's own tree (temporary detached worktree; junction unlinked before removal). */
+function runInCommitWorktree(projectRoot, sha, command, timeoutMs) {
+  const wt = path.join(projectRoot, '.oxe', 'checkpoint-ws', `p-${String(sha).slice(0, 10)}-${Date.now().toString(36)}`);
+  fs.mkdirSync(path.dirname(wt), { recursive: true });
+  const add = gitOut(projectRoot, ['worktree', 'add', '-q', '--detach', wt, sha]);
+  if (add.status !== 0) return null;
+  let r = null;
+  try {
+    const nm = path.join(projectRoot, 'node_modules');
+    if (fs.existsSync(nm)) fs.symlinkSync(fs.realpathSync(nm), path.join(wt, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    try { require('./oxe-local-config.cjs').copyLocalFiles(projectRoot, wt); } catch { /* */ }
+    r = runChildCommandFull(wt, command, timeoutMs);
+  } finally {
+    try {
+      const rt = loadRuntimeModule();
+      if (rt && typeof rt.unlinkExternalLinks === 'function') rt.unlinkExternalLinks(wt);
+      else if (fs.existsSync(path.join(wt, 'node_modules'))) fs.unlinkSync(path.join(wt, 'node_modules'));
+    } catch { /* */ }
+    let linkLeft = false;
+    try { linkLeft = fs.lstatSync(path.join(wt, 'node_modules')).isSymbolicLink(); } catch { linkLeft = false; }
+    if (!linkLeft) gitOut(projectRoot, ['worktree', 'remove', '--force', wt]);
+    gitOut(projectRoot, ['worktree', 'prune']);
+  }
+  return r;
 }
 
 /** OXB-172: the test files a vitest/jest run reports as failing (FAIL / × / ❯ lines). */

@@ -1227,3 +1227,18 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
     - nenhuma outra tarefa pendente os tem no escopo.
   - Caminho que o trabalho interrompido de **outra** tarefa segura continua recusado (OXB-170). Evento: `OwnLeftoversAttributed`.
   - Teste: `tests/oxe-1212-checkpoint-phase.test.cjs` (a A falha com edições no escopo e a run seguinte a completa sem tocá-las: o commit as contém; os restos interrompidos da B num arquivo compartilhado continuam fora do commit da A).
+
+## OXB-175: `checkpoint_related_tests` desfazia commits bons por testes vermelhos de propósito (P0, regressão da OXB-172)
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 08/11 (F2, rc.31).
+  - O que aconteceu: o checkpoint da T9 (CR37) foi desfeito (e98c9d54) por três testes que estão vermelhos de propósito: um teste congelado estacionado da F3, uma reprodução de CR e o teste congelado de uma tarefa **posterior** da F2.
+  - Pior: o execute **começou a tarefa seguinte** com as edições do CR37 fora de commit, a mistura que a OXB-170 evita. O FRONTEND tinha verificado o commit verde.
+  - Agora um vermelho relacionado só conta como da tarefa quando:
+    - o teste **não** é um teste de aceite congelado de tarefa **pendente** deste plano, nem de outra fase (em `acceptance/`, sem dono no plano), nem de uma pasta `parked*/`. Testes de tarefas já done continuam contando, porque são regressão;
+    - ele estava **verde no commit pai**. Os candidatos rodam com o `run_command` na árvore do pai, e o que já estava vermelho antes não é da tarefa.
+  - Os vermelhos ignorados saem em `check.ignored_reds`.
+  - **Uma falha de checkpoint para a corrente:** a run é cancelada logo depois, e nenhuma tarefa seguinte começa sobre trabalho não commitado. O resultado sai com `status: checkpoint_failed` e `stopped_after_checkpoint_failure`.
+  - Teste: `tests/oxe-1212-checkpoint-phase.test.cjs`.
+    - Testes de tarefa pendente, de pasta parked e de reprodução de bug: commit feito.
+    - Vermelho também no pai: commit feito.
+    - Vermelho real (verde antes): checkpoint falha e a T2 nunca começa.
