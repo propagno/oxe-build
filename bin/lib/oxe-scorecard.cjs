@@ -10,6 +10,10 @@
  *   crs_closed_without_proof  CRs resolved without a green frozen test or gate          = 0
  *   post_green_crs            defect/constraint CRs opened after their phase's green    = 0
  *                             verify (CI, review or UAT caught what the verify passed)
+ *   manual_interventions_per_phase                                                        ≤ 1
+ *                             a person stepping in on the flow, per phase started: a task marked done or reopened
+ *                             by hand (plan done / plan reopen), a defect / plan-review / drift waiver, a CR
+ *                             resolved or withdrawn by hand. Can someone build with the recommended commands alone?
  *
  * Purity (`--json`, read commands) is a static property covered by the test suite, not by events.
  */
@@ -23,12 +27,24 @@ const TARGETS = {
   budget_overruns: { op: '=', value: 0 },
   crs_closed_without_proof: { op: '=', value: 0 },
   post_green_crs: { op: '=', value: 0 },
+  manual_interventions_per_phase: { op: '<=', value: 1 },
 };
+
+/** Events that mean a person had to step in on the flow (the recorded ones). */
+const INTERVENTION_EVENTS = new Set(['PlanTaskMarkedDone', 'PlanTaskReopened', 'PlanReviewWaived', 'DefectWaived', 'DriftWaived']);
+function isIntervention(e) {
+  if (!e || !e.type) return null;
+  if (INTERVENTION_EVENTS.has(e.type)) return e.type;
+  if (e.type === 'ChangeResolved' && e.payload && e.payload.manual) return 'ChangeResolvedManually';
+  return null;
+}
 
 function meets(metric, value) {
   const t = TARGETS[metric];
   if (value == null) return null;
-  return t.op === '>=' ? value >= t.value : value === t.value;
+  if (t.op === '>=') return value >= t.value;
+  if (t.op === '<=') return value <= t.value;
+  return value === t.value;
 }
 
 function readLedgers(projectRoot) {
@@ -120,12 +136,19 @@ function computeScorecard(input) {
   const firstGreen = greens.length ? greens.sort()[0] : null;
   const postGreen = changes.filter((cr) => (cr.class === 'defect' || cr.class === 'constraint') && !cr.gate && firstGreen && String(cr.at || '') > firstGreen).length;
 
+  // interventions per phase started (at least one: a project without a program is one phase of work)
+  const interventions = {};
+  for (const e of events) { const kind = isIntervention(e); if (kind) interventions[kind] = (interventions[kind] || 0) + 1; }
+  const interventionCount = Object.values(interventions).reduce((a, b) => a + b, 0);
+  const phasesStarted = new Set(events.filter((e) => e.type === 'PhaseStarted').map((e) => (e.payload && e.payload.phase) || '?')).size || 1;
+
   const metrics = {
     first_attempt_rate: judged.length ? Math.round((firstAttempt / judged.length) * 100) / 100 : null,
     turns_on_finished_work: turnsOnFinished,
     budget_overruns: overruns,
     crs_closed_without_proof: withoutProof,
     post_green_crs: postGreen,
+    manual_interventions_per_phase: Math.round((interventionCount / phasesStarted) * 100) / 100,
   };
   const results = Object.entries(metrics).map(([metric, value]) => ({ metric, value, target: `${TARGETS[metric].op} ${TARGETS[metric].value}`, ok: meets(metric, value) }));
   return {
@@ -142,6 +165,9 @@ function computeScorecard(input) {
       resolved_crs: resolved.length,
       budget_ledgers: ledgers.length,
       events: events.length,
+      phases_started: phasesStarted,
+      manual_interventions: interventionCount,
+      interventions_by_kind: interventions,
     },
     metrics: results,
     ok: results.every((r) => r.ok !== false),

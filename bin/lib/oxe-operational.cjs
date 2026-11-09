@@ -3526,6 +3526,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       const reviewLib = require('./oxe-plan-review.cjs');
       if (options.reviewWaive) {
         reviewLib.waive(projectRoot, String(options.reviewWaive), { reason: options.reason, by: options.by });
+        appendEvent(projectRoot, activeSession, { type: 'PlanReviewWaived', payload: { dimension: String(options.reviewWaive), by: options.by || null } });
       }
       const { doc: pjv } = readPlanJsonDoc(projectRoot, activeSession);
       if (pjv) {
@@ -5494,6 +5495,8 @@ function runtimePlanDone(projectRoot, activeSession, options = {}) {
   if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan done exige PLAN.json (o PLAN.md não guarda done por tarefa).');
   const commit = options.commit || findTaskCheckpoint(projectRoot, taskId);
   const changed = planJsonLib.markPlanTaskDone(paths.plan, taskId, { commit });
+  // the scorecard counts it as a manual intervention on the flow
+  if (changed) appendEvent(projectRoot, activeSession, { type: 'PlanTaskMarkedDone', work_item_id: taskId, payload: { task: taskId, commit: commit || null, manual: true } });
   return { task: taskId, commit: commit || null, changed };
 }
 
@@ -5529,6 +5532,7 @@ function runtimePlanReopen(projectRoot, activeSession, options = {}) {
   if (!/^T\d+$/.test(taskId)) throw new Error('Informe a tarefa: oxe-cc plan reopen T<n>');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const changed = require('./oxe-plan-json.cjs').markPlanTaskOpen(paths.plan, taskId, { by: options.by || 'plan reopen' });
+  if (changed) appendEvent(projectRoot, activeSession, { type: 'PlanTaskReopened', work_item_id: taskId, payload: { task: taskId, by: options.by || null, manual: true } });
   return { task: taskId, changed };
 }
 
