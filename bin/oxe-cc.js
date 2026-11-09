@@ -6637,6 +6637,38 @@ async function main() {
   }
   // OXB-058: `oxe-cc program <status|init|start|close>` is `runtime program …`; `phase add` and `export` are handled
   // below with `spec`.
+  // OXB-101: snapshot a real program's .oxe/ (outside the repo) and regress the CLI over the snapshots.
+  if (command === 'program' && (argv[0] === 'snapshot' || argv[0] === 'regress')) {
+    const o = { dir: process.cwd(), json: false };
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--update') o.update = true;
+      else if (['--to', '--name', '--fixtures'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const lib = require('./lib/oxe-real-regression.cjs');
+      if (argv[0] === 'snapshot') {
+        const out = lib.snapshot(o.dir, o.to, o.name);
+        if (o.json) console.log(JSON.stringify({ oxeProgramSnapshotSchema: 1, ...out }, null, 2));
+        else console.log(`  ${green}✓${reset} ${out.dir}: ${out.copied.join(', ')}`);
+        return;
+      }
+      const fixtures = o.fixtures || process.env.OXE_REAL_FIXTURES;
+      if (!fixtures) throw new Error('use: oxe-cc program regress --fixtures <pasta> (ou OXE_REAL_FIXTURES)');
+      const out = lib.regress(path.resolve(fixtures), oxeOperational, { update: o.update });
+      if (o.json) console.log(JSON.stringify({ oxeProgramRegressSchema: 1, ...out }, null, 2));
+      else for (const r of out.results) {
+        console.log(`  ${r.regressions.length ? red + '✗' : green + '✓'}${reset} ${r.name}${r.baseline ? ` — baseline ${r.baseline}` : ''}`);
+        for (const x of r.regressions) console.log(`    ${x}`);
+      }
+      if (!out.ok) process.exitCode = 1;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   if (command === 'program' && !(argv[0] === 'phase' || argv[0] === 'export' || argv[0] === 'criterion')) {
     command = 'runtime';
     argv.unshift('program');

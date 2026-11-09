@@ -777,8 +777,14 @@ Cada bloco tem uma meta medível:
 
 ## OXB-101: suíte de regressão com programas REAIS
 
-- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
-  - O `.oxe/` da F1 e da F2 do OXESpace congelado como fixture. Antes de cada RC rodam lint, compile, dossiê e close dry-run sobre ele.
+- **Status:** resolvido (1.21.2), com uma mudança de desenho: os snapshots ficam **fora** do repositório. Implementado em `bin/lib/oxe-real-regression.cjs`.
+- **Por que fora do repositório:** o `.oxe/` do OXESpace é ignorado pelo git dele (é privado), e o oxe-build é um repositório público. Congelar a F1 e a F2 como fixture dentro do repositório publicaria os planos do produto.
+- **`oxe-cc program snapshot --to <pasta externa> --name f2`:** copia só o núcleo do `.oxe/`: SPEC, ROADMAP, PLAN.json/MD, packs, config, program/, dossier/, research/, codebase/ e SYSTEM-DESIGN. Ficam de fora runs/, caches, prompts e worktrees. O comando recusa uma pasta dentro do projeto.
+- **`oxe-cc program regress --fixtures <pasta>`** (ou `OXE_REAL_FIXTURES`): antes de cada RC, copia cada snapshot para uma pasta temporária e roda o plan lint, o compile do runtime, o render do dossiê e um close dry-run. Compara com o `expect.json` de cada snapshot.
+  - Um passo que agora quebra é regressão, e uma contagem que mudou (erros do lint, nós compilados, issues do dossiê, motivos do close) também.
+  - `--update` aceita a mudança intencional.
+- **Prova no dado real:** o snapshot do `oxespace-150` (lido, nunca escrito) está em `Estudos/oxe-real-fixtures/oxespace-150`. A baseline tem lint 51 erros e 41 avisos (a cópia não tem os arquivos-fonte), compile com 14 nós, dossiê com 4 issues e close com 8 motivos.
+- **Teste:** `tests/oxe-1212-real-regression.test.cjs` (snapshot só do núcleo e só fora do repositório; baseline, regressão detectada, --update).
 
 ## OXB-102: ciência do merge-train
 
