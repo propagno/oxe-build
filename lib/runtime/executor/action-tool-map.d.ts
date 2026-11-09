@@ -1,3 +1,5 @@
 import type { Action } from '../compiler/graph-compiler';
 import type { ToolSchema } from './stream-completion';
-export declare function selectToolsForActions(actions: Action[]): ToolSchema[];
+export declare function selectToolsForActions(actions: Action[], opts?: {
+    askOrchestrator?: boolean;
+}): ToolSchema[];

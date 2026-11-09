@@ -384,4 +384,5 @@ exports.BUILT_IN_TOOLS = {
     finish_task: finishTask,
     ask_orchestrator: askOrchestrator,
 };
-exports.ALL_BUILT_IN_SCHEMAS = Object.values(exports.BUILT_IN_TOOLS).map((t) => t.schema);
+// OXB-125: ask_orchestrator is offered only when the run opts in (execute.ask_orchestrator) — see selectToolsForActions.
+exports.ALL_BUILT_IN_SCHEMAS = Object.entries(exports.BUILT_IN_TOOLS).filter(([name]) => name !== 'ask_orchestrator').map(([, t]) => t.schema);

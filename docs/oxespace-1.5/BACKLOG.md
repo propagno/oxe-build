@@ -1668,3 +1668,8 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 - **Lint:** `plan lint` avisa quando uma tarefa pede mais turnos do que o teto global permite.
 - **Escalonamento e reparo:** `turns_exhausted` conta como falha `logic` para o escalonamento de modelo (OXB-131) e para o reparo (OXB-130), com o ajuste "a próxima recebe o nível de turnos seguinte".
 - **Teste:** `tests/oxe-1212-turns.test.cjs` (a precedência, o execute passando 30 e depois 60, nenhum ScopeInsufficient, a classe no retry e no bloqueio, o aviso do lint). Também `gap4-finish-task` e `turn-limit-verify`, atualizados para a nova classe.
+
+### OXB-125 (adendo, rc.38): o canal de pergunta é opt-in
+
+- No rc.37, o `ask_orchestrator` entrava em `ALL_BUILT_IN_SCHEMAS` e, por isso, era oferecido a toda tarefa com ação `custom` ou não mapeada. Uma pergunta bloqueante podia parar a tarefa com `waiting_answer`, uma classe de parada nova, sem que o projeto tivesse pedido.
+- A partir do rc.38, a ferramenta só é oferecida com `execute.ask_orchestrator: true`. Teste em `tests/oxe-1212-questions.test.cjs`.

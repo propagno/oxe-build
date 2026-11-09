@@ -41,6 +41,8 @@ export interface LlmTaskExecutorOptions {
      * the verify hash check (`acceptance_tampered`).
      */
     protectedPaths?: string[] | null;
+    /** OXB-125: offer the ask_orchestrator tool (opt-in: execute.ask_orchestrator). */
+    askOrchestrator?: boolean;
 }
 export interface ExecutorUsage {
     turns: number;

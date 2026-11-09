@@ -82,4 +82,10 @@ describe('OXB-125: executor questions', () => {
     assert.deepEqual(result.blocked, ['T1']);
     assert.ok(events.some((e) => e.type === 'WorkItemBlocked' && e.payload.reason === 'waiting_answer'));
   });
+
+  it('the tool is offered only when the run opts in (execute.ask_orchestrator)', () => {
+    const names = (opts) => runtime.selectToolsForActions([{ type: 'custom' }, { type: 'generate_patch' }], opts).map((t) => t.function.name);
+    assert.ok(!names().includes('ask_orchestrator'));
+    assert.ok(names({ askOrchestrator: true }).includes('ask_orchestrator'));
+  });
 });

@@ -394,4 +394,5 @@ export const BUILT_IN_TOOLS: Record<string, BuiltInToolHandler> = {
   ask_orchestrator: askOrchestrator,
 };
 
-export const ALL_BUILT_IN_SCHEMAS: ToolSchema[] = Object.values(BUILT_IN_TOOLS).map((t) => t.schema);
+// OXB-125: ask_orchestrator is offered only when the run opts in (execute.ask_orchestrator) — see selectToolsForActions.
+export const ALL_BUILT_IN_SCHEMAS: ToolSchema[] = Object.entries(BUILT_IN_TOOLS).filter(([name]) => name !== 'ask_orchestrator').map(([, t]) => t.schema);

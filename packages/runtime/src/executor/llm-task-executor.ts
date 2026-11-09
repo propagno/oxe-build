@@ -58,6 +58,8 @@ export interface LlmTaskExecutorOptions {
    * the verify hash check (`acceptance_tampered`).
    */
   protectedPaths?: string[] | null;
+  /** OXB-125: offer the ask_orchestrator tool (opt-in: execute.ask_orchestrator). */
+  askOrchestrator?: boolean;
 }
 
 function normalizeRel(p: string): string {
@@ -129,7 +131,7 @@ export class LlmTaskExecutor implements TaskExecutor {
       // Context is an aid, never a reason to fail the attempt.
     }
     const prompt = buildNodePrompt(node, lease, runId, attempt, { previousError: options.previousError ?? null, context });
-    const tools = selectToolsForActions(node.actions);
+    const tools = selectToolsForActions(node.actions, { askOrchestrator: this.options.askOrchestrator === true });
     // Only the tools offered for this node's actions may run; the model can still name others.
     const allowedTools = new Set(tools.map((tool) => tool.function.name));
     const cwd = lease.root_path;

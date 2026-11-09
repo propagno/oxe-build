@@ -54,7 +54,7 @@ class LlmTaskExecutor {
             // Context is an aid, never a reason to fail the attempt.
         }
         const prompt = (0, node_prompt_builder_1.buildNodePrompt)(node, lease, runId, attempt, { previousError: options.previousError ?? null, context });
-        const tools = (0, action_tool_map_1.selectToolsForActions)(node.actions);
+        const tools = (0, action_tool_map_1.selectToolsForActions)(node.actions, { askOrchestrator: this.options.askOrchestrator === true });
         // Only the tools offered for this node's actions may run; the model can still name others.
         const allowedTools = new Set(tools.map((tool) => tool.function.name));
         const cwd = lease.root_path;

@@ -1327,6 +1327,7 @@ function createAdapterExecutor(runtime, projectRoot, activeSession, options, get
     {
       contextProvider: options.contextProvider === false ? null : buildNodeContextProvider(projectRoot, activeSession),
       protectedPaths: readProtectedAcceptancePaths(projectRoot, activeSession),
+      askOrchestrator: ((readProjectConfig(projectRoot) || {}).execute || {}).ask_orchestrator === true,
     }
   );
 }
