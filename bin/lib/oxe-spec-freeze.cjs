@@ -81,7 +81,14 @@ function freeze(root, jsonPath, doc, options = {}) {
     frozen.push({ file: f, criterion, proves: proves.length, origin: origin.ref });
   }
   if (frozen.length) fs.writeFileSync(jsonPath, `${JSON.stringify(doc, null, 2)}\n`);
-  return { origin, frozen, refused };
+  // OXB-109: the imported tests go through the same rigor lint as the planned ones (a source assertion is flagged).
+  let rigor = [];
+  try {
+    const r = require('./oxe-test-rigor.cjs');
+    const imported = { acceptance_tests: doc.acceptance_tests.filter((a) => frozen.some((f) => (a.files || []).includes(f.file))) };
+    rigor = r.rigorMessages(r.sourceAssertionFindings(root, imported));
+  } catch { rigor = []; }
+  return { origin, frozen, refused, rigor };
 }
 
 module.exports = { freeze, titlesOf, criterionOf, resolveRef };

@@ -6863,6 +6863,7 @@ async function main() {
       if (o.json) { console.log(JSON.stringify({ oxeSpecFreezeSchema: 1, ...out }, null, 2)); if (out.refused.length) process.exitCode = 1; return; }
       for (const f of out.frozen) console.log(`  ${green}✓${reset} ${f.file} → ${f.criterion} (${f.proves} título(s), origem ${f.origin})`);
       for (const r of out.refused) console.log(`  ${red}✗${reset} ${r.why}`);
+      for (const w of out.rigor || []) console.log(`  ${yellow}!${reset} ${w}`);
       if (out.refused.length) process.exitCode = 1;
     } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
     return;

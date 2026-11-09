@@ -876,7 +876,7 @@ Requisitos escritos pelo TECH LEAD, aprovados pelo usuário. O desenho e a imple
 
 ## OXB-109: gate de rigor do teste congelado (no spec freeze e no plan lint)
 
-- **Status:** resolvido (1.21.2), no `plan lint`. O `spec freeze` ainda não existe (OXB-099) e vai reusar o mesmo módulo (`bin/lib/oxe-test-rigor.cjs`).
+- **Status:** resolvido (1.21.2), no `plan lint`. O `spec freeze` (OXB-099) roda o mesmo lint nos testes que importa (`bin/lib/oxe-test-rigor.cjs`).
   - **Asserção sobre o texto:** o teste congelado de uma tarefa pendente que **lê código-fonte do produto como texto** (`readFileSync` de .ts/.js/.kt…) e **não importa nada do produto** testa o texto, não o comportamento. O lint diz qual arquivo ele lê e como corrigir.
     - Exceção declarada no acceptance_tests: `"rigor": "source-assertion"` com `"rigor_reason"` (≥ 8 caracteres; o schema exige o motivo).
     - Por padrão é aviso, porque as fases em andamento têm testes de remoção que podem ler fonte. `lint.test_rigor: "error"` torna fatal. Testes de tarefas já done não são cobrados.

@@ -74,4 +74,14 @@ describe('OXB-099: spec freeze', () => {
     assert.equal(op.runtimeSpecFreeze(dir, null, { from: sha, paths: 'tests/acceptance/**' }).frozen.length, 1);
     assert.throws(() => op.runtimeSpecFreeze(dir, null, { from: sha, paths: 'tests/other/**' }), /nenhum arquivo de teste em tests\/other/);
   });
+
+  it('the imported tests go through the rigor lint (a source assertion is flagged)', () => {
+    const { dir } = project();
+    write(dir, 'src/q.ts', 'export const x = 1\n');
+    write(dir, 'tests/acceptance/text.test.ts', "import { it } from 'vitest';\nimport fs from 'fs';\nit('A12 tem a palavra', () => { fs.readFileSync('src/q.ts', 'utf8').includes('x'); });\n");
+    git(dir, 'add', '-A'); git(dir, 'commit', '-qm', 'teste de texto');
+    const out = op.runtimeSpecFreeze(dir, null, { from: git(dir, 'rev-parse', 'HEAD').stdout.trim() });
+    assert.equal(out.frozen.length, 1);
+    assert.match(out.rigor.join('\n'), /afirma sobre o TEXTO do código/);
+  });
 });
