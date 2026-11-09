@@ -64,6 +64,9 @@ function useAnsiColors() {
  */
 const JSON_OUTPUT_MODE = process.argv.includes('--json');
 
+/** 1.21.2 (OXB-133): `--json-errors` / OXE_JSON_ERRORS=1 — every failure is one typed envelope with a stable exit code. */
+process.argv = require('./lib/oxe-cli-errors.cjs').install(process.argv).argv;
+
 /**
  * 1.21.2 (OXB-065): plain output. When stdout is not a TTY (redirected to a log, read by an agent loop) or with
  * `--plain`, the CLI prints no banner and no box drawing, and status glyphs become ASCII words (OK, FAIL, BLOCKED…).

@@ -1595,3 +1595,11 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - sem `models` na config, nada muda: vale o modelo padrão do executor.
 - **Registro:** `AttemptStarted` grava `model`, `tier` e `escalated`. O adaptador `claude` usa o modelo da tentativa (`--model`), e o `http` também (`model` da completion). O scorecard ganha `sample.cost_by_tier`.
 - **Teste:** `tests/oxe-1212-model-tiers.test.cjs`. Cobre a precedência, o teto, o fato de só `logic` escalar, o execute passando `m-fast` e depois `m-bal`, e o custo por nível.
+
+## OXB-133: erros com tipo e código de saída estáveis em toda a CLI
+
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-cli-errors.cjs`, com o catálogo em `docs/cli-errors.md`.
+- **O envelope:** com `--json-errors` (flag global) ou `OXE_JSON_ERRORS=1`, toda falha imprime uma linha no stderr, `{ ok:false, kind, message, detail, command, hint, exit }`, e sai com o código do `kind`.
+- **O catálogo é fechado:** `internal` 1, `usage` 2, `validation` 3, `not_found` 4, `conflict` 5, `gate_failed` 6, `environment` 7. O stdout continua com os dados. Sem a flag, a saída humana não muda.
+- **Correção junto:** `oxe-cc plugins <subcomando desconhecido>` saía com 0. Agora é erro de uso (exit 2).
+- **Teste:** `tests/oxe-1212-cli-errors.test.cjs`. Os 37 comandos (os do `--help` e os da 1.21.2) devolvem o envelope `usage`/2 num erro de uso, sem escrever nada. O catálogo do código é o do doc. A env var funciona como a flag, e sem a flag a saída é a mesma.

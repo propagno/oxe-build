@@ -94,7 +94,7 @@ describe('oxe-plugin-cli — runPluginCommand', () => {
       ...output,
     });
 
-    assert.strictEqual(exitCode, 0);
+    assert.strictEqual(exitCode, 2, 'OXB-133: an unknown subcommand is a usage error');
     const usage = output.lines.find((line) => line.includes('Uso: oxe-cc plugins')) || '';
     assert.ok(usage.includes('install <npm-package> [version]'));
     assert.ok(!usage.includes('|path'));
