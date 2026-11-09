@@ -713,7 +713,18 @@ function implicitPhaseGates(projectRoot, programState, phaseId, projectConfig) {
   const base = phase && phase.base_commit;
   if (!projectConfig || projectConfig.stub_check === false || !base) return decisionPhaseGates(projectRoot, phaseId);
   const script = path.join(__dirname, 'oxe-stub-check.cjs').replace(/\\/g, '/');
-  return [{ id: 'stub-check', when: 'phase_verify', command: `node "${script}" --phase --since ${base}`, description: 'anti-stub da fase: stubs e arquivos novos sem ligação (OXB-108)', on_fail: 'cr_defect' }, ...decisionPhaseGates(projectRoot, phaseId)];
+  return [{ id: 'stub-check', when: 'phase_verify', command: `node "${script}" --phase --since ${base}`, description: 'anti-stub da fase: stubs e arquivos novos sem ligação (OXB-108)', on_fail: 'cr_defect' }, ...decisionPhaseGates(projectRoot, phaseId), ...depsPhaseGates(projectRoot, base)];
+}
+
+/** OXB-127: the dependency audit as an implicit phase gate, when the phase diff touches package.json / the lockfile. */
+function depsPhaseGates(projectRoot, base) {
+  try {
+    if (!base) return [];
+    const changed = gitLines(projectRoot, ['diff', '--name-only', base, '--', 'package.json', 'package-lock.json']) || [];
+    if (!changed.length) return [];
+    const cli = path.join(__dirname, '..', 'oxe-cc.js').replace(/\\/g, '/');
+    return [{ id: 'deps', when: 'phase_verify', command: `node "${cli}" runtime deps --gate --base ${base}`, description: 'auditoria de dependências da fase (OXB-127)', on_fail: 'cr_defect' }];
+  } catch { return []; }
 }
 
 /** OXB-112: the evidence of the phase's decisions (their `check`), as implicit phase gates. */
@@ -799,6 +810,74 @@ function runtimeCost(projectRoot, activeSession) {
   let changes = [];
   try { changes = require('./oxe-change.cjs').listChanges(paths.programDir || path.join(projectRoot, '.oxe', 'program')); } catch { changes = []; }
   return require('./oxe-phase-extras.cjs').costReport(readEvents(projectRoot, activeSession), doc, changes);
+}
+
+/** OXB-136: `oxe-cc runtime seams [--behavior-ran A5 --evidence …]` and retro actions (`--retro-add`, `--retro-done`). */
+function runtimeSeams(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-seams.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  let program = null;
+  try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; }
+  const phaseId = options.phase || (program && program.active_phase) || null;
+  const phase = program && phaseId ? (program.phases || []).find((p) => p.id === phaseId) : null;
+  const retroFile = path.join(programDir, 'retro-actions.ndjson');
+  const behaviorFile = path.join(programDir, 'behavior-runs.ndjson');
+  if (options.retroAdd) {
+    const list = readNdjsonQuiet(retroFile).filter((a) => a && a.phase === phaseId);
+    const rec = { id: `RA-${phaseId || 'X'}-${list.length + 1}`, phase: phaseId, action: String(options.retroAdd), at: new Date().toISOString(), by: options.by || null };
+    changeLib.appendNdjson(retroFile, rec);
+    return { retro_action: rec };
+  }
+  if (options.retroDone) {
+    if (!options.evidence) throw new Error('--retro-done exige --evidence <commit/arquivo/link>');
+    changeLib.appendNdjson(retroFile, { id: String(options.retroDone), status: 'done', evidence: options.evidence, at: new Date().toISOString(), by: options.by || null });
+    return { done: options.retroDone };
+  }
+  if (options.behaviorRan) {
+    if (!options.evidence) throw new Error('--behavior-ran exige --evidence <relatório/gravação>');
+    const rec = { phase: phaseId, criteria: String(options.behaviorRan).split(',').map((x) => x.trim().toUpperCase()), evidence: options.evidence, by: options.by || null, at: new Date().toISOString() };
+    changeLib.appendNdjson(behaviorFile, rec);
+    return { behavior_run: rec };
+  }
+  // fold retro actions (records + done lines)
+  const byId = new Map();
+  for (const r of readNdjsonQuiet(retroFile)) { if (!r || !r.id) continue; byId.set(r.id, { ...(byId.get(r.id) || {}), ...r }); }
+  const base = (phase && phase.base_commit) || null;
+  const report = base ? lib.seamsReport(projectRoot, base, {
+    config: readProjectConfig(projectRoot) || {},
+    phase: phaseId,
+    retroActions: [...byId.values()],
+    behaviorCriteria: lib.behaviorCriteriaFromSpec(readTextIfExists(paths.spec) || '', phase ? phase.acceptance : null),
+    behaviorRuns: readNdjsonQuiet(behaviorFile).filter((r) => r && r.phase === phaseId),
+  }) : { shared_files: [], export_consumers: [], duplicate_helpers: [], grown_files: [], retro_open: [], behavior_missing: [] };
+  let file = null;
+  if (phaseId) {
+    const dir = path.join(path.dirname(paths.plan || path.join(projectRoot, '.oxe', 'PLAN.md')), 'dossier', phaseId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'seams.md'), lib.renderSeams(report, phaseId));
+    file = path.relative(projectRoot, path.join(dir, 'seams.md')).replace(/\\/g, '/');
+  }
+  return { phase: phaseId, base, report, file };
+}
+
+/** OXB-127: `oxe-cc runtime deps [--base <sha>] [--gate]` — the dependency audit of the phase (or since --base). */
+function runtimeDeps(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-deps-audit.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  let program = null;
+  try { program = require('./oxe-program.cjs').readProgram(paths.programDir || path.join(projectRoot, '.oxe', 'program')); } catch { program = null; }
+  const phaseId = program && program.active_phase;
+  const phase = program && phaseId ? (program.phases || []).find((p) => p.id === phaseId) : null;
+  const base = options.base || (phase && phase.base_commit) || 'HEAD';
+  const cfg = (readProjectConfig(projectRoot) || {}).deps || {};
+  const res = lib.auditDeps(projectRoot, base, { block: cfg.block, registry: options.registry, audit: options.audit });
+  if (phaseId && res.ran) {
+    const dir = path.join(path.dirname(paths.plan || path.join(projectRoot, '.oxe', 'PLAN.md')), 'dossier', phaseId);
+    try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'deps.md'), lib.renderDeps(res)); } catch { /* */ }
+  }
+  return { base, ...res };
 }
 
 /** OXB-115: `oxe-cc runtime complexity` — the phase's complexity alarms and .oxe/REFACTOR-PROPOSALS.md. */
@@ -3991,6 +4070,7 @@ function runtimeFeedback(projectRoot, activeSession, options = {}) {
     phase: options.phase, amendTo: options.amendTo, evidence: options.evidence, additive: Boolean(options.additive),
     specEdit: options.specEdit || null,
     tasks: options.tasks ? (Array.isArray(options.tasks) ? options.tasks : String(options.tasks).split(',')).map((t) => String(t).trim().toUpperCase()).filter((t) => /^T\d+$/.test(t)) : [],
+    rating: require('./oxe-findings.cjs').rate(projectRoot, { rule: options.rule || null, severity: options.severity || null }),
   });
   if (result.reopened && result.program) programLib.writeProgram(programDir, result.program);
   // 1.21.1: a defect or spec_gap reopens tasks (done → open), so the next execute redoes exactly them.
@@ -6503,6 +6583,21 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
       if (!rollbackRehearsal.ok) closeGates.reasons.push(`ensaio de rollback falhou: ${rollbackRehearsal.error || ''} ${(rollbackRehearsal.conflicts || []).join(', ')} — os commits da fase não revertem limpos (ou feche com --no-rollback-check e registre o risco)`.trim());
     } catch { /* auxiliar */ }
   }
+  // OXB-137: open findings whose table severity blocks (close.block_on, default critical + high on a standing criterion).
+  try {
+    const cfgClose = (readProjectConfig(projectRoot) || {}).close || {};
+    const crsB = require('./oxe-change.cjs').listChanges(paths.programDir).filter((cr) => !cr.phase || cr.phase === phase.id);
+    for (const cr of require('./oxe-findings.cjs').blockingFindings(crsB, cfgClose.block_on, require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot))) {
+      closeGates.reasons.push(`achado ${cr.severity} aberto: ${cr.id} (${cr.rule}) ${cr.summary}`);
+    }
+  } catch { /* auxiliar */ }
+  // OXB-136: seam review — seams.md in the dossier; open retro actions / missing end-to-end runs block when required.
+  try {
+    const sm = runtimeSeams(projectRoot, activeSession, { phase: phase.id });
+    const sc = ((readProjectConfig(projectRoot) || {}).close || {}).seams || {};
+    if (sc.require_behavior_run !== false) for (const c of sm.report.behavior_missing) closeGates.reasons.push(`costura: o critério ${c} pede o fluxo de ponta a ponta executado — registre com oxe-cc runtime seams --behavior-ran ${c} --evidence <relatório>`);
+    if (sc.require_retro) for (const a of sm.report.retro_open) closeGates.reasons.push(`costura: ação da retro ${a.id} sem evidência (${a.action})`);
+  } catch { /* auxiliar */ }
   // OXB-115: complexity alarms — a proposal always; a block in strict (profile strict or complexity.block).
   try {
     const cx = runtimeComplexity(projectRoot, activeSession, { phase: phase.id });
@@ -7994,6 +8089,8 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeSeams,
+  runtimeDeps,
   runtimeStateCheck,
   stateSnapshot,
   runtimeCost,

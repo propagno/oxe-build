@@ -44,8 +44,10 @@ function scopeOf(doc, criterion) {
  * @returns {{ fresh: boolean, why: string|null }}
  */
 function freshness(root, verdict, ctx) {
-  if (!verdict || !verdict.head) return { fresh: false, why: 'sign-off sem head (gravado antes da 1.21.2): refaça o sign-off no commit atual' };
   const head = ctx.head || headOf(root);
+  if (!verdict) return { fresh: false, why: 'sem veredito' };
+  // a repository with no commit yet has nothing to pin a verdict to
+  if (!verdict.head) return head ? { fresh: false, why: 'sign-off sem head (gravado antes da 1.21.2): refaça o sign-off no commit atual' } : { fresh: true, why: null };
   if (verdict.head !== head) {
     if (git(root, ['merge-base', '--is-ancestor', verdict.head, head]).status !== 0) return { fresh: false, why: `o commit avaliado (${verdict.head.slice(0, 8)}) não está na história do HEAD` };
     const changed = (git(root, ['diff', '--name-only', verdict.head, head, '--']).stdout || '').split(/\r?\n/).filter(Boolean).filter((f) => !f.startsWith('.oxe/'));

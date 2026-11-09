@@ -1353,7 +1353,7 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - **`quota`:** limite de uso do provedor. Pausa a run com o horário de retomada quando a mensagem traz ("resets at …", "try again in …").
   - **`flaky`:** coberto pelo `flaky_suspect` (OXB-162) e pela quarentena (OXB-117 b).
   - Padrões do projeto: `execute.failure_classes: { environment: [regex], quota: [regex] }`.
-  - O resumo do execute mostra "PAUSADA: ambiente — <diagnóstico>". `oxe-cc runtime resume` retoma (o execute de novo: pula o que está done e começa a tarefa pausada com tentativas novas).
+  - O resumo do execute mostra "PAUSADA: ambiente — <diagnóstico>". Para retomar, rode `oxe-cc runtime execute` de novo: ele pula o que está done e começa a tarefa pausada com tentativas novas. (O `runtime resume` existente continua sendo o par do `runtime pause`.)
   - O scorecard não conta tarefa pausada como tentativa.
   - Teste: `tests/oxe-1212-failure-classes.test.cjs` (exit 127 pausa com uma chamada só e a T2 não começa; falha de lógica segue com retry; padrão do projeto; cota com horário de retomada; o classificador).
 
@@ -1368,3 +1368,47 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
     - sign-off antigo, sem `head`, também é obsoleto, com mensagem de migração;
     - o verify da fase também precisa ser do código que está sendo fechado: mudança de código depois do `verification_head` dá `stale_verdict` com o pedido de rodar o verify de novo.
   - Teste: `tests/oxe-1212-verdict-head.test.cjs` (sign-off e commit em `src/`: obsoleto; commit só em `docs/`: vale; emenda do A70: obsoleto; sign-off sem head: obsoleto).
+
+## OXB-119: guardas na ferramenta para os agentes do programa
+
+- **Status:** resolvido (1.21.2). Item P1 do backlog de comparação. `bin/lib/oxe-guard.cjs`.
+  - `oxe-cc guards install` (ou `oxe-cc install --guards`) grava, por projeto e por opt-in, o hook `PreToolUse` no `.claude/settings.json`. `guards status` e `guards uninstall` existem; o uninstall remove só o hook do OXE.
+  - O guarda bloqueia **antes** da ação (saída 2 com o motivo):
+    - (a) escrita fora da raiz do projeto ou worktree, por Write/Edit/MultiEdit/NotebookEdit e também por redirecionamento ou `tee` no shell;
+    - (b) leitura de caminho `deny_read` das `policy_rules` por qualquer ferramenta: Read, Grep, Glob e shell (`cat`, `type`, `head`, `git show ref:caminho`, dentro de `$( )` e de `bash -c`);
+    - (c) comando `deny` das regras;
+    - (d) comando pesado (`guards.heavy`) sem o wrapper de lock (`guards.heavy_wrapper`), com a sugestão do comando certo.
+  - `git checkout|switch|stash|reset|clean|restore` em `guards.protected_checkouts` também é bloqueado.
+  - Falha fechado: um erro interno bloqueia e explica. Cada bloqueio vira `PolicyBlocked` no OXE-EVENTS. `guards.enabled: false` desliga.
+  - Teste: `tests/oxe-1212-guards.test.cjs` e `tests/oxe-1212-findings-seams-deps.test.cjs` (install/uninstall).
+
+## OXB-127: auditar dependências no diff da tarefa e da fase
+
+- **Status:** resolvido (1.21.2). Item P1 do backlog de comparação. `bin/lib/oxe-deps-audit.cjs` e o comando `oxe-cc runtime deps [--base <sha>]`.
+  - Quando o diff mexe em package.json ou no lockfile:
+    - (a) roda `npm audit` na base e na branch; advisory high/critical **nova** bloqueia, a que já existia na base não;
+    - (b) cada pacote novo precisa existir no registro (`npm view`); nome inexistente bloqueia, e nome a uma letra (ou uma troca de vizinhas) de um pacote popular é listado para conferência;
+    - (c) dependências nativas adicionadas e removidas (`hasInstallScript`/`gypfile`) são listadas, com o lembrete de rebuild e de teste de presença.
+  - O resultado vai para `deps.md` no dossiê. Na fase vira gate implícito `deps` (só quando o diff da fase mexe no manifest). `deps.block` no config muda as severidades que bloqueiam.
+  - Teste: `tests/oxe-1212-findings-seams-deps.test.cjs` (registro e audit simulados).
+
+## OXB-136: revisão de costura no close da fase
+
+- **Status:** resolvido (1.21.2). Item P1 do backlog de comparação. `bin/lib/oxe-seams.cjs` e o comando `oxe-cc runtime seams`.
+  - Sobre o diff da fase, de forma determinística:
+    - (a) arquivos mexidos por mais de uma tarefa (pelos trailers `OXE-Task`) e exports alterados ou removidos com consumidor em arquivo de outra tarefa;
+    - (b) helpers duplicados (mesmo corpo normalizado, ≥ 4 linhas, em arquivos diferentes);
+    - (c) arquivos que cresceram acima do limite somando as tarefas (`close.seams.grow_limit_lines`, padrão 300);
+    - (d) ações da retro anterior sem evidência (`runtime seams --retro-add "…"` grava `RA-<fase>-<n>`, e `--retro-done RA-… --evidence …` fecha);
+    - (e) critério cujo "Como verificar" pede o fluxo de ponta a ponta sem uma execução registrada (`--behavior-ran A5 --evidence …`).
+  - O relatório vai para `seams.md` no dossiê. No close, (e) bloqueia por padrão (`close.seams.require_behavior_run: false` desliga) e (d) bloqueia com `require_retro: true`.
+  - Teste: `tests/oxe-1212-findings-seams-deps.test.cjs`.
+
+## OXB-137: severidade fixa para achados, lida de uma tabela
+
+- **Status:** resolvido (1.21.2). Item P1 do backlog de comparação. `bin/lib/oxe-findings.cjs` e `oxe/templates/finding-rules.json`.
+  - A tabela padrão vem no pacote, com 12 regras: data-loss e security (critical); crash, a11y-serious, contract-break e gate-red (high); behavior-wrong, i18n-raw, build-order e perf-regression (medium); stale-copy e polish (low).
+  - `.oxe/finding-rules.json` acrescenta regras e pode **subir** a severidade de uma regra do pacote, nunca baixar. Uma tentativa de baixar é ignorada com aviso.
+  - `runtime feedback --rule <id>` grava `rule` e `severity` no CR, com a severidade vinda da tabela. Informar uma severidade diferente é recusado, e severidade sem regra também. Sem regra, o achado é observação (`unrated`).
+  - O close bloqueia em `close.block_on` (padrão: qualquer `critical` e `high` num critério permanente).
+  - Teste: `tests/oxe-1212-findings-seams-deps.test.cjs`.

@@ -4238,6 +4238,12 @@ function parseRuntimeArgs(argv) {
     else if (a === '--in-place') out.inPlace = true;
     else if (a === '--promote-each') out.promoteEach = true;
     else if (a === '--reopen') out.reopen = true;
+    else if (a === '--rule' && argv[i + 1]) out.rule = String(argv[++i]);
+    else if (a === '--severity' && argv[i + 1]) out.severity = String(argv[++i]);
+    else if (a === '--behavior-ran' && argv[i + 1]) out.behaviorRan = String(argv[++i]);
+    else if (a === '--retro-add' && argv[i + 1]) out.retroAdd = String(argv[++i]);
+    else if (a === '--retro-done' && argv[i + 1]) out.retroDone = String(argv[++i]);
+    else if (a === '--gate') out.gate = true;
     else if (a === '--waive' && argv[i + 1]) out.waive = String(argv[++i]);
     else if (a === '--used' && argv[i + 1]) out.used = Number(argv[++i]);
     else if (a === '--limit' && argv[i + 1]) out.limit = Number(argv[++i]);
@@ -5118,7 +5124,7 @@ async function runRuntime(opts) {
         return;
       }
       const result = oxeOperational.runtimeFeedback(opts.dir, activeSession, {
-        class: opts.changeClass, summary: opts.summary, criteria: opts.criteria, by: opts.by,
+        class: opts.changeClass, summary: opts.summary, criteria: opts.criteria, by: opts.by, rule: opts.rule || null, severity: opts.severity || null,
         phase: opts.phase || null, amendTo: opts.amendTo || null, evidence: opts.evidence || null,
         tasks: opts.tasks || null, additive: Boolean(opts.additive), reopen: Boolean(opts.reopen),
       });
@@ -5432,9 +5438,6 @@ async function runRuntime(opts) {
     }
   }
 
-  // OXB-120: `runtime resume` continues a paused run (environment fixed / quota reset): the same execute, which skips
-  // what is done and starts the paused tasks with fresh attempts.
-  if (opts.action === 'resume') opts.action = 'execute';
   if (opts.action === 'execute') {
     try {
       // Resolve provider: flag > env vars > persisted .oxe/config.json runtime.provider
@@ -5552,7 +5555,7 @@ async function runRuntime(opts) {
       if (r.status === 'paused') {
         try {
           const ev = oxeOperational.readEvents(opts.dir, activeSession).filter((e) => e.type === 'RunPaused').pop();
-          if (ev) console.log(`  ${c ? yellow : ''}PAUSADA: ${ev.payload.reason === 'quota' ? 'cota do provedor' : 'ambiente'}${c ? reset : ''} — ${ev.payload.diagnosis || ''}${ev.payload.resume_at ? ` (retoma: ${ev.payload.resume_at})` : ''}. Corrija e rode oxe-cc runtime resume (nenhuma tentativa foi cobrada).`);
+          if (ev) console.log(`  ${c ? yellow : ''}PAUSADA: ${ev.payload.reason === 'quota' ? 'cota do provedor' : 'ambiente'}${c ? reset : ''} — ${ev.payload.diagnosis || ''}${ev.payload.resume_at ? ` (retoma: ${ev.payload.resume_at})` : ''}. Corrija e rode oxe-cc runtime execute de novo (pula o que está done; nenhuma tentativa foi cobrada).`);
         } catch { /* auxiliar */ }
       }
       if (result.preflight) {
@@ -5594,6 +5597,27 @@ async function runRuntime(opts) {
       console.error(`${red}${err && err.message ? err.message : 'Falha ao executar runtime.'}${reset}`);
       process.exit(1);
     }
+  }
+
+  // OXB-136: seam review; OXB-127: dependency audit.
+  if (opts.action === 'seams' || opts.action === 'deps') {
+    try {
+      if (opts.action === 'deps') {
+        const out = oxeOperational.runtimeDeps(opts.dir, activeSession, { base: opts.baseBranch || null });
+        if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeDepsSchema: 1, ...out }, null, 2));
+        else if (!out.ran) console.log('  dependências: nenhuma mudança em package.json / package-lock.json');
+        else console.log(require('./lib/oxe-deps-audit.cjs').renderDeps(out));
+        if (out.blocks && out.blocks.length) process.exitCode = 1;
+        return;
+      }
+      const out = oxeOperational.runtimeSeams(opts.dir, activeSession, { phase: opts.phase || null, behaviorRan: opts.behaviorRan, retroAdd: opts.retroAdd, retroDone: opts.retroDone, evidence: opts.evidence, by: opts.by });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeSeamsSchema: 1, ...out }, null, 2)); return; }
+      if (out.retro_action) console.log(`  ${green}✓${reset} ${out.retro_action.id}: ${out.retro_action.action}`);
+      else if (out.done) console.log(`  ${green}✓${reset} ${out.done} com evidência`);
+      else if (out.behavior_run) console.log(`  ${green}✓${reset} fluxo de ponta a ponta registrado: ${out.behavior_run.criteria.join(', ')}`);
+      else { const r = out.report; console.log(`  costura da fase ${out.phase || '—'}: ${r.shared_files.length} arquivo(s) compartilhado(s), ${r.export_consumers.length} export(s) com consumidor em outra tarefa, ${r.duplicate_helpers.length} helper(s) duplicado(s), ${r.grown_files.length} arquivo(s) grande(s), ${r.retro_open.length} ação(ões) da retro aberta(s), ${r.behavior_missing.length} fluxo(s) sem execução${out.file ? ` · ${out.file}` : ''}`); }
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
   }
 
   // OXB-117 (a): cost and time per task / CR / retry, and the phase forecast.
@@ -6414,6 +6438,7 @@ async function main() {
     argv[0] === 'policy' ||
     argv[0] === 'decision' ||
     argv[0] === 'state' ||
+    argv[0] === 'guards' ||
     argv[0] === 'verify' ||
     argv[0] === 'install'
   ) {
@@ -6650,6 +6675,28 @@ async function main() {
   }
 
   // OXB-087: oxe-cc plan append --from extra.json --by <papel> --reason "…" [--dir] [--session] [--json]
+  // OXB-119: tool guards (pre-tool hook) — install / status / uninstall, per project, opt-in.
+  if (command === 'install' && argv.includes('--guards')) { command = 'guards'; argv.splice(0, argv.length, 'install', ...argv.filter((a) => a !== '--guards')); }
+  if (command === 'guards') {
+    const sub = ['install', 'uninstall', 'status'].includes(argv[0]) ? argv[0] : 'status';
+    let dir = process.cwd();
+    for (let i = 0; i < argv.length; i += 1) { if (argv[i] === '--dir' && argv[i + 1]) dir = path.resolve(argv[++i]); else if (i > 0 && !argv[i].startsWith('-')) dir = path.resolve(argv[i]); }
+    const settingsFile = path.join(dir, '.claude', 'settings.json');
+    let settings = {};
+    try { settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8')); } catch { settings = {}; }
+    const script = path.join(__dirname, 'lib', 'oxe-guard.cjs').replace(/\\/g, '/');
+    const command0 = `node "${script}" --project "${dir.replace(/\\/g, '/')}"`;
+    const pre = (settings.hooks && Array.isArray(settings.hooks.PreToolUse)) ? settings.hooks.PreToolUse : [];
+    const ours = (h) => h && Array.isArray(h.hooks) && h.hooks.some((x) => String(x.command || '').includes('oxe-guard.cjs'));
+    if (sub === 'status') { console.log(pre.some(ours) ? `  ${green}✓${reset} guardas OXE instalados em ${settingsFile}` : '  guardas OXE não instalados (oxe-cc guards install)'); return; }
+    const rest = pre.filter((h) => !ours(h));
+    settings.hooks = { ...(settings.hooks || {}), PreToolUse: sub === 'install' ? [...rest, { matcher: 'Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob|Bash|PowerShell', hooks: [{ type: 'command', command: command0 }] }] : rest };
+    fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+    fs.writeFileSync(settingsFile, `${JSON.stringify(settings, null, 2)}\n`);
+    console.log(sub === 'install' ? `  ${green}✓${reset} guardas OXE instalados (PreToolUse) em ${settingsFile} — configure em .oxe/config.json: policy_rules {kind: path|command}, guards.{heavy, heavy_wrapper, protected_checkouts}` : `  guardas OXE removidos de ${settingsFile}`);
+    return;
+  }
+
   // OXB-121: the state as a contract — validate STATE.md against the sources, sync the projections.
   if (command === 'state') {
     const sub = argv[0] === 'sync' ? 'sync' : 'validate';
