@@ -5074,7 +5074,7 @@ async function runRuntime(opts) {
   if (opts.action === 'signoff') {
     try {
       const record = oxeOperational.runtimeSignoff(opts.dir, activeSession, {
-        phase: opts.phase || null, criteria: opts.criteria, by: opts.by, note: opts.message || null, evidence: opts.evidence || null,
+        phase: opts.phase || null, criteria: opts.criteria, by: opts.by, note: opts.message || null, evidence: opts.evidence || null, head: opts.head || null,
       });
       if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeSignoffSchema: 1, ...record }, null, 2));
       else console.log(`  ${c ? green : ''}✓${c ? reset : ''} Sign-off ${record.phase}: ${record.criteria.join(', ')} por ${record.by}`);

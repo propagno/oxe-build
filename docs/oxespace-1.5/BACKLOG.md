@@ -1356,3 +1356,15 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - O resumo do execute mostra "PAUSADA: ambiente — <diagnóstico>". `oxe-cc runtime resume` retoma (o execute de novo: pula o que está done e começa a tarefa pausada com tentativas novas).
   - O scorecard não conta tarefa pausada como tentativa.
   - Teste: `tests/oxe-1212-failure-classes.test.cjs` (exit 127 pausa com uma chamada só e a T2 não começa; falha de lógica segue com retry; padrão do projeto; cota com horário de retomada; o classificador).
+
+## OXB-124: veredito e sign-off presos ao commit e à versão do critério
+
+- **Status:** resolvido (1.21.2). Item P1 do backlog de comparação. `bin/lib/oxe-verdicts.cjs`.
+  - O `runtime signoff` grava `head` (o commit avaliado; `--head <sha>` para outro) e `criteria_versions` (hash da linha de cada critério na SPEC). O verify da fase grava `verification_head`. O anexo de CI já levava `--head`.
+  - **No close:**
+    - um sign-off só conta enquanto o `head` dele for ancestral do HEAD de fechamento, sem commit depois dele no escopo do critério, e com a versão atual do critério;
+    - o escopo do critério são os files das tarefas que o cobrem; sem tarefa, qualquer arquivo fora de `docs/` e `.md`;
+    - quando não conta, sai `stale_verdict` com o motivo (commit novo no escopo, critério emendado, commit fora da história) e o comando para refazer;
+    - sign-off antigo, sem `head`, também é obsoleto, com mensagem de migração;
+    - o verify da fase também precisa ser do código que está sendo fechado: mudança de código depois do `verification_head` dá `stale_verdict` com o pedido de rodar o verify de novo.
+  - Teste: `tests/oxe-1212-verdict-head.test.cjs` (sign-off e commit em `src/`: obsoleto; commit só em `docs/`: vale; emenda do A70: obsoleto; sign-off sem head: obsoleto).

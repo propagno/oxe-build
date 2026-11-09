@@ -3090,6 +3090,8 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     // OXB-079: the verify's own outcome, apart from the run status (which stays `running` while a graph node — an
     // external delivery still pending, say — is not completed). The phase close reads this.
     verification_status: report.status,
+    // OXB-124: the commit the phase verify judged (the close refuses a verify of an older code tree).
+    verification_head: require('./oxe-verdicts.cjs').headOf(projectRoot),
     verified_at: new Date().toISOString(),
     verification_regression: regressionSummary,
     verification_gates: gateSummary,
@@ -3953,7 +3955,10 @@ function runtimeSignoff(projectRoot, activeSession, options = {}) {
   const criteria = (Array.isArray(options.criteria) ? options.criteria : String(options.criteria || '').split(','))
     .map((c) => c.trim().toUpperCase()).filter((c) => /^(?:A\d+(?:\.\d+)?|G\d+)$/.test(c));
   if (!criteria.length) throw new Error('Sign-off exige --criteria A8[,A9].');
-  const record = { phase: phaseId, criteria, by, at: new Date().toISOString(), note: options.note || null, evidence: options.evidence || null };
+  // OXB-124: the verdict is pinned to the commit it judged and to the text of each criterion.
+  const verdicts = require('./oxe-verdicts.cjs');
+  const head = options.head ? (gitLines(projectRoot, ['rev-parse', '--verify', `${options.head}^{commit}`]) || [])[0] || null : verdicts.headOf(projectRoot);
+  const record = { phase: phaseId, criteria, by, at: new Date().toISOString(), note: options.note || null, evidence: options.evidence || null, head, criteria_versions: verdicts.criteriaVersions(readTextIfExists(paths.spec) || '', criteria) };
   const file = path.join(paths.programDir, 'signoffs.ndjson');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.appendFileSync(file, `${JSON.stringify(record)}\n`, 'utf8');
@@ -6482,6 +6487,14 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     appendEvent(projectRoot, activeSession, { type: 'DriftWaived', payload: { phase: phase.id, globs: acceptDrift, by } });
   }
   const closeGates = programCloseGateReasons(projectRoot, activeSession, { phase, run, paths, state, skip: options.gates === false });
+  // OXB-124: the phase verify must be of the code being closed — no code commit after the commit it judged.
+  if (run && run.verification_head) {
+    const headNow = require('./oxe-verdicts.cjs').headOf(projectRoot);
+    if (headNow && headNow !== run.verification_head) {
+      const changedAfter = (gitLines(projectRoot, ['diff', '--name-only', run.verification_head, headNow, '--']) || []).filter((p) => !p.startsWith('.oxe/') && !/^docs\//.test(p) && !/\.md$/i.test(p));
+      if (changedAfter.length) closeGates.reasons.push(`stale_verdict: o verify da fase avaliou ${run.verification_head.slice(0, 8)}; depois disso mudaram ${changedAfter.slice(0, 4).join(', ')} — rode oxe-cc runtime verify de novo`);
+    }
+  }
   // OXB-117 (d): rollback rehearsal — the phase's commits must revert cleanly (a temporary worktree at HEAD).
   let rollbackRehearsal = null;
   if (options.rollbackCheck !== false) {
@@ -6509,7 +6522,17 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   // interface não serão admitidos" holds at every close).
   const standing = require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot);
   if (standing.length) {
-    const signoffs = readNdjsonQuiet(path.join(paths.programDir, 'signoffs.ndjson')).filter((s) => s && s.phase === phase.id);
+    const allSignoffs = readNdjsonQuiet(path.join(paths.programDir, 'signoffs.ndjson')).filter((s) => s && s.phase === phase.id);
+    // OXB-124: a sign-off counts only while it is about the code and the criterion text being closed.
+    const verdictLib = require('./oxe-verdicts.cjs');
+    let docV = null;
+    try { docV = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { docV = null; }
+    const specTextV = readTextIfExists(paths.spec) || '';
+    const signoffs = allSignoffs.filter((s) => {
+      const f = verdictLib.freshness(projectRoot, s, { doc: docV, specText: specTextV });
+      if (!f.fresh && (s.criteria || []).some((c) => standing.includes(c))) closeGates.reasons.push(`stale_verdict: sign-off de ${(s.criteria || []).join(',')} por ${s.by} — ${f.why} (refaça: oxe-cc runtime signoff --phase ${phase.id} --criteria ${(s.criteria || []).join(',')} --by <papel> --evidence …)`);
+      return f.fresh;
+    });
     for (const criterion of standing) {
       const ok = signoffs.some((s) => (s.criteria || []).includes(criterion) && s.evidence);
       if (!ok) closeGates.reasons.push(`critério permanente ${criterion}: falta o sign-off da fase ${phase.id} com evidência (oxe-cc runtime signoff --phase ${phase.id} --criteria ${criterion} --by <papel> --evidence <relatório/link>)`);
