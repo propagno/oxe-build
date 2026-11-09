@@ -1719,3 +1719,13 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - **Regressão:** uma piora acima de `nfr.regression_pct` (padrão 10%) contra a fase anterior abre um achado `nfr-regression` (regra nova, medium), mesmo dentro do limite.
 - **No verify da fase:** cada critério NFR da fase vira um gate implícito `nfr-A12`. O dossiê ganha `nfr.md` com a série.
 - **Teste:** `tests/oxe-1212-nfr.test.cjs`. Cobre o parser, a mediana e a dispersão, o passa/reprova com 5 amostras, as amostras insuficientes, a regressão de 20% com achado e o gate implícito.
+
+## OXB-143: teste de estresse da spec por leitores independentes
+
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-spec-stress.cjs`, com o catálogo em `oxe/templates/stress-methods.md`: premortem, adversary, extreme-user, boundary, concurrency e regression.
+- **O comando:** `oxe-cc spec stress [A<n>…|--phase Fn] [--methods …]`.
+- **A escolha dos métodos:** até três por critério. Primeiro o que mais casa com as palavras do ponto fraco, depois um aleatório com semente no id (reproduzível), depois um do tamanho do critério.
+- **O leitor:** cada método roda num leitor separado (o mesmo processo de revisão do OXB-178b), que recebe só o resumo do objetivo (≤ 400 caracteres) e o texto do critério.
+- **A saída:** as mudanças propostas, marcadas com o método, vão para `.oxe/stress/<run>.json`.
+- **A aceitação:** `oxe-cc spec stress accept <run> --changes 1,3 --by <papel>` aceita só as escolhidas. Cada uma vira uma emenda aditiva pelo caminho do `spec amend` (CR `spec_gap` com `spec_edit`) e um registro `spec_edit` com `origin: "stress"` e o método.
+- **Teste:** `tests/oxe-1212-spec-stress.test.cjs`. Cobre a escolha reproduzível dos métodos, o isolamento do leitor (nem a seção interna nem o outro critério entram no prompt), a aceitação parcial e o registro como emenda.

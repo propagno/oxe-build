@@ -6725,6 +6725,29 @@ async function main() {
   }
 
   // OXB-058: `oxe-cc spec amend|add …` and `oxe-cc program phase add|export …`.
+  // OXB-143: stress test of the spec by independent readers.
+  if (command === 'spec' && argv[0] === 'stress') {
+    const accept = argv[1] === 'accept';
+    const o = { dir: process.cwd(), json: false, ids: [] };
+    for (let i = accept ? 2 : 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (['--phase', '--methods', '--changes', '--by', '--model'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (/^A\d+$/i.test(a)) o.ids.push(a.toUpperCase());
+      else if (accept && /^stress-/.test(a)) o.run = a;
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = await oxeOperational.runtimeSpecStress(o.dir, null, { action: accept ? 'accept' : 'run', ids: o.ids, phase: o.phase, methods: o.methods, changes: o.changes, by: o.by, run: o.run, model: o.model });
+      if (o.json) { console.log(JSON.stringify({ oxeSpecStressSchema: 1, ...out, prompts: undefined }, null, 2)); return; }
+      if (accept) { for (const a of out.accepted) console.log(`  ${green}✓${reset} ${a.n} → ${a.criterion} (${a.method}) · ${a.cr}`); return; }
+      for (const p of out.proposals) console.log(p.n ? `  ${p.n}. ${p.criterion} [${p.method}] ${p.text}` : `  ${yellow}?${reset} ${p.criterion} [${p.method}] não rodou: ${p.reason}`);
+      console.log(`  → .oxe/stress/${out.id}.json · aceite: oxe-cc spec stress accept ${out.id} --changes 1,3 --by <papel>`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   // OXB-123: edge and prohibition probes on the spec.
   if (command === 'spec' && argv[0] === 'probe') {
     const o = { dir: process.cwd(), json: false, ids: [] };

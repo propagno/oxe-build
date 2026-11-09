@@ -826,6 +826,44 @@ function runtimeContextUsage(projectRoot, activeSession, options = {}) {
   return { ...lvl, handoff, workflows };
 }
 
+/** OXB-143: `oxe-cc spec stress [A<n>|--phase Fn] [--methods …]` and `spec stress accept [<run>] --changes 1,3 --by`. */
+async function runtimeSpecStress(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-spec-stress.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const specText = readTextIfExists(paths.spec) || '';
+  if (options.action === 'accept') {
+    const { file, doc } = lib.readRun(projectRoot, options.run);
+    const pick = new Set(String(options.changes || '').split(',').map((x) => Number(x.trim())).filter(Boolean));
+    if (!pick.size) throw new Error('informe as mudanças aceitas: --changes 1,3');
+    if (!options.by) throw new Error('accept exige --by <papel>');
+    const changeLib = require('./oxe-change.cjs');
+    const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+    const accepted = [];
+    for (const p of doc.proposals.filter((x) => x.n && pick.has(x.n) && !x.accepted)) {
+      const r = runtimeSpecAmend(projectRoot, activeSession, { id: p.criterion, append: p.text, by: options.by, reason: `stress:${p.method} — ${p.rationale || p.text}`.slice(0, 400), additive: true });
+      changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'spec_edit', action: 'stress_amend', id: p.criterion, origin: 'stress', method: p.method, cr: r.cr && r.cr.id, text: p.text, by: options.by, at: new Date().toISOString() });
+      p.accepted = { by: options.by, cr: r.cr && r.cr.id, at: new Date().toISOString() };
+      accepted.push({ n: p.n, criterion: p.criterion, method: p.method, cr: r.cr && r.cr.id });
+    }
+    fs.writeFileSync(file, `${JSON.stringify(doc, null, 2)}\n`);
+    appendEvent(projectRoot, activeSession, { type: 'SpecStressAccepted', payload: { run: doc.id, accepted } });
+    return { run: doc.id, accepted };
+  }
+  const rows = [];
+  for (const m of specText.matchAll(/^\|\s*(A\d+)\s*\|\s*([^|]+?)\s*\|/gm)) rows.push({ id: m[1], text: m[2] });
+  let wanted = options.ids && options.ids.length ? options.ids.map((x) => String(x).toUpperCase()) : null;
+  if (!wanted && options.phase) {
+    const pg = require('./oxe-program.cjs').readProgram(paths.programDir || path.join(projectRoot, '.oxe', 'program'));
+    const ph = pg && (pg.phases || []).find((p) => p.id === String(options.phase).toUpperCase());
+    wanted = ph ? ph.acceptance || [] : [];
+  }
+  const criteria = rows.filter((r) => !wanted || wanted.includes(r.id));
+  if (!criteria.length) throw new Error('nenhum critério para estressar (informe A<n> ou --phase Fn)');
+  const out = await lib.stress(projectRoot, { specText, criteria, methods: options.methods ? String(options.methods).split(',').map((s) => s.trim()) : null, reviewer: options.reviewer, model: options.model });
+  appendEvent(projectRoot, activeSession, { type: 'SpecStressed', payload: { run: out.id, criteria: criteria.map((c) => c.id), proposals: out.proposals.filter((p) => p.n).length } });
+  return out;
+}
+
 /** OXB-144: `oxe-cc runtime nfr declare|measure|list`. */
 function runtimeNfr(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-nfr.cjs');
@@ -8574,6 +8612,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeSpecStress,
   implicitPhaseGates,
   runtimeNfr,
   runtimeWaive,
