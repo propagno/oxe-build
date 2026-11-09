@@ -6601,6 +6601,7 @@ async function main() {
     argv[0] === 'decision' ||
     argv[0] === 'review' ||
     argv[0] === 'docs' ||
+    argv[0] === 'eval' ||
     argv[0] === 'state' ||
     argv[0] === 'guards' ||
     argv[0] === 'verify' ||
@@ -6975,6 +6976,49 @@ async function main() {
         for (const f of r.open) console.log(`    ${f.fid} (${f.severity})${f.place ? ` ${f.place}` : ''} ${f.text}${f.reopened ? ` — ${f.reopened}` : ''}`);
         if (r.closed.length) console.log(`    encerrados: ${r.closed.map((f) => `${f.fid}=${f.status}`).join(', ')}`);
       }
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // OXB-141: behavioral evaluation of OXE's own workflows.
+  if (command === 'eval') {
+    const o = { dir: process.cwd(), json: false, runs: 1, names: [] };
+    for (let i = argv[0] === 'workflow' ? 1 : 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--self-test') o.selfTest = true;
+      else if (a === '--write-report') o.writeReport = true;
+      else if (a === '--runs' && argv[i + 1]) o.runs = Number(argv[++i]);
+      else if (a === '--candidate' && argv[i + 1]) o.candidate = path.resolve(argv[++i]);
+      else if (a === '--model' && argv[i + 1]) o.model = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-')) o.names.push(a.endsWith('.md') ? a : `${a}.md`);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const ev = require('./lib/oxe-workflow-eval.cjs');
+      const names = o.names.length ? o.names : ['plan.md'];
+      let model = null;
+      if (o.model === 'claude') {
+        const reviewer = require('./lib/oxe-review.cjs').claudeReviewer({});
+        model = async (text, input) => {
+          const r = await reviewer(`${text}\n\n---\nProduza SOMENTE o PLAN.json (JSON) para esta entrada:\n${JSON.stringify({ tasks: input.tasks, phase_acceptance_tests: input.phase_acceptance_tests }, null, 2)}`);
+          let body = String((r && r.text) || '');
+          try { const j = JSON.parse(body); if (j && typeof j.result === 'string') body = j.result; } catch { /* */ }
+          try { return JSON.parse(body.slice(body.indexOf('{'), body.lastIndexOf('}') + 1)); } catch { return { tasks: [] }; }
+        };
+      }
+      const results = [];
+      for (const n of names) results.push(await ev.evalWorkflow(n, { runs: o.runs, candidate: o.candidate, selfTest: o.selfTest, ...(model ? { model } : {}) }));
+      const report = { oxeEvalSchema: 1, generated_at: new Date().toISOString(), model: o.model || 'simulated', workflows: results, ok: results.every((r) => r.ok) };
+      if (o.writeReport) { const f = path.join(o.dir, '.oxe', 'release', 'eval-report.json'); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, `${JSON.stringify(report, null, 2)}\n`); }
+      if (o.json) console.log(JSON.stringify(report, null, 2));
+      else for (const r of results) {
+        console.log(`  ${r.ok ? green + '✓' : red + '✗'}${reset} ${r.workflow}: ${r.cases} caso(s) × ${r.runs} · ${Object.entries(r.candidate).map(([k, v]) => `${k} ${v.mean}±${v.sd}`).join(' · ')}`);
+        for (const g of r.regressions) console.log(`    regressão: ${g.rule} ${g.baseline} → ${g.candidate} (tolerância ${g.tolerance})`);
+        if (r.self_test) console.log(`    mutações detectadas: ${r.self_test.detected}/${r.self_test.mutations}`);
+      }
+      if (!report.ok) process.exitCode = 1;
     } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
     return;
   }

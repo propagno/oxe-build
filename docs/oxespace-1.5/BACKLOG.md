@@ -1748,3 +1748,22 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 - **Lint:** o `plan lint` avisa `derivable_inlined` (bloco de código no PLAN.json, campo de código com mais de 200 caracteres no pack) e `intent sem fonte` (`intent`/`rationale` do pack sem `source`).
 - **Fora do escopo:** a marcação por seção nos templates não foi feita. A classificação é pelo tipo do campo, que é o que o runtime lê.
 - **Teste:** `tests/oxe-1212-intent-context.test.cjs`. Cobre a decisão com a alternativa, a regra do caminho certo (a de outro caminho fica fora), os ponteiros com gatilho, nenhum código copiado, o recorte menos da metade do pack da tarefa e o lint.
+
+## OXB-141: avaliação comportamental dos próprios workflows do OXE
+
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-workflow-eval.cjs`, com casos em `evals/<workflow>/*.json`.
+- **O caso:** cada caso traz a entrada (tarefas, testes de aceite da fase), as **guardas** que o workflow precisa manter (o regex da instrução) e as regras determinísticas que pontuam o plano produzido:
+  - `no_phase_acceptance_as_task_verify`;
+  - `every_task_has_verify`;
+  - `explicit_files`.
+- **O modelo:**
+  - **padrão:** um planner simulado e determinístico, que segue só as instruções presentes no texto. Tirar uma guarda reintroduz o defeito que ela evita;
+  - **`--model claude`:** roda um `claude -p` real (pago, opt-in).
+- **A comparação:**
+  - baseline (o workflow empacotado) × candidata (`--candidate <arquivo>`), com média e desvio por regra em `--runs`;
+  - é regressão quando a queda passa de max(0,05, 2σ).
+- **`--self-test`:** semeia uma mutação por guarda (a frase da guarda removida), e cada uma precisa ser detectada.
+- **Relatório e release:** `--write-report` grava `.oxe/release/eval-report.json`, que o `doctor --release` exige a partir da 1.21.2.
+- **Caso inicial:** o OXB-046 anonimizado (o teste de aceite da fase usado como verify de tarefa). O `plan.md` ganhou a guarda explícita: "Um teste de aceite da fase inteira não é verify de tarefa".
+- **Limite:** o modelo simulado mede se a instrução está no texto, não se um LLM a obedece. A medida do LLM real é o `--model claude --runs N`, opt-in e pago.
+- **Teste:** `tests/oxe-1212-workflow-eval.test.cjs`. Tirar a guarda do OXB-046 é detectado como regressão, e uma mudança neutra não é. As 3 mutações são detectadas, a variância entra na tolerância e o bloqueio do release está presente.

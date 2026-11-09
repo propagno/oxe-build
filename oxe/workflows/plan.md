@@ -118,6 +118,7 @@ Resumo operacional:
 - Se existir **`plan_max_tasks_per_wave` > 0** na config, **não** colocar mais tarefas do que esse número na mesma **Onda**; dividir em mais ondas.
 - Tamanho alvo: cada tarefa cabe em **um** contexto de agente focado.
 - IDs das tarefas: `T1`, `T2`, … estáveis para referência no verify.
+- O verify de uma tarefa roda os testes dela. Um teste de aceite da fase inteira não é verify de tarefa: ele roda no verify da fase (OXB-046).
 </context>
 
 <format_plan>

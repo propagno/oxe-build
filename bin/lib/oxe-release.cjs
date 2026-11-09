@@ -59,6 +59,7 @@ function releasePaths(projectRoot) {
     multiAgentSoakReport: path.join(releaseDir, 'multi-agent-soak-report.json'),
     multiAgentRealReport: path.join(releaseDir, 'multi-agent-real-report.json'),
     scorecardReport: path.join(releaseDir, 'scorecard-report.json'),
+    evalReport: path.join(releaseDir, 'eval-report.json'),
   };
 }
 
@@ -86,6 +87,14 @@ function loadScorecardReport(projectRoot) {
   // The OXE version that produced the evidence: a scorecard of an older release does not prove this one.
   summary.oxe_version = raw && typeof raw.oxe_version === 'string' ? raw.oxe_version : null;
   return summary;
+}
+
+/** OXB-141: the workflow eval report — no significant regression and every seeded mutation detected. */
+function loadEvalReport(projectRoot) {
+  const raw = readJsonIfExists(releasePaths(projectRoot).evalReport);
+  if (!raw) return { present: false, ok: false, failures: [] };
+  const failures = (raw.workflows || []).filter((w) => !w.ok).map((w) => w.workflow);
+  return { present: true, ok: Boolean(raw.ok) && failures.length === 0, failures, workflows: (raw.workflows || []).map((w) => w.workflow) };
 }
 
 function ensureDirForFile(filePath) {
@@ -429,6 +438,7 @@ function buildReleaseManifest(projectRoot, options = {}) {
   const multiAgent = loadMultiAgentSoakReport(projectRoot);
   const multiAgentReal = loadMultiAgentRealReport(projectRoot);
   const scorecard = loadScorecardReport(projectRoot);
+  const workflowEval = loadEvalReport(projectRoot);
   const manifest = {
     schema_version: 1,
     generated_at: new Date().toISOString(),
@@ -467,6 +477,7 @@ function buildReleaseManifest(projectRoot, options = {}) {
       multi_agent_soak: multiAgent,
       multi_agent_real: multiAgentReal,
       scorecard,
+      workflow_eval: workflowEval,
     },
   };
   if (options.writeManifest) {
@@ -557,6 +568,12 @@ function evaluateReleaseManifest(manifest, options = {}) {
       const sameLine = evidence && semver.major(evidence) === semver.major(releaseVersion) && semver.minor(evidence) === semver.minor(releaseVersion);
       if (!sameLine) blockers.push(`scorecard produzido pelo OXE ${card.oxe_version || 'desconhecido'}; a release ${releaseVersion} exige evidência da mesma linha (${semver.major(releaseVersion)}.${semver.minor(releaseVersion)}.x)`);
     }
+  }
+  // 1.21.2 (OXB-141): a workflow change must not regress the agent behavior the eval measures.
+  if (releaseVersion && semver.gte(releaseVersion, '1.21.2')) {
+    const ev = manifest.reports.workflow_eval;
+    if (!ev || !ev.present) blockers.push('eval report ausente (oxe-cc eval workflow plan.md --self-test --write-report)');
+    else if (!ev.ok) blockers.push(`eval de workflow com regressão ou mutação não detectada: ${ev.failures.join(', ') || 'ver .oxe/release/eval-report.json'}`);
   }
   if (versions.banner.mode === 'unknown') {
     warnings.push('banner.txt sem placeholder v{version} nem versão fixa detectável');
