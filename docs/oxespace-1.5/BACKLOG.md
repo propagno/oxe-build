@@ -720,17 +720,31 @@ Cada bloco tem uma meta medível:
 
 ## OXB-097: `oxe-cc plan build --from <arquivos de papel…>`
 
-- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
-  - Grava PLAN.json, PLAN.md e IMPLEMENTATION-PACK juntos.
-  - Cobre o `plan merge`, monta as ondas pela sobreposição de arquivos (arquivo quente serializa sozinho) e tira os arquivos de aceite dos escopos.
-  - Os symbols saem dos imports dos testes congelados e dos caminhos deleted/edited/created do papel. Os contracts saem dos symbols.
-  - O pack e o PLAN.md levam a `phase`.
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-plan-build.cjs`.
+- **O comando:** `oxe-cc plan build --from backend.json frontend.json [--phase Fn] [--force] [--dry-run]` grava PLAN.json, PLAN.md e IMPLEMENTATION-PACK.json juntos.
+- **A base:** o `plan merge` (OXB-086). Por cima dele:
+  - os caminhos `deleted`, `edited`, `created` e `moves` do papel entram no escopo;
+  - os arquivos de aceite congelados saem do escopo;
+  - as ondas saem também da sobreposição de arquivos: um arquivo quente escrito por duas tarefas da mesma onda empurra a segunda para a onda seguinte, e os dependentes seguem.
+- **O pack:**
+  - os `symbols` saem dos imports nomeados dos testes congelados que resolvem para os arquivos da tarefa;
+  - os `contracts` saem dos símbolos e dos caminhos removidos ou movidos;
+  - `removed_paths` vem do papel;
+  - o pack e o PLAN.md levam a `phase`, que é a fase ativa por padrão.
+- **Sem símbolo:** um arquivo de código sem símbolo vindo do teste gera aviso, e o `validatePackTask` do preflight aponta o mesmo.
+- **Teste:** `tests/oxe-1212-plan-build.test.cjs`.
 
 ## OXB-098: `oxe-cc plan check-role <arquivo>`
 
-- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
-  - Validador que os agentes rodam ANTES de passar o plano ao TL.
-  - Checa os títulos exatos dos proves, prosa × ids A, a existência dos caminhos deleted/edited num ref e a forma do verify.
+- **Status:** resolvido (1.21.2). O comando é `oxe-cc plan check-role <arquivo> [--ref <ref>]`.
+- **O que confere:**
+  - os títulos exatos dos `proves` no arquivo de teste;
+  - critério em prosa no lugar do id A;
+  - que `deleted` e `edited` existam no ref;
+  - que `created` não exista no ref;
+  - a forma do verify: placeholder `...` ou `<…>` é recusado, e verify ausente também;
+  - o kind desconhecido, como aviso.
+- **Saída:** exit 1 com a lista de problemas.
 
 ## OXB-099: `oxe-cc spec freeze --from <PR|sha> [--paths glob]`
 
@@ -775,8 +789,13 @@ Cada bloco tem uma meta medível:
 
 ## OXB-106: tipos de tarefa declarativos
 
-- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
-  - add, remove, move, test-only e config-only, cada um com a sua regra de pack. A OXB-088 fez só o remove.
+- **Status:** resolvido (1.21.2). Os kinds `add`, `remove`, `move`, `test-only` e `config-only` passam a ser aceitos no PLAN.json.
+- **A regra de pack de cada um (`kindErrors`, no `plan build`):**
+  - **add:** só caminhos criados (`deleted` é erro);
+  - **remove:** `removed_paths` com o contrato "não existe mais" (OXB-088);
+  - **move:** `moves: [{from,to}]` obrigatório;
+  - **test-only:** só arquivos de teste;
+  - **config-only:** só configuração, sem symbols.
 
 ## OXB-107: gates como plugins de config
 

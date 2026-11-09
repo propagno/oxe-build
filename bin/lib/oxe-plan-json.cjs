@@ -98,7 +98,8 @@ function validatePlanJson(doc) {
     if (task.done_commit != null && typeof task.done_commit !== 'string') errors.push(`${at}.done_commit: sha do checkpoint`);
     if (task.reopened != null && !Array.isArray(task.reopened)) errors.push(`${at}.reopened: histórico de reaberturas`);
     if (task.commit != null && (typeof task.commit !== 'string' || !task.commit.trim())) errors.push(`${at}.commit: mensagem do checkpoint`);
-    if (task.kind != null && !['code', 'spike', 'verify_only', 'external_delivery'].includes(task.kind)) errors.push(`${at}.kind: code | spike | verify_only | external_delivery`);
+    // OXB-106: add | remove | move | test-only | config-only are declarative code kinds with their own pack rule.
+    if (task.kind != null && !['code', 'spike', 'verify_only', 'external_delivery', 'add', 'remove', 'move', 'test-only', 'config-only'].includes(task.kind)) errors.push(`${at}.kind: code | spike | verify_only | external_delivery | add | remove | move | test-only | config-only`);
     if (task.question != null && typeof task.question !== 'string') errors.push(`${at}.question: texto`);
     if (task.gate != null && (typeof task.gate !== 'object' || Array.isArray(task.gate) || typeof task.gate.reason !== 'string')) errors.push(`${at}.gate: { kind?, reason }`);
     // OXB-085: an entry is a string (work delivered by another path, e.g. "owner/repo#594") or a precondition object

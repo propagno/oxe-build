@@ -7136,6 +7136,34 @@ async function main() {
   }
 
   // OXB-086: oxe-cc plan merge a.json b.json [--key rid] [--out .oxe/PLAN.json] [--force] [--json]
+  // OXB-097 / OXB-098: build the plan trio from role files; check a role file before handing it over.
+  if (command === 'plan' && (argv[0] === 'build' || argv[0] === 'check-role')) {
+    const o = { dir: process.cwd(), json: false, files: [], force: false };
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--force') o.force = true;
+      else if (a === '--dry-run') o.dryRun = true;
+      else if (a === '--from') { while (argv[i + 1] && !argv[i + 1].startsWith('-')) o.files.push(path.resolve(argv[++i])); }
+      else if (['--phase', '--ref', '--key'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-')) o.files.push(path.resolve(a));
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = argv[0] === 'check-role'
+        ? oxeOperational.runtimePlanBuild(o.dir, null, { action: 'check-role', file: o.files[0], ref: o.ref })
+        : oxeOperational.runtimePlanBuild(o.dir, null, { files: o.files, phase: o.phase, force: o.force, dryRun: o.dryRun, key: o.key });
+      if (o.json) { console.log(JSON.stringify({ oxePlanBuildSchema: 1, ...out }, null, 2)); if (out.errors.length) process.exitCode = 1; return; }
+      for (const w of out.warnings) console.log(`  ${yellow}!${reset} ${w}`);
+      for (const e of out.errors) console.log(`  ${red}✗${reset} ${e}`);
+      if (argv[0] === 'check-role') { if (!out.errors.length) console.log(`  ${green}✓${reset} ${path.basename(o.files[0])}: pronto para o TL`); }
+      else if (out.ok) console.log(`  ${green}✓${reset} ${out.plan.tasks.length} tarefas em ${Math.max(...out.plan.tasks.map((t) => t.wave))} onda(s) → ${out.written.join(', ') || '(dry-run)'}`);
+      if (out.errors.length) process.exitCode = 1;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   if (command === 'plan' && argv[0] === 'merge') {
     const rest = argv.slice(1);
     const files = [];

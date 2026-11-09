@@ -826,6 +826,38 @@ function runtimeContextUsage(projectRoot, activeSession, options = {}) {
   return { ...lvl, handoff, workflows };
 }
 
+/** OXB-097/098: `oxe-cc plan build --from <role files…> [--phase Fn] [--force]` and `plan check-role <file> [--ref]`. */
+function runtimePlanBuild(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-plan-build.cjs');
+  const mergeLib = require('./oxe-plan-merge.cjs');
+  if (options.action === 'check-role') {
+    const out = lib.checkRole(projectRoot, mergeLib.readRolePlan(options.file), { ref: options.ref });
+    return { file: options.file, ...out };
+  }
+  const files = options.files || [];
+  if (files.length < 1) throw new Error('use: oxe-cc plan build --from backend.json frontend.json [--phase Fn]');
+  let phase = options.phase || null;
+  if (!phase) { try { const pg = require('./oxe-program.cjs').readProgram(resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program')); phase = pg && pg.active_phase ? pg.active_phase : null; } catch { phase = null; } }
+  const res = lib.build(files.map((file) => ({ file, doc: mergeLib.readRolePlan(file) })), { root: projectRoot, phase, key: options.key });
+  const lintErrors = res.errors.length ? [] : require('./oxe-plan-json.cjs').validatePlanJson(res.plan);
+  const errors = [...res.errors, ...lintErrors];
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const planMd = paths.plan || path.join(projectRoot, '.oxe', 'PLAN.md');
+  const planJson = planMd.replace(/PLAN\.md$/, 'PLAN.json');
+  const packFile = paths.implementationPack || path.join(path.dirname(planMd), 'IMPLEMENTATION-PACK.json');
+  const written = [];
+  if (!errors.length && !options.dryRun) {
+    for (const f of [planJson, planMd, packFile]) if (fs.existsSync(f) && !options.force) throw new Error(`${path.relative(projectRoot, f)} já existe — use --force para substituir`);
+    fs.mkdirSync(path.dirname(planJson), { recursive: true });
+    fs.writeFileSync(planJson, `${JSON.stringify(res.plan, null, 2)}\n`);
+    fs.writeFileSync(planMd, res.planMd);
+    fs.writeFileSync(packFile, `${JSON.stringify(res.pack, null, 2)}\n`);
+    written.push(...[planJson, planMd, packFile].map((f) => path.relative(projectRoot, f).replace(/\\/g, '/')));
+    appendEvent(projectRoot, activeSession, { type: 'PlanBuilt', payload: { from: files.map((f) => path.basename(f)), tasks: res.plan.tasks.length, phase } });
+  }
+  return { ok: errors.length === 0, errors, warnings: res.warnings, map: res.map, written, plan: res.plan, pack: res.pack };
+}
+
 /** OXB-143: `oxe-cc spec stress [A<n>|--phase Fn] [--methods …]` and `spec stress accept [<run>] --changes 1,3 --by`. */
 async function runtimeSpecStress(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-spec-stress.cjs');
@@ -8636,6 +8668,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimePlanBuild,
   runtimeSpecStress,
   implicitPhaseGates,
   runtimeNfr,
