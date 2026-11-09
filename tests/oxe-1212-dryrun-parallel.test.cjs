@@ -29,7 +29,8 @@ describe('OXB-095: parallel dry-verify', () => {
     const t0 = Date.now();
     const r = dryRunVerifyCommands(dir, plan, { parallel: { max: 3, minFreeMb: 0 }, onProgress: (l) => lines.push(l) });
     const ms = Date.now() - t0;
-    assert.ok(ms < 3800, `took ${ms}ms (serial would be ≥ 4500ms)`);
+    assert.ok(ms < 4300, // < serial 4500ms; 3800 flaked under a loaded suite (3890ms)
+      `took ${ms}ms (serial would be ≥ 4500ms)`);
     assert.deepEqual(r.results.map((x) => [x.task, x.verdict]), [['T1', 'missing_target'], ['T2', 'missing_target'], ['T3', 'missing_target']]);
     assert.ok(lines.some((l) => /dry-verify paralelo: 3 comando\(s\), até 3 por vez/.test(l)), lines.join('\n'));
     assert.ok(lines.some((l) => /\(paralelo\)$/.test(l)));
