@@ -57,7 +57,7 @@ function decide(task, doc, ctx) {
   const cfg = (ctx.config && ctx.config.execute && ctx.config.execute.repair) || {};
   const allow = new Set(Array.isArray(cfg.allow) ? cfg.allow : DEFAULT_ALLOW);
   const budget = Number.isInteger(cfg.budget) ? cfg.budget : 2;
-  const logic = ['verify', 'llm', 'logic', 'turn_limit_exhausted', 'turns_exhausted', 'no_tool_call'].includes(String(ctx.failureClass || ''));
+  const logic = ['verify', 'llm', 'logic', 'turn_limit_exhausted', 'turns_exhausted', 'no_progress', 'no_tool_call'].includes(String(ctx.failureClass || ''));
   if (!logic) return null; // OXB-120: environment / quota / waiting are not repaired here
   const overBudget = (ctx.repairsSoFar || 0) >= budget;
   if (!ctx.final && !ctx.verifySuspect && !overBudget && allow.has('retry')) {

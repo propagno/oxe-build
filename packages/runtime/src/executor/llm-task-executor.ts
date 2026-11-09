@@ -21,6 +21,8 @@ export interface LlmProviderConfig {
 }
 
 export type LlmExecutorEventType =
+  | 'executor_turn'
+  | 'executor_slow_turn'
   | 'turn_start'
   | 'turn_complete'
   | 'tool_call'
@@ -60,6 +62,13 @@ export interface LlmTaskExecutorOptions {
   protectedPaths?: string[] | null;
   /** OXB-125: offer the ask_orchestrator tool (opt-in: execute.ask_orchestrator). */
   askOrchestrator?: boolean;
+  /**
+   * OXB-186: consecutive turns with no file written and no finish_task that end the attempt as `no_progress`
+   * (default 8; 0 disables).
+   */
+  noProgressTurns?: number;
+  /** OXB-186: a turn slower than this (ms, default 180000) is reported with the prompt size behind it. */
+  slowTurnMs?: number;
 }
 
 function normalizeRel(p: string): string {
@@ -168,6 +177,11 @@ export class LlmTaskExecutor implements TaskExecutor {
 
     let turn = 0;
     let timeoutsInARow = 0;
+    // OXB-186: progress = a file written (write/patch) or finish_task; K turns without it end the attempt.
+    const noProgressLimit = this.options.noProgressTurns ?? 8;
+    const slowTurnMs = this.options.slowTurnMs ?? 180_000;
+    let turnsWithoutProgress = 0;
+    let turnWrites = 0;
     for (; turn < maxTurns; turn++) {
       this.emit({ type: 'turn_start', nodeId: node.id, attempt, detail: { turn } });
       // OXB-026: the last turn finishes and reports; the runtime runs the task's verify itself afterwards.
@@ -182,6 +196,8 @@ export class LlmTaskExecutor implements TaskExecutor {
           baseUrl: this.provider.baseUrl,
           apiKey: this.provider.apiKey,
           model: options.model || this.provider.model,
+          // the attempt's own model only (OXB-131): the claude adapter must not turn the http default into --model
+          attemptModel: options.model || null,
           messages,
           tools: tools.length > 0 ? tools : undefined,
           maxTokens: this.provider.maxTokens,
@@ -234,6 +250,26 @@ export class LlmTaskExecutor implements TaskExecutor {
       }
 
       messages.push(...concurrentResults, ...serialResults);
+
+      // OXB-186: a heartbeat per turn (so a stall shows in OXE-EVENTS), a slow-turn report, and the no-progress guard.
+      const writesBefore = turnWrites;
+      turnWrites = (usage.writes ?? []).length;
+      const latencyMs = Date.now() - turnStarted;
+      const promptChars = messages.reduce((n, m) => n + String(m.content ?? '').length + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0), 0);
+      this.emit({ type: 'executor_turn', nodeId: node.id, attempt, detail: { turn: turn + 1, max_turns: maxTurns, tool_calls: response.tool_calls.length, tool_calls_total: usage.tool_calls, files_written: (usage.writes ?? []).length, prompt_chars: promptChars, latency_ms: latencyMs } });
+      if (latencyMs > slowTurnMs) this.emit({ type: 'executor_slow_turn', nodeId: node.id, attempt, detail: { turn: turn + 1, latency_ms: latencyMs, prompt_chars: promptChars, messages: messages.length } });
+      const wroteThisTurn = turnWrites > writesBefore;
+      const finishedThisTurn = [...concurrentResults, ...serialResults].some((r) => r.name === 'finish_task');
+      turnsWithoutProgress = wroteThisTurn || finishedThisTurn ? 0 : turnsWithoutProgress + 1;
+      if (noProgressLimit > 0 && turnsWithoutProgress >= noProgressLimit && !finishedThisTurn) {
+        return done({
+          success: false,
+          failure_class: 'no_progress',
+          evidence: evidencePaths,
+          output: `no_progress: ${turnsWithoutProgress} turnos seguidos sem escrever arquivo nem chamar finish_task (turno ${turn + 1}/${maxTurns}, ${usage.tool_calls} tool calls, prompt ${promptChars} chars)${finalOutput ? `\n${String(finalOutput).slice(-1500)}` : ''}`,
+          completed_by: 'no_progress',
+        });
+      }
 
       // Detect finish_task call — authoritative completion signal
       const allResults = [...concurrentResults, ...serialResults];

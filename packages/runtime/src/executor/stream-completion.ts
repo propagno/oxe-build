@@ -35,6 +35,8 @@ export interface StreamCompletionOptions {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /** OXB-131: the model chosen for this attempt (tier/override); null = the backend default. */
+  attemptModel?: string | null;
   messages: ChatMessage[];
   tools?: ToolSchema[];
   maxTokens?: number;

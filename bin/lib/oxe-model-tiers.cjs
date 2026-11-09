@@ -14,7 +14,7 @@ const ORDER = ['fast', 'balanced', 'powerful'];
 function failureKind(cls) {
   const c = String(cls || '');
   if (!c) return null;
-  if (['verify', 'llm', 'logic', 'no_tool_call', 'turn_limit_exhausted', 'turns_exhausted', 'scope_violation'].includes(c)) return 'logic';
+  if (['verify', 'llm', 'logic', 'no_tool_call', 'turn_limit_exhausted', 'turns_exhausted', 'no_progress', 'scope_violation'].includes(c)) return 'logic';
   if (['env', 'environment', 'paused_environment', 'timeout'].includes(c)) return 'environment';
   if (c.startsWith('quota') || c === 'paused_quota') return 'quota';
   return c;

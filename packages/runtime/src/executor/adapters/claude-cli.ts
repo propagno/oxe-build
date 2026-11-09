@@ -262,7 +262,9 @@ export class ClaudeCliAdapter implements ExecutorAdapter {
       }
       const reply = await singleFlight(async () => {
         await this.waitForMemory();
-        return this.runOnce(prompt, opts.timeoutMs, opts.model || null);
+        // rc.39: only the attempt's own model (tier/override) overrides the adapter. opts.model is the http provider's
+        // default (claude-sonnet-4-6) and forced every turn of rc.37/rc.38 onto that old model.
+        return this.runOnce(prompt, opts.timeoutMs, opts.attemptModel || null);
       });
       costUsd += reply.costUsd;
       lastText = reply.text;

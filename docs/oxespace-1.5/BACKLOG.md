@@ -1869,3 +1869,18 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - `customize apply`;
   - `customize migrate`.
 - **Teste:** `tests/oxe-1212-customize.test.cjs` (precedência, rules e fields, ponto renomeado vira decisão, a edição direta migrada, o edit recusado).
+
+## OXB-186: tentativa que gira turnos sem escrever, e o modelo forçado do rc.37/rc.38
+
+- **Status:** resolvido (rc.39). Relatado pelo TECH LEAD: na oxespace-150-f10, a T22 (CR-A42b, L=60) passou 106 min sem escrever nenhum arquivo. Cada turno do `claude -p` durou de 6 a 9 min, contra uns 25 s no rc.36, e o mesmo aconteceu em todas as fases rodando no rc.38.
+- **Causa da lentidão (regressão minha, OXB-131):**
+  - o executor passou a mandar `provider.model` como modelo da tentativa, e no adaptador `claude` isso virava `--model`;
+  - sem `runtime.provider.model` no config, esse valor é o padrão do provider http, `claude-sonnet-4-6`;
+  - no rc.36, o `claude -p` rodava sem `--model`, ou seja, com o modelo padrão do Claude Code;
+  - no rc.37 e no rc.38, todo turno foi forçado para o sonnet-4-6.
+- **Correção:** a completion ganhou `attemptModel` (só o modelo escolhido por nível ou override da tentativa). O adaptador `claude` usa só esse, ou o `--model` / `OXE_CLAUDE_MODEL` do próprio adaptador. Teste: sem modelo da tentativa, nenhum turno recebe `--model`.
+- **Batimento por turno:** evento `ExecutorTurn` com o turno n/N, as tool calls do turno e do total, os arquivos escritos até ali, o tamanho do prompt em caracteres e a latência.
+- **Turno lento:** acima de `execute.slow_turn_ms` (padrão 180000) vira `ExecutorSlowTurn`, com o tamanho do prompt e o número de mensagens.
+- **Guarda de progresso:** `execute.no_progress_turns` turnos seguidos (padrão 8; 0 desliga) sem escrever arquivo nem chamar `finish_task` encerram a tentativa como `no_progress`. A saída leva a contagem, o turno, as tool calls, o tamanho do prompt e o último raciocínio. A classe conta como falha `logic` para o retry, o nível de modelo e o reparo.
+- **Limite:** um arquivo escrito por `run_command` (codegen, gravação de golden) não conta como escrita. Uma tarefa que só trabalha por comando pode precisar de um `no_progress_turns` maior.
+- **Teste:** `tests/oxe-1212-turn-heartbeat.test.cjs`, com um `claude -p` simulado. Cobre o `--model` ausente e presente, os 8 turnos de só leitura que viram `no_progress`, o batimento com o prompt crescendo, o turno lento, a escrita que zera a contagem e o 0 que desliga.

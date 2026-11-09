@@ -14,7 +14,7 @@ export interface LlmProviderConfig {
     timeoutMs?: number;
     systemPrompt?: string;
 }
-export type LlmExecutorEventType = 'turn_start' | 'turn_complete' | 'tool_call' | 'tool_result' | 'tool_denied' | 'executor_complete'
+export type LlmExecutorEventType = 'executor_turn' | 'executor_slow_turn' | 'turn_start' | 'turn_complete' | 'tool_call' | 'tool_result' | 'tool_denied' | 'executor_complete'
 /** Once per attempt: turns, tool calls and backend-reported cost. */
  | 'executor_usage' | 'turn_timeout';
 /** Injectable completion function (defaults to the HTTP OpenAI-compatible client). */
@@ -43,6 +43,13 @@ export interface LlmTaskExecutorOptions {
     protectedPaths?: string[] | null;
     /** OXB-125: offer the ask_orchestrator tool (opt-in: execute.ask_orchestrator). */
     askOrchestrator?: boolean;
+    /**
+     * OXB-186: consecutive turns with no file written and no finish_task that end the attempt as `no_progress`
+     * (default 8; 0 disables).
+     */
+    noProgressTurns?: number;
+    /** OXB-186: a turn slower than this (ms, default 180000) is reported with the prompt size behind it. */
+    slowTurnMs?: number;
 }
 export interface ExecutorUsage {
     turns: number;
