@@ -4213,6 +4213,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--criteria' && argv[i + 1]) out.criteria = String(argv[++i]);
     else if (a === '--by' && argv[i + 1]) out.by = String(argv[++i]);
     else if (a === '--answer' && argv[i + 1]) out.answer = String(argv[++i]);
+    else if (a === '--freeze') out.freeze = true;
     else if (a === '--evidence' && argv[i + 1]) out.evidence = String(argv[++i]);
     else if (a === '--class' && argv[i + 1]) out.changeClass = String(argv[++i]);
     else if (a === '--summary' && argv[i + 1]) out.summary = String(argv[++i]);
@@ -4325,6 +4326,10 @@ function parseRuntimeArgs(argv) {
     // OXB-060: `runtime promote T7 --base main` promotes one task; without a task id it is the run promotion pipeline.
     out.task = positionals[1].toUpperCase();
     if (positionals[2]) out.dir = path.resolve(positionals[2]);
+  } else if (out.action === 'ui-evidence') {
+    if (positionals[1]) out.subAction = positionals[1];
+    if (positionals[2]) out.uiFolder = positionals[2];
+    if (positionals[3]) out.dir = path.resolve(positionals[3]);
   } else if (out.action === 'questions') {
     if (positionals[1]) out.subAction = positionals[1];
     let k = 2;
@@ -5604,6 +5609,18 @@ async function runRuntime(opts) {
     }
   }
 
+  // OXB-128: the UI evidence package.
+  if (opts.action === 'ui-evidence') {
+    try {
+      const out = oxeOperational.runtimeUiEvidence(opts.dir, activeSession, { folder: opts.uiFolder });
+      if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeUiEvidenceSchema: 1, ...out }, null, 2));
+      else if (out.ok) console.log(`  ${green}✓${reset} pacote de UI válido · ${out.cells} célula(s) da matriz · sha ${String(out.sha).slice(0, 10)}`);
+      else { console.log(`  ${red}✗${reset} pacote de UI recusado:`); for (const e of out.errors) console.log(`    - ${e}`); }
+      if (!out.ok) process.exitCode = 1;
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
   // OXB-125: questions the executor asked the orchestrator.
   if (opts.action === 'questions') {
     try {
@@ -5739,8 +5756,9 @@ async function runRuntime(opts) {
   // OXB-092: runtime signal --from <HML report>|<issue url>|github:<owner/repo> [--by] [--dry-run] [--any-label]
   if (opts.action === 'signal') {
     try {
-      const out = oxeOperational.runtimeSignal(opts.dir, activeSession, { from: opts.fromEventId || opts.from, by: opts.by || null, dryRun: Boolean(opts.dryRun), anyLabel: Boolean(opts.anyLabel) });
+      const out = oxeOperational.runtimeSignal(opts.dir, activeSession, { from: opts.fromEventId || opts.from, by: opts.by || null, dryRun: Boolean(opts.dryRun), anyLabel: Boolean(opts.anyLabel), freeze: Boolean(opts.freeze) });
       if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeSignalSchema: 1, ...out }, null, 2)); return; }
+      if (out.freeze) { for (const f of out.freeze.frozen) console.log(`  ${green}✓${reset} ${f.finding} → ${f.file} (teste congelado)`); for (const s of out.freeze.skipped) console.log(`  ${yellow}?${reset} ${s}: sem roteiro — não virou teste`); return; }
       for (const e of out.created) console.log(`  ${c ? green : ''}${out.dry_run ? '~' : '✓'}${c ? reset : ''} ${e.cr ? `${e.cr} ` : ''}${e.class} na ${e.phase || '—'} · ${e.criteria.join(', ')} (${e.criteria_source}) · ${e.summary.slice(0, 100)}`);
       for (const d of out.duplicates) console.log(`  ${c ? dim : ''}= ${d} já importado${c ? reset : ''}`);
       for (const x of out.closed_phase) console.log(`  ${c ? yellow : ''}! ${x.id}: ${x.phase} está fechada — não virou CR aqui. Para reabrir: ${x.suggestion}${c ? reset : ''}`);

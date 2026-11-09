@@ -1077,6 +1077,34 @@ function spawnPromote(projectRoot, activeSession, taskId, opts = {}, runId = nul
   return child.pid;
 }
 
+/** OXB-128: `oxe-cc runtime ui-evidence validate <pasta>` and `runtime signal --from <pasta> --freeze`. */
+function runtimeUiEvidence(projectRoot, activeSession, options = {}) {
+  const ui = require('./oxe-ui-evidence.cjs');
+  if (!options.folder) throw new Error('use: oxe-cc runtime ui-evidence validate <pasta>');
+  const folder = path.resolve(projectRoot, options.folder);
+  const cfg = readProjectConfig(projectRoot);
+  const matrix = cfg.ui_evidence && cfg.ui_evidence.matrix ? cfg.ui_evidence.matrix : null;
+  const diffThreshold = cfg.ui_evidence && cfg.ui_evidence.diff_threshold != null ? cfg.ui_evidence.diff_threshold : undefined;
+  if (!options.freeze) { const v = ui.validate(folder, { matrix, diffThreshold }); return { ok: v.ok, errors: v.errors, cells: v.cells, sha: v.doc && v.doc.sha }; }
+  const testDir = (cfg.ui_evidence && cfg.ui_evidence.test_dir) || 'tests/ui-regression';
+  const out = ui.freeze(projectRoot, folder, { testDir, matrix, diffThreshold });
+  // the frozen tests become acceptance tests of the plan (regression of the next phase)
+  try {
+    const { jsonPath, doc } = readPlanJsonDoc(projectRoot, activeSession);
+    if (doc && out.frozen.length) {
+      doc.acceptance_tests = Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [];
+      for (const f of out.frozen) {
+        const id = `ui-${String(f.finding).replace(/[^A-Za-z0-9_-]+/g, '-')}`;
+        if (doc.acceptance_tests.some((a) => a && a.id === id)) continue;
+        doc.acceptance_tests.push({ id, criterion: f.criteria[0] || undefined, files: [f.file], command: `npx playwright test ${f.file}`, frozen: true, origin: 'ui_evidence', regression: 'next_phase' });
+      }
+      fs.writeFileSync(jsonPath, `${JSON.stringify(doc, null, 2)}\n`);
+    }
+  } catch { /* sem PLAN.json: os testes ficam no disco */ }
+  appendEvent(projectRoot, activeSession, { type: 'UiEvidenceFrozen', payload: out });
+  return out;
+}
+
 /** OXB-125: the orchestrator side of `ask_orchestrator` — answers from the artifacts, queues what needs a person. */
 function installQuestionResolver(runtime, projectRoot, activeSession, getRunId) {
   if (typeof runtime.setQuestionResolver !== 'function') return;
@@ -4156,7 +4184,21 @@ function runtimeSignoff(projectRoot, activeSession, options = {}) {
   // OXB-124: the verdict is pinned to the commit it judged and to the text of each criterion.
   const verdicts = require('./oxe-verdicts.cjs');
   const head = options.head ? (gitLines(projectRoot, ['rev-parse', '--verify', `${options.head}^{commit}`]) || [])[0] || null : verdicts.headOf(projectRoot);
-  const record = { phase: phaseId, criteria, by, at: new Date().toISOString(), note: options.note || null, evidence: options.evidence || null, head, criteria_versions: verdicts.criteriaVersions(readTextIfExists(paths.spec) || '', criteria) };
+  // OXB-128: a standing UI criterion is signed off only with a valid UI evidence package of this commit.
+  let uiEvidence = null;
+  {
+    const ui = require('./oxe-ui-evidence.cjs');
+    const uiCrit = ui.uiStandingCriteria(readProjectConfig(projectRoot), require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot), readTextIfExists(paths.spec) || '');
+    const hit = criteria.filter((c) => uiCrit.includes(c));
+    if (hit.length) {
+      if (!options.evidence) throw new Error(`${hit.join(', ')}: critério permanente de UI — o sign-off exige --evidence <pasta com ${ui.FILE}>`);
+      const folder = path.resolve(projectRoot, options.evidence);
+      const v = ui.validate(folder, { head });
+      if (!v.ok) throw new Error(`${hit.join(', ')}: pacote de evidência de UI recusado:\n  - ${v.errors.join('\n  - ')}`);
+      uiEvidence = { folder: path.relative(projectRoot, folder).replace(/\\/g, '/'), sha: v.doc.sha, cells: v.cells };
+    }
+  }
+  const record = { phase: phaseId, criteria, by, at: new Date().toISOString(), note: options.note || null, evidence: options.evidence || null, head, criteria_versions: verdicts.criteriaVersions(readTextIfExists(paths.spec) || '', criteria), ...(uiEvidence ? { ui_evidence: uiEvidence } : {}) };
   const file = path.join(paths.programDir, 'signoffs.ndjson');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.appendFileSync(file, `${JSON.stringify(record)}\n`, 'utf8');
@@ -4234,6 +4276,11 @@ function runtimeSignal(projectRoot, activeSession, options = {}) {
   const programLib = require('./oxe-program.cjs');
   const from = String(options.from || '').trim();
   if (!from) throw new Error('use: oxe-cc runtime signal --from <relatório do HML>|<url de issue>|github:<owner/repo> [--by <papel>] [--dry-run]');
+  if (options.freeze) {
+    const folder = path.resolve(projectRoot, from);
+    if (!fs.existsSync(path.join(folder, require('./oxe-ui-evidence.cjs').FILE))) throw new Error(`--freeze: ${from} não é um pacote de evidência de UI (falta ui-evidence.json)`);
+    return { freeze: runtimeUiEvidence(projectRoot, activeSession, { folder: from, freeze: true }), created: [], duplicates: [], closed_phase: [], triage: [], suspicious: [] };
+  }
   let findings = signal.githubFindings(from, { ghSpawn: options.ghSpawn, anyLabel: options.anyLabel });
   if (!findings) {
     const file = path.resolve(projectRoot, from);
@@ -8217,6 +8264,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeUiEvidence,
   runtimeQuestions,
   runtimePlanStaleness,
   runtimeSpecProbe,

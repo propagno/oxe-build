@@ -1465,3 +1465,19 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
     - `oxe-cc runtime questions answer Q-n --answer "…"` responde e grava a decisão;
     - o preflight do execute recusa enquanto houver uma pergunta em espera (`question_waiting:Q-n`).
   - Teste: `tests/oxe-1212-questions.test.cjs`, com 4 cenários: resposta pela decisão; default provisório; bloqueante e `interrupt_on` em espera, a resposta desbloqueia e é reaproveitada; a tarefa em `waiting_answer` não é retentada.
+
+## OXB-128: prova de UI reproduzível para o sign-off permanente
+
+- **Status:** resolvido (1.21.2). Item P1 do backlog de comparação. Implementado em `bin/lib/oxe-ui-evidence.cjs`.
+- **O pacote:** `<pasta>/ui-evidence.json` (schema 1), com:
+  - `sha` avaliado;
+  - matriz locale × tema × SO;
+  - por execução, um roteiro com seletores estáveis (`role` + `name`; `selector` livre ou CSS/XPath são recusados);
+  - capturas com baseline e `diff_ratio` (limite `diff_threshold`, padrão 0,01);
+  - um relatório de acessibilidade por estado capturado, com zero violações;
+  - `findings` com roteiro.
+- **`oxe-cc runtime ui-evidence validate <pasta>`:** recusa uma matriz incompleta, diff acima do limite, seletor instável, captura ou relatório ausente e violação de a11y.
+- **O sign-off:** quando um critério permanente de UI é assinado (opt-in em `ui_evidence.criteria: ["A70"]`, ou `ui_evidence.standing: true`, que detecta pelo texto do critério), o sign-off só aceita o pacote válido do mesmo commit (`sha` = HEAD). O registro guarda `ui_evidence`.
+- **`runtime signal --from <pasta> --freeze`:** cada achado com roteiro vira um teste Playwright (`getByRole`) congelado em `tests/ui-regression/<id>.spec.js` (configurável por `ui_evidence.test_dir`). O teste é registrado em PLAN.json `acceptance_tests`, com `frozen`, `origin: ui_evidence` e `regression: next_phase`.
+- **Limite:** o "reprova na árvore antiga e passa na corrigida" depende do Playwright do projeto. A suíte do oxe-build valida o teste gerado (seletores e asserção), não o executa num browser.
+- **Teste:** `tests/oxe-1212-ui-evidence.test.cjs`.
