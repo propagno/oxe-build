@@ -6403,6 +6403,7 @@ async function main() {
     argv[0] === 'program' ||
     argv[0] === 'policy' ||
     argv[0] === 'decision' ||
+    argv[0] === 'state' ||
     argv[0] === 'verify' ||
     argv[0] === 'install'
   ) {
@@ -6639,6 +6640,33 @@ async function main() {
   }
 
   // OXB-087: oxe-cc plan append --from extra.json --by <papel> --reason "…" [--dir] [--session] [--json]
+  // OXB-121: the state as a contract — validate STATE.md against the sources, sync the projections.
+  if (command === 'state') {
+    const sub = argv[0] === 'sync' ? 'sync' : 'validate';
+    const o = { dir: process.cwd(), json: false, strict: false, dryRun: false };
+    for (let i = (argv[0] === 'sync' || argv[0] === 'validate') ? 1 : 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--strict') o.strict = true;
+      else if (a === '--dry-run') o.dryRun = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-')) o.dir = path.resolve(a);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = oxeOperational.runtimeStateCheck(o.dir, null, { action: sub, dryRun: o.dryRun });
+      if (o.json) console.log(JSON.stringify({ oxeStateSchema: 1, ...out }, null, 2));
+      else {
+        if (sub === 'sync' && !o.dryRun) console.log(`  ${green}✓${reset} STATE.md e .oxe/state.json reescritos das fontes (${out.fixed.length} divergência(s) corrigida(s))`);
+        const list = out.divergences;
+        if (!list.length) console.log(`  ${green}✓${reset} STATE.md coerente com as fontes`);
+        else { console.log(`  ${yellow}${list.length} divergência(s)${reset}${sub === 'validate' ? ' — rode oxe-cc state sync' : ''}`); for (const d of list) console.log(`    ${d.field}: STATE diz "${d.claims}", a fonte diz "${d.truth}"`); }
+      }
+      if (o.strict && out.divergences.length) process.exitCode = 1;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   // OXB-112: decisions as first-class ids.
   if (command === 'decision') {
     const sub = argv[0] === 'add' || argv[0] === 'list' ? argv[0] : 'list';

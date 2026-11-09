@@ -1004,10 +1004,13 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 
 ## OXB-121 (parte): a contradição do STATE.md
 
-- **Status:** a contradição foi resolvida (1.21.2), P0. `state validate`/`state sync`/`state.json` continuam em aberto (P1).
-  - O bloco do topo (dossiê) era reescrito no verify/close, e o bloco do runtime em cada execute/verify, só a partir dos eventos. Depois do close da F1 um dizia "completed 38/38" e o outro "failed · 0 concluídos · 7 falhos", para a mesma run.
-  - Agora os dois blocos são escritos na mesma passada, a partir do mesmo estado da run. No bloco do runtime, o status vem da run e o progresso do PLAN.json (fonte da verdade, OXB-059): tarefa `done` nunca aparece como falha porque uma tentativa anterior falhou, e a entrega externa aparece à parte.
-  - Teste: `tests/oxe-1212-state-coherent.test.cjs`.
+- **Status:** resolvido (1.21.2). A contradição do STATE.md foi resolvida primeiro (P0). Depois vieram o `state validate`, o `state sync` e o `state.json` (`bin/lib/oxe-state.cjs`).
+  - **`.oxe/state.json`** (contrato `1.0.0`) é gravado a cada projeção do STATE.md, ou seja, a cada transição: compile, execute, verify, close e emenda.
+    - Chaves sempre presentes, desconhecido = `null`: `program`, `phase`, `run`, `tasks` (`total`, `done`, `failed`, `blocked`, `pending`, `external`, `checkpoint_failed`), `open_crs`, `next` (o mesmo próximo passo do status) e `updated_at`.
+    - Sem mudança nas fontes, o arquivo não é reescrito.
+  - **`oxe-cc state validate [--strict] [--json]`:** compara o que o STATE.md afirma com as fontes (journal da run, PROGRAM.json, PLAN.json, CRs) e lista as divergências: status da run, concluídos, falhos que já estão done, "completed" com a run `failed`, fase ativa. `--strict` sai com 1 quando há divergência.
+  - **`oxe-cc state sync [--dry-run]`:** reescreve as projeções a partir das fontes.
+  - Teste: `tests/oxe-1212-state-contract.test.cjs` (o formato da F2: run falha com projeção antiga; o validate aponta; o sync corrige e o `--strict` passa; o contrato tem todas as chaves e é estável).
 
 ## OXB-150: testes JUnit em Kotlin/Java e o JUnit XML do Gradle
 

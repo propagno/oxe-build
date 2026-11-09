@@ -3903,7 +3903,42 @@ function projectStateMd(projectRoot, activeSession) {
   const isTemplate = !existing || /Porta de entrada enxuta/.test(existing);
   if (isTemplate) fs.writeFileSync(statePath, `${dossierLib.BEGIN}\n${block}\n${dossierLib.END}\n\n## Decisões persistentes\n\n- (bullet: D-NN: decisão → data)\n`, 'utf8');
   else dossierLib.writeDossierFile(statePath, block);
+  // OXB-121: the machine-readable state, at every projection (every transition projects STATE.md).
+  try { require('./oxe-state.cjs').writeStateJson(projectRoot, stateSnapshot(projectRoot, activeSession)); } catch { /* auxiliar */ }
   return statePath;
+}
+
+/** OXB-121: the state contract (.oxe/state.json) built from the sources of truth. */
+function stateSnapshot(projectRoot, activeSession) {
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  let program = null;
+  try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; }
+  let work = null;
+  try { work = runtimePhaseWork(projectRoot, activeSession); } catch { work = null; }
+  let changes = [];
+  try { changes = require('./oxe-change.cjs').listChanges(programDir); } catch { changes = []; }
+  let doc = null;
+  try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
+  const checkpointFailed = ((doc && doc.tasks) || []).filter((t) => t && !t.done && t.checkpoint_failed).map((t) => t.id);
+  return require('./oxe-state.cjs').buildStateJson({ program, run: readRunState(projectRoot, activeSession) || {}, work, changes, checkpointFailed });
+}
+
+/** OXB-121: `oxe-cc state validate [--strict]` and `state sync [--dry-run]`. */
+function runtimeStateCheck(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-state.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const statePath = paths.state || path.join(projectRoot, '.oxe', 'STATE.md');
+  const truth = stateSnapshot(projectRoot, activeSession);
+  const before = lib.validateStateMd(readTextIfExists(statePath) || '', truth);
+  if (options.action === 'sync') {
+    if (options.dryRun) return { action: 'sync', dry_run: true, divergences: before, state: truth };
+    projectStateMd(projectRoot, activeSession);
+    const after = lib.validateStateMd(readTextIfExists(statePath) || '', truth);
+    lib.writeStateJson(projectRoot, truth);
+    return { action: 'sync', fixed: before, divergences: after, state: truth };
+  }
+  return { action: 'validate', divergences: before, state: truth };
 }
 
 /** Sign-off humano de critérios manuais/UAT de uma fase (append-only). */
@@ -7936,6 +7971,8 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeStateCheck,
+  stateSnapshot,
   runtimeCost,
   runtimeComplexity,
   runtimeHandoff,
