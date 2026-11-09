@@ -33,6 +33,9 @@ export interface TaskResult {
   evidence: string[];
   output: string;
   completed_by?: string;
+  /** OXB-185: turns used and the cap of the attempt, when it ended at the cap. */
+  turns_used?: number;
+  turns_cap?: number;
   /** Every verify segment's output with headers (1.21.2, OXB-066), for the attempt log. */
   verify_log?: string;
 }
@@ -139,6 +142,8 @@ export interface SchedulerContext {
    * there — appended to the informed retry, so the next attempt does not redo (or wrongly assume) work.
    */
   attemptChanges?: (nodeId: string) => { kept: string[]; gone: string[] } | null;
+  /** OXB-185: the turns of an attempt of this task (sized to it); the provider's maxTurns stays the upper bound. */
+  turnsFor?: (nodeId: string, attempt: number, lastFailureClass: string | null) => number | null;
   /**
    * OXB-131: the model of an attempt. Receives the attempt number and the previous attempt's failure class; the
    * orchestrator applies override > tier escalation > the task's hint. Null keeps the executor's default.
@@ -831,7 +836,9 @@ export class Scheduler {
           this.blockNode(nodeId, ctx, status, blocked, 'budget_exhausted', budgetReason);
           return;
         }
-        const turnsLeft = ctx.budget?.remainingTurns() ?? null;
+        const budgetTurns = ctx.budget?.remainingTurns() ?? null;
+        const sizedTurns = ctx.turnsFor ? ctx.turnsFor(nodeId, attempt, attempt > 1 ? (lastResult?.failure_class ?? null) : null) : null;
+        const turnsLeft = budgetTurns != null && sizedTurns != null ? Math.min(budgetTurns, sizedTurns) : (budgetTurns ?? sizedTurns);
 
         const wsReq: WorkspaceRequest = {
           work_item_id: nodeId,
@@ -873,10 +880,12 @@ export class Scheduler {
             // Informed retry: the next attempt sees the command, the reason and the output — not just "failed".
             lastResult = {
               success: false,
-              failure_class: 'verify',
+              // OXB-185: out of turns, the red verify is a consequence — the class stays turns_exhausted.
+              failure_class: turnLimitWithWork ? 'turns_exhausted' : 'verify',
               evidence: lastResult.evidence,
-              output: describeVerifyFailure(node.verify.command, verifyResult.check, verifyResult.gaps, verifyResult.segment),
+              output: `${turnLimitWithWork ? `turns_exhausted: ${lastResult.turns_used ?? '?'}/${lastResult.turns_cap ?? '?'} turnos usados sem finish_task; o verify do trabalho parcial:\n` : ''}${describeVerifyFailure(node.verify.command, verifyResult.check, verifyResult.gaps, verifyResult.segment)}`,
               verify_log: buildVerifyLog(verifyResult.segments),
+              ...(turnLimitWithWork ? { turns_used: lastResult.turns_used, turns_cap: lastResult.turns_cap } : {}),
             };
             // OXB-120: a verify that failed for the environment (not the code) pauses the run — no attempt is spent.
             const envClass = classifyFailureOutput(`${verifyResult.check?.error ?? ''}\n${verifyResult.check?.stderr ?? ''}\n${verifyResult.check?.stdout ?? ''}`, verifyResult.check?.exit_code ?? null, (ctx.options as SchedulerOptions | undefined)?.failureClasses);
@@ -887,7 +896,7 @@ export class Scheduler {
             }
             // OXB-155: a verify that timed out did not fail — the clock did. It is never "identical_verify_failure".
             const verifyTimedOut = Boolean((verifyResult.check as { timed_out?: boolean } | undefined)?.timed_out);
-            const signature = verifyTimedOut ? null : verifyFailureSignature(verifyResult.check);
+            const signature = verifyTimedOut || turnLimitWithWork ? null : verifyFailureSignature(verifyResult.check);
             if (signature && signature === lastVerifySignature) {
               verifySuspect = true;
               this.emit(ctx, {
@@ -906,7 +915,7 @@ export class Scheduler {
             lastVerifySignature = signature;
             // OXB-171: the frozen test needs a file outside the task's scope (plan lint) and it is THAT test failing, or
             // the agent said the change it needs is out of scope → stop now: a retry cannot pass.
-            const scopeReason = scopeInsufficientReason(nodeId, ctx, `${verifyResult.check?.stdout ?? ''}\n${verifyResult.check?.stderr ?? ''}`, agentOutput);
+            const scopeReason = turnLimitWithWork ? null : scopeInsufficientReason(nodeId, ctx, `${verifyResult.check?.stdout ?? ''}\n${verifyResult.check?.stderr ?? ''}`, agentOutput);
             if (scopeReason) {
               lastResult = { ...lastResult, failure_class: 'scope_insufficient' };
               this.emit(ctx, {
@@ -983,7 +992,7 @@ export class Scheduler {
         lastError = lastResult.output || (lastResult.failure_class ?? 'unknown error');
 
         // OXB-171: the agent stopped saying the needed change is outside its files — a retry has the same files.
-        if (!lastResult.success && lastResult.failure_class !== 'scope_insufficient' && OUT_OF_SCOPE_RE.test(agentOutput)) {
+        if (!lastResult.success && lastResult.failure_class !== 'scope_insufficient' && lastResult.failure_class !== 'turns_exhausted' && OUT_OF_SCOPE_RE.test(agentOutput)) {
           lastResult = { ...lastResult, failure_class: 'scope_insufficient' };
           this.emit(ctx, {
             type: 'ScopeInsufficient',

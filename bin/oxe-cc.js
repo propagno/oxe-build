@@ -5468,7 +5468,8 @@ async function runRuntime(opts) {
         || '';
       const model = opts.model || process.env.OXE_MODEL || (_persisted && _persisted.model) || 'claude-sonnet-4-6';
       const baseUrl = opts.baseUrl || process.env.OXE_BASE_URL || (_persisted && _persisted.baseUrl) || 'https://api.anthropic.com/v1';
-      const maxTurns = opts.maxTurns || (_persisted && _persisted.maxTurns) || 10;
+      // OXB-185: no fixed 10 — the global cap only when given; each attempt gets turns sized to its task.
+      const maxTurns = opts.maxTurns || (_persisted && _persisted.maxTurns) || undefined;
       // Adapter: --adapter > configurado > `http` quando há chave/URL (comportamento anterior) >
       // `claude` quando o CLI está instalado (sem API key) > http.
       let adapterId = opts.adapter || (_persisted && _persisted.adapter) || '';

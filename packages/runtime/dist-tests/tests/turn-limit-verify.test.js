@@ -67,7 +67,8 @@ const exhausted = (evidence) => ({
             const result = await new scheduler_1.Scheduler().run(graphFor(cmd), ctx);
             strict_1.default.equal(result.status, 'completed');
             const retry = events.find((e) => e.type === 'RetryScheduled');
-            strict_1.default.equal((retry?.payload).reason, 'verify');
+            // OXB-185: out of turns, the red verify keeps the real cause
+            strict_1.default.equal((retry?.payload).reason, 'turns_exhausted');
         }
         finally {
             fs_1.default.rmSync(tmp, { recursive: true, force: true });

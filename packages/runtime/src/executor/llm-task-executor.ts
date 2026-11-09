@@ -133,10 +133,11 @@ export class LlmTaskExecutor implements TaskExecutor {
     // Only the tools offered for this node's actions may run; the model can still name others.
     const allowedTools = new Set(tools.map((tool) => tool.function.name));
     const cwd = lease.root_path;
-    const providerTurns = this.provider.maxTurns ?? 10;
-    const maxTurns = typeof options.maxTurns === 'number' && options.maxTurns > 0
-      ? Math.min(providerTurns, Math.floor(options.maxTurns))
-      : providerTurns;
+    // OXB-185: the provider's maxTurns is the global CAP; the attempt's turns (sized to the task, or the budget left)
+    // come in options.maxTurns. Without either, 10 (the old default).
+    const optTurns = typeof options.maxTurns === 'number' && options.maxTurns > 0 ? Math.floor(options.maxTurns) : null;
+    const providerTurns = this.provider.maxTurns ?? (optTurns ?? 10);
+    const maxTurns = optTurns != null ? Math.min(providerTurns, optTurns) : providerTurns;
     const systemPrompt = this.provider.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
 
     const messages: ChatMessage[] = [
@@ -264,10 +265,12 @@ export class LlmTaskExecutor implements TaskExecutor {
     if (completedBy === 'turn_limit_exhausted') {
       return done({
         success: false,
-        failure_class: 'llm',
+        failure_class: 'turns_exhausted',
         evidence: evidencePaths,
-        output: finalOutput || `Task exhausted ${maxTurns} turns without calling finish_task`,
+        output: `turns_exhausted: ${maxTurns}/${maxTurns} turnos usados sem finish_task${finalOutput ? `\n${finalOutput}` : ''}`,
         completed_by: completedBy,
+        turns_used: maxTurns,
+        turns_cap: maxTurns,
       });
     }
 

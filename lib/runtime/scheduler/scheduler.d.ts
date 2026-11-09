@@ -16,6 +16,9 @@ export interface TaskResult {
     evidence: string[];
     output: string;
     completed_by?: string;
+    /** OXB-185: turns used and the cap of the attempt, when it ended at the cap. */
+    turns_used?: number;
+    turns_cap?: number;
     /** Every verify segment's output with headers (1.21.2, OXB-066), for the attempt log. */
     verify_log?: string;
 }
@@ -104,6 +107,8 @@ export interface SchedulerContext {
         kept: string[];
         gone: string[];
     } | null;
+    /** OXB-185: the turns of an attempt of this task (sized to it); the provider's maxTurns stays the upper bound. */
+    turnsFor?: (nodeId: string, attempt: number, lastFailureClass: string | null) => number | null;
     /**
      * OXB-131: the model of an attempt. Receives the attempt number and the previous attempt's failure class; the
      * orchestrator applies override > tier escalation > the task's hint. Null keeps the executor's default.

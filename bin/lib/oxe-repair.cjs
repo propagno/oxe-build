@@ -24,6 +24,7 @@ function adjustmentFrom(output, changes) {
   const tests = [...new Set([...text.matchAll(/(?:✖|not ok \d+ -|FAIL(?:ED)?:?)\s+([^\n]{4,120})/g)].map((m) => m[1].trim()))].slice(0, 5);
   const assertion = /(AssertionError[^\n]{0,160}|Expected[^\n]{0,120}|expected[^\n]{0,120})/.exec(text);
   const parts = [];
+  if (/^turns_exhausted:/m.test(text)) parts.push('a tentativa acabou sem turnos: a próxima recebe o nível de turnos seguinte e deve priorizar terminar o escopo restante');
   if (tests.length) parts.push(`fazer passar: ${tests.join('; ')}`);
   if (assertion) parts.push(`a asserção: ${assertion[1].trim()}`);
   if (seg && !tests.length) parts.push(`o segmento que reprovou: ${seg[1].trim().slice(0, 160)}`);
@@ -56,7 +57,7 @@ function decide(task, doc, ctx) {
   const cfg = (ctx.config && ctx.config.execute && ctx.config.execute.repair) || {};
   const allow = new Set(Array.isArray(cfg.allow) ? cfg.allow : DEFAULT_ALLOW);
   const budget = Number.isInteger(cfg.budget) ? cfg.budget : 2;
-  const logic = ['verify', 'llm', 'logic', 'turn_limit_exhausted', 'no_tool_call'].includes(String(ctx.failureClass || ''));
+  const logic = ['verify', 'llm', 'logic', 'turn_limit_exhausted', 'turns_exhausted', 'no_tool_call'].includes(String(ctx.failureClass || ''));
   if (!logic) return null; // OXB-120: environment / quota / waiting are not repaired here
   const overBudget = (ctx.repairsSoFar || 0) >= budget;
   if (!ctx.final && !ctx.verifySuspect && !overBudget && allow.has('retry')) {

@@ -15,4 +15,5 @@ export type FailureClass =
   | 'scope_insufficient' // OXB-171: the task cannot pass inside its files (the frozen test needs a file outside them)
   | 'environment'      // OXB-120: the machine, not the code (exit 126/127, missing tool, network) — pauses the run
   | 'waiting_answer'   // OXB-125: the executor asked a blocking question the artifacts could not answer
+  | 'turns_exhausted'  // OXB-185: the attempt ended at the turn cap without finish_task — never a scope or verify failure
   | null;              // success — no failure

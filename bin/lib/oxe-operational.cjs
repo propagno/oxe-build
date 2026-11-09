@@ -138,6 +138,7 @@ function createExecutionContext(projectRoot, activeSession, options = {}) {
     onEvent: options.onEvent || null,
     attemptChanges: options.attemptChanges || null,
     repairFor: options.repairFor || null,
+    turnsFor: options.turnsFor || null,
     modelFor: options.modelFor || null,
     options: options.schedulerOptions || {},
   };
@@ -2613,6 +2614,8 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     // The scheduler already persists every event through the runtime bus (events/bus.ts →
     // appendEvent). This hook only forwards progress; writing here again duplicated the log.
     attemptChanges: (id) => lastAttemptChanges.get(id) || null,
+    // OXB-185: turns sized to each task (max_turns > size S/M/L > estimate); the provider cap stays the bound.
+    turnsFor: options.turnsFor || (() => { try { const { doc, paths: tp } = readPlanJsonDoc(projectRoot, activeSession); const pk = readJsonQuiet(tp.implementationPack); return require('./oxe-turns.cjs').createTurnSizer(readProjectConfig(projectRoot), new Map(((doc || {}).tasks || []).map((t) => [t.id, t])), new Map(((pk && pk.tasks) || []).map((x) => [x.id || x.task, x]))); } catch { return null; } })(),
     // OXB-130: repair strategy before each retry (opt-in: execute.repair in config).
     repairFor: options.repairFor || (repairOn ? (id, info) => {
       const lib = require('./oxe-repair.cjs');
@@ -4059,6 +4062,11 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
   try {
     const { doc: pjq } = readPlanJsonDoc(projectRoot, activeSession);
     result.warnings.push(...require('./oxe-phase-extras.cjs').quarantineWarnings(projectRoot, pjq));
+  } catch { /* auxiliar */ }
+  // OXB-185: a task whose size needs more turns than the global cap.
+  try {
+    const { doc: pjt, paths: ptt } = readPlanJsonDoc(projectRoot, activeSession);
+    result.warnings.push(...require('./oxe-turns.cjs').turnWarnings(pjt, readJsonQuiet(ptt.implementationPack), readProjectConfig(projectRoot)));
   } catch { /* auxiliar */ }
   // OXB-134: research claims without a source; assumptions a task uses without a plan risk.
   try {

@@ -1651,3 +1651,20 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 - **Orçamento:** é por tarefa. Ao esgotar, o retry não é mais oferecido.
 - **Tentativas esgotadas:** quando todas acabaram, a decisão final é decompose ou prune.
 - **Teste:** `tests/oxe-1212-repair.test.cjs`.
+
+## OXB-185: turnos fixos em 10 e a exaustão de turnos escondida como escopo ou verify
+
+- **Status:** resolvido (1.21.2). P0, relatado pelo TECH LEAD. Na oxespace-150 F2, a T13 (remoção de ~5.000 linhas) terminou as 3 tentativas em turns=10, cada uma com 36–39 tool calls e US$ 4,6, e foi classificada como `scope_insufficient` ou falha de verify.
+- **A classe `turns_exhausted`:** uma tentativa que acaba no teto sem `finish_task` passa a ter a classe `turns_exhausted` (antes era `llm`), com a contagem na saída (`turns_exhausted: N/N turnos usados sem finish_task`).
+  - Quando há trabalho no escopo e o verify roda vermelho, a classe continua `turns_exhausted`, com o verify como detalhe.
+  - Ela nunca vira `scope_insufficient`: o "precisa de arquivo fora do escopo" do agente é ignorado nesse caso.
+  - Ela nunca vira `verify_suspect`: a mesma saída do verify em duas tentativas sem turnos não para o laço.
+  - O `RetryScheduled` e o `WorkItemBlocked` levam `turns_exhausted`.
+- **Turnos por tarefa** (`bin/lib/oxe-turns.cjs`, `ctx.turnsFor`):
+  - o `max_turns` da tarefa no PLAN.json vem antes de `size: S|M|L`, que vem antes da estimativa pelo escopo (arquivos mais símbolos do pack, um glob vale 3; até 2 é S, até 6 é M, acima é L);
+  - os valores vêm de `execute.turns` (padrão S 15, M 30, L 60);
+  - o retry depois de `turns_exhausted` ganha o nível seguinte, ou o dobro do `max_turns`;
+  - o `runtime.provider.maxTurns` (ou `--max-turns`) continua sendo o teto global, mas o padrão fixo de 10 da CLI saiu. Sem teto, vale o tamanho da tarefa. Executores usados fora do `runtime execute` mantêm o 10.
+- **Lint:** `plan lint` avisa quando uma tarefa pede mais turnos do que o teto global permite.
+- **Escalonamento e reparo:** `turns_exhausted` conta como falha `logic` para o escalonamento de modelo (OXB-131) e para o reparo (OXB-130), com o ajuste "a próxima recebe o nível de turnos seguinte".
+- **Teste:** `tests/oxe-1212-turns.test.cjs` (a precedência, o execute passando 30 e depois 60, nenhum ScopeInsufficient, a classe no retry e no bloqueio, o aviso do lint). Também `gap4-finish-task` e `turn-limit-verify`, atualizados para a nova classe.
