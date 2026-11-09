@@ -1612,3 +1612,14 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 - **A escolha:** config `context.compact: auto|on|off`. O `runtime context --used --limit` diz qual variante ler; em `auto`, é a compacta quando a folga está abaixo de 30%.
 - **`oxe-cc runtime context-pack --task T3 [--stats]`:** grava `.oxe/context-packs/T3.json` com a tarefa, as dependências transitivas, os testes de aceite dela e as entradas do IMPLEMENTATION-PACK dessas tarefas, e mostra a redução contra o PLAN.json e o pack inteiros. O teste exige ≥ 70% num plano de 30 tarefas.
 - **Teste:** `tests/oxe-1212-workflow-budget.test.cjs`.
+
+## OXB-134: pesquisa com proveniência
+
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-research-provenance.cjs`, com o template `RESEARCH.template.md` e o workflow `research.md`.
+- **A nota:** `## Afirmações` (cada item com `[fonte: arquivo:linha|URL|comando]`) e `## Suposições` (`- S1: …`).
+- **O lint (`plan lint`, avisos):**
+  - aponta cada afirmação sem fonte;
+  - aponta suposição sem id;
+  - aponta uma nota antiga sem as seções, como aviso e não como erro;
+  - emite `assumption_without_risk` para a tarefa que usa uma suposição (`assumptions: ["S1"]`, ou S1 no título ou na descrição) sem um risco no PLAN.json (`risks: [{ assumption: "S1", mitigation }]`).
+- **Teste:** `tests/oxe-1212-research-provenance.test.cjs`. Três afirmações sem fonte geram três avisos; a ligação suposição → risco; a nota antiga.

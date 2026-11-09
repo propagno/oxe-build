@@ -3995,6 +3995,11 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     const { doc: pjq } = readPlanJsonDoc(projectRoot, activeSession);
     result.warnings.push(...require('./oxe-phase-extras.cjs').quarantineWarnings(projectRoot, pjq));
   } catch { /* auxiliar */ }
+  // OXB-134: research claims without a source; assumptions a task uses without a plan risk.
+  try {
+    const { doc: pjr } = readPlanJsonDoc(projectRoot, activeSession);
+    result.warnings.push(...require('./oxe-research-provenance.cjs').lintResearch(projectRoot, pjr));
+  } catch { /* auxiliar */ }
   // OXB-112: decisions cited by tasks must exist; the phase's decisions should be cited by some task.
   try {
     const { doc: pjd } = readPlanJsonDoc(projectRoot, activeSession);
