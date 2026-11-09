@@ -2194,6 +2194,26 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
                 appendEvent(projectRoot, activeSession, { type: 'PolicyWarning', run_id: current.run_id, work_item_id: event.work_item_id, payload: { reason: 'checkpoint_incomplete', leftover: cp.leftover, commit: cp.commit } });
                 checkpointFailure = { reason: `checkpoint incompleto: ${cp.leftover.length} arquivo(s) do escopo fora do commit (${cp.leftover.slice(0, 5).join(', ')})`, commit: cp.commit, leftover: cp.leftover };
               }
+            } else if (!cp.failed) {
+              // OXB-176: the attempt added nothing. Done only with an earlier checkpoint of this task (its work is
+              // already committed); otherwise empty_checkpoint — never "completed with no commit" and on to the next.
+              const earlier = findTaskCheckpoint(projectRoot, event.work_item_id, phaseCtxForCommits);
+              const planTaskNow = planTaskById.get(event.work_item_id) || {};
+              const scopeNow = (planTaskNow.files || []).map((p) => String(p).replace(/\\/g, '/')).filter((p) => p && !p.includes('*'));
+              const dirtyNow = scopeNow.length ? changedPathsUnder(projectRoot, scopeNow) : [];
+              if (!scopeNow.length || isVerifyOnlyNode(event.work_item_id) || planTaskNow.kind === 'external_delivery' || (planTaskNow.meta && ['external_delivery', 'spike'].includes(planTaskNow.meta.kind))) {
+                // no file scope (verify-only / external / spike): nothing to commit, done as before
+              } else if (earlier && !dirtyNow.length) {
+                checkpoint = earlier;
+                appendEvent(projectRoot, activeSession, { type: 'GateResolved', run_id: current.run_id, work_item_id: event.work_item_id, payload: { gate: 'checkpoint', commit: earlier, reused: true } });
+              } else {
+                checkpointFailure = {
+                  kind: 'empty_checkpoint',
+                  reason: dirtyNow.length
+                    ? `empty_checkpoint: a tentativa não acrescentou diff, e as mudanças no escopo (${dirtyNow.slice(0, 6).join(', ')}) estavam na árvore antes dela sem serem atribuídas à tarefa — o próximo execute as atribui (restos da própria tarefa) e commita`
+                    : 'empty_checkpoint: a tarefa completou sem nenhuma mudança e sem checkpoint anterior dela — confira se o trabalho já está na base (oxe-cc plan done Tn --commit <sha>) ou reabra',
+                };
+              }
             } else if (cp.failed) {
               checkpointFailure = { reason: cp.reason, ...(cp.snapshot ? { snapshot: cp.snapshot } : {}), ...(cp.kind ? { kind: cp.kind } : {}), ...(cp.related_red ? { related_red: cp.related_red } : {}) };
               if (cp.kind === 'scope_insufficient') appendEvent(projectRoot, activeSession, { type: 'ScopeInsufficient', run_id: current.run_id, work_item_id: event.work_item_id, payload: { task: event.work_item_id, reason: 'related_tests_outside_scope', tests: cp.related_red || [], at: 'checkpoint' } });
@@ -5504,8 +5524,11 @@ function ownLeftoversByTask(projectRoot, activeSession, interrupted = []) {
   const inScope = (scope, p) => scope.some((e) => e === p || p.startsWith(`${e.replace(/\/$/, '')}/`));
   for (const t of tasks) {
     if (t.done === true) continue;
+    // OXB-176: PLAN.json is the authority — a task that ran before and is not done now (failed, interrupted, or
+    // completed and then reopened: F4's T4 on rc.32) owns its in-scope leftovers.
     const started = lastStart.get(t.id);
-    if (started == null || (lastDone.has(t.id) && lastDone.get(t.id) > started)) continue; // never ran, or completed since
+    if (started == null) continue; // never ran
+    void lastDone;
     const scope = scopes.get(t.id) || [];
     if (!scope.length) continue;
     const dirty = changedPathsUnder(projectRoot, scope);

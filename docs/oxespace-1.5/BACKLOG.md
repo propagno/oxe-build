@@ -1260,3 +1260,16 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
     - Testes de tarefa pendente, de pasta parked e de reprodução de bug: commit feito.
     - Vermelho também no pai: commit feito.
     - Vermelho real (verde antes): checkpoint falha e a T2 nunca começa.
+
+## OXB-176: tarefa reaberta completava sem checkpoint e a run seguia (P0)
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 09/11 (F4, run oxe-run-mw855cc1-yap7sx, rc.32).
+  - O que aconteceu: a T4, deixada sem commit pela rc.31, foi reaberta com `plan reopen`. A tentativa nova não mudou nada, o diff próprio deu vazio, e não houve **nenhum** evento de checkpoint: a T4 "completou", o HEAD ficou na T3 e a T5 começou. O typecheck da T5 reprovou porque usava o que a T4 registra.
+  - O `ownLeftoversByTask` (OXB-174) pulava a tarefa que já tinha completado antes. Agora o PLAN.json é a autoridade: tarefa que já rodou e **não está done** (falhou, foi interrompida, ou completou e foi reaberta) herda os restos do próprio escopo, com as mesmas regras de posse.
+  - **Completou sem diff próprio:**
+    - escopo limpo e um checkpoint anterior da tarefa: done com esse commit (`GateResolved reused`);
+    - senão, **`empty_checkpoint`**: checkpoint falho, não done, a run para (OXB-175) e nenhuma dependente começa. A mensagem diz se havia mudanças no escopo não atribuídas, que o próximo execute atribui e commita.
+  - Tarefas sem escopo de arquivos (verify-only, entrega externa, spike) continuam como antes.
+  - Mudou o comportamento da OXB-167 para "nada mudou no escopo": antes ficava done sem commit, agora é `empty_checkpoint` quando não há checkpoint anterior.
+  - Teste: `tests/oxe-1212-checkpoint-phase.test.cjs` (a A reaberta com as edições na árvore e uma tentativa sem escrita: a A commita, e a B só começa depois do commit; nada mudou e sem checkpoint anterior: `empty_checkpoint`).
+

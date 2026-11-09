@@ -85,12 +85,12 @@ describe('OXB-167: a task is done only with its checkpoint commit', () => {
     assert.deepEqual(git(dir, 'show', '--name-only', '--format=', 'HEAD').stdout.trim().split(/\r?\n/).sort(), ['src/a.js', 'src/b.js']);
   });
 
-  it('nothing changed in the scope: done with no commit, as before (not a failure)', async () => {
+  it('nothing changed and no earlier checkpoint: empty_checkpoint, not done (OXB-176; was done with no commit)', async () => {
     const plan = { schema_version: 1, tasks: [{ id: 'T1', title: 'noop', wave: 1, files: ['src/a.js'], verify: { commands: [ok] } }] };
     const dir = project({ plan, files: { 'src/a.js': 'a0\n' } });
     const res = await op.runRuntimeExecute(dir, null, { executor: writer(dir, {}), skipPreflight: true, checkpointCommits: true });
-    assert.equal(res.result.checkpoint_failed, undefined);
-    assert.equal(planOf(dir).tasks[0].done, true);
+    assert.equal(res.result.checkpoint_failed[0].kind, 'empty_checkpoint');
+    assert.notEqual(planOf(dir).tasks[0].done, true);
   });
 });
 
@@ -454,5 +454,35 @@ describe('OXB-175: related reds that are not the task\'s never undo its commit; 
     assert.equal(res.result.status, 'checkpoint_failed');
     assert.equal(res.result.stopped_after_checkpoint_failure, true);
     assert.equal(planOf(dir).tasks[0].checkpoint_failed.kind, 'scope_insufficient');
+  });
+});
+
+describe('OXB-176: a reopened task whose work is already in the tree commits it; its dependents wait for the commit', () => {
+  it('A is reopened with its edits in the tree and writes nothing: A commits them, then B starts', async () => {
+    const plan = { schema_version: 1, tasks: [
+      { id: 'T1', title: 'A thread.place.gone', wave: 1, files: ['src/messages.ts'], verify: { commands: [ok] } },
+      { id: 'T2', title: 'B uses it', wave: 2, depends_on: ['T1'], files: ['src/thread.ts'], verify: { commands: [ok] } },
+    ] };
+    const dir = project({ plan, files: { 'src/messages.ts': 'm0\n', 'src/thread.ts': 't0\n' } });
+    // run 1 (rc.31): A ran and "completed" — its edits stayed uncommitted
+    const first = { async execute(node) { if (node.id === 'T1') fs.writeFileSync(path.join(dir, 'src', 'messages.ts'), 'm1 thread.place.gone\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    await op.runRuntimeExecute(dir, null, { executor: first, skipPreflight: true, wave: 1 });
+    op.runtimePlanReopen(dir, null, { task: 'T1' });
+    assert.notEqual(planOf(dir).tasks[0].done, true);
+    // run 2 (rc.32): A's new attempt changes nothing; B writes its file
+    const order = [];
+    const second = { async execute(node) {
+      order.push(`${node.id}@${git(dir, 'log', '--format=%s', '-1').stdout.trim()}`);
+      if (node.id === 'T2') fs.writeFileSync(path.join(dir, 'src', 'thread.ts'), 't1\n');
+      return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' };
+    } };
+    await op.runRuntimeExecute(dir, null, { executor: second, skipPreflight: true, checkpointCommits: true });
+    const tasks = planOf(dir).tasks;
+    const a = tasks.find((t) => t.id === 'T1');
+    assert.equal(a.done, true, JSON.stringify(a.checkpoint_failed));
+    assert.equal(git(dir, 'show', `${a.done_commit}:src/messages.ts`).stdout, 'm1 thread.place.gone\n', 'A commits its own leftovers');
+    assert.ok(order[1] && order[1].startsWith('T2@'), JSON.stringify(order));
+    assert.notEqual(order[1], 'T2@init', 'B starts only after A\'s commit');
+    assert.equal(tasks.find((t) => t.id === 'T2').done, true);
   });
 });
