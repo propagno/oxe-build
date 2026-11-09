@@ -475,6 +475,8 @@ function parseInstallArgs(argv) {
     else if (a === '--all-worktrees') out.allWorktrees = true;
     else if (a === '--release') out.releaseDoctor = true;
     else if (a === '--project') out.projectDoctor = true;
+    else if (a === '--migrate-config') out.migrateConfig = true;
+    else if (a === '--apply') out.applyMigration = true;
     else if (a === '--write-manifest') out.writeManifest = true;
     else if (!a.startsWith('-')) out.restPositional.push(a);
     else {
@@ -2075,6 +2077,27 @@ function runStatus(target, opts = {}) {
 
 /** @param {string} target */
 function runDoctor(target, options = {}) {
+    // OXB-100: the config migrations of this version (notes + mechanical key moves), applied only with --apply.
+    if (options.migrateConfig) {
+      const ch = require('./lib/oxe-channels.cjs');
+      const cfgPath = path.join(target, '.oxe', 'config.json');
+      const pkgVersion = readPkgVersion();
+      if (!fs.existsSync(cfgPath)) { console.error(`${red}✗${reset} sem .oxe/config.json em ${target}`); process.exitCode = 1; return; }
+      const config = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      const list = ch.pending(config, config.oxe_config_version || null, pkgVersion);
+      const out = options.applyMigration ? ch.apply(cfgPath, pkgVersion) : { from: config.oxe_config_version || null, to: pkgVersion, pending: list };
+      if (options.json) { console.log(JSON.stringify({ oxeMigrateConfigSchema: 1, ...out }, null, 2)); return; }
+      printSection('OXE ▸ doctor --migrate-config');
+      const notes = options.applyMigration ? out.notes : list.flatMap((m) => m.notes.map((n) => `${m.version}: ${n}`));
+      const moves = options.applyMigration ? out.applied : list.flatMap((m) => m.moves.map((mv) => `${mv.from} → ${mv.to}`));
+      console.log(`  config de ${out.from || '(sem versão)'} para ${out.to}`);
+      for (const n of notes) console.log(`  - ${n}`);
+      for (const mv of moves) console.log(`  ${options.applyMigration ? 'aplicado' : 'pendente'}: ${mv}`);
+      if (!notes.length && !moves.length) console.log('  nada a migrar');
+      if (!options.applyMigration && (notes.length || moves.length)) console.log('  aplicar (com backup): oxe-cc doctor --migrate-config --apply');
+      if (options.applyMigration) console.log(`  backup: ${path.relative(target, out.backup)}`);
+      return;
+    }
     if (options.project) {
       // 1.21 (OXB-006): the machine against the project's engines/.nvmrc/packageManager, the same check the execute
       // preflight blocks on.
@@ -6603,6 +6626,7 @@ async function main() {
     argv[0] === 'docs' ||
     argv[0] === 'eval' ||
     argv[0] === 'design' ||
+    argv[0] === 'release' ||
     argv[0] === 'state' ||
     argv[0] === 'guards' ||
     argv[0] === 'verify' ||
@@ -6998,6 +7022,28 @@ async function main() {
         for (const f of r.open) console.log(`    ${f.fid} (${f.severity})${f.place ? ` ${f.place}` : ''} ${f.text}${f.reopened ? ` — ${f.reopened}` : ''}`);
         if (r.closed.length) console.log(`    encerrados: ${r.closed.map((f) => `${f.fid}=${f.status}`).join(', ')}`);
       }
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // OXB-100: next (RC) and stable channels — records and prints the npm commands; never publishes.
+  if (command === 'release' && argv[0] === 'channel') {
+    const sub = ['status', 'next', 'promote'].includes(argv[1]) ? argv[1] : 'status';
+    const o = { dir: process.cwd(), json: false };
+    for (let i = 2; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (['--to', '--evidence', '--phase', '--project', '--by'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-') && !o.version) o.version = a;
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const ch = require('./lib/oxe-channels.cjs');
+      const out = sub === 'next' ? ch.recordNext(o.dir, o.version || readPkgVersion()) : sub === 'promote' ? ch.promote(o.dir, o.version, o) : { doc: ch.readChannels(o.dir), commands: [] };
+      if (o.json) { console.log(JSON.stringify({ oxeReleaseChannelSchema: 1, ...out }, null, 2)); return; }
+      console.log(`  next: ${out.doc.next || '—'} · stable: ${out.doc.stable || '—'}`);
+      for (const cmd of out.commands) console.log(`  publique você mesmo: ${cmd}`);
     } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
     return;
   }

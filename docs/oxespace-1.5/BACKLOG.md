@@ -762,9 +762,18 @@ Cada bloco tem uma meta medível:
 
 ## OXB-100: dois canais, `next` (RC) e `stable`
 
-- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
-  - `stable` é promovido só depois que uma fase do OXESpace fecha naquela build.
-  - Cada versão leva CHANGELOG e nota de migração de config (`oxe-cc doctor --migrate-config`).
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-channels.cjs`.
+- **Os canais:** `oxe-cc release channel status|next <versão>|promote <versão> --to stable --project <nome> --phase Fn --evidence <ref>`.
+  - O `stable` só é promovido com uma fase de projeto real fechada naquela build. A evidência é o commit ou o dossiê do close.
+  - Uma pré-release (`-rc`) nunca vai para stable.
+  - O registro fica em `release-evidence/channels.json`.
+  - O comando só imprime os comandos npm (`npm publish --tag next`, `npm dist-tag add … latest`) e **nunca publica**: a publicação é do mantenedor, com o OTP.
+- **Migração de config:**
+  - `oxe/migrations/config-migrations.json` traz, por versão, as notas e os movimentos mecânicos de chaves do `.oxe/config.json`;
+  - `oxe-cc doctor --migrate-config` lista o que está pendente desde `oxe_config_version`;
+  - com `--apply`, faz backup (`config.json.bak-<versão>`), move as chaves e grava a versão;
+  - as notas são impressas, nunca aplicadas caladas. A 1.21.2 traz as notas de maxTurns como teto (OXB-185), dos opt-ins novos e do eval-report.
+- **Teste:** `tests/oxe-1212-channels.test.cjs`.
 
 ## OXB-101: suíte de regressão com programas REAIS
 
