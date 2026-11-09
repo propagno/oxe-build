@@ -826,6 +826,26 @@ function runtimeContextUsage(projectRoot, activeSession, options = {}) {
   return { ...lvl, handoff, workflows };
 }
 
+/** OXB-102: `oxe-cc runtime train [status|sync] [--apply]` — merge-train awareness of the task PRs. */
+function runtimeTrain(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-merge-train.cjs');
+  const items = lib.status(projectRoot, readEvents(projectRoot, activeSession), { spawn: options.spawn });
+  if (options.action !== 'sync') return { items };
+  const left = items.filter((i) => i.state === 'left');
+  if (!options.apply) return { items, plan: left.map((i) => ({ task: i.task, url: i.url, action: i.action })), applied: false };
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const { doc } = (() => { try { return readPlanJsonDoc(projectRoot, activeSession); } catch { return { doc: null }; } })();
+  const results = [];
+  for (const item of left) {
+    const task = ((doc && doc.tasks) || []).find((t) => t.id === item.task);
+    const verifyCommand = task && task.verify && Array.isArray(task.verify.commands) ? task.verify.commands.join(' && ') : null;
+    const r = lib.resync({ root: projectRoot, item, verifyCommand, spawn: options.spawn, reopen: (id) => { try { require('./oxe-plan-json.cjs').markPlanTaskOpen(paths.plan, id, { by: 'merge-train' }); } catch { /* sem PLAN.md */ } } });
+    appendEvent(projectRoot, activeSession, { type: 'MergeTrainResync', work_item_id: item.task, payload: { url: item.url, ok: r.ok, why: r.why || null, steps: r.steps } });
+    results.push({ task: item.task, ...r });
+  }
+  return { items, results, applied: true };
+}
+
 /** OXB-104: `oxe-cc design build` → .oxe/SYSTEM-DESIGN.md (keeps the prose of existing sections). */
 function runtimeDesignBuild(projectRoot, activeSession) {
   const lib = require('./oxe-system-design.cjs');
@@ -8705,6 +8725,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeTrain,
   runtimeDesignBuild,
   runtimeSpecFreeze,
   runtimePlanBuild,

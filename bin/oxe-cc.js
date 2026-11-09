@@ -4254,6 +4254,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--freeze') out.freeze = true;
     else if (a === '--stats') out.stats = true;
     else if (a === '--explain') out.explain = true;
+    else if (a === '--apply') out.applyTrain = true;
     else if (a === '--until' && argv[i + 1]) out.until = String(argv[++i]);
     else if (a === '--metric' && argv[i + 1]) out.metric = String(argv[++i]);
     else if (a === '--method' && argv[i + 1]) out.method = String(argv[++i]);
@@ -4376,6 +4377,9 @@ function parseRuntimeArgs(argv) {
     if (positionals[1]) out.subAction = positionals[1];
     if (positionals[2]) out.uiFolder = positionals[2];
     if (positionals[3]) out.dir = path.resolve(positionals[3]);
+  } else if (out.action === 'train') {
+    if (positionals[1]) out.subAction = positionals[1];
+    if (positionals[2]) out.dir = path.resolve(positionals[2]);
   } else if (out.action === 'nfr') {
     if (positionals[1]) out.subAction = positionals[1];
     if (positionals[2]) out.dir = path.resolve(positionals[2]);
@@ -5781,6 +5785,20 @@ async function runRuntime(opts) {
       const out = oxeOperational.runtimeWaive(opts.dir, activeSession, { criteria: opts.criteria, reason: opts.reason, until: opts.until, by: opts.by, phase: opts.phase });
       if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeWaiveSchema: 1, ...out }, null, 2)); return; }
       for (const w of out.waivers) console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${w.criterion} com waiver de ${w.by} até ${w.until}: ${w.reason}`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
+  // OXB-102: merge-train awareness (read-only unless sync --apply).
+  if (opts.action === 'train') {
+    try {
+      const sub = opts.subAction === 'sync' ? 'sync' : 'status';
+      const out = oxeOperational.runtimeTrain(opts.dir, activeSession, { action: sub, apply: Boolean(opts.applyTrain) });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeTrainSchema: 1, ...out }, null, 2)); return; }
+      if (!out.items.length) console.log('  nenhuma tarefa promovida (TaskPromoted) para acompanhar');
+      for (const i of out.items) console.log(`  ${i.task} ${i.url || i.branch || ''} — ${i.state}${i.note ? ` (${i.note})` : ''} → ${i.action}`);
+      if (out.plan && out.plan.length) console.log(`  sync com --apply faria: ${out.plan.map((p) => p.task).join(', ')}`);
+      for (const r of out.results || []) console.log(`  ${r.ok ? green + '✓' : red + '✗'}${reset} ${r.task}: ${r.steps.map((s) => `${s.step}${s.ok === false ? ' ✗' : ''}`).join(' → ')}${r.why ? ` — ${r.why}` : ''}`);
       return;
     } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
   }

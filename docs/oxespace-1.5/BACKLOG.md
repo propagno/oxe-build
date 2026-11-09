@@ -788,10 +788,18 @@ Cada bloco tem uma meta medível:
 
 ## OXB-102: ciência do merge-train
 
-- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
-  - Lê o estado do PR e os comentários `merge-train:`.
-  - Quando o PR de uma tarefa sai do trem: reabre a tarefa, faz merge da main, roda o verify de novo, push e relabel.
-  - Nunca faz push num PR na fila no meio do carro. Nunca apaga branch ou tag.
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-merge-train.cjs`.
+- **O estado do trem:** para cada tarefa promovida (eventos `TaskPromoted`), o OXE lê o PR com `gh pr view --json state,labels,comments,headRefName,url` e o último comentário `merge-train:`. Os estados são queued, riding (car N), left (removed/kicked/dequeued, ou o label `merge-train:removed`) e merged.
+- **`oxe-cc runtime train status`:** só leitura.
+- **`oxe-cc runtime train sync`:** sem `--apply`, só imprime o plano. Com `--apply`, para cada PR que saiu do trem:
+  1. reabre a tarefa no PLAN.json (`by: merge-train`);
+  2. faz merge de `origin/<base>` no branch num worktree temporário;
+  3. roda o verify da tarefa;
+  4. faz push sem force;
+  5. troca o label (`--remove-label merge-train:removed --add-label merge-train`).
+- **Onde para:** no primeiro passo que falha. Um conflito de merge ou um verify vermelho não envia nada.
+- **O que nunca faz:** push num PR queued ou riding, apagar branch ou tag, ou dar merge no PR. O worktree é removido sem `--force`.
+- **Teste:** `tests/oxe-1212-merge-train.test.cjs`, com um remote local de verdade e o gh simulado. O PR que saiu recebe o merge da main e o push, e o que está no vagão continua intacto.
 
 ## OXB-103: modo coordenador
 
