@@ -4239,6 +4239,9 @@ function parseRuntimeArgs(argv) {
     else if (a === '--promote-each') out.promoteEach = true;
     else if (a === '--reopen') out.reopen = true;
     else if (a === '--waive' && argv[i + 1]) out.waive = String(argv[++i]);
+    else if (a === '--used' && argv[i + 1]) out.used = Number(argv[++i]);
+    else if (a === '--limit' && argv[i + 1]) out.limit = Number(argv[++i]);
+    else if (a === '--note' && argv[i + 1]) out.note = String(argv[++i]);
     else if (a === '--no-defects') out.noDefects = true;
     else if (a === '--hold-deps' || a === '--promote-hold-deps') out.holdDeps = true;
     else if (a === '--allow-undelivered') out.allowUndelivered = true;
@@ -5578,6 +5581,29 @@ async function runRuntime(opts) {
     } catch (err) {
       console.error(`${red}${err && err.message ? err.message : 'Falha ao executar runtime.'}${reset}`);
       process.exit(1);
+    }
+  }
+
+  // OXB-113: resumable handoff, and the context reading a host hook sends.
+  if (opts.action === 'handoff' || opts.action === 'context') {
+    try {
+      if (opts.action === 'handoff') {
+        const out = oxeOperational.runtimeHandoff(opts.dir, activeSession, { note: opts.note || null, reason: opts.reason || 'manual' });
+        if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeHandoffSchema: 1, ...out }, null, 2)); return; }
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} handoff gravado em ${out.files.md} — uma sessão nova retoma por ele`);
+        return;
+      }
+      const out = oxeOperational.runtimeContextUsage(opts.dir, activeSession, { used: opts.used, limit: opts.limit });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeContextSchema: 1, ...out }, null, 2)); return; }
+      const pct = Math.round(out.ratio * 100);
+      if (out.level === 'critical') console.log(`  ${c ? red : ''}contexto ${pct}%${c ? reset : ''} — handoff gravado em ${out.handoff.md}; compacte ou abra uma sessão nova e retome por ele`);
+      else if (out.level === 'warn') console.log(`  ${c ? yellow : ''}contexto ${pct}%${c ? reset : ''} — termine a tarefa atual e rode oxe-cc runtime handoff antes de começar outra`);
+      else console.log(`  contexto ${pct}%`);
+      return;
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+      return;
     }
   }
 

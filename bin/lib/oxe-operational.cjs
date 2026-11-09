@@ -757,6 +757,40 @@ function runtimeDefects(projectRoot, activeSession, options = {}) {
   return { register, open: lib.open(register) };
 }
 
+/**
+ * OXB-113: `oxe-cc runtime handoff [--note]` and `oxe-cc runtime context --used N --limit M` (host hook). The handoff
+ * is a resumable snapshot (.oxe/HANDOFF.md/.json); a context reading at ≥ 85% writes it on its own.
+ */
+function runtimeHandoff(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-handoff.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  let program = null;
+  try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; }
+  let work = null;
+  try { work = runtimePhaseWork(projectRoot, activeSession); } catch { work = null; }
+  let changes = [];
+  try { changes = require('./oxe-change.cjs').listChanges(programDir); } catch { changes = []; }
+  let defects = [];
+  try { const reg = require('./oxe-open-defects.cjs').read(projectRoot); defects = reg ? require('./oxe-open-defects.cjs').open(reg) : []; } catch { defects = []; }
+  let doc = null;
+  try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
+  const data = lib.buildHandoff(projectRoot, { phase: program && program.active_phase, run: readRunState(projectRoot, activeSession), work, changes, defects, plan: doc }, options);
+  const files = lib.writeHandoff(projectRoot, data);
+  appendEvent(projectRoot, activeSession, { type: 'HandoffWritten', payload: { reason: data.reason, files, context: data.context } });
+  return { handoff: data, files };
+}
+
+function runtimeContextUsage(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-handoff.cjs');
+  const cfg = (readProjectConfig(projectRoot) || {}).context || {};
+  const lvl = lib.contextLevel(options.used, options.limit, { warn: Number(cfg.warn) || lib.THRESHOLDS.warn, critical: Number(cfg.critical) || lib.THRESHOLDS.critical });
+  appendEvent(projectRoot, activeSession, { type: 'ContextUsage', payload: lvl });
+  let handoff = null;
+  if (lvl.level === 'critical') handoff = runtimeHandoff(projectRoot, activeSession, { reason: 'context_critical', context: lvl }).files;
+  return { ...lvl, handoff };
+}
+
 /** OXB-112: `oxe-cc decision add|list`. */
 function runtimeDecision(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-decisions.cjs');
@@ -7746,6 +7780,8 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeHandoff,
+  runtimeContextUsage,
   runtimeDecision,
   runtimeDefects,
   projectStatusPaths,

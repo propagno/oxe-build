@@ -857,9 +857,20 @@ Requisitos escritos pelo TECH LEAD, aprovados pelo usuário. O desenho e a imple
 
 ## OXB-113: monitor de folga de contexto do orquestrador
 
-- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
-  - Hooks registram o uso de contexto e avisam nos limites.
-  - `oxe-cc runtime handoff` grava um estado retomável antes da compactação.
+- **Status:** resolvido (1.21.2). `bin/lib/oxe-handoff.cjs`.
+  - **`oxe-cc runtime handoff [--note "…"]`:** grava `.oxe/HANDOFF.md` e `.json`, um estado retomável que dispensa reler a conversa:
+    - fase, branch e HEAD;
+    - arquivos sujos fora de `.oxe/`;
+    - run;
+    - tarefas done, pendentes e externas;
+    - checkpoints falhos com o tipo;
+    - CRs e defeitos abertos;
+    - o próximo comando.
+  - **`oxe-cc runtime context --used <tokens> --limit <tokens>`:** é para o hook do host (por exemplo PreCompact ou um hook por turno), que manda o uso de contexto do orquestrador.
+    - Registra o evento `ContextUsage` e classifica: ok, `warn` a partir de 70% ("termine a tarefa atual e rode o handoff") e `critical` a partir de 85%, quando grava o handoff sozinho (`reason: context_critical`).
+    - Os limiares mudam com `context.warn` / `context.critical` no `.oxe/config.json`.
+  - Hook do Claude Code, em `.claude/settings.json`: `{ "hooks": { "PreCompact": [{ "hooks": [{ "type": "command", "command": "npx oxe-cc runtime handoff --reason precompact" }] }] } }`.
+  - Teste: `tests/oxe-1212-handoff.test.cjs` (o handoff com as tarefas, o checkpoint falho, o arquivo sujo e o próximo passo; os três níveis de contexto, com o handoff automático no crítico; os limiares configuráveis).
 
 ## OXB-114: verificação de UI ao vivo dentro do loop (opt-in por fase)
 
