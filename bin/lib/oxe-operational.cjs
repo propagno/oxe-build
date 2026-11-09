@@ -826,6 +826,17 @@ function runtimeContextUsage(projectRoot, activeSession, options = {}) {
   return { ...lvl, handoff, workflows };
 }
 
+/** OXB-154: `oxe-cc plan skeleton [--tasks T3] [--dry-run]` — stubs from the pack signatures so frozen tests compile. */
+function runtimePlanSkeleton(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-plan-skeleton.cjs');
+  const { doc, paths } = readPlanJsonDoc(projectRoot, activeSession);
+  if (!doc) throw new Error('plan skeleton exige PLAN.json');
+  const planned = lib.plan(projectRoot, doc, readJsonQuiet(paths.implementationPack), options);
+  const written = options.dryRun ? [] : lib.write(projectRoot, planned);
+  if (written.length) appendEvent(projectRoot, activeSession, { type: 'PlanSkeletonWritten', payload: { files: written } });
+  return { planned: planned.files.map((f) => ({ path: f.path, stubs: f.stubs.map((s) => `${s.task}:${s.name}`) })), written, missing_signature: planned.missing_signature, dry_run: Boolean(options.dryRun) };
+}
+
 /** OXB-135: `oxe-cc program member add|remove|list`. */
 function runtimeProgramMember(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-program-members.cjs');
@@ -8778,6 +8789,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimePlanSkeleton,
   runtimeProgramMember,
   runtimeProgramQueue,
   runtimeTrain,

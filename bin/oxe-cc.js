@@ -7352,6 +7352,28 @@ async function main() {
 
   // OXB-086: oxe-cc plan merge a.json b.json [--key rid] [--out .oxe/PLAN.json] [--force] [--json]
   // OXB-097 / OXB-098: build the plan trio from role files; check a role file before handing it over.
+  // OXB-154: the compile skeleton of the pending tasks.
+  if (command === 'plan' && argv[0] === 'skeleton') {
+    const o = { dir: process.cwd(), json: false };
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dry-run') o.dryRun = true;
+      else if (a === '--tasks' && argv[i + 1]) o.tasks = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = oxeOperational.runtimePlanSkeleton(o.dir, null, o);
+      if (o.json) { console.log(JSON.stringify({ oxePlanSkeletonSchema: 1, ...out }, null, 2)); return; }
+      for (const f of out.planned) console.log(`  ${out.dry_run ? '~' : green + '✓' + reset} ${f.path}: ${f.stubs.join(', ')}`);
+      for (const m of out.missing_signature) console.log(`  ${yellow}!${reset} ${m}`);
+      if (!out.planned.length) console.log('  nada a gerar (os símbolos já existem ou faltam assinaturas)');
+      else if (!out.dry_run) console.log('  Próximo: commite o esqueleto antes do runtime execute (os testes congelados passam a compilar)');
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   if (command === 'plan' && (argv[0] === 'build' || argv[0] === 'check-role')) {
     const o = { dir: process.cwd(), json: false, files: [], force: false };
     for (let i = 1; i < argv.length; i += 1) {

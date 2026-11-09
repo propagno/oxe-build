@@ -1133,7 +1133,11 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
     - falha de asserção JUnit num arquivo de teste que a tarefa **prova** vira `assertion_red` (`AssertionFailedError`, `AssertionError`, `ComparisonFailure`, kotlin.test, `expected: <…>`). O JUnit XML que o gradle/maven gravou é lido também no dry-verify, como no verify desde a OXB-150.
   - Continuam `broken_command`: erro de configuração do gradle (task inexistente, dependência ou plugin não resolvido), erro de compilação em símbolo fora do pack e asserção em teste que a tarefa não prova.
   - **Acoplamento:** o lint avisa quando várias tarefas pendentes compilam juntas no mesmo comando de projeto inteiro (gradle/maven/tsc sem arquivo). Os testes congelados de uma não compilam enquanto faltarem os símbolos das outras, e a dica é commitar antes um esqueleto com TODO.
-  - Ainda não feito: o gerador `plan skeleton`. Sem as assinaturas no pack, um stub gerado não compila contra os testes.
+  - **`oxe-cc plan skeleton [--tasks T3] [--dry-run]` (1.21.2):** gera os stubs a partir dos `symbols` do pack que têm `signature` (o campo novo do pack).
+    - O stub só é escrito onde o arquivo ou o símbolo falta, com corpo TODO que nomeia a tarefa: Kotlin `= TODO("T3: …")`, TS/JS `throw new Error('TODO T3')`, Python `raise NotImplementedError`, Java `throw new UnsupportedOperationException`; class/interface/enum ficam como declaradas, e o package vem do caminho.
+    - Assim o teste congelado compila e falha pelo motivo certo (`missing_target`).
+    - Um símbolo sem `signature` é reportado, não adivinhado.
+    - É idempotente, e as tarefas done ficam de fora. Teste: `tests/oxe-1212-plan-skeleton.test.cjs`.
   - Teste: `tests/oxe-1212-compiled-right-red.test.cjs`.
 
 ## OXB-155: o verify por tarefa do execute ignorava `verify_timeout_ms` (60 s fixos)
