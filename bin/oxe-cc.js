@@ -5561,6 +5561,13 @@ async function runRuntime(opts) {
         ? { model: opts.model || process.env.OXE_CLAUDE_MODEL || null, timeoutMs: llmTimeoutMs }
         : {};
       if (!opts.jsonOutput) console.log(`  ${c ? green : ''}Adapter:${c ? reset : ''} ${adapterId}${adapterId === 'claude' ? ` (claude -p${adapterOptions.model ? ` --model ${adapterOptions.model}` : ''})` : ` (${baseUrl})`}`);
+      // OXB-187: the model this run will really use, and who chose it — a default nobody picked is said out loud.
+      const modelInfo = require('./lib/oxe-model-resolve.cjs').resolve({ adapter: adapterId, flag: opts.model || null, persisted: _persisted || {}, config: (() => { try { return JSON.parse(fs.readFileSync(path.join(opts.dir, '.oxe', 'config.json'), 'utf8')); } catch { return {}; } })() });
+      if (!opts.jsonOutput) {
+        console.log(`  ${c ? green : ''}Modelo:${c ? reset : ''} ${require('./lib/oxe-model-resolve.cjs').describe(modelInfo)}`);
+        for (const n of modelInfo.notes) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${n}`);
+      }
+      oxeOperational.appendEvent(opts.dir, activeSession, { type: 'ExecutorModelResolved', payload: modelInfo });
       const emitTaskNdjson = cliOutput.createTaskNdjsonEmitter((line) => process.stdout.write(`${line}
 `));
       const result = await oxeOperational.runRuntimeExecute(opts.dir, activeSession, {

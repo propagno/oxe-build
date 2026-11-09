@@ -4318,6 +4318,15 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     const { doc: pji, paths: pti } = readPlanJsonDoc(projectRoot, activeSession);
     result.warnings.push(...require('./oxe-intent-context.cjs').lint(pji, readJsonQuiet(pti.implementationPack)));
   } catch { /* auxiliar */ }
+  // OXB-187: the model the execute would use when nobody chose one (or a per-attempt tier) is said in the lint.
+  try {
+    const cfgM = readProjectConfig(projectRoot);
+    const prov = (cfgM.runtime && cfgM.runtime.provider) || {};
+    if (prov.adapter || (cfgM.models && (cfgM.models.tiers || cfgM.models.overrides))) {
+      const mr = require('./oxe-model-resolve.cjs').resolve({ adapter: prov.adapter || 'claude', flag: null, env: {}, persisted: prov, config: cfgM });
+      for (const n of mr.notes) result.warnings.push(`modelo: ${n}`);
+    }
+  } catch { /* auxiliar */ }
   // OXB-185: a task whose size needs more turns than the global cap.
   try {
     const { doc: pjt, paths: ptt } = readPlanJsonDoc(projectRoot, activeSession);

@@ -1884,3 +1884,16 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 - **Guarda de progresso:** `execute.no_progress_turns` turnos seguidos (padrão 8; 0 desliga) sem escrever arquivo nem chamar `finish_task` encerram a tentativa como `no_progress`. A saída leva a contagem, o turno, as tool calls, o tamanho do prompt e o último raciocínio. A classe conta como falha `logic` para o retry, o nível de modelo e o reparo.
 - **Limite:** um arquivo escrito por `run_command` (codegen, gravação de golden) não conta como escrita. Uma tarefa que só trabalha por comando pode precisar de um `no_progress_turns` maior.
 - **Teste:** `tests/oxe-1212-turn-heartbeat.test.cjs`, com um `claude -p` simulado. Cobre o `--model` ausente e presente, os 8 turnos de só leitura que viram `no_progress`, o batimento com o prompt crescendo, o turno lento, a escrita que zera a contagem e o 0 que desliga.
+
+## OXB-187: o modelo que o execute vai usar, e quem o escolheu
+
+- **Status:** resolvido (1.21.2). Pedido do TECH LEAD depois do OXB-186: o rebaixamento silencioso de modelo custou a vazão da noite. Implementado em `bin/lib/oxe-model-resolve.cjs`.
+- **Na largada do `runtime execute`:** o execute imprime `Modelo: <modelo> — <origem>` e grava o evento `ExecutorModelResolved`. As origens são:
+  - **adaptador `claude`:** `--model`, `OXE_CLAUDE_MODEL` ou o padrão do Claude Code (sem `--model`);
+  - **adaptador `http`:** `--model`, `OXE_MODEL`, `runtime.provider.model` ou o padrão embutido.
+- **Os avisos:**
+  - o padrão embutido do http (`claude-sonnet-4-6`) é marcado como `operator_chosen: false` e gera aviso;
+  - `runtime.provider.model` com o adaptador claude avisa que não se aplica ao `claude -p`;
+  - `models.tiers` e `models.overrides` avisam que cada tentativa troca de modelo.
+- **No lint:** o `plan lint` repete esses avisos (`modelo: …`) quando o config declara o adaptador ou os níveis.
+- **Teste:** `tests/oxe-1212-model-resolve.test.cjs`.
