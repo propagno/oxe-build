@@ -2004,7 +2004,8 @@ function applyTaskGatesToGraph(projectRoot, artifactPaths, compiledGraph) {
       const files = node && relatedRed.get(node.id);
       if (!files) continue;
       const rt0 = (readProjectConfig(projectRoot) || {}).checkpoint_related_tests;
-      const runTpl = rt0 && typeof rt0 === 'object' && typeof rt0.run_command === 'string' && rt0.run_command.includes('{files}') ? rt0.run_command : 'npx vitest run {files}';
+      // OXB-189: the rerun is one file, alone, in ONE worker (no load from the rest of the set).
+  const runTpl = rt0 && typeof rt0 === 'object' && typeof rt0.run_command === 'string' && rt0.run_command.includes('{files}') ? rt0.run_command : 'npx vitest run {files} --maxWorkers=1';
       const cmd = runTpl.replace('{files}', files.join(' '));
       node.verify = node.verify && typeof node.verify === 'object' ? node.verify : {};
       if (!String(node.verify.command || '').includes(cmd)) node.verify.command = [node.verify.command, cmd].filter(Boolean).join(' && ');
@@ -6810,9 +6811,11 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
         failed: true,
         kind: outside.length ? 'scope_insufficient' : 'related_tests',
         related_red: failing.map((t) => t.file),
+        ...(check.related_set_size != null ? { related_set_size: check.related_set_size } : {}),
+        ...(check.flaky_reds && check.flaky_reds.length ? { flaky_reds: check.flaky_reds } : {}),
         reason: outside.length
           ? `scope_insufficient: testes que importam os arquivos da tarefa ficaram vermelhos fora do escopo dela — ${named}. Inclua ${outside.map((t) => t.file).join(', ')} nos files (ou abra um CR/tarefa), depois rode oxe-cc plan reopen`
-          : `testes relacionados vermelhos (\`${check.command.slice(0, 120)}\`): ${named} — entram no verify da tarefa no próximo execute`,
+          : `testes relacionados vermelhos (\`${check.command.slice(0, 120)}\`${check.related_set_size != null ? `, ${check.related_set_size} arquivo(s) no conjunto` : ''}): ${named} — vermelhos também sozinhos (--maxWorkers=1) no commit e na árvore do projeto — entram no verify da tarefa no próximo execute`,
         snapshot: entries,
       };
     }
@@ -6825,7 +6828,7 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
     return entries[p] === 'deleted' ? Boolean(inCommit) : inCommit !== entries[p];
   });
   const committedFiles = (gitOut(projectRoot, ['show', '--name-only', '--format=', 'HEAD']).stdout || '').split(/\r?\n/).filter(Boolean);
-  return { committed: true, commit: head, files: committedFiles, leftover, ...(check ? { check: { command: check.command, ok: true, ...(check.ignored_reds && check.ignored_reds.length ? { ignored_reds: check.ignored_reds } : {}), ...(check.flaky_reds && check.flaky_reds.length ? { flaky_reds: check.flaky_reds } : {}) } } : {}) };
+  return { committed: true, commit: head, files: committedFiles, leftover, ...(check ? { check: { command: check.command, ok: true, ...(check.ignored_reds && check.ignored_reds.length ? { ignored_reds: check.ignored_reds } : {}), ...(check.flaky_reds && check.flaky_reds.length ? { flaky_reds: check.flaky_reds } : {}), ...(check.related_set_size != null ? { related_set_size: check.related_set_size } : {}) } } : {}) };
 }
 
 /**
@@ -6836,7 +6839,7 @@ function checkpointCheck(projectRoot, sha, options = {}) {
   const cfg = readProjectConfig(projectRoot) || {};
   const typecheck = options.checkpointCheck != null ? options.checkpointCheck : cfg.checkpoint_check;
   // OXB-172: the tests that import the task's OWN changed files (vitest related), not only the task's verify.
-  const related = relatedTestsCommand(cfg, options.changedFiles || []);
+  const related = relatedTestsCommand(cfg, options.changedFiles || [], projectRoot);
   const commands = [...(typecheck && typeof typecheck === 'string' ? [{ kind: 'check', command: typecheck, timeout: Number(cfg.checkpoint_check_timeout_ms) > 0 ? Number(cfg.checkpoint_check_timeout_ms) : 900_000 }] : []), ...(related ? [related] : [])];
   if (!commands.length) return null;
   const command = commands.map((c) => c.command).join(' ; ');
@@ -6867,6 +6870,8 @@ function checkpointCheck(projectRoot, sha, options = {}) {
   }
   const out = { ok: Boolean(res && res.ok), command: (res && res.command) || command, kind: res && res.kind, tail: String((res && res.tail) || '').split(/\r?\n/).slice(-6).join(' · ') };
   if (res && !res.ok && res.kind === 'related') out.failing_tests = failingTestFiles(res.output || res.tail || '');
+  // OXB-189: the size of the related set vitest ran (Test Files … (N)), so an oversized related run is visible.
+  if (res && res.kind === 'related') { const m = /Test Files\s+[^\n(]*\((\d+)\)/.exec(String(res.output || res.tail || '')); if (m) out.related_set_size = Number(m[1]); }
   if (res && res.skipped && res.skipped.length) out.related_skipped = res.skipped;
   return out;
 }
@@ -6875,11 +6880,15 @@ function checkpointCheck(projectRoot, sha, options = {}) {
  * OXB-172: config `checkpoint_related_tests`: true | { command, max_files, timeout_ms }. The command gets the task's own
  * changed code files ({files}); default `npx vitest related --run {files}`; at most max_files (40) files.
  */
-function relatedTestsCommand(cfg, changedFiles) {
+function relatedTestsCommand(cfg, changedFiles, root) {
   const opt = cfg && cfg.checkpoint_related_tests;
   if (!opt) return null;
   const o = typeof opt === 'object' ? opt : {};
-  const code = [...new Set((changedFiles || []).map((f) => String(f).replace(/\\/g, '/')).filter((f) => /\.(c|m)?[jt]sx?$/.test(f)))];
+  // OXB-189: only FILES go to `vitest related` (a directory pulls a huge related set and runs it under load), and never
+  // e2e / Playwright specs, which vitest cannot run.
+  const isDir = (f) => f.endsWith('/') || (root ? (() => { try { return fs.statSync(path.join(root, f)).isDirectory(); } catch { return false; } })() : false);
+  const isE2e = (f) => /(^|\/)(e2e|playwright)\//i.test(f) || /\.e2e\.[cm]?[jt]sx?$/.test(f);
+  const code = [...new Set((changedFiles || []).map((f) => String(f).replace(/\\/g, '/')).filter((f) => /\.(c|m)?[jt]sx?$/.test(f) && !isDir(f) && !isE2e(f)))];
   if (!code.length) return null;
   const max = Number(o.max_files) > 0 ? Number(o.max_files) : 40;
   const files = code.slice(0, max);
@@ -6927,8 +6936,12 @@ function relatedRedsOfTask(projectRoot, parentSha, failing, options = {}) {
     const confirmed = [];
     for (const t of candidates) {
       const again = runInCommitWorktree(projectRoot, options.commitSha, runTpl.replace('{files}', t.file), timeoutMs);
-      if (again && again.ok) { if (Array.isArray(options.flakyReds)) options.flakyReds.push({ file: t.file, first: 'red', rerun: 'green' }); }
-      else confirmed.push(t);
+      if (again && again.ok) { if (Array.isArray(options.flakyReds)) options.flakyReds.push({ file: t.file, first: 'red', rerun: 'green', where: 'commit_worktree' }); continue; }
+      // OXB-189: still red in the temporary worktree → run it alone in the project's own tree (where the task's verify
+      // ran green). Green there = the red is the environment of the check, not the task: flaky, the commit stays.
+      const inTree = runChildCommandFull(projectRoot, runTpl.replace('{files}', t.file), timeoutMs);
+      if (inTree && inTree.ok) { if (Array.isArray(options.flakyReds)) options.flakyReds.push({ file: t.file, first: 'red', rerun: 'red', project_tree: 'green', where: 'project_tree' }); continue; }
+      confirmed.push(t);
     }
     candidates = confirmed;
     if (!candidates.length) return candidates;
@@ -8815,6 +8828,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  relatedTestsCommand,
   runtimePlanSkeleton,
   runtimeProgramMember,
   runtimeProgramQueue,

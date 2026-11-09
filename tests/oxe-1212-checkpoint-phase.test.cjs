@@ -593,9 +593,33 @@ describe('OXB-178: a one-off related red is rerun alone before it counts', () =>
       assert.equal(t9.done, true);
       assert.equal(git(dir, 'show', `${t9.done_commit}:src/migration.js`).stdout, 'v2\n');
       const ev = op.readEvents(dir, null).find((e) => e.type === 'GateResolved' && e.payload.gate === 'checkpoint');
-      assert.deepEqual(ev.payload.check.flaky_reds, [{ file: 'tests/integration/policy-change-gate.test.js', first: 'red', rerun: 'green' }]);
+      assert.deepEqual(ev.payload.check.flaky_reds, [{ file: 'tests/integration/policy-change-gate.test.js', first: 'red', rerun: 'green', where: 'commit_worktree' }]);
     } finally {
       fs.rmSync(marker, { force: true });
     }
+  });
+});
+
+describe('OXB-189: related tests — files only, no e2e, alone in one worker, green in the project tree is flaky', () => {
+  it('vitest related gets only files: directories and e2e specs are dropped; the rerun is one file with --maxWorkers=1', () => {
+    const dir = project({ plan: { schema_version: 1, tasks: [] }, files: { 'electron/main/index.ts': 'x\n' } });
+    const r = op.relatedTestsCommand({ checkpoint_related_tests: true }, ['e2e/t53-read-lookups-auto.spec.ts', 'electron.vite.config.ts', 'electron/main/index.ts', 'electron/main/', 'electron/main', 'playwright/a.spec.ts'], dir);
+    assert.equal(r.command, 'npx vitest related --run electron.vite.config.ts electron/main/index.ts');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'bin', 'lib', 'oxe-operational.cjs'), 'utf8');
+    assert.match(src, /'npx vitest run \{files\} --maxWorkers=1'/);
+  });
+
+  it('red in the related run and in the worktree rerun, green alone in the project tree: flaky_reds, the commit holds', async () => {
+    // the fake test fails whenever it runs inside a checkpoint worktree (an environment difference), passes in the project
+    const envRed = "const fs=require('fs');if(process.cwd().split(require('path').sep).join('/').includes('.oxe/checkpoint-ws')){console.log(' FAIL  tests/unit/auto-approve-oxespace-reads.test.ts > reads');console.log(' Test Files  1 failed | 28 passed (29)');process.exit(1)}console.log(' Test Files  1 passed (1)');process.exit(0);\n";
+    const plan = { schema_version: 1, tasks: [{ id: 'T15', title: 'R1', wave: 1, files: ['src/reads.js'], verify: { commands: [ok] } }] };
+    const dir = project({ plan, files: { 'src/reads.js': 'v1\n', 'related.js': envRed }, config: { checkpoint_related_tests: { command: 'node related.js {files}', run_command: 'node related.js {files}' } } });
+    const exec = { async execute() { fs.writeFileSync(path.join(dir, 'src', 'reads.js'), 'v2\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    const res = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, checkpointCommits: true });
+    assert.equal(res.result.checkpoint_failed, undefined, JSON.stringify(res.result.checkpoint_failed));
+    assert.equal(planOf(dir).tasks[0].done, true);
+    const ev = op.readEvents(dir, null).find((e) => e.type === 'GateResolved' && e.payload.gate === 'checkpoint');
+    assert.deepEqual(ev.payload.check.flaky_reds, [{ file: 'tests/unit/auto-approve-oxespace-reads.test.ts', first: 'red', rerun: 'red', project_tree: 'green', where: 'project_tree' }]);
+    assert.equal(ev.payload.check.related_set_size, 29);
   });
 });

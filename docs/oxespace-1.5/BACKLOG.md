@@ -1911,3 +1911,13 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 - **No scheduler:** essa linha no verify da tarefa encerra a tentativa como `scope_insufficient` (`reason: blocked_stub`, com os `files`), sem retry e sem done.
 - **No checkpoint:** o checkpoint de tarefa done recusa qualquer marcador de stub adicionado (`checkpoint recusado: N marcador(es) de stub adicionados`, `failed`, nada commitado), mesmo que o verify não tenha rodado o stub-check. Fica desligado só com `stub_check: false`, que é o opt-out explícito do anti-stub.
 - **Teste:** `tests/oxe-1212-blocked-stub.test.cjs`. Cobre os marcadores e o falso positivo; a tarefa que não alcança o arquivo e escreve o stub BLOCKED termina como `scope_insufficient` com `files: ["protocol/live/Commands.kt"]`, 1 chamada só e não done; e o checkpoint recusado.
+
+## OXB-189: checkpoint recusado por teste relacionado que passa sozinho na mesma árvore
+
+- **Status:** resolvido (1.21.2).
+- **O que aconteceu:** relatado pelo TECH LEAD na oxespace-150 F2, T15 (R1). Em duas tentativas, o `CheckpointFailed` acusou `tests/unit/auto-approve-oxespace-reads.test.ts` vermelho num `npx vitest related --run e2e/…spec.ts electron.vite.config.ts electron/main/index.ts electron/main/`. Rodado logo depois na árvore, o arquivo passava 7/7. O commit foi feito à mão (b9416de8).
+- **O `vitest related` recebe só arquivos:** diretórios (`electron/main/`, ou um caminho que é diretório no disco) e specs de e2e/Playwright saem da lista. Um diretório puxava um conjunto relacionado enorme, rodado sob carga.
+- **O rerun do OXB-178:** é um arquivo, sozinho, com `--maxWorkers=1` (o `run_command` padrão passou a ser `npx vitest run {files} --maxWorkers=1`).
+- **Vermelho também no rerun do worktree temporário:** o arquivo roda sozinho na **árvore do projeto**, onde o verify da tarefa ficou verde. Se passa ali, é diferença de ambiente do check, não da tarefa. Ele entra em `flaky_reds` (`where: project_tree`) e o commit não é recusado. Só um vermelho que se repete nos dois lugares recusa, e a mensagem diz isso.
+- **O tamanho do conjunto relacionado:** o "Test Files … (N)" do vitest vai para `related_set_size`, no evento do checkpoint e na mensagem de recusa.
+- **Teste:** `tests/oxe-1212-checkpoint-phase.test.cjs`, no bloco OXB-189. Cobre a lista sem diretório nem e2e, o rerun com `--maxWorkers=1` e um teste que só falha dentro do worktree de checkpoint: o commit é mantido, `flaky_reds` registra `project_tree: green` e `related_set_size` fica em 29.
