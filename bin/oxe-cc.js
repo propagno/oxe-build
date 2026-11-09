@@ -5584,6 +5584,18 @@ async function runRuntime(opts) {
     }
   }
 
+  // OXB-115: complexity alarms of the phase.
+  if (opts.action === 'complexity') {
+    try {
+      const out = oxeOperational.runtimeComplexity(opts.dir, activeSession, { phase: opts.phase || null });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeComplexitySchema: 1, ...out }, null, 2)); return; }
+      if (!out.base) { console.log('  sem fase com base_commit (rode dentro de um programa)'); return; }
+      if (!out.alarms.length) console.log(`  ${c ? green : ''}✓${c ? reset : ''} nenhuma função tocada passou de ${out.max}`);
+      else { console.log(`  ${c ? yellow : ''}${out.alarms.length} alarme(s) de complexidade${c ? reset : ''}${out.block ? ' — bloqueiam o close (strict)' : ''} · ${out.file}`); for (const a of out.alarms) console.log(`    ${a.file}:${a.line} ${a.name} ${a.before == null ? 'nova' : a.before}→${a.after}`); }
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
   // OXB-113: resumable handoff, and the context reading a host hook sends.
   if (opts.action === 'handoff' || opts.action === 'context') {
     try {

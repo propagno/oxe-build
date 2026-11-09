@@ -884,14 +884,23 @@ Requisitos escritos pelo TECH LEAD, aprovados pelo usuário. O desenho e a imple
 
 ## OXB-115: alarme de complexidade
 
-- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
-  - Mede as funções tocadas contra uma linha de base. Passando do limite, gera uma proposta de refatoração (no modo strict, bloqueia o close).
+- **Status:** resolvido (1.21.2). `bin/lib/oxe-complexity.cjs` e o comando `oxe-cc runtime complexity`.
+  - Para as funções que a fase tocou (JS/TS, Kotlin/Java, fora de testes), conta os pontos de decisão (1 + if/for/while/case/catch/&&/||/??/ternário, ignorando strings e comentários) na árvore e na base da fase.
+  - Uma função **acima do limite** (`complexity.max`, padrão 15) que é **nova** ou **cresceu** ≥ `complexity.max_growth` (padrão 5) gera uma proposta de refatoração em `.oxe/REFACTOR-PROPOSALS.md` (arquivo:linha, antes → depois e o que fazer). Sai também o evento `ComplexityAlarm`.
+  - **Modo strict** (`profile: "strict"` ou `complexity.block: true`): os alarmes bloqueiam o `program close`. Fora dele, ficam só como proposta.
+  - Teste: `tests/oxe-1212-complexity-api.test.cjs` (função que cresceu e função nova acima do limite; a proposta; o bloqueio no strict; palavras-chave em strings e comentários não contam).
 
 ## OXB-116: diff da superfície de API por fase
 
-- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
-  - Exports, assinaturas, canais IPC e ferramentas MCP, antes e depois, no dossiê.
-  - Mudança fora dos `symbols`/`symbols_removed` do pack é sinalizada.
+- **Status:** resolvido (1.21.2). `bin/lib/oxe-api-surface.cjs`, ligado ao `runtime dossier`.
+  - A superfície de API dos arquivos que a fase mudou, na base e na árvore:
+    - exports ESM e CommonJS, com assinatura (parâmetros e tipo de retorno);
+    - classes, interfaces, types e enums exportados;
+    - canais IPC (`ipcMain`/`ipcRenderer` handle/on/invoke/send);
+    - ferramentas MCP (`registerTool` / `server.tool` / `name` com `inputSchema`).
+  - O dossiê da fase ganha `api-surface.md`, com o que foi adicionado, removido e teve a assinatura mudada. O resultado do `runtime dossier` traz `api_surface`.
+  - **Sinalizado:** export adicionado, removido ou mudado que não está nos `symbols` / `symbols_removed` do pack. Com `api_surface.block: true` no config, vira issue do dossiê e bloqueia o close.
+  - Teste: `tests/oxe-1212-complexity-api.test.cjs` (export novo, removido e com assinatura mudada; canal IPC trocado; ferramenta MCP; exports fora do pack sinalizados).
 
 ## OXB-117: lacunas extras
 

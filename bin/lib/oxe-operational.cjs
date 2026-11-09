@@ -791,6 +791,22 @@ function runtimeContextUsage(projectRoot, activeSession, options = {}) {
   return { ...lvl, handoff };
 }
 
+/** OXB-115: `oxe-cc runtime complexity` — the phase's complexity alarms and .oxe/REFACTOR-PROPOSALS.md. */
+function runtimeComplexity(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-complexity.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  let program = null;
+  try { program = require('./oxe-program.cjs').readProgram(paths.programDir || path.join(projectRoot, '.oxe', 'program')); } catch { program = null; }
+  const phaseId = options.phase || (program && program.active_phase) || null;
+  const phase = program && phaseId ? (program.phases || []).find((p) => p.id === phaseId) : null;
+  const base = options.base || (phase && phase.base_commit) || null;
+  if (!base) return { alarms: [], block: false, file: null, phase: phaseId, base: null };
+  const res = lib.complexityAlarms(projectRoot, base, readProjectConfig(projectRoot) || {});
+  const file = lib.writeProposals(projectRoot, res, phaseId);
+  if (res.alarms.length) appendEvent(projectRoot, activeSession, { type: 'ComplexityAlarm', payload: { phase: phaseId, alarms: res.alarms.map((a) => `${a.file}:${a.line} ${a.name} ${a.after}`) } });
+  return { ...res, file, phase: phaseId, base };
+}
+
 /** OXB-112: `oxe-cc decision add|list`. */
 function runtimeDecision(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-decisions.cjs');
@@ -3769,12 +3785,24 @@ function runtimeDossier(projectRoot, activeSession, options = {}) {
   } else {
     handoffFilled = dossierLib.handoffFilled(dossierLib.humanPart(readTextIfExists(path.join(dir, 'plan.md')) || ''));
   }
+  // OXB-116: the phase's API surface (exports + signatures, IPC channels, MCP tools) before → after; a change the pack
+  // did not declare is flagged (a dossier issue with config api_surface.block: true).
+  let apiSurface = null;
+  if (base) {
+    try {
+      const apiLib = require('./oxe-api-surface.cjs');
+      const d = apiLib.apiDiff(projectRoot, base, readJsonQuiet(paths.implementationPack));
+      apiSurface = { added: d.added.length, removed: d.removed.length, changed: d.changed.length, flagged: d.flagged.map((x) => `${x.key} (${x.file})`) };
+      if (options.write !== false) { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'api-surface.md'), apiLib.renderApiDiff(d, phaseId, base)); }
+      if (((readProjectConfig(projectRoot) || {}).api_surface || {}).block === true) for (const f of apiSurface.flagged) built.issues.push(`api_surface: ${f} mudou sem estar no pack`);
+    } catch { /* auxiliar ao dossiê */ }
+  }
   try {
     projectStateMd(projectRoot, activeSession);
   } catch {
     // STATE é projeção auxiliar; nunca falha o dossiê.
   }
-  return { dir, phase: phaseId, base, issues: built.issues, pending: built.pending, untouched: built.untouched, handoff_filled: handoffFilled, totals: built.totals };
+  return { dir, phase: phaseId, base, issues: built.issues, pending: built.pending, untouched: built.untouched, handoff_filled: handoffFilled, totals: built.totals, api_surface: apiSurface };
 }
 
 const STATE_PHASE_BY_STATUS = { pending: 'spec_ready', planning: 'spec_ready', executing: 'executing', verifying: 'executing', closed: 'verify_complete', reopened: 'executing' };
@@ -6371,6 +6399,11 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     appendEvent(projectRoot, activeSession, { type: 'DriftWaived', payload: { phase: phase.id, globs: acceptDrift, by } });
   }
   const closeGates = programCloseGateReasons(projectRoot, activeSession, { phase, run, paths, state, skip: options.gates === false });
+  // OXB-115: complexity alarms — a proposal always; a block in strict (profile strict or complexity.block).
+  try {
+    const cx = runtimeComplexity(projectRoot, activeSession, { phase: phase.id });
+    if (cx.block) for (const a of cx.alarms.slice(0, 10)) closeGates.reasons.push(`complexidade: ${a.name} (${a.file}:${a.line}) ${a.before == null ? 'nova' : a.before}→${a.after} — veja .oxe/REFACTOR-PROPOSALS.md`);
+  } catch { /* auxiliar */ }
   // OXB-110: open defects (stubs, TODO/FIXME, skipped tests, verify missing, open signal/standing CRs) block the close
   // — and the deploy gate the close evaluates — unless waived with a reason.
   if (options.defects !== false) {
@@ -7813,6 +7846,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeComplexity,
   runtimeHandoff,
   runtimeContextUsage,
   runtimeDecision,
