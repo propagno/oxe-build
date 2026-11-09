@@ -807,8 +807,13 @@ Cada bloco tem uma meta medível:
 
 ## OXB-107: gates como plugins de config
 
-- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
-  - command, signoff, deploy e script próprio, sem lógica de gate fixa no código.
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-phase-gates.cjs`.
+- **Kinds nativos:** `command`, `ci` e `deploy` (como antes), e mais:
+  - **`signoff`** (`criteria`): verde quando a fase tem sign-off com evidência de cada critério. Roda no close por padrão;
+  - **`script`** (`module`, `options`): um módulo CommonJS que exporta `async (ctx) => ({ ok, message })`, com ctx { root, programDir, phase, gate }.
+- **Plugins:** qualquer outro kind é resolvido por config `gate_plugins: { "<kind>": "<módulo>" }` e roda como script, com as `options` do gate.
+- **Kind desconhecido:** sem plugin, o gate é descartado, e o `plan lint` avisa em vez de ignorar calado.
+- **Teste:** `tests/oxe-1212-gate-plugins.test.cjs` (plugin verde e vermelho com options, signoff, kind desconhecido).
 
 # Melhoria contínua (08/11)
 

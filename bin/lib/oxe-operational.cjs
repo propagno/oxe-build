@@ -4086,6 +4086,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
   // 1.21 (OXB-020): a repo with gate scripts or governance tests but no phase_gates gets a warning.
   const gatesLib = require('./oxe-phase-gates.cjs');
   result.warnings.push(...gatesLib.lintPhaseGates(projectRoot, gatesLib.readPhaseGates({ phase_gates: plan.phaseGates }, config)));
+  result.warnings.push(...gatesLib.unknownGateKinds({ phase_gates: plan.phaseGates }, config));
   let dryVerify = null;
   // OXB-021: checkpoint messages follow the project's commit convention.
   result.errors.push(...require('./oxe-commit-convention.cjs').lintCommitConvention(plan, config));
