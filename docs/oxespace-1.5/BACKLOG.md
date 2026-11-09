@@ -1848,3 +1848,20 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 - **O close:** percorre os membros na ordem. Um membro com mudança não commitada para o close (`membros: …`). O sha pousado de cada membro fica em `members_landed` da fase e no dossiê (`dossier/<fase>/members.md`). O verify roda do coordenador.
 - **Limite:** o `runtime execute` do coordenador não leva a escrita de uma tarefa `repo` para dentro do membro. Execute essa tarefa com `--dir <membro>`, ou mantenha o código do membro no coordenador. Isso fica como próximo passo, porque mexe na contenção de caminhos do executor.
 - **Teste:** `tests/oxe-1212-program-members.test.cjs`. Cobre member add/list, repo desconhecido, a tarefa em dois repositórios e o fluxo completo: execute, verify, handoff, o close parado pelo membro sujo e, depois do commit no membro, o close com o sha no PROGRAM e no `members.md`.
+
+## OXB-146: personalização de workflow por equipe e por pessoa sem copiar o workflow
+
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-customize.cjs`.
+- **As sobreposições:**
+  - ficam em `.oxe/custom/<workflow>.json` (equipe, versionado) e `.oxe/custom/<workflow>.user.json` (pessoal, fora do git);
+  - têm `extensions` (`{ point, text }`), `rules` (viram a seção "Regras extras do projeto") e `fields` (substituem `{{oxe:<nome>}}`);
+  - a precedência é pessoal > equipe > pacote.
+- **Os pontos de extensão:** saem dos títulos do próprio workflow (`before:<slug>` / `after:<slug>`). Não é preciso copiar o workflow nem manter marcadores.
+- **No install e no update:** o workflow novo é copiado e as sobreposições são **reaplicadas**. A saída diz "N sobreposições reaplicadas, M precisam de decisão". Uma sobreposição cujo ponto sumiu ou mudou de nome é listada com as saídas manter, retirar e reescrever, e nunca é descartada calada.
+- **A edição direta na cópia instalada:** é detectada por hash (`.oxe/workflows/.oxe-applied.json`). `oxe-cc customize migrate` transforma as linhas adicionadas em entradas `after:<seção>` da sobreposição da equipe. As linhas removidas são reportadas, não adivinhadas.
+- **Comandos:**
+  - `oxe-cc customize list [<workflow>]` mostra os pontos, as sobreposições e as edições diretas;
+  - `customize edit <workflow> --point … --text … [--user]` recusa um ponto inexistente;
+  - `customize apply`;
+  - `customize migrate`.
+- **Teste:** `tests/oxe-1212-customize.test.cjs` (precedência, rules e fields, ponto renomeado vira decisão, a edição direta migrada, o edit recusado).

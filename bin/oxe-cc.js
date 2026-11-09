@@ -2944,6 +2944,13 @@ function runInstall(opts) {
   } else {
     const nested = path.join(target, '.oxe');
     copyDir(path.join(PKG_ROOT, 'oxe', 'workflows'), path.join(nested, 'workflows'), copyOpts, true);
+    // OXB-146: reapply the team/personal overlays on the new workflows; an overlay whose point vanished asks a decision.
+    if (!opts.dryRun) {
+      try {
+        const cust = require('./lib/oxe-customize.cjs').applyAll(target);
+        if (cust.reapplied || cust.decisions.length) console.log(`  ${useAnsiColors() ? dim : ''}Sobreposições:${useAnsiColors() ? reset : ''} ${cust.reapplied} reaplicada(s), ${cust.decisions.length} precisam de decisão${cust.decisions.length ? ` — ${cust.decisions.map((d) => `${d.workflow} ${d.point}`).join(', ')} (oxe-cc customize list)` : ''}`);
+      } catch { /* sobreposição nunca derruba o install */ }
+    }
     copyDir(path.join(PKG_ROOT, 'oxe', 'templates'), path.join(nested, 'templates'), copyOpts, true);
     // Personas: copiar para .oxe/personas/ (não sobrescreve personalizações do projeto)
     const personasSrc = path.join(PKG_ROOT, 'oxe', 'personas');
@@ -6645,6 +6652,7 @@ async function main() {
     argv[0] === 'eval' ||
     argv[0] === 'design' ||
     argv[0] === 'release' ||
+    argv[0] === 'customize' ||
     argv[0] === 'state' ||
     argv[0] === 'guards' ||
     argv[0] === 'verify' ||
@@ -7108,6 +7116,42 @@ async function main() {
         for (const f of r.open) console.log(`    ${f.fid} (${f.severity})${f.place ? ` ${f.place}` : ''} ${f.text}${f.reopened ? ` — ${f.reopened}` : ''}`);
         if (r.closed.length) console.log(`    encerrados: ${r.closed.map((f) => `${f.fid}=${f.status}`).join(', ')}`);
       }
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // OXB-146: workflow overlays per team and per person.
+  if (command === 'customize') {
+    const sub = ['list', 'edit', 'migrate', 'apply'].includes(argv[0]) ? argv[0] : 'list';
+    const o = { dir: process.cwd(), json: false };
+    for (let i = sub === argv[0] ? 1 : 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--user') o.user = true;
+      else if (['--point', '--text'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-') && !o.workflow) o.workflow = a.endsWith('.md') ? a : `${a}.md`;
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const cu = require('./lib/oxe-customize.cjs');
+      let out;
+      if (sub === 'edit') { if (!o.workflow) throw new Error('use: oxe-cc customize edit <workflow> --point after:<seção> --text "…" [--user]'); out = { edited: cu.addExtension(o.dir, o.workflow, o), applied: cu.applyAll(o.dir) }; }
+      else if (sub === 'migrate') out = { migrated: cu.migrate(o.dir) };
+      else if (sub === 'apply') out = { applied: cu.applyAll(o.dir) };
+      else {
+        const wf = o.workflow;
+        const pkgText = wf && fs.existsSync(path.join(PKG_ROOT, 'oxe', 'workflows', wf)) ? fs.readFileSync(path.join(PKG_ROOT, 'oxe', 'workflows', wf), 'utf8') : null;
+        out = { points: pkgText ? cu.points(pkgText) : undefined, overlay: wf ? cu.overlayFor(o.dir, wf) : undefined, direct_edits: cu.directEdits(o.dir) };
+      }
+      if (o.json) { console.log(JSON.stringify({ oxeCustomizeSchema: 1, ...out }, null, 2)); return; }
+      if (out.points) console.log(`  pontos de extensão de ${o.workflow}: ${out.points.join(', ')}`);
+      if (out.overlay) for (const e of out.overlay.extensions) console.log(`  ${e.point} (${e.source}): ${String(e.text).split(/\r?\n/)[0].slice(0, 80)}`);
+      if (out.direct_edits && out.direct_edits.length) console.log(`  ${yellow}edições diretas nas cópias instaladas:${reset} ${out.direct_edits.join(', ')} — oxe-cc customize migrate`);
+      if (out.edited) console.log(`  ${green}✓${reset} ${out.edited.point} → ${path.relative(o.dir, out.edited.file)}`);
+      if (out.migrated) for (const m of out.migrated) console.log(`  ${green}✓${reset} ${m.workflow}: ${m.migrated.join(', ') || 'nada adicionado'}${m.removed_lines.length ? ` · ${m.removed_lines.length} linha(s) removida(s) à mão — decida no workflow` : ''}`);
+      const ap = out.applied;
+      if (ap) console.log(`  ${ap.reapplied} sobreposição(ões) reaplicada(s), ${ap.decisions.length} precisam de decisão`);
     } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
     return;
   }
