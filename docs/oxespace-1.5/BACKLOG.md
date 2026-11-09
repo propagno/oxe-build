@@ -874,9 +874,13 @@ Requisitos escritos pelo TECH LEAD, aprovados pelo usuário. O desenho e a imple
 
 ## OXB-114: verificação de UI ao vivo dentro do loop (opt-in por fase)
 
-- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
-  - Um agente verificador isolado, o único com ferramentas de browser, roda depois de cada onda que toca UI.
-  - Os achados viram CRs de sinal na fase.
+- **Status:** resolvido (1.21.2). `bin/lib/oxe-ui-verify.cjs`. É opt-in por fase.
+  - `PLAN.json` (o plano da fase): `"ui_verify": { "command": "<verificador>", "report"?: ".oxe/ui-verify/report.json", "timeout_ms"?: 900000 }`. Também vale `config.json ui_verify` com `phases: ["F3"]`.
+  - **Quando roda:** o execute detecta o fim de cada **onda** pelo grafo (todas as tarefas da onda terminaram). Se alguma tarefa de UI (tsx, jsx, vue, svelte, css, html…) completou nela, ele roda o verificador.
+    - O verificador é um agente isolado, o único com ferramentas de browser, escolhido pelo projeto: um CLI de agente só com o MCP de browser, ou um script Playwright.
+    - Ele recebe `OXE_UI_WAVE`, `OXE_UI_TASKS`, `OXE_UI_FILES`, `OXE_UI_PHASE` e `OXE_UI_REPORT`, e grava o relatório no formato de sinal: `{ phase, findings: [{ id, summary, class?, criteria?, files? }] }`.
+  - **Achados:** cada um vira **CR de sinal** da fase pelo `runtime signal` (`by: signal:ui_verify`, sem duplicar pelo id). O evento `UiVerifyCompleted` traz a onda, as tarefas, o código de saída, o relatório e os CRs criados. Sem relatório, o evento diz isso com o final da saída.
+  - Teste: `tests/oxe-1212-ui-verify.test.cjs` (só a onda com tarefa de UI chama o verificador; o achado vira CR de sinal da F1; sem `ui_verify` nada roda).
 
 ## OXB-115: alarme de complexidade
 

@@ -2078,6 +2078,14 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     const checkpointCommits = Boolean(options.checkpointCommits || readProjectConfig(projectRoot).checkpoint_commits);
     const checkpointFailures = [];
     const schedulerRef = { current: null };
+    // OXB-114: live UI verification after each wave with completed UI tasks (opt-in: PLAN.json ui_verify).
+    const uiVerifyLib = require('./oxe-ui-verify.cjs');
+    let uiVerifyCfg = null;
+    let uiPlanDoc = null;
+    try { uiPlanDoc = readPlanJsonDoc(projectRoot, activeSession).doc; uiVerifyCfg = uiVerifyLib.uiVerifyConfig(uiPlanDoc, readProjectConfig(projectRoot)); } catch { uiVerifyCfg = null; }
+    const uiTerminal = new Set();
+    const uiCompleted = new Set();
+    const uiDoneWaves = new Set();
     const phaseCtxForCommits = taskPhaseContext(projectRoot, activeSession);
     const preflight = buildRuntimeExecutePreflight(projectRoot, activeSession, current);
     if (!preflight.ok && !options.skipPreflight) {
@@ -2251,6 +2259,31 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
             appendEvent(projectRoot, activeSession, { type: 'RollbackExecuted', run_id: current.run_id, work_item_id: taskId, payload: { reason: verifyOnlyWrote ? 'verify_only_wrote_files' : 'failed_attempt_isolated', files: iso.files, outside_scope: extraPaths, not_restored: iso.notRestored, saved_to: iso.savedTo } });
           }
         } catch { /* isolamento nunca derruba a execução */ }
+      }
+      if (uiVerifyCfg && event && event.work_item_id && ['WorkItemCompleted', 'WorkItemBlocked'].includes(event.type)) {
+        try {
+          uiTerminal.add(event.work_item_id);
+          if (event.type === 'WorkItemCompleted') uiCompleted.add(event.work_item_id);
+          const waves = (current.compiled_graph && Array.isArray(current.compiled_graph.waves)) ? current.compiled_graph.waves : [];
+          const wave = waves.find((w) => (w.node_ids || []).includes(event.work_item_id));
+          if (wave && !uiDoneWaves.has(wave.wave_number != null ? wave.wave_number : JSON.stringify(wave.node_ids)) && (wave.node_ids || []).every((id) => uiTerminal.has(id))) {
+            const waveKey = wave.wave_number != null ? wave.wave_number : JSON.stringify(wave.node_ids);
+            uiDoneWaves.add(waveKey);
+            const planTasksMap = new Map(((uiPlanDoc && uiPlanDoc.tasks) || []).map((t) => [t.id, t]));
+            const uiTasks = uiVerifyLib.uiTasksOf(wave.node_ids || [], uiCompleted, planTasksMap);
+            if (uiTasks.length) {
+              let program0 = null;
+              try { program0 = require('./oxe-program.cjs').readProgram(runPaths.programDir || path.join(projectRoot, '.oxe', 'program')); } catch { program0 = null; }
+              const phase0 = (program0 && program0.active_phase) || (uiPlanDoc && uiPlanDoc.phase) || null;
+              const res = uiVerifyLib.runUiVerify(projectRoot, uiVerifyCfg, { wave: waveKey, tasks: uiTasks, phase: phase0 });
+              let signal = null;
+              if (res.report) {
+                try { signal = runtimeSignal(projectRoot, activeSession, { from: res.report, by: 'signal:ui_verify' }); } catch (err) { signal = { error: String(err && err.message || err) }; }
+              }
+              appendEvent(projectRoot, activeSession, { type: 'UiVerifyCompleted', run_id: current.run_id, payload: { wave: waveKey, tasks: uiTasks.map((t) => t.id), ok: res.ok, exit_code: res.exit_code, ms: res.ms, report: res.report ? path.relative(projectRoot, res.report).replace(/\\/g, '/') : null, crs: signal && signal.created ? signal.created.map((c) => (typeof c.cr === 'string' ? c.cr : c.cr && c.cr.id) || null).filter(Boolean) : [], error: signal && signal.error ? signal.error : (!res.report ? `o verificador não gravou o relatório (${res.tail.slice(-200)})` : null) } });
+            }
+          }
+        } catch { /* a verificação de UI é auxiliar ao execute */ }
       }
       if (event && event.type === 'WorkItemCompleted' && event.work_item_id) {
         let checkpoint = null;
