@@ -748,9 +748,17 @@ Cada bloco tem uma meta medível:
 
 ## OXB-099: `oxe-cc spec freeze --from <PR|sha> [--paths glob]`
 
-- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
-  - Importa os testes congelados para o programa e checa os títulos dos proves.
-  - Recusa a mudança de um arquivo já congelado sem CR e registra a origem (PR, sha).
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-spec-freeze.cjs`.
+- **O comando:** `oxe-cc spec freeze --from <#PR|sha> [--paths "tests/acceptance/**"] [--criteria A12] [--cr CR-n] [--command …]`.
+- **De onde vêm os arquivos:** um PR é lido por `gh pr view --json headRefOid,files`; um commit, por `git diff-tree`.
+- **O que vira acceptance_test do PLAN.json:** cada arquivo de teste mudado (filtrado por `--paths`), com:
+  - os `proves`, que são os títulos de it/test do arquivo;
+  - o `sha256` do conteúdo;
+  - a `origin` ({kind: pr|sha, ref, sha, url}).
+- **O critério:** vem de `--criteria` ou do A<n> no describe/it.
+- **Um arquivo que ainda não está na árvore** é escrito a partir do ref.
+- **Recusa:** mudar um arquivo já congelado com outro conteúdo é recusado sem `--cr`. Com `--cr`, a mudança grava `resolves` e sobe a `version`.
+- **Teste:** `tests/oxe-1212-spec-freeze.test.cjs` (commit, recusa sem CR, PR via gh simulado).
 
 ## OXB-100: dois canais, `next` (RC) e `stable`
 

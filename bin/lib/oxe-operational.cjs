@@ -826,6 +826,16 @@ function runtimeContextUsage(projectRoot, activeSession, options = {}) {
   return { ...lvl, handoff, workflows };
 }
 
+/** OXB-099: `oxe-cc spec freeze --from <PR|sha> [--paths glob] [--criteria A12] [--cr CR-n]`. */
+function runtimeSpecFreeze(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-spec-freeze.cjs');
+  const { jsonPath, doc } = readPlanJsonDoc(projectRoot, activeSession);
+  if (!doc) throw new Error('spec freeze exige PLAN.json');
+  const out = lib.freeze(projectRoot, jsonPath, doc, options);
+  if (out.frozen.length) appendEvent(projectRoot, activeSession, { type: 'AcceptanceImported', payload: { origin: { kind: out.origin.kind, ref: out.origin.ref, sha: out.origin.sha }, frozen: out.frozen, cr: options.cr || null } });
+  return out;
+}
+
 /** OXB-097/098: `oxe-cc plan build --from <role files…> [--phase Fn] [--force]` and `plan check-role <file> [--ref]`. */
 function runtimePlanBuild(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-plan-build.cjs');
@@ -8668,6 +8678,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeSpecFreeze,
   runtimePlanBuild,
   runtimeSpecStress,
   implicitPhaseGates,

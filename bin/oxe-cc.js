@@ -6728,6 +6728,27 @@ async function main() {
   }
 
   // OXB-058: `oxe-cc spec amend|add …` and `oxe-cc program phase add|export …`.
+  // OXB-099: import the frozen tests of a PR / commit into the program.
+  if (command === 'spec' && argv[0] === 'freeze') {
+    const o = { dir: process.cwd(), json: false };
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (['--from', '--paths', '--criteria', '--cr', '--command'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      if (!o.from) throw new Error('use: oxe-cc spec freeze --from <#PR|sha> [--paths "tests/acceptance/**"] [--criteria A12] [--cr CR-n]');
+      const out = oxeOperational.runtimeSpecFreeze(o.dir, null, o);
+      if (o.json) { console.log(JSON.stringify({ oxeSpecFreezeSchema: 1, ...out }, null, 2)); if (out.refused.length) process.exitCode = 1; return; }
+      for (const f of out.frozen) console.log(`  ${green}✓${reset} ${f.file} → ${f.criterion} (${f.proves} título(s), origem ${f.origin})`);
+      for (const r of out.refused) console.log(`  ${red}✗${reset} ${r.why}`);
+      if (out.refused.length) process.exitCode = 1;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   // OXB-143: stress test of the spec by independent readers.
   if (command === 'spec' && argv[0] === 'stress') {
     const accept = argv[1] === 'accept';
