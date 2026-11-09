@@ -144,6 +144,11 @@ export interface SchedulerContext {
    * orchestrator applies override > tier escalation > the task's hint. Null keeps the executor's default.
    */
   modelFor?: (nodeId: string, attempt: number, lastFailureClass: string | null) => { model: string | null; tier: string | null; escalated?: boolean } | null;
+  /**
+   * OXB-130: the repair strategy before a retry. `retry` carries the adjustment (appended to the informed retry);
+   * any other strategy stops the attempts and blocks the node as `repair_<strategy>` (the orchestrator acts on it).
+   */
+  repairFor?: (nodeId: string, info: { attempt: number; maxAttempts: number; failureClass: string | null; output: string; verifySuspect: boolean }) => { strategy: string; reason: string; adjustment: string | null } | null;
   projectRoot: string;
   sessionId: string | null;
   runId: string;
@@ -1005,6 +1010,18 @@ export class Scheduler {
         // OXB-148: a prompt that does not fit fails the same way on a blind retry.
         if (lastResult.failure_class === 'context') break;
 
+        // OXB-130: decide the repair before paying another attempt.
+        if (attempt < maxAttempts && ctx.repairFor) {
+          const repair = ctx.repairFor(nodeId, { attempt, maxAttempts, failureClass: lastResult.failure_class ?? null, output: String(lastResult.output || ''), verifySuspect });
+          if (repair) {
+            this.emit(ctx, { type: 'RepairDecided', work_item_id: nodeId, attempt_id: attemptId, payload: { strategy: repair.strategy, reason: repair.reason, adjustment: repair.adjustment, attempt_number: attempt } });
+            if (repair.strategy !== 'retry') {
+              this.blockNode(nodeId, ctx, status, blocked, `repair_${repair.strategy}`, repair.reason);
+              return;
+            }
+            if (repair.adjustment) lastError = `${lastError ?? ''}\n\n## Ajuste declarado para esta tentativa\n${repair.adjustment}`;
+          }
+        }
         if (attempt < maxAttempts) {
           const retryBlocked = this.consumeRetryQuota(ctx);
           if (retryBlocked) {

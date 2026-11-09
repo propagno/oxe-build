@@ -137,6 +137,7 @@ function createExecutionContext(projectRoot, activeSession, options = {}) {
     evidenceStore: options.evidenceStore || null,
     onEvent: options.onEvent || null,
     attemptChanges: options.attemptChanges || null,
+    repairFor: options.repairFor || null,
     modelFor: options.modelFor || null,
     options: options.schedulerOptions || {},
   };
@@ -812,6 +813,22 @@ function runtimeContextUsage(projectRoot, activeSession, options = {}) {
     for (const [rel, size] of Object.entries(declared)) if (size === 'l' && rel.startsWith('workflows/')) { const v = budget.chooseVariant(path.basename(rel), readProjectConfig(projectRoot), typeof lvl.ratio === 'number' ? 1 - lvl.ratio : null); workflows[path.basename(rel)] = { variant: v.variant, path: path.relative(path.join(__dirname, '..', '..'), v.path).replace(/\\/g, '/') }; }
   } catch { /* auxiliar */ }
   return { ...lvl, handoff, workflows };
+}
+
+/** OXB-130: `oxe-cc runtime repair [list|apply <task> [--approve]]`. */
+function runtimeRepair(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-repair.cjs');
+  if (options.action === 'apply') {
+    const { jsonPath, doc } = readPlanJsonDoc(projectRoot, activeSession);
+    if (!doc) throw new Error('repair apply exige PLAN.json');
+    const out = lib.applyProposal(projectRoot, jsonPath, doc, String(options.task || '').toUpperCase(), { approve: Boolean(options.approve) });
+    appendEvent(projectRoot, activeSession, { type: 'RepairApplied', work_item_id: out.task, payload: out });
+    return { applied: out };
+  }
+  const dir = path.join(projectRoot, '.oxe', 'repairs');
+  let names = [];
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.json')); } catch { names = []; }
+  return { proposals: names.map((n) => readJsonQuiet(path.join(dir, n))).filter(Boolean) };
 }
 
 /** OXB-132: `oxe-cc runtime context-pack --task T3 [--stats]` — the task's slice of PLAN.json + pack (and its deps). */
@@ -2419,6 +2436,30 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     const isScratchPath = scratchLib.makeScratchMatcher(projectRoot);
     const attemptBaseline = new Map();
     const lastAttemptChanges = new Map(); // OXB-184
+    const repairsByTask = new Map(); // OXB-130
+    const repairCfg = readProjectConfig(projectRoot);
+    const repairOn = Boolean(repairCfg.execute && repairCfg.execute.repair);
+    const repairDoc = () => { try { return readPlanJsonDoc(projectRoot, activeSession).doc || { tasks: [] }; } catch { return { tasks: [] }; } };
+    /** OXB-130: acts on a repair decision — decompose writes the proposal, prune opens the CR for the owner. */
+    const actOnRepair = (taskId, decision) => {
+      const lib = require('./oxe-repair.cjs');
+      const doc = repairDoc();
+      const task = (doc.tasks || []).find((t) => t.id === taskId);
+      if (!task || !decision) return null;
+      if (decision.strategy === 'decompose') {
+        const proposal = lib.writeProposal(projectRoot, task, doc, decision);
+        appendEvent(projectRoot, activeSession, { type: 'RepairProposed', run_id: current.run_id, work_item_id: taskId, payload: { strategy: 'decompose', subtasks: proposal.subtasks.map((s) => ({ id: s.id, alias: s.alias, files: s.files, acceptance: s.acceptance })), requires_approval: proposal.requires_approval, apply: `oxe-cc runtime repair apply ${taskId}${proposal.requires_approval ? ' --approve' : ''}` } });
+        return proposal;
+      }
+      if (decision.strategy === 'prune') {
+        try {
+          const fb = runtimeFeedback(projectRoot, activeSession, { class: 'spec_gap', criteria: (task.acceptance || []).join(',') || undefined, summary: `${taskId} podada pelo reparo (${decision.reason}): "${task.title}" não converge como está — o dono decide entre reescrever, dividir à mão ou retirar o critério`, by: 'repair:prune', evidence: `.oxe/runs/${current.run_id}/attempts/${taskId}-final.log` });
+          appendEvent(projectRoot, activeSession, { type: 'RepairProposed', run_id: current.run_id, work_item_id: taskId, payload: { strategy: 'prune', cr: fb && fb.cr ? fb.cr.id : null, reason: decision.reason } });
+          return fb;
+        } catch (err) { return { error: String(err && err.message || err) }; }
+      }
+      return null;
+    };
     const attemptLogsThisExecute = new Set(); // OXB-184
     const scopeViolations = new Map();
     const graphNodeOf = (id) => {
@@ -2572,6 +2613,17 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     // The scheduler already persists every event through the runtime bus (events/bus.ts →
     // appendEvent). This hook only forwards progress; writing here again duplicated the log.
     attemptChanges: (id) => lastAttemptChanges.get(id) || null,
+    // OXB-130: repair strategy before each retry (opt-in: execute.repair in config).
+    repairFor: options.repairFor || (repairOn ? (id, info) => {
+      const lib = require('./oxe-repair.cjs');
+      const doc = repairDoc();
+      const task = (doc.tasks || []).find((t) => t.id === id);
+      if (!task) return null;
+      const d = lib.decide(task, doc, { ...info, changes: lastAttemptChanges.get(id) || null, repairsSoFar: repairsByTask.get(id) || 0, config: repairCfg, final: false });
+      if (d) repairsByTask.set(id, (repairsByTask.get(id) || 0) + 1);
+      if (d && d.strategy !== 'retry') actOnRepair(id, d);
+      return d ? { strategy: d.strategy, reason: d.reason, adjustment: d.adjustment } : null;
+    } : null),
     // OXB-131: override > tier escalation > the task's model_hint
     modelFor: options.modelFor || require('./oxe-model-tiers.cjs').createModelSelector(readProjectConfig(projectRoot), (() => { try { return new Map(((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).map((t) => [t.id, t])); } catch { return new Map(); } })()),
     onEvent: (event) => {
@@ -2665,6 +2717,19 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
             appendEvent(projectRoot, activeSession, { type: 'RollbackExecuted', run_id: current.run_id, work_item_id: taskId, payload: { reason: verifyOnlyWrote ? 'verify_only_wrote_files' : 'failed_attempt_isolated', files: iso.files, outside_scope: extraPaths, not_restored: iso.notRestored, saved_to: iso.savedTo } });
           }
         } catch { /* isolamento nunca derruba a execução */ }
+      }
+      // OXB-130: attempts exhausted → the final repair decision (decompose proposal or prune CR), recorded.
+      if (repairOn && event && event.type === 'WorkItemBlocked' && event.work_item_id && event.payload && event.payload.max_attempts != null && !String(event.payload.failure_class || '').startsWith('paused')) {
+        try {
+          const lib = require('./oxe-repair.cjs');
+          const doc = repairDoc();
+          const task = (doc.tasks || []).find((t) => t.id === event.work_item_id);
+          const d = task ? lib.decide(task, doc, { attempt: event.payload.max_attempts, failureClass: event.payload.failure_class || 'verify', output: String(event.payload.output_tail || ''), verifySuspect: false, changes: null, repairsSoFar: repairsByTask.get(event.work_item_id) || 0, config: repairCfg, final: true }) : null;
+          if (d) {
+            appendEvent(projectRoot, activeSession, { type: 'RepairDecided', run_id: current.run_id, work_item_id: event.work_item_id, payload: { strategy: d.strategy, reason: d.reason, adjustment: null, final: true } });
+            actOnRepair(event.work_item_id, d);
+          }
+        } catch { /* auxiliar */ }
       }
       // OXB-138: a task that exhausted its attempts goes to the phase's deferred ledger (AD-<fase>-<n>).
       if (event && event.type === 'WorkItemBlocked' && event.work_item_id && event.payload && event.payload.max_attempts != null && !String(event.payload.failure_class || '').startsWith('paused')) {
@@ -8423,6 +8488,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeRepair,
   runtimeContextPack,
   runtimeDocsCheck,
   runtimeReview,

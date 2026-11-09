@@ -42,6 +42,7 @@ export const EVENT_TYPES = [
   'RunPaused',
   'WorkItemDeferred',
   'DispatchState',
+  'RepairDecided',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

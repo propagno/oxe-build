@@ -113,6 +113,21 @@ export interface SchedulerContext {
         tier: string | null;
         escalated?: boolean;
     } | null;
+    /**
+     * OXB-130: the repair strategy before a retry. `retry` carries the adjustment (appended to the informed retry);
+     * any other strategy stops the attempts and blocks the node as `repair_<strategy>` (the orchestrator acts on it).
+     */
+    repairFor?: (nodeId: string, info: {
+        attempt: number;
+        maxAttempts: number;
+        failureClass: string | null;
+        output: string;
+        verifySuspect: boolean;
+    }) => {
+        strategy: string;
+        reason: string;
+        adjustment: string | null;
+    } | null;
     projectRoot: string;
     sessionId: string | null;
     runId: string;

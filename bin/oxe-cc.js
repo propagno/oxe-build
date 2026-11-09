@@ -4334,6 +4334,11 @@ function parseRuntimeArgs(argv) {
     if (positionals[1]) out.subAction = positionals[1];
     if (positionals[2]) out.uiFolder = positionals[2];
     if (positionals[3]) out.dir = path.resolve(positionals[3]);
+  } else if (out.action === 'repair') {
+    if (positionals[1]) out.subAction = positionals[1];
+    let k = 2;
+    if (/^T\d+$/i.test(positionals[2] || '')) { out.task = positionals[2].toUpperCase(); k = 3; }
+    if (positionals[k]) out.dir = path.resolve(positionals[k]);
   } else if (out.action === 'questions') {
     if (positionals[1]) out.subAction = positionals[1];
     let k = 2;
@@ -5700,6 +5705,20 @@ async function runRuntime(opts) {
   }
 
   // OXB-113: resumable handoff, and the context reading a host hook sends.
+  // OXB-130: repair proposals (decompose) and their application.
+  if (opts.action === 'repair') {
+    try {
+      const sub = opts.subAction === 'apply' ? 'apply' : 'list';
+      if (sub === 'apply' && !opts.task) throw new Error('use: oxe-cc runtime repair apply T7 [--approve]');
+      const out = oxeOperational.runtimeRepair(opts.dir, activeSession, { action: sub, task: opts.task, approve: Boolean(opts.approve) });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeRepairSchema: 1, ...out }, null, 2)); return; }
+      if (out.applied) { console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.applied.task} → ${out.applied.into.map((s) => `${s.id} (${s.alias})`).join(', ')}`); return; }
+      if (!out.proposals.length) console.log('  nenhuma proposta de reparo');
+      for (const p of out.proposals) console.log(`  ${p.task}: ${p.strategy}${p.applied_at ? ' (aplicada)' : ''} — ${p.subtasks.map((s) => s.alias).join(', ')}${p.requires_approval ? ' · exige --approve' : ''} — ${p.reason}`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
   // OXB-132: the task's context pack.
   if (opts.action === 'context-pack') {
     try {

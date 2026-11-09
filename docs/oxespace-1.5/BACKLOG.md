@@ -1636,3 +1636,18 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 - **Visibilidade:** cada decisão vira o evento `DispatchState` (`started`, `running`, `waiting` com o motivo: depende de, limite, arquivo quente, memória) e fica no journal (`dispatch`).
 - **Pouso:** continua sob o lock de integração do OXB-050, um por vez, na ordem de conclusão. A ordem dos commits é a de conclusão, como no modo onda com paralelismo; ela não é reordenada para a ordem do plano.
 - **Teste:** `tests/oxe-1212-stream-dispatch.test.cjs`. Cobre: a T3 (que só depende da T2) começa antes de a T1 lenta terminar, e no modo onda ela espera; o limite de paralelismo e o arquivo quente; a falha da T1 bloqueia só a T3.
+
+## OXB-130: estratégias de reparo depois de falha
+
+- **Status:** resolvido (1.21.2). Opt-in com `execute.repair: { budget: 2, allow: ["retry","decompose","prune"] }`. Implementado em `bin/lib/oxe-repair.cjs` e no hook `ctx.repairFor` do scheduler.
+- **A decisão:** depois de uma falha `logic`, antes de pagar outra tentativa, o OXE decide e registra `RepairDecided { strategy, reason, adjustment }`. As estratégias são:
+  - **`retry`:** só com um ajuste concreto tirado do verify (os testes que reprovaram, a asserção, o segmento, o que a tentativa deixou). O ajuste entra no retry informado como "Ajuste declarado". Sem ajuste, o retry é recusado.
+  - **`decompose`:** quando a tarefa tem mais de um critério, uma subtarefa por critério (com o teste de aceite dele como verify); senão, uma por arquivo. A proposta vai para `.oxe/repairs/<task>.json`.
+    - `oxe-cc runtime repair apply T7 [--approve]` põe as subtarefas no plano.
+    - Os ids são novos `T<n>`, com `split_of: "T7"` e `alias: "T7.1"`. O id `T7.1` literal quebraria o contrato `^T\d+$` usado nos trailers e no lint, por isso ele fica como alias.
+    - A tarefa vai para PLAN.json `decomposed`, e os dependentes passam a depender da última subtarefa.
+    - Uma subtarefa fora dos arquivos da tarefa exige `--approve`.
+  - **`prune`:** abre um CR `spec_gap` para o dono com a tarefa e o motivo (`by: repair:prune`). A tarefa sai da run, e com `defer_failed` vai para o ledger de adiadas.
+- **Orçamento:** é por tarefa. Ao esgotar, o retry não é mais oferecido.
+- **Tentativas esgotadas:** quando todas acabaram, a decisão final é decompose ou prune.
+- **Teste:** `tests/oxe-1212-repair.test.cjs`.
