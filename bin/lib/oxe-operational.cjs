@@ -791,6 +791,16 @@ function runtimeContextUsage(projectRoot, activeSession, options = {}) {
   return { ...lvl, handoff };
 }
 
+/** OXB-117 (a): `oxe-cc runtime cost` — cost and time per task, CR and retry, and the phase budget forecast. */
+function runtimeCost(projectRoot, activeSession) {
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  let doc = null;
+  try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
+  let changes = [];
+  try { changes = require('./oxe-change.cjs').listChanges(paths.programDir || path.join(projectRoot, '.oxe', 'program')); } catch { changes = []; }
+  return require('./oxe-phase-extras.cjs').costReport(readEvents(projectRoot, activeSession), doc, changes);
+}
+
 /** OXB-115: `oxe-cc runtime complexity` — the phase's complexity alarms and .oxe/REFACTOR-PROPOSALS.md. */
 function runtimeComplexity(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-complexity.cjs');
@@ -1866,6 +1876,20 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     let report = null;
     // 1.21 (OXB-006): the machine's toolchain against the project's engines/.nvmrc/packageManager, before any paid turn.
     // `project_env_check`: true/"block" (default) blocks; "warn" reports only (a mismatch accepted on purpose); false skips.
+    // OXB-117 (c): pending tasks touching files the frozen regression of a closed phase exercises.
+    try {
+      const pathsR = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+      const programDirR = pathsR.programDir || path.join(projectRoot, '.oxe', 'program');
+      const progLib = require('./oxe-program.cjs');
+      const stateR = progLib.readProgram(programDirR);
+      if (stateR) {
+        const checksR = progLib.loadRegressionChecks(programDirR, stateR, stateR.active_phase);
+        const { doc: pjR } = readPlanJsonDoc(projectRoot, activeSession);
+        const byTask = new Map();
+        for (const h of require('./oxe-phase-extras.cjs').regressionImpact(projectRoot, checksR, pjR)) for (const t of h.tasks) byTask.set(t, [...(byTask.get(t) || []), `${h.file} (${h.check})`]);
+        for (const [t, list] of byTask) warnings.push(`regression_impact:${t} mexe em ${[...new Set(list)].slice(0, 4).join(', ')} — a regressão congelada dessas fases roda no verify; rode-a cedo`);
+      }
+    } catch { /* auxiliar */ }
     // OXB-111: a plan review of THIS plan with an unwaived FAIL blocks the execute.
     try {
       const { doc: pjr } = readPlanJsonDoc(projectRoot, activeSession);
@@ -2276,6 +2300,10 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
           }
         } catch { /* isolamento nunca derruba a execução */ }
       }
+      // OXB-117 (b): a flaky verify (green, then red on the same tree; rerun green) goes to quarantine with evidence.
+      if (event && event.type === 'VerifyCommandSuspect' && event.payload && event.payload.reason === 'flaky_suspect') {
+        try { require('./oxe-phase-extras.cjs').quarantine(projectRoot, { task: event.work_item_id || null, command: String(event.payload.command || ''), rerun: event.payload.rerun || null, evidence: String(event.payload.excerpt || '').slice(0, 1200), run_id: current.run_id, at: new Date().toISOString() }); } catch { /* auxiliar */ }
+      }
       if (uiVerifyCfg && event && event.work_item_id && ['WorkItemCompleted', 'WorkItemBlocked'].includes(event.type)) {
         try {
           uiTerminal.add(event.work_item_id);
@@ -2322,7 +2350,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
             }
             if (cp.committed) {
               checkpoint = cp.commit;
-              appendEvent(projectRoot, activeSession, { type: 'GateResolved', run_id: current.run_id, work_item_id: event.work_item_id, payload: { gate: 'checkpoint', commit: cp.commit, files: cp.files, leftover: cp.leftover } });
+              appendEvent(projectRoot, activeSession, { type: 'GateResolved', run_id: current.run_id, work_item_id: event.work_item_id, payload: { gate: 'checkpoint', commit: cp.commit, files: cp.files, leftover: cp.leftover, ...(cp.check ? { check: cp.check } : {}) } });
               if (cp.leftover && cp.leftover.length) {
                 appendEvent(projectRoot, activeSession, { type: 'PolicyWarning', run_id: current.run_id, work_item_id: event.work_item_id, payload: { reason: 'checkpoint_incomplete', leftover: cp.leftover, commit: cp.commit } });
                 checkpointFailure = { reason: `checkpoint incompleto: ${cp.leftover.length} arquivo(s) do escopo fora do commit (${cp.leftover.slice(0, 5).join(', ')})`, commit: cp.commit, leftover: cp.leftover };
@@ -3589,6 +3617,11 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
         result.warnings.push(`${t.id}: o título mudou desde a run ${rs.run_id} ("${titles[t.id]}" → "${t.title}")${moved ? `; "${t.title}" era ${moved[0]}` : ''} — ids renumerados: tentativas, trabalho interrompido e snapshots são por id. Prefira ids estáveis (acrescente tarefas no fim, ex.: T${(pj0.tasks || []).length + 1}); o execute atribui o trabalho interrompido pelo título`);
       }
     }
+  } catch { /* auxiliar */ }
+  // OXB-117 (b): plans still using a quarantined (flaky) verify.
+  try {
+    const { doc: pjq } = readPlanJsonDoc(projectRoot, activeSession);
+    result.warnings.push(...require('./oxe-phase-extras.cjs').quarantineWarnings(projectRoot, pjq));
   } catch { /* auxiliar */ }
   // OXB-112: decisions cited by tasks must exist; the phase's decisions should be cited by some task.
   try {
@@ -5974,9 +6007,10 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
   // another phase or a parked folder, and (2) it was green on the parent commit. T9 (CR37) of F2 had e98c9d54 undone
   // by three tests red by design (a parked F3 test, a CR repro, a later F2 task's frozen test).
   if (check && !check.ok && check.kind === 'related' && Array.isArray(check.failing_tests) && check.failing_tests.length) {
-    const own = relatedRedsOfTask(projectRoot, oldHead, check.failing_tests, options);
-    if (!own.length) check = { ...check, ok: true, ignored_reds: check.failing_tests.map((t) => t.file) };
-    else check = { ...check, failing_tests: own, ignored_reds: check.failing_tests.filter((t) => !own.some((o) => o.file === t.file)).map((t) => t.file) };
+    const flakyReds = [];
+    const own = relatedRedsOfTask(projectRoot, oldHead, check.failing_tests, { ...options, commitSha: head, flakyReds });
+    if (!own.length) check = { ...check, ok: true, ignored_reds: check.failing_tests.map((t) => t.file), ...(flakyReds.length ? { flaky_reds: flakyReds } : {}) };
+    else check = { ...check, failing_tests: own, ignored_reds: check.failing_tests.filter((t) => !own.some((o) => o.file === t.file)).map((t) => t.file), ...(flakyReds.length ? { flaky_reds: flakyReds } : {}) };
   }
   if (check && !check.ok) {
     gitOut(projectRoot, ['update-ref', '-m', 'oxe: checkpoint_check vermelho', 'HEAD', oldHead, head]);
@@ -6009,7 +6043,7 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
     return entries[p] === 'deleted' ? Boolean(inCommit) : inCommit !== entries[p];
   });
   const committedFiles = (gitOut(projectRoot, ['show', '--name-only', '--format=', 'HEAD']).stdout || '').split(/\r?\n/).filter(Boolean);
-  return { committed: true, commit: head, files: committedFiles, leftover, ...(check ? { check: { command: check.command, ok: true, ...(check.ignored_reds && check.ignored_reds.length ? { ignored_reds: check.ignored_reds } : {}) } } : {}) };
+  return { committed: true, commit: head, files: committedFiles, leftover, ...(check ? { check: { command: check.command, ok: true, ...(check.ignored_reds && check.ignored_reds.length ? { ignored_reds: check.ignored_reds } : {}), ...(check.flaky_reds && check.flaky_reds.length ? { flaky_reds: check.flaky_reds } : {}) } } : {}) };
 }
 
 /**
@@ -6094,19 +6128,33 @@ function relatedRedsOfTask(projectRoot, parentSha, failing, options = {}) {
   }
   const isAcceptanceDir = (p) => /(^|\/)acceptance\//.test(p);
   const parked = (p) => /(^|\/)parked[^/]*\//i.test(p);
-  const candidates = failing.filter((t) => {
+  let candidates = failing.filter((t) => {
     if (parked(t.file)) return false;
     const own = owners.get(t.file);
     if (own) return own.includes(taskId) || own.every((id) => doneIds.has(id)); // pending owner → red by design
     return !isAcceptanceDir(t.file); // a frozen test of another phase / a CR repro not in this plan
   });
-  if (!candidates.length || !parentSha) return candidates;
-  // red on the parent too → not this task's
+  if (!candidates.length) return candidates;
   const cfg = readProjectConfig(projectRoot) || {};
   const rt0 = cfg.checkpoint_related_tests;
   const runTpl = rt0 && typeof rt0 === 'object' && typeof rt0.run_command === 'string' && rt0.run_command.includes('{files}') ? rt0.run_command : 'npx vitest run {files}';
+  const timeoutMs = Number(rt0 && rt0.timeout_ms) > 0 ? Number(rt0.timeout_ms) : 600_000;
+  // OXB-178: a one-off red (memory pressure on a busy machine, a timing test) never undoes a good commit — each failing
+  // file reruns ONCE, alone, on the commit's tree; it counts only if red again. Both results go in check.flaky_reds.
+  if (options.commitSha) {
+    const confirmed = [];
+    for (const t of candidates) {
+      const again = runInCommitWorktree(projectRoot, options.commitSha, runTpl.replace('{files}', t.file), timeoutMs);
+      if (again && again.ok) { if (Array.isArray(options.flakyReds)) options.flakyReds.push({ file: t.file, first: 'red', rerun: 'green' }); }
+      else confirmed.push(t);
+    }
+    candidates = confirmed;
+    if (!candidates.length) return candidates;
+  }
+  if (!parentSha) return candidates;
+  // red on the parent too → not this task's
   const cmd = runTpl.replace('{files}', candidates.map((t) => t.file).join(' '));
-  const before = runInCommitWorktree(projectRoot, parentSha, cmd, Number(rt0 && rt0.timeout_ms) > 0 ? Number(rt0.timeout_ms) : 600_000);
+  const before = runInCommitWorktree(projectRoot, parentSha, cmd, timeoutMs);
   if (!before) return candidates;
   if (before.ok) return candidates; // all green before: every red is this task's
   const redBefore = new Set(failingTestFiles(before.output || '').map((t) => t.file));
@@ -6399,6 +6447,14 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     appendEvent(projectRoot, activeSession, { type: 'DriftWaived', payload: { phase: phase.id, globs: acceptDrift, by } });
   }
   const closeGates = programCloseGateReasons(projectRoot, activeSession, { phase, run, paths, state, skip: options.gates === false });
+  // OXB-117 (d): rollback rehearsal — the phase's commits must revert cleanly (a temporary worktree at HEAD).
+  let rollbackRehearsal = null;
+  if (options.rollbackCheck !== false) {
+    try {
+      rollbackRehearsal = require('./oxe-phase-extras.cjs').rehearseRollback(projectRoot, phase.base_commit || null);
+      if (!rollbackRehearsal.ok) closeGates.reasons.push(`ensaio de rollback falhou: ${rollbackRehearsal.error || ''} ${(rollbackRehearsal.conflicts || []).join(', ')} — os commits da fase não revertem limpos (ou feche com --no-rollback-check e registre o risco)`.trim());
+    } catch { /* auxiliar */ }
+  }
   // OXB-115: complexity alarms — a proposal always; a block in strict (profile strict or complexity.block).
   try {
     const cx = runtimeComplexity(projectRoot, activeSession, { phase: phase.id });
@@ -6489,6 +6545,38 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   }
   programLib.writeProgram(paths.programDir, closed.state);
   try { projectStateMd(projectRoot, activeSession); } catch { /* projeção auxiliar */ }
+  // OXB-117 (e): the one-page phase report, for people.
+  let reportFile = null;
+  try {
+    const extras = require('./oxe-phase-extras.cjs');
+    let docR = null;
+    try { docR = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { docR = null; }
+    const crsR = require('./oxe-change.cjs').listChanges(paths.programDir).filter((cr) => !cr.phase || cr.phase === phase.id);
+    let defectsReg = null;
+    try { defectsReg = require('./oxe-open-defects.cjs').read(projectRoot); } catch { defectsReg = null; }
+    let cxR = null;
+    try { cxR = require('./oxe-complexity.cjs').complexityAlarms(projectRoot, phase.base_commit, readProjectConfig(projectRoot) || {}); } catch { cxR = null; }
+    let scoreR = null;
+    try { scoreR = require('./oxe-scorecard.cjs').scorecardForProject(projectRoot, () => readEvents(projectRoot, activeSession)); } catch { scoreR = null; }
+    const tasksR = ((docR && docR.tasks) || []).filter(Boolean);
+    const report = extras.renderPhaseReport({
+      phase: phase.id, title: phase.title, at: new Date().toISOString(), commit: commit.commit,
+      criteria: phase.acceptance || [], tasks_done: tasksR.filter((t) => t.done).length, tasks_total: tasksR.length,
+      first_attempt_rate: scoreR ? (scoreR.metrics.find((m) => m.metric === 'first_attempt_rate') || {}).value : null,
+      cost: runtimeCost(projectRoot, activeSession),
+      crs_total: crsR.length, crs_resolved: crsR.filter((c) => c.status === 'resolved').length, crs_open: crsR.filter((c) => c.status === 'open').length,
+      defects_waived: defectsReg ? (defectsReg.waivers || []).length : 0,
+      complexity_alarms: cxR ? cxR.alarms.length : 0,
+      api_flagged: dossier && dossier.api_surface ? dossier.api_surface.flagged.length : 0,
+      deferred: gate.deferred ? gate.deferred.length : 0,
+      quarantined: extras.readQuarantine(projectRoot).entries.length,
+      rollback: rollbackRehearsal,
+    });
+    const reportDir = path.join(path.dirname(paths.plan || path.join(projectRoot, '.oxe', 'PLAN.md')), 'dossier', phase.id);
+    fs.mkdirSync(reportDir, { recursive: true });
+    fs.writeFileSync(path.join(reportDir, 'RELATORIO.md'), report);
+    reportFile = path.relative(projectRoot, path.join(reportDir, 'RELATORIO.md')).replace(/\\/g, '/');
+  } catch { /* o relatório é auxiliar */ }
   appendEvent(projectRoot, activeSession, {
     type: 'PhaseClosed',
     run_id: run.run_id,
@@ -6506,6 +6594,8 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     phase: phase.id,
     gate,
     commit,
+    report: reportFile,
+    rollback_rehearsal: rollbackRehearsal,
     regression_checks: regressionChecks.length,
     interface_modules: modules.length,
     next: runtime.nextOpenPhase(closed.state),
@@ -7846,6 +7936,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeCost,
   runtimeComplexity,
   runtimeHandoff,
   runtimeContextUsage,

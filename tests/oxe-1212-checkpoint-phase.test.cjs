@@ -418,8 +418,9 @@ describe('OXB-174: a task\'s own leftovers from its earlier failed attempts go i
 describe('OXB-175: related reds that are not the task\'s never undo its commit; a checkpoint failure stops the chain', () => {
   // fake related: prints FAIL for every file listed in RED (env), exit 1 if any
   const RELATED = "const red=String(process.env.OXE_TEST_RED||'').split(',').filter(Boolean);for(const f of red)console.log(' FAIL  '+f+' > by design');process.exit(red.length?1:0);\n";
-  // fake run on the parent: red for files in OXE_TEST_RED_BEFORE
-  const RUN = "const red=String(process.env.OXE_TEST_RED_BEFORE||'').split(',').filter(Boolean);const args=process.argv.slice(2);let bad=0;for(const f of args)if(red.includes(f)){console.log(' FAIL  '+f+' > before');bad++;}process.exit(bad?1:0);\n";
+  // fake run (rerun on the commit tree, run on the parent): red for files in OXE_TEST_RED_BEFORE, and for files in
+  // OXE_TEST_RED_AFTER when the task's change is in that tree (src/t1.js changed)
+  const RUN = "const fs=require('fs');const red=String(process.env.OXE_TEST_RED_BEFORE||'').split(',').filter(Boolean);const after=String(process.env.OXE_TEST_RED_AFTER||'').split(',').filter(Boolean);const changed=fs.existsSync('src/t1.js')&&fs.readFileSync('src/t1.js','utf8').includes('changed');const args=process.argv.slice(2);let bad=0;for(const f of args)if(red.includes(f)||(changed&&after.includes(f))){console.log(' FAIL  '+f+' > red');bad++;}process.exit(bad?1:0);\n";
   const cfg = { checkpoint_related_tests: { command: 'node related.js {files}', run_command: 'node related-run.js {files}' } };
   const withEnv = async (env, fn) => { const prev = { ...process.env }; Object.assign(process.env, env); try { return await fn(); } finally { for (const k of Object.keys(env)) { if (prev[k] === undefined) delete process.env[k]; else process.env[k] = prev[k]; } } };
   const exec = (dir, calls = []) => ({ async execute(node) { calls.push(node.id); fs.writeFileSync(path.join(dir, 'src', `${node.id.toLowerCase()}.js`), 'changed\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } });
@@ -448,7 +449,7 @@ describe('OXB-175: related reds that are not the task\'s never undo its commit; 
   it('a real red (green before) fails the checkpoint AND the next task never starts', async () => {
     const dir = project({ plan: base(), files, config: cfg });
     const calls = [];
-    const res = await withEnv({ OXE_TEST_RED: 'tests/integration/remote.test.js', OXE_TEST_RED_BEFORE: '' }, () =>
+    const res = await withEnv({ OXE_TEST_RED: 'tests/integration/remote.test.js', OXE_TEST_RED_BEFORE: '', OXE_TEST_RED_AFTER: 'tests/integration/remote.test.js' }, () =>
       op.runRuntimeExecute(dir, null, { executor: exec(dir, calls), skipPreflight: true, checkpointCommits: true }));
     assert.deepEqual(calls, ['T1'], 'T2 never starts on top of T1\'s uncommitted work');
     assert.equal(res.result.status, 'checkpoint_failed');
@@ -574,5 +575,27 @@ describe('OXB-177: unseparable shared file', () => {
     assert.equal(res.result.checkpoint_failed[0].kind, 'shared_file_conflict');
     assert.match(res.result.checkpoint_failed[0].reason, /shared\/mcp-coverage\.ts tem edições de T2 e de T1/);
     assert.equal(git(dir, 'rev-parse', 'HEAD').stdout.trim(), head, 'nothing committed');
+  });
+});
+
+describe('OXB-178: a one-off related red is rerun alone before it counts', () => {
+  // fake related: red the first time it runs in a worktree (a marker file outside the worktree), green afterwards
+  const flakyRelated = (marker) => `const fs=require('fs');if(!fs.existsSync(${JSON.stringify(marker)})){fs.writeFileSync(${JSON.stringify(marker)},'1');console.log(' FAIL  tests/integration/policy-change-gate.test.js > migration');process.exit(1)}process.exit(0);\n`;
+  it('red on the first run, green on the rerun: the commit holds and flaky_reds lists the test', async () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T9', title: 'CR-F4-1 rename', wave: 1, files: ['src/migration.js'], verify: { commands: [ok] } }] };
+    const marker = path.join(os.tmpdir(), `oxe-flaky-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const dir = project({ plan, files: { 'src/migration.js': 'v1\n', 'related.js': flakyRelated(marker) }, config: { checkpoint_related_tests: { command: 'node related.js {files}', run_command: 'node related.js {files}' } } });
+    const exec = { async execute() { fs.writeFileSync(path.join(dir, 'src', 'migration.js'), 'v2\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    try {
+      const res = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, checkpointCommits: true });
+      assert.equal(res.result.checkpoint_failed, undefined, JSON.stringify(res.result.checkpoint_failed));
+      const t9 = planOf(dir).tasks[0];
+      assert.equal(t9.done, true);
+      assert.equal(git(dir, 'show', `${t9.done_commit}:src/migration.js`).stdout, 'v2\n');
+      const ev = op.readEvents(dir, null).find((e) => e.type === 'GateResolved' && e.payload.gate === 'checkpoint');
+      assert.deepEqual(ev.payload.check.flaky_reds, [{ file: 'tests/integration/policy-change-gate.test.js', first: 'red', rerun: 'green' }]);
+    } finally {
+      fs.rmSync(marker, { force: true });
+    }
   });
 });

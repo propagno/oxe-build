@@ -4243,6 +4243,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--limit' && argv[i + 1]) out.limit = Number(argv[++i]);
     else if (a === '--note' && argv[i + 1]) out.note = String(argv[++i]);
     else if (a === '--no-defects') out.noDefects = true;
+    else if (a === '--no-rollback-check') out.noRollbackCheck = true;
     else if (a === '--hold-deps' || a === '--promote-hold-deps') out.holdDeps = true;
     else if (a === '--allow-undelivered') out.allowUndelivered = true;
     else if (a === '--strict-delivery') out.strictDelivery = true;
@@ -5227,6 +5228,7 @@ async function runRuntime(opts) {
           commit: !opts.noCommit,
           gates: !opts.noGates,
           defects: !opts.noDefects,
+          rollbackCheck: !opts.noRollbackCheck,
           message: opts.message || undefined,
           deferSignoff: opts.deferSignoff,
           by: opts.by || undefined,
@@ -5582,6 +5584,20 @@ async function runRuntime(opts) {
       console.error(`${red}${err && err.message ? err.message : 'Falha ao executar runtime.'}${reset}`);
       process.exit(1);
     }
+  }
+
+  // OXB-117 (a): cost and time per task / CR / retry, and the phase forecast.
+  if (opts.action === 'cost') {
+    try {
+      const out = oxeOperational.runtimeCost(opts.dir, activeSession);
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeCostSchema: 1, ...out }, null, 2)); return; }
+      const t = out.totals;
+      console.log(`  Gasto: US$ ${t.cost_usd.toFixed(2)} (retries US$ ${t.retry_cost_usd.toFixed(2)}) · ${t.turns} turnos · ${Math.round(t.ms / 60000)} min de executor`);
+      if (out.forecast) console.log(`  Previsão: ${out.forecast.pending_tasks} tarefa(s) pendente(s) × US$ ${out.forecast.avg_cost_usd.toFixed(2)} = US$ ${out.forecast.remaining_cost_usd.toFixed(2)} · total da fase ≈ US$ ${out.forecast.phase_total_usd.toFixed(2)}`);
+      for (const r of out.tasks.slice(0, 12)) console.log(`    ${r.task.padEnd(6)} US$ ${r.cost_usd.toFixed(2)}  ${r.attempts} tentativa(s)  ${r.turns} turnos${r.retry_cost_usd ? `  (retries US$ ${r.retry_cost_usd.toFixed(2)})` : ''}`);
+      for (const c of out.crs) console.log(`    ${c.cr} (${c.class}) → ${c.tasks.join(', ')}: US$ ${c.cost_usd.toFixed(2)}`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
   }
 
   // OXB-115: complexity alarms of the phase.

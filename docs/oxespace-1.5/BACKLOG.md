@@ -904,12 +904,19 @@ Requisitos escritos pelo TECH LEAD, aprovados pelo usuário. O desenho e a imple
 
 ## OXB-117: lacunas extras
 
-- **Status:** aberto (aprovado pelo usuário em 08/11, "melhoria contínua total"; vem depois do bloco A e antes da OXB-097).
-  - (a) custo e tempo por tarefa, CR e retry, com previsão do orçamento da fase;
-  - (b) verify instável (verde e depois vermelho na mesma árvore) entra em quarentena com evidência;
-  - (c) impacto de regressão entre fases antes do execute;
-  - (d) ensaio de rollback (`runtime rollback --dry-run`) antes do close;
-  - (e) relatório da fase legível por humanos, em uma página, gerado no close.
+- **Status:** resolvido (1.21.2). `bin/lib/oxe-phase-extras.cjs`.
+  - **(a) Custo e tempo:** `oxe-cc runtime cost` lê o `ExecutorUsage` e mostra custo, turnos e tempo por tarefa (separando o gasto dos retries), por CR (as tarefas ligadas a ele) e o total.
+    - Traz uma **previsão** do orçamento da fase: custo médio das tarefas done × tarefas pendentes, e tempo restante.
+  - **(b) Quarentena:** um verify `flaky_suspect` (OXB-162: verde, vermelho e verde de novo na mesma árvore) entra em `.oxe/QUARANTINE.json` com a evidência e a contagem. O `plan lint` avisa quais tarefas pendentes ainda usam esse comando.
+  - **(c) Impacto de regressão entre fases:** o preflight do execute avisa (`regression_impact:Tn`) quando uma tarefa pendente mexe em arquivo que a regressão congelada de uma fase fechada exercita, seja o teste ou o que ele importa.
+  - **(d) Ensaio de rollback:** o `program close` reverte os commits da fase (`base_commit..HEAD`) numa worktree temporária. Se não reverte limpo, bloqueia o close; `--no-rollback-check` registra o risco e segue. A árvore real não é tocada.
+  - **(e) Relatório da fase:** o close grava `RELATORIO.md`, de uma página, no dossiê da fase, com:
+    - critérios entregues, tarefas e taxa de 1ª tentativa;
+    - custo e tempo;
+    - CRs;
+    - riscos que ficaram (defeitos dispensados, alarmes de complexidade, API fora do pack, sign-offs adiados, verifies em quarentena);
+    - o ensaio de rollback.
+  - Teste: `tests/oxe-1212-phase-extras.test.cjs`.
 
 # Backlogs de comparação (08/11)
 
@@ -1324,3 +1331,12 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
     - A interrompida com H1 em F; B muda H2 em F e faz checkpoint: o commit da B tem só H2 e A continua vendo H1.
     - B com uma tentativa anterior que escreveu F: continua só H2.
     - Sem a base (histórico anterior): `shared_file_conflict` e nenhum commit.
+
+## OXB-178: `checkpoint_related_tests` desfazia o commit por um vermelho pontual
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 09/11 (F4, rc.36).
+  - O que aconteceu: a T9 (CR-F4-1) teve o checkpoint desfeito como `scope_insufficient` por `tests/integration/policy-change-gate.test.ts` vermelho. Rodado de novo logo depois, na mesma árvore, deu 33/33 verde: provável pressão de memória com três fases na máquina.
+  - Antes de contar um vermelho relacionado contra a tarefa, cada arquivo de teste que falhou roda **mais uma vez, sozinho, na árvore do commit** (`run_command`). Só conta se ficar vermelho de novo.
+  - Os que passam no rerun vão para `check.flaky_reds` (`{ file, first: red, rerun: green }`), que aparece no `GateResolved` do checkpoint. O commit é mantido.
+  - A ordem dos filtros: exclusões da OXB-175 (aceite de tarefa pendente, outra fase, parked), depois o rerun na árvore do commit, depois o vermelho também no pai.
+  - Teste: `tests/oxe-1212-checkpoint-phase.test.cjs` (vermelho na 1ª execução e verde no rerun: commit mantido e `flaky_reds` com o teste). O fixture da OXB-175 passou a ficar vermelho conforme a árvore, como um teste real.
