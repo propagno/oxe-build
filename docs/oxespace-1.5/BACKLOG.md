@@ -1428,3 +1428,14 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
     - decisão humana: tarefa sem verify.
   - Entradas abertas entram no registro de defeitos (OXB-110) e bloqueiam o close, salvo dispensa com motivo.
   - Teste: `tests/oxe-1212-deferred.test.cjs` (T1 esgota, T3 e T4 pousam, T2 bloqueada; o ledger e o bloqueio no close; o retry "já resolvida"; o modo antigo).
+
+## OXB-123: sondas de borda e de proibição na spec
+
+- **Status:** resolvido (1.21.2). Item P1 do backlog de comparação. `bin/lib/oxe-spec-probe.cjs` e o comando `oxe-cc spec probe [A<n>…|--all]`.
+  - **Sonda de bordas:** para cada critério A*, uma taxonomia fechada levanta só as categorias que o texto pede: limite, vazio, adjacência, encoding/locale, ordem, precisão, idempotência, concorrência, teclado e foco.
+    - Cada borda vira uma linha `A<n>.e<k>` em `## Bordas`, com a pergunta, e o status `coberta | descartada | prova_extra | aberta`.
+  - **Sonda de proibição:** grava critérios negativos `N<n>` em `## Proibições` (perda de dado, vazamento, dependência de rede quando local, travar a interface, erro cru), com nível `teste | julgamento`.
+  - O `spec probe` é idempotente: só acrescenta para os critérios que ainda não têm linhas.
+  - **Lint:** status inválido e borda descartada sem motivo são erro. Borda aberta sem suposição no plano (`assumptions` com o id) é aviso.
+  - **Close:** borda `prova_extra` e proibição `julgamento` sem evidência ficam `needs_human` e nunca passam sozinhas. O `runtime signoff` passou a aceitar ids `N<n>` e `A<n>.e<k>` com `--evidence`.
+  - Teste: `tests/oxe-1212-spec-probe.test.cjs`.

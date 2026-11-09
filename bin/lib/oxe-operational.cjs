@@ -889,6 +889,18 @@ function runtimeDeferred(projectRoot, activeSession, options = {}) {
   return { retry: out, dry_run: Boolean(options.dryRun) };
 }
 
+/** OXB-123: `oxe-cc spec probe [A<n>…]` — writes the ## Bordas / ## Proibições rows for the criteria without them. */
+function runtimeSpecProbe(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-spec-probe.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const text = readTextIfExists(paths.spec);
+  if (!text) throw new Error('SPEC.md ausente');
+  const res = lib.writeProbe(text, options.ids || []);
+  fs.writeFileSync(paths.spec, res.text);
+  appendEvent(projectRoot, activeSession, { type: 'SpecProbed', payload: { edges: res.edges.length, prohibitions: res.prohibitions.length } });
+  return { spec: path.relative(projectRoot, paths.spec).replace(/\\/g, '/'), edges: res.edges, prohibitions: res.prohibitions };
+}
+
 /** OXB-127: `oxe-cc runtime deps [--base <sha>] [--gate]` — the dependency audit of the phase (or since --base). */
 function runtimeDeps(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-deps-audit.cjs');
@@ -3748,6 +3760,16 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       result.warnings.push(...dl.warnings);
     }
   } catch { /* auxiliar */ }
+  // OXB-123: the probe sections of the SPEC (statuses, reasons, open edges without an assumption in the plan).
+  try {
+    const specP = readTextIfExists(resolveRuntimeArtifactPaths(projectRoot, activeSession).spec) || '';
+    if (/^##\s+(Bordas|Proibi)/im.test(specP)) {
+      const { doc: pjp } = readPlanJsonDoc(projectRoot, activeSession);
+      const lp = require('./oxe-spec-probe.cjs').lintProbe(specP, pjp);
+      result.errors.push(...lp.errors);
+      result.warnings.push(...lp.warnings);
+    }
+  } catch { /* auxiliar */ }
   // OXB-111: adversarial review of the plan (--review): PLAN-REVIEW.md, one verdict per dimension; FAIL blocks.
   if (options.review || options.reviewWaive) {
     try {
@@ -4063,8 +4085,8 @@ function runtimeSignoff(projectRoot, activeSession, options = {}) {
   const by = String(options.by || '').trim();
   if (!by) throw new Error('Sign-off exige --by <quem aceitou>.');
   const criteria = (Array.isArray(options.criteria) ? options.criteria : String(options.criteria || '').split(','))
-    .map((c) => c.trim().toUpperCase()).filter((c) => /^(?:A\d+(?:\.\d+)?|G\d+)$/.test(c));
-  if (!criteria.length) throw new Error('Sign-off exige --criteria A8[,A9].');
+    .map((c) => c.trim().toUpperCase().replace(/\.E(\d+)$/, '.e$1')).filter((c) => /^(?:A\d+(?:\.\d+|\.e\d+)?|G\d+|N\d+)$/.test(c));
+  if (!criteria.length) throw new Error('Sign-off exige --criteria A8[,A9] (ou N3, A4.e2).');
   // OXB-124: the verdict is pinned to the commit it judged and to the text of each criterion.
   const verdicts = require('./oxe-verdicts.cjs');
   const head = options.head ? (gitLines(projectRoot, ['rev-parse', '--verify', `${options.head}^{commit}`]) || [])[0] || null : verdicts.headOf(projectRoot);
@@ -6614,6 +6636,15 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
       if (!rollbackRehearsal.ok) closeGates.reasons.push(`ensaio de rollback falhou: ${rollbackRehearsal.error || ''} ${(rollbackRehearsal.conflicts || []).join(', ')} — os commits da fase não revertem limpos (ou feche com --no-rollback-check e registre o risco)`.trim());
     } catch { /* auxiliar */ }
   }
+  // OXB-123: edges marked prova_extra and prohibitions at level julgamento need explicit evidence (a sign-off naming them).
+  try {
+    const specN = readTextIfExists(paths.spec) || '';
+    const evid = readNdjsonQuiet(path.join(paths.programDir, 'signoffs.ndjson')).filter((s) => s && s.phase === phase.id && s.evidence).flatMap((s) => s.criteria || []);
+    const phaseCrit = new Set(phase.acceptance || []);
+    const lib123 = require('./oxe-spec-probe.cjs');
+    const relevant = new Set([...lib123.readEdges(specN), ...lib123.readProhibitions(specN)].filter((x) => !phaseCrit.size || phaseCrit.has(x.criterion)).map((x) => x.id));
+    for (const id of lib123.needsHuman(specN, evid).filter((x) => relevant.has(x))) closeGates.reasons.push(`needs_human: ${id} pede evidência explícita (oxe-cc runtime signoff --phase ${phase.id} --criteria ${id} --by <papel> --evidence …) — nunca passa sozinho`);
+  } catch { /* auxiliar */ }
   // OXB-137: open findings whose table severity blocks (close.block_on, default critical + high on a standing criterion).
   try {
     const cfgClose = (readProjectConfig(projectRoot) || {}).close || {};
@@ -8120,6 +8151,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeSpecProbe,
   runtimeDeferred,
   runtimeSeams,
   runtimeDeps,

@@ -6575,6 +6575,26 @@ async function main() {
   }
 
   // OXB-058: `oxe-cc spec amend|add …` and `oxe-cc program phase add|export …`.
+  // OXB-123: edge and prohibition probes on the spec.
+  if (command === 'spec' && argv[0] === 'probe') {
+    const o = { dir: process.cwd(), json: false, ids: [] };
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--all') o.ids = [];
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (/^A\d+$/i.test(a)) o.ids.push(a.toUpperCase());
+      else if (!a.startsWith('-')) o.dir = path.resolve(a);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = oxeOperational.runtimeSpecProbe(o.dir, null, { ids: o.ids });
+      if (o.json) { console.log(JSON.stringify({ oxeSpecProbeSchema: 1, ...out }, null, 2)); return; }
+      console.log(`  ${green}✓${reset} ${out.edges.length} borda(s) e ${out.prohibitions.length} proibição(ões) novas em ${out.spec} — marque cada borda como coberta | descartada (com motivo) | prova_extra | aberta, e cada proibição como teste | julgamento`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   if (command === 'spec' || command === 'program') {
     // OXB-076: `program phase edit Fn …` and `program criterion move A<n> --from Fn --to Fm`.
     const sub = command === 'spec' ? argv[0]
