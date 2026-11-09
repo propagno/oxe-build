@@ -6656,6 +6656,27 @@ async function main() {
   // OXB-058: `oxe-cc program <status|init|start|close>` is `runtime program …`; `phase add` and `export` are handled
   // below with `spec`.
   // OXB-101: snapshot a real program's .oxe/ (outside the repo) and regress the CLI over the snapshots.
+  // OXB-135: members of a multi-repository program.
+  if (command === 'program' && argv[0] === 'member') {
+    const sub = ['add', 'remove', 'list'].includes(argv[1]) ? argv[1] : 'list';
+    const o = { dir: process.cwd(), json: false };
+    for (let i = sub === argv[1] ? 2 : 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (['--name', '--path', '--remote', '--branch', '--order'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-') && !o.name) o.name = a;
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = oxeOperational.runtimeProgramMember(o.dir, null, { action: sub, ...o });
+      if (o.json) { console.log(JSON.stringify({ oxeProgramMemberSchema: 1, ...out }, null, 2)); return; }
+      if (!out.members.length) console.log('  programa de um repositório só (sem membros)');
+      for (const m of out.members) console.log(`  ${m.order}. ${m.name} — ${m.path} (${m.branch})${m.remote ? ` ${m.remote}` : ''}`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   // OXB-103: coordinator queue.
   if (command === 'program' && argv[0] === 'queue') {
     const o = { dir: process.cwd(), json: argv.includes('--json') };

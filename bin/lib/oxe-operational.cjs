@@ -826,6 +826,18 @@ function runtimeContextUsage(projectRoot, activeSession, options = {}) {
   return { ...lvl, handoff, workflows };
 }
 
+/** OXB-135: `oxe-cc program member add|remove|list`. */
+function runtimeProgramMember(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-program-members.cjs');
+  const programLib = require('./oxe-program.cjs');
+  const programDir = resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program');
+  const program = programLib.readProgram(programDir);
+  if (!program) throw new Error('program member exige PROGRAM.json (oxe-cc program init)');
+  if (options.action === 'add') { const m = lib.add(projectRoot, program, options); programLib.writeProgram(programDir, program); appendEvent(projectRoot, activeSession, { type: 'ProgramMemberAdded', payload: m }); return { member: m, members: lib.list(program) }; }
+  if (options.action === 'remove') { lib.remove(program, options.name); programLib.writeProgram(programDir, program); return { removed: options.name, members: lib.list(program) }; }
+  return { members: lib.list(program) };
+}
+
 /** OXB-103: `oxe-cc program queue` → .oxe/program/QUEUE.md + queue.json (the next prep item of each role). */
 function runtimeProgramQueue(projectRoot, activeSession) {
   const lib = require('./oxe-coordinator-queue.cjs');
@@ -4278,6 +4290,12 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     const { doc: pjq } = readPlanJsonDoc(projectRoot, activeSession);
     result.warnings.push(...require('./oxe-phase-extras.cjs').quarantineWarnings(projectRoot, pjq));
   } catch { /* auxiliar */ }
+  // OXB-135: a task's repo must be a program member; one task, one repository.
+  try {
+    const { doc: pjm, paths: ptm } = readPlanJsonDoc(projectRoot, activeSession);
+    const pgm = require('./oxe-program.cjs').readProgram(ptm.programDir || path.join(projectRoot, '.oxe', 'program'));
+    result.errors.push(...require('./oxe-program-members.cjs').lint(pjm, pgm));
+  } catch { /* auxiliar */ }
   // OXB-142: code copied into the plan/pack instead of pointed at; pack intent without a source.
   try {
     const { doc: pji, paths: pti } = readPlanJsonDoc(projectRoot, activeSession);
@@ -7266,6 +7284,15 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     const onlyManual = (run.verification_check_results || []).every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));
     if (onlyManual) gateInput.verify_status = 'completed';
   }
+  // OXB-135: the members close in order — a dirty member stops; the landed shas go to the phase and the dossier.
+  let memberClose = null;
+  try {
+    const ml = require('./oxe-program-members.cjs');
+    if (ml.list(state).length) {
+      memberClose = ml.closeMembers(projectRoot, state);
+      if (!memberClose.ok) closeGates.reasons.push(`membros: ${memberClose.reason}`);
+    }
+  } catch { memberClose = null; }
   // OXB-105: the phase changed paths a SYSTEM-DESIGN section describes and the document did not change.
   try {
     if (readProjectConfig(projectRoot).design_drift !== false) {
@@ -7316,6 +7343,16 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     return { closed: false, phase: phase.id, gate, commit: null };
   }
 
+  // OXB-135: the landed sha of each member, recorded with the phase and in the dossier.
+  if (memberClose && memberClose.ok && memberClose.landed.length) {
+    try {
+      const target = (state.phases || []).find((p) => p.id === phase.id);
+      if (target) { target.members_landed = memberClose.landed; programLib.writeProgram(paths.programDir, state); }
+      const ddir = path.join(path.dirname(paths.plan || path.join(projectRoot, '.oxe', 'PLAN.md')), 'dossier', phase.id);
+      fs.mkdirSync(ddir, { recursive: true });
+      fs.writeFileSync(path.join(ddir, 'members.md'), require('./oxe-program-members.cjs').renderMembers(phase.id, memberClose.landed));
+    } catch { /* auxiliar */ }
+  }
   // OXB-105: what the phase touched, for the compact (structural CODEBASE-DELTA entry).
   try { require('./oxe-system-design.cjs').deltaEntry(projectRoot, phase.id, phase.base_commit); } catch { /* auxiliar */ }
   const regressionChecks = programLib.freezeRegressionChecks(run.verification_check_results, run.verification_suite);
@@ -8741,6 +8778,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeProgramMember,
   runtimeProgramQueue,
   runtimeTrain,
   runtimeDesignBuild,

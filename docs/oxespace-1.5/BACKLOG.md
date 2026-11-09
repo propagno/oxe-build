@@ -1839,3 +1839,12 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 - **Caso inicial:** o OXB-046 anonimizado (o teste de aceite da fase usado como verify de tarefa). O `plan.md` ganhou a guarda explícita: "Um teste de aceite da fase inteira não é verify de tarefa".
 - **Limite:** o modelo simulado mede se a instrução está no texto, não se um LLM a obedece. A medida do LLM real é o `--model claude --runs N`, opt-in e pago.
 - **Teste:** `tests/oxe-1212-workflow-eval.test.cjs`. Tirar a guarda do OXB-046 é detectado como regressão, e uma mudança neutra não é. As 3 mutações são detectadas, a variância entra na tolerância e o bloqueio do release está presente.
+
+## OXB-135: programa que muda mais de um repositório
+
+- **Status:** resolvido (1.21.2), parcial na execução (ver o limite). Implementado em `bin/lib/oxe-program-members.cjs`.
+- **Os membros:** `oxe-cc program member add --name ui --path ../ui [--remote …] [--branch main] [--order 2]`, `remove` e `list`. Ficam em PROGRAM.json `members`, e o `add` recusa um caminho que não é repositório git.
+- **A tarefa:** declara `repo: "<membro>"`, sem `repo` para o coordenador. O lint recusa um `repo` desconhecido e recusa uma tarefa que toca dois repositórios (prefixo `<membro>:caminho` diferente do `repo`, ou prefixo numa tarefa do coordenador).
+- **O close:** percorre os membros na ordem. Um membro com mudança não commitada para o close (`membros: …`). O sha pousado de cada membro fica em `members_landed` da fase e no dossiê (`dossier/<fase>/members.md`). O verify roda do coordenador.
+- **Limite:** o `runtime execute` do coordenador não leva a escrita de uma tarefa `repo` para dentro do membro. Execute essa tarefa com `--dir <membro>`, ou mantenha o código do membro no coordenador. Isso fica como próximo passo, porque mexe na contenção de caminhos do executor.
+- **Teste:** `tests/oxe-1212-program-members.test.cjs`. Cobre member add/list, repo desconhecido, a tarefa em dois repositórios e o fluxo completo: execute, verify, handoff, o close parado pelo membro sujo e, depois do commit no membro, o close com o sha no PROGRAM e no `members.md`.
