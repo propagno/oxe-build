@@ -889,6 +889,22 @@ function runtimeDeferred(projectRoot, activeSession, options = {}) {
   return { retry: out, dry_run: Boolean(options.dryRun) };
 }
 
+/** OXB-126: `oxe-cc plan staleness [--stamp]` and `plan refresh --tasks T3,T7`. */
+function runtimePlanStaleness(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-plan-staleness.cjs');
+  const { jsonPath, doc, paths } = readPlanJsonDoc(projectRoot, activeSession);
+  if (!doc) throw new Error('plan staleness exige PLAN.json');
+  const head = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0] || null;
+  if (options.stamp) { lib.stamp(jsonPath, doc, head); return { stamped: head }; }
+  if (options.refresh) {
+    const ids = String(options.refresh).split(',').map((x) => x.trim().toUpperCase()).filter(Boolean);
+    const done = lib.refresh(jsonPath, doc, ids, head);
+    appendEvent(projectRoot, activeSession, { type: 'PlanRefreshed', payload: { tasks: done, head } });
+    return { refreshed: done, head };
+  }
+  return lib.staleness(projectRoot, doc, readJsonQuiet(paths.implementationPack));
+}
+
 /** OXB-123: `oxe-cc spec probe [A<n>…]` — writes the ## Bordas / ## Proibições rows for the criteria without them. */
 function runtimeSpecProbe(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-spec-probe.cjs');
@@ -2007,6 +2023,17 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
         for (const h of require('./oxe-phase-extras.cjs').regressionImpact(projectRoot, checksR, pjR)) for (const t of h.tasks) byTask.set(t, [...(byTask.get(t) || []), `${h.file} (${h.check})`]);
         for (const [t, list] of byTask) warnings.push(`regression_impact:${t} mexe em ${[...new Set(list)].slice(0, 4).join(', ')} — a regressão congelada dessas fases roda no verify; rode-a cedo`);
       }
+    } catch { /* auxiliar */ }
+    // OXB-126: a plan written against code that changed since (base_sha) — refuse with the report per task.
+    try {
+      const st = runtimePlanStaleness(projectRoot, activeSession, {});
+      for (const x of st.stale.slice(0, 12)) blockers.push(`plan_stale:${x.task} — ${x.file ? `${x.file}: ` : ''}${x.why} (revise a tarefa e rode oxe-cc plan refresh --tasks ${x.task})`);
+    } catch { /* sem PLAN.json */ }
+    // OXB-126: a phase still in sketch (PROGRAM.json detail: "sketch") is not executed.
+    try {
+      const pg = require('./oxe-program.cjs').readProgram(resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program'));
+      const ph = pg && pg.active_phase ? (pg.phases || []).find((p) => p.id === pg.active_phase) : null;
+      if (ph && ph.detail === 'sketch') blockers.push(`phase_sketch:${ph.id} — a fase está em esboço (objetivo, risco, dependências); detalhe o plano antes de executar`);
     } catch { /* auxiliar */ }
     // OXB-111: a plan review of THIS plan with an unwaived FAIL blocks the execute.
     try {
@@ -8151,6 +8178,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimePlanStaleness,
   runtimeSpecProbe,
   runtimeDeferred,
   runtimeSeams,

@@ -6781,6 +6781,30 @@ async function main() {
     return;
   }
 
+  // OXB-126: staleness of the plan against the code that landed since it was written.
+  if (command === 'plan' && (argv[0] === 'staleness' || argv[0] === 'refresh')) {
+    const o = { dir: process.cwd(), json: false, stamp: false, tasks: null };
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--stamp') o.stamp = true;
+      else if (a === '--tasks' && argv[i + 1]) o.tasks = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-')) o.dir = path.resolve(a);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      if (argv[0] === 'refresh' && !o.tasks) throw new Error('use: oxe-cc plan refresh --tasks T3[,T7]');
+      const out = oxeOperational.runtimePlanStaleness(o.dir, null, { stamp: o.stamp, refresh: argv[0] === 'refresh' ? o.tasks : null });
+      if (o.json) { console.log(JSON.stringify({ oxePlanStalenessSchema: 1, ...out }, null, 2)); return; }
+      if (out.stamped) console.log(`  ${green}✓${reset} PLAN.json base_sha = ${out.stamped.slice(0, 10)}`);
+      else if (out.refreshed) console.log(`  ${green}✓${reset} revisadas contra ${String(out.head).slice(0, 10)}: ${out.refreshed.join(', ') || '—'}`);
+      else if (!out.stale.length) console.log(`  ${green}✓${reset} o plano está em dia com o código`);
+      else { console.log(`  ${yellow}${out.stale.length} ponto(s) do plano mudaram depois dele${reset} — o execute recusa:`); for (const x of out.stale) console.log(`    ${x.task}: ${x.file || ''} ${x.why}`); process.exitCode = 1; }
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   if (command === 'plan' && argv[0] === 'append') {
     const rest = argv.slice(1);
     const o = { dir: process.cwd(), session: null, json: false };

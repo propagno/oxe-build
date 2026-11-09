@@ -1439,3 +1439,13 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - **Lint:** status inválido e borda descartada sem motivo são erro. Borda aberta sem suposição no plano (`assumptions` com o id) é aviso.
   - **Close:** borda `prova_extra` e proibição `julgamento` sem evidência ficam `needs_human` e nunca passam sozinhas. O `runtime signoff` passou a aceitar ids `N<n>` e `A<n>.e<k>` com `--evidence`.
   - Teste: `tests/oxe-1212-spec-probe.test.cjs`.
+
+## OXB-126: detectar plano velho antes do execute
+
+- **Status:** resolvido (1.21.2). Item P1 do backlog de comparação. `bin/lib/oxe-plan-staleness.cjs`.
+  - O PLAN.json guarda `base_sha`, o commit contra o qual foi escrito (`oxe-cc plan staleness --stamp`). Uma tarefa pode ter o próprio `base_sha` depois de revisada.
+  - **`oxe-cc plan staleness`:** os commits desde a base, sem os checkpoints das próprias tarefas do plano, cruzados com cada tarefa pendente: os files dela, os arquivos dos símbolos do pack e os testes congelados. Aponta arquivo mudado, caminho removido e teste mudado, por tarefa.
+  - **O execute recusa** (`plan_stale:Tn` no preflight) enquanto houver interseção.
+  - **`oxe-cc plan refresh --tasks T3[,T7]`** registra que a tarefa foi revisada contra o código atual (`base_sha` e `refreshed_at` na tarefa). Ids e tarefas done são preservados. O conteúdo da revisão é do planner; o comando só grava o ponto de referência.
+  - **Fase em esboço:** PROGRAM.json `detail: "sketch"` na fase. Ela não executa (`phase_sketch` no preflight) até o plano ser detalhado.
+  - Teste: `tests/oxe-1212-plan-staleness.test.cjs` (merge que mexe no escopo da T3 e remove um arquivo: o execute recusa nomeando a T3, e o checkpoint da T1 não conta; refresh; fase em esboço).
