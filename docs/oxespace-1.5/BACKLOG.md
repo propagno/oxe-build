@@ -803,8 +803,14 @@ Cada bloco tem uma meta medível:
 
 ## OXB-103: modo coordenador
 
-- **Status:** aberto (roteiro de excelência, TECH LEAD em 08/11, a pedido do usuário).
-  - Pelo DAG do PROGRAM, o próximo item de preparação de cada papel (CCRs, testes congelados das próximas fases) vai para um arquivo de fila que os papéis leem.
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-coordinator-queue.cjs`.
+- **O comando:** `oxe-cc program queue` grava `.oxe/program/QUEUE.md` e `queue.json`, com o próximo item de preparação de cada papel, pelo DAG do PROGRAM.
+- **O que entra na fila:**
+  - os CRs abertos, por severidade, para os papéis das tarefas e dos critérios que eles tocam (senão, o tech lead);
+  - para as fases prontas (pendentes, com as dependências fechadas ou em curso): "planejar Fk" para o planner, se a fase não tem plano, e "escrever o teste congelado de A<n>" para o papel de testes, para cada critério sem teste congelado;
+  - as tarefas abertas da fase ativa, para os papéis delas.
+- **Os papéis:** vêm de PLAN.json `roles` (plan merge) e de config `program.roles` ({ tests, planner, lead }).
+- **Teste:** `tests/oxe-1212-coordinator-queue.test.cjs` (DAG, CR antes da tarefa, critério já congelado fica fora, fase não pronta fica fora, arquivos gravados).
 
 ## OXB-104: artefato SYSTEM-DESIGN
 

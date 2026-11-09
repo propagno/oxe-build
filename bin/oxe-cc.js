@@ -6656,6 +6656,21 @@ async function main() {
   // OXB-058: `oxe-cc program <status|init|start|close>` is `runtime program …`; `phase add` and `export` are handled
   // below with `spec`.
   // OXB-101: snapshot a real program's .oxe/ (outside the repo) and regress the CLI over the snapshots.
+  // OXB-103: coordinator queue.
+  if (command === 'program' && argv[0] === 'queue') {
+    const o = { dir: process.cwd(), json: argv.includes('--json') };
+    const di = argv.indexOf('--dir');
+    if (di >= 0 && argv[di + 1]) o.dir = path.resolve(argv[di + 1]);
+    try {
+      const q = oxeOperational.runtimeProgramQueue(o.dir, null);
+      if (o.json) { console.log(JSON.stringify({ oxeProgramQueueSchema: 1, ...q }, null, 2)); return; }
+      for (const [role, it] of Object.entries(q.next)) console.log(`  ${role}: ${it.text}`);
+      if (!Object.keys(q.next).length) console.log('  nada na fila');
+      console.log('  → .oxe/program/QUEUE.md');
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   if (command === 'program' && (argv[0] === 'snapshot' || argv[0] === 'regress')) {
     const o = { dir: process.cwd(), json: false };
     for (let i = 1; i < argv.length; i += 1) {

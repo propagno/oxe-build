@@ -826,6 +826,22 @@ function runtimeContextUsage(projectRoot, activeSession, options = {}) {
   return { ...lvl, handoff, workflows };
 }
 
+/** OXB-103: `oxe-cc program queue` → .oxe/program/QUEUE.md + queue.json (the next prep item of each role). */
+function runtimeProgramQueue(projectRoot, activeSession) {
+  const lib = require('./oxe-coordinator-queue.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const program = require('./oxe-program.cjs').readProgram(programDir);
+  if (!program) throw new Error('program queue exige PROGRAM.json (oxe-cc program init)');
+  let doc = null;
+  try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
+  const q = lib.build({ program, doc, changes: require('./oxe-change.cjs').listChanges(programDir), config: readProjectConfig(projectRoot) });
+  fs.writeFileSync(path.join(programDir, 'queue.json'), `${JSON.stringify(q, null, 2)}\n`);
+  fs.writeFileSync(path.join(programDir, 'QUEUE.md'), lib.render(q));
+  appendEvent(projectRoot, activeSession, { type: 'CoordinatorQueueWritten', payload: { roles: Object.keys(q.roles) } });
+  return q;
+}
+
 /** OXB-102: `oxe-cc runtime train [status|sync] [--apply]` — merge-train awareness of the task PRs. */
 function runtimeTrain(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-merge-train.cjs');
@@ -8725,6 +8741,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeProgramQueue,
   runtimeTrain,
   runtimeDesignBuild,
   runtimeSpecFreeze,
