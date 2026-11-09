@@ -74,6 +74,8 @@ function collect(projectRoot, ctx = {}) {
     const cmds = t.verify && Array.isArray(t.verify.commands) ? t.verify.commands.filter((c) => String(c).trim()) : [];
     if (!cmds.length && !(t.verify && t.verify.command)) push('verify_missing', `${ctx.phase || ''}|${t.id}|${t.title}`, { task: t.id, text: `${t.id} concluída sem verify` });
   }
+  // OXB-138: deferred tasks still open block the close too (waivable like any defect)
+  for (const d of ctx.deferred || []) push('deferred', d.id, { task: d.task, text: `${d.id}: ${d.task} adiada (${d.reason})` });
   const standing = new Set(ctx.standing || []);
   for (const cr of ctx.changes || []) {
     if (!cr || cr.status !== 'open') continue;

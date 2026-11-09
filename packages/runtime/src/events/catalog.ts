@@ -40,6 +40,7 @@ export const EVENT_TYPES = [
   'ScratchIgnored',
   'ScopeInsufficient',
   'RunPaused',
+  'WorkItemDeferred',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

@@ -53,6 +53,11 @@ export interface SchedulerOptions {
         environment?: string[];
         quota?: string[];
     };
+    /**
+     * OXB-138: a task that exhausts its attempts is DEFERRED and the run goes on with every task that does not depend on
+     * it (its dependents end `blocked_by_deferred`). false keeps the old stop-at-the-failed-wave behavior.
+     */
+    deferFailed?: boolean;
     maxRunDurationMs?: number;
     staleProgressMs?: number;
 }

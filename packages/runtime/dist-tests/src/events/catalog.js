@@ -44,6 +44,7 @@ exports.EVENT_TYPES = [
     'ScratchIgnored',
     'ScopeInsufficient',
     'RunPaused',
+    'WorkItemDeferred',
 ];
 function isValidEventType(type) {
     return exports.EVENT_TYPES.includes(type);

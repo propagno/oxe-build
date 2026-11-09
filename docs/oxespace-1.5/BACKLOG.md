@@ -1412,3 +1412,19 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - `runtime feedback --rule <id>` grava `rule` e `severity` no CR, com a severidade vinda da tabela. Informar uma severidade diferente é recusado, e severidade sem regra também. Sem regra, o achado é observação (`unrated`).
   - O close bloqueia em `close.block_on` (padrão: qualquer `critical` e `high` num critério permanente).
   - Teste: `tests/oxe-1212-findings-seams-deps.test.cjs`.
+
+## OXB-138: adiar a tarefa que não converge e seguir com as independentes
+
+- **Status:** resolvido (1.21.2). Item P1 do backlog de comparação. `bin/lib/oxe-deferred.cjs` e o comando `oxe-cc runtime deferred [retry] [--dry-run]`.
+  - Uma tarefa que esgota as tentativas fica **adiada** (`WorkItemDeferred`), e a run continua.
+    - As tarefas que dependem dela, direta ou transitivamente, ficam `blocked_by_deferred` e não rodam.
+    - As independentes seguem e pousam. Os arquivos da adiada são restaurados pelo isolamento de tentativa falha (OXB-051).
+    - `execute.defer_failed: false` volta ao comportamento antigo (a run para na onda com falha).
+  - **Ledger** em `.oxe/program/deferred.ndjson`: `AD-<fase>-<n>`, com o motivo (a classe da falha) e a última evidência. Uma falha nova da mesma tarefa atualiza a entrada.
+  - **`runtime deferred retry`** classifica cada entrada aberta contra a árvore atual:
+    - já resolvida (o verify passa agora): fecha a entrada;
+    - pronta para refazer: o próximo execute a roda, já que continua pendente;
+    - feita por outro caminho (done no PLAN.json): fecha a entrada;
+    - decisão humana: tarefa sem verify.
+  - Entradas abertas entram no registro de defeitos (OXB-110) e bloqueiam o close, salvo dispensa com motivo.
+  - Teste: `tests/oxe-1212-deferred.test.cjs` (T1 esgota, T3 e T4 pousam, T2 bloqueada; o ledger e o bloqueio no close; o retry "já resolvida"; o modo antigo).

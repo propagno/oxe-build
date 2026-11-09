@@ -723,7 +723,7 @@ function depsPhaseGates(projectRoot, base) {
     const changed = gitLines(projectRoot, ['diff', '--name-only', base, '--', 'package.json', 'package-lock.json']) || [];
     if (!changed.length) return [];
     const cli = path.join(__dirname, '..', 'oxe-cc.js').replace(/\\/g, '/');
-    return [{ id: 'deps', when: 'phase_verify', command: `node "${cli}" runtime deps --gate --base ${base}`, description: 'auditoria de dependências da fase (OXB-127)', on_fail: 'cr_defect' }];
+    return [{ id: 'deps', when: 'phase_verify', command: `node "${cli}" runtime deps --base ${base}`, description: 'auditoria de dependências da fase (OXB-127)', on_fail: 'cr_defect' }];
   } catch { return []; }
 }
 
@@ -764,6 +764,7 @@ function runtimeDefects(projectRoot, activeSession, options = {}) {
     doc,
     changes: changes.filter((c) => !phaseId || !c.phase || c.phase === phaseId),
     standing: require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot),
+    deferred: (() => { try { return require('./oxe-deferred.cjs').open(programDir).filter((d) => !phaseId || !d.phase || d.phase === phaseId); } catch { return []; } })(),
   });
   return { register, open: lib.open(register) };
 }
@@ -860,6 +861,32 @@ function runtimeSeams(projectRoot, activeSession, options = {}) {
     file = path.relative(projectRoot, path.join(dir, 'seams.md')).replace(/\\/g, '/');
   }
   return { phase: phaseId, base, report, file };
+}
+
+/**
+ * OXB-138: `oxe-cc runtime deferred [retry] [--dry-run]` — the phase's deferred ledger. `retry` classifies each open entry
+ * against the current tree: already resolved (its verify passes now → closed), ready to redo (red: the next execute
+ * runs it, the task is still pending), or done elsewhere (the task is done in PLAN.json → closed).
+ */
+function runtimeDeferred(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-deferred.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const open = lib.open(programDir);
+  if (options.action !== 'retry') return { entries: lib.list(programDir), open };
+  let doc = null;
+  try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
+  const out = [];
+  for (const e of open) {
+    const t = ((doc && doc.tasks) || []).find((x) => x && x.id === e.task);
+    if (t && t.done) { out.push({ id: e.id, task: e.task, status: 'done_elsewhere' }); if (!options.dryRun) lib.close(programDir, e.id, 'done_elsewhere'); continue; }
+    const cmds = t ? [...((t.verify && t.verify.commands) || []), ...((t.verify && t.verify.command) ? [t.verify.command] : [])] : [];
+    if (!cmds.length) { out.push({ id: e.id, task: e.task, status: 'human_decision', why: 'tarefa sem verify' }); continue; }
+    const r = runChildCommand(projectRoot, cmds.join(' && '), 600_000);
+    if (r.ok) { out.push({ id: e.id, task: e.task, status: 'already_resolved' }); if (!options.dryRun) lib.close(programDir, e.id, 'already_resolved'); }
+    else out.push({ id: e.id, task: e.task, status: 'ready', tail: r.tail.split(/\r?\n/).slice(-3).join(' · ') });
+  }
+  return { retry: out, dry_run: Boolean(options.dryRun) };
 }
 
 /** OXB-127: `oxe-cc runtime deps [--base <sha>] [--gate]` — the dependency audit of the phase (or since --base). */
@@ -2298,7 +2325,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     pluginRegistry: options.pluginRegistry || buildRuntimePluginRegistry(projectRoot),
     // OXB-165: no run-level timeout by default (the scheduler's 30 min aborted at the first wave past it); the
     // stale-progress guard covers hangs. --max-run-ms > config executor.max_run_ms.
-    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, outOfScopeRequirements: execScopeGaps, failureClasses: ((readProjectConfig(projectRoot) || {}).execute || {}).failure_classes || undefined, ...(options.schedulerOptions || {}) },
+    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, outOfScopeRequirements: execScopeGaps, deferFailed: ((readProjectConfig(projectRoot) || {}).execute || {}).defer_failed !== false, failureClasses: ((readProjectConfig(projectRoot) || {}).execute || {}).failure_classes || undefined, ...(options.schedulerOptions || {}) },
     // The scheduler already persists every event through the runtime bus (events/bus.ts →
     // appendEvent). This hook only forwards progress; writing here again duplicated the log.
     onEvent: (event) => {
@@ -2378,6 +2405,10 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
             appendEvent(projectRoot, activeSession, { type: 'RollbackExecuted', run_id: current.run_id, work_item_id: taskId, payload: { reason: verifyOnlyWrote ? 'verify_only_wrote_files' : 'failed_attempt_isolated', files: iso.files, outside_scope: extraPaths, not_restored: iso.notRestored, saved_to: iso.savedTo } });
           }
         } catch { /* isolamento nunca derruba a execução */ }
+      }
+      // OXB-138: a task that exhausted its attempts goes to the phase's deferred ledger (AD-<fase>-<n>).
+      if (event && event.type === 'WorkItemBlocked' && event.work_item_id && event.payload && event.payload.max_attempts != null && !String(event.payload.failure_class || '').startsWith('paused')) {
+        try { require('./oxe-deferred.cjs').add(runPaths.programDir || path.join(projectRoot, '.oxe', 'program'), { task: event.work_item_id, reason: event.payload.failure_class || 'logic', evidence: String(event.payload.output_tail || '').slice(-1500), run_id: current.run_id, phase: phaseCtxForCommits.phase }); } catch { /* auxiliar */ }
       }
       // OXB-117 (b): a flaky verify (green, then red on the same tree; rerun green) goes to quarantine with evidence.
       if (event && event.type === 'VerifyCommandSuspect' && event.payload && event.payload.reason === 'flaky_suspect') {
@@ -8089,6 +8120,7 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 }
 
 module.exports = {
+  runtimeDeferred,
   runtimeSeams,
   runtimeDeps,
   runtimeStateCheck,

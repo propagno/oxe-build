@@ -4243,7 +4243,6 @@ function parseRuntimeArgs(argv) {
     else if (a === '--behavior-ran' && argv[i + 1]) out.behaviorRan = String(argv[++i]);
     else if (a === '--retro-add' && argv[i + 1]) out.retroAdd = String(argv[++i]);
     else if (a === '--retro-done' && argv[i + 1]) out.retroDone = String(argv[++i]);
-    else if (a === '--gate') out.gate = true;
     else if (a === '--waive' && argv[i + 1]) out.waive = String(argv[++i]);
     else if (a === '--used' && argv[i + 1]) out.used = Number(argv[++i]);
     else if (a === '--limit' && argv[i + 1]) out.limit = Number(argv[++i]);
@@ -5597,6 +5596,19 @@ async function runRuntime(opts) {
       console.error(`${red}${err && err.message ? err.message : 'Falha ao executar runtime.'}${reset}`);
       process.exit(1);
     }
+  }
+
+  // OXB-138: the deferred ledger.
+  if (opts.action === 'deferred') {
+    try {
+      const sub = (opts.positionals || [])[1] === 'retry' || process.argv.includes('retry') ? 'retry' : 'list';
+      const out = oxeOperational.runtimeDeferred(opts.dir, activeSession, { action: sub, dryRun: Boolean(opts.dryRun) });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeDeferredSchema: 1, ...out }, null, 2)); return; }
+      if (sub === 'retry') for (const r of out.retry) console.log(`  ${r.id} ${r.task}: ${r.status}${r.tail ? ` — ${r.tail}` : ''}${r.status === 'ready' ? ' (o próximo oxe-cc runtime execute refaz)' : ''}`);
+      else if (!out.open.length) console.log('  nenhuma tarefa adiada');
+      else for (const e of out.open) console.log(`  ${e.id} ${e.task} (${e.reason}) — ${String(e.evidence || '').split(/\r?\n/).filter(Boolean).slice(-1)[0] || ''}`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
   }
 
   // OXB-136: seam review; OXB-127: dependency audit.

@@ -70,6 +70,11 @@ export interface SchedulerOptions {
   outOfScopeRequirements?: Record<string, { files: string[]; tests: string[] }>;
   /** OXB-120: project patterns (regex sources) added to the built-in environment / quota classifiers. */
   failureClasses?: { environment?: string[]; quota?: string[] };
+  /**
+   * OXB-138: a task that exhausts its attempts is DEFERRED and the run goes on with every task that does not depend on
+   * it (its dependents end `blocked_by_deferred`). false keeps the old stop-at-the-failed-wave behavior.
+   */
+  deferFailed?: boolean;
   maxRunDurationMs?: number;   // default: 30 min
   staleProgressMs?: number;    // default: 5 min without any task completing
 }
@@ -275,8 +280,21 @@ export class Scheduler {
         return { run_id: ctx.runId, status: 'paused', completed, failed, blocked, pending_gates: this.journal.pending_gates.slice() };
       }
 
+      // OXB-138: a task depending (transitively) on a failed/deferred or blocked one does not run.
+      const deferMode = (ctx.options as SchedulerOptions | undefined)?.deferFailed === true;
+      let waveIds = wave.node_ids;
+      if (deferMode) {
+        waveIds = [];
+        for (const id of wave.node_ids) {
+          const n = graph.nodes.get(id);
+          const bad = (n?.depends_on ?? []).find((d) => status.get(d) === 'failed' || status.get(d) === 'blocked');
+          if (bad && status.get(id) === 'pending') this.blockNode(id, ctx, status, blocked, 'blocked_by_deferred', bad);
+          else waveIds.push(id);
+        }
+      }
+      const failedBefore = failed.length;
       const waveFailed = await this.runWave(
-        wave.node_ids,
+        waveIds,
         graph,
         ctx,
         status,
@@ -284,6 +302,9 @@ export class Scheduler {
         failed,
         blocked
       );
+      if (deferMode) {
+        for (const id of failed.slice(failedBefore)) this.emit(ctx, { type: 'WorkItemDeferred', work_item_id: id, payload: { task: id } });
+      }
 
       // Sync journal after each wave
       this.journal.completed_work_items = completed.slice();
@@ -291,7 +312,7 @@ export class Scheduler {
       this.journal.blocked_work_items = blocked.slice();
       saveJournal(ctx.projectRoot, ctx.runId, this.journal);
 
-      if (waveFailed) {
+      if (waveFailed && !deferMode) {
         // Execute rollback plan if one was created for this run
         const memos = listMemos(ctx.projectRoot, ctx.runId);
         for (const memo of memos) {
