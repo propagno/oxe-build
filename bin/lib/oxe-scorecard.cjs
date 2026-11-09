@@ -94,7 +94,7 @@ function computeScorecard(input) {
   const completedAt = new Map();
   const outcome = new Map(); // run::task → 'first' | 'late' | 'failed'
   const failedBefore = new Set();
-  const NOT_ATTEMPTED = new Set(['external_dependency', 'budget_exhausted', 'pending_gate', 'policy_denied', 'quota_exceeded']);
+  const NOT_ATTEMPTED = new Set(['external_dependency', 'budget_exhausted', 'pending_gate', 'policy_denied', 'quota_exceeded', 'paused_environment', 'paused_quota']);
   let completed = 0;
   let external = 0;
   let turnsOnFinished = 0;

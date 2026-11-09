@@ -13,4 +13,5 @@ export type FailureClass =
   | 'context'          // OXB-148: the prompt does not fit the model window — retrying the same prompt cannot help
   | 'quota'            // OXB-148: provider usage limit / rate limit — retrying now only burns attempts
   | 'scope_insufficient' // OXB-171: the task cannot pass inside its files (the frozen test needs a file outside them)
+  | 'environment'      // OXB-120: the machine, not the code (exit 126/127, missing tool, network) — pauses the run
   | null;              // success — no failure

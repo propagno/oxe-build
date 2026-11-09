@@ -43,6 +43,7 @@ exports.EVENT_TYPES = [
     'ScopeViolation',
     'ScratchIgnored',
     'ScopeInsufficient',
+    'RunPaused',
 ];
 function isValidEventType(type) {
     return exports.EVENT_TYPES.includes(type);

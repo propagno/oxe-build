@@ -1343,3 +1343,16 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - Os que passam no rerun vão para `check.flaky_reds` (`{ file, first: red, rerun: green }`), que aparece no `GateResolved` do checkpoint. O commit é mantido.
   - A ordem dos filtros: exclusões da OXB-175 (aceite de tarefa pendente, outra fase, parked), depois o rerun na árvore do commit, depois o vermelho também no pai.
   - Teste: `tests/oxe-1212-checkpoint-phase.test.cjs` (vermelho na 1ª execução e verde no rerun: commit mantido e `flaky_reds` com o teste). O fixture da OXB-175 passou a ficar vermelho conforme a árvore, como um teste real.
+
+## OXB-120: classificar a falha antes de cobrar uma tentativa
+
+- **Status:** resolvido (1.21.2). Item P1 do backlog de comparação (BACKLOG-gsd).
+  - Só a falha de **lógica** consome tentativa. As outras pausam a run com um diagnóstico.
+  - **`environment`:** saída 126/127, executável ausente ("command not found", "is not recognized"), artefato de build não construído (ENOENT em out/dist/build/lib), módulo de outro pacote ausente, módulo nativo de outra versão do Node, rede (ECONNREFUSED, ENOTFOUND, EAI_AGAIN…), disco ou memória.
+    - O verify que falha assim pausa a run (`RunPaused` com `reason: environment` e a linha do diagnóstico). A tarefa fica bloqueada (`paused_environment`), sem retry, e nenhuma outra tarefa começa.
+  - **`quota`:** limite de uso do provedor. Pausa a run com o horário de retomada quando a mensagem traz ("resets at …", "try again in …").
+  - **`flaky`:** coberto pelo `flaky_suspect` (OXB-162) e pela quarentena (OXB-117 b).
+  - Padrões do projeto: `execute.failure_classes: { environment: [regex], quota: [regex] }`.
+  - O resumo do execute mostra "PAUSADA: ambiente — <diagnóstico>". `oxe-cc runtime resume` retoma (o execute de novo: pula o que está done e começa a tarefa pausada com tentativas novas).
+  - O scorecard não conta tarefa pausada como tentativa.
+  - Teste: `tests/oxe-1212-failure-classes.test.cjs` (exit 127 pausa com uma chamada só e a T2 não começa; falha de lógica segue com retry; padrão do projeto; cota com horário de retomada; o classificador).

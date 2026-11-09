@@ -48,6 +48,11 @@ export interface SchedulerOptions {
         files: string[];
         tests: string[];
     }>;
+    /** OXB-120: project patterns (regex sources) added to the built-in environment / quota classifiers. */
+    failureClasses?: {
+        environment?: string[];
+        quota?: string[];
+    };
     maxRunDurationMs?: number;
     staleProgressMs?: number;
 }
@@ -129,6 +134,8 @@ export declare class Scheduler {
     private runNode;
     /** Abort keeps the progress made so far: an aborted run is recoverable, not a blank slate. */
     private abortRun;
+    /** OXB-120: pause the run for a failure that is not the task's (environment / quota). */
+    private pauseForFailure;
     pause(): void;
     resume(): void;
     cancel(): void;
@@ -151,6 +158,14 @@ export declare class Scheduler {
     private consumeRetryQuota;
     private emit;
 }
+export declare function classifyFailureOutput(output: string, exitCode: number | null | undefined, extra?: {
+    environment?: string[];
+    quota?: string[];
+}): {
+    kind: 'environment' | 'quota';
+    diagnosis: string;
+} | null;
+export declare function quotaResumeAt(text: string): string | null;
 export declare function tailLines(text: string, n: number): string;
 /** OXB-162: the test files a segment names (`x.test.ts`, `y.spec.js`, JVM `--tests` excluded). */
 export declare function segmentTestFiles(command: string): string[];

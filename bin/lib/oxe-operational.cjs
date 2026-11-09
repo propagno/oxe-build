@@ -2219,7 +2219,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     pluginRegistry: options.pluginRegistry || buildRuntimePluginRegistry(projectRoot),
     // OXB-165: no run-level timeout by default (the scheduler's 30 min aborted at the first wave past it); the
     // stale-progress guard covers hangs. --max-run-ms > config executor.max_run_ms.
-    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, outOfScopeRequirements: execScopeGaps, ...(options.schedulerOptions || {}) },
+    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, outOfScopeRequirements: execScopeGaps, failureClasses: ((readProjectConfig(projectRoot) || {}).execute || {}).failure_classes || undefined, ...(options.schedulerOptions || {}) },
     // The scheduler already persists every event through the runtime bus (events/bus.ts →
     // appendEvent). This hook only forwards progress; writing here again duplicated the log.
     onEvent: (event) => {

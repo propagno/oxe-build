@@ -5432,6 +5432,9 @@ async function runRuntime(opts) {
     }
   }
 
+  // OXB-120: `runtime resume` continues a paused run (environment fixed / quota reset): the same execute, which skips
+  // what is done and starts the paused tasks with fresh attempts.
+  if (opts.action === 'resume') opts.action = 'execute';
   if (opts.action === 'execute') {
     try {
       // Resolve provider: flag > env vars > persisted .oxe/config.json runtime.provider
@@ -5545,6 +5548,13 @@ async function runRuntime(opts) {
       const blocked = Array.isArray(r.blocked) ? r.blocked : [];
       const okColor = r.status === 'blocked' ? yellow : green;
       console.log(`  ${c ? okColor : ''}${r.status === 'blocked' ? '!' : '✓'}${c ? reset : ''} Runtime execute concluído (modo: ${result.mode})`);
+      // OXB-120: paused for the environment or a quota — not the code; no attempt was spent.
+      if (r.status === 'paused') {
+        try {
+          const ev = oxeOperational.readEvents(opts.dir, activeSession).filter((e) => e.type === 'RunPaused').pop();
+          if (ev) console.log(`  ${c ? yellow : ''}PAUSADA: ${ev.payload.reason === 'quota' ? 'cota do provedor' : 'ambiente'}${c ? reset : ''} — ${ev.payload.diagnosis || ''}${ev.payload.resume_at ? ` (retoma: ${ev.payload.resume_at})` : ''}. Corrija e rode oxe-cc runtime resume (nenhuma tentativa foi cobrada).`);
+        } catch { /* auxiliar */ }
+      }
       if (result.preflight) {
         console.log(`  ${c ? green : ''}Preflight:${c ? reset : ''} ${result.preflight.ok ? 'ready' : 'blocked'}`);
         if (Array.isArray(result.preflight.blockers) && result.preflight.blockers.length) {
