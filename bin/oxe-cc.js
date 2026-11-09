@@ -1968,11 +1968,23 @@ function runStatus(target, opts = {}) {
     if (opts.hints) {
       payload.hints = routineHints;
     }
+    // OXB-145: pending attention first-class in the JSON too.
+    try { payload.attention = require('./lib/oxe-attention.cjs').open(path.resolve(target)).map((x) => ({ id: x.id, what: x.what, command: x.command, owner: x.owner, at: x.at })); } catch { payload.attention = []; }
     console.log(JSON.stringify(payload));
     return;
   }
 
   printSection('OXE ▸ status');
+  // OXB-145: what needs someone comes first.
+  try {
+    const att = require('./lib/oxe-attention.cjs').open(path.resolve(target));
+    if (att.length) {
+      const cc = useAnsiColors();
+      console.log(`  ${cc ? yellow : ''}ATENÇÃO (${att.length}) — .oxe/ATTENTION.md${cc ? reset : ''}`);
+      for (const x of att.slice(0, 5)) console.log(`    ${x.id}: ${x.what} → ${x.command} (${x.owner})`);
+      console.log('');
+    }
+  } catch { /* auxiliar */ }
   const c = useAnsiColors();
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${target}${c ? reset : ''}`);
   console.log(`  ${c ? dim : ''}Workspace mode:${c ? reset : ''} ${report.workspaceMode || 'oxe_project'}`);
@@ -4334,6 +4346,11 @@ function parseRuntimeArgs(argv) {
     if (positionals[1]) out.subAction = positionals[1];
     if (positionals[2]) out.uiFolder = positionals[2];
     if (positionals[3]) out.dir = path.resolve(positionals[3]);
+  } else if (out.action === 'attention') {
+    if (positionals[1]) out.subAction = positionals[1];
+    let k = 2;
+    if (out.subAction === 'resolve' && positionals[2]) { out.attentionId = positionals[2]; k = 3; }
+    if (positionals[k]) out.dir = path.resolve(positionals[k]);
   } else if (out.action === 'repair') {
     if (positionals[1]) out.subAction = positionals[1];
     let k = 2;
@@ -5706,6 +5723,26 @@ async function runRuntime(opts) {
   }
 
   // OXB-113: resumable handoff, and the context reading a host hook sends.
+  // OXB-145: what the run needs from someone.
+  if (opts.action === 'attention') {
+    try {
+      const lib = require('./lib/oxe-attention.cjs');
+      if (opts.subAction === 'resolve') {
+        if (!opts.attentionId) throw new Error('use: oxe-cc runtime attention resolve <id> --by <papel>');
+        const out = lib.resolve(opts.dir, opts.attentionId, opts.by);
+        oxeOperational.appendEvent(opts.dir, activeSession, { type: 'AttentionResolved', payload: out });
+        if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeAttentionSchema: 1, resolved: out }, null, 2));
+        else console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.id} resolvido por ${out.resolved_by}`);
+        return;
+      }
+      const items = lib.open(opts.dir);
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeAttentionSchema: 1, open: items }, null, 2)); return; }
+      if (!items.length) console.log('  nada precisa de alguém agora');
+      for (const x of items) console.log(`  ${x.id}: ${x.what} — ${x.why}\n    → ${x.command} (dono: ${x.owner})`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
   // OXB-130: repair proposals (decompose) and their application.
   if (opts.action === 'repair') {
     try {

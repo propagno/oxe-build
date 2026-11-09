@@ -1673,3 +1673,21 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 
 - No rc.37, o `ask_orchestrator` entrava em `ALL_BUILT_IN_SCHEMAS` e, por isso, era oferecido a toda tarefa com ação `custom` ou não mapeada. Uma pergunta bloqueante podia parar a tarefa com `waiting_answer`, uma classe de parada nova, sem que o projeto tivesse pedido.
 - A partir do rc.38, a ferramenta só é oferecida com `execute.ask_orchestrator: true`. Teste em `tests/oxe-1212-questions.test.cjs`.
+
+## OXB-145: sinal de atenção quando a run pausa ou precisa de alguém
+
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-attention.cjs`.
+- **Os avisos:** cada pausa que precisa de uma pessoa abre um aviso (`AttentionRaised`):
+  - ambiente (`env:Tn`);
+  - cota (`quota`);
+  - pergunta em espera (`question:Tn`);
+  - gate pendente (`gate:Tn`);
+  - reparo (`repair:Tn`);
+  - tarefa adiada (`deferred:Tn`).
+- **O arquivo:** cada aviso diz o que parou, por quê, o comando para resolver e o dono. Os avisos abertos ficam em `.oxe/ATTENTION.md`, que é apagado quando não sobra nenhum. O histórico fica em `.oxe/attention.ndjson`.
+- **A notificação:** `attention.notify` é um comando local, com `{summary}` e as variáveis `OXE_ATTENTION_ID` e `OXE_ATTENTION_SUMMARY`, e roda sem OXESPACE_*. Ele é chamado uma vez por aviso: a mesma pausa não notifica duas vezes.
+- **Comandos:**
+  - `oxe-cc runtime attention [list]`;
+  - `oxe-cc runtime attention resolve <id> --by <papel>` (`AttentionResolved`);
+  - o `oxe-cc status` mostra os avisos pendentes no topo, e no JSON em `attention`.
+- **Teste:** `tests/oxe-1212-attention.test.cjs`. Uma pausa de ambiente grava o arquivo e notifica uma vez; um aviso por tipo; o resolve apaga o arquivo; o status mostra o aviso.

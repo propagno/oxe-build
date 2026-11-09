@@ -2722,6 +2722,15 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
           }
         } catch { /* isolamento nunca derruba a execução */ }
       }
+      // OXB-145: a pause that needs a person → .oxe/ATTENTION.md + the notify hook (once per item).
+      try {
+        const attLib = require('./oxe-attention.cjs');
+        const item = attLib.fromEvent(event);
+        if (item) {
+          const r = attLib.raise(projectRoot, { ...item, source: event.type }, readProjectConfig(projectRoot));
+          if (r.isNew) appendEvent(projectRoot, activeSession, { type: 'AttentionRaised', run_id: current.run_id, work_item_id: event.work_item_id, payload: { id: r.item.id, notified: r.notified } });
+        }
+      } catch { /* auxiliar */ }
       // OXB-130: attempts exhausted → the final repair decision (decompose proposal or prune CR), recorded.
       if (repairOn && event && event.type === 'WorkItemBlocked' && event.work_item_id && event.payload && event.payload.max_attempts != null && !String(event.payload.failure_class || '').startsWith('paused')) {
         try {
