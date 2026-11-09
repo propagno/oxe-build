@@ -27,6 +27,8 @@ export interface LlmExecutorEvent {
 }
 export interface LlmExecuteOptions {
     previousError?: string | null;
+    /** OXB-131: the model of this attempt (tier escalation); empty keeps the provider's. */
+    model?: string | null;
     /** Cap from the run budget (OXB-023): the attempt never uses more turns than the run has left. */
     maxTurns?: number | null;
 }

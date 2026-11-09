@@ -262,7 +262,7 @@ export class ClaudeCliAdapter implements ExecutorAdapter {
       }
       const reply = await singleFlight(async () => {
         await this.waitForMemory();
-        return this.runOnce(prompt, opts.timeoutMs);
+        return this.runOnce(prompt, opts.timeoutMs, opts.model || null);
       });
       costUsd += reply.costUsd;
       lastText = reply.text;
@@ -298,14 +298,16 @@ export class ClaudeCliAdapter implements ExecutorAdapter {
     }
   }
 
-  private runOnce(prompt: string, timeoutMs?: number): Promise<CliReply> {
-    return this.runOnceRaw(prompt, timeoutMs);
+  private runOnce(prompt: string, timeoutMs?: number, modelOverride?: string | null): Promise<CliReply> {
+    return this.runOnceRaw(prompt, timeoutMs, modelOverride);
   }
 
-  private runOnceRaw(prompt: string, timeoutMs?: number): Promise<CliReply> {
+  private runOnceRaw(prompt: string, timeoutMs?: number, modelOverride?: string | null): Promise<CliReply> {
     const executable = this.executable();
     if (!executable) return Promise.reject(new Error(`${this.command} não encontrado no PATH`));
-    const model = this.options.model ? ['--model', this.options.model] : [];
+    // OXB-131: the attempt's model (tier escalation) wins over the adapter's default.
+    const chosen = modelOverride || this.options.model;
+    const model = chosen ? ['--model', chosen] : [];
     const spawnable = buildSpawnable(executable, [
       ...(this.options.prefixArgs ?? []),
       ...CLAUDE_FLAGS,

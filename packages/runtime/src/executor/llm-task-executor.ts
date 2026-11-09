@@ -43,6 +43,8 @@ export interface LlmExecutorEvent {
 
 export interface LlmExecuteOptions {
   previousError?: string | null;
+  /** OXB-131: the model of this attempt (tier escalation); empty keeps the provider's. */
+  model?: string | null;
   /** Cap from the run budget (OXB-023): the attempt never uses more turns than the run has left. */
   maxTurns?: number | null;
 }
@@ -176,7 +178,7 @@ export class LlmTaskExecutor implements TaskExecutor {
         response = await this.complete({
           baseUrl: this.provider.baseUrl,
           apiKey: this.provider.apiKey,
-          model: this.provider.model,
+          model: options.model || this.provider.model,
           messages,
           tools: tools.length > 0 ? tools : undefined,
           maxTokens: this.provider.maxTokens,

@@ -137,6 +137,7 @@ function createExecutionContext(projectRoot, activeSession, options = {}) {
     evidenceStore: options.evidenceStore || null,
     onEvent: options.onEvent || null,
     attemptChanges: options.attemptChanges || null,
+    modelFor: options.modelFor || null,
     options: options.schedulerOptions || {},
   };
 }
@@ -2549,6 +2550,8 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     // The scheduler already persists every event through the runtime bus (events/bus.ts →
     // appendEvent). This hook only forwards progress; writing here again duplicated the log.
     attemptChanges: (id) => lastAttemptChanges.get(id) || null,
+    // OXB-131: override > tier escalation > the task's model_hint
+    modelFor: options.modelFor || require('./oxe-model-tiers.cjs').createModelSelector(readProjectConfig(projectRoot), (() => { try { return new Map(((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).map((t) => [t.id, t])); } catch { return new Map(); } })()),
     onEvent: (event) => {
       options.onProgress?.(event);
       // OXB-051: the output of every failed attempt goes to its own log (the journal kept only the state, not why).

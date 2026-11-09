@@ -98,7 +98,7 @@ class LlmTaskExecutor {
                 response = await this.complete({
                     baseUrl: this.provider.baseUrl,
                     apiKey: this.provider.apiKey,
-                    model: this.provider.model,
+                    model: options.model || this.provider.model,
                     messages,
                     tools: tools.length > 0 ? tools : undefined,
                     maxTokens: this.provider.maxTokens,

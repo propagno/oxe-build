@@ -168,6 +168,7 @@ function computeScorecard(input) {
       phases_started: phasesStarted,
       manual_interventions: interventionCount,
       interventions_by_kind: interventions,
+      cost_by_tier: require('./oxe-model-tiers.cjs').costByTier(events), // OXB-131
     },
     metrics: results,
     ok: results.every((r) => r.ok !== false),

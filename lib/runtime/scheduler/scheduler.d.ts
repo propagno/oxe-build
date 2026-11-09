@@ -23,6 +23,7 @@ export interface TaskExecutor {
     execute(node: GraphNode, lease: WorkspaceLease, runId: string, attemptNumber: number, options?: {
         previousError?: string | null;
         maxTurns?: number | null;
+        model?: string | null;
     }): Promise<TaskResult>;
 }
 /**
@@ -96,6 +97,15 @@ export interface SchedulerContext {
     attemptChanges?: (nodeId: string) => {
         kept: string[];
         gone: string[];
+    } | null;
+    /**
+     * OXB-131: the model of an attempt. Receives the attempt number and the previous attempt's failure class; the
+     * orchestrator applies override > tier escalation > the task's hint. Null keeps the executor's default.
+     */
+    modelFor?: (nodeId: string, attempt: number, lastFailureClass: string | null) => {
+        model: string | null;
+        tier: string | null;
+        escalated?: boolean;
     } | null;
     projectRoot: string;
     sessionId: string | null;

@@ -43,7 +43,7 @@ export interface TaskExecutor {
     lease: WorkspaceLease,
     runId: string,
     attemptNumber: number,
-    options?: { previousError?: string | null; maxTurns?: number | null }
+    options?: { previousError?: string | null; maxTurns?: number | null; model?: string | null }
   ): Promise<TaskResult>;
 }
 
@@ -133,6 +133,11 @@ export interface SchedulerContext {
    * there — appended to the informed retry, so the next attempt does not redo (or wrongly assume) work.
    */
   attemptChanges?: (nodeId: string) => { kept: string[]; gone: string[] } | null;
+  /**
+   * OXB-131: the model of an attempt. Receives the attempt number and the previous attempt's failure class; the
+   * orchestrator applies override > tier escalation > the task's hint. Null keeps the executor's default.
+   */
+  modelFor?: (nodeId: string, attempt: number, lastFailureClass: string | null) => { model: string | null; tier: string | null; escalated?: boolean } | null;
   projectRoot: string;
   sessionId: string | null;
   runId: string;
@@ -691,12 +696,13 @@ export class Scheduler {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const attemptId = `${nodeId}-a${attempt}`;
+      const attemptModel = ctx.modelFor ? ctx.modelFor(nodeId, attempt, attempt > 1 ? (lastResult?.failure_class ?? null) : null) : null;
 
       this.emit(ctx, {
         type: 'AttemptStarted',
         work_item_id: nodeId,
         attempt_id: attemptId,
-        payload: { attempt_number: attempt },
+        payload: { attempt_number: attempt, ...(attemptModel ? { model: attemptModel.model, tier: attemptModel.tier, escalated: Boolean(attemptModel.escalated) } : {}) },
       });
 
       try {
@@ -766,6 +772,7 @@ export class Scheduler {
 
         lastResult = await this.executeNode(node, lease, ctx, attempt, attemptId, {
           previousError: withAttemptChanges(lastError, attempt > 1 && ctx.attemptChanges ? ctx.attemptChanges(nodeId) : null),
+          ...(attemptModel && attemptModel.model ? { model: attemptModel.model } : {}),
           ...(turnsLeft != null ? { maxTurns: turnsLeft } : {}),
         });
 
@@ -1052,7 +1059,7 @@ export class Scheduler {
     ctx: SchedulerContext,
     attempt: number,
     attemptId: string,
-    options: { previousError?: string | null; maxTurns?: number | null } = {},
+    options: { previousError?: string | null; maxTurns?: number | null; model?: string | null } = {},
   ): Promise<TaskResult> {
     const primaryAction = pickPrimaryAction(node, ctx.pluginRegistry);
     const provider = primaryAction ? ctx.pluginRegistry?.toolProviderFor(primaryAction.type) : null;

@@ -1583,3 +1583,15 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
 - **A saída:** `.oxe/DOCS-CHECK.md`. O comando não corrige nada. O workflow `compact.md` passa a rodá-lo.
 - **Fora do escopo:** o aviso no `doctor`. Rodar os `check`s das decisões a cada `doctor` seria lento demais; ele fica no `compact` e sob demanda.
 - **Teste:** "mudou de lugar" e "não existe mais" a partir de `src/a.ts#foo`; um arquivo planejado como novo não aparece; um check que falhava e agora passa; menos de 5 s.
+
+## OXB-131: subir o nível de modelo depois de falha branda, com teto
+
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-model-tiers.cjs` e `scheduler.ts` (`ctx.modelFor`).
+- **Config:** `models: { tiers: { fast, balanced, powerful }, default_tier, escalate_on: ["logic"], max_escalations: 1, overrides: { T3: "<modelo>" } }`.
+- **Precedência:** o override, de config ou do `model` da tarefa, vem antes do nível. O nível vem antes do `model_hint` da tarefa. A 1ª tentativa usa o nível da tarefa.
+- **Escalonamento:**
+  - uma falha `logic` (verify, llm, turn limit) sobe um nível na próxima tentativa, até `max_escalations`;
+  - uma falha de ambiente nunca sobe;
+  - sem `models` na config, nada muda: vale o modelo padrão do executor.
+- **Registro:** `AttemptStarted` grava `model`, `tier` e `escalated`. O adaptador `claude` usa o modelo da tentativa (`--model`), e o `http` também (`model` da completion). O scorecard ganha `sample.cost_by_tier`.
+- **Teste:** `tests/oxe-1212-model-tiers.test.cjs`. Cobre a precedência, o teto, o fato de só `logic` escalar, o execute passando `m-fast` e depois `m-bal`, e o custo por nível.

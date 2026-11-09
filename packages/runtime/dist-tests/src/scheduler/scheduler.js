@@ -10,6 +10,7 @@ exports.quotaResumeAt = quotaResumeAt;
 exports.tailLines = tailLines;
 exports.segmentTestFiles = segmentTestFiles;
 exports.splitVerifySegments = splitVerifySegments;
+exports.withAttemptChanges = withAttemptChanges;
 exports.buildVerifyLog = buildVerifyLog;
 exports.describeVerifyFailure = describeVerifyFailure;
 exports.verifyFailureSignature = verifyFailureSignature;
@@ -503,11 +504,12 @@ class Scheduler {
         }
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             const attemptId = `${nodeId}-a${attempt}`;
+            const attemptModel = ctx.modelFor ? ctx.modelFor(nodeId, attempt, attempt > 1 ? (lastResult?.failure_class ?? null) : null) : null;
             this.emit(ctx, {
                 type: 'AttemptStarted',
                 work_item_id: nodeId,
                 attempt_id: attemptId,
-                payload: { attempt_number: attempt },
+                payload: { attempt_number: attempt, ...(attemptModel ? { model: attemptModel.model, tier: attemptModel.tier, escalated: Boolean(attemptModel.escalated) } : {}) },
             });
             try {
                 const policyDecision = this.evaluatePolicyForNode(node, ctx);
@@ -570,7 +572,8 @@ class Scheduler {
                     payload: { workspace_id: lease.workspace_id, strategy: lease.strategy },
                 });
                 lastResult = await this.executeNode(node, lease, ctx, attempt, attemptId, {
-                    previousError: lastError,
+                    previousError: withAttemptChanges(lastError, attempt > 1 && ctx.attemptChanges ? ctx.attemptChanges(nodeId) : null),
+                    ...(attemptModel && attemptModel.model ? { model: attemptModel.model } : {}),
                     ...(turnsLeft != null ? { maxTurns: turnsLeft } : {}),
                 });
                 // OXB-026: the verify judges the work, not the end of the LLM conversation. An attempt that ran out of turns
@@ -1288,6 +1291,18 @@ function splitVerifySegments(command) {
     if (current.trim())
         out.push(current.trim());
     return out.length ? out : [command];
+}
+/** OXB-184: the retry text plus what the previous attempt left in the tree. */
+function withAttemptChanges(previousError, changes) {
+    if (!changes || (!changes.kept.length && !changes.gone.length))
+        return previousError;
+    const list = (xs) => xs.slice(0, 30).join(', ') + (xs.length > 30 ? ` (+${xs.length - 30})` : '');
+    const lines = ['', '## O que a tentativa anterior deixou na árvore'];
+    if (changes.kept.length)
+        lines.push(`Mantidos (o verify desta tentativa os vê; não refaça sem motivo): ${list(changes.kept)}`);
+    if (changes.gone.length)
+        lines.push(`Escritos e NÃO mantidos (refaça se ainda forem necessários): ${list(changes.gone)}`);
+    return `${previousError ?? ''}${lines.join('\n')}`;
 }
 /** Every segment's output with a header per segment, for the attempt log (`attempts/<Tn>-<n>.log`). */
 function buildVerifyLog(segments, maxLinesPerSegment = 120) {
