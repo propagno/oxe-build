@@ -486,3 +486,93 @@ describe('OXB-176: a reopened task whose work is already in the tree commits it;
     assert.equal(tasks.find((t) => t.id === 'T2').done, true);
   });
 });
+
+describe('OXB-177: a shared file is committed with only the checkpointing task\'s hunks', () => {
+  const F = Array.from({ length: 12 }, (_, i) => `line ${i}`).join('\n') + '\n';
+  const withLine = (text, n, v) => text.split('\n').map((l, i) => (i === n ? v : l)).join('\n');
+  const setup = () => {
+    const plan = { schema_version: 1, budget: { max_retries: 0 }, tasks: [
+      { id: 'T1', title: 'R6 Linear', wave: 1, files: ['shared/mcp-coverage.ts', 'src/linear.ts'], verify: { commands: [ok] } },
+      { id: 'T2', title: 'CR37 rtk', wave: 1, files: ['shared/mcp-coverage.ts', 'src/rtk.ts'], verify: { commands: [ok] } },
+    ] };
+    return project({ plan, files: { 'shared/mcp-coverage.ts': F, 'src/linear.ts': 'l0\n', 'src/rtk.ts': 'r0\n' }, config: { isolate_failed_attempts: false } });
+  };
+  const interruptA = (dir, run) => {
+    fs.writeFileSync(path.join(dir, 'shared', 'mcp-coverage.ts'), withLine(fs.readFileSync(path.join(dir, 'shared', 'mcp-coverage.ts'), 'utf8'), 1, 'line 1 Linear removed (A)'));
+    fs.appendFileSync(path.join(dir, '.oxe', 'OXE-EVENTS.ndjson'), JSON.stringify({ type: 'AttemptStarted', run_id: run, work_item_id: 'T1', timestamp: new Date().toISOString(), payload: { attempt_number: 1 } }) + '\n');
+  };
+  const bWrites = (dir) => fs.writeFileSync(path.join(dir, 'shared', 'mcp-coverage.ts'), withLine(fs.readFileSync(path.join(dir, 'shared', 'mcp-coverage.ts'), 'utf8'), 10, 'line 10 rtk dropped (B)'));
+
+  it('A interrupted with H1 in F; B changes H2 in F and checkpoints: B\'s commit has H2 only, A still sees H1', async () => {
+    const dir = setup();
+    interruptA(dir, 'oxe-run-old');
+    let aSaw = null;
+    const exec = { async execute(node) {
+      if (node.id === 'T2') { bWrites(dir); fs.writeFileSync(path.join(dir, 'src', 'rtk.ts'), 'r1\n'); }
+      if (node.id === 'T1') aSaw = fs.readFileSync(path.join(dir, 'shared', 'mcp-coverage.ts'), 'utf8');
+      return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' };
+    } };
+    // only B in this run (A is the interrupted one, it would run later)
+    const plan = planOf(dir); plan.tasks[0].wave = 2; plan.tasks[0].depends_on = ['T2'];
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify(plan, null, 2));
+    await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, checkpointCommits: true, wave: 1 });
+    const b = planOf(dir).tasks.find((t) => t.id === 'T2');
+    assert.equal(b.done, true, JSON.stringify(b.checkpoint_failed));
+    const committed = git(dir, 'show', `${b.done_commit}:shared/mcp-coverage.ts`).stdout;
+    assert.match(committed, /line 10 rtk dropped \(B\)/);
+    assert.doesNotMatch(committed, /Linear removed/, 'none of A\'s hunks in B\'s commit');
+    assert.match(fs.readFileSync(path.join(dir, 'shared', 'mcp-coverage.ts'), 'utf8'), /line 1 Linear removed \(A\)/, 'A\'s hunk stays in the tree');
+    void aSaw;
+  });
+
+  it('B had an earlier failed attempt that wrote F: still H2 only (its first baseline is the base), never the whole file', async () => {
+    const dir = setup();
+    const plan = planOf(dir); plan.tasks[0].wave = 2; plan.tasks[0].depends_on = ['T2'];
+    plan.acceptance_tests = [];
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify(plan, null, 2));
+    interruptA(dir, 'oxe-run-old');
+    // run 1: B writes H2 and fails its verify (gate file missing)
+    const gated = planOf(dir); gated.tasks[1].verify = { commands: ['node -e "process.exit(require(\'fs\').existsSync(\'.oxe/go\')?0:1)"'] };
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify(gated, null, 2));
+    const execFail = { async execute(node) { if (node.id === 'T2') bWrites(dir); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    await op.runRuntimeExecute(dir, null, { executor: execFail, skipPreflight: true, checkpointCommits: true, wave: 1 });
+    assert.notEqual(planOf(dir).tasks[1].done, true);
+    // the executor logged the write (what OXB-174 attributes)
+    fs.appendFileSync(path.join(dir, '.oxe', 'OXE-EVENTS.ndjson'), JSON.stringify({ type: 'ExecutorUsage', run_id: 'x', work_item_id: 'T2', timestamp: new Date().toISOString(), payload: { writes: ['shared/mcp-coverage.ts'] } }) + '\n');
+    // run 2: B passes without touching F again
+    fs.writeFileSync(path.join(dir, '.oxe', 'go'), '');
+    const execPass = { async execute(node) { if (node.id === 'T2') fs.writeFileSync(path.join(dir, 'src', 'rtk.ts'), 'r1\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    await op.runRuntimeExecute(dir, null, { executor: execPass, skipPreflight: true, checkpointCommits: true, wave: 1 });
+    const b = planOf(dir).tasks.find((t) => t.id === 'T2');
+    assert.equal(b.done, true, JSON.stringify(b.checkpoint_failed));
+    const committed = git(dir, 'show', `${b.done_commit}:shared/mcp-coverage.ts`).stdout;
+    assert.match(committed, /line 10 rtk dropped \(B\)/, 'B\'s own leftover hunk goes in');
+    assert.doesNotMatch(committed, /Linear removed/, 'A\'s hunk never does');
+  });
+});
+
+describe('OXB-177: unseparable shared file', () => {
+  const F = Array.from({ length: 12 }, (_, i) => `line ${i}`).join('\n') + '\n';
+  const withLine = (text, n, v) => text.split('\n').map((l, i) => (i === n ? v : l)).join('\n');
+  it('no first baseline (history from before this version) and the file holds both tasks\' edits: shared_file_conflict, nothing committed', async () => {
+    const plan = { schema_version: 1, budget: { max_retries: 0 }, tasks: [
+      { id: 'T1', title: 'R6 Linear', wave: 2, depends_on: ['T2'], files: ['shared/mcp-coverage.ts'], verify: { commands: [ok] } },
+      { id: 'T2', title: 'CR37 rtk', wave: 1, files: ['shared/mcp-coverage.ts'], verify: { commands: ['node -e "process.exit(require(\'fs\').existsSync(\'.oxe/go\')?0:1)"'] } },
+    ] };
+    const dir = project({ plan, files: { 'shared/mcp-coverage.ts': F }, config: { isolate_failed_attempts: false } });
+    const file = path.join(dir, 'shared', 'mcp-coverage.ts');
+    fs.writeFileSync(file, withLine(F, 1, 'line 1 Linear removed (A)'));
+    fs.appendFileSync(path.join(dir, '.oxe', 'OXE-EVENTS.ndjson'), JSON.stringify({ type: 'AttemptStarted', run_id: 'oxe-run-old', work_item_id: 'T1', timestamp: new Date().toISOString(), payload: { attempt_number: 1 } }) + '\n');
+    const execFail = { async execute(node) { if (node.id === 'T2') fs.writeFileSync(file, withLine(fs.readFileSync(file, 'utf8'), 10, 'line 10 rtk dropped (B)')); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    await op.runRuntimeExecute(dir, null, { executor: execFail, skipPreflight: true, checkpointCommits: true, wave: 1 });
+    fs.appendFileSync(path.join(dir, '.oxe', 'OXE-EVENTS.ndjson'), JSON.stringify({ type: 'ExecutorUsage', run_id: 'x', work_item_id: 'T2', timestamp: new Date().toISOString(), payload: { writes: ['shared/mcp-coverage.ts'] } }) + '\n');
+    fs.rmSync(path.join(dir, '.oxe', 'task-baselines'), { recursive: true, force: true }); // as on rc ≤ 35
+    fs.writeFileSync(path.join(dir, '.oxe', 'go'), '');
+    const head = git(dir, 'rev-parse', 'HEAD').stdout.trim();
+    const res = await op.runRuntimeExecute(dir, null, { executor: { async execute() { return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } }, skipPreflight: true, checkpointCommits: true, wave: 1 });
+    assert.ok(res.result.checkpoint_failed, JSON.stringify({ r: res.result, ev: op.readEvents(dir, null).filter((e) => /Interrupted|OwnLeftovers|Checkpoint|GateResolved/.test(e.type)).map((e) => [e.type, e.payload]) }));
+    assert.equal(res.result.checkpoint_failed[0].kind, 'shared_file_conflict');
+    assert.match(res.result.checkpoint_failed[0].reason, /shared\/mcp-coverage\.ts tem edições de T2 e de T1/);
+    assert.equal(git(dir, 'rev-parse', 'HEAD').stdout.trim(), head, 'nothing committed');
+  });
+});

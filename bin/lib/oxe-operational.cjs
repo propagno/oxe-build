@@ -1937,11 +1937,15 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
   const checkpointRetry = retryFailedCheckpoints(projectRoot, activeSession, options);
   // OXB-170: an interrupted task's leftovers are ITS work when it runs again (not "dirty before it").
   const interruptedWork = new Map((checkpointRetry.interrupted || []).filter((w) => w.task).map((w) => [w.task, w.files]));
+  // OXB-177: per task, shared files whose base is its first baseline, and shared files that cannot be separated.
+  const sharedBases = new Map();
   // OXB-174: plus the task's own leftovers from its earlier failed/interrupted attempts (any run).
   try {
-    for (const [id, files] of ownLeftoversByTask(projectRoot, activeSession, checkpointRetry.interrupted || [])) {
+    const leftovers = ownLeftoversByTask(projectRoot, activeSession, checkpointRetry.interrupted || []);
+    for (const [id, files] of leftovers) {
       interruptedWork.set(id, [...new Set([...(interruptedWork.get(id) || []), ...files])]);
     }
+    for (const [id, x] of leftovers.extra || []) sharedBases.set(id, x);
     if (interruptedWork.size) appendEvent(projectRoot, activeSession, { type: 'OwnLeftoversAttributed', payload: { tasks: [...interruptedWork].map(([task, files]) => ({ task, files })) } });
   } catch { /* auxiliar */ }
 
@@ -2163,7 +2167,10 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
         try {
           if (event.type === 'WorkItemReady') {
             const snap = treeSnapshot(projectRoot);
+            writeFirstBaseline(projectRoot, taskId, (planTaskById.get(taskId) || {}).title, snap);
             for (const f of interruptedWork.get(taskId) || []) snap.delete(f);
+            const sb = sharedBases.get(taskId);
+            if (sb) for (const [p, blob] of Object.entries(sb.bases || {})) snap.set(p, blob);
             taskBaseline.set(taskId, snap);
           }
           if (event.type === 'AttemptStarted') attemptBaseline.set(taskId, treeSnapshot(projectRoot));
@@ -2219,7 +2226,17 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
         // 1.20c: checkpoint de filesystem por tarefa concluída (opt-in), na convenção de commit do projeto (OXB-021).
         if (checkpointCommits) {
           try {
-            const cp = commitTaskCheckpoint(projectRoot, current, event.work_item_id, { task: planTaskById.get(event.work_item_id), phase: phaseCtxForCommits.phase, baseline: taskBaseline.get(event.work_item_id) || null });
+            const sbNow = sharedBases.get(event.work_item_id);
+            const unsep = sbNow && sbNow.unseparable ? Object.entries(sbNow.unseparable) : [];
+            const cp = unsep.length
+              ? { committed: false, failed: true, kind: 'shared_file_conflict', reason: `shared_file_conflict: ${unsep.map(([p, ids]) => `${p} tem edições de ${event.work_item_id} e de ${ids.join(', ')}`).join('; ')} — sem a base da 1ª tentativa (histórico anterior à 1.21.2-rc.36) não dá para separar; commite à mão o hunk de cada tarefa (ou plan done --commit)` }
+              : commitTaskCheckpoint(projectRoot, current, event.work_item_id, { task: planTaskById.get(event.work_item_id), phase: phaseCtxForCommits.phase, baseline: taskBaseline.get(event.work_item_id) || null });
+            if (!cp.committed && cp.failed && !cp.kind && /sobrepõe edições de outra tarefa/.test(String(cp.reason || ''))) {
+              const pt = planTaskById.get(event.work_item_id) || {};
+              const others = [...planTaskById.values()].filter((o) => o.id !== event.work_item_id && !o.done && (o.files || []).some((f) => (pt.files || []).includes(f))).map((o) => o.id);
+              cp.kind = 'shared_file_conflict';
+              cp.reason = `shared_file_conflict entre ${event.work_item_id} e ${others.join(', ') || 'outra tarefa'}: ${cp.reason}`;
+            }
             if (cp.committed) {
               checkpoint = cp.commit;
               appendEvent(projectRoot, activeSession, { type: 'GateResolved', run_id: current.run_id, work_item_id: event.work_item_id, payload: { gate: 'checkpoint', commit: cp.commit, files: cp.files, leftover: cp.leftover } });
@@ -2278,7 +2295,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
         // OXB-167: … unless its checkpoint failed: then `checkpoint_failed` (the next execute retries the commit first).
         try {
           if (checkpointFailure) require('./oxe-plan-json.cjs').markPlanTaskCheckpointFailed(runPaths.plan, event.work_item_id, { ...checkpointFailure, run_id: current.run_id, title: (planTaskById.get(event.work_item_id) || {}).title || null });
-          else require('./oxe-plan-json.cjs').markPlanTaskDone(runPaths.plan, event.work_item_id, { commit: checkpoint });
+          else { require('./oxe-plan-json.cjs').markPlanTaskDone(runPaths.plan, event.work_item_id, { commit: checkpoint }); dropFirstBaseline(projectRoot, event.work_item_id); }
         } catch { /* o done é auxiliar; o journal continua sendo a verdade da run */ }
         // OXB-151: --promote-each — the task enters the merge train at once, without waiting for the whole plan.
         if (options.promoteEach) {
@@ -5527,11 +5544,16 @@ function interruptedTaskWork(projectRoot, activeSession) {
   const lastRun = [...events].reverse().find((e) => e && e.run_id && e.type === 'AttemptStarted');
   if (!lastRun) return [];
   const runId = lastRun.run_id;
+  // OXB-177: in ANY run — R6 was interrupted runs before CR37 ran. The last AttemptStarted of an item with nothing
+  // ending it afterwards (a later run's own start of the item re-opens it; a later end closes it).
   const state = new Map();
+  const runOf = new Map();
   for (const e of events) {
-    if (!e || e.run_id !== runId || !e.work_item_id) continue;
-    if (e.type === 'AttemptStarted') state.set(e.work_item_id, 'running');
-    else if (['WorkItemCompleted', 'WorkItemBlocked', 'WorkItemFailed', 'RetryScheduled'].includes(e.type)) state.set(e.work_item_id, 'ended');
+    if (!e || !e.work_item_id) continue;
+    if (e.type === 'AttemptStarted') { state.set(e.work_item_id, 'running'); runOf.set(e.work_item_id, e.run_id || null); }
+    // an end counts only in the run the item started in (a run that never started it — out of --wave, a dependency
+    // blocked — does not end an interruption from an earlier run)
+    else if (['WorkItemCompleted', 'WorkItemBlocked', 'WorkItemFailed', 'RetryScheduled'].includes(e.type) && (!e.run_id || !runOf.has(e.work_item_id) || runOf.get(e.work_item_id) === e.run_id)) state.set(e.work_item_id, 'ended');
   }
   const running = [...state].filter(([, s]) => s === 'running').map(([id]) => id);
   if (!running.length) return [];
@@ -5551,7 +5573,7 @@ function interruptedTaskWork(projectRoot, activeSession) {
   for (const runningId of running) {
     const tasks = doc && Array.isArray(doc.tasks) ? doc.tasks.filter(Boolean) : [];
     let t = tasks.find((x) => x.id === runningId) || null;
-    const was = runTitles[runningId];
+    const was = runOf.get(runningId) === runId ? runTitles[runningId] : null;
     let renumbered = null;
     if (was && t && norm(t.title) !== norm(was)) {
       const same = tasks.filter((x) => norm(x.title) === norm(was));
@@ -5565,9 +5587,32 @@ function interruptedTaskWork(projectRoot, activeSession) {
     const id = t.id;
     const scope = (t.files || []).map((p) => String(p).replace(/\\/g, '/')).filter((p) => p && !p.includes('*'));
     const files = scope.length ? changedPathsUnder(projectRoot, scope) : [];
-    if (files.length) out.push({ task: id, run_id: runId, files, ...(renumbered ? { renumbered } : {}) });
+    if (files.length) out.push({ task: id, run_id: runOf.get(runningId) || runId, files, ...(renumbered ? { renumbered } : {}) });
   }
   return out;
+}
+
+/**
+ * OXB-177: the tree a task saw at the start of its FIRST attempt (dirty paths → blob), kept on disk until the task is
+ * done. In a file another task also has edits in, the task's commit is HEAD + (this base → now), never the whole file.
+ */
+const firstBaselineFile = (projectRoot, taskId) => path.join(projectRoot, '.oxe', 'task-baselines', `${String(taskId).replace(/[^\w.-]/g, '_')}.json`);
+function readFirstBaseline(projectRoot, taskId, title) {
+  try {
+    const b = JSON.parse(fs.readFileSync(firstBaselineFile(projectRoot, taskId), 'utf8'));
+    if (title && b.title && String(b.title).trim().toLowerCase() !== String(title).trim().toLowerCase()) return null; // renumbered id
+    return b;
+  } catch { return null; }
+}
+function writeFirstBaseline(projectRoot, taskId, title, snap) {
+  if (readFirstBaseline(projectRoot, taskId, title)) return;
+  try {
+    fs.mkdirSync(path.dirname(firstBaselineFile(projectRoot, taskId)), { recursive: true });
+    fs.writeFileSync(firstBaselineFile(projectRoot, taskId), JSON.stringify({ task: taskId, title: title || null, at: new Date().toISOString(), paths: Object.fromEntries(snap) }, null, 2));
+  } catch { /* auxiliar */ }
+}
+function dropFirstBaseline(projectRoot, taskId) {
+  try { fs.rmSync(firstBaselineFile(projectRoot, taskId), { force: true }); } catch { /* */ }
 }
 
 /**
@@ -5613,13 +5658,31 @@ function ownLeftoversByTask(projectRoot, activeSession, interrupted = []) {
     if (!scope.length) continue;
     const dirty = changedPathsUnder(projectRoot, scope);
     const wrote = writes.get(t.id) || new Set();
-    const own = dirty.filter((p) => {
+    const first = readFirstBaseline(projectRoot, t.id, t.title);
+    const own = [];
+    const bases = {};
+    const unseparable = {};
+    for (const p of dirty) {
       const holder = claimed.get(p);
-      if (holder && holder !== t.id) return false;
-      if (wrote.has(p)) return true;
-      return ![...scopes].some(([id, sc]) => id !== t.id && inScope(sc, p));
-    });
-    if (own.length) out.set(t.id, own);
+      const others = [...scopes].filter(([id, sc]) => id !== t.id && inScope(sc, p)).map(([id]) => id);
+      const shared = (holder && holder !== t.id) || others.length > 0;
+      if (!shared) { own.push(p); continue; }
+      // OXB-177: shared with another pending/interrupted task — never the whole file.
+      // (1) its first-attempt base has the path: commit HEAD + (that base → now)
+      if (first && first.paths && Object.prototype.hasOwnProperty.call(first.paths, p)) { bases[p] = first.paths[p]; continue; }
+      // (2) another task's interrupted work holds it: this task's only if it also wrote it — then it cannot be split
+      if (holder && holder !== t.id) {
+        if (wrote.has(p)) unseparable[p] = [...new Set([holder, ...others])];
+        continue; // otherwise the edits are the other task's: they stay out (the normal baseline keeps them foreign)
+      }
+      // (3) only in another pending task's scope: this task's when it wrote it
+      if (wrote.has(p)) own.push(p);
+    }
+    if (own.length || Object.keys(bases).length || Object.keys(unseparable).length) {
+      out.set(t.id, own);
+      if (!out.extra) out.extra = new Map();
+      out.extra.set(t.id, { bases, unseparable });
+    }
   }
   return out;
 }

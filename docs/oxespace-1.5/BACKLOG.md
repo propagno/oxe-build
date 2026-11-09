@@ -1282,3 +1282,21 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - Mudou o comportamento da OXB-167 para "nada mudou no escopo": antes ficava done sem commit, agora é `empty_checkpoint` quando não há checkpoint anterior.
   - Teste: `tests/oxe-1212-checkpoint-phase.test.cjs` (a A reaberta com as edições na árvore e uma tentativa sem escrita: a A commita, e a B só começa depois do commit; nada mudou e sem checkpoint anterior: `empty_checkpoint`).
 
+## OXB-177: arquivo de dois escopos commitado inteiro pela primeira tarefa que fazia checkpoint
+
+- **Status:** resolvido (1.21.2). Registrado pelo TECH LEAD em 09/11 (F2, rc.32).
+  - O que aconteceu: a R6 (Linear), interrompida, deixou `shared/mcp-coverage.ts` editado. O CR37, que tem o mesmo arquivo no escopo por um hunk só, fez o checkpoint b9bc1a44 com o arquivo **inteiro**, remoções da R6 incluídas. No PR #727 isso reprovou `tests/mcp-coverage.test.ts`.
+  - Havia duas causas:
+    - a interrupção da R6 era de uma run **anterior**, e a detecção da OXB-170 só olhava a última run;
+    - o CR37 tinha escrito o arquivo numa tentativa anterior, e a OXB-174 atribuiu o arquivo inteiro a ele.
+  - **Interrupção em qualquer run:** tarefa não-done cuja última `AttemptStarted`, em qualquer run, não tem fim **na mesma run**. Um bloqueio emitido numa run que nem a começou (fora do `--wave`, dependência bloqueada) não encerra a interrupção.
+  - **Base da 1ª tentativa:** no início da primeira tentativa de cada tarefa, o oxe-build grava `.oxe/task-baselines/<tarefa>.json` (caminhos sujos → blob, com o título para detectar renumeração). Ela é apagada quando a tarefa fica done.
+  - **Caminho compartilhado** (sujo, e reivindicado por trabalho interrompido de outra tarefa ou no escopo de outra tarefa pendente), nunca commitado inteiro:
+    - na base da 1ª tentativa: a tarefa commita `HEAD + (base → agora)` pelo merge-file da OXB-170, só os hunks dela;
+    - reivindicado por outra tarefa interrompida: é da tarefa só se ela também o escreveu. Nesse caso, sem base, não dá para separar: **`shared_file_conflict`** nomeando as duas tarefas, e nada é commitado;
+    - só no escopo de outra tarefa pendente: é da tarefa quando ela o escreveu (`ExecutorUsage.writes`).
+    - Um conflito do merge-file num arquivo compartilhado também sai como `shared_file_conflict`, com os nomes.
+  - Teste: `tests/oxe-1212-checkpoint-phase.test.cjs`.
+    - A interrompida com H1 em F; B muda H2 em F e faz checkpoint: o commit da B tem só H2 e A continua vendo H1.
+    - B com uma tentativa anterior que escreveu F: continua só H2.
+    - Sem a base (histórico anterior): `shared_file_conflict` e nenhum commit.
