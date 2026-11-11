@@ -48,6 +48,402 @@ function rigorMessages(findings) {
   return findings.map((f) => `${f.task || f.criterion || 'acceptance'}: ${f.file} afirma sobre o TEXTO do código (lê ${f.reads.slice(0, 3).join(', ')}) sem importar nada do produto — teste o comportamento, ou declare no acceptance_tests "rigor": "source-assertion" com "rigor_reason"${f.declared ? ' (rigor_reason faltando ou curto)' : ''}`);
 }
 
+function walkAcceptanceTestFiles(dir, rootDir, acc = []) {
+  if (!fs.existsSync(dir)) return acc;
+  let entries = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return acc; }
+  for (const ent of entries) {
+    const full = path.join(dir, ent.name);
+    if (ent.isDirectory()) {
+      walkAcceptanceTestFiles(full, rootDir, acc);
+    } else if (ent.isFile() && /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(ent.name)) {
+      acc.push(norm(path.relative(rootDir, full)));
+    }
+  }
+  return acc;
+}
+
+function regexRequiresLiteralDigit(pattern) {
+  const cleaned = String(pattern || '')
+    .replace(/\\[^d0-9]/g, '')
+    .replace(/\{\d+(?:,\d*)?\}/g, '')
+    .replace(/\[\^[^\]]*\]/g, '');
+  return /\\d|[0-9]/.test(cleaned);
+}
+
+function assertionRequiresDigit(assertionCall) {
+  const call = String(assertionCall || '');
+  if (/\.not\b/.test(call)) return false;
+  const reMatch = /\.toMatch\s*\(\s*\/((?:\\.|[^/\\])+)\/[dgimsuvy]*\s*\)/.exec(call);
+  if (reMatch) return regexRequiresLiteralDigit(reMatch[1]);
+  const strMatch = /\.(?:toMatch|toContain|toBe|toEqual)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1\s*\)/.exec(call);
+  if (strMatch) return /[0-9]/.test(strMatch[2]);
+  return false;
+}
+
+function collectTargetAcceptanceFiles(projectRoot, docOrFiles) {
+  const files = new Set();
+  if (Array.isArray(docOrFiles)) {
+    for (const f of docOrFiles) if (f) files.add(norm(typeof f === 'string' ? f : f.path));
+  } else {
+    for (const entry of entriesOf(docOrFiles)) {
+      for (const f of entry.files || []) {
+        if (f) files.add(norm(typeof f === 'string' ? f : f.path));
+      }
+    }
+    if (!docOrFiles || docOrFiles.scanAcceptanceDir !== false) {
+      for (const f of walkAcceptanceTestFiles(path.join(projectRoot, 'tests', 'acceptance'), projectRoot)) {
+        files.add(f);
+      }
+    }
+  }
+  return [...files].sort();
+}
+
+/**
+ * Masks comments with spaces (`commentStripped`, keeping string literals intact) and also produces `structureOnly`
+ * (strings/templates masked too, preserving `{`/`}` only in code and `\r`/`\n` everywhere so offsets/lines stay exact).
+ */
+function maskJsSource(raw) {
+  const src = String(raw || '');
+  const commentArr = src.split('');
+  const structArr = src.split('');
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+    const next = src[i + 1];
+    // Line comment //
+    if (ch === '/' && next === '/') {
+      while (i < src.length && src[i] !== '\n' && src[i] !== '\r') {
+        commentArr[i] = ' ';
+        structArr[i] = ' ';
+        i += 1;
+      }
+      continue;
+    }
+    // Block comment /* ... */
+    if (ch === '/' && next === '*') {
+      commentArr[i] = ' ';
+      structArr[i] = ' ';
+      commentArr[i + 1] = ' ';
+      structArr[i + 1] = ' ';
+      i += 2;
+      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) {
+        if (src[i] !== '\n' && src[i] !== '\r') {
+          commentArr[i] = ' ';
+          structArr[i] = ' ';
+        }
+        i += 1;
+      }
+      if (i < src.length) {
+        commentArr[i] = ' ';
+        structArr[i] = ' ';
+        if (i + 1 < src.length) {
+          commentArr[i + 1] = ' ';
+          structArr[i + 1] = ' ';
+        }
+        i += 2;
+      }
+      continue;
+    }
+    // Single, double, or backtick string literal
+    if (ch === '\'' || ch === '"' || ch === '`') {
+      const quote = ch;
+      structArr[i] = ' ';
+      i += 1;
+      while (i < src.length && src[i] !== quote) {
+        if (src[i] === '\\' && i + 1 < src.length) {
+          if (src[i] !== '\n' && src[i] !== '\r') structArr[i] = ' ';
+          if (src[i + 1] !== '\n' && src[i + 1] !== '\r') structArr[i + 1] = ' ';
+          i += 2;
+          continue;
+        }
+        if (src[i] !== '\n' && src[i] !== '\r') structArr[i] = ' ';
+        i += 1;
+      }
+      if (i < src.length) {
+        structArr[i] = ' ';
+        i += 1;
+      }
+      continue;
+    }
+    i += 1;
+  }
+  return {
+    commentStripped: commentArr.join(''),
+    structureOnly: structArr.join(''),
+  };
+}
+
+function lineNumberAt(text, offset) {
+  let line = 1;
+  const end = Math.min(offset, text.length);
+  for (let i = 0; i < end; i += 1) {
+    if (text[i] === '\n') line += 1;
+  }
+  return line;
+}
+
+function findEnclosingBlockBounds(structureOnly, pos) {
+  let depth = 0;
+  let openBrace = -1;
+  for (let i = pos - 1; i >= 0; i -= 1) {
+    const ch = structureOnly[i];
+    if (ch === '}') depth += 1;
+    else if (ch === '{') {
+      if (depth === 0) {
+        openBrace = i;
+        break;
+      }
+      depth -= 1;
+    }
+  }
+  if (openBrace < 0) return { start: 0, end: structureOnly.length };
+  let fwdDepth = 1;
+  for (let i = openBrace + 1; i < structureOnly.length; i += 1) {
+    const ch = structureOnly[i];
+    if (ch === '{') fwdDepth += 1;
+    else if (ch === '}') {
+      fwdDepth -= 1;
+      if (fwdDepth === 0) return { start: openBrace, end: i + 1 };
+    }
+  }
+  return { start: openBrace, end: structureOnly.length };
+}
+
+/**
+ * OXB-208: static lint for Node 22+ paused `net.connect` / `tls.connect` sockets in frozen acceptance tests.
+ * When a test opens `connect(...)`, sends data via `.write(...)`, and waits for `.on('close')` or `.on('end')`
+ * without `.resume()` or a `'data'`/`'readable'` listener in the same scope, unread server bytes in
+ * `readableState.buffer` prevent `'end'` and `'close'` from firing on graceful server EOF in Node 22+.
+ */
+function pausedSocketFindings(projectRoot, docOrFiles) {
+  const files = collectTargetAcceptanceFiles(projectRoot, docOrFiles);
+  const findings = [];
+  const seenKey = new Set();
+  const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  const assignedConnectRe = /(?:(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*|(?<![.\w$])([A-Za-z_$][\w$]*)\s*=\s*)(?:await\s+)?(?:(net|tls|nodeNet|nodeTls)\s*\.\s*)?(connect|createConnection)\s*\(/g;
+  const bareConnectRe = /(?<![=.\w$])(?:(net|tls|nodeNet|nodeTls)\s*\.\s*)?(connect|createConnection)\s*\(/g;
+
+  for (const file of files) {
+    const abs = path.join(projectRoot, file);
+    if (!fs.existsSync(abs)) continue;
+    let raw;
+    try { raw = fs.readFileSync(abs, 'utf8'); } catch { continue; }
+    if (!/\b(?:connect|createConnection)\s*\(/.test(raw)) continue;
+
+    const { commentStripped, structureOnly } = maskJsSource(raw);
+    const rawLines = raw.split(/\r?\n/);
+
+    assignedConnectRe.lastIndex = 0;
+    let m;
+    while ((m = assignedConnectRe.exec(commentStripped)) !== null) {
+      const varName = m[1] || m[2];
+      const matchStart = m.index;
+      const afterConnect = matchStart + m[0].length;
+      const bounds = findEnclosingBlockBounds(structureOnly, matchStart);
+      let scopeEnd = bounds.end;
+
+      // Cap scope if the same variable is reassigned later in the same block
+      const reassignRe = new RegExp(`(?<![.\\w$])${escRe(varName)}\\s*=[^=]`, 'g');
+      reassignRe.lastIndex = afterConnect;
+      const nextReassign = reassignRe.exec(structureOnly);
+      if (nextReassign && nextReassign.index < scopeEnd) {
+        scopeEnd = nextReassign.index;
+      }
+
+      const scopeCode = commentStripped.slice(matchStart, scopeEnd);
+      const escVar = escRe(varName);
+      const writeRe = new RegExp(`\\b(?:${escVar}|this)\\s*\\.\\s*write\\s*\\(`);
+      const closeOrEndRe = new RegExp(`\\b${escVar}\\s*\\.\\s*(?:on|once|addListener)\\s*\\(\\s*(['"\`])(close|end)\\1`);
+      const drainRe = new RegExp(
+        `\\b${escVar}\\s*\\.\\s*(?:resume|pipe)\\s*\\(`
+        + `|\\b${escVar}\\s*\\.\\s*(?:on|once|addListener)\\s*\\(\\s*(['"\`])(?:data|readable)\\1`
+        + `|\\bfor\\s+await\\s*\\([^)]*\\bof\\s+${escVar}\\b`
+        + `|\\bpipeline\\s*\\([^)]*\\b${escVar}\\b`
+      );
+
+      const writeMatch = writeRe.exec(scopeCode);
+      const closeMatch = closeOrEndRe.exec(scopeCode);
+      if (writeMatch && closeMatch && !drainRe.test(scopeCode)) {
+        const closeLine = lineNumberAt(commentStripped, matchStart + closeMatch.index);
+        const connectLine = lineNumberAt(commentStripped, matchStart);
+        const key = `${file}:${closeLine}:${varName}`;
+        if (!seenKey.has(key)) {
+          seenKey.add(key);
+          findings.push({
+            file,
+            line: closeLine,
+            connect_line: connectLine,
+            kind: 'paused_socket_close',
+            variable: varName,
+            event: closeMatch[2],
+            suggestion: `chame ${varName}.resume() ou registre ${varName}.on('data', () => {}) no mesmo escopo`,
+            snippet: (rawLines[closeLine - 1] || '').trim().slice(0, 140),
+          });
+        }
+      }
+    }
+
+    bareConnectRe.lastIndex = 0;
+    while ((m = bareConnectRe.exec(commentStripped)) !== null) {
+      // Skip if preceded by `= ` (already handled by assignedConnectRe)
+      const prefix = commentStripped.slice(Math.max(0, m.index - 40), m.index);
+      if (/=\s*(?:await\s+)?$/.test(prefix)) continue;
+      const bounds = findEnclosingBlockBounds(structureOnly, m.index);
+      const scopeCode = commentStripped.slice(m.index, bounds.end);
+      const writeMatch = /\.\s*write\s*\(/.exec(scopeCode);
+      const closeMatch = /\.\s*(?:on|once|addListener)\s*\(\s*(['"`])(close|end)\1/.exec(scopeCode);
+      const drainMatch = /\.\s*(?:resume|pipe)\s*\(|\.\s*(?:on|once|addListener)\s*\(\s*(['"`])(?:data|readable)\1/.test(scopeCode);
+      if (writeMatch && closeMatch && !drainMatch) {
+        const closeLine = lineNumberAt(commentStripped, m.index + closeMatch.index);
+        const connectLine = lineNumberAt(commentStripped, m.index);
+        const key = `${file}:${closeLine}:<chained>`;
+        if (!seenKey.has(key)) {
+          seenKey.add(key);
+          findings.push({
+            file,
+            line: closeLine,
+            connect_line: connectLine,
+            kind: 'paused_socket_close',
+            variable: 'socket',
+            event: closeMatch[2],
+            suggestion: "chame socket.resume() ou registre .on('data', () => {}) no mesmo escopo",
+            snippet: (rawLines[closeLine - 1] || '').trim().slice(0, 140),
+          });
+        }
+      }
+    }
+  }
+  return findings;
+}
+
+function pausedSocketMessages(findings) {
+  return (findings || []).map((f) => (
+    `${f.file}:${f.line}: socket \`${f.variable}\` aberto com connect() (linha ${f.connect_line}) aguarda '${f.event}' após .write() em modo pausado (Node 22+ não emite '${f.event}' com bytes não lidos no buffer) — ${f.suggestion}`
+  ));
+}
+
+/**
+ * OXB-205: static lint over frozen acceptance test suites (`tests/acceptance/**` + `acceptance_tests.files`).
+ * Detects:
+ *  1. Suspicious unescaped regex character classes (`/d+/`, `/s+/`, `/w+/`, etc.) next to `.replace(`, `.match(`,
+ *     `.split(`, `.toMatch(`, `.test(`, `.exec(`.
+ *  2. Contradictory strip-digits (`.replace(/\d+/g, '')`) immediately followed by an assertion expecting digits on
+ *     the stripped value.
+ */
+function suspiciousRegexFindings(projectRoot, docOrFiles) {
+  const files = collectTargetAcceptanceFiles(projectRoot, docOrFiles);
+
+  const findings = [];
+  const callBeforeRe = /\.(replace|replaceAll|match|matchAll|split|search|toMatch)\s*\(\s*\/(\^?(?:\\b)?([dswDSW])(\+|\*|\{\d+(?:,\d*)?\})(?:\\b)?\$?)\/([dgimsuvy]*)/g;
+  const callAfterRe = /\/(\^?(?:\\b)?([dswDSW])(\+|\*|\{\d+(?:,\d*)?\})(?:\\b)?\$?)\/([dgimsuvy]*)\s*\.\s*(test|exec)\s*\(/g;
+  const stripDigitsRe = /\.replace(?:All)?\s*\(\s*\/(?:\\d\+|\[0-9\]\+)\/[dgimsuvy]*\s*,\s*(['"`])([^'"`0-9]*)\1\s*\)/;
+
+  for (const file of files) {
+    const abs = path.join(projectRoot, file);
+    if (!fs.existsSync(abs)) continue;
+    let raw;
+    try { raw = fs.readFileSync(abs, 'utf8'); } catch { continue; }
+    // Replace block comments preserving newlines so line numbers stay exact
+    const text = raw.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
+    const lines = text.split(/\r?\n/);
+
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (trimmed.startsWith('//')) continue;
+      const codeLine = line.replace(/\/\/.*$/, '');
+
+      callBeforeRe.lastIndex = 0;
+      let m;
+      while ((m = callBeforeRe.exec(codeLine)) !== null) {
+        const body = m[2];
+        const cls = m[3];
+        const flags = m[5] || '';
+        const suggested = `/${body.replace(cls, `\\${cls}`)}/${flags}`;
+        findings.push({
+          file,
+          line: i + 1,
+          kind: 'unescaped_char_class',
+          pattern: `/${body}/${flags}`,
+          suggestion: suggested,
+          method: `.${m[1]}(`,
+          snippet: trimmed.slice(0, 140),
+        });
+      }
+
+      callAfterRe.lastIndex = 0;
+      while ((m = callAfterRe.exec(codeLine)) !== null) {
+        const body = m[1];
+        const cls = m[2];
+        const flags = m[4] || '';
+        const suggested = `/${body.replace(cls, `\\${cls}`)}/${flags}`;
+        findings.push({
+          file,
+          line: i + 1,
+          kind: 'unescaped_char_class',
+          pattern: `/${body}/${flags}`,
+          suggestion: suggested,
+          method: `.${m[5]}(`,
+          snippet: trimmed.slice(0, 140),
+        });
+      }
+
+      if (stripDigitsRe.test(codeLine)) {
+        // Case A: chained `expect(...replace(/\d+/g, '')...).toMatch(/2/)`
+        const window2 = `${codeLine} ${lines[i + 1] ? lines[i + 1].replace(/\/\/.*$/, '') : ''}`;
+        if (/\bexpect\s*\([^)]*\.replace(?:All)?\s*\(\s*\/(?:\\d\+|\[0-9\]\+)\//.test(window2) && assertionRequiresDigit(window2)) {
+          findings.push({
+            file,
+            line: i + 1,
+            kind: 'contradictory_strip_assert',
+            pattern: '.replace(/\\d+/g, ...)',
+            suggestion: 'não remova dígitos antes de afirmar presença de dígitos no mesmo valor',
+            snippet: trimmed.slice(0, 140),
+          });
+          continue;
+        }
+        // Case B: `const x = ...replace(/\d+/g, '')` followed by `expect(x).toMatch(/2/)`
+        const assignMatch = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(codeLine);
+        if (assignMatch) {
+          const varName = assignMatch[1];
+          const escapedVar = varName.replace(/\$/g, '\\$');
+          const expectVarRe = new RegExp(`\\bexpect\\s*\\(\\s*${escapedVar}(?:\\s*\\.[\\w$]+\\(\\s*\\))*\\s*\\)`);
+          const reassignRe = new RegExp(`\\b${escapedVar}\\s*=[^=]`);
+          for (let j = i + 1; j < Math.min(lines.length, i + 12); j += 1) {
+            const nextCode = lines[j].replace(/\/\/.*$/, '');
+            if (/^\s*\}\s*\)\s*;?\s*$/.test(nextCode)) break;
+            if (reassignRe.test(nextCode)) break;
+            if (expectVarRe.test(nextCode) && assertionRequiresDigit(nextCode)) {
+              findings.push({
+                file,
+                line: j + 1,
+                kind: 'contradictory_strip_assert',
+                pattern: `${varName} (após .replace(/\\d+/g, ''))`,
+                suggestion: 'a linha anterior removeu todos os dígitos com .replace(/\\d+/g, ""); a asserção de dígitos sempre falhará',
+                snippet: lines[j].trim().slice(0, 140),
+              });
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+  return findings;
+}
+
+function suspiciousRegexMessages(findings) {
+  return (findings || []).map((f) => {
+    if (f.kind === 'contradictory_strip_assert') {
+      return `${f.file}:${f.line}: contradição em teste congelado — ${f.pattern} remove dígitos, mas a asserção exige dígito (${f.snippet})`;
+    }
+    return `${f.file}:${f.line}: regex suspeita ${f.pattern} ao lado de ${f.method} (provável barra invertida omitida: use ${f.suggestion})`;
+  });
+}
+
 const MUTATORS = [
   { re: /===/, to: '!==' },
   { re: /!==/, to: '===' },
@@ -141,4 +537,14 @@ function mutationMessages(report) {
   return msgs;
 }
 
-module.exports = { sourceAssertionFindings, rigorMessages, mutationSample, mutationMessages, mutantsOf };
+module.exports = {
+  sourceAssertionFindings,
+  rigorMessages,
+  suspiciousRegexFindings,
+  suspiciousRegexMessages,
+  pausedSocketFindings,
+  pausedSocketMessages,
+  mutationSample,
+  mutationMessages,
+  mutantsOf,
+};
