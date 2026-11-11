@@ -117,6 +117,13 @@ function decide(call, ctx) {
         return { block: true, rule: 'protected_checkout', reason: `checkout protegido (${prot}): git ${/\bgit\s+(\w+)/.exec(cmd)[1]} não é permitido aqui` };
       }
     }
+    if (/\bgit\s+push\b/.test(cmd) && !/\b--delete\b/.test(cmd)) {
+      const ic = require('./oxe-integration-checks.cjs');
+      const parked = ic.findTrackedParkedAcceptance(cwd);
+      if (parked.length) {
+        return { block: true, rule: 'parked_acceptance_tracked', reason: ic.formatParkedAcceptanceError(parked) };
+      }
+    }
     const heavy = (guards.heavy || []).find((h) => { try { return new RegExp(h, 'i').test(cmd); } catch { return false; } });
     if (heavy && guards.heavy_wrapper && !cmd.trim().startsWith(guards.heavy_wrapper)) {
       return { block: true, rule: 'heavy_without_lock', reason: `comando pesado (${heavy}) sem o wrapper de lock — rode: ${guards.heavy_wrapper} ${cmd.trim()}` };

@@ -54,6 +54,7 @@ export declare class PromotionPipeline {
         summaryPath?: string | null;
     }): CommitRecord;
     promote(runResult: RunResult, manifest: VerificationManifest | null, riskLedger: ResidualRiskLedger | null, opts?: PromotionOptions, gates?: GateToken[], evidenceCoverage?: EvidenceCoverageSummary | null): Promise<PromotionRecord>;
+    private findTrackedParkedAcceptance;
     loadCommitRecord(runId: string): CommitRecord | null;
     loadPromotionRecord(runId: string): PromotionRecord | null;
     savePRLink(runId: string, link: RunPRLink): void;
