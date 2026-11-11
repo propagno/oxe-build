@@ -200,11 +200,15 @@ const provider = { baseUrl: '', apiKey: '', model: '', maxTurns: 4 };
             fs_1.default.rmSync(dir, { recursive: true, force: true });
         }
     });
-    (0, node_test_1.test)('registry: http exige API key, claude não', () => {
+    (0, node_test_1.test)('registry: http exige API key, claude e antigravity não', () => {
         strict_1.default.equal((0, registry_1.createExecutorAdapter)('http').requiresApiKey, true);
         strict_1.default.equal((0, registry_1.createExecutorAdapter)('claude').requiresApiKey, false);
-        const ids = (0, registry_1.detectExecutorAdapters)({ claude: { command: 'oxe-no-such-claude-binary' } }).map((a) => `${a.id}:${a.available}`);
-        strict_1.default.deepEqual(ids, ['claude:false', 'http:true']);
+        strict_1.default.equal((0, registry_1.createExecutorAdapter)('antigravity').requiresApiKey, false);
+        const ids = (0, registry_1.detectExecutorAdapters)({
+            claude: { command: 'oxe-no-such-claude-binary' },
+            antigravity: { command: 'oxe-no-such-agy-binary' },
+        }).map((a) => `${a.id}:${a.available}`);
+        strict_1.default.deepEqual(ids, ['claude:false', 'antigravity:false', 'http:true']);
     });
 });
 (0, node_test_1.describe)('OXB-148: claude -p failure reasons come from stdout, classified', () => {

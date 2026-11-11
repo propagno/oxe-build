@@ -4,8 +4,10 @@ export { renderNodeContext, truncate as truncateContext, DEFAULT_NODE_CONTEXT_BU
 export type { NodeExecutionContext, NodeContextProvider, WorkspaceFileSnapshot, NodeContextBudget } from './node-context';
 export { ClaudeCliAdapter, buildBridgePrompt, parseBridgeReply, resolveExecutable, buildSpawnable } from './adapters/claude-cli';
 export type { ClaudeCliAdapterOptions } from './adapters/claude-cli';
+export { AntigravityCliAdapter, parseAntigravityEvents, agyFailure, buildAntigravityArgs } from './adapters/antigravity-cli';
+export type { AntigravityCliAdapterOptions, ParsedAntigravityStream } from './adapters/antigravity-cli';
 export { HttpOpenAiAdapter } from './adapters/http-openai';
-export { createExecutorAdapter, detectExecutorAdapters, isExecutorAdapterId, EXECUTOR_ADAPTER_IDS } from './adapters/registry';
+export { createExecutorAdapter, detectExecutorAdapters, isExecutorAdapterId, normalizeExecutorAdapterId, EXECUTOR_ADAPTER_IDS } from './adapters/registry';
 export type { ExecutorAdapter, ExecutorAdapterId, AdapterDetection } from './adapters/types';
 export { buildNodePrompt } from './node-prompt-builder';
 export { buildChatCompletionsUrl } from './stream-completion';
@@ -16,3 +18,4 @@ export type { ShellInvocation } from './shell-argv';
 export type { BuiltInToolHandler } from './built-in-tools';
 export { setQuestionResolver } from './built-in-tools';
 export type { ExecutorQuestion, ExecutorAnswer } from './built-in-tools';
+export { PROVIDER_QUOTA_RE, CLI_FAILURE_QUOTA_RE, isProviderQuotaText } from './quota-patterns';

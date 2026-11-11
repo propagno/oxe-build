@@ -12,6 +12,7 @@ exports.buildBridgePrompt = buildBridgePrompt;
 exports.cliFailure = cliFailure;
 exports.parseBridgeReply = parseBridgeReply;
 const os_1 = __importDefault(require("os"));
+const quota_patterns_1 = require("../quota-patterns");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const child_process_1 = require("child_process");
@@ -113,7 +114,7 @@ function buildBridgePrompt(messages, tools = [], retryHint = false) {
     ].join('\n');
 }
 const CONTEXT_RE = /prompt is too long|too many tokens|context (window|length)|input is too long|maximum context|exceeds? the (model'?s? )?(context|token)/i;
-const QUOTA_RE = /usage limit|rate.?limit|limit reached|quota|credit balance|overloaded|resets? (at|in)|try again (later|in)|429/i;
+const QUOTA_RE = quota_patterns_1.CLI_FAILURE_QUOTA_RE;
 function cliFailure(input) {
     const env = input.envelope;
     const subtype = env && typeof env.subtype === 'string' ? env.subtype : null;

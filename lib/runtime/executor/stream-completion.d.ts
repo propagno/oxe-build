@@ -17,6 +17,9 @@ export interface ToolCall {
 export interface CompletionUsage {
     /** Cost reported by the backend for this turn (USD), when it reports one. */
     cost_usd?: number | null;
+    input_tokens?: number;
+    output_tokens?: number;
+    thinking_tokens?: number;
 }
 export interface CompletionResponse {
     content: string;

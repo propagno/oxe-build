@@ -50,7 +50,18 @@ export function shellInvocation(command: string, platform: NodeJS.Platform = pro
  */
 const DEFAULT_SCRUB: RegExp[] = [/^OXESPACE_/i, /(TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL|PRIVATE_KEY)/i];
 /** What the host CLI needs to authenticate itself (allowed only where the caller asks for provider credentials). */
-export const PROVIDER_CREDENTIAL_ENV = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY'];
+export const PROVIDER_CREDENTIAL_ENV = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'OPENAI_API_KEY',
+  'GEMINI_API_KEY',
+  'GOOGLE_API_KEY',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'ANTIGRAVITY_API_KEY',
+  'ANTIGRAVITY_AUTH_TOKEN',
+];
 
 let extraScrub: RegExp[] = [];
 let extraAllow: string[] = [];

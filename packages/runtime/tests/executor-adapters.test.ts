@@ -224,11 +224,15 @@ describe('claude-cli — protocolo e spawn portável', () => {
     }
   });
 
-  test('registry: http exige API key, claude não', () => {
+  test('registry: http exige API key, claude e antigravity não', () => {
     assert.equal(createExecutorAdapter('http').requiresApiKey, true);
     assert.equal(createExecutorAdapter('claude').requiresApiKey, false);
-    const ids = detectExecutorAdapters({ claude: { command: 'oxe-no-such-claude-binary' } }).map((a) => `${a.id}:${a.available}`);
-    assert.deepEqual(ids, ['claude:false', 'http:true']);
+    assert.equal(createExecutorAdapter('antigravity').requiresApiKey, false);
+    const ids = detectExecutorAdapters({
+      claude: { command: 'oxe-no-such-claude-binary' },
+      antigravity: { command: 'oxe-no-such-agy-binary' },
+    }).map((a) => `${a.id}:${a.available}`);
+    assert.deepEqual(ids, ['claude:false', 'antigravity:false', 'http:true']);
   });
 });
 

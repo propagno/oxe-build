@@ -14,7 +14,9 @@
 const HTTP_DEFAULT_MODEL = 'claude-sonnet-4-6';
 
 function resolve(input) {
-  const { adapter, flag, env = process.env, persisted = {}, config = {} } = input;
+  const rawAdapter = String(input.adapter || '').toLowerCase();
+  const adapter = rawAdapter === 'agy' ? 'antigravity' : (input.adapter || '');
+  const { flag, env = process.env, persisted = {}, config = {} } = input;
   const notes = [];
   let model;
   let source;
@@ -23,6 +25,21 @@ function resolve(input) {
     else if (env.OXE_CLAUDE_MODEL) { model = env.OXE_CLAUDE_MODEL; source = 'OXE_CLAUDE_MODEL'; }
     else { model = null; source = 'padrão do Claude Code (sem --model)'; }
     if (persisted && persisted.model && !flag && !env.OXE_CLAUDE_MODEL) notes.push(`runtime.provider.model=${persisted.model} é do adaptador http e não se aplica ao claude -p; para fixar o modelo do claude, use --model ou OXE_CLAUDE_MODEL`);
+  } else if (adapter === 'antigravity') {
+    const isPersistedAgy = persisted && (
+      String(persisted.name || '').toLowerCase() === 'antigravity'
+      || String(persisted.name || '').toLowerCase() === 'agy'
+      || String(persisted.adapter || '').toLowerCase() === 'antigravity'
+      || String(persisted.adapter || '').toLowerCase() === 'agy'
+    );
+    if (flag) { model = flag; source = '--model'; }
+    else if (env.OXE_AGY_MODEL) { model = env.OXE_AGY_MODEL; source = 'OXE_AGY_MODEL'; }
+    else if (env.OXE_ANTIGRAVITY_MODEL) { model = env.OXE_ANTIGRAVITY_MODEL; source = 'OXE_ANTIGRAVITY_MODEL'; }
+    else if (isPersistedAgy && persisted.model && persisted.model !== HTTP_DEFAULT_MODEL) { model = persisted.model; source = 'runtime.provider.model'; }
+    else { model = null; source = 'padrão do Antigravity CLI (sem --model)'; }
+    if (persisted && persisted.model && !isPersistedAgy && !flag && !env.OXE_AGY_MODEL && !env.OXE_ANTIGRAVITY_MODEL) {
+      notes.push(`runtime.provider.model=${persisted.model} é do adaptador http e não se aplica ao agy -p; para fixar o modelo do antigravity, use --model, OXE_AGY_MODEL ou runtime.provider.name="antigravity"`);
+    }
   } else {
     if (flag) { model = flag; source = '--model'; }
     else if (env.OXE_MODEL) { model = env.OXE_MODEL; source = 'OXE_MODEL'; }
@@ -35,6 +52,9 @@ function resolve(input) {
   return { adapter, model, source, operator_chosen: source !== 'padrão embutido', notes };
 }
 
-function describe(r) { return `${r.model || '(padrão do Claude Code)'} — ${r.source}`; }
+function describe(r) {
+  const defaultLabel = r.adapter === 'antigravity' ? '(padrão do Antigravity CLI)' : '(padrão do Claude Code)';
+  return `${r.model || defaultLabel} — ${r.source}`;
+}
 
 module.exports = { HTTP_DEFAULT_MODEL, resolve, describe };

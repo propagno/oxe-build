@@ -1,4 +1,5 @@
 import os from 'os';
+import { CLI_FAILURE_QUOTA_RE } from '../quota-patterns';
 import fs from 'fs';
 import path from 'path';
 import { spawn, spawnSync } from 'child_process';
@@ -155,7 +156,7 @@ export function buildBridgePrompt(messages: ChatMessage[], tools: ToolSchema[] =
 export interface CliFailure extends Error { kind: 'context' | 'quota' | 'llm' | 'env' | 'timeout'; costUsd: number; subtype: string | null; exitCode: number | null; }
 
 const CONTEXT_RE = /prompt is too long|too many tokens|context (window|length)|input is too long|maximum context|exceeds? the (model'?s? )?(context|token)/i;
-const QUOTA_RE = /usage limit|rate.?limit|limit reached|quota|credit balance|overloaded|resets? (at|in)|try again (later|in)|429/i;
+const QUOTA_RE = CLI_FAILURE_QUOTA_RE;
 
 export function cliFailure(input: { code: number | null; stdout: string; stderr: string; envelope: { result?: unknown; total_cost_usd?: unknown; subtype?: unknown; is_error?: unknown } | null; promptChars?: number }): CliFailure {
   const env = input.envelope;
