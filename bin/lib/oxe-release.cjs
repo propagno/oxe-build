@@ -550,7 +550,9 @@ function evaluateReleaseManifest(manifest, options = {}) {
   if (!manifest.reports.multi_agent_soak.present || !manifest.reports.multi_agent_soak.ok) {
     blockers.push('multi-agent soak report incompleto ou com falhas');
   }
-  const releaseVersion = semver.valid(versions.root) ? versions.root : null;
+  // The manifest carries the version in versions.rootPackage.version; versions.root is the override the tests use.
+  const releaseVersionRaw = versions.root || canonicalVersion;
+  const releaseVersion = semver.valid(releaseVersionRaw) ? releaseVersionRaw : null;
   if (releaseVersion && semver.gte(releaseVersion, '1.9.1')) {
     if (!manifest.reports.multi_agent_real.present || !manifest.reports.multi_agent_real.ok) {
       blockers.push('multi-agent real report incompleto ou com falhas');

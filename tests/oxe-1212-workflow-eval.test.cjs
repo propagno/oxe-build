@@ -45,4 +45,21 @@ describe('OXB-141: workflow eval', () => {
     assert.match(src, /eval report ausente \(oxe-cc eval workflow plan\.md --self-test --write-report\)/);
     assert.equal(typeof rel, 'object');
   });
+
+  it('the version gates read the version the manifest really carries (versions.rootPackage.version)', () => {
+    const rel = require('../bin/lib/oxe-release.cjs');
+    const manifest = JSON.parse(JSON.stringify(rel.buildReleaseManifest(ROOT, { skipWrapperSync: true })));
+    assert.equal(manifest.versions.root, undefined, 'a real manifest has no versions.root');
+    const blockers = (m) => rel.evaluateReleaseManifest(m, { enforceSync: false }).blockers;
+
+    manifest.versions.rootPackage.version = '1.21.2';
+    manifest.reports.workflow_eval = { present: false, ok: false, failures: [] };
+    assert.ok(blockers(manifest).some((b) => /eval report ausente/.test(b)), 'eval gate fires without versions.root');
+
+    manifest.reports.scorecard = { present: false, failures: ['report_missing'], results: [] };
+    assert.ok(blockers(manifest).some((b) => /scorecard/.test(b)), 'scorecard gate fires without versions.root');
+
+    manifest.versions.rootPackage.version = '1.20.0';
+    assert.ok(!blockers(manifest).some((b) => /eval report ausente|scorecard/.test(b)), 'older lines are not gated');
+  });
 });

@@ -4,19 +4,26 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
-## [1.21.2] — 2026-11-09
+## [1.21.2] — 2026-11-11
 
-Esta versão consolida o que o OXESpace 1.5.0 (F1, F2, F4 e F10) cobrou do oxe-build, mais o roteiro de excelência e os backlogs de comparação aprovados pelo TECH LEAD. Cada item tem uma seção em `docs/oxespace-1.5/BACKLOG.md`, com a evidência e o teste que a reproduz (`tests/oxe-1212-*.test.cjs`). Para usar só a trilha recomendada, veja [docs/HAPPY-PATH.md](docs/HAPPY-PATH.md).
+Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-build, mais o roteiro de excelência e os backlogs de comparação aprovados pelo TECH LEAD. Cada item tem uma seção em `docs/oxespace-1.5/BACKLOG.md`, com a evidência e o teste que a reproduz (`tests/oxe-1212-*.test.cjs`). Para usar só a trilha recomendada, veja [docs/HAPPY-PATH.md](docs/HAPPY-PATH.md).
 
 ### Execução que não desperdiça nem esconde a causa
 - **Turnos por tarefa (OXB-185):**
   - a tentativa que termina no teto é `turns_exhausted`, com a contagem, e nunca é chamada de escopo ou de verify;
   - os turnos saem do tamanho da tarefa (`max_turns` › `size` › estimativa; S 15 · M 30 · L 60);
   - `runtime.provider.maxTurns` passa a ser o teto.
-- **Tentativa que gira sem escrever (OXB-186):**
+- **Tentativa que gira sem escrever (OXB-186/196):**
   - evento `ExecutorTurn` por turno (turno n/N, tool calls, arquivos escritos, tamanho do prompt, latência) e `ExecutorSlowTurn` acima de `execute.slow_turn_ms`;
-  - `execute.no_progress_turns` (padrão 8) turnos sem escrita nem `finish_task` encerram a tentativa como `no_progress`;
+  - `execute.no_progress_turns` (padrão 8) turnos sem escrita nem `finish_task` encerram a tentativa como `no_progress`, contabilizando também arquivos em escopo gerados/modificados por `run_command` (OXB-196);
   - o adaptador `claude` não força mais o modelo padrão do provider http (`claude-sonnet-4-6`) como `--model`, que foi a regressão de latência do rc.37/rc.38: sem modelo da tentativa, vale o padrão do Claude Code, como no rc.36.
+- **Cota, retomada e ruído de watcher (OXB-191/192/204):**
+  - falhas de cota/rate-limit (`You've hit your .* limit`, `429`, `RESOURCE_EXHAUSTED`, `overloaded_error`) pausam em `paused_environment` (`quota_exhausted`) antes de gastar tentativa, sem retry cego, sem rollback do código em progresso e sem marcar `deferred` (OXB-191); os padrões embutidos exigem a redação do provedor e não valem para a saída de um verify (um teste "resets the form" ou um erro na linha 429 continua sendo falha de lógica; padrões do projeto vão em `execute.failure_classes`), com backoff automático quando o provedor informa janela curta de reset (OXB-204);
+  - `TaskStarted` + `status: "in_progress"` permitem retomada auditável via `oxe-cc runtime resume` (`inspect | continue | reset-task`) validando JSON/TS na árvore suja (OXB-204);
+  - strings benignas `FileSystemFileChangedEvent` com exit `0` ou após `finish_task` não abortam o fechamento da tarefa como `paused_environment` (OXB-192).
+- **Adaptador Antigravity (`agy`) e commit atômico externo (OXB-197/200):**
+  - `runtime.provider.name: "antigravity"` executa tentativas via `agy -p` / `--model` em paridade com `claude` e `http` (OXB-197);
+  - `oxe-cc runtime commit-task Tn` permite que subagentes externos ou fallback fechem tarefas validando escopo, `sha256` congelado, `stub-check` e `verify`, gravando `TaskCompleted` + `CheckpointCreated` no ledger (OXB-200).
 - **Stub marcado como bloqueado não fecha tarefa (OXB-188):** BLOCKED / "OXB stub" / "until … lands" num comentário vira `scope_insufficient` com o arquivo fora do escopo que falta, e o checkpoint done recusa qualquer marcador de stub adicionado.
 - **Teste relacionado que passa sozinho não recusa o checkpoint (OXB-189):** `vitest related` só com arquivos (sem diretório nem e2e), rerun de um arquivo com `--maxWorkers=1` e, se ainda vermelho, na árvore do projeto (verde ali = `flaky_reds`, o commit fica); `related_set_size` no evento.
 - **`test.each` no proves (OXB-190):** os títulos de `test.each` / `it.each` / `describe.each` (template, parte literal e nomes expandidos de tabela literal) contam como testes declarados.
@@ -39,16 +46,23 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1, F2, F4 e F10) cobrou do oxe-b
   - subida de nível de modelo depois de falha de lógica (`models.tiers`, OXB-131).
 
 ### Plano e spec
-- **`plan build`, `plan check-role` e kinds (OXB-097/098/106):**
+- **`plan build`, `plan check-role` e kinds (OXB-097/098/106/193–195/198/199/201–203/206/207):**
   - `oxe-cc plan build --from <papéis>` grava PLAN.json, PLAN.md e o pack juntos: ondas por arquivo quente, símbolos tirados dos imports dos testes congelados e a fase;
+  - expansão automática de diretórios em `files`/`deleted` e suporte a prefixos no `scope-guard` (OXB-193);
+  - filtragem automática de testes deletados pela tarefa ou por suas dependências fora do `verify` (OXB-194);
+  - regras `coupled_scope` para arquivos de governança/contrato (`mcp-coverage`, `file-size-baseline.json`, `palette-commands.base.json`, `THIRD_PARTY_NOTICES.md`, `e2e/offer-audit.spec.ts` com aviso sobre `MENU_EFFECTS`), injeção automática de `tests/design-lint*.test.ts` no `verify` de tarefas `FE-*` que criam/editam `.tsx`/`.css` em `src/` e gate automático `npm run notices:check` ao tocar `package.json` (OXB-195/202/207);
+  - fechamento de 1 salto no grafo reverso de imports (`--auto-close-imports`), mapas `Record<Union, ...>` em encolhimento de união e varredura automática de suítes legadas (`tests/**`, `e2e/**`, `appMenus`, `threat-model`) em tarefas de remoção (OXB-198/199/206);
+  - validação de `edited_paths`/`deleted_paths` contra `git ls-tree HEAD` com sugestão de arquivo renomeado via `git log --diff-filter=R` (OXB-201);
+  - resolução de aliases `id -> rid` em `depends_on` e ordenação automática de tarefas `BE` de IPC antes de consumidores `FE-*` em `--pair-as-deps` (OXB-203);
   - `plan check-role` valida um papel antes de ele ir para o TL;
   - kinds `add|remove|move|test-only|config-only`.
 - **`plan skeleton` (OXB-154):** stubs de compilação a partir das assinaturas do pack, para Kotlin, TS/JS, Python e Java.
 - **Plano velho (OXB-126):** `plan staleness` e `plan refresh` detectam um plano escrito contra código que mudou.
-- **Spec (OXB-123/099/143):**
+- **Spec e emendas auditadas de testes congelados (OXB-123/099/143/205):**
   - `spec probe` traz as bordas e as proibições de cada critério;
   - `spec freeze --from <PR|sha>` importa os testes congelados com proves, hash e origem;
-  - `spec stress` estressa a spec com métodos fixos em leitores independentes.
+  - `spec stress` estressa a spec com métodos fixos em leitores independentes;
+  - `plan amend-test <path> --reason "<CR-id>"` atualiza o `sha256` em `PLAN.json` sem perder tarefas `done` e grava `FrozenTestAmended` (OXB-205).
 - **Decisões, pesquisa e lints (OXB-112/182/134/142/111):**
   - decisões são ids de primeira classe, com as alternativas recusadas e quem as recusou;
   - a pesquisa separa a afirmação com fonte da suposição (`assumption_without_risk`);
@@ -56,7 +70,7 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1, F2, F4 e F10) cobrou do oxe-b
   - `plan lint --review`.
 
 ### Verify, close e evidência
-- **Na tarefa:** anti-stub (OXB-108) e rigor do teste congelado (OXB-109).
+- **Na tarefa e na promoção:** anti-stub (OXB-108), rigor do teste congelado incluindo regex suspeitas sem barra invertida como `/d+/` e sockets `net.connect` pausados sem `resume()`/`'data'` no Node 22+ (OXB-109/205/208), checagem de `check-file-size.mjs` + `notices:check` na integração/promoção (OXB-202) e bloqueio de diretórios `tests/acceptance/parked-*` rastreados pelo Git no `promote` e `pre-push` (OXB-206).
 - **Defeitos, vereditos e achados:**
   - registro de defeitos abertos (OXB-110);
   - veredito e sign-off presos ao commit e à versão do critério (OXB-124);
@@ -93,6 +107,7 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1, F2, F4 e F10) cobrou do oxe-b
   - `docs check`: os documentos fechados conferidos contra o código atual (OXB-183);
   - `program snapshot` / `program regress`: regressão sobre o `.oxe/` de programas reais, com os snapshots fora do repositório (OXB-101).
 - **Canais:** `release channel` com `next` e `stable`, este último só depois de uma fase real fechada; o comando nunca publica (OXB-100).
+- **Gate de release:** as exigências por versão do `doctor --release` (relatório de runtime real, scorecard de 2 projetos reais, eval de workflow) liam um campo que o manifesto não grava e nunca rodavam; agora leem `versions.rootPackage.version`.
 - **CLI:**
   - `doctor --migrate-config` (OXB-100);
   - `--json-errors`, um envelope tipado com código de saída fixo por tipo (OXB-133, `docs/cli-errors.md`);

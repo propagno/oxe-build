@@ -523,6 +523,12 @@ oxe-cc azure operations list
 | `oxe-cc doctor --project` | compara a máquina com `engines`, `.nvmrc` e o lockfile do projeto |
 | `oxe-cc plan lint [--dry-verify] [--resume] [--only T5,T6] [--changed] [--no-preflight]` | valida o PLAN.json, os gates, o pack, o mesmo preflight do execute (autoavaliação, confiança, ambiente) e se cada verify está vermelho pelo motivo certo; "ok" quer dizer que o execute não recusa. O dry-verify mostra uma linha por comando no stderr, e `--resume` retoma uma rodada interrompida sem rodar de novo o que já passou na mesma árvore |
 | `oxe-cc plan done Tn` | marca uma tarefa concluída (com o checkpoint) no PLAN.json |
+| `oxe-cc plan build --from <papéis> [--auto-close-imports] [--fix-stale-paths] [--pair-as-deps]` | monta PLAN.json, PLAN.md e o pack a partir dos planos de papel; fecha o escopo com quem importa um arquivo removido, corrige um caminho que foi movido e ordena o contrato antes de quem o consome |
+| `oxe-cc plan amend-test <arquivo> --reason "<CR>" [--by <papel>]` | emenda um teste congelado com a CR que autoriza: confere o rigor, recalcula só o `sha256` dele e mantém as tarefas já concluídas |
+| `oxe-cc runtime resume [continue\|reset-task]` | retoma uma tarefa interrompida com a árvore suja: sem argumento só inspeciona (arquivos no escopo, fora dele e sintaxe JSON/TS); `continue` mantém o trabalho, `reset-task` descarta só os arquivos da tarefa |
+| `oxe-cc runtime commit-task Tn [--by <agente>] [--skip-verify-if-fresh] [--strict-scope]` | fecha uma tarefa feita fora do executor (subagente, fallback manual) pelo mesmo crivo: escopo, hash dos testes congelados, anti-stub, verify, commit isolado e eventos no ledger |
+| `oxe-cc runtime start-task Tn [--by <agente>]` | registra que alguém de fora do executor começou a tarefa (`TaskStarted`, `in_progress`), para o `resume` saber de quem é a árvore suja |
+| `oxe-cc runtime pre-push` | recusa o push quando há um diretório `tests/acceptance/parked-*` rastreado pelo Git; é o que o hook de `oxe-cc guards install` chama |
 | `oxe-cc runtime program init\|start\|close\|status` | programa por fases a partir do ROADMAP |
 | `oxe-cc runtime feedback\|signoff\|dossier` | change requests, sign-off de UAT e dossiê vivo da fase |
 | `oxe-cc runtime execute --budget-turns N --checkpoint-commits` | executa com teto de turnos e checkpoint por tarefa |

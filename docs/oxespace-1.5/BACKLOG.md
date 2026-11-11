@@ -1932,3 +1932,125 @@ Itens P0 e P1 revisados pelo TECH LEAD. O desenho é próprio do oxe-build.
   - quando a tabela é um array literal de strings, números ou booleanos, cada nome expandido (`x (en)`, `x (pt-BR)`).
 - **O proves:** casa por nome exato ou por trecho de qualquer um desses nomes.
 - **Teste:** `tests/oxe-1212-each-titles.test.cjs`. O "feito quando" é `test.each([['en'],['pt-BR']])('x (%s)')` aceitar "x" e "x (en)" no `plan lint`, e um proves desconhecido continuar falhando.
+
+## OXB-191: falha de cota não agenda retry, não gasta tentativa, não faz rollback e não marca `deferred`
+
+- **Status:** resolvido (1.21.2). P0 relatado na F4 (`T26` / `FE-CR-F4-D`, run `oxe-run-mw855cc1-yap7sx`).
+- **O que aconteceu:** na tentativa 2, com 6 arquivos já editados e testes unitários passando, o `claude -p` devolveu `exit 1 · You've hit your weekly limit · resets Nov 14, 10am`. O scheduler agendou retry imediato, consumiu a tentativa 3/3 em 2 s, acionou o rollback do `OXB-138` e marcou a tarefa como `deferred`.
+- **Correção:** padrões de cota e sobrecarga (`You've hit your .* limit`, `resets .* at`, `rate_limit_error`, `429`, `insufficient_quota`, `overloaded_error`, `RESOURCE_EXHAUSTED`) são classificados como `quota_exhausted` (`environment`) antes de incrementar `attempt` ou agendar `RetryScheduled`. O scheduler pausa imediatamente em `paused_environment` (`reason: quota_exhausted`), sem consumir tentativa, sem acionar `TaskDeferred` e preservando o código em escopo na árvore.
+- **Teste:** `tests/oxe-1212-quota-pause.test.cjs`.
+
+## OXB-192: falso positivo de `paused_environment` por `FileSystemFileChangedEvent` após `finish_task`
+
+- **Status:** resolvido (1.21.2). P0 relatado na F2 (`T16` / `R5`, run `oxe-run-mw83vtdy-8uzesq`).
+- **O que aconteceu:** depois de 93 deleções/edições, aceite verde e `finish_task` invocado no turno 32, uma linha benigna `FileSystemFileChangedEvent` do watcher do sistema operacional apareceu no output e abortou o fechamento como `paused_environment`, deixando a árvore suja sem commitar o checkpoint.
+- **Correção:** `FileSystemFileChangedEvent` não dispara erro de ambiente quando o comando/turno sai com código `0` ou quando `finish_task` já foi invocado; turnos com `finish_task` priorizam o `verify` + checkpoint da tarefa.
+- **Teste:** `tests/oxe-1212-watcher-noise-finish.test.cjs`.
+
+## OXB-193: expansão e autorização de diretórios em `files` e `deleted`
+
+- **Status:** resolvido (1.21.2). Relatado na F2 (`R5`/`T16`, `R7`/`T17`, `R14`/`T22`).
+- **O que aconteceu:** diretórios declarados em `deleted` (`electron/main/services/memory`, `src/components/Teams`) iam literais para `Tn.files`, e o `scope-guard` rejeitava `electron/main/services/memory/index.ts` com `ScopeViolation`.
+- **Correção:** `oxe-plan-build.cjs` expande diretórios existentes em `git ls-tree -r --name-only HEAD` (e prefixos `/` ou `/**`) em `Tn.files` e `removed_paths`, mantendo também o prefixo autorizado; o `scope-guard` e o checkpoint autorizam qualquer caminho sob `D/...`, e o `plan lint` avisa se sobrar diretório não expandido.
+- **Teste:** `tests/oxe-1212-scope-directory.test.cjs`.
+
+## OXB-194: filtragem automática de testes deletados fora do `verify`
+
+- **Status:** resolvido (1.21.2). Relatado na F2 (`build-f2.sh`, flags manuais `--drop-verify`).
+- **Correção:** `oxe-plan-build.cjs` remove dos comandos `verify` de `Tn` qualquer arquivo listado em `deleted`/`removed_paths` da própria `Tn` ou de qualquer dependência transitiva `Tm ≺ Tn`, e o `plan lint` acusa erro caso um `verify` ainda referencie teste removido.
+- **Teste:** `tests/oxe-1212-plan-build-deleted-verify.test.cjs`.
+
+## OXB-195: auto-inclusão de arquivos acoplados de contrato e governança (`coupled_scope`)
+
+- **Status:** resolvido (1.21.2). Relatado nas fases F2/F4 (`mcp-coverage`, `file-size-baseline.json`, `palette-commands.base.json`).
+- **Correção:** suporte a regras `coupled_scope` em `.oxe/config.json` (além de regras embutidas para `mcp-internal/**` → `shared/mcp-coverage.ts` + `docs/validation/mcp-coverage-1.4.md`, interseção de `deleted` com `scripts/file-size-baseline.json`, e menus/palette → `tests/fixtures/palette-commands.base.json`), injetadas pelo `plan build` e sugeridas pelo `plan lint` / `plan check-role`.
+- **Teste:** `tests/oxe-1212-coupled-scope.test.cjs`.
+
+## OXB-196: `no_progress_turns` contabiliza arquivos em escopo alterados por `run_command`
+
+- **Status:** resolvido (1.21.2). Resolve o limite registrado no `OXB-186` para F10 (`android:generate`, Paparazzi goldens, scripts de migração).
+- **Correção:** o executor compara a assinatura (`sha`/estado no disco) dos arquivos em `Tn.files` antes e depois de turnos com `run_command`; qualquer arquivo em escopo modificado entra em `filesWritten` do `ExecutorTurn` e zera `no_progress_turns`.
+- **Teste:** `tests/oxe-1212-turn-heartbeat.test.cjs`.
+
+## OXB-197: adaptador de execução `antigravity` (`agy`) no `oxe-cc`
+
+- **Status:** resolvido (1.21.2). Implementado em `bin/lib/oxe-provider-antigravity.cjs` e `packages/runtime/src/executor/adapters/antigravity-cli.ts`.
+- **O que entrega:** suporte a `runtime.provider.name: "antigravity"` executando `agy -p` / `--model`, com resolução explícita em `oxe-model-resolve.cjs`, parsing de eventos JSONL / chamadas de ferramentas e batimento `ExecutorTurn` em paridade com `claude` e `http`.
+- **Teste:** `tests/oxe-1212-antigravity-adapter.test.cjs`.
+
+## OXB-198: fechamento de escopo em encolhimento de união de tipos (`Record<Union, ...>`)
+
+- **Status:** resolvido (1.21.2). Relatado na F2 (`T22`/`R14` e `T24`/`R15`, encolhimento de `AppView` em `keybindings.ts` quebrando `VIEW_NAMES: Record<AppView, string>` em `viewSwitch.ts` e `ShortcutGuide.tsx`).
+- **Correção:** quando uma tarefa de remoção altera ou encolhe um tipo união exportado, `oxe-plan-build.cjs` localiza consumidores tipados com `Record<Union, ...>` / mapas exaustivos e os inclui automaticamente no escopo da tarefa.
+- **Teste:** `tests/oxe-1212-union-shrink-scope.test.cjs`.
+
+## OXB-199: fechamento de 1 salto no grafo reverso de imports (`deleted` e símbolos removidos)
+
+- **Status:** resolvido (1.21.2). Relatado nas fases F2, F4 e F10 para eliminar `build_phase.py --add-files`.
+- **Correção:** para cada caminho `P` em `deleted` de `Tn` (não removido antes), `oxe-plan-check-role` e `oxe-plan-build.cjs` buscam nos diretórios de produção (`src/`, `electron/`, `shared/`, `resources/`) importadores ainda fora de `Tn.files` e `Tn.deleted`: o `check-role` bloqueia listando os importadores órfãos e `--auto-close-imports` no `plan build` os anexa a `Tn.files`.
+- **Teste:** `tests/oxe-1212-reverse-import-closure.test.cjs`.
+
+## OXB-200: comando atômico `oxe-cc runtime commit-task Tn` para subagentes externos e fallback
+
+- **Status:** resolvido (1.21.2).
+- **O que entrega:** `oxe-cc runtime commit-task <Tn> [--by <agent|role>] [--skip-verify-if-fresh]` valida que só arquivos de `Tn.files` entram no commit, confere o `sha256` das suítes congeladas (`acceptance_tests`), roda o `oxe-stub-check` nos hunks adicionados, executa (ou reaproveita log fresco de) `Tn.verify.commands`, cria o commit isolado com trailer `OXE-Task: <Phase>/<Tn>`, marca `Tn` como `done` em `PLAN.json` e grava `TaskCompleted` + `CheckpointCreated` em `OXE-EVENTS.ndjson`.
+- **Teste:** `tests/oxe-1212-commit-task-cli.test.cjs`.
+
+## OXB-201: validação de `edited_paths` e `deleted_paths` contra `git ls-tree HEAD` com detecção de renomeação
+
+- **Status:** resolvido (1.21.2). Relatado na F5 (`preview-automation.ts` movido na `R0c`).
+- **Correção:** o `plan lint` e o `plan build` conferem cada entrada de `edited_paths` e `deleted_paths` (exceto caminhos criados por tarefas anteriores da fase em `created_paths`) contra `git ls-tree HEAD`; quando o caminho não existe e `git log --diff-filter=R` aponta um único destino com o mesmo `basename`, o lint informa o caminho novo (e `--fix-stale-paths` corrige no `plan build`).
+- **Teste:** `tests/oxe-1212-plan-lint-stale-edited-path.test.cjs`.
+
+## OXB-202: `notices:check` e `check-file-size.mjs` automáticos em mudanças de `package.json` e na promoção
+
+- **Status:** resolvido (1.21.2). Relatado na F2 PR `#754` e no merge da Wave 1 (`F2 + F3`). Implementado em `bin/lib/oxe-plan-build.cjs` e `bin/lib/oxe-integration-checks.cjs`.
+- **Correção:** tarefas que editam `package.json` ou `package-lock.json` recebem automaticamente o gate `npm run notices:check` e a sugestão/escopo acoplado de `THIRD_PARTY_NOTICES.md` quando presente; `runtime integrate` e `runtime promote` rodam `node scripts/check-file-size.mjs` e `npm run notices:check` antes da promoção/push.
+- **Teste:** `tests/oxe-1212-gates-notices-and-filesize.test.cjs`.
+
+## OXB-203: aliases `id -> rid` em `depends_on` e ordenação de `BE` de IPC antes de `FE-*` em `--pair-as-deps`
+
+- **Status:** resolvido (1.21.2). Relatado nas fases F6 e F7 (`FE-AP1`/`A24` e `F7-IPC`).
+- **Correção:** `oxe-plan-build.cjs` indexa tanto `task.id` quanto `task.rid` na tabela de aliases de `depends_on` e, com `--pair-as-deps`, ordena tarefas `BE` que editam contratos IPC (`shared/types/ipc.ts`, `shared/types/ipc/**`, `src/types/window.d.ts`) antes de tarefas `FE-*` consumidoras de `window.oxe` / `mock-ipc.ts`.
+- **Teste:** `tests/oxe-1212-plan-build-id-rid-and-ipc-order.test.cjs`.
+
+## OXB-204: retomada segura de tarefa interrompida (`runtime resume`) e backoff automático em `429`
+
+- **Status:** resolvido (1.21.2). Relatado na Wave 2 (`F5`/`F6`/`F7`) após quedas `wsasend` e `RESOURCE_EXHAUSTED (429)`. Implementado em `bin/lib/oxe-resume.cjs`, `scheduler.ts` e `llm-task-executor.ts`.
+- **Correção:**
+  - ao iniciar uma tarefa, o runtime grava `TaskStarted` (com `Tn`, executor e `baseSha`) em `OXE-EVENTS.ndjson` e marca `Tn.status = "in_progress"` em `PLAN.json`;
+  - `oxe-cc runtime resume [--action inspect|continue|reset-task]` detecta `in_progress` com árvore suja, valida a sintaxe JSON/TS dos arquivos tocados, separa o diff dentro vs. fora de `Tn.files` e permite manter (`continue`) ou descartar apenas os arquivos de `Tn` (`reset-task`);
+  - erros transitórios `429` com janela curta de reset aplicam backoff/espera respeitando `Retry-After` / horário de reset antes de pausar o executor.
+- **Teste:** `tests/oxe-1212-runtime-resume-dirty-task.test.cjs`.
+
+## OXB-205: lint de regex suspeitas em testes congelados e comando `oxe-cc plan amend-test`
+
+- **Status:** resolvido (1.21.2). Relatado na F6 (`u61-header-as-task.test.tsx:126`, `.replace(/d+/g, '')`).
+- **Correção:**
+  - `oxe-test-rigor.cjs` passa a acusar classes de regex sem barra invertida (`/d+/`, `/s+/`, `/w+/`) em chamadas `.replace(`, `.match(`, `.split(` e `.test(` nas suítes `tests/acceptance/**`;
+  - `oxe-cc plan amend-test <path> --reason "<CR-id>" [--by <role>]` valida o rigor do arquivo emendado, recalcula apenas o `sha256` correspondente em `.oxe/PLAN.json` preservando o `status: "done"` das tarefas já concluídas e registra `FrozenTestAmended` em `OXE-EVENTS.ndjson`.
+- **Teste:** `tests/oxe-1212-plan-amend-frozen-test.test.cjs`.
+
+## OXB-206: varredura automática de suítes legadas em remoções e bloqueio de `tests/acceptance/parked-*`
+
+- **Status:** resolvido (1.21.2). Relatado na F2 PR `#754` (suítes legadas `tests/**` e `e2e/**`, `appMenus.ts`, `threat-model-*.md` e diretório `tests/acceptance/parked-f3/`).
+- **Correção:**
+  - em tarefas de remoção (`deleted` em `src/`/`electron/`/`shared/`, `kind: "remove"` ou canais/modos/símbolos removidos), `oxe-plan-build.cjs` (`sweepRemovalImpacts`) varre `tests/**` (excluindo `tests/acceptance/**` congelados), `e2e/**` (incluindo `vi.mock`/`jest.mock`), `**/appMenus.{ts,tsx,js,jsx}` e `docs/security/threat-model-*.md`, anexando os arquivos impactados a `edited_paths`, `files`, `pack` (`swept_paths`), `verify` e `phase_gates` (`legacy-tests`, `legacy-e2e`);
+  - diretórios `tests/acceptance/parked-*` rastreados pelo Git são bloqueados em `runtime promote` (`PromotionPipeline`), `runtime integrate`, `oxe-cc runtime pre-push`, no hook `pre-push` instalado por `oxe-cc guards install` e no `oxe-guard.cjs` (`git push`).
+- **Teste:** `tests/oxe-1212-removal-legacy-test-sweep.test.cjs`.
+
+## OXB-207: acoplamento automático de `e2e/offer-audit.spec.ts` e injeção de `tests/design-lint*.test.ts` em tarefas `FE-*`
+
+- **Status:** resolvido (1.21.2). Relatado nas fases F3 (`PR #753`), F8 e F11 (`MENU_EFFECTS` em `e2e/offer-audit.spec.ts` e violações tardias em `tests/design-lint.test.ts`).
+- **Correção:**
+  - em `coupled_scope` (`oxe-plan-build.cjs` + `oxe-plan-json.cjs`): tarefas que editam `src/components/Navigation/appMenus.ts` ou `src/components/Settings/SettingsModal.tsx` incluem automaticamente `e2e/offer-audit.spec.ts` em `files` e `pack.exact_paths` quando existente no repositório, emitindo aviso explícito sobre `MENU_EFFECTS` no `plan build`, `plan check-role` e `plan lint`;
+  - em `oxe-plan-build.cjs` (`injectFrontendDesignLintVerify`): toda tarefa `FE-*` / `role: frontend` que cria ou edita `.tsx` ou `.css` sob `src/` recebe automaticamente `tests/design-lint.test.ts` e `tests/design-lint-target-size.test.ts` (quando presentes no repositório) em `Tn.verify.commands` e `pack.expected_checks`.
+- **Teste:** `tests/oxe-1212-coupled-offer-audit-and-design-lint.test.cjs`.
+
+## OXB-208: lint estático de sockets `net.connect` em modo pausado no Node 22+ (`oxe-test-rigor.cjs`)
+
+- **Status:** resolvido (1.21.2). Relatado na F11 (`tests/acceptance/f11/a68-hosts-proxy.native.test.ts:283-288`, onde `connect(...)` com `.write(...)` e `.on('close')` sem `.resume()` nem listener `'data'` não emite `'end'`/`'close'` no Node 22+ com bytes pendentes em `readableState.buffer`).
+- **Correção:**
+  - `oxe-test-rigor.cjs` (`pausedSocketFindings` + `pausedSocketMessages`) analisa blocos `connect(` / `net.connect` / `tls.connect` / `createConnection` em `tests/acceptance/**` (com máscara de comentários e strings, respeitando escopo léxico de cada teste e ignorando `.destroy()` dentro de timeouts) e reprova quando há `.write(` seguido de `.on('close'|'end')` / `.once('close'|'end')` sem `.resume()`, `.pipe()`, `pipeline(...)`, `for await` ou `.on/.once('data'|'readable')` no mesmo escopo;
+  - integrado em `runtimePlanLint`, `runtimePlanAmendTest`, `oxe-plan-build.cjs` (`build` e `checkRole`) e `oxe-spec-freeze.cjs`.
+- **Teste:** `tests/oxe-1212-test-rigor-paused-socket-close.test.cjs`.

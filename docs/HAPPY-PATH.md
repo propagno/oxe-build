@@ -22,7 +22,9 @@ A execução nunca para calada. O `oxe-cc status` mostra no topo o que precisa d
 | Sinal | O que é | O que fazer |
 |---|---|---|
 | `paused_environment` | foi a máquina, não o código (ferramenta, rede, memória) | corrija e rode `oxe-cc runtime execute` de novo; nenhuma tentativa foi gasta |
-| `paused_quota` | foi a cota do provedor | espere o reset e rode de novo |
+| `paused_quota` | foi a cota do provedor; uma janela curta (até 5 min, com o tempo informado pelo provedor) é esperada sozinha, e só o resto pausa | espere o reset e rode de novo; nenhuma tentativa foi gasta e o código em progresso fica na árvore |
+| tarefa `in_progress` com a árvore suja | o executor caiu no meio da tarefa (rede, cota, máquina) | `oxe-cc runtime resume` mostra o que ficou; depois `runtime resume continue` ou `runtime resume reset-task` |
+| tarefa feita fora do executor | um subagente ou você implementou a tarefa à mão | `oxe-cc runtime commit-task Tn --by <quem>` fecha pelo mesmo crivo (escopo, testes congelados, anti-stub, verify) |
 | `turns_exhausted` | a tentativa acabou sem turnos | o retry já sobe o nível de turnos; para um teto fixo, use `execute.turns` ou `max_turns` na tarefa |
 | `question_waiting:Q-n` | o executor perguntou e os artefatos não respondem (só com `execute.ask_orchestrator`) | `oxe-cc runtime questions answer Q-n --answer "…"` |
 | tarefa adiada (`AD-…`) | a tarefa esgotou as tentativas; as independentes seguiram | `oxe-cc runtime deferred`, corrija e depois `runtime deferred retry` |
@@ -43,6 +45,10 @@ Está ligado por padrão:
 
 Os opt-ins ficam em `.oxe/config.json`:
 
+- `runtime.provider.name: "antigravity"` (ou `--adapter antigravity`): executa as tentativas com `agy -p` em vez de `claude -p`;
+- `execute.failure_classes: { "quota": [...], "environment": [...] }`: padrões do projeto para o que pausa a run sem gastar tentativa. A saída do verify só é lida como cota por um padrão declarado aqui, porque um teste chamado "resets the form" ou um erro na linha 429 é lógica, não o provedor;
+- `coupled_scope`: arquivos que entram no escopo junto com outros (`[{ "when": [...], "include": [...], "note": "…" }]`); `builtin_coupled_scope: false` desliga as regras embutidas;
+- `integration_checks`: comandos rodados no `runtime sync` e antes do push do `promote` (`false` desliga; uma lista substitui os detectados);
 - `execute.ask_orchestrator`: canal de pergunta;
 - `execute.dispatch: "stream"`: dependentes começam sem esperar a onda;
 - `execute.repair`: estratégia de reparo;
