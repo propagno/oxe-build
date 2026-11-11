@@ -4,10 +4,19 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.Scheduler = void 0;
+exports.scopesOverlap = scopesOverlap;
+exports.classifyFailureOutput = classifyFailureOutput;
+exports.quotaResumeAt = quotaResumeAt;
+exports.parseRateLimitResetMs = parseRateLimitResetMs;
 exports.tailLines = tailLines;
+exports.segmentTestFiles = segmentTestFiles;
+exports.splitVerifySegments = splitVerifySegments;
+exports.withAttemptChanges = withAttemptChanges;
+exports.buildVerifyLog = buildVerifyLog;
 exports.describeVerifyFailure = describeVerifyFailure;
 exports.verifyFailureSignature = verifyFailureSignature;
 const path_1 = __importDefault(require("path"));
+const quota_patterns_1 = require("../executor/quota-patterns");
 const fs_1 = __importDefault(require("fs"));
 const bus_1 = require("../events/bus");
 const policy_engine_1 = require("../policy/policy-engine");
@@ -16,6 +25,30 @@ const run_journal_1 = require("./run-journal");
 const decision_memo_1 = require("../decision/decision-memo");
 const capability_adapter_1 = require("../plugins/capability-adapter");
 const verification_compiler_1 = require("../verification/verification-compiler");
+/** Two scopes may touch the same file: equal paths, one a directory prefix of the other, or a glob in either. */
+function scopesOverlap(a, b) {
+    if (!a.length || !b.length)
+        return true;
+    const norm = (p) => String(p).replace(/\\/g, '/').replace(/\/+$/, '');
+    const base = (p) => norm(p).split(/[*?[{]/)[0].replace(/\/[^/]*$/, (m) => (/[*?[{]/.test(norm(p)) ? '' : m));
+    for (const x of a) {
+        for (const y of b) {
+            const nx = norm(x);
+            const ny = norm(y);
+            if (nx === ny)
+                return true;
+            const gx = /[*?[{]/.test(nx);
+            const gy = /[*?[{]/.test(ny);
+            const px = gx ? base(nx) : nx;
+            const py = gy ? base(ny) : ny;
+            if (!px || !py)
+                return true;
+            if (px === py || px.startsWith(`${py}/`) || py.startsWith(`${px}/`))
+                return true;
+        }
+    }
+    return false;
+}
 class Scheduler {
     constructor() {
         this.cancelled = false;
@@ -24,9 +57,16 @@ class Scheduler {
         this.ctx = null;
         this.runStartMs = 0;
         this.lastProgressMs = 0;
+        /** OXB-050: integrations into the program checkout happen one at a time (copy, verify, checkpoint). */
+        this.integrationChain = Promise.resolve();
     }
     recordProgress() {
         this.lastProgressMs = Date.now();
+    }
+    withIntegrationLock(fn) {
+        const run = this.integrationChain.then(fn, fn);
+        this.integrationChain = run.catch(() => undefined);
+        return run;
     }
     async executeRollback(plan, ctx) {
         try {
@@ -97,7 +137,11 @@ class Scheduler {
         });
         const maxRunMs = ctx.options?.maxRunDurationMs ?? 30 * 60000;
         const staleMs = ctx.options?.staleProgressMs ?? 5 * 60000;
-        for (const wave of graph.waves) {
+        // OXB-129: stream dispatch — no wave barrier.
+        if (ctx.options?.dispatch === 'stream') {
+            await this.runStream(graph, ctx, status, completed, failed, blocked, maxRunMs);
+        }
+        for (const wave of ctx.options?.dispatch === 'stream' ? [] : graph.waves) {
             if (this.cancelled)
                 break;
             // Global run timeout
@@ -123,13 +167,32 @@ class Scheduler {
                 });
                 return { run_id: ctx.runId, status: 'paused', completed, failed, blocked, pending_gates: this.journal.pending_gates.slice() };
             }
-            const waveFailed = await this.runWave(wave.node_ids, graph, ctx, status, completed, failed, blocked);
+            // OXB-138: a task depending (transitively) on a failed/deferred or blocked one does not run.
+            const deferMode = ctx.options?.deferFailed === true;
+            let waveIds = wave.node_ids;
+            if (deferMode) {
+                waveIds = [];
+                for (const id of wave.node_ids) {
+                    const n = graph.nodes.get(id);
+                    const bad = (n?.depends_on ?? []).find((d) => status.get(d) === 'failed' || status.get(d) === 'blocked');
+                    if (bad && status.get(id) === 'pending')
+                        this.blockNode(id, ctx, status, blocked, 'blocked_by_deferred', bad);
+                    else
+                        waveIds.push(id);
+                }
+            }
+            const failedBefore = failed.length;
+            const waveFailed = await this.runWave(waveIds, graph, ctx, status, completed, failed, blocked);
+            if (deferMode) {
+                for (const id of failed.slice(failedBefore))
+                    this.emit(ctx, { type: 'WorkItemDeferred', work_item_id: id, payload: { task: id } });
+            }
             // Sync journal after each wave
             this.journal.completed_work_items = completed.slice();
             this.journal.failed_work_items = failed.slice();
             this.journal.blocked_work_items = blocked.slice();
             (0, run_journal_1.saveJournal)(ctx.projectRoot, ctx.runId, this.journal);
-            if (waveFailed) {
+            if (waveFailed && !deferMode) {
                 // Execute rollback plan if one was created for this run
                 const memos = (0, decision_memo_1.listMemos)(ctx.projectRoot, ctx.runId);
                 for (const memo of memos) {
@@ -155,11 +218,13 @@ class Scheduler {
         }
         const finalStatus = this.cancelled
             ? 'cancelled'
-            : failed.length > 0
-                ? 'failed'
-                : blocked.length > 0
-                    ? 'blocked'
-                    : 'completed';
+            : this.paused // OXB-120: paused inside the last wave (environment / quota)
+                ? 'paused'
+                : failed.length > 0
+                    ? 'failed'
+                    : blocked.length > 0
+                        ? 'blocked'
+                        : 'completed';
         this.emit(ctx, {
             type: 'RunCompleted',
             payload: { run_id: ctx.runId, status: finalStatus },
@@ -346,7 +411,10 @@ class Scheduler {
         }
         for (const id of eligible) {
             const node = graph.nodes.get(id);
-            if (node.mutation_scope.length === 0 && nodeMayMutate(node)) {
+            // OXB-068: a verify_only / external-dependency node has an enforced empty scope (checked by the caller), not a
+            // "may write files" warning.
+            const externalNode = Boolean(node.policy.verify_only) || (node.policy.external_dependency?.length ?? 0) > 0;
+            if (node.mutation_scope.length === 0 && nodeMayMutate(node) && !externalNode) {
                 this.emit(ctx, {
                     type: 'PolicyWarning',
                     work_item_id: id,
@@ -362,15 +430,133 @@ class Scheduler {
         if (readOnly.length > 0) {
             await Promise.all(readOnly.map((id) => this.runNode(id, graph, ctx, status, completed, failed, blocked)));
         }
+        if (ctx.parallel && mutations.length > 1) {
+            await this.runMutationsInParallel(mutations, graph, ctx, status, completed, failed, blocked);
+            return failed.length > 0;
+        }
         for (const id of mutations) {
-            if (this.cancelled)
+            if (this.cancelled || this.paused)
                 break;
             await this.runNode(id, graph, ctx, status, completed, failed, blocked);
         }
         return failed.length > 0;
     }
-    async runNode(nodeId, graph, ctx, status, completed, failed, blocked) {
+    /**
+     * OXB-129: dispatch by dependency, not by wave. A node is ready when every dependency is completed; one with a failed
+     * or blocked dependency is blocked (only its dependents — the rest goes on). Ready nodes start in plan order, up to
+     * `parallel.maxParallel` (1 without --parallel-mutating), never two with overlapping scopes (a hot file serializes),
+     * and never past the free-memory floor. Every decision is a `DispatchState` event (ready / waiting with the reason).
+     */
+    async runStream(graph, ctx, status, completed, failed, blocked, maxRunMs) {
+        const order = graph.waves.flatMap((w) => w.node_ids);
+        const parallel = ctx.parallel;
+        const max = parallel ? Math.max(1, Math.floor(parallel.maxParallel || 1)) : 1;
+        const running = new Map();
+        let lastSignature = '';
+        while (!this.cancelled && !this.paused) {
+            if (Date.now() - this.runStartMs > maxRunMs)
+                break;
+            const waiting = [];
+            const ready = [];
+            for (const id of order) {
+                if (status.get(id) !== 'pending' || running.has(id))
+                    continue;
+                const node = graph.nodes.get(id);
+                const bad = node.depends_on.find((d) => status.get(d) === 'failed' || status.get(d) === 'blocked');
+                if (bad) {
+                    this.blockNode(id, ctx, status, blocked, 'dependency_not_met', bad);
+                    continue;
+                }
+                const open = node.depends_on.filter((d) => status.get(d) !== 'completed');
+                if (open.length) {
+                    waiting.push({ id, reason: `depende de ${open.join(', ')}` });
+                    continue;
+                }
+                ready.push(id);
+            }
+            const started = [];
+            for (const id of ready) {
+                if (running.size >= max) {
+                    waiting.push({ id, reason: `limite de paralelismo (${max})` });
+                    continue;
+                }
+                const node = graph.nodes.get(id);
+                const hot = [...running.entries()].find(([, r]) => scopesOverlap(r.scope, node.mutation_scope) || (node.mutation_scope.length === 0 && nodeMayMutate(node)));
+                if (hot) {
+                    waiting.push({ id, reason: `arquivo quente: escopo em comum com ${hot[0]}` });
+                    continue;
+                }
+                if (running.size > 0 && parallel?.minFreeMb && parallel.freeMb && parallel.freeMb() < parallel.minFreeMb) {
+                    waiting.push({ id, reason: `memória livre abaixo de ${parallel.minFreeMb} MB` });
+                    continue;
+                }
+                const useParallel = Boolean(parallel) && max > 1;
+                const done = this.runNode(id, graph, ctx, status, completed, failed, blocked, useParallel ? { parallel: true } : {})
+                    .catch(() => undefined)
+                    .finally(() => { running.delete(id); });
+                running.set(id, { scope: node.mutation_scope, done });
+                started.push(id);
+            }
+            const signature = JSON.stringify([started, waiting]);
+            if (signature !== lastSignature && (started.length || waiting.length)) {
+                lastSignature = signature;
+                this.emit(ctx, { type: 'DispatchState', payload: { mode: 'stream', started, running: [...running.keys()], waiting } });
+                if (this.journal)
+                    this.journal.dispatch = { running: [...running.keys()], waiting };
+            }
+            if (running.size === 0)
+                break;
+            await Promise.race([...running.values()].map((r) => r.done));
+            if (this.journal) {
+                this.journal.completed_work_items = completed.slice();
+                this.journal.failed_work_items = failed.slice();
+                this.journal.blocked_work_items = blocked.slice();
+                (0, run_journal_1.saveJournal)(ctx.projectRoot, ctx.runId, this.journal);
+            }
+        }
+        if (running.size)
+            await Promise.all([...running.values()].map((r) => r.done));
+    }
+    /** OXB-050: a pool over the wave's mutating nodes — disjoint scopes only, `maxParallel`, memory per agent. */
+    async runMutationsInParallel(mutations, graph, ctx, status, completed, failed, blocked) {
+        const parallel = ctx.parallel;
+        const max = Math.max(1, Math.floor(parallel.maxParallel || 1));
+        const pending = [...mutations];
+        const running = new Map();
+        let memoryWarned = false;
+        while ((pending.length > 0 || running.size > 0) && !this.cancelled) {
+            for (const id of [...pending]) {
+                if (running.size >= max)
+                    break;
+                const scope = graph.nodes.get(id).mutation_scope;
+                if ([...running.values()].some((r) => scopesOverlap(r.scope, scope)))
+                    continue;
+                if (running.size > 0 && parallel.minFreeMb && parallel.freeMb && parallel.freeMb() < parallel.minFreeMb) {
+                    if (!memoryWarned) {
+                        memoryWarned = true;
+                        this.emit(ctx, { type: 'PolicyWarning', work_item_id: id, payload: { reason: 'parallel_memory', detail: `memória livre abaixo de ${parallel.minFreeMb} MB: o próximo agente espera um terminar` } });
+                    }
+                    break;
+                }
+                pending.splice(pending.indexOf(id), 1);
+                const done = this.runNode(id, graph, ctx, status, completed, failed, blocked, { parallel: true })
+                    .catch(() => undefined)
+                    .finally(() => { running.delete(id); });
+                running.set(id, { scope, done });
+            }
+            if (running.size === 0) {
+                // Nothing could start (should not happen: one always runs) — fall back to the next one, alone.
+                const id = pending.shift();
+                if (id)
+                    await this.runNode(id, graph, ctx, status, completed, failed, blocked);
+                continue;
+            }
+            await Promise.race([...running.values()].map((r) => r.done));
+        }
+    }
+    async runNode(nodeId, graph, ctx, status, completed, failed, blocked, mode = {}) {
         const node = graph.nodes.get(nodeId);
+        const parallelNode = Boolean(mode.parallel && ctx.parallel);
         status.set(nodeId, 'running');
         this.emit(ctx, {
             type: 'WorkItemReady',
@@ -398,13 +584,18 @@ class Scheduler {
             this.blockNode(nodeId, ctx, status, blocked, 'quota_exceeded', quotaBlocked);
             return;
         }
+        const maxQuotaWaitMs = ctx.options?.maxQuotaWaitMs ?? 5 * 60000;
+        const maxQuotaWaits = ctx.options?.maxQuotaWaits ?? 3;
+        const sleepFn = ctx.options?.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+        let quotaWaits = 0;
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             const attemptId = `${nodeId}-a${attempt}`;
+            const attemptModel = ctx.modelFor ? ctx.modelFor(nodeId, attempt, attempt > 1 ? (lastResult?.failure_class ?? null) : null) : null;
             this.emit(ctx, {
                 type: 'AttemptStarted',
                 work_item_id: nodeId,
                 attempt_id: attemptId,
-                payload: { attempt_number: attempt },
+                payload: { attempt_number: attempt, ...(attemptModel ? { model: attemptModel.model, tier: attemptModel.tier, escalated: Boolean(attemptModel.escalated) } : {}) },
             });
             try {
                 const policyDecision = this.evaluatePolicyForNode(node, ctx);
@@ -448,14 +639,18 @@ class Scheduler {
                     this.blockNode(nodeId, ctx, status, blocked, 'budget_exhausted', budgetReason);
                     return;
                 }
-                const turnsLeft = ctx.budget?.remainingTurns() ?? null;
+                const budgetTurns = ctx.budget?.remainingTurns() ?? null;
+                const sizedTurns = ctx.turnsFor ? ctx.turnsFor(nodeId, attempt, attempt > 1 ? (lastResult?.failure_class ?? null) : null) : null;
+                const turnsLeft = budgetTurns != null && sizedTurns != null ? Math.min(budgetTurns, sizedTurns) : (budgetTurns ?? sizedTurns);
                 const wsReq = {
                     work_item_id: nodeId,
                     attempt_number: attempt,
                     strategy: node.workspace_strategy,
                     mutation_scope: node.mutation_scope,
                 };
-                const workspaceManager = ctx.pluginRegistry?.workspaceProviderFor(node.workspace_strategy) ?? ctx.workspaceManager;
+                const workspaceManager = parallelNode
+                    ? ctx.parallel.manager
+                    : ctx.pluginRegistry?.workspaceProviderFor(node.workspace_strategy) ?? ctx.workspaceManager;
                 leaseManager = workspaceManager;
                 lease = await workspaceManager.allocate(wsReq);
                 this.emit(ctx, {
@@ -465,7 +660,8 @@ class Scheduler {
                     payload: { workspace_id: lease.workspace_id, strategy: lease.strategy },
                 });
                 lastResult = await this.executeNode(node, lease, ctx, attempt, attemptId, {
-                    previousError: lastError,
+                    previousError: withAttemptChanges(lastError, attempt > 1 && ctx.attemptChanges ? ctx.attemptChanges(nodeId) : null),
+                    ...(attemptModel && attemptModel.model ? { model: attemptModel.model } : {}),
                     ...(turnsLeft != null ? { maxTurns: turnsLeft } : {}),
                 });
                 // OXB-026: the verify judges the work, not the end of the LLM conversation. An attempt that ran out of turns
@@ -475,17 +671,53 @@ class Scheduler {
                     && lastResult.completed_by === 'turn_limit_exhausted'
                     && Boolean(node.verify?.command)
                     && (lastResult.evidence?.length ?? 0) > 0;
+                // OXB-171: what the agent itself said (before a verify failure replaces the output).
+                const agentOutput = String(lastResult.output || '');
                 if (lastResult.success || turnLimitWithWork) {
                     const verifyResult = await this.verifyNode(node, lease, ctx, attemptId, attempt);
                     if (verifyResult && verifyResult.status === 'failed') {
                         // Informed retry: the next attempt sees the command, the reason and the output — not just "failed".
                         lastResult = {
                             success: false,
-                            failure_class: 'verify',
+                            // OXB-185: out of turns, the red verify is a consequence — the class stays turns_exhausted.
+                            failure_class: turnLimitWithWork ? 'turns_exhausted' : 'verify',
                             evidence: lastResult.evidence,
-                            output: describeVerifyFailure(node.verify.command, verifyResult.check, verifyResult.gaps),
+                            output: `${turnLimitWithWork ? `turns_exhausted: ${lastResult.turns_used ?? '?'}/${lastResult.turns_cap ?? '?'} turnos usados sem finish_task; o verify do trabalho parcial:\n` : ''}${describeVerifyFailure(node.verify.command, verifyResult.check, verifyResult.gaps, verifyResult.segment)}`,
+                            verify_log: buildVerifyLog(verifyResult.segments),
+                            ...(turnLimitWithWork ? { turns_used: lastResult.turns_used, turns_cap: lastResult.turns_cap } : {}),
                         };
-                        const signature = verifyFailureSignature(verifyResult.check);
+                        // OXB-120: a verify that failed for the environment (not the code) pauses the run — no attempt is spent.
+                        const envClass = classifyFailureOutput(`${verifyResult.check?.error ?? ''}\n${verifyResult.check?.stderr ?? ''}\n${verifyResult.check?.stdout ?? ''}`, verifyResult.check?.exit_code ?? null, ctx.options?.failureClasses, { builtinQuota: false });
+                        if (envClass && envClass.kind === 'environment') {
+                            this.pauseForFailure(ctx, nodeId, 'environment', envClass.diagnosis, null);
+                            this.blockNode(nodeId, ctx, status, blocked, 'paused_environment', envClass.diagnosis);
+                            return;
+                        }
+                        if (envClass && envClass.kind === 'quota') {
+                            const rawQuotaOut = `${verifyResult.check?.error ?? ''}\n${verifyResult.check?.stderr ?? ''}\n${verifyResult.check?.stdout ?? ''}`;
+                            const diag = envClass.diagnosis || tailLines(lastResult.output || '', 3);
+                            const waitMs = parseRateLimitResetMs(rawQuotaOut);
+                            if (waitMs != null && waitMs >= 0 && waitMs <= maxQuotaWaitMs && quotaWaits < maxQuotaWaits) {
+                                quotaWaits += 1;
+                                this.emit(ctx, {
+                                    type: 'RateLimitWait',
+                                    work_item_id: nodeId,
+                                    attempt_id: attemptId,
+                                    payload: { task: nodeId, attempt_number: attempt, wait_ms: waitMs, quota_wait: quotaWaits, diagnosis: diag },
+                                });
+                                await sleepFn(waitMs);
+                                this.recordProgress();
+                                attempt -= 1;
+                                continue;
+                            }
+                            const resume = quotaResumeAt(rawQuotaOut);
+                            this.pauseForFailure(ctx, nodeId, 'quota', diag, resume);
+                            this.blockNode(nodeId, ctx, status, blocked, 'paused_quota', diag);
+                            return;
+                        }
+                        // OXB-155: a verify that timed out did not fail — the clock did. It is never "identical_verify_failure".
+                        const verifyTimedOut = Boolean(verifyResult.check?.timed_out);
+                        const signature = verifyTimedOut || turnLimitWithWork ? null : verifyFailureSignature(verifyResult.check);
                         if (signature && signature === lastVerifySignature) {
                             verifySuspect = true;
                             this.emit(ctx, {
@@ -502,6 +734,66 @@ class Scheduler {
                             break;
                         }
                         lastVerifySignature = signature;
+                        // OXB-171: the frozen test needs a file outside the task's scope (plan lint) and it is THAT test failing, or
+                        // the agent said the change it needs is out of scope → stop now: a retry cannot pass.
+                        const scopeReason = turnLimitWithWork ? null : scopeInsufficientReason(nodeId, ctx, `${verifyResult.check?.stdout ?? ''}\n${verifyResult.check?.stderr ?? ''}`, agentOutput);
+                        if (scopeReason) {
+                            lastResult = { ...lastResult, failure_class: 'scope_insufficient' };
+                            this.emit(ctx, {
+                                type: 'ScopeInsufficient',
+                                work_item_id: nodeId,
+                                attempt_id: attemptId,
+                                payload: { task: nodeId, attempt_number: attempt, ...scopeReason, output_tail: tailLines(`${verifyResult.check?.stdout ?? ''}\n${verifyResult.check?.stderr ?? ''}`, 40) },
+                            });
+                            lastError = lastResult.output || 'scope_insufficient';
+                            break;
+                        }
+                    }
+                    else if (parallelNode) {
+                        // OXB-050: green in its worktree → integrate (in-scope files only) and verify again on the integrated tree,
+                        // under the integration lock; only then the task completes (and its checkpoint is committed).
+                        const attemptLease = lease;
+                        const outcome = await this.withIntegrationLock(async () => {
+                            const integration = await ctx.parallel.integrate(node, attemptLease);
+                            if (integration.outside.length) {
+                                this.emit(ctx, {
+                                    type: 'ScopeViolation',
+                                    work_item_id: nodeId,
+                                    attempt_id: attemptId,
+                                    payload: { task: nodeId, paths: integration.outside, outcome: 'not_integrated', workspace: 'worktree' },
+                                });
+                            }
+                            if (!integration.ok)
+                                return { ok: false, output: `integration_failed: ${integration.error ?? 'unknown'}` };
+                            const integrated = await this.verifyNode(node, { ...attemptLease, root_path: ctx.projectRoot }, ctx, attemptId, attempt);
+                            if (integrated && integrated.status === 'failed') {
+                                await ctx.parallel.discard(integration.files);
+                                return {
+                                    ok: false,
+                                    output: `Verify on the integrated tree failed (it passed in the task's worktree; another task's change may conflict).\n${describeVerifyFailure(node.verify.command, integrated.check, integrated.gaps, integrated.segment)}`,
+                                };
+                            }
+                            this.emit(ctx, {
+                                type: 'WorkItemCompleted',
+                                work_item_id: nodeId,
+                                attempt_id: attemptId,
+                                payload: {
+                                    attempt_number: attempt,
+                                    evidence: lastResult.evidence,
+                                    workspace: 'worktree',
+                                    integrated_files: integration.files,
+                                    ...(turnLimitWithWork ? { completed_by: 'verify_after_turn_limit' } : {}),
+                                },
+                            });
+                            return { ok: true, output: '' };
+                        });
+                        if (outcome.ok) {
+                            status.set(nodeId, 'completed');
+                            completed.push(nodeId);
+                            this.recordProgress();
+                            return;
+                        }
+                        lastResult = { success: false, failure_class: 'verify', evidence: lastResult.evidence, output: outcome.output };
                     }
                     else {
                         this.emit(ctx, {
@@ -521,8 +813,77 @@ class Scheduler {
                     }
                 }
                 lastError = lastResult.output || (lastResult.failure_class ?? 'unknown error');
+                // OXB-171: the agent stopped saying the needed change is outside its files — a retry has the same files.
+                if (!lastResult.success && lastResult.failure_class !== 'scope_insufficient' && lastResult.failure_class !== 'turns_exhausted' && OUT_OF_SCOPE_RE.test(agentOutput)) {
+                    lastResult = { ...lastResult, failure_class: 'scope_insufficient' };
+                    this.emit(ctx, {
+                        type: 'ScopeInsufficient',
+                        work_item_id: nodeId,
+                        attempt_id: attemptId,
+                        payload: { task: nodeId, attempt_number: attempt, reason: 'agent_reported_out_of_scope', output_tail: tailLines(agentOutput, 40) },
+                    });
+                    break;
+                }
+                if (lastResult.failure_class === 'scope_insufficient')
+                    break;
+                // OXB-125: waiting for a person's answer — never a retry
+                if (lastResult.failure_class === 'waiting_answer') {
+                    this.blockNode(nodeId, ctx, status, blocked, 'waiting_answer', tailLines(lastResult.output || '', 3));
+                    return;
+                }
                 if (lastResult.failure_class === 'policy')
                     break;
+                // The output of a red verify (or of an attempt that ran out of turns / made no progress) is the project's test
+                // log: a test called "resets the form" or an error at line 429 is logic, not the provider.
+                const executorLevelFailure = !lastResult.failure_class || ['env', 'llm', 'timeout', 'quota'].includes(String(lastResult.failure_class));
+                const execClass = executorLevelFailure
+                    ? classifyFailureOutput(lastResult.output || '', null, ctx.options?.failureClasses)
+                    : null;
+                // OXB-120 / OXB-191 / OXB-204: short 429 rate-limit windows wait for the reported reset; long/unknown quotas pause.
+                if (lastResult.failure_class === 'quota' || execClass?.kind === 'quota') {
+                    const rawQuotaOut = lastResult.output || '';
+                    const diag = (execClass?.kind === 'quota' ? execClass.diagnosis : null) || tailLines(rawQuotaOut, 3);
+                    const waitMs = parseRateLimitResetMs(rawQuotaOut);
+                    if (waitMs != null && waitMs >= 0 && waitMs <= maxQuotaWaitMs && quotaWaits < maxQuotaWaits) {
+                        quotaWaits += 1;
+                        this.emit(ctx, {
+                            type: 'RateLimitWait',
+                            work_item_id: nodeId,
+                            attempt_id: attemptId,
+                            payload: { task: nodeId, attempt_number: attempt, wait_ms: waitMs, quota_wait: quotaWaits, diagnosis: diag },
+                        });
+                        await sleepFn(waitMs);
+                        this.recordProgress();
+                        attempt -= 1;
+                        continue;
+                    }
+                    const resume = quotaResumeAt(rawQuotaOut);
+                    this.pauseForFailure(ctx, nodeId, 'quota', diag, resume);
+                    this.blockNode(nodeId, ctx, status, blocked, 'paused_quota', diag);
+                    return;
+                }
+                quotaWaits = 0;
+                if (execClass?.kind === 'environment') {
+                    this.pauseForFailure(ctx, nodeId, 'environment', execClass.diagnosis, null);
+                    this.blockNode(nodeId, ctx, status, blocked, 'paused_environment', execClass.diagnosis);
+                    return;
+                }
+                // OXB-148: a prompt that does not fit fails the same way on a blind retry.
+                if (lastResult.failure_class === 'context')
+                    break;
+                // OXB-130: decide the repair before paying another attempt.
+                if (attempt < maxAttempts && ctx.repairFor) {
+                    const repair = ctx.repairFor(nodeId, { attempt, maxAttempts, failureClass: lastResult.failure_class ?? null, output: String(lastResult.output || ''), verifySuspect });
+                    if (repair) {
+                        this.emit(ctx, { type: 'RepairDecided', work_item_id: nodeId, attempt_id: attemptId, payload: { strategy: repair.strategy, reason: repair.reason, adjustment: repair.adjustment, attempt_number: attempt } });
+                        if (repair.strategy !== 'retry') {
+                            this.blockNode(nodeId, ctx, status, blocked, `repair_${repair.strategy}`, repair.reason);
+                            return;
+                        }
+                        if (repair.adjustment)
+                            lastError = `${lastError ?? ''}\n\n## Ajuste declarado para esta tentativa\n${repair.adjustment}`;
+                    }
+                }
                 if (attempt < maxAttempts) {
                     const retryBlocked = this.consumeRetryQuota(ctx);
                     if (retryBlocked) {
@@ -535,7 +896,7 @@ class Scheduler {
                     this.emit(ctx, {
                         type: 'RetryScheduled',
                         work_item_id: nodeId,
-                        payload: { next_attempt: attempt + 1, reason: lastResult.failure_class, backoff_ms: backoffMs, output_tail: tailLines(lastResult.output || '', 60) },
+                        payload: { next_attempt: attempt + 1, reason: lastResult.failure_class, backoff_ms: backoffMs, output_tail: tailLines(lastResult.output || '', 60), ...(lastResult.verify_log ? { verify_log: lastResult.verify_log } : {}) },
                     });
                 }
             }
@@ -576,7 +937,7 @@ class Scheduler {
         this.emit(ctx, {
             type: 'WorkItemBlocked',
             work_item_id: nodeId,
-            payload: { failure_class: verifySuspect ? 'verify_suspect' : lastResult?.failure_class ?? 'env', max_attempts: maxAttempts, output_tail: tailLines(lastResult?.output || '', 60) },
+            payload: { failure_class: verifySuspect ? 'verify_suspect' : lastResult?.failure_class ?? 'env', max_attempts: maxAttempts, output_tail: tailLines(lastResult?.output || '', 60), ...(lastResult?.verify_log ? { verify_log: lastResult.verify_log } : {}) },
         });
         status.set(nodeId, 'failed');
         failed.push(nodeId);
@@ -593,6 +954,11 @@ class Scheduler {
             (0, run_journal_1.saveJournal)(ctx.projectRoot, ctx.runId, this.journal);
         }
         return { run_id: ctx.runId, status: 'aborted', completed, failed, blocked, reason };
+    }
+    /** OXB-120: pause the run for a failure that is not the task's (environment / quota). */
+    pauseForFailure(ctx, nodeId, kind, diagnosis, resumeAt) {
+        this.emit(ctx, { type: 'RunPaused', work_item_id: nodeId, payload: { reason: kind, diagnosis, resume_at: resumeAt, task: nodeId } });
+        this.pause();
     }
     pause() {
         this.paused = true;
@@ -696,48 +1062,118 @@ class Scheduler {
             work_item_id: node.id,
             payload: { command: node.verify.command, attempt_number: attempt },
         });
-        const suite = {
-            checks: [{
-                    id: `inline-${node.id}`,
-                    type: 'custom',
-                    command: node.verify.command,
-                    evidence_type_expected: 'stdout',
-                    acceptance_ref: null,
-                    description: `Verify ${node.id}`,
-                }],
-            compiled_at: new Date().toISOString(),
-            spec_hash: '',
-            plan_hash: '',
-        };
-        let result;
-        try {
-            result = await (0, verification_compiler_1.verifyRun)({
-                suite,
-                cwd: lease.root_path,
-                timeoutMs: ctx.options?.verifyTimeoutMs ?? 60000,
-                runId: ctx.runId,
-                workItemId: node.id,
-                attemptNumber: attempt,
-                projectRoot: ctx.projectRoot,
-                pluginRegistry: ctx.pluginRegistry,
-            });
+        // 1.21.2 (OXB-066): each top-level `&&` segment runs on its own, in order, stopping at the first failure. As one
+        // command, `vitest … && tsc --noEmit` failed in tsc but the retry only carried the passing vitest output: the
+        // executor never saw the type error (oxespace 1.5.0 T13: 4 attempts, US$ 4.54, 0 completed).
+        const segments = splitVerifySegments(node.verify.command);
+        const ran = [];
+        const gaps = [];
+        let status = 'passed';
+        let failing = null;
+        for (let index = 0; index < segments.length; index++) {
+            const command = segments[index];
+            const suite = {
+                checks: [{
+                        id: segments.length > 1 ? `inline-${node.id}-s${index + 1}` : `inline-${node.id}`,
+                        type: 'custom',
+                        command,
+                        evidence_type_expected: 'stdout',
+                        acceptance_ref: null,
+                        description: `Verify ${node.id}${segments.length > 1 ? ` [${index + 1}/${segments.length}]` : ''}`,
+                    }],
+                compiled_at: new Date().toISOString(),
+                spec_hash: '',
+                plan_hash: '',
+            };
+            let result;
+            try {
+                result = await (0, verification_compiler_1.verifyRun)({
+                    suite,
+                    cwd: lease.root_path,
+                    timeoutMs: ctx.options?.verifyTimeoutMs ?? 600000,
+                    runId: ctx.runId,
+                    workItemId: node.id,
+                    attemptNumber: attempt,
+                    projectRoot: ctx.projectRoot,
+                    pluginRegistry: ctx.pluginRegistry,
+                });
+            }
+            catch (err) {
+                this.emit(ctx, {
+                    type: 'VerificationCompleted',
+                    work_item_id: node.id,
+                    attempt_id: attemptId,
+                    payload: { status: 'error', error: String(err), failed_segment: { index: index + 1, total: segments.length, command, exit_code: null } },
+                });
+                return null;
+            }
+            let segmentRun = { index: index + 1, total: segments.length, command, status: result.status, check: result.check_results?.[0] };
+            // OXB-162: the same command, or test files an earlier segment of THIS attempt already passed, failing now is a
+            // flaky suspect: rerun once; green → continue (marked), red → the task fails as before.
+            if (result.status === 'failed') {
+                const files = segmentTestFiles(command);
+                const earlier = ran.find((r) => r.status === 'passed' && (r.command === command || (files.length > 0 && files.every((f) => segmentTestFiles(r.command).includes(f)))));
+                if (earlier) {
+                    let rerun = null;
+                    try {
+                        rerun = await (0, verification_compiler_1.verifyRun)({
+                            suite: { ...suite, checks: suite.checks.map((c) => ({ ...c, id: `${c.id}-rerun` })) },
+                            cwd: lease.root_path,
+                            timeoutMs: ctx.options?.verifyTimeoutMs ?? 600000,
+                            runId: ctx.runId,
+                            workItemId: node.id,
+                            attemptNumber: attempt,
+                            projectRoot: ctx.projectRoot,
+                            pluginRegistry: ctx.pluginRegistry,
+                        });
+                    }
+                    catch {
+                        rerun = null;
+                    }
+                    const green = rerun?.status === 'passed';
+                    this.emit(ctx, {
+                        type: 'VerifyCommandSuspect',
+                        work_item_id: node.id,
+                        attempt_id: attemptId,
+                        payload: { attempt_number: attempt, command, reason: 'flaky_suspect', passed_before_in: earlier.index, rerun: green ? 'passed' : 'failed', excerpt: tailLines(`${segmentRun.check?.stdout ?? ''}\n${segmentRun.check?.stderr ?? ''}`, 12) },
+                    });
+                    if (green && rerun) {
+                        result = rerun;
+                        segmentRun = { ...segmentRun, status: 'passed', check: rerun.check_results?.[0], flaky_suspect: true };
+                    }
+                    else {
+                        segmentRun = { ...segmentRun, flaky_suspect: true };
+                    }
+                }
+            }
+            ran.push(segmentRun);
+            gaps.push(...(result.gaps ?? []));
+            if (result.status === 'failed') {
+                status = 'failed';
+                failing = segmentRun;
+                break;
+            }
+            if (result.status !== 'passed' && status === 'passed')
+                status = result.status;
         }
-        catch (err) {
-            this.emit(ctx, {
-                type: 'VerificationCompleted',
-                work_item_id: node.id,
-                attempt_id: attemptId,
-                payload: { status: 'error', error: String(err) },
-            });
-            return null;
-        }
+        // OXB-171: the failing segment's own output tail rides in the event (the cause was only found by rerunning by hand).
+        const failedSegment = failing
+            ? { index: failing.index, total: failing.total, command: failing.command, exit_code: failing.check?.exit_code ?? null, output_tail: tailLines(`${failing.check?.stdout ?? ''}\n${failing.check?.stderr ?? ''}\n${failing.check?.error ?? ''}`, 40) }
+            : null;
         this.emit(ctx, {
             type: 'VerificationCompleted',
             work_item_id: node.id,
             attempt_id: attemptId,
-            payload: { status: result.status },
+            payload: { status, ...(failedSegment ? { failed_segment: failedSegment } : {}) },
         });
-        return { status: result.status, gaps: result.gaps, check: result.check_results?.[0] };
+        const last = ran[ran.length - 1];
+        return {
+            status,
+            gaps,
+            check: failing ? failing.check : last?.check,
+            segment: failedSegment,
+            segments: ran,
+        };
     }
     evaluatePolicyForNode(node, ctx) {
         if (!ctx.policyEngine)
@@ -902,16 +1338,232 @@ function inferGateScope(node) {
     return 'plan_approval';
 }
 /** Last `n` non-empty lines of a text. */
-function tailLines(text, n) {
-    return String(text || '').split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-n).join('\n');
+/**
+ * OXB-120: a failure that is not the task's logic must not cost an attempt. Environment (exit 126/127, a missing
+ * executable, a build artifact not built, a native module for another Node, the network) and quota (a provider usage
+ * limit) pause the run with a diagnosis; only `logic` failures consume attempts.
+ */
+const ENVIRONMENT_RE = /command not found|is not recognized as an internal or external command|ENOENT[^\n]*\b(out|dist|build|\.next|lib)[\\/]|Cannot find module '(?!\.)[^']+'|was compiled against a different Node\.js version|NODE_MODULE_VERSION \d+|\bECONNREFUSED\b|\bENOTFOUND\b|\bEAI_AGAIN\b|getaddrinfo|\bECONNRESET\b|socket hang up|\bENOSPC\b|\bEMFILE\b|JavaScript heap out of memory/i;
+const QUOTA_RE = quota_patterns_1.PROVIDER_QUOTA_RE;
+function classifyFailureOutput(output, exitCode, extra, opts) {
+    const text = String(output || '');
+    if (exitCode === 0)
+        return null;
+    const lineOf = (re) => (text.split(/\r?\n/).find((l) => re.test(l) && !/FileSystemFileChangedEvent/i.test(l)) || '').trim().slice(0, 240);
+    const extraRe = (list) => (list || []).map((p) => { try {
+        return new RegExp(p, 'i');
+    }
+    catch {
+        return null;
+    } }).filter(Boolean);
+    for (const re of extraRe(extra?.quota))
+        if (re.test(text))
+            return { kind: 'quota', diagnosis: lineOf(re) || 'quota exceeded' };
+    for (const re of extraRe(extra?.environment))
+        if (re.test(text)) {
+            const diag = lineOf(re);
+            if (diag)
+                return { kind: 'environment', diagnosis: diag };
+        }
+    if (opts?.builtinQuota !== false && QUOTA_RE.test(text))
+        return { kind: 'quota', diagnosis: lineOf(QUOTA_RE) || 'quota limit reached' };
+    if (exitCode === 126 || exitCode === 127)
+        return { kind: 'environment', diagnosis: lineOf(/./) || `exit ${exitCode}` };
+    if (ENVIRONMENT_RE.test(text)) {
+        const diag = lineOf(ENVIRONMENT_RE);
+        if (diag)
+            return { kind: 'environment', diagnosis: diag };
+    }
+    return null;
 }
-/** What the next attempt needs to know about a failed task verify (1.20c informed retry). */
-function describeVerifyFailure(command, check, gaps) {
+function quotaResumeAt(text) {
+    const m = /resets? (?:at|in|on)?\s*([^\n.;·]{3,40})|try again (?:in|after) ([^\n.;·]{2,30})/i.exec(String(text || ''));
+    return m ? (m[1] || m[2]).trim() : null;
+}
+function unitMultiplierMs(unit, defaultMs = 1000) {
+    const u = String(unit || '').trim().toLowerCase();
+    if (!u)
+        return defaultMs;
+    if (u === 'ms' || u.startsWith('millisecond'))
+        return 1;
+    if (u === 's' || u.startsWith('sec'))
+        return 1000;
+    if (u === 'm' || u.startsWith('min'))
+        return 60000;
+    if (u === 'h' || u.startsWith('hr') || u.startsWith('hour'))
+        return 3600000;
+    return defaultMs;
+}
+/**
+ * OXB-204: extract explicit reset/retry duration in ms from 429 headers or provider error payloads.
+ * Returns `null` when no machine-actionable duration is present (e.g. "resets Nov 14, 10am"), so multi-day
+ * quotas still pause immediately instead of guessing.
+ */
+function parseRateLimitResetMs(text, nowMs = Date.now(), retryAfterHeader) {
+    if (retryAfterHeader != null && String(retryAfterHeader).trim() !== '') {
+        const rawHeader = String(retryAfterHeader).trim();
+        if (/^\d+(?:\.\d+)?$/.test(rawHeader)) {
+            const ms = Math.ceil(Number(rawHeader) * 1000);
+            if (Number.isFinite(ms) && ms >= 0)
+                return ms;
+        }
+        else {
+            const parsedDate = Date.parse(rawHeader);
+            if (Number.isFinite(parsedDate) && parsedDate >= nowMs) {
+                return Math.ceil(parsedDate - nowMs);
+            }
+        }
+    }
+    const raw = String(text || '');
+    if (!raw)
+        return null;
+    const retryDelayMatch = /"?retryDelay"?\s*[:=]\s*"?(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?)?"?/i.exec(raw);
+    if (retryDelayMatch) {
+        const ms = Math.ceil(Number(retryDelayMatch[1]) * unitMultiplierMs(retryDelayMatch[2], 1000));
+        if (Number.isFinite(ms) && ms >= 0)
+            return ms;
+    }
+    const retryAfterField = /"?(retry[-_ ]after(?:[-_ ]ms)?)"?\s*[:=]\s*"?(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?)?"?/i.exec(raw);
+    if (retryAfterField) {
+        const defaultMs = /ms$/i.test(retryAfterField[1]) ? 1 : 1000;
+        const ms = Math.ceil(Number(retryAfterField[2]) * unitMultiplierMs(retryAfterField[3], defaultMs));
+        if (Number.isFinite(ms) && ms >= 0)
+            return ms;
+    }
+    const relMatch = /(?:please\s+)?(?:retry|try again|resets?|wait|backoff|available)\s+(?:in|after)\s+((?:\d+(?:\.\d+)?\s*(?:ms|milliseconds?|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?)(?:\s*,?\s*(?:and\s+)?)?)+)/i.exec(raw);
+    if (relMatch) {
+        let totalMs = 0;
+        let matchedAny = false;
+        const tokenRe = /(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?)/gi;
+        let tok;
+        while ((tok = tokenRe.exec(relMatch[1])) !== null) {
+            totalMs += Number(tok[1]) * unitMultiplierMs(tok[2], 1000);
+            matchedAny = true;
+        }
+        if (matchedAny && Number.isFinite(totalMs) && totalMs >= 0)
+            return Math.ceil(totalMs);
+    }
+    const isoMatch = /resets?\s+(?:at\s+)?(\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:?\d{2}))/i.exec(raw);
+    if (isoMatch) {
+        const parsed = Date.parse(isoMatch[1]);
+        if (Number.isFinite(parsed) && parsed >= nowMs)
+            return Math.ceil(parsed - nowMs);
+    }
+    return null;
+}
+/** OXB-171: an agent that says the change it needs is outside its files (pt/en). */
+const OUT_OF_SCOPE_RE = /\b(out of (my |the task'?s? )?scope|outside (of )?(my |the task'?s? )?(scope|files)|not in (my |the task'?s? )?(files|scope)|fora do (meu |)escopo|fora dos arquivos( da tarefa)?|não está (no|nos) (escopo|arquivos)( da tarefa)?|scope_insufficient)\b/i;
+function scopeInsufficientReason(nodeId, ctx, verifyOutput, agentOutput) {
+    const req = ctx.options?.outOfScopeRequirements?.[nodeId];
+    if (req && req.files.length) {
+        const out = String(verifyOutput || '').replace(/\\/g, '/');
+        const named = req.tests.filter((t) => out.includes(t) || out.includes(t.split('/').pop() || t));
+        if (named.length)
+            return { reason: 'frozen_test_needs_out_of_scope_file', files: req.files, tests: named };
+    }
+    if (OUT_OF_SCOPE_RE.test(agentOutput))
+        return { reason: 'agent_reported_out_of_scope' };
+    // OXB-188: the agent left a stub it labels as blocked — the change it needs is outside the scope; never a retry.
+    const blocked = /scope_insufficient: stub marcado como bloqueado[^\n]*/.exec(String(verifyOutput || ''));
+    if (blocked) {
+        const files = [...new Set([...blocked[0].matchAll(/precisa de ([^,(]+(?:, [^,(]+)*), fora do escopo/g)].flatMap((m) => m[1].split(', ').map((x) => x.trim())))];
+        return { reason: 'blocked_stub', files, detail: blocked[0] };
+    }
+    return null;
+}
+/** OXB-162: git's line-ending notices — they filled F4-T1's whole output tail and hid the failing test. */
+const GIT_EOL_NOTICE_RE = /^\s*warning: (in the working copy of .*(LF|CRLF) will be replaced|(LF|CRLF) will be replaced by (CRLF|LF))/i;
+/** A failing-test block start (vitest/jest/node:test/mocha/JUnit). */
+const FAIL_BLOCK_RE = /^\s*(FAIL\b|×|✗|✖|not ok\b|\d+\) |●\s)/;
+const FAIL_ERROR_RE = /AssertionError|Error: expect/;
+function tailLines(text, n) {
+    const lines = String(text || '').split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.trim() && !GIT_EOL_NOTICE_RE.test(l));
+    const tail = lines.slice(-n);
+    // OXB-162: the last failing-test block, when the tail (summary lines, noise) does not reach it.
+    let lastFail = -1;
+    for (let i = lines.length - 1; i >= 0; i -= 1)
+        if (FAIL_BLOCK_RE.test(lines[i])) {
+            lastFail = i;
+            break;
+        }
+    if (lastFail < 0)
+        for (let i = lines.length - 1; i >= 0; i -= 1)
+            if (FAIL_ERROR_RE.test(lines[i])) {
+                lastFail = i;
+                break;
+            }
+    if (lastFail >= 0 && lastFail < lines.length - n) {
+        const block = lines.slice(lastFail, Math.min(lastFail + Math.max(10, Math.floor(n / 2)), lines.length - n));
+        return [...block, '…', ...tail.slice(-Math.max(1, n - block.length - 1))].join('\n');
+    }
+    return tail.join('\n');
+}
+/** OXB-162: the test files a segment names (`x.test.ts`, `y.spec.js`, JVM `--tests` excluded). */
+function segmentTestFiles(command) {
+    return [...new Set((String(command).match(/[\w./\\-]+\.(?:test|spec)\.[cm]?[jt]sx?\b/g) || []).map((f) => f.replace(/\\/g, '/').replace(/^\.\//, '')))].sort();
+}
+/**
+ * Top-level `&&` segments of a verify command (quoted text is not split). Same rule as the dry-verify (OXB-018), so
+ * what the planner checks before execution is what runs after.
+ */
+function splitVerifySegments(command) {
+    const out = [];
+    let current = '';
+    let quote = null;
+    for (let i = 0; i < command.length; i += 1) {
+        const ch = command[i];
+        if (quote) {
+            if (ch === quote)
+                quote = null;
+        }
+        else if (ch === '"' || ch === "'") {
+            quote = ch;
+        }
+        else if (ch === '&' && command[i + 1] === '&') {
+            if (current.trim())
+                out.push(current.trim());
+            current = '';
+            i += 1;
+            continue;
+        }
+        current += ch;
+    }
+    if (current.trim())
+        out.push(current.trim());
+    return out.length ? out : [command];
+}
+/** OXB-184: the retry text plus what the previous attempt left in the tree. */
+function withAttemptChanges(previousError, changes) {
+    if (!changes || (!changes.kept.length && !changes.gone.length))
+        return previousError;
+    const list = (xs) => xs.slice(0, 30).join(', ') + (xs.length > 30 ? ` (+${xs.length - 30})` : '');
+    const lines = ['', '## O que a tentativa anterior deixou na árvore'];
+    if (changes.kept.length)
+        lines.push(`Mantidos (o verify desta tentativa os vê; não refaça sem motivo): ${list(changes.kept)}`);
+    if (changes.gone.length)
+        lines.push(`Escritos e NÃO mantidos (refaça se ainda forem necessários): ${list(changes.gone)}`);
+    return `${previousError ?? ''}${lines.join('\n')}`;
+}
+/** Every segment's output with a header per segment, for the attempt log (`attempts/<Tn>-<n>.log`). */
+function buildVerifyLog(segments, maxLinesPerSegment = 120) {
+    return (segments ?? []).map((s) => {
+        const check = s.check;
+        const exit = check?.exit_code != null ? `exit ${check.exit_code}` : check?.error ? check.error : s.status;
+        const body = tailLines(`${check?.stdout ?? ''}\n${check?.stderr ?? ''}`, maxLinesPerSegment);
+        return `=== [${s.index}/${s.total}] ${s.command} — ${s.status} (${exit})${s.flaky_suspect ? ' · flaky_suspect (repetido: passou antes nesta tentativa)' : ''} ===\n${body || '(sem saída)'}`;
+    }).join('\n\n');
+}
+function describeVerifyFailure(command, check, gaps, segment) {
     const reason = check?.error || (check?.exit_code != null ? `exit code ${check.exit_code}` : (gaps || []).join('; ') || 'checks did not pass');
+    // Only the failing segment's output: the tail of a passing earlier segment never reaches the executor (OXB-066).
     const output = tailLines(`${check?.stdout ?? ''}\n${check?.stderr ?? ''}`, 40);
+    const failingLine = segment && segment.total > 1
+        ? [`Failing segment [${segment.index}/${segment.total}]: ${segment.command}`, `(segments before it passed; the output below is only from this segment)`]
+        : [];
     return [
         'Verification failed after your previous attempt.',
         `Command: ${command ?? '(none)'}`,
+        ...failingLine,
         `Reason: ${reason}`,
         output ? `Output (last lines):\n${output.slice(-4000)}` : 'Output: (empty)',
         'Fix the code so this exact command passes. If you are certain the command itself is wrong (not the code), stop and call finish_task explaining why — do not work around it.',

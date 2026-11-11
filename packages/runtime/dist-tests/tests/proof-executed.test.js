@@ -40,7 +40,8 @@ const verification_compiler_1 = require("../src/verification/verification-compil
             const check = suite.checks.find((c) => c.id === 'check-accept-a1');
             const result = await (0, verification_compiler_1.runCheck)(check, dir);
             strict_1.default.equal(result.status, 'fail');
-            strict_1.default.equal(result.error, 'proof_not_executed: não publica quando matched');
+            // OXB-073: the missing proof, then the tests that did pass.
+            strict_1.default.equal(result.error, 'proof_not_executed: não publica quando matched — testes que passaram: publica a linha na hora (proves precisa ser o nome, ou um trecho, de um deles)');
             const ok = await (0, verification_compiler_1.runCheck)({ ...check, proves: ['publica a linha na hora'] }, dir);
             strict_1.default.equal(ok.status, 'pass', String(ok.error));
         }

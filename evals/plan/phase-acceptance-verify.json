@@ -1,0 +1,19 @@
+{
+  "id": "phase-acceptance-verify",
+  "description": "OXB-046: o planner usou o teste de aceite da fase inteira como verify de tarefa (oxespace F1). Anonimizado.",
+  "rules": ["no_phase_acceptance_as_task_verify", "every_task_has_verify", "explicit_files"],
+  "input": {
+    "guards": [
+      { "id": "phase-acceptance-not-task-verify", "pattern": "teste de aceite da fase inteira não é verify de tarefa" },
+      { "id": "verify-required", "pattern": "^- [*][*]Verificar:[*][*]" },
+      { "id": "explicit-files", "pattern": "Arquivos prováveis" }
+    ],
+    "phase_acceptance_tests": [{ "criterion": "A1", "files": ["tests/acceptance/phase.test.ts"], "command": "npx vitest run tests/acceptance/phase.test.ts" }],
+    "tasks": [
+      { "title": "modelo da fila", "files": ["src/queue/model.ts"], "acceptance": ["A1"], "test": "npx vitest run tests/queue/model.test.ts" },
+      { "title": "sincronização", "files": ["src/queue/sync.ts"], "acceptance": ["A1"] },
+      { "title": "tela da fila", "files": ["src/ui/Queue.tsx"], "acceptance": ["A1"], "test": "npx vitest run tests/ui/queue.test.tsx" }
+    ],
+    "default_verify": "npx vitest run tests/queue"
+  }
+}

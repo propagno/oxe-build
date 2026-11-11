@@ -86,8 +86,10 @@ function runPluginCommand(argv, options = {}) {
     return 0;
   }
 
+  // OXB-133: an unknown subcommand or flag is a usage error (exit ≠ 0), not a silent usage line.
   log(`  ${c ? colors.yellow : ''}Uso: oxe-cc plugins list | install <npm-package> [version] | remove <id>${c ? colors.reset : ''}`);
-  return 0;
+  (options.errorLog || console.error)(`Opção desconhecida: ${subCmd} (subcomando de oxe-cc plugins)`);
+  return 2;
 }
 
 module.exports = {

@@ -8,6 +8,7 @@ exports.streamCompletion = streamCompletion;
 const https_1 = __importDefault(require("https"));
 const http_1 = __importDefault(require("http"));
 const url_1 = require("url");
+const scheduler_1 = require("../scheduler/scheduler");
 /**
  * `<baseUrl>/chat/completions`, keeping any path prefix such as `/v1`.
  * (`new URL('/chat/completions', base)` discarded the prefix and hit `<host>/chat/completions`.)
@@ -45,7 +46,18 @@ function fetchWithTimeout(url, apiKey, body, timeoutMs) {
             },
         }, (res) => {
             res.on('data', (chunk) => chunks.push(chunk));
-            res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+            res.on('end', () => {
+                const text = Buffer.concat(chunks).toString('utf8');
+                const status = res.statusCode ?? 200;
+                if (status === 429 || (status >= 400 && /RESOURCE_EXHAUSTED|rate[ _-]?limit|too many requests|quota exceeded|insufficient_quota/i.test(text))) {
+                    const retryAfterHeader = Array.isArray(res.headers['retry-after']) ? res.headers['retry-after'][0] : res.headers['retry-after'];
+                    const retryAfterMs = (0, scheduler_1.parseRateLimitResetMs)(text, Date.now(), retryAfterHeader ?? null);
+                    const err = Object.assign(new Error(`HTTP ${status}: ${text.slice(0, 500)}`), { kind: 'quota', statusCode: status, retryAfterMs });
+                    reject(err);
+                    return;
+                }
+                resolve(text);
+            });
             res.on('error', reject);
         });
         const timer = setTimeout(() => {

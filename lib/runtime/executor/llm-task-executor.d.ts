@@ -14,9 +14,9 @@ export interface LlmProviderConfig {
     timeoutMs?: number;
     systemPrompt?: string;
 }
-export type LlmExecutorEventType = 'turn_start' | 'turn_complete' | 'tool_call' | 'tool_result' | 'tool_denied' | 'executor_complete'
+export type LlmExecutorEventType = 'executor_turn' | 'executor_slow_turn' | 'turn_start' | 'turn_complete' | 'tool_call' | 'tool_result' | 'tool_denied' | 'executor_complete'
 /** Once per attempt: turns, tool calls and backend-reported cost. */
- | 'executor_usage';
+ | 'executor_usage' | 'turn_timeout' | 'rate_limit_wait';
 /** Injectable completion function (defaults to the HTTP OpenAI-compatible client). */
 export type CompletionFn = typeof streamCompletion;
 export interface LlmExecutorEvent {
@@ -27,6 +27,8 @@ export interface LlmExecutorEvent {
 }
 export interface LlmExecuteOptions {
     previousError?: string | null;
+    /** OXB-131: the model of this attempt (tier escalation); empty keeps the provider's. */
+    model?: string | null;
     /** Cap from the run budget (OXB-023): the attempt never uses more turns than the run has left. */
     maxTurns?: number | null;
 }
@@ -39,6 +41,21 @@ export interface LlmTaskExecutorOptions {
      * the verify hash check (`acceptance_tampered`).
      */
     protectedPaths?: string[] | null;
+    /** OXB-125: offer the ask_orchestrator tool (opt-in: execute.ask_orchestrator). */
+    askOrchestrator?: boolean;
+    /**
+     * OXB-186: consecutive turns with no file written and no finish_task that end the attempt as `no_progress`
+     * (default 8; 0 disables).
+     */
+    noProgressTurns?: number;
+    /** OXB-186: a turn slower than this (ms, default 180000) is reported with the prompt size behind it. */
+    slowTurnMs?: number;
+    /** OXB-204: max automatic backoff wait (ms) on 429 / rate-limit reset before failing as quota (default 300000). */
+    maxQuotaWaitMs?: number;
+    /** OXB-204: max consecutive automatic 429 waits inside an attempt before failing as quota (default 3). */
+    maxQuotaRetries?: number;
+    /** Injectable sleep for deterministic tests. */
+    sleep?: (ms: number) => Promise<void>;
 }
 export interface ExecutorUsage {
     turns: number;
@@ -46,7 +63,17 @@ export interface ExecutorUsage {
     /** Calls per tool name (e.g. how many `run_command`). */
     tools: Record<string, number>;
     cost_usd: number | null;
+    /**
+     * OXB-118: what the attempt did, for the project's action rules checked after the fact (a command run, a path
+     * read or written). Capped; long commands are cut.
+     */
+    commands?: string[];
+    reads?: string[];
+    writes?: string[];
 }
+/** OXB-148: a single tool result kept in the conversation (the rest is cut with a note). */
+export declare const TOOL_RESULT_MAX_CHARS = 40000;
+export declare function capToolResult(text: string, max?: number): string;
 /** Sent before the last turn (OXB-026): finishing and reporting beats spending it on a verification the runtime repeats. */
 export declare const LAST_TURN_NOTICE: string;
 export declare class LlmTaskExecutor implements TaskExecutor {

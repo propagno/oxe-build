@@ -18,6 +18,14 @@
 - **Fontes:** …
 - **Profundidade:** …
 
+## Afirmações
+
+- Cada afirmação leva a fonte: `[fonte: src/x.ts:42]`, `[fonte: https://…]` ou `[fonte: saída de git log -3 -- src/x.ts]`. Sem fonte, ela vai para Suposições. O `plan lint` aponta afirmação sem fonte.
+
+## Suposições
+
+- S1: … (o que se assume sem evidência. Uma tarefa que depende dela cita `assumptions: ["S1"]`, e o plano declara um risco em PLAN.json `risks`, com a tarefa ou o spike que a elimina.)
+
 ## Evidência
 
 - Paths lidos, comandos (grep, etc.); diagramas ASCII opcionais. **Não** colar segredos ou valores de env.

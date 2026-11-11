@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "rules": [
+    { "id": "data-loss", "severity": "critical", "when": "o achado apaga, corrompe ou deixa inacessível dado do usuário", "applies": "any" },
+    { "id": "security", "severity": "critical", "when": "segredo exposto, injeção, permissão indevida, execução de conteúdo não confiável", "applies": "any" },
+    { "id": "crash", "severity": "high", "when": "o app, processo ou fluxo principal quebra ou trava", "applies": "any" },
+    { "id": "a11y-serious", "severity": "high", "when": "ARIA inválido, foco perdido ou preso, controle sem nome acessível, contraste abaixo do mínimo", "applies": "ui" },
+    { "id": "contract-break", "severity": "high", "when": "uma interface pública (export, IPC, ferramenta MCP, schema) mudou e quebra um consumidor", "applies": "code" },
+    { "id": "gate-red", "severity": "high", "when": "typecheck, lint ou suíte de governança do projeto vermelha", "applies": "code" },
+    { "id": "behavior-wrong", "severity": "medium", "when": "o comportamento diverge do critério sem perda de dado nem quebra", "applies": "any" },
+    { "id": "i18n-raw", "severity": "medium", "when": "texto cru, sem tradução ou no idioma errado para o locale", "applies": "ui" },
+    { "id": "build-order", "severity": "medium", "when": "falha que depende da ordem de build ou de um artefato não gerado", "applies": "code" },
+    { "id": "perf-regression", "severity": "medium", "when": "piora mensurável de tempo, memória ou tamanho", "applies": "any" },
+    { "id": "stale-copy", "severity": "low", "when": "texto, rótulo ou ícone desatualizado sem afetar o uso", "applies": "ui" },
+    { "id": "polish", "severity": "low", "when": "acabamento visual ou de código sem impacto no uso", "applies": "any" },
+    { "id": "unclear-section", "severity": "high", "when": "um leitor sem contexto não consegue resumir a seção (plan lint --read)", "applies": "any" },
+    { "id": "summary-mismatch", "severity": "high", "when": "o resumo do leitor de fora não bate com a intenção do autor", "applies": "any" },
+    { "id": "open-choice", "severity": "high", "when": "quem implementa teria que escolher sozinho um esquema, assinatura, dependência ou caso de borda", "applies": "any" },
+    { "id": "nfr-regression", "severity": "medium", "when": "a métrica não funcional piorou mais que o limite relativo em relação à fase anterior (OXB-144)", "applies": "any" },
+    { "id": "undefined-term", "severity": "medium", "when": "termo do projeto usado sem definição nem link", "applies": "any" }
+  ]
+}

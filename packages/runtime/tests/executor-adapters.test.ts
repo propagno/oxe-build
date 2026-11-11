@@ -224,10 +224,95 @@ describe('claude-cli — protocolo e spawn portável', () => {
     }
   });
 
-  test('registry: http exige API key, claude não', () => {
+  test('registry: http exige API key, claude e antigravity não', () => {
     assert.equal(createExecutorAdapter('http').requiresApiKey, true);
     assert.equal(createExecutorAdapter('claude').requiresApiKey, false);
-    const ids = detectExecutorAdapters({ claude: { command: 'oxe-no-such-claude-binary' } }).map((a) => `${a.id}:${a.available}`);
-    assert.deepEqual(ids, ['claude:false', 'http:true']);
+    assert.equal(createExecutorAdapter('antigravity').requiresApiKey, false);
+    const ids = detectExecutorAdapters({
+      claude: { command: 'oxe-no-such-claude-binary' },
+      antigravity: { command: 'oxe-no-such-agy-binary' },
+    }).map((a) => `${a.id}:${a.available}`);
+    assert.deepEqual(ids, ['claude:false', 'antigravity:false', 'http:true']);
+  });
+});
+
+describe('OXB-148: claude -p failure reasons come from stdout, classified', () => {
+  let tmp: string;
+  const shim = (body: string) => {
+    const p = path.join(tmp, `fail-${Math.random().toString(36).slice(2)}.js`);
+    fs.writeFileSync(p, `process.stdin.resume(); process.stdin.on('end', () => { ${body} }); process.stdin.on('data', () => {});`, 'utf8');
+    return new ClaudeCliAdapter({ command: process.execPath, prefixArgs: [p], parseRetries: 0 });
+  };
+  const call = (a: ClaudeCliAdapter) => a.createCompletion()({ baseUrl: '', apiKey: '', model: '', messages: [{ role: 'user', content: 'x' }], tools: [] } as any);
+
+  before(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-adapter-fail-')); });
+  after(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+
+  test('exit 1 with empty stderr: the JSON stdout reason (subtype, result) is in the error, prompt-too-long is `context`', async () => {
+    const a = shim(`process.stdout.write(JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'Prompt is too long', total_cost_usd: 0.21 })); process.exit(1);`);
+    await assert.rejects(call(a), (err: any) => {
+      assert.equal(err.kind, 'context');
+      assert.equal(err.costUsd, 0.21);
+      assert.match(err.message, /claude exit 1 · subtype=error_during_execution · result=Prompt is too long · prompt=\d+ chars/);
+      return true;
+    });
+  });
+
+  test('a usage limit is `quota`; max turns is `llm`; anything else stays `env` with the stdout tail', async () => {
+    await assert.rejects(call(shim(`process.stdout.write(JSON.stringify({ is_error: true, result: 'Claude AI usage limit reached|1762650000' })); process.exit(1);`)), (e: any) => e.kind === 'quota');
+    await assert.rejects(call(shim(`process.stdout.write(JSON.stringify({ is_error: true, subtype: 'error_max_turns', result: '' })); process.exit(1);`)), (e: any) => e.kind === 'llm');
+    await assert.rejects(call(shim(`process.stdout.write('boom: not json'); process.exit(1);`)), (e: any) => e.kind === 'env' && /stdout=boom: not json/.test(e.message));
+  });
+
+  test('the executor records the class and the cost of the failed call', async () => {
+    const a = shim(`process.stdout.write(JSON.stringify({ is_error: true, result: 'Prompt is too long', total_cost_usd: 0.05 })); process.exit(1);`);
+    const events: LlmExecutorEvent[] = [];
+    const ex = new LlmTaskExecutor(provider, null, (e) => events.push(e), a.createCompletion());
+    const ws = fs.mkdtempSync(path.join(tmp, 'ws-'));
+    const res = await ex.execute(node([{ type: 'generate_patch', targets: ['out.txt'] }]), lease(ws), 'run-1', 1);
+    assert.equal(res.failure_class, 'context');
+    const usage = events.find((e) => e.type === 'executor_usage');
+    assert.equal((usage as any).detail.cost_usd, 0.05);
+  });
+});
+
+describe('OXB-153: a claude call that times out continues the same attempt', () => {
+  let tmp: string;
+  before(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-adapter-timeout-')); });
+  after(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+
+  test('1st call hangs past timeoutMs; the 2nd answers finish_task: success in ONE attempt, with a turn_timeout event', async () => {
+    const counter = path.join(tmp, 'calls.txt');
+    const shim = path.join(tmp, 'slow.js');
+    // first call never answers in time; next calls finish the task (the bridge expects {"content","tool_calls"} JSON in result)
+    fs.writeFileSync(shim, `
+const fs=require('fs');const n=(fs.existsSync(${JSON.stringify(counter)})?Number(fs.readFileSync(${JSON.stringify(counter)},'utf8')):0)+1;fs.writeFileSync(${JSON.stringify(counter)},String(n));
+process.stdin.resume();process.stdin.on('data',()=>{});process.stdin.on('end',()=>{
+  if(n===1){setTimeout(()=>{},60000);return;}
+  const reply=JSON.stringify({content:'ok',tool_calls:[{name:'finish_task',arguments:{summary:'done'}}]});
+  process.stdout.write(JSON.stringify({type:'result',subtype:'success',is_error:false,result:reply,total_cost_usd:0.01}));
+});`, 'utf8');
+    const a = new ClaudeCliAdapter({ command: process.execPath, prefixArgs: [shim], timeoutMs: 2000 }); // 400 ms flaked under a loaded full suite: the 2nd (answering) call also timed out
+    const events: LlmExecutorEvent[] = [];
+    const ex = new LlmTaskExecutor({ ...provider, maxTurns: 4 }, null, (e) => events.push(e), a.createCompletion());
+    const ws = fs.mkdtempSync(path.join(tmp, 'ws-'));
+    const res = await ex.execute(node([{ type: 'generate_patch', targets: ['out.txt'] }]), lease(ws), 'run-1', 1);
+    assert.equal(res.success, true, res.output);
+    assert.equal(res.completed_by, 'finish_task');
+    const t = events.filter((e) => e.type === 'turn_timeout');
+    assert.equal(t.length, 1);
+    assert.equal((t[0] as any).detail.retry, 1);
+  });
+
+  test('timeouts in a row beyond the limit fail the attempt as `timeout` (not `env`)', async () => {
+    const shim = path.join(tmp, 'always-slow.js');
+    fs.writeFileSync(shim, `process.stdin.resume();process.stdin.on('data',()=>{});process.stdin.on('end',()=>{setTimeout(()=>{},60000)});`, 'utf8');
+    const a = new ClaudeCliAdapter({ command: process.execPath, prefixArgs: [shim], timeoutMs: 300 });
+    const ex = new LlmTaskExecutor({ ...provider, maxTurns: 4 }, null, null, a.createCompletion());
+    const ws = fs.mkdtempSync(path.join(tmp, 'ws-'));
+    const res = await ex.execute(node([{ type: 'generate_patch', targets: ['out.txt'] }]), lease(ws), 'run-1', 1);
+    assert.equal(res.success, false);
+    assert.equal(res.failure_class, 'timeout');
+    assert.match(res.output, /claude -p excedeu 300 ms/);
   });
 });

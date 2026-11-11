@@ -42,7 +42,8 @@ describe('check-accept com proves', () => {
       const check = suite.checks.find((c) => c.id === 'check-accept-a1')!;
       const result = await runCheck(check, dir);
       assert.equal(result.status, 'fail');
-      assert.equal(result.error, 'proof_not_executed: não publica quando matched');
+      // OXB-073: the missing proof, then the tests that did pass.
+      assert.equal(result.error, 'proof_not_executed: não publica quando matched — testes que passaram: publica a linha na hora (proves precisa ser o nome, ou um trecho, de um deles)');
 
       const ok = await runCheck({ ...check, proves: ['publica a linha na hora'] }, dir);
       assert.equal(ok.status, 'pass', String(ok.error));

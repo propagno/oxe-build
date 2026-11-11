@@ -213,9 +213,10 @@ Registrar em `VERIFY.md`: `Resultado de calibração | Confiança declarada | Re
 ```
 O `calibration_error` de cada dimensão = `|score declarado - resultado observado|`. Para `technical_risk` e `dependencies`, o resultado observado é estimado por: `1.0` se sem bloqueios nessa dimensão, `0.5` se houve 1 bloqueio, `0.0` se houve 2+ bloqueios. Omitir o registro se PLAN.md não tiver `<confidence_vector>`.
 7b. **Camada 4a — Auditoria Adversarial (opcional):** se `adversarial_verify: true` em `.oxe/config.json` (padrão: `false`):
-   - Abrir novo contexto com pack no modo auditor: `oxe-cc context inspect --workflow verify --mode auditor --json` (inclui apenas `state`, `spec`, `verify` — exclui `plan`, `runtime`).
-   - Executar `oxe/workflows/verify-audit.md` com esse contexto restrito.
-   - O auditor não vê PLAN.md nem EXECUTION-RUNTIME.md — restrição intencional.
+   - Rodar, por tarefa da entrega, `oxe-cc review run --role auditor --task <Tn>`. A revisão roda num **processo separado** (`claude -p` sem ferramentas, sem sessão persistida, numa pasta vazia) e recebe só o diff, a tarefa, os critérios e as decisões, com os critérios de `oxe/workflows/verify-audit.md`.
+   - O recibo `.oxe/reviews/<id>/receipt.json` lista cada arquivo entregue com o hash, o que foi excluído (`plan`, `runtime`, `DISCUSS`) e o que foi citado fora do repositório.
+   - Uma revisão `não rodou` (adaptador indisponível, ou duas tentativas sem relatório) **nunca** conta como aprovada: registre-a como `não rodou` no VERIFY.md e não avance.
+   - As rodadas e os achados ficam no registro da revisão (`oxe-cc review status`). O autor responde cada achado com `oxe-cc review respond <achado> --dispute --ref … | --to-owner --reason … | --fix | --note`. Com `review.max_rounds` (padrão 2) esgotado e um achado alto repetido, o OXE abre um CR `spec_gap` (`origin: review_repeat`) em vez de outra rodada.
    - Incorporar a seção `## Auditoria Adversarial` no VERIFY.md.
    - Se o resultado for `REPROVADO`, registrar `verify_failed` e não avançar para SUMMARY/commit.
 7c. **Blueprint plan-agent:** se **todas** as verificações relevantes **passaram**, existir **`.oxe/plan-agents.json`** com `oxePlanAgentsSchema >= 2` e `lifecycle.status === "executing"` (ou `pending_execute`), actualizar o JSON: `lifecycle: { "status": "closed", "since": "<ISO>" }` e espelhar em **`STATE.md`** (**lifecycle_status** → `closed`). Não fechar como `closed` se `verify_failed` ou gaps por resolver.

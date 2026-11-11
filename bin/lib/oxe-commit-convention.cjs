@@ -23,8 +23,21 @@ function settingsOf(config) {
   return raw || null;
 }
 
+// OXB-045: `{message}` (and `{subject}`/`{summary}`) are the task title too — "{type}({scope}): {message}" wrote three
+// F1 checkpoints literally as "feat: {message}".
+const PLACEHOLDERS = new Set(['task', 'title', 'type', 'scope', 'message', 'subject', 'summary']);
+
+/** Placeholders a template uses that the convention does not know. */
+function unknownPlaceholders(template) {
+  return [...String(template || '').matchAll(/\{([A-Za-z_]+)\}/g)].map((m) => m[1]).filter((k) => !PLACEHOLDERS.has(k));
+}
+
 function fill(template, values) {
-  return String(template).replace(/\{(task|title|type|scope)\}/g, (_, key) => String(values[key] ?? ''))
+  return String(template).replace(/\{([A-Za-z_]+)\}/g, (_, key) => {
+    if (key === 'message' || key === 'subject' || key === 'summary') return String(values.title ?? '');
+    // An unknown placeholder never reaches the history (lint reports it before execution).
+    return PLACEHOLDERS.has(key) ? String(values[key] ?? '') : String(values.title ?? '');
+  })
     .replace(/\(\)/g, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -58,7 +71,9 @@ function checkpointMessage(task, config) {
   const settings = settingsOf(config);
   const subject = checkpointSubject(task, config);
   const own = task && typeof task.commit === 'string' ? task.commit.trim().split(/\r?\n/).slice(1).join('\n').trim() : '';
-  const trailers = [...(settings && Array.isArray(settings.trailers) ? settings.trailers : []), `OXE-Task: ${task && task.id}`];
+  // OXB-166: T-ids restart per phase — the trailer names the phase (`OXE-Task: F2/T4`) and the run when known.
+  const taskRef = task && task.phase ? `${task.phase}/${task.id}` : (task && task.id);
+  const trailers = [...(settings && Array.isArray(settings.trailers) ? settings.trailers : []), `OXE-Task: ${taskRef}`, ...(task && task.run_id ? [`OXE-Run: ${task.run_id}`] : [])];
   return [subject, own, trailers.join('\n')].filter(Boolean).join('\n\n');
 }
 
@@ -68,6 +83,8 @@ function lintCommitConvention(plan, config) {
   const errors = [];
   if (!settings) return errors;
   if (settings.pattern && !patternOf(settings)) errors.push(`commit_convention.pattern inválido: ${settings.pattern}`);
+  const unknown = unknownPlaceholders(settings.template);
+  if (unknown.length) errors.push(`commit_convention.template usa placeholder desconhecido: ${unknown.map((k) => `{${k}}`).join(', ')} — use {type}, {scope}, {title} (ou {message}), {task}`);
   const pattern = patternOf(settings);
   for (const task of (plan && plan.tasks) || []) {
     if (task.done) continue;
@@ -82,4 +99,4 @@ function lintCommitConvention(plan, config) {
   return errors;
 }
 
-module.exports = { checkpointSubject, checkpointMessage, lintCommitConvention, LEGACY_TEMPLATE };
+module.exports = { checkpointSubject, checkpointMessage, lintCommitConvention, unknownPlaceholders, LEGACY_TEMPLATE };

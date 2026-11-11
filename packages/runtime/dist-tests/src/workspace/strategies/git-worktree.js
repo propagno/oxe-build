@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.GitWorktreeManager = void 0;
 exports.unlinkExternalLinks = unlinkExternalLinks;
+exports.sweepStaleWorkspaces = sweepStaleWorkspaces;
 const child_process_1 = require("child_process");
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
@@ -84,9 +85,51 @@ function unlinkExternalLinks(root, limits = {}) {
     walk(root, 0);
     return removed;
 }
+/**
+ * OXB-050: leftover worktrees of a crashed or aborted run (`.oxe/workspaces/ws-*`). Each one has its external links
+ * (node_modules junction, workspace links) removed FIRST, then `git worktree remove --force`, then `worktree prune`.
+ * A forced remove with the junction still in place deletes the real node_modules — never in this order.
+ * @returns the workspace directories removed
+ */
+function sweepStaleWorkspaces(projectRoot, options = {}) {
+    const root = path_1.default.join(projectRoot, '.oxe', 'workspaces');
+    const removed = [];
+    let entries = [];
+    try {
+        entries = fs_1.default.readdirSync(root);
+    }
+    catch {
+        return removed;
+    }
+    for (const name of entries) {
+        if (!name.startsWith('ws-') || options.keep?.has(name))
+            continue;
+        const dir = path_1.default.join(root, name);
+        unlinkExternalLinks(dir);
+        try {
+            (0, child_process_1.execFileSync)('git', ['worktree', 'remove', dir, '--force'], { cwd: projectRoot, stdio: 'ignore', windowsHide: true });
+        }
+        catch {
+            // not a registered worktree (half-created): its links are already gone, remove the plain directory
+            try {
+                fs_1.default.rmSync(dir, { recursive: true, force: true });
+            }
+            catch {
+                continue;
+            }
+        }
+        removed.push(dir);
+    }
+    try {
+        (0, child_process_1.execFileSync)('git', ['worktree', 'prune'], { cwd: projectRoot, stdio: 'ignore', windowsHide: true });
+    }
+    catch { /* best effort */ }
+    return removed;
+}
 class GitWorktreeManager {
-    constructor(projectRoot) {
+    constructor(projectRoot, options = {}) {
         this.projectRoot = projectRoot;
+        this.options = options;
         this.isolation_level = 'isolated';
         this.leases = new Map();
     }
@@ -110,6 +153,15 @@ class GitWorktreeManager {
             ttl_minutes: 45,
         };
         this.leases.set(wsId, lease);
+        if (this.options.prepare) {
+            try {
+                await this.options.prepare(worktreePath, lease);
+            }
+            catch (err) {
+                await this.dispose(wsId);
+                throw err;
+            }
+        }
         return lease;
     }
     async snapshot(id) {

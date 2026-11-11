@@ -70,7 +70,8 @@ describe('verify após turn limit (OXB-026)', () => {
       const result = await new Scheduler().run(graphFor(cmd), ctx);
       assert.equal(result.status, 'completed');
       const retry = events.find((e) => e.type === 'RetryScheduled');
-      assert.equal((retry?.payload as Record<string, unknown>).reason, 'verify');
+      // OXB-185: out of turns, the red verify keeps the real cause
+      assert.equal((retry?.payload as Record<string, unknown>).reason, 'turns_exhausted');
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

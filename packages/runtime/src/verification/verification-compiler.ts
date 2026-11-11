@@ -2,8 +2,8 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { spawnSync } from 'child_process';
-import { parseTestReport, extractTestFileArgs, missingProofs } from './test-report-parsers';
-import { shellInvocation, childProcessEnv } from '../executor/shell-argv';
+import { parseTestReport, extractTestFileArgs, missingProofs, extractTestResults } from './test-report-parsers';
+import { shellInvocation, childProcessEnv, decodeConsoleOutput } from '../executor/shell-argv';
 import { checkExpectedExports } from './contract-exports';
 import type { ExpectedExport } from './contract-exports';
 import type { EvidenceType } from '../models/evidence';
@@ -78,6 +78,8 @@ export interface AcceptanceTestLike {
   command: string;
   files: FrozenFile[];
   proves?: string[];
+  /** OXB-072: own timeout (e.g. `npm run test:electron`, an Electron cold start). */
+  timeout_ms?: number;
 }
 
 export interface AcceptanceCheckSuite {
@@ -99,6 +101,8 @@ export interface CheckResult {
   evidence_refs?: string[];
   /** Why a check was skipped (`needs_structured_check` = criterion has no executable verification). */
   skip_reason?: string | null;
+  /** OXB-072: killed by the check timeout (status `error`, never `fail`). */
+  timed_out?: boolean;
   /** Test cases the runner reported; null when the output has no recognizable test report. */
   tests_executed?: number | null;
   /** Evidence id of the structured summary record (kept out of `evidence_refs` so coverage counts real output only). */
@@ -295,6 +299,7 @@ export function compile(
       description: `Teste de aceite congelado de ${entry.criterion || entry.id}`,
       frozen_files: entry.files.map((f) => ({ path: f.path, sha256: f.sha256 ?? null })),
       ...(Array.isArray(entry.proves) && entry.proves.length ? { proves: [...entry.proves] } : {}),
+      ...(typeof entry.timeout_ms === 'number' && entry.timeout_ms > 0 ? { timeout_ms: entry.timeout_ms } : {}),
     });
   }
 
@@ -416,18 +421,37 @@ export async function runCheck(
     const result = spawnSync(shell.file, shell.args, {
       cwd,
       env: childProcessEnv(),
-      encoding: 'utf8',
       timeout: timeoutMs,
       maxBuffer: 2 * 1024 * 1024,
       windowsVerbatimArguments: shell.windowsVerbatimArguments,
     });
 
     const duration_ms = Date.now() - start;
-    const stdout = result.stdout ?? '';
-    const stderr = result.stderr ?? '';
+    // OXB-150: gradle/maven report per-test results in JUnit XML files (build/test-results, target/surefire-reports),
+    // not on stdout; the reports this command wrote are appended so counts and `proves` see each test.
+    const junitXml = /\b(gradlew(\.bat)?|gradle|mvnw?(\.cmd)?)\b/.test(check.command) ? junitReportsSince(cwd, start) : '';
+    const stdout = decodeConsoleOutput(result.stdout as unknown as Buffer) + (junitXml ? `\n${junitXml}` : '');
+    const stderr = decodeConsoleOutput(result.stderr as unknown as Buffer);
     const report = parseTestReport(`${stdout}\n${stderr}`);
     let status: VerificationStatus = result.status === 0 ? 'pass' : 'fail';
     let error: string | null = result.error ? String(result.error) : null;
+    // OXB-072: a check killed by its timeout did not fail — it did not finish. `error` + `timed_out`, with the limit
+    // and how to raise it (an Electron cold start plus vitest easily passes the old 60 s).
+    const timedOut = Boolean(result.error && /ETIMEDOUT/.test(String((result.error as NodeJS.ErrnoException).code || result.error.message)));
+    if (timedOut) {
+      return {
+        check_id: check.id,
+        acceptance_ref: check.acceptance_ref,
+        status: 'error',
+        stdout,
+        stderr,
+        exit_code: null,
+        duration_ms,
+        error: `timeout: passou de ${Math.round(timeoutMs / 1000)}s sem terminar — aumente verify_timeout_ms (config) ou o timeout_ms do teste de aceite`,
+        tests_executed: report.tests_executed,
+        timed_out: true,
+      };
+    }
 
     // Exit code 0 is not proof: `node --test` exits 0 when a listed file is missing, and a
     // unit check that executed zero tests verified nothing.
@@ -447,7 +471,9 @@ export async function runCheck(
 ${stderr}`);
       if (missing.length > 0) {
         status = 'fail';
-        error = `proof_not_executed: ${missing.join(' | ')}`;
+        // OXB-073: name what DID pass — a paraphrased `proves` looked like a test that never ran.
+        const passedNames = extractTestResults(`${stdout}\n${stderr}`).passed.slice(0, 8);
+        error = `proof_not_executed: ${missing.join(' | ')}${passedNames.length ? ` — testes que passaram: ${passedNames.join(' | ')} (proves precisa ser o nome, ou um trecho, de um deles)` : ''}`;
       }
     }
 
@@ -763,4 +789,32 @@ async function collectCheckEvidence(
   // The summary record is bookkeeping, not proof: it is stored but excluded from `evidence_refs`,
   // otherwise every check (even a silent exit 0) counts as "covered".
   return { refs, summaryRef: summaryEvidence.evidence_id };
+}
+
+/** OXB-150: JUnit XML files under test-results/ or surefire-reports/ written at or after `since` (ms). */
+function junitReportsSince(root: string, since: number): string {
+  const fs = require('fs') as typeof import('fs');
+  const path = require('path') as typeof import('path');
+  const parts: string[] = [];
+  let budget = 8 * 1024 * 1024;
+  const walk = (dir: string, depth: number, inReports: boolean) => {
+    if (depth > 8 || budget <= 0) return;
+    let entries: import('fs').Dirent[] = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name === '.git' || e.name === '.gradle' || e.name === '.oxe') continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full, depth + 1, inReports || e.name === 'test-results' || e.name === 'surefire-reports');
+      else if (inReports && /\.xml$/i.test(e.name)) {
+        try {
+          const st = fs.statSync(full);
+          if (st.mtimeMs + 1000 < since || st.size > budget) continue;
+          parts.push(fs.readFileSync(full, 'utf8'));
+          budget -= st.size;
+        } catch { /* unreadable */ }
+      }
+    }
+  };
+  walk(root, 0, false);
+  return parts.join('\n');
 }

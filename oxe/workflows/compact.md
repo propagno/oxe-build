@@ -9,6 +9,7 @@ Em cada execução:
 2. **Atualizar** os **sete** ficheiros em **`.oxe/codebase/`** (mesmos nomes e propósito que em **`scan.md`**) — **incrementalmente** quando já existirem conteúdos úteis; **geração completa** alinhada a **`scan.md`** (passos 2–4, incluindo **2b** legado e **2c** docs) quando faltarem ficheiros ou estiverem claramente vazios/inúteis.
 3. Escrever **`.oxe/CODEBASE-DELTA.md`**: registo **estruturado** do que mudou **na documentação do codebase** face à versão anterior (o “diff” legível para humanos e agentes).
 4. Reescrever **`.oxe/RESUME.md`** com a **trilha OXE** (fase, SPEC/PLAN, decisões, bloqueios) **e** um resumo de **1–3 linhas** a apontar para o delta e para os mapas atualizados.
+5. Rodar **`oxe-cc docs check`**: confere os caminhos e símbolos que as decisões, os dossiês das fases fechadas e o `.oxe/codebase/` citam como estado atual contra o código de hoje, e roda de novo o `check` das decisões ativas de fases fechadas. Ele só relata (`.oxe/DOCS-CHECK.md`). Cada divergência se resolve marcando a decisão como substituída, com uma nota no artefato ou com um CR.
 
 **Não** é “compactar conversa”. **Não** apaga nem substitui `SPEC.md`, `PLAN.md`, `VERIFY.md`.
 </objective>

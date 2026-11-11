@@ -15,7 +15,7 @@ Desenvolvimento assistido por IA com especificação, contexto persistente, exec
 npx oxe-cc@latest
 ```
 
-**Versão:** `1.21.1` · **Node.js:** `>=18`
+**Versão:** `1.21.2` · **Node.js:** `>=18`
 
 </div>
 
@@ -337,6 +337,8 @@ oxe-cc runtime program status
 - **Regressão acumulada:** os checks executáveis de cada fase fechada são congelados em `.oxe/program/regression/` e rodam (`reg-<fase>-*`) no verify das fases seguintes. Uma fase não fecha se quebrar uma anterior.
 - **Contratos de interface:** os `symbols` do IMPLEMENTATION-PACK são verificados estaticamente (JS/TS). Um módulo sem o export contratado falha com `exports_missing`.
 - **Contexto que escala:** o prompt de cada tarefa recebe `## Interfaces disponíveis`, com os exports e assinaturas das fases fechadas e das dependências, em vez dos arquivos inteiros.
+- **Mudar o programa com trilha (1.21.2):** `oxe-cc spec amend A40 --append "…" --by tl --reason "…" [--additive]` emenda um critério de qualquer fase (CR `spec_gap` com a linha antes/depois). `oxe-cc spec add criterion A42 --text "…" --verify "…"` e `spec add requirement R14 …` criam ids novos, sem duplicata nem buraco. `oxe-cc program phase add --after F7 --title "…" --acceptance A42,A43` insere uma fase e renumera só as fases ainda não iniciadas. `oxe-cc program phase edit F3 --add-acceptance A58 --add-requirements R17` edita uma fase, e `oxe-cc program criterion move A3 --from F1 --to F11` move um critério (tirando-o do plano atual quando a fase de origem está ativa). Cada mudança vai para `program/changes.ndjson`. Se o `.oxe/` estiver no .gitignore, `oxe-cc program export --out docs/oxe` (ou `program.export_dir` no config) mantém SPEC, ROADMAP, PROGRAM.json e changes.ndjson versionados.
+- **Branch do programa em dia com a main (1.21.2):** `oxe-cc runtime sync --from origin/main` faz o merge local (para e aborta no conflito) e roda de novo, segmento a segmento e sem executor, o verify das tarefas done cujos `files` mudaram na base: verde continua done, vermelho reabre. `oxe-cc runtime promote T7 --base main` cria uma branch a partir da base com os checkpoints da tarefa e os commits dos testes congelados (cherry-pick -x), roda o `pr:ready` do projeto e grava o corpo do PR em arquivo. Push e `gh pr create --body-file` só com `--open-pr`, nunca com force-push nem label.
 - **`PLAN.json` canônico:** `/oxe-plan` grava `PLAN.json` (`oxe/schemas/plan.schema.json`) ao lado do `PLAN.md`. O runtime lê o JSON, e o markdown é o fallback.
 
 `npm run test:e2e-program` roda o benchmark do app "taskboard": 3 fases, oráculo independente por fase e uma mutação que quebra a fase 1 durante a fase 3. Com `--real --adapter claude`, ele também mede custo e turnos por fase.
@@ -519,13 +521,22 @@ oxe-cc azure operations list
 | `oxe-cc doctor` | valida estrutura, configuração e saúde lógica |
 | `oxe-cc doctor --release --write-manifest` | executa o gate de release e grava o manifesto |
 | `oxe-cc doctor --project` | compara a máquina com `engines`, `.nvmrc` e o lockfile do projeto |
-| `oxe-cc plan lint [--dry-verify]` | valida o PLAN.json, os gates, o pack e se cada verify está vermelho pelo motivo certo |
+| `oxe-cc plan lint [--dry-verify] [--resume] [--only T5,T6] [--changed] [--no-preflight]` | valida o PLAN.json, os gates, o pack, o mesmo preflight do execute (autoavaliação, confiança, ambiente) e se cada verify está vermelho pelo motivo certo; "ok" quer dizer que o execute não recusa. O dry-verify mostra uma linha por comando no stderr, e `--resume` retoma uma rodada interrompida sem rodar de novo o que já passou na mesma árvore |
 | `oxe-cc plan done Tn` | marca uma tarefa concluída (com o checkpoint) no PLAN.json |
+| `oxe-cc plan build --from <papéis> [--auto-close-imports] [--fix-stale-paths] [--pair-as-deps]` | monta PLAN.json, PLAN.md e o pack a partir dos planos de papel; fecha o escopo com quem importa um arquivo removido, corrige um caminho que foi movido e ordena o contrato antes de quem o consome |
+| `oxe-cc plan amend-test <arquivo> --reason "<CR>" [--by <papel>]` | emenda um teste congelado com a CR que autoriza: confere o rigor, recalcula só o `sha256` dele e mantém as tarefas já concluídas |
+| `oxe-cc runtime resume [continue\|reset-task]` | retoma uma tarefa interrompida com a árvore suja: sem argumento só inspeciona (arquivos no escopo, fora dele e sintaxe JSON/TS); `continue` mantém o trabalho, `reset-task` descarta só os arquivos da tarefa |
+| `oxe-cc runtime commit-task Tn [--by <agente>] [--skip-verify-if-fresh] [--strict-scope]` | fecha uma tarefa feita fora do executor (subagente, fallback manual) pelo mesmo crivo: escopo, hash dos testes congelados, anti-stub, verify, commit isolado e eventos no ledger |
+| `oxe-cc runtime start-task Tn [--by <agente>]` | registra que alguém de fora do executor começou a tarefa (`TaskStarted`, `in_progress`), para o `resume` saber de quem é a árvore suja |
+| `oxe-cc runtime pre-push` | recusa o push quando há um diretório `tests/acceptance/parked-*` rastreado pelo Git; é o que o hook de `oxe-cc guards install` chama |
 | `oxe-cc runtime program init\|start\|close\|status` | programa por fases a partir do ROADMAP |
 | `oxe-cc runtime feedback\|signoff\|dossier` | change requests, sign-off de UAT e dossiê vivo da fase |
 | `oxe-cc runtime execute --budget-turns N --checkpoint-commits` | executa com teto de turnos e checkpoint por tarefa |
 | `oxe-cc runtime ci --attach <run>` | anexa um run de CI à fase (gate `kind: ci`) |
 | `oxe-cc runtime scorecard [--since <data>]` | mede a maturidade a partir dos registros do runtime |
+| `oxe-cc runtime execute --parallel-mutating --checkpoint-commits` | roda ao mesmo tempo as tarefas de uma onda com escopos disjuntos, cada uma numa worktree; integra só os arquivos do escopo, verifica de novo e commita uma por vez (`parallel.max`, `deps_strategy`) |
+| `oxe-cc runtime execute --json` | uma linha NDJSON por evento de tarefa (`task`, `attempt`, `status`, `cost_usd`, `failed_segment`); a última linha é o resultado |
+| `oxe-cc … --plain` | saída ASCII (OK/FAIL/BLOCKED), sem banner nem box drawing; é o padrão quando o stdout não é um TTY (`OXE_PLAIN=0` desliga) |
 | `oxe-cc status --full` | mostra próximo passo, coverage matrix e active run |
 | `oxe-cc status --json` | saída estruturada para hosts e CI |
 | `oxe-cc map --json` | catálogo dos artefatos existentes e lazy |
@@ -586,7 +597,7 @@ Métricas úteis para acompanhar a adoção:
 
 Não use quantidade de prompts, agentes ou linhas geradas como métrica isolada de sucesso. O objetivo é reduzir retrabalho e aumentar confiança na entrega.
 
-Guias: [adoção por papéis](docs/ROLES.md) · [adoção em equipe](docs/TEAM-ADOPTION.md) · [walkthrough](docs/WALKTHROUGH.md) · [playbook de incidentes](docs/INCIDENT-PLAYBOOK.md).
+Guias: [caminho feliz](docs/HAPPY-PATH.md) · [adoção por papéis](docs/ROLES.md) · [adoção em equipe](docs/TEAM-ADOPTION.md) · [walkthrough](docs/WALKTHROUGH.md) · [playbook de incidentes](docs/INCIDENT-PLAYBOOK.md).
 
 ---
 
@@ -644,6 +655,7 @@ O pipeline de release usa GitHub Actions fixadas por SHA, valida correspondênci
 ## Documentação complementar
 
 - [Quickstart](QUICKSTART.md)
+- [Caminho feliz (só a trilha recomendada)](docs/HAPPY-PATH.md)
 - [Walkthrough completo](docs/WALKTHROUGH.md)
 - [Papéis e responsabilidades](docs/ROLES.md)
 - [Adoção em equipe](docs/TEAM-ADOPTION.md)

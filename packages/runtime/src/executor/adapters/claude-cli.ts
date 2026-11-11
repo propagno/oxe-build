@@ -1,4 +1,5 @@
 import os from 'os';
+import { CLI_FAILURE_QUOTA_RE } from '../quota-patterns';
 import fs from 'fs';
 import path from 'path';
 import { spawn, spawnSync } from 'child_process';
@@ -35,6 +36,8 @@ export interface ClaudeCliAdapterOptions {
   freeMemory?: () => number;
   /** Poll interval of the memory gate (default 5 s). */
   memoryPollMs?: number;
+  /** OXB-148: hard limit of a bridge prompt in chars (default 1.2M); over it the turn fails fast as `context`. */
+  maxPromptChars?: number;
 }
 
 /** One `claude -p` at a time per process: turns of parallel nodes queue instead of stacking CLI processes. */
@@ -57,7 +60,31 @@ interface CliReply {
 }
 
 const CLAUDE_FLAGS = ['-p', '--output-format', 'json', '--tools', '', '--no-session-persistence', '--strict-mcp-config'];
-const DEFAULT_TIMEOUT_MS = 5 * 60_000;
+/** OXB-153: one turn that writes a big module or a migration takes more than 5 min (F4-P1: 9 turns, then killed). */
+const DEFAULT_TIMEOUT_MS = 20 * 60_000;
+/**
+ * OXB-148: F2-T1's 2.29M-char prompt was ~1.37M tokens (≈1.7 chars/token for code + Portuguese). The window is 1M
+ * tokens; 1.2M chars keeps a margin. Tool results older than the last few are elided from 600k chars on.
+ */
+export const DEFAULT_MAX_PROMPT_CHARS = 1_200_000;
+const ELIDE_FROM_CHARS = 600_000;
+const KEEP_RECENT_TOOL_RESULTS = 6;
+
+/** Elides the oldest tool results (keeping the last few) until the conversation fits the soft budget. */
+export function fitTranscript(messages: ChatMessage[], hardLimit: number = DEFAULT_MAX_PROMPT_CHARS): ChatMessage[] {
+  const size = (ms: ChatMessage[]) => ms.reduce((n, m) => n + String(m.content ?? '').length, 0);
+  const soft = Math.min(ELIDE_FROM_CHARS, hardLimit);
+  if (size(messages) <= soft) return messages;
+  const out = messages.map((m) => ({ ...m }));
+  const toolIdx = out.map((m, i) => (m.role === 'tool' ? i : -1)).filter((i) => i >= 0);
+  const elidable = toolIdx.slice(0, Math.max(0, toolIdx.length - KEEP_RECENT_TOOL_RESULTS));
+  for (const i of elidable) {
+    if (size(out) <= soft) break;
+    const len = String(out[i].content ?? '').length;
+    if (len > 400) out[i].content = `[resultado antigo omitido para caber na janela: ${len} chars — leia de novo se precisar]`;
+  }
+  return out;
+}
 let callSeq = 0;
 
 /** First matching executable on PATH (on Windows also tries .exe/.cmd/.bat), or null. */
@@ -125,6 +152,37 @@ export function buildBridgePrompt(messages: ChatMessage[], tools: ToolSchema[] =
 }
 
 /** Parse the model's reply into content + tool calls; null when it is not the expected JSON. */
+/** An adapter failure with what the CLI said, classified (context / quota / llm / env) and the cost already spent. */
+export interface CliFailure extends Error { kind: 'context' | 'quota' | 'llm' | 'env' | 'timeout'; costUsd: number; subtype: string | null; exitCode: number | null; }
+
+const CONTEXT_RE = /prompt is too long|too many tokens|context (window|length)|input is too long|maximum context|exceeds? the (model'?s? )?(context|token)/i;
+const QUOTA_RE = CLI_FAILURE_QUOTA_RE;
+
+export function cliFailure(input: { code: number | null; stdout: string; stderr: string; envelope: { result?: unknown; total_cost_usd?: unknown; subtype?: unknown; is_error?: unknown } | null; promptChars?: number }): CliFailure {
+  const env = input.envelope;
+  const subtype = env && typeof env.subtype === 'string' ? env.subtype : null;
+  const result = env ? String(env.result ?? '') : '';
+  const stdoutTail = env ? '' : String(input.stdout || '').trim().slice(-400);
+  const stderr = String(input.stderr || '').trim().slice(0, 400);
+  const text = [subtype, result, stdoutTail, stderr].filter(Boolean).join(' · ');
+  const kind: CliFailure['kind'] = CONTEXT_RE.test(text) ? 'context' : QUOTA_RE.test(text) ? 'quota' : subtype === 'error_max_turns' ? 'llm' : 'env';
+  const parts = [
+    `claude exit ${input.code ?? '?'}`,
+    subtype ? `subtype=${subtype}` : null,
+    result ? `result=${result.slice(0, 400)}` : null,
+    stdoutTail ? `stdout=${stdoutTail}` : null,
+    stderr ? `stderr=${stderr}` : null,
+    input.promptChars ? `prompt=${input.promptChars} chars (~${Math.round(input.promptChars / 4)} tokens)` : null,
+    `kind=${kind}`,
+  ].filter(Boolean);
+  const error = new Error(parts.join(' · ')) as CliFailure;
+  error.kind = kind;
+  error.costUsd = env && typeof env.total_cost_usd === 'number' ? env.total_cost_usd : 0;
+  error.subtype = subtype;
+  error.exitCode = input.code;
+  return error;
+}
+
 export function parseBridgeReply(text: string): { content: string; tool_calls: ToolCall[] } | null {
   const raw = String(text ?? '');
   const start = raw.indexOf('{');
@@ -195,11 +253,19 @@ export class ClaudeCliAdapter implements ExecutorAdapter {
     const retries = this.options.parseRetries ?? 2;
     let costUsd = 0;
     let lastText = '';
+    // OXB-148: the whole conversation is re-sent on every turn. Old tool results are elided first; a prompt still over
+    // the hard limit fails fast as `context` without paying for a call that cannot fit.
+    const messages = fitTranscript(opts.messages, this.options.maxPromptChars ?? DEFAULT_MAX_PROMPT_CHARS);
     for (let attempt = 0; attempt <= retries; attempt++) {
-      const prompt = buildBridgePrompt(opts.messages, opts.tools ?? [], attempt > 0);
+      const prompt = buildBridgePrompt(messages, opts.tools ?? [], attempt > 0);
+      if (prompt.length > (this.options.maxPromptChars ?? DEFAULT_MAX_PROMPT_CHARS)) {
+        throw cliFailure({ code: null, stdout: '', stderr: '', envelope: { is_error: true, subtype: 'prompt_over_limit', result: `Prompt is too long (estimated before the call, limit ${this.options.maxPromptChars ?? DEFAULT_MAX_PROMPT_CHARS} chars)` }, promptChars: prompt.length });
+      }
       const reply = await singleFlight(async () => {
         await this.waitForMemory();
-        return this.runOnce(prompt, opts.timeoutMs);
+        // rc.39: only the attempt's own model (tier/override) overrides the adapter. opts.model is the http provider's
+        // default (claude-sonnet-4-6) and forced every turn of rc.37/rc.38 onto that old model.
+        return this.runOnce(prompt, opts.timeoutMs, opts.attemptModel || null);
       });
       costUsd += reply.costUsd;
       lastText = reply.text;
@@ -235,10 +301,16 @@ export class ClaudeCliAdapter implements ExecutorAdapter {
     }
   }
 
-  private runOnce(prompt: string, timeoutMs?: number): Promise<CliReply> {
+  private runOnce(prompt: string, timeoutMs?: number, modelOverride?: string | null): Promise<CliReply> {
+    return this.runOnceRaw(prompt, timeoutMs, modelOverride);
+  }
+
+  private runOnceRaw(prompt: string, timeoutMs?: number, modelOverride?: string | null): Promise<CliReply> {
     const executable = this.executable();
     if (!executable) return Promise.reject(new Error(`${this.command} não encontrado no PATH`));
-    const model = this.options.model ? ['--model', this.options.model] : [];
+    // OXB-131: the attempt's model (tier escalation) wins over the adapter's default.
+    const chosen = modelOverride || this.options.model;
+    const model = chosen ? ['--model', chosen] : [];
     const spawnable = buildSpawnable(executable, [
       ...(this.options.prefixArgs ?? []),
       ...CLAUDE_FLAGS,
@@ -256,7 +328,11 @@ export class ClaudeCliAdapter implements ExecutorAdapter {
       let err = '';
       const timer = setTimeout(() => {
         proc.kill();
-        reject(new Error(`claude -p excedeu ${limit} ms`));
+        // OXB-153: a per-call timeout is its own class — the attempt continues instead of restarting from zero.
+        const e = new Error(`claude -p excedeu ${limit} ms (timeout por chamada; executor.timeout_ms / --llm-timeout-ms)`) as Error & { kind: string; costUsd: number };
+        e.kind = 'timeout';
+        e.costUsd = 0;
+        reject(e);
       }, limit);
       proc.stdout.on('data', (chunk) => { out += chunk; });
       proc.stderr.on('data', (chunk) => { err += chunk; });
@@ -266,14 +342,13 @@ export class ClaudeCliAdapter implements ExecutorAdapter {
       });
       proc.on('close', (code) => {
         clearTimeout(timer);
-        if (code !== 0) return reject(new Error(`claude exit ${code}: ${err.slice(0, 400)}`));
-        let envelope: { result?: unknown; total_cost_usd?: unknown; is_error?: unknown };
-        try {
-          envelope = JSON.parse(out);
-        } catch {
-          return reject(new Error(`claude devolveu saída não-JSON: ${out.slice(0, 400)}`));
+        // OXB-148: `claude -p --output-format json` puts the real reason in STDOUT (is_error, subtype, result), also on a
+        // non-zero exit with an empty stderr. F2's T1 failed 3/3 as "claude exit 1: " with nothing to act on.
+        let envelope: { result?: unknown; total_cost_usd?: unknown; is_error?: unknown; subtype?: unknown } | null = null;
+        try { envelope = JSON.parse(out); } catch { envelope = null; }
+        if (code !== 0 || !envelope || envelope.is_error) {
+          return reject(cliFailure({ code, stdout: out, stderr: err, envelope, promptChars: prompt.length }));
         }
-        if (envelope.is_error) return reject(new Error(`claude reportou erro: ${String(envelope.result ?? '').slice(0, 400)}`));
         resolve({
           text: String(envelope.result ?? ''),
           costUsd: typeof envelope.total_cost_usd === 'number' ? envelope.total_cost_usd : 0,

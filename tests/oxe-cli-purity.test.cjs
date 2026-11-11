@@ -56,6 +56,6 @@ describe('pureza da CLI de runtime', () => {
     assert.equal(res.status, 0, res.stderr);
     const doc = JSON.parse(res.stdout);
     assert.deepEqual(doc, { run: null, status: 'absent' });
-    assert.match(res.stderr, /OXE ▸ runtime/);
+    assert.match(res.stderr, /OXE (▸|>) runtime/); // ▸ on a TTY, > in plain mode (OXB-065)
   });
 });

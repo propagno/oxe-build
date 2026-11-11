@@ -40,6 +40,20 @@ exports.EVENT_TYPES = [
     'ChangeResolved',
     'VerifyCommandSuspect',
     'BudgetExhausted',
+    'ScopeViolation',
+    'ScratchIgnored',
+    'ScopeInsufficient',
+    'RunPaused',
+    'WorkItemDeferred',
+    'DispatchState',
+    'RepairDecided',
+    'TaskStarted',
+    'TaskCompleted',
+    'CheckpointCreated',
+    'TaskResumed',
+    'TaskReset',
+    'RateLimitWait',
+    'FrozenTestAmended',
 ];
 function isValidEventType(type) {
     return exports.EVENT_TYPES.includes(type);

@@ -17,6 +17,9 @@ export interface ToolCall {
 export interface CompletionUsage {
     /** Cost reported by the backend for this turn (USD), when it reports one. */
     cost_usd?: number | null;
+    input_tokens?: number;
+    output_tokens?: number;
+    thinking_tokens?: number;
 }
 export interface CompletionResponse {
     content: string;
@@ -28,6 +31,8 @@ export interface StreamCompletionOptions {
     baseUrl: string;
     apiKey: string;
     model: string;
+    /** OXB-131: the model chosen for this attempt (tier/override); null = the backend default. */
+    attemptModel?: string | null;
     messages: ChatMessage[];
     tools?: ToolSchema[];
     maxTokens?: number;

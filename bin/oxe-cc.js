@@ -63,6 +63,25 @@ function useAnsiColors() {
  * decoration go to stderr, so `oxe-cc … --json | jq` and benchmarks can parse the output.
  */
 const JSON_OUTPUT_MODE = process.argv.includes('--json');
+
+/** 1.21.2 (OXB-133): `--json-errors` / OXE_JSON_ERRORS=1 — every failure is one typed envelope with a stable exit code. */
+process.argv = require('./lib/oxe-cli-errors.cjs').install(process.argv).argv;
+
+/**
+ * 1.21.2 (OXB-065): plain output. When stdout is not a TTY (redirected to a log, read by an agent loop) or with
+ * `--plain`, the CLI prints no banner and no box drawing, and status glyphs become ASCII words (OK, FAIL, BLOCKED…).
+ * A reader that decodes with a legacy code page (pwsh `*>> log`) then still greps "OK T3"; accents stay real UTF-8.
+ * `OXE_PLAIN=0` forces the decorated output, `OXE_PLAIN=1` forces plain.
+ */
+const cliOutput = require('./lib/oxe-cli-output.cjs');
+const PLAIN_OUTPUT_MODE = cliOutput.isPlainMode();
+if (process.argv.includes('--plain')) process.argv = process.argv.filter((a) => a !== '--plain');
+if (PLAIN_OUTPUT_MODE) {
+  // stdout in --json mode carries data (JSON/NDJSON): its strings are not rewritten. Decoration on stderr is.
+  if (!JSON_OUTPUT_MODE) cliOutput.installPlainWriter(process.stdout);
+  cliOutput.installPlainWriter(process.stderr);
+}
+
 function decor(...args) {
   if (JSON_OUTPUT_MODE) console.error(...args);
   else console.log(...args);
@@ -83,7 +102,7 @@ function printSection(title) {
 /** Print branded header; skip with OXE_NO_BANNER=1. Not used for --version (scripts). */
 function printBanner() {
   if (process.env.OXE_NO_BANNER === '1' || process.env.OXE_NO_BANNER === 'true') return;
-  if (JSON_OUTPUT_MODE) return;
+  if (JSON_OUTPUT_MODE || PLAIN_OUTPUT_MODE) return;
   const color = useAnsiColors();
   const ver = readPkgVersion();
   const bannerPath = path.join(PKG_ROOT, 'bin', 'banner.txt');
@@ -453,8 +472,11 @@ function parseInstallArgs(argv) {
     else if (a === '--hints') out.statusHints = true;
     else if (a === '--full') out.statusFull = true;
     else if (a === '--summary') out.statusSummary = true;
+    else if (a === '--all-worktrees') out.allWorktrees = true;
     else if (a === '--release') out.releaseDoctor = true;
     else if (a === '--project') out.projectDoctor = true;
+    else if (a === '--migrate-config') out.migrateConfig = true;
+    else if (a === '--apply') out.applyMigration = true;
     else if (a === '--write-manifest') out.writeManifest = true;
     else if (!a.startsWith('-')) out.restPositional.push(a);
     else {
@@ -1328,7 +1350,8 @@ function writeOxeLegend(target, opts = {}) {
   const dest = path.join(oxeDir, 'README.md');
   try {
     ensureDir(oxeDir);
-    fs.writeFileSync(dest, oxeArtifactCatalog.renderLegend(), 'utf8');
+    // OXB-031/043: the generated legend carries the oxe-cc version that (re)wrote it — the lean core stays 3 files.
+    fs.writeFileSync(dest, `${oxeArtifactCatalog.renderLegend().replace(/\s*$/, '')}\n\n<!-- oxe-cc-version: ${readPkgVersion()} -->\n`, 'utf8');
     if (!opts.quiet) console.log(`${green}init${reset}  ${dest}`);
   } catch {
     /* best-effort: a missing legend is never fatal */
@@ -1825,6 +1848,26 @@ function runStatusFull(target) {
  */
 function runStatus(target, opts = {}) {
   const { config } = oxeHealth.loadOxeConfigMerged(target);
+  const dirInfo = require('./lib/oxe-dir-info.cjs');
+  const staleDays = Number.isInteger(config && config.oxe_stale_days) ? config.oxe_stale_days : 14;
+  // OXB-043: `oxe-cc status --all-worktrees` — every worktree's .oxe/ and its state, to tell the active one.
+  if (opts.allWorktrees) {
+    const rows = dirInfo.worktreesOxe(target, { staleDays });
+    if (opts.json) {
+      console.log(JSON.stringify({ oxeWorktreesSchema: 1, worktrees: rows.map((r) => ({ path: r.path, branch: r.branch, here: r.here, oxe: r.oxe.exists ? { version: r.oxe.version, last_activity: r.oxe.last_activity, idle_days: r.oxe.idle_days, program: r.oxe.program, stale: r.oxe.stale, reasons: r.oxe.reasons } : null })) }));
+      return;
+    }
+    const cc = useAnsiColors();
+    printSection('OXE ▸ worktrees');
+    if (!rows.length) console.log('  (não é um repositório git)');
+    for (const r of rows) {
+      const tag = !r.oxe.exists ? `${cc ? dim : ''}sem .oxe/${cc ? reset : ''}` : r.oxe.stale ? `${cc ? yellow : ''}stale${cc ? reset : ''}` : `${cc ? green : ''}ativo${cc ? reset : ''}`;
+      console.log(`  ${r.here ? '▸' : ' '} ${r.path} [${r.branch || '?'}] ${tag}`);
+      if (r.oxe.exists) console.log(`      ${dirInfo.oxeDirLine(r.oxe)}${r.oxe.reasons.length ? ` — ${r.oxe.reasons.join('; ')}` : ''}`);
+    }
+    return;
+  }
+  const oxeDirInfo = dirInfo.describeOxeDir(target, { staleDays });
   const report = oxeHealth.buildHealthReport(target);
   const routineHints = collectOxeRoutineHints(target, report, config);
   const next = report.next;
@@ -1846,6 +1889,7 @@ function runStatus(target, opts = {}) {
     const payload = {
       oxeStatusSchema: 5,
       projectRoot: path.resolve(target),
+      oxeDir: oxeDirInfo.exists ? { version: oxeDirInfo.version, running: oxeDirInfo.running, last_activity: oxeDirInfo.last_activity, idle_days: oxeDirInfo.idle_days, program: oxeDirInfo.program, stale: oxeDirInfo.stale, reasons: oxeDirInfo.reasons } : null,
       workspaceMode: report.workspaceMode || 'oxe_project',
       releaseReadiness: report.releaseReadiness || null,
       nextStep: report.next.step,
@@ -1926,14 +1970,30 @@ function runStatus(target, opts = {}) {
     if (opts.hints) {
       payload.hints = routineHints;
     }
+    // OXB-145: pending attention first-class in the JSON too.
+    try { payload.attention = require('./lib/oxe-attention.cjs').open(path.resolve(target)).map((x) => ({ id: x.id, what: x.what, command: x.command, owner: x.owner, at: x.at })); } catch { payload.attention = []; }
     console.log(JSON.stringify(payload));
     return;
   }
 
   printSection('OXE ▸ status');
+  // OXB-145: what needs someone comes first.
+  try {
+    const att = require('./lib/oxe-attention.cjs').open(path.resolve(target));
+    if (att.length) {
+      const cc = useAnsiColors();
+      console.log(`  ${cc ? yellow : ''}ATENÇÃO (${att.length}) — .oxe/ATTENTION.md${cc ? reset : ''}`);
+      for (const x of att.slice(0, 5)) console.log(`    ${x.id}: ${x.what} → ${x.command} (${x.owner})`);
+      console.log('');
+    }
+  } catch { /* auxiliar */ }
   const c = useAnsiColors();
   console.log(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${target}${c ? reset : ''}`);
   console.log(`  ${c ? dim : ''}Workspace mode:${c ? reset : ''} ${report.workspaceMode || 'oxe_project'}`);
+  if (oxeDirInfo.exists) {
+    console.log(`  ${c ? dim : ''}.oxe/:${c ? reset : ''} ${dirInfo.oxeDirLine(oxeDirInfo)}`);
+    if (oxeDirInfo.stale) console.log(`  ${c ? yellow : ''}AVISO${c ? reset : ''} .oxe/ stale: ${oxeDirInfo.reasons.join('; ')} — o próximo passo abaixo pode ser de um plano morto. Com várias worktrees: ${c ? cyan : ''}oxe-cc status --all-worktrees${c ? reset : ''}`);
+  }
 
   const wfTgt = oxeWorkflows.resolveWorkflowsDir(target);
   if (!wfTgt) {
@@ -1967,7 +2027,7 @@ function runStatus(target, opts = {}) {
 
   // Explicit blockage diagnosis
   const packageMode = report.workspaceMode === 'product_package';
-  const specMissing = !fs.existsSync(path.join(target, '.oxe', 'SPEC.md'));
+  const specMissing = !fs.existsSync(oxeHealth.oxePaths(target).spec);
   const planMissing = !fs.existsSync(path.join(target, '.oxe', 'PLAN.md'));
   const verifyMissing = !fs.existsSync(path.join(target, '.oxe', 'VERIFY.md'));
   if (packageMode) {
@@ -2017,6 +2077,27 @@ function runStatus(target, opts = {}) {
 
 /** @param {string} target */
 function runDoctor(target, options = {}) {
+    // OXB-100: the config migrations of this version (notes + mechanical key moves), applied only with --apply.
+    if (options.migrateConfig) {
+      const ch = require('./lib/oxe-channels.cjs');
+      const cfgPath = path.join(target, '.oxe', 'config.json');
+      const pkgVersion = readPkgVersion();
+      if (!fs.existsSync(cfgPath)) { console.error(`${red}✗${reset} sem .oxe/config.json em ${target}`); process.exitCode = 1; return; }
+      const config = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      const list = ch.pending(config, config.oxe_config_version || null, pkgVersion);
+      const out = options.applyMigration ? ch.apply(cfgPath, pkgVersion) : { from: config.oxe_config_version || null, to: pkgVersion, pending: list };
+      if (options.json) { console.log(JSON.stringify({ oxeMigrateConfigSchema: 1, ...out }, null, 2)); return; }
+      printSection('OXE ▸ doctor --migrate-config');
+      const notes = options.applyMigration ? out.notes : list.flatMap((m) => m.notes.map((n) => `${m.version}: ${n}`));
+      const moves = options.applyMigration ? out.applied : list.flatMap((m) => m.moves.map((mv) => `${mv.from} → ${mv.to}`));
+      console.log(`  config de ${out.from || '(sem versão)'} para ${out.to}`);
+      for (const n of notes) console.log(`  - ${n}`);
+      for (const mv of moves) console.log(`  ${options.applyMigration ? 'aplicado' : 'pendente'}: ${mv}`);
+      if (!notes.length && !moves.length) console.log('  nada a migrar');
+      if (!options.applyMigration && (notes.length || moves.length)) console.log('  aplicar (com backup): oxe-cc doctor --migrate-config --apply');
+      if (options.applyMigration) console.log(`  backup: ${path.relative(target, out.backup)}`);
+      return;
+    }
     if (options.project) {
       // 1.21 (OXB-006): the machine against the project's engines/.nvmrc/packageManager, the same check the execute
       // preflight blocks on.
@@ -2181,6 +2262,34 @@ function runDoctor(target, options = {}) {
   } else {
     console.log(`${dim}Obs.:${reset} .oxe/config.json ausente (opcional — ver oxe/templates/CONFIG.md)`);
   }
+  // OXB-031/043: the oxe-cc that wrote this .oxe/ versus the one running now, and whether the .oxe/ is stale.
+  try {
+    const dirInfo = require('./lib/oxe-dir-info.cjs');
+    const info = dirInfo.describeOxeDir(target);
+    if (info.exists) {
+      console.log(`${info.stale ? yellow + 'AVISO' : green + 'OK'}${reset} .oxe/: ${dirInfo.oxeDirLine(info)}`);
+      for (const r of info.reasons) if (info.stale || /sem registro/.test(r)) console.log(`  ${dim}${r}${reset}`);
+      if (info.version && info.running && info.version !== info.running) console.log(`  ${dim}Versão do projeto ≠ versão em execução: use npx oxe-cc@${info.version} (ou atualize o projeto com oxe-cc update) para não rodar um fluxo de outra versão.${reset}`);
+    }
+  } catch { /* opcional */ }
+  // OXB-118: which project rules are enforced and which are only text.
+  try {
+    const cfgRules = (JSON.parse(fs.readFileSync(path.join(target, '.oxe', 'config.json'), 'utf8')) || {}).policy_rules;
+    const pol = require('./lib/oxe-policy-rules.cjs').summary(cfgRules);
+    if (pol.total) {
+      console.log(`${pol.advisory.length ? yellow + 'AVISO' : green + 'OK'}${reset} Regras do projeto: ${pol.enforced.length} aplicada(s), ${pol.advisory.length} só texto${pol.advisory.length ? ' — nada checa estas; converta (oxe-cc policy list)' : ''}`);
+      for (const r of pol.advisory.slice(0, 12)) console.log(`  ${dim}· ${r.text.slice(0, 110)}${reset}`);
+    }
+  } catch { /* opcional */ }
+  // OXB-032: spec_ref/roadmap_ref that are missing, or a .oxe/ copy that diverges from them.
+  try {
+    for (const w of require('./lib/oxe-artifact-refs.cjs').refWarnings(target)) console.log(`${yellow}AVISO${reset} ${w}`);
+  } catch { /* opcional */ }
+  // OXB-058: a gitignored .oxe/ with no versioned export leaves SPEC/ROADMAP/PROGRAM edits without history.
+  try {
+    const historyWarning = oxeOperational.oxeHistoryWarning(target);
+    if (historyWarning) console.log(`${yellow}AVISO${reset} ${historyWarning}`);
+  } catch { /* opcional */ }
 
   const cbDir = path.join(target, '.oxe', 'codebase');
   const expectedMaps = [
@@ -2537,14 +2646,28 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime program <status|init|start|close> [--phase F2] [--force] [--no-commit] [--json] [pasta-do-projeto]
   npx oxe-cc runtime dossier [--phase F1] [--base-commit <sha>] [--json] [pasta-do-projeto]
   npx oxe-cc runtime signoff --phase F1 --criteria A8 --by <quem> [--message <nota>] [--evidence <caminho|url>]
-  npx oxe-cc runtime feedback --class <defect|spec_gap|constraint|new_scope> --summary "..." [--criteria A4] [--by <quem>] [--amend-to 2]
+  npx oxe-cc runtime feedback --class <defect|spec_gap|constraint|new_scope> --summary "..." [--criteria A4] [--tasks T7[,T8]] [--by <quem>] [--amend-to 2] [--additive]
   npx oxe-cc runtime feedback list [--json]
+  npx oxe-cc runtime feedback resolve|withdraw CR-<n> --by <papel> --reason "…"
   npx oxe-cc runtime rollback --task T3 [--yes]
-  npx oxe-cc runtime execute ... [--checkpoint-commits] [--budget-turns N] [--budget-usd X] [--budget-reset] [--max-retries N]
+  npx oxe-cc runtime execute ... [--checkpoint-commits] [--budget-turns N] [--budget-usd X] [--budget-reset] [--max-retries N] [--wave N] [--strict-external] [--parallel-mutating [--max-parallel N]] [--json → NDJSON por evento de tarefa]
+  (qualquer comando) --plain  saída ASCII sem banner (padrão quando o stdout não é TTY; OXE_PLAIN=0 desliga)
   npx oxe-cc runtime verify [--no-gates]
   npx oxe-cc runtime scorecard [--since <data>] [--write] [--release-report <arquivo> --name <projeto>] [--json]
   npx oxe-cc runtime ci --attach <run-id|url> [--repo owner/repo] [--head <sha>]
-  npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"] [--no-gates]
+  npx oxe-cc runtime signal --from <relatório do HML>|<url de issue>|github:<owner/repo> [--dry-run] [--by <papel>]   (achado → CR na fase dele)
+  npx oxe-cc runtime deploy --attach <env> --version <v> --ref <tag|url> [--check "<cmd>"]… [--phase Fn]   (registra e verifica; nunca faz o deploy)
+  npx oxe-cc runtime program budget [--mode cap|track_only] [--budget-usd N] [--budget-turns N] --by <papel> --reason "…"
+  npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"] [--no-gates] [--accept-drift <glob> --by <papel> --reason "…"]
+  npx oxe-cc runtime sync --from origin/main [--no-fetch] [--no-reverify]   (merge local; reverify das tarefas done tocadas pela base)
+  npx oxe-cc runtime promote T<n> --base main [--branch <nome>] [--open-pr] [--remote origin] [--no-pr-ready]
+  npx oxe-cc spec amend A<n> (--text "…"|--append "…"|--verify "…") --by <papel> --reason "…" [--additive] [--phase Fn]
+  npx oxe-cc spec add criterion A<n> --text "…" --verify "…" --by <papel> --reason "…" [--allow-gap]
+  npx oxe-cc spec add requirement R<n> --text "…" [--criteria A<n>,…] [--before "### Fora do escopo"] --by <papel> --reason "…"
+  npx oxe-cc program phase add --after Fn --title "…" [--requirements R14] [--acceptance A42,A43] [--scope "…"] --by <papel>
+  npx oxe-cc program phase edit Fn [--title "…"] [--add-requirements R17] [--remove-requirements R2] [--add-acceptance A58] [--remove-acceptance A3] [--scope "…" [--keep-bullets] | --scope-file escopo.md] --by <papel>
+  npx oxe-cc program criterion move A<n> --from Fn --to Fm --by <papel>
+  npx oxe-cc program export [<projeto>] [--out <pasta>]   (saída padrão: program.export_dir do .oxe/config.json)
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
     npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
     npx oxe-cc plugins <list|install|remove> [opções]
@@ -2721,6 +2844,7 @@ ${green}init-oxe${reset} (bootstrap só de .oxe/ no projeto — STATE.md, codeba
 ${green}status${reset} (coerência .oxe/ + um próximo passo sugerido; não exige pacote de workflows completo)
   --dir <pasta>   raiz do projeto (padrão: diretório atual)
   --json          imprime um único objeto JSON (próximo passo + diagnósticos) em stdout; adequado a CI
+  --all-worktrees  o .oxe/ de cada worktree do repositório (versão, última atividade, programa, stale)
   --hints         lembretes de rotina (idade scan/compact quando configurado em config.json); com --json inclui array \`hints\`
 
 ${green}capabilities${reset} (catálogo nativo de extensões do projeto)
@@ -2820,6 +2944,13 @@ function runInstall(opts) {
   } else {
     const nested = path.join(target, '.oxe');
     copyDir(path.join(PKG_ROOT, 'oxe', 'workflows'), path.join(nested, 'workflows'), copyOpts, true);
+    // OXB-146: reapply the team/personal overlays on the new workflows; an overlay whose point vanished asks a decision.
+    if (!opts.dryRun) {
+      try {
+        const cust = require('./lib/oxe-customize.cjs').applyAll(target);
+        if (cust.reapplied || cust.decisions.length) console.log(`  ${useAnsiColors() ? dim : ''}Sobreposições:${useAnsiColors() ? reset : ''} ${cust.reapplied} reaplicada(s), ${cust.decisions.length} precisam de decisão${cust.decisions.length ? ` — ${cust.decisions.map((d) => `${d.workflow} ${d.point}`).join(', ')} (oxe-cc customize list)` : ''}`);
+      } catch { /* sobreposição nunca derruba o install */ }
+    }
     copyDir(path.join(PKG_ROOT, 'oxe', 'templates'), path.join(nested, 'templates'), copyOpts, true);
     // Personas: copiar para .oxe/personas/ (não sobrescreve personalizações do projeto)
     const personasSrc = path.join(PKG_ROOT, 'oxe', 'personas');
@@ -4126,21 +4257,69 @@ function parseRuntimeArgs(argv) {
     else if (a === '--base-commit' && argv[i + 1]) out.base = String(argv[++i]);
     else if (a === '--criteria' && argv[i + 1]) out.criteria = String(argv[++i]);
     else if (a === '--by' && argv[i + 1]) out.by = String(argv[++i]);
+    else if (a === '--answer' && argv[i + 1]) out.answer = String(argv[++i]);
+    else if (a === '--freeze') out.freeze = true;
+    else if (a === '--stats') out.stats = true;
+    else if (a === '--explain') out.explain = true;
+    else if (a === '--apply') out.applyTrain = true;
+    else if (a === '--until' && argv[i + 1]) out.until = String(argv[++i]);
+    else if (a === '--metric' && argv[i + 1]) out.metric = String(argv[++i]);
+    else if (a === '--method' && argv[i + 1]) out.method = String(argv[++i]);
+    else if (a === '--threshold' && argv[i + 1]) out.threshold = String(argv[++i]);
+    else if (a === '--samples' && argv[i + 1]) out.samples = Number(argv[++i]);
+    else if (a === '--environment' && argv[i + 1]) out.environment = String(argv[++i]);
     else if (a === '--evidence' && argv[i + 1]) out.evidence = String(argv[++i]);
     else if (a === '--class' && argv[i + 1]) out.changeClass = String(argv[++i]);
     else if (a === '--summary' && argv[i + 1]) out.summary = String(argv[++i]);
     else if (a === '--amend-to' && argv[i + 1]) out.amendTo = Number(argv[++i]);
+    else if (a === '--tasks' && argv[i + 1]) out.tasks = String(argv[++i]);
+    else if (a === '--branch' && argv[i + 1]) out.branch = String(argv[++i]);
+    else if (a === '--open-pr') out.openPr = true;
+    else if (a === '--no-fetch') out.noFetch = true;
+    else if (a === '--no-reverify') out.noReverify = true;
+    else if (a === '--no-pr-ready') out.noPrReady = true;
+    else if (a === '--additive') out.additive = true;
     else if (a === '--defer-signoff') out.deferSignoff = true;
     else if (a === '--risk' && argv[i + 1]) out.risk = String(argv[++i]);
+    else if (a === '--accept-drift' && argv[i + 1]) out.acceptDrift = [...(out.acceptDrift || []), String(argv[++i])];
     else if (a === '--yes') out.yes = true;
     else if (a === '--checkpoint-commits') out.checkpointCommits = true;
     else if (a === '--attach' && argv[i + 1]) out.attach = String(argv[++i]);
+    else if (a === '--ref' && argv[i + 1]) out.ref = String(argv[++i]);
+    else if (a === '--any-label') out.anyLabel = true;
+    else if (a === '--print-prompt') out.printPrompt = true;
+    else if (a === '--llm-timeout-ms' && argv[i + 1]) out.llmTimeoutMs = Number(argv[++i]);
+    else if (a === '--max-run-ms' && argv[i + 1]) out.maxRunMs = Number(argv[++i]);
+    else if (a === '--verify-timeout-ms' && argv[i + 1]) out.verifyTimeoutMs = Number(argv[++i]);
+    else if (a === '--in-place') out.inPlace = true;
+    else if (a === '--promote-each') out.promoteEach = true;
+    else if (a === '--reopen') out.reopen = true;
+    else if (a === '--rule' && argv[i + 1]) out.rule = String(argv[++i]);
+    else if (a === '--severity' && argv[i + 1]) out.severity = String(argv[++i]);
+    else if (a === '--behavior-ran' && argv[i + 1]) out.behaviorRan = String(argv[++i]);
+    else if (a === '--retro-add' && argv[i + 1]) out.retroAdd = String(argv[++i]);
+    else if (a === '--retro-done' && argv[i + 1]) out.retroDone = String(argv[++i]);
+    else if (a === '--waive' && argv[i + 1]) out.waive = String(argv[++i]);
+    else if (a === '--used' && argv[i + 1]) out.used = Number(argv[++i]);
+    else if (a === '--limit' && argv[i + 1]) out.limit = Number(argv[++i]);
+    else if (a === '--note' && argv[i + 1]) out.note = String(argv[++i]);
+    else if (a === '--no-defects') out.noDefects = true;
+    else if (a === '--no-rollback-check') out.noRollbackCheck = true;
+    else if (a === '--hold-deps' || a === '--promote-hold-deps') out.holdDeps = true;
+    else if (a === '--allow-undelivered') out.allowUndelivered = true;
+    else if (a === '--strict-delivery') out.strictDelivery = true;
+    else if (a === '--dry-run') out.dryRun = true;
+    else if (a === '--check' && argv[i + 1]) (out.deployChecks = out.deployChecks || []).push(String(argv[++i]));
+    else if (a === '--version' && argv[i + 1] && !String(argv[i + 1]).startsWith('-')) out.deployVersion = String(argv[++i]);
     else if (a === '--repo' && argv[i + 1]) out.repo = String(argv[++i]);
     else if (a === '--head' && argv[i + 1]) out.head = String(argv[++i]);
     else if (a === '--no-gates') out.noGates = true;
     else if (a === '--budget-turns' && argv[i + 1]) out.budgetTurns = Number(argv[++i]);
     else if (a === '--budget-usd' && argv[i + 1]) out.budgetUsd = Number(argv[++i]);
     else if (a === '--budget-reset') out.budgetReset = true;
+    else if (a === '--strict-external') out.strictExternal = true;
+    else if (a === '--parallel-mutating') out.parallelMutating = true;
+    else if (a === '--max-parallel' && argv[i + 1]) out.maxParallel = Number(argv[++i]);
     else if (a === '--release-report' && argv[i + 1]) out.releaseReport = String(argv[++i]);
     else if (a === '--since' && argv[i + 1]) out.since = String(argv[++i]);
     else if (a === '--name' && argv[i + 1]) out.name = String(argv[++i]);
@@ -4177,6 +4356,10 @@ function parseRuntimeArgs(argv) {
     else if (a === '--agents-plan' && argv[i + 1]) out.agentsPlanPath = path.resolve(argv[++i]);
     else if (a === '--api-key-env' && argv[i + 1]) out.apiKeyEnv = String(argv[++i]);
     else if (a === '--recompile') out.recompile = true;
+    else if (a === '--skip-verify-if-fresh') out.skipVerifyIfFresh = true;
+    else if (a === '--strict-scope') out.strictScope = true;
+    else if (a === '--continue') out.resumeDecision = 'continue';
+    else if (a === '--reset-task') out.resumeDecision = 'reset-task';
     else if (!a.startsWith('-')) positionals.push(a);
     else {
       out.parseError = true;
@@ -4187,12 +4370,56 @@ function parseRuntimeArgs(argv) {
   if (positionals[0]) out.action = positionals[0];
   if (out.action === 'feedback') {
     // Só `list` é subcomando; qualquer outro posicional é o diretório do projeto.
-    if (positionals[1] === 'list') {
+    if (positionals[1] === 'resolve' || positionals[1] === 'withdraw') {
+      out.subAction = positionals[1];
+      out.crId = positionals[2] ? String(positionals[2]).toUpperCase() : '';
+      if (positionals[3]) out.dir = path.resolve(positionals[3]);
+    } else if (positionals[1] === 'list') {
       out.subAction = 'list';
       if (positionals[2]) out.dir = path.resolve(positionals[2]);
     } else if (positionals[1]) {
       out.dir = path.resolve(positionals[1]);
     }
+  } else if (out.action === 'promote' && /^T\d+$/i.test(positionals[1] || '')) {
+    // OXB-060: `runtime promote T7 --base main` promotes one task; without a task id it is the run promotion pipeline.
+    out.task = positionals[1].toUpperCase();
+    if (positionals[2]) out.dir = path.resolve(positionals[2]);
+  } else if (out.action === 'commit-task' || out.action === 'start-task') {
+    // OXB-200 / OXB-204: `runtime commit-task|start-task T<n> [--by <agent|role>]`
+    if (/^T\d+$/i.test(positionals[1] || '')) {
+      out.task = positionals[1].toUpperCase();
+      if (positionals[2]) out.dir = path.resolve(positionals[2]);
+    } else if (positionals[1]) {
+      out.dir = path.resolve(positionals[1]);
+    }
+  } else if (out.action === 'resume' && (positionals[1] === 'continue' || positionals[1] === 'reset-task')) {
+    out.resumeDecision = positionals[1];
+    if (positionals[2]) out.dir = path.resolve(positionals[2]);
+  } else if (out.action === 'ui-evidence') {
+    if (positionals[1]) out.subAction = positionals[1];
+    if (positionals[2]) out.uiFolder = positionals[2];
+    if (positionals[3]) out.dir = path.resolve(positionals[3]);
+  } else if (out.action === 'train') {
+    if (positionals[1]) out.subAction = positionals[1];
+    if (positionals[2]) out.dir = path.resolve(positionals[2]);
+  } else if (out.action === 'nfr') {
+    if (positionals[1]) out.subAction = positionals[1];
+    if (positionals[2]) out.dir = path.resolve(positionals[2]);
+  } else if (out.action === 'attention') {
+    if (positionals[1]) out.subAction = positionals[1];
+    let k = 2;
+    if (out.subAction === 'resolve' && positionals[2]) { out.attentionId = positionals[2]; k = 3; }
+    if (positionals[k]) out.dir = path.resolve(positionals[k]);
+  } else if (out.action === 'repair') {
+    if (positionals[1]) out.subAction = positionals[1];
+    let k = 2;
+    if (/^T\d+$/i.test(positionals[2] || '')) { out.task = positionals[2].toUpperCase(); k = 3; }
+    if (positionals[k]) out.dir = path.resolve(positionals[k]);
+  } else if (out.action === 'questions') {
+    if (positionals[1]) out.subAction = positionals[1];
+    let k = 2;
+    if (/^Q-\d+$/i.test(positionals[2] || '')) { out.questionId = positionals[2].toUpperCase(); k = 3; }
+    if (positionals[k]) out.dir = path.resolve(positionals[k]);
   } else if (out.action === 'gates' || out.action === 'program') {
     if (positionals[1]) out.subAction = positionals[1];
     if (positionals[2]) out.dir = path.resolve(positionals[2]);
@@ -4648,11 +4875,30 @@ async function runRuntime(opts) {
 
   if (opts.action === 'status') {
     const current = oxeOperational.readRunState(opts.dir, activeSession);
+    // OXB-059: the phase's work comes from PLAN.json; the last run may be superseded by what was done after it.
+    let phaseWork = null;
+    try { phaseWork = oxeOperational.runtimePhaseWork(opts.dir, activeSession); } catch { phaseWork = null; }
+    const printPhaseWork = () => {
+      if (!phaseWork || !phaseWork.total) return;
+      const parts = [`${phaseWork.done.length} concluída(s)`];
+      if (phaseWork.external_pending.length) parts.push(`${phaseWork.external_pending.length} aguardando entrega externa (${phaseWork.external_pending.join(', ')})`);
+      if (phaseWork.pending.length) parts.push(`${phaseWork.pending.length} pendente(s) (${phaseWork.pending.join(', ')})`);
+      console.log(`  ${c ? green : ''}Trabalho${phaseWork.phase ? ` da fase ${phaseWork.phase}` : ''}:${c ? reset : ''} ${parts.join(' · ')} de ${phaseWork.total}`);
+      // OXB-157: done in the run but not in PLAN.json.
+      if ((phaseWork.run_done_not_in_plan || []).length) console.log(`  ${c ? yellow : ''}AVISO${c ? reset : ''} ${phaseWork.run_done_not_in_plan.join(', ')} concluída(s) na run mas não no PLAN.json — o PLAN.json foi regenerado? marque com oxe-cc plan done <Tn>`);
+      // OXB-085: tasks held by a precondition (PR merged, commit on main, file existing).
+      for (const [id, labels] of Object.entries(phaseWork.waiting || {})) console.log(`  ${c ? yellow : ''}${id} aguardando:${c ? reset : ''} ${labels.join(', ')}`);
+      if (phaseWork.next_steps.length) console.log(`  ${c ? cyan : ''}Próxima ação:${c ? reset : ''} ${phaseWork.next_steps.join('  →  ')}`);
+    };
     if (!current) {
-      if (opts.jsonOutput) console.log(JSON.stringify({ run: null, status: 'absent' }, null, 2));
-      else console.log(`  ${yellow}Nenhum ACTIVE-RUN encontrado.${reset}`);
+      if (opts.jsonOutput) console.log(JSON.stringify({ run: null, status: 'absent', ...(phaseWork && phaseWork.total ? { phaseWork } : {}) }, null, 2));
+      else {
+        console.log(`  ${yellow}Nenhum ACTIVE-RUN encontrado.${reset}`);
+        printPhaseWork();
+      }
       return;
     }
+    const runSuperseded = Boolean(phaseWork && phaseWork.complete && !/^completed/.test(String(current.status || '')) && current.status !== 'running');
     const report = oxeHealth.buildHealthReport(opts.dir);
     const gates = oxeOperational.readRuntimeGates
       ? oxeOperational.readRuntimeGates(opts.dir, activeSession, { runId: current.run_id })
@@ -4660,7 +4906,8 @@ async function runRuntime(opts) {
     const runtimeMode = oxeOperational.buildRuntimeModeStatus
       ? oxeOperational.buildRuntimeModeStatus(current)
       : null;
-    const multiAgent = oxeOperational.readRuntimeMultiAgentStatus
+    // OXB-059: multi-agent status (and its "execute with plan-agents.json" advice) only when the project uses it.
+    const multiAgent = oxeOperational.readRuntimeMultiAgentStatus && (!phaseWork || phaseWork.multi_agent)
       ? oxeOperational.readRuntimeMultiAgentStatus(opts.dir, activeSession, { runId: current.run_id })
       : null;
     if (opts.jsonOutput) {
@@ -4677,6 +4924,9 @@ async function runRuntime(opts) {
             recoveryState: report.recoveryState || null,
             providerCatalog: report.providerCatalog || null,
             multiAgent: multiAgent || null,
+            phaseWork: phaseWork || null,
+            runSuperseded,
+            nextAction: phaseWork && phaseWork.next_steps.length ? phaseWork.next_steps : null,
           },
           null,
           2
@@ -4685,7 +4935,9 @@ async function runRuntime(opts) {
       return;
     }
     console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${current.run_id}`);
-    console.log(`  ${c ? green : ''}Estado:${c ? reset : ''} ${current.status}`);
+    if (runSuperseded) console.log(`  ${c ? green : ''}Estado:${c ? reset : ''} ${c ? dim : ''}${current.status} — superado: o trabalho do plano foi concluído depois deste run${c ? reset : ''}`);
+    else console.log(`  ${c ? green : ''}Estado:${c ? reset : ''} ${current.status}`);
+    printPhaseWork();
     console.log(`  ${c ? green : ''}Cursor:${c ? reset : ''} onda=${current.cursor && current.cursor.wave != null ? current.cursor.wave : '—'} tarefa=${current.cursor && current.cursor.task ? current.cursor.task : '—'} modo=${current.cursor && current.cursor.mode ? current.cursor.mode : '—'}`);
     console.log(`  ${c ? green : ''}Arquivo:${c ? reset : ''} ${path.join(p.runsDir, `${current.run_id}.json`)}`);
     if (current.compiled_graph && current.compiled_graph.metadata) {
@@ -4718,7 +4970,9 @@ async function runRuntime(opts) {
       const blockers = Array.isArray(report.promotionReadiness.blockers) ? report.promotionReadiness.blockers : [];
       // Only show blockers that are not solely due to unconfigured policy
       const meaningfulBlockers = blockers.filter(b => b !== 'policy_uncovered_mutations' || report.policyCoverage.coveragePercent > 0);
-      const promoLabel = promoStatus === 'blocked' && meaningfulBlockers.length === 0
+      const promoLabel = runSuperseded
+        ? `${c ? dim : ''}n/a (run superado — rode runtime verify)${c ? reset : ''}`
+        : promoStatus === 'blocked' && meaningfulBlockers.length === 0
         ? `${c ? dim : ''}n/a (execução não concluída)${c ? reset : ''}`
         : `${promoStatus}${meaningfulBlockers.length ? ` · ${meaningfulBlockers.join(', ')}` : ''}`;
       console.log(`  ${c ? green : ''}Promotion readiness:${c ? reset : ''} ${promoLabel}`);
@@ -4921,12 +5175,44 @@ async function runRuntime(opts) {
   if (opts.action === 'signoff') {
     try {
       const record = oxeOperational.runtimeSignoff(opts.dir, activeSession, {
-        phase: opts.phase || null, criteria: opts.criteria, by: opts.by, note: opts.message || null, evidence: opts.evidence || null,
+        phase: opts.phase || null, criteria: opts.criteria, by: opts.by, note: opts.message || null, evidence: opts.evidence || null, head: opts.head || null,
       });
       if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeSignoffSchema: 1, ...record }, null, 2));
       else console.log(`  ${c ? green : ''}✓${c ? reset : ''} Sign-off ${record.phase}: ${record.criteria.join(', ')} por ${record.by}`);
     } catch (err) {
       console.error(`  ${c ? red : ''}✗${c ? reset : ''} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (opts.action === 'commit-task') {
+    try {
+      const result = oxeOperational.runtimeCommitTask(opts.dir, activeSession, {
+        task: opts.task || undefined,
+        by: opts.by || undefined,
+        phase: opts.phase || undefined,
+        skipVerifyIfFresh: Boolean(opts.skipVerifyIfFresh),
+        strictScope: Boolean(opts.strictScope),
+        verifyTimeoutMs: opts.verifyTimeoutMs || opts.timeoutMs || undefined,
+        force: Boolean(opts.force),
+      });
+      if (opts.jsonOutput) {
+        console.log(JSON.stringify({ oxeRuntimeCommitTaskSchema: 1, ...result }, null, 2));
+        return;
+      }
+      const refLabel = result.phase ? `${result.phase}/${result.task}` : result.task;
+      console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${refLabel} commitada e marcada done · ${String(result.commit).slice(0, 8)}${result.verify_skipped ? ' · verify reaproveitado (fresh)' : ''} · por ${result.by}`);
+      console.log(`  ${c ? dim : ''}Arquivos (${result.files.length}):${c ? reset : ''} ${result.files.join(', ')}`);
+      if (result.ignored_out_of_scope && result.ignored_out_of_scope.length) {
+        console.log(`  ${c ? yellow : ''}!${c ? reset : ''} Ignorados fora do escopo (não commitados): ${result.ignored_out_of_scope.join(', ')}`);
+      }
+    } catch (err) {
+      if (opts.jsonOutput) {
+        console.log(JSON.stringify({ oxeRuntimeCommitTaskSchema: 1, ok: false, error: err && err.message ? err.message : String(err) }, null, 2));
+      } else {
+        console.error(`  ${c ? red : ''}✗${c ? reset : ''} ${err && err.message ? err.message : err}`);
+      }
       process.exitCode = 1;
     }
     return;
@@ -4950,6 +5236,13 @@ async function runRuntime(opts) {
 
   if (opts.action === 'feedback') {
     try {
+      // OXB-078: close a CR that can no longer close by evidence (its gate was removed, its scope was dropped).
+      if (opts.subAction === 'resolve' || opts.subAction === 'withdraw') {
+        const out = oxeOperational.runtimeChangeSetStatus(opts.dir, activeSession, { id: opts.crId, status: opts.subAction === 'resolve' ? 'resolved' : 'withdrawn', by: opts.by, reason: opts.reason });
+        if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeFeedbackSchema: 1, ...out }, null, 2));
+        else console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.id} ${out.status} por ${out.by}: ${out.reason}`);
+        return;
+      }
       if (opts.subAction === 'list' || (!opts.changeClass && !opts.summary)) {
         const changes = oxeOperational.runtimeChanges(opts.dir, activeSession);
         if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeChangesSchema: 1, changes }, null, 2));
@@ -4958,14 +5251,19 @@ async function runRuntime(opts) {
         return;
       }
       const result = oxeOperational.runtimeFeedback(opts.dir, activeSession, {
-        class: opts.changeClass, summary: opts.summary, criteria: opts.criteria, by: opts.by,
+        class: opts.changeClass, summary: opts.summary, criteria: opts.criteria, by: opts.by, rule: opts.rule || null, severity: opts.severity || null,
         phase: opts.phase || null, amendTo: opts.amendTo || null, evidence: opts.evidence || null,
+        tasks: opts.tasks || null, additive: Boolean(opts.additive), reopen: Boolean(opts.reopen),
       });
       if (opts.jsonOutput) {
         console.log(JSON.stringify({ oxeRuntimeFeedbackSchema: 1, ...result, program: undefined }, null, 2));
       } else {
         console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${result.cr.id} (${result.cr.class}) registrado na fase ${result.cr.phase || '—'}${result.reopened ? ' — fase REABERTA' : ''}`);
-        if (result.impacted.length) console.log(`  ${c ? dim : ''}Tarefas impactadas:${c ? reset : ''} ${result.impacted.join(', ')}`);
+        if (result.reopened_tasks && result.reopened_tasks.length) console.log(`  ${c ? yellow : ''}Reabertas:${c ? reset : ''} ${result.reopened_tasks.join(', ')} (o próximo execute refaz)`);
+        if (result.linked_tasks && result.linked_tasks.length) console.log(`  Ligadas ao ${result.cr.id}, NÃO reabertas: ${result.linked_tasks.join(', ')} — use --reopen para que o próximo execute as refaça`);
+        if (result.impacted_not_reopened && result.impacted_not_reopened.length) console.log(`  ${c ? dim : ''}Impactadas, não reabertas:${c ? reset : ''} ${result.impacted_not_reopened.join(', ')} (use --tasks para reabrir outras)`);
+        if (result.external_not_reopened && result.external_not_reopened.length) console.log(`  ${c ? dim : ''}Entregues por fora, nunca reabertas:${c ? reset : ''} ${result.external_not_reopened.join(', ')}`);
+        if (result.unknown_tasks && result.unknown_tasks.length) console.log(`  ${c ? yellow : ''}Tarefas desconhecidas em --tasks:${c ? reset : ''} ${result.unknown_tasks.join(', ')}`);
         console.log(`  ${c ? dim : ''}Rota:${c ? reset : ''}`);
         result.route.forEach((step, i) => console.log(`    ${i + 1}. ${step}`));
       }
@@ -4989,11 +5287,16 @@ async function runRuntime(opts) {
       }
       const { state, progress } = status;
       console.log(`  ${c ? green : ''}Programa:${c ? reset : ''} ${progress.closed}/${progress.total} fases fechadas`);
+      // OXB-090: amendments to criteria of closed phases (after the close): reopen?
+      const byPhase = new Map();
+      for (const x of status.amended_closed || []) { if (!byPhase.has(x.phase)) byPhase.set(x.phase, []); byPhase.get(x.phase).push(`${x.criterion}@v${x.version}${x.crs.length ? ` (${x.crs.join(', ')})` : ''}`); }
+      for (const [ph, list] of byPhase) console.log(`  ${c ? yellow : ''}${ph} fechada com emenda depois do close — reaberto?${c ? reset : ''} ${list.join(', ')}  →  oxe-cc runtime feedback --class spec_gap --phase ${ph} … (reabre) ou siga se a emenda vale só para as fases seguintes`);
       for (const phase of state.phases) {
         const active = state.active_phase === phase.id ? ' ◀ ativa' : '';
         const mark = phase.status === 'closed' ? '✓' : phase.status === 'pending' ? '·' : '▶';
         const commit = phase.closed_commit ? `  ${c ? dim : ''}${String(phase.closed_commit).slice(0, 8)}${c ? reset : ''}` : '';
-        console.log(`  ${mark} ${phase.id.padEnd(4)} ${phase.status.padEnd(10)} ${phase.title}${active}${commit}`);
+        const deps = Array.isArray(phase.depends_on) ? `  ${c ? dim : ''}← ${phase.depends_on.length ? phase.depends_on.join(', ') : 'independente'}${c ? reset : ''}` : '';
+        console.log(`  ${mark} ${phase.id.padEnd(4)} ${phase.status.padEnd(10)} ${phase.title}${active}${commit}${deps}${phase.adopted_from ? `  ${c ? dim : ''}(adotada de ${phase.adopted_from})${c ? reset : ''}` : ''}`);
       }
       if (progress.phase && progress.phase.status !== 'closed') {
         const nextStep = progress.phase.status === 'pending'
@@ -5011,12 +5314,45 @@ async function runRuntime(opts) {
         printStatus(oxeOperational.runtimeProgramStatus(opts.dir, activeSession));
         return;
       }
+      if (sub === 'init' && opts.fromEventId) {
+        // OXB-033: prepare THIS worktree's .oxe/ from the program's one (parallel phase).
+        const out = oxeOperational.runtimeProgramInitFrom(opts.dir, activeSession, { from: opts.fromEventId, phase: opts.phase || null, base: opts.baseBranch || null, force: opts.force, allowUndelivered: Boolean(opts.allowUndelivered), strictDelivery: Boolean(opts.strictDelivery), by: opts.by || null });
+        if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeProgramInitFromSchema: 1, copied: out.copied, delivery: out.delivery, started: out.started }, null, 2)); return; }
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} .oxe/ preparado de ${opts.fromEventId}: ${out.copied.length} item(ns)`);
+        for (const d of out.delivery) console.log(`  ${d.missing.length ? (c ? yellow : '') + '!' : (c ? green : '') + '✓'}${c ? reset : ''} ${d.phase} entregue na base: ${d.delivered.length}/${d.checked} commit(s)${d.missing.length ? ` — sem equivalente na base: ${d.missing.map((m) => `${m.sha.slice(0, 8)} ${m.subject.slice(0, 50)}`).join('; ')} (a regressão congelada de ${d.phase} roda no verify desta fase)` : ''}${d.note ? ` (${d.note})` : ''}`);
+        if (out.started) console.log(`  ${c ? green : ''}✓${c ? reset : ''} fase ${out.started} iniciada nesta worktree`);
+        printStatus(out);
+        return;
+      }
       if (sub === 'init') {
-        printStatus(oxeOperational.runtimeProgramInit(opts.dir, activeSession, { force: opts.force }));
+        const initOut = oxeOperational.runtimeProgramInit(opts.dir, activeSession, { force: opts.force });
+        printStatus(initOut);
+        if (!opts.jsonOutput) for (const w of initOut.warnings || []) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${w}`);
         return;
       }
       if (sub === 'start') {
         printStatus(oxeOperational.runtimeProgramStart(opts.dir, activeSession, opts.phase || null));
+        return;
+      }
+      // OXB-033: adopt the phases closed in another worktree.
+      if (sub === 'adopt') {
+        const out = oxeOperational.runtimeProgramAdopt(opts.dir, activeSession, { from: opts.from || opts.fromEventId, phase: opts.phase || null, by: opts.by, reason: opts.reason });
+        if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeProgramAdoptSchema: 1, adopted: out.adopted, skipped: out.skipped, crs_merged: out.crs_merged || 0, crs_renamed: out.crs_renamed || {} }, null, 2)); return; }
+        console.log(out.adopted.length ? `  ${c ? green : ''}✓${c ? reset : ''} adotadas: ${out.adopted.join(', ')}` : `  ${c ? dim : ''}nenhuma fase fechada nova para adotar${c ? reset : ''}`);
+        if (out.crs_merged) console.log(`  CRs trazidos: ${out.crs_merged}${Object.keys(out.crs_renamed || {}).length ? ` · renomeados (id já usado aqui): ${Object.entries(out.crs_renamed).map(([o, n]) => `${o} -> ${n}`).join(', ')}` : ''}`);
+        for (const s of out.skipped) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${s}`);
+        return;
+      }
+      // OXB-036: program budget policy (cap | track_only) with history.
+      if (sub === 'budget') {
+        const out = oxeOperational.runtimeProgramBudget(opts.dir, activeSession, { mode: opts.mode, usd: opts.budgetUsd, turns: opts.budgetTurns, by: opts.by, reason: opts.reason });
+        if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeProgramBudgetSchema: 1, ...out }, null, 2)); return; }
+        const p = out.policy;
+        if (!p) console.log(`  ${c ? dim : ''}Sem política de orçamento no programa${c ? reset : ''} — vale o budget de cada PLAN.json / flags. Defina: oxe-cc runtime program budget --mode cap --budget-usd 275 --by <papel> --reason "…"`);
+        else {
+          console.log(`  ${c ? green : ''}${out.changed ? '✓ ' : ''}Orçamento do programa:${c ? reset : ''} ${p.mode === 'track_only' ? 'track_only (sem teto; o gasto é registrado)' : `cap${p.usd ? ` US$ ${p.usd}` : ''}${p.turns ? ` ${p.turns} turnos` : ''}`} — ${p.decided_by}, ${String(p.decided_at).slice(0, 16).replace('T', ' ')}`);
+          for (const h of (p.history || []).slice(-5)) console.log(`    ${String(h.at).slice(0, 16).replace('T', ' ')} ${h.mode}${h.usd ? ` US$ ${h.usd}` : ''}${h.turns ? ` ${h.turns}t` : ''} — ${h.by}: ${h.reason}`);
+        }
         return;
       }
       if (sub === 'close') {
@@ -5024,9 +5360,13 @@ async function runRuntime(opts) {
           phase: opts.phase || null,
           commit: !opts.noCommit,
           gates: !opts.noGates,
+          defects: !opts.noDefects,
+          rollbackCheck: !opts.noRollbackCheck,
           message: opts.message || undefined,
           deferSignoff: opts.deferSignoff,
           by: opts.by || undefined,
+          acceptDrift: opts.acceptDrift || undefined,
+          reason: opts.reason || undefined,
           risk: opts.risk || undefined,
         });
         if (opts.jsonOutput) {
@@ -5062,7 +5402,7 @@ async function runRuntime(opts) {
     for (const a of adapters) {
       const mark = a.available ? `${c ? green : ''}✓${c ? reset : ''}` : `${c ? yellow : ''}✗${c ? reset : ''}`;
       const detail = a.available ? (a.version || (a.requires_api_key ? 'requer API key' : 'disponível')) : (a.error || 'indisponível');
-      console.log(`  ${mark} ${a.id.padEnd(8)} ${detail}${a.binary ? `  ${c ? dim : ''}${a.binary}${c ? reset : ''}` : ''}`);
+      console.log(`  ${mark} ${a.id.padEnd(12)} ${detail}${a.binary ? `  ${c ? dim : ''}${a.binary}${c ? reset : ''}` : ''}`);
     }
     return;
   }
@@ -5070,6 +5410,7 @@ async function runRuntime(opts) {
   if (opts.action === 'configure') {
     try {
       const providerConfig = {
+        name: opts.name || opts.provider || undefined,
         baseUrl: opts.baseUrl || undefined,
         model: opts.model || undefined,
         apiKeyEnv: opts.apiKeyEnv || undefined,
@@ -5078,12 +5419,15 @@ async function runRuntime(opts) {
       };
       const saved = oxeOperational.saveRuntimeProviderConfig(opts.dir, providerConfig);
       console.log(`  ${c ? green : ''}✓${c ? reset : ''} Provider configurado em .oxe/config.json`);
-      console.log(`  ${c ? green : ''}Base URL:${c ? reset : ''} ${saved.baseUrl}`);
-      console.log(`  ${c ? green : ''}Modelo:${c ? reset : ''} ${saved.model}`);
+      if (saved.name) console.log(`  ${c ? green : ''}Name:${c ? reset : ''} ${saved.name}`);
+      if (saved.baseUrl) console.log(`  ${c ? green : ''}Base URL:${c ? reset : ''} ${saved.baseUrl}`);
+      if (saved.model) console.log(`  ${c ? green : ''}Modelo:${c ? reset : ''} ${saved.model}`);
       if (saved.apiKeyEnv) console.log(`  ${c ? green : ''}API Key env:${c ? reset : ''} $${saved.apiKeyEnv}`);
       if (saved.maxTurns != null) console.log(`  ${c ? green : ''}Max turns:${c ? reset : ''} ${saved.maxTurns}`);
       if (saved.adapter) console.log(`  ${c ? green : ''}Adapter:${c ? reset : ''} ${saved.adapter}`);
-      console.log(`  ${c ? dim : ''}Passe --api-key na execução ou exporte a variável configurada em apiKeyEnv.${c ? reset : ''}`);
+      if (saved.adapter !== 'claude' && saved.adapter !== 'antigravity') {
+        console.log(`  ${c ? dim : ''}Passe --api-key na execução ou exporte a variável configurada em apiKeyEnv.${c ? reset : ''}`);
+      }
       return;
     } catch (err) {
       console.error(`${red}${err && err.message ? err.message : 'Falha ao salvar configuração.'}${reset}`);
@@ -5211,6 +5555,20 @@ async function runRuntime(opts) {
     }
   }
 
+  // OXB-148: runtime execute --task T1 --print-prompt (nothing runs)
+  if (opts.action === 'execute' && opts.printPrompt) {
+    try {
+      const out = oxeOperational.runtimePrintPrompt(opts.dir, activeSession, { task: opts.task });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimePromptSchema: 1, ...out }, null, 2)); return; }
+      console.log(`  ${out.task}: ${out.total_chars} chars (~${out.est_tokens} tokens) → ${path.relative(opts.dir, out.file)}`);
+      for (const s of out.sections) console.log(`    ${s.name.padEnd(24)} ${String(s.chars).padStart(9)} chars${s.raw_chars != null ? `  (bruto ${s.raw_chars})` : ''}`);
+      return;
+    } catch (err) {
+      console.error(`${red}${err && err.message ? err.message : err}${reset}`);
+      process.exit(1);
+    }
+  }
+
   if (opts.action === 'execute') {
     try {
       // Resolve provider: flag > env vars > persisted .oxe/config.json runtime.provider
@@ -5222,33 +5580,57 @@ async function runRuntime(opts) {
         || '';
       const model = opts.model || process.env.OXE_MODEL || (_persisted && _persisted.model) || 'claude-sonnet-4-6';
       const baseUrl = opts.baseUrl || process.env.OXE_BASE_URL || (_persisted && _persisted.baseUrl) || 'https://api.anthropic.com/v1';
-      const maxTurns = opts.maxTurns || (_persisted && _persisted.maxTurns) || 10;
-      // Adapter: --adapter > configurado > `http` quando há chave/URL (comportamento anterior) >
-      // `claude` quando o CLI está instalado (sem API key) > http.
-      let adapterId = opts.adapter || (_persisted && _persisted.adapter) || '';
+      // OXB-185: no fixed 10 — the global cap only when given; each attempt gets turns sized to its task.
+      const maxTurns = opts.maxTurns || (_persisted && _persisted.maxTurns) || undefined;
+      // Adapter: --adapter > configurado (`adapter` ou `name`) > `http` quando há chave/URL >
+      // `claude` ou `antigravity` quando o CLI está instalado (sem API key) > http.
+      const agyProviderLib = require('./lib/oxe-provider-antigravity.cjs');
+      let adapterId = agyProviderLib.normalizeAdapterId(opts.adapter || opts.provider || (_persisted && (_persisted.adapter || _persisted.name)) || '');
       if (!adapterId) {
         if (apiKey || opts.baseUrl) adapterId = 'http';
         else {
-          const claude = oxeOperational.detectRuntimeAdapters().find((a) => a.id === 'claude');
-          adapterId = claude && claude.available ? 'claude' : 'http';
+          const detected = oxeOperational.detectRuntimeAdapters();
+          const claude = detected.find((a) => a.id === 'claude');
+          const agy = detected.find((a) => a.id === 'antigravity');
+          adapterId = claude && claude.available ? 'claude' : (agy && agy.available ? 'antigravity' : 'http');
         }
       }
-      if (adapterId !== 'claude' && adapterId !== 'http') {
-        console.error(`${red}Erro: --adapter ${adapterId} desconhecido (use claude ou http).${reset}`);
+      if (adapterId !== 'claude' && adapterId !== 'antigravity' && adapterId !== 'http') {
+        console.error(`${red}Erro: --adapter ${adapterId} desconhecido (use claude, antigravity ou http).${reset}`);
         process.exit(1);
       }
       if (adapterId === 'http' && !apiKey) {
         console.error(`${red}Erro: executor LLM não configurado.${reset}`);
-        console.error(`  Use: --adapter claude (Claude Code instalado, sem API key)`);
+        console.error(`  Use: --adapter claude  ou  --adapter antigravity (sem API key)`);
         console.error(`  Ou:  --api-key <chave>  ou  exporte ANTHROPIC_API_KEY`);
         console.error(`  Ou persista com: oxe-cc runtime configure --model <modelo> --api-key-env ANTHROPIC_API_KEY`);
         process.exit(1);
       }
-      const providerConfig = { baseUrl, apiKey, model, maxTurns };
+      // OXB-153: per-call timeout — --llm-timeout-ms > config executor.timeout_ms > 20 min (it was a fixed 5 min).
+      let execCfg = {};
+      try { execCfg = (JSON.parse(fs.readFileSync(path.join(opts.dir, '.oxe', 'config.json'), 'utf8')) || {}).executor || {}; } catch { execCfg = {}; }
+      const llmTimeoutMs = Number(opts.llmTimeoutMs) > 0 ? Number(opts.llmTimeoutMs) : Number(execCfg.timeout_ms) > 0 ? Number(execCfg.timeout_ms) : 20 * 60_000;
+      const providerConfig = { baseUrl, apiKey, model, maxTurns, timeoutMs: llmTimeoutMs };
       const adapterOptions = adapterId === 'claude'
-        ? { model: opts.model || process.env.OXE_CLAUDE_MODEL || null }
-        : {};
-      if (!opts.jsonOutput) console.log(`  ${c ? green : ''}Adapter:${c ? reset : ''} ${adapterId}${adapterId === 'claude' ? ` (claude -p${adapterOptions.model ? ` --model ${adapterOptions.model}` : ''})` : ` (${baseUrl})`}`);
+        ? { model: opts.model || process.env.OXE_CLAUDE_MODEL || null, timeoutMs: llmTimeoutMs }
+        : adapterId === 'antigravity'
+          ? agyProviderLib.resolveAntigravityOptions({ flagModel: opts.model || null, timeoutMs: llmTimeoutMs, persisted: _persisted })
+          : {};
+      const adapterBanner = adapterId === 'claude'
+        ? ` (claude -p${adapterOptions.model ? ` --model ${adapterOptions.model}` : ''})`
+        : adapterId === 'antigravity'
+          ? ` (agy -p${adapterOptions.model ? ` --model ${adapterOptions.model}` : ''})`
+          : ` (${baseUrl})`;
+      if (!opts.jsonOutput) console.log(`  ${c ? green : ''}Adapter:${c ? reset : ''} ${adapterId}${adapterBanner}`);
+      // OXB-187: the model this run will really use, and who chose it — a default nobody picked is said out loud.
+      const modelInfo = require('./lib/oxe-model-resolve.cjs').resolve({ adapter: adapterId, flag: opts.model || null, persisted: _persisted || {}, config: (() => { try { return JSON.parse(fs.readFileSync(path.join(opts.dir, '.oxe', 'config.json'), 'utf8')); } catch { return {}; } })() });
+      if (!opts.jsonOutput) {
+        console.log(`  ${c ? green : ''}Modelo:${c ? reset : ''} ${require('./lib/oxe-model-resolve.cjs').describe(modelInfo)}`);
+        for (const n of modelInfo.notes) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${n}`);
+      }
+      oxeOperational.appendEvent(opts.dir, activeSession, { type: 'ExecutorModelResolved', payload: modelInfo });
+      const emitTaskNdjson = cliOutput.createTaskNdjsonEmitter((line) => process.stdout.write(`${line}
+`));
       const result = await oxeOperational.runRuntimeExecute(opts.dir, activeSession, {
         runId: opts.runId || undefined,
         heartbeatTimeoutMs: opts.heartbeatTimeoutMs || undefined,
@@ -5261,11 +5643,31 @@ async function runRuntime(opts) {
         budgetUsd: opts.budgetUsd || undefined,
         budgetReset: opts.budgetReset || undefined,
         maxRetries: opts.maxRetries != null && !Number.isNaN(opts.maxRetries) ? opts.maxRetries : undefined,
+        parallelMutating: Boolean(opts.parallelMutating),
+        verifyTimeoutMs: opts.verifyTimeoutMs || undefined,
+        maxRunMs: opts.maxRunMs || undefined,
+        // OXB-151: each task done green is promoted (own worktree, PR opened) in the background.
+        promoteEach: opts.promoteEach ? { base: opts.baseBranch || null, remote: opts.remote || 'origin', holdDeps: Boolean(opts.holdDeps) } : null,
+        maxParallel: opts.maxParallel || undefined,
         agentsPlanPath: opts.agentsPlanPath || undefined,
         onProgress: (event) => {
+          // OXB-065: with --json, one NDJSON line per task event on stdout; the final result is the last line.
+          if (opts.jsonOutput) {
+            emitTaskNdjson(event);
+            return;
+          }
           if (event.type === 'turn_start') {
             const turn = event.detail?.turn ?? 0;
             if (turn === 0) process.stdout.write(`  → ${event.nodeId} `);
+            // OXB-153: a long turn shows its elapsed time every minute.
+            if (global.__oxeTurnTimer) clearInterval(global.__oxeTurnTimer);
+            const started = Date.now();
+            global.__oxeTurnTimer = setInterval(() => process.stdout.write(` [turno ${turn + 1}: ${Math.round((Date.now() - started) / 60000)} min]`), 60_000);
+            global.__oxeTurnTimer.unref();
+          } else if (event.type === 'turn_complete') {
+            if (global.__oxeTurnTimer) { clearInterval(global.__oxeTurnTimer); global.__oxeTurnTimer = null; }
+          } else if (event.type === 'turn_timeout') {
+            process.stdout.write(` ⏱ chamada excedeu ${Math.round((event.detail?.elapsed_ms || 0) / 60000)} min — continuando a mesma tentativa (${event.detail?.retry}/2)`);
           } else if (event.type === 'tool_call') {
             process.stdout.write('.');
           } else if (event.type === 'executor_usage' && typeof event.detail?.cost_usd === 'number') {
@@ -5283,17 +5685,28 @@ async function runRuntime(opts) {
           }
         },
       });
+      const r = result.result || {};
       if (opts.jsonOutput) {
-        console.log(JSON.stringify(result, null, 2));
-        if (result.result && ((result.result.failed && result.result.failed.length > 0) || result.result.status === 'blocked')) process.exitCode = 1;
+        process.stdout.write(`${JSON.stringify({ type: 'result', ...result })}\n`);
+        const jFailed = Array.isArray(r.failed) ? r.failed : [];
+        const jBlocked = Array.isArray(r.blocked) ? r.blocked : [];
+        const jExternal = Array.isArray(r.external_pending) ? r.external_pending : [];
+        if (jFailed.length > 0 || jBlocked.length > 0 || (r.status === 'blocked' && result.mode !== 'single' && result.mode !== 'parallel')) process.exitCode = 1;
+        else if (opts.strictExternal && jExternal.length > 0) process.exitCode = 3;
         return;
       }
-      const r = result.result || {};
       const completed = Array.isArray(r.completed) ? r.completed : [];
       const failed = Array.isArray(r.failed) ? r.failed : [];
       const blocked = Array.isArray(r.blocked) ? r.blocked : [];
       const okColor = r.status === 'blocked' ? yellow : green;
       console.log(`  ${c ? okColor : ''}${r.status === 'blocked' ? '!' : '✓'}${c ? reset : ''} Runtime execute concluído (modo: ${result.mode})`);
+      // OXB-120: paused for the environment or a quota — not the code; no attempt was spent.
+      if (r.status === 'paused') {
+        try {
+          const ev = oxeOperational.readEvents(opts.dir, activeSession).filter((e) => e.type === 'RunPaused').pop();
+          if (ev) console.log(`  ${c ? yellow : ''}PAUSADA: ${ev.payload.reason === 'quota' ? 'cota do provedor' : 'ambiente'}${c ? reset : ''} — ${ev.payload.diagnosis || ''}${ev.payload.resume_at ? ` (retoma: ${ev.payload.resume_at})` : ''}. Corrija e rode oxe-cc runtime execute de novo (pula o que está done; nenhuma tentativa foi cobrada).`);
+        } catch { /* auxiliar */ }
+      }
       if (result.preflight) {
         console.log(`  ${c ? green : ''}Preflight:${c ? reset : ''} ${result.preflight.ok ? 'ready' : 'blocked'}`);
         if (Array.isArray(result.preflight.blockers) && result.preflight.blockers.length) {
@@ -5312,11 +5725,241 @@ async function runRuntime(opts) {
         console.log(`  ${c ? red : ''}Falhos:${c ? reset : ''} ${failed.length} — ${failed.join(', ')}`);
       if (blocked.length > 0)
         console.log(`  ${c ? '\x1b[33m' : ''}Bloqueados:${c ? reset : ''} ${blocked.length} — ${blocked.join(', ')}`);
-      if (failed.length > 0 || r.status === 'blocked') process.exitCode = 1;
+      const externalPending = Array.isArray(r.external_pending) ? r.external_pending : [];
+      // OXB-085: a task held by a precondition is this plan's work waiting to start, not an external delivery.
+      let waiting = {};
+      try { waiting = (oxeOperational.runtimePhaseWork(opts.dir, activeSession) || {}).waiting || {}; } catch { waiting = {}; }
+      const delivered = externalPending.filter((id) => !waiting[id]);
+      if (delivered.length > 0)
+        console.log(`  ${c ? dim : ''}Aguardando entrega externa:${c ? reset : ''} ${delivered.length} — ${delivered.join(', ')}`);
+      for (const id of externalPending.filter((x) => waiting[x])) console.log(`  ${c ? '\x1b[33m' : ''}${id} aguardando:${c ? reset : ''} ${waiting[id].join(', ')} — roda no próximo execute depois disso`);
+      // OXB-064: exit 0 when everything runnable in scope completed; tasks outside --wave never count;
+      // external_pending only fails the run with --strict-external (exit 3).
+      // OXB-167: verify green but the checkpoint commit failed — NOT done; the work is in the tree, not in a commit.
+      const cpFailed = Array.isArray(r.checkpoint_failed) ? r.checkpoint_failed : [];
+      for (const f of cpFailed) console.log(`  ${c ? red : ''}✗ checkpoint de ${f.task} falhou${c ? reset : ''} — ${f.reason}. A tarefa NÃO ficou done; o próximo execute tenta o commit de novo antes de tudo.`);
+      if (cpFailed.length) process.exitCode = 1;
+      if (failed.length > 0 || blocked.length > 0 || (r.status === 'blocked' && result.mode !== 'single' && result.mode !== 'parallel')) process.exitCode = 1;
+      else if (opts.strictExternal && externalPending.length > 0) process.exitCode = 3;
       return;
     } catch (err) {
       console.error(`${red}${err && err.message ? err.message : 'Falha ao executar runtime.'}${reset}`);
       process.exit(1);
+    }
+  }
+
+  // OXB-128: the UI evidence package.
+  if (opts.action === 'ui-evidence') {
+    try {
+      const out = oxeOperational.runtimeUiEvidence(opts.dir, activeSession, { folder: opts.uiFolder });
+      if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeUiEvidenceSchema: 1, ...out }, null, 2));
+      else if (out.ok) console.log(`  ${green}✓${reset} pacote de UI válido · ${out.cells} célula(s) da matriz · sha ${String(out.sha).slice(0, 10)}`);
+      else { console.log(`  ${red}✗${reset} pacote de UI recusado:`); for (const e of out.errors) console.log(`    - ${e}`); }
+      if (!out.ok) process.exitCode = 1;
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
+  // OXB-125: questions the executor asked the orchestrator.
+  if (opts.action === 'questions') {
+    try {
+      const sub = opts.subAction === 'answer' ? 'answer' : 'list';
+      if (sub === 'answer' && !opts.questionId) throw new Error('use: oxe-cc runtime questions answer Q-1 --answer "…"');
+      const out = oxeOperational.runtimeQuestions(opts.dir, activeSession, { action: sub, id: opts.questionId, answer: opts.answer, by: opts.by });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeQuestionsSchema: 1, ...out }, null, 2)); return; }
+      if (out.answered) { console.log(`  ${green}✓${reset} ${out.answered.id} respondida → ${out.answered.decision} (rode oxe-cc runtime execute de novo)`); return; }
+      if (!out.questions.length) console.log('  nenhuma pergunta do executor');
+      for (const q of out.questions) console.log(`  ${q.id} [${q.status}] ${q.question}${q.answer ? ` → ${q.answer}${q.answered_by ? ` (${q.answered_by})` : ''}` : ` — opções: ${(q.options || []).join(' | ')}`}`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
+  // OXB-138: the deferred ledger.
+  if (opts.action === 'deferred') {
+    try {
+      const sub = (opts.positionals || [])[1] === 'retry' || process.argv.includes('retry') ? 'retry' : 'list';
+      const out = oxeOperational.runtimeDeferred(opts.dir, activeSession, { action: sub, dryRun: Boolean(opts.dryRun) });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeDeferredSchema: 1, ...out }, null, 2)); return; }
+      if (sub === 'retry') for (const r of out.retry) console.log(`  ${r.id} ${r.task}: ${r.status}${r.tail ? ` — ${r.tail}` : ''}${r.status === 'ready' ? ' (o próximo oxe-cc runtime execute refaz)' : ''}`);
+      else if (!out.open.length) console.log('  nenhuma tarefa adiada');
+      else for (const e of out.open) console.log(`  ${e.id} ${e.task} (${e.reason}) — ${String(e.evidence || '').split(/\r?\n/).filter(Boolean).slice(-1)[0] || ''}`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
+  // OXB-136: seam review; OXB-127: dependency audit.
+  if (opts.action === 'seams' || opts.action === 'deps') {
+    try {
+      if (opts.action === 'deps') {
+        const out = oxeOperational.runtimeDeps(opts.dir, activeSession, { base: opts.baseBranch || null });
+        if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeDepsSchema: 1, ...out }, null, 2));
+        else if (!out.ran) console.log('  dependências: nenhuma mudança em package.json / package-lock.json');
+        else console.log(require('./lib/oxe-deps-audit.cjs').renderDeps(out));
+        if (out.blocks && out.blocks.length) process.exitCode = 1;
+        return;
+      }
+      const out = oxeOperational.runtimeSeams(opts.dir, activeSession, { phase: opts.phase || null, behaviorRan: opts.behaviorRan, retroAdd: opts.retroAdd, retroDone: opts.retroDone, evidence: opts.evidence, by: opts.by });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeSeamsSchema: 1, ...out }, null, 2)); return; }
+      if (out.retro_action) console.log(`  ${green}✓${reset} ${out.retro_action.id}: ${out.retro_action.action}`);
+      else if (out.done) console.log(`  ${green}✓${reset} ${out.done} com evidência`);
+      else if (out.behavior_run) console.log(`  ${green}✓${reset} fluxo de ponta a ponta registrado: ${out.behavior_run.criteria.join(', ')}`);
+      else { const r = out.report; console.log(`  costura da fase ${out.phase || '—'}: ${r.shared_files.length} arquivo(s) compartilhado(s), ${r.export_consumers.length} export(s) com consumidor em outra tarefa, ${r.duplicate_helpers.length} helper(s) duplicado(s), ${r.grown_files.length} arquivo(s) grande(s), ${r.retro_open.length} ação(ões) da retro aberta(s), ${r.behavior_missing.length} fluxo(s) sem execução${out.file ? ` · ${out.file}` : ''}`); }
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
+  // OXB-117 (a): cost and time per task / CR / retry, and the phase forecast.
+  if (opts.action === 'cost') {
+    try {
+      const out = oxeOperational.runtimeCost(opts.dir, activeSession);
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeCostSchema: 1, ...out }, null, 2)); return; }
+      const t = out.totals;
+      console.log(`  Gasto: US$ ${t.cost_usd.toFixed(2)} (retries US$ ${t.retry_cost_usd.toFixed(2)}) · ${t.turns} turnos · ${Math.round(t.ms / 60000)} min de executor`);
+      if (out.forecast) console.log(`  Previsão: ${out.forecast.pending_tasks} tarefa(s) pendente(s) × US$ ${out.forecast.avg_cost_usd.toFixed(2)} = US$ ${out.forecast.remaining_cost_usd.toFixed(2)} · total da fase ≈ US$ ${out.forecast.phase_total_usd.toFixed(2)}`);
+      for (const r of out.tasks.slice(0, 12)) console.log(`    ${r.task.padEnd(6)} US$ ${r.cost_usd.toFixed(2)}  ${r.attempts} tentativa(s)  ${r.turns} turnos${r.retry_cost_usd ? `  (retries US$ ${r.retry_cost_usd.toFixed(2)})` : ''}`);
+      for (const c of out.crs) console.log(`    ${c.cr} (${c.class}) → ${c.tasks.join(', ')}: US$ ${c.cost_usd.toFixed(2)}`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
+  // OXB-115: complexity alarms of the phase.
+  if (opts.action === 'complexity') {
+    try {
+      const out = oxeOperational.runtimeComplexity(opts.dir, activeSession, { phase: opts.phase || null });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeComplexitySchema: 1, ...out }, null, 2)); return; }
+      if (!out.base) { console.log('  sem fase com base_commit (rode dentro de um programa)'); return; }
+      if (!out.alarms.length) console.log(`  ${c ? green : ''}✓${c ? reset : ''} nenhuma função tocada passou de ${out.max}`);
+      else { console.log(`  ${c ? yellow : ''}${out.alarms.length} alarme(s) de complexidade${c ? reset : ''}${out.block ? ' — bloqueiam o close (strict)' : ''} · ${out.file}`); for (const a of out.alarms) console.log(`    ${a.file}:${a.line} ${a.name} ${a.before == null ? 'nova' : a.before}→${a.after}`); }
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
+  // OXB-113: resumable handoff, and the context reading a host hook sends.
+  // OXB-144: non-functional criteria with measured evidence.
+  if (opts.action === 'nfr') {
+    try {
+      const sub = ['declare', 'measure'].includes(opts.subAction) ? opts.subAction : 'list';
+      const out = oxeOperational.runtimeNfr(opts.dir, activeSession, { action: sub, criteria: opts.criteria, phase: opts.phase, metric: opts.metric, method: opts.method, threshold: opts.threshold, samples: opts.samples, environment: opts.environment });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeNfrSchema: 1, ...out }, null, 2)); if (out.measurement && !out.measurement.pass) process.exitCode = 1; return; }
+      if (out.declared && sub === 'declare') { console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.declared.criterion}: ${out.declared.metric} ${out.declared.threshold} (${out.declared.samples} amostras)`); return; }
+      if (out.measurement) {
+        const m = out.measurement;
+        console.log(`  ${m.pass ? (c ? green : '') + '✓' : (c ? red : '') + '✗'}${c ? reset : ''} ${m.criterion} ${m.metric}: mediana ${m.median} (${m.min}–${m.max}, dispersão ${m.spread}) · ${m.measured}/${m.samples} amostras · limite ${m.threshold}${m.reason ? ` — ${m.reason}` : ''}`);
+        if (m.regression) console.log(`  ${c ? yellow : ''}regressão:${c ? reset : ''} ${m.regression.worse_pct}% pior que ${m.regression.from_phase} → ${typeof out.finding === 'string' ? out.finding : 'achado'}`);
+        if (!m.pass) process.exitCode = 1;
+        return;
+      }
+      for (const [k, d] of Object.entries(out.declared)) console.log(`  ${k}: ${d.metric} ${d.threshold} · ${d.samples} amostras · ${d.method}`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
+  // OXB-140: waivers of a P2/P3 gap (with an owner and the phase it comes back).
+  if (opts.action === 'waive') {
+    try {
+      const out = oxeOperational.runtimeWaive(opts.dir, activeSession, { criteria: opts.criteria, reason: opts.reason, until: opts.until, by: opts.by, phase: opts.phase });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeWaiveSchema: 1, ...out }, null, 2)); return; }
+      for (const w of out.waivers) console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${w.criterion} com waiver de ${w.by} até ${w.until}: ${w.reason}`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
+  // OXB-102: merge-train awareness (read-only unless sync --apply).
+  if (opts.action === 'train') {
+    try {
+      const sub = opts.subAction === 'sync' ? 'sync' : 'status';
+      const out = oxeOperational.runtimeTrain(opts.dir, activeSession, { action: sub, apply: Boolean(opts.applyTrain) });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeTrainSchema: 1, ...out }, null, 2)); return; }
+      if (!out.items.length) console.log('  nenhuma tarefa promovida (TaskPromoted) para acompanhar');
+      for (const i of out.items) console.log(`  ${i.task} ${i.url || i.branch || ''} — ${i.state}${i.note ? ` (${i.note})` : ''} → ${i.action}`);
+      if (out.plan && out.plan.length) console.log(`  sync com --apply faria: ${out.plan.map((p) => p.task).join(', ')}`);
+      for (const r of out.results || []) console.log(`  ${r.ok ? green + '✓' : red + '✗'}${reset} ${r.task}: ${r.steps.map((s) => `${s.step}${s.ok === false ? ' ✗' : ''}`).join(' → ')}${r.why ? ` — ${r.why}` : ''}`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
+  // OXB-145: what the run needs from someone.
+  if (opts.action === 'attention') {
+    try {
+      const lib = require('./lib/oxe-attention.cjs');
+      if (opts.subAction === 'resolve') {
+        if (!opts.attentionId) throw new Error('use: oxe-cc runtime attention resolve <id> --by <papel>');
+        const out = lib.resolve(opts.dir, opts.attentionId, opts.by);
+        oxeOperational.appendEvent(opts.dir, activeSession, { type: 'AttentionResolved', payload: out });
+        if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeAttentionSchema: 1, resolved: out }, null, 2));
+        else console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.id} resolvido por ${out.resolved_by}`);
+        return;
+      }
+      const items = lib.open(opts.dir);
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeAttentionSchema: 1, open: items }, null, 2)); return; }
+      if (!items.length) console.log('  nada precisa de alguém agora');
+      for (const x of items) console.log(`  ${x.id}: ${x.what} — ${x.why}\n    → ${x.command} (dono: ${x.owner})`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
+  // OXB-130: repair proposals (decompose) and their application.
+  if (opts.action === 'repair') {
+    try {
+      const sub = opts.subAction === 'apply' ? 'apply' : 'list';
+      if (sub === 'apply' && !opts.task) throw new Error('use: oxe-cc runtime repair apply T7 [--approve]');
+      const out = oxeOperational.runtimeRepair(opts.dir, activeSession, { action: sub, task: opts.task, approve: Boolean(opts.approve) });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeRepairSchema: 1, ...out }, null, 2)); return; }
+      if (out.applied) { console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.applied.task} → ${out.applied.into.map((s) => `${s.id} (${s.alias})`).join(', ')}`); return; }
+      if (!out.proposals.length) console.log('  nenhuma proposta de reparo');
+      for (const p of out.proposals) console.log(`  ${p.task}: ${p.strategy}${p.applied_at ? ' (aplicada)' : ''} — ${p.subtasks.map((s) => s.alias).join(', ')}${p.requires_approval ? ' · exige --approve' : ''} — ${p.reason}`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
+  // OXB-132: the task's context pack.
+  if (opts.action === 'context-pack') {
+    try {
+      if (!opts.task) throw new Error('use: oxe-cc runtime context-pack --task T3 [--stats]');
+      const out = oxeOperational.runtimeContextPack(opts.dir, activeSession, { task: opts.task, explain: Boolean(opts.explain) });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeContextPackSchema: 1, ...out }, null, 2)); return; }
+      if (out.explain) for (const x of out.explain) console.log(`    [${x.kind}] ${x.type} ${x.what} — ${x.why}`);
+      console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.file}: ${out.stats.tasks_included.join(', ')} · ${out.stats.pack_chars} de ${out.stats.full_chars} chars (−${Math.round(out.stats.reduction * 100)}%)`);
+      return;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; return; }
+  }
+
+  if (opts.action === 'handoff' || opts.action === 'context') {
+    try {
+      if (opts.action === 'handoff') {
+        const out = oxeOperational.runtimeHandoff(opts.dir, activeSession, { note: opts.note || null, reason: opts.reason || 'manual' });
+        if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeHandoffSchema: 1, ...out }, null, 2)); return; }
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} handoff gravado em ${out.files.md} — uma sessão nova retoma por ele`);
+        return;
+      }
+      const out = oxeOperational.runtimeContextUsage(opts.dir, activeSession, { used: opts.used, limit: opts.limit });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeContextSchema: 1, ...out }, null, 2)); return; }
+      const pct = Math.round(out.ratio * 100);
+      if (out.level === 'critical') console.log(`  ${c ? red : ''}contexto ${pct}%${c ? reset : ''} — handoff gravado em ${out.handoff.md}; compacte ou abra uma sessão nova e retome por ele`);
+      else if (out.level === 'warn') console.log(`  ${c ? yellow : ''}contexto ${pct}%${c ? reset : ''} — termine a tarefa atual e rode oxe-cc runtime handoff antes de começar outra`);
+      else console.log(`  contexto ${pct}%`);
+      return;
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  // OXB-110: the open-defects register of the active phase.
+  if (opts.action === 'defects') {
+    try {
+      const out = oxeOperational.runtimeDefects(opts.dir, activeSession, { waive: opts.waive || null, reason: opts.reason, by: opts.by, phase: opts.phase || null });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeDefectsSchema: 1, ...out }, null, 2)); return; }
+      const lib = require('./lib/oxe-open-defects.cjs');
+      if (opts.waive) console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${opts.waive} dispensado por ${opts.by}`);
+      if (!out.open.length) console.log(`  ${c ? green : ''}✓${c ? reset : ''} nenhum defeito aberto (${(out.register.waivers || []).length} dispensado(s))`);
+      else { console.log(`  ${c ? yellow : ''}${out.open.length} defeito(s) aberto(s)${c ? reset : ''} — bloqueiam o program close:`); for (const it of out.open) console.log(`    ${lib.describe(it)}`); }
+      return;
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+      return;
     }
   }
 
@@ -5336,6 +5979,44 @@ async function runRuntime(opts) {
     }
     if (!card.ok) process.exitCode = 1;
     return;
+  }
+
+  // OXB-092: runtime signal --from <HML report>|<issue url>|github:<owner/repo> [--by] [--dry-run] [--any-label]
+  if (opts.action === 'signal') {
+    try {
+      const out = oxeOperational.runtimeSignal(opts.dir, activeSession, { from: opts.fromEventId || opts.from, by: opts.by || null, dryRun: Boolean(opts.dryRun), anyLabel: Boolean(opts.anyLabel), freeze: Boolean(opts.freeze) });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeSignalSchema: 1, ...out }, null, 2)); return; }
+      if (out.freeze) { for (const f of out.freeze.frozen) console.log(`  ${green}✓${reset} ${f.finding} → ${f.file} (teste congelado)`); for (const s of out.freeze.skipped) console.log(`  ${yellow}?${reset} ${s}: sem roteiro — não virou teste`); return; }
+      for (const e of out.created) console.log(`  ${c ? green : ''}${out.dry_run ? '~' : '✓'}${c ? reset : ''} ${e.cr ? `${e.cr} ` : ''}${e.class} na ${e.phase || '—'} · ${e.criteria.join(', ')} (${e.criteria_source}) · ${e.summary.slice(0, 100)}`);
+      for (const d of out.duplicates) console.log(`  ${c ? dim : ''}= ${d} já importado${c ? reset : ''}`);
+      for (const x of out.closed_phase) console.log(`  ${c ? yellow : ''}! ${x.id}: ${x.phase} está fechada — não virou CR aqui. Para reabrir: ${x.suggestion}${c ? reset : ''}`);
+      for (const t of out.triage) console.log(`  ${c ? yellow : ''}? ${t.id} (${t.phase || '—'}): ${t.reason}${c ? reset : ''}`);
+      // OXB-122: imported text with instruction-like content is marked (not dropped) and shown.
+      for (const s of out.suspicious) console.log(`  ${c ? red : ''}⚠ ${s.id} suspeito (${s.flags.map((x) => x.id).join(', ')}):${c ? reset : ''} ${s.flags[0].snippet.slice(0, 140)}`);
+      if (out.suspicious.length) console.log(`  ${out.suspicious.length} suspeito(s): o texto entra no contexto do executor só como dado delimitado`);
+      console.log(`  ${out.dry_run ? 'dry-run: ' : ''}${out.created.length} CR(s)${out.dry_run ? ' seriam criados' : ' criados'} · ${out.duplicates.length} já importados · ${out.closed_phase.length} de fase fechada · ${out.triage.length} para triagem`);
+      return;
+    } catch (err) {
+      console.error(`${red}${err && err.message ? err.message : 'Falha ao importar sinais.'}${reset}`);
+      process.exit(1);
+    }
+  }
+
+  // OXB-093: runtime deploy --attach <env> --version <v> --ref <tag|url> [--check "<cmd>"]… (never deploys).
+  if (opts.action === 'deploy') {
+    try {
+      if (!opts.attach) throw new Error('use: oxe-cc runtime deploy --attach <env> --version <v> --ref <tag|release url> [--check "<cmd>"]… [--phase Fn] [--by <papel>]');
+      const record = oxeOperational.runtimeDeployAttach(opts.dir, activeSession, { env: opts.attach, version: opts.deployVersion, ref: opts.ref || null, checks: opts.deployChecks || [], phase: opts.phase || null, by: opts.by || null });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeDeploySchema: 1, ...record }, null, 2)); if (!record.ok) process.exitCode = 1; return; }
+      console.log(`  ${record.ok ? (c ? green : '') + '✓' : (c ? red : '') + '✗'}${c ? reset : ''} deploy ${record.env} ${record.version} anexado à fase ${record.phase || '—'}${record.ref ? ` · ${record.ref}` : ''}`);
+      for (const ch of record.checks) console.log(`    ${ch.ok ? '✓' : '✗'} [${ch.id}] ${ch.command} · exit ${ch.exit} · ${ch.secs}s${ch.excerpt ? `\n      ${ch.excerpt.split('\n').join('\n      ')}` : ''}`);
+      if (!record.checks.length) console.log(`  ${c ? dim : ''}Sem --check: só o registro. Um phase_gate kind "deploy" com checks exigidos continua vermelho até eles rodarem.${c ? reset : ''}`);
+      if (!record.ok) process.exitCode = 1;
+      return;
+    } catch (err) {
+      console.error(`${red}${err && err.message ? err.message : 'Falha ao anexar o deploy.'}${reset}`);
+      process.exit(1);
+    }
   }
 
   if (opts.action === 'ci' && opts.attach) {
@@ -5382,6 +6063,75 @@ async function runRuntime(opts) {
       console.error(`${red}${err && err.message ? err.message : 'Falha ao executar checks do runtime.'}${reset}`);
       process.exit(1);
     }
+  }
+
+  if (opts.action === 'sync') {
+    // OXB-060: merge the base into the program branch and reverify the done tasks whose files changed upstream.
+    try {
+      const out = oxeOperational.runtimeSync(opts.dir, activeSession, { from: opts.fromEventId, fetch: !opts.noFetch, verify: !opts.noReverify });
+      if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeSyncSchema: 1, ...out }, null, 2));
+      else if (out.up_to_date) console.log(`  ${c ? green : ''}✓${c ? reset : ''} já contém ${out.from} — nada a mergear`);
+      else if (out.error) console.log(`  ${red}✗${reset} ${out.error}`);
+      else {
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.from} mergeado (${out.upstream_files.length} arquivo(s) mudaram na base)${out.fetched.attempted && !out.fetched.ok ? ' — fetch falhou, usada a ref local' : ''}`);
+        if (!out.needs_reverify.length) console.log('  Nenhuma tarefa done tocada pela base.');
+        else {
+          console.log('  Tarefa  Reverify');
+          for (const row of out.table) console.log(`  ${row.task.padEnd(7)} ${row.status === 'still_green' ? 'OK ainda verde' : `FAIL agora vermelho — reaberta${row.failed_segment ? ` (segmento [${row.failed_segment.index}/${row.failed_segment.total}]: ${row.failed_segment.command})` : ''}`}`);
+          const unverified = out.needs_reverify.filter((id) => !out.table.some((r) => r.task === id));
+          if (unverified.length) console.log(`  needs_reverify (sem verify rodado): ${unverified.join(', ')}`);
+        }
+      }
+      if (out.error || out.reopened.length) process.exitCode = 1;
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (opts.action === 'pre-push') {
+    const ic = require('./lib/oxe-integration-checks.cjs');
+    let stdinText = '';
+    if (!process.stdin.isTTY) {
+      try { stdinText = fs.readFileSync(0, 'utf8'); } catch { stdinText = ''; }
+    }
+    const out = ic.checkPrePush(opts.dir, stdinText, { baseRef: opts.baseBranch || null });
+    if (opts.jsonOutput) {
+      console.log(JSON.stringify({ oxeRuntimePrePushSchema: 1, ...out }, null, 2));
+    } else if (!out.ok) {
+      console.error(`  ${red}✗${reset} pre-push bloqueado: ${out.message}`);
+    } else {
+      console.log(`  ${c ? green : ''}✓${c ? reset : ''} pre-push: nenhum diretório estacionado em tests/acceptance/parked-* rastreado pelo Git`);
+    }
+    if (!out.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (opts.action === 'promote' && (opts.task || opts.tasks)) {
+    try {
+      const out = oxeOperational.runtimePromote(opts.dir, activeSession, { task: opts.task, tasks: opts.tasks || null, base: opts.baseBranch || null, branch: opts.branch, remote: opts.remote || 'origin', openPr: Boolean(opts.openPr), prReady: !opts.noPrReady, inPlace: Boolean(opts.inPlace), holdDeps: Boolean(opts.holdDeps) });
+      if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimePromoteSchema: 1, ...out }, null, 2));
+      else if (out.conflict) console.log(`  ${red}✗${reset} ${out.error}`);
+      else {
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.task} → branch ${out.branch} a partir de ${out.base} @ ${String(out.base_sha || "").slice(0, 10)} (${out.commits.length} commit(s), cherry-pick -x)`);
+        if (out.swept && out.swept.length) console.log(`  limpas ${out.swept.length} worktree(s) de promote interrompido: ${out.swept.join(', ')}`);
+        if (out.replaced_remote) console.log(`  branch ${out.branch} (do promote, sem PR) refeita: force-push com lease sobre ${String(out.replaced_remote).slice(0, 8)}`);
+        if (out.stacked_on) console.log(`  empilhada sobre ${out.stacked_on.task} (${out.stacked_on.pr || out.stacked_on.branch}, ainda não mergeada) — o PR vai contra ${String(out.base).replace(/^[^/]+\//, '')} e traz os commits dela até o merge`);
+        for (const w of out.warnings || []) console.log(`  ${c ? yellow : ""}AVISO${c ? reset : ""} ${w}`);
+        if (out.pr_ready) console.log(`  pr:ready: ${out.pr_ready.ok ? 'OK verde' : 'FAIL vermelho'}${out.pr_ready.ok ? '' : `
+${out.pr_ready.tail}`}`);
+        console.log(`  Corpo do PR: ${out.body_file}`);
+        if (out.pr) console.log(`  PR: ${out.pr}`);
+        else if (out.error) console.log(`  ${red}✗${reset} ${out.error}`);
+        if (!out.pr) { console.log('  Para abrir o PR:'); for (const cmd of out.commands) console.log(`    ${cmd}`); }
+      }
+      if (out.error || (out.pr_ready && !out.pr_ready.ok)) process.exitCode = 1;
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+    }
+    return;
   }
 
   if (opts.action === 'promote') {
@@ -5462,6 +6212,90 @@ async function runRuntime(opts) {
     console.log(`  ${c ? green : ''}Merge:${c ? reset : ''} ${multiAgent.mergeReadiness || 'n/a'} · blockers=${Array.isArray(multiAgent.mergeBlockers) ? multiAgent.mergeBlockers.length : 0} · arbitration=${multiAgent.arbitrationRequired ? 'required' : 'no'}`);
     if (multiAgent.nextAction) console.log(`  ${c ? cyan : ''}Próxima ação:${c ? reset : ''} ${multiAgent.nextAction}`);
     return;
+  }
+
+  if (opts.action === 'start-task') {
+    try {
+      const started = oxeOperational.runtimeStartTask(opts.dir, activeSession, {
+        task: opts.task,
+        by: opts.by || opts.actor || undefined,
+      });
+      if (opts.jsonOutput) {
+        console.log(JSON.stringify({ oxeRuntimeStartTaskSchema: 1, ...started }, null, 2));
+      } else {
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${started.task} marcada como in_progress (executor=${started.executor}${started.base_sha ? `, base=${started.base_sha.slice(0, 10)}` : ''})`);
+      }
+      return;
+    } catch (err) {
+      if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeStartTaskSchema: 1, ok: false, error: err && err.message ? err.message : String(err) }, null, 2));
+      else console.error(`${red}${err && err.message ? err.message : 'Falha em start-task.'}${reset}`);
+      process.exit(1);
+    }
+  }
+
+  if (opts.action === 'resume') {
+    try {
+      const resumed = oxeOperational.runtimeResume(opts.dir, activeSession, {
+        decision: opts.resumeDecision || opts.decision || null,
+        wave: opts.wave,
+        task: opts.task || null,
+        mode: opts.mode || null,
+        reason: opts.reason || '',
+      });
+      if (resumed && resumed.dirty_resume) {
+        if (opts.jsonOutput) {
+          console.log(JSON.stringify({ oxeRuntimeResumeSchema: 1, ...resumed }, null, 2));
+          if (resumed.needs_decision) process.exit(1);
+          return;
+        }
+        if (resumed.needs_decision) {
+          console.log(`  ${c ? yellow : ''}⚠ Tarefa em andamento com árvore suja:${c ? reset : ''} ${resumed.task}${resumed.title ? ` — ${resumed.title}` : ''}${resumed.executor ? ` · executor=${resumed.executor}` : ''}${resumed.base_sha ? ` · base=${String(resumed.base_sha).slice(0, 10)}` : ''}`);
+          if (resumed.invalid_files.length) {
+            console.log(`  ${c ? red : ''}✗ Validação JSON/TS (${resumed.invalid_files.length} inválido(s)):${c ? reset : ''}`);
+            for (const inv of resumed.invalid_files) {
+              console.log(`    - ${inv.path} [${inv.kind}]: ${inv.error}`);
+            }
+          } else {
+            console.log(`  ${c ? green : ''}✓ Validação JSON/TS:${c ? reset : ''} todos os arquivos tocados são sintaticamente válidos`);
+          }
+          console.log(`  ${c ? cyan : ''}Diff em ${resumed.task}.files (${resumed.in_scope.length}):${c ? reset : ''}`);
+          if (!resumed.in_scope.length) console.log('    (nenhum)');
+          for (const f of resumed.in_scope) console.log(`    - ${f.path} [${f.summary}]`);
+          console.log(`  ${c ? yellow : ''}Diff fora de escopo (${resumed.out_of_scope.length}):${c ? reset : ''}`);
+          if (!resumed.out_of_scope.length) console.log('    (nenhum)');
+          for (const f of resumed.out_of_scope) console.log(`    - ${f.path} [${f.summary}]`);
+          console.log(`  ${c ? cyan : ''}Escolha como retomar:${c ? reset : ''}`);
+          console.log(`    • ${c ? green : ''}oxe-cc runtime resume --continue${c ? reset : ''}    (manter os arquivos parciais de ${resumed.task})`);
+          console.log(`    • ${c ? yellow : ''}oxe-cc runtime resume --reset-task${c ? reset : ''}  (descartar só os arquivos de ${resumed.task}; preserva fora de escopo)`);
+          process.exit(1);
+        }
+        if (resumed.decision === 'continue') {
+          console.log(`  ${c ? green : ''}✓${c ? reset : ''} Retomada de ${resumed.task} (continue): ${resumed.kept.length} arquivo(s) mantido(s).`);
+        } else {
+          console.log(`  ${c ? green : ''}✓${c ? reset : ''} Reset de ${resumed.task} (reset-task): ${resumed.discarded.length} arquivo(s) de ${resumed.task} descartado(s), ${resumed.kept_out_of_scope.length} fora de escopo preservado(s).`);
+        }
+        return;
+      }
+      if (opts.jsonOutput) {
+        console.log(JSON.stringify(resumed, null, 2));
+        return;
+      }
+      const next = resumed && resumed.run_id ? resumed : (resumed && resumed.run ? resumed.run : resumed);
+      if (next && next.run_id) {
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} Runtime atualizado.`);
+        console.log(`  ${c ? green : ''}Run:${c ? reset : ''} ${next.run_id}`);
+        console.log(`  ${c ? green : ''}Estado:${c ? reset : ''} ${next.status}`);
+        console.log(`  ${c ? green : ''}Cursor:${c ? reset : ''} onda=${next.cursor && next.cursor.wave != null ? next.cursor.wave : '—'} tarefa=${next.cursor && next.cursor.task ? next.cursor.task : '—'} modo=${next.cursor && next.cursor.mode ? next.cursor.mode : '—'}`);
+        console.log(`  ${c ? green : ''}Trace:${c ? reset : ''} ${p.events}`);
+      } else {
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} Nenhuma tarefa suja pendente.`);
+      }
+      return;
+    } catch (err) {
+      if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeResumeSchema: 1, ok: false, error: err && err.message ? err.message : String(err) }, null, 2));
+      else console.error(`${red}${err && err.message ? err.message : 'Falha ao executar resume.'}${reset}`);
+      process.exit(1);
+    }
   }
 
   try {
@@ -5979,11 +6813,97 @@ async function main() {
     argv[0] === 'capabilities' ||
     argv[0] === 'plugins' ||
     argv[0] === 'plan' ||
+    argv[0] === 'spec' ||
+    argv[0] === 'program' ||
+    argv[0] === 'policy' ||
+    argv[0] === 'decision' ||
+    argv[0] === 'review' ||
+    argv[0] === 'docs' ||
+    argv[0] === 'eval' ||
+    argv[0] === 'design' ||
+    argv[0] === 'release' ||
+    argv[0] === 'customize' ||
+    argv[0] === 'state' ||
+    argv[0] === 'guards' ||
     argv[0] === 'verify' ||
     argv[0] === 'install'
   ) {
     command = argv[0];
     argv.shift();
+  }
+  // OXB-058: `oxe-cc program <status|init|start|close>` is `runtime program …`; `phase add` and `export` are handled
+  // below with `spec`.
+  // OXB-101: snapshot a real program's .oxe/ (outside the repo) and regress the CLI over the snapshots.
+  // OXB-135: members of a multi-repository program.
+  if (command === 'program' && argv[0] === 'member') {
+    const sub = ['add', 'remove', 'list'].includes(argv[1]) ? argv[1] : 'list';
+    const o = { dir: process.cwd(), json: false };
+    for (let i = sub === argv[1] ? 2 : 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (['--name', '--path', '--remote', '--branch', '--order'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-') && !o.name) o.name = a;
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = oxeOperational.runtimeProgramMember(o.dir, null, { action: sub, ...o });
+      if (o.json) { console.log(JSON.stringify({ oxeProgramMemberSchema: 1, ...out }, null, 2)); return; }
+      if (!out.members.length) console.log('  programa de um repositório só (sem membros)');
+      for (const m of out.members) console.log(`  ${m.order}. ${m.name} — ${m.path} (${m.branch})${m.remote ? ` ${m.remote}` : ''}`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // OXB-103: coordinator queue.
+  if (command === 'program' && argv[0] === 'queue') {
+    const o = { dir: process.cwd(), json: argv.includes('--json') };
+    const di = argv.indexOf('--dir');
+    if (di >= 0 && argv[di + 1]) o.dir = path.resolve(argv[di + 1]);
+    try {
+      const q = oxeOperational.runtimeProgramQueue(o.dir, null);
+      if (o.json) { console.log(JSON.stringify({ oxeProgramQueueSchema: 1, ...q }, null, 2)); return; }
+      for (const [role, it] of Object.entries(q.next)) console.log(`  ${role}: ${it.text}`);
+      if (!Object.keys(q.next).length) console.log('  nada na fila');
+      console.log('  → .oxe/program/QUEUE.md');
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  if (command === 'program' && (argv[0] === 'snapshot' || argv[0] === 'regress')) {
+    const o = { dir: process.cwd(), json: false };
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--update') o.update = true;
+      else if (['--to', '--name', '--fixtures'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const lib = require('./lib/oxe-real-regression.cjs');
+      if (argv[0] === 'snapshot') {
+        const out = lib.snapshot(o.dir, o.to, o.name);
+        if (o.json) console.log(JSON.stringify({ oxeProgramSnapshotSchema: 1, ...out }, null, 2));
+        else console.log(`  ${green}✓${reset} ${out.dir}: ${out.copied.join(', ')}`);
+        return;
+      }
+      const fixtures = o.fixtures || process.env.OXE_REAL_FIXTURES;
+      if (!fixtures) throw new Error('use: oxe-cc program regress --fixtures <pasta> (ou OXE_REAL_FIXTURES)');
+      const out = lib.regress(path.resolve(fixtures), oxeOperational, { update: o.update });
+      if (o.json) console.log(JSON.stringify({ oxeProgramRegressSchema: 1, ...out }, null, 2));
+      else for (const r of out.results) {
+        console.log(`  ${r.regressions.length ? red + '✗' : green + '✓'}${reset} ${r.name}${r.baseline ? ` — baseline ${r.baseline}` : ''}`);
+        for (const x of r.regressions) console.log(`    ${x}`);
+      }
+      if (!out.ok) process.exitCode = 1;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  if (command === 'program' && !(argv[0] === 'phase' || argv[0] === 'export' || argv[0] === 'criterion')) {
+    command = 'runtime';
+    argv.unshift('program');
   }
 
   const coreRegistry = createCoreCommandRegistry({
@@ -6096,6 +7016,663 @@ async function main() {
     return;
   }
 
+  // OXB-058: `oxe-cc spec amend|add …` and `oxe-cc program phase add|export …`.
+  // OXB-099: import the frozen tests of a PR / commit into the program.
+  if (command === 'spec' && argv[0] === 'freeze') {
+    const o = { dir: process.cwd(), json: false };
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (['--from', '--paths', '--criteria', '--cr', '--command'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      if (!o.from) throw new Error('use: oxe-cc spec freeze --from <#PR|sha> [--paths "tests/acceptance/**"] [--criteria A12] [--cr CR-n]');
+      const out = oxeOperational.runtimeSpecFreeze(o.dir, null, o);
+      if (o.json) { console.log(JSON.stringify({ oxeSpecFreezeSchema: 1, ...out }, null, 2)); if (out.refused.length) process.exitCode = 1; return; }
+      for (const f of out.frozen) console.log(`  ${green}✓${reset} ${f.file} → ${f.criterion} (${f.proves} título(s), origem ${f.origin})`);
+      for (const r of out.refused) console.log(`  ${red}✗${reset} ${r.why}`);
+      for (const w of out.rigor || []) console.log(`  ${yellow}!${reset} ${w}`);
+      if (out.refused.length) process.exitCode = 1;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // OXB-143: stress test of the spec by independent readers.
+  if (command === 'spec' && argv[0] === 'stress') {
+    const accept = argv[1] === 'accept';
+    const o = { dir: process.cwd(), json: false, ids: [] };
+    for (let i = accept ? 2 : 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (['--phase', '--methods', '--changes', '--by', '--model'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (/^A\d+$/i.test(a)) o.ids.push(a.toUpperCase());
+      else if (accept && /^stress-/.test(a)) o.run = a;
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = await oxeOperational.runtimeSpecStress(o.dir, null, { action: accept ? 'accept' : 'run', ids: o.ids, phase: o.phase, methods: o.methods, changes: o.changes, by: o.by, run: o.run, model: o.model });
+      if (o.json) { console.log(JSON.stringify({ oxeSpecStressSchema: 1, ...out, prompts: undefined }, null, 2)); return; }
+      if (accept) { for (const a of out.accepted) console.log(`  ${green}✓${reset} ${a.n} → ${a.criterion} (${a.method}) · ${a.cr}`); return; }
+      for (const p of out.proposals) console.log(p.n ? `  ${p.n}. ${p.criterion} [${p.method}] ${p.text}` : `  ${yellow}?${reset} ${p.criterion} [${p.method}] não rodou: ${p.reason}`);
+      console.log(`  → .oxe/stress/${out.id}.json · aceite: oxe-cc spec stress accept ${out.id} --changes 1,3 --by <papel>`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // OXB-123: edge and prohibition probes on the spec.
+  if (command === 'spec' && argv[0] === 'probe') {
+    const o = { dir: process.cwd(), json: false, ids: [] };
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--all') o.ids = [];
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (/^A\d+$/i.test(a)) o.ids.push(a.toUpperCase());
+      else if (!a.startsWith('-')) o.dir = path.resolve(a);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = oxeOperational.runtimeSpecProbe(o.dir, null, { ids: o.ids });
+      if (o.json) { console.log(JSON.stringify({ oxeSpecProbeSchema: 1, ...out }, null, 2)); return; }
+      console.log(`  ${green}✓${reset} ${out.edges.length} borda(s) e ${out.prohibitions.length} proibição(ões) novas em ${out.spec} — marque cada borda como coberta | descartada (com motivo) | prova_extra | aberta, e cada proibição como teste | julgamento`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  if (command === 'spec' || command === 'program') {
+    // OXB-076: `program phase edit Fn …` and `program criterion move A<n> --from Fn --to Fm`.
+    const sub = command === 'spec' ? argv[0]
+      : argv[0] === 'phase' ? `phase ${argv[1]}`
+        : argv[0] === 'criterion' ? `criterion ${argv[1]}`
+          : 'export';
+    const rest = command === 'program' && (argv[0] === 'phase' || argv[0] === 'criterion') ? argv.slice(2) : argv.slice(1);
+    if (command === 'program' && !['phase add', 'phase edit', 'criterion move', 'export'].includes(sub)) {
+      console.error(`${red}Use:${reset} oxe-cc program phase add --after Fn --title "…" [--requirements R14] [--acceptance A42,A43] [--scope "…"] --by <papel>`);
+      console.error(`     oxe-cc program phase edit Fn [--title "…"] [--add-requirements R17] [--remove-requirements R2] [--add-acceptance A58] [--remove-acceptance A3] [--scope "…" [--keep-bullets] | --scope-file escopo.md] --by <papel>`);
+      console.error(`     oxe-cc program criterion move A<n> --from Fn --to Fm --by <papel>`);
+      process.exit(1);
+    }
+    const o = { dir: process.cwd(), session: null, json: false };
+    const positional = [];
+    const VALUE_FLAGS = { '--by': 'by', '--reason': 'reason', '--text': 'text', '--append': 'append', '--verify': 'verify', '--phase': 'phase', '--criteria': 'criteria', '--before': 'before', '--version': 'version', '--after': 'after', '--title': 'title', '--requirements': 'requirements', '--acceptance': 'acceptance', '--scope': 'scope', '--add-requirements': 'addRequirements', '--remove-requirements': 'removeRequirements', '--add-acceptance': 'addAcceptance', '--remove-acceptance': 'removeAcceptance', '--from': 'from', '--to': 'to', '--out': 'out', '--scope-file': 'scopeFile', '--depends-on': 'dependsOn' };
+    for (let i = 0; i < rest.length; i += 1) {
+      const a = rest[i];
+      if (VALUE_FLAGS[a] && rest[i + 1] != null) o[VALUE_FLAGS[a]] = String(rest[++i]);
+      else if (a === '--dir' && rest[i + 1]) o.dir = path.resolve(rest[++i]);
+      else if (a === '--session' && rest[i + 1]) o.session = String(rest[++i]).replace(/\\/g, '/');
+      else if (a === '--additive') o.additive = true;
+      else if (a === '--allow-gap') o.allowGap = true;
+      else if (a === '--keep-bullets') o.keepBullets = true;
+      else if (a === '--standing') o.standing = true;
+      else if (a === '--json') o.json = true;
+      else if (a.startsWith('-')) { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+      else positional.push(a);
+    }
+    const c = useAnsiColors();
+    try {
+      let out;
+      if (command === 'spec' && sub === 'amend') {
+        out = oxeOperational.runtimeSpecAmend(o.dir, o.session, { ...o, id: positional[0] });
+        if (!o.json) {
+          console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.id} → v${out.version} (${out.cr.id}, ${out.cr.amendment}) na fase ${out.phase || '—'}`);
+          console.log(`  antes:  ${out.before}\n  depois: ${out.after}`);
+          if (out.reopened_tasks && out.reopened_tasks.length) console.log(`  Reabertas: ${out.reopened_tasks.join(', ')}`);
+        }
+      } else if (command === 'spec' && sub === 'add') {
+        out = oxeOperational.runtimeSpecAdd(o.dir, o.session, { ...o, kind: positional[0], id: positional[1] });
+        if (!o.json) console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.id} adicionado à SPEC: ${out.after}`);
+      } else if (sub === 'phase add') {
+        out = oxeOperational.runtimeProgramPhaseAdd(o.dir, o.session, o);
+        if (!o.json) {
+          console.log(`  ${c ? green : ''}✓${c ? reset : ''} fase ${out.phase} inserida depois de ${out.after}${out.renumbered.length ? ` · renumeradas: ${out.renumbered.map((r) => `${r.from}→${r.to}`).join(', ')}` : ''}`);
+          if (out.moved_change_records) console.log(`  ${out.moved_change_records} registro(s) de mudança acompanharam a fase renumerada`);
+          for (const w of out.warnings) console.log(`  ${yellow}!${reset} ${w}`);
+          for (const l of out.leftovers) console.log(`  ${yellow}!${reset} ${l}`);
+        }
+      } else if (sub === 'phase edit') {
+        out = oxeOperational.runtimeProgramPhaseEdit(o.dir, o.session, { ...o, phase: positional[0] || o.phase });
+        if (!o.json) {
+          console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.phase} editada: R ${out.after.requirements.join(', ') || '—'} · A ${out.after.acceptance.join(', ') || '—'}${out.after.title !== out.before.title ? ` · título "${out.after.title}"` : ''}`);
+          if (out.plan_removed_tests.length || out.plan_removed_tasks.length) console.log(`  plano atual: testes removidos ${out.plan_removed_tests.join(', ') || '—'} · tarefas removidas ${out.plan_removed_tasks.join(', ') || '—'}`);
+          for (const w of out.warnings) console.log(`  ${yellow}!${reset} ${w}`);
+        }
+      } else if (sub === 'criterion move') {
+        out = oxeOperational.runtimeProgramCriterionMove(o.dir, o.session, { ...o, id: positional[0] });
+        if (!o.json) {
+          console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.criterion}: ${out.from} → ${out.to}${out.moved_change_records ? ` · ${out.moved_change_records} CR(s) acompanharam` : ''}`);
+          if (out.plan_removed_tests.length || out.plan_removed_tasks.length) console.log(`  plano atual: testes removidos ${out.plan_removed_tests.join(', ') || '—'} · tarefas removidas ${out.plan_removed_tasks.join(', ') || '—'}`);
+          for (const w of out.warnings) console.log(`  ${yellow}!${reset} ${w}`);
+        }
+      } else if (sub === 'export') {
+        // OXB-083: the positional is the PROJECT dir, as in every other command; the output is --out (default export_dir).
+        if (positional[0]) {
+          const projectDir = path.resolve(positional[0]);
+          if (!fs.existsSync(path.join(projectDir, '.oxe')) && fs.existsSync(path.join(o.dir, '.oxe'))) {
+            throw new Error(`${positional[0]} não é um projeto OXE (sem .oxe/). O posicional é a pasta do projeto; para escolher a saída use --out ${positional[0]}`);
+          }
+          o.dir = projectDir;
+        }
+        out = oxeOperational.runtimeProgramExport(o.dir, o.session, { dir: o.out || null });
+        if (!o.json) {
+          console.log(`  ${c ? green : ''}✓${c ? reset : ''} exportado para ${out.dir}: ${out.written.map((w) => path.basename(w)).join(', ')}`);
+          if (out.missing.length) console.log(`  ${c ? dim : ''}ausentes:${c ? reset : ''} ${out.missing.join(', ')}`);
+        }
+      } else {
+        console.error(`${red}Use:${reset} oxe-cc spec amend A<n> (--text|--append|--verify) --by <papel> --reason "…" [--additive] | oxe-cc spec add criterion A<n> --text "…" --verify "…" | oxe-cc spec add requirement R<n> --text "…" [--criteria A<n>] [--before "<cabeçalho>"]`);
+        process.exit(1);
+      }
+      if (o.json) console.log(JSON.stringify({ oxeProgramEditSchema: 1, ...out, program: undefined }, null, 2));
+      else if (out && out.export && out.export.written) console.log(`  ${c ? dim : ''}export atualizado:${c ? reset : ''} ${out.export.dir}`);
+      process.exit(0);
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exit(1);
+    }
+  }
+
+  // OXB-118: oxe-cc policy list [--json] [--dir]
+  if (command === 'policy') {
+    const rest = argv.slice(argv[0] === 'list' ? 1 : 0);
+    let dir = process.cwd();
+    let json = false;
+    for (let i = 0; i < rest.length; i += 1) {
+      if (rest[i] === '--json') json = true;
+      else if (rest[i] === '--dir' && rest[i + 1]) dir = path.resolve(rest[++i]);
+      else if (!rest[i].startsWith('-')) dir = path.resolve(rest[i]);
+    }
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'config.json'), 'utf8')) || {}; } catch { cfg = {}; }
+    const rows = require('./lib/oxe-policy-rules.cjs').classifyRules(cfg.policy_rules);
+    if (json) { console.log(JSON.stringify({ oxePolicySchema: 1, enforced: rows.filter((r) => r.state === 'enforced').length, advisory: rows.filter((r) => r.state === 'advisory').length, rules: rows.map(({ rule, ...r }) => r) }, null, 2)); process.exit(0); }
+    const c = useAnsiColors();
+    console.log(`  Regras do projeto: ${rows.filter((r) => r.state === 'enforced').length} aplicada(s), ${rows.filter((r) => r.state === 'advisory').length} só texto`);
+    for (const r of rows) console.log(`  ${r.state === 'enforced' ? (c ? green : '') + 'aplicada ' : (c ? yellow : '') + 'só texto '}${c ? reset : ''} ${r.id.padEnd(14)} ${r.kind.padEnd(8)} ${r.text.slice(0, 90)}${r.problem ? ` — ${r.problem}` : ''}`);
+    process.exit(0);
+  }
+
+  // OXB-087: oxe-cc plan append --from extra.json --by <papel> --reason "…" [--dir] [--session] [--json]
+  // OXB-119: tool guards (pre-tool hook) — install / status / uninstall, per project, opt-in.
+  if (command === 'install' && argv.includes('--guards')) { command = 'guards'; argv.splice(0, argv.length, 'install', ...argv.filter((a) => a !== '--guards')); }
+  if (command === 'guards') {
+    const sub = ['install', 'uninstall', 'status'].includes(argv[0]) ? argv[0] : 'status';
+    let dir = process.cwd();
+    for (let i = 0; i < argv.length; i += 1) { if (argv[i] === '--dir' && argv[i + 1]) dir = path.resolve(argv[++i]); else if (i > 0 && !argv[i].startsWith('-')) dir = path.resolve(argv[i]); }
+    const settingsFile = path.join(dir, '.claude', 'settings.json');
+    let settings = {};
+    try { settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8')); } catch { settings = {}; }
+    const script = path.join(__dirname, 'lib', 'oxe-guard.cjs').replace(/\\/g, '/');
+    const command0 = `node "${script}" --project "${dir.replace(/\\/g, '/')}"`;
+    const pre = (settings.hooks && Array.isArray(settings.hooks.PreToolUse)) ? settings.hooks.PreToolUse : [];
+    const ours = (h) => h && Array.isArray(h.hooks) && h.hooks.some((x) => String(x.command || '').includes('oxe-guard.cjs'));
+    if (sub === 'status') { console.log(pre.some(ours) ? `  ${green}✓${reset} guardas OXE instalados em ${settingsFile}` : '  guardas OXE não instalados (oxe-cc guards install)'); return; }
+    const rest = pre.filter((h) => !ours(h));
+    settings.hooks = { ...(settings.hooks || {}), PreToolUse: sub === 'install' ? [...rest, { matcher: 'Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob|Bash|PowerShell', hooks: [{ type: 'command', command: command0 }] }] : rest };
+    fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+    fs.writeFileSync(settingsFile, `${JSON.stringify(settings, null, 2)}\n`);
+    if (sub === 'install') {
+      try { require('./lib/oxe-integration-checks.cjs').installPrePushHook(dir, __filename); } catch { /* opcional fora de git */ }
+    }
+    console.log(sub === 'install' ? `  ${green}✓${reset} guardas OXE instalados (PreToolUse) em ${settingsFile} — configure em .oxe/config.json: policy_rules {kind: path|command}, guards.{heavy, heavy_wrapper, protected_checkouts}` : `  guardas OXE removidos de ${settingsFile}`);
+    return;
+  }
+
+  // OXB-121: the state as a contract — validate STATE.md against the sources, sync the projections.
+  if (command === 'state') {
+    const sub = argv[0] === 'sync' ? 'sync' : 'validate';
+    const o = { dir: process.cwd(), json: false, strict: false, dryRun: false };
+    for (let i = (argv[0] === 'sync' || argv[0] === 'validate') ? 1 : 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--strict') o.strict = true;
+      else if (a === '--dry-run') o.dryRun = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-')) o.dir = path.resolve(a);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = oxeOperational.runtimeStateCheck(o.dir, null, { action: sub, dryRun: o.dryRun });
+      if (o.json) console.log(JSON.stringify({ oxeStateSchema: 1, ...out }, null, 2));
+      else {
+        if (sub === 'sync' && !o.dryRun) console.log(`  ${green}✓${reset} STATE.md e .oxe/state.json reescritos das fontes (${out.fixed.length} divergência(s) corrigida(s))`);
+        const list = out.divergences;
+        if (!list.length) console.log(`  ${green}✓${reset} STATE.md coerente com as fontes`);
+        else { console.log(`  ${yellow}${list.length} divergência(s)${reset}${sub === 'validate' ? ' — rode oxe-cc state sync' : ''}`); for (const d of list) console.log(`    ${d.field}: STATE diz "${d.claims}", a fonte diz "${d.truth}"`); }
+      }
+      if (o.strict && out.divergences.length) process.exitCode = 1;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // OXB-178b/179/139/180: independent review, findings ledger, bounded rounds, author responses.
+  if (command === 'review') {
+    const sub = ['run', 'status', 'respond'].includes(argv[0]) ? argv[0] : 'status';
+    const o = { dir: process.cwd(), json: false, respond: {} };
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (['--role', '--task', '--model', '--criteria', '--id'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--allow-external') o.allowExternal = true;
+      else if (a === '--dispute') o.respond.dispute = true;
+      else if (a === '--ref' && argv[i + 1]) o.respond.ref = String(argv[++i]);
+      else if (a === '--to-owner') o.respond.toOwner = true;
+      else if (a === '--reason' && argv[i + 1]) o.respond.reason = String(argv[++i]);
+      else if (a === '--fix') o.respond.fix = true;
+      else if (a === '--commit' && argv[i + 1]) o.respond.commit = String(argv[++i]);
+      else if (a === '--note') o.respond.note = true;
+      else if (a === '--waive') o.respond.waive = true;
+      else if (a === '--owner-confirm') o.respond.ownerConfirm = true;
+      else if (a === '--owner-record' && argv[i + 1]) o.respond.ownerRecord = String(argv[++i]);
+      else if (a === '--severity' && argv[i + 1]) o.respond.severity = String(argv[++i]);
+      else if (a === '--by' && argv[i + 1]) o.respond.by = String(argv[++i]);
+      else if (!a.startsWith('-') && sub === 'respond' && !o.fid) o.fid = a;
+      else if (!a.startsWith('-') && sub === 'status' && !o.id) o.id = a;
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = await oxeOperational.runtimeReview(o.dir, null, { action: sub, role: o.role, task: o.task, model: o.model, criteria: o.criteria, id: o.id, fid: o.fid, respond: o.respond, allowExternal: o.allowExternal });
+      if (o.json) { console.log(JSON.stringify({ oxeReviewSchema: 1, ...out }, null, 2)); return; }
+      if (sub === 'respond') { console.log(`  ${green}✓${reset} ${out.fid} → ${out.status}${out.decision ? ` (${out.decision})` : ''}`); return; }
+      if (sub === 'run') {
+        console.log(`  revisão ${out.id} rodada ${out.round}: ${out.status === 'ran' ? 'rodou' : `${red}não rodou${reset} — ${out.reason}`} · ${out.clean ? 'limpa' : 'suja'}${out.converged ? ' · convergiu' : ''}`);
+        console.log(`  novos: ${out.new.length} · repetidos: ${out.repeated.length} · reabertos: ${out.reopened.length} · altos abertos: ${out.open_high.join(', ') || '—'}`);
+        if (out.decision.action === 'escalate') console.log(`  ${yellow}escalonado:${reset} ${typeof out.escalated === 'string' ? out.escalated : JSON.stringify(out.escalated)} (spec_gap, origin review_repeat) — sem nova rodada`);
+        else if (out.decision.action.startsWith('stop')) console.log(`  ${yellow}laço parado (${out.decision.action === 'stop_ping_pong' ? 'vai-e-volta' : 'limite de rodadas'})${reset}: aceitar e seguir, rodar além do limite (com motivo) ou voltar ao autor do critério`);
+        if (out.status !== 'ran') process.exitCode = 1;
+        return;
+      }
+      for (const r of out.reviews) {
+        console.log(`  ${r.id}: ${r.rounds.length} rodada(s), ${r.clean_rounds} limpa(s)${r.converged ? ', convergiu' : ''}`);
+        for (const f of r.to_owner) console.log(`    [dono] ${f.fid} (${f.severity}) ${f.text}`);
+        for (const f of r.open) console.log(`    ${f.fid} (${f.severity})${f.place ? ` ${f.place}` : ''} ${f.text}${f.reopened ? ` — ${f.reopened}` : ''}`);
+        if (r.closed.length) console.log(`    encerrados: ${r.closed.map((f) => `${f.fid}=${f.status}`).join(', ')}`);
+      }
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // OXB-146: workflow overlays per team and per person.
+  if (command === 'customize') {
+    const sub = ['list', 'edit', 'migrate', 'apply'].includes(argv[0]) ? argv[0] : 'list';
+    const o = { dir: process.cwd(), json: false };
+    for (let i = sub === argv[0] ? 1 : 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--user') o.user = true;
+      else if (['--point', '--text'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-') && !o.workflow) o.workflow = a.endsWith('.md') ? a : `${a}.md`;
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const cu = require('./lib/oxe-customize.cjs');
+      let out;
+      if (sub === 'edit') { if (!o.workflow) throw new Error('use: oxe-cc customize edit <workflow> --point after:<seção> --text "…" [--user]'); out = { edited: cu.addExtension(o.dir, o.workflow, o), applied: cu.applyAll(o.dir) }; }
+      else if (sub === 'migrate') out = { migrated: cu.migrate(o.dir) };
+      else if (sub === 'apply') out = { applied: cu.applyAll(o.dir) };
+      else {
+        const wf = o.workflow;
+        const pkgText = wf && fs.existsSync(path.join(PKG_ROOT, 'oxe', 'workflows', wf)) ? fs.readFileSync(path.join(PKG_ROOT, 'oxe', 'workflows', wf), 'utf8') : null;
+        out = { points: pkgText ? cu.points(pkgText) : undefined, overlay: wf ? cu.overlayFor(o.dir, wf) : undefined, direct_edits: cu.directEdits(o.dir) };
+      }
+      if (o.json) { console.log(JSON.stringify({ oxeCustomizeSchema: 1, ...out }, null, 2)); return; }
+      if (out.points) console.log(`  pontos de extensão de ${o.workflow}: ${out.points.join(', ')}`);
+      if (out.overlay) for (const e of out.overlay.extensions) console.log(`  ${e.point} (${e.source}): ${String(e.text).split(/\r?\n/)[0].slice(0, 80)}`);
+      if (out.direct_edits && out.direct_edits.length) console.log(`  ${yellow}edições diretas nas cópias instaladas:${reset} ${out.direct_edits.join(', ')} — oxe-cc customize migrate`);
+      if (out.edited) console.log(`  ${green}✓${reset} ${out.edited.point} → ${path.relative(o.dir, out.edited.file)}`);
+      if (out.migrated) for (const m of out.migrated) console.log(`  ${green}✓${reset} ${m.workflow}: ${m.migrated.join(', ') || 'nada adicionado'}${m.removed_lines.length ? ` · ${m.removed_lines.length} linha(s) removida(s) à mão — decida no workflow` : ''}`);
+      const ap = out.applied;
+      if (ap) console.log(`  ${ap.reapplied} sobreposição(ões) reaplicada(s), ${ap.decisions.length} precisam de decisão`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // OXB-100: next (RC) and stable channels — records and prints the npm commands; never publishes.
+  if (command === 'release' && argv[0] === 'channel') {
+    const sub = ['status', 'next', 'promote'].includes(argv[1]) ? argv[1] : 'status';
+    const o = { dir: process.cwd(), json: false };
+    for (let i = 2; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (['--to', '--evidence', '--phase', '--project', '--by'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-') && !o.version) o.version = a;
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const ch = require('./lib/oxe-channels.cjs');
+      const out = sub === 'next' ? ch.recordNext(o.dir, o.version || readPkgVersion()) : sub === 'promote' ? ch.promote(o.dir, o.version, o) : { doc: ch.readChannels(o.dir), commands: [] };
+      if (o.json) { console.log(JSON.stringify({ oxeReleaseChannelSchema: 1, ...out }, null, 2)); return; }
+      console.log(`  next: ${out.doc.next || '—'} · stable: ${out.doc.stable || '—'}`);
+      for (const cmd of out.commands) console.log(`  publique você mesmo: ${cmd}`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // OXB-104: the SYSTEM-DESIGN artifact.
+  if (command === 'design') {
+    const o = { dir: process.cwd(), json: false };
+    for (let i = argv[0] === 'build' ? 1 : 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = oxeOperational.runtimeDesignBuild(o.dir, null);
+      if (o.json) console.log(JSON.stringify({ oxeDesignSchema: 1, ...out }, null, 2));
+      else console.log(`  ${green}✓${reset} ${out.file}: ${out.sections.length} seção(ões) ligadas a caminhos e ids R/A`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // OXB-141: behavioral evaluation of OXE's own workflows.
+  if (command === 'eval') {
+    const o = { dir: process.cwd(), json: false, runs: 1, names: [] };
+    for (let i = argv[0] === 'workflow' ? 1 : 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--self-test') o.selfTest = true;
+      else if (a === '--write-report') o.writeReport = true;
+      else if (a === '--runs' && argv[i + 1]) o.runs = Number(argv[++i]);
+      else if (a === '--candidate' && argv[i + 1]) o.candidate = path.resolve(argv[++i]);
+      else if (a === '--model' && argv[i + 1]) o.model = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-')) o.names.push(a.endsWith('.md') ? a : `${a}.md`);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const ev = require('./lib/oxe-workflow-eval.cjs');
+      const names = o.names.length ? o.names : ['plan.md'];
+      let model = null;
+      if (o.model === 'claude') {
+        const reviewer = require('./lib/oxe-review.cjs').claudeReviewer({});
+        model = async (text, input) => {
+          const r = await reviewer(`${text}\n\n---\nProduza SOMENTE o PLAN.json (JSON) para esta entrada:\n${JSON.stringify({ tasks: input.tasks, phase_acceptance_tests: input.phase_acceptance_tests }, null, 2)}`);
+          let body = String((r && r.text) || '');
+          try { const j = JSON.parse(body); if (j && typeof j.result === 'string') body = j.result; } catch { /* */ }
+          try { return JSON.parse(body.slice(body.indexOf('{'), body.lastIndexOf('}') + 1)); } catch { return { tasks: [] }; }
+        };
+      }
+      const results = [];
+      for (const n of names) results.push(await ev.evalWorkflow(n, { runs: o.runs, candidate: o.candidate, selfTest: o.selfTest, ...(model ? { model } : {}) }));
+      const report = { oxeEvalSchema: 1, generated_at: new Date().toISOString(), model: o.model || 'simulated', workflows: results, ok: results.every((r) => r.ok) };
+      if (o.writeReport) { const f = path.join(o.dir, '.oxe', 'release', 'eval-report.json'); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, `${JSON.stringify(report, null, 2)}\n`); }
+      if (o.json) console.log(JSON.stringify(report, null, 2));
+      else for (const r of results) {
+        console.log(`  ${r.ok ? green + '✓' : red + '✗'}${reset} ${r.workflow}: ${r.cases} caso(s) × ${r.runs} · ${Object.entries(r.candidate).map(([k, v]) => `${k} ${v.mean}±${v.sd}`).join(' · ')}`);
+        for (const g of r.regressions) console.log(`    regressão: ${g.rule} ${g.baseline} → ${g.candidate} (tolerância ${g.tolerance})`);
+        if (r.self_test) console.log(`    mutações detectadas: ${r.self_test.detected}/${r.self_test.mutations}`);
+      }
+      if (!report.ok) process.exitCode = 1;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // OXB-183: what the closed documents claim, checked against today's code.
+  if (command === 'docs') {
+    const o = { dir: process.cwd(), json: false, phase: null };
+    for (let i = argv[0] === 'check' ? 1 : 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--phase' && argv[i + 1]) o.phase = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-')) o.dir = path.resolve(a);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = oxeOperational.runtimeDocsCheck(o.dir, null, { phase: o.phase });
+      if (o.json) console.log(JSON.stringify({ oxeDocsCheckSchema: 1, ...out }, null, 2));
+      else if (!out.divergences.length) console.log(`  ${green}✓${reset} ${out.artifacts} artefato(s) fechado(s) conferem com o código`);
+      else { console.log(`  ${yellow}${out.divergences.length} divergência(s)${reset} → .oxe/DOCS-CHECK.md`); for (const d of out.divergences.slice(0, 20)) console.log(`    ${d.artifact}: ${d.cite} — ${d.why}${d.now ? ` (agora em ${d.now.join(', ')})` : ''}`); }
+      if (out.divergences.length) process.exitCode = 1;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // OXB-112: decisions as first-class ids.
+  if (command === 'decision') {
+    const sub = argv[0] === 'add' || argv[0] === 'list' ? argv[0] : 'list';
+    const o = { dir: process.cwd(), json: false };
+    for (let i = sub === argv[0] ? 1 : 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (['--title', '--text', '--phase', '--by', '--check', '--criteria'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--alt' && argv[i + 1]) (o.alternatives = o.alternatives || []).push(String(argv[++i]));
+      else if (!a.startsWith('-')) o.dir = path.resolve(a);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = oxeOperational.runtimeDecision(o.dir, null, { action: sub, ...o });
+      if (o.json) { console.log(JSON.stringify({ oxeDecisionSchema: 1, ...out }, null, 2)); return; }
+      if (sub === 'add') console.log(`  ${green}✓${reset} ${out.decision.id} — ${out.decision.title}${out.decision.check ? ` (evidência: \`${out.decision.check}\` no verify da fase)` : ''}`);
+      else if (!out.decisions.length) console.log('  Nenhuma decisão registrada.');
+      else for (const d of out.decisions) {
+        console.log(`  ${d.id.padEnd(12)} ${d.phase || '—'}  ${d.title}${d.check ? '  [check]' : ''}`);
+        for (const a of d.alternatives || []) console.log(`  ${''.padEnd(12)}   ✗ ${a.text} — ${a.reason} (por ${a.by}${a.link ? `, ${a.link}` : ''})`);
+      }
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  // OXB-126: staleness of the plan against the code that landed since it was written.
+  if (command === 'plan' && (argv[0] === 'staleness' || argv[0] === 'refresh')) {
+    const o = { dir: process.cwd(), json: false, stamp: false, tasks: null };
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--stamp') o.stamp = true;
+      else if (a === '--tasks' && argv[i + 1]) o.tasks = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-')) o.dir = path.resolve(a);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      if (argv[0] === 'refresh' && !o.tasks) throw new Error('use: oxe-cc plan refresh --tasks T3[,T7]');
+      const out = oxeOperational.runtimePlanStaleness(o.dir, null, { stamp: o.stamp, refresh: argv[0] === 'refresh' ? o.tasks : null });
+      if (o.json) { console.log(JSON.stringify({ oxePlanStalenessSchema: 1, ...out }, null, 2)); return; }
+      if (out.stamped) console.log(`  ${green}✓${reset} PLAN.json base_sha = ${out.stamped.slice(0, 10)}`);
+      else if (out.refreshed) console.log(`  ${green}✓${reset} revisadas contra ${String(out.head).slice(0, 10)}: ${out.refreshed.join(', ') || '—'}`);
+      else if (!out.stale.length) console.log(`  ${green}✓${reset} o plano está em dia com o código`);
+      else { console.log(`  ${yellow}${out.stale.length} ponto(s) do plano mudaram depois dele${reset} — o execute recusa:`); for (const x of out.stale) console.log(`    ${x.task}: ${x.file || ''} ${x.why}`); process.exitCode = 1; }
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // OXB-205: surgical amendment of a frozen acceptance test sha256 for audited CRs, preserving done tasks.
+  if (command === 'plan' && argv[0] === 'amend-test') {
+    const rest = argv.slice(1);
+    const o = { dir: process.cwd(), session: null, json: false, file: '', reason: '', by: '', force: false };
+    for (let i = 0; i < rest.length; i += 1) {
+      const a = rest[i];
+      if (a === '--reason' && rest[i + 1]) o.reason = String(rest[++i]);
+      else if (a === '--by' && rest[i + 1]) o.by = String(rest[++i]);
+      else if (a === '--dir' && rest[i + 1]) o.dir = path.resolve(rest[++i]);
+      else if (a === '--session' && rest[i + 1]) o.session = String(rest[++i]).replace(/\\/g, '/');
+      else if (a === '--force') o.force = true;
+      else if (a === '--json') o.json = true;
+      else if (a === '--file' && rest[i + 1]) o.file = String(rest[++i]);
+      else if (a.startsWith('-')) { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+      else if (!o.file) o.file = String(a);
+      else o.dir = path.resolve(a);
+    }
+    if (!o.session) {
+      try {
+        const statePath = oxeHealth.oxePaths(o.dir).state;
+        o.session = oxeHealth.parseActiveSession(fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : '') || null;
+      } catch { o.session = null; }
+    }
+    try {
+      const out = oxeOperational.runtimePlanAmendTest(o.dir, o.session, {
+        file: o.file,
+        reason: o.reason,
+        by: o.by || undefined,
+        force: o.force,
+      });
+      if (o.json) {
+        console.log(JSON.stringify({ oxePlanAmendTestSchema: 1, ...out }, null, 2));
+      } else {
+        const c = useAnsiColors();
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.file}: sha256 atualizado (${out.previous_sha256 ? String(out.previous_sha256).slice(0, 10) : '—'} → ${String(out.sha256).slice(0, 10)}) · motivo=${out.reason} · ${out.preserved_done_tasks} tarefa(s) done preservada(s)`);
+      }
+      process.exit(0);
+    } catch (err) {
+      if (o.json) console.log(JSON.stringify({ oxePlanAmendTestSchema: 1, ok: false, error: err && err.message ? err.message : String(err) }, null, 2));
+      else console.error(`${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exit(1);
+    }
+  }
+
+  if (command === 'plan' && argv[0] === 'append') {
+    const rest = argv.slice(1);
+    const o = { dir: process.cwd(), session: null, json: false };
+    for (let i = 0; i < rest.length; i += 1) {
+      const a = rest[i];
+      if (a === '--from' && rest[i + 1]) o.from = String(rest[++i]);
+      else if (a === '--by' && rest[i + 1]) o.by = String(rest[++i]);
+      else if (a === '--reason' && rest[i + 1]) o.reason = String(rest[++i]);
+      else if (a === '--dir' && rest[i + 1]) o.dir = path.resolve(rest[++i]);
+      else if (a === '--session' && rest[i + 1]) o.session = String(rest[++i]).replace(/\\/g, '/');
+      else if (a === '--json') o.json = true;
+      else if (a.startsWith('-')) { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+      else o.dir = path.resolve(a);
+    }
+    if (!o.session) {
+      try {
+        const statePath = oxeHealth.oxePaths(o.dir).state;
+        o.session = oxeHealth.parseActiveSession(fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : '') || null;
+      } catch { o.session = null; }
+    }
+    if (o.from && !path.isAbsolute(o.from)) o.from = path.resolve(process.cwd(), o.from);
+    try {
+      const out = oxeOperational.runtimePlanAppend(o.dir, o.session, o);
+      if (o.json) console.log(JSON.stringify({ oxePlanAppendSchema: 1, ok: true, ...out }, null, 2));
+      else {
+        const c = useAnsiColors();
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} lote ${out.batch}: ${out.tasks.map((t) => `${t.id}${t.from_id ? ` (${t.from_id})` : ''} onda ${t.wave}`).join(', ')}`);
+        for (const w of out.warnings) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${w}`);
+        console.log('  Um execute em andamento termina o próprio grafo; o próximo oxe-cc runtime execute roda o lote (as tarefas feitas são puladas).');
+      }
+      process.exit(0);
+    } catch (err) {
+      if (o.json) console.log(JSON.stringify({ oxePlanAppendSchema: 1, ok: false, error: err.message }, null, 2));
+      else console.error(`${red}✗${reset} ${err.message}`);
+      process.exit(1);
+    }
+  }
+
+  // OXB-086: oxe-cc plan merge a.json b.json [--key rid] [--out .oxe/PLAN.json] [--force] [--json]
+  // OXB-097 / OXB-098: build the plan trio from role files; check a role file before handing it over.
+  // OXB-154: the compile skeleton of the pending tasks.
+  if (command === 'plan' && argv[0] === 'skeleton') {
+    const o = { dir: process.cwd(), json: false };
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dry-run') o.dryRun = true;
+      else if (a === '--tasks' && argv[i + 1]) o.tasks = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = oxeOperational.runtimePlanSkeleton(o.dir, null, o);
+      if (o.json) { console.log(JSON.stringify({ oxePlanSkeletonSchema: 1, ...out }, null, 2)); return; }
+      for (const f of out.planned) console.log(`  ${out.dry_run ? '~' : green + '✓' + reset} ${f.path}: ${f.stubs.join(', ')}`);
+      for (const m of out.missing_signature) console.log(`  ${yellow}!${reset} ${m}`);
+      if (!out.planned.length) console.log('  nada a gerar (os símbolos já existem ou faltam assinaturas)');
+      else if (!out.dry_run) console.log('  Próximo: commite o esqueleto antes do runtime execute (os testes congelados passam a compilar)');
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  if (command === 'plan' && (argv[0] === 'build' || argv[0] === 'check-role')) {
+    const o = { dir: process.cwd(), json: false, files: [], force: false, autoCloseImports: false };
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--force') o.force = true;
+      else if (a === '--dry-run') o.dryRun = true;
+      else if (a === '--auto-close-imports') o.autoCloseImports = true;
+      else if (a === '--fix-stale-paths') o.fixStalePaths = true;
+      else if (a === '--pair-as-deps') o.pairAsDeps = true;
+      else if (a === '--from') { while (argv[i + 1] && !argv[i + 1].startsWith('-')) o.files.push(path.resolve(argv[++i])); }
+      else if (['--phase', '--ref', '--key'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-')) o.files.push(path.resolve(a));
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = argv[0] === 'check-role'
+        ? oxeOperational.runtimePlanBuild(o.dir, null, { action: 'check-role', file: o.files[0], ref: o.ref, autoCloseImports: o.autoCloseImports, fixStalePaths: o.fixStalePaths })
+        : oxeOperational.runtimePlanBuild(o.dir, null, { files: o.files, phase: o.phase, ref: o.ref, force: o.force, dryRun: o.dryRun, key: o.key, autoCloseImports: o.autoCloseImports, fixStalePaths: o.fixStalePaths, pairAsDeps: o.pairAsDeps });
+      if (o.json) { console.log(JSON.stringify({ oxePlanBuildSchema: 1, ...out }, null, 2)); if (out.errors.length) process.exitCode = 1; return; }
+      for (const w of out.warnings) console.log(`  ${yellow}!${reset} ${w}`);
+      for (const e of out.errors) console.log(`  ${red}✗${reset} ${e}`);
+      if (argv[0] === 'check-role') { if (!out.errors.length) console.log(`  ${green}✓${reset} ${path.basename(o.files[0])}: pronto para o TL`); }
+      else if (out.ok) console.log(`  ${green}✓${reset} ${out.plan.tasks.length} tarefas em ${Math.max(...out.plan.tasks.map((t) => t.wave))} onda(s) → ${out.written.join(', ') || '(dry-run)'}`);
+      if (out.errors.length) process.exitCode = 1;
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  if (command === 'plan' && argv[0] === 'merge') {
+    const rest = argv.slice(1);
+    const files = [];
+    let key = 'rid';
+    let out = null;
+    let force = false;
+    let json = false;
+    for (let i = 0; i < rest.length; i += 1) {
+      const a = rest[i];
+      if (a === '--key' && rest[i + 1]) key = String(rest[++i]);
+      else if (a === '--out' && rest[i + 1]) out = path.resolve(rest[++i]);
+      else if (a === '--force') force = true;
+      else if (a === '--json') json = true;
+      else if (a.startsWith('-')) { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+      else files.push(path.resolve(a));
+    }
+    if (files.length < 2) { console.error(`${red}Use:${reset} oxe-cc plan merge backend.json frontend.json [--key rid] [--out .oxe/PLAN.json] [--force]`); process.exit(1); }
+    const mergeLib = require('./lib/oxe-plan-merge.cjs');
+    const planJsonLib = require('./lib/oxe-plan-json.cjs');
+    let result;
+    try {
+      result = mergeLib.mergeRolePlans(files.map((file) => ({ file, doc: mergeLib.readRolePlan(file) })), { key });
+    } catch (err) {
+      console.error(`${red}✗${reset} ${err.message}`);
+      process.exit(1);
+    }
+    const lintErrors = result.errors.length ? [] : planJsonLib.validatePlanJson(result.plan);
+    const errors = [...result.errors, ...lintErrors];
+    const c = useAnsiColors();
+    if (!errors.length && out) {
+      if (fs.existsSync(out) && !force) { console.error(`${red}✗${reset} ${path.relative(process.cwd(), out) || out} já existe — use --force para substituir`); process.exit(1); }
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.writeFileSync(out, `${JSON.stringify(result.plan, null, 2)}\n`, 'utf8');
+    }
+    if (json || !out) {
+      console.log(JSON.stringify(json ? { oxePlanMergeSchema: 1, ok: errors.length === 0, errors, warnings: result.warnings, map: result.map, plan: result.plan } : result.plan, null, 2));
+      for (const w of json ? [] : result.warnings) console.error(`  ${c ? yellow : ''}!${c ? reset : ''} ${w}`);
+      for (const e of json ? [] : errors) console.error(`  ${c ? red : ''}✗${c ? reset : ''} ${e}`);
+    } else {
+      for (const w of result.warnings) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${w}`);
+      for (const e of errors) console.log(`  ${c ? red : ''}✗${c ? reset : ''} ${e}`);
+      if (!errors.length) {
+        const waves = Math.max(...result.plan.tasks.map((t) => t.wave));
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${result.plan.tasks.length} tarefas em ${waves} onda(s) → ${path.relative(process.cwd(), out) || out}`);
+        console.log(`  ${Object.entries(result.map).map(([k, id]) => `${k}→${id}`).join(' · ')}`);
+        console.log(`  Próximo: oxe-cc plan lint`);
+      }
+    }
+    process.exit(errors.length ? 1 : 0);
+  }
+
   if (command === 'plan' && argv[0] === 'reopen') {
     // oxe-cc plan reopen T<n> [--dir <pasta>]
     const rest = argv.slice(1);
@@ -6104,7 +7681,7 @@ async function main() {
     for (let i = 0; i < rest.length; i += 1) {
       const a = rest[i];
       if (a === '--dir' && rest[i + 1]) dir = path.resolve(rest[++i]);
-      else if (/^Td+$/.test(a)) task = a;
+      else if (/^T\d+$/.test(a)) task = a;
       else if (!a.startsWith('-')) dir = path.resolve(a);
     }
     try {
@@ -6152,10 +7729,39 @@ async function main() {
     let json = false;
     let maxTasksPerWave = 0;
     let dryVerify = false;
+    let noPreflight = false;
+    // OXB-084: --resume (skip commands already run on the same tree), --only T5,T6, --changed, --quiet.
+    let resume = false;
+    let dryVerifyAnyway = false;
+    let changed = false;
+    let quiet = false;
+    let only = null;
+    let mutation = false;
+    let mutationMax = 0;
+    let review = false;
+    let planRead = false;
+    let planReadRole = null;
+    let reviewWaive = null;
+    let reviewBy = null;
+    let reviewReason = null;
     for (let i = 0; i < rest.length; i += 1) {
       const a = rest[i];
       if (a === '--json') json = true;
+      else if (a === '--mutation') mutation = true;
+      else if (a === '--review') review = true;
+      else if (a === '--read') planRead = true;
+      else if (a === '--role' && rest[i + 1]) planReadRole = String(rest[++i]);
+      else if (a === '--waive' && rest[i + 1]) { reviewWaive = String(rest[++i]); review = true; }
+      else if (a === '--by' && rest[i + 1]) reviewBy = String(rest[++i]);
+      else if (a === '--reason' && rest[i + 1]) reviewReason = String(rest[++i]);
+      else if (a === '--mutation-max' && rest[i + 1]) { mutation = true; mutationMax = Number(rest[++i]) || 0; }
       else if (a === '--dry-verify') dryVerify = true;
+      else if (a === '--no-preflight') noPreflight = true;
+      else if (a === '--resume') { resume = true; dryVerify = true; }
+      else if (a === '--dry-verify-anyway') { dryVerifyAnyway = true; dryVerify = true; }
+      else if (a === '--changed') { changed = true; dryVerify = true; }
+      else if (a === '--quiet') quiet = true;
+      else if (a === '--only' && rest[i + 1]) { only = String(rest[++i]).split(',').map((s) => s.trim()).filter(Boolean); dryVerify = true; }
       else if (a === '--session' && rest[i + 1]) session = String(rest[++i]).replace(/\\/g, '/');
       else if (a === '--max-tasks-per-wave' && rest[i + 1]) maxTasksPerWave = Number(rest[++i]) || 0;
       else if (a === '--dir' && rest[i + 1]) dir = path.resolve(rest[++i]);
@@ -6170,9 +7776,27 @@ async function main() {
         session = null;
       }
     }
+    // OXB-181: the context-free read of the spec and plan (separate processes) → PLAN-READ.md/.json.
+    if (planRead) {
+      try {
+        const out = await oxeOperational.runtimePlanRead(dir, session, { role: planReadRole });
+        if (json) { console.log(JSON.stringify({ oxePlanReadSchema: 1, ...out }, null, 2)); }
+        else {
+          for (const r of out.roles) {
+            console.log(`  ${r.role}: ${r.status === 'ran' ? 'rodou' : `não rodou (${r.reason})`} · altos abertos: ${r.open_high.join(', ') || '—'}`);
+            if (r.summary && r.summary.delivers) console.log(`    entrega (leitor): ${r.summary.delivers}`);
+          }
+          console.log('  → .oxe/PLAN-READ.md');
+        }
+        if (out.roles.some((r) => r.status !== 'ran' || r.open_high.length)) process.exitCode = 1;
+      } catch (err) { console.error(`${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+      return;
+    }
     let result;
     try {
-      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave, dryVerify });
+      // Progress goes to stderr, so --json on stdout stays parseable.
+      const onProgress = quiet ? null : (line) => process.stderr.write(`  ${line}\n`);
+      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave, dryVerify, preflight: !noPreflight, onProgress, resume, changed, only, dryVerifyAnyway, mutation, mutationMax, review, reviewWaive, by: reviewBy, reason: reviewReason });
     } catch (err) {
       console.error(`${red}✗${reset} ${err && err.message ? err.message : err}`);
       process.exit(1);

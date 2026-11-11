@@ -118,6 +118,7 @@ Resumo operacional:
 - Se existir **`plan_max_tasks_per_wave` > 0** na config, **não** colocar mais tarefas do que esse número na mesma **Onda**; dividir em mais ondas.
 - Tamanho alvo: cada tarefa cabe em **um** contexto de agente focado.
 - IDs das tarefas: `T1`, `T2`, … estáveis para referência no verify.
+- O verify de uma tarefa roda os testes dela. Um teste de aceite da fase inteira não é verify de tarefa: ele roda no verify da fase (OXB-046).
 </context>
 
 <format_plan>
@@ -152,7 +153,7 @@ Depois do resumo e antes das tarefas, o `PLAN.md` deve conter também:
   - Clareza da validação / testes: NN/15
   - Lacunas externas / decisões pendentes: NN/10
 - **Principais incertezas:** ...
-- **Alternativas descartadas:** ...
+- **Alternativas descartadas:** cite as das decisões da fase (`oxe-cc decision list` mostra cada uma com o motivo e quem recusou) em vez de reescrevê-las. Uma alternativa nova recusada neste plano entra na decisão: `oxe-cc decision add … --alt "texto::motivo[::por::link]"`. O `plan lint` avisa quando uma tarefa propõe uma alternativa já recusada.
 - **Condição para replanejar:** ...
 ```
 

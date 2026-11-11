@@ -122,7 +122,8 @@ describe('Gap 4 — finish_task tool', () => {
       const result = await executor.execute(node, lease, 'run-2', 1);
       assert.equal(result.success, false, 'must fail when turns exhausted');
       assert.equal(result.completed_by, 'turn_limit_exhausted');
-      assert.equal(result.failure_class, 'llm');
+      assert.equal(result.failure_class, 'turns_exhausted', 'OXB-185: out of turns is its own class');
+      assert.match(result.output, /^turns_exhausted: 2\/2 turnos/);
     } finally {
       streamCompletionModule.streamCompletion = original;
     }

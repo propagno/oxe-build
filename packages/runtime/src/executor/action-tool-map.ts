@@ -31,7 +31,7 @@ const ACTION_TOOL_MAP: Record<Action['type'], ToolSchema[]> = {
   custom: ALL_BUILT_IN_SCHEMAS,
 };
 
-export function selectToolsForActions(actions: Action[]): ToolSchema[] {
+export function selectToolsForActions(actions: Action[], opts: { askOrchestrator?: boolean } = {}): ToolSchema[] {
   const seen = new Set<string>();
   const result: ToolSchema[] = [];
   for (const action of actions) {
@@ -46,5 +46,7 @@ export function selectToolsForActions(actions: Action[]): ToolSchema[] {
   if (!seen.has('finish_task') && BUILT_IN_TOOLS.finish_task) {
     result.push(BUILT_IN_TOOLS.finish_task.schema);
   }
+  // OXB-125: the question channel, only when the run opted in
+  if (opts.askOrchestrator && !seen.has('ask_orchestrator') && BUILT_IN_TOOLS.ask_orchestrator) result.push(BUILT_IN_TOOLS.ask_orchestrator.schema);
   return result;
 }

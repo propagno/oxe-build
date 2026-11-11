@@ -299,7 +299,8 @@ function writeHandoff(dir, phase) {
 async function runPhase(dir, phase, executorOptions) {
   operational.runtimeProgramStart(dir, null, phase.id);
   writePhaseArtifacts(dir, phase);
-  const lint = operational.runtimePlanLint(dir, null);
+  // execute runs with skipPreflight below, so lint skips the same preflight (OXB-041: lint ≡ execute).
+  const lint = operational.runtimePlanLint(dir, null, { preflight: false });
   const interfaces = interfaceNames(dir, phase);
   const executed = await operational.runRuntimeExecute(dir, null, { skipPreflight: true, ...executorOptions });
   const verified = await operational.runRuntimeVerify(dir, null, { timeoutMs: 120_000 });
@@ -359,7 +360,12 @@ async function runMockScenario(name, mutate, variant = null) {
       }
       if (mutate && phase.id === 'F3') {
         const regFailed = step.verified.regression ? step.verified.regression.failed.map((f) => f.check_id) : [];
-        mutationCaught = !step.closed.closed && regFailed.some((id) => id.startsWith('reg-f1-'));
+        // 1.21.2 (OXB-067): the mutation is an edit OUTSIDE the F3 task's files; when it breaks the task's verify, the
+        // failed attempt is rolled back including that file, so it never reaches the phase regression. Either catch
+        // counts — the phase must not close with F1 broken.
+        const scopeRollback = operational.readEvents(dir, null).some((e) => e.type === 'RollbackExecuted'
+          && Array.isArray(e.payload && e.payload.outside_scope) && e.payload.outside_scope.includes('src/store.js'));
+        mutationCaught = !step.closed.closed && (regFailed.some((id) => id.startsWith('reg-f1-')) || scopeRollback);
         // Repara o store e re-executa a fase (o que o próximo /oxe-execute faria), depois fecha.
         writeFile(path.join(dir, 'src', 'store.js'), PHASES[0].tasks[1].source['src/store.js']);
         operational.runtimePlanReopen(dir, null, { task: phase.tasks[phase.tasks.length - 1].id });

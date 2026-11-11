@@ -105,6 +105,76 @@ function npmVersion(spawn = spawnSync) {
  * @param {string} projectRoot
  * @param {{ node?: string, npm?: string|null, freeMb?: number, minFreeMb?: number, spawn?: Function }} [machine]
  */
+/** An optional package for another OS/CPU is legitimately absent (fsevents on Windows, @esbuild/<other-platform>). */
+function platformExcluded(meta, platform, arch) {
+  const deny = (list, value) => {
+    if (!Array.isArray(list) || !list.length) return false;
+    const allowed = list.filter((x) => !String(x).startsWith('!'));
+    const denied = list.filter((x) => String(x).startsWith('!')).map((x) => String(x).slice(1));
+    if (denied.includes(value)) return true;
+    return allowed.length > 0 && !allowed.includes(value);
+  };
+  return deny(meta.os, platform) || deny(meta.cpu, arch);
+}
+
+/**
+ * OXB-039: package-lock (v2/v3) entries missing from node_modules. Skips: the root, workspace sources, dev packages
+ * when NODE_ENV=production installs omit them, and optional packages for another platform. A `link` entry must point
+ * at an existing directory.
+ * @returns {string[]} `name@version` of the missing ones
+ */
+function missingLockfilePackages(projectRoot, lockDoc, machine = {}) {
+  if (!lockDoc || !lockDoc.packages || typeof lockDoc.packages !== 'object') return [];
+  if (!fs.existsSync(path.join(projectRoot, 'node_modules'))) return [];
+  const platform = machine.platform || process.platform;
+  const arch = machine.arch || process.arch;
+  const omitDev = (machine.env || process.env).NODE_ENV === 'production';
+  const missing = [];
+  for (const [key, meta] of Object.entries(lockDoc.packages)) {
+    if (!key || !key.includes('node_modules/') || !meta || typeof meta !== 'object') continue;
+    if (meta.extraneous) continue;
+    if (omitDev && meta.dev) continue;
+    if (meta.optional && platformExcluded(meta, platform, arch)) continue;
+    if (meta.peer && meta.optional) continue;
+    const dir = path.join(projectRoot, ...key.split('/'));
+    const present = meta.link ? fs.existsSync(path.join(projectRoot, String(meta.resolved || ''))) && fs.existsSync(dir) : fs.existsSync(path.join(dir, 'package.json'));
+    if (!present) missing.push(`${key.split('node_modules/').pop()}@${meta.version || '?'}${meta.optional ? ' (optional)' : ''}`);
+  }
+  return missing;
+}
+
+function installStaleness(projectRoot) {
+  try {
+    const lock = fs.statSync(path.join(projectRoot, 'package-lock.json'));
+    const marker = path.join(projectRoot, 'node_modules', '.package-lock.json');
+    if (!fs.existsSync(marker)) return null;
+    const installed = fs.statSync(marker);
+    if (lock.mtimeMs - installed.mtimeMs > 2000) return 'node_modules mais velho que o package-lock.json — o lockfile mudou depois do último install; reinstale (npm ci) e rode o native_check';
+  } catch { /* sem lockfile ou sem node_modules */ }
+  return null;
+}
+
+/** Config `native_check` (+ `native_check_timeout_ms`, default 5 min), run with the runtime's child env policy. */
+function runNativeCheck(projectRoot, machine = {}) {
+  if (machine.nativeCheck === false) return null;
+  const config = readJson(path.join(projectRoot, '.oxe', 'config.json')) || {};
+  const command = typeof config.native_check === 'string' ? config.native_check.trim() : '';
+  if (!command) return null;
+  let childEnv = { ...process.env };
+  try {
+    const runtime = require('../../lib/runtime/index.js');
+    if (typeof runtime.childProcessEnv === 'function') childEnv = runtime.childProcessEnv(process.env);
+  } catch { delete childEnv.NODE_TEST_CONTEXT; }
+  const res = (machine.spawn || spawnSync)(command, {
+    cwd: projectRoot, shell: true, encoding: 'utf8', windowsHide: true, env: childEnv,
+    timeout: Number(config.native_check_timeout_ms) > 0 ? Number(config.native_check_timeout_ms) : 300_000,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  const output = `${res.stdout || ''}\n${res.stderr || ''}`;
+  const tail = output.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(-4).join(' | ');
+  return { ok: res.status === 0, status: res.status, command, tail: res.error && /ETIMEDOUT/.test(String(res.error.code || res.error.message)) ? 'timeout' : tail };
+}
+
 function checkProjectEnvironment(projectRoot, machine = {}) {
   const problems = [];
   const warnings = [];
@@ -143,6 +213,31 @@ function checkProjectEnvironment(projectRoot, machine = {}) {
   if (depConflicts.length) {
     problems.push(`node ${node} fora do engines de ${depConflicts.length} dependência(s) direta(s): ${depConflicts.slice(0, 5).join(', ')}${depConflicts.length > 5 ? '…' : ''} — o npm ci pode recompilar/descartar módulos nativos em silêncio`);
   }
+  // OXB-039: what the lockfile says is installed, actually present in node_modules. With a compatible Node the npm ci of
+  // the plan worktree ran node-gyp on better-sqlite3, the build failed, npm dropped it as a "failed optional
+  // dependency", and doctor said "compatible". Only when node_modules exists (an uninstalled checkout is not this case).
+  const missingDeps = lockDoc ? missingLockfilePackages(projectRoot, lockDoc, machine) : [];
+  // OXB-074: an OPTIONAL package npm dropped after a failed build is legitimate (ssh2's cpu-features/buildcheck/nan on
+  // Windows): a warning, silenced by config `deps_optional_ignore`. Only a missing non-optional package blocks; real
+  // native breakage of something the app uses is the project's `native_check` job (it caught better-sqlite3).
+  const oxeConfig = readJson(path.join(projectRoot, '.oxe', 'config.json')) || {};
+  const ignoreOptional = new Set(Array.isArray(oxeConfig.deps_optional_ignore) ? oxeConfig.deps_optional_ignore.map(String) : []);
+  const nameOf = (entry) => entry.replace(/ \(optional\)$/, '').replace(/@[^@]*$/, '');
+  const requiredMissing = missingDeps.filter((d) => !/ \(optional\)$/.test(d));
+  const optionalMissing = missingDeps.filter((d) => / \(optional\)$/.test(d) && !ignoreOptional.has(nameOf(d)));
+  if (requiredMissing.length) {
+    problems.push(`${requiredMissing.length} pacote(s) do package-lock ausentes em node_modules: ${requiredMissing.slice(0, 6).join(', ')}${requiredMissing.length > 6 ? '…' : ''} — o install descartou dependência(s); reinstale ou copie/linke um node_modules validado antes do execute`);
+  }
+  if (optionalMissing.length) {
+    warnings.push(`opcional(is) ausente(s) em node_modules: ${optionalMissing.slice(0, 6).join(', ')}${optionalMissing.length > 6 ? '…' : ''} — o npm descarta um opcional cujo build falhou; se o app usa algum deles, declare native_check (silencie com deps_optional_ignore)`);
+  }
+  // OXB-039: node_modules older than the lockfile (npm writes node_modules/.package-lock.json on every install).
+  const stale = installStaleness(projectRoot);
+  if (stale) warnings.push(stale);
+  // OXB-039: the project's own native check (config `native_check`, e.g. "node scripts/run-native-verification.mjs"),
+  // so a native module that the install broke fails here, loudly, not as a red test that looks like code.
+  const native = runNativeCheck(projectRoot, machine);
+  if (native && !native.ok) problems.push(`native_check falhou (${native.command}): ${native.tail || `exit ${native.status}`} — reinstale/reconstrua os módulos nativos (ex.: npm run rebuild:native) antes do execute`);
   const pm = pkg && typeof pkg.packageManager === 'string' ? /^(npm|pnpm|yarn|bun)@(.+)$/.exec(pkg.packageManager) : null;
   if (pm) {
     const lock = { npm: 'package-lock.json', pnpm: 'pnpm-lock.yaml', yarn: 'yarn.lock', bun: 'bun.lockb' }[pm[1]];
@@ -175,4 +270,4 @@ function checkProjectEnvironment(projectRoot, machine = {}) {
   };
 }
 
-module.exports = { checkProjectEnvironment, satisfies, parseVersion };
+module.exports = { checkProjectEnvironment, missingLockfilePackages, satisfies, parseVersion };

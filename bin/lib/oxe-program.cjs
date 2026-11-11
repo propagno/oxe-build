@@ -79,8 +79,9 @@ function writeRegression(programDir, phaseId, checks, meta = {}) {
 /** Checks de regressão das fases fechadas antes de `phaseId`, com id `reg-<fase>-<check>`. */
 function loadRegressionChecks(programDir, state, phaseId) {
   if (!state || !Array.isArray(state.phases)) return [];
-  const index = phaseId ? state.phases.findIndex((phase) => phase.id === phaseId) : state.phases.length;
-  const before = state.phases.slice(0, index < 0 ? state.phases.length : index).filter((phase) => phase.status === 'closed');
+  // OXB-033: with phase dependencies a later phase can close first; every closed phase other than this one is
+  // regression (in the serial default only earlier phases are closed, so nothing changes).
+  const before = state.phases.filter((phase) => phase.status === 'closed' && phase.id !== phaseId);
   const checks = [];
   for (const phase of before) {
     const frozen = readJson(path.join(programPaths(programDir).regressionDir, `${phase.id}.json`));

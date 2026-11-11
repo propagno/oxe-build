@@ -64,7 +64,7 @@ test('core handlers expose the decomposed command boundary', async () => {
   ]);
   await registry.dispatch('status', ['--json']);
   assert.equal(calls.includes('banner'), false);
-  assert.deepEqual(calls[0], ['status', 'project', { json: true, hints: true, summary: undefined }]);
+  assert.deepEqual(calls[0], ['status', 'project', { json: true, hints: true, summary: undefined, allWorktrees: undefined }]);
 });
 
 test('core update handler dispatches version check and validates missing directories', async () => {

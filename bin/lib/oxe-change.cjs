@@ -56,9 +56,78 @@ function listChanges(programDir) {
   return [...byId.values()];
 }
 
-function nextId(changes) {
-  const max = changes.reduce((m, c) => Math.max(m, Number(String(c.id).replace(/\D/g, '')) || 0), 0);
-  return `CR-${String(max + 1).padStart(2, '0')}`;
+/**
+ * OXB-159: next CR id. Without a prefix, `CR-NN` over the plain ids only. With a prefix (a phase id — used in a forked
+ * worktree, where the program tree keeps numbering its own CRs in parallel), `CR-<prefix>-<n>`, which cannot collide.
+ */
+function nextId(changes, prefix) {
+  const p = prefix ? String(prefix).toUpperCase().replace(/[^A-Z0-9.]/g, '') : '';
+  const re = p ? new RegExp(`^CR-${p.replace(/\./g, '\\.')}-(\\d+)$`) : /^CR-(\d+)$/;
+  const max = changes.reduce((m, c) => { const hit = re.exec(String(c.id)); return hit ? Math.max(m, Number(hit[1])) : m; }, 0);
+  return p ? `CR-${p}-${max + 1}` : `CR-${String(max + 1).padStart(2, '0')}`;
+}
+
+/** The phase prefix for new CR ids: set in a forked worktree (`program init --from`), or by `program.cr_id_prefix`. */
+function idPrefixFor(program, phaseId) {
+  if (program && program.cr_id_prefix) return String(program.cr_id_prefix);
+  if (program && program.forked_from) return phaseId || 'X';
+  return '';
+}
+
+/**
+ * OXB-159: `program adopt` brings the CR records of the adopted worktree (CRs, status changes, signals) into this
+ * program. A record already here (copied at the fork, or merged before) is skipped; a CR whose id is already taken
+ * here by a DIFFERENT CR is renamed to `CR-<phase>-<n>` and its status records follow (`origin_id` keeps the trail).
+ * @returns {{ merged: number, renamed: Record<string,string> }}
+ */
+function mergeChanges(ourDir, theirDir, options = {}) {
+  const ours = readNdjson(changesFile(ourDir));
+  const theirs = readNdjson(changesFile(theirDir));
+  const key = (r) => `${r.kind}|${r.id || ''}|${r.at || ''}|${r.status || r.action || ''}`;
+  const have = new Set();
+  for (const r of ours) {
+    have.add(key(r));
+    if (r.origin_id) have.add(key({ ...r, id: r.origin_id }));
+  }
+  const crById = new Map(ours.filter((r) => r.kind === 'cr').map((r) => [r.id, r]));
+  // a fork CR merged earlier under a new id: reuse the mapping
+  const renamed = {};
+  for (const r of ours) if (r.kind === 'cr' && r.origin_id && r.origin_root === options.from) renamed[r.origin_id] = r.id;
+  const pending = [];
+  let merged = 0;
+  for (const r of theirs) {
+    if (r.kind === 'program_edit' && r.action === 'program_fork') continue; // the fork's own bookkeeping
+    if (have.has(key(r))) continue;
+    let rec = { ...r };
+    if (r.kind === 'cr') {
+      const taken = crById.get(r.id);
+      if (taken && !(taken.at === r.at && taken.summary === r.summary)) {
+        const id = nextId([...crById.values(), ...pending], r.phase || options.phase || 'X');
+        renamed[r.id] = id;
+        rec = { ...r, id, origin_id: r.id, origin_root: options.from || null };
+      }
+      crById.set(rec.id, rec);
+      pending.push(rec);
+    } else if (r.id && renamed[r.id]) {
+      rec = { ...r, id: renamed[r.id], origin_id: r.id };
+    }
+    if (Array.isArray(rec.resolves)) rec.resolves = rec.resolves.map((x) => renamed[x] || x);
+    appendNdjson(changesFile(ourDir), rec);
+    have.add(key(rec));
+    merged += 1;
+  }
+  return { merged, renamed };
+}
+
+/** Rewrites CR ids in a copied JSON/markdown file (`resolves`, mentions) after a rename. */
+function renameCrRefs(file, renamed) {
+  const ids = Object.keys(renamed || {});
+  if (!ids.length || !fs.existsSync(file)) return false;
+  const text = fs.readFileSync(file, 'utf8');
+  const re = new RegExp(`\\b(${ids.map((i) => i.replace(/[.]/g, '\\.')).join('|')})\\b(?!-)`, 'g');
+  const next = text.replace(re, (m) => renamed[m] || m);
+  if (next !== text) fs.writeFileSync(file, next);
+  return next !== text;
 }
 
 /** Tarefas ligadas aos critérios do CR (rastreabilidade A* → T). */
@@ -79,7 +148,9 @@ function routeFor(cr, impacted) {
     case 'spec_gap':
       return [
         `emendar a SPEC: ${cr.criteria.map((a) => `${a} → v${cr.amend_to || 2}`).join(', ')} (motivo: ${cr.summary})`,
-        `reescrever o teste de aceite com "version": ${cr.amend_to || 2} e "resolves": ["${cr.id}"]; os de versão anterior ficam stale no plan lint`,
+        cr.amendment === 'additive'
+          ? `adicionar um teste de aceite novo com "version": ${cr.amend_to || 2} e "resolves": ["${cr.id}"]; a emenda é aditiva, os testes anteriores continuam valendo`
+          : `reescrever o teste de aceite com "version": ${cr.amend_to || 2} e "resolves": ["${cr.id}"]; os de versão anterior ficam stale no plan lint`,
         `replan em modo merge das tarefas ${impacted.join(', ') || '(nenhuma ligada)'}`,
       ];
     case 'constraint':
@@ -105,7 +176,7 @@ function recordChange(input) {
   if (summary.length < 8) throw new Error('descreva o problema (--summary) em uma frase');
   const by = String(input.by || '').trim() || 'usuário';
   const criteria = (Array.isArray(input.criteria) ? input.criteria : String(input.criteria || '').split(','))
-    .map((c) => c.trim().toUpperCase()).filter((c) => /^A\d+$/.test(c));
+    .map((c) => c.trim().toUpperCase()).filter((c) => /^(?:A\d+(?:\.\d+)?|G\d+)$/.test(c));
   if ((cls === 'defect' || cls === 'spec_gap') && criteria.length === 0) {
     throw new Error(`um CR ${cls} precisa apontar os critérios afetados (--criteria A4[,A5]); defeito sem critério é escopo novo`);
   }
@@ -113,7 +184,7 @@ function recordChange(input) {
   const phaseId = input.phase || (program && program.active_phase) || null;
   const cr = {
     kind: 'cr',
-    id: nextId(existing),
+    id: nextId(existing, idPrefixFor(program, phaseId)),
     class: cls,
     summary,
     criteria,
@@ -122,8 +193,17 @@ function recordChange(input) {
     at: new Date().toISOString(),
     status: 'open',
     amend_to: cls === 'spec_gap' ? Number(input.amendTo) || 2 : null,
+    // OXB-062: an additive amendment only adds to the criterion (the earlier tests stay valid); a changing one
+    // rewrites it (the earlier tests go stale).
+    amendment: cls === 'spec_gap' ? (input.additive ? 'additive' : 'changing') : null,
     evidence: input.evidence || null,
     ...(input.gate ? { gate: String(input.gate) } : {}),
+    // OXB-137: the finding rule that fired and the severity the table gives it (never chosen by the reporter).
+    ...(input.rating ? { rule: input.rating.rule, severity: input.rating.severity } : {}),
+    // OXB-173: the tasks the CR is about (`--tasks`), linked whether or not they are reopened.
+    ...(Array.isArray(input.tasks) && input.tasks.length ? { tasks: input.tasks } : {}),
+    // OXB-058: the SPEC edit this CR made (`spec amend`): the row before and after, for the audit trail.
+    ...(input.specEdit ? { spec_edit: input.specEdit } : {}),
   };
   appendNdjson(changesFile(programDir), cr);
   const impacted = impactedTasks(plan, criteria);
@@ -158,8 +238,10 @@ function setChangeStatus(programDir, id, status, extra = {}) {
  * ou, para um CR aberto por gate do projeto (`gate`), o próprio `gate-<id>` verde.
  * @returns {{ resolved: string[], open: object[] }}
  */
-function reconcileChanges(programDir, phaseId, plan, checkResults) {
+function reconcileChanges(programDir, phaseId, plan, checkResults, options = {}) {
   const passing = new Set((checkResults || []).filter((r) => r.status === 'pass').map((r) => r.check_id));
+  // OXB-078: a gate CR whose gate is no longer declared can never go green — it closes as "gate removido do plano".
+  const declaredGates = Array.isArray(options.declaredGates) ? new Set(options.declaredGates) : null;
   const resolvedBy = new Map();
   for (const a of (plan && plan.acceptanceTests) || []) {
     const key = a.id || a.criterion;
@@ -176,10 +258,38 @@ function reconcileChanges(programDir, phaseId, plan, checkResults) {
       // 1.21: a CR raised by a red phase gate closes when that same gate goes green.
       setChangeStatus(programDir, cr.id, 'resolved', { resolution: `gate do projeto ${cr.gate} verde`, by: 'verify' });
       resolved.push(cr.id);
+    } else if (cr.gate && declaredGates && !declaredGates.has(cr.gate)) {
+      setChangeStatus(programDir, cr.id, 'withdrawn', { resolution: `gate ${cr.gate} removido do plano (phase_gates) — o CR não tem mais como ficar verde`, by: 'verify' });
+      resolved.push(cr.id);
     }
   }
   const open = listChanges(programDir).filter((cr) => cr.status === 'open' && cr.class !== 'new_scope' && (!phaseId || !cr.phase || cr.phase === phaseId));
   return { resolved, open };
+}
+
+/**
+ * OXB-062: per criterion, the version a new acceptance test must carry (`required`, the latest amendment) and the
+ * version below which the earlier tests are stale (`staleBelow`, the latest CHANGING amendment; 1 when every
+ * amendment was additive, so nothing goes stale).
+ * @returns {Map<string, { required: number, staleBelow: number, additive: boolean }>}
+ */
+function amendmentRequirements(programDir) {
+  const out = new Map();
+  for (const cr of listChanges(programDir)) {
+    if (cr.class !== 'spec_gap') continue;
+    const version = cr.amend_to || 2;
+    const additive = cr.amendment === 'additive';
+    for (const a of cr.criteria || []) {
+      const cur = out.get(a) || { required: 1, staleBelow: 1, additive: true, crs: [], last_at: null };
+      cur.required = Math.max(cur.required, version);
+      if (cr.id && !cur.crs.includes(cr.id)) cur.crs.push(cr.id);
+      if (cr.at && (!cur.last_at || cr.at > cur.last_at)) cur.last_at = cr.at;
+      if (!additive) cur.staleBelow = Math.max(cur.staleBelow, version);
+      cur.additive = cur.staleBelow < cur.required;
+      out.set(a, cur);
+    }
+  }
+  return out;
 }
 
 /** Emendas de SPEC (spec_gap): versão mínima exigida por critério. */
@@ -199,7 +309,8 @@ function requiredVersions(programDir) {
 function checkPolicyRules(projectRoot, rules, files) {
   const violations = [];
   for (const rule of Array.isArray(rules) ? rules : []) {
-    if (!rule || !rule.id || !rule.forbid) continue;
+    // Content rules only (OXB-118: action rules — kind command/path/env — are checked elsewhere; strings are advisory).
+    if (!rule || !rule.id || !rule.forbid || (rule.kind && rule.kind !== 'content')) continue;
     let forbid;
     let scope = null;
     try {
@@ -227,4 +338,4 @@ function checkPolicyRules(projectRoot, rules, files) {
   return violations;
 }
 
-module.exports = { CLASSES, listChanges, recordChange, setChangeStatus, reconcileChanges, requiredVersions, checkPolicyRules, impactedTasks, changesFile };
+module.exports = { nextId, idPrefixFor, mergeChanges, renameCrRefs, CLASSES, appendNdjson, readNdjson, listChanges, recordChange, setChangeStatus, reconcileChanges, requiredVersions, amendmentRequirements, checkPolicyRules, impactedTasks, changesFile };

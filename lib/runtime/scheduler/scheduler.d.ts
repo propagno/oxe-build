@@ -16,11 +16,17 @@ export interface TaskResult {
     evidence: string[];
     output: string;
     completed_by?: string;
+    /** OXB-185: turns used and the cap of the attempt, when it ended at the cap. */
+    turns_used?: number;
+    turns_cap?: number;
+    /** Every verify segment's output with headers (1.21.2, OXB-066), for the attempt log. */
+    verify_log?: string;
 }
 export interface TaskExecutor {
     execute(node: GraphNode, lease: WorkspaceLease, runId: string, attemptNumber: number, options?: {
         previousError?: string | null;
         maxTurns?: number | null;
+        model?: string | null;
     }): Promise<TaskResult>;
 }
 /**
@@ -35,10 +41,104 @@ export interface RunBudget {
     remainingTurns(): number | null;
 }
 export interface SchedulerOptions {
+    /** OXB-155: per-segment timeout of the task verify (the caller passes config verify_timeout_ms; default 10 min). */
+    verifyTimeoutMs?: number;
+    /**
+     * OXB-171: per task, the files its frozen acceptance tests import/read that are outside its `files` (from the
+     * plan lint), and those tests. A verify failure that names one of the tests stops after attempt 1 as
+     * `scope_insufficient` instead of retrying a task that cannot pass.
+     */
+    outOfScopeRequirements?: Record<string, {
+        files: string[];
+        tests: string[];
+    }>;
+    /** OXB-120: project patterns (regex sources) added to the built-in environment / quota classifiers. */
+    failureClasses?: {
+        environment?: string[];
+        quota?: string[];
+    };
+    /**
+     * OXB-138: a task that exhausts its attempts is DEFERRED and the run goes on with every task that does not depend on
+     * it (its dependents end `blocked_by_deferred`). false keeps the old stop-at-the-failed-wave behavior.
+     */
+    deferFailed?: boolean;
+    /**
+     * OXB-129: `stream` dispatches a task as soon as all its declared dependencies completed (not when its whole wave
+     * did), within the parallel limits; a task whose scope overlaps a running one (hot file) waits. `wave` (default)
+     * keeps the wave barrier. The wave becomes a reading grouping only in stream mode.
+     */
+    dispatch?: 'wave' | 'stream';
     maxRunDurationMs?: number;
     staleProgressMs?: number;
+    /** OXB-204: max automatic wait (ms) on 429 / rate-limit reset before pausing as quota (default: 5 min). */
+    maxQuotaWaitMs?: number;
+    /** OXB-204: max consecutive automatic 429 waits per attempt before pausing as quota (default: 3). */
+    maxQuotaWaits?: number;
+    /** Injectable sleep for deterministic tests. */
+    sleep?: (ms: number) => Promise<void>;
 }
+/** OXB-050: what integrating a worktree's work into the program checkout did. */
+export interface ParallelIntegration {
+    ok: boolean;
+    /** In-scope files copied into the program checkout (relative paths). */
+    files: string[];
+    /** Files the attempt changed outside its mutation_scope (never copied). */
+    outside: string[];
+    error?: string;
+}
+/**
+ * OXB-050 (opt-in `--parallel-mutating`): the mutating nodes of a wave with disjoint `mutation_scope` run at the same
+ * time, each in its own isolated workspace (`manager`, a git worktree with prepared dependencies). A node whose verify
+ * passes there is integrated into the program checkout under a lock — in-scope files only — and verified again on the
+ * integrated tree before it completes. Concurrency is bounded by `maxParallel` and by free memory per agent.
+ */
+export interface ParallelMutatingOptions {
+    maxParallel: number;
+    /** Free memory (MB) required to START another parallel node (one always runs). */
+    minFreeMb?: number;
+    freeMb?: () => number;
+    manager: WorkspaceManager;
+    integrate: (node: GraphNode, lease: WorkspaceLease) => ParallelIntegration | Promise<ParallelIntegration>;
+    /** Undo an integration whose verify on the integrated tree failed. */
+    discard: (files: string[]) => void | Promise<void>;
+}
+/** Two scopes may touch the same file: equal paths, one a directory prefix of the other, or a glob in either. */
+export declare function scopesOverlap(a: string[], b: string[]): boolean;
 export interface SchedulerContext {
+    /**
+     * OXB-184: what the previous attempt of a task changed in the tree (paths, binary or not) and whether it is still
+     * there — appended to the informed retry, so the next attempt does not redo (or wrongly assume) work.
+     */
+    attemptChanges?: (nodeId: string) => {
+        kept: string[];
+        gone: string[];
+    } | null;
+    /** OXB-185: the turns of an attempt of this task (sized to it); the provider's maxTurns stays the upper bound. */
+    turnsFor?: (nodeId: string, attempt: number, lastFailureClass: string | null) => number | null;
+    /**
+     * OXB-131: the model of an attempt. Receives the attempt number and the previous attempt's failure class; the
+     * orchestrator applies override > tier escalation > the task's hint. Null keeps the executor's default.
+     */
+    modelFor?: (nodeId: string, attempt: number, lastFailureClass: string | null) => {
+        model: string | null;
+        tier: string | null;
+        escalated?: boolean;
+    } | null;
+    /**
+     * OXB-130: the repair strategy before a retry. `retry` carries the adjustment (appended to the informed retry);
+     * any other strategy stops the attempts and blocks the node as `repair_<strategy>` (the orchestrator acts on it).
+     */
+    repairFor?: (nodeId: string, info: {
+        attempt: number;
+        maxAttempts: number;
+        failureClass: string | null;
+        output: string;
+        verifySuspect: boolean;
+    }) => {
+        strategy: string;
+        reason: string;
+        adjustment: string | null;
+    } | null;
     projectRoot: string;
     sessionId: string | null;
     runId: string;
@@ -53,6 +153,7 @@ export interface SchedulerContext {
     policyActor?: string;
     onEvent?: (event: OxeEvent) => void;
     options?: SchedulerOptions;
+    parallel?: ParallelMutatingOptions;
 }
 export interface RunResult {
     run_id: string;
@@ -71,6 +172,9 @@ export declare class Scheduler {
     private runStartMs;
     private lastProgressMs;
     private recordProgress;
+    /** OXB-050: integrations into the program checkout happen one at a time (copy, verify, checkpoint). */
+    private integrationChain;
+    private withIntegrationLock;
     private executeRollback;
     run(graph: ExecutionGraph, ctx: SchedulerContext): Promise<RunResult>;
     /**
@@ -80,9 +184,20 @@ export declare class Scheduler {
     recover(runId: string, ctx: SchedulerContext, graph: ExecutionGraph): Promise<RunResult | null>;
     private isConcurrentSafe;
     private runWave;
+    /**
+     * OXB-129: dispatch by dependency, not by wave. A node is ready when every dependency is completed; one with a failed
+     * or blocked dependency is blocked (only its dependents — the rest goes on). Ready nodes start in plan order, up to
+     * `parallel.maxParallel` (1 without --parallel-mutating), never two with overlapping scopes (a hot file serializes),
+     * and never past the free-memory floor. Every decision is a `DispatchState` event (ready / waiting with the reason).
+     */
+    private runStream;
+    /** OXB-050: a pool over the wave's mutating nodes — disjoint scopes only, `maxParallel`, memory per agent. */
+    private runMutationsInParallel;
     private runNode;
     /** Abort keeps the progress made so far: an aborted run is recoverable, not a blank slate. */
     private abortRun;
+    /** OXB-120: pause the run for a failure that is not the task's (environment / quota). */
+    private pauseForFailure;
     pause(): void;
     resume(): void;
     cancel(): void;
@@ -105,9 +220,66 @@ export declare class Scheduler {
     private consumeRetryQuota;
     private emit;
 }
-/** Last `n` non-empty lines of a text. */
+export declare function classifyFailureOutput(output: string, exitCode: number | null | undefined, extra?: {
+    environment?: string[];
+    quota?: string[];
+}, opts?: {
+    builtinQuota?: boolean;
+}): {
+    kind: 'environment' | 'quota';
+    diagnosis: string;
+} | null;
+export declare function quotaResumeAt(text: string): string | null;
+/**
+ * OXB-204: extract explicit reset/retry duration in ms from 429 headers or provider error payloads.
+ * Returns `null` when no machine-actionable duration is present (e.g. "resets Nov 14, 10am"), so multi-day
+ * quotas still pause immediately instead of guessing.
+ */
+export declare function parseRateLimitResetMs(text: string, nowMs?: number, retryAfterHeader?: string | null): number | null;
 export declare function tailLines(text: string, n: number): string;
+/** OXB-162: the test files a segment names (`x.test.ts`, `y.spec.js`, JVM `--tests` excluded). */
+export declare function segmentTestFiles(command: string): string[];
 /** What the next attempt needs to know about a failed task verify (1.20c informed retry). */
-export declare function describeVerifyFailure(command: string | null | undefined, check: CheckResult | undefined, gaps?: string[]): string;
+/** One `&&` segment of a task verify, as run (1.21.2, OXB-066). */
+export interface VerifySegmentRun {
+    index: number;
+    total: number;
+    command: string;
+    status: string;
+    check?: CheckResult;
+    /** OXB-162: failed after an earlier segment of the same attempt passed the same files; rerun once. */
+    flaky_suspect?: boolean;
+}
+export interface VerifyNodeResult {
+    status: string;
+    gaps?: string[];
+    /** The failing segment's check (or the last one run). */
+    check?: CheckResult;
+    /** The segment that failed, when the verify has segments and one failed. */
+    segment?: {
+        index: number;
+        total: number;
+        command: string;
+        exit_code: number | null;
+    } | null;
+    segments?: VerifySegmentRun[];
+}
+/**
+ * Top-level `&&` segments of a verify command (quoted text is not split). Same rule as the dry-verify (OXB-018), so
+ * what the planner checks before execution is what runs after.
+ */
+export declare function splitVerifySegments(command: string): string[];
+/** OXB-184: the retry text plus what the previous attempt left in the tree. */
+export declare function withAttemptChanges(previousError: string | null, changes: {
+    kept: string[];
+    gone: string[];
+} | null): string | null;
+/** Every segment's output with a header per segment, for the attempt log (`attempts/<Tn>-<n>.log`). */
+export declare function buildVerifyLog(segments: VerifySegmentRun[] | undefined, maxLinesPerSegment?: number): string;
+export declare function describeVerifyFailure(command: string | null | undefined, check: CheckResult | undefined, gaps?: string[], segment?: {
+    index: number;
+    total: number;
+    command: string;
+} | null): string;
 /** Normalized failure fingerprint: timings, timestamps, hashes and temp paths removed. */
 export declare function verifyFailureSignature(check: CheckResult | undefined): string | null;

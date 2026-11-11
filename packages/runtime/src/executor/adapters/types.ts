@@ -1,6 +1,6 @@
 import type { CompletionFn } from '../llm-task-executor';
 
-export type ExecutorAdapterId = 'claude' | 'http';
+export type ExecutorAdapterId = 'claude' | 'antigravity' | 'http';
 
 export interface AdapterDetection {
   available: boolean;

@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PromotionPipeline = exports.MergeGateEvaluator = void 0;
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
+const child_process_1 = require("child_process");
 const delivery_records_1 = require("./delivery-records");
 class MergeGateEvaluator {
     evaluate(runResult, manifest, riskLedger, gates = [], evidenceCoverage = null, minimumCoverage = 100) {
@@ -143,6 +144,20 @@ class PromotionPipeline {
             this.savePRLink(runResult.run_id, this.asRunPRLink(link));
             return link;
         }
+        const parkedFiles = this.findTrackedParkedAcceptance(opts.baseBranch ?? null);
+        if (parkedFiles.length > 0) {
+            const parkedDirs = Array.from(new Set(parkedFiles
+                .map((f) => /(?:^|\/)(tests\/acceptance\/parked-[^/]+)(?:\/|$)/.exec(f)?.[1])
+                .filter((d) => Boolean(d)))).sort();
+            link.reasons = [
+                ...(link.reasons ?? []),
+                `parked_acceptance_tracked: diretório(s) estacionado(s) rastreado(s) pelo Git (${parkedDirs.join(', ')})`,
+            ];
+            link.status = 'blocked';
+            (0, delivery_records_1.savePromotionRecord)(this.projectRoot, runResult.run_id, link);
+            this.savePRLink(runResult.run_id, this.asRunPRLink(link));
+            return link;
+        }
         if (targetKind === 'branch_push') {
             try {
                 this.branchManager.push(opts.remote ?? 'origin', link.branch, false);
@@ -179,6 +194,44 @@ class PromotionPipeline {
         (0, delivery_records_1.savePromotionRecord)(this.projectRoot, runResult.run_id, link);
         this.savePRLink(runResult.run_id, this.asRunPRLink(link));
         return link;
+    }
+    findTrackedParkedAcceptance(baseBranch) {
+        try {
+            const res = (0, child_process_1.spawnSync)('git', ['ls-files'], {
+                cwd: this.projectRoot,
+                encoding: 'utf8',
+                windowsHide: true,
+            });
+            if (res.status !== 0 || !res.stdout)
+                return [];
+            const re = /(?:^|\/)(tests\/acceptance\/parked-[^/]+)(?:\/|$)/;
+            const matched = res.stdout
+                .split(/\r?\n/)
+                .map((line) => line.trim().replace(/\\/g, '/'))
+                .filter((line) => Boolean(line) && re.test(line));
+            if (!matched.length || !baseBranch)
+                return matched.sort();
+            return matched
+                .filter((file) => {
+                const baseBlob = (0, child_process_1.spawnSync)('git', ['rev-parse', '--verify', '-q', `${baseBranch}:${file}`], {
+                    cwd: this.projectRoot,
+                    encoding: 'utf8',
+                    windowsHide: true,
+                });
+                if (baseBlob.status !== 0 || !baseBlob.stdout.trim())
+                    return true;
+                const headBlob = (0, child_process_1.spawnSync)('git', ['rev-parse', '--verify', '-q', `HEAD:${file}`], {
+                    cwd: this.projectRoot,
+                    encoding: 'utf8',
+                    windowsHide: true,
+                });
+                return headBlob.stdout.trim() !== baseBlob.stdout.trim();
+            })
+                .sort();
+        }
+        catch {
+            return [];
+        }
     }
     loadCommitRecord(runId) {
         return (0, delivery_records_1.loadCommitRecord)(this.projectRoot, runId);

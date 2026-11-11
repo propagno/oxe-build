@@ -92,7 +92,7 @@ function parseSpec(specMd) {
   if (m) {
     for (const row of m[1].split('\n').filter((l) => l.startsWith('|'))) {
       const cells = row.split('|').map((c) => c.trim()).filter(Boolean);
-      if (cells.length >= 2 && /^A\d+$/i.test(cells[0])) criteria.push({ id: cells[0].toUpperCase(), criterion: cells[1] || '', howToVerify: cells[2] || '' });
+      if (cells.length >= 2 && /^(?:A\d+(?:\.\d+)?|G\d+)$/i.test(cells[0])) criteria.push({ id: cells[0].toUpperCase(), criterion: cells[1] || '', howToVerify: cells[2] || '' });
     }
   }
   return { objective, criteria };

@@ -56,8 +56,11 @@ const readFile: BuiltInToolHandler = {
     const content = fs.readFileSync(filePath, 'utf8');
     const lines = content.split('\n');
     const offset = typeof args.offset === 'number' ? args.offset - 1 : 0;
-    const limit = typeof args.limit === 'number' ? args.limit : lines.length;
-    return lines.slice(offset, offset + limit).join('\n');
+    // OXB-148: a whole big file in the transcript is paid again on every following turn; default to a window.
+    const limit = typeof args.limit === 'number' ? args.limit : Math.min(lines.length, READ_DEFAULT_LINES);
+    const slice = lines.slice(offset, offset + limit).map((l) => (l.length > LINE_MAX ? `${l.slice(0, LINE_MAX)}… [linha com ${l.length} chars cortada]` : l)).join('\n');
+    const more = offset + limit < lines.length ? `\n[… ${lines.length - (offset + limit)} linha(s) a mais: use offset/limit]` : '';
+    return slice + more;
   },
 };
 
@@ -183,6 +186,15 @@ function micromatch(name: string, pattern: string): boolean {
 
 // ─── grep ─────────────────────────────────────────────────────────────────────
 
+/** OXB-148: caps that keep a tool result from flooding the transcript (F2-T1: a 2.29M-char prompt). */
+const READ_DEFAULT_LINES = 800;
+const LINE_MAX = 400;
+const GREP_MAX_MATCHES = 200;
+const GREP_MAX_FILE_BYTES = 1024 * 1024;
+/** Generated / vendored trees the search never walks (minified bundles have megabyte lines). */
+const GREP_SKIP_DIRS = new Set(['node_modules', 'out', 'dist', 'build', 'coverage', 'release', 'releases', '.next', 'target', 'vendor', 'bower_components', 'storybook-static', 'playwright-report', 'test-results']);
+const GREP_SKIP_FILE = /(\.min\.(js|css)|\.map|\.lock|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|\.(png|jpe?g|gif|webp|ico|pdf|zip|gz|wasm|node|exe|dll|so|dylib|woff2?|ttf|mp4|mp3))$/i;
+
 const grep: BuiltInToolHandler = {
   idempotent: true,
   schema: {
@@ -205,7 +217,9 @@ const grep: BuiltInToolHandler = {
     const regex = new RegExp(String(args.pattern));
     const results: string[] = [];
     grepDir(searchRoot, regex, cwd, results);
-    return results.length ? results.slice(0, 200).join('\n') : '(no matches)';
+    if (!results.length) return '(no matches)';
+    const shown = results.slice(0, GREP_MAX_MATCHES).join('\n');
+    return results.length > GREP_MAX_MATCHES ? `${shown}\n[… ${results.length - GREP_MAX_MATCHES} ocorrência(s) a mais: estreite o padrão ou o path]` : shown;
   },
 };
 
@@ -218,9 +232,10 @@ function grepDir(dir: string, regex: RegExp, root: string, out: string[]): void 
   }
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+    if (out.length > GREP_MAX_MATCHES * 5) return;
+    if (entry.isDirectory() && !entry.name.startsWith('.') && !GREP_SKIP_DIRS.has(entry.name)) {
       grepDir(full, regex, root, out);
-    } else if (entry.isFile()) {
+    } else if (entry.isFile() && !GREP_SKIP_FILE.test(entry.name)) {
       grepFile(full, regex, root, out);
     }
   }
@@ -228,10 +243,18 @@ function grepDir(dir: string, regex: RegExp, root: string, out: string[]): void 
 
 function grepFile(filePath: string, regex: RegExp, root: string, out: string[]): void {
   try {
+    if (fs.statSync(filePath).size > GREP_MAX_FILE_BYTES) return;
     const content = fs.readFileSync(filePath, 'utf8');
     content.split('\n').forEach((line, i) => {
       if (regex.test(line)) {
-        out.push(`${path.relative(root, filePath).replace(/\\/g, '/')}:${i + 1}: ${line}`);
+        // a long line (minified, generated) is shown around the match only
+        let shown = line;
+        if (line.length > LINE_MAX) {
+          const m = regex.exec(line);
+          const at = m ? Math.max(0, m.index - 120) : 0;
+          shown = `…${line.slice(at, at + LINE_MAX)}… [linha com ${line.length} chars]`;
+        }
+        out.push(`${path.relative(root, filePath).replace(/\\/g, '/')}:${i + 1}: ${shown}`);
       }
     });
   } catch { /* skip binary or unreadable files */ }
@@ -318,6 +341,46 @@ const finishTask: BuiltInToolHandler = {
   },
 };
 
+// ─── ask_orchestrator (OXB-125) ───────────────────────────────────────────────
+
+export interface ExecutorQuestion { question: string; options: string[]; default?: string | null; blocking: boolean; task?: string | null }
+export interface ExecutorAnswer { answer?: string | null; source?: string | null; provisional?: boolean; wait?: boolean; id?: string | null }
+let questionResolver: ((q: ExecutorQuestion) => ExecutorAnswer) | null = null;
+/** The orchestrator side (oxe-cc) answers from the artifacts, records decisions, queues what needs a person. */
+export function setQuestionResolver(fn: ((q: ExecutorQuestion) => ExecutorAnswer) | null): void { questionResolver = fn; }
+
+const askOrchestrator: BuiltInToolHandler = {
+  idempotent: false,
+  schema: {
+    type: 'function',
+    function: {
+      name: 'ask_orchestrator',
+      description: 'Ask the orchestrator when the contract is ambiguous (two readings, an anchor that does not decide, a test and the code disagreeing) instead of guessing. Give the options and your default; blocking=true when going on with the default could do harm.',
+      parameters: {
+        type: 'object',
+        properties: {
+          question: { type: 'string' },
+          options: { type: 'array', items: { type: 'string' } },
+          default: { type: 'string' },
+          blocking: { type: 'boolean' },
+        },
+        required: ['question', 'options'],
+      },
+    },
+  },
+  async execute(args, _cwd) {
+    const q: ExecutorQuestion = {
+      question: String(args.question || ''),
+      options: Array.isArray(args.options) ? args.options.map(String) : [],
+      default: args.default != null ? String(args.default) : null,
+      blocking: args.blocking === true,
+    };
+    const a = questionResolver ? questionResolver(q) : (q.default && !q.blocking ? { answer: q.default, provisional: true, source: null } : { wait: true });
+    if (a.wait) return JSON.stringify({ __ask_blocked__: true, id: a.id || null, question: q.question });
+    return JSON.stringify({ answer: a.answer, source: a.source || null, provisional: Boolean(a.provisional) });
+  },
+};
+
 // ─── Registry ─────────────────────────────────────────────────────────────────
 
 export const BUILT_IN_TOOLS: Record<string, BuiltInToolHandler> = {
@@ -328,6 +391,8 @@ export const BUILT_IN_TOOLS: Record<string, BuiltInToolHandler> = {
   grep,
   run_command: runCommand,
   finish_task: finishTask,
+  ask_orchestrator: askOrchestrator,
 };
 
-export const ALL_BUILT_IN_SCHEMAS: ToolSchema[] = Object.values(BUILT_IN_TOOLS).map((t) => t.schema);
+// OXB-125: ask_orchestrator is offered only when the run opts in (execute.ask_orchestrator) — see selectToolsForActions.
+export const ALL_BUILT_IN_SCHEMAS: ToolSchema[] = Object.entries(BUILT_IN_TOOLS).filter(([name]) => name !== 'ask_orchestrator').map(([, t]) => t.schema);

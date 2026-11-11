@@ -14,9 +14,45 @@ const fs = require('fs');
 const path = require('path');
 
 const TASK_ID_RE = /^T\d+$/;
-const ACCEPT_RE = /^A\d+$/;
-const DECISION_RE = /^D-\d+$/;
+// 1.21.2 (OXB-037): A<n>, subcriteria A<n>.<m> and global criteria G<n>.
+const ACCEPT_RE = require('./oxe-criteria-ids.cjs').CRITERION_ID_RE;
+// OXB-112: D-<n>, D-<fase>-<n> (D-F2-3) and D-SPIKE-<Tn>
+const DECISION_RE = require('./oxe-decisions.cjs').DECISION_ID_RE;
 const COMPLEXITY = new Set(['XS', 'S', 'M', 'L', 'XL']);
+
+
+/** OXB-085: preconditions a task waits on before starting (PLAN.json `blocked_by` objects). */
+const PRECONDITION_KINDS = { pr: ['merged', 'closed'], commit: ['on_branch'], file: ['exists'] };
+
+function preconditionProblem(entry) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return 'texto ("owner/repo#123") ou { kind: "pr"|"commit"|"file", ref, until? }';
+  if (!PRECONDITION_KINDS[entry.kind]) return `kind "${entry.kind}" desconhecido — use pr, commit ou file`;
+  if (typeof entry.ref !== 'string' || !entry.ref.trim()) return `${entry.kind}: ref obrigatório (ex.: ${entry.kind === 'pr' ? '"#686"' : entry.kind === 'commit' ? '"a1b2c3d"' : '"src/x.ts"'})`;
+  if (entry.until != null && !PRECONDITION_KINDS[entry.kind].includes(entry.until)) return `${entry.kind}: until "${entry.until}" inválido — use ${PRECONDITION_KINDS[entry.kind].join(' | ')}`;
+  if (entry.branch != null && (entry.kind !== 'commit' || typeof entry.branch !== 'string')) return 'branch só vale para kind "commit" (texto)';
+  return null;
+}
+
+function preconditionLabel(p) {
+  if (p.kind === 'pr') return `${p.ref} (${p.until === 'closed' ? 'PR fechado' : 'PR mergeado'})`;
+  if (p.kind === 'commit') return `commit ${p.ref.slice(0, 12)} em ${p.branch || 'origin/main'}`;
+  return `arquivo ${p.ref}`;
+}
+
+/** String entries of `blocked_by`: work delivered by another path (the task is externally delivered). */
+function externalRefs(task) {
+  return (Array.isArray(task && task.blocked_by) ? task.blocked_by : []).filter((e) => typeof e === 'string' && e.trim()).map((e) => e.trim());
+}
+
+/** Object entries of `blocked_by`, normalized, with a label for the status ("aguardando #686 (PR mergeado)"). */
+function taskPreconditions(task) {
+  return (Array.isArray(task && task.blocked_by) ? task.blocked_by : [])
+    .filter((e) => e && typeof e === 'object' && !Array.isArray(e) && !preconditionProblem(e))
+    .map((e) => {
+      const p = { kind: e.kind, ref: e.ref.trim(), until: e.until || PRECONDITION_KINDS[e.kind][0], ...(e.branch ? { branch: e.branch } : {}) };
+      return { ...p, label: preconditionLabel(p) };
+    });
+}
 
 function planJsonPathFor(planMdPath) {
   return planMdPath ? path.join(path.dirname(planMdPath), 'PLAN.json') : null;
@@ -47,18 +83,41 @@ function validatePlanJson(doc) {
     if (!Number.isInteger(task.wave) || task.wave < 1) errors.push(`${at}.wave: inteiro ≥ 1`);
     if (task.depends_on != null && !isStringArray(task.depends_on, TASK_ID_RE)) errors.push(`${at}.depends_on: lista de ids T<n>`);
     if (task.files != null && !isStringArray(task.files)) errors.push(`${at}.files: lista de caminhos`);
-    if (task.acceptance != null && !isStringArray(task.acceptance, ACCEPT_RE)) errors.push(`${at}.acceptance: lista de A<n>`);
-    if (task.decisions != null && !isStringArray(task.decisions, DECISION_RE)) errors.push(`${at}.decisions: lista de D-<n>`);
+    if (task.edited_paths != null && !isStringArray(task.edited_paths)) errors.push(`${at}.edited_paths: lista de caminhos`);
+    if (task.gates != null && !isStringArray(task.gates)) errors.push(`${at}.gates: lista de comandos de gate`);
+    // OXB-086: name the offending value — FRONTEND's prose criteria failed with only "lista de A<n>".
+    if (task.acceptance != null) {
+      if (!Array.isArray(task.acceptance)) errors.push(`${at}.acceptance: lista de ids A<n> (ex.: ["A12"]), não ${typeof task.acceptance === 'string' ? `o texto "${task.acceptance.slice(0, 60)}"` : typeof task.acceptance}`);
+      else {
+        const bad = task.acceptance.filter((v) => typeof v !== 'string' || !ACCEPT_RE.test(v));
+        if (bad.length) errors.push(`${at}.acceptance: ${bad.map((v) => JSON.stringify(typeof v === 'string' ? v.slice(0, 60) : v)).join(', ')} não ${bad.length > 1 ? 'são ids' : 'é id'} A<n> — critérios são ids A da SPEC; a prosa vai em "notes"`);
+      }
+    }
+    if (task.decisions != null && !isStringArray(task.decisions, DECISION_RE)) errors.push(`${at}.decisions: lista de D-<n> / D-<fase>-<n>`);
     if (task.complexity != null && !COMPLEXITY.has(task.complexity)) errors.push(`${at}.complexity: XS|S|M|L|XL`);
     if (task.done != null && typeof task.done !== 'boolean') errors.push(`${at}.done: boolean`);
+    if (task.status != null && !['pending', 'in_progress', 'done', 'blocked'].includes(task.status)) errors.push(`${at}.status: pending | in_progress | done | blocked`);
+    if (task.started_at != null && typeof task.started_at !== 'string') errors.push(`${at}.started_at: data ISO`);
+    if (task.base_sha != null && typeof task.base_sha !== 'string') errors.push(`${at}.base_sha: sha git`);
+    if (task.executor != null && typeof task.executor !== 'string') errors.push(`${at}.executor: texto`);
     if (task.done_at != null && typeof task.done_at !== 'string') errors.push(`${at}.done_at: data ISO`);
     if (task.done_commit != null && typeof task.done_commit !== 'string') errors.push(`${at}.done_commit: sha do checkpoint`);
     if (task.reopened != null && !Array.isArray(task.reopened)) errors.push(`${at}.reopened: histórico de reaberturas`);
     if (task.commit != null && (typeof task.commit !== 'string' || !task.commit.trim())) errors.push(`${at}.commit: mensagem do checkpoint`);
-    if (task.kind != null && !['code', 'spike', 'verify_only', 'external_delivery'].includes(task.kind)) errors.push(`${at}.kind: code | spike | verify_only | external_delivery`);
+    // OXB-106: add | remove | move | test-only | config-only are declarative code kinds with their own pack rule.
+    if (task.kind != null && !['code', 'spike', 'verify_only', 'external_delivery', 'add', 'remove', 'move', 'test-only', 'config-only'].includes(task.kind)) errors.push(`${at}.kind: code | spike | verify_only | external_delivery | add | remove | move | test-only | config-only`);
     if (task.question != null && typeof task.question !== 'string') errors.push(`${at}.question: texto`);
     if (task.gate != null && (typeof task.gate !== 'object' || Array.isArray(task.gate) || typeof task.gate.reason !== 'string')) errors.push(`${at}.gate: { kind?, reason }`);
-    if (task.blocked_by != null && !isStringArray(task.blocked_by)) errors.push(`${at}.blocked_by: lista de dependências externas`);
+    // OXB-085: an entry is a string (work delivered by another path, e.g. "owner/repo#594") or a precondition object
+    // { kind: "pr"|"commit"|"file", ref, until? } the task waits on before it starts (it is still this plan's work).
+    if (task.blocked_by != null) {
+      if (!Array.isArray(task.blocked_by)) errors.push(`${at}.blocked_by: lista de dependências externas`);
+      else task.blocked_by.forEach((entry, k) => {
+        if (typeof entry === 'string') { if (!entry.trim()) errors.push(`${at}.blocked_by[${k}]: texto vazio`); return; }
+        const problem = preconditionProblem(entry);
+        if (problem) errors.push(`${at}.blocked_by[${k}]: ${problem}`);
+      });
+    }
     if (task.verify != null) {
       if (typeof task.verify !== 'object' || Array.isArray(task.verify)) errors.push(`${at}.verify: objeto`);
       else if (task.verify.commands != null && !isStringArray(task.verify.commands)) errors.push(`${at}.verify.commands: lista de comandos`);
@@ -76,9 +135,21 @@ function validatePlanJson(doc) {
       if (entry.criterion == null && !(hasId && Array.isArray(entry.resolves) && entry.resolves.length)) errors.push(`${at}.criterion: A<n> (ou "id" + "resolves" para uma prova transversal)`);
       if (!isStringArray(entry.files) || entry.files.length === 0) errors.push(`${at}.files: lista com ao menos 1 caminho`);
       if (typeof entry.command !== 'string' || !entry.command.trim()) errors.push(`${at}.command: obrigatório`);
-      if (entry.proves != null && !isStringArray(entry.proves)) errors.push(`${at}.proves: lista de nomes de teste`);
-      if (entry.resolves != null && !isStringArray(entry.resolves, /^CR-\d+$/)) errors.push(`${at}.resolves: lista de CR-NN`);
+      if (entry.proves != null && !isStringArray(entry.proves)) errors.push(`${at}.proves: lista de nomes de teste${entry.proves && typeof entry.proves === 'object' && !Array.isArray(entry.proves) ? ' — o formato { arquivo: [títulos] } é de plano por papel: junte com oxe-cc plan merge' : ''}`);
+      if (entry.rigor != null && entry.rigor !== 'source-assertion') errors.push(`${at}.rigor: só "source-assertion"`);
+      if (entry.rigor === 'source-assertion' && !(typeof entry.rigor_reason === 'string' && entry.rigor_reason.trim().length >= 8)) errors.push(`${at}.rigor_reason: diga por que este teste afirma sobre o texto do código`);
+      if (entry.resolves != null && !isStringArray(entry.resolves, require('./oxe-criteria-ids.cjs').CR_ID_RE)) errors.push(`${at}.resolves: lista de CR-NN (ou CR-<fase>-N)`);
       if (entry.version != null && !(Number.isInteger(entry.version) && entry.version >= 1)) errors.push(`${at}.version: inteiro ≥ 1`);
+      if (entry.sha256 != null && (typeof entry.sha256 !== 'string' || !/^[0-9a-f]{64}$/i.test(entry.sha256))) errors.push(`${at}.sha256: sha256 hex (64 chars)`);
+      if (entry.hashes != null) {
+        if (typeof entry.hashes !== 'object' || Array.isArray(entry.hashes)) errors.push(`${at}.hashes: objeto { [path]: sha256 }`);
+        else {
+          for (const [hp, hv] of Object.entries(entry.hashes)) {
+            if (typeof hv !== 'string' || !/^[0-9a-f]{64}$/i.test(hv)) errors.push(`${at}.hashes[${JSON.stringify(hp)}]: sha256 hex (64 chars)`);
+          }
+        }
+      }
+      if (entry.amended != null && !Array.isArray(entry.amended)) errors.push(`${at}.amended: histórico de emendas`);
     });
   }
   if (doc.budget != null) {
@@ -106,6 +177,93 @@ function validatePlanJson(doc) {
   return errors;
 }
 
+/**
+ * OXB-073: test titles a JS/TS test file declares (`it`/`test` with a literal title, any `.only/.skip/.each` chain).
+ * Template literals with `${…}` are skipped (their title is only known at run time).
+ */
+/**
+ * OXB-150: JUnit tests in Kotlin/Java are methods, not string literals: `@Test fun name()`, `@Test fun \`spaced name\`()`,
+ * `@Test void name()` (any modifiers, other annotations in between), with `@DisplayName("…")` when present. F10's
+ * AttnUsageTest.kt was read as ONE test named "Notice" (a string literal in the body).
+ */
+function declaredJvmTestTitles(text) {
+  const out = [];
+  const src = String(text || '');
+  const re = /@(?:Test|ParameterizedTest|RepeatedTest|TestFactory)\b(?:\([^)]*\))?((?:\s*@[\w.]+(?:\((?:[^()"]|"(?:\\.|[^"\\])*")*\))?)*)\s*(?:(?:public|private|protected|internal|open|override|final|suspend|static)\s+)*(?:fun\s+(?:`([^`]+)`|([A-Za-z_$][\w$]*))|(?:[\w<>[\],.?]+\s+)?([A-Za-z_$][\w$]*)\s*\()/g;
+  for (const m of src.matchAll(re)) {
+    const name = m[2] || m[3] || m[4];
+    if (name) out.push(name);
+    const display = /@DisplayName\(\s*"((?:\\.|[^"\\])*)"\s*\)/.exec(m[1] || '');
+    if (display) out.push(display[1].replace(/\\(.)/g, '$1'));
+  }
+  // @DisplayName written before @Test
+  for (const m of src.matchAll(/@DisplayName\(\s*"((?:\\.|[^"\\])*)"\s*\)\s*@(?:Test|ParameterizedTest)\b/g)) out.push(m[1].replace(/\\(.)/g, '$1'));
+  return [...new Set(out)];
+}
+
+/**
+ * OXB-190: `test.each(table)('title %s', …)` / `it.each` / `describe.each` (and the tagged-template form). Each yields
+ * the template, its literal part (placeholders %s %d %i %j %o %p %# and $var removed, so a prove can name "the title"
+ * without the case), and — when the table is a literal array of strings/numbers — every expanded name.
+ */
+function eachTestTitles(text) {
+  const out = [];
+  const src = String(text || '');
+  const re = /\b(?:it|test|describe)(?:\.(?:only|skip|concurrent))?\.each\s*/g;
+  let m;
+  while ((m = re.exec(src))) {
+    let i = m.index + m[0].length;
+    let table = null;
+    if (src[i] === '(') {
+      let depth = 0;
+      let j = i;
+      let quote = null;
+      for (; j < src.length; j += 1) {
+        const c = src[j];
+        if (quote) { if (c === '\\') { j += 1; continue; } if (c === quote) quote = null; continue; }
+        if (c === '"' || c === "'" || c === '`') { quote = c; continue; }
+        if (c === '(' || c === '[' || c === '{') depth += 1;
+        else if (c === ')' || c === ']' || c === '}') { depth -= 1; if (depth === 0) break; }
+      }
+      table = src.slice(i + 1, j);
+      i = j + 1;
+    } else if (src[i] === '`') {
+      const end = src.indexOf('`', i + 1);
+      if (end < 0) continue;
+      i = end + 1;
+    } else continue;
+    const t = /^\s*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/.exec(src.slice(i));
+    if (!t) continue;
+    const template = t[2].replace(/\\(['"`\\])/g, '$1');
+    out.push(template);
+    const literal = template.replace(/%[sdifjop#%]|\$[A-Za-z_][\w.]*/g, ' ').replace(/\(\s*\)|\[\s*\]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (literal && literal !== template) out.push(literal);
+    // a literal table: [['en'], ['pt-BR']] or ['en', 'pt-BR'] → the expanded names
+    let rows = null;
+    try { rows = JSON.parse(String(table || '').trim().replace(/'((?:\\.|[^'\\])*)'/g, (_, s) => JSON.stringify(s.replace(/\\'/g, "'")))); } catch { rows = null; }
+    if (Array.isArray(rows)) {
+      for (const row of rows.slice(0, 50)) {
+        const args = Array.isArray(row) ? row : [row];
+        if (!args.every((a) => ['string', 'number', 'boolean'].includes(typeof a))) continue;
+        let k = 0;
+        out.push(template.replace(/%[sdifjop]/g, () => String(args[k++])).replace(/%#/g, String(rows.indexOf(row))));
+      }
+    }
+  }
+  return out;
+}
+
+function declaredTestTitles(text, file) {
+  if (file && /\.(kt|kts|java|groovy|scala)$/i.test(String(file))) return declaredJvmTestTitles(text);
+  const out = eachTestTitles(text);
+  const re = /\b(?:it|test)(?:\.\w+)*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
+  for (const m of String(text || '').matchAll(re)) {
+    if (m[1] === '`' && m[2].includes('${')) continue;
+    out.push(m[2].replace(/\\(['"`\\])/g, '$1'));
+  }
+  return out;
+}
+
 /** PLAN.json → mesmo formato de `sdk.parsePlan` (o graph compiler e o verify não mudam). */
 function planJsonToParsedPlan(doc) {
   const spikeLib = require('./oxe-spike.cjs');
@@ -124,16 +282,22 @@ function planJsonToParsedPlan(doc) {
       verifyCommand: commands.length ? [...new Set(commands)].join(' && ') : null,
       aceite: Array.isArray(task.acceptance) ? [...task.acceptance] : [],
       decisions: Array.isArray(task.decisions) ? [...task.decisions] : [],
-      done: task.done === true,
+      done: task.done === true || task.status === 'done',
       meta: {
         source: 'PLAN.json',
         complexity: task.complexity || null,
+        ...(task.status ? { status: task.status } : {}),
+        ...(task.started_at ? { started_at: task.started_at } : {}),
+        ...(task.base_sha ? { base_sha: task.base_sha } : {}),
+        ...(task.executor ? { executor: task.executor } : {}),
         ...(typeof task.commit === 'string' && task.commit.trim() ? { commit: task.commit.trim() } : {}),
         ...(task.done_commit ? { done_commit: task.done_commit } : {}),
         ...(task.kind ? { kind: task.kind } : {}),
         ...(typeof task.question === 'string' ? { question: task.question } : {}),
         ...(task.gate ? { gate: task.gate } : {}),
-        ...(Array.isArray(task.blocked_by) && task.blocked_by.length ? { blocked_by: [...task.blocked_by] } : {}),
+        // OXB-172: a task whose related tests went red OUTSIDE its scope waits (a CR / a plan edit), never re-runs blind.
+        ...((externalRefs(task).length || (task.checkpoint_failed && task.checkpoint_failed.kind === 'scope_insufficient')) ? { blocked_by: [...externalRefs(task), ...(task.checkpoint_failed && task.checkpoint_failed.kind === 'scope_insufficient' ? [`scope_insufficient: ${(task.checkpoint_failed.related_red || []).join(', ')}`] : [])] } : {}),
+        ...(taskPreconditions(task).length ? { waits_on: taskPreconditions(task) } : {}),
       },
     };
   });
@@ -151,6 +315,11 @@ function planJsonToParsedPlan(doc) {
     proves: Array.isArray(entry.proves) ? entry.proves.map((name) => String(name).trim()).filter(Boolean) : [],
     resolves: Array.isArray(entry.resolves) ? [...entry.resolves] : [],
     version: Number.isInteger(entry.version) ? entry.version : 1,
+    // OXB-072: own timeout for a slow suite (e.g. Electron).
+    ...(Number.isInteger(entry.timeout_ms) && entry.timeout_ms > 0 ? { timeout_ms: entry.timeout_ms } : {}),
+    ...(typeof entry.sha256 === 'string' && entry.sha256 ? { sha256: entry.sha256 } : {}),
+    ...(entry.hashes && typeof entry.hashes === 'object' && !Array.isArray(entry.hashes) ? { hashes: { ...entry.hashes } } : {}),
+    ...(Array.isArray(entry.amended) ? { amended: [...entry.amended] } : {}),
   }));
   // Gates do projeto (1.21, OXB-020): rodam uma vez no verify da fase; normalizados por oxe-phase-gates.cjs.
   const phaseGates = Array.isArray(doc.phase_gates) ? doc.phase_gates.map((gate) => ({ ...gate })) : [];
@@ -185,9 +354,39 @@ function readPlanArtifact(planMdPath, planMdText, parseMarkdown) {
  * next compile skips it instead of paying for it again. Atomic write; the rest of the document is kept as is.
  * @returns {boolean} whether PLAN.json changed
  */
+/**
+ * OXB-087: PLAN.json is written by the running execute (done) and by `plan append` (new tasks) at the same time; both
+ * read-modify-write under this lock file so neither drops the other's change. A lock older than 30 s is stale.
+ */
+function withPlanLock(jsonPath, fn) {
+  const lock = `${jsonPath}.lock`;
+  const deadline = Date.now() + 10_000;
+  let fd = null;
+  while (fd === null) {
+    try {
+      fd = fs.openSync(lock, 'wx');
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      try { if (Date.now() - fs.statSync(lock).mtimeMs > 30_000) { fs.rmSync(lock, { force: true }); continue; } } catch { continue; }
+      if (Date.now() > deadline) throw new Error(`PLAN.json ocupado (${lock}) — tente de novo`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try { fs.closeSync(fd); } catch { /* */ }
+    fs.rmSync(lock, { force: true });
+  }
+}
+
 function markPlanTaskDone(planMdPath, taskId, info = {}) {
   const jsonPath = planJsonPathFor(planMdPath);
   if (!jsonPath || !fs.existsSync(jsonPath)) return false;
+  return withPlanLock(jsonPath, () => markPlanTaskDoneUnlocked(jsonPath, taskId, info));
+}
+
+function markPlanTaskDoneUnlocked(jsonPath, taskId, info) {
   let doc;
   try {
     doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
@@ -196,14 +395,138 @@ function markPlanTaskDone(planMdPath, taskId, info = {}) {
   }
   const task = Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
   if (!task) return false;
-  if (task.done === true && (!info.commit || task.done_commit === info.commit)) return false;
+  if (task.done === true && task.status !== 'in_progress' && (!info.commit || task.done_commit === info.commit)) return false;
   task.done = true;
+  if (task.status != null || info.setStatus === true) task.status = 'done';
   task.done_at = info.at || new Date().toISOString();
   if (info.commit) task.done_commit = info.commit;
+  delete task.started_at;
+  delete task.base_sha;
+  delete task.executor;
+  delete task.checkpoint_failed;
   const tmp = `${jsonPath}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
   fs.renameSync(tmp, jsonPath);
   return true;
+}
+
+/** OXB-204: mark a task as `in_progress` with executor + base SHA when execution starts. */
+function markPlanTaskStarted(planMdPath, taskId, info = {}) {
+  const jsonPath = planJsonPathFor(planMdPath);
+  if (!jsonPath || !fs.existsSync(jsonPath)) return false;
+  return withPlanLock(jsonPath, () => {
+    let doc;
+    try { doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8')); } catch { return false; }
+    const task = Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
+    if (!task || task.done === true) return false;
+    task.status = 'in_progress';
+    task.started_at = info.at || new Date().toISOString();
+    if (info.executor) task.executor = String(info.executor);
+    if (info.base_sha) task.base_sha = String(info.base_sha);
+    const tmp = `${jsonPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, jsonPath);
+    return true;
+  });
+}
+
+/** OXB-204: clear `in_progress` state (e.g. after `runtime resume --reset-task`). */
+function clearPlanTaskInProgress(planMdPath, taskId) {
+  const jsonPath = planJsonPathFor(planMdPath);
+  if (!jsonPath || !fs.existsSync(jsonPath)) return false;
+  return withPlanLock(jsonPath, () => {
+    let doc;
+    try { doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8')); } catch { return false; }
+    const task = Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
+    if (!task) return false;
+    const had = task.status === 'in_progress' || task.started_at != null || task.base_sha != null || task.executor != null;
+    if (!had) return false;
+    if (task.status === 'in_progress') delete task.status;
+    delete task.started_at;
+    delete task.base_sha;
+    delete task.executor;
+    const tmp = `${jsonPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, jsonPath);
+    return true;
+  });
+}
+
+/**
+ * OXB-205: surgical amendment of a frozen acceptance test's sha256 in PLAN.json, preserving all task `done` / `status`
+ * fields untouched.
+ */
+function amendFrozenTestInPlanJson(planMdPath, relPath, newSha, info = {}) {
+  const jsonPath = planJsonPathFor(planMdPath);
+  if (!jsonPath || !fs.existsSync(jsonPath)) return { ok: false, error: 'PLAN.json não encontrado' };
+  const normTarget = String(relPath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  return withPlanLock(jsonPath, () => {
+    let doc;
+    try { doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8')); } catch (err) { return { ok: false, error: `PLAN.json inválido: ${err.message}` }; }
+    if (!Array.isArray(doc.acceptance_tests) || !doc.acceptance_tests.length) {
+      return { ok: false, error: 'PLAN.json não declara acceptance_tests' };
+    }
+    const matched = [];
+    const crRe = require('./oxe-criteria-ids.cjs').CR_ID_RE;
+    const at = info.at || new Date().toISOString();
+    const by = info.by || 'tech-lead';
+    const reason = String(info.reason || '').trim();
+    for (const entry of doc.acceptance_tests) {
+      if (!entry || !Array.isArray(entry.files)) continue;
+      const idx = entry.files.findIndex((f) => String(f || '').replace(/\\/g, '/').replace(/^\.\//, '') === normTarget);
+      if (idx < 0) continue;
+      const canonicalFile = String(entry.files[idx]).replace(/\\/g, '/').replace(/^\.\//, '');
+      const prevSha = (entry.hashes && entry.hashes[canonicalFile])
+        || (entry.files.length === 1 && typeof entry.sha256 === 'string' ? entry.sha256 : null)
+        || info.previous_sha256
+        || null;
+      if (entry.files.length === 1) {
+        entry.sha256 = newSha;
+      }
+      entry.hashes = {
+        ...(entry.hashes && typeof entry.hashes === 'object' && !Array.isArray(entry.hashes) ? entry.hashes : {}),
+        [canonicalFile]: newSha,
+      };
+      if (reason && crRe.test(reason)) {
+        const resolves = Array.isArray(entry.resolves) ? [...entry.resolves] : [];
+        if (!resolves.includes(reason)) resolves.push(reason);
+        entry.resolves = resolves;
+        entry.version = Math.max(2, (Number.isInteger(entry.version) ? entry.version : 1) + 1);
+      }
+      entry.amended = [
+        ...(Array.isArray(entry.amended) ? entry.amended : []),
+        { file: canonicalFile, previous_sha256: prevSha, sha256: newSha, reason, by, at },
+      ];
+      matched.push({ criterion: entry.criterion || entry.id || null, previous_sha256: prevSha });
+    }
+    if (!matched.length) {
+      return { ok: false, error: `${normTarget} não está declarado em acceptance_tests de PLAN.json` };
+    }
+    const tmp = `${jsonPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, jsonPath);
+    return { ok: true, matched, previous_sha256: matched[0].previous_sha256 || null };
+  });
+}
+
+/** OXB-167: the task passed its verify but its checkpoint commit failed — not done; the next execute retries the commit. */
+function markPlanTaskCheckpointFailed(planMdPath, taskId, info = {}) {
+  const jsonPath = planJsonPathFor(planMdPath);
+  if (!jsonPath || !fs.existsSync(jsonPath)) return false;
+  return withPlanLock(jsonPath, () => {
+    let doc;
+    try { doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8')); } catch { return false; }
+    const task = Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
+    if (!task) return false;
+    task.done = false;
+    delete task.done_at;
+    delete task.done_commit;
+    task.checkpoint_failed = { at: new Date().toISOString(), reason: String(info.reason || '').slice(0, 800), ...(info.commit ? { commit: info.commit } : {}), ...(info.leftover ? { leftover: info.leftover.slice(0, 50) } : {}), ...(info.run_id ? { run_id: info.run_id } : {}), ...(info.snapshot ? { snapshot: info.snapshot } : {}), ...(info.kind ? { kind: info.kind } : {}), ...(info.related_red ? { related_red: info.related_red } : {}), ...(info.title ? { title: info.title } : {}) };
+    const tmp = `${jsonPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, jsonPath);
+    return true;
+  });
 }
 
 function hasCycle(tasks) {
@@ -253,6 +576,110 @@ function lintPlan(input) {
     }
     if (!task.verifyCommand && !task.done) warnings.push(`${task.id}: sem comando de verificação`);
   }
+
+  // OXB-193: helper to check scope containment
+  const isPathInScope = (filePath, scope) => {
+    const f = String(filePath || '').replace(/\\/g, '/');
+    for (const raw of scope || []) {
+      const s = String(raw || '').replace(/\\/g, '/').replace(/^\.\//, '');
+      if (!s) continue;
+      if (/[*?[{]/.test(s)) {
+        const re = new RegExp(`^${s.replace(/[.+^$()|\\]/g, '\\$&').replace(/\*\*\/?/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\u0000/g, '.*')}$`);
+        if (re.test(f)) return true;
+      } else {
+        const clean = s.replace(/\/+$/, '');
+        if (f === clean || f.startsWith(`${clean}/`)) return true;
+      }
+    }
+    return false;
+  };
+
+  // OXB-193: warn if files contains an unexpanded directory
+  for (const task of tasks) {
+    for (const file of task.files || []) {
+      const s = String(file || '').trim();
+      const isDirPattern = s.endsWith('/') || s.endsWith('/**');
+      let isDiskDir = false;
+      if (input.projectRoot) {
+        try {
+          const abs = path.resolve(input.projectRoot, s.replace(/(\/\*\*|\/)+$/, ''));
+          isDiskDir = fs.existsSync(abs) && fs.statSync(abs).isDirectory();
+        } catch { /* ignore */ }
+      }
+      if (isDirPattern || isDiskDir) {
+        const hasChild = (task.files || []).some((f) => f !== s && isPathInScope(f, [s]));
+        if (!hasChild) {
+          warnings.push(`${task.id}: diretório não expandido em files ("${s}") — use oxe-cc plan build para expandir os arquivos`);
+        }
+      }
+    }
+  }
+
+  // OXB-194: error if verify references a file removed by the task or a dependency
+  const packTasks = input.pack && Array.isArray(input.pack.tasks) ? input.pack.tasks : [];
+  const packTaskById = new Map(packTasks.map((t) => [String(t.id || t.task_id || '').trim(), t]));
+  for (const task of tasks) {
+    const transitiveRemoved = new Set();
+    const visited = new Set();
+    const q = [task.id];
+    while (q.length) {
+      const curId = q.shift();
+      if (visited.has(curId)) continue;
+      visited.add(curId);
+      const curTask = byId.get(curId);
+      const curPack = packTaskById.get(curId);
+      if (curTask && Array.isArray(curTask.removed_paths)) for (const p of curTask.removed_paths) transitiveRemoved.add(String(p).replace(/\\/g, '/'));
+      if (curPack && Array.isArray(curPack.removed_paths)) for (const p of curPack.removed_paths) transitiveRemoved.add(String(p).replace(/\\/g, '/'));
+      const deps = curTask ? (curTask.dependsOn || curTask.depends_on || []) : [];
+      for (const d of deps) q.push(d);
+    }
+    if (transitiveRemoved.size > 0) {
+      const verifyCmds = [];
+      if (task.verifyCommand) verifyCmds.push(task.verifyCommand);
+      if (task.verify && Array.isArray(task.verify.commands)) verifyCmds.push(...task.verify.commands);
+      for (const cmd of verifyCmds) {
+        for (const rem of transitiveRemoved) {
+          if (cmd.includes(rem)) {
+            errors.push(`${task.id}: verify cita arquivo removido por ela ou dependência ("${rem}")`);
+          }
+        }
+      }
+    }
+  }
+
+  // OXB-195 / OXB-207: coupled_scope check (including built-in offer-audit rule + MENU_EFFECTS lint note)
+  let coupledRules = [];
+  try {
+    coupledRules = require('./oxe-plan-build.cjs').loadCoupledScope(input.projectRoot || null, {
+      coupledScope: input.config && Array.isArray(input.config.coupled_scope) ? input.config.coupled_scope : undefined,
+      builtinCoupledScope: input.config && input.config.builtin_coupled_scope === false ? false : undefined,
+    });
+  } catch { /* ignore */ }
+  if (coupledRules.length) {
+    for (const task of tasks) {
+      if (task.done === true) continue;
+      const taskFiles = (task.files || []).map((f) => String(f).replace(/\\/g, '/'));
+      const editedPaths = (task.edited_paths || []).map((f) => String(f).replace(/\\/g, '/'));
+      const removedPaths = (task.removed_paths || []).map((f) => String(f).replace(/\\/g, '/'));
+      for (const rule of coupledRules) {
+        const when = rule.when ? (Array.isArray(rule.when) ? rule.when : [rule.when]) : [];
+        const whenDeleted = rule.when_deleted ? (Array.isArray(rule.when_deleted) ? rule.when_deleted : [rule.when_deleted]) : [];
+        const whenEdited = rule.when_edited ? (Array.isArray(rule.when_edited) ? rule.when_edited : [rule.when_edited]) : [];
+        const matchWhen = when.some((w) => taskFiles.some((f) => isPathInScope(f, [w])));
+        const matchDeleted = whenDeleted.some((w) => removedPaths.some((f) => isPathInScope(f, [w])));
+        const matchEdited = whenEdited.some((w) => editedPaths.some((f) => isPathInScope(f, [w])));
+        if (matchWhen || matchDeleted || matchEdited) {
+          const inc = (Array.isArray(rule.include) ? rule.include : (rule.include ? [rule.include] : [])).map((f) => String(f).replace(/\\/g, '/'));
+          const missing = inc.filter((f) => !taskFiles.includes(f));
+          if (missing.length) {
+            warnings.push(`${task.id}: escopo acoplado recomendado não incluído em files (${missing.join(', ')})${rule.note ? ` — ${rule.note}` : ''}`);
+          } else if (rule.note) {
+            warnings.push(`${task.id}: ${rule.note}`);
+          }
+        }
+      }
+    }
+  }
   if (tasks.length && hasCycle(tasks)) errors.push('dependência circular entre tarefas');
 
   const waves = new Map();
@@ -289,17 +716,29 @@ function lintPlan(input) {
   }
 
   const phase = input.phase || null;
+  const critIds = require('./oxe-criteria-ids.cjs');
+  // OXB-037: global criteria G* hold for every UI task of the phase — each must be covered by some UI task.
+  const globals = criteria.filter(critIds.isGlobal);
+  const uiTasks = tasks.filter((t) => critIds.isUiTask(t) && !t.done);
+  if (globals.length && uiTasks.length) {
+    const uiCovered = new Set(uiTasks.flatMap((t) => t.aceite || []));
+    const missingG = globals.filter((g) => !uiCovered.has(g));
+    if (missingG.length) warnings.push(`critérios globais sem tarefa de UI que os cubra: ${missingG.join(', ')} (o plano tem ${uiTasks.length} tarefa(s) de UI: ${uiTasks.map((t) => t.id).join(', ')})`);
+  }
   if (phase && Array.isArray(phase.acceptance) && phase.acceptance.length) {
     const allowed = new Set(phase.acceptance);
-    const outside = [...covered].filter((ref) => !allowed.has(ref));
+    // A subcriterion belongs to its parent's phase; a G* is global.
+    const standing = new Set(input.standing || []);
+    const outside = [...covered].filter((ref) => !critIds.inPhase(ref, allowed) && !standing.has(ref));
     if (outside.length) errors.push(`fase ${phase.id}: o plano usa A* de outras fases: ${outside.join(', ')}`);
-    const missing = phase.acceptance.filter((ref) => !covered.has(ref));
+    // A parent with subcriteria declared in the SPEC is covered when each subcriterion is (OXB-037).
+    const missing = critIds.uncovered(phase.acceptance.filter((ref) => !critIds.isGlobal(ref) && !standing.has(ref)), covered, criteria);
     if (missing.length) errors.push(`fase ${phase.id}: A* da fase sem tarefa: ${missing.join(', ')}`);
     if (input.plan && input.plan.phase && input.plan.phase !== phase.id) {
       errors.push(`PLAN.json declara fase ${input.plan.phase}, mas a fase ativa é ${phase.id}`);
     }
   } else if (criteria.length) {
-    const missing = criteria.filter((ref) => !covered.has(ref));
+    const missing = critIds.uncovered(criteria.filter((ref) => !critIds.isGlobal(ref) && !critIds.isSub(ref)), covered, criteria);
     if (missing.length) warnings.push(`A* da SPEC sem tarefa: ${missing.join(', ')}`);
   }
 
@@ -324,16 +763,54 @@ function lintPlan(input) {
     if (!entry.proves || !entry.proves.length) continue;
     const verbose = /--reporter[= ]verbose|--verbose|--test-reporter[= ](tap|spec)|node\s+--test|\s-v\b|junit/i.test(entry.command);
     if (!verbose) warnings.push(`teste de aceite ${entry.criterion}: 'proves' exige saída com nomes de teste — use um reporter verbose (ex.: vitest --reporter=verbose)`);
+    // OXB-073: each `proves` must name a test the files DECLARE. Paraphrased proves ("ratchet (LIMIT_SELECTED) stays at
+    // 22 or lower, never raised" for the test "ratchet stays at 22 or lower (never raised)") can never be found among
+    // the passed tests: the verify said proof_not_executed although every test passed.
+    if (input.projectRoot) {
+      const declared = [];
+      for (const file of entry.files || []) {
+        let text = '';
+        try { text = fs.readFileSync(path.resolve(input.projectRoot, file), 'utf8'); } catch { continue; }
+        declared.push(...declaredTestTitles(text, file));
+      }
+      if (declared.length) {
+        const norm = (s) => String(s).toLowerCase().replace(/[›>]/g, ' ').replace(/\s+/g, ' ').trim();
+        const haystack = declared.map(norm);
+        for (const proof of entry.proves) {
+          const wanted = norm(String(proof).includes('›') ? String(proof).split('›').slice(1).join('›') : proof);
+          if (!haystack.some((name) => name.includes(wanted))) {
+            errors.push(`teste de aceite ${entry.id || entry.criterion}: proves "${proof}" não é o nome de nenhum teste declarado em ${entry.files.join(', ')} — use o nome exato (ou um trecho dele). Testes declarados: ${declared.slice(0, 8).map((n) => `"${n}"`).join('; ')}`);
+          }
+        }
+      }
+    }
   }
   // Emenda de SPEC (CR spec_gap): teste de aceite de versão anterior está stale até ser reescrito.
-  const required = input.requiredVersions instanceof Map ? input.requiredVersions : new Map();
-  for (const [criterion, version] of required) {
-    const entry = acceptanceTests.find((a) => a.criterion === criterion);
-    if (!entry) errors.push(`${criterion}@v${version}: emenda sem teste de aceite (escreva-o com "version": ${version})`);
-    else if ((entry.version || 1) < version) errors.push(`${criterion}: teste de aceite v${entry.version || 1} está stale — a SPEC foi emendada para v${version}`);
+  // OXB-062: `amendments` tells an additive amendment (earlier tests stay valid, one new test carries the version)
+  // from a changing one (every earlier test is stale). Plain `requiredVersions` means changing.
+  const amendments = input.amendments instanceof Map
+    ? input.amendments
+    : new Map([...(input.requiredVersions instanceof Map ? input.requiredVersions : new Map())].map(([c, v]) => [c, { required: v, staleBelow: v }]));
+  for (const [criterion, req] of amendments) {
+    const entries = acceptanceTests.filter((a) => a.criterion === criterion);
+    if (!entries.some((e) => (e.version || 1) >= req.required)) {
+      errors.push(entries.length && req.staleBelow < req.required
+        ? `${criterion}@v${req.required}: emenda aditiva sem teste novo (adicione um teste com "version": ${req.required}; os anteriores continuam valendo)`
+        : entries.length
+          ? `${criterion}: teste de aceite v${Math.max(...entries.map((e) => e.version || 1))} está stale — a SPEC foi emendada para v${req.required}`
+          : `${criterion}@v${req.required}: emenda sem teste de aceite (escreva-o com "version": ${req.required})`);
+    }
+    for (const e of entries) {
+      const v = e.version || 1;
+      if (v < req.staleBelow && entries.some((o) => (o.version || 1) >= req.required)) {
+        errors.push(`${criterion}: teste de aceite v${v}${e.files && e.files[0] ? ` (${e.files[0]})` : ''} está stale — a SPEC foi emendada para v${req.staleBelow}`);
+      }
+    }
   }
   const scopeAcceptance = phase && Array.isArray(phase.acceptance) && phase.acceptance.length ? phase.acceptance : [...covered];
-  const untested = scopeAcceptance.filter((ref) => !testedCriteria.has(ref));
+  // OXB-091: a standing criterion is proven by the phase sign-off + evidence, not by a frozen test.
+  const standingSet = new Set(input.standing || []);
+  const untested = scopeAcceptance.filter((ref) => !testedCriteria.has(ref) && !standingSet.has(ref));
   if (untested.length) {
     (input.requireAcceptanceTests ? errors : warnings).push(`A* sem teste de aceite congelado: ${untested.join(', ')}`);
   }
@@ -341,9 +818,14 @@ function lintPlan(input) {
   const pack = input.pack && Array.isArray(input.pack.tasks) ? input.pack.tasks : null;
   if (pack) {
     const packIds = new Set(pack.map((t) => String((t && (t.id || t.task_id)) || '').trim()));
+    // OXB-088: a pack of another phase (F1's stale pack under F2's plan: T1–T13 passed only because ids matched).
+    const packPhase = input.pack && typeof input.pack.phase === 'string' ? input.pack.phase : null;
+    const planPhase = (input.plan && input.plan.phase) || (phase && phase.id) || null;
+    const otherPhase = packPhase && planPhase && packPhase !== planPhase ? packPhase : null;
+    if (otherPhase) warnings.push(`IMPLEMENTATION-PACK é da fase ${otherPhase}, e o plano é da ${planPhase} — gere o pack desta fase`);
     for (const task of tasks) {
       if ((task.files || []).length && !task.done && !packIds.has(task.id)) {
-        errors.push(`${task.id}: tarefa mutável sem entrada no IMPLEMENTATION-PACK`);
+        errors.push(`${task.id}: tarefa mutável sem entrada no IMPLEMENTATION-PACK${otherPhase ? ` (o pack é da fase ${otherPhase})` : ''}`);
       }
     }
     // OXB-022: the very rules the execute preflight applies — nothing passes here and blocks there.
@@ -410,8 +892,13 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
     return false;
   }
   const task = Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
-  if (!task || task.done !== true) return false;
+  if (!task || (task.done !== true && !task.checkpoint_failed && task.status !== 'done')) return false;
+  delete task.checkpoint_failed; // OXB-172: reopen also clears a failed checkpoint (scope fixed by a plan edit / CR)
   task.done = false;
+  if (task.status != null) delete task.status;
+  delete task.started_at;
+  delete task.base_sha;
+  delete task.executor;
   task.reopened = [...(Array.isArray(task.reopened) ? task.reopened : []), { at: new Date().toISOString(), by: info.by || null, previous_commit: task.done_commit || null }];
   delete task.done_at;
   delete task.done_commit;
@@ -422,6 +909,17 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
 }
 
 module.exports = {
+  eachTestTitles,
+  markPlanTaskCheckpointFailed,
+  markPlanTaskStarted,
+  clearPlanTaskInProgress,
+  amendFrozenTestInPlanJson,
+  withPlanLock,
+  ACCEPT_RE,
+  externalRefs,
+  taskPreconditions,
+  preconditionProblem,
+  declaredTestTitles,
   markPlanTaskOpen,
   criterionClosers,
   markPlanTaskDone,

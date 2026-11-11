@@ -115,3 +115,26 @@ describe('scorecard --since', () => {
     assert.equal(recent.since, '2026-11-02T00:00:00.000Z');
   });
 });
+
+describe('manual_interventions_per_phase', () => {
+  it('counts plan done/reopen by hand, waivers and manual CR resolutions per phase started; target ≤ 1', () => {
+    const ev = (type, payload = {}) => ({ type, payload, timestamp: '2026-11-09T10:00:00Z' });
+    const events = [
+      ev('PhaseStarted', { phase: 'F1' }), ev('PhaseStarted', { phase: 'F2' }),
+      ev('PlanTaskMarkedDone', { task: 'T4', manual: true }),
+      ev('PlanTaskReopened', { task: 'T4', manual: true }),
+      ev('DefectWaived', { id: 'OD-todo-1' }),
+      ev('ChangeResolved', { id: 'CR-09', manual: true }),
+      ev('ChangeResolved', { id: 'CR-10' }), // resolved by evidence: not an intervention
+    ];
+    const r = scorecard.computeScorecard({ events, changeLines: [], ledgers: [] });
+    const m = r.metrics.find((x) => x.metric === 'manual_interventions_per_phase');
+    assert.equal(m.value, 2, '4 interventions / 2 phases');
+    assert.equal(m.ok, false);
+    assert.equal(m.target, '<= 1');
+    assert.equal(r.sample.manual_interventions, 4);
+    assert.deepEqual(r.sample.interventions_by_kind, { PlanTaskMarkedDone: 1, PlanTaskReopened: 1, DefectWaived: 1, ChangeResolvedManually: 1 });
+    const clean = scorecard.computeScorecard({ events: [ev('PhaseStarted', { phase: 'F1' })], changeLines: [], ledgers: [] });
+    assert.equal(clean.metrics.find((x) => x.metric === 'manual_interventions_per_phase').ok, true);
+  });
+});

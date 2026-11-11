@@ -181,10 +181,13 @@ describe('runtime lê PLAN.json e o CLI `plan lint`', () => {
     const tmp = project();
     const cli = path.join(__dirname, '..', 'bin', 'oxe-cc.js');
     const md = spawnSync(process.execPath, [cli, 'plan', 'lint', '--json', tmp], { encoding: 'utf8' });
-    assert.equal(md.status, 0, md.stderr);
     const mdReport = JSON.parse(md.stdout);
     assert.equal(mdReport.source, 'PLAN.md');
     assert.match(mdReport.warnings.join('\n'), /PLAN\.json ausente/);
+    // OXB-041/044: this PLAN.md has no self-evaluation, so execute would refuse it — lint says so (exit 1), and every
+    // error is a preflight one.
+    assert.equal(md.status, 1, md.stderr);
+    assert.ok(mdReport.errors.length > 0 && mdReport.errors.every((e) => /^preflight: /.test(e)), mdReport.errors.join('\n'));
 
     const bad = goodPlan();
     delete bad.phase;
@@ -273,7 +276,7 @@ describe('dry-verify roda o comando efetivo do nó (OXB-018)', () => {
         schema_version: 1,
         tasks: [{ id: 'T1', title: 'x', wave: 1, files: ['src/new.js'], acceptance: ['A1'], verify: { commands: ['node -e "require(\'./src/new.js\')"'] } }],
       }), 'utf8');
-      const result = op.runtimePlanLint(tmp, null, { dryVerify: true });
+      const result = op.runtimePlanLint(tmp, null, { dryVerify: true, dryVerifyAnyway: true });
       const t1 = result.dry_verify.find((r) => r.task === 'T1');
       assert.equal(t1.verdict, 'broken_command', JSON.stringify(t1));
       assert.match(result.errors.join('\n'), /T1: comando de verificação falha/);

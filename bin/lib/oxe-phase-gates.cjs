@@ -8,6 +8,12 @@
  *   { id, command, runner?, when?: 'phase_verify' | 'program_close', kind?: 'command' | 'ci', repo? }
  * `runner` (or config `phase_gates_runner`) wraps the command, e.g. a heavy-lock: "node {env:TEMP}/lock.mjs -- {command}".
  * A `kind: 'ci'` gate is green only when the CI run attached to the phase (`runtime ci --attach <run>`) succeeded.
+ *
+ * OXB-107: gates are config plugins, not fixed logic. Built-in kinds: command, ci, deploy, `signoff` ({ criteria })
+ * — green when the phase has a sign-off with evidence for each criterion — and `script` ({ module }) — a CommonJS
+ * module exporting `async (ctx) => ({ ok, message })` with ctx { root, programDir, phase, gate }. Any other kind
+ * resolves through config `gate_plugins: { "<kind>": "<module path>" }` and runs as a script gate; an unknown kind
+ * without a plugin is dropped with a lint warning.
  */
 
 const fs = require('fs');
@@ -20,17 +26,47 @@ const DEFAULT_GATE_TIMEOUT_MS = 15 * 60 * 1000;
 const GOVERNANCE_TEST_RE = /(^|[\\/._-])(lint|allowlist|catalog|coverage|governance|ratchet|boundar(y|ies)|budget)[^\\/]*\.test\.[cm]?[jt]sx?$/i;
 const GATE_SCRIPT_NAMES = ['typecheck', 'type-check', 'lint', 'check', 'test:governance'];
 
-function normalizeGate(raw) {
+const BUILTIN_KINDS = new Set(['command', 'ci', 'deploy', 'signoff', 'script']);
+
+function normalizeGate(raw, plugins = {}) {
   if (!raw || typeof raw !== 'object') return null;
   const id = String(raw.id || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
-  const kind = raw.kind === 'ci' ? 'ci' : 'command';
+  // OXB-107: signoff / script are built in; another kind is a plugin from config gate_plugins.
+  if (raw.kind === 'signoff' || raw.kind === 'script' || (raw.kind && !BUILTIN_KINDS.has(raw.kind))) {
+    const pluginModule = raw.kind === 'script' ? raw.module : raw.kind === 'signoff' ? null : plugins && plugins[raw.kind];
+    if (!id) return null;
+    if (raw.kind === 'signoff' && !(Array.isArray(raw.criteria) && raw.criteria.length)) return null;
+    if (raw.kind !== 'signoff' && !(typeof pluginModule === 'string' && pluginModule.trim())) return null;
+    return {
+      id,
+      kind: raw.kind === 'signoff' ? 'signoff' : 'script',
+      plugin: raw.kind !== 'signoff' && raw.kind !== 'script' ? raw.kind : null,
+      module: pluginModule || null,
+      criteria: raw.kind === 'signoff' ? raw.criteria.map((c) => String(c).trim().toUpperCase()) : null,
+      options: raw.options && typeof raw.options === 'object' ? raw.options : null,
+      command: null,
+      runner: null,
+      when: WHEN.has(raw.when) ? raw.when : raw.kind === 'signoff' ? 'program_close' : 'phase_verify',
+      repo: null,
+      description: typeof raw.description === 'string' ? raw.description.trim() : '',
+      timeout_ms: Number(raw.timeout_ms) > 0 ? Number(raw.timeout_ms) : DEFAULT_GATE_TIMEOUT_MS,
+    };
+  }
+  const kind = raw.kind === 'ci' ? 'ci' : raw.kind === 'deploy' ? 'deploy' : 'command';
   const command = typeof raw.command === 'string' ? raw.command.trim() : '';
   if (!id || (kind === 'command' && !command)) return null;
-  const when = WHEN.has(raw.when) ? raw.when : 'phase_verify';
+  if (kind === 'deploy' && !(typeof raw.env === 'string' && raw.env.trim())) return null;
+  // OXB-093: a deploy gate is checked at the close (the deploy happens after the phase's work).
+  const when = WHEN.has(raw.when) ? raw.when : kind === 'deploy' ? 'program_close' : 'phase_verify';
   return {
     id,
     kind,
     command: kind === 'command' ? command : null,
+    ...(kind === 'deploy' ? {
+      env: raw.env.trim(),
+      version: typeof raw.version === 'string' && raw.version.trim() ? raw.version.trim() : null,
+      required_checks: (Array.isArray(raw.checks) ? raw.checks : []).map((c) => String(c).trim()).filter(Boolean),
+    } : {}),
     runner: typeof raw.runner === 'string' && raw.runner.trim() ? raw.runner.trim() : null,
     when,
     repo: typeof raw.repo === 'string' && raw.repo.trim() ? raw.repo.trim() : null,
@@ -44,7 +80,7 @@ function readPhaseGates(planJson, config) {
   const byId = new Map();
   for (const source of [config && config.phase_gates, planJson && planJson.phase_gates]) {
     for (const raw of Array.isArray(source) ? source : []) {
-      const gate = normalizeGate(raw);
+      const gate = normalizeGate(raw, (config && config.gate_plugins) || {});
       if (gate) byId.set(gate.id, gate);
     }
   }
@@ -63,6 +99,24 @@ function quote(value) {
 
 /** The shell command a gate runs (runner applied; CI gates call this module's CLI). */
 function gateCommand(gate, options = {}) {
+  if (gate.kind === 'signoff') {
+    const args = [quote(process.execPath), quote(__filename), '--signoff-gate', '--program-dir', quote(options.programDir || '.oxe/program'), '--criteria', quote(gate.criteria.join(','))];
+    if (options.phase) args.push('--phase', quote(options.phase));
+    return args.join(' ');
+  }
+  if (gate.kind === 'script') {
+    const args = [quote(process.execPath), quote(__filename), '--script-gate', '--program-dir', quote(options.programDir || '.oxe/program'), '--module', quote(gate.module), '--gate-id', quote(gate.id)];
+    if (options.phase) args.push('--phase', quote(options.phase));
+    if (gate.options) args.push('--options', quote(JSON.stringify(gate.options)));
+    return args.join(' ');
+  }
+  if (gate.kind === 'deploy') {
+    const args = [quote(process.execPath), quote(__filename), '--deploy-gate', '--program-dir', quote(options.programDir || '.oxe/program'), '--env', quote(gate.env)];
+    if (options.phase) args.push('--phase', quote(options.phase));
+    if (gate.version) args.push('--version', quote(gate.version));
+    for (const c of gate.required_checks || []) args.push('--require', quote(c));
+    return args.join(' ');
+  }
   if (gate.kind === 'ci') {
     const args = [quote(process.execPath), quote(__filename), '--ci-gate', '--program-dir', quote(options.programDir || '.oxe/program')];
     if (options.phase) args.push('--phase', quote(options.phase));
@@ -89,11 +143,45 @@ function gateChecks(gates, when, options = {}) {
     }));
 }
 
+/**
+ * OXB-070: the lines that make the gate FAIL, never the head of the stream. CR-16 (lint) quoted the first of 217
+ * warnings ("285:3 warning … Error: Cannot access refs during render") — a case-insensitive /error/ matched a warning —
+ * while the failure was 2 `error` lines at the end. Strong markers first (eslint `N:M error`, tsc `error TS`, test
+ * runner FAIL/×/not ok/AssertionError, npm ERR!, a line starting with "error"); warnings never count; with none, the
+ * last lines of the output (a non-zero exit's tail).
+ */
+const ESLINT_WARNING_RE = /^\s*\d+:\d+\s+warning\s/i;
+const FAILING_LINE_RES = [
+  /^\s*\d+:\d+\s+error\s/i, // eslint stylish
+  /error TS\d{4}/, // tsc
+  /^\s*(FAIL|×|✗|✖(?!\s+\d+\s+problems?))\s/, // vitest / jest / node:test reporters
+  /^\s*not ok\s+\d+/, // TAP
+  /AssertionError|Expected:|Received:/,
+  /^npm ERR!/,
+  /^\s*(error|ERROR)\b[:\s]/,
+];
+const SUMMARY_LINE_RE = /✖\s+\d+\s+problems?\s+\(\d+\s+errors?|Tests?\s+\d+\s+failed|Found \d+ errors?|\d+ failing/i;
+
 function firstErrorLines(result, max = 12) {
   const text = [result && result.stdout, result && result.stderr, result && result.error].filter(Boolean).join('\n');
   const lines = text.split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.trim());
-  const flagged = lines.filter((l) => /error|fail|✗|×|expected|received|TS\d{4}/i.test(l));
-  return (flagged.length ? flagged : lines.slice(-max)).slice(0, max).join('\n');
+  const picked = [];
+  let lastFile = null;
+  for (const line of lines) {
+    // eslint prints the file path on its own line, then its problems indented.
+    if (/^[^\s].*\.(c|m)?[jt]sx?$|^[A-Za-z]:\\.*\.\w+$|^\/.*\.\w+$/.test(line)) { lastFile = line.trim(); continue; }
+    if (ESLINT_WARNING_RE.test(line)) continue;
+    if (FAILING_LINE_RES.some((re) => re.test(line))) {
+      picked.push(/^\s*\d+:\d+\s+error\s/i.test(line) && lastFile ? `${lastFile}:${line.trim()}` : line.trim());
+    }
+  }
+  if (picked.length) {
+    const summary = lines.find((l) => SUMMARY_LINE_RE.test(l));
+    const out = picked.slice(0, max);
+    if (summary && !out.includes(summary.trim())) out.push(summary.trim());
+    return out.join('\n');
+  }
+  return lines.filter((l) => !ESLINT_WARNING_RE.test(l)).slice(-max).join('\n');
 }
 
 /**
@@ -170,6 +258,14 @@ function findGovernanceTests(projectRoot, maxDepth = 3) {
 }
 
 /** Lint warning: the repo has gate candidates but the plan declares none. */
+/** OXB-107: gates whose kind is neither built in nor a configured plugin (they would be dropped silently). */
+function unknownGateKinds(planJson, config) {
+  const plugins = (config && config.gate_plugins) || {};
+  const out = [];
+  for (const source of [config && config.phase_gates, planJson && planJson.phase_gates]) for (const g of Array.isArray(source) ? source : []) if (g && g.kind && !BUILTIN_KINDS.has(g.kind) && !plugins[g.kind]) out.push(`gate ${g.id}: kind "${g.kind}" não é nativo (command|ci|deploy|signoff|script) nem está em config gate_plugins — o gate é ignorado`);
+  return out;
+}
+
 function lintPhaseGates(projectRoot, gates) {
   if (gates.length) return [];
   const candidates = detectGateCandidates(projectRoot);
@@ -258,11 +354,136 @@ function runCiGateCli(argv) {
   return status.ok ? 0 : 1;
 }
 
-if (require.main === module && process.argv.includes('--ci-gate')) {
+// ── Deploy attachment (OXB-093) ────────────────────────────────────────────────
+//
+// `runtime deploy --attach <env> --version <v> --ref <tag|release url> [--check "<cmd>"]…` records that a deploy
+// happened and runs the POST-DEPLOY checks given (install-over, packaged HML pass, upgrade-with-data). It NEVER performs
+// the deploy: tags, releases and approvals stay with the people who own them. Commands that would deploy are refused.
+
+const DEPLOY_ACTION_RE = /\b(git\s+(tag|push)|gh\s+release\s+(create|upload|edit)|npm\s+publish|release\.mjs|gh\s+workflow\s+run|docker\s+push|kubectl\s+(apply|rollout)|terraform\s+apply)\b/i;
+
+function deployFile(programDir) {
+  return path.join(programDir, 'deploy.ndjson');
+}
+
+/**
+ * @param {string} programDir
+ * @param {{ env: string, version: string, ref?: string|null, phase?: string|null, by?: string|null, checks?: string[], cwd?: string, spawn?: Function, env_vars?: object }} input
+ */
+function attachDeploy(programDir, input) {
+  const env = String(input.env || '').trim();
+  const version = String(input.version || '').trim();
+  if (!env) throw new Error('informe o ambiente: oxe-cc runtime deploy --attach <env> --version <v> --ref <tag|url>');
+  if (!version) throw new Error('informe a versão implantada: --version <v>');
+  const checks = (input.checks || []).map((c) => String(c).trim()).filter(Boolean);
+  const forbidden = checks.filter((c) => DEPLOY_ACTION_RE.test(c));
+  if (forbidden.length) throw new Error(`--check é verificação pós-deploy, nunca o deploy: recusado ${forbidden.map((c) => `"${c.slice(0, 60)}"`).join(', ')} (tags, releases e aprovações ficam com quem as tem)`);
+  const run = input.spawn || spawnSync;
+  const results = checks.map((command, i) => {
+    const started = Date.now();
+    const res = run(command, { cwd: input.cwd || process.cwd(), shell: true, encoding: 'utf8', timeout: input.timeoutMs || DEFAULT_GATE_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, windowsHide: true, env: input.env_vars || process.env });
+    const exit = res && typeof res.status === 'number' ? res.status : null;
+    return {
+      id: `chk-${started.toString(36)}-${i + 1}`,
+      command,
+      exit,
+      ok: exit === 0,
+      at: new Date(started).toISOString(),
+      secs: Math.round((Date.now() - started) / 1000),
+      excerpt: exit === 0 ? null : firstErrorLines({ stdout: res && res.stdout, stderr: res && res.stderr, error: res && res.error ? String(res.error) : null }, 6) || null,
+    };
+  });
+  const record = {
+    kind: 'deploy',
+    phase: input.phase || null,
+    env,
+    version,
+    ref: input.ref ? String(input.ref).trim() : null,
+    by: input.by || null,
+    at: new Date().toISOString(),
+    checks: results,
+    ok: results.every((r) => r.ok),
+  };
+  fs.mkdirSync(programDir, { recursive: true });
+  fs.appendFileSync(deployFile(programDir), `${JSON.stringify(record)}\n`, 'utf8');
+  return record;
+}
+
+function readDeploys(programDir, phase) {
+  let lines = [];
+  try { lines = fs.readFileSync(deployFile(programDir), 'utf8').split(/\r?\n/).filter(Boolean); } catch { return []; }
+  return lines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((r) => r && (!phase || !r.phase || r.phase === phase));
+}
+
+/**
+ * A deploy gate is green when the phase has a deploy to `env` (of `version`, when declared) whose checks all passed and
+ * that ran every required check (matched by substring of the command). Several attaches to the same env/version add up
+ * (a check that passed later counts; the latest result of each command wins).
+ */
+function deployGateStatus(programDir, phase, gate) {
+  const records = readDeploys(programDir, phase).filter((r) => r.env === gate.env && (!gate.version || r.version === gate.version));
+  if (!records.length) return { ok: false, message: `nenhum deploy em ${gate.env}${gate.version ? ` ${gate.version}` : ''} anexado à fase ${phase || ''} — oxe-cc runtime deploy --attach ${gate.env} --version <v> --ref <tag|url> --check "<cmd>"` };
+  const version = gate.version || records[records.length - 1].version;
+  const latest = new Map();
+  for (const r of records.filter((x) => x.version === version)) for (const c of r.checks || []) latest.set(c.command, c);
+  const failed = [...latest.values()].filter((c) => !c.ok);
+  if (failed.length) return { ok: false, message: `deploy ${gate.env} ${version}: check vermelho — ${failed.map((c) => `${c.command} (exit ${c.exit})`).join('; ')}` };
+  const missing = (gate.required_checks || []).filter((req) => ![...latest.keys()].some((cmd) => cmd.includes(req)));
+  if (missing.length) return { ok: false, message: `deploy ${gate.env} ${version}: checks exigidos não rodados — ${missing.join(', ')}` };
+  return { ok: true, message: `deploy ${gate.env} ${version} verificado (${latest.size} check(s))` };
+}
+
+function runDeployGateCli(argv) {
+  const get = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : null; };
+  const required = [];
+  argv.forEach((a, i) => { if (a === '--require' && argv[i + 1]) required.push(argv[i + 1]); });
+  const status = deployGateStatus(get('--program-dir') || '.oxe/program', get('--phase'), { env: get('--env'), version: get('--version'), required_checks: required });
+  (status.ok ? console.log : console.error)(status.message);
+  return status.ok ? 0 : 1;
+}
+
+/** OXB-107: a signoff gate — every criterion has a sign-off of the phase with evidence. */
+function signoffGateStatus(programDir, phase, criteria) {
+  let lines = [];
+  try { lines = fs.readFileSync(path.join(programDir, 'signoffs.ndjson'), 'utf8').split(/\r?\n/).filter(Boolean); } catch { lines = []; }
+  const recs = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((s) => s && (!phase || s.phase === phase) && s.evidence);
+  const missing = criteria.filter((c) => !recs.some((s) => (s.criteria || []).includes(c)));
+  return missing.length ? { ok: false, message: `sign-off com evidência faltando para ${missing.join(', ')} na fase ${phase || ''} — oxe-cc runtime signoff --criteria ${missing.join(',')} --by <papel> --evidence …` } : { ok: true, message: `sign-off de ${criteria.join(', ')} presente` };
+}
+
+async function runScriptGateCli(argv) {
+  const get = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : null; };
+  const programDir = get('--program-dir') || '.oxe/program';
+  const root = path.resolve(programDir, '..', '..');
+  const mod = path.resolve(root, get('--module'));
+  let fn;
+  try { fn = require(mod); fn = typeof fn === 'function' ? fn : fn && (fn.default || fn.gate); } catch (err) { console.error(`gate ${get('--gate-id')}: não carregou ${mod}: ${err.message}`); return 1; }
+  if (typeof fn !== 'function') { console.error(`gate ${get('--gate-id')}: ${mod} não exporta uma função (async (ctx) => ({ ok, message }))`); return 1; }
+  try {
+    const out = await fn({ root, programDir, phase: get('--phase'), gate: { id: get('--gate-id'), options: get('--options') ? JSON.parse(get('--options')) : null } });
+    (out && out.ok ? console.log : console.error)(String((out && out.message) || (out && out.ok ? 'ok' : 'reprovou')));
+    return out && out.ok ? 0 : 1;
+  } catch (err) { console.error(`gate ${get('--gate-id')}: ${err && err.message ? err.message : err}`); return 1; }
+}
+
+if (require.main === module && process.argv.includes('--signoff-gate')) {
+  const argv = process.argv.slice(2);
+  const get = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : null; };
+  const st = signoffGateStatus(get('--program-dir') || '.oxe/program', get('--phase'), String(get('--criteria') || '').split(',').filter(Boolean));
+  (st.ok ? console.log : console.error)(st.message);
+  process.exitCode = st.ok ? 0 : 1;
+} else if (require.main === module && process.argv.includes('--script-gate')) {
+  runScriptGateCli(process.argv.slice(2)).then((code) => { process.exitCode = code; });
+} else if (require.main === module && process.argv.includes('--ci-gate')) {
   process.exitCode = runCiGateCli(process.argv.slice(2));
+} else if (require.main === module && process.argv.includes('--deploy-gate')) {
+  process.exitCode = runDeployGateCli(process.argv.slice(2));
 }
 
 module.exports = {
+  unknownGateKinds,
+  signoffGateStatus,
+  BUILTIN_KINDS,
   DEFAULT_GATE_TIMEOUT_MS,
   normalizeGate,
   readPhaseGates,
@@ -273,6 +494,10 @@ module.exports = {
   findGovernanceTests,
   lintPhaseGates,
   attachCiRun,
+  attachDeploy,
+  readDeploys,
+  deployGateStatus,
+  DEPLOY_ACTION_RE,
   latestCiRun,
   ciRunStatus,
   parseRunRef,

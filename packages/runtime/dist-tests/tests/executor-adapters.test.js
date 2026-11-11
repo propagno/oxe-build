@@ -200,10 +200,87 @@ const provider = { baseUrl: '', apiKey: '', model: '', maxTurns: 4 };
             fs_1.default.rmSync(dir, { recursive: true, force: true });
         }
     });
-    (0, node_test_1.test)('registry: http exige API key, claude não', () => {
+    (0, node_test_1.test)('registry: http exige API key, claude e antigravity não', () => {
         strict_1.default.equal((0, registry_1.createExecutorAdapter)('http').requiresApiKey, true);
         strict_1.default.equal((0, registry_1.createExecutorAdapter)('claude').requiresApiKey, false);
-        const ids = (0, registry_1.detectExecutorAdapters)({ claude: { command: 'oxe-no-such-claude-binary' } }).map((a) => `${a.id}:${a.available}`);
-        strict_1.default.deepEqual(ids, ['claude:false', 'http:true']);
+        strict_1.default.equal((0, registry_1.createExecutorAdapter)('antigravity').requiresApiKey, false);
+        const ids = (0, registry_1.detectExecutorAdapters)({
+            claude: { command: 'oxe-no-such-claude-binary' },
+            antigravity: { command: 'oxe-no-such-agy-binary' },
+        }).map((a) => `${a.id}:${a.available}`);
+        strict_1.default.deepEqual(ids, ['claude:false', 'antigravity:false', 'http:true']);
+    });
+});
+(0, node_test_1.describe)('OXB-148: claude -p failure reasons come from stdout, classified', () => {
+    let tmp;
+    const shim = (body) => {
+        const p = path_1.default.join(tmp, `fail-${Math.random().toString(36).slice(2)}.js`);
+        fs_1.default.writeFileSync(p, `process.stdin.resume(); process.stdin.on('end', () => { ${body} }); process.stdin.on('data', () => {});`, 'utf8');
+        return new claude_cli_1.ClaudeCliAdapter({ command: process.execPath, prefixArgs: [p], parseRetries: 0 });
+    };
+    const call = (a) => a.createCompletion()({ baseUrl: '', apiKey: '', model: '', messages: [{ role: 'user', content: 'x' }], tools: [] });
+    (0, node_test_1.before)(() => { tmp = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-adapter-fail-')); });
+    (0, node_test_1.after)(() => { fs_1.default.rmSync(tmp, { recursive: true, force: true }); });
+    (0, node_test_1.test)('exit 1 with empty stderr: the JSON stdout reason (subtype, result) is in the error, prompt-too-long is `context`', async () => {
+        const a = shim(`process.stdout.write(JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'Prompt is too long', total_cost_usd: 0.21 })); process.exit(1);`);
+        await strict_1.default.rejects(call(a), (err) => {
+            strict_1.default.equal(err.kind, 'context');
+            strict_1.default.equal(err.costUsd, 0.21);
+            strict_1.default.match(err.message, /claude exit 1 · subtype=error_during_execution · result=Prompt is too long · prompt=\d+ chars/);
+            return true;
+        });
+    });
+    (0, node_test_1.test)('a usage limit is `quota`; max turns is `llm`; anything else stays `env` with the stdout tail', async () => {
+        await strict_1.default.rejects(call(shim(`process.stdout.write(JSON.stringify({ is_error: true, result: 'Claude AI usage limit reached|1762650000' })); process.exit(1);`)), (e) => e.kind === 'quota');
+        await strict_1.default.rejects(call(shim(`process.stdout.write(JSON.stringify({ is_error: true, subtype: 'error_max_turns', result: '' })); process.exit(1);`)), (e) => e.kind === 'llm');
+        await strict_1.default.rejects(call(shim(`process.stdout.write('boom: not json'); process.exit(1);`)), (e) => e.kind === 'env' && /stdout=boom: not json/.test(e.message));
+    });
+    (0, node_test_1.test)('the executor records the class and the cost of the failed call', async () => {
+        const a = shim(`process.stdout.write(JSON.stringify({ is_error: true, result: 'Prompt is too long', total_cost_usd: 0.05 })); process.exit(1);`);
+        const events = [];
+        const ex = new llm_task_executor_1.LlmTaskExecutor(provider, null, (e) => events.push(e), a.createCompletion());
+        const ws = fs_1.default.mkdtempSync(path_1.default.join(tmp, 'ws-'));
+        const res = await ex.execute(node([{ type: 'generate_patch', targets: ['out.txt'] }]), lease(ws), 'run-1', 1);
+        strict_1.default.equal(res.failure_class, 'context');
+        const usage = events.find((e) => e.type === 'executor_usage');
+        strict_1.default.equal(usage.detail.cost_usd, 0.05);
+    });
+});
+(0, node_test_1.describe)('OXB-153: a claude call that times out continues the same attempt', () => {
+    let tmp;
+    (0, node_test_1.before)(() => { tmp = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-adapter-timeout-')); });
+    (0, node_test_1.after)(() => { fs_1.default.rmSync(tmp, { recursive: true, force: true }); });
+    (0, node_test_1.test)('1st call hangs past timeoutMs; the 2nd answers finish_task: success in ONE attempt, with a turn_timeout event', async () => {
+        const counter = path_1.default.join(tmp, 'calls.txt');
+        const shim = path_1.default.join(tmp, 'slow.js');
+        // first call never answers in time; next calls finish the task (the bridge expects {"content","tool_calls"} JSON in result)
+        fs_1.default.writeFileSync(shim, `
+const fs=require('fs');const n=(fs.existsSync(${JSON.stringify(counter)})?Number(fs.readFileSync(${JSON.stringify(counter)},'utf8')):0)+1;fs.writeFileSync(${JSON.stringify(counter)},String(n));
+process.stdin.resume();process.stdin.on('data',()=>{});process.stdin.on('end',()=>{
+  if(n===1){setTimeout(()=>{},60000);return;}
+  const reply=JSON.stringify({content:'ok',tool_calls:[{name:'finish_task',arguments:{summary:'done'}}]});
+  process.stdout.write(JSON.stringify({type:'result',subtype:'success',is_error:false,result:reply,total_cost_usd:0.01}));
+});`, 'utf8');
+        const a = new claude_cli_1.ClaudeCliAdapter({ command: process.execPath, prefixArgs: [shim], timeoutMs: 2000 }); // 400 ms flaked under a loaded full suite: the 2nd (answering) call also timed out
+        const events = [];
+        const ex = new llm_task_executor_1.LlmTaskExecutor({ ...provider, maxTurns: 4 }, null, (e) => events.push(e), a.createCompletion());
+        const ws = fs_1.default.mkdtempSync(path_1.default.join(tmp, 'ws-'));
+        const res = await ex.execute(node([{ type: 'generate_patch', targets: ['out.txt'] }]), lease(ws), 'run-1', 1);
+        strict_1.default.equal(res.success, true, res.output);
+        strict_1.default.equal(res.completed_by, 'finish_task');
+        const t = events.filter((e) => e.type === 'turn_timeout');
+        strict_1.default.equal(t.length, 1);
+        strict_1.default.equal(t[0].detail.retry, 1);
+    });
+    (0, node_test_1.test)('timeouts in a row beyond the limit fail the attempt as `timeout` (not `env`)', async () => {
+        const shim = path_1.default.join(tmp, 'always-slow.js');
+        fs_1.default.writeFileSync(shim, `process.stdin.resume();process.stdin.on('data',()=>{});process.stdin.on('end',()=>{setTimeout(()=>{},60000)});`, 'utf8');
+        const a = new claude_cli_1.ClaudeCliAdapter({ command: process.execPath, prefixArgs: [shim], timeoutMs: 300 });
+        const ex = new llm_task_executor_1.LlmTaskExecutor({ ...provider, maxTurns: 4 }, null, null, a.createCompletion());
+        const ws = fs_1.default.mkdtempSync(path_1.default.join(tmp, 'ws-'));
+        const res = await ex.execute(node([{ type: 'generate_patch', targets: ['out.txt'] }]), lease(ws), 'run-1', 1);
+        strict_1.default.equal(res.success, false);
+        strict_1.default.equal(res.failure_class, 'timeout');
+        strict_1.default.match(res.output, /claude -p excedeu 300 ms/);
     });
 });

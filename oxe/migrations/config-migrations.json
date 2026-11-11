@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "migrations": [
+    {
+      "version": "1.21.2",
+      "notes": [
+        "runtime.provider.maxTurns passou a ser o TETO global: cada tentativa recebe os turnos do tamanho da tarefa (execute.turns, padrão S 15 · M 30 · L 60). Para manter um número fixo, declare execute.turns com o mesmo valor nos três tamanhos (OXB-185).",
+        "Novos opt-ins: execute.ask_orchestrator (OXB-125), execute.dispatch: \"stream\" (OXB-129), execute.repair (OXB-130), models.tiers (OXB-131), program.risk_decision (OXB-140), ui_evidence (OXB-128).",
+        "O doctor --release passa a exigir .oxe/release/eval-report.json (oxe-cc eval workflow plan.md --self-test --write-report) (OXB-141).",
+        "SYSTEM-DESIGN.md presente liga o gate design_drift no close; desligue com design_drift: false (OXB-105)."
+      ],
+      "moves": []
+    }
+  ]
+}

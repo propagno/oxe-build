@@ -41,6 +41,17 @@ export interface NodeExecutionContext {
     repoRules?: RepoRule[];
     /** What each closed program phase told the next ones (its dossier handoff), oldest first (1.21). */
     handoffs?: PhaseHandoff[];
+    /**
+     * OXB-122: findings imported from outside (HML report, GitHub issues) that concern this task. Rendered inside a
+     * delimited block as DATA: never instructions to follow.
+     */
+    externalSignals?: Array<{
+        id: string;
+        source: string | null;
+        trust: string;
+        flags: string[];
+        text: string;
+    }>;
     lessons?: string[];
 }
 export interface PhaseHandoff {

@@ -109,7 +109,7 @@ function resolveInstallOptionsFromConfig(projectRoot, optsIn) {
  * @returns {string | null}
  */
 function pickVsixFile(files, pkgVersion) {
-  const semver = require('semver');
+  const semver = require('./oxe-semver.cjs').loadSemver();
   const candidates = files
     .map((name) => ({ name, version: (String(name).match(/^oxe-agents-(.+)\.vsix$/) || [])[1] }))
     .filter((entry) => entry.version && semver.valid(entry.version));

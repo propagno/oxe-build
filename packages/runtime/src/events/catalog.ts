@@ -36,6 +36,20 @@ export const EVENT_TYPES = [
   'ChangeResolved',
   'VerifyCommandSuspect',
   'BudgetExhausted',
+  'ScopeViolation',
+  'ScratchIgnored',
+  'ScopeInsufficient',
+  'RunPaused',
+  'WorkItemDeferred',
+  'DispatchState',
+  'RepairDecided',
+  'TaskStarted',
+  'TaskCompleted',
+  'CheckpointCreated',
+  'TaskResumed',
+  'TaskReset',
+  'RateLimitWait',
+  'FrozenTestAmended',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

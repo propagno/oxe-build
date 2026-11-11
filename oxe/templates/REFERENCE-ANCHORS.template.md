@@ -14,6 +14,9 @@
     extraction_confidence="not_applicable"
     reproducibility="local_file"
     snippet_ref="lines 10-30"
+    target="src/caminho/que/a/tarefa/escreve.ts"
+    symbols="NomeExportado"
+    compare="geometry"
     source_ref="external-ref: exemplo">
     <relevance>Por que esta referência sustenta a tarefa.</relevance>
     <action>copy | adapt | consult</action>
@@ -28,6 +31,7 @@
 
 - Se não houver referência aplicável, usar `<reference_anchors ... status="not_applicable" ready="true">`.
 - `critical="true"` exige `status="resolved"` antes do execute.
+- **Cópia verificada (OXB-049):** com `<action>copy</action>`, declare `target` (o arquivo que a tarefa escreve) e, de preferência, `symbols` (as declarações copiadas). O verify da tarefa passa a comparar a cópia com `path`: `compare="geometry"` compara a geometria SVG (d, points, viewBox…), e `compare="exact"` compara o texto normalizado da declaração. Sem `symbols`, as linhas de `snippet_ref` (ou o arquivo inteiro) precisam estar no alvo.
 - `path` deve ser reproduzível no workspace ou materializado em `.oxe/investigations/externals/`.
 - Referência solta em texto não é evidência. Se o path/range/snippet não puder ser materializado, marcar `status="missing"` e derrubar readiness.
 - Anchors podem ser locais, externos materializados, predecessor interno, contrato público, fixture ou decisão registrada.

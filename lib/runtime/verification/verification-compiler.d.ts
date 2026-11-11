@@ -48,6 +48,8 @@ export interface AcceptanceTestLike {
     command: string;
     files: FrozenFile[];
     proves?: string[];
+    /** OXB-072: own timeout (e.g. `npm run test:electron`, an Electron cold start). */
+    timeout_ms?: number;
 }
 export interface AcceptanceCheckSuite {
     checks: AcceptanceCheck[];
@@ -67,6 +69,8 @@ export interface CheckResult {
     evidence_refs?: string[];
     /** Why a check was skipped (`needs_structured_check` = criterion has no executable verification). */
     skip_reason?: string | null;
+    /** OXB-072: killed by the check timeout (status `error`, never `fail`). */
+    timed_out?: boolean;
     /** Test cases the runner reported; null when the output has no recognizable test report. */
     tests_executed?: number | null;
     /** Evidence id of the structured summary record (kept out of `evidence_refs` so coverage counts real output only). */

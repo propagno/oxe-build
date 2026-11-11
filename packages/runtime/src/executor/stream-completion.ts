@@ -1,6 +1,7 @@
 import https from 'https';
 import http from 'http';
 import { URL } from 'url';
+import { parseRateLimitResetMs } from '../scheduler/scheduler';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -22,6 +23,9 @@ export interface ToolCall {
 export interface CompletionUsage {
   /** Cost reported by the backend for this turn (USD), when it reports one. */
   cost_usd?: number | null;
+  input_tokens?: number;
+  output_tokens?: number;
+  thinking_tokens?: number;
 }
 
 export interface CompletionResponse {
@@ -35,6 +39,8 @@ export interface StreamCompletionOptions {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /** OXB-131: the model chosen for this attempt (tier/override); null = the backend default. */
+  attemptModel?: string | null;
   messages: ChatMessage[];
   tools?: ToolSchema[];
   maxTokens?: number;
@@ -93,7 +99,21 @@ function fetchWithTimeout(url: URL, apiKey: string, body: string, timeoutMs: num
       },
       (res) => {
         res.on('data', (chunk: Buffer) => chunks.push(chunk));
-        res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          const status = res.statusCode ?? 200;
+          if (status === 429 || (status >= 400 && /RESOURCE_EXHAUSTED|rate[ _-]?limit|too many requests|quota exceeded|insufficient_quota/i.test(text))) {
+            const retryAfterHeader = Array.isArray(res.headers['retry-after']) ? res.headers['retry-after'][0] : res.headers['retry-after'];
+            const retryAfterMs = parseRateLimitResetMs(text, Date.now(), retryAfterHeader ?? null);
+            const err = Object.assign(
+              new Error(`HTTP ${status}: ${text.slice(0, 500)}`),
+              { kind: 'quota' as const, statusCode: status, retryAfterMs },
+            );
+            reject(err);
+            return;
+          }
+          resolve(text);
+        });
         res.on('error', reject);
       },
     );

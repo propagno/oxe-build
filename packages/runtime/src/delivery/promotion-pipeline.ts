@@ -1,5 +1,6 @@
 import path from 'path';
 import fs from 'fs';
+import { spawnSync } from 'child_process';
 import type { PRManager } from './pr-manager';
 import type { BranchManager } from './branch-manager';
 import type { VerificationManifest, ResidualRiskLedger } from '../verification/verification-manifest';
@@ -251,6 +252,25 @@ export class PromotionPipeline {
       return link;
     }
 
+    const parkedFiles = this.findTrackedParkedAcceptance(opts.baseBranch ?? null);
+    if (parkedFiles.length > 0) {
+      const parkedDirs = Array.from(
+        new Set(
+          parkedFiles
+            .map((f) => /(?:^|\/)(tests\/acceptance\/parked-[^/]+)(?:\/|$)/.exec(f)?.[1])
+            .filter((d): d is string => Boolean(d))
+        )
+      ).sort();
+      link.reasons = [
+        ...(link.reasons ?? []),
+        `parked_acceptance_tracked: diretório(s) estacionado(s) rastreado(s) pelo Git (${parkedDirs.join(', ')})`,
+      ];
+      link.status = 'blocked';
+      savePromotionRecord(this.projectRoot, runResult.run_id, link);
+      this.savePRLink(runResult.run_id, this.asRunPRLink(link));
+      return link;
+    }
+
     if (targetKind === 'branch_push') {
       try {
         this.branchManager.push(opts.remote ?? 'origin', link.branch, false);
@@ -291,6 +311,41 @@ export class PromotionPipeline {
     this.savePRLink(runResult.run_id, this.asRunPRLink(link));
 
     return link;
+  }
+
+  private findTrackedParkedAcceptance(baseBranch: string | null): string[] {
+    try {
+      const res = spawnSync('git', ['ls-files'], {
+        cwd: this.projectRoot,
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+      if (res.status !== 0 || !res.stdout) return [];
+      const re = /(?:^|\/)(tests\/acceptance\/parked-[^/]+)(?:\/|$)/;
+      const matched = res.stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim().replace(/\\/g, '/'))
+        .filter((line) => Boolean(line) && re.test(line));
+      if (!matched.length || !baseBranch) return matched.sort();
+      return matched
+        .filter((file) => {
+          const baseBlob = spawnSync('git', ['rev-parse', '--verify', '-q', `${baseBranch}:${file}`], {
+            cwd: this.projectRoot,
+            encoding: 'utf8',
+            windowsHide: true,
+          });
+          if (baseBlob.status !== 0 || !baseBlob.stdout.trim()) return true;
+          const headBlob = spawnSync('git', ['rev-parse', '--verify', '-q', `HEAD:${file}`], {
+            cwd: this.projectRoot,
+            encoding: 'utf8',
+            windowsHide: true,
+          });
+          return headBlob.stdout.trim() !== baseBlob.stdout.trim();
+        })
+        .sort();
+    } catch {
+      return [];
+    }
   }
 
   loadCommitRecord(runId: string): CommitRecord | null {

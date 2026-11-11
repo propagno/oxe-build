@@ -1,6 +1,14 @@
 import type { RunResult } from './scheduler';
 export interface RunJournal {
     run_id: string;
+    /** OXB-129: stream dispatch — what runs and what waits, with the reason. */
+    dispatch?: {
+        running: string[];
+        waiting: Array<{
+            id: string;
+            reason: string;
+        }>;
+    };
     paused_at: string | null;
     cancelled: boolean;
     eligible_work_items: string[];
