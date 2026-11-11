@@ -83,6 +83,8 @@ function validatePlanJson(doc) {
     if (!Number.isInteger(task.wave) || task.wave < 1) errors.push(`${at}.wave: inteiro ≥ 1`);
     if (task.depends_on != null && !isStringArray(task.depends_on, TASK_ID_RE)) errors.push(`${at}.depends_on: lista de ids T<n>`);
     if (task.files != null && !isStringArray(task.files)) errors.push(`${at}.files: lista de caminhos`);
+    if (task.edited_paths != null && !isStringArray(task.edited_paths)) errors.push(`${at}.edited_paths: lista de caminhos`);
+    if (task.gates != null && !isStringArray(task.gates)) errors.push(`${at}.gates: lista de comandos de gate`);
     // OXB-086: name the offending value — FRONTEND's prose criteria failed with only "lista de A<n>".
     if (task.acceptance != null) {
       if (!Array.isArray(task.acceptance)) errors.push(`${at}.acceptance: lista de ids A<n> (ex.: ["A12"]), não ${typeof task.acceptance === 'string' ? `o texto "${task.acceptance.slice(0, 60)}"` : typeof task.acceptance}`);
@@ -94,6 +96,10 @@ function validatePlanJson(doc) {
     if (task.decisions != null && !isStringArray(task.decisions, DECISION_RE)) errors.push(`${at}.decisions: lista de D-<n> / D-<fase>-<n>`);
     if (task.complexity != null && !COMPLEXITY.has(task.complexity)) errors.push(`${at}.complexity: XS|S|M|L|XL`);
     if (task.done != null && typeof task.done !== 'boolean') errors.push(`${at}.done: boolean`);
+    if (task.status != null && !['pending', 'in_progress', 'done', 'blocked'].includes(task.status)) errors.push(`${at}.status: pending | in_progress | done | blocked`);
+    if (task.started_at != null && typeof task.started_at !== 'string') errors.push(`${at}.started_at: data ISO`);
+    if (task.base_sha != null && typeof task.base_sha !== 'string') errors.push(`${at}.base_sha: sha git`);
+    if (task.executor != null && typeof task.executor !== 'string') errors.push(`${at}.executor: texto`);
     if (task.done_at != null && typeof task.done_at !== 'string') errors.push(`${at}.done_at: data ISO`);
     if (task.done_commit != null && typeof task.done_commit !== 'string') errors.push(`${at}.done_commit: sha do checkpoint`);
     if (task.reopened != null && !Array.isArray(task.reopened)) errors.push(`${at}.reopened: histórico de reaberturas`);
@@ -134,6 +140,16 @@ function validatePlanJson(doc) {
       if (entry.rigor === 'source-assertion' && !(typeof entry.rigor_reason === 'string' && entry.rigor_reason.trim().length >= 8)) errors.push(`${at}.rigor_reason: diga por que este teste afirma sobre o texto do código`);
       if (entry.resolves != null && !isStringArray(entry.resolves, require('./oxe-criteria-ids.cjs').CR_ID_RE)) errors.push(`${at}.resolves: lista de CR-NN (ou CR-<fase>-N)`);
       if (entry.version != null && !(Number.isInteger(entry.version) && entry.version >= 1)) errors.push(`${at}.version: inteiro ≥ 1`);
+      if (entry.sha256 != null && (typeof entry.sha256 !== 'string' || !/^[0-9a-f]{64}$/i.test(entry.sha256))) errors.push(`${at}.sha256: sha256 hex (64 chars)`);
+      if (entry.hashes != null) {
+        if (typeof entry.hashes !== 'object' || Array.isArray(entry.hashes)) errors.push(`${at}.hashes: objeto { [path]: sha256 }`);
+        else {
+          for (const [hp, hv] of Object.entries(entry.hashes)) {
+            if (typeof hv !== 'string' || !/^[0-9a-f]{64}$/i.test(hv)) errors.push(`${at}.hashes[${JSON.stringify(hp)}]: sha256 hex (64 chars)`);
+          }
+        }
+      }
+      if (entry.amended != null && !Array.isArray(entry.amended)) errors.push(`${at}.amended: histórico de emendas`);
     });
   }
   if (doc.budget != null) {
@@ -266,10 +282,14 @@ function planJsonToParsedPlan(doc) {
       verifyCommand: commands.length ? [...new Set(commands)].join(' && ') : null,
       aceite: Array.isArray(task.acceptance) ? [...task.acceptance] : [],
       decisions: Array.isArray(task.decisions) ? [...task.decisions] : [],
-      done: task.done === true,
+      done: task.done === true || task.status === 'done',
       meta: {
         source: 'PLAN.json',
         complexity: task.complexity || null,
+        ...(task.status ? { status: task.status } : {}),
+        ...(task.started_at ? { started_at: task.started_at } : {}),
+        ...(task.base_sha ? { base_sha: task.base_sha } : {}),
+        ...(task.executor ? { executor: task.executor } : {}),
         ...(typeof task.commit === 'string' && task.commit.trim() ? { commit: task.commit.trim() } : {}),
         ...(task.done_commit ? { done_commit: task.done_commit } : {}),
         ...(task.kind ? { kind: task.kind } : {}),
@@ -297,6 +317,9 @@ function planJsonToParsedPlan(doc) {
     version: Number.isInteger(entry.version) ? entry.version : 1,
     // OXB-072: own timeout for a slow suite (e.g. Electron).
     ...(Number.isInteger(entry.timeout_ms) && entry.timeout_ms > 0 ? { timeout_ms: entry.timeout_ms } : {}),
+    ...(typeof entry.sha256 === 'string' && entry.sha256 ? { sha256: entry.sha256 } : {}),
+    ...(entry.hashes && typeof entry.hashes === 'object' && !Array.isArray(entry.hashes) ? { hashes: { ...entry.hashes } } : {}),
+    ...(Array.isArray(entry.amended) ? { amended: [...entry.amended] } : {}),
   }));
   // Gates do projeto (1.21, OXB-020): rodam uma vez no verify da fase; normalizados por oxe-phase-gates.cjs.
   const phaseGates = Array.isArray(doc.phase_gates) ? doc.phase_gates.map((gate) => ({ ...gate })) : [];
@@ -372,15 +395,118 @@ function markPlanTaskDoneUnlocked(jsonPath, taskId, info) {
   }
   const task = Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
   if (!task) return false;
-  if (task.done === true && (!info.commit || task.done_commit === info.commit)) return false;
+  if (task.done === true && task.status !== 'in_progress' && (!info.commit || task.done_commit === info.commit)) return false;
   task.done = true;
+  if (task.status != null || info.setStatus === true) task.status = 'done';
   task.done_at = info.at || new Date().toISOString();
   if (info.commit) task.done_commit = info.commit;
+  delete task.started_at;
+  delete task.base_sha;
+  delete task.executor;
   delete task.checkpoint_failed;
   const tmp = `${jsonPath}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
   fs.renameSync(tmp, jsonPath);
   return true;
+}
+
+/** OXB-204: mark a task as `in_progress` with executor + base SHA when execution starts. */
+function markPlanTaskStarted(planMdPath, taskId, info = {}) {
+  const jsonPath = planJsonPathFor(planMdPath);
+  if (!jsonPath || !fs.existsSync(jsonPath)) return false;
+  return withPlanLock(jsonPath, () => {
+    let doc;
+    try { doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8')); } catch { return false; }
+    const task = Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
+    if (!task || task.done === true) return false;
+    task.status = 'in_progress';
+    task.started_at = info.at || new Date().toISOString();
+    if (info.executor) task.executor = String(info.executor);
+    if (info.base_sha) task.base_sha = String(info.base_sha);
+    const tmp = `${jsonPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, jsonPath);
+    return true;
+  });
+}
+
+/** OXB-204: clear `in_progress` state (e.g. after `runtime resume --reset-task`). */
+function clearPlanTaskInProgress(planMdPath, taskId) {
+  const jsonPath = planJsonPathFor(planMdPath);
+  if (!jsonPath || !fs.existsSync(jsonPath)) return false;
+  return withPlanLock(jsonPath, () => {
+    let doc;
+    try { doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8')); } catch { return false; }
+    const task = Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
+    if (!task) return false;
+    const had = task.status === 'in_progress' || task.started_at != null || task.base_sha != null || task.executor != null;
+    if (!had) return false;
+    if (task.status === 'in_progress') delete task.status;
+    delete task.started_at;
+    delete task.base_sha;
+    delete task.executor;
+    const tmp = `${jsonPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, jsonPath);
+    return true;
+  });
+}
+
+/**
+ * OXB-205: surgical amendment of a frozen acceptance test's sha256 in PLAN.json, preserving all task `done` / `status`
+ * fields untouched.
+ */
+function amendFrozenTestInPlanJson(planMdPath, relPath, newSha, info = {}) {
+  const jsonPath = planJsonPathFor(planMdPath);
+  if (!jsonPath || !fs.existsSync(jsonPath)) return { ok: false, error: 'PLAN.json não encontrado' };
+  const normTarget = String(relPath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  return withPlanLock(jsonPath, () => {
+    let doc;
+    try { doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8')); } catch (err) { return { ok: false, error: `PLAN.json inválido: ${err.message}` }; }
+    if (!Array.isArray(doc.acceptance_tests) || !doc.acceptance_tests.length) {
+      return { ok: false, error: 'PLAN.json não declara acceptance_tests' };
+    }
+    const matched = [];
+    const crRe = require('./oxe-criteria-ids.cjs').CR_ID_RE;
+    const at = info.at || new Date().toISOString();
+    const by = info.by || 'tech-lead';
+    const reason = String(info.reason || '').trim();
+    for (const entry of doc.acceptance_tests) {
+      if (!entry || !Array.isArray(entry.files)) continue;
+      const idx = entry.files.findIndex((f) => String(f || '').replace(/\\/g, '/').replace(/^\.\//, '') === normTarget);
+      if (idx < 0) continue;
+      const canonicalFile = String(entry.files[idx]).replace(/\\/g, '/').replace(/^\.\//, '');
+      const prevSha = (entry.hashes && entry.hashes[canonicalFile])
+        || (entry.files.length === 1 && typeof entry.sha256 === 'string' ? entry.sha256 : null)
+        || info.previous_sha256
+        || null;
+      if (entry.files.length === 1) {
+        entry.sha256 = newSha;
+      }
+      entry.hashes = {
+        ...(entry.hashes && typeof entry.hashes === 'object' && !Array.isArray(entry.hashes) ? entry.hashes : {}),
+        [canonicalFile]: newSha,
+      };
+      if (reason && crRe.test(reason)) {
+        const resolves = Array.isArray(entry.resolves) ? [...entry.resolves] : [];
+        if (!resolves.includes(reason)) resolves.push(reason);
+        entry.resolves = resolves;
+        entry.version = Math.max(2, (Number.isInteger(entry.version) ? entry.version : 1) + 1);
+      }
+      entry.amended = [
+        ...(Array.isArray(entry.amended) ? entry.amended : []),
+        { file: canonicalFile, previous_sha256: prevSha, sha256: newSha, reason, by, at },
+      ];
+      matched.push({ criterion: entry.criterion || entry.id || null, previous_sha256: prevSha });
+    }
+    if (!matched.length) {
+      return { ok: false, error: `${normTarget} não está declarado em acceptance_tests de PLAN.json` };
+    }
+    const tmp = `${jsonPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, jsonPath);
+    return { ok: true, matched, previous_sha256: matched[0].previous_sha256 || null };
+  });
 }
 
 /** OXB-167: the task passed its verify but its checkpoint commit failed — not done; the next execute retries the commit. */
@@ -449,6 +575,110 @@ function lintPlan(input) {
       }
     }
     if (!task.verifyCommand && !task.done) warnings.push(`${task.id}: sem comando de verificação`);
+  }
+
+  // OXB-193: helper to check scope containment
+  const isPathInScope = (filePath, scope) => {
+    const f = String(filePath || '').replace(/\\/g, '/');
+    for (const raw of scope || []) {
+      const s = String(raw || '').replace(/\\/g, '/').replace(/^\.\//, '');
+      if (!s) continue;
+      if (/[*?[{]/.test(s)) {
+        const re = new RegExp(`^${s.replace(/[.+^$()|\\]/g, '\\$&').replace(/\*\*\/?/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\u0000/g, '.*')}$`);
+        if (re.test(f)) return true;
+      } else {
+        const clean = s.replace(/\/+$/, '');
+        if (f === clean || f.startsWith(`${clean}/`)) return true;
+      }
+    }
+    return false;
+  };
+
+  // OXB-193: warn if files contains an unexpanded directory
+  for (const task of tasks) {
+    for (const file of task.files || []) {
+      const s = String(file || '').trim();
+      const isDirPattern = s.endsWith('/') || s.endsWith('/**');
+      let isDiskDir = false;
+      if (input.projectRoot) {
+        try {
+          const abs = path.resolve(input.projectRoot, s.replace(/(\/\*\*|\/)+$/, ''));
+          isDiskDir = fs.existsSync(abs) && fs.statSync(abs).isDirectory();
+        } catch { /* ignore */ }
+      }
+      if (isDirPattern || isDiskDir) {
+        const hasChild = (task.files || []).some((f) => f !== s && isPathInScope(f, [s]));
+        if (!hasChild) {
+          warnings.push(`${task.id}: diretório não expandido em files ("${s}") — use oxe-cc plan build para expandir os arquivos`);
+        }
+      }
+    }
+  }
+
+  // OXB-194: error if verify references a file removed by the task or a dependency
+  const packTasks = input.pack && Array.isArray(input.pack.tasks) ? input.pack.tasks : [];
+  const packTaskById = new Map(packTasks.map((t) => [String(t.id || t.task_id || '').trim(), t]));
+  for (const task of tasks) {
+    const transitiveRemoved = new Set();
+    const visited = new Set();
+    const q = [task.id];
+    while (q.length) {
+      const curId = q.shift();
+      if (visited.has(curId)) continue;
+      visited.add(curId);
+      const curTask = byId.get(curId);
+      const curPack = packTaskById.get(curId);
+      if (curTask && Array.isArray(curTask.removed_paths)) for (const p of curTask.removed_paths) transitiveRemoved.add(String(p).replace(/\\/g, '/'));
+      if (curPack && Array.isArray(curPack.removed_paths)) for (const p of curPack.removed_paths) transitiveRemoved.add(String(p).replace(/\\/g, '/'));
+      const deps = curTask ? (curTask.dependsOn || curTask.depends_on || []) : [];
+      for (const d of deps) q.push(d);
+    }
+    if (transitiveRemoved.size > 0) {
+      const verifyCmds = [];
+      if (task.verifyCommand) verifyCmds.push(task.verifyCommand);
+      if (task.verify && Array.isArray(task.verify.commands)) verifyCmds.push(...task.verify.commands);
+      for (const cmd of verifyCmds) {
+        for (const rem of transitiveRemoved) {
+          if (cmd.includes(rem)) {
+            errors.push(`${task.id}: verify cita arquivo removido por ela ou dependência ("${rem}")`);
+          }
+        }
+      }
+    }
+  }
+
+  // OXB-195 / OXB-207: coupled_scope check (including built-in offer-audit rule + MENU_EFFECTS lint note)
+  let coupledRules = [];
+  try {
+    coupledRules = require('./oxe-plan-build.cjs').loadCoupledScope(input.projectRoot || null, {
+      coupledScope: input.config && Array.isArray(input.config.coupled_scope) ? input.config.coupled_scope : undefined,
+      builtinCoupledScope: input.config && input.config.builtin_coupled_scope === false ? false : undefined,
+    });
+  } catch { /* ignore */ }
+  if (coupledRules.length) {
+    for (const task of tasks) {
+      if (task.done === true) continue;
+      const taskFiles = (task.files || []).map((f) => String(f).replace(/\\/g, '/'));
+      const editedPaths = (task.edited_paths || []).map((f) => String(f).replace(/\\/g, '/'));
+      const removedPaths = (task.removed_paths || []).map((f) => String(f).replace(/\\/g, '/'));
+      for (const rule of coupledRules) {
+        const when = rule.when ? (Array.isArray(rule.when) ? rule.when : [rule.when]) : [];
+        const whenDeleted = rule.when_deleted ? (Array.isArray(rule.when_deleted) ? rule.when_deleted : [rule.when_deleted]) : [];
+        const whenEdited = rule.when_edited ? (Array.isArray(rule.when_edited) ? rule.when_edited : [rule.when_edited]) : [];
+        const matchWhen = when.some((w) => taskFiles.some((f) => isPathInScope(f, [w])));
+        const matchDeleted = whenDeleted.some((w) => removedPaths.some((f) => isPathInScope(f, [w])));
+        const matchEdited = whenEdited.some((w) => editedPaths.some((f) => isPathInScope(f, [w])));
+        if (matchWhen || matchDeleted || matchEdited) {
+          const inc = (Array.isArray(rule.include) ? rule.include : (rule.include ? [rule.include] : [])).map((f) => String(f).replace(/\\/g, '/'));
+          const missing = inc.filter((f) => !taskFiles.includes(f));
+          if (missing.length) {
+            warnings.push(`${task.id}: escopo acoplado recomendado não incluído em files (${missing.join(', ')})${rule.note ? ` — ${rule.note}` : ''}`);
+          } else if (rule.note) {
+            warnings.push(`${task.id}: ${rule.note}`);
+          }
+        }
+      }
+    }
   }
   if (tasks.length && hasCycle(tasks)) errors.push('dependência circular entre tarefas');
 
@@ -662,9 +892,13 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
     return false;
   }
   const task = Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
-  if (!task || (task.done !== true && !task.checkpoint_failed)) return false;
+  if (!task || (task.done !== true && !task.checkpoint_failed && task.status !== 'done')) return false;
   delete task.checkpoint_failed; // OXB-172: reopen also clears a failed checkpoint (scope fixed by a plan edit / CR)
   task.done = false;
+  if (task.status != null) delete task.status;
+  delete task.started_at;
+  delete task.base_sha;
+  delete task.executor;
   task.reopened = [...(Array.isArray(task.reopened) ? task.reopened : []), { at: new Date().toISOString(), by: info.by || null, previous_commit: task.done_commit || null }];
   delete task.done_at;
   delete task.done_commit;
@@ -677,6 +911,9 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
 module.exports = {
   eachTestTitles,
   markPlanTaskCheckpointFailed,
+  markPlanTaskStarted,
+  clearPlanTaskInProgress,
+  amendFrozenTestInPlanJson,
   withPlanLock,
   ACCEPT_RE,
   externalRefs,

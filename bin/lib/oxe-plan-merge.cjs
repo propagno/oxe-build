@@ -86,6 +86,30 @@ function mergeRolePlans(inputs, options = {}) {
     for (const entry of Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : []) tests.push({ ...entry, _from: name });
   }
 
+  // OXB-203: depends_on may name a task by its role id (`FE-AP1`, or `frontend:FE-AP1`) instead of the key (`A24`).
+  const aliases = new Map();
+  const ambiguous = new Set();
+  for (const { file, doc } of inputs) {
+    if (!doc || !Array.isArray(doc.tasks)) continue;
+    const role = String(doc.role || path.basename(file, path.extname(file))).trim();
+    for (const task of doc.tasks) {
+      const k = task && task[key] != null ? String(task[key]).trim() : '';
+      if (!k || task.id == null) continue;
+      for (const alias of [String(task.id).trim(), `${role}:${String(task.id).trim()}`]) {
+        if (!alias || groups.has(alias)) continue;
+        if (aliases.has(alias) && aliases.get(alias) !== k) ambiguous.add(alias);
+        else aliases.set(alias, k);
+      }
+    }
+  }
+  const resolveDep = (dep) => {
+    const d = String(dep).trim();
+    if (groups.has(d)) return d;
+    if (ambiguous.has(d)) { errors.push(`depends_on "${d}" é ambíguo — o id aponta para mais de um ${key}; use o ${key}`); return null; }
+    return aliases.has(d) ? aliases.get(d) : d;
+  };
+  for (const g of groups.values()) g.deps = uniq(g.deps.map(resolveDep).filter(Boolean));
+
   // Dependencies by key → depth → waves.
   const keys = [...groups.keys()];
   const depth = new Map();

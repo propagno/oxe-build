@@ -78,11 +78,12 @@ function validatePackTask(task) {
     // OXB-088: a removal's contract is what must NOT exist: code paths covered by removed_paths / symbols_removed need no
     // symbols; symbols are required only for code paths the task adds to or keeps.
     const removedPaths = new Set((Array.isArray(task && task.removed_paths) ? task.removed_paths : []).map((p) => String(p || '').trim()));
+    const sweptPaths = new Set((Array.isArray(task && task.swept_paths) ? task.swept_paths : []).map((p) => String(p || '').trim()));
     const symbolsRemoved = Array.isArray(task && task.symbols_removed) ? task.symbols_removed : [];
     for (const s of symbolsRemoved) if (!s || typeof s !== 'object' || !s.name || !s.path) gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} com symbols_removed inválido: use [{ "name", "path" }]`);
     const removedSymbolPaths = new Set(symbolsRemoved.filter((s) => s && s.path).map((s) => String(s.path).trim()));
     const codePaths = exactPaths.filter((e) => CODE_FILE_RE.test(e));
-    const uncovered = codePaths.filter((e) => !removedPaths.has(e) && !removedSymbolPaths.has(e));
+    const uncovered = codePaths.filter((e) => !removedPaths.has(e) && !removedSymbolPaths.has(e) && !sweptPaths.has(e));
     if (!symbols.length && uncovered.length) {
       gaps.push(`IMPLEMENTATION-PACK.json tarefa ${id} sem symbols (escreve arquivo de código: ${uncovered.slice(0, 3).join(', ')})${removedPaths.size || removedSymbolPaths.size ? '' : ' — numa remoção, declare removed_paths / symbols_removed'}`);
     }

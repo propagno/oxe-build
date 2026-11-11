@@ -17,9 +17,12 @@
         "additionalProperties": true,
         "properties": {
           "rid": { "type": "string", "description": "A chave que junta as tarefas dos papéis (ex.: \"R5\"). Com --key, o nome do campo muda." },
-          "id": { "type": "string", "description": "Id próprio do papel (ex.: \"FE-R5\"), só para rastreio; o PLAN.json recebe T<n>." },
+          "id": { "type": "string", "description": "Id próprio do papel (ex.: \"FE-R5\"), só para rastreio; o PLAN.json recebe T<n>. Também vale em depends_on de outras tarefas (alias do rid, OXB-203)." },
           "title": { "type": "string" },
           "files": { "type": "array", "items": { "type": "string" } },
+          "edited": { "type": "array", "items": { "type": "string" }, "description": "Caminhos editados (alias: edited_paths). Precisam existir na ref, salvo se criados por tarefa anterior da fase (OXB-201)." },
+          "deleted": { "type": "array", "items": { "type": "string" }, "description": "Caminhos removidos (alias: deleted_paths). Mesma regra de existência de edited (OXB-201)." },
+          "created": { "type": "array", "items": { "type": "string" }, "description": "Caminhos criados (alias: created_paths). Não podem existir na ref." },
           "verify": {
             "oneOf": [
               { "type": "object", "properties": { "commands": { "type": "array", "items": { "type": "string" } } } },
