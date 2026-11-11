@@ -44,4 +44,15 @@ function close(dir, id, status) {
   fs.appendFileSync(FILE(dir), `${JSON.stringify({ kind: 'deferred_close', id, status, at: new Date().toISOString() })}\n`);
 }
 
-module.exports = { list, open, add, close };
+function closeTask(dir, taskId, phase = null, status = 'resolved') {
+  const closed = [];
+  for (const entry of open(dir)) {
+    if (entry.task === taskId && (!phase || !entry.phase || entry.phase === phase)) {
+      close(dir, entry.id, status);
+      closed.push(entry.id);
+    }
+  }
+  return closed;
+}
+
+module.exports = { list, open, add, close, closeTask };

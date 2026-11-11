@@ -150,16 +150,25 @@ function createExecutionContext(projectRoot, activeSession, options = {}) {
  * @param {{ baseUrl?: string, model?: string, apiKeyEnv?: string, maxTurns?: number }} providerConfig
  */
 function saveRuntimeProviderConfig(projectRoot, providerConfig) {
+  const agyLib = require('./oxe-provider-antigravity.cjs');
   const configPath = path.join(projectRoot, '.oxe', 'config.json');
   let cfg = {};
   try { cfg = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch {}
   if (!cfg.runtime || typeof cfg.runtime !== 'object') cfg.runtime = {};
-  cfg.runtime.provider = {
-    baseUrl: providerConfig.baseUrl || 'https://api.anthropic.com/v1',
-    model: providerConfig.model || 'claude-sonnet-4-6',
-  };
+  const normalizedAdapter = agyLib.normalizeAdapterId(providerConfig.adapter || providerConfig.name || '');
+  const isCliAdapter = normalizedAdapter === 'claude' || normalizedAdapter === 'antigravity';
+  cfg.runtime.provider = {};
+  if (providerConfig.name) cfg.runtime.provider.name = normalizedAdapter === 'antigravity' ? 'antigravity' : providerConfig.name;
+  else if (normalizedAdapter === 'antigravity') cfg.runtime.provider.name = 'antigravity';
+  if (!isCliAdapter || providerConfig.baseUrl) {
+    cfg.runtime.provider.baseUrl = providerConfig.baseUrl || 'https://api.anthropic.com/v1';
+  }
+  if (!isCliAdapter || providerConfig.model) {
+    cfg.runtime.provider.model = providerConfig.model || 'claude-sonnet-4-6';
+  }
   if (providerConfig.apiKeyEnv) cfg.runtime.provider.apiKeyEnv = providerConfig.apiKeyEnv;
-  if (providerConfig.adapter) cfg.runtime.provider.adapter = providerConfig.adapter;
+  if (normalizedAdapter) cfg.runtime.provider.adapter = normalizedAdapter;
+  if (providerConfig.command) cfg.runtime.provider.command = providerConfig.command;
   if (providerConfig.maxTurns != null) cfg.runtime.provider.maxTurns = providerConfig.maxTurns;
   const oxeDir = path.join(projectRoot, '.oxe');
   if (!fs.existsSync(oxeDir)) fs.mkdirSync(oxeDir, { recursive: true });
@@ -170,14 +179,13 @@ function saveRuntimeProviderConfig(projectRoot, providerConfig) {
 /**
  * Reads persisted LLM provider config from .oxe/config.json runtime.provider.
  * @param {string} projectRoot
- * @returns {{ baseUrl?: string, model?: string, apiKeyEnv?: string, maxTurns?: number } | null}
+ * @returns {{ name?: string, adapter?: string, baseUrl?: string, model?: string, apiKeyEnv?: string, maxTurns?: number } | null}
  */
 function loadRuntimeProviderConfig(projectRoot) {
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(projectRoot, '.oxe', 'config.json'), 'utf8'));
-    return (cfg.runtime && cfg.runtime.provider && typeof cfg.runtime.provider === 'object')
-      ? cfg.runtime.provider
-      : null;
+    if (!cfg.runtime || !cfg.runtime.provider || typeof cfg.runtime.provider !== 'object') return null;
+    return require('./oxe-provider-antigravity.cjs').normalizeProviderConfig(cfg.runtime.provider);
   } catch {
     return null;
   }
@@ -912,19 +920,23 @@ function runtimeSpecFreeze(projectRoot, activeSession, options = {}) {
   return out;
 }
 
-/** OXB-097/098: `oxe-cc plan build --from <role files…> [--phase Fn] [--force]` and `plan check-role <file> [--ref]`. */
+/** OXB-097/098/199: `oxe-cc plan build --from <role files…> [--phase Fn] [--auto-close-imports] [--force]` and `plan check-role <file> [--ref] [--auto-close-imports]`. */
 function runtimePlanBuild(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-plan-build.cjs');
   const mergeLib = require('./oxe-plan-merge.cjs');
   if (options.action === 'check-role') {
-    const out = lib.checkRole(projectRoot, mergeLib.readRolePlan(options.file), { ref: options.ref });
+    const roleDoc = mergeLib.readRolePlan(options.file);
+    const out = lib.checkRole(projectRoot, roleDoc, { ref: options.ref, autoCloseImports: Boolean(options.autoCloseImports), fixStalePaths: Boolean(options.fixStalePaths) });
+    if (((options.autoCloseImports && options.writeRole) || (options.fixStalePaths && options.writeRole !== false)) && !out.errors.length) {
+      fs.writeFileSync(options.file, `${JSON.stringify(roleDoc, null, 2)}\n`, 'utf8');
+    }
     return { file: options.file, ...out };
   }
   const files = options.files || [];
   if (files.length < 1) throw new Error('use: oxe-cc plan build --from backend.json frontend.json [--phase Fn]');
   let phase = options.phase || null;
   if (!phase) { try { const pg = require('./oxe-program.cjs').readProgram(resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program')); phase = pg && pg.active_phase ? pg.active_phase : null; } catch { phase = null; } }
-  const res = lib.build(files.map((file) => ({ file, doc: mergeLib.readRolePlan(file) })), { root: projectRoot, phase, key: options.key });
+  const res = lib.build(files.map((file) => ({ file, doc: mergeLib.readRolePlan(file) })), { root: projectRoot, phase, key: options.key, ref: options.ref, autoCloseImports: Boolean(options.autoCloseImports), fixStalePaths: Boolean(options.fixStalePaths), pairAsDeps: Boolean(options.pairAsDeps) });
   const lintErrors = res.errors.length ? [] : require('./oxe-plan-json.cjs').validatePlanJson(res.plan);
   const errors = [...res.errors, ...lintErrors];
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
@@ -1518,13 +1530,22 @@ function runtimeQuestions(projectRoot, activeSession, options = {}) {
 }
 
 /**
- * LlmTaskExecutor sobre um adapter (`claude` = `claude -p` por turno, `http` = OpenAI-compatível).
+ * LlmTaskExecutor sobre um adapter (`claude` = `claude -p` por turno, `antigravity` = `agy -p` por turno, `http` = OpenAI-compatível).
  * O uso por tentativa vira evento `ExecutorUsage`.
  */
 function createAdapterExecutor(runtime, projectRoot, activeSession, options, getRunId) {
-  const adapterId = options.adapter || 'http';
+  const agyLib = require('./oxe-provider-antigravity.cjs');
+  const persisted = loadRuntimeProviderConfig(projectRoot);
+  const rawAdapter = options.adapter || (persisted && (persisted.adapter || persisted.name)) || 'http';
+  const adapterId = agyLib.normalizeAdapterId(rawAdapter) || 'http';
   if (typeof runtime.createExecutorAdapter !== 'function') throw new Error('Runtime não exporta createExecutorAdapter.');
-  const adapter = runtime.createExecutorAdapter(adapterId, { claude: options.adapterOptions || {} });
+  const resolvedAdapterOpts = adapterId === 'antigravity'
+    ? { ...agyLib.resolveAntigravityOptions({ persisted }), ...(options.adapterOptions || {}) }
+    : (options.adapterOptions || {});
+  const adapter = runtime.createExecutorAdapter(adapterId, {
+    claude: adapterId === 'claude' ? resolvedAdapterOpts : {},
+    antigravity: adapterId === 'antigravity' ? resolvedAdapterOpts : {},
+  });
   installQuestionResolver(runtime, projectRoot, activeSession, getRunId);
   const provider = options.providerConfig || {};
   const progress = (event) => {
@@ -1608,6 +1629,8 @@ function normalizeRuntimeEventType(type) {
     BudgetExhausted: 'BudgetExhausted',
     ScopeViolation: 'ScopeViolation',
     ScratchIgnored: 'ScratchIgnored',
+    TaskCompleted: 'TaskCompleted',
+    CheckpointCreated: 'CheckpointCreated',
   };
   if (directMap[raw]) return directMap[raw];
   const lower = raw.toLowerCase();
@@ -2042,6 +2065,29 @@ function appendStubCheck(projectRoot, doc, compiledGraph) {
   } catch { /* auxiliar */ }
 }
 
+function normalizePlanJsonForHash(rawText) {
+  if (!rawText) return '';
+  try {
+    const doc = JSON.parse(rawText);
+    if (doc && Array.isArray(doc.tasks)) {
+      doc.tasks = doc.tasks.map((t) => {
+        if (!t || typeof t !== 'object') return t;
+        const copy = { ...t };
+        delete copy.started_at;
+        delete copy.base_sha;
+        delete copy.executor;
+        if (copy.status === 'in_progress' || (copy.status === 'done' && copy.done === true)) {
+          delete copy.status;
+        }
+        return copy;
+      });
+    }
+    return JSON.stringify(doc);
+  } catch {
+    return rawText;
+  }
+}
+
 function planSourceHash(projectRoot, activeSession) {
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const planJsonPath = require('./oxe-plan-json.cjs').planJsonPathFor(paths.plan);
@@ -2050,7 +2096,8 @@ function planSourceHash(projectRoot, activeSession) {
   const anchorsPath = paths.plan ? path.join(path.dirname(paths.plan), 'REFERENCE-ANCHORS.md') : null;
   for (const file of [planJsonPath, paths.plan, paths.spec, paths.implementationPack, anchorsPath]) {
     hash.update(`${file ? path.basename(file) : '-'}\n`);
-    hash.update(readTextIfExists(file) || '');
+    const raw = readTextIfExists(file) || '';
+    hash.update(file && planJsonPath && file === planJsonPath ? normalizePlanJsonForHash(raw) : raw);
     hash.update('\n\u0000\n');
   }
   // OXB-048: the task gates live partly in config.json; changing them must recompile the graph.
@@ -2710,7 +2757,13 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
       if (isVerifyOnlyNode(id)) return []; // enforced empty scope (OXB-068)
       const planTask = planTaskById.get(id);
       const planFiles = planTask && Array.isArray(planTask.files) ? planTask.files.map((p) => String(p).replace(/\\/g, '/')) : [];
-      return [...new Set([...taskScopeFiles(current, id), ...planFiles])].filter((p) => p && !p.includes('*'));
+      const baseScope = [...new Set([...taskScopeFiles(current, id), ...planFiles])].filter(Boolean);
+      let coupled = [];
+      try {
+        const coupledRules = require('./oxe-plan-build.cjs').loadCoupledScope(projectRoot);
+        coupled = require('./oxe-plan-build.cjs').applyCoupledScope(coupledRules, { files: baseScope, created: [], edited: [], deleted: [] });
+      } catch { /* ignore */ }
+      return [...new Set([...baseScope, ...coupled])];
     };
     // OXB-036: the program's budget policy applies to every phase without editing each PLAN.json.
     let programBudgetPolicy = null;
@@ -2891,7 +2944,33 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
       const inplaceRun = !parallelOptions && Boolean(runtime.InplaceWorkspaceManager && workspaceManager instanceof runtime.InplaceWorkspaceManager);
       let outsideNow = [];
       // OXB-159: each task's scratch dir (.oxe/tmp/<task>, named in the prompt); removed when the task passes.
-      if (taskId && event.type === 'WorkItemReady') scratchLib.ensureScratchDir(projectRoot, taskId);
+      if (taskId && event.type === 'WorkItemReady') {
+        scratchLib.ensureScratchDir(projectRoot, taskId);
+        // OXB-204: record TaskStarted (Tn, executor, base SHA) in OXE-EVENTS.ndjson and mark Tn.status = "in_progress".
+        try {
+          const baseSha = gitRepo ? ((gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0] || null) : null;
+          const executorLabel = String(
+            options.adapter
+            || (options.providerConfig && (options.providerConfig.adapter || options.providerConfig.model))
+            || (options.executor ? 'custom' : 'runtime')
+          );
+          require('./oxe-plan-json.cjs').markPlanTaskStarted(runPaths.plan, taskId, {
+            executor: executorLabel,
+            base_sha: baseSha,
+          });
+          appendEvent(projectRoot, activeSession, {
+            type: 'TaskStarted',
+            run_id: current.run_id,
+            work_item_id: taskId,
+            payload: {
+              task: taskId,
+              executor: executorLabel,
+              base_sha: baseSha,
+              wave: event.payload && event.payload.wave != null ? event.payload.wave : null,
+            },
+          });
+        } catch { /* auxiliary persistence */ }
+      }
       if (taskId && inplaceRun && gitRepo) {
         try {
           if (event.type === 'WorkItemReady') {
@@ -2914,9 +2993,9 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
           if (event.type === 'AttemptStarted') attemptBaseline.set(taskId, treeSnapshot(projectRoot));
           const attemptEnded = event.type === 'RetryScheduled' || event.type === 'WorkItemCompleted' || event.type === 'WorkItemBlocked';
           if (attemptEnded && taskBaseline.has(taskId)) {
-            const scope = new Set(scopeOfTask(taskId));
+            const taskScope = scopeOfTask(taskId);
             const base = event.type === 'RetryScheduled' ? attemptBaseline.get(taskId) || taskBaseline.get(taskId) : taskBaseline.get(taskId);
-            outsideNow = changedSinceSnapshot(projectRoot, base).filter((p) => !scope.has(p));
+            outsideNow = changedSinceSnapshot(projectRoot, base).filter((p) => !isPathInScope(p, taskScope));
             // OXB-159: scratch an attempt left in the repo root (*.log, *.tsbuildinfo, executor.scratch_ignore) is not
             // a scope violation; the files it created are removed.
             const split = scratchLib.splitScratch(projectRoot, outsideNow, taskBaseline.get(taskId), isScratchPath);
@@ -3088,7 +3167,11 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
         // OXB-167: … unless its checkpoint failed: then `checkpoint_failed` (the next execute retries the commit first).
         try {
           if (checkpointFailure) require('./oxe-plan-json.cjs').markPlanTaskCheckpointFailed(runPaths.plan, event.work_item_id, { ...checkpointFailure, run_id: current.run_id, title: (planTaskById.get(event.work_item_id) || {}).title || null });
-          else { require('./oxe-plan-json.cjs').markPlanTaskDone(runPaths.plan, event.work_item_id, { commit: checkpoint }); dropFirstBaseline(projectRoot, event.work_item_id); }
+          else {
+            require('./oxe-plan-json.cjs').markPlanTaskDone(runPaths.plan, event.work_item_id, { commit: checkpoint });
+            dropFirstBaseline(projectRoot, event.work_item_id);
+            require('./oxe-deferred.cjs').closeTask(runPaths.programDir || path.join(projectRoot, '.oxe', 'program'), event.work_item_id, phaseCtxForCommits.phase, 'resolved');
+          }
         } catch { /* o done é auxiliar; o journal continua sendo a verdade da run */ }
         // OXB-151: --promote-each — the task enters the merge train at once, without waiting for the whole plan.
         if (options.promoteEach) {
@@ -3970,6 +4053,14 @@ function attachAcceptanceLock(parsedPlan, runState, projectRoot) {
   const runtime = loadRuntimeModule();
   const lateFrozen = [];
   for (const entry of parsedPlan.acceptanceTests) {
+    // OXB-205: an audited `plan amend-test` records `amended` + updated sha256/hashes in PLAN.json; honor it.
+    if (Array.isArray(entry.amended) && entry.amended.length > 0) {
+      for (const file of entry.files || []) {
+        const amendedSha = (entry.hashes && entry.hashes[file])
+          || (entry.files.length === 1 && typeof entry.sha256 === 'string' ? entry.sha256 : null);
+        if (amendedSha) hashes.set(file, amendedSha);
+      }
+    }
     for (const file of entry.files || []) {
       if (hashes.has(file)) continue;
       // Declared by the current plan but unknown to this run's lock: frozen NOW (later edits count as tampering).
@@ -4080,6 +4171,16 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     result.errors.push(...gateLint.errors);
     result.warnings.push(...gateLint.warnings);
     if (gateLint.errors.length) result.ok = false;
+    // OXB-201: edited_paths / deleted_paths carried in PLAN.json must exist at HEAD (unless an earlier task creates them).
+    if (!options.skipPathCheck && gitLines(projectRoot, ['rev-parse', '--git-dir'])) {
+      const pb = require('./oxe-plan-build.cjs');
+      const pending = (rawPlan.tasks || []).filter((t) => t && t.done !== true);
+      for (const s of pb.staleRolePaths(projectRoot, 'HEAD', pending)) {
+        const t = pending[s.index];
+        result.errors.push(`${t.id || `tasks[${s.index}]`}: ${s.field}_paths cita ${s.path}, que não existe em HEAD${s.suggestion ? ` — movido para ${s.suggestion}? (corrija o caminho no plano)` : ''}`);
+      }
+      if (result.errors.length) result.ok = false;
+    }
   } catch { /* sem PLAN.json: nada a checar */ }
   // OXB-053/046: when each criterion's check runs, and the planner error of putting a criterion-wide acceptance test
   // in the verify of a task that does not complete the criterion (it can only fail there).
@@ -4405,7 +4506,12 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       const cfgLint = (readProjectConfig(projectRoot) || {}).lint || {};
       const findings = rigor.sourceAssertionFindings(projectRoot, pjr);
       (cfgLint.test_rigor === 'error' ? result.errors : result.warnings).push(...rigor.rigorMessages(findings));
-      result.test_rigor = { source_assertions: findings };
+      // OXB-205 / OXB-208: suspicious regexes and Node 22+ paused `net.connect` sockets fail plan lint.
+      const regexFindings = rigor.suspiciousRegexFindings(projectRoot, pjr);
+      const pausedSockets = rigor.pausedSocketFindings(projectRoot, pjr);
+      (cfgLint.suspicious_test_regex === 'warn' ? result.warnings : result.errors).push(...rigor.suspiciousRegexMessages(regexFindings));
+      (cfgLint.paused_socket_close === 'warn' ? result.warnings : result.errors).push(...rigor.pausedSocketMessages(pausedSockets));
+      result.test_rigor = { source_assertions: findings, suspicious_regex: regexFindings, paused_sockets: pausedSockets };
       if (options.mutation) {
         const report = rigor.mutationSample(projectRoot, pjr, { max: options.mutationMax });
         result.test_rigor.mutation = report;
@@ -5231,6 +5337,15 @@ function runtimeSync(projectRoot, activeSession, options = {}) {
     appendEvent(projectRoot, activeSession, { type: 'ProgramSyncDepsChanged', payload: { from, files: depFiles, action: result.deps.action, ok: result.deps.ok !== false } });
   }
   if (depsStale) options = { ...options, verify: false };
+  // OXB-202: the merge wave — two lines of work met here; the size baseline and the notices are checked now, not in CI.
+  if (!depsStale && options.integrationChecks !== false) {
+    const ic = require('./oxe-integration-checks.cjs').runIntegrationChecks(projectRoot);
+    if (ic.ran.length) result.integration_checks = ic.ran;
+    if (!ic.ok) {
+      result.error = result.error || `check de integração vermelho depois do merge de ${from}: \`${ic.failed.command}\` (exit ${ic.failed.exit}) — corrija antes do push da PR`;
+      appendEvent(projectRoot, activeSession, { type: 'IntegrationCheckFailed', payload: { from, command: ic.failed.command, exit: ic.failed.exit } });
+    }
+  }
   const { jsonPath, doc, paths } = readPlanJsonDoc(projectRoot, activeSession);
   if (doc && Array.isArray(doc.tasks)) {
     const changed = new Set(upstream);
@@ -5483,6 +5598,21 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
         if (!c.ok) result.error = `commit dos testes congelados falhou: ${c.stderr.trim().split(/\r?\n/).pop()}`;
       }
       result.frozen_tests = added;
+    }
+    // OXB-206: never promote a branch carrying Git-tracked parked future-phase suites (`tests/acceptance/parked-*`).
+    if (!result.conflict && !result.error) {
+      const icLib = require('./oxe-integration-checks.cjs');
+      const parked = icLib.findTrackedParkedAcceptance(work, { baseRef: baseSha });
+      if (parked.length) {
+        result.parked_acceptance = parked;
+        result.error = `gate de PR bloqueado em ${branch}: ${icLib.formatParkedAcceptanceError(parked)}`;
+      }
+    }
+    // OXB-202: what only breaks when work meets (size baseline summed by two phases, stale notices) — before any push.
+    if (!result.conflict && !result.error && options.integrationChecks !== false) {
+      const ic = require('./oxe-integration-checks.cjs').runIntegrationChecks(work, { configRoot: projectRoot, baseRef: baseSha });
+      if (ic.ran.length) result.integration_checks = ic.ran;
+      if (!ic.ok) result.error = `check de integração vermelho em ${branch}: \`${ic.failed.command}\` (exit ${ic.failed.exit}) — nada foi enviado; corrija (ex.: npm run notices:generate, ou reduza o arquivo acima do teto) e promova de novo`;
     }
     // OXB-158: with --open-pr the branch is pushed FIRST — pr:ready posts its GitHub status on the pushed sha (before,
     // it passed its checks, failed to post "… is not on GitHub yet: push it first", and the PR was never opened).
@@ -6291,6 +6421,10 @@ function changedSinceSnapshot(projectRoot, before) {
   return [...changed].sort();
 }
 
+function isPathInScope(filePath, scope) {
+  return require('./oxe-resume.cjs').isPathInScope(filePath, scope);
+}
+
 function isolateFailedTask(projectRoot, runState, taskId, options = {}) {
   const nodes = runState && runState.compiled_graph && runState.compiled_graph.nodes;
   const node = nodes ? (Array.isArray(nodes) ? nodes.find((n) => n && n.id === taskId) : nodes[taskId]) : null;
@@ -6394,6 +6528,651 @@ function findTaskCheckpoint(projectRoot, taskId, ctx = null) {
   // newest of all candidates
   const order = gitLines(projectRoot, ['rev-list', '--no-walk=sorted', ...shas]) || shas;
   return order[0] || null;
+}
+
+function sha256BufferOrFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const crypto = require('crypto');
+    return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+function computeScopeFingerprint(projectRoot, relPaths) {
+  const crypto = require('crypto');
+  const h = crypto.createHash('sha256');
+  for (const rel of [...new Set((relPaths || []).map((p) => String(p).replace(/\\/g, '/')))].sort()) {
+    const abs = path.join(projectRoot, rel);
+    const sha = sha256BufferOrFile(abs) || 'DELETED';
+    h.update(`${rel}:${sha}\n`);
+  }
+  return h.digest('hex');
+}
+
+function writeTaskVerifyFresh(projectRoot, taskId, info = {}) {
+  const freshPath = path.join(projectRoot, '.oxe', 'tmp', taskId, 'verify-fresh.json');
+  fs.mkdirSync(path.dirname(freshPath), { recursive: true });
+  const record = {
+    task: taskId,
+    scope_hash: info.scopeHash || null,
+    commands: info.commands || [],
+    verified_at: info.verifiedAt || new Date().toISOString(),
+    ok: info.ok !== false,
+  };
+  fs.writeFileSync(freshPath, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+  return record;
+}
+
+function isTaskVerifyFresh(projectRoot, taskId, changedInScope, scopeHash, maxAgeMs = 30 * 60_000) {
+  const tmpDir = path.join(projectRoot, '.oxe', 'tmp', taskId);
+  const freshFile = path.join(tmpDir, 'verify-fresh.json');
+  const now = Date.now();
+  if (fs.existsSync(freshFile)) {
+    try {
+      const stamp = JSON.parse(fs.readFileSync(freshFile, 'utf8'));
+      const age = now - Date.parse(stamp.verified_at || '');
+      if (stamp && stamp.ok === true && Number.isFinite(age) && age >= 0 && age <= maxAgeMs) {
+        if (!stamp.scope_hash || stamp.scope_hash === scopeHash) return true;
+      }
+    } catch { /* check log files */ }
+  }
+  if (!fs.existsSync(tmpDir)) return false;
+  let latestCodeMtime = 0;
+  for (const rel of changedInScope || []) {
+    try {
+      const st = fs.statSync(path.join(projectRoot, rel));
+      if (st.mtimeMs > latestCodeMtime) latestCodeMtime = st.mtimeMs;
+    } catch { /* deleted file */ }
+  }
+  try {
+    const entries = fs.readdirSync(tmpDir).filter((n) => /\.(log|txt)$/i.test(n));
+    for (const name of entries) {
+      const full = path.join(tmpDir, name);
+      const st = fs.statSync(full);
+      if (now - st.mtimeMs > maxAgeMs) continue;
+      if (latestCodeMtime > 0 && st.mtimeMs + 50 < latestCodeMtime) continue;
+      const body = fs.readFileSync(full, 'utf8');
+      if (!body.trim()) continue;
+      if (/\bFAIL\b|ERR_TEST_FAILURE|AssertionError|exit code [1-9]/i.test(body)) continue;
+      if (/\b(pass|passed|ok|✓|0 failed)\b/i.test(body)) return true;
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
+function verifyFrozenAcceptanceUntampered(projectRoot, activeSession, doc, runState) {
+  const crypto = require('crypto');
+  const expectedByPath = new Map();
+  const amendedPaths = new Set();
+  const frozenPaths = new Set();
+
+  for (const entry of (doc && Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])) {
+    const entryFiles = (entry && entry.files) || [];
+    for (const f of entryFiles) {
+      if (typeof f === 'string') {
+        const p = f.replace(/\\/g, '/').replace(/^\.\//, '');
+        frozenPaths.add(p);
+        const explicitSha = (entry.hashes && entry.hashes[p])
+          || (entryFiles.length === 1 && typeof entry.sha256 === 'string' ? entry.sha256 : null);
+        if (explicitSha) expectedByPath.set(p, explicitSha);
+        if (explicitSha && Array.isArray(entry.amended) && entry.amended.some((a) => a && String(a.file || '').replace(/\\/g, '/').replace(/^\.\//, '') === p && a.sha256 === explicitSha)) {
+          amendedPaths.add(p);
+        }
+      } else if (f && f.path) {
+        const p = String(f.path).replace(/\\/g, '/').replace(/^\.\//, '');
+        frozenPaths.add(p);
+        if (f.sha256) expectedByPath.set(p, f.sha256);
+      }
+    }
+  }
+  const lockTests = (runState && runState.acceptance_lock && Array.isArray(runState.acceptance_lock.tests))
+    ? runState.acceptance_lock.tests
+    : [];
+  for (const t of lockTests) {
+    for (const f of (t && t.files) || []) {
+      if (f && f.path) {
+        const p = String(f.path).replace(/\\/g, '/').replace(/^\.\//, '');
+        frozenPaths.add(p);
+        if (f.sha256 && !expectedByPath.has(p)) expectedByPath.set(p, f.sha256);
+      }
+    }
+  }
+  try {
+    const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+    const programLib = require('./oxe-program.cjs');
+    const state = paths.programDir ? programLib.readProgram(paths.programDir) : null;
+    for (const check of state ? programLib.loadRegressionChecks(paths.programDir, state, state.active_phase) : []) {
+      for (const f of check.frozen_files || []) {
+        if (f && f.path) {
+          const p = String(f.path).replace(/\\/g, '/').replace(/^\.\//, '');
+          frozenPaths.add(p);
+          if (f.sha256 && !expectedByPath.has(p)) expectedByPath.set(p, f.sha256);
+        }
+      }
+    }
+  } catch { /* best-effort program checks */ }
+
+  for (const rel of frozenPaths) {
+    const abs = path.join(projectRoot, rel);
+    const actualSha = sha256BufferOrFile(abs);
+    let headSha = null;
+    const headShow = spawnSync('git', ['show', `HEAD:${rel}`], { cwd: projectRoot, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+    if (headShow.status === 0 && headShow.stdout) {
+      headSha = crypto.createHash('sha256').update(headShow.stdout).digest('hex');
+    }
+    const lockedSha = expectedByPath.get(rel) || headSha;
+    const headMismatch = !amendedPaths.has(rel) && headSha && actualSha !== headSha;
+    if (!actualSha || (lockedSha && actualSha !== lockedSha) || headMismatch) {
+      const expected = lockedSha || headSha || 'frozen';
+      appendEvent(projectRoot, activeSession, {
+        type: 'ScopeViolation',
+        payload: { reason: 'acceptance_tampered', file: rel, expected, actual: actualSha || 'missing' },
+      });
+      throw new Error(`acceptance_tampered: teste de aceite congelado foi adulterado (${rel}: esperado ${String(expected).slice(0, 12)}, atual ${String(actualSha || 'ausente').slice(0, 12)})`);
+    }
+  }
+  frozenPaths._amended = amendedPaths;
+  return frozenPaths;
+}
+
+/**
+ * OXB-204: `oxe-cc runtime start-task <Tn> [--by <executor>]`
+ * Records `TaskStarted` (with Tn, executor, base_sha) in OXE-EVENTS.ndjson and marks `Tn.status = "in_progress"` in PLAN.json.
+ */
+function runtimeStartTask(projectRoot, activeSession, options = {}) {
+  const taskId = String(options.task || '').trim().toUpperCase();
+  if (!/^T\d+$/.test(taskId)) {
+    throw new Error('Use: oxe-cc runtime start-task T<n> [--by <executor>]');
+  }
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) {
+    throw new Error('runtime start-task exige PLAN.json.');
+  }
+  const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+  const task = (doc && Array.isArray(doc.tasks) ? doc.tasks : []).find((t) => t && t.id === taskId);
+  if (!task) {
+    throw new Error(`Tarefa ${taskId} não encontrada em PLAN.json.`);
+  }
+  if (task.done === true || task.status === 'done') {
+    throw new Error(`Tarefa ${taskId} já está concluída (done).`);
+  }
+  const baseSha = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0] || null;
+  const executor = String(options.by || options.executor || 'subagent');
+  const at = new Date().toISOString();
+  planJsonLib.markPlanTaskStarted(paths.plan, taskId, { executor, base_sha: baseSha, at });
+  const runState = readRunState(projectRoot, activeSession);
+  appendEvent(projectRoot, activeSession, {
+    type: 'TaskStarted',
+    run_id: (runState && runState.run_id) || null,
+    work_item_id: taskId,
+    payload: { task: taskId, executor, base_sha: baseSha },
+  });
+  return { ok: true, task: taskId, status: 'in_progress', executor, base_sha: baseSha, started_at: at };
+}
+
+/**
+ * OXB-204: `oxe-cc runtime resume [--continue | --reset-task]`
+ * Detects `in_progress` task + dirty working tree, validates JSON/TS syntax of touched files,
+ * lists per-file diffs of `Tn.files` vs out-of-scope, and offers `continue` (keep) or `reset-task`
+ * (discard only `Tn`'s files). Falls back to standard `applyRuntimeAction(..., 'resume')` when clean.
+ */
+function runtimeResume(projectRoot, activeSession, options = {}) {
+  const resumeLib = require('./oxe-resume.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+  const events = readEvents(projectRoot, activeSession);
+  const inspection = resumeLib.inspectDirtyResume(projectRoot, doc, events, isPathInScope);
+  const decision = options.decision || options.resumeDecision || null;
+
+  if (!inspection.has_dirty_in_progress && !decision) {
+    return applyRuntimeAction(projectRoot, activeSession, {
+      action: 'resume',
+      wave: options.wave,
+      task: options.task,
+      mode: options.mode,
+      reason: options.reason,
+    });
+  }
+
+  if (!inspection.has_dirty_in_progress && decision) {
+    // Nothing dirty/in-progress left; clear stale in_progress if requested and resume run if present.
+    if (decision === 'reset-task' && inspection.active_task) {
+      require('./oxe-plan-json.cjs').clearPlanTaskInProgress(paths.plan, inspection.active_task.id);
+    }
+    const current = readRunState(projectRoot, activeSession);
+    const resumed = current
+      ? applyRuntimeAction(projectRoot, activeSession, { action: 'resume', wave: options.wave, task: options.task, mode: options.mode, reason: options.reason })
+      : null;
+    return {
+      ok: true,
+      decision,
+      dirty_resume: false,
+      task: inspection.active_task ? inspection.active_task.id : null,
+      run: resumed ? resumed.run : null,
+    };
+  }
+
+  const activeTask = inspection.active_task;
+  if (decision !== 'continue' && decision !== 'reset-task') {
+    return {
+      ok: false,
+      needs_decision: true,
+      dirty_resume: true,
+      task: activeTask.id,
+      title: activeTask.title,
+      executor: activeTask.executor,
+      base_sha: activeTask.base_sha,
+      started_at: activeTask.started_at,
+      in_scope: inspection.in_scope,
+      out_of_scope: inspection.out_of_scope,
+      validation: inspection.validation,
+      invalid_files: inspection.invalid_files,
+      choices: ['continue', 'reset-task'],
+    };
+  }
+
+  const current = readRunState(projectRoot, activeSession);
+  if (decision === 'continue') {
+    appendEvent(projectRoot, activeSession, {
+      type: 'TaskResumed',
+      run_id: (current && current.run_id) || null,
+      work_item_id: activeTask.id,
+      payload: {
+        task: activeTask.id,
+        decision: 'continue',
+        executor: activeTask.executor,
+        base_sha: activeTask.base_sha,
+        in_scope: inspection.in_scope.map((f) => f.path),
+        out_of_scope: inspection.out_of_scope.map((f) => f.path),
+        invalid_files: inspection.invalid_files.map((f) => ({ path: f.path, error: f.error })),
+      },
+    });
+    const resumed = current
+      ? applyRuntimeAction(projectRoot, activeSession, {
+        action: 'resume',
+        wave: options.wave,
+        task: options.task || activeTask.id,
+        mode: options.mode,
+        reason: options.reason || `continue dirty task ${activeTask.id}`,
+      })
+      : null;
+    return {
+      ok: true,
+      needs_decision: false,
+      dirty_resume: true,
+      decision: 'continue',
+      task: activeTask.id,
+      kept: inspection.in_scope.map((f) => f.path),
+      out_of_scope: inspection.out_of_scope.map((f) => f.path),
+      invalid_files: inspection.invalid_files,
+      run: resumed ? resumed.run : null,
+    };
+  }
+
+  // decision === 'reset-task': discard ONLY Tn's in-scope files; preserve out_of_scope untouched.
+  const discarded = resumeLib.resetTaskFiles(projectRoot, activeTask.base_sha, inspection.in_scope);
+  require('./oxe-plan-json.cjs').clearPlanTaskInProgress(paths.plan, activeTask.id);
+  appendEvent(projectRoot, activeSession, {
+    type: 'TaskReset',
+    run_id: (current && current.run_id) || null,
+    work_item_id: activeTask.id,
+    payload: {
+      task: activeTask.id,
+      decision: 'reset-task',
+      base_sha: activeTask.base_sha,
+      discarded,
+      kept_out_of_scope: inspection.out_of_scope.map((f) => f.path),
+    },
+  });
+  const resumed = current
+    ? applyRuntimeAction(projectRoot, activeSession, {
+      action: 'resume',
+      wave: options.wave,
+      task: options.task || activeTask.id,
+      mode: options.mode,
+      reason: options.reason || `reset-task ${activeTask.id}`,
+    })
+    : null;
+  return {
+    ok: true,
+    needs_decision: false,
+    dirty_resume: true,
+    decision: 'reset-task',
+    task: activeTask.id,
+    discarded,
+    kept_out_of_scope: inspection.out_of_scope.map((f) => f.path),
+    run: resumed ? resumed.run : null,
+  };
+}
+
+/**
+ * OXB-205: `oxe-cc plan amend-test <path> --reason "<CR-id>" [--by <papel>] [--force]`
+ * Recalculates ONLY the `sha256` of `<path>` in `.oxe/PLAN.json` (and active run `acceptance_lock` if present),
+ * preserves `done: true` / `status: "done"` of completed tasks, validates static regex rules on `<path>`,
+ * and appends an auditable `FrozenTestAmended` event to `OXE-EVENTS.ndjson`.
+ */
+function runtimePlanAmendTest(projectRoot, activeSession, options = {}) {
+  const rawFile = String(options.file || '').trim();
+  const reason = String(options.reason || '').trim();
+  if (!rawFile || !reason) {
+    throw new Error('Use: oxe-cc plan amend-test <path> --reason "<CR-id>" [--by <papel>]');
+  }
+  const absFile = path.isAbsolute(rawFile) ? rawFile : path.resolve(projectRoot, rawFile);
+  if (!fs.existsSync(absFile)) {
+    throw new Error(`Arquivo de teste não encontrado: ${rawFile}`);
+  }
+  const relPath = path.relative(projectRoot, absFile).replace(/\\/g, '/').replace(/^\.\//, '');
+  if (relPath.startsWith('..')) {
+    throw new Error(`O arquivo precisa estar dentro do projeto (${rawFile}).`);
+  }
+
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) {
+    throw new Error('plan amend-test exige PLAN.json.');
+  }
+
+  if (!options.force) {
+    const rigor = require('./oxe-test-rigor.cjs');
+    const regexFindings = rigor.suspiciousRegexFindings(projectRoot, [relPath]);
+    if (regexFindings.length) {
+      throw new Error(`plan amend-test recusado por lint de regex suspeita:\n  - ${rigor.suspiciousRegexMessages(regexFindings).join('\n  - ')}`);
+    }
+    const socketFindings = rigor.pausedSocketFindings(projectRoot, [relPath]);
+    if (socketFindings.length) {
+      throw new Error(`plan amend-test recusado por lint de socket pausado:\n  - ${rigor.pausedSocketMessages(socketFindings).join('\n  - ')}`);
+    }
+  }
+
+  const currentRun = readRunState(projectRoot, activeSession);
+  let lockPrevSha = null;
+  if (currentRun && currentRun.acceptance_lock && Array.isArray(currentRun.acceptance_lock.tests)) {
+    for (const t of currentRun.acceptance_lock.tests) {
+      for (const f of (t && t.files) || []) {
+        if (f && String(f.path || '').replace(/\\/g, '/').replace(/^\.\//, '') === relPath && f.sha256) {
+          lockPrevSha = f.sha256;
+        }
+      }
+    }
+  }
+
+  const newSha = sha256BufferOrFile(absFile);
+  const by = String(options.by || 'tech-lead').trim();
+  const at = new Date().toISOString();
+  const amended = planJsonLib.amendFrozenTestInPlanJson(paths.plan, relPath, newSha, {
+    reason,
+    by,
+    at,
+    previous_sha256: lockPrevSha,
+  });
+  if (!amended.ok) {
+    throw new Error(amended.error || `Falha ao emendar ${relPath} em PLAN.json`);
+  }
+
+  const previousSha = amended.previous_sha256 || lockPrevSha || null;
+  if (currentRun && currentRun.acceptance_lock && Array.isArray(currentRun.acceptance_lock.tests)) {
+    let updatedLock = false;
+    const nextTests = currentRun.acceptance_lock.tests.map((t) => {
+      if (!t || !Array.isArray(t.files)) return t;
+      let hit = false;
+      const nextFiles = t.files.map((f) => {
+        if (f && String(f.path || '').replace(/\\/g, '/').replace(/^\.\//, '') === relPath) {
+          hit = true;
+          updatedLock = true;
+          return { ...f, sha256: newSha };
+        }
+        return f;
+      });
+      return hit ? { ...t, files: nextFiles } : t;
+    });
+    if (updatedLock) {
+      writeRunState(projectRoot, activeSession, {
+        ...currentRun,
+        source_hash: planSourceHash(projectRoot, activeSession),
+        acceptance_lock: { ...currentRun.acceptance_lock, tests: nextTests },
+        verification_suite: null,
+      });
+    }
+  }
+
+  const { doc: afterDoc } = readPlanJsonDoc(projectRoot, activeSession);
+  const doneCount = afterDoc && Array.isArray(afterDoc.tasks)
+    ? afterDoc.tasks.filter((t) => t && (t.done === true || t.status === 'done')).length
+    : 0;
+
+  appendEvent(projectRoot, activeSession, {
+    type: 'FrozenTestAmended',
+    run_id: (currentRun && currentRun.run_id) || null,
+    payload: {
+      file: relPath,
+      previous_sha256: previousSha,
+      sha256: newSha,
+      reason,
+      by,
+      criteria: (amended.matched || []).map((m) => m.criterion).filter(Boolean),
+      preserved_done_tasks: doneCount,
+    },
+  });
+
+  return {
+    ok: true,
+    file: relPath,
+    previous_sha256: previousSha,
+    sha256: newSha,
+    reason,
+    by,
+    amended_at: at,
+    criteria: (amended.matched || []).map((m) => m.criterion).filter(Boolean),
+    preserved_done_tasks: doneCount,
+  };
+}
+
+/**
+ * OXB-200: `oxe-cc runtime commit-task <Tn> [--by <agent|role>] [--skip-verify-if-fresh]`
+ * Atomic commit & ledger closure for external subagents / fallback execution:
+ *   1. Validates frozen `acceptance_tests` sha256 integrity and ensures no file outside `Tn.files` is committed;
+ *   2. Runs `oxe-stub-check` on added hunks;
+ *   3. Runs (or validates fresh log of) `Tn.verify.commands`;
+ *   4. Commits ONLY `Tn`'s scope changes with trailer `OXE-Task: <Phase>/<Tn>`;
+ *   5. Marks `Tn` as `done` in `PLAN.json` and writes `CheckpointCreated` + `TaskCompleted` (+ `WorkItemCompleted` / `GateResolved`) in `OXE-EVENTS.ndjson`.
+ */
+function runtimeCommitTask(projectRoot, activeSession, options = {}) {
+  const taskId = String(options.task || '').trim().toUpperCase();
+  if (!/^T\d+$/.test(taskId)) {
+    throw new Error('Use: oxe-cc runtime commit-task T<n> [--by <agent|role>] [--skip-verify-if-fresh]');
+  }
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) {
+    throw new Error('runtime commit-task exige PLAN.json.');
+  }
+  const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+  const task = (doc && Array.isArray(doc.tasks) ? doc.tasks : []).find((t) => t && t.id === taskId);
+  if (!task) {
+    throw new Error(`Tarefa ${taskId} não encontrada em PLAN.json.`);
+  }
+  if (task.done === true && !options.force) {
+    throw new Error(`Tarefa ${taskId} já está concluída (done) em PLAN.json${task.done_commit ? ` (${String(task.done_commit).slice(0, 8)})` : ''}.`);
+  }
+
+  const runState = readRunState(projectRoot, activeSession);
+  const runId = (runState && runState.run_id) || null;
+  const phaseCtx = taskPhaseContext(projectRoot, activeSession);
+  const phase = options.phase || task.phase || (doc && doc.phase) || (phaseCtx && phaseCtx.phase) || null;
+  const actor = String(options.by || 'external_agent').trim();
+
+  // 1. Frozen acceptance test sha256 integrity check
+  const frozenPaths = verifyFrozenAcceptanceUntampered(projectRoot, activeSession, doc, runState);
+
+  // 2. Scope calculation & out-of-scope check
+  const normPath = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const planFiles = (Array.isArray(task.files) ? task.files : []).map(normPath).filter(Boolean);
+  const removedPaths = (Array.isArray(task.removed_paths) ? task.removed_paths : []).map(normPath).filter(Boolean);
+  const runFiles = taskScopeFiles(runState, taskId);
+  let packFiles = [];
+  let packRemoved = [];
+  try {
+    const packPath = paths.implementationPack || path.join(path.dirname(jsonPath), 'IMPLEMENTATION-PACK.json');
+    if (fs.existsSync(packPath)) {
+      const packDoc = JSON.parse(fs.readFileSync(packPath, 'utf8'));
+      const packTask = (packDoc && Array.isArray(packDoc.tasks) ? packDoc.tasks : []).find((x) => x && (x.id === taskId || x.task === taskId));
+      if (packTask) {
+        packFiles = (packTask.exact_paths || []).map(normPath);
+        packRemoved = (packTask.removed_paths || []).map(normPath);
+      }
+    }
+  } catch { /* ignore missing/invalid pack */ }
+  let coupled = [];
+  try {
+    const pb = require('./oxe-plan-build.cjs');
+    const rules = pb.loadCoupledScope(projectRoot);
+    coupled = pb.applyCoupledScope(rules, { files: [...planFiles, ...packFiles], created: [], edited: [], deleted: [...removedPaths, ...packRemoved] });
+  } catch { /* ignore */ }
+
+  const allowedScope = [...new Set([...planFiles, ...removedPaths, ...runFiles, ...packFiles, ...packRemoved, ...coupled])].filter((p) => p && !frozenPaths.has(p));
+  if (!allowedScope.length) {
+    throw new Error(`Tarefa ${taskId} não possui arquivos declarados em files.`);
+  }
+
+  const allEntries = changedEntriesUnder(projectRoot, ['.'])
+    .map((e) => ({ path: normPath(e.path), code: e.code }))
+    .filter((e) => e.path && !e.path.startsWith('.oxe/'));
+  const allDirtyPaths = [...new Set(allEntries.map((e) => e.path))];
+
+  const amendedFrozen = frozenPaths._amended || new Set();
+  for (const p of allDirtyPaths) {
+    if (frozenPaths.has(p) && !amendedFrozen.has(p)) {
+      appendEvent(projectRoot, activeSession, { type: 'ScopeViolation', run_id: runId, work_item_id: taskId, payload: { reason: 'acceptance_tampered', file: p } });
+      throw new Error(`acceptance_tampered: teste congelado modificado (${p})`);
+    }
+  }
+
+  const inScopeDirty = allDirtyPaths.filter((p) => isPathInScope(p, allowedScope));
+  const outOfScopeDirty = allDirtyPaths.filter((p) => !isPathInScope(p, allowedScope) && !amendedFrozen.has(p));
+
+  if (options.strictScope && outOfScopeDirty.length > 0) {
+    appendEvent(projectRoot, activeSession, { type: 'ScopeViolation', run_id: runId, work_item_id: taskId, payload: { task: taskId, paths: outOfScopeDirty } });
+    throw new Error(`ScopeViolation: arquivos modificados fora de ${taskId}.files (${outOfScopeDirty.join(', ')})`);
+  }
+  if (!inScopeDirty.length) {
+    if (outOfScopeDirty.length > 0) {
+      appendEvent(projectRoot, activeSession, { type: 'ScopeViolation', run_id: runId, work_item_id: taskId, payload: { task: taskId, paths: outOfScopeDirty } });
+      throw new Error(`ScopeViolation: nenhuma alteração em ${taskId}.files, mas há arquivos sujos fora do escopo (${outOfScopeDirty.join(', ')})`);
+    }
+    throw new Error(`Nada mudou no escopo de ${taskId} (${allowedScope.slice(0, 5).join(', ')}).`);
+  }
+
+  // 3. Run oxe-stub-check on added hunks (and pack exists symbols)
+  if (options.stubCheck !== false) {
+    const stub = require('./oxe-stub-check.cjs');
+    const found = stub.stubFindings(projectRoot, { task: taskId, levels: ['exists', 'substantive'], since: 'HEAD', scope: inScopeDirty });
+    if (found.length) {
+      const bl = stub.blockedLine(found);
+      throw new Error(`${bl ? `${bl} · ` : ''}stub-check reprovou ${taskId}: ${found.slice(0, 5).map((f) => `${f.file}:${f.line} (${f.why})`).join('; ')}`);
+    }
+  }
+
+  // Verify removed_paths are actually absent on disk
+  const mustBeRemoved = [...new Set([...removedPaths, ...packRemoved])].filter((p) => !/[*?[{]/.test(p));
+  for (const rem of mustBeRemoved) {
+    if (fs.existsSync(path.join(projectRoot, rem))) {
+      throw new Error(`verify de ${taskId} reprovado: caminho declarado em removed_paths ainda existe (${rem})`);
+    }
+  }
+
+  // 4. Run (or validate fresh log of) Tn.verify.commands
+  const rawVerify = task.verify;
+  const commands = (Array.isArray(rawVerify)
+    ? rawVerify
+    : (rawVerify && Array.isArray(rawVerify.commands)
+      ? rawVerify.commands
+      : (typeof rawVerify === 'string' ? [rawVerify] : (task.verifyCommand ? [task.verifyCommand] : []))))
+    .map((c) => String(c || '').trim())
+    .filter(Boolean);
+
+  const scopeHash = computeScopeFingerprint(projectRoot, inScopeDirty);
+  const verifyTimeoutMs = Number(options.verifyTimeoutMs) > 0 ? Number(options.verifyTimeoutMs) : 10 * 60_000;
+  let verifySkipped = false;
+
+  if (commands.length > 0) {
+    if (options.skipVerifyIfFresh && isTaskVerifyFresh(projectRoot, taskId, inScopeDirty, scopeHash, options.freshMaxAgeMs)) {
+      verifySkipped = true;
+    } else {
+      for (const cmd of commands) {
+        const res = runChildCommandFull(projectRoot, cmd, verifyTimeoutMs);
+        if (!res.ok) {
+          throw new Error(`verify de ${taskId} falhou (\`${cmd}\`): ${String(res.tail || res.output || '').trim().slice(-500)}`);
+        }
+      }
+      writeTaskVerifyFresh(projectRoot, taskId, { scopeHash, commands, ok: true });
+    }
+  }
+
+  // Re-verify frozen acceptance tests were not touched by a verify command
+  verifyFrozenAcceptanceUntampered(projectRoot, activeSession, doc, runState);
+
+  // 5. Create isolated commit with only Tn.files and trailer `OXE-Task: <Phase>/<Tn>`
+  const cp = commitTaskCheckpoint(projectRoot, runState || { run_id: runId }, taskId, {
+    task: { ...task, files: allowedScope },
+    phase,
+    config: readProjectConfig(projectRoot),
+  });
+  if (!cp.committed || !cp.commit) {
+    throw new Error(cp.reason || `Falha ao criar checkpoint de ${taskId}.`);
+  }
+
+  const leakedOutOfScope = (cp.files || []).filter((f) => !isPathInScope(f, allowedScope));
+  if (leakedOutOfScope.length > 0) {
+    throw new Error(`ScopeViolation crítica no commit de ${taskId}: ${leakedOutOfScope.join(', ')}`);
+  }
+
+  // 6. Mark Tn as done in PLAN.json and record CheckpointCreated + TaskCompleted (+ WorkItemCompleted / GateResolved) in OXE-EVENTS.ndjson
+  planJsonLib.markPlanTaskDone(paths.plan, taskId, { commit: cp.commit });
+  try {
+    require('./oxe-deferred.cjs').closeTask(paths.programDir || path.join(projectRoot, '.oxe', 'program'), taskId, phase, 'resolved');
+  } catch { /* auxiliary */ }
+
+  appendEvent(projectRoot, activeSession, {
+    type: 'GateResolved',
+    run_id: runId,
+    work_item_id: taskId,
+    payload: { gate: 'checkpoint', commit: cp.commit, files: cp.files, leftover: cp.leftover || [], actor },
+  });
+  appendEvent(projectRoot, activeSession, {
+    type: 'CheckpointCreated',
+    run_id: runId,
+    work_item_id: taskId,
+    payload: { task: taskId, phase, commit: cp.commit, files: cp.files, by: actor },
+  });
+  appendEvent(projectRoot, activeSession, {
+    type: 'WorkItemCompleted',
+    run_id: runId,
+    work_item_id: taskId,
+    payload: { work_item_id: taskId, attempt_number: 1, completed_by: 'commit_task', by: actor, commit: cp.commit, phase },
+  });
+  appendEvent(projectRoot, activeSession, {
+    type: 'TaskCompleted',
+    run_id: runId,
+    work_item_id: taskId,
+    payload: { task: taskId, phase, commit: cp.commit, files: cp.files, by: actor, verify_skipped: verifySkipped },
+  });
+
+  return {
+    ok: true,
+    task: taskId,
+    phase,
+    commit: cp.commit,
+    files: cp.files,
+    ignored_out_of_scope: outOfScopeDirty,
+    verify_skipped: verifySkipped,
+    by: actor,
+  };
 }
 
 /** `oxe-cc plan done Tn [--commit sha]`: marks a finished task in PLAN.json (default commit: its checkpoint). */
@@ -6802,9 +7581,8 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
       // OXB-172: tests that import the task's changed files went red. In the task's scope → its work (the next execute
       // runs them in its verify); outside it → scope_insufficient, naming the test (OXB-171).
       const scope = (options.scope || []).map((p) => String(p).replace(/\\/g, '/'));
-      const inScope = (f) => scope.some((e) => e === f || f.startsWith(`${e.replace(/\/$/, '')}/`));
       const failing = check.failing_tests || [];
-      const outside = failing.filter((t) => !inScope(t.file));
+      const outside = failing.filter((t) => !isPathInScope(t.file, scope));
       const named = failing.map((t) => `${t.file}${t.names.length ? ` (${t.names.slice(0, 2).join('; ')})` : ''}`).join(', ') || check.tail;
       return {
         committed: false,
@@ -6995,14 +7773,20 @@ function failingTestFiles(output) {
 
 function commitTaskCheckpoint(projectRoot, runState, taskId, options = {}) {
   // OXB-052: the scope is the graph's AND the current plan's (a CR may have added files after the compile).
-  const planFiles = options.task && Array.isArray(options.task.files) ? options.task.files.map((p) => String(p).replace(/\\/g, '/')).filter((p) => p && !p.includes('*')) : [];
-  const files = [...new Set([...taskScopeFiles(runState, taskId), ...planFiles])];
+  const planFiles = options.task && Array.isArray(options.task.files) ? options.task.files.map((p) => String(p).replace(/\\/g, '/')).filter(Boolean) : [];
+  const baseFiles = [...new Set([...taskScopeFiles(runState, taskId), ...planFiles])];
+  let coupled = [];
+  try {
+    const coupledRules = require('./oxe-plan-build.cjs').loadCoupledScope(projectRoot);
+    coupled = require('./oxe-plan-build.cjs').applyCoupledScope(coupledRules, { files: baseFiles, created: [], edited: [], deleted: [] });
+  } catch { /* ignore */ }
+  const files = [...new Set([...baseFiles, ...coupled])];
   if (!files.length) return { committed: false, reason: 'tarefa sem escopo declarado' };
   if (!gitLines(projectRoot, ['rev-parse', '--is-inside-work-tree'])) return { committed: false, reason: 'sem repositório git' };
   // OXB-168: built from what CHANGED under the scope, never from the scope as pathspecs (a path another task already
   // removed made git reject the whole commit).
   const changed = changedPathsUnder(projectRoot, files);
-  const scopeAbsent = files.filter((p) => !fs.existsSync(path.join(projectRoot, p)) && !(gitLines(projectRoot, ['ls-files', '--', p]) || []).length && !changed.some((c) => c === p || c.startsWith(`${p.replace(/\/$/, '')}/`)));
+  const scopeAbsent = files.filter((p) => !fs.existsSync(path.join(projectRoot, p)) && !(gitLines(projectRoot, ['ls-files', '--', p]) || []).length && !changed.some((c) => isPathInScope(c, [p])));
   if (!changed.length) return { committed: false, reason: 'nada mudou no escopo da tarefa', scope_absent: scopeAbsent };
   // OXB-170: only what THIS task wrote — paths already dirty when it started carry only its own diff.
   const own = taskOwnContent(projectRoot, changed, options.baseline || null);
@@ -8893,6 +9677,8 @@ module.exports = {
   runtimeCiAttach,
   runtimeScorecard,
   runtimePlanDone,
+  runtimeCommitTask,
+  writeTaskVerifyFresh,
   findTaskCheckpoint,
   taskCommitShas,
   taskPhaseContext,
@@ -8909,6 +9695,9 @@ module.exports = {
   runtimeProgramStatus,
   runtimeRollback,
   commitTaskCheckpoint,
+  runtimeStartTask,
+  runtimeResume,
+  runtimePlanAmendTest,
   runtimeFeedback,
   runtimeChanges,
   runtimeDossier,
@@ -8964,4 +9753,5 @@ module.exports = {
   replayRuntimeState,
   readRuntimeMultiAgentStatus,
   applySpecChecklistSync,
+  isPathInScope,
 };
