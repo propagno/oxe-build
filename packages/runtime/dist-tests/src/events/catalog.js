@@ -47,6 +47,13 @@ exports.EVENT_TYPES = [
     'WorkItemDeferred',
     'DispatchState',
     'RepairDecided',
+    'TaskStarted',
+    'TaskCompleted',
+    'CheckpointCreated',
+    'TaskResumed',
+    'TaskReset',
+    'RateLimitWait',
+    'FrozenTestAmended',
 ];
 function isValidEventType(type) {
     return exports.EVENT_TYPES.includes(type);

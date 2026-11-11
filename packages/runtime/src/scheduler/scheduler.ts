@@ -1,4 +1,5 @@
 import path from 'path';
+import { PROVIDER_QUOTA_RE } from '../executor/quota-patterns';
 import fs from 'fs';
 import { appendEvent } from '../events/bus';
 import type { OxeEvent } from '../events/envelope';
@@ -86,6 +87,12 @@ export interface SchedulerOptions {
   dispatch?: 'wave' | 'stream';
   maxRunDurationMs?: number;   // default: 30 min
   staleProgressMs?: number;    // default: 5 min without any task completing
+  /** OXB-204: max automatic wait (ms) on 429 / rate-limit reset before pausing as quota (default: 5 min). */
+  maxQuotaWaitMs?: number;
+  /** OXB-204: max consecutive automatic 429 waits per attempt before pausing as quota (default: 3). */
+  maxQuotaWaits?: number;
+  /** Injectable sleep for deterministic tests. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /** OXB-050: what integrating a worktree's work into the program checkout did. */
@@ -780,6 +787,11 @@ export class Scheduler {
       return;
     }
 
+    const maxQuotaWaitMs = (ctx.options as SchedulerOptions | undefined)?.maxQuotaWaitMs ?? 5 * 60_000;
+    const maxQuotaWaits = (ctx.options as SchedulerOptions | undefined)?.maxQuotaWaits ?? 3;
+    const sleepFn = (ctx.options as SchedulerOptions | undefined)?.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    let quotaWaits = 0;
+
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const attemptId = `${nodeId}-a${attempt}`;
       const attemptModel = ctx.modelFor ? ctx.modelFor(nodeId, attempt, attempt > 1 ? (lastResult?.failure_class ?? null) : null) : null;
@@ -888,10 +900,32 @@ export class Scheduler {
               ...(turnLimitWithWork ? { turns_used: lastResult.turns_used, turns_cap: lastResult.turns_cap } : {}),
             };
             // OXB-120: a verify that failed for the environment (not the code) pauses the run — no attempt is spent.
-            const envClass = classifyFailureOutput(`${verifyResult.check?.error ?? ''}\n${verifyResult.check?.stderr ?? ''}\n${verifyResult.check?.stdout ?? ''}`, verifyResult.check?.exit_code ?? null, (ctx.options as SchedulerOptions | undefined)?.failureClasses);
+            const envClass = classifyFailureOutput(`${verifyResult.check?.error ?? ''}\n${verifyResult.check?.stderr ?? ''}\n${verifyResult.check?.stdout ?? ''}`, verifyResult.check?.exit_code ?? null, (ctx.options as SchedulerOptions | undefined)?.failureClasses, { builtinQuota: false });
             if (envClass && envClass.kind === 'environment') {
               this.pauseForFailure(ctx, nodeId, 'environment', envClass.diagnosis, null);
               this.blockNode(nodeId, ctx, status, blocked, 'paused_environment', envClass.diagnosis);
+              return;
+            }
+            if (envClass && envClass.kind === 'quota') {
+              const rawQuotaOut = `${verifyResult.check?.error ?? ''}\n${verifyResult.check?.stderr ?? ''}\n${verifyResult.check?.stdout ?? ''}`;
+              const diag = envClass.diagnosis || tailLines(lastResult.output || '', 3);
+              const waitMs = parseRateLimitResetMs(rawQuotaOut);
+              if (waitMs != null && waitMs >= 0 && waitMs <= maxQuotaWaitMs && quotaWaits < maxQuotaWaits) {
+                quotaWaits += 1;
+                this.emit(ctx, {
+                  type: 'RateLimitWait',
+                  work_item_id: nodeId,
+                  attempt_id: attemptId,
+                  payload: { task: nodeId, attempt_number: attempt, wait_ms: waitMs, quota_wait: quotaWaits, diagnosis: diag },
+                });
+                await sleepFn(waitMs);
+                this.recordProgress();
+                attempt -= 1;
+                continue;
+              }
+              const resume = quotaResumeAt(rawQuotaOut);
+              this.pauseForFailure(ctx, nodeId, 'quota', diag, resume);
+              this.blockNode(nodeId, ctx, status, blocked, 'paused_quota', diag);
               return;
             }
             // OXB-155: a verify that timed out did not fail — the clock did. It is never "identical_verify_failure".
@@ -1009,11 +1043,39 @@ export class Scheduler {
           return;
         }
         if (lastResult.failure_class === 'policy') break;
-        // OXB-120: a provider usage limit pauses the whole run (every task would hit it), with the reset time when known.
-        if (lastResult.failure_class === 'quota') {
-          const diag = tailLines(lastResult.output || '', 3);
-          this.pauseForFailure(ctx, nodeId, 'quota', diag, quotaResumeAt(lastResult.output || ''));
+        // The output of a red verify (or of an attempt that ran out of turns / made no progress) is the project's test
+        // log: a test called "resets the form" or an error at line 429 is logic, not the provider.
+        const executorLevelFailure = !lastResult.failure_class || ['env', 'llm', 'timeout', 'quota'].includes(String(lastResult.failure_class));
+        const execClass = executorLevelFailure
+          ? classifyFailureOutput(lastResult.output || '', null, (ctx.options as SchedulerOptions | undefined)?.failureClasses)
+          : null;
+        // OXB-120 / OXB-191 / OXB-204: short 429 rate-limit windows wait for the reported reset; long/unknown quotas pause.
+        if (lastResult.failure_class === 'quota' || execClass?.kind === 'quota') {
+          const rawQuotaOut = lastResult.output || '';
+          const diag = (execClass?.kind === 'quota' ? execClass.diagnosis : null) || tailLines(rawQuotaOut, 3);
+          const waitMs = parseRateLimitResetMs(rawQuotaOut);
+          if (waitMs != null && waitMs >= 0 && waitMs <= maxQuotaWaitMs && quotaWaits < maxQuotaWaits) {
+            quotaWaits += 1;
+            this.emit(ctx, {
+              type: 'RateLimitWait',
+              work_item_id: nodeId,
+              attempt_id: attemptId,
+              payload: { task: nodeId, attempt_number: attempt, wait_ms: waitMs, quota_wait: quotaWaits, diagnosis: diag },
+            });
+            await sleepFn(waitMs);
+            this.recordProgress();
+            attempt -= 1;
+            continue;
+          }
+          const resume = quotaResumeAt(rawQuotaOut);
+          this.pauseForFailure(ctx, nodeId, 'quota', diag, resume);
           this.blockNode(nodeId, ctx, status, blocked, 'paused_quota', diag);
+          return;
+        }
+        quotaWaits = 0;
+        if (execClass?.kind === 'environment') {
+          this.pauseForFailure(ctx, nodeId, 'environment', execClass.diagnosis, null);
+          this.blockNode(nodeId, ctx, status, blocked, 'paused_environment', execClass.diagnosis);
           return;
         }
         // OXB-148: a prompt that does not fit fails the same way on a blind retry.
@@ -1545,21 +1607,100 @@ function inferGateScope(node: GraphNode): 'critical_mutation' | 'security' | 'pl
  * executable, a build artifact not built, a native module for another Node, the network) and quota (a provider usage
  * limit) pause the run with a diagnosis; only `logic` failures consume attempts.
  */
-const ENVIRONMENT_RE = /command not found|is not recognized as an internal or external command|ENOENT[^\n]*\b(out|dist|build|\.next|lib)[\\/]|Cannot find module '(?!\.)[^']+'|was compiled against a different Node\.js version|NODE_MODULE_VERSION \d+|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|getaddrinfo|ECONNRESET|socket hang up|ENOSPC|EMFILE|JavaScript heap out of memory/i;
-const QUOTA_RE = /usage limit|rate limit|quota exceeded|too many requests|\b429\b|limit reached|resets? at|try again (in|after)/i;
-export function classifyFailureOutput(output: string, exitCode: number | null | undefined, extra?: { environment?: string[]; quota?: string[] }): { kind: 'environment' | 'quota'; diagnosis: string } | null {
+const ENVIRONMENT_RE = /command not found|is not recognized as an internal or external command|ENOENT[^\n]*\b(out|dist|build|\.next|lib)[\\/]|Cannot find module '(?!\.)[^']+'|was compiled against a different Node\.js version|NODE_MODULE_VERSION \d+|\bECONNREFUSED\b|\bENOTFOUND\b|\bEAI_AGAIN\b|getaddrinfo|\bECONNRESET\b|socket hang up|\bENOSPC\b|\bEMFILE\b|JavaScript heap out of memory/i;
+const QUOTA_RE = PROVIDER_QUOTA_RE;
+export function classifyFailureOutput(output: string, exitCode: number | null | undefined, extra?: { environment?: string[]; quota?: string[] }, opts?: { builtinQuota?: boolean }): { kind: 'environment' | 'quota'; diagnosis: string } | null {
   const text = String(output || '');
-  const lineOf = (re: RegExp) => (text.split(/\r?\n/).find((l) => re.test(l)) || '').trim().slice(0, 240);
+  if (exitCode === 0) return null;
+  const lineOf = (re: RegExp) => (text.split(/\r?\n/).find((l) => re.test(l) && !/FileSystemFileChangedEvent/i.test(l)) || '').trim().slice(0, 240);
   const extraRe = (list?: string[]) => (list || []).map((p) => { try { return new RegExp(p, 'i'); } catch { return null; } }).filter(Boolean) as RegExp[];
-  for (const re of extraRe(extra?.quota)) if (re.test(text)) return { kind: 'quota', diagnosis: lineOf(re) };
-  for (const re of extraRe(extra?.environment)) if (re.test(text)) return { kind: 'environment', diagnosis: lineOf(re) };
+  for (const re of extraRe(extra?.quota)) if (re.test(text)) return { kind: 'quota', diagnosis: lineOf(re) || 'quota exceeded' };
+  for (const re of extraRe(extra?.environment)) if (re.test(text)) {
+    const diag = lineOf(re);
+    if (diag) return { kind: 'environment', diagnosis: diag };
+  }
+  if (opts?.builtinQuota !== false && QUOTA_RE.test(text)) return { kind: 'quota', diagnosis: lineOf(QUOTA_RE) || 'quota limit reached' };
   if (exitCode === 126 || exitCode === 127) return { kind: 'environment', diagnosis: lineOf(/./) || `exit ${exitCode}` };
-  if (ENVIRONMENT_RE.test(text)) return { kind: 'environment', diagnosis: lineOf(ENVIRONMENT_RE) };
+  if (ENVIRONMENT_RE.test(text)) {
+    const diag = lineOf(ENVIRONMENT_RE);
+    if (diag) return { kind: 'environment', diagnosis: diag };
+  }
   return null;
 }
 export function quotaResumeAt(text: string): string | null {
-  const m = /resets? at ([^\n.;]{3,40})|try again (?:in|after) ([^\n.;]{2,30})/i.exec(String(text || ''));
+  const m = /resets? (?:at|in|on)?\s*([^\n.;·]{3,40})|try again (?:in|after) ([^\n.;·]{2,30})/i.exec(String(text || ''));
   return m ? (m[1] || m[2]).trim() : null;
+}
+
+function unitMultiplierMs(unit: string | undefined, defaultMs = 1000): number {
+  const u = String(unit || '').trim().toLowerCase();
+  if (!u) return defaultMs;
+  if (u === 'ms' || u.startsWith('millisecond')) return 1;
+  if (u === 's' || u.startsWith('sec')) return 1000;
+  if (u === 'm' || u.startsWith('min')) return 60_000;
+  if (u === 'h' || u.startsWith('hr') || u.startsWith('hour')) return 3_600_000;
+  return defaultMs;
+}
+
+/**
+ * OXB-204: extract explicit reset/retry duration in ms from 429 headers or provider error payloads.
+ * Returns `null` when no machine-actionable duration is present (e.g. "resets Nov 14, 10am"), so multi-day
+ * quotas still pause immediately instead of guessing.
+ */
+export function parseRateLimitResetMs(
+  text: string,
+  nowMs = Date.now(),
+  retryAfterHeader?: string | null,
+): number | null {
+  if (retryAfterHeader != null && String(retryAfterHeader).trim() !== '') {
+    const rawHeader = String(retryAfterHeader).trim();
+    if (/^\d+(?:\.\d+)?$/.test(rawHeader)) {
+      const ms = Math.ceil(Number(rawHeader) * 1000);
+      if (Number.isFinite(ms) && ms >= 0) return ms;
+    } else {
+      const parsedDate = Date.parse(rawHeader);
+      if (Number.isFinite(parsedDate) && parsedDate >= nowMs) {
+        return Math.ceil(parsedDate - nowMs);
+      }
+    }
+  }
+
+  const raw = String(text || '');
+  if (!raw) return null;
+
+  const retryDelayMatch = /"?retryDelay"?\s*[:=]\s*"?(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?)?"?/i.exec(raw);
+  if (retryDelayMatch) {
+    const ms = Math.ceil(Number(retryDelayMatch[1]) * unitMultiplierMs(retryDelayMatch[2], 1000));
+    if (Number.isFinite(ms) && ms >= 0) return ms;
+  }
+
+  const retryAfterField = /"?(retry[-_ ]after(?:[-_ ]ms)?)"?\s*[:=]\s*"?(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?)?"?/i.exec(raw);
+  if (retryAfterField) {
+    const defaultMs = /ms$/i.test(retryAfterField[1]) ? 1 : 1000;
+    const ms = Math.ceil(Number(retryAfterField[2]) * unitMultiplierMs(retryAfterField[3], defaultMs));
+    if (Number.isFinite(ms) && ms >= 0) return ms;
+  }
+
+  const relMatch = /(?:please\s+)?(?:retry|try again|resets?|wait|backoff|available)\s+(?:in|after)\s+((?:\d+(?:\.\d+)?\s*(?:ms|milliseconds?|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?)(?:\s*,?\s*(?:and\s+)?)?)+)/i.exec(raw);
+  if (relMatch) {
+    let totalMs = 0;
+    let matchedAny = false;
+    const tokenRe = /(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?)/gi;
+    let tok: RegExpExecArray | null;
+    while ((tok = tokenRe.exec(relMatch[1])) !== null) {
+      totalMs += Number(tok[1]) * unitMultiplierMs(tok[2], 1000);
+      matchedAny = true;
+    }
+    if (matchedAny && Number.isFinite(totalMs) && totalMs >= 0) return Math.ceil(totalMs);
+  }
+
+  const isoMatch = /resets?\s+(?:at\s+)?(\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:?\d{2}))/i.exec(raw);
+  if (isoMatch) {
+    const parsed = Date.parse(isoMatch[1]);
+    if (Number.isFinite(parsed) && parsed >= nowMs) return Math.ceil(parsed - nowMs);
+  }
+
+  return null;
 }
 
 /** OXB-171: an agent that says the change it needs is outside its files (pt/en). */

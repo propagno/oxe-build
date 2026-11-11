@@ -27,9 +27,17 @@ process.stdin.on('end', () => {
   const mode = process.env.OXE_SHIM_MODE;
   const result = mode === 'read'
     ? JSON.stringify({ content: 'ainda lendo o código…', tool_calls: [{ name: 'glob', arguments: { pattern: '**/*' } }] })
-    : input.includes('TOOL RESULT (write_file')
-      ? JSON.stringify({ content: 'ok', tool_calls: [{ name: 'finish_task', arguments: { summary: 'feito' } }] })
-      : JSON.stringify({ content: '', tool_calls: [{ name: 'write_file', arguments: { path: 'a.txt', content: 'x' } }] });
+    : mode === 'run_cmd_dir'
+      ? input.includes('TOOL RESULT (run_command')
+        ? JSON.stringify({ content: 'ok', tool_calls: [{ name: 'finish_task', arguments: { summary: 'feito' } }] })
+        : JSON.stringify({ content: '', tool_calls: [{ name: 'run_command', arguments: { command: 'node -e "const fs=require(\\\'fs\\\');fs.mkdirSync(\\\'generated/sub\\\',{recursive:true});fs.writeFileSync(\\\'generated/sub/Client.kt\\\',\\\'package gen\\\')"' } }] })
+      : mode === 'run_cmd'
+      ? input.includes('TOOL RESULT (run_command')
+        ? JSON.stringify({ content: 'ok', tool_calls: [{ name: 'finish_task', arguments: { summary: 'feito' } }] })
+        : JSON.stringify({ content: '', tool_calls: [{ name: 'run_command', arguments: { command: 'node -e "require(\\\'fs\\\').writeFileSync(\\\'a.txt\\\', \\\'gen\\\')"' } }] })
+      : input.includes('TOOL RESULT (write_file')
+        ? JSON.stringify({ content: 'ok', tool_calls: [{ name: 'finish_task', arguments: { summary: 'feito' } }] })
+        : JSON.stringify({ content: '', tool_calls: [{ name: 'write_file', arguments: { path: 'a.txt', content: 'x' } }] });
   process.stdout.write(JSON.stringify({ type: 'result', is_error: false, result, total_cost_usd: 0.01 }));
 });
 `;
@@ -42,7 +50,7 @@ function setup(mode) {
   process.env.OXE_SHIM_ARGV = argvLog;
   process.env.OXE_SHIM_MODE = mode;
   const adapter = runtime.createExecutorAdapter('claude', { claude: { command: process.execPath, prefixArgs: [shim] } });
-  const node = { id: 'T1', title: 't', mutation_scope: ['a.txt'], actions: [{ type: 'generate_patch', command: null, targets: [] }], verify: { must_pass: [], command: null }, workspace_strategy: 'inplace', policy: { max_retries: 0, requires_human_approval: false } };
+  const node = { id: 'T1', title: 't', mutation_scope: ['a.txt'], actions: [{ type: 'custom', command: null, targets: [] }], verify: { must_pass: [], command: null }, workspace_strategy: 'inplace', policy: { max_retries: 0, requires_human_approval: false } };
   const lease = { root_path: dir, workspace_id: 'w', strategy: 'inplace' };
   return { dir, argvLog, adapter, node, lease };
 }
@@ -91,5 +99,32 @@ describe('OXB-186: turn heartbeat and no-progress guard', () => {
     const ex2 = new LlmTaskExecutor({ model: 'x', maxTurns: 10 }, null, null, s2.adapter.createCompletion(), { contextProvider: null, noProgressTurns: 0 });
     const r2 = await ex2.execute(s2.node, s2.lease, 'r', 1, {});
     assert.equal(r2.failure_class, 'turns_exhausted');
+  });
+
+  it('OXB-196: run_command that modifies a file in scope resets no_progress_turns and counts files_written', async () => {
+    const s = setup('run_cmd');
+    const events = [];
+    const ex = new LlmTaskExecutor({ model: 'x', maxTurns: 10 }, null, (e) => events.push(e), s.adapter.createCompletion(), { contextProvider: null, noProgressTurns: 1 });
+    const r = await ex.execute(s.node, s.lease, 'r', 1, {});
+    assert.equal(r.success, true, r.output);
+    const beats = events.filter((e) => e.type === 'executor_turn');
+    assert.ok(beats.length >= 1);
+    assert.ok(beats.some((b) => b.detail.files_written > 0), 'files_written counted from run_command file modification');
+    assert.equal(fs.readFileSync(path.join(s.dir, 'a.txt'), 'utf8'), 'gen');
+  });
+
+  it('OXB-196: run_command that creates a brand-new file under an in-scope directory or glob resets no_progress_turns and counts files_written', async () => {
+    for (const scopeEntry of ['generated', 'generated/**']) {
+      const s = setup('run_cmd_dir');
+      s.node.mutation_scope = [scopeEntry];
+      const events = [];
+      const ex = new LlmTaskExecutor({ model: 'x', maxTurns: 10 }, null, (e) => events.push(e), s.adapter.createCompletion(), { contextProvider: null, noProgressTurns: 1 });
+      const r = await ex.execute(s.node, s.lease, 'r', 1, {});
+      assert.equal(r.success, true, `${scopeEntry}: ${r.output}`);
+      const beats = events.filter((e) => e.type === 'executor_turn');
+      assert.ok(beats.some((b) => b.detail.files_written === 1), `${scopeEntry}: files_written counted new nested file`);
+      const usageEvt = events.find((e) => e.type === 'executor_usage');
+      assert.ok(usageEvt.detail.writes.includes('generated/sub/Client.kt'), `${scopeEntry}: recorded exact generated relative path`);
+    }
   });
 });

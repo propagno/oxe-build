@@ -70,6 +70,12 @@ export interface SchedulerOptions {
     dispatch?: 'wave' | 'stream';
     maxRunDurationMs?: number;
     staleProgressMs?: number;
+    /** OXB-204: max automatic wait (ms) on 429 / rate-limit reset before pausing as quota (default: 5 min). */
+    maxQuotaWaitMs?: number;
+    /** OXB-204: max consecutive automatic 429 waits per attempt before pausing as quota (default: 3). */
+    maxQuotaWaits?: number;
+    /** Injectable sleep for deterministic tests. */
+    sleep?: (ms: number) => Promise<void>;
 }
 /** OXB-050: what integrating a worktree's work into the program checkout did. */
 export interface ParallelIntegration {
@@ -217,11 +223,19 @@ export declare class Scheduler {
 export declare function classifyFailureOutput(output: string, exitCode: number | null | undefined, extra?: {
     environment?: string[];
     quota?: string[];
+}, opts?: {
+    builtinQuota?: boolean;
 }): {
     kind: 'environment' | 'quota';
     diagnosis: string;
 } | null;
 export declare function quotaResumeAt(text: string): string | null;
+/**
+ * OXB-204: extract explicit reset/retry duration in ms from 429 headers or provider error payloads.
+ * Returns `null` when no machine-actionable duration is present (e.g. "resets Nov 14, 10am"), so multi-day
+ * quotas still pause immediately instead of guessing.
+ */
+export declare function parseRateLimitResetMs(text: string, nowMs?: number, retryAfterHeader?: string | null): number | null;
 export declare function tailLines(text: string, n: number): string;
 /** OXB-162: the test files a segment names (`x.test.ts`, `y.spec.js`, JVM `--tests` excluded). */
 export declare function segmentTestFiles(command: string): string[];

@@ -1,14 +1,17 @@
 import type { GraphNode } from '../compiler/graph-compiler';
 import type { WorkspaceLease } from '../models/workspace';
 import type { TaskExecutor, TaskResult } from '../scheduler/scheduler';
+import { parseRateLimitResetMs } from '../scheduler/scheduler';
 import type { PluginRegistry } from '../plugins/plugin-registry';
 import { streamCompletion } from './stream-completion';
+import { CLI_FAILURE_QUOTA_RE } from './quota-patterns';
 import type { ChatMessage, ToolCall } from './stream-completion';
 import { BUILT_IN_TOOLS } from './built-in-tools';
 import { selectToolsForActions } from './action-tool-map';
 import { buildNodePrompt } from './node-prompt-builder';
 import type { NodeContextProvider } from './node-context';
 import path from 'path';
+import fs from 'fs';
 
 export interface LlmProviderConfig {
   baseUrl: string;
@@ -31,7 +34,8 @@ export type LlmExecutorEventType =
   | 'executor_complete'
   /** Once per attempt: turns, tool calls and backend-reported cost. */
   | 'executor_usage'
-  | 'turn_timeout';
+  | 'turn_timeout'
+  | 'rate_limit_wait';
 
 /** Injectable completion function (defaults to the HTTP OpenAI-compatible client). */
 export type CompletionFn = typeof streamCompletion;
@@ -69,10 +73,87 @@ export interface LlmTaskExecutorOptions {
   noProgressTurns?: number;
   /** OXB-186: a turn slower than this (ms, default 180000) is reported with the prompt size behind it. */
   slowTurnMs?: number;
+  /** OXB-204: max automatic backoff wait (ms) on 429 / rate-limit reset before failing as quota (default 300000). */
+  maxQuotaWaitMs?: number;
+  /** OXB-204: max consecutive automatic 429 waits inside an attempt before failing as quota (default 3). */
+  maxQuotaRetries?: number;
+  /** Injectable sleep for deterministic tests. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 function normalizeRel(p: string): string {
   return path.normalize(String(p || '')).replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+}
+
+const IGNORED_WALK_DIRS = new Set(['.git', 'node_modules', '.oxe']);
+
+function globToScopeRegExp(pattern: string): RegExp {
+  const escaped = pattern
+    .replace(/[.+^$()|\\]/g, '\\$&')
+    .replace(/\*\*\/?/g, '\u0000')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\?/g, '[^/]')
+    .replace(/\u0000/g, '.*');
+  return new RegExp(`^${escaped}$`);
+}
+
+function walkScopeDir(cwd: string, absDir: string, out: Map<string, string>, filter?: (rel: string) => boolean): void {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(absDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const ent of entries) {
+    if (ent.isDirectory()) {
+      if (IGNORED_WALK_DIRS.has(ent.name)) continue;
+      walkScopeDir(cwd, path.join(absDir, ent.name), out, filter);
+    } else if (ent.isFile()) {
+      const absFile = path.join(absDir, ent.name);
+      const rel = path.relative(cwd, absFile).replace(/\\/g, '/');
+      if (filter && !filter(rel)) continue;
+      try {
+        const st = fs.statSync(absFile);
+        out.set(rel, `${st.size}:${st.mtimeMs}`);
+      } catch {
+        // disappeared mid-scan
+      }
+    }
+  }
+}
+
+/**
+ * OXB-196: snapshot all in-scope files on disk (exact paths, directories, and globs) so `run_command`
+ * codegen / snapshot creation inside an in-scope directory counts as file progress.
+ */
+function snapshotScopeFiles(cwd: string, mutationScope: string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const raw of mutationScope || []) {
+    const entry = String(raw || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!entry) continue;
+    if (/[*?[{]/.test(entry)) {
+      const re = globToScopeRegExp(entry);
+      const prefix = entry.split(/[*?[{]/)[0].replace(/\/+$/, '');
+      const baseAbs = prefix ? path.resolve(cwd, prefix) : cwd;
+      walkScopeDir(cwd, baseAbs, out, (rel) => re.test(rel));
+      continue;
+    }
+    const clean = entry.replace(/\/+$/, '');
+    if (!clean) continue;
+    const abs = path.resolve(cwd, clean);
+    let st: fs.Stats;
+    try {
+      st = fs.statSync(abs);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory()) {
+      walkScopeDir(cwd, abs, out);
+    } else if (st.isFile()) {
+      out.set(clean, `${st.size}:${st.mtimeMs}`);
+    }
+  }
+  return out;
 }
 
 export interface ExecutorUsage {
@@ -177,6 +258,10 @@ export class LlmTaskExecutor implements TaskExecutor {
 
     let turn = 0;
     let timeoutsInARow = 0;
+    let quotaWaitsInARow = 0;
+    const maxQuotaWaitMs = this.options.maxQuotaWaitMs ?? 5 * 60_000;
+    const maxQuotaRetries = this.options.maxQuotaRetries ?? 3;
+    const sleepFn = this.options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     // OXB-186: progress = a file written (write/patch) or finish_task; K turns without it end the attempt.
     const noProgressLimit = this.options.noProgressTurns ?? 8;
     const slowTurnMs = this.options.slowTurnMs ?? 180_000;
@@ -191,6 +276,7 @@ export class LlmTaskExecutor implements TaskExecutor {
 
       let response;
       const turnStarted = Date.now();
+      const scopeBefore = snapshotScopeFiles(cwd, node.mutation_scope || []);
       try {
         response = await this.complete({
           baseUrl: this.provider.baseUrl,
@@ -207,6 +293,7 @@ export class LlmTaskExecutor implements TaskExecutor {
         // OXB-148: the adapter classifies its failure (context / quota / llm / env) and reports what it already cost.
         const kind = (err as { kind?: unknown }).kind;
         const spent = (err as { costUsd?: unknown }).costUsd;
+        const errMsg = String((err as Error)?.message ?? err);
         if (typeof spent === 'number' && spent > 0) usage.cost_usd = (usage.cost_usd ?? 0) + spent;
         // OXB-153: a call that timed out keeps the attempt — the files it already wrote stay, and the next call
         // continues from the same conversation (with a nudge) instead of restarting the task from scratch.
@@ -217,11 +304,34 @@ export class LlmTaskExecutor implements TaskExecutor {
           turn -= 1; // the timed-out call is not a model turn
           continue;
         }
-        const failureClass = kind === 'context' || kind === 'quota' || kind === 'llm' || kind === 'timeout' ? kind : 'env';
-        return done({ success: false, failure_class: failureClass, evidence: evidencePaths, output: String((err as Error)?.message ?? err) });
+        // OXB-204: automatic backoff/wait on 429 rate limits when a reset time is reported and within maxQuotaWaitMs.
+        const isQuota = kind === 'quota' || CLI_FAILURE_QUOTA_RE.test(errMsg);
+        if (isQuota) {
+          const explicitMs = (err as { retryAfterMs?: unknown }).retryAfterMs;
+          const waitMs = typeof explicitMs === 'number' && Number.isFinite(explicitMs)
+            ? explicitMs
+            : parseRateLimitResetMs(errMsg);
+          if (waitMs != null && waitMs >= 0 && waitMs <= maxQuotaWaitMs && quotaWaitsInARow < maxQuotaRetries) {
+            quotaWaitsInARow += 1;
+            this.emit({
+              type: 'rate_limit_wait',
+              nodeId: node.id,
+              attempt,
+              detail: { turn, wait_ms: waitMs, retry: quotaWaitsInARow },
+            });
+            await sleepFn(waitMs);
+            turn -= 1; // rate-limited call is not a model turn
+            continue;
+          }
+        }
+        const failureClass = isQuota
+          ? 'quota'
+          : (kind === 'context' || kind === 'llm' || kind === 'timeout' ? kind : 'env');
+        return done({ success: false, failure_class: failureClass, evidence: evidencePaths, output: errMsg });
       }
       usage.turns += 1;
       timeoutsInARow = 0;
+      quotaWaitsInARow = 0;
       if (typeof response.usage?.cost_usd === 'number') usage.cost_usd = (usage.cost_usd ?? 0) + response.usage.cost_usd;
       usage.tool_calls += response.tool_calls.length;
       for (const tc of response.tool_calls) usage.tools[tc.function.name] = (usage.tools[tc.function.name] ?? 0) + 1;
@@ -251,14 +361,34 @@ export class LlmTaskExecutor implements TaskExecutor {
 
       messages.push(...concurrentResults, ...serialResults);
 
-      // OXB-186: a heartbeat per turn (so a stall shows in OXE-EVENTS), a slow-turn report, and the no-progress guard.
+      // OXB-196: if run_command was invoked, check if any in-scope file was modified, created, or deleted on disk
+      const ranCommand = [...concurrent, ...serial].some((tc) => tc.function.name === 'run_command');
+      let commandModifiedScope = false;
+      if (ranCommand) {
+        const scopeAfter = snapshotScopeFiles(cwd, node.mutation_scope || []);
+        const changedScopePaths = new Set<string>();
+        for (const [rel, sig] of scopeAfter) {
+          if (scopeBefore.get(rel) !== sig) changedScopePaths.add(rel);
+        }
+        for (const rel of scopeBefore.keys()) {
+          if (!scopeAfter.has(rel)) changedScopePaths.add(rel);
+        }
+        for (const rel of changedScopePaths) {
+          commandModifiedScope = true;
+          if (usage.writes && !usage.writes.includes(rel)) {
+            usage.writes.push(rel);
+          }
+        }
+      }
+
+      // OXB-186 / OXB-196: a heartbeat per turn, a slow-turn report, and the no-progress guard.
       const writesBefore = turnWrites;
       turnWrites = (usage.writes ?? []).length;
       const latencyMs = Date.now() - turnStarted;
       const promptChars = messages.reduce((n, m) => n + String(m.content ?? '').length + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0), 0);
       this.emit({ type: 'executor_turn', nodeId: node.id, attempt, detail: { turn: turn + 1, max_turns: maxTurns, tool_calls: response.tool_calls.length, tool_calls_total: usage.tool_calls, files_written: (usage.writes ?? []).length, prompt_chars: promptChars, latency_ms: latencyMs } });
       if (latencyMs > slowTurnMs) this.emit({ type: 'executor_slow_turn', nodeId: node.id, attempt, detail: { turn: turn + 1, latency_ms: latencyMs, prompt_chars: promptChars, messages: messages.length } });
-      const wroteThisTurn = turnWrites > writesBefore;
+      const wroteThisTurn = turnWrites > writesBefore || commandModifiedScope;
       const finishedThisTurn = [...concurrentResults, ...serialResults].some((r) => r.name === 'finish_task');
       turnsWithoutProgress = wroteThisTurn || finishedThisTurn ? 0 : turnsWithoutProgress + 1;
       if (noProgressLimit > 0 && turnsWithoutProgress >= noProgressLimit && !finishedThisTurn) {
