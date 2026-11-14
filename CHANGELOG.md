@@ -82,6 +82,7 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
   - Se o card já está nessa versão, nada é gravado.
   - A versão precisa existir no projeto do Jira.
   - Com `alm.transport: "mcp"`, o comando diz para usar a ferramenta do MCP.
+  - `alm version <KEY> …` chega ao comando: antes, o roteamento do `alm version ensure` o interceptava e respondia com o uso do ensure.
 
 ### Prova de teste no Kotlin/Gradle e hooks sem esqueleto (Celular F2 e OxeChat F2, 14/11)
 

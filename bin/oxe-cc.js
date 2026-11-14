@@ -7828,7 +7828,9 @@ async function main() {
     return;
   }
 
-  if (command === 'alm' && ['intake', 'doctor', 'version', 'usage'].includes(argv[0])) {
+  // `alm version <KEY> <versão>` (a card's fix version) goes to the alm handler below; `alm version ensure` stays here
+  const almVersionSet = command === 'alm' && argv[0] === 'version' && /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(argv[1] || '');
+  if (command === 'alm' && ['intake', 'doctor', 'version', 'usage'].includes(argv[0]) && !almVersionSet) {
     const action = argv[0];
     const o = { dir: process.cwd(), json: false };
     let i = action === 'version' && argv[1] === 'ensure' ? 2 : 1;

@@ -186,3 +186,18 @@ describe('close sem o ensaio de rollback registra o risco (Celular F2, 14/11)', 
     assert.match(r.stderr, /--no-rollback-check exige --by <papel> e --reason/);
   });
 });
+
+describe('alm version <KEY> <versão> chega ao comando (OxeSpace 14/11, OXE-10)', () => {
+  it('a chave do card vai para a troca de versão; version ensure continua no admin', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-almver-'));
+    dirs.push(dir);
+    fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.oxe', 'config.json'), '{}');
+    const env = { ...process.env, NO_COLOR: '1' };
+    const set = spawnSync(process.execPath, [CLI, 'alm', 'version', 'OXE-10', '1.5.3', '--dry-run', '--dir', dir], { encoding: 'utf8', env });
+    assert.doesNotMatch(`${set.stdout}${set.stderr}`, /version ensure/);
+    assert.match(`${set.stdout}${set.stderr}`, /ALM não configurado/);
+    const ensure = spawnSync(process.execPath, [CLI, 'alm', 'version'], { encoding: 'utf8', env });
+    assert.match(`${ensure.stdout}${ensure.stderr}`, /alm version ensure <nome>/);
+  });
+});
