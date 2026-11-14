@@ -24,6 +24,14 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Eventos:** `AutoResumed` e `AutoResumeSkipped`.
 - **Teste:** `tests/oxe-1212-autoresume.test.cjs`. O CA-1 é um reinício simulado num programa de teste: o execute é morto em T2 com SIGKILL e o `autoresume run` o retoma em T2 sem chamar o executor para T1.
 
+### Card em desenvolvimento na hora e pedidos da sessão leitora (G27 e G21)
+
+- **G27, o card vai para `in_progress` quando a tarefa começa:** o `runtime execute` dispara a sincronização com o ALM no `TaskStarted`, e não só no fim do execute. Antes, o card ficava em "Pronto" a fase inteira.
+- **G21, a sessão leitora grava pedidos para o escritor:**
+  - Numa sessão que não é o escritor, o quick registra em `.oxe/alm/pending.ndjson` o comentário (a mini-spec, o fechamento) e o movimento para `in_progress`. Antes, só dizia "ALM só leitura", e o card ficava sem nada.
+  - O escritor lista com `oxe-cc alm pending` e aplica com `oxe-cc alm pending apply`. Os comentários vão em ordem, o movimento é só para frente e depois roda um `sync`. Um pedido aplicado nunca é reaplicado.
+  - A regra de só mover para frente do quick virou `moveForward`, a mesma usada no dreno.
+
 ### Regressão congelada sem falso `acceptance_tampered` (OxeCode F3, 14/11)
 
 - **O verify compara o teste congelado sem depender do final de linha:** o arquivo bate quando os bytes, a forma LF ou a forma CRLF têm o hash congelado, a mesma regra do check do `commit-task`. Antes, a regressão das fases fechadas, com hashes gravados em LF, dava `acceptance_tampered` em 7 testes da F3 com `core.autocrlf`, embora nenhum diferisse da `origin/main`.

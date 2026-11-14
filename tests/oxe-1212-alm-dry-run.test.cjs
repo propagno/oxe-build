@@ -489,3 +489,29 @@ describe('OXB-G12: the grooming comment keeps facts apart from questions', () =>
     assert.match(big, /^Perguntas: 18 \(18 respondida\(s\), 0 em aberto\)/m);
   });
 });
+
+describe('G21: a reader session records the card writes as pending requests; the writer drains them once', () => {
+  it('quick start as a reader writes nothing and records the comment and the move; alm pending apply applies them', async () => {
+    const dir = project();
+    const j = fakeJira();
+    const reader = { ...ENV, OXE_ALM_WRITER: 'outra-sessao' };
+    j.arm();
+    const q = await op.runtimeQuick(dir, null, { action: 'start', key: 'OXE-20', objective: 'ajuste do rótulo do menu', http: j.http, env: reader, sleep });
+    assert.deepEqual(j.writes, [], 'a reader never writes the card');
+    assert.deepEqual(q.alm.pending.map((p) => p.op), ['comment', 'move']);
+    assert.match(q.alm.why, /alm pending apply/);
+    j.disarm();
+    const list = await op.runtimeAlm(dir, null, { action: 'pending', http: j.http, env: reader, sleep });
+    assert.equal(list.pending.length, 2);
+    // a reader cannot apply
+    await assert.rejects(op.runtimeAlm(dir, null, { action: 'pending', sub: 'apply', http: j.http, env: reader, sleep }), /escritor|writer/i);
+    const net = { http: j.http, env: ENV, sleep };
+    const applied = await op.runtimeAlm(dir, null, { action: 'pending', sub: 'apply', ...net });
+    assert.equal(applied.applied.length, 2, JSON.stringify(applied.failed));
+    assert.equal(applied.remaining, 0);
+    assert.equal(j.issues.get('OXE-20').fields.comment.comments.length, 1);
+    assert.equal(j.issues.get('OXE-20').fields.status.name, STATES.in_progress);
+    const again = await op.runtimeAlm(dir, null, { action: 'pending', sub: 'apply', ...net });
+    assert.equal(again.applied.length, 0, 'never applied twice');
+  });
+});

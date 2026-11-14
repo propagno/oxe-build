@@ -892,6 +892,61 @@ async function labelItem(programDir, cfg, refOrKey, labels, options = {}) {
 }
 
 /**
+ * Moves a card to `stage` only forward (a card already at or past it stays, with the reason). The quick's rule, shared.
+ */
+async function moveForward(programDir, cfg, key, stage, options = {}) {
+  if (!cfg.states[stage]) return { skipped: true, why: `alm.states sem "${stage}": nada movido` };
+  const prov = options.provider || provider(cfg, options);
+  const live = typeof prov.status === 'function' && !prov.deferred ? await prov.status(key) : null;
+  const liveStage = STAGES.find((s) => cfg.states[s] && live && String(cfg.states[s]).toLowerCase() === String(live).toLowerCase()) || null;
+  const before = liveStage && STAGES.indexOf(liveStage) < STAGES.indexOf(stage);
+  if (before || prov.deferred) return move(programDir, cfg, key, stage, { ...options, provider: prov });
+  return { skipped: true, why: liveStage ? `o card está em "${live}" (${liveStage}): não move para trás nem para o lado` : `estado "${live}" sem etapa mapeada: nada movido` };
+}
+
+/**
+ * G21 (OxeSpace 14/11): a session that is not the ALM writer cannot write the card, and used to just say so — the card
+ * stayed without the mini-spec and the move. Now it records the request in `.oxe/alm/pending.ndjson`; the writer
+ * drains it with `oxe-cc alm pending apply` (comments in order, moves only forward), and an applied request is never
+ * applied again.
+ */
+function pendingFile(projectRoot) { return path.join(projectRoot, '.oxe', 'alm', 'pending.ndjson'); }
+
+function readPendingLog(projectRoot) {
+  try { return fs.readFileSync(pendingFile(projectRoot), 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch { return []; }
+}
+
+function addPending(projectRoot, req) {
+  const entry = { id: `P-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, at: new Date().toISOString(), ...req };
+  fs.mkdirSync(path.dirname(pendingFile(projectRoot)), { recursive: true });
+  fs.appendFileSync(pendingFile(projectRoot), `${JSON.stringify(entry)}\n`);
+  return entry;
+}
+
+function listPending(projectRoot) {
+  const log = readPendingLog(projectRoot);
+  const done = new Set(log.filter((e) => e.applied).map((e) => e.applied));
+  return log.filter((e) => e.op && !done.has(e.id));
+}
+
+async function applyPending(projectRoot, programDir, cfg, options = {}) {
+  const todo = listPending(projectRoot);
+  if (options.dryRun || cfg.dry_run) return { planned: todo, applied: [], failed: [] };
+  const applied = [];
+  const failed = [];
+  for (const p of todo) {
+    try {
+      const r = p.op === 'comment' ? await comment(programDir, cfg, p.key, p.text, options)
+        : p.op === 'move' ? await moveForward(programDir, cfg, p.key, p.stage, options)
+          : (() => { throw new Error(`operação desconhecida: ${p.op}`); })();
+      fs.appendFileSync(pendingFile(projectRoot), `${JSON.stringify({ applied: p.id, at: new Date().toISOString(), result: r && r.skipped ? 'skipped' : 'ok' })}\n`);
+      applied.push({ ...p, result: r });
+    } catch (err) { failed.push({ ...p, error: err.message }); }
+  }
+  return { applied, failed, remaining: listPending(projectRoot).length };
+}
+
+/**
  * OxeSpace 14/11: an existing card's fix version (OXE-10 moved to 1.5.3 and no command changed it). Jira only; the
  * version must exist in the project. Replaces the card's fix versions with this one.
  */
@@ -978,4 +1033,4 @@ function keyFor(programDir, cfg, phase, taskId) {
   return cfg && cfg.provider === 'azure-devops' ? `AB#${l.key}` : l.key;
 }
 
-module.exports = { almConfig, checkConfig, jiraRest, isWriter, writerError, withWriteLock, comment, provider, readQueue, pendingOps, enqueue, ack, dropEnsure, push, sync, move, stagesFromEvents, reportDefect, links, addLink, readState, keyFor, refLabel, taskRef, oldRefs, perPhase, STAGES, STAGE_INFO, STAGE_ALIASES, canonStage, adf, request, isDry, warnApply, resolveItem, linkPr, labelItem, relateItems, setItemVersion };
+module.exports = { almConfig, checkConfig, jiraRest, isWriter, writerError, withWriteLock, comment, provider, readQueue, pendingOps, enqueue, ack, dropEnsure, push, sync, move, stagesFromEvents, reportDefect, links, addLink, readState, keyFor, refLabel, taskRef, oldRefs, perPhase, STAGES, STAGE_INFO, STAGE_ALIASES, canonStage, adf, request, isDry, warnApply, resolveItem, linkPr, labelItem, relateItems, setItemVersion, moveForward, addPending, listPending, applyPending, pendingFile };

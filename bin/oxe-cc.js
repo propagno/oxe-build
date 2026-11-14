@@ -7960,7 +7960,7 @@ async function main() {
   }
 
   if (command === 'alm') {
-    const SUBS = ['status', 'push', 'sync', 'move', 'link', 'label', 'version', 'defect', 'comment', 'queue', 'ack'];
+    const SUBS = ['status', 'push', 'sync', 'move', 'link', 'label', 'version', 'pending', 'defect', 'comment', 'queue', 'ack'];
     const sub = SUBS.includes(argv[0]) ? argv[0] : 'status';
     const o = { dir: process.cwd(), json: false, dryRun: false };
     const positional = [];
@@ -7981,6 +7981,7 @@ async function main() {
     if (sub === 'move') { o.ref = positional[0]; o.stage = positional[1]; }
     else if (sub === 'link') { o.ref = positional[0]; o.key = positional[1]; }
     else if (sub === 'label') { o.ref = positional[0]; if (!o.add && positional[1]) o.add = positional[1]; }
+    else if (sub === 'pending') { o.sub = positional[0] === 'apply' ? 'apply' : 'list'; }
     else if (sub === 'version') {
       o.ref = positional[0]; o.version = positional[1];
       if (!o.ref || !o.version) { console.error(`${red}Uso:${reset} oxe-cc alm version <KEY> <versão> [--comment "…"] [--apply | --dry-run] — troca a versão de correção (fixVersion) de um card existente; só o escritor`); process.exit(1); }
@@ -8029,6 +8030,18 @@ async function main() {
         if (out.version_released) console.log(`  ${green}✓${reset} versão ${out.version_released} lançada`);
         for (const q of out.queued || []) console.log(`  ${cyan}⇢${reset} ${q.ref} → ${q.state || q.stage} (na fila do MCP)`);
         if (!out.moved.length && !(out.planned || []).length && !out.failed.length && !(out.queued || []).length) console.log('  nada a sincronizar');
+      } else if (sub === 'pending') {
+        const list = o.sub === 'apply' ? (Array.isArray(out.planned) ? out.planned : null) : out.pending;
+        if (list) {
+          if (!list.length) console.log('  nenhum pedido pendente do ALM');
+          for (const p of list) console.log(`  ${tag}${p.id}  ${p.key}: ${p.op === 'move' ? `mover para ${p.stage}` : `comentar (${String(p.text || '').split('\n')[0].slice(0, 60)})`}  ${dim}${p.by || ''} · ${p.at}${reset}`);
+          if (o.sub === 'apply' && list.length) console.log(`  ${dim}nada foi gravado no ALM; para gravar: oxe-cc alm pending apply --apply${reset}`);
+          else if (list.length) console.log(`  ${dim}o escritor aplica: oxe-cc alm pending apply${reset}`);
+        } else {
+          for (const a of out.applied) console.log(`  ${green}✓${reset} ${a.id} ${a.key}: ${a.op}${a.result && a.result.skipped ? ` ${dim}(${a.result.why})${reset}` : ''}`);
+          for (const f of out.failed) console.log(`  ${red}✗${reset} ${f.id} ${f.key}: ${f.error} — fica pendente`);
+          console.log(`  ${out.applied.length} aplicado(s) · ${out.remaining} pendente(s)${out.sync && out.sync.moved ? ` · sync: ${out.sync.moved.filter((m) => m.changed).length} movido(s)` : ''}`);
+        }
       } else if (sub === 'version' && !out.planned) {
         console.log(out.ok ? `  ${green}✓${reset} ${out.key}: versão ${out.version}${out.changed ? ` (antes: ${(out.before || []).join(', ') || '—'})` : ' (já era essa)'}${out.commented ? ' · comentado' : ''}` : `  ${red}✗${reset} ${out.key}: o Jira não confirmou a versão ${out.version} (agora: ${(out.versions || []).join(', ') || '—'})`);
         if (!out.ok) process.exitCode = 1;
@@ -8153,6 +8166,7 @@ async function main() {
       const almLine = (a) => {
         if (!a) return;
         if (a.skipped) { console.log(`  ${yellow}!${reset} ALM: ${a.why}`); return; }
+        if (a.pending) { console.log(`  ${yellow}⇢${reset} ALM: ${a.why}`); return; }
         if (a.error) { console.log(`  ${red}✗${reset} ALM: ${a.error}`); process.exitCode = 1; return; }
         const tag = a.dry_run ? `${yellow}(simulação)${reset} ` : '';
         if (a.comment) console.log(`  ${tag}${a.comment.planned ? 'comentaria' : a.comment.queued ? 'comentário na fila do MCP' : 'comentou'} no card`);

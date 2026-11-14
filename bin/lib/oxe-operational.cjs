@@ -2383,8 +2383,9 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
   // OXB-b: one writer per program (alm.writer); the other sessions read and comment. A local lock keeps two writers
   // on the same machine from creating the same batch at once.
   const WRITES = ['push', 'sync', 'move', 'defect', 'ack', 'link', 'label', 'version'];
-  if ([...WRITES, 'comment'].includes(options.action) && !dryRun && !options.auto) lib.warnApply(cfg, options);
-  if (WRITES.includes(options.action) && !dryRun) {
+  const writes = WRITES.includes(options.action) || (options.action === 'pending' && options.sub === 'apply');
+  if ((writes || options.action === 'comment') && !dryRun && !options.auto) lib.warnApply(cfg, options);
+  if (writes && !dryRun) {
     if (!lib.isWriter(cfg, env)) throw lib.writerError(cfg);
     if (['push', 'sync', 'defect'].includes(options.action) && !options.noLock) {
       return lib.withWriteLock(programDir, () => runtimeAlm(projectRoot, activeSession, { ...options, noLock: true }));
@@ -2437,6 +2438,16 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
   }
   // the umbrella card: a label and "Relates" links between cards, by key (OxeSpace 14/11, OXE-22/23)
   if (options.action === 'label') return lib.labelItem(programDir, cfg, options.ref, options.add, net);
+  // G21: the requests reader sessions recorded; apply (writer) drains them, then a sync catches up the events
+  if (options.action === 'pending') {
+    if (options.sub !== 'apply') return { pending: lib.listPending(projectRoot) };
+    const out = await lib.applyPending(projectRoot, programDir, cfg, net);
+    if (!dryRun) appendEvent(projectRoot, activeSession, { type: 'AlmPendingApplied', payload: { applied: out.applied.length, failed: out.failed.length } });
+    // the task starts/ends a reader session's execute logged as events (G27) move here too
+    let synced = null;
+    try { synced = await runtimeAlm(projectRoot, activeSession, { ...options, action: 'sync', noLock: false }); } catch (err) { synced = { error: err.message }; }
+    return { dry_run: dryRun, ...out, sync: synced };
+  }
   if (options.action === 'version') return { dry_run: dryRun, ...(await lib.setItemVersion(programDir, cfg, options.ref, options.version, { ...net, comment: options.comment })) };
   if (options.action === 'link' && options.relates) return lib.relateItems(programDir, cfg, options.ref, options.relates, net);
   if (options.action === 'link' && options.pr) {
@@ -2943,22 +2954,21 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
   if (!cfg || !rec.key || rec.resumed || (action === 'done' && !rec.closed)) return { ...rec, alm: null };
   const env = options.env || process.env;
   const dry = lib.isDry(cfg, options);
-  if (!dry && !lib.isWriter(cfg, env)) return { ...rec, alm: { skipped: true, why: lib.writerError(cfg).message } };
+  // G21: a reader session records the writes as pending requests the writer drains (`alm pending apply`)
+  if (!dry && !lib.isWriter(cfg, env)) {
+    const phase = action === 'start' ? 'start' : action === 'cancel' ? 'cancel' : 'done';
+    const by = `quick ${rec.id}`;
+    const pending = [lib.addPending(projectRoot, { op: 'comment', key: rec.key, text: q.cardComment(rec, phase), by })];
+    if (action === 'start' && cfg.states.in_progress) pending.push(lib.addPending(projectRoot, { op: 'move', key: rec.key, stage: 'in_progress', by }));
+    return { ...rec, alm: { pending: pending.map((p) => ({ id: p.id, op: p.op, key: p.key, stage: p.stage || null })), why: `${lib.writerError(cfg).message} — ${pending.length} pedido(s) gravado(s) para o escritor: oxe-cc alm pending apply` } };
+  }
   if (!dry) lib.warnApply(cfg, options);
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const net = { http: options.http, env, sleep: options.sleep, retries: options.retries, dryRun: dry, apply: options.apply };
   const alm = {};
   try {
     alm.comment = await lib.comment(programDir, cfg, rec.key, q.cardComment(rec, action === 'start' ? 'start' : action === 'cancel' ? 'cancel' : 'done'), net);
-    if (action === 'start' && cfg.states.in_progress) {
-      const prov = lib.provider(cfg, net);
-      const live = typeof prov.status === 'function' && !prov.deferred ? await prov.status(rec.key) : null;
-      const liveStage = lib.STAGES.find((s) => cfg.states[s] && live && String(cfg.states[s]).toLowerCase() === String(live).toLowerCase()) || null;
-      const before = liveStage && lib.STAGES.indexOf(liveStage) < lib.STAGES.indexOf('in_progress');
-      alm.move = before || prov.deferred
-        ? await lib.move(programDir, cfg, rec.key, 'in_progress', net)
-        : { skipped: true, why: liveStage ? `o card está em "${live}" (${liveStage}): o quick não move para trás nem para o lado` : `estado "${live}" sem etapa mapeada: nada movido` };
-    }
+    if (action === 'start' && cfg.states.in_progress) alm.move = await lib.moveForward(programDir, cfg, rec.key, 'in_progress', net);
   } catch (err) { alm.error = err.message; }
   return { ...rec, alm: { dry_run: dry, ...alm } };
 }
@@ -4146,6 +4156,8 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
               wave: event.payload && event.payload.wave != null ? event.payload.wave : null,
             },
           });
+          // G27: the card moves to in_progress when the task starts, not only when the execute ends (fire and forget)
+          almAutoSync(projectRoot, activeSession);
         } catch { /* auxiliary persistence */ }
       }
       if (taskId && inplaceRun && gitRepo) {
