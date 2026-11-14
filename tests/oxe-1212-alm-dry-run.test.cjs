@@ -44,7 +44,7 @@ function fakeJira() {
     if (method === 'POST' && p === '/rest/api/3/issue') { n += 1; const key = `OXE-${n}`; issues.set(key, { key, id: String(n), fields: { ...body.fields, status: { name: 'Backlog' }, issuelinks: [], comment: { comments: [] } } }); return { status: 201, json: { key, id: String(n) } }; }
     let m = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)$/.exec(p);
     if (m && method === 'GET') return issues.has(m[1]) ? { status: 200, json: issues.get(m[1]) } : { status: 404, json: null, text: 'nf' };
-    if (m && method === 'PUT') { const it = issues.get(m[1]); if (body.fields && body.fields.description) it.fields.description = body.fields.description; for (const l of (body.update && body.update.labels) || []) if (l.add && !it.fields.labels.includes(l.add)) it.fields.labels.push(l.add); for (const fv of (body.update && body.update.fixVersions) || []) if (fv.set) it.fields.fixVersions = fv.set.map((s) => versions.find((v) => v.id === s.id)); return { status: 204, json: null }; }
+    if (m && method === 'PUT') { const it = issues.get(m[1]); if (body.fields && body.fields.description) it.fields.description = body.fields.description; if (body.fields && body.fields.summary) it.fields.summary = body.fields.summary; for (const l of (body.update && body.update.labels) || []) if (l.add && !it.fields.labels.includes(l.add)) it.fields.labels.push(l.add); for (const fv of (body.update && body.update.fixVersions) || []) if (fv.set) it.fields.fixVersions = fv.set.map((s) => versions.find((v) => v.id === s.id)); return { status: 204, json: null }; }
     m = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)\/transitions$/.exec(p);
     if (m && method === 'GET') return { status: 200, json: { transitions: names.map((s, i) => ({ id: String(i + 1), name: s, to: { name: s } })) } };
     if (m && method === 'POST') { issues.get(m[1]).fields.status = { name: names[Number(body.transition.id) - 1] }; return { status: 204, json: null }; }
@@ -513,5 +513,21 @@ describe('G21: a reader session records the card writes as pending requests; the
     assert.equal(j.issues.get('OXE-20').fields.status.name, STATES.in_progress);
     const again = await op.runtimeAlm(dir, null, { action: 'pending', sub: 'apply', ...net });
     assert.equal(again.applied.length, 0, 'never applied twice');
+  });
+});
+
+describe('alm summary <KEY> "<título>": the card title after a refine narrowed the scope (OxeSpace 14/11, OXE-160)', () => {
+  it('a simulation without --apply; with it the summary changes; a reader is refused', async () => {
+    const dir = project({ require_apply: true });
+    const j = fakeJira();
+    const net = { http: j.http, env: ENV, sleep };
+    j.arm();
+    assert.ok((await op.runtimeAlm(dir, null, { action: 'summary', ref: 'OXE-20', summary: 'Menu ⋯ com 8 itens, sem o diálogo', ...net })).planned);
+    assert.deepEqual(j.writes, []);
+    j.disarm();
+    const s = await op.runtimeAlm(dir, null, { action: 'summary', ref: 'OXE-20', summary: 'Menu ⋯ com 8 itens, sem o diálogo', apply: true, ...net });
+    assert.equal(s.ok, true);
+    assert.equal(j.issues.get('OXE-20').fields.summary, 'Menu ⋯ com 8 itens, sem o diálogo');
+    await assert.rejects(op.runtimeAlm(dir, null, { action: 'summary', ref: 'OXE-20', summary: 'outro título', apply: true, http: j.http, env: { ...ENV, OXE_ALM_WRITER: 'outra' }, sleep }), /escritor|writer/i);
   });
 });

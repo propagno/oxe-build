@@ -2382,7 +2382,7 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
   const phase = activeProgramPhase(projectRoot, activeSession);
   // OXB-b: one writer per program (alm.writer); the other sessions read and comment. A local lock keeps two writers
   // on the same machine from creating the same batch at once.
-  const WRITES = ['push', 'sync', 'move', 'defect', 'ack', 'link', 'label', 'version'];
+  const WRITES = ['push', 'sync', 'move', 'defect', 'ack', 'link', 'label', 'version', 'summary'];
   const writes = WRITES.includes(options.action) || (options.action === 'pending' && options.sub === 'apply');
   if ((writes || options.action === 'comment') && !dryRun && !options.auto) lib.warnApply(cfg, options);
   if (writes && !dryRun) {
@@ -2448,6 +2448,7 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
     try { synced = await runtimeAlm(projectRoot, activeSession, { ...options, action: 'sync', noLock: false }); } catch (err) { synced = { error: err.message }; }
     return { dry_run: dryRun, ...out, sync: synced };
   }
+  if (options.action === 'summary') return { dry_run: dryRun, ...(await lib.setItemSummary(programDir, cfg, options.ref, options.summary, { ...net, comment: options.comment })) };
   if (options.action === 'version') return { dry_run: dryRun, ...(await lib.setItemVersion(programDir, cfg, options.ref, options.version, { ...net, comment: options.comment })) };
   if (options.action === 'link' && options.relates) return lib.relateItems(programDir, cfg, options.ref, options.relates, net);
   if (options.action === 'link' && options.pr) {

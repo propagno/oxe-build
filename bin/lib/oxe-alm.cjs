@@ -295,6 +295,12 @@ function jiraProvider(cfg, env, ctx) {
       const now = await this.fixVersions(key);
       return { changed: true, ok: now.includes(name), versions: now };
     },
+    /** The card's summary line (OxeSpace 14/11, OXE-160: refine narrowed the scope, the title still named it). */
+    async setSummary(key, summary) {
+      await request(c, 'PUT', `${site}/rest/api/3/issue/${key}`, { fields: { summary } });
+      const r = await request(c, 'GET', `${site}/rest/api/3/issue/${key}?fields=summary`);
+      return { ok: Boolean(r && r.fields && r.fields.summary === summary), summary: r && r.fields ? r.fields.summary : null };
+    },
     async releaseVersion(name) {
       const vs = await request(c, 'GET', `${site}/rest/api/3/project/${project}/versions`);
       const v = (vs || []).find((x) => x.name === name);
@@ -966,6 +972,23 @@ async function setItemVersion(programDir, cfg, refOrKey, version, options = {}) 
   return { key: item.key, version: name, before: have, ...out, commented };
 }
 
+/** `alm summary <KEY> "<título>"`: an existing card's summary line (Jira, REST). Writer only. */
+async function setItemSummary(programDir, cfg, refOrKey, summary, options = {}) {
+  const item = resolveItem(programDir, cfg, refOrKey);
+  if (!item) throw new Error(`${refOrKey}: sem item no ALM (use a chave do item)`);
+  const text = String(summary || '').trim();
+  if (text.length < 3) throw new Error('informe o título: oxe-cc alm summary <KEY> "<título>"');
+  if (text.length > 255) throw new Error(`título com ${text.length} caracteres: o Jira aceita até 255`);
+  if (options.dryRun || cfg.dry_run) return { planned: { key: item.key, summary: text, comment: options.comment || null } };
+  const prov = options.provider || provider(cfg, options);
+  if (prov.deferred) throw new Error('alm.transport "mcp": troque o título com a ferramenta do Jira do MCP — este comando grava só por REST');
+  if (typeof prov.setSummary !== 'function') throw new Error(`${cfg.provider}: título ainda não suportado`);
+  const out = await prov.setSummary(item.key, text);
+  let commented = false;
+  if (options.comment) { await comment(programDir, cfg, item.key, options.comment, options); commented = true; }
+  return { key: item.key, ...out, commented };
+}
+
 async function relateItems(programDir, cfg, refOrKey, others, options = {}) {
   const item = resolveItem(programDir, cfg, refOrKey);
   if (!item) throw new Error(`${refOrKey}: sem item no ALM (use a chave do item)`);
@@ -1033,4 +1056,4 @@ function keyFor(programDir, cfg, phase, taskId) {
   return cfg && cfg.provider === 'azure-devops' ? `AB#${l.key}` : l.key;
 }
 
-module.exports = { almConfig, checkConfig, jiraRest, isWriter, writerError, withWriteLock, comment, provider, readQueue, pendingOps, enqueue, ack, dropEnsure, push, sync, move, stagesFromEvents, reportDefect, links, addLink, readState, keyFor, refLabel, taskRef, oldRefs, perPhase, STAGES, STAGE_INFO, STAGE_ALIASES, canonStage, adf, request, isDry, warnApply, resolveItem, linkPr, labelItem, relateItems, setItemVersion, moveForward, addPending, listPending, applyPending, pendingFile };
+module.exports = { almConfig, checkConfig, jiraRest, isWriter, writerError, withWriteLock, comment, provider, readQueue, pendingOps, enqueue, ack, dropEnsure, push, sync, move, stagesFromEvents, reportDefect, links, addLink, readState, keyFor, refLabel, taskRef, oldRefs, perPhase, STAGES, STAGE_INFO, STAGE_ALIASES, canonStage, adf, request, isDry, warnApply, resolveItem, linkPr, labelItem, relateItems, setItemVersion, setItemSummary, moveForward, addPending, listPending, applyPending, pendingFile };

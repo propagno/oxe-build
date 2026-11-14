@@ -7960,7 +7960,7 @@ async function main() {
   }
 
   if (command === 'alm') {
-    const SUBS = ['status', 'push', 'sync', 'move', 'link', 'label', 'version', 'pending', 'defect', 'comment', 'queue', 'ack'];
+    const SUBS = ['status', 'push', 'sync', 'move', 'link', 'label', 'version', 'summary', 'pending', 'defect', 'comment', 'queue', 'ack'];
     const sub = SUBS.includes(argv[0]) ? argv[0] : 'status';
     const o = { dir: process.cwd(), json: false, dryRun: false };
     const positional = [];
@@ -7982,6 +7982,10 @@ async function main() {
     else if (sub === 'link') { o.ref = positional[0]; o.key = positional[1]; }
     else if (sub === 'label') { o.ref = positional[0]; if (!o.add && positional[1]) o.add = positional[1]; }
     else if (sub === 'pending') { o.sub = positional[0] === 'apply' ? 'apply' : 'list'; }
+    else if (sub === 'summary') {
+      o.ref = positional[0]; o.summary = positional.slice(1).join(' ');
+      if (!o.ref || !o.summary) { console.error(`${red}Uso:${reset} oxe-cc alm summary <KEY> "<título>" [--comment "…"] [--apply | --dry-run] — troca o título de um card existente; só o escritor`); process.exit(1); }
+    }
     else if (sub === 'version') {
       o.ref = positional[0]; o.version = positional[1];
       if (!o.ref || !o.version) { console.error(`${red}Uso:${reset} oxe-cc alm version <KEY> <versão> [--comment "…"] [--apply | --dry-run] — troca a versão de correção (fixVersion) de um card existente; só o escritor`); process.exit(1); }
@@ -8042,6 +8046,9 @@ async function main() {
           for (const f of out.failed) console.log(`  ${red}✗${reset} ${f.id} ${f.key}: ${f.error} — fica pendente`);
           console.log(`  ${out.applied.length} aplicado(s) · ${out.remaining} pendente(s)${out.sync && out.sync.moved ? ` · sync: ${out.sync.moved.filter((m) => m.changed).length} movido(s)` : ''}`);
         }
+      } else if (sub === 'summary' && !out.planned) {
+        console.log(out.ok ? `  ${green}✓${reset} ${out.key}: título "${out.summary}"${out.commented ? ' · comentado' : ''}` : `  ${red}✗${reset} ${out.key}: o Jira não confirmou o título (agora: "${out.summary || '—'}")`);
+        if (!out.ok) process.exitCode = 1;
       } else if (sub === 'version' && !out.planned) {
         console.log(out.ok ? `  ${green}✓${reset} ${out.key}: versão ${out.version}${out.changed ? ` (antes: ${(out.before || []).join(', ') || '—'})` : ' (já era essa)'}${out.commented ? ' · comentado' : ''}` : `  ${red}✗${reset} ${out.key}: o Jira não confirmou a versão ${out.version} (agora: ${(out.versions || []).join(', ') || '—'})`);
         if (!out.ok) process.exitCode = 1;

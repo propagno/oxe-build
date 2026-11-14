@@ -109,6 +109,7 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
   - Se o card já está nessa versão, nada é gravado.
   - A versão precisa existir no projeto do Jira.
   - Com `alm.transport: "mcp"`, o comando diz para usar a ferramenta do MCP.
+  - `oxe-cc alm summary <KEY> "<título>" [--comment "…"] [--apply]` troca o título de um card existente: só o escritor, simulação sem `--apply` sob `require_apply`, até 255 caracteres. É o caso do OXE-160, cujo refine estreitou o escopo enquanto o título ainda citava o diálogo removido.
   - `alm version <KEY> …` chega ao comando: antes, o roteamento do `alm version ensure` o interceptava e respondia com o uso do ensure.
 
 ### Prova de teste no Kotlin/Gradle e hooks sem esqueleto (Celular F2 e OxeChat F2, 14/11)
