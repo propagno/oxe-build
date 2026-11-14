@@ -80,6 +80,64 @@ describe('a CR redo done without a commit gets its commit, naming the CR', () =>
     assert.deepEqual(op.reopeningCrsOf(dir, 'T3').sort(), ['CR-02', 'CR-03']);
   });
 
+  it('plan scope add T3 <file> --cr CR-03: widens files during a phase, only by an open CR that reopens the task', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-scopeadd-'));
+    dirs.push(dir);
+    write(dir, '.oxe/STATE.md', '# STATE\n');
+    write(dir, '.oxe/PLAN.md', '# PLAN\n');
+    write(dir, '.oxe/PLAN.json', JSON.stringify({ schema_version: 1, phase: 'F2', tasks: [
+      { id: 'T3', title: 'reinício', wave: 1, files: ['electron/main/services/terminal.service.ts'], acceptance: ['A3'], verify: { commands: ['node -e 0'] } },
+      { id: 'T4', title: 'feita', wave: 1, files: ['x.ts'], acceptance: ['A4'], verify: { commands: ['node -e 0'] }, done: true },
+    ], acceptance_tests: [{ criterion: 'A3', task: 'T3', files: ['tests/cr03.test.ts'], command: 'npx vitest run tests/cr03.test.ts', resolves: ['CR-03'] }] }));
+    const programDir = path.join(dir, '.oxe', 'program');
+    change.appendNdjson(change.changesFile(programDir), { kind: 'cr', id: 'CR-03', class: 'defect', status: 'open', criteria: ['A3'], tasks: ['T3'], summary: 'restart-size.ts como módulo próprio', at: 'x' });
+    change.appendNdjson(change.changesFile(programDir), { kind: 'cr', id: 'CR-09', class: 'defect', status: 'open', criteria: ['A4'], tasks: ['T4'], summary: 'outro defeito qualquer', at: 'x' });
+    const base = { task: 'T3', paths: ['electron/main/services/terminal/restart-size.ts'], cr: 'CR-03', by: 'coordenação', reason: 'o teste congelado do CR-03 importa o módulo novo' };
+    assert.throws(() => op.runtimePlanScopeAdd(dir, null, { ...base, cr: 'CR-09' }), /CR-09 não reabre T3/);
+    assert.throws(() => op.runtimePlanScopeAdd(dir, null, { ...base, cr: undefined }), /só cresce por um CR aberto/);
+    assert.throws(() => op.runtimePlanScopeAdd(dir, null, { ...base, paths: ['tests/cr03.test.ts'] }), /teste congelado/);
+    assert.throws(() => op.runtimePlanScopeAdd(dir, null, { ...base, task: 'T4', cr: 'CR-09' }), /está done/);
+    const out = op.runtimePlanScopeAdd(dir, null, base);
+    assert.deepEqual(out.added, ['electron/main/services/terminal/restart-size.ts']);
+    const plan = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'));
+    const t3 = plan.tasks.find((t) => t.id === 'T3');
+    assert.ok(t3.files.includes('electron/main/services/terminal/restart-size.ts'));
+    assert.equal(t3.scope_added[0].cr, 'CR-03');
+    assert.equal(change.listChanges(programDir).find((c) => c.id === 'CR-03').scope_added[0].paths[0], 'electron/main/services/terminal/restart-size.ts');
+    assert.deepEqual(op.runtimePlanScopeAdd(dir, null, base).added, [], 'idempotent');
+    assert.equal(change.amendmentRequirements(programDir).get('A3'), undefined, 'no new test version asked');
+  });
+
+  it('a frozen test with CRLF in the working copy and LF in HEAD (autocrlf) is not "tampered"; a real edit is', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-crlf-'));
+    dirs.push(dir);
+    write(dir, '.gitignore', '.oxe/\n');
+    write(dir, '.oxe/STATE.md', '# STATE\n');
+    write(dir, '.oxe/config.json', JSON.stringify({ external_dependency_check: false, stub_check: false }));
+    write(dir, 'src/a.ts', 'a\n');
+    write(dir, 'tests/frozen.test.ts', "it('x', () => {})\nit('y', () => {})\n");
+    write(dir, '.oxe/PLAN.json', JSON.stringify({ schema_version: 1, phase: 'F3', tasks: [
+      { id: 'T11', title: 'a', wave: 1, files: ['src/a.ts'], acceptance: ['A9'], verify: { commands: ['node -e 0'] }, done: true },
+      { id: 'T12', title: 'b', wave: 1, files: ['src/a.ts'], acceptance: ['A9'], verify: { commands: ['node -e 0'] }, done: true },
+    ], acceptance_tests: [{ criterion: 'A9', task: 'T12', files: ['tests/frozen.test.ts'], command: 'node -e 0' }] }, null, 2));
+    git(dir, 'init', '-q');
+    git(dir, 'config', 'user.email', 't@oxe.dev');
+    git(dir, 'config', 'user.name', 'T');
+    git(dir, 'config', 'core.autocrlf', 'false');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'base');
+    // the working copy becomes CRLF (what autocrlf does on Windows), HEAD stays LF: same content
+    fs.writeFileSync(path.join(dir, 'tests', 'frozen.test.ts'), "it('x', () => {})\r\nit('y', () => {})\r\n");
+    git(dir, 'config', 'core.autocrlf', 'true');
+    write(dir, 'src/a.ts', 'a\nT11\nT12\n');
+    const r = op.runtimeCommitTasksTogether(dir, null, { tasks: ['T11', 'T12'], by: 'executor' });
+    assert.equal(r.ok, true);
+    // a real edit of the frozen test is still refused
+    fs.writeFileSync(path.join(dir, 'tests', 'frozen.test.ts'), "it('x', () => {})\r\nit('y mudou', () => {})\r\n");
+    write(dir, 'src/a.ts', 'a\nT11\nT12\nmais\n');
+    assert.throws(() => op.runtimeCommitTasksTogether(dir, null, { tasks: ['T11', 'T12'], force: true }), /acceptance_tampered.*difere do HEAD/);
+  });
+
   it('commit-task T11,T12 --together: one commit for tasks mixed in a shared file, one OXE-Task each, origin passes', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-together-'));
     dirs.push(dir);

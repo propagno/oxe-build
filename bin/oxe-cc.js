@@ -8498,6 +8498,28 @@ async function main() {
     process.exit(errors.length ? 1 : 0);
   }
 
+  // oxe-cc plan scope add T<n> <arquivo…> --cr CR-n --by <papel> --reason "…": widens a task's files during a phase,
+  // recorded in the CR (OxeSpace 14/11, CR-03: the frozen test imports a module the task must create)
+  if (command === 'plan' && argv[0] === 'scope' && argv[1] === 'add') {
+    const o = { dir: process.cwd(), json: false, paths: [] };
+    for (let i = 2; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (['--cr', '--by', '--reason'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (/^T\d+$/i.test(a) && !o.task) o.task = a.toUpperCase();
+      else if (!a.startsWith('-')) o.paths.push(a);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    try {
+      const out = oxeOperational.runtimePlanScopeAdd(o.dir, null, o);
+      if (o.json) { console.log(JSON.stringify({ oxePlanScopeSchema: 1, ...out }, null, 2)); return; }
+      console.log(out.added.length ? `  ${green}✓${reset} ${out.task}: +${out.added.join(', ')} no escopo (${out.cr}, por ${out.by})` : `  ${dim}= ${out.task}: já no escopo${reset}`);
+      if (out.existed.length) console.log(`  ${dim}já estavam: ${out.existed.join(', ')}${reset}`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   if (command === 'plan' && argv[0] === 'reopen') {
     // oxe-cc plan reopen T<n> [--dir <pasta>]
     const rest = argv.slice(1);

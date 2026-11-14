@@ -7866,6 +7866,15 @@ function isTaskVerifyFresh(projectRoot, taskId, changedInScope, scopeHash, maxAg
   return false;
 }
 
+/** A frozen test that git calls dirty only for its line endings (CRLF working copy, LF blob) did not change. */
+function frozenContentChanged(projectRoot, rel) {
+  let work = null;
+  try { work = fs.readFileSync(path.join(projectRoot, rel), 'utf8'); } catch { return true; }
+  const head = spawnSync('git', ['show', `HEAD:${rel}`], { cwd: projectRoot, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+  if (head.status !== 0) return true;
+  return work.replace(/\r\n/g, '\n') !== String(head.stdout).replace(/\r\n/g, '\n');
+}
+
 function verifyFrozenAcceptanceUntampered(projectRoot, activeSession, doc, runState) {
   const crypto = require('crypto');
   const expectedByPath = new Map();
@@ -7918,23 +7927,33 @@ function verifyFrozenAcceptanceUntampered(projectRoot, activeSession, doc, runSt
     }
   } catch { /* best-effort program checks */ }
 
+  // line endings are not content (core.autocrlf: the working copy is CRLF, the HEAD blob LF — OxeSpace 14/11, F3
+  // joint commit refused "esperado 650162c67eb4, atual 650162c67eb4"): a hash matches in raw, LF or CRLF form, and
+  // the HEAD comparison is made on LF-normalized bytes. The message names the comparison that failed.
+  const sha = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+  const forms = (buf) => {
+    const lf = Buffer.from(buf.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
+    return { raw: sha(buf), lf: sha(lf), crlf: sha(Buffer.from(lf.toString('utf8').replace(/\n/g, '\r\n'), 'utf8')) };
+  };
   for (const rel of frozenPaths) {
     const abs = path.join(projectRoot, rel);
-    const actualSha = sha256BufferOrFile(abs);
-    let headSha = null;
+    let buf = null;
+    try { buf = fs.readFileSync(abs); } catch { buf = null; }
+    const actual = buf ? forms(buf) : null;
+    const actualSha = actual ? actual.raw : null;
+    let head = null;
     const headShow = spawnSync('git', ['show', `HEAD:${rel}`], { cwd: projectRoot, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
-    if (headShow.status === 0 && headShow.stdout) {
-      headSha = crypto.createHash('sha256').update(headShow.stdout).digest('hex');
-    }
-    const lockedSha = expectedByPath.get(rel) || headSha;
-    const headMismatch = !amendedPaths.has(rel) && headSha && actualSha !== headSha;
-    if (!actualSha || (lockedSha && actualSha !== lockedSha) || headMismatch) {
-      const expected = lockedSha || headSha || 'frozen';
+    if (headShow.status === 0 && headShow.stdout) head = forms(headShow.stdout);
+    const locked = expectedByPath.get(rel) || null;
+    const lockMismatch = Boolean(actual && locked && ![actual.raw, actual.lf, actual.crlf].includes(locked));
+    const headMismatch = Boolean(actual && !amendedPaths.has(rel) && head && actual.lf !== head.lf);
+    if (!actual || lockMismatch || headMismatch) {
+      const why = !actual ? 'ausente' : lockMismatch ? `difere do hash congelado (esperado ${String(locked).slice(0, 12)}, atual ${actual.raw.slice(0, 12)})` : `difere do HEAD (HEAD ${head.lf.slice(0, 12)}, atual ${actual.lf.slice(0, 12)}, finais de linha normalizados)`;
       appendEvent(projectRoot, activeSession, {
         type: 'ScopeViolation',
-        payload: { reason: 'acceptance_tampered', file: rel, expected, actual: actualSha || 'missing' },
+        payload: { reason: 'acceptance_tampered', file: rel, expected: locked || (head && head.lf) || 'frozen', actual: actualSha || 'missing', why },
       });
-      throw new Error(`acceptance_tampered: teste de aceite congelado foi adulterado (${rel}: esperado ${String(expected).slice(0, 12)}, atual ${String(actualSha || 'ausente').slice(0, 12)})`);
+      throw new Error(`acceptance_tampered: teste de aceite congelado foi adulterado (${rel}: ${why})`);
     }
   }
   frozenPaths._amended = amendedPaths;
@@ -8274,9 +8293,11 @@ function runtimeCommitTasksTogether(projectRoot, activeSession, options = {}) {
   const normPath = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
   const frozenPaths = verifyFrozenAcceptanceUntampered(projectRoot, activeSession, doc, runState);
   const scope = [...new Set(tasks.flatMap((t) => [...(t.files || []), ...(t.removed_paths || []), ...taskScopeFiles(runState, t.id)]).map(normPath).filter(Boolean))].filter((p) => !frozenPaths.has(p));
-  const dirty = [...new Set(changedEntriesUnder(projectRoot, ['.']).map((e) => normPath(e.path)).filter((p) => p && !p.startsWith('.oxe/')))];
+  // a frozen test dirty only by its line endings is not a change at all (neither tampered nor out of scope)
+  const dirty = [...new Set(changedEntriesUnder(projectRoot, ['.']).map((e) => normPath(e.path)).filter((p) => p && !p.startsWith('.oxe/')))]
+    .filter((p) => !(frozenPaths.has(p) && !frozenContentChanged(projectRoot, p)));
   const amended = frozenPaths._amended || new Set();
-  const tampered = dirty.filter((p) => frozenPaths.has(p) && !amended.has(p));
+  const tampered = dirty.filter((p) => frozenPaths.has(p) && !amended.has(p) && frozenContentChanged(projectRoot, p));
   if (tampered.length) throw new Error(`acceptance_tampered: teste congelado modificado (${tampered.join(', ')})`);
   const outside = dirty.filter((p) => !isPathInScope(p, scope));
   if (outside.length) {
@@ -8375,11 +8396,12 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
   const allEntries = changedEntriesUnder(projectRoot, ['.'])
     .map((e) => ({ path: normPath(e.path), code: e.code }))
     .filter((e) => e.path && !e.path.startsWith('.oxe/'));
-  const allDirtyPaths = [...new Set(allEntries.map((e) => e.path))];
+  // a frozen test dirty only by its line endings (autocrlf) is no change: neither tampered nor out of scope
+  const allDirtyPaths = [...new Set(allEntries.map((e) => e.path))].filter((p) => !(frozenPaths.has(p) && !frozenContentChanged(projectRoot, p)));
 
   const amendedFrozen = frozenPaths._amended || new Set();
   for (const p of allDirtyPaths) {
-    if (frozenPaths.has(p) && !amendedFrozen.has(p)) {
+    if (frozenPaths.has(p) && !amendedFrozen.has(p) && frozenContentChanged(projectRoot, p)) {
       appendEvent(projectRoot, activeSession, { type: 'ScopeViolation', run_id: runId, work_item_id: taskId, payload: { reason: 'acceptance_tampered', file: p } });
       throw new Error(`acceptance_tampered: teste congelado modificado (${p})`);
     }
@@ -8549,6 +8571,59 @@ function classifyBlockedResult(result, graph) {
 }
 
 /** `oxe-cc plan reopen Tn`: reopens a done task so the next execute redoes it (rework without a CR). */
+/**
+ * `oxe-cc plan scope add T<n> <paths…> --cr CR-n --by <papel> --reason "…"`: widens a task's `files` during a
+ * phase, the only sanctioned way (a hand edit of PLAN.json is a frozen-plan edit). Needs an OPEN CR naming the task
+ * (the CR is why the scope grows), never a frozen test, never a done task; recorded in the task (scope_added), in the
+ * CR log (kind "scope") and as an event. No new test version is asked: the criterion text did not change.
+ */
+function runtimePlanScopeAdd(projectRoot, activeSession, options = {}) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const taskId = String(options.task || '').toUpperCase();
+  if (!/^T\d+$/.test(taskId)) throw new Error('use: oxe-cc plan scope add T<n> <arquivo…> --cr CR-n --by <papel> --reason "…"');
+  const add = [...new Set((options.paths || []).map((p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '').trim()).filter(Boolean))];
+  if (!add.length) throw new Error('informe ao menos um arquivo');
+  if (add.some((p) => p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.split('/').includes('..'))) throw new Error('caminho relativo ao repositório, sem ".." nem absoluto');
+  const by = String(options.by || '').trim();
+  const reason = String(options.reason || '').trim();
+  if (!by) throw new Error('informe quem decide (--by <papel>)');
+  if (reason.length < 8) throw new Error('informe o motivo em uma frase (--reason "…")');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const crId = String(options.cr || '').toUpperCase();
+  const cr = changeLib.listChanges(programDir).find((c) => c.id === crId);
+  if (!cr) throw new Error(`--cr ${options.cr || '(ausente)'}: o escopo de uma fase em andamento só cresce por um CR aberto (oxe-cc runtime feedback …)`);
+  if (cr.status !== 'open') throw new Error(`${crId} está ${cr.status}: use um CR aberto`);
+  if (!(cr.tasks || []).map((t) => String(t).toUpperCase()).includes(taskId)) throw new Error(`${crId} não reabre ${taskId} (tasks: ${(cr.tasks || []).join(', ') || '—'})`);
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan scope add exige PLAN.json');
+  const result = planJsonLib.withPlanLock(jsonPath, () => {
+    const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const task = (doc.tasks || []).find((t) => t && String(t.id).toUpperCase() === taskId);
+    if (!task) throw new Error(`Tarefa ${taskId} não encontrada em PLAN.json`);
+    if (task.done === true) throw new Error(`${taskId} está done: reabra antes (oxe-cc plan reopen ${taskId})`);
+    const frozen = new Set((doc.acceptance_tests || []).flatMap((a) => (a && a.files) || []).map((f) => String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/')));
+    const bad = add.filter((p) => frozen.has(p));
+    if (bad.length) throw new Error(`${bad.join(', ')}: teste congelado não entra em files de tarefa`);
+    const have = new Set((task.files || []).map((f) => String(f).replace(/\\/g, '/')));
+    const added = add.filter((p) => !have.has(p));
+    if (added.length) {
+      task.files = [...(task.files || []), ...added];
+      task.scope_added = [...(Array.isArray(task.scope_added) ? task.scope_added : []), { paths: added, cr: crId, by, reason, at: new Date().toISOString() }];
+      const tmp = `${jsonPath}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+      fs.renameSync(tmp, jsonPath);
+    }
+    return { added, existed: add.filter((p) => have.has(p)) };
+  });
+  if (result.added.length) {
+    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'scope', id: crId, task: taskId, paths: result.added, by, reason, at: new Date().toISOString() });
+    appendEvent(projectRoot, activeSession, { type: 'PlanScopeAmended', work_item_id: taskId, payload: { task: taskId, paths: result.added, cr: crId, by, reason } });
+  }
+  return { task: taskId, cr: crId, by, ...result };
+}
+
 function runtimePlanReopen(projectRoot, activeSession, options = {}) {
   const taskId = String(options.task || '').trim();
   if (!/^T\d+$/.test(taskId)) throw new Error('Informe a tarefa: oxe-cc plan reopen T<n>');
@@ -11093,6 +11168,7 @@ module.exports = {
   runtimeCommitTasksTogether,
   applyTaskGatesToGraph,
   reopeningCrsOf,
+  runtimePlanScopeAdd,
   writeTaskVerifyFresh,
   findTaskCheckpoint,
   taskCommitShas,
