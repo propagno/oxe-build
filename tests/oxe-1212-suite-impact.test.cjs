@@ -70,6 +70,23 @@ describe('G30 · suítes que importam os arquivos da tarefa', () => {
     assert.ok(noMention[0].suites.every((s) => s.level === 'warn'));
   });
 
+  it('G30b: a fixture que uma suíte lê (import de .json, readFileSync, path.join) fora de files vira aviso, mesmo com a suíte no verify', () => {
+    const dir = repo({
+      ...FILES,
+      'tests/fixtures/palette-commands.base.json': '["open"]\n',
+      'tests/unit/policy-own.test.ts': "import base from '../fixtures/palette-commands.base.json';\nimport { check } from '@/policy';\nconst fs = require('fs');\nconst verbs = fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'verbs.json'), 'utf8');\nit('own', () => {});\n",
+      'tests/fixtures/verbs.json': '["Abrir"]\n',
+    });
+    const f = si.suiteImpact(dir, plan());
+    const data = f.flatMap((x) => x.data || []).map((d) => d.file).sort();
+    assert.deepEqual(data, ['tests/fixtures/palette-commands.base.json', 'tests/fixtures/verbs.json']);
+    const msg = si.messages(f);
+    assert.ok(msg.warnings.some((w) => /policy-own\.test\.ts \(que importa src\/policy\.ts\) lê tests\/fixtures\/palette-commands\.base\.json/.test(w)), msg.warnings.join('\n'));
+    // in files: no warning
+    const inFiles = si.suiteImpact(dir, plan({ files: ['src/policy.ts', 'tests/fixtures/'] }));
+    assert.equal(inFiles.flatMap((x) => x.data || []).length, 0);
+  });
+
   it('constantes exportadas: lista, objeto, literal e Object.freeze; não uma função', () => {
     const c = si.exportedConstants("export const A = [1];\nexport const B: Record<string, number> = { x: 1 };\nexport const C = 'x';\nexport const D = Object.freeze([1]);\nexport function E() {}\nexport const F = () => 1;\n");
     assert.deepEqual([...c].sort(), ['A', 'B', 'C', 'D']);

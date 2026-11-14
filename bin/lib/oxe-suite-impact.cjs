@@ -70,6 +70,33 @@ function importIndex(root, { files = null, readText = null } = {}) {
 const words = (s) => new Set(String(s || '').match(/[A-Za-z_$][\w$]*/g) || []);
 
 /**
+ * G30b (OxeSpace 14/11, OxeCode F4 T20, ~US$ 15): the data a suite reads — a baseline fixture (palette-commands.base.json)
+ * the guard compares against, a verb list. Literal paths only: an import/require of a data file, readFileSync /
+ * path.join / path.resolve with string literals. Resolved against the test's folder and the repo root; existing
+ * files only.
+ */
+const DATA_RE = /\.(json|ya?ml|txt|csv|snap|md)$/i;
+function dataFilesOf(root, test, text, known) {
+  const out = new Set();
+  const dir = path.posix.dirname(test);
+  const consider = (rel) => {
+    const r = norm(rel);
+    if (!DATA_RE.test(r)) return;
+    for (const cand of [path.posix.normalize(path.posix.join(dir, r)), path.posix.normalize(r)]) {
+      if (known.has(cand) || fs.existsSync(path.join(root, cand))) { out.add(cand); return; }
+    }
+  };
+  const src = String(text || '');
+  for (const m of src.matchAll(/\b(?:import|export)\s+[\s\S]*?\s+from\s*['"]([^'"]+)['"]|\brequire\(\s*['"]([^'"]+)['"]\s*\)|\bimport\(\s*['"]([^'"]+)['"]\s*\)/g)) consider(m[1] || m[2] || m[3]);
+  // readFileSync('a/b.json') / path.join(__dirname, 'fixtures', 'x.json') / path.resolve('tests/fixtures/x.json')
+  for (const m of src.matchAll(/\b(?:readFileSync|readFile|path\.(?:join|resolve))\(([^)]*)\)/g)) {
+    const parts = [...m[1].matchAll(/['"`]([^'"`$]+)['"`]/g)].map((p) => p[1]);
+    if (parts.length) consider(parts.join('/'));
+  }
+  return [...out];
+}
+
+/**
  * Per task not done: the suites that import its files and are outside its verify/scope.
  * @returns {{ task: string, file: string, suites: { test: string, level: 'warn'|'error', names: string[] }[] }[]}
  */
@@ -77,6 +104,7 @@ function suiteImpact(root, planDoc, options = {}) {
   const tasks = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter((t) => t && !(t.done === true || t.status === 'done'));
   if (!tasks.length) return [];
   const { byTarget, read } = options.index || importIndex(root, options);
+  const known = new Set(options.files || trackedFiles(root));
   const accept = (planDoc && Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : []);
   const findings = [];
   for (const t of tasks) {
@@ -96,13 +124,18 @@ function suiteImpact(root, planDoc, options = {}) {
       const consts = exportedConstants(read(file));
       const suites = [];
       const seen = new Set();
+      const data = [];
       for (const imp of byTarget.get(file)) {
-        if (seen.has(imp.test) || inScope(imp.test) || ownAccept.has(imp.test) || namedInVerify(imp.test)) continue;
+        if (seen.has(imp.test)) continue;
         seen.add(imp.test);
+        // G30b: the data the suite reads, outside the task's files — also for a suite already in the verify (the T20
+        // guard was in the verify; its baseline fixture was not in files)
+        if (!inScope(imp.test)) for (const d of dataFilesOf(root, imp.test, read(imp.test), known)) if (!inScope(d)) data.push({ test: imp.test, file: d });
+        if (inScope(imp.test) || ownAccept.has(imp.test) || namedInVerify(imp.test)) continue;
         const asserted = imp.names.filter((n) => consts.has(n) && mentioned.has(n));
         suites.push({ test: imp.test, level: asserted.length ? 'error' : 'warn', names: asserted });
       }
-      if (suites.length) findings.push({ task: t.id, file, suites });
+      if (suites.length || data.length) findings.push({ task: t.id, file, suites, data });
     }
   }
   return findings;
@@ -118,6 +151,9 @@ function messages(findings, { mode = 'error' } = {}) {
         : `${f.task}: ${s.test} importa ${f.file} e não está no verify nem no escopo da tarefa — se a mudança a quebrar, o vermelho fica fora do escopo (inclua no verify) [G30]`;
       if (s.level === 'error' && mode === 'error') errors.push(line);
       else warnings.push(line);
+    }
+    for (const d of f.data || []) {
+      warnings.push(`${f.task}: ${d.test} (que importa ${f.file}) lê ${d.file} — se a tarefa muda o que essa suíte compara (ids, rótulos, uma lista), ${d.file} precisa estar em files da tarefa [G30b]`);
     }
   }
   return { errors, warnings };

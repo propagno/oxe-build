@@ -24,6 +24,19 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Eventos:** `AutoResumed` e `AutoResumeSkipped`.
 - **Teste:** `tests/oxe-1212-autoresume.test.cjs`. O CA-1 é um reinício simulado num programa de teste: o execute é morto em T2 com SIGKILL e o `autoresume run` o retoma em T2 sem chamar o executor para T1.
 
+### Custo de falha medido, tentativa reaproveitada e fixtures das suítes (G30b, G36, relatório)
+
+- **`oxe-cc report failure-cost [--since <data>] [--gap-minutes 30] [--json]`:** o custo de falha medido nos eventos e nos CRs do projeto, sem estimativa.
+  - Mostra os US$ das tentativas descartadas por causa: o motivo do retry, a classe de falha do bloqueio ou o CR que nomeou a tarefa depois da tentativa, que é o diagnóstico. Uma tarefa concluída e refeita por CR também entra.
+  - Mostra as horas paradas: intervalos sem evento dentro de um run.
+  - Totais: descartado, gasto e a fração descartada. `failure_cost.fixes` liga uma causa ao seu conserto.
+  - Primeira medição, no OxeChat F2: US$ 44,03 descartados de US$ 61,22 (72%) e 2,4 h paradas.
+- **G36, `runtime retry T<n> --reuse-attempt [--run <id>]`:**
+  - Reaplica a tentativa revertida guardada em `.oxe/runs/<run>/attempts/<Tn>-failed/` (o patch e os arquivos novos), roda o verify da tarefa contra o teste corrigido e, se der verde, commita como checkpoint (`OXE-Task`/`OXE-Run`), sem turno de modelo.
+  - Se der vermelho, desfaz tudo e diz para seguir com uma tentativa normal. É recusado se não houver tentativa guardada ou se os arquivos dela estiverem sujos na árvore.
+  - Eventos: `AttemptReused` e `AttemptReuseFailed`.
+- **G30b, os dados que a suíte lê:** para cada suíte que importa um arquivo da tarefa, inclusive a que já está no verify, o `plan lint` avisa dos arquivos de dados que ela lê fora do `files` da tarefa: import de `.json`, `readFileSync`, `path.join` com literais. Antes, a baseline do guarda da T20 (`palette-commands.base.json`) custou 3 tentativas.
+
 ### Teste re-congelado por CR não trava o close (OxeChat F2, 14/11)
 
 - **O lock de aceite do run aceita o re-freeze por CR:**

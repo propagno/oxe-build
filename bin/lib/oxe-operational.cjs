@@ -8494,6 +8494,71 @@ function runtimeCommitTasksTogether(projectRoot, activeSession, options = {}) {
   return { ok: true, tasks: ids, commit: cp.commit, files: cp.files, verified: !options.skipVerify, crs };
 }
 
+/**
+ * G36 (OxeSpace 14/11, OxeChat F2 T5/T6, ~US$ 25 each): an attempt rolled back only because its frozen test was wrong
+ * had the right code; after the CR fixed the test, the next attempt rebuilt the same code. `oxe-cc runtime retry T<n>
+ * --reuse-attempt [--run <id>]` re-applies that attempt's saved changes (`.oxe/runs/<run>/attempts/<Tn>-failed/`),
+ * runs the task's verify against the fixed test and, green, commits it as the task's checkpoint (commit-task: frozen
+ * tests checked, OXE-Task/OXE-Run) — no model turns. Red: everything it applied is undone, and the task goes to a
+ * normal attempt.
+ */
+function runtimeReuseAttempt(projectRoot, activeSession, options = {}) {
+  const taskId = String(options.task || '').trim().toUpperCase();
+  if (!/^T\d+$/.test(taskId)) throw new Error('use: oxe-cc runtime retry T<n> --reuse-attempt [--run <id>]');
+  const runsDir = path.join(projectRoot, '.oxe', 'runs');
+  const candidates = (() => {
+    try {
+      return fs.readdirSync(runsDir).filter((r) => !options.run || r === options.run)
+        .map((r) => path.join(runsDir, r, 'attempts', `${taskId}-failed`))
+        .filter((d) => fs.existsSync(d))
+        .map((d) => ({ dir: d, at: fs.statSync(d).mtimeMs }))
+        .sort((a, b) => b.at - a.at);
+    } catch { return []; }
+  })();
+  if (!candidates.length) throw new Error(`nenhuma tentativa revertida de ${taskId} guardada em .oxe/runs/*/attempts/${taskId}-failed${options.run ? ` (run ${options.run})` : ''}`);
+  const dir = candidates[0].dir;
+  const patch = path.join(dir, 'changes.patch');
+  const hasPatch = fs.existsSync(patch) && fs.statSync(patch).size > 0;
+  const newRoot = path.join(dir, 'new');
+  const newFiles = [];
+  const walk = (d) => { let es = []; try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; } for (const e of es) { const full = path.join(d, e.name); if (e.isDirectory()) walk(full); else newFiles.push(path.relative(newRoot, full).replace(/\\/g, '/')); } };
+  walk(newRoot);
+  if (!hasPatch && !newFiles.length) throw new Error(`${path.relative(projectRoot, dir)} está vazio: nada a reaplicar`);
+  const patched = hasPatch ? (gitLines(projectRoot, ['apply', '--numstat', patch]) || []).map((l) => l.split('\t').pop().replace(/\\/g, '/')).filter(Boolean) : [];
+  const touched = [...new Set([...patched, ...newFiles])];
+  const dirty = new Set(workingTreeChanges(projectRoot).map((c) => c.path));
+  const busy = touched.filter((p) => dirty.has(p));
+  if (busy.length) throw new Error(`arquivos da tentativa com mudanças na árvore: ${busy.slice(0, 5).join(', ')} — commite ou descarte antes de reaplicar`);
+  const undo = () => {
+    if (patched.length) gitRun(projectRoot, ['checkout', 'HEAD', '--', ...patched]);
+    for (const f of newFiles) { try { fs.rmSync(path.join(projectRoot, f), { force: true }); } catch { /* */ } }
+  };
+  if (hasPatch) {
+    const ap = gitRun(projectRoot, ['apply', '--3way', '--whitespace=nowarn', patch]);
+    if (!ap.ok) { undo(); throw new Error(`o patch da tentativa não aplica no HEAD atual (${String(ap.stderr || '').trim().split(/\r?\n/).pop()}) — siga com uma tentativa normal (runtime execute)`); }
+  }
+  for (const f of newFiles) { ensureDirForFile(path.join(projectRoot, f)); fs.copyFileSync(path.join(newRoot, f), path.join(projectRoot, f)); }
+  try {
+    const out = runtimeCommitTask(projectRoot, activeSession, { task: taskId, by: options.by || 'reuse-attempt', force: true });
+    appendEvent(projectRoot, activeSession, { type: 'AttemptReused', work_item_id: taskId, payload: { task: taskId, from: path.relative(projectRoot, dir).replace(/\\/g, '/'), files: touched, commit: out.commit || out.done_commit || null } });
+    return { task: taskId, reused_from: path.relative(projectRoot, dir).replace(/\\/g, '/'), files: touched, ...out };
+  } catch (err) {
+    undo();
+    appendEvent(projectRoot, activeSession, { type: 'AttemptReuseFailed', work_item_id: taskId, payload: { task: taskId, from: path.relative(projectRoot, dir).replace(/\\/g, '/'), reason: String(err.message || err).slice(0, 400) } });
+    throw new Error(`a tentativa reaproveitada não passou: ${err.message} — nada ficou na árvore; siga com uma tentativa normal (runtime execute)`);
+  }
+}
+
+/** `oxe-cc report failure-cost [--since …]`: the cost of failure from the project's events and CRs (oxe-failure-cost). */
+function runtimeFailureCost(projectRoot, activeSession, options = {}) {
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  let crs = [];
+  try { crs = require('./oxe-change.cjs').listChanges(programDir); } catch { crs = []; }
+  const cfg = (readProjectConfig(projectRoot) || {}).failure_cost || {};
+  return require('./oxe-failure-cost.cjs').report(readEvents(projectRoot, activeSession), crs, { since: options.since, gapMinutes: options.gapMinutes, fixes: cfg.fixes });
+}
+
 function runtimeCommitTask(projectRoot, activeSession, options = {}) {
   const taskId = String(options.task || '').trim().toUpperCase();
   if (!/^T\d+$/.test(taskId)) {
@@ -11488,6 +11553,8 @@ module.exports = {
   reopeningCrsOf,
   runtimePlanScopeAdd,
   runtimePlanTaskEdit,
+  runtimeReuseAttempt,
+  runtimeFailureCost,
   attachAcceptanceLock,
   runtimePlanPackFix,
   uiCardGaps,

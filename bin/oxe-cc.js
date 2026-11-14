@@ -4348,6 +4348,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--budget-reset') out.budgetReset = true;
     else if (a === '--strict-external') out.strictExternal = true;
     else if (a === '--supervise') out.supervise = true;
+    else if (a === '--reuse-attempt') out.reuseAttempt = true;
     else if (a === '--parallel-mutating') out.parallelMutating = true;
     else if (a === '--max-parallel' && argv[i + 1]) out.maxParallel = Number(argv[++i]);
     else if (a === '--release-report' && argv[i + 1]) out.releaseReport = String(argv[++i]);
@@ -4433,6 +4434,12 @@ function parseRuntimeArgs(argv) {
   } else if (out.action === 'resume' && (positionals[1] === 'continue' || positionals[1] === 'reset-task')) {
     out.resumeDecision = positionals[1];
     if (positionals[2]) out.dir = path.resolve(positionals[2]);
+  } else if (out.action === 'retry') {
+    // G36: runtime retry T<n> --reuse-attempt [--run <id>]
+    if (/^T\d+$/i.test(positionals[1] || '')) {
+      out.task = positionals[1].toUpperCase();
+      if (positionals[2]) out.dir = path.resolve(positionals[2]);
+    } else if (positionals[1]) out.dir = path.resolve(positionals[1]);
   } else if (out.action === 'autoresume') {
     // G24: runtime autoresume [status|run|install|uninstall] [pasta]
     if (/^(status|run|install|uninstall)$/.test(positionals[1] || '')) {
@@ -5675,6 +5682,19 @@ async function runRuntime(opts) {
     });
     return { lib, file, cfg, decideNow, next, spawnChild };
   };
+
+  if (opts.action === 'retry') {
+    try {
+      if (!opts.reuseAttempt) throw new Error('use: oxe-cc runtime retry T<n> --reuse-attempt [--run <id>] — reaplica a tentativa revertida, roda o verify e commita, sem turno de modelo (uma tentativa nova é o runtime execute)');
+      const out = oxeOperational.runtimeReuseAttempt(opts.dir, activeSession, { task: opts.task, run: opts.runId || null, by: opts.actor || undefined });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeRetrySchema: 1, ...out }, null, 2)); return; }
+      console.log(`  ${green}✓${reset} ${out.task}: tentativa reaproveitada de ${out.reused_from} — verify verde, commit ${String(out.commit || '').slice(0, 10)} (${out.files.length} arquivo(s)), sem turno de modelo`);
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
 
   if (opts.action === 'autoresume') {
     try {
@@ -7053,6 +7073,7 @@ async function main() {
     argv[0] === 'verify' ||
     argv[0] === 'quick' ||
     argv[0] === 'workflow' ||
+    argv[0] === 'report' ||
     argv[0] === 'install'
   ) {
     command = argv[0];
@@ -7062,7 +7083,7 @@ async function main() {
   } else if (argv[0] && /^[a-z][a-z-]*$/.test(argv[0]) && !fs.existsSync(argv[0])) {
     // 1.21.2 (OXB-G10): a word that is no command used to fall into the install with exit 0 — "oxe-cc quick --help"
     // printed the install help. It is an error now, with the closest command or the workflow it names.
-    const KNOWN = ['doctor', 'status', 'init-oxe', 'context', 'dashboard', 'events', 'map', 'runtime', 'azure', 'uninstall', 'update', 'capabilities', 'plugins', 'plan', 'spec', 'program', 'policy', 'decision', 'prd', 'grill', 'ship', 'trace', 'rfc', 'alm', 'review', 'docs', 'eval', 'design', 'release', 'customize', 'state', 'guards', 'verify', 'install', 'member', 'queue', 'quick', 'workflow'];
+    const KNOWN = ['doctor', 'status', 'init-oxe', 'context', 'dashboard', 'events', 'map', 'runtime', 'azure', 'uninstall', 'update', 'capabilities', 'plugins', 'plan', 'spec', 'program', 'policy', 'decision', 'prd', 'grill', 'ship', 'trace', 'rfc', 'alm', 'review', 'docs', 'eval', 'design', 'release', 'customize', 'state', 'guards', 'verify', 'install', 'member', 'queue', 'quick', 'workflow', 'report'];
     const WORKFLOWS = { execute: '/oxe-execute (ou oxe-cc runtime execute)', discuss: '/oxe-discuss', scan: '/oxe-scan', debug: '/oxe-execute --debug', retro: '/oxe-retro', next: '/oxe-next (ou oxe-cc status)', oxe: '/oxe' };
     const word = argv[0];
     const dist = (a, b) => { const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]); for (let j = 1; j <= b.length; j += 1) d[0][j] = j; for (let i = 1; i <= a.length; i += 1) for (let j = 1; j <= b.length; j += 1) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); return d[a.length][b.length]; };
@@ -8396,6 +8417,26 @@ async function main() {
     ].join('\n'));
     return;
   }
+  // oxe-cc report failure-cost [--since <data>] [--gap-minutes 30] [--json] [--dir <projeto>]
+  if (command === 'report') {
+    const o = { dir: process.cwd(), json: false };
+    if (argv[0] !== 'failure-cost') { console.error(`${red}Uso:${reset} oxe-cc report failure-cost [--since <data|ISO>] [--gap-minutes 30] [--json] [--dir <projeto>]`); process.exitCode = 1; return; }
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (a === '--since' && argv[i + 1]) o.since = String(argv[++i]);
+      else if (a === '--gap-minutes' && argv[i + 1]) o.gapMinutes = Number(argv[++i]);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    try {
+      const out = oxeOperational.runtimeFailureCost(o.dir, null, o);
+      if (o.json) { console.log(JSON.stringify({ oxeFailureCostSchema: 1, ...out }, null, 2)); return; }
+      console.log(require('./lib/oxe-failure-cost.cjs').render(out));
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   if (command === 'grill' && (argv[0] === 'publish' || argv[0] === 'report')) {
     const o = { dir: process.cwd(), json: false, action: argv[0] };
     for (let i = 1; i < argv.length; i += 1) {

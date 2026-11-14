@@ -111,6 +111,8 @@ const ALLOWED_CONFIG_KEYS = [
   'dry_verify',
   // G24: autoresume.enabled / min_free_mb / wait_memory_minutes / max_restarts / window_hours
   'autoresume',
+  // report failure-cost: failure_cost.fixes (cause → the OXB/commit that fixed it)
+  'failure_cost',
 ];
 
 /**
