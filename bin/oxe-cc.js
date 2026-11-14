@@ -2763,6 +2763,8 @@ ${green}runtime${reset} (controle operacional explícito do ACTIVE-RUN)
   start                                  cria um novo run com tracing inicial
   pause                                  pausa o run ativo e preserva o cursor
   resume                                 retoma o run ativo
+  autoresume [status|run|install|uninstall]  retoma sozinho o execute cortado por reinício ou kill (G24)
+  execute --supervise                    relança o execute que cai no meio do run (kill por memória)
   replay                                 marca replay parcial por onda ou tarefa
   compile                                compila PLAN/SPEC em ExecutionGraph formal + verification suite
   verify                                 executa a suite enterprise, coleta evidência e projeta VERIFY.md
@@ -4345,6 +4347,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--budget-usd' && argv[i + 1]) out.budgetUsd = Number(argv[++i]);
     else if (a === '--budget-reset') out.budgetReset = true;
     else if (a === '--strict-external') out.strictExternal = true;
+    else if (a === '--supervise') out.supervise = true;
     else if (a === '--parallel-mutating') out.parallelMutating = true;
     else if (a === '--max-parallel' && argv[i + 1]) out.maxParallel = Number(argv[++i]);
     else if (a === '--release-report' && argv[i + 1]) out.releaseReport = String(argv[++i]);
@@ -4430,6 +4433,15 @@ function parseRuntimeArgs(argv) {
   } else if (out.action === 'resume' && (positionals[1] === 'continue' || positionals[1] === 'reset-task')) {
     out.resumeDecision = positionals[1];
     if (positionals[2]) out.dir = path.resolve(positionals[2]);
+  } else if (out.action === 'autoresume') {
+    // G24: runtime autoresume [status|run|install|uninstall] [pasta]
+    if (/^(status|run|install|uninstall)$/.test(positionals[1] || '')) {
+      out.subAction = positionals[1];
+      if (positionals[2]) out.dir = path.resolve(positionals[2]);
+    } else {
+      out.subAction = 'status';
+      if (positionals[1]) out.dir = path.resolve(positionals[1]);
+    }
   } else if (out.action === 'ui-evidence') {
     if (positionals[1]) out.subAction = positionals[1];
     if (positionals[2]) out.uiFolder = positionals[2];
@@ -4894,7 +4906,10 @@ async function runRuntime(opts) {
   // deleted stays deleted). Read commands need an existing `.oxe/`; a write command on a fresh project initializes it.
   const RUNTIME_READ_ONLY = new Set(['status', 'providers', 'agents', 'replay', 'gates']);
   const readOnly = RUNTIME_READ_ONLY.has(opts.action) && !(opts.action === 'gates' && opts.subAction && opts.subAction !== 'list');
-  if (!fs.existsSync(path.join(opts.dir, '.oxe'))) {
+  // A git hook (pre-push, installed in the common .git, so it runs in EVERY worktree) and autoresume never create
+  // .oxe/ in a checkout: a fresh skeleton appeared in a worktree at a push (OxeSpace 14/11).
+  const NEVER_BOOTSTRAP = new Set(['pre-push', 'autoresume']);
+  if (!fs.existsSync(path.join(opts.dir, '.oxe')) && !NEVER_BOOTSTRAP.has(opts.action)) {
     if (readOnly) {
       console.error(`${yellow}Projeto sem .oxe/: ${opts.dir}${reset} — nada para ler. Rode ${cyan}npx oxe-cc init-oxe${reset} (ou /oxe-spec) antes.`);
       process.exit(1);
@@ -5622,7 +5637,135 @@ async function runRuntime(opts) {
     }
   }
 
+  // G24 (OXE-143): resume a run cut by a restart or a kill for memory.
+  const autoresumeCtx = () => {
+    const lib = require('./lib/oxe-autoresume.cjs');
+    const file = lib.leasePath(oxeOperational.operationalPaths(opts.dir, activeSession).executionRoot);
+    let projectConfig = {};
+    try { projectConfig = JSON.parse(fs.readFileSync(path.join(opts.dir, '.oxe', 'config.json'), 'utf8')) || {}; } catch { projectConfig = {}; }
+    const cfg = lib.config(projectConfig);
+    const decideNow = () => lib.decide({
+      inspection: lib.inspect(file),
+      runState: oxeOperational.readRunState(opts.dir, activeSession),
+      events: (() => { try { return oxeOperational.readEvents(opts.dir, activeSession); } catch { return []; } })(),
+      cfg,
+      freeMb: Math.round(require('os').freemem() / (1024 * 1024)),
+    });
+    const next = (argv) => {
+      try {
+        const pj = oxeOperational.readPlanJsonDoc(opts.dir, activeSession);
+        const doc = pj.doc || lib.tasksFromPlanMd(pj.paths && pj.paths.plan && fs.existsSync(pj.paths.plan) ? fs.readFileSync(pj.paths.plan, 'utf8') : '');
+        const completed = oxeOperational.readEvents(opts.dir, activeSession).filter((e) => e.type === 'WorkItemCompleted' && e.work_item_id).map((e) => e.work_item_id);
+        return lib.nextTask(doc, argv, { completed });
+      } catch { return null; }
+    };
+    const spawnChild = (argv, resumedFrom, cwd) => new Promise((resolve) => {
+      const child = require('child_process').spawn(process.execPath, [path.join(__dirname, 'oxe-cc.js'), ...argv], {
+        cwd: cwd || process.cwd(),
+        stdio: 'inherit',
+        env: { ...process.env, ...(resumedFrom ? { OXE_AUTORESUME_FROM: JSON.stringify(resumedFrom) } : {}) },
+      });
+      child.on('exit', (code, signal) => resolve({ code, signal }));
+      child.on('error', () => resolve({ code: 1, signal: null }));
+    });
+    return { lib, file, cfg, decideNow, next, spawnChild };
+  };
+
+  if (opts.action === 'autoresume') {
+    try {
+      const ar = autoresumeCtx();
+      const sub = opts.subAction || 'status';
+      if (sub === 'install' || sub === 'uninstall') {
+        const out = sub === 'install'
+          ? ar.lib.install({ projectDir: opts.dir, session: activeSession, cliPath: path.join(__dirname, 'oxe-cc.js') })
+          : ar.lib.uninstall({ projectDir: opts.dir, session: activeSession });
+        if (opts.jsonOutput) { console.log(JSON.stringify({ oxeAutoresumeSchema: 1, action: sub, ...out }, null, 2)); return; }
+        if (sub === 'install' && out.installed) console.log(`  ${green}✓${reset} autoresume no logon: ${out.file}\n    roda: oxe-cc runtime autoresume run --dir ${opts.dir}`);
+        else if (sub === 'install') console.log(`  ${yellow}!${reset} ${out.why}:\n    ${out.crontab}`);
+        else console.log(out.removed ? `  ${green}✓${reset} removido: ${out.file}` : `  ${dim}nada instalado${out.why ? ` (${out.why})` : ''}${reset}`);
+        return;
+      }
+      const insp = ar.lib.inspect(ar.file);
+      const lease = insp.lease;
+      const nextT = lease ? ar.next(lease.argv) : null;
+      if (sub === 'status') {
+        const d = ar.decideNow();
+        const where = ar.lib.installed({ projectDir: opts.dir, session: activeSession });
+        if (opts.jsonOutput) { console.log(JSON.stringify({ oxeAutoresumeSchema: 1, state: insp.state, lease, decision: d, next_task: nextT, installed: where, config: ar.cfg }, null, 2)); return; }
+        console.log(`  Execute: ${insp.state}${lease ? ` (pid ${lease.pid}, desde ${lease.started_at}${lease.ended_at ? `, fim ${lease.ended_at}` : ''})` : ''}`);
+        if (lease && (lease.restarts || []).length) console.log(`  Retomadas: ${lease.restarts.length} (última ${lease.restarts[lease.restarts.length - 1].at})`);
+        console.log(`  ${d.resume ? `${green}retomaria agora${reset}` : `${dim}não retoma${reset}`}: ${d.why}`);
+        if (nextT) console.log(`  Próxima tarefa: ${nextT.id}${nextT.title ? ` — ${nextT.title}` : ''} (${nextT.pending} pendente(s))`);
+        console.log(`  No logon: ${where ? where : 'não instalado — oxe-cc runtime autoresume install'}`);
+        return;
+      }
+      // run: the logon entry (or by hand) — waits for the memory rule, then relaunches under the supervisor
+      const d = await ar.lib.waitForResume(ar.decideNow, { waitMs: ar.cfg.waitMemoryMinutes * 60_000, onWait: (x) => console.log(`  ${dim}esperando: ${x.why}${reset}`) });
+      if (!d.resume) {
+        if (insp.state === 'interrupted') oxeOperational.appendEvent(opts.dir, activeSession, { type: 'AutoResumeSkipped', payload: { why: d.why, pid: lease.pid } });
+        if (opts.jsonOutput) console.log(JSON.stringify({ oxeAutoresumeSchema: 1, resumed: false, why: d.why }, null, 2));
+        else console.log(`  ${dim}não retomou:${reset} ${d.why}`);
+        if (d.paused || d.crash_loop || d.wait === 'memory') process.exitCode = 2;
+        return;
+      }
+      oxeOperational.appendEvent(opts.dir, activeSession, { type: 'AutoResumed', payload: { from_pid: lease.pid, why: d.why, next_task: nextT ? nextT.id : null, by: 'autoresume run' } });
+      console.log(`  ${green}↻${reset} retomando o execute${nextT ? ` em ${nextT.id}` : ''}: ${d.why}`);
+      const sup = await ar.lib.supervise({
+        file: ar.file, argv: lease.argv, resumedFrom: { pid: lease.pid, why: 'restart' }, decideNow: ar.decideNow,
+        waitMs: ar.cfg.waitMemoryMinutes * 60_000,
+        spawnChild: (argv, from) => ar.spawnChild(argv, from, lease.cwd),
+        log: (m) => console.log(`  ${dim}autoresume:${reset} ${m}`),
+      });
+      if (sup.why) console.log(`  ${dim}parou:${reset} ${sup.why}`);
+      process.exitCode = sup.exit && sup.exit.code != null ? sup.exit.code : 1;
+      return;
+    } catch (err) {
+      console.error(`${red}${err && err.message ? err.message : err}${reset}`);
+      process.exit(1);
+    }
+  }
+
+  // G24: --supervise keeps a light parent that relaunches the execute when it dies mid-run
+  if (opts.action === 'execute' && opts.supervise) {
+    const ar = autoresumeCtx();
+    const argv = ar.lib.relaunchArgv(process.argv.slice(2));
+    const sup = await ar.lib.supervise({
+      file: ar.file, argv, decideNow: ar.decideNow, waitMs: ar.cfg.waitMemoryMinutes * 60_000,
+      spawnChild: (a, from) => {
+        if (from) {
+          const n = ar.next(a);
+          oxeOperational.appendEvent(opts.dir, activeSession, { type: 'AutoResumed', payload: { from_pid: from.pid, why: 'o execute caiu no meio do run', next_task: n ? n.id : null, by: 'supervise' } });
+        }
+        return ar.spawnChild(a, from);
+      },
+      log: (m) => console.log(`  ${dim}supervisor:${reset} ${m}`),
+    });
+    if (sup.why) {
+      oxeOperational.appendEvent(opts.dir, activeSession, { type: 'AutoResumeSkipped', payload: { why: sup.why, by: 'supervise' } });
+      console.log(`  ${dim}supervisor parou:${reset} ${sup.why}`);
+    }
+    process.exitCode = sup.exit && sup.exit.code != null ? sup.exit.code : 1;
+    return;
+  }
+
   if (opts.action === 'execute') {
+    // G24: the lease says this execute is running; a clean end closes it, a restart or a kill leaves it open
+    const arLease = (() => {
+      try {
+        const lib = require('./lib/oxe-autoresume.cjs');
+        const file = lib.leasePath(oxeOperational.operationalPaths(opts.dir, activeSession).executionRoot);
+        let resumedFrom = null;
+        try { resumedFrom = process.env.OXE_AUTORESUME_FROM ? JSON.parse(process.env.OXE_AUTORESUME_FROM) : null; } catch { resumedFrom = null; }
+        lib.startLease(file, { argv: process.argv.slice(2), session: activeSession, resumedFrom });
+        return { lib, file };
+      } catch { return null; }
+    })();
+    let arDone = false;
+    const arFinish = (status) => { if (arLease && !arDone) { arDone = true; try { arLease.lib.finishLease(arLease.file, status); } catch { /* auxiliar */ } } };
+    // any exit of this process closes the lease (a kill or a restart never runs this, and leaves it open);
+    // Ctrl+C is the person stopping the run: "stopped", never resumed by itself
+    process.on('exit', () => arFinish(process.exitCode ? 'failed' : 'finished'));
+    for (const sig of ['SIGINT', 'SIGBREAK']) process.once(sig, () => { arFinish('stopped'); process.exit(130); });
     try {
       // Resolve provider: flag > env vars > persisted .oxe/config.json runtime.provider
       const _persisted = oxeOperational.loadRuntimeProviderConfig(opts.dir);
@@ -5739,6 +5882,7 @@ async function runRuntime(opts) {
         },
       });
       const r = result.result || {};
+      if (arLease) arFinish(arLease.lib.endStatus(result));
       // ALM: the tasks this run started / finished move on the board (never fails the execute).
       try { await oxeOperational.almAutoSync(opts.dir, activeSession); } catch { /* registrado como pendente */ }
       // transport "mcp": the agent runs the queue with its MCP tools
@@ -7271,7 +7415,7 @@ async function main() {
           if (out.missing.length) console.log(`  ${c ? dim : ''}ausentes:${c ? reset : ''} ${out.missing.join(', ')}`);
         }
       } else {
-        console.error(`${red}Use:${reset} oxe-cc spec amend A<n> (--text|--append|--verify|--risk) --by <papel> --reason "…" [--additive] | oxe-cc spec add criterion A<n> --text "…" --verify "…" [--risk P1] | oxe-cc spec add requirement R<n> --text "…" [--criteria A<n>] [--before "<cabeçalho>"]`);
+        console.error(`${red}Use:${reset} oxe-cc spec amend A<n> (--text|--append|--verify|--risk) --by <papel> --reason "…" [--additive] | oxe-cc spec add criterion A<n> --text "…" --verify "…" [--risk P1] --by <papel> --reason "…" | oxe-cc spec add requirement R<n> --text "…" [--criteria A<n>] [--before "<cabeçalho>"] --by <papel> --reason "…"`);
         process.exit(1);
       }
       if (o.json) console.log(JSON.stringify({ oxeProgramEditSchema: 1, ...out, program: undefined }, null, 2));

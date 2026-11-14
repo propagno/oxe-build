@@ -29,7 +29,8 @@ export interface TestResultNames {
 /**
  * Names of the tests a runner reported as passed / failed (1.20 "executed proof"). Supported outputs: TAP
  * (`node --test`, `ok 1 - name`), vitest `--reporter=verbose` (`✓ file > suite > name 5ms`), jest `--verbose`
- * and mocha (`✓ name`), pytest `-v` (`path::name PASSED`) and JUnit XML `<testcase name=…>`.
+ * and mocha (`✓ name`), pytest `-v` (`path::name PASSED`), Gradle testLogging (`Class > method PASSED`) and JUnit XML
+ * `<testcase name=…>`.
  * Default (non-verbose) vitest/jest output lists no passed names: the plan must use a verbose reporter.
  */
 export declare function extractTestResults(output: string): TestResultNames;

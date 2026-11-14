@@ -8,6 +8,32 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-build, mais o roteiro de excelência e os backlogs de comparação aprovados pelo TECH LEAD. Cada item tem uma seção em `docs/oxespace-1.5/BACKLOG.md`, com a evidência e o teste que a reproduz (`tests/oxe-1212-*.test.cjs`). Para usar só a trilha recomendada, veja [docs/HAPPY-PATH.md](docs/HAPPY-PATH.md).
 
+### Retomada automática do execute (G24, OXE-143)
+
+- **Lease do execute:** todo `runtime execute` grava `EXECUTE-LEASE.json` com o pid, os argumentos sem segredo e o estado. Um fim limpo fecha o lease e Ctrl+C o fecha como `stopped`. Um reinício ou um kill o deixam aberto, e isso passa a ser visível: `runtime autoresume status` mostra o estado, a decisão e a próxima tarefa.
+- **Retoma sozinho:**
+  - `runtime execute --supervise` relança o execute que cai no meio do run (kill por memória);
+  - `runtime autoresume install` põe `autoresume run` no logon: no Windows, um `.cmd` na pasta Inicializar, sem admin; nos outros sistemas, a linha `@reboot` impressa para o crontab.
+- **Onde recomeça:** a retomada usa os mesmos argumentos e começa na próxima tarefa não concluída. As tarefas concluídas antes do corte já estão done no PLAN.json e não são pagas de novo.
+- **Nunca retoma:**
+  - uma fase pausada (`runtime pause`, pausa de cota ou de ambiente, checkpoint esperando aprovação);
+  - um lease fechado ou `stopped`;
+  - `autoresume.enabled: false`;
+  - um laço de queda (`max_restarts` em `window_hours`);
+  - memória abaixo de `min_free_mb`: padrão 2560, ou `parallel.min_free_mb` quando definido; espera até `wait_memory_minutes` e desiste dizendo por quê.
+- **Eventos:** `AutoResumed` e `AutoResumeSkipped`.
+- **Teste:** `tests/oxe-1212-autoresume.test.cjs`. O CA-1 é um reinício simulado num programa de teste: o execute é morto em T2 com SIGKILL e o `autoresume run` o retoma em T2 sem chamar o executor para T1.
+
+### Prova de teste no Kotlin/Gradle e hooks sem esqueleto (Celular F2 e OxeChat F2, 14/11)
+
+- **`proves` com Gradle:**
+  - A linha do testlog do Gradle (`Class > method PASSED|FAILED|SKIPPED`) conta como nome de teste. Vale também com a duração e com o prefixo de job e timestamp do log da CI. Antes, os testes Kotlin que rodaram davam `proof_not_executed`.
+  - O anexo do JUnit XML também pega um wrapper com "gradle" no nome (`gradle152.mjs`).
+  - O lint não pede mais "reporter verbose" para gradle, gradlew e mvn.
+  - A saída do check vai até 32 MB; antes eram 2 MB, que cortavam um build Android.
+- **Hook nunca cria `.oxe/`:** o pre-push fica no `.git` comum e roda em toda worktree. O `runtime pre-push`, assim como o `runtime autoresume`, não faz mais o bootstrap do `.oxe/` num checkout que não tem um.
+- A mensagem de uso do `spec add` lista `--by` e `--reason`.
+
 ### ALM: simulação que nunca grava, e escrita explícita (OXB-G12 a G15)
 - **`--dry-run` nunca grava no ALM, em nenhum comando (G13, P0):** antes, `alm refine apply --dry-run` aplicava de verdade.
   - O transporte REST recusa POST, PUT, PATCH e DELETE em simulação; a consulta WIQL do Azure é a única leitura liberada.

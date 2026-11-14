@@ -109,6 +109,8 @@ const ALLOWED_CONFIG_KEYS = [
   'ship',
   // dry_verify.timeout_ms (plan lint --dry-verify, per command)
   'dry_verify',
+  // G24: autoresume.enabled / min_free_mb / wait_memory_minutes / max_restarts / window_hours
+  'autoresume',
 ];
 
 /**

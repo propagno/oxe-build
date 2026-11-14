@@ -135,3 +135,17 @@ describe('the budget message says it is the phase total', () => {
     if (reason) assert.match(reason, /acumulado da fase/);
   });
 });
+
+describe('hooks nunca criam .oxe/ numa worktree (OxeSpace 14/11)', () => {
+  it('runtime pre-push num checkout sem .oxe/ passa e não cria o esqueleto', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-prepush-'));
+    dirs.push(dir);
+    spawnSync('git', ['init', '-q'], { cwd: dir });
+    const r = spawnSync(process.execPath, [CLI, 'runtime', 'pre-push', '--dir', dir], { encoding: 'utf8', input: '', env: { ...process.env, NO_COLOR: '1' } });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal(fs.existsSync(path.join(dir, '.oxe')), false);
+    const s = spawnSync(process.execPath, [CLI, 'runtime', 'autoresume', 'status', '--dir', dir], { encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' } });
+    assert.equal(s.status, 0, s.stdout + s.stderr);
+    assert.equal(fs.existsSync(path.join(dir, '.oxe')), false);
+  });
+});

@@ -764,7 +764,8 @@ function lintPlan(input) {
   // Prova executada: o runner precisa listar os nomes dos testes que passaram.
   for (const entry of acceptanceTests) {
     if (!entry.proves || !entry.proves.length) continue;
-    const verbose = /--reporter[= ]verbose|--verbose|--test-reporter[= ](tap|spec)|node\s+--test|\s-v\b|junit/i.test(entry.command);
+    // gradle / maven: the test names come from testLogging lines (`Class > method PASSED`) or the JUnit XML reports
+    const verbose = /--reporter[= ]verbose|--verbose|--test-reporter[= ](tap|spec)|node\s+--test|\s-v\b|junit|\b(gradlew|gradle|mvnw?)/i.test(entry.command);
     if (!verbose) warnings.push(`teste de aceite ${entry.criterion}: 'proves' exige saída com nomes de teste — use um reporter verbose (ex.: vitest --reporter=verbose)`);
     // OXB-073: each `proves` must name a test the files DECLARE. Paraphrased proves ("ratchet (LIMIT_SELECTED) stays at
     // 22 or lower, never raised" for the test "ratchet stays at 22 or lower (never raised)") can never be found among

@@ -295,13 +295,15 @@ async function runCheckOnce(check, cwd, timeoutMs = 60000) {
             cwd,
             env: (0, shell_argv_1.childProcessEnv)(),
             timeout: timeoutMs,
-            maxBuffer: 2 * 1024 * 1024,
+            // a Gradle/Android build prints a lot before and around the test lines: 2 MB cut it (ENOBUFS)
+            maxBuffer: 32 * 1024 * 1024,
             windowsVerbatimArguments: shell.windowsVerbatimArguments,
         });
         const duration_ms = Date.now() - start;
         // OXB-150: gradle/maven report per-test results in JUnit XML files (build/test-results, target/surefire-reports),
         // not on stdout; the reports this command wrote are appended so counts and `proves` see each test.
-        const junitXml = /\b(gradlew(\.bat)?|gradle|mvnw?(\.cmd)?)\b/.test(check.command) ? junitReportsSince(cwd, start) : '';
+        // also a wrapper script named after it (gradle152.mjs): no word boundary after "gradle"
+        const junitXml = /\b(gradlew|gradle|mvnw?)/i.test(check.command) ? junitReportsSince(cwd, start) : '';
         const stdout = (0, shell_argv_1.decodeConsoleOutput)(result.stdout) + (junitXml ? `\n${junitXml}` : '');
         const stderr = (0, shell_argv_1.decodeConsoleOutput)(result.stderr);
         const report = (0, test_report_parsers_1.parseTestReport)(`${stdout}\n${stderr}`);

@@ -130,6 +130,24 @@ Os checks pesados (e2e, build empacotado, Android) rodam no CI do repositório n
 - **Trace da CI:** quando um job falha, os artefatos (`artifacts`, padrão `*trace*`, `*playwright-report*`, `*test-results*`, `*screenshot*`; `[]` desliga) são baixados para `.oxe/evidence/remote/`. Com `where: "both"`, o check roda aqui e na CI; vermelho só na CI vira `ci_only`, e a leitura certa é o trace da CI, não uma reprodução local.
 - **`verify.min_free_mb`:** com menos memória livre que isso, nenhum check pesado roda na máquina. Ele vai para a CI quando há `verify.remote`; sem ela, fica como "não verificado (memória baixa)" e o verify termina parcial.
 
+## Retomada automática do execute (`autoresume`)
+
+```json
+"autoresume": { "enabled": true, "min_free_mb": 2560, "wait_memory_minutes": 30, "max_restarts": 3, "window_hours": 6 }
+```
+
+- Todo `runtime execute` grava um lease (`EXECUTE-LEASE.json`, ao lado do `ACTIVE-RUN.json`) com o pid, os argumentos sem segredo (`--api-key` nunca entra) e o estado. Um fim limpo fecha o lease (`finished`, `paused`, `blocked`, `failed`); Ctrl+C fecha como `stopped`. Um lease ainda `running` com o pid morto quer dizer reinício ou kill.
+- `oxe-cc runtime execute --supervise` roda o execute como filho e o relança quando ele cai no meio do run, que é o kill por memória com a máquina ligada.
+- `oxe-cc runtime autoresume install` põe `autoresume run` no logon. No Windows é um `.cmd` na pasta Inicializar do usuário, sem admin, um por projeto. Nos outros sistemas, imprime a linha `@reboot` para o crontab. `autoresume status` mostra o estado, a decisão e a próxima tarefa; `uninstall` remove.
+- A retomada usa os mesmos argumentos, e o execute pula o que está done, então começa na próxima tarefa não concluída.
+- **Nunca retoma** nestes casos:
+  - run pausado (`runtime pause`, pausa de cota ou de ambiente, checkpoint esperando aprovação);
+  - lease fechado limpo, inclusive `stopped`;
+  - `enabled: false`;
+  - mais de `max_restarts` retomadas em `window_hours`, porque isso é um laço de queda;
+  - memória abaixo da regra: espera até `wait_memory_minutes` por `min_free_mb` livres e desiste dizendo por quê.
+- `min_free_mb` cai para `parallel.min_free_mb`, depois para `OXE_EXECUTOR_MIN_FREE_MB` e, sem nenhum dos dois, fica em 2560 (2,5 GB). Os eventos `AutoResumed` e `AutoResumeSkipped` vão para o `OXE-EVENTS.ndjson`.
+
 ## Entrega e CI (`ship`)
 
 ```json

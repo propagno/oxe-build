@@ -24,6 +24,22 @@ const verification_compiler_1 = require("../src/verification/verification-compil
         strict_1.default.deepEqual(r.passed, ['publica a linha na hora', 'tests/a.test.ts > registry > starts one session', 'legacy mocha name', 'test_ok', 'junit ok']);
         strict_1.default.deepEqual(r.failed, ['não publica', 'tests/a.test.ts > registry > busy', 'test_bad', 'junit bad']);
     });
+    (0, node_test_1.test)('Gradle testLogging (Kotlin/JVM): Class > method PASSED|FAILED|SKIPPED, também com prefixo do log da CI', () => {
+        const out = [
+            '> Task :protocol:test',
+            'VtScreenScrollTest > theFilledScreenIsFiveRows PASSED',
+            'VtScreenScrollTest > lineFeedAtTheBottomOfAScrollRegionScrollsOnlyThatRegion PASSED (0.2s)',
+            'test\tRun tests\t2026-11-14T16:00:00.000Z TerminalEnterTest > anEnterKeySendsCarriageReturn PASSED',
+            'TerminalEnterTest > Nested > sendWithAnEmptyFieldSendsEnterAlone FAILED',
+            'TerminalEnterTest > ignoredOne SKIPPED',
+            'BUILD SUCCESSFUL in 41s',
+        ].join('\n');
+        const r = (0, test_report_parsers_1.extractTestResults)(out);
+        strict_1.default.deepEqual(r.passed, ['VtScreenScrollTest > theFilledScreenIsFiveRows', 'VtScreenScrollTest > lineFeedAtTheBottomOfAScrollRegionScrollsOnlyThatRegion', 'TerminalEnterTest > anEnterKeySendsCarriageReturn']);
+        strict_1.default.deepEqual(r.failed, ['TerminalEnterTest > Nested > sendWithAnEmptyFieldSendsEnterAlone']);
+        strict_1.default.deepEqual((0, test_report_parsers_1.missingProofs)(['theFilledScreenIsFiveRows', 'lineFeedAtTheBottomOfAScrollRegionScrollsOnlyThatRegion', 'anEnterKeySendsCarriageReturn'], out), []);
+        strict_1.default.deepEqual((0, test_report_parsers_1.missingProofs)(['sendWithAnEmptyFieldSendsEnterAlone', 'ignoredOne'], out), ['sendWithAnEmptyFieldSendsEnterAlone', 'ignoredOne']);
+    });
     (0, node_test_1.test)('missingProofs aceita "arquivo › nome" e nome parcial', () => {
         const out = ' ✓ tests/r.test.ts > voice registry (A1) > starts one session, stamps events 9ms';
         strict_1.default.deepEqual((0, test_report_parsers_1.missingProofs)(['tests/r.test.ts › starts one session'], out), []);
