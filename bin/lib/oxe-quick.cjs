@@ -100,6 +100,9 @@ function done(root, input = {}) {
   const rec = input.id ? read(root, input.id) : current(root);
   if (!rec) throw new Error('nenhum quick aberto (oxe-cc quick <KEY> "<objetivo>")');
   if (rec.status !== 'open') throw new Error(`${rec.id} já está ${rec.status}`);
+  // OxeSpace 14/11 (OXE-158): --verify is run by the shell; prose in it ("a -> b") became a redirect and left a stray
+  // file. A prose arrow is refused before anything runs.
+  if (input.verify && /(^|\s)[-=]>(\s|$)/.test(String(input.verify))) throw new Error(`--verify roda no shell: "${String(input.verify).slice(0, 80)}" parece texto ("->" vira redirecionamento e cria um arquivo). Passe só o comando (ex.: --verify "npx vitest run x.test.ts") e escreva o resto no commit`);
   const spawn = input.spawn || spawnSync;
   const commits = commitsOf(root, rec.id, spawn);
   if (!commits.length && !input.noCommit) throw new Error(`${rec.id}: nenhum commit com "OXE-Quick: ${rec.id}" — commite com o trailer (o hook commit-msg acrescenta) ou feche com --no-commit se nada precisou mudar`);

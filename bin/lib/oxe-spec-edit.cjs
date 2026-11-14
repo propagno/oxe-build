@@ -17,9 +17,13 @@ function eolOf(text) {
 function splitRow(line) {
   const trimmed = line.trim();
   if (!trimmed.startsWith('|')) return null;
-  const inner = trimmed.replace(/^\|/, '').replace(/\|$/, '');
-  return inner.split('|').map((cell) => cell.trim());
+  const inner = trimmed.replace(/^\|/, '').replace(/(?<!\\)\|$/, '');
+  // an escaped \| is part of the cell (GFM tables)
+  return inner.split(/(?<!\\)\|/).map((cell) => cell.trim());
 }
+
+/** A cell's text with its "|" escaped, so it never splits the row (OxeSpace 14/11, Celular F3). */
+const cellText = (s) => String(s).trim().replace(/(?<!\\)\|/g, '\\|');
 
 function joinRow(cells) {
   return `| ${cells.join(' | ')} |`;
@@ -159,10 +163,10 @@ function amendCriterion(specText, id, change = {}) {
       const col = criteriaColumns(t.header);
       if (change.verify && col.verify < 0) throw new Error('a tabela de critérios não tem coluna "Como verificar"');
       if (change.risk && col.risk < 0) throw new Error('a tabela de critérios não tem coluna "Risco"');
-      if (change.text) next[col.criterion] = String(change.text).trim();
-      if (change.append) next[col.criterion] = `${next[col.criterion].replace(/[.;\s]+$/, '')}; ${String(change.append).trim()}`;
-      if (change.verify) next[col.verify] = String(change.verify).trim();
-      if (change.risk) next[col.risk] = String(change.risk).trim();
+      if (change.text) next[col.criterion] = cellText(change.text);
+      if (change.append) next[col.criterion] = `${next[col.criterion].replace(/[.;\s]+$/, '')}; ${cellText(change.append)}`;
+      if (change.verify) next[col.verify] = cellText(change.verify);
+      if (change.risk) next[col.risk] = cellText(change.risk);
       lines[i] = joinRow(next);
       return { text: lines.join(eol), before, after: lines[i] };
     }
@@ -198,9 +202,9 @@ function addCriterion(specText, id, change = {}) {
   if (col.risk < 0 && change.risk) throw new Error('a tabela de critérios não tem coluna "Risco" — retire --risk');
   const cells = t.header.map(() => '');
   cells[0] = key;
-  cells[col.criterion] = String(change.text).trim();
-  cells[col.verify] = String(change.verify).trim();
-  if (col.risk >= 0) cells[col.risk] = String(change.risk).trim();
+  cells[col.criterion] = cellText(change.text);
+  cells[col.verify] = cellText(change.verify);
+  if (col.risk >= 0) cells[col.risk] = cellText(change.risk);
   const row = joinRow(cells);
   lines.splice(t.lastRow + 1, 0, row);
   return { text: lines.join(eol), id: key, before: null, after: row };
@@ -400,4 +404,5 @@ module.exports = {
   parseScopeFile,
   leftoverPhaseMentions,
   checkNewId,
+  splitRow,
 };

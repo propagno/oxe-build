@@ -201,3 +201,50 @@ describe('alm version <KEY> <versão> chega ao comando (OxeSpace 14/11, OXE-10)'
     assert.match(`${ensure.stdout}${ensure.stderr}`, /alm version ensure <nome>/);
   });
 });
+
+describe('spec add/amend: um "|" no texto não parte a linha da tabela (Celular F3, 14/11)', () => {
+  const se = require('../bin/lib/oxe-spec-edit.cjs');
+  const SPEC = '# SPEC\n\n## Critérios de aceite\n\n| ID | Critério | Risco | Como verificar |\n|---|---|---|---|\n| A1 | x | P2 | `node -e 1` |\n';
+  it('o texto vai escapado e a linha continua com 4 células; o amend acha o critério', () => {
+    const add = se.addCriterion(SPEC, 'A2', { text: 'aceita a | b', verify: 'npx vitest run t -t "a|b"', risk: 'P1' });
+    const BS = String.fromCharCode(92);
+    assert.ok(add.after.includes(`aceita a ${BS}| b`), add.after);
+    const row = add.text.split('\n').find((l) => l.startsWith('| A2'));
+    assert.equal(se.splitRow(row).length, 4, row);
+    const am = se.amendCriterion(add.text, 'A2', { append: 'ou c | d' });
+    assert.ok(am.after.includes(`ou c ${BS}| d`), am.after);
+    assert.equal(se.splitRow(am.after).length, 4, am.after);
+    assert.ok(se.criteriaIds(am.text).includes('A2'));
+  });
+});
+
+describe('plan task edit: onda, dependências, escopo e notas sem editar o PLAN.json à mão (Celular F3, 14/11)', () => {
+  it('edita, registra, e recusa ciclo, tarefa done, dependência inexistente e teste congelado', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-taskedit-'));
+    dirs.push(dir);
+    fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.md'), '# PLAN\n');
+    const doc = { schema_version: 1, tasks: [
+      { id: 'T7', title: 'a', wave: 1, files: ['src/a.kt', 'src/shared.kt'], notes: 'limite de 600 ms' },
+      { id: 'T9', title: 'b', wave: 1, depends_on: [], files: ['src/shared.kt'] },
+      { id: 'T1', title: 'feita', wave: 1, files: ['src/x.kt'], done: true },
+    ], acceptance_tests: [{ criterion: 'A7', files: ['tests/A7Test.kt'] }] };
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify(doc));
+    const base = { by: 'planner', reason: 'T7 e T9 escreviam o mesmo arquivo na onda 1' };
+    const out = op.runtimePlanTaskEdit(dir, null, { ...base, task: 'T9', wave: '2', dependsOn: 'T7' });
+    assert.equal(out.after.wave, 2);
+    assert.deepEqual(out.after.depends_on, ['T7']);
+    op.runtimePlanTaskEdit(dir, null, { ...base, task: 'T7', removePaths: 'src/shared.kt', notes: 'limite de 400 ms (CR-F3-2)' });
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'));
+    const t7 = saved.tasks.find((t) => t.id === 'T7');
+    assert.deepEqual(t7.files, ['src/a.kt']);
+    assert.equal(t7.notes, 'limite de 400 ms (CR-F3-2)');
+    assert.equal(t7.edits.length, 1);
+    assert.throws(() => op.runtimePlanTaskEdit(dir, null, { ...base, task: 'T7', dependsOn: 'T9' }), /ciclo/);
+    assert.throws(() => op.runtimePlanTaskEdit(dir, null, { ...base, task: 'T1', wave: '2' }), /está done/);
+    assert.throws(() => op.runtimePlanTaskEdit(dir, null, { ...base, task: 'T9', dependsOn: 'T42' }), /T42 não existe/);
+    assert.throws(() => op.runtimePlanTaskEdit(dir, null, { ...base, task: 'T7', removePaths: 'tests/A7Test.kt' }), /teste congelado/);
+    const changes = fs.readFileSync(path.join(dir, '.oxe', 'program', 'changes.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(changes.filter((c) => c.kind === 'task_edit').length, 2);
+  });
+});

@@ -63,6 +63,10 @@ describe('spec freeze reads test titles like the plan lint (escapes undone)', ()
     // an explicit --command wins on a re-freeze (OxeSpace 14/11: A5 kept a command naming a deleted .ts)
     freeze.freeze(dir, jsonPath, doc, { from: sha, criteria: 'A10', cr: 'CR-07', command: 'npx vitest run tests/integration/policy-change-gate.test.ts --reporter=verbose' });
     assert.equal(doc.acceptance_tests[0].command, 'npx vitest run tests/integration/policy-change-gate.test.ts --reporter=verbose');
+    // the entry's other files stay on a re-freeze (OxeSpace 14/11, Celular F3: RenderedScreen.kt dropped out)
+    doc.acceptance_tests[0].files.push('src/RenderedScreen.kt');
+    freeze.freeze(dir, jsonPath, doc, { from: sha, criteria: 'A10', cr: 'CR-07' });
+    assert.deepEqual(doc.acceptance_tests[0].files.sort(), ['src/RenderedScreen.kt', 'tests/integration/policy-change-gate.test.ts']);
   });
 });
 
@@ -94,5 +98,39 @@ describe('freeze keeps only the titles the entry command selects (OxeSpace 14/11
     assert.deepEqual(freeze.filterTitles(SHARED, titles, 'OXE-128 ring').sort(), ['rings once', 'rings twice']);
     assert.deepEqual(freeze.filterTitles(SHARED, titles, null), titles, 'no pattern: every title');
     assert.deepEqual(freeze.filterTitles(SHARED, titles, 'nada disso'), []);
+  });
+});
+
+describe('Kotlin: --proves-filter / --tests over package.Class.method (OxeSpace 14/11, Celular F3)', () => {
+  const KT = [
+    'package dev.oxe.protocol',
+    '',
+    'class VtScreenScrollTest {',
+    '  @Test fun theFilledScreenIsFiveRows() {}',
+    '  // @Test fun commentedOut() {}',
+    '  @Test',
+    '  @DisplayName("a line feed scrolls only its region")',
+    '  fun lineFeedScrollsRegion() {}',
+    '}',
+    'class TerminalEnterTest {',
+    '  @Test fun anEnterKeySendsCarriageReturn() {}',
+    '}',
+  ].join('\n');
+
+  it('full names carry the package and the class; a DisplayName maps to its method', () => {
+    const names = Object.fromEntries(freeze.fullJvmTestNames(KT).map((t) => [t.title, t.full]));
+    assert.equal(names.theFilledScreenIsFiveRows, 'dev.oxe.protocol.VtScreenScrollTest.theFilledScreenIsFiveRows');
+    assert.equal(names['a line feed scrolls only its region'], 'dev.oxe.protocol.VtScreenScrollTest.lineFeedScrollsRegion');
+    assert.equal(names.anEnterKeySendsCarriageReturn, 'dev.oxe.protocol.TerminalEnterTest.anEnterKeySendsCarriageReturn');
+  });
+
+  it('the Gradle --tests glob of the command selects the class', () => {
+    assert.equal(freeze.namePatternOf('node gradle152.mjs :protocol:test --tests "*VtScreenScrollTest*"'), '*VtScreenScrollTest*');
+    const titles = freeze.titlesOf(KT, 'VtTest.kt');
+    const sel = freeze.filterTitles(KT, titles, '*VtScreenScrollTest*', 'VtTest.kt');
+    assert.ok(sel.includes('theFilledScreenIsFiveRows'));
+    assert.ok(sel.includes('a line feed scrolls only its region'));
+    assert.ok(!sel.includes('anEnterKeySendsCarriageReturn'));
+    assert.deepEqual(freeze.filterTitles(KT, titles, 'TerminalEnterTest', 'VtTest.kt'), ['anEnterKeySendsCarriageReturn']);
   });
 });

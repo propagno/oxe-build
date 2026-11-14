@@ -90,14 +90,50 @@ function fullTestNames(text) {
   return out;
 }
 
-/** The `-t` / `--testNamePattern` / `--grep` pattern of a test command, or null. */
+const JVM_FILE = /\.(kt|kts|java|groovy|scala)$/i;
+
+/**
+ * OxeSpace 14/11 (Celular F3): --proves-filter never matched Kotlin tests. JVM full names are `package.Class.method`
+ * (what Gradle's --tests matches); a @DisplayName title takes the full name of the method it annotates.
+ */
+function fullJvmTestNames(text) {
+  const src = blankComments(text);
+  const pkg = (/^\s*package\s+([\w.]+)/m.exec(src) || [])[1] || '';
+  const classes = [...src.matchAll(/\b(?:class|object|interface)\s+([A-Za-z_$][\w$]*)/g)].map((m) => ({ name: m[1], at: m.index }));
+  const classAt = (i) => { let c = ''; for (const k of classes) if (k.at < i) c = k.name; return c; };
+  const full = (cls, name) => [pkg, cls, name].filter(Boolean).join('.');
+  const out = [];
+  const titles = require('./oxe-plan-json.cjs').declaredTestTitles(text, 'x.kt');
+  for (const t of titles) {
+    const esc = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const fun = new RegExp(`\\bfun\\s+(?:\`${esc}\`|${esc})\\s*\\(|\\b${esc}\\s*\\(`).exec(src);
+    if (fun) { out.push({ title: t, full: full(classAt(fun.index), t) }); continue; }
+    // a @DisplayName: the method that follows it
+    const disp = new RegExp(`@DisplayName\\(\\s*"${esc.replace(/"/g, '\\\\"')}"`).exec(src);
+    if (disp) {
+      const next = /\bfun\s+(?:`([^`]+)`|([A-Za-z_$][\w$]*))|\b(?:void|public|private)\s+(?:\w+\s+)*([A-Za-z_$][\w$]*)\s*\(/.exec(src.slice(disp.index));
+      const method = next ? (next[1] || next[2] || next[3]) : t;
+      out.push({ title: t, full: full(classAt(disp.index), method) });
+    }
+  }
+  return out;
+}
+
+/** The `-t` / `--testNamePattern` / `--grep` (JS) or `--tests` (Gradle) pattern of a test command, or null. */
 function namePatternOf(command) {
-  const m = /(?:^|\s)(?:-t|--testNamePattern|--test-name-pattern|--grep)(?:=|\s+)(?:"([^"]*)"|'([^']*)'|(\S+))/.exec(String(command || ''));
+  const m = /(?:^|\s)(?:-t|--testNamePattern|--test-name-pattern|--grep|--tests)(?:=|\s+)(?:"([^"]*)"|'([^']*)'|(\S+))/.exec(String(command || ''));
   return m ? (m[1] ?? m[2] ?? m[3]) : null;
 }
 
-function filterTitles(text, titles, pattern) {
+function filterTitles(text, titles, pattern, file = '') {
   if (!pattern) return titles;
+  if (JVM_FILE.test(String(file))) {
+    // Gradle --tests: a glob over package.Class.method (* = anything); without *, a part of the name
+    const re = pattern.includes('*') ? new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`) : null;
+    const hit = (s) => (re ? re.test(s) : s.includes(pattern));
+    const selected = new Set(fullJvmTestNames(text).filter((t) => hit(t.full)).map((t) => t.title));
+    return titles.filter((t) => selected.has(t));
+  }
   let re = null;
   try { re = new RegExp(pattern); } catch { re = null; }
   const hit = (s) => (re ? re.test(s) : s.includes(pattern));
@@ -152,13 +188,14 @@ function freeze(root, jsonPath, doc, options = {}) {
     if (!allTitles.length) { refused.push({ file: f, why: `${f}: nenhum it/test com título — nada a provar` }); continue; }
     // only the titles the entry's command selects (--proves-filter, or its -t / --testNamePattern)
     const pattern = options.provesFilter || namePatternOf(options.command || (existing && existing.command) || '');
-    const proves = filterTitles(text, allTitles, pattern);
+    const proves = filterTitles(text, allTitles, pattern, f);
     if (!proves.length) { refused.push({ file: f, why: `${f}: o filtro "${pattern}" não seleciona nenhum dos ${allTitles.length} testes — confira o -t do comando ou o --proves-filter` }); continue; }
     if (local == null || local !== text) { fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, text); }
     const entry = {
       ...(existing || {}),
       criterion,
-      files: [f],
+      // the entry's other files stay (OxeSpace 14/11, Celular F3: RenderedScreen.kt dropped out of A7/A8/A9/A11)
+      files: [...new Set([...((existing && existing.files) || []).map((x) => norm(typeof x === 'string' ? x : x.path)), f])],
       // an explicit --command wins on a re-freeze (OxeSpace 14/11: A5 kept a command naming a deleted .ts)
       command: options.command || (existing && existing.command) || `npx vitest run ${f}`,
       proves,
@@ -188,4 +225,4 @@ function freeze(root, jsonPath, doc, options = {}) {
   return { origin, frozen, refused, rigor };
 }
 
-module.exports = { freeze, titlesOf, criterionOf, resolveRef, fullTestNames, namePatternOf, filterTitles };
+module.exports = { freeze, titlesOf, criterionOf, resolveRef, fullTestNames, fullJvmTestNames, namePatternOf, filterTitles };

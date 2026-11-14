@@ -2934,8 +2934,21 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
     if (!open) throw new Error('nenhum quick aberto (oxe-cc quick <KEY> "<objetivo>")');
     return { id: open.id, trailers: q.trailers(open) };
   }
-  const config = readProjectConfig(projectRoot) || {};
+  let config = readProjectConfig(projectRoot) || {};
   const lib = require('./oxe-alm.cjs');
+  // OxeSpace 14/11 (Celular F3): a new worktree has no "alm" block and the quick wrote nothing to the card. Without
+  // one here, the ALM of the clone's main worktree is used, and the result says which.
+  let almFrom = null;
+  if (!config.alm) {
+    try {
+      const common = (gitLines(projectRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir']) || [])[0];
+      const main = common ? path.dirname(common) : null;
+      if (main && path.resolve(main) !== path.resolve(projectRoot)) {
+        const mainCfg = readProjectConfig(main) || {};
+        if (mainCfg.alm) { config = { ...config, alm: mainCfg.alm }; almFrom = main; }
+      }
+    } catch { /* sem git */ }
+  }
   const cfg = lib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) });
   if (action === 'start' && cfg && cfg.provider !== 'none' && !options.key) throw new Error('com ALM configurado, o quick nomeia o card: oxe-cc quick <KEY> "<objetivo>"');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
@@ -2970,7 +2983,7 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
     alm.comment = await lib.comment(programDir, cfg, rec.key, q.cardComment(rec, action === 'start' ? 'start' : action === 'cancel' ? 'cancel' : 'done'), net);
     if (action === 'start' && cfg.states.in_progress) alm.move = await lib.moveForward(programDir, cfg, rec.key, 'in_progress', net);
   } catch (err) { alm.error = err.message; }
-  return { ...rec, alm: { dry_run: dry, ...alm } };
+  return { ...rec, alm: { dry_run: dry, ...alm, ...(almFrom ? { from: almFrom } : {}) } };
 }
 
 /**
@@ -6137,10 +6150,14 @@ function runtimeFeedback(projectRoot, activeSession, options = {}) {
   const program = programLib.readProgram(programDir);
   const planText = readTextIfExists(paths.plan) || '';
   const plan = parsers && planText ? parsePlanArtifact(parsers, planText, paths.plan) : { tasks: [] };
+  // OxeSpace 14/11 (Celular F3, CR-X-1): a criterion of a phase not started yet got phase "-"; like spec amend, the
+  // phase is the one that owns the criterion when --phase is not given
+  const firstCriterion = (Array.isArray(options.criteria) ? options.criteria : String(options.criteria || '').split(',')).map((c) => String(c).trim().toUpperCase()).filter(Boolean)[0] || null;
+  const phase = options.phase || (firstCriterion ? phaseOfCriterion(program, firstCriterion) : null) || undefined;
   const result = changeLib.recordChange({
     programDir, program, plan,
     class: options.class, summary: options.summary, criteria: options.criteria, by: options.by,
-    phase: options.phase, amendTo: options.amendTo, evidence: options.evidence, additive: Boolean(options.additive),
+    phase, amendTo: options.amendTo, evidence: options.evidence, additive: Boolean(options.additive),
     specEdit: options.specEdit || null,
     tasks: options.tasks ? (Array.isArray(options.tasks) ? options.tasks : String(options.tasks).split(',')).map((t) => String(t).trim().toUpperCase()).filter((t) => /^T\d+$/.test(t)) : [],
     rating: require('./oxe-findings.cjs').rate(projectRoot, { rule: options.rule || null, severity: options.severity || null }),
@@ -8763,6 +8780,80 @@ function runtimePlanScopeAdd(projectRoot, activeSession, options = {}) {
     appendEvent(projectRoot, activeSession, { type: 'PlanScopeAmended', work_item_id: taskId, payload: { task: taskId, paths: result.added, cr: crId, by, reason } });
   }
   return { task: taskId, cr: crId, by, ...result };
+}
+
+/**
+ * `oxe-cc plan task edit T<n> [--wave <n>] [--depends-on T1,T2 | --depends-on none] [--remove-paths a,b] [--notes "…"]
+ * --by <papel> --reason "…" [--cr CR-n]` (OxeSpace 14/11, Celular F3): the planner had to hand-edit PLAN.json to move a
+ * task's wave, fix its dependencies, take a path out of its scope or update notes a CR made stale. Never a done task;
+ * a dependency that does not exist, points to the task itself or closes a cycle is refused; a frozen test never leaves
+ * through here. Recorded in the task (edits), in changes.ndjson (kind "task_edit") and as an event.
+ */
+function runtimePlanTaskEdit(projectRoot, activeSession, options = {}) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const taskId = String(options.task || '').toUpperCase();
+  if (!/^T\d+$/.test(taskId)) throw new Error('use: oxe-cc plan task edit T<n> [--wave n] [--depends-on T1,T2|none] [--remove-paths a,b] [--notes "…"] --by <papel> --reason "…"');
+  const by = String(options.by || '').trim();
+  const reason = String(options.reason || '').trim();
+  if (!by) throw new Error('informe quem decide (--by <papel>)');
+  if (reason.length < 8) throw new Error('informe o motivo em uma frase (--reason "…")');
+  const wave = options.wave != null && options.wave !== '' ? Number(options.wave) : null;
+  if (wave != null && !(Number.isInteger(wave) && wave > 0)) throw new Error('--wave: um número inteiro ≥ 1');
+  const list = (v) => (Array.isArray(v) ? v : String(v || '').split(',')).map((x) => String(x).trim()).filter(Boolean);
+  const deps = options.dependsOn == null ? null : String(options.dependsOn).trim().toLowerCase() === 'none' ? [] : list(options.dependsOn).map((d) => d.toUpperCase());
+  const remove = list(options.removePaths).map((p) => p.replace(/\\/g, '/').replace(/^\.\//, ''));
+  const notes = options.notes != null ? String(options.notes) : null;
+  if (wave == null && deps == null && !remove.length && notes == null) throw new Error('nada a editar: --wave, --depends-on, --remove-paths ou --notes');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan task edit exige PLAN.json');
+  const out = planJsonLib.withPlanLock(jsonPath, () => {
+    const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const tasks = (doc.tasks || []).filter(Boolean);
+    const task = tasks.find((t) => String(t.id).toUpperCase() === taskId);
+    if (!task) throw new Error(`Tarefa ${taskId} não encontrada em PLAN.json`);
+    if (task.done === true) throw new Error(`${taskId} está done: reabra antes (oxe-cc plan reopen ${taskId})`);
+    const before = { wave: task.wave ?? null, depends_on: [...(task.depends_on || [])], files: [...(task.files || [])], notes: task.notes ?? null };
+    if (deps) {
+      const ids = new Set(tasks.map((t) => String(t.id).toUpperCase()));
+      const unknown = deps.filter((d) => !ids.has(d));
+      if (unknown.length) throw new Error(`--depends-on: ${unknown.join(', ')} não existe(m) no plano`);
+      if (deps.includes(taskId)) throw new Error(`--depends-on: ${taskId} não depende de si mesma`);
+      // a cycle: some dependency (transitively) depends on this task
+      const depsOf = (id) => (id === taskId ? deps : ((tasks.find((t) => String(t.id).toUpperCase() === id) || {}).depends_on || []).map((d) => String(d).toUpperCase()));
+      const seen = new Set();
+      const stack = [...deps];
+      while (stack.length) {
+        const id = stack.pop();
+        if (id === taskId) throw new Error(`--depends-on: forma um ciclo de dependência com ${taskId}`);
+        if (seen.has(id)) continue;
+        seen.add(id);
+        stack.push(...depsOf(id));
+      }
+      task.depends_on = deps;
+    }
+    if (wave != null) task.wave = wave;
+    if (remove.length) {
+      const frozen = new Set((doc.acceptance_tests || []).flatMap((a) => (a && a.files) || []).map((f) => String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/')));
+      const bad = remove.filter((p) => frozen.has(p));
+      if (bad.length) throw new Error(`${bad.join(', ')}: teste congelado não sai por aqui (um CR e spec freeze)`);
+      const missing = remove.filter((p) => !(task.files || []).map((f) => String(f).replace(/\\/g, '/')).includes(p));
+      if (missing.length) throw new Error(`${missing.join(', ')} não está(ão) em files de ${taskId}`);
+      task.files = (task.files || []).filter((f) => !remove.includes(String(f).replace(/\\/g, '/')));
+    }
+    if (notes != null) task.notes = notes;
+    const after = { wave: task.wave ?? null, depends_on: [...(task.depends_on || [])], files: [...(task.files || [])], notes: task.notes ?? null };
+    task.edits = [...(Array.isArray(task.edits) ? task.edits : []), { by, reason, cr: options.cr ? String(options.cr).toUpperCase() : null, at: new Date().toISOString(), ...(wave != null ? { wave } : {}), ...(deps ? { depends_on: deps } : {}), ...(remove.length ? { removed_paths: remove } : {}), ...(notes != null ? { notes: true } : {}) }];
+    const tmp = `${jsonPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, jsonPath);
+    return { before, after };
+  });
+  changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'task_edit', task: taskId, ...out, cr: options.cr ? String(options.cr).toUpperCase() : null, by, reason, at: new Date().toISOString() });
+  appendEvent(projectRoot, activeSession, { type: 'PlanTaskEdited', work_item_id: taskId, payload: { task: taskId, by, reason, before: out.before, after: out.after } });
+  return { task: taskId, by, ...out };
 }
 
 /**
@@ -11392,6 +11483,7 @@ module.exports = {
   applyTaskGatesToGraph,
   reopeningCrsOf,
   runtimePlanScopeAdd,
+  runtimePlanTaskEdit,
   runtimePlanPackFix,
   uiCardGaps,
   writeTaskVerifyFresh,

@@ -24,6 +24,20 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Eventos:** `AutoResumed` e `AutoResumeSkipped`.
 - **Teste:** `tests/oxe-1212-autoresume.test.cjs`. O CA-1 é um reinício simulado num programa de teste: o execute é morto em T2 com SIGKILL e o `autoresume run` o retoma em T2 sem chamar o executor para T1.
 
+### Rodada de CR do Celular F3 (14/11)
+
+- **`plan task edit T<n>`:** edita a tarefa sem mexer à mão num PLAN.json em execução.
+  - Muda `--wave`, `--depends-on T1,T2|none`, `--remove-paths a,b` e `--notes "…"`, com `--by` e `--reason`.
+  - Recusa tarefa done, dependência inexistente, dependência da tarefa sobre si mesma, ciclo e a remoção de um teste congelado.
+  - Fica registrado na tarefa (`edits`), em `changes.ndjson` (`task_edit`) e no evento `PlanTaskEdited`.
+- **`spec freeze`:**
+  - `--proves-filter` e o `--tests` do Gradle valem para testes Kotlin/Java, sobre `pacote.Classe.método`; um `@DisplayName` herda o nome do método que anota.
+  - O re-freeze mantém os outros arquivos da entrada. Antes, o RenderedScreen.kt sumia do A7/A8/A9/A11.
+- **`runtime feedback`:** um critério de fase ainda não iniciada recebe a fase dona do critério, como no `spec amend`. Antes, a fase ficava "-".
+- **`spec add` e `spec amend`:** um `|` no texto vai escapado (`\|`), e a leitura da tabela respeita o `\|`. Antes, o `|` partia a linha e deixava uma célula a mais.
+- **`quick done --verify`:** texto com seta de prosa (`->`, `=>`) é recusado antes de rodar. No cmd.exe, ele virava redirecionamento e criava um arquivo solto.
+- **`quick` numa worktree sem bloco `alm`:** usa o ALM da worktree principal do clone e diz de onde veio. Antes, não gravava nada no card.
+
 ### Teto de US$ antes da próxima tentativa e versão da spec emendada (OxeSpace 14/11)
 
 - **`--budget-usd` vale antes da próxima tentativa:** uma tentativa só começa se o que resta cobre o custo médio das últimas tentativas (até 10) registradas no ledger da fase. Sem histórico de custo, vale o teto puro. Antes, com US$ 59,69 de 60 gastos, a T21 do OxeCode F4 começou e terminou acima do teto.

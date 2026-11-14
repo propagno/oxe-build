@@ -8169,6 +8169,7 @@ async function main() {
         if (a.pending) { console.log(`  ${yellow}⇢${reset} ALM: ${a.why}`); return; }
         if (a.error) { console.log(`  ${red}✗${reset} ALM: ${a.error}`); process.exitCode = 1; return; }
         const tag = a.dry_run ? `${yellow}(simulação)${reset} ` : '';
+        if (a.from) console.log(`  ${dim}ALM da worktree principal: ${a.from} (esta não tem o bloco "alm")${reset}`);
         if (a.comment) console.log(`  ${tag}${a.comment.planned ? 'comentaria' : a.comment.queued ? 'comentário na fila do MCP' : 'comentou'} no card`);
         if (a.move) console.log(`  ${tag}${a.move.skipped ? `não moveu: ${a.move.why}` : a.move.planned ? `moveria para "${a.move.planned.state}"` : a.move.queued ? `movimento na fila do MCP` : a.move.changed === false ? `já em "${a.move.state}"` : `→ movido para "${a.move.state}"`}`);
         if (a.dry_run) console.log(`  ${dim}nada foi gravado no ALM; para gravar, rode com --apply${o.dryRun ? ' e sem --dry-run' : ''}${reset}`);
@@ -8772,6 +8773,36 @@ async function main() {
       if (o.json) { console.log(JSON.stringify({ oxePlanScopeSchema: 1, ...out }, null, 2)); return; }
       console.log(out.added.length ? `  ${green}✓${reset} ${out.task}: +${out.added.join(', ')} no escopo (${out.cr}, por ${out.by})` : `  ${dim}= ${out.task}: já no escopo${reset}`);
       if (out.existed.length) console.log(`  ${dim}já estavam: ${out.existed.join(', ')}${reset}`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // oxe-cc plan task edit T<n> [--wave n] [--depends-on T1,T2|none] [--remove-paths a,b] [--notes "…"] --by --reason
+  // (OxeSpace 14/11, Celular F3: no hand edit of an executing PLAN.json)
+  if (command === 'plan' && argv[0] === 'task' && argv[1] === 'edit') {
+    const o = { dir: process.cwd(), json: false };
+    for (let i = 2; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (['--cr', '--by', '--reason', '--wave', '--notes'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--depends-on' && argv[i + 1] != null) o.dependsOn = String(argv[++i]);
+      else if (a === '--remove-paths' && argv[i + 1] != null) o.removePaths = String(argv[++i]);
+      else if (/^T\d+$/i.test(a) && !o.task) o.task = a.toUpperCase();
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    try {
+      const out = oxeOperational.runtimePlanTaskEdit(o.dir, null, o);
+      if (o.json) { console.log(JSON.stringify({ oxePlanTaskEditSchema: 1, ...out }, null, 2)); return; }
+      const b = out.before;
+      const n = out.after;
+      const diff = [
+        b.wave !== n.wave ? `onda ${b.wave ?? '—'} → ${n.wave}` : null,
+        b.depends_on.join(',') !== n.depends_on.join(',') ? `depende de ${b.depends_on.join(', ') || '—'} → ${n.depends_on.join(', ') || '—'}` : null,
+        b.files.length !== n.files.length ? `escopo −${b.files.filter((f) => !n.files.includes(f)).join(', ')}` : null,
+        b.notes !== n.notes ? 'notas atualizadas' : null,
+      ].filter(Boolean);
+      console.log(`  ${green}✓${reset} ${out.task}: ${diff.join(' · ') || 'sem mudança'} (por ${out.by})`);
     } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
     return;
   }

@@ -107,6 +107,12 @@ describe('OXB-058: spec amend / spec add', () => {
     assert.equal(again.version, 3);
   });
 
+  it('feedback on a criterion of a phase not started yet records that phase, not "-" (OxeSpace 14/11, CR-X-1)', () => {
+    const dir = project();
+    const fb = op.runtimeFeedback(dir, null, { class: 'spec_gap', summary: 'A40 precisa citar o install-over', criteria: 'A40', by: 'tl' });
+    assert.equal(fb.cr.phase, 'F8');
+  });
+
   it('amend of an open spec_gap CR that asked for it: no new CR, its version (OxeSpace 14/11, CR-F2-1)', () => {
     const dir = project();
     const fb = op.runtimeFeedback(dir, null, { class: 'spec_gap', summary: 'A40 precisa citar o install-over', criteria: 'A40', by: 'tl' });

@@ -58,6 +58,8 @@ describe('G9: oxe-cc quick — a verifiable record, the QUICK.md mini-spec, the 
     assert.equal(fs.readFileSync(path.join(dir, '.git', 'hooks', 'commit-msg'), 'utf8').split('oxe-cc commit-msg >>>').length, 2, 'idempotent');
     commitFile(dir, 'src/footer.ts', 'fix(terminal): rodapé por painel');
     assert.match(git(dir, 'log', '-1', '--format=%B'), new RegExp(`OXE-Quick: ${s.id}`));
+    // prose in --verify is refused before anything runs (OXE-158: "->" became a redirect)
+    await assert.rejects(op.runtimeQuick(dir, null, { action: 'done', verify: 'testes verdes -> ok' }), /parece texto/);
     // a failing verification keeps it open; a passing one closes it with the commit found by the trailer
     const bad = await op.runtimeQuick(dir, null, { action: 'done', verify: 'node -e "process.exit(3)"' });
     assert.equal(bad.closed, false);
