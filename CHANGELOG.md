@@ -24,6 +24,13 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Eventos:** `AutoResumed` e `AutoResumeSkipped`.
 - **Teste:** `tests/oxe-1212-autoresume.test.cjs`. O CA-1 é um reinício simulado num programa de teste: o execute é morto em T2 com SIGKILL e o `autoresume run` o retoma em T2 sem chamar o executor para T1.
 
+### Teste re-congelado por CR não trava o close (OxeChat F2, 14/11)
+
+- **O lock de aceite do run aceita o re-freeze por CR:**
+  - Uma entrada com `resolves`, gravada pelo `spec freeze --cr`, usa o hash novo do arquivo, como já fazia com o `amended` do `plan amend-test`. O `spec freeze` grava `hashes[arquivo]` por arquivo.
+  - Antes, o close do OxeChat F2 dava `acceptance_changed` no teste do A6 re-congelado (CR-F2-8, v4), comparado contra o lock da primeira compilação.
+- **O dossiê compara o teste congelado com a regra do verify:** bytes, forma LF ou forma CRLF (`frozenFileMatches`, agora exportado pelo runtime).
+
 ### Rodada de CR do Celular F3 (14/11)
 
 - **`plan task edit T<n>`:** edita a tarefa sem mexer à mão num PLAN.json em execução.

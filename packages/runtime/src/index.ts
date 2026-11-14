@@ -20,6 +20,7 @@ export {
   extractCommandFromHowToVerify,
   looksLikeShellCommand,
   sha256File,
+  frozenFileMatches,
 } from './verification/verification-compiler';
 export * from './verification/test-report-parsers';
 export type {

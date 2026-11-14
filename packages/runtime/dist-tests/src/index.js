@@ -14,7 +14,7 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sha256File = exports.looksLikeShellCommand = exports.extractCommandFromHowToVerify = exports.summarizeSuite = exports.verifyRun = exports.executeSuite = exports.runSuite = exports.isRunnerTimeoutOnly = exports.runCheck = exports.compileVerification = void 0;
+exports.frozenFileMatches = exports.sha256File = exports.looksLikeShellCommand = exports.extractCommandFromHowToVerify = exports.summarizeSuite = exports.verifyRun = exports.executeSuite = exports.runSuite = exports.isRunnerTimeoutOnly = exports.runCheck = exports.compileVerification = void 0;
 // R1 Public ABI — OXE Runtime Foundation
 __exportStar(require("./models/index"), exports);
 __exportStar(require("./events/index"), exports);
@@ -36,6 +36,7 @@ Object.defineProperty(exports, "summarizeSuite", { enumerable: true, get: functi
 Object.defineProperty(exports, "extractCommandFromHowToVerify", { enumerable: true, get: function () { return verification_compiler_1.extractCommandFromHowToVerify; } });
 Object.defineProperty(exports, "looksLikeShellCommand", { enumerable: true, get: function () { return verification_compiler_1.looksLikeShellCommand; } });
 Object.defineProperty(exports, "sha256File", { enumerable: true, get: function () { return verification_compiler_1.sha256File; } });
+Object.defineProperty(exports, "frozenFileMatches", { enumerable: true, get: function () { return verification_compiler_1.frozenFileMatches; } });
 __exportStar(require("./verification/test-report-parsers"), exports);
 __exportStar(require("./verification/verification-manifest"), exports);
 __exportStar(require("./verification/contract-exports"), exports);

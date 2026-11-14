@@ -5339,8 +5339,10 @@ function attachAcceptanceLock(parsedPlan, runState, projectRoot) {
   const runtime = loadRuntimeModule();
   const lateFrozen = [];
   for (const entry of parsedPlan.acceptanceTests) {
-    // OXB-205: an audited `plan amend-test` records `amended` + updated sha256/hashes in PLAN.json; honor it.
-    if (Array.isArray(entry.amended) && entry.amended.length > 0) {
+    // OXB-205: an audited `plan amend-test` records `amended` + updated sha256/hashes in PLAN.json; honor it. So is a
+    // re-freeze for a CR (`spec freeze --cr`, `resolves`): OxeSpace 14/11, the F2 close read the re-frozen A6 test as
+    // acceptance_changed against the run's first lock.
+    if ((Array.isArray(entry.amended) && entry.amended.length > 0) || (Array.isArray(entry.resolves) && entry.resolves.length > 0 && (entry.hashes || entry.sha256))) {
       for (const file of entry.files || []) {
         const amendedSha = (entry.hashes && entry.hashes[file])
           || (entry.files.length === 1 && typeof entry.sha256 === 'string' ? entry.sha256 : null);
@@ -5949,6 +5951,7 @@ function runtimeDossier(projectRoot, activeSession, options = {}) {
       .filter((r) => r && r.kind === 'drift_waiver' && (!phaseId || r.phase === phaseId))
       .flatMap((r) => r.globs || []),
     hashFile: (rel) => { const rt = loadRuntimeModule(); return rt && typeof rt.sha256File === 'function' ? rt.sha256File(path.resolve(projectRoot, rel)) : null; },
+    fileMatches: (rel, sha) => { const rt = loadRuntimeModule(); return rt && typeof rt.frozenFileMatches === 'function' ? rt.frozenFileMatches(path.resolve(projectRoot, rel), sha) : (rt && rt.sha256File(path.resolve(projectRoot, rel))) === sha; },
     decisions: readNdjsonQuiet(path.join(programDir, 'decisions.ndjson')),
     notes: readNdjsonQuiet(path.join(programDir, 'notes.ndjson')).filter((n) => !phaseId || !n.phase || n.phase === phaseId),
     signoffs: readNdjsonQuiet(path.join(programDir, 'signoffs.ndjson')).filter((s) => !phaseId || s.phase === phaseId),
@@ -11485,6 +11488,7 @@ module.exports = {
   reopeningCrsOf,
   runtimePlanScopeAdd,
   runtimePlanTaskEdit,
+  attachAcceptanceLock,
   runtimePlanPackFix,
   uiCardGaps,
   writeTaskVerifyFresh,

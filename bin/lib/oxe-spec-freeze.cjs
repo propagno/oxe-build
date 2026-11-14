@@ -200,6 +200,8 @@ function freeze(root, jsonPath, doc, options = {}) {
       command: options.command || (existing && existing.command) || `npx vitest run ${f}`,
       proves,
       sha256: hash,
+      // per file: the run's acceptance lock and the dossier read the re-frozen hash of THIS file (OxeSpace 14/11, F2 close)
+      hashes: { ...((existing && existing.hashes) || {}), [f]: hash },
       origin: { kind: origin.kind, ref: origin.ref, sha: origin.sha, ...(origin.url ? { url: origin.url } : {}) },
       // idempotent: freezing again for the same CR re-reads the titles and the hash, but bumps the version only the
       // first time that CR touches the entry

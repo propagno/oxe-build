@@ -248,3 +248,14 @@ describe('plan task edit: onda, dependências, escopo e notas sem editar o PLAN.
     assert.equal(changes.filter((c) => c.kind === 'task_edit').length, 2);
   });
 });
+
+describe('re-freeze por CR repina o hash do lock do run (OxeSpace 14/11, fechamento do OxeChat F2)', () => {
+  it('uma entrada com resolves + hashes usa o hash novo; sem CR, o lock do run vale', () => {
+    const lock = { tests: [{ criterion: 'A6', files: [{ path: 'tests/a6.test.ts', sha256: 'old' }] }] };
+    const plan = (extra) => ({ acceptanceTests: [{ criterion: 'A6', command: 'x', files: ['tests/a6.test.ts'], proves: [], ...extra }] });
+    const repinned = op.attachAcceptanceLock(plan({ resolves: ['CR-F2-8'], version: 4, hashes: { 'tests/a6.test.ts': 'new' }, sha256: 'new' }), { acceptance_lock: lock }, os.tmpdir());
+    assert.equal(repinned.acceptanceTests[0].files[0].sha256, 'new');
+    const kept = op.attachAcceptanceLock(plan({}), { acceptance_lock: lock }, os.tmpdir());
+    assert.equal(kept.acceptanceTests[0].files[0].sha256, 'old');
+  });
+});

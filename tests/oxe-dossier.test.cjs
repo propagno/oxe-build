@@ -98,6 +98,13 @@ describe('dossiê vivo', () => {
     assert.match(text, /proof_not_executed: A1/);
   });
 
+  it('com fileMatches (a regra do verify, LF/CRLF), um aceite que bate não é acceptance_changed (OxeSpace 14/11)', () => {
+    const built = dossier.buildDossier(input({ hashFile: () => 'crlf-bytes', fileMatches: (p, sha) => p === 'r.test.ts' && sha === 'abc' }));
+    assert.ok(!built.issues.some((i) => /acceptance_changed/.test(i)), built.issues.join('\n'));
+    const changed = dossier.buildDossier(input({ fileMatches: () => false }));
+    assert.ok(changed.issues.some((i) => /acceptance_changed: r\.test\.ts/.test(i)));
+  });
+
   it('a regeneração preserva o texto humano e o handoff; placeholder não conta como handoff', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-dossier-'));
     try {
