@@ -891,6 +891,26 @@ async function labelItem(programDir, cfg, refOrKey, labels, options = {}) {
   return { key: item.key, added: missing, existed: add.filter((l) => have.includes(l)) };
 }
 
+/**
+ * OxeSpace 14/11: an existing card's fix version (OXE-10 moved to 1.5.3 and no command changed it). Jira only; the
+ * version must exist in the project. Replaces the card's fix versions with this one.
+ */
+async function setItemVersion(programDir, cfg, refOrKey, version, options = {}) {
+  const item = resolveItem(programDir, cfg, refOrKey);
+  if (!item) throw new Error(`${refOrKey}: sem item no ALM (use a chave do item)`);
+  const name = String(version || '').trim();
+  if (!name) throw new Error('informe a versão: oxe-cc alm version <KEY> <versão>');
+  const prov = options.provider || (options.dryRun || cfg.dry_run ? null : provider(cfg, options));
+  if (options.dryRun || cfg.dry_run) return { planned: { key: item.key, version: name, comment: options.comment || null } };
+  if (prov.deferred) throw new Error('alm.transport "mcp": troque a versão com a ferramenta do Jira do MCP (fixVersions) — este comando grava só por REST');
+  if (typeof prov.setFixVersion !== 'function') throw new Error(`${cfg.provider}: versão de correção ainda não suportada (Azure: use a iteração)`);
+  const have = typeof prov.fixVersions === 'function' ? await prov.fixVersions(item.key) : [];
+  const out = have.length === 1 && have[0] === name ? { changed: false, ok: true, versions: have } : await prov.setFixVersion(item.key, name);
+  let commented = false;
+  if (options.comment) { await comment(programDir, cfg, item.key, options.comment, options); commented = true; }
+  return { key: item.key, version: name, before: have, ...out, commented };
+}
+
 async function relateItems(programDir, cfg, refOrKey, others, options = {}) {
   const item = resolveItem(programDir, cfg, refOrKey);
   if (!item) throw new Error(`${refOrKey}: sem item no ALM (use a chave do item)`);
@@ -958,4 +978,4 @@ function keyFor(programDir, cfg, phase, taskId) {
   return cfg && cfg.provider === 'azure-devops' ? `AB#${l.key}` : l.key;
 }
 
-module.exports = { almConfig, checkConfig, jiraRest, isWriter, writerError, withWriteLock, comment, provider, readQueue, pendingOps, enqueue, ack, dropEnsure, push, sync, move, stagesFromEvents, reportDefect, links, addLink, readState, keyFor, refLabel, taskRef, oldRefs, perPhase, STAGES, STAGE_INFO, STAGE_ALIASES, canonStage, adf, request, isDry, warnApply, resolveItem, linkPr, labelItem, relateItems };
+module.exports = { almConfig, checkConfig, jiraRest, isWriter, writerError, withWriteLock, comment, provider, readQueue, pendingOps, enqueue, ack, dropEnsure, push, sync, move, stagesFromEvents, reportDefect, links, addLink, readState, keyFor, refLabel, taskRef, oldRefs, perPhase, STAGES, STAGE_INFO, STAGE_ALIASES, canonStage, adf, request, isDry, warnApply, resolveItem, linkPr, labelItem, relateItems, setItemVersion };

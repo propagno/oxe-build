@@ -63,6 +63,26 @@ describe('OXB-160: promote fixtures and its own leftover branch', () => {
     assert.equal(out.error, undefined, out.error);
     assert.deepEqual(out.frozen_tests.sort(), ['tests/acceptance/f2/fixtures/t3.ts', 'tests/acceptance/f2/t3.test.ts', 'tests/acceptance/helpers/h.ts']);
     assert.equal(git(dir, 'show', 'oxe/promote-t3:shared/types/ipc/index.ts'), 'export type Ipc = 1;', 'product source is not copied from the program tip');
+    // the frozen-tests commit carries the task's origin (the commit-msg hook refused it, OxeSpace 14/11)
+    const body = git(dir, 'log', '-1', '--format=%B', 'oxe/promote-t3');
+    assert.match(body, /^test\(acceptance\): frozen tests of T3/);
+    assert.match(body, /^OXE-Task: (F\d+\/)?T3$/m);  });
+
+  it('the dirty worktree of a failed promote (pid gone) never blocks the next one (OxeSpace 14/11)', () => {
+    const dir = setup();
+    const first = op.runtimePromote(dir, null, { task: 'T3', base: 'main' });
+    assert.equal(first.error, undefined, first.error);
+    // what the failed promote left: its worktree holding the branch, an uncommitted file, the pid of a dead process
+    const wt = path.join(dir, '.oxe', 'promote-ws', 't3-old');
+    git(dir, 'worktree', 'add', '-q', wt, 'oxe/promote-t3');
+    fs.writeFileSync(path.join(wt, 'pendente.txt'), 'x\n');
+    const dead = Number(require('child_process').spawnSync(process.execPath, ['-e', 'console.log(process.pid)'], { encoding: 'utf8' }).stdout.trim());
+    fs.writeFileSync(`${wt}.pid`, JSON.stringify({ pid: dead, task: 'T3' }));
+    const again = op.runtimePromote(dir, null, { task: 'T3', base: 'main' });
+    assert.equal(again.error, undefined, again.error);
+    assert.ok(again.replaced_branch);
+    assert.ok(again.swept.some((s) => /t3-old$/.test(s)), JSON.stringify(again.swept));
+    assert.equal(fs.existsSync(wt), false);
   });
 
   it('a promote branch left local and unpushed is rebuilt; a branch with other commits is refused', () => {

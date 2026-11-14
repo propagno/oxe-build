@@ -44,7 +44,7 @@ function fakeJira() {
     if (method === 'POST' && p === '/rest/api/3/issue') { n += 1; const key = `OXE-${n}`; issues.set(key, { key, id: String(n), fields: { ...body.fields, status: { name: 'Backlog' }, issuelinks: [], comment: { comments: [] } } }); return { status: 201, json: { key, id: String(n) } }; }
     let m = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)$/.exec(p);
     if (m && method === 'GET') return issues.has(m[1]) ? { status: 200, json: issues.get(m[1]) } : { status: 404, json: null, text: 'nf' };
-    if (m && method === 'PUT') { const it = issues.get(m[1]); if (body.fields && body.fields.description) it.fields.description = body.fields.description; for (const l of (body.update && body.update.labels) || []) if (l.add && !it.fields.labels.includes(l.add)) it.fields.labels.push(l.add); return { status: 204, json: null }; }
+    if (m && method === 'PUT') { const it = issues.get(m[1]); if (body.fields && body.fields.description) it.fields.description = body.fields.description; for (const l of (body.update && body.update.labels) || []) if (l.add && !it.fields.labels.includes(l.add)) it.fields.labels.push(l.add); for (const fv of (body.update && body.update.fixVersions) || []) if (fv.set) it.fields.fixVersions = fv.set.map((s) => versions.find((v) => v.id === s.id)); return { status: 204, json: null }; }
     m = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)\/transitions$/.exec(p);
     if (m && method === 'GET') return { status: 200, json: { transitions: names.map((s, i) => ({ id: String(i + 1), name: s, to: { name: s } })) } };
     if (m && method === 'POST') { issues.get(m[1]).fields.status = { name: names[Number(body.transition.id) - 1] }; return { status: 204, json: null }; }
@@ -59,7 +59,7 @@ function fakeJira() {
     if (p === '/rest/dev-status/latest/issue/summary') return { status: 200, json: { summary: {} } };
     return { status: 404, json: null, text: `no route ${method} ${p}` };
   };
-  return { http, issues, writes, reads, arm() { guard = true; writes.length = 0; }, disarm() { guard = false; } };
+  return { http, issues, writes, reads, versions, arm() { guard = true; writes.length = 0; }, disarm() { guard = false; } };
 }
 
 const PRD = ['---', 'oxe_doc: prd', 'version: 1', '---', '', '# PRD', '', '## Histórias de usuário', '', '| ID | Como | Quero | Para | Requisitos | Critérios | Prioridade |', '|----|------|-------|------|------------|-----------|------------|', '| US-1 | operador | enviar texto | não digitar | R1 | A1 | Must |', ''].join('\n');
@@ -336,6 +336,27 @@ describe('the umbrella card: alm label --add and alm link --relates, by key, ide
     assert.deepEqual(r1.linked, ['OXE-20', 'OXE-21']);
     assert.equal(j.writes.filter((w) => w === 'POST /rest/api/3/issueLink').length, 2);
     await assert.rejects(op.runtimeAlm(dir, null, { action: 'label', ref: 'OXE-22', add: 'com espaco nao', apply: true, ...net }), /não tem espaço/);
+  });
+
+  it('alm version <KEY> <versão>: a simulation without --apply; with it the fix version changes once, with the comment (OXE-10 → 1.5.3)', async () => {
+    const dir = project({ require_apply: true });
+    const j = fakeJira();
+    const net = { http: j.http, env: ENV, sleep };
+    j.versions.push({ id: '3', name: '1.5.3', released: false });
+    j.issues.get('OXE-20').fields.fixVersions = [{ id: '1', name: '1.5.2' }];
+    j.arm();
+    assert.ok((await op.runtimeAlm(dir, null, { action: 'version', ref: 'OXE-20', version: '1.5.3', comment: 'adiado para a 1.5.3', ...net })).planned);
+    assert.deepEqual(j.writes, []);
+    j.disarm();
+    const v = await op.runtimeAlm(dir, null, { action: 'version', ref: 'OXE-20', version: '1.5.3', comment: 'adiado para a 1.5.3', apply: true, ...net });
+    assert.equal(v.ok, true);
+    assert.deepEqual(v.before, ['1.5.2']);
+    assert.deepEqual(j.issues.get('OXE-20').fields.fixVersions.map((x) => x.name), ['1.5.3']);
+    assert.equal(j.issues.get('OXE-20').fields.comment.comments.length, 1);
+    const again = await op.runtimeAlm(dir, null, { action: 'version', ref: 'OXE-20', version: '1.5.3', apply: true, ...net });
+    assert.equal(again.changed, false, 'already that version: nothing written');
+    await assert.rejects(op.runtimeAlm(dir, null, { action: 'version', ref: 'OXE-20', version: '9.9.9', apply: true, ...net }), /versão 9\.9\.9 não existe/);
+    await assert.rejects(op.runtimeAlm(dir, null, { action: 'version', ref: 'OXE-20', version: '1.5.3', apply: true, http: j.http, env: { ...ENV, OXE_ALM_WRITER: 'outra' }, sleep }), /escritor|writer/i);
   });
 
   it('alm.ref_label "plain": the intake label is ref-<id> (the board convention); the default keeps the program', async () => {

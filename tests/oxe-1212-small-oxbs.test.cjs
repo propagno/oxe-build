@@ -149,3 +149,40 @@ describe('hooks nunca criam .oxe/ numa worktree (OxeSpace 14/11)', () => {
     assert.equal(fs.existsSync(path.join(dir, '.oxe')), false);
   });
 });
+
+describe('checkpoint-ws: a junction deixada por um kill some (OxeSpace 14/11)', () => {
+  it('sobra com mais de 2 h perde o link e sai; a pasta real das deps fica; a recente fica', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-cpws-'));
+    dirs.push(dir);
+    spawnSync('git', ['init', '-q'], { cwd: dir });
+    const deps = path.join(dir, 'deps');
+    fs.mkdirSync(deps);
+    fs.writeFileSync(path.join(deps, 'keep.txt'), 'x');
+    const mk = (name) => {
+      const wt = path.join(dir, '.oxe', 'checkpoint-ws', name);
+      fs.mkdirSync(wt, { recursive: true });
+      fs.symlinkSync(deps, path.join(wt, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+      return wt;
+    };
+    const old = mk('old');
+    const fresh = mk('fresh');
+    const past = new Date(Date.now() - 3 * 3600_000);
+    fs.utimesSync(old, past, past);
+    const out = op.sweepCheckpointWorkspaces(dir);
+    assert.deepEqual(out.swept, ['old']);
+    assert.equal(fs.existsSync(old), false);
+    assert.equal(fs.existsSync(path.join(deps, 'keep.txt')), true, 'a pasta real das deps nunca é apagada');
+    assert.equal(fs.existsSync(fresh), true);
+  });
+});
+
+describe('close sem o ensaio de rollback registra o risco (Celular F2, 14/11)', () => {
+  it('--no-rollback-check sem --by e --reason é recusado antes de tocar em nada', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-norb-'));
+    dirs.push(dir);
+    fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
+    const r = spawnSync(process.execPath, [CLI, 'runtime', 'program', 'close', '--no-rollback-check', '--dir', dir], { encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' } });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /--no-rollback-check exige --by <papel> e --reason/);
+  });
+});

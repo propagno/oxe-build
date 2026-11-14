@@ -2382,7 +2382,7 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
   const phase = activeProgramPhase(projectRoot, activeSession);
   // OXB-b: one writer per program (alm.writer); the other sessions read and comment. A local lock keeps two writers
   // on the same machine from creating the same batch at once.
-  const WRITES = ['push', 'sync', 'move', 'defect', 'ack', 'link', 'label'];
+  const WRITES = ['push', 'sync', 'move', 'defect', 'ack', 'link', 'label', 'version'];
   if ([...WRITES, 'comment'].includes(options.action) && !dryRun && !options.auto) lib.warnApply(cfg, options);
   if (WRITES.includes(options.action) && !dryRun) {
     if (!lib.isWriter(cfg, env)) throw lib.writerError(cfg);
@@ -2437,6 +2437,7 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
   }
   // the umbrella card: a label and "Relates" links between cards, by key (OxeSpace 14/11, OXE-22/23)
   if (options.action === 'label') return lib.labelItem(programDir, cfg, options.ref, options.add, net);
+  if (options.action === 'version') return { dry_run: dryRun, ...(await lib.setItemVersion(programDir, cfg, options.ref, options.version, { ...net, comment: options.comment })) };
   if (options.action === 'link' && options.relates) return lib.relateItems(programDir, cfg, options.ref, options.relates, net);
   if (options.action === 'link' && options.pr) {
     // OXB-G18: the card to the pull request that delivered it (Jira remote link / Azure hyperlink)
@@ -4363,6 +4364,18 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
   });
 
   if (budgetLedger) ctx.budget = budgetLib.schedulerBudget(budgetLedger);
+  // OxeSpace 14/11: `runtime pause` from another process held nothing — T3 finished and T4 started. A pause requested
+  // AFTER this execute started stops it before the next task (the one in progress finishes).
+  const executeStartedMs = Date.now();
+  ctx.pauseRequested = () => {
+    const rs = readRunState(projectRoot, activeSession);
+    if (!rs || rs.status !== 'paused') return null;
+    const at = Date.parse(rs.updated_at || '') || 0;
+    if (at < executeStartedMs) return null;
+    let reason = '';
+    try { const ev = readEvents(projectRoot, activeSession).filter((e) => e.type === 'run_paused').pop(); reason = ev && ev.payload && ev.payload.reason ? ev.payload.reason : ''; } catch { reason = ''; }
+    return `runtime pause${reason ? `: ${reason}` : ''}`;
+  };
 
   // Gap 5: multi-agent path if plan-agents.json exists
   if (agentPlanPath) {
@@ -5790,6 +5803,19 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       }
     }
   } catch { /* auxiliar */ }
+  // G30: the existing suites that import a task's files and are not in its verify/scope (three paid redos, 14/11).
+  try {
+    const { doc: pjs } = readPlanJsonDoc(projectRoot, activeSession);
+    const mode = ((readProjectConfig(projectRoot) || {}).lint || {}).suite_impact || 'error';
+    if (pjs && mode !== 'off') {
+      const si = require('./oxe-suite-impact.cjs');
+      const findings = si.suiteImpact(projectRoot, pjs);
+      const msg = si.messages(findings, { mode });
+      result.errors.push(...msg.errors);
+      result.warnings.push(...msg.warnings);
+      result.suite_impact = findings;
+    }
+  } catch { /* auxiliar */ }
   // OXB-171: the product files a task's frozen tests import/read must be in its scope (or a dependency's); T8 of F2
   // retried 3× a test on shared/types/ipc.ts that was outside its files. config lint.test_scope: "error" makes it fatal.
   try {
@@ -6305,8 +6331,33 @@ function runtimeSpecAmend(projectRoot, activeSession, options = {}) {
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const program = programLib.readProgram(programDir);
   const current = changeLib.amendmentRequirements(programDir).get(id);
-  const version = (current ? current.required : 1) + 1;
   const phase = options.phase || phaseOfCriterion(program, id) || (program && program.active_phase) || null;
+  // OxeSpace 14/11 (OxeChat F2): the amendment an open spec_gap CR asked for went into a NEW CR and to v3. With
+  // --cr CR-n (or the one open spec_gap CR on this criterion with no amendment yet) it is that CR's amendment: no new
+  // CR, and the version that CR asked for — one bump per CR.
+  const openGap = changeLib.listChanges(programDir).filter((cr) => cr.class === 'spec_gap' && cr.status === 'open' && (cr.criteria || []).includes(id));
+  let target = null;
+  if (options.cr) {
+    const want = String(options.cr).toUpperCase();
+    target = changeLib.listChanges(programDir).find((cr) => cr.id === want) || null;
+    if (!target) throw new Error(`${want} não existe (oxe-cc runtime feedback list)`);
+    if (target.status !== 'open' || target.class !== 'spec_gap') throw new Error(`${want} é ${target.class} ${target.status}: só um spec_gap aberto recebe emenda`);
+    if (!(target.criteria || []).includes(id)) throw new Error(`${want} não cita ${id} (critérios: ${(target.criteria || []).join(', ') || '—'})`);
+  } else {
+    // a CR whose amendment is already in the SPEC (its own spec_edit, or one attached later) asks for nothing more
+    const attached = new Set(changeLib.readNdjson(changeLib.changesFile(programDir)).filter((r) => r && r.kind === 'spec_edit' && r.action === 'amend_criterion' && r.cr).map((r) => r.cr));
+    const pending = openGap.filter((cr) => !cr.spec_edit && !cr.specEdit && !attached.has(cr.id));
+    if (pending.length === 1) target = pending[0];
+  }
+  if (target) {
+    const version = target.amend_to || 2;
+    const record = { kind: 'spec_edit', action: 'amend_criterion', id, cr: target.id, version, by, reason, file: path.relative(projectRoot, paths.spec).replace(/\\/g, '/'), before: edit.before, after: edit.after, at: new Date().toISOString() };
+    changeLib.appendNdjson(changeLib.changesFile(programDir), record);
+    writeTextAtomic(paths.spec, edit.text);
+    appendEvent(projectRoot, activeSession, { type: 'SpecAmended', payload: { id, version, cr: target.id, attached: true, additive: Boolean(options.additive), phase } });
+    return { cr: target, attached: true, id, version, phase, before: edit.before, after: edit.after, reopened_tasks: [], export: autoExportProgram(projectRoot, activeSession) };
+  }
+  const version = (current ? current.required : 1) + 1;
   const result = runtimeFeedback(projectRoot, activeSession, {
     class: 'spec_gap', summary: reason, criteria: id, by, phase, amendTo: version, additive: Boolean(options.additive),
     specEdit: { file: path.relative(projectRoot, paths.spec).replace(/\\/g, '/'), before: edit.before, after: edit.after },
@@ -6383,6 +6434,17 @@ function runtimeProgramPhaseAdd(projectRoot, activeSession, options = {}) {
   const list = (v) => (Array.isArray(v) ? v : String(v || '').split(',')).map((x) => x.trim().toUpperCase()).filter(Boolean);
   const requirements = list(options.requirements);
   const acceptance = list(options.acceptance);
+  // OxeSpace 14/11 (OxeCode F4): run twice, phase add duplicated F4/F5 and wrote the ROADMAP three times. Same title
+  // right after --after → already done (idempotent, nothing written); the title or a criterion owned by another
+  // phase → refused (a criterion moves with `program criterion move`).
+  const normTitle = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const sameTitle = state.phases.find((p) => normTitle(p.title) === normTitle(title));
+  if (sameTitle) {
+    if (state.phases[idx + 1] === sameTitle) return { phase: sameTitle.id, after: afterNorm, already: true, renumbered: [], moved_change_records: 0, warnings: [`${sameTitle.id} "${sameTitle.title}" já existe depois de ${afterNorm}: nada foi gravado`], leftovers: [] };
+    throw new Error(`já existe a fase ${sameTitle.id} "${sameTitle.title}" — nada foi gravado (edite-a com program phase edit ${sameTitle.id})`);
+  }
+  const owned = acceptance.map((a) => [a, state.phases.find((p) => (p.acceptance || []).map((x) => String(x).toUpperCase()).includes(a))]).filter(([, p]) => p);
+  if (owned.length) throw new Error(`critério(s) já de outra fase: ${owned.map(([a, p]) => `${a} (${p.id})`).join(', ')} — nada foi gravado; mova com program criterion move ${owned[0][0]} --to <fase>`);
   const later = state.phases.slice(idx + 1);
   const started = later.filter((p) => p.status !== 'pending' || p.plan_ref || p.run_id || p.started_at || state.active_phase === p.id);
   if (started.length) {
@@ -6406,8 +6468,13 @@ function runtimeProgramPhaseAdd(projectRoot, activeSession, options = {}) {
   if (depMap.size) {
     roadmapEdit.text = roadmapEdit.text.replace(/^(\*\*(?:Depende de|Depends on|Dependências|Dependencies):\*\*)(.*)$/gim, (_m, label, rest) => `${label}${rest.replace(/\bF(\d+)\b/g, (id) => depMap.get(id) || id)}`);
   }
+  // --depends-on was accepted but not stored (OxeSpace 14/11, OxeCode F4 after F3 depending on F2): the start then
+  // asked to close F3 first. Ids follow the renumbering above.
+  const dependsOn = list(options.dependsOn).map((d) => (/^\d+$/.test(d) ? `F${d}` : d)).map((d) => depMap.get(d) || d);
+  for (const d of dependsOn) if (!next.phases.some((p) => p.id === d)) throw new Error(`--depends-on ${d}: a fase não existe no programa`);
   next.phases.splice(idx + 1, 0, {
     id: newId, title, requirements, acceptance, scope: options.scope ? String(options.scope) : null,
+    ...(dependsOn.length ? { depends_on: dependsOn } : {}),
     status: 'pending', plan_ref: null, run_id: null, started_at: null, closed_at: null, closed_commit: null, regression_ref: null, interfaces_ref: null,
   });
   next.updated_at = new Date().toISOString();
@@ -6782,6 +6849,9 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     if (!own.ok) throw new Error(`a branch ${branch} já existe em ${remote} (${remoteSha.slice(0, 8)}) — ${own.why}; o promote não sobrescreve; use --branch <outra>`);
     forceLease = remoteSha;
   }
+  // OxeSpace 14/11: the leftover worktree of an earlier failed promote holds the branch ("está em uso numa worktree");
+  // sweep the stale promote worktrees (pid gone) BEFORE checking whether the branch is ours to rebuild.
+  const sweptEarly = sweepStalePromoteWorkspaces(projectRoot);
   if (gitLines(projectRoot, ['rev-parse', '--verify', '-q', `refs/heads/${branch}`])) {
     const own = ownUnpushedPromoteBranch(projectRoot, branch, remote, baseSha, { allowRemote: Boolean(forceLease) });
     if (!own.ok) throw new Error(`a branch ${branch} já existe${own.why ? ` (${own.why})` : ''} — use --branch <outra> ou apague-a`);
@@ -6814,7 +6884,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     const wt = path.join(projectRoot, '.oxe', 'promote-ws', `${taskId.toLowerCase()}-${Date.now().toString(36)}`);
     fs.mkdirSync(path.dirname(wt), { recursive: true });
     // OXB-162: worktrees of killed promotes (their junction unlinked first), and this one's pid for the next sweep.
-    result.swept = sweepStalePromoteWorkspaces(projectRoot);
+    result.swept = [...sweptEarly, ...sweepStalePromoteWorkspaces(projectRoot)];
     fs.writeFileSync(`${wt}.pid`, JSON.stringify({ pid: process.pid, task: taskId, at: new Date().toISOString() }));
     const add = gitRun(projectRoot, ['worktree', 'add', '-q', '-b', branch, wt, buildSha]);
     if (!add.ok) throw new Error(`não foi possível criar a worktree de ${branch}: ${add.stderr.trim()}`);
@@ -6841,7 +6911,15 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
         if (rt && typeof rt.unlinkExternalLinks === 'function') rt.unlinkExternalLinks(wt);
         else if (linked) fs.unlinkSync(path.join(wt, 'node_modules'));
       } catch { /* */ }
-      const rm = gitRun(projectRoot, ['worktree', 'remove', wt]);
+      let rm = gitRun(projectRoot, ['worktree', 'remove', wt]);
+      // OxeSpace 14/11: a failed step (the frozen-tests commit refused) leaves uncommitted files in this promote's OWN
+      // worktree; plain remove refuses and the worktree keeps holding the branch, so the next promote cannot rebuild
+      // it. It is ours (created above): with no link left inside, a forced removal is safe.
+      if (!rm.ok) {
+        let linkLeft = false;
+        try { linkLeft = fs.lstatSync(path.join(wt, 'node_modules')).isSymbolicLink(); } catch { linkLeft = false; }
+        if (!linkLeft) rm = gitRun(projectRoot, ['worktree', 'remove', '--force', wt]);
+      }
       if (rm.ok) { try { fs.rmSync(`${wt}.pid`, { force: true }); } catch { /* */ } }
       if (!rm.ok) result.cleanup_warning = `worktree ${result.worktree} não removida (${rm.stderr.trim().split(/\r?\n/).pop()}) — remova à mão depois de conferir que não há links dentro`;
       gitRun(projectRoot, ['worktree', 'prune']);
@@ -6879,7 +6957,10 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       }
       if (added.length) {
         gitRun(work, ['add', '--', ...added]);
-        const c = gitRun(work, ['commit', '-q', '-m', `test(acceptance): frozen tests of ${taskId}`, '-m', `From the program branch at ${String(programTip).slice(0, 10)}: ${added.join(', ')}`]);
+        // OxeSpace 14/11: the commit-msg origin hook refused this commit. The frozen tests are part of the task's
+        // delivery: OXE-Task per promoted task (with the phase) and OXE-Run when known, like a checkpoint.
+        const originTrailers = [...planTasks.map((t) => `OXE-Task: ${phaseCtx.phase ? `${phaseCtx.phase}/` : ''}${t.id}`), ...[...new Set(planTasks.map((t) => t.run_id).filter(Boolean))].map((r) => `OXE-Run: ${r}`)].join('\n');
+        const c = gitRun(work, ['commit', '-q', '-m', `test(acceptance): frozen tests of ${taskId}`, '-m', `From the program branch at ${String(programTip).slice(0, 10)}: ${added.join(', ')}`, '-m', originTrailers]);
         if (!c.ok) result.error = `commit dos testes congelados falhou: ${c.stderr.trim().split(/\r?\n/).pop()}`;
       }
       result.frozen_tests = added;
@@ -9117,10 +9198,39 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
 }
 
 /**
+ * OxeSpace 14/11: a check killed mid-run (a restart, a kill for memory) never reaches its `finally`, and the
+ * workspace keeps its node_modules junction inside .oxe/checkpoint-ws — a plain `cp -r .oxe` then followed it into
+ * ~118k files. At the start of each check, leftovers older than 2 h lose the link first, then the worktree goes.
+ */
+function sweepCheckpointWorkspaces(projectRoot, { maxAgeMs = 2 * 3600_000, now = Date.now() } = {}) {
+  const root = path.join(projectRoot, '.oxe', 'checkpoint-ws');
+  let names = [];
+  try { names = fs.readdirSync(root); } catch { return { swept: [] }; }
+  const swept = [];
+  for (const name of names) {
+    const wt = path.join(root, name);
+    let st;
+    try { st = fs.lstatSync(wt); } catch { continue; }
+    if (!st.isDirectory() || now - st.mtimeMs < maxAgeMs) continue;
+    const nm = path.join(wt, 'node_modules');
+    try { if (fs.lstatSync(nm).isSymbolicLink()) fs.unlinkSync(nm); } catch { /* no link */ }
+    let linkLeft = false;
+    try { linkLeft = fs.lstatSync(nm).isSymbolicLink(); } catch { linkLeft = false; }
+    if (linkLeft) continue; // never remove with the link in place: it would delete the real node_modules
+    gitOut(projectRoot, ['worktree', 'remove', '--force', wt]);
+    try { fs.rmSync(wt, { recursive: true, force: true }); } catch { /* */ }
+    swept.push(name);
+  }
+  if (swept.length) gitOut(projectRoot, ['worktree', 'prune']);
+  return { swept };
+}
+
+/**
  * OXB-170: config `checkpoint_check` (e.g. "npm run typecheck"): runs on the commit's own tree — a temporary detached
  * worktree with a junction to node_modules (unlinked before removal, never a forced removal with it in place).
  */
 function checkpointCheck(projectRoot, sha, options = {}) {
+  try { sweepCheckpointWorkspaces(projectRoot); } catch { /* auxiliar */ }
   const cfg = readProjectConfig(projectRoot) || {};
   const typecheck = options.checkpointCheck != null ? options.checkpointCheck : cfg.checkpoint_check;
   // OXB-172: the tests that import the task's OWN changed files (vitest related), not only the task's verify.
@@ -9138,6 +9248,8 @@ function checkpointCheck(projectRoot, sha, options = {}) {
     if (fs.existsSync(nm)) fs.symlinkSync(fs.realpathSync(nm), path.join(wt, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
     try { require('./oxe-local-config.cjs').copyLocalFiles(projectRoot, wt); } catch { /* */ }
     for (const c of commands) {
+      // OxeSpace 14/11: minutes of silence after WorkItemCompleted looked like a hang — say what runs, and for how long
+      try { process.stderr.write(`\n  [checkpoint ${String(sha).slice(0, 8)}] ${c.kind === 'related' ? 'testes relacionados' : 'checkpoint_check'}: ${String(c.command).slice(0, 160)} (até ${Math.round((c.timeout || 0) / 60000)} min)\n`); } catch { /* */ }
       const r = runChildCommandFull(wt, c.command, c.timeout);
       res = { ok: r.ok, tail: r.tail, kind: c.kind, command: c.command, output: r.output, skipped: c.skipped || [] };
       if (!r.ok) break;
@@ -9224,6 +9336,7 @@ function relatedRedsOfTask(projectRoot, parentSha, failing, options = {}) {
       if (again && again.ok) { if (Array.isArray(options.flakyReds)) options.flakyReds.push({ file: t.file, first: 'red', rerun: 'green', where: 'commit_worktree' }); continue; }
       // OXB-189: still red in the temporary worktree → run it alone in the project's own tree (where the task's verify
       // ran green). Green there = the red is the environment of the check, not the task: flaky, the commit stays.
+      try { process.stderr.write(`\n  [checkpoint] reconfere ${t.file} na árvore do projeto (até ${Math.round(timeoutMs / 60000)} min)\n`); } catch { /* */ }
       const inTree = runChildCommandFull(projectRoot, runTpl.replace('{files}', t.file), timeoutMs);
       if (inTree && inTree.ok) { if (Array.isArray(options.flakyReds)) options.flakyReds.push({ file: t.file, first: 'red', rerun: 'red', project_tree: 'green', where: 'project_tree' }); continue; }
       confirmed.push(t);
@@ -9243,7 +9356,9 @@ function relatedRedsOfTask(projectRoot, parentSha, failing, options = {}) {
 
 /** OXB-175: runs a command on a commit's own tree (temporary detached worktree; junction unlinked before removal). */
 function runInCommitWorktree(projectRoot, sha, command, timeoutMs) {
-  const wt = path.join(projectRoot, '.oxe', 'checkpoint-ws', `p-${String(sha).slice(0, 10)}-${Date.now().toString(36)}`);
+  try { sweepCheckpointWorkspaces(projectRoot); } catch { /* auxiliar */ }
+  try { process.stderr.write(`\n  [checkpoint] reconfere vermelho em ${String(sha).slice(0, 8)}: ${String(command).slice(0, 160)} (até ${Math.round((timeoutMs || 0) / 60000)} min)\n`); } catch { /* */ }
+  const wt =path.join(projectRoot, '.oxe', 'checkpoint-ws', `p-${String(sha).slice(0, 10)}-${Date.now().toString(36)}`);
   fs.mkdirSync(path.dirname(wt), { recursive: true });
   const add = gitOut(projectRoot, ['worktree', 'add', '-q', '--detach', wt, sha]);
   if (add.status !== 0) return null;
@@ -9581,10 +9696,17 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   }
   // OXB-117 (d): rollback rehearsal — the phase's commits must revert cleanly (a temporary worktree at HEAD).
   let rollbackRehearsal = null;
+  // OxeSpace 14/11 (Celular F2, merges of origin/main in the phase): closing without the rehearsal records the risk —
+  // who assumed it and why — in changes.ndjson and the events (the CLI requires --by and --reason for it).
+  if (options.rollbackCheck === false && options.by && options.reason) {
+    const changeLib = require('./oxe-change.cjs');
+    changeLib.appendNdjson(changeLib.changesFile(paths.programDir || path.join(projectRoot, '.oxe', 'program')), { kind: 'rollback_risk', phase: phase.id, by: String(options.by), reason: String(options.reason), at: new Date().toISOString() });
+    appendEvent(projectRoot, activeSession, { type: 'RollbackRiskAccepted', payload: { phase: phase.id, by: String(options.by), reason: String(options.reason) } });
+  }
   if (options.rollbackCheck !== false) {
     try {
       rollbackRehearsal = require('./oxe-phase-extras.cjs').rehearseRollback(projectRoot, phase.base_commit || null);
-      if (!rollbackRehearsal.ok) closeGates.reasons.push(`ensaio de rollback falhou: ${rollbackRehearsal.error || ''} ${(rollbackRehearsal.conflicts || []).join(', ')} — os commits da fase não revertem limpos (ou feche com --no-rollback-check e registre o risco)`.trim());
+      if (!rollbackRehearsal.ok) closeGates.reasons.push(`ensaio de rollback falhou: ${rollbackRehearsal.error || ''} ${(rollbackRehearsal.conflicts || []).join(', ')} — os commits da fase não revertem limpos (ou feche com --no-rollback-check --by <papel> --reason "…", que registra o risco)`.trim());
     } catch { /* auxiliar */ }
   }
   // OXB-123: edges marked prova_extra and prohibitions at level julgamento need explicit evidence (a sign-off naming them).
@@ -11312,6 +11434,7 @@ module.exports = {
   summarizeEvents,
   writeRunState,
   readRunState,
+  sweepCheckpointWorkspaces,
   readGitActivity,
   verifyGitEvidence,
   runtimeStateWarnings,

@@ -34,6 +34,13 @@ function tmpDir() {
             // Implementação com a leitura errada: o aceite do plano reprova.
             fs_1.default.writeFileSync(path_1.default.join(dir, 'api.js'), 'module.exports = { createApi: () => ({ handle() {} }) };\n');
             strict_1.default.equal((await (0, verification_compiler_1.runCheck)(check, dir)).status, 'fail');
+            // core.autocrlf: frozen with LF, read back as CRLF — the same file, never "tampered" (OxeSpace 14/11, F3 close)
+            fs_1.default.writeFileSync(path_1.default.join(dir, 'api.js'), 'module.exports = { createApi: () => () => 1 };\n');
+            fs_1.default.writeFileSync(path_1.default.join(dir, 'accept.test.js'), ACCEPT.replace(/\n/g, '\r\n'));
+            const crlf = await (0, verification_compiler_1.runCheck)(check, dir);
+            strict_1.default.notEqual(crlf.error, 'acceptance_tampered: accept.test.js');
+            strict_1.default.equal(crlf.status, 'pass', `${crlf.error} ${crlf.stderr}`);
+            fs_1.default.writeFileSync(path_1.default.join(dir, 'accept.test.js'), ACCEPT);
             // Executor "ajusta" o teste para passar: adulterado.
             fs_1.default.writeFileSync(path_1.default.join(dir, 'accept.test.js'), ACCEPT.replace("'function'", "'object'"));
             const tampered = await (0, verification_compiler_1.runCheck)(check, dir);

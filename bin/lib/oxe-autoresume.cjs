@@ -91,6 +91,8 @@ function startLease(file, { pid = process.pid, argv = [], cwd = process.cwd(), s
     cwd,
     session,
     argv: relaunchArgv(argv),
+    // this execute stops before its next task on a `runtime pause` (an older one does not read the pause)
+    reads_pause: true,
     started_at: now.toISOString(),
     restarts: resumedFrom ? [...restarts, { at: now.toISOString(), from_pid: resumedFrom.pid || null, why: resumedFrom.why || 'interrupted' }] : [],
   };
@@ -120,6 +122,8 @@ function endStatus(result) {
 function inspect(file, { alive = defaultAlive } = {}) {
   const lease = readJson(file);
   if (!lease) return { state: 'none', lease: null };
+  // a crash of the runtime is a cut run, like a kill: resumable (under the crash-loop limit)
+  if (lease.status === 'crashed') return { state: 'interrupted', lease, crashed: true };
   if (lease.status !== 'running') return { state: 'ended', lease };
   // a lease from another machine (a shared folder) is never judged by a local pid
   if (lease.host && lease.host !== os.hostname()) return { state: 'running', lease, foreign_host: true };
@@ -189,7 +193,7 @@ function decide({ inspection, runState = null, events = [], cfg, freeMb, now = n
   const recent = (lease.restarts || []).filter((r) => now.getTime() - Date.parse(r.at) < windowMs);
   if (recent.length >= cfg.maxRestarts) return { resume: false, why: `${recent.length} retomada(s) em ${cfg.windowHours} h (autoresume.max_restarts ${cfg.maxRestarts}): parece um laço de queda — olhe o log antes de rodar de novo`, crash_loop: true };
   if (freeMb < cfg.minFreeMb) return { resume: false, why: `memória livre ${freeMb} MB < ${cfg.minFreeMb} MB (regra de memória)`, wait: 'memory' };
-  return { resume: true, why: `execute interrompido (pid ${lease.pid} não existe mais)` };
+  return { resume: true, why: inspection.crashed ? `o runtime caiu (crash) no execute do pid ${lease.pid}` : `execute interrompido (pid ${lease.pid} não existe mais)` };
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

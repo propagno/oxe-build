@@ -1472,6 +1472,8 @@ module.exports = {
   applyCoupledScope,
   injectFrontendDesignLintVerify,
   buildImportIndex,
+  extractModuleImports,
+  loadPathAliases,
   resolveModuleSpecifier,
   findOrphanImporters,
   findCoupledUnionConsumers,

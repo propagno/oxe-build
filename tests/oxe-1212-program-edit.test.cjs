@@ -107,6 +107,24 @@ describe('OXB-058: spec amend / spec add', () => {
     assert.equal(again.version, 3);
   });
 
+  it('amend of an open spec_gap CR that asked for it: no new CR, its version (OxeSpace 14/11, CR-F2-1)', () => {
+    const dir = project();
+    const fb = op.runtimeFeedback(dir, null, { class: 'spec_gap', summary: 'A40 precisa citar o install-over', criteria: 'A40', by: 'tl' });
+    const crs = () => ndjson(dir).filter((r) => r.kind === 'cr');
+    assert.equal(crs().length, 1);
+    const out = op.runtimeSpecAmend(dir, null, { id: 'A40', append: 'install-over', by: 'tl', reason: 'emenda pedida pelo CR aberto' });
+    assert.equal(out.attached, true);
+    assert.equal(out.cr.id, fb.cr.id);
+    assert.equal(out.version, 2);
+    assert.equal(crs().length, 1, 'no new CR');
+    // the same CR again, explicitly: still v2; a second amendment without --cr opens a new CR (v3)
+    assert.equal(op.runtimeSpecAmend(dir, null, { id: 'A40', append: 'ajuste', cr: fb.cr.id, by: 'tl', reason: 'ajuste da mesma emenda' }).version, 2);
+    const third = op.runtimeSpecAmend(dir, null, { id: 'A40', append: 'HML-R-1', by: 'tl', reason: 'outra cláusula do review' });
+    assert.equal(third.attached, undefined);
+    assert.equal(third.version, 3);
+    assert.throws(() => op.runtimeSpecAmend(dir, null, { id: 'A40', append: 'x', cr: 'CR-99', by: 'tl', reason: 'motivo suficiente' }), /CR-99 não existe/);
+  });
+
   it('amend refuses an unknown criterion and a missing reason, without touching the SPEC', () => {
     const dir = project();
     assert.throws(() => op.runtimeSpecAmend(dir, null, { id: 'A99', text: 'x', by: 'tl', reason: 'motivo suficiente' }), /A99 não está/);
@@ -171,6 +189,28 @@ describe('OXB-058: program phase add --after', () => {
     });
     assert.throws(() => op.runtimeProgramPhaseAdd(dir, null, { after: 'F7', title: 'Celular', by: 'tl' }), /F8 \(pending, com plano\) já começou/);
     assert.equal(read(dir, '.oxe/ROADMAP.md'), ROADMAP);
+  });
+
+  it('run twice is a no-op; a title or a criterion of another phase is refused (OxeSpace 14/11)', () => {
+    const dir = project();
+    op.runtimeProgramPhaseAdd(dir, null, { after: 'F7', title: 'Celular', acceptance: 'A42', by: 'tl' });
+    const roadmap1 = read(dir, '.oxe/ROADMAP.md');
+    const again = op.runtimeProgramPhaseAdd(dir, null, { after: 'F7', title: 'celular', acceptance: 'A42', by: 'tl' });
+    assert.equal(again.already, true);
+    assert.equal(again.phase, 'F8');
+    assert.equal(read(dir, '.oxe/ROADMAP.md'), roadmap1);
+    assert.equal(JSON.parse(read(dir, '.oxe/program/PROGRAM.json')).phases.length, 3);
+    assert.throws(() => op.runtimeProgramPhaseAdd(dir, null, { after: 'F9', title: 'Celular', by: 'tl' }), /já existe a fase F8/);
+    assert.throws(() => op.runtimeProgramPhaseAdd(dir, null, { after: 'F9', title: 'Outra', acceptance: 'A42', by: 'tl' }), /A42 \(F8\)/);
+    assert.equal(read(dir, '.oxe/ROADMAP.md'), roadmap1);
+  });
+
+  it('--depends-on is stored on the new phase; an unknown phase is refused (OxeSpace 14/11, OxeCode F4)', () => {
+    const dir = project();
+    const out = op.runtimeProgramPhaseAdd(dir, null, { after: 'F8', title: 'Celular', dependsOn: 'F7', by: 'tl' });
+    const p = JSON.parse(read(dir, '.oxe/program/PROGRAM.json')).phases.find((x) => x.id === out.phase);
+    assert.deepEqual(p.depends_on, ['F7']);
+    assert.throws(() => op.runtimeProgramPhaseAdd(dir, null, { after: 'F9', title: 'Outra', dependsOn: 'F2', by: 'tl' }), /--depends-on F2: a fase não existe/);
   });
 
   it('inserting after the last phase renumbers nothing', () => {

@@ -59,5 +59,40 @@ describe('spec freeze reads test titles like the plan lint (escapes undone)', ()
     freeze.freeze(dir, jsonPath, doc, { from: sha, criteria: 'A10', cr: 'CR-07', task: 'T13' });
     assert.equal(doc.acceptance_tests.length, 1);
     assert.equal(doc.acceptance_tests[0].version || 1, v, 'no version bump on a re-freeze for the same CR');
+    assert.equal(doc.acceptance_tests[0].command, 'npx vitest run tests/integration/policy-change-gate.test.ts', 'no --command: the existing one stays');
+    // an explicit --command wins on a re-freeze (OxeSpace 14/11: A5 kept a command naming a deleted .ts)
+    freeze.freeze(dir, jsonPath, doc, { from: sha, criteria: 'A10', cr: 'CR-07', command: 'npx vitest run tests/integration/policy-change-gate.test.ts --reporter=verbose' });
+    assert.equal(doc.acceptance_tests[0].command, 'npx vitest run tests/integration/policy-change-gate.test.ts --reporter=verbose');
+  });
+});
+
+describe('freeze keeps only the titles the entry command selects (OxeSpace 14/11, OxeCode F4 T20)', () => {
+  const SHARED = [
+    "describe('OXE-128 next', () => {",
+    "  it('opens the next attention', () => {});",
+    "  it(\"skips a resolved one (A17)\", () => {});",
+    "});",
+    "describe('OXE-128 ring', () => {",
+    "  // it('commented out', () => {})",
+    "  it('rings once', () => {});",
+    "  describe('nested', () => { test('rings twice', () => {}); });",
+    "});",
+  ].join('\n');
+
+  it('full names carry the enclosing describes', () => {
+    const names = freeze.fullTestNames(SHARED).map((t) => t.full);
+    assert.ok(names.includes('OXE-128 next opens the next attention'));
+    assert.ok(names.includes('OXE-128 ring nested rings twice'));
+  });
+
+  it('the -t / --testNamePattern of the command filters the declared titles', () => {
+    assert.equal(freeze.namePatternOf('npx vitest run x.test.tsx -t "OXE-128 next"'), 'OXE-128 next');
+    assert.equal(freeze.namePatternOf("jest --testNamePattern='ring'"), 'ring');
+    assert.equal(freeze.namePatternOf('npx vitest run x.test.tsx'), null);
+    const titles = freeze.titlesOf(SHARED, 'x.test.tsx');
+    assert.deepEqual(freeze.filterTitles(SHARED, titles, 'OXE-128 next'), ['opens the next attention', 'skips a resolved one (A17)']);
+    assert.deepEqual(freeze.filterTitles(SHARED, titles, 'OXE-128 ring').sort(), ['rings once', 'rings twice']);
+    assert.deepEqual(freeze.filterTitles(SHARED, titles, null), titles, 'no pattern: every title');
+    assert.deepEqual(freeze.filterTitles(SHARED, titles, 'nada disso'), []);
   });
 });

@@ -135,6 +135,13 @@ interface ParsedPlanLike {
     /** PLAN.json `acceptance_tests` with the hashes frozen when the run was compiled. */
     acceptanceTests?: AcceptanceTestLike[];
 }
+/**
+ * OxeSpace 14/11 (OxeCode F3 close): the frozen regression of closed phases stores hashes taken with LF; with
+ * core.autocrlf the working copy is CRLF and every file read as "acceptance_tampered" although none differed from
+ * origin/main. A frozen file matches when its bytes, its LF form or its CRLF form hash to the frozen sha (the same
+ * line-ending rule as commit-task's frozen check).
+ */
+export declare function frozenFileMatches(absPath: string, sha: string): boolean;
 export declare function sha256File(absPath: string): string | null;
 /**
  * Drop quoted arguments so only invoked programs are classified: `node -e "…'node --test'…"`

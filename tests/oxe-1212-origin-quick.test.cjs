@@ -89,6 +89,19 @@ describe('G9: oxe-cc quick — a verifiable record, the QUICK.md mini-spec, the 
     const chk = op.runtimeCheckOrigin(dir, null, { target: 'base..HEAD' });
     assert.equal(chk.ok, true, JSON.stringify(chk.violations));
     assert.equal(chk.results[0].card, 'OXE-17');
+    // a deleted path, staged by git rm or not: committed as a deletion (OxeSpace 14/11)
+    fs.unlinkSync(path.join(dir, 'scale.css'));
+    const d = cli(dir, 'quick', 'commit', '-m', 'chore(scale): remove o css', 'scale.css');
+    assert.equal(d.status, 0, d.stderr);
+    assert.equal(git(dir, 'show', '--name-status', '--format=', 'HEAD'), 'D\tscale.css');
+    // commits in another branch count too (OXE-149: 4 commits in two branches were counted as 1 from HEAD)
+    const here = git(dir, 'rev-parse', '--abbrev-ref', 'HEAD');
+    git(dir, 'checkout', '-q', '-b', 'outro');
+    fs.writeFileSync(path.join(dir, 'b.css'), 'b{}\n');
+    assert.equal(cli(dir, 'quick', 'commit', '-m', 'feat(b): outro branch', 'b.css').status, 0);
+    git(dir, 'checkout', '-q', here);
+    const done = await op.runtimeQuick(dir, null, { action: 'done', verify: 'node -e "process.exit(0)"', dryRun: true });
+    assert.equal(done.commits.length, 3, done.commits.map((x) => x.subject).join(' | '));
   });
 
   it('a quick with no commit closes only with --no-commit', async () => {

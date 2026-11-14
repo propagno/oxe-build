@@ -150,6 +150,11 @@ export interface SchedulerContext {
     auditTrail?: AuditTrail;
     quota?: RunQuota;
     budget?: RunBudget;
+    /**
+     * OxeSpace 14/11: a `runtime pause` from another process. Checked before every node starts: the task in progress
+     * finishes, the next one never starts. Returns the reason when a pause was requested, else null.
+     */
+    pauseRequested?: () => string | null;
     policyActor?: string;
     onEvent?: (event: OxeEvent) => void;
     options?: SchedulerOptions;
@@ -196,6 +201,8 @@ export declare class Scheduler {
     private runNode;
     /** Abort keeps the progress made so far: an aborted run is recoverable, not a blank slate. */
     private abortRun;
+    /** A pause requested from outside (`runtime pause`) takes effect before the next node, never in the middle of one. */
+    private checkRequestedPause;
     /** OXB-120: pause the run for a failure that is not the task's (environment / quota). */
     private pauseForFailure;
     pause(): void;

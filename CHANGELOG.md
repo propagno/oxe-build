@@ -24,6 +24,65 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Eventos:** `AutoResumed` e `AutoResumeSkipped`.
 - **Teste:** `tests/oxe-1212-autoresume.test.cjs`. O CA-1 é um reinício simulado num programa de teste: o execute é morto em T2 com SIGKILL e o `autoresume run` o retoma em T2 sem chamar o executor para T1.
 
+### Regressão congelada sem falso `acceptance_tampered` (OxeCode F3, 14/11)
+
+- **O verify compara o teste congelado sem depender do final de linha:** o arquivo bate quando os bytes, a forma LF ou a forma CRLF têm o hash congelado, a mesma regra do check do `commit-task`. Antes, a regressão das fases fechadas, com hashes gravados em LF, dava `acceptance_tampered` em 7 testes da F3 com `core.autocrlf`, embora nenhum diferisse da `origin/main`.
+
+### Saída grande do shell não derruba o run (P0, OxeChat F2, 14/11)
+
+- **`run_command` com saída limitada:**
+  - O executor guarda os primeiros e os últimos 64 KB da saída, com a contagem do que foi cortado, e para o comando que passa de 64 MB.
+  - Antes, um grep recursivo que seguiu a junction do `node_modules` imprimiu mais de 512 MB. O `Buffer.concat(...).toString()` lançou `ERR_STRING_TOO_LONG` e matou o run inteiro na T5.
+  - A descrição da ferramenta avisa o agente para excluir `node_modules`, `dist` e `.git` das buscas recursivas.
+- **`2>$null` no Windows não cria arquivo:**
+  - No Windows o `run_command` usa o cmd.exe. Um redirecionamento para `$null` (PowerShell) ou para `/dev/null` vai para `nul`, e a descrição da ferramenta diz qual é o shell.
+  - Antes, o T5 do OxeChat F2 criou um arquivo chamado `$null` na worktree.
+- **O checkpoint diz o que está rodando:**
+  - Antes de cada comando, o check e os testes relacionados do checkpoint escrevem no stderr o comando, o commit e o teto de tempo.
+  - O mesmo vale para a reconferência de um vermelho (no commit, na árvore do projeto e no commit pai).
+  - Antes, minutos de silêncio depois do `WorkItemCompleted` pareciam um travamento.
+- **Crash do runtime é retomável:** uma exceção não tratada marca o lease como `crashed`, e o `--supervise` e o `autoresume` o relançam, dentro do limite de laço de queda. Um run que termina `failed` continua não sendo retomado.
+
+### Pausa que segura, emenda do CR aberto e freeze (OxeChat F2, 14/11)
+
+- **`runtime pause` segura o execute em curso:** a pausa pedida de outro processo é lida antes de cada tarefa. A tarefa em curso termina, a próxima não começa, e o run termina `paused` com `RunPaused { reason: "requested" }`. Antes, a T3 terminou e a T4 começou mesmo com o run pausado. O autoresume nunca retoma esse run.
+  - A saída do `runtime pause` diz se o execute em curso vai ler a pausa. Um execute anterior a esta versão não lê; o aviso diz para pará-lo.
+- **`spec amend` usa o CR spec_gap aberto que pediu a emenda:** com `--cr CR-n`, ou sozinho quando há exatamente um CR aberto desse critério ainda sem emenda. Não abre CR novo e usa a versão que esse CR pediu, uma por CR. Antes, a emenda abria CRs novos e levava o critério a v3.
+- **`spec freeze --cr`:** diz que o CR segue aberto até o verify rodar o teste verde, como já era o desenho, e como fechá-lo antes.
+- **Re-freeze:** um `--command` explícito vence o comando já registrado.
+- **`spec freeze` respeita o filtro de nome do comando (OxeCode F4 T20):** o `proves` guarda só os testes que o comando da entrada seleciona.
+  - O filtro vem de `--proves-filter "<padrão>"` ou, sem ele, do `-t` / `--testNamePattern` / `--grep` do comando.
+  - O padrão é aplicado ao nome completo do teste, com os `describe` que o envolvem, como fazem o vitest e o jest; testes comentados ficam de fora.
+  - Um filtro que não seleciona nada é recusado.
+  - Antes, um arquivo dividido entre duas tarefas punha os 9 títulos na T20, e os 4 da outra tarefa nunca rodavam (`proof_not_executed`).
+  - O `freeze` também aceita `--by`.
+- **`quick commit <caminho apagado>`:** registra a remoção, ou não faz nada se o `git rm` já a registrou. Antes, recusava o caminho.
+- **`runtime promote` passa pelo hook de origem:** o commit dos testes congelados da tarefa leva `OXE-Task: Fn/Tn`, uma linha por tarefa promovida, mais o `OXE-Run` quando é conhecido. Os testes viajam no PR da tarefa. Antes, o hook commit-msg recusava esse commit e o branch ficava só com o cherry-pick.
+- **Um promote que falhou não trava o próximo:**
+  - A worktree do próprio promote, suja porque um passo falhou, é removida com força depois de o link do `node_modules` ser desfeito. Antes, o `worktree remove` sem força recusava, e a worktree ficava segurando o branch.
+  - A varredura das worktrees de promotes mortos roda antes de conferir o branch. Antes, o promote seguinte dizia "está em uso numa worktree" e pedia uma remoção à mão.
+- **Close sem o ensaio de rollback registra o risco (Celular F2):** `program close --no-rollback-check` exige `--by` e `--reason`, e grava `rollback_risk` no `changes.ndjson` e o evento `RollbackRiskAccepted`. A mensagem do gate mostra o comando completo. É o caso de uma fase com merges da main, que não revertem sem `-m`.
+- **`quick done` conta os commits de todos os branches (OXE-149):** a busca pelo trailer `OXE-Quick` passa a olhar os branches locais e remotos, além do HEAD, sem os commits de stash. Antes, quatro commits em dois branches contavam como um.
+
+### Suítes fora do verify, fase duplicada, junction e versão do card (G30 e OxeSpace, 14/11)
+
+- **G30, suítes que importam os arquivos da tarefa:** o `plan lint` lista, por tarefa não concluída, as suítes de teste existentes que importam algum arquivo de `files` e não estão nem no escopo, nem no verify, nem entre os testes de aceite da tarefa. A resolução de imports aceita os aliases do tsconfig.
+  - É aviso por padrão.
+  - Vira erro quando o texto da tarefa cita uma lista ou constante exportada (`export const NOME = [ … ]`, `{ … }`, literal, `Object.freeze`) que a suíte importa pelo nome, porque a suíte afirma sobre o que a tarefa vai mudar.
+  - `lint.suite_impact`: `"warn"` ou `"off"`.
+  - Nesta rodada, três refações pagas tiveram essa causa (CR-07, CR-08 e o terminal do Celular).
+- **`program phase add` idempotente:**
+  - o mesmo título logo depois de `--after` não grava nada e diz que a fase já existe;
+  - um título já usado por outra fase, ou um critério que outra fase já tem, é recusado sem gravar e indica o `program criterion move`.
+  - Antes, rodar duas vezes duplicava a fase e repetia o ROADMAP.
+  - O `--depends-on` agora é gravado na fase nova e segue a renumeração; uma fase que não existe é recusada. Antes, ele era aceito e ignorado.
+- **`checkpoint-ws` sem junction órfã:** um check morto no meio (reinício, kill) deixava a junction do `node_modules` dentro do `.oxe/`, e um `cp -r .oxe` a seguia por cerca de 118 mil arquivos. Agora, no início de cada check, as sobras com mais de 2 h perdem o link primeiro e depois saem. A pasta real das dependências nunca é tocada.
+- **`oxe-cc alm version <KEY> <versão> [--comment "…"] [--apply]`:** troca a versão de correção (fixVersion) de um card existente.
+  - Só o escritor pode usar, e sem `--apply` sob `require_apply` é uma simulação.
+  - Se o card já está nessa versão, nada é gravado.
+  - A versão precisa existir no projeto do Jira.
+  - Com `alm.transport: "mcp"`, o comando diz para usar a ferramenta do MCP.
+
 ### Prova de teste no Kotlin/Gradle e hooks sem esqueleto (Celular F2 e OxeChat F2, 14/11)
 
 - **`proves` com Gradle:**

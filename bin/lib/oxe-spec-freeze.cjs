@@ -24,6 +24,87 @@ function globRe(g) { return new RegExp(`^${String(g).replace(/[.+^${}()|[\]\\]/g
 function titlesOf(text, file) {
   return [...new Set(require('./oxe-plan-json.cjs').declaredTestTitles(text, file))].filter(Boolean);
 }
+/**
+ * OxeSpace 14/11 (OxeCode F4 T20): a test file shared by two tasks (`-t "OXE-128 next"` / `-t "OXE-128 ring"`) put all 9
+ * titles in T20's proves; the 4 ring ones never run under T20's filter → proof_not_executed. The full name of each
+ * test (its enclosing describe titles + its own, joined by a space, as vitest/jest match `-t`) is filtered by the
+ * pattern.
+ */
+/** Comments blanked out (same length, positions kept), strings untouched — a commented-out it() is not a test. */
+function blankComments(text) {
+  const s = String(text || '');
+  let out = '';
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (ch === '"' || ch === "'" || ch === '`') {
+      let j = i + 1;
+      for (; j < s.length && s[j] !== ch; j += 1) if (s[j] === '\\') j += 1;
+      out += s.slice(i, j + 1);
+      i = j;
+    } else if (ch === '/' && s[i + 1] === '/') {
+      let j = s.indexOf('\n', i);
+      if (j < 0) j = s.length;
+      out += ' '.repeat(j - i);
+      i = j - 1;
+    } else if (ch === '/' && s[i + 1] === '*') {
+      let j = s.indexOf('*/', i + 2);
+      j = j < 0 ? s.length : j + 2;
+      out += s.slice(i, j).replace(/[^\n]/g, ' ');
+      i = j - 1;
+    } else out += ch;
+  }
+  return out;
+}
+
+function fullTestNames(text) {
+  const src = blankComments(text);
+  // index of the ")" closing the "(" at `open`, skipping strings, template literals and comments
+  const closeOf = (open) => {
+    let depth = 0;
+    for (let i = open; i < src.length; i += 1) {
+      const ch = src[i];
+      if (ch === '/' && src[i + 1] === '/') { i = src.indexOf('\n', i); if (i < 0) return src.length; continue; }
+      if (ch === '/' && src[i + 1] === '*') { i = src.indexOf('*/', i + 2); if (i < 0) return src.length; i += 1; continue; }
+      if (ch === '"' || ch === "'" || ch === '`') {
+        for (i += 1; i < src.length && src[i] !== ch; i += 1) if (src[i] === '\\') i += 1;
+        continue;
+      }
+      if (ch === '(') depth += 1;
+      else if (ch === ')') { depth -= 1; if (depth === 0) return i; }
+    }
+    return src.length;
+  };
+  const unq = (s) => s.replace(/\\(['"`\\])/g, '$1');
+  const describes = [];
+  for (const m of src.matchAll(/\bdescribe(?:\.\w+)*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g)) {
+    const open = m.index + m[0].indexOf('(');
+    describes.push({ title: unq(m[2]), start: open, end: closeOf(open) });
+  }
+  const out = [];
+  for (const m of src.matchAll(/\b(?:it|test)(?:\.\w+)*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g)) {
+    if (m[1] === '`' && m[2].includes('${')) continue;
+    const at = m.index;
+    const chain = describes.filter((d) => d.start < at && at < d.end).sort((a, b) => a.start - b.start).map((d) => d.title);
+    out.push({ title: unq(m[2]), full: [...chain, unq(m[2])].join(' ') });
+  }
+  return out;
+}
+
+/** The `-t` / `--testNamePattern` / `--grep` pattern of a test command, or null. */
+function namePatternOf(command) {
+  const m = /(?:^|\s)(?:-t|--testNamePattern|--test-name-pattern|--grep)(?:=|\s+)(?:"([^"]*)"|'([^']*)'|(\S+))/.exec(String(command || ''));
+  return m ? (m[1] ?? m[2] ?? m[3]) : null;
+}
+
+function filterTitles(text, titles, pattern) {
+  if (!pattern) return titles;
+  let re = null;
+  try { re = new RegExp(pattern); } catch { re = null; }
+  const hit = (s) => (re ? re.test(s) : s.includes(pattern));
+  const selected = new Set(fullTestNames(text).filter((t) => hit(t.full)).map((t) => t.title));
+  return titles.filter((t) => selected.has(t));
+}
+
 function criterionOf(text) { const m = /\b(?:describe|it|test)\s*\(\s*['"`][^'"`]*\b(A\d+)\b/.exec(String(text)); return m ? m[1] : null; }
 
 /** The ref's commit sha and changed files: a PR via `gh`, a sha via git. spawn is injectable (tests). */
@@ -67,14 +148,19 @@ function freeze(root, jsonPath, doc, options = {}) {
     if (existing && existing.sha256 && existing.sha256 !== hash && !options.cr) { refused.push({ file: f, why: `${f} já está congelado com outro conteúdo — mudar um teste congelado exige um CR (--cr CR-n)` }); continue; }
     const criterion = (options.criteria && String(options.criteria).split(',')[0].trim().toUpperCase()) || criterionOf(text) || (existing && existing.criterion) || null;
     if (!criterion) { refused.push({ file: f, why: `${f}: sem critério — informe --criteria A<n> ou cite o A<n> no describe` }); continue; }
-    const proves = titlesOf(text, f);
-    if (!proves.length) { refused.push({ file: f, why: `${f}: nenhum it/test com título — nada a provar` }); continue; }
+    const allTitles = titlesOf(text, f);
+    if (!allTitles.length) { refused.push({ file: f, why: `${f}: nenhum it/test com título — nada a provar` }); continue; }
+    // only the titles the entry's command selects (--proves-filter, or its -t / --testNamePattern)
+    const pattern = options.provesFilter || namePatternOf(options.command || (existing && existing.command) || '');
+    const proves = filterTitles(text, allTitles, pattern);
+    if (!proves.length) { refused.push({ file: f, why: `${f}: o filtro "${pattern}" não seleciona nenhum dos ${allTitles.length} testes — confira o -t do comando ou o --proves-filter` }); continue; }
     if (local == null || local !== text) { fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, text); }
     const entry = {
       ...(existing || {}),
       criterion,
       files: [f],
-      command: (existing && existing.command) || options.command || `npx vitest run ${f}`,
+      // an explicit --command wins on a re-freeze (OxeSpace 14/11: A5 kept a command naming a deleted .ts)
+      command: options.command || (existing && existing.command) || `npx vitest run ${f}`,
       proves,
       sha256: hash,
       origin: { kind: origin.kind, ref: origin.ref, sha: origin.sha, ...(origin.url ? { url: origin.url } : {}) },
@@ -102,4 +188,4 @@ function freeze(root, jsonPath, doc, options = {}) {
   return { origin, frozen, refused, rigor };
 }
 
-module.exports = { freeze, titlesOf, criterionOf, resolveRef };
+module.exports = { freeze, titlesOf, criterionOf, resolveRef, fullTestNames, namePatternOf, filterTitles };

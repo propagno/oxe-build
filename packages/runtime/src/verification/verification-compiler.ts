@@ -167,6 +167,22 @@ interface ParsedPlanLike {
   acceptanceTests?: AcceptanceTestLike[];
 }
 
+/**
+ * OxeSpace 14/11 (OxeCode F3 close): the frozen regression of closed phases stores hashes taken with LF; with
+ * core.autocrlf the working copy is CRLF and every file read as "acceptance_tampered" although none differed from
+ * origin/main. A frozen file matches when its bytes, its LF form or its CRLF form hash to the frozen sha (the same
+ * line-ending rule as commit-task's frozen check).
+ */
+export function frozenFileMatches(absPath: string, sha: string): boolean {
+  let raw: Buffer;
+  try { raw = fs.readFileSync(absPath); } catch { return false; }
+  const h = (b: Buffer | string) => crypto.createHash('sha256').update(b).digest('hex');
+  if (h(raw) === sha) return true;
+  const text = raw.toString('utf8');
+  const lf = text.replace(/\r\n/g, '\n');
+  return h(lf) === sha || h(lf.replace(/\n/g, '\r\n')) === sha;
+}
+
 export function sha256File(absPath: string): string | null {
   try {
     return crypto.createHash('sha256').update(fs.readFileSync(absPath)).digest('hex');
@@ -357,7 +373,7 @@ async function runCheckOnce(
     const missing = frozen.filter((f) => !fs.existsSync(path.resolve(cwd, f.path)));
     const tampered = missing.length > 0
       ? []
-      : frozen.filter((f) => f.sha256 !== null && sha256File(path.resolve(cwd, f.path)) !== f.sha256);
+      : frozen.filter((f) => f.sha256 !== null && !frozenFileMatches(path.resolve(cwd, f.path), f.sha256));
     const unlocked = frozen.filter((f) => f.sha256 === null);
     if (missing.length > 0 || tampered.length > 0 || unlocked.length > 0) {
       return {

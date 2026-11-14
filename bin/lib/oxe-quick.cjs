@@ -82,9 +82,12 @@ function start(root, input = {}) {
   return { resumed: false, ...rec, trailers: trailers(rec) };
 }
 
-/** The commits of a quick, found by its trailer (any branch reachable from HEAD). */
+/**
+ * The commits of a quick, found by its trailer in every local and remote branch plus HEAD (OxeSpace 14/11, OXE-149:
+ * 4 commits in two branches were counted as 1 from HEAD). Not `--all`: a stash commit is not the quick's.
+ */
 function commitsOf(root, id, spawn = spawnSync) {
-  const r = spawn('git', ['log', '--format=%H%x1f%s', '-E', `--grep=^OXE-Quick: ${id}$`], { cwd: root, encoding: 'utf8', windowsHide: true });
+  const r = spawn('git', ['log', '--format=%H%x1f%s', '-E', `--grep=^OXE-Quick: ${id}$`, 'HEAD', '--branches', '--remotes'], { cwd: root, encoding: 'utf8', windowsHide: true });
   if (r.status !== 0) return [];
   return String(r.stdout || '').split('\n').filter(Boolean).map((l) => { const [sha, subject] = l.split('\x1f'); return { sha, subject }; });
 }
@@ -140,7 +143,14 @@ function commit(root, input = {}) {
     return { id: rec.id, key: rec.key, dry_run: true, files, message: require('./oxe-origin.cjs').appendTrailers(message, trailers(rec)).trim() };
   }
   if (input.all) git(['add', '-A']);
-  else if (input.paths && input.paths.length) git(['add', '--', ...input.paths]);
+  else if (input.paths && input.paths.length) {
+    // a path deleted in this commit (OxeSpace 14/11): `git add` refuses it once `git rm` staged the deletion; stage the
+    // deletion if it is not staged yet, and nothing if it already is
+    const present = input.paths.filter((p) => fs.existsSync(path.join(root, p)));
+    const gone = input.paths.filter((p) => !present.includes(p));
+    if (present.length) git(['add', '--', ...present]);
+    if (gone.length) git(['rm', '-q', '--cached', '--ignore-unmatch', '--', ...gone]);
+  }
   const staged = git(['diff', '--cached', '--name-only']).split('\n').map((l) => l.trim()).filter(Boolean);
   if (!staged.length) throw new Error('nada para commitar: passe os arquivos, --all, ou faça git add antes');
   const full = require('./oxe-origin.cjs').appendTrailers(message, trailers(rec));

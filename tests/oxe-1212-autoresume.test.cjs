@@ -47,6 +47,18 @@ describe('G24 · lease e decisão', () => {
     assert.equal(ar.inspect(file).state, 'running');
     ar.finishLease(file, 'finished');
     assert.equal(ar.inspect(file).state, 'ended');
+    // a crash of the runtime (uncaught exception) is resumable, unlike "failed" (OxeSpace 14/11, ERR_STRING_TOO_LONG)
+    ar.startLease(file, { pid: process.pid, argv: ['runtime', 'execute'] });
+    ar.finishLease(file, 'crashed');
+    const crashed = ar.inspect(file);
+    assert.equal(crashed.state, 'interrupted');
+    assert.equal(crashed.crashed, true);
+    const dc = ar.decide({ inspection: crashed, cfg: ar.config({ autoresume: { min_free_mb: 1 } }, {}), freeMb: 4000 });
+    assert.equal(dc.resume, true);
+    assert.match(dc.why, /caiu \(crash\)/);
+    ar.startLease(file, { pid: process.pid, argv: [] });
+    ar.finishLease(file, 'failed');
+    assert.equal(ar.inspect(file).state, 'ended');
     // a newer execute's lease is never closed by an older process
     ar.startLease(file, { pid: 999999, argv: [] });
     assert.equal(ar.finishLease(file, 'failed', { pid: process.pid }), null);

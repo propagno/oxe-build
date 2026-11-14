@@ -3,8 +3,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ALL_BUILT_IN_SCHEMAS = exports.BUILT_IN_TOOLS = exports.PathContainmentError = void 0;
+exports.ALL_BUILT_IN_SCHEMAS = exports.BUILT_IN_TOOLS = exports.BoundedOutput = exports.PathContainmentError = void 0;
 exports.resolveWithin = resolveWithin;
+exports.windowsNullRedirects = windowsNullRedirects;
 exports.setQuestionResolver = setQuestionResolver;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
@@ -269,7 +270,7 @@ const runCommand = {
         type: 'function',
         function: {
             name: 'run_command',
-            description: 'Run a shell command in the workspace directory',
+            description: 'Run a shell command in the workspace directory (on Windows the shell is cmd.exe: discard output with 2>nul; elsewhere sh: 2>/dev/null). The output is cut to its first and last 64 KB, and a command printing more than 64 MB is stopped. node_modules may be a link to a shared dependencies folder: exclude node_modules, dist and .git from recursive grep/find/cat (prefer the search tool).',
             parameters: {
                 type: 'object',
                 properties: {
@@ -286,9 +287,60 @@ const runCommand = {
         return runShell(command, cwd, timeoutMs);
     },
 };
+/**
+ * OxeSpace 14/11 (P0): a command that printed more than ~512 MB (a recursive grep that followed the node_modules
+ * junction) made `Buffer.concat(out).toString()` throw ERR_STRING_TOO_LONG and killed the whole run. The output is now
+ * bounded: the first and the last `keep` bytes, with the count of what was cut; past `hardLimit` the command is killed.
+ */
+class BoundedOutput {
+    constructor(keep = 64 * 1024, hardLimit = 64 * 1024 * 1024) {
+        this.keep = keep;
+        this.hardLimit = hardLimit;
+        this.head = [];
+        this.headBytes = 0;
+        this.tail = [];
+        this.tailBytes = 0;
+        this.total = 0;
+    }
+    push(chunk) {
+        this.total += chunk.length;
+        let c = chunk;
+        if (this.headBytes < this.keep) {
+            const take = Math.min(this.keep - this.headBytes, c.length);
+            this.head.push(c.subarray(0, take));
+            this.headBytes += take;
+            c = c.subarray(take);
+        }
+        if (!c.length)
+            return;
+        this.tail.push(c);
+        this.tailBytes += c.length;
+        while (this.tail.length > 1 && this.tailBytes - this.tail[0].length >= this.keep)
+            this.tailBytes -= this.tail.shift().length;
+    }
+    get overLimit() { return this.total > this.hardLimit; }
+    text() {
+        const head = Buffer.concat(this.head).toString('utf8');
+        let tail = Buffer.concat(this.tail);
+        if (tail.length > this.keep)
+            tail = tail.subarray(tail.length - this.keep);
+        const cut = this.total - this.headBytes - tail.length;
+        if (cut <= 0)
+            return (head + tail.toString('utf8')).trim();
+        return `${head}\n[… ${cut} bytes cortados da saída (${this.total} no total) — restrinja o comando: exclua node_modules, dist e .git de buscas recursivas …]\n${tail.toString('utf8')}`.trim();
+    }
+}
+exports.BoundedOutput = BoundedOutput;
+/**
+ * OxeSpace 14/11 (OxeChat F2 T5): the agent ran `… 2>$null` (PowerShell) through cmd.exe, which created a file named
+ * `$null` in the worktree (a ScopeViolation). On Windows, a redirect to `$null` or `/dev/null` goes to `nul`.
+ */
+function windowsNullRedirects(command) {
+    return command.replace(/(\d?>>?|&>)\s*(?:\$null|\/dev\/null)(?![\w/])/gi, (_m, op) => (op === '&>' ? '>nul 2>&1' : `${op}nul`));
+}
 function runShell(command, cwd, timeoutMs) {
     return new Promise((resolve) => {
-        const shell = (0, shell_argv_1.shellInvocation)(command);
+        const shell = (0, shell_argv_1.shellInvocation)(process.platform === 'win32' ? windowsNullRedirects(command) : command);
         // stdin is closed so a command that waits for input (e.g. grep without a file) ends instead of hanging.
         const proc = (0, child_process_1.spawn)(shell.file, shell.args, {
             cwd,
@@ -296,15 +348,25 @@ function runShell(command, cwd, timeoutMs) {
             stdio: ['ignore', 'pipe', 'pipe'],
             windowsVerbatimArguments: shell.windowsVerbatimArguments,
         });
-        const out = [];
+        const out = new BoundedOutput();
         let timedOut = false;
+        let killedForSize = false;
         const timer = setTimeout(() => { timedOut = true; proc.kill('SIGTERM'); }, timeoutMs);
-        proc.stdout.on('data', (c) => out.push(c));
-        proc.stderr.on('data', (c) => out.push(c));
+        const onData = (c) => {
+            out.push(c);
+            if (out.overLimit && !killedForSize) {
+                killedForSize = true;
+                proc.kill('SIGTERM');
+            }
+        };
+        proc.stdout.on('data', onData);
+        proc.stderr.on('data', onData);
         proc.on('close', (code) => {
             clearTimeout(timer);
-            const text = Buffer.concat(out).toString('utf8').trim();
-            if (timedOut)
+            const text = out.text();
+            if (killedForSize)
+                resolve(`[interrompido: a saída passou de ${Math.round(out.hardLimit / (1024 * 1024))} MB — o comando foi parado; restrinja-o (exclua node_modules de buscas recursivas)]\n${text}`);
+            else if (timedOut)
                 resolve(`[timed out after ${timeoutMs}ms]\n${text}`);
             else
                 resolve(code === 0 ? text || '(no output)' : `[exit ${code}]\n${text}`);

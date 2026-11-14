@@ -41,6 +41,14 @@ describe('teste de aceite congelado no verify', () => {
       fs.writeFileSync(path.join(dir, 'api.js'), 'module.exports = { createApi: () => ({ handle() {} }) };\n');
       assert.equal((await runCheck(check, dir)).status, 'fail');
 
+      // core.autocrlf: frozen with LF, read back as CRLF — the same file, never "tampered" (OxeSpace 14/11, F3 close)
+      fs.writeFileSync(path.join(dir, 'api.js'), 'module.exports = { createApi: () => () => 1 };\n');
+      fs.writeFileSync(path.join(dir, 'accept.test.js'), ACCEPT.replace(/\n/g, '\r\n'));
+      const crlf = await runCheck(check, dir);
+      assert.notEqual(crlf.error, 'acceptance_tampered: accept.test.js');
+      assert.equal(crlf.status, 'pass', `${crlf.error} ${crlf.stderr}`);
+      fs.writeFileSync(path.join(dir, 'accept.test.js'), ACCEPT);
+
       // Executor "ajusta" o teste para passar: adulterado.
       fs.writeFileSync(path.join(dir, 'accept.test.js'), ACCEPT.replace("'function'", "'object'"));
       const tampered = await runCheck(check, dir);

@@ -172,6 +172,11 @@ export interface SchedulerContext {
   auditTrail?: AuditTrail;
   quota?: RunQuota;
   budget?: RunBudget;
+  /**
+   * OxeSpace 14/11: a `runtime pause` from another process. Checked before every node starts: the task in progress
+   * finishes, the next one never starts. Returns the reason when a pause was requested, else null.
+   */
+  pauseRequested?: () => string | null;
   policyActor?: string;
   onEvent?: (event: OxeEvent) => void;
   options?: SchedulerOptions;
@@ -631,6 +636,7 @@ export class Scheduler {
     }
 
     for (const id of mutations) {
+      this.checkRequestedPause(ctx);
       if (this.cancelled || this.paused) break;
       await this.runNode(id, graph, ctx, status, completed, failed, blocked);
     }
@@ -660,6 +666,9 @@ export class Scheduler {
     let lastSignature = '';
     while (!this.cancelled && !this.paused) {
       if (Date.now() - this.runStartMs > maxRunMs) break;
+      // a requested pause stops new starts; the nodes already running finish (awaited below)
+      this.checkRequestedPause(ctx);
+      if (this.paused) break;
       const waiting: Array<{ id: string; reason: string }> = [];
       const ready: string[] = [];
       for (const id of order) {
@@ -719,6 +728,12 @@ export class Scheduler {
     const running = new Map<string, { scope: string[]; done: Promise<void> }>();
     let memoryWarned = false;
     while ((pending.length > 0 || running.size > 0) && !this.cancelled) {
+      // a requested pause: nothing new starts; what is running finishes
+      this.checkRequestedPause(ctx);
+      if (this.paused) {
+        if (running.size) await Promise.all([...running.values()].map((r) => r.done));
+        break;
+      }
       for (const id of [...pending]) {
         if (running.size >= max) break;
         const scope = graph.nodes.get(id)!.mutation_scope;
@@ -1174,6 +1189,16 @@ export class Scheduler {
       saveJournal(ctx.projectRoot, ctx.runId, this.journal);
     }
     return { run_id: ctx.runId, status: 'aborted', completed, failed, blocked, reason };
+  }
+
+  /** A pause requested from outside (`runtime pause`) takes effect before the next node, never in the middle of one. */
+  private checkRequestedPause(ctx: SchedulerContext): void {
+    if (this.paused || !ctx.pauseRequested) return;
+    let reason: string | null = null;
+    try { reason = ctx.pauseRequested(); } catch { reason = null; }
+    if (!reason) return;
+    this.emit(ctx, { type: 'RunPaused', payload: { reason: 'requested', diagnosis: reason, resume_at: null } });
+    this.pause();
   }
 
   /** OXB-120: pause the run for a failure that is not the task's (environment / quota). */
