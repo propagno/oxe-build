@@ -202,10 +202,14 @@ function recordGateFailures(input) {
   const failing = (checkResults || []).filter((r) => /^gate-/.test(String(r.check_id || '')) && (r.status === 'fail' || r.status === 'error'));
   if (!failing.length) return { created, program };
   const open = changeLib.listChanges(programDir).filter((cr) => cr.status === 'open' && cr.gate);
+  const infra = [];
   for (const result of failing) {
     const gateId = String(result.check_id).replace(/^gate-/, '');
     if (open.some((cr) => cr.gate === gateId)) continue;
     const excerpt = firstErrorLines(result);
+    // a network failure (the runner, gh, the registry) says nothing about the code: infra, no CR (OxeSpace 14/11,
+    // gate-android-unit: "dial tcp … connectex" from gh in remote-verify, while the run itself passed)
+    if (isInfraFailure(result)) { infra.push({ gate: gateId, excerpt: excerpt ? excerpt.split('\n')[0].slice(0, 200) : null }); continue; }
     const out = changeLib.recordChange({
       programDir,
       program,
@@ -219,7 +223,14 @@ function recordGateFailures(input) {
     program = out.program || program;
     created.push(out.cr);
   }
-  return { created, program };
+  return { created, program, infra };
+}
+
+/** The output of a failed check carries a network / infrastructure signature (not a defect of the code). */
+const INFRA_RE = /\b(dial tcp|connectex|forcibly closed by the remote host|WSAE[A-Z]+|remote end hung up|early EOF|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|socket hang up|TLS handshake timeout|tls: |certificate has expired|getaddrinfo|i\/o timeout|connection (reset|refused|timed out)|A connection attempt failed|HTTP (502|503|504)|\b(502|503|504) (Bad Gateway|Service Unavailable|Gateway Time-?out)|rate limit exceeded|API rate limit)\b/i;
+function isInfraFailure(result) {
+  const text = [result && result.stderr, result && result.stdout, result && result.error, result && result.output, result && result.excerpt, result && result.message, result && result.evidence].filter(Boolean).join('\n');
+  return INFRA_RE.test(text);
 }
 
 /** Gates a plan could declare: package.json gate scripts and governance tests found in the repo. */
@@ -495,6 +506,7 @@ module.exports = {
   gateCommand,
   gateChecks,
   recordGateFailures,
+  isInfraFailure,
   detectGateCandidates,
   findGovernanceTests,
   lintPhaseGates,

@@ -107,6 +107,8 @@ const ALLOWED_CONFIG_KEYS = [
   'verify',
   // G8: ship.train_labels (the merge train's labels shown by ship status --repo)
   'ship',
+  // dry_verify.timeout_ms (plan lint --dry-verify, per command)
+  'dry_verify',
 ];
 
 /**

@@ -2357,6 +2357,16 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const env = options.env || process.env;
   const problems = lib.checkConfig(cfg, env);
+  // alm status <KEY>: the card's live column (read only), not a folder (OxeSpace 14/11: "alm status OXE-144")
+  if ((options.action === 'status' || !options.action) && options.ref) {
+    if (!cfg) return { configured: false, key: options.ref, why: 'ALM não configurado aqui' };
+    const item = lib.resolveItem(programDir, cfg, options.ref);
+    if (!item) throw new Error(`${options.ref}: não é uma chave deste projeto (${cfg.provider === 'jira' ? `${cfg.p.project}-n` : 'número'})`);
+    const prov = lib.provider(cfg, { http: options.http, env, sleep: options.sleep, readOnly: true });
+    const state = typeof prov.status === 'function' && !prov.deferred ? await prov.status(item.key) : null;
+    const stage = lib.STAGES.find((s) => cfg.states[s] && state && String(cfg.states[s]).toLowerCase() === String(state).toLowerCase()) || null;
+    return { configured: true, key: item.key, ref: item.direct ? null : item.ref, state, stage };
+  }
   if (options.action === 'status' || !options.action) {
     const st = lib.readState(programDir);
     return { configured: Boolean(cfg), provider: cfg ? cfg.provider : 'none', transport: cfg ? cfg.transport : null, problems, links: lib.links(programDir).size, pending: (st.pending || []).length, queue: lib.readQueue(programDir).ops.length, last_sync: st.last_sync || null, auto: cfg ? cfg.auto : false };
@@ -2809,6 +2819,15 @@ async function runtimeAlmRefine(projectRoot, activeSession, options = {}) {
       const md = fs.readFileSync(specFile, 'utf8');
       if (action === 'lint') {
         const l = refine.lintSpec(md, collected.kind);
+        // G34 (user decision 14/11, via the brand: the 1.5.2 is faithful to the rebranding end to end): a UI card
+        // passes the refine only with (1) its BRD-n, (2) the target (a file or an approved artifact) and (3)
+        // measures in the CAs (size, font, radius, color as a token), for both themes and both densities. Without
+        // them: needs-info, with the question for the brand.
+        const ui = uiCardGaps(md, collected);
+        if (ui.isUi && ui.gaps.length) {
+          for (const g of ui.gaps) { l.warnings.push(`interface: ${g}`); l.questions.push(`MARCA: ${g}`); }
+          l.needs_info = true;
+        }
         // CA ↔ A: with a program SPEC, every CA names its criterion and that criterion exists
         const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
         const specText = paths.spec && fs.existsSync(paths.spec) ? fs.readFileSync(paths.spec, 'utf8') : null;
@@ -2910,10 +2929,15 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const rec = action === 'start'
     ? q.start(projectRoot, { key: options.key, objective: options.objective, by: options.by, replace: options.replace, dryRun: options.dryRun, quickFile: paths.quick || path.join(projectRoot, '.oxe', 'QUICK.md') })
-    : q.done(projectRoot, { verify: options.verify, noCommit: options.noCommit, by: options.by, id: options.id, dryRun: options.dryRun });
+    : action === 'cancel'
+      ? q.cancel(projectRoot, { reason: options.reason, evidence: options.evidence, by: options.by, id: options.id, dryRun: options.dryRun })
+      : q.done(projectRoot, { verify: options.verify, noCommit: options.noCommit, by: options.by, id: options.id, dryRun: options.dryRun });
   // a dry run writes no local state either (no record, no QUICK.md, no event, no commit) — the G13 rule, locally
   if (action === 'start' && !rec.resumed && !rec.dry_run) appendEvent(projectRoot, activeSession, { type: 'QuickStarted', payload: { id: rec.id, key: rec.key } });
+  if (action === 'cancel' && rec.cancelled) appendEvent(projectRoot, activeSession, { type: 'QuickAbandoned', payload: { id: rec.id, key: rec.key, reason: rec.cancel.reason, evidence: rec.cancel.evidence } });
   if (action === 'done' && rec.closed) appendEvent(projectRoot, activeSession, { type: 'QuickDone', payload: { id: rec.id, key: rec.key, commits: rec.commits.length, verify_ok: rec.verify ? rec.verify.ok : null } });
+  // a card named but no ALM here: say it, never a silent OK (OxeSpace 14/11, OXE-144 in a worktree with no alm block)
+  if (!cfg && rec.key && !rec.resumed && !(action === 'done' && rec.closed === false)) return { ...rec, alm: { skipped: true, why: `ALM não configurado aqui: nada foi gravado no card ${rec.key} (rode na pasta que tem o bloco "alm" do .oxe/config.json, ou com --dir dela)` } };
   // the card: only when there is one, an ALM, and the quick is not a resume or a failed verification
   if (!cfg || !rec.key || rec.resumed || (action === 'done' && !rec.closed)) return { ...rec, alm: null };
   const env = options.env || process.env;
@@ -2924,7 +2948,7 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
   const net = { http: options.http, env, sleep: options.sleep, retries: options.retries, dryRun: dry, apply: options.apply };
   const alm = {};
   try {
-    alm.comment = await lib.comment(programDir, cfg, rec.key, q.cardComment(rec, action === 'start' ? 'start' : 'done'), net);
+    alm.comment = await lib.comment(programDir, cfg, rec.key, q.cardComment(rec, action === 'start' ? 'start' : action === 'cancel' ? 'cancel' : 'done'), net);
     if (action === 'start' && cfg.states.in_progress) {
       const prov = lib.provider(cfg, net);
       const live = typeof prov.status === 'function' && !prov.deferred ? await prov.status(rec.key) : null;
@@ -3166,6 +3190,26 @@ function applyTaskGatesToGraph(projectRoot, artifactPaths, compiledGraph) {
   }
   appendStubCheck(projectRoot, doc, compiledGraph);
 }
+
+/** G34: what a UI card's spec still lacks (BRD-n, target, measures in the CAs, both themes, both densities). */
+function uiCardGaps(md, collected = {}) {
+  const text = String(md || '');
+  const labels = (collected.labels || []).map((l) => String(l).toLowerCase());
+  const UI_PATHS = /\b(src\/(renderer|ui|styles|design|components)\/|mobile\/android\/[\w/.-]*\/ui\/)/;
+  const isUi = labels.includes('area-marca') || UI_PATHS.test(text);
+  if (!isUi) return { isUi: false, gaps: [] };
+  const gaps = [];
+  if (!/\bBRD-\d+\b/.test(text)) gaps.push('qual é o BRD-n deste card? (a referência do rebranding)');
+  const target = /(\.brand-audit\/|playground|src\/[\w/.-]+\.(tsx?|css|kt)|mobile\/android\/[\w/.-]+\.kt|[\w/.-]+\.(png|fig|html))/.test(text);
+  if (!target) gaps.push('qual é o alvo aprovado (arquivo, playground ou artefato da marca)?');
+  const crit = refineLibCriteria(text);
+  const measured = crit.filter((c) => /\b\d+(\.\d+)?\s*(px|dp|sp)\b|var\(--[\w-]+\)|--[a-z][\w-]+|Oxe(Radius|Theme|Space)\.\w+|\b(raio|altura|fonte|peso)\s+\d+/i.test(c.text));
+  if (!crit.length || !measured.length) gaps.push('quais medidas os critérios conferem (altura, fonte, raio, cor como token)?');
+  if (!/(dois temas|ambos os temas|claro e (o )?escuro|escuro e (o )?claro|noite e (o )?dia|light and dark|dark and light)/i.test(text)) gaps.push('as medidas valem nos dois temas (claro e escuro)?');
+  if (!/(duas densidades|compacta e (a )?confortável|confortável e (a )?compacta|data-density|densidade)/i.test(text)) gaps.push('as medidas valem nas duas densidades (compacta e confortável)?');
+  return { isUi: true, gaps };
+}
+const refineLibCriteria = (md) => { try { return require('./oxe-alm-refine.cjs').parseCriteria(md); } catch { return []; } };
 
 /** The open CRs that reopened a task (cr.tasks names it). */
 function reopeningCrsOf(projectRoot, taskId) {
@@ -5009,6 +5053,9 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
         checkResults: report.check_results,
       });
       gateSummary.changes = recorded.created.map((cr) => cr.id);
+      // a gate that failed by the network (infra) opens no CR: rerun the verify (the code was not judged)
+      gateSummary.infra = recorded.infra || [];
+      for (const i of gateSummary.infra) appendEvent(projectRoot, activeSession, { type: 'GateInfraFailure', run_id: current.run_id, payload: { gate: i.gate, excerpt: i.excerpt } });
       for (const cr of recorded.created) {
         appendEvent(projectRoot, activeSession, { type: 'ChangeRequested', run_id: current.run_id, payload: { id: cr.id, class: cr.class, phase: cr.phase, criteria: [], gate: cr.gate, by: cr.by } });
       }
@@ -5569,7 +5616,8 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     // OXB-084: progress per command, a resume cache keyed by the tree, and --only / --changed.
     const cacheDir = paths.programDir ? path.dirname(paths.programDir) : path.join(projectRoot, '.oxe');
     dryVerify = require('./oxe-verify-dryrun.cjs').dryRunVerifyCommands(projectRoot, effective, {
-      timeoutMs: options.dryVerifyTimeoutMs,
+      // per command; config dry_verify.timeout_ms (e.g. a verify that goes to a remote runner and waits in a queue)
+      timeoutMs: options.dryVerifyTimeoutMs || (() => { const v = (readProjectConfig(projectRoot) || {}).dry_verify; return v && Number(v.timeout_ms) > 0 ? Number(v.timeout_ms) : undefined; })(),
       onProgress: options.onProgress,
       cachePath: options.dryVerifyCache === false ? null : path.join(cacheDir, 'cache', 'dry-verify.json'),
       resume: Boolean(options.resume),
@@ -8624,6 +8672,47 @@ function runtimePlanScopeAdd(projectRoot, activeSession, options = {}) {
   return { task: taskId, cr: crId, by, ...result };
 }
 
+/**
+ * `oxe-cc plan pack fix T<n> --symbol <path>#<name> (--internal | --member-of <Class> | --remove) --by <papel>
+ * --reason "…" [--cr CR-n]`: corrects a planner's pack symbol during a phase without reopening the task (OxeSpace
+ * 14/11, Celular F2: a module-private class and a class method named as exports failed check-pack). The symbol stays
+ * recorded (exported:false, member_of) or is removed; every change is kept in the entry's `fixes` and as an event.
+ */
+function runtimePlanPackFix(projectRoot, activeSession, options = {}) {
+  const taskId = String(options.task || '').toUpperCase();
+  if (!/^T\d+$/.test(taskId)) throw new Error('use: oxe-cc plan pack fix T<n> --symbol <arquivo>#<nome> (--internal | --member-of <Classe> | --remove) --by <papel> --reason "…"');
+  const m = /^(.+)#([A-Za-z_$][\w$]*)$/.exec(String(options.symbol || '').trim());
+  if (!m) throw new Error('informe o símbolo: --symbol <arquivo>#<nome>');
+  const [, file, name] = m;
+  const mode = options.remove ? 'remove' : options.memberOf ? 'member' : options.internal ? 'internal' : null;
+  if (!mode) throw new Error('diga a correção: --internal (não é export), --member-of <Classe> (é membro) ou --remove');
+  if (mode === 'member' && !/^[A-Za-z_$][\w$]*$/.test(String(options.memberOf))) throw new Error('--member-of: o nome da classe');
+  const by = String(options.by || '').trim();
+  const reason = String(options.reason || '').trim();
+  if (!by) throw new Error('informe quem decide (--by <papel>)');
+  if (reason.length < 8) throw new Error('informe o motivo em uma frase (--reason "…")');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const packFile = paths.implementationPack || path.join(projectRoot, '.oxe', 'IMPLEMENTATION-PACK.json');
+  let pack;
+  try { pack = JSON.parse(fs.readFileSync(packFile, 'utf8')); } catch { throw new Error(`IMPLEMENTATION-PACK.json ausente ou inválido (${path.relative(projectRoot, packFile)})`); }
+  const entry = (pack.tasks || []).find((t) => t && String(t.id || t.task_id || '').toUpperCase() === taskId);
+  if (!entry) throw new Error(`${taskId} não está no IMPLEMENTATION-PACK.json`);
+  const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const syms = Array.isArray(entry.symbols) ? entry.symbols : [];
+  const idx = syms.findIndex((s) => s && typeof s === 'object' && String(s.name) === name && norm(s.path || s.file) === norm(file));
+  if (idx < 0) throw new Error(`${file}#${name} não está nos symbols de ${taskId}`);
+  const before = { ...syms[idx] };
+  if (mode === 'remove') syms.splice(idx, 1);
+  else Object.assign(syms[idx], { exported: false, ...(mode === 'member' ? { member_of: String(options.memberOf) } : {}) });
+  entry.symbols = syms;
+  entry.fixes = [...(Array.isArray(entry.fixes) ? entry.fixes : []), { symbol: `${file}#${name}`, change: mode === 'member' ? `membro de ${options.memberOf}` : mode, before, by, reason, ...(options.cr ? { cr: String(options.cr).toUpperCase() } : {}), at: new Date().toISOString() }];
+  const tmp = `${packFile}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(pack, null, 2)}\n`, 'utf8');
+  fs.renameSync(tmp, packFile);
+  appendEvent(projectRoot, activeSession, { type: 'PackSymbolFixed', work_item_id: taskId, payload: { task: taskId, symbol: `${file}#${name}`, change: mode, member_of: options.memberOf || null, by, reason, cr: options.cr || null } });
+  return { task: taskId, symbol: `${file}#${name}`, change: mode, member_of: options.memberOf || null, by };
+}
+
 function runtimePlanReopen(projectRoot, activeSession, options = {}) {
   const taskId = String(options.task || '').trim();
   if (!/^T\d+$/.test(taskId)) throw new Error('Informe a tarefa: oxe-cc plan reopen T<n>');
@@ -11169,6 +11258,8 @@ module.exports = {
   applyTaskGatesToGraph,
   reopeningCrsOf,
   runtimePlanScopeAdd,
+  runtimePlanPackFix,
+  uiCardGaps,
   writeTaskVerifyFresh,
   findTaskCheckpoint,
   taskCommitShas,

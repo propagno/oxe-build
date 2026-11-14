@@ -51,6 +51,7 @@ describe('G9: oxe-cc quick — a verifiable record, the QUICK.md mini-spec, the 
     // install the hooks, then a plain commit gets the quick's trailers
     const inst = cli(dir, 'guards', 'install');
     assert.equal(inst.status, 0, inst.stderr);
+    assert.ok(!fs.existsSync(path.join(dir, '.claude', 'settings.json')), 'G33: the git hooks only; the Claude Code guards need --claude-guards');
     const hook = fs.readFileSync(path.join(dir, '.git', 'hooks', 'commit-msg'), 'utf8');
     assert.match(hook, /# >>> oxe-cc commit-msg >>>[\s\S]*ship commit-msg "\$1" \|\| exit 1[\s\S]*# <<< oxe-cc commit-msg <<</);
     cli(dir, 'guards', 'install');

@@ -7305,7 +7305,8 @@ async function main() {
 
   // OXB-087: oxe-cc plan append --from extra.json --by <papel> --reason "…" [--dir] [--session] [--json]
   // OXB-119: tool guards (pre-tool hook) — install / status / uninstall, per project, opt-in.
-  if (command === 'install' && argv.includes('--guards')) { command = 'guards'; argv.splice(0, argv.length, 'install', ...argv.filter((a) => a !== '--guards')); }
+  // `install --guards` asks for the Claude Code guards explicitly (G33: `guards install` alone puts only the git hooks)
+  if (command === 'install' && argv.includes('--guards')) { command = 'guards'; argv.splice(0, argv.length, 'install', '--claude-guards', ...argv.filter((a) => a !== '--guards')); }
   if (command === 'guards') {
     const sub = ['install', 'uninstall', 'status'].includes(argv[0]) ? argv[0] : 'status';
     let dir = process.cwd();
@@ -7317,17 +7318,30 @@ async function main() {
     const command0 = `node "${script}" --project "${dir.replace(/\\/g, '/')}"`;
     const pre = (settings.hooks && Array.isArray(settings.hooks.PreToolUse)) ? settings.hooks.PreToolUse : [];
     const ours = (h) => h && Array.isArray(h.hooks) && h.hooks.some((x) => String(x.command || '').includes('oxe-guard.cjs'));
-    if (sub === 'status') { console.log(pre.some(ours) ? `  ${green}✓${reset} guardas OXE instalados em ${settingsFile}` : '  guardas OXE não instalados (oxe-cc guards install)'); return; }
-    const rest = pre.filter((h) => !ours(h));
-    settings.hooks = { ...(settings.hooks || {}), PreToolUse: sub === 'install' ? [...rest, { matcher: 'Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob|Bash|PowerShell', hooks: [{ type: 'command', command: command0 }] }] : rest };
-    fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-    fs.writeFileSync(settingsFile, `${JSON.stringify(settings, null, 2)}\n`);
-    if (sub === 'install') {
-      try { require('./lib/oxe-integration-checks.cjs').installPrePushHook(dir, __filename); } catch { /* opcional fora de git */ }
-      // G11: commit-msg — the open quick's trailers, or no commit without origin (origin.commit_msg / origin.exempt)
-      try { require('./lib/oxe-integration-checks.cjs').installCommitMsgHook(dir, __filename); } catch { /* opcional fora de git */ }
+    if (sub === 'status') { console.log(pre.some(ours) ? `  ${green}✓${reset} guardas OXE do Claude Code instalados em ${settingsFile}` : '  guardas OXE do Claude Code não instalados (oxe-cc guards install --claude-guards)'); return; }
+    // G33 (OxeSpace 14/11): the git hooks (commit-msg, pre-push) and the Claude Code guards (PreToolUse in
+    // .claude/settings.json) are separate choices. By default `install` puts only the git hooks; --claude-guards adds
+    // (or, alone with --no-git-hooks, puts only) the PreToolUse guards. `uninstall` removes the PreToolUse guards.
+    const wantClaude = sub === 'uninstall' || argv.includes('--claude-guards');
+    const wantGit = sub === 'install' && !argv.includes('--no-git-hooks');
+    if (wantClaude) {
+      const rest = pre.filter((h) => !ours(h));
+      settings.hooks = { ...(settings.hooks || {}), PreToolUse: sub === 'install' ? [...rest, { matcher: 'Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob|Bash|PowerShell', hooks: [{ type: 'command', command: command0 }] }] : rest };
+      fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+      fs.writeFileSync(settingsFile, `${JSON.stringify(settings, null, 2)}\n`);
     }
-    console.log(sub === 'install' ? `  ${green}✓${reset} guardas OXE instalados (PreToolUse) em ${settingsFile} — configure em .oxe/config.json: policy_rules {kind: path|command}, guards.{heavy, heavy_wrapper, protected_checkouts}` : `  guardas OXE removidos de ${settingsFile}`);
+    const hooks = [];
+    if (wantGit) {
+      try { if (require('./lib/oxe-integration-checks.cjs').installPrePushHook(dir, __filename).installed) hooks.push('pre-push'); } catch { /* opcional fora de git */ }
+      // G11: commit-msg — the open quick's trailers, or no commit without origin (origin.commit_msg / origin.exempt)
+      try { if (require('./lib/oxe-integration-checks.cjs').installCommitMsgHook(dir, __filename).installed) hooks.push('commit-msg'); } catch { /* opcional fora de git */ }
+    }
+    if (sub === 'install') {
+      if (hooks.length) console.log(`  ${green}✓${reset} hooks do git instalados: ${hooks.join(', ')}`);
+      else if (wantGit) console.log(`  ${yellow}!${reset} fora de um repositório git: nenhum hook instalado`);
+      if (wantClaude) console.log(`  ${green}✓${reset} guardas OXE do Claude Code (PreToolUse) em ${settingsFile} — configure em .oxe/config.json: policy_rules {kind: path|command}, guards.{heavy, heavy_wrapper, protected_checkouts}`);
+      else console.log(`  ${dim}guardas do Claude Code não instalados (para instalar: oxe-cc guards install --claude-guards)${reset}`);
+    } else console.log(`  guardas OXE do Claude Code removidos de ${settingsFile}`);
     return;
   }
 
@@ -7802,13 +7816,17 @@ async function main() {
     else if (sub === 'label') { o.ref = positional[0]; if (!o.add && positional[1]) o.add = positional[1]; }
     else if (sub === 'ack') { o.ref = positional[0]; if (positional[1] && !o.key) o.key = positional[1]; }
     else if (sub === 'comment') { o.ref = positional[0]; if (positional[1] && !o.text) o.text = positional.slice(1).join(' '); }
+    // alm status OXE-144: a card key, not a folder
+    else if (sub === 'status' && positional[0] && /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(positional[0])) o.ref = positional[0].toUpperCase();
     else if (positional[0]) o.dir = path.resolve(positional[0]);
     if (sub === 'move' && (!o.ref || !o.stage)) { console.error(`${red}Uso:${reset} oxe-cc alm move <US-n|Tn|chave> <intake|grooming|refinement|ready|in_progress|review|verified|queued|integrated|staging|accepted|released> [--comment "…"]`); process.exit(1); }
     try {
       const out = await oxeOperational.runtimeAlm(o.dir, null, { action: sub, ...o });
       if (o.json) { console.log(JSON.stringify({ oxeAlmSchema: 1, ...out }, null, 2)); return; }
       const tag = out.dry_run ? `${yellow}[ensaio]${reset} ` : '';
-      if (sub === 'status') {
+      if (sub === 'status' && out.key) {
+        console.log(out.configured ? `  ${out.key}: ${out.state || '—'}${out.stage ? ` (${out.stage})` : ''}${out.ref ? ` · ${out.ref}` : ''}` : `  ${out.key}: ${out.why}`);
+      } else if (sub === 'status') {
         console.log(out.configured ? `  ALM: ${out.provider}${out.transport === 'mcp' ? ' via MCP' : ''}${out.auto ? ' (sincroniza sozinho)' : ''} · ${out.links} item(ns) ligado(s) · ${out.pending} pendente(s)${out.queue ? ` · ${out.queue} operação(ões) na fila do MCP (oxe-cc alm queue)` : ''}${out.last_sync ? ` · último sync ${out.last_sync}` : ''}` : '  ALM: nenhum (alm.provider não configurado) — o OXE segue sem ALM.\n  Para ligar: o bloco "alm" do .oxe/config.json (exemplo em oxe/templates/CONFIG.md, seção ALM) ou o setup guiado /oxe-alm; oxe-cc alm --help lista os subcomandos');
         for (const p of out.configured ? out.problems : []) console.log(`  ${yellow}!${reset} ${p}`);
       } else if (sub === 'queue') {
@@ -7918,11 +7936,12 @@ async function main() {
 
   // G9: oxe-cc quick <KEY> "<objetivo>" · quick status|trailers|list · quick done [--verify "<cmd>"] [--no-commit]
   if (command === 'quick') {
-    const SUBS = ['status', 'trailers', 'list', 'done', 'start', 'commit'];
+    const SUBS = ['status', 'trailers', 'list', 'done', 'start', 'commit', 'cancel'];
     if (argv.includes('--help') || argv.includes('-h')) {
       console.log(`\n  oxe-cc quick <KEY> "<objetivo>" [--by <papel>] [--replace] [--apply|--dry-run]   abre um quick: registro em .oxe/quick/, minispec no QUICK.md, trailers dos commits
   oxe-cc quick status | trailers | list                                              o quick aberto, as linhas de trailer, os quicks do projeto
   oxe-cc quick commit -m "<mensagem>" [<arquivos…>|--all]                            o commit do quick, feito pelo CLI com os trailers
+  oxe-cc quick cancel --reason "…" [--evidence <url|caminho>] [--apply|--dry-run]       abandona o quick aberto (nunca "feito"); o card é comentado, não avança
   oxe-cc quick done [--verify "<comando>"] [--no-commit] [--apply|--dry-run]          fecha: commits com OXE-Quick, verificação rodada pelo CLI
 
   Com ALM: o card recebe a minispec e vai para "em desenvolvimento" (só de uma coluna anterior); no done, os commits e a verificação.
@@ -7942,7 +7961,7 @@ async function main() {
       else if (a === '--all') o.all = true;
       else if ((a === '-m' || a === '--message') && argv[i + 1] != null) o.message = String(argv[++i]);
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
-      else if (['--by', '--verify', '--id', '--key', '--objective'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
+      else if (['--by', '--verify', '--id', '--key', '--objective', '--reason', '--evidence'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
       else if (!a.startsWith('-')) positional.push(a);
       else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
     }
@@ -7977,6 +7996,9 @@ async function main() {
         almLine(out.alm);
         if (out.dry_run) console.log(`  ${dim}simulação: nenhum registro, QUICK.md, evento ou card gravado${reset}`);
         else console.log(`  ${dim}Próximo: /oxe-quick preenche passos e verificação no QUICK.md; feche com oxe-cc quick done --verify "<comando>"${reset}`);
+      } else if (action === 'cancel') {
+        console.log(out.dry_run ? `  ${yellow}(simulação)${reset} abandonaria ${out.id} — ${out.cancel.reason}` : `  ${green}✓${reset} ${out.id} abandonado (não conta como feito) · ${out.commits.length} commit(s) · ${out.cancel.reason}${out.cancel.evidence ? ` · evidência: ${out.cancel.evidence}` : ''}`);
+        almLine(out.alm);
       } else if (action === 'done') {
         if (out.dry_run) { console.log(`  ${yellow}(simulação)${reset} fecharia ${out.id} com ${out.commits.length} commit(s)${out.would_verify ? ` depois de rodar: ${out.would_verify}` : ''}; nada rodado nem gravado`); return; }
         if (out.closed === false) { console.log(`  ${red}✗${reset} ${out.id}: a verificação falhou (exit ${out.verify.exit}); o quick continua aberto\n${out.verify.tail.split('\n').map((l) => `      ${l}`).join('\n')}`); process.exitCode = 1; return; }
@@ -8027,8 +8049,19 @@ async function main() {
     return;
   }
 
+  if (command === 'ship' && argv[0] === 'known-failure' && (argv.includes('--help') || argv.includes('-h'))) {
+    console.log(`
+  oxe-cc ship known-failure add "<teste>" --item <KEY> [--pr <n do conserto>] [--note "…"]   registra no repositório (todas as worktrees)
+  oxe-cc ship known-failure list [--offline] [--json]                                       as em vigor; wt:KF-n são de .oxe/program desta worktree
+  oxe-cc ship known-failure move <KF-n|wt:KF-n> --item <KEY> [--pr <n>] [--reason "…"]      leva a falha para o card certo (no repositório)
+  oxe-cc ship known-failure remove <KF-n|wt:KF-n> [--reason "…"]                            tira uma entrada (só ela)
+  oxe-cc ship known-failure prune                                                           tira as expiradas (PR do conserto mergeado)
+`);
+    return;
+  }
+
   if (command === 'ship' && argv[0] === 'known-failure') {
-    const sub = ['add', 'list', 'remove', 'prune'].includes(argv[1]) ? argv[1] : 'list';
+    const sub = ['add', 'list', 'remove', 'prune', 'move'].includes(argv[1]) ? argv[1] : 'list';
     const o = { dir: process.cwd(), json: false };
     const pos = [];
     for (let i = sub === argv[1] ? 2 : 1; i < argv.length; i += 1) {
@@ -8048,13 +8081,26 @@ async function main() {
       const repo = kf.repoDir(o.dir);
       const store = repo || programDir;
       const prState = o.offline ? undefined : require('./lib/oxe-ship-pr.cjs').prState(require('child_process').spawnSync, o.dir);
-      if (sub === 'remove' && String(pos[0] || '').startsWith('wt:')) throw new Error(`${pos[0]} é de uma worktree antiga (.oxe/program): registre de novo no repositório (add) e apague o arquivo da worktree`);
-      const out = sub === 'add' ? { ...kf.add(store, { pattern: pos[0], item: o.item, pr: o.pr, note: o.note, by: o.by }), scope: repo ? 'repo' : 'worktree' }
-        : sub === 'remove' ? kf.remove(store, pos[0], { reason: o.reason })
+      // wt:KF-n is an entry of THIS worktree's .oxe/program: removed there, alone (append-only; the others stay)
+      const target = (id) => (String(id || '').startsWith('wt:') ? { dir: programDir, id: String(id).slice(3) } : { dir: store, id: String(id || '') });
+      let out;
+      if (sub === 'move') {
+        if (!o.item) throw new Error('use: oxe-cc ship known-failure move <KF-n|wt:KF-n> --item <KEY> [--pr <n>]');
+        const t = target(pos[0]);
+        const cur = kf.list(t.dir).find((k) => k.id === t.id);
+        if (!cur) throw new Error(`${pos[0]}: falha conhecida inexistente (oxe-cc ship known-failure list)`);
+        kf.remove(t.dir, t.id, { reason: o.reason || `movida para ${o.item}` });
+        const moved = kf.add(store, { pattern: cur.pattern, item: o.item, pr: o.pr || cur.pr, note: o.note || cur.note, by: o.by });
+        out = { ...moved, moved_from: pos[0], previous_item: cur.item, scope: repo ? 'repo' : 'worktree' };
+      } else {
+        out = sub === 'add' ? { ...kf.add(store, { pattern: pos[0], item: o.item, pr: o.pr, note: o.note, by: o.by }), scope: repo ? 'repo' : 'worktree' }
+          : sub === 'remove' ? kf.remove(target(pos[0]).dir, target(pos[0]).id, { reason: o.reason })
           : sub === 'prune' ? kf.prune(o.dir, { prState })
             : { known: kf.listAll(o.dir, programDir, { prState }) };
+      }
       if (o.json) { console.log(JSON.stringify({ oxeKnownFailuresSchema: 1, ...out }, null, 2)); return; }
-      if (sub === 'add') console.log(`  ${green}✓${reset} ${out.id}: "${out.pattern}" → ${out.item}${out.pr ? ` (PR ${out.pr})` : ''} · ${out.scope === 'repo' ? 'no repositório (todas as worktrees)' : 'nesta pasta (fora de git)'}`);
+      if (sub === 'move') console.log(`  ${green}✓${reset} ${out.moved_from} (${out.previous_item}) → ${out.id}: "${out.pattern}" → ${out.item}${out.pr ? ` (PR ${out.pr})` : ''}`);
+      else if (sub === 'add') console.log(`  ${green}✓${reset} ${out.id}: "${out.pattern}" → ${out.item}${out.pr ? ` (PR ${out.pr})` : ''} · ${out.scope === 'repo' ? 'no repositório (todas as worktrees)' : 'nesta pasta (fora de git)'}`);
       else if (sub === 'remove') console.log(`  ${green}✓${reset} ${out.id} removida`);
       else if (sub === 'prune') console.log(out.pruned.length ? out.pruned.map((k) => `  ${green}✓${reset} ${k.id} "${k.pattern}" expirou: ${k.why}`).join('\n') : '  nenhuma falha conhecida expirada');
       else if (!out.known.length) console.log('  nenhuma falha conhecida registrada');
@@ -8496,6 +8542,28 @@ async function main() {
       }
     }
     process.exit(errors.length ? 1 : 0);
+  }
+
+  // oxe-cc plan pack fix T<n> --symbol <arquivo>#<nome> (--internal | --member-of <Classe> | --remove) --by --reason
+  if (command === 'plan' && argv[0] === 'pack' && argv[1] === 'fix') {
+    const o = { dir: process.cwd(), json: false };
+    for (let i = 2; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--internal') o.internal = true;
+      else if (a === '--remove') o.remove = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (a === '--member-of' && argv[i + 1]) o.memberOf = String(argv[++i]);
+      else if (['--symbol', '--by', '--reason', '--cr'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (/^T\d+$/i.test(a) && !o.task) o.task = a.toUpperCase();
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    try {
+      const out = oxeOperational.runtimePlanPackFix(o.dir, null, o);
+      if (o.json) { console.log(JSON.stringify({ oxePlanPackFixSchema: 1, ...out }, null, 2)); return; }
+      console.log(`  ${green}✓${reset} ${out.task} ${out.symbol}: ${out.change === 'member' ? `membro de ${out.member_of} (não é export)` : out.change === 'internal' ? 'não é export (fica no pack como interno)' : 'removido do pack'} · por ${out.by}`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
   }
 
   // oxe-cc plan scope add T<n> <arquivo…> --cr CR-n --by <papel> --reason "…": widens a task's files during a phase,

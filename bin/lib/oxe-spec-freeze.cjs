@@ -19,8 +19,10 @@ const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const norm = (p) => String(p).replace(/\\/g, '/');
 function globRe(g) { return new RegExp(`^${String(g).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*\//g, '\u0000').replace(/\*\*/g, '\u0001').replace(/\*/g, '[^/]*').replace(/\u0000/g, '(?:.*/)?').replace(/\u0001/g, '.*')}$`); }
 
-function titlesOf(text) {
-  return [...String(text).matchAll(/\b(?:it|test)(?:\.only|\.skip)?\s*\(\s*(['"`])((?:\\.|(?!\1).)+)\1/g)].map((m) => m[2]);
+// the same reader the plan lint uses (OxeSpace 14/11, CR-07: freeze kept `\'` in the titles and the lint, which
+// unescapes, refused 9 proves): JS escapes undone, it.each/test.each, template literals without ${…}, JVM tests
+function titlesOf(text, file) {
+  return [...new Set(require('./oxe-plan-json.cjs').declaredTestTitles(text, file))].filter(Boolean);
 }
 function criterionOf(text) { const m = /\b(?:describe|it|test)\s*\(\s*['"`][^'"`]*\b(A\d+)\b/.exec(String(text)); return m ? m[1] : null; }
 
@@ -65,7 +67,7 @@ function freeze(root, jsonPath, doc, options = {}) {
     if (existing && existing.sha256 && existing.sha256 !== hash && !options.cr) { refused.push({ file: f, why: `${f} já está congelado com outro conteúdo — mudar um teste congelado exige um CR (--cr CR-n)` }); continue; }
     const criterion = (options.criteria && String(options.criteria).split(',')[0].trim().toUpperCase()) || criterionOf(text) || (existing && existing.criterion) || null;
     if (!criterion) { refused.push({ file: f, why: `${f}: sem critério — informe --criteria A<n> ou cite o A<n> no describe` }); continue; }
-    const proves = titlesOf(text);
+    const proves = titlesOf(text, f);
     if (!proves.length) { refused.push({ file: f, why: `${f}: nenhum it/test com título — nada a provar` }); continue; }
     if (local == null || local !== text) { fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, text); }
     const entry = {
@@ -76,7 +78,9 @@ function freeze(root, jsonPath, doc, options = {}) {
       proves,
       sha256: hash,
       origin: { kind: origin.kind, ref: origin.ref, sha: origin.sha, ...(origin.url ? { url: origin.url } : {}) },
-      ...(options.cr ? { resolves: [...new Set([...((existing && existing.resolves) || []), String(options.cr).toUpperCase()])], version: ((existing && existing.version) || 1) + (existing ? 1 : 0) } : {}),
+      // idempotent: freezing again for the same CR re-reads the titles and the hash, but bumps the version only the
+      // first time that CR touches the entry
+      ...(options.cr ? { resolves: [...new Set([...((existing && existing.resolves) || []), String(options.cr).toUpperCase()])], version: ((existing && existing.version) || 1) + (existing && !((existing.resolves || []).includes(String(options.cr).toUpperCase())) ? 1 : 0) } : {}),
       // --task T3: the test belongs to that task (no hand edit of "task" in an executing phase's PLAN.json)
       ...(options.task ? { task: String(options.task).toUpperCase() } : {}),
     };

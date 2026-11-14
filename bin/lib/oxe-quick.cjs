@@ -67,7 +67,9 @@ function start(root, input = {}) {
   if (open && (open.key === key || (!key && !objective)) && !input.replace) return { resumed: true, ...open, trailers: trailers(open) };
   if (objective.length < 8) throw new Error('informe o objetivo do quick em uma frase: oxe-cc quick <KEY> "<objetivo>"');
   if (open && !input.replace) throw new Error(`o quick ${open.id}${open.key ? ` (${open.key})` : ''} está aberto: feche com oxe-cc quick done, ou abra outro com --replace`);
-  const rec = { schema: 1, id: newId(input.now), key, objective, by: input.by || null, started_at: new Date().toISOString(), status: 'open', commits: [], verify: null, closed_at: null };
+  // a new quick on a card whose last quick was abandoned links back to it
+  const prevAbandoned = key ? list(root).find((r) => r.key === key && r.status === 'abandoned') : null;
+  const rec = { schema: 1, id: newId(input.now), key, objective, by: input.by || null, started_at: new Date().toISOString(), status: 'open', commits: [], verify: null, closed_at: null, ...(prevAbandoned ? { follows: prevAbandoned.id } : {}) };
   // --dry-run: validated, nothing written (no record, no QUICK.md, no current)
   if (input.dryRun) return { resumed: false, dry_run: true, ...rec, trailers: trailers(rec), would_replace: open ? open.id : null };
   if (open && input.replace) write(root, { ...open, status: 'replaced', closed_at: new Date().toISOString() });
@@ -150,6 +152,23 @@ function commit(root, input = {}) {
   return { id: rec.id, key: rec.key, sha, files: staged, message: full.trim() };
 }
 
+/**
+ * `quick cancel --reason "…" [--evidence <url|path>]` (G32): closes the open quick as `abandoned`, never "done" —
+ * a quick that did not reproduce, or was dropped. The card is commented, never moved forward.
+ */
+function cancel(root, input = {}) {
+  const rec = input.id ? read(root, input.id) : current(root);
+  if (!rec) throw new Error('nenhum quick aberto (oxe-cc quick status)');
+  if (rec.status !== 'open') throw new Error(`${rec.id} já está ${rec.status}`);
+  const reason = String(input.reason || '').trim();
+  if (reason.length < 8) throw new Error('informe o motivo em uma frase (--reason "…"): fica no registro e no card');
+  const closed = { ...rec, status: 'abandoned', commits: commitsOf(root, rec.id, input.spawn || spawnSync), cancel: { reason, evidence: input.evidence ? String(input.evidence) : null, by: input.by || null }, closed_at: new Date().toISOString() };
+  if (input.dryRun) return { ...closed, dry_run: true, status: rec.status, would_status: 'abandoned' };
+  write(root, closed);
+  try { fs.unlinkSync(currentFile(root)); } catch { /* */ }
+  return { ...closed, cancelled: true };
+}
+
 function list(root) {
   try {
     return fs.readdirSync(dirOf(root)).filter((f) => ID_RE.test(f.replace(/\.json$/, ''))).map((f) => read(root, f.replace(/\.json$/, ''))).filter(Boolean).sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)));
@@ -158,10 +177,11 @@ function list(root) {
 
 /** The ALM comment of a quick: the mini-spec at the start, the commits and the verification at the end. */
 function cardComment(rec, phase) {
+  if (phase === 'cancel') return [`Quick ${rec.id} abandonado (OXE)`, '', `Objetivo: ${rec.objective}`, '', `Motivo: ${rec.cancel.reason}`, ...(rec.cancel.evidence ? ['', `Evidência: ${rec.cancel.evidence}`] : []), '', 'O card não avança por este quick.'].join('\n');
   if (phase === 'start') return [`Quick ${rec.id} (OXE)`, '', `Objetivo: ${rec.objective}`, '', `Commits deste quick levam ${trailers(rec).join(' e ')}.`].join('\n');
   return [`Quick ${rec.id} concluído (OXE)`, '', `Objetivo: ${rec.objective}`, '',
     rec.commits.length ? `Commits (${rec.commits.length}):\n${rec.commits.map((c) => `- ${c.sha.slice(0, 9)} ${c.subject}`).join('\n')}` : 'Sem commit: nada precisou mudar.',
     '', rec.verify ? `Verificação: \`${rec.verify.command}\` → ${rec.verify.ok ? 'passou' : `falhou (exit ${rec.verify.exit})`}` : 'Verificação: não informada (quick done --verify "<comando>")'].join('\n');
 }
 
-module.exports = { start, done, commit, current, list, read, trailers, commitsOf, quickMd, cardComment, newId, ID_RE };
+module.exports = { start, done, commit, cancel, current, list, read, trailers, commitsOf, quickMd, cardComment, newId, ID_RE };

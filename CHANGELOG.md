@@ -20,6 +20,25 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Comentário do grooming (G12):** os fatos ficam em "Fatos (fonte): N", cada um com a fonte, e as perguntas em "Perguntas: N (X respondida(s), Y em aberto)". Antes, os fatos eram contados como perguntas.
 - **`grill answer` (G15):** o eco mostra a fonte dada em `--source`, não "decisão do usuário".
 
+### Fechamento de fases, refine de interface e quick (depois do 4a7f39a)
+- **Falha de rede num gate:** quando a saída de um gate de fase tem assinatura de rede, o gate não abre CR (`GateInfraFailure`). Valem dial tcp/connectex, "forcibly closed", WSAE*, ECONNRESET/TIMEDOUT, TLS, DNS, HTTP 5xx e rate limit. O runtime classifica a falha como `env_setup`, não `deterministic`.
+- **`plan pack fix T<n> --symbol <arquivo>#<nome> --internal | --member-of <Classe> | --remove`:** corrige um símbolo do pack sem reabrir a tarefa. A correção fica em `fixes` e no evento PackSymbolFixed.
+- **G34:** um card de interface só passa do lint do refine com o BRD-n, o alvo aprovado e medidas nos CA, nos dois temas e nas duas densidades. Sem isso, o card fica needs-info, com a pergunta para a MARCA.
+- **G33:** `guards install` instala só os hooks do git. As guardas do Claude Code (PreToolUse) passam a exigir `--claude-guards`; o `install --guards` continua instalando-as.
+- **`spec freeze`:**
+  - lê os títulos com o leitor do plan lint, então escapes, `.each` e template literals saem iguais;
+  - refazer o freeze para o mesmo CR é idempotente.
+- **`quick`:**
+  - `quick cancel --reason [--evidence]` fecha o quick como abandonado, nunca como concluído. Comenta no card, sem movê-lo, e o próximo quick do card registra `follows`.
+  - Numa pasta sem ALM, o quick diz que nada foi gravado no card.
+- **`ship known-failure`:**
+  - `move <id> --item <KEY>` leva a falha para o card certo;
+  - `remove wt:KF-n` tira só aquela entrada;
+  - `--help`.
+- **`alm status <KEY>`** lê a coluna do card.
+- **`dry_verify.timeout_ms`** configura o timeout por comando.
+- **Orçamento esgotado:** a mensagem diz que o teto é o acumulado da fase.
+
 ### Refazer por CR sem verde falso, e commit das tarefas (depois do 253492c)
 - **P0, verde falso:** uma tarefa reaberta por um CR aberto passa a rodar, no próprio verify (compile), os testes congelados que resolvem o CR, ligados por tarefa ou por critério.
   - Ela nunca reaproveita o checkpoint de antes do CR. Uma tentativa que não mudou nada vira `empty_checkpoint`, com o CR no motivo.

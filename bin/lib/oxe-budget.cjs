@@ -95,10 +95,10 @@ function remainingTurns(ledger) {
 function exhaustedReason(ledger) {
   if (!ledger) return null;
   if (ledger.limit_turns != null && ledger.used_turns >= ledger.limit_turns) {
-    return `budget_turns: ${ledger.used_turns}/${ledger.limit_turns} turnos usados`;
+    return `budget_turns: ${ledger.used_turns}/${ledger.limit_turns} turnos usados (acumulado da fase: o --budget-turns é o teto total, não o desta execução)`;
   }
   if (ledger.limit_usd != null && ledger.used_usd >= ledger.limit_usd) {
-    return `budget_usd: US$ ${ledger.used_usd.toFixed(2)}/${ledger.limit_usd.toFixed(2)} usados`;
+    return `budget_usd: US$ ${ledger.used_usd.toFixed(2)}/${ledger.limit_usd.toFixed(2)} usados (acumulado da fase: o --budget-usd é o teto total, não o desta execução — para mais US$ X nesta, use --budget-usd ${(ledger.used_usd + 1).toFixed(0)}+X)`;
   }
   return null;
 }
