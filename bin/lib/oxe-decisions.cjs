@@ -74,6 +74,11 @@ function rejectedApproachWarnings(doc, decisions) {
   return out;
 }
 
+/** US-n ids of a list or a comma string. */
+function storyIds(v) {
+  return [...new Set((Array.isArray(v) ? v : String(v || '').split(',')).map((c) => String(c).trim().toUpperCase()).filter((c) => /^US-\d+$/.test(c)))];
+}
+
 function add(programDir, input = {}) {
   const title = String(input.title || '').trim();
   if (title.length < 4) throw new Error('informe a decisão em uma frase (--title "…")');
@@ -93,6 +98,8 @@ function add(programDir, input = {}) {
     text: String(input.text || '').trim() || null,
     phase: input.phase || null,
     criteria: (Array.isArray(input.criteria) ? input.criteria : String(input.criteria || '').split(',')).map((c) => c.trim().toUpperCase()).filter(Boolean),
+    // the user stories the decision touches (US-n): the ADR lists them, and a card reaches its decisions through them
+    ...(storyIds(input.stories).length ? { stories: storyIds(input.stories) } : {}),
     check: input.check ? String(input.check) : null,
     by: String(input.by || '').trim() || 'usuário',
     at: input.at ? String(input.at) : new Date().toISOString(),

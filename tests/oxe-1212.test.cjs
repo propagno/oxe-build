@@ -316,9 +316,13 @@ describe('OXB-061: feedback reopens only the closer task (or --tasks), never an 
   });
   const doneOf = (dir) => Object.fromEntries(JSON.parse(read(dir, '.oxe/PLAN.json')).tasks.map((t) => [t.id, t.done]));
 
-  it('without --tasks: only the closer (T7); T4 and T6 listed as impacted; the external T5 never reopened', () => {
+  it('without --tasks (--reopen): only the closer (T7); T4 and T6 listed as impacted; the external T5 never reopened', () => {
     const dir = project({ plan: plan() });
-    const out = op.runtimeFeedback(dir, null, { class: 'defect', summary: 'a tinta sancionada do CR-15 falta', criteria: 'A1', by: 'review' });
+    const silent = op.runtimeFeedback(dir, null, { class: 'defect', summary: 'a tinta falta (sem --reopen)', criteria: 'A1', by: 'review' });
+    assert.deepEqual(silent.reopened_tasks, [], 'never reopened without --reopen');
+    assert.deepEqual(silent.linked_tasks, ['T7']);
+    assert.deepEqual(doneOf(dir), { T4: true, T5: true, T6: true, T7: true });
+    const out = op.runtimeFeedback(dir, null, { class: 'defect', summary: 'a tinta sancionada do CR-15 falta', criteria: 'A1', by: 'review', reopen: true });
     assert.deepEqual(out.reopened_tasks, ['T7']);
     assert.deepEqual(out.impacted_not_reopened, ['T4', 'T6']);
     assert.deepEqual(out.external_not_reopened, ['T5']);

@@ -39,7 +39,7 @@ oxe_semantics_hash: afa0ff72a118df58
 
 <!-- oxe-workflow-resolution:start -->
 
-**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/update.md ou oxe/workflows/update.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir, reportar os paths tentados e parar.
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/update.md ou oxe/workflows/update.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir (um worktree sem .oxe/, um repo sem a cópia dos workflows), rodar `oxe-cc workflow path update` (ou `npx oxe-cc workflow path update`): ele devolve o workflow do pacote oxe-cc instalado. Aplicar esse ficheiro e avisar uma vez: "este repositório não tem .oxe/workflows; para fixar a versão, rode oxe-cc install --oxe-only .". Só se o comando também falhar, reportar os paths tentados e parar.
 
 <!-- oxe-workflow-resolution:end -->
 

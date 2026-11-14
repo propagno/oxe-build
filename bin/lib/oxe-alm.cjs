@@ -36,11 +36,35 @@
 const fs = require('fs');
 const path = require('path');
 
-const STAGES = ['todo', 'in_progress', 'in_review', 'queued', 'merged', 'released'];
-const DEFAULT_STATES = {
-  jira: { todo: 'To Do', in_progress: 'In Progress', in_review: 'In Review', queued: null, merged: 'Done', released: 'Done' },
-  'azure-devops': { todo: 'New', in_progress: 'Active', in_review: 'Resolved', queued: null, merged: 'Resolved', released: 'Closed' },
+/**
+ * The canonical stages of a card, in order. Each project maps them to its own board's column names (alm.states); a
+ * stage with no column is skipped. The OXE moves only the stages in alm.track (the ones it owns: grill → grooming,
+ * refine → refinement / ready, task start → in_progress); a repository workflow may own the rest.
+ */
+const STAGES = ['intake', 'grooming', 'refinement', 'ready', 'in_progress', 'review', 'verified', 'queued', 'integrated', 'staging', 'accepted', 'released'];
+/** The names of 1.21.2 before the 12 stages, still accepted in states / track / move. */
+const STAGE_ALIASES = { todo: 'intake', in_review: 'review', merged: 'integrated' };
+const canonStage = (s) => STAGE_ALIASES[s] || s;
+/** Who moves each stage by default, and what proves a card may enter it (documentation and metrics). */
+const STAGE_INFO = {
+  intake: { owner: 'human', proof: null },
+  grooming: { owner: 'oxe', proof: 'grill / perguntas do refine' },
+  refinement: { owner: 'oxe', proof: 'alm refine em curso' },
+  ready: { owner: 'oxe', proof: 'spec-v1 + lint OK + sem needs-info' },
+  in_progress: { owner: 'oxe', proof: 'tarefa iniciada (com ready_gate: spec-v1)' },
+  review: { owner: 'ci', proof: 'PR aberto' },
+  verified: { owner: 'ci', proof: 'pr:ready (CI verde)' },
+  queued: { owner: 'ci', proof: 'no trem de merge' },
+  integrated: { owner: 'ci', proof: 'merge na main' },
+  staging: { owner: 'ci', proof: 'branch release/X.Y.Z ou stage homologacao' },
+  accepted: { owner: 'human', proof: 'relatório de homologação' },
+  released: { owner: 'ci', proof: 'release verify / deploy' },
 };
+const DEFAULT_STATES = {
+  jira: { intake: 'To Do', in_progress: 'In Progress', review: 'In Review', integrated: 'Done', released: 'Done' },
+  'azure-devops': { intake: 'New', in_progress: 'Active', review: 'Resolved', integrated: 'Resolved', released: 'Closed' },
+};
+const canonStates = (st) => Object.fromEntries(Object.entries(st || {}).map(([k, v]) => [canonStage(k), v]));
 
 // ── config ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -59,6 +83,8 @@ function almConfig(config, options = {}) {
     // the agent runs the queue with the session's MCP tools (the user's own login) and reports back (alm ack).
     transport,
     dry_run: a.dry_run === true,
+    // OXB-G13: write only with an explicit --apply; without it every writing command is a simulation
+    require_apply: a.require_apply === true,
     auto: a.auto !== false,
     // The program name in the idempotency label (ref-<program>-<ref>): refs like F2-T5 repeat across programs.
     program: String(a.program || options.defaultProgram || 'oxe').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'oxe',
@@ -73,15 +99,58 @@ function almConfig(config, options = {}) {
     ledger_guard: a.ledger_guard === true,
     search_settle_ms: Number.isFinite(Number(a.search_settle_ms)) && Number(a.search_settle_ms) >= 0 ? Number(a.search_settle_ms) : (a.ledger_guard === true ? 60_000 : 5000),
     release_version: a.release_version === true,
+    // One writer per program: with alm.writer set, only the session that exports OXE_ALM_WRITER=<that name> creates
+    // or moves items; the others read and comment (two sessions creating the same batch duplicated 19 items).
+    writer: a.writer ? String(a.writer) : null,
+    // where the stories come from: "prd" (new project: the push creates them) or "alm" (the cards already exist: the
+    // push only links a PRD story to the card its row names, and never creates a story or an epic)
+    stories_source: a.stories_source === 'alm' ? 'alm' : 'prd',
+    // Definition of Ready: an item goes to in_progress only with the refined-spec label (alm refine → spec-v1)
+    ready_gate: a.ready_gate === true ? 'spec-v1' : (typeof a.ready_gate === 'string' && a.ready_gate ? a.ready_gate : null),
     // The stages the OXE moves. A repository that already moves PR / train / tag (e.g. a GitHub Action) keeps only
     // what it does not cover: "track": ["in_progress"].
-    track: Array.isArray(a.track) ? a.track.map(String).filter((s) => STAGES.includes(s)) : STAGES.slice(),
-    states: { ...DEFAULT_STATES[provider], ...(a.states || {}) },
+    track: Array.isArray(a.track) ? a.track.map((s) => canonStage(String(s))).filter((s) => STAGES.includes(s)) : STAGES.slice(),
+    states: { ...DEFAULT_STATES[provider], ...canonStates(a.states) },
+    // optional WIP limits per stage (warning only, in alm metrics): { "in_progress": 5 }
+    wip: a.wip && typeof a.wip === 'object' ? canonStates(a.wip) : {},
     p,
   };
 }
 
 /** Missing settings / environment variables (names only). */
+/** Is this process the program's ALM writer? (no alm.writer → everyone writes, as before) */
+function isWriter(cfg, env = process.env) {
+  return !cfg || !cfg.writer || String(env.OXE_ALM_WRITER || '') === cfg.writer;
+}
+
+function writerError(cfg) {
+  return Object.assign(new Error(`ALM só leitura nesta sessão: o escritor do programa é "${cfg.writer}" (alm.writer). Daqui só se lê e comenta (oxe-cc alm comment); para escrever, rode na sessão escritora (OXE_ALM_WRITER=${cfg.writer})`), { readOnly: true });
+}
+
+/**
+ * A local lock while a session writes (push/sync/defect): a second writer on the same machine waits for nothing and
+ * is refused. A lock older than 15 minutes, or of a dead process, is taken over.
+ */
+function withWriteLock(programDir, fn) {
+  const file = path.join(programDir, 'alm-write.lock');
+  fs.mkdirSync(programDir, { recursive: true });
+  try {
+    const cur = JSON.parse(fs.readFileSync(file, 'utf8'));
+    let alive = false;
+    try { process.kill(cur.pid, 0); alive = true; } catch { alive = false; }
+    if (alive && cur.pid !== process.pid && Date.now() - Date.parse(cur.at) < 15 * 60_000) {
+      throw Object.assign(new Error(`outra sessão está escrevendo no ALM agora (pid ${cur.pid}, desde ${cur.at}) — rode de novo quando ela terminar; nada foi escrito`), { locked: true });
+    }
+  } catch (err) { if (err.locked) throw err; }
+  fs.writeFileSync(file, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
+  const release = () => { try { const cur = JSON.parse(fs.readFileSync(file, 'utf8')); if (cur.pid === process.pid) fs.unlinkSync(file); } catch { /* */ } };
+  let out;
+  try { out = fn(); } catch (err) { release(); throw err; }
+  if (out && typeof out.then === 'function') return out.finally(release);
+  release();
+  return out;
+}
+
 function checkConfig(cfg, env = process.env) {
   const problems = [];
   if (!cfg) return ['alm não configurado (alm.provider: "jira" | "azure-devops" no .oxe/config.json)'];
@@ -105,7 +174,14 @@ async function fetchHttp(method, url, headers, body) {
   return { status: res.status, json, text, headers: { retryAfter: res.headers.get('retry-after') } };
 }
 
+/** A read-only POST (Azure WIQL query): allowed in a dry run. Everything else that is not GET writes. */
+const isReadOnlyCall = (method, url) => method === 'GET' || (method === 'POST' && /\/wit\/wiql\?/.test(url));
+
 async function request(ctx, method, url, body, extraHeaders = {}) {
+  // OXB-G13: a dry run (or a read-only session) never reaches a write endpoint, whatever the command does above
+  if (ctx.readOnly && !isReadOnlyCall(method, url)) {
+    throw Object.assign(new Error(`simulação: ${method} ${url.replace(/\?.*$/, '')} bloqueado (--dry-run nunca grava no ALM)`), { fatal: true, dryRunBlocked: true });
+  }
   const attempts = ctx.retries ?? 3;
   let last = null;
   for (let i = 0; i < attempts; i += 1) {
@@ -187,6 +263,32 @@ function jiraProvider(cfg, env, ctx) {
     },
     async comment(key, text) { await request(c, 'POST', `${site}/rest/api/3/issue/${key}/comment`, { body: adf(text) }); },
     async link(key, otherKey, type = 'Relates') { await request(c, 'POST', `${site}/rest/api/3/issueLink`, { type: { name: type }, inwardIssue: { key }, outwardIssue: { key: otherKey } }); },
+    async remoteLink(key, url, title) {
+      // globalId makes it idempotent: the same PR posted again updates the link instead of adding a second one
+      await request(c, 'POST', `${site}/rest/api/3/issue/${key}/remotelink`, { globalId: `oxe-pr:${url}`, object: { url, title, icon: { url16x16: 'https://github.com/favicon.ico', title: 'GitHub' } } });
+      return { linked: true };
+    },
+    async labels(key) {
+      const r = await request(c, 'GET', `${site}/rest/api/3/issue/${key}?fields=labels`);
+      return (r && r.fields && r.fields.labels) || [];
+    },
+    /** The fix versions of an item (names). */
+    async fixVersions(key) {
+      const r = await request(c, 'GET', `${site}/rest/api/3/issue/${key}?fields=fixVersions`);
+      return ((r && r.fields && r.fields.fixVersions) || []).map((v) => v.name);
+    },
+    /**
+     * Sets the fix version of an existing item. A PUT of `fields.fixVersions` came back empty on Jira Cloud; what works
+     * is `update.fixVersions[].set` with the version id.
+     */
+    async setFixVersion(key, name) {
+      const vs = await request(c, 'GET', `${site}/rest/api/3/project/${project}/versions`);
+      const v = (vs || []).find((x) => x.name === name);
+      if (!v) throw Object.assign(new Error(`versão ${name} não existe no projeto ${project}`), { fatal: true });
+      await request(c, 'PUT', `${site}/rest/api/3/issue/${key}`, { update: { fixVersions: [{ set: [{ id: String(v.id) }] }] } });
+      const now = await this.fixVersions(key);
+      return { changed: true, ok: now.includes(name), versions: now };
+    },
     async releaseVersion(name) {
       const vs = await request(c, 'GET', `${site}/rest/api/3/project/${project}/versions`);
       const v = (vs || []).find((x) => x.name === name);
@@ -247,6 +349,10 @@ function azureProvider(cfg, env, ctx) {
     async link(id, otherId) {
       await request(c, 'PATCH', `${base}/wit/workitems/${id}?${api}`, [{ op: 'add', path: '/relations/-', value: { rel: 'System.LinkTypes.Related', url: `${orgUrl}/_apis/wit/workItems/${otherId}` } }], { 'Content-Type': 'application/json-patch+json' });
     },
+    async remoteLink(id, url, title) {
+      await request(c, 'PATCH', `${base}/wit/workitems/${id}?${api}`, [{ op: 'add', path: '/relations/-', value: { rel: 'Hyperlink', url, attributes: { comment: title } } }], { 'Content-Type': 'application/json-patch+json' });
+      return { linked: true };
+    },
     async releaseVersion() { return { changed: false, note: 'Azure DevOps não tem versão de release no item; use iteration_path' }; },
   };
 }
@@ -259,10 +365,34 @@ function queueProvider(cfg) {
   return { name: cfg.provider, deferred: true, url: () => null };
 }
 
+/** A raw Jira REST context ({ request(method, url, body), site }) with the same auth, retries and backoff. */
+function jiraRest(cfg, options = {}) {
+  const env = options.env || process.env;
+  const site = String(env[cfg.p.site_env || 'JIRA_SITE'] || '').replace(/\/+$/, '');
+  const auth = Buffer.from(`${env[cfg.p.email_env || 'JIRA_EMAIL']}:${env[cfg.p.token_env || 'JIRA_API_TOKEN']}`).toString('base64');
+  const c = { http: options.http || fetchHttp, sleep: options.sleep || ((ms) => new Promise((r) => setTimeout(r, ms))), retries: options.retries, readOnly: isDry(cfg, options), headers: { Authorization: `Basic ${auth}`, Accept: 'application/json', 'Content-Type': 'application/json' } };
+  return { site, readOnly: c.readOnly, request: (method, url, body) => request(c, method, url, body) };
+}
+
+/** Is this call a simulation? --dry-run, alm.dry_run, or an explicit read-only context. */
+/**
+ * Deprecation (coordination 14/11): today a writing command without --apply still writes; the next minor makes
+ * alm.require_apply true by default. Said once per process, on stderr, so a JSON output stays clean.
+ */
+let applyWarned = false;
+function warnApply(cfg, options = {}) {
+  if (applyWarned || !cfg || cfg.require_apply || options.apply || isDry(cfg, options) || options.quietApply) return false;
+  applyWarned = true;
+  process.stderr.write('  ! isto grava no ALM sem --apply; na próxima versão vai exigir --apply (alm.require_apply passa a true)\n');
+  return true;
+}
+
+const isDry = (cfg, options = {}) => Boolean(options.dryRun || options.readOnly || (cfg && cfg.dry_run) || (cfg && cfg.require_apply && !options.apply));
+
 function provider(cfg, options = {}) {
   if (cfg.transport === 'mcp') return queueProvider(cfg);
   const env = options.env || process.env;
-  const ctx = { http: options.http || fetchHttp, sleep: options.sleep || ((ms) => new Promise((r) => setTimeout(r, ms))), retries: options.retries };
+  const ctx = { http: options.http || fetchHttp, sleep: options.sleep || ((ms) => new Promise((r) => setTimeout(r, ms))), retries: options.retries, readOnly: isDry(cfg, options) };
   return cfg.provider === 'jira' ? jiraProvider(cfg, env, ctx) : azureProvider(cfg, env, ctx);
 }
 
@@ -360,7 +490,7 @@ function ack(programDir, cfg, idOrRef, input = {}) {
   if (op.op === 'ensure') {
     if (!input.key) throw new Error(`${op.id}: informe a chave criada ou encontrada (--key OXE-12 / --key 123)`);
     const key = String(input.key).replace(/^AB#/i, '');
-    addLink(programDir, { ref: op.ref, key, url: input.url || null, kind: op.kind, provider: cfg.provider, via: 'mcp', ...(input.adopted ? { adopted: input.adopted } : {}) });
+    addLink(programDir, { ref: op.ref, key, url: input.url || null, kind: op.kind, provider: cfg.provider, via: 'mcp', ...(input.adopted ? { adopted: input.adopted } : {}), ...(op.cr ? { cr: op.cr } : {}) });
   } else if (op.op === 'transition') {
     const st = readState(programDir);
     st.stages[op.ref] = op.stage;
@@ -425,13 +555,43 @@ async function push(programDir, cfg, input, options = {}) {
   let settled = false;
   // transport "mcp": an item not linked yet becomes an `ensure` op (search by label → adopt or create → alm ack); the
   // children name it by ref until the agent reports its key.
+  // The target version on an item that exists (adopted, or created without it): set by id via update.set — never
+  // trusted to the create alone. A failure here is a warning, not a lost item.
+  const ensureVersion = async (key, version) => {
+    if (!version || input.dryRun || typeof prov.fixVersions !== 'function') return;
+    try {
+      const have = await prov.fixVersions(key);
+      if (have.includes(version)) return;
+      const r = await prov.setFixVersion(key, version);
+      (result.versions = result.versions || []).push({ key, version, ok: r.ok });
+    } catch (err) { (result.versions = result.versions || []).push({ key, version, ok: false, error: err.message }); }
+  };
   const deferred = prov.deferred && !input.dryRun && !input.rebuild;
   const ops = [];
   if (deferred) result.queued = [];
   const TYPES = cfg.provider === 'jira' ? { epic: 'Epic', story: 'Story', task: 'Task', bug: 'Task' } : { epic: 'Epic', story: 'User Story', task: 'Task', bug: 'Bug' };
   const parentField = (p) => (typeof p === 'string' && p.startsWith(REF_MARK) ? { parent_ref: p.slice(REF_MARK.length) } : (p ? { parent: p } : {}));
-  const ensure = async (ref, item, adopt = []) => {
+  const keyRe = new RegExp(`^${String(cfg.p.project || '[A-Z][A-Z0-9]+').replace(/[^A-Za-z0-9]/g, '')}-\\d+$`);
+  const ensure = async (ref, item, adopt = [], hints = {}) => {
     if (known.has(ref)) { result.reused.push({ ref, key: known.get(ref).key }); return known.get(ref).key; }
+    // the item names its card (OXE-48 in the PRD row, "(OXE-20)" in the task): that card is it, confirmed by key
+    const cardKey = (hints.keys || []).find((k) => keyRe.test(k)) || null;
+    if (cardKey && !deferred && (canRead || !input.dryRun)) {
+      try {
+        const got = await prov.read(cardKey);
+        if (got) {
+          if (input.dryRun) { result.reused.push({ ref, key: got.key, by_key: true, dry_run: true }); return got.key; }
+          addLink(programDir, { ref, key: got.key, url: prov.url(got.key), kind: item.kind, provider: prov.name, by_key: true });
+          known.set(ref, { ref, key: got.key });
+          result.reused.push({ ref, key: got.key, by_key: true });
+          return got.key;
+        }
+      } catch { /* not found by key: the usual path below */ }
+    }
+    if (hints.noCreate) {
+      (result.missing = result.missing || []).push({ ref, kind: item.kind, title: item.title, why: cardKey ? `o card ${cardKey} não foi encontrado` : 'alm.stories_source "alm": a história não cita o card — ponha a chave na linha da US no PRD (ex.: "OXE-48") ou rode oxe-cc alm link ' + ref + ' <chave>' });
+      return null;
+    }
     if (deferred) {
       ops.push({
         id: `ensure:${ref}`, op: 'ensure', ref, kind: item.kind,
@@ -441,6 +601,7 @@ async function push(programDir, cfg, input, options = {}) {
         ...(cfg.provider === 'azure-devops' && cfg.p.area_path ? { area_path: cfg.p.area_path } : {}),
         ...(cfg.provider === 'azure-devops' && cfg.p.iteration_path ? { iteration_path: cfg.p.iteration_path } : {}),
         ...(adopt.length ? { adopt } : {}),
+        ...(cardKey ? { adopt_key: cardKey } : {}),
         search: searchFor(cfg, [refLabel(ref, cfg), ...adopt.map((o) => `ref-${o}`)]),
       });
       result.queued.push({ ref, kind: item.kind, title: item.title });
@@ -470,6 +631,7 @@ async function push(programDir, cfg, input, options = {}) {
         addLink(programDir, { ref, key: found.key, url: prov.url(found.key), kind: item.kind, provider: prov.name, ...(adopted ? { adopted } : {}) });
         known.set(ref, { ref, key: found.key });
         result.reused.push({ ref, key: found.key, ...(adopted ? { adopted } : {}) });
+        await ensureVersion(found.key, item.fixVersion);
         return found.key;
       }
       // --rebuild-ledger: only what the search finds is recorded; nothing is created in this mode
@@ -481,6 +643,7 @@ async function push(programDir, cfg, input, options = {}) {
       let confirmed = true;
       try { confirmed = Boolean(await prov.read(it.key)); } catch { confirmed = false; }
       result.created.push({ ref, key: it.key, ...(confirmed ? {} : { unconfirmed: true }) });
+      if (confirmed) await ensureVersion(it.key, item.fixVersion);
       return it.key;
     } catch (err) {
       result.failed.push({ ref, error: err.message });
@@ -488,7 +651,7 @@ async function push(programDir, cfg, input, options = {}) {
     }
   };
   // Spec approved → the epic, when the config names none (one per program, or per phase with input.phase).
-  if (!epicFor(input.phase) && input.epicTitle && (input.stories || []).length) {
+  if (cfg.stories_source !== 'alm' && !epicFor(input.phase) && input.epicTitle && (input.stories || []).length) {
     // one epic per spec (program); per phase only when the config already maps epics per phase
     const ref = cfg.epic && typeof cfg.epic === 'object' && input.phase ? `EPIC-${input.phase}` : 'EPIC';
     createdEpic = await ensure(ref, { kind: 'epic', title: input.epicTitle, description: input.epicDescription || 'Criado pelo OXE a partir do PRD.md.', labels: [...cfg.labels, refLabel(ref, cfg)], fixVersion });
@@ -504,7 +667,7 @@ async function push(programDir, cfg, input, options = {}) {
       labels: [...cfg.labels, refLabel(s.id, cfg)],
       parent: epicFor(input.phase),
       fixVersion,
-    });
+    }, [], { keys: s.cards || [], noCreate: cfg.stories_source === 'alm' });
     for (const a of s.criteria) if (!storyKeyByCriterion.has(a)) storyKeyByCriterion.set(a, key || (input.dryRun ? s.id : null));
   }
   for (const t of input.tasks || []) {
@@ -523,7 +686,7 @@ async function push(programDir, cfg, input, options = {}) {
       labels: [...new Set([...cfg.labels, ...(Array.isArray(t.labels) ? t.labels.map(String) : []), refLabel(ref, cfg)])],
       parent,
       fixVersion,
-    }, oldRefs(cfg, t));
+    }, oldRefs(cfg, t), { keys: require('./oxe-prd.cjs').cardKeys([t.title, t.description, ...(Array.isArray(t.refs) ? t.refs : [])].join(' ')) });
     if (key && story && cfg.provider === 'jira' && !input.dryRun && story !== key) {
       const storyRef = crit.map((a) => storyRefByCriterion.get(a)).find(Boolean);
       if (deferred) { if (storyRef && !known.has(ref)) ops.push({ id: `link:${ref}:${storyRef}`, op: 'link', ref, other_ref: storyRef, type: 'Relates' }); } else {
@@ -549,9 +712,9 @@ function stagesFromEvents(events, ctx = {}) {
   for (const e of events) {
     const task = e.work_item_id || (e.payload && e.payload.task) || null;
     if (e.type === 'TaskStarted' && task) out.push({ ref: taskRef(phaseOfTask(task), task), stage: 'in_progress' });
-    else if (e.type === 'TaskPromoted' && task && e.payload && e.payload.pr) out.push({ ref: taskRef(phaseOfTask(task), task), stage: 'in_review', comment: `PR aberto: ${e.payload.pr}` });
-    else if (e.type === 'TaskPromoteFailed' && task) out.push({ ref: taskRef(phaseOfTask(task), task), stage: 'in_review', comment: `Promoção falhou: ${(e.payload && (e.payload.reason || e.payload.error)) || 'sem detalhe'}` });
-    else if (e.type === 'AlmMerged' && task) out.push({ ref: taskRef(phaseOfTask(task), task), stage: 'merged', comment: e.payload && e.payload.pr ? `Merge: ${e.payload.pr}` : undefined });
+    else if (e.type === 'TaskPromoted' && task && e.payload && e.payload.pr) out.push({ ref: taskRef(phaseOfTask(task), task), stage: 'review', comment: `PR aberto: ${e.payload.pr}` });
+    else if (e.type === 'TaskPromoteFailed' && task) out.push({ ref: taskRef(phaseOfTask(task), task), stage: 'review', comment: `Promoção falhou: ${(e.payload && (e.payload.reason || e.payload.error)) || 'sem detalhe'}` });
+    else if (e.type === 'AlmMerged' && task) out.push({ ref: taskRef(phaseOfTask(task), task), stage: 'integrated', comment: e.payload && e.payload.pr ? `Merge: ${e.payload.pr}` : undefined });
     else if (e.type === 'DeployAttached' && e.payload && e.payload.ok !== false && (!ctx.releasedEnv || e.payload.env === ctx.releasedEnv)) {
       for (const ref of (ctx.refsOfPhase ? ctx.refsOfPhase(e.payload.phase) : [])) out.push({ ref, stage: 'released', comment: `Deploy ${e.payload.env || ''} ${e.payload.version || ''}`.trim() });
     }
@@ -594,6 +757,27 @@ async function sync(programDir, cfg, events, ctx = {}, options = {}) {
     if (backwards) { result.skipped.push({ ref: m.ref, stage: m.stage, why: `já em ${prev}` }); continue; }
     if (options.dryRun || cfg.dry_run) { result.planned.push({ ref: m.ref, key: link.key, stage: m.stage, state }); continue; }
     try {
+      // Another tool may own the later states (a repository workflow moving PR → train → main → release): read the
+      // live state and never pull an item back from a more advanced one.
+      // Definition of Ready, before "ready" and before development starts: the refined spec, with no open question.
+      if (cfg.ready_gate && (m.stage === 'in_progress' || m.stage === 'ready') && typeof prov.labels === 'function') {
+        const have = await prov.labels(link.key);
+        const missing = !have.includes(cfg.ready_gate) ? `sem o rótulo ${cfg.ready_gate}` : have.includes('needs-info') ? 'com needs-info (perguntas em aberto)' : null;
+        if (missing) {
+          result.skipped.push({ ref: m.ref, stage: m.stage, why: `Definition of Ready: ${link.key} ${missing} — rode oxe-cc alm refine ${link.key} e responda as perguntas antes de começar` });
+          pending.push(m);
+          continue;
+        }
+      }
+      if (typeof prov.status === 'function' && !/^Promoção falhou/.test(m.comment || '')) {
+        const live = await prov.status(link.key);
+        const liveStage = STAGES.filter((s) => cfg.states[s] && live && String(cfg.states[s]).toLowerCase() === String(live).toLowerCase()).sort((a, b) => RANK[b] - RANK[a])[0];
+        if (liveStage && RANK[liveStage] > RANK[m.stage]) {
+          st.stages[m.ref] = liveStage;
+          result.skipped.push({ ref: m.ref, stage: m.stage, why: `já em "${live}" (movido por outra ferramenta) — o OXE nunca recua um item` });
+          continue;
+        }
+      }
       const r = await prov.transition(link.key, state);
       if (m.comment && r.changed) { await prov.comment(link.key, m.comment); result.comments += 1; }
       st.stages[m.ref] = m.stage;
@@ -633,25 +817,26 @@ async function reportDefect(programDir, cfg, input, options = {}) {
   const labels = [...cfg.labels, refLabel(ref, cfg), ...(cfg.provider === 'jira' ? [cfg.p.bug_label || 'bug'] : [])];
   if (prov.deferred) {
     const type = { ...(cfg.provider === 'jira' ? { bug: 'Task' } : { bug: 'Bug' }), ...(cfg.p.types || {}) }.bug;
-    const ops = [{ id: `ensure:${ref}`, op: 'ensure', ref, kind: 'bug', type, project: cfg.p.project, title: `${ref}: ${input.title}`, description: [input.description || '', origin ? `Origem: ${origin.key}` : ''].filter(Boolean).join('\n\n'), labels, ...(perPhase(cfg.fix_version, input.phase || null) ? { fix_version: perPhase(cfg.fix_version, input.phase || null) } : {}), search: searchFor(cfg, [refLabel(ref, cfg)]) }];
+    const ops = [{ id: `ensure:${ref}`, op: 'ensure', ref, kind: 'bug', type, project: cfg.p.project, title: `${ref}: ${input.title}`, description: [input.description || '', origin ? `Origem: ${origin.key}` : ''].filter(Boolean).join('\n\n'), labels, ...(perPhase(cfg.fix_version, input.phase || null) ? { fix_version: perPhase(cfg.fix_version, input.phase || null) } : {}), search: searchFor(cfg, [refLabel(ref, cfg)]), ...(input.cr ? { cr: String(input.cr) } : {}) }];
     if (origin) ops.push({ id: `link:${ref}:${input.origin}`, op: 'link', ref, other_ref: input.origin, other_key: origin.key, type: 'Relates' });
     enqueue(programDir, ops);
     return { ref, queued: ops.length };
   }
   const it = (await prov.findByLabel(refLabel(ref, cfg))) || await prov.create({ kind: 'bug', title: `${ref}: ${input.title}`, description: [input.description || '', origin ? `Origem: ${origin.key}` : ''].filter(Boolean).join('\n\n'), labels, fixVersion: perPhase(cfg.fix_version, input.phase || null) });
-  addLink(programDir, { ref, key: it.key, url: prov.url(it.key), kind: 'bug', provider: prov.name, origin: origin ? origin.key : null });
+  addLink(programDir, { ref, key: it.key, url: prov.url(it.key), kind: 'bug', provider: prov.name, origin: origin ? origin.key : null, ...(input.cr ? { cr: String(input.cr) } : {}) });
   if (origin) { try { await prov.link(it.key, origin.key); } catch { /* */ } }
   return { key: it.key, created: true };
 }
 
 /** A manual move (the merge train's "na fila", a fix by hand): by OXE ref (US-3, F2-T5) or by the item key. */
 async function move(programDir, cfg, refOrKey, stage, options = {}) {
+  stage = canonStage(stage);
   if (!STAGES.includes(stage)) throw new Error(`etapa "${stage}" desconhecida (${STAGES.join(' | ')})`);
   const state = cfg.states[stage];
   if (!state) throw new Error(`alm.states.${stage} não está mapeado no .oxe/config.json`);
-  const link = links(programDir).get(refOrKey) || [...links(programDir).values()].find((l) => l.key === refOrKey);
-  if (!link) throw new Error(`${refOrKey}: sem item no ALM (oxe-cc alm push, ou alm link ${refOrKey} <chave>)`);
-  if (options.dryRun || cfg.dry_run) return { planned: { ref: link.ref, key: link.key, stage, state } };
+  const link = resolveItem(programDir, cfg, refOrKey);
+  if (!link) throw new Error(`${refOrKey}: sem item no ALM (oxe-cc alm push, alm link ${refOrKey} <chave>, ou a chave do item, ex.: ${cfg.provider === 'jira' ? `${cfg.p.project}-12` : '123'})`);
+  if (options.dryRun || cfg.dry_run) return { planned: { ref: link.ref, key: link.key, stage, state, ...(options.comment ? { comment: options.comment } : {}) } };
   const prov = options.provider || provider(cfg, options);
   if (prov.deferred) {
     enqueue(programDir, [{ id: `transition:${link.ref}`, op: 'transition', ref: link.ref, key: link.key, stage, state, ...(options.comment ? { comments: [options.comment] } : {}) }]);
@@ -659,10 +844,62 @@ async function move(programDir, cfg, refOrKey, stage, options = {}) {
   }
   const r = await prov.transition(link.key, state);
   if (options.comment && r.changed) await prov.comment(link.key, options.comment);
-  const st = readState(programDir);
-  st.stages[link.ref] = stage;
-  writeState(programDir, st);
-  return { ref: link.ref, key: link.key, stage, state: r.status, changed: r.changed };
+  // the lifecycle state is the OXE refs'; a card moved by its key alone is not one of them
+  if (!link.direct) {
+    const st = readState(programDir);
+    st.stages[link.ref] = stage;
+    writeState(programDir, st);
+  }
+  return { ref: link.ref, key: link.key, stage, state: r.status, changed: r.changed, ...(options.comment && r.changed ? { commented: true } : {}) };
+}
+
+/**
+ * The item of an OXE ref (US-3, F2-T5) or of a key: the ledger first, then a key of this project used directly
+ * (OXE-12 in Jira, 123 in Azure), the way refine and grill publish take it (OXB-G17). "US-1" is never a key.
+ */
+function resolveItem(programDir, cfg, refOrKey) {
+  const s = String(refOrKey || '').trim();
+  const all = links(programDir);
+  const known = all.get(s) || [...all.values()].find((l) => l.key === s || l.key === s.toUpperCase());
+  if (known) return known;
+  const direct = cfg.provider === 'jira' ? new RegExp(`^${String(cfg.p.project || '[A-Z][A-Z0-9]+').toUpperCase()}-\\d+$`, 'i').test(s) : /^\d+$/.test(s);
+  return direct ? { ref: s.toUpperCase(), key: s.toUpperCase(), direct: true } : null;
+}
+
+/** A link from the item to a pull request (Jira remote link / Azure hyperlink): "entregue no #771". Idempotent. */
+async function linkPr(programDir, cfg, refOrKey, input, options = {}) {
+  const item = resolveItem(programDir, cfg, refOrKey);
+  if (!item) throw new Error(`${refOrKey}: sem item no ALM (use a chave do item, ex.: ${cfg.provider === 'jira' ? `${cfg.p.project}-12` : '123'})`);
+  const pr = String(input.pr || '').replace(/^#/, '');
+  if (!/^\d+$/.test(pr)) throw new Error('informe o número do PR (--pr 771)');
+  const repo = String(input.repo || '').replace(/\.git$/, '').replace(/\/+$/, '');
+  if (!/^https?:\/\//.test(repo)) throw new Error('o repositório do PR não está configurado: --repo https://github.com/<dono>/<repo> ou alm.docs.repo no .oxe/config.json');
+  const url = `${repo}/pull/${pr}`;
+  const title = input.title || `PR #${pr}`;
+  if (options.dryRun || cfg.dry_run) return { planned: { key: item.key, pr: Number(pr), url, title } };
+  const prov = options.provider || provider(cfg, options);
+  if (prov.deferred) {
+    enqueue(programDir, [{ id: `remotelink:${item.key}:${pr}`, op: 'remotelink', ref: item.ref, key: item.key, url, title }]);
+    return { key: item.key, url, queued: true };
+  }
+  if (typeof prov.remoteLink !== 'function') throw new Error(`${cfg.provider}: link para PR ainda não suportado`);
+  const r = await prov.remoteLink(item.key, url, title);
+  return { key: item.key, pr: Number(pr), url, linked: true, ...(r && r.existed ? { existed: true } : {}) };
+}
+
+/** A comment on an item (by OXE ref or key) — allowed to reader sessions too (alm.writer). */
+async function comment(programDir, cfg, refOrKey, text, options = {}) {
+  if (!text || String(text).trim().length < 2) throw new Error('informe o comentário (--text "…")');
+  const link = resolveItem(programDir, cfg, refOrKey);
+  if (!link) throw new Error(`${refOrKey}: sem item no ALM (oxe-cc alm push, ou use a chave do item)`);
+  if (options.dryRun || cfg.dry_run) return { planned: { ref: link.ref, key: link.key, comment: String(text) } };
+  const prov = options.provider || provider(cfg, options);
+  if (prov.deferred) {
+    enqueue(programDir, [{ id: `comment:${link.ref}:${Date.now().toString(36)}`, op: 'comment', ref: link.ref, key: link.key, comments: [String(text)] }]);
+    return { ref: link.ref, key: link.key, queued: true };
+  }
+  await prov.comment(link.key, String(text));
+  return { ref: link.ref, key: link.key, commented: true };
 }
 
 /** "(OXE-12)" / "(AB#123)" for a task: what goes in the PR title, the commit and the branch. */
@@ -672,4 +909,4 @@ function keyFor(programDir, cfg, phase, taskId) {
   return cfg && cfg.provider === 'azure-devops' ? `AB#${l.key}` : l.key;
 }
 
-module.exports = { almConfig, checkConfig, provider, readQueue, pendingOps, enqueue, ack, dropEnsure, push, sync, move, stagesFromEvents, reportDefect, links, addLink, readState, keyFor, refLabel, taskRef, oldRefs, perPhase, STAGES, adf, request };
+module.exports = { almConfig, checkConfig, jiraRest, isWriter, writerError, withWriteLock, comment, provider, readQueue, pendingOps, enqueue, ack, dropEnsure, push, sync, move, stagesFromEvents, reportDefect, links, addLink, readState, keyFor, refLabel, taskRef, oldRefs, perPhase, STAGES, STAGE_INFO, STAGE_ALIASES, canonStage, adf, request, isDry, warnApply, resolveItem, linkPr };

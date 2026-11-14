@@ -86,12 +86,18 @@ As credenciais nunca ficam no arquivo: o bloco diz o **nome** da variável de am
 | `epic` | Pai das histórias e tarefas: uma chave ou uma por fase (`{ "F1": "OXE-4" }`). Sem ela, o `alm push` cria o épico a partir do título do PRD. |
 | `fix_version` | Versão-alvo dos itens: uma, ou uma por fase. |
 | `labels` | Somados aos rótulos da própria tarefa (`labels` no PLAN.json), nunca no lugar deles. |
-| `states` | Estado de cada etapa, pelo **nome**; o id da transição é resolvido na hora. |
-| `track` | Etapas que o OXE move (padrão: todas). Um repositório que já move PR, trem e tag por conta própria deixa só `["in_progress"]`. |
+| `states` | A coluna do quadro de cada etapa canônica, pelo **nome**; o id da transição é resolvido na hora. Etapas, em ordem: `intake`, `grooming`, `refinement`, `ready`, `in_progress`, `review`, `verified`, `queued`, `integrated`, `staging`, `accepted`, `released`. Uma etapa sem coluna é pulada. Os nomes antigos `todo`, `in_review` e `merged` continuam aceitos. Donos e provas: o OXE move `grooming` (grill), `refinement` e `ready` (refine) e `in_progress` (tarefa iniciada); `review` a `released` costumam ser da CI (PR, pr:ready, trem, main, homologação, release). |
+| `wip` | Limite de cards por etapa (`{ "in_progress": 5 }`), só como aviso no `oxe-cc alm metrics`. |
+| `track` | Etapas que o OXE move (padrão: todas). Um repositório que já move PR, trem e tag por conta própria (ex.: um workflow `jira-sync`) deixa só `["in_progress"]`: o OXE cria, liga, comenta e move A fazer → Em andamento, e o resto fica com o workflow. Em qualquer modo, o OXE lê o estado real antes de mover e nunca recua um item que outra ferramenta já avançou. |
 | `release_version` | `true` lança a versão no deploy. Desligado quando uma pipeline de tag já faz isso. |
 | `adopt_prefixes` | Códigos antigos (`CODE-8` no título da tarefa, ou `refs: ["CODE-8"]`): o item com o rótulo `ref-CODE-8` é adotado em vez de criar outro. |
 | `ledger_guard` / `search_settle_ms` | A busca do Jira por rótulo pode levar minutos para ver um item novo, e o registro local (`.oxe/program/alm-links.ndjson`) é a defesa principal contra duplicata. Com `ledger_guard: true`, um push sem esse registro se recusa a criar. `alm push --rebuild-ledger` refaz o registro pela busca, sem criar nada; `--first-push` vale para o primeiro push de um programa. `search_settle_ms` é a espera antes da segunda busca: 5 s, ou 60 s com o guard. |
 | `dry_run` / `auto` | `dry_run: true` só mostra; `auto: false` desliga a sincronização automática nos pontos do ciclo. |
+| `require_apply` | `true`: gravar exige `--apply` explícito. Sem ele, todo comando que escreve (`push`, `sync`, `move`, `comment`, `defect`, `intake`, `version ensure`, `refine --claim`, `refine apply`) roda como simulação. A sincronização automática também vira simulação. Em qualquer modo, `--dry-run` nunca grava: o transporte recusa POST, PUT, PATCH e DELETE. |
+| `docs` | `{ "repo": "https://github.com/<org>/<repo>", "branch": "main", "dir": "docs" }`: a base dos links do comentário "Documentos (OXE)" que o `oxe-cc trace publish` mantém em cada card (PRD, ADRs). |
+| `stories_source` | `"prd"` (padrão, projeto novo: o push cria as histórias do PRD) ou `"alm"` (os cards já existem): o push só liga a história do PRD ao card que a linha dela cita (ex.: `OXE-48` na linha da US) e nunca cria história nem épico. Uma história sem card fica listada como pendente. Em qualquer modo, um item que cita a chave do seu card (`(OXE-20)` no título da tarefa) é adotado por ela, conferido por GET. |
+| `ready_gate` | `true` (rótulo `spec-v1`) ou o nome de outro rótulo: Definition of Ready. Um item sem o rótulo não vai para "Em andamento". O sync deixa a mudança pendente e diz por quê; ela acontece quando o card for refinado (`oxe-cc alm refine`). |
+| `writer` | Um único escritor por programa. Com `"writer": "coord"`, só a sessão que exporta `OXE_ALM_WRITER=coord` cria e move itens; as demais leem (ensaios, status, fila) e comentam (`oxe-cc alm comment <ref|chave> --text "…"`). Na mesma máquina, uma trava local (`.oxe/program/alm-write.lock`) recusa dois escritores ao mesmo tempo. |
 
 Uma falha do ALM nunca derruba o comando do OXE: a escrita é tentada 3 vezes com backoff, é relida depois de feita, e, se não passar, fica pendente para o próximo `oxe-cc alm sync`.
 
@@ -119,6 +125,42 @@ Os checks pesados (e2e, build empacotado, Android) rodam no CI do repositório n
   - Um job vermelho reprova o critério, com o link do run no VERIFY.
   - GitHub fora do ar, `gh` ausente ou tempo esgotado deixam o check como "não verificado", e a fase segue com o local. Com `required: true`, a fase só fecha com o remoto verde.
   - `--no-remote` roda tudo local.
+- **Espera leve e retomável:** sem `gh run watch` de longa duração. São consultas curtas (`poll_seconds`, padrão 30) com o estado em `.oxe/program/remote-verify.json`; o verify seguinte retoma o mesmo run. Com `detach: true`, o verify dispara o run e retorna na hora.
+- **Trace da CI:** quando um job falha, os artefatos (`artifacts`, padrão `*trace*`, `*playwright-report*`, `*test-results*`, `*screenshot*`; `[]` desliga) são baixados para `.oxe/evidence/remote/`. Com `where: "both"`, o check roda aqui e na CI; vermelho só na CI vira `ci_only`, e a leitura certa é o trace da CI, não uma reprodução local.
+- **`verify.min_free_mb`:** com menos memória livre que isso, nenhum check pesado roda na máquina. Ele vai para a CI quando há `verify.remote`; sem ela, fica como "não verificado (memória baixa)" e o verify termina parcial.
+
+## Entrega e CI (`ship`)
+
+```json
+"ship": { "train_labels": ["na-fila", "no-batch", "fix-main"] }
+```
+
+- `oxe-cc ship status --pr <n> | --card <KEY> | --repo` mostra o veredito de CI de um PR (de fase ou não), dos PRs que citam o card no título, na descrição ou no branch, ou de todos os PRs abertos, com os rótulos do trem (`train_labels`). Os vereditos: verde, rodando, falha conhecida (com o `gh run rerun <id> --failed`), VERMELHO (falha nova), sem leitura.
+- `--comment --apply` põe o veredito no PR, num comentário "CI (OXE)" atualizado no lugar. É lá que o trem, a CI e as pessoas leem; um arquivo local nunca chega a eles.
+- **Falhas conhecidas do repositório:** `oxe-cc ship known-failure add "<teste>" --item <KEY> --pr <n do conserto>` grava em `<git common dir>/oxe/`. Todas as worktrees do clone veem a mesma lista, e o arquivo fica fora de qualquer checkout e de qualquer commit. A falha expira quando o PR do conserto é mergeado: o conserto entrou na main, e um vermelho depois disso é regressão. `ship known-failure prune` remove as expiradas. As entradas antigas de uma worktree (`.oxe/program`) continuam legíveis como `wt:KF-n`.
+
+## Origem dos commits (`origin`)
+
+Regra: nada chega a um PR sem vir do `oxe-cc runtime execute` (trailer `OXE-Task`, mais `OXE-Run`) ou de um quick registrado (`oxe-cc quick <KEY> "<objetivo>"`, trailers `OXE-Quick` e, com ALM, `OXE-Card`). As isenções são só as declaradas aqui.
+
+```json
+"origin": {
+  "exempt": { "merges": true, "authors": ["github-actions[bot]"], "paths": [".oxe/", "docs/releases/"] },
+  "commit_msg": "require",
+  "base": "origin/main"
+}
+```
+
+| Chave | Efeito |
+|---|---|
+| `exempt.merges` | commits de merge passam (padrão `true`) |
+| `exempt.authors` | autores que passam sem trailer: o bot do trem de merge, o bot de release (padrão: nenhum) |
+| `exempt.paths` | um commit que só toca esses caminhos passa (padrão `[".oxe/"]`; terminado em `/` é pasta) |
+| `commit_msg` | o hook `commit-msg` do `oxe-cc guards install`: `require` (padrão) recusa commit sem origem; `append` só avisa; `off` desliga. Com um quick aberto, o hook acrescenta os trailers dele |
+| `require_card` | o commit de quick precisa de `OXE-Card` (padrão: `true` quando há ALM) |
+| `base` | a base do `oxe-cc ship check-origin` sem argumento (padrão `origin/main`) |
+
+Conferência: `oxe-cc ship check-origin [<#PR>|<a..b>] [--json]` sai com 1 e lista cada commit sem origem. O commit do quick é feito por `oxe-cc quick commit -m "<mensagem>" <arquivos…>`, que acrescenta os trailers.
 
 ## Profiles de execução (`profile`)
 

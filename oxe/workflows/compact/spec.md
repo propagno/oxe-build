@@ -108,7 +108,7 @@ Complemento adaptativo para a Fase 1. Quando o domínio for confirmado (via scan
 </process>
 **Ao terminar:** o **Próximo passo** de `oxe-cc status --json` (ver `references/next-step-footer.md`).
 <success_criteria>
-- [ ] `PRD.md` existe com histórias US-n ligadas aos A*, e `oxe-cc prd lint` passa; com ALM configurado, as histórias foram enviadas (`oxe-cc alm push --stories-only`).
+- [ ] `PRD.md` existe com histórias US-n ligadas aos A*, e `oxe-cc prd lint` passa; com ALM configurado, as histórias foram enviadas (`oxe-cc alm push --stories-only --apply`).
 - [ ] Usuário foi consultado no gate da Fase 5 e escolheu o próximo passo.
 - [ ] Grill fechado (`oxe-cc grill close`), com cada critério, história e termo rastreável a uma pergunta; ou `--fast` com no máximo 3 rodadas.
 - [ ] `oxe-cc spec check` verde e spec aprovada (`oxe-cc spec approve`); RFC em rascunho para cada P0/P1.

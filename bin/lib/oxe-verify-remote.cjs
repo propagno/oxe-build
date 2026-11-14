@@ -8,7 +8,8 @@
  *   "verify": { "remote": { "provider": "github", "workflow": "ci.yml", "ref": "branch", "wait_minutes": 60,
  *                            "required": false, "protected": ["release/*"] },
  *               "where": { "A7": "remote", "gate-e2e": "remote", "T4": "local" } }
- * and, per check / acceptance test / task in PLAN.json, `"where": "remote" | "local"` and `"remote_job": "<job>"`.
+ * and, per check / acceptance test / task in PLAN.json, `"where": "remote" | "local" | "both"` and `"remote_job": "<job>"`.
+ * `both` runs the check here AND in the CI: red only in the CI is reported as `ci_only` (the CI's trace is kept).
  *
  * Safety (agreed with the coordination): never push to main/master or to a protected branch; never `--force` (a
  * rejected push leaves the checks "not verified"); the workflow is dispatched WITHOUT inputs — a release/publish
@@ -37,6 +38,10 @@ function remoteConfig(cfg) {
     workflow: String(r.workflow),
     wait_minutes: Number(r.wait_minutes) > 0 ? Number(r.wait_minutes) : 60,
     required: r.required === true,
+    detach: r.detach === true,
+    poll_seconds: Number(r.poll_seconds) > 0 ? Number(r.poll_seconds) : 30,
+    // artifacts downloaded when a job fails (gh run download -p <pattern>); [] turns it off
+    artifacts: Array.isArray(r.artifacts) ? r.artifacts.map(String) : ['*trace*', '*playwright-report*', '*test-results*', '*screenshot*'],
     protected: Array.isArray(r.protected) ? r.protected.map(String) : [],
     inputs,
     where: v.where && typeof v.where === 'object' ? v.where : {},
@@ -50,11 +55,13 @@ function remoteConfig(cfg) {
  * @param {{ byCriterion?: Map, byTask?: Map }} plan
  */
 function whereFor(check, rcfg, plan = {}) {
+  // nothing to run (manual criterion, files-only check): never sent to the CI
+  if (!check.command) return 'local';
   const explicit = check.where
     || rcfg.where[check.id]
     || (check.acceptance_ref && (rcfg.where[check.acceptance_ref] || (plan.byCriterion && plan.byCriterion.get(check.acceptance_ref))))
     || (() => { const t = /^(T\d+)\b/.exec(String(check.id || '')); return t ? rcfg.where[t[1]] || (plan.byTask && plan.byTask.get(t[1])) : null; })();
-  if (explicit === 'remote' || explicit === 'local') return explicit;
+  if (explicit === 'remote' || explicit === 'local' || explicit === 'both') return explicit;
   const cmd = String(check.command || '');
   if (!cmd) return 'local';
   // a heavy command goes remote even when it also mentions a light runner ("vitest run e2e/…")
@@ -67,11 +74,11 @@ function planHints(doc) {
   const byTask = new Map();
   const jobs = new Map();
   for (const t of (doc && doc.acceptance_tests) || []) {
-    if (t && t.criterion && (t.where === 'remote' || t.where === 'local')) byCriterion.set(t.criterion, t.where);
+    if (t && t.criterion && ['remote', 'local', 'both'].includes(t.where)) byCriterion.set(t.criterion, t.where);
     if (t && t.criterion && t.remote_job) jobs.set(t.criterion, String(t.remote_job));
   }
   for (const t of (doc && doc.tasks) || []) {
-    if (t && t.id && (t.where === 'remote' || t.where === 'local')) byTask.set(t.id, t.where);
+    if (t && t.id && ['remote', 'local', 'both'].includes(t.where)) byTask.set(t.id, t.where);
     if (t && t.id && t.remote_job) jobs.set(t.id, String(t.remote_job));
   }
   return { byCriterion, byTask, jobs };
@@ -138,9 +145,19 @@ function runRemote(input) {
     if (!run) return notVerified('o run disparado não apareceu na lista do GitHub em 1 minuto');
   }
   const runInfo = { id: run.databaseId, url: run.url, reused, head, pushed };
-  if (!(run.status === 'completed')) {
-    const w = sh(spawn, 'gh', ['run', 'watch', String(run.databaseId), '--exit-status', '--interval', '30'], cwd, rcfg.wait_minutes * 60_000);
-    if (w.timedOut) return notVerified(`tempo esgotado (${rcfg.wait_minutes} min) — o run ${run.url} segue no GitHub; rode o verify de novo para ler o resultado`, { run: runInfo });
+  if (input.stateFile) writeState(input.stateFile, { run: runInfo, workflow: rcfg.workflow, branch, at: new Date().toISOString() });
+  // OXB-f: a light, resumable poll (one short `gh run view` at a time, state on disk) — no long-lived watcher that
+  // the machine's memory pressure can kill. detach: dispatch and return; the next verify picks the same run up.
+  if (run.status !== 'completed') {
+    if (rcfg.detach) return notVerified(`run em andamento (${run.url}) — rode o verify de novo para ler o resultado (verify.remote.detach)`, { run: runInfo, pending: true });
+    const deadline = (input.now || Date.now)() + rcfg.wait_minutes * 60_000;
+    let status = run.status;
+    while (status !== 'completed') {
+      if ((input.now || Date.now)() >= deadline) return notVerified(`tempo esgotado (${rcfg.wait_minutes} min) — o run ${run.url} segue no GitHub; rode o verify de novo para ler o resultado`, { run: runInfo, pending: true });
+      sleep(rcfg.poll_seconds * 1000);
+      const v = json(sh(spawn, 'gh', ['run', 'view', String(run.databaseId), '--json', 'status,conclusion'], cwd, 30_000).stdout);
+      if (v && v.status) status = v.status;
+    }
   }
   const view = json(sh(spawn, 'gh', ['run', 'view', String(run.databaseId), '--json', 'jobs,url,conclusion,status'], cwd, 30_000).stdout);
   if (!view || !Array.isArray(view.jobs)) return notVerified('não foi possível ler os jobs do run', { run: runInfo });
@@ -153,7 +170,21 @@ function runRemote(input) {
     if (['failure', 'cancelled', 'timed_out', 'action_required', 'startup_failure'].includes(job.conclusion)) return { check: c, job: job.name, status: 'fail', url, reason: `job ${job.name}: ${job.conclusion}` };
     return { check: c, job: job.name, status: 'not_verified', url, reason: `job ${job.name}: ${job.conclusion || job.status || 'sem conclusão'}` };
   });
-  return { status: 'verified', run: { ...runInfo, url: view.url || run.url }, results };
+  // OXB-e: a red job keeps the CI's own evidence (trace, report, screenshots) next to the verify, so the failure is
+  // read where it happened instead of "reproduce locally" — a slow Windows runner fails what a fast machine passes.
+  let artifacts = null;
+  if (results.some((r) => r.status === 'fail') && input.artifactsDir && rcfg.artifacts.length) {
+    const args = ['run', 'download', String(run.databaseId), '--dir', input.artifactsDir];
+    for (const p of rcfg.artifacts) args.push('-p', p);
+    const d = sh(spawn, 'gh', args, cwd, 300_000);
+    artifacts = d.ok ? { dir: input.artifactsDir } : { error: (d.stderr || 'sem detalhe').split('\n')[0].slice(0, 160) };
+  }
+  if (input.stateFile) writeState(input.stateFile, { run: { ...runInfo, url: view.url || run.url }, workflow: rcfg.workflow, branch, at: new Date().toISOString(), done: true, conclusion: view.conclusion || null });
+  return { status: 'verified', run: { ...runInfo, url: view.url || run.url }, results, ...(artifacts ? { artifacts } : {}) };
+}
+
+function writeState(file, data) {
+  try { require('fs').mkdirSync(require('path').dirname(file), { recursive: true }); require('fs').writeFileSync(file, JSON.stringify(data, null, 2)); } catch { /* auxiliary */ }
 }
 
 /** A remote result as a runtime CheckResult (merged into the verify report). */

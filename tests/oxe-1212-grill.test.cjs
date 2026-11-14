@@ -182,3 +182,24 @@ describe('grill: close and the documents', () => {
     assert.equal(run('close').status, 1);
   });
 });
+
+describe('grill decisions keep their anchor (criteria and stories → ADR)', () => {
+  it('--affects A*/US-* of a decision question become the decision\'s criteria and stories, listed in the ADR', () => {
+    const dir = project();
+    fs.writeFileSync(path.join(dir, '.oxe', 'config.json'), JSON.stringify({}));
+    g(dir, 'start', { type: 'investigação' });
+    for (const b of ['problem', 'scope', 'risks']) {
+      const q = g(dir, 'ask', { branch: b, question: `pergunta do ramo ${b}?`, options: 'opção alfa | opção beta', recommended: 'opção alfa', why: 'evidência', decision: b === 'scope', affects: b === 'scope' ? 'A3,US-2,R1' : '' });
+      g(dir, 'answer', { id: q.id, choice: 'ok' });
+      g(dir, 'confirm', { branch: b });
+    }
+    g(dir, 'close', { by: 'po' });
+    const d = require('../bin/lib/oxe-decisions.cjs').list(path.join(dir, '.oxe', 'program')).find((x) => /^grill:/.test(x.source));
+    assert.deepEqual(d.criteria, ['A3']);
+    assert.deepEqual(d.stories, ['US-2']);
+    const adrDir = path.join(dir, 'docs', 'adr');
+    const adr = fs.readdirSync(adrDir).filter((f) => /^D-/.test(f)).map((f) => fs.readFileSync(path.join(adrDir, f), 'utf8')).join('\n');
+    assert.match(adr, /\*\*Critérios:\*\* A3/);
+    assert.match(adr, /\*\*Histórias:\*\* US-2/);
+  });
+});

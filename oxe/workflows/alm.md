@@ -3,7 +3,7 @@
 <objective>
 Configurar e operar o ALM do projeto: as histórias do PRD e as tarefas do plano viram itens no Jira ou no Azure DevOps, sem duplicar, e o ciclo do OXE move esses itens. Sem ALM, o fluxo do OXE segue igual, e este comando só diz isso.
 
-Subcomandos (argumento livre): `setup` (padrão quando não há bloco `alm`), `status`, `push`, `queue`, `defect`.
+Subcomandos (argumento livre): `setup` (padrão quando não há bloco `alm`), `status`, `push`, `queue`, `refine`, `defect`.
 </objective>
 
 <context>
@@ -33,11 +33,14 @@ Subcomandos (argumento livre): `setup` (padrão quando não há bloco `alm`), `s
 ### queue (transporte MCP)
 `oxe-cc alm queue --json`. Execute **na ordem** com as ferramentas MCP:
 - **`ensure`:** busque primeiro com o `search` (`jql`/`wiql`); se achar, adote, senão crie. Depois, `oxe-cc alm ack <id> --key <chave>`.
-- **`transition`, `link`, `release_version`:** faça a operação e rode `oxe-cc alm ack <id>`.
+- **`transition`, `link`, `comment`, `release_version`:** faça a operação e rode `oxe-cc alm ack <id>`.
 - **Falha:** `oxe-cc alm ack <id> --error "…"` e siga para a próxima.
 
+### refine — card do Jira → spec guiado
+`oxe-cc alm refine <KEY…>` (ou `--jql "…" --max-cards N`) só lê: coleta o card inteiro e grava o esqueleto do tipo em `.oxe/alm/specs/<KEY>.md`. Reescreva cada spec seguindo `references/alm-refine.md` (nunca invente: sem fonte, fica "A confirmar" com a pergunta), rode `oxe-cc alm refine lint`, mostre ao usuário e, com o OK, rode `oxe-cc alm refine apply <KEY> --dry-run` e depois `--apply` na sessão escritora.
+
 ### defect
-Defeito depois do deploy: `oxe-cc alm defect --title "…" --origin <US-n|Fn-Tn>`. Abra também o CR (`oxe-cc runtime feedback --class defect …`); o caminho completo está em `/oxe-ship --defect`.
+Defeito depois do deploy: `oxe-cc alm defect --title "…" --origin <US-n|Fn-Tn> --apply`. Abra também o CR (`oxe-cc runtime feedback --class defect …`); o caminho completo está em `/oxe-ship --defect`.
 </process>
 
 <success_criteria>

@@ -151,6 +151,29 @@ function installPrePushHook(root, cliScriptPath = path.resolve(__dirname, '..', 
   return { installed: true, path: hookPath };
 }
 
+/**
+ * G11: the commit-msg hook — appends the open quick's trailers (OXE-Quick / OXE-Card), or refuses a commit with no
+ * origin (origin.commit_msg "require"; exemptions only in origin.exempt). Same marker block as the pre-push hook.
+ */
+function installCommitMsgHook(root, cliScriptPath = path.resolve(__dirname, '..', 'oxe-cc.js')) {
+  const gitDirRes = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: root, encoding: 'utf8', windowsHide: true });
+  if (gitDirRes.status !== 0 || !gitDirRes.stdout.trim()) return { installed: false, path: null };
+  const hookPath = path.join(path.resolve(root, gitDirRes.stdout.trim()), 'hooks', 'commit-msg');
+  fs.mkdirSync(path.dirname(hookPath), { recursive: true });
+  const markerStart = '# >>> oxe-cc commit-msg >>>';
+  const markerEnd = '# <<< oxe-cc commit-msg <<<';
+  const block = [markerStart, `node "${cliScriptPath.replace(/\\/g, '/')}" ship commit-msg "$1" || exit 1`, markerEnd].join('\n');
+  let existing = '';
+  try { existing = fs.existsSync(hookPath) ? fs.readFileSync(hookPath, 'utf8') : ''; } catch { existing = ''; }
+  const start = existing.indexOf(markerStart);
+  const end = existing.indexOf(markerEnd);
+  const next = start >= 0 && end > start ? existing.slice(0, start) + block + existing.slice(end + markerEnd.length)
+    : existing.trim() ? `${existing.replace(/\s*$/, '')}\n\n${block}\n` : `#!/bin/sh\n${block}\n`;
+  fs.writeFileSync(hookPath, next, { encoding: 'utf8', mode: 0o755 });
+  try { fs.chmodSync(hookPath, 0o755); } catch { /* windows */ }
+  return { installed: true, path: hookPath };
+}
+
 /** The commands to run in `root` (a checkout or a worktree), from config or detected. */
 function integrationCommands(root, config) {
   const cfg = config || readJson(path.join(root, '.oxe', 'config.json')) || {};
@@ -212,6 +235,7 @@ module.exports = {
   formatParkedAcceptanceError,
   checkPrePush,
   installPrePushHook,
+  installCommitMsgHook,
   FILE_SIZE_SCRIPT,
   PARKED_ACCEPTANCE_RE,
 };

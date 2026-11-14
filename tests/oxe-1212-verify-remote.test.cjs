@@ -39,7 +39,9 @@ function fake(state = {}) {
       return ok(JSON.stringify(runs));
     }
     if (cmd === 'gh' && a.startsWith('workflow run')) return state.dispatchFails ? fail('HTTP 422: Workflow does not have workflow_dispatch trigger') : ok();
-    if (cmd === 'gh' && a.startsWith('run watch')) return state.watchTimeout ? { status: null, signal: 'SIGTERM', error: Object.assign(new Error('spawnSync gh ETIMEDOUT'), { code: 'ETIMEDOUT' }) } : ok();
+    if (cmd === 'gh' && a.startsWith('run watch')) return fail('o verify não usa mais o watch longo');
+    if (cmd === 'gh' && a.startsWith('run download')) return state.downloadFails ? fail('no artifacts') : ok();
+    if (cmd === 'gh' && a.startsWith('run view') && a.includes('status,conclusion')) return ok(JSON.stringify(state.stillRunning ? { status: 'in_progress', conclusion: null } : { status: 'completed', conclusion: 'success' }));
     if (cmd === 'gh' && a.startsWith('run view')) return ok(JSON.stringify({ url: 'https://github.com/o/r/actions/runs/900', conclusion: 'success', status: 'completed', jobs: state.jobs || [{ name: 'A7-e2e', conclusion: 'success', url: 'https://github.com/o/r/actions/runs/900/job/1' }, { name: 'android', conclusion: 'success' }] }));
     return fail(`rota fake ausente: ${cmd} ${a}`);
   };
@@ -106,12 +108,48 @@ describe('verify.remote: the run', () => {
   });
 
   it('timeout, missing gh, dispatch refused → every remote check not verified, with the reason', () => {
-    const t = run(fake({ dispatched: true, watchTimeout: true }));
+    let clock = 0;
+    const t = run(fake({ dispatched: true, stillRunning: true }), { now: () => (clock += 20_000) });
     assert.equal(t.status, 'not_verified');
     assert.match(t.reason, /tempo esgotado \(1 min\)/);
     assert.ok(t.results.every((r) => r.status === 'not_verified'));
     assert.match(run(fake({ noGh: true })).reason, /gh indisponível/);
     assert.match(run(fake({ dispatchFails: true })).reason, /workflow_dispatch/);
+  });
+});
+
+describe('verify.remote: light, resumable wait and CI evidence', () => {
+  it('waits by short polls (no gh run watch); detach returns at once with the run pending; the state goes to disk', () => {
+    const f = fake({ dispatched: true });
+    const fsx = require('fs');
+    const os = require('os');
+    const pathx = require('path');
+    const stateFile = pathx.join(fsx.mkdtempSync(pathx.join(os.tmpdir(), 'oxe-rv-')), 'remote-verify.json');
+    const out = run(f, { stateFile });
+    assert.equal(out.status, 'verified');
+    assert.equal(called(f, 'gh run watch').length, 0);
+    assert.ok(called(f, 'gh run view 900 --json status,conclusion').length >= 1);
+    assert.equal(JSON.parse(fsx.readFileSync(stateFile, 'utf8')).done, true);
+    const detachCfg = remote.remoteConfig({ verify: { remote: { workflow: 'ci.yml', detach: true } } });
+    const g = fake({ dispatched: true });
+    const d = remote.runRemote({ checks: CHECKS, rcfg: detachCfg, cwd: '.', spawn: g.spawn, sleep: () => {} });
+    assert.equal(d.pending, true);
+    assert.match(d.reason, /run em andamento.*rode o verify de novo/);
+    assert.equal(called(g, 'gh run view 900 --json status,conclusion').length, 0);
+  });
+
+  it('a red job downloads the CI trace/report next to the verify (patterns configurable, [] turns it off)', () => {
+    const f = fake({ dispatched: true, jobs: [{ name: 'A7-e2e', conclusion: 'failure' }, { name: 'android', conclusion: 'success' }] });
+    const out = run(f, { artifactsDir: '.oxe/evidence/remote/1' });
+    const dl = called(f, 'gh run download');
+    assert.equal(dl.length, 1);
+    assert.ok(dl[0].includes('*trace*') && dl[0].includes('--dir'));
+    assert.deepEqual(out.artifacts, { dir: '.oxe/evidence/remote/1' });
+    const off = remote.remoteConfig({ verify: { remote: { workflow: 'ci.yml', artifacts: [] } } });
+    const g = fake({ dispatched: true, jobs: [{ name: 'A7-e2e', conclusion: 'failure' }] });
+    remote.runRemote({ checks: CHECKS, rcfg: off, cwd: '.', spawn: g.spawn, sleep: () => {}, artifactsDir: 'x' });
+    assert.equal(called(g, 'gh run download').length, 0);
+    assert.equal(remote.whereFor({ id: 'x', command: 'npx vitest', where: 'both' }, CFG), 'both');
   });
 });
 

@@ -612,7 +612,7 @@ Detectar e corrigir estes problemas antes de entregar a SPEC. A auto-reflexão d
 - [ ] `SPEC.md` existe no escopo correto (`spec/` da sessão ou `.oxe/` legado) com critérios A* e coluna Como verificar; `STATE.md` global atualizado.
 - [ ] `ROADMAP.md` existe no mesmo escopo com fases mapeadas a R-IDs e A*, status `approved` (ou `draft` se usuário não confirmou).
 - [ ] Tabela de requisitos R-ID foi apresentada e validada (v1/v2/fora) antes do roteiro.
-- [ ] `PRD.md` existe com histórias US-n ligadas aos A*, e `oxe-cc prd lint` passa; com ALM configurado, as histórias foram enviadas (`oxe-cc alm push --stories-only`).
+- [ ] `PRD.md` existe com histórias US-n ligadas aos A*, e `oxe-cc prd lint` passa; com ALM configurado, as histórias foram enviadas (`oxe-cc alm push --stories-only --apply`).
 - [ ] Usuário foi consultado no gate da Fase 5 e escolheu o próximo passo.
 - [ ] OBS pendentes com impacto `spec` foram incorporadas e marcadas `incorporada`.
 - [ ] Grill fechado (`oxe-cc grill close`), com cada critério, história e termo rastreável a uma pergunta; ou `--fast` com no máximo 3 rodadas.

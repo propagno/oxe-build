@@ -114,15 +114,15 @@ describe('ALM via MCP: lifecycle', () => {
     assert.equal(r.queued.length, 2);
     let ops = alm.pendingOps(pdir);
     assert.equal(ops.length, 1);
-    assert.deepEqual({ key: ops[0].key, state: ops[0].state, stage: ops[0].stage }, { key: 'OXE-201', state: 'Em revisão', stage: 'in_review' });
+    assert.deepEqual({ key: ops[0].key, state: ops[0].state, stage: ops[0].stage }, { key: 'OXE-201', state: 'Em revisão', stage: 'review' });
     assert.deepEqual(ops[0].comments, ['PR aberto: https://github.com/o/r/pull/9']);
     const again = await alm.sync(pdir, cfg, ev, { phase: 'F1' }, { http: noNet });
     assert.equal(again.queued.length, 0, 'cursor: the same events are not queued twice');
     alm.ack(pdir, cfg, 'transition:F1-T1');
-    assert.equal(alm.readState(pdir).stages['F1-T1'], 'in_review');
+    assert.equal(alm.readState(pdir).stages['F1-T1'], 'review');
     // a stage behind the acked one is not queued
     const back = await alm.sync(pdir, cfg, [...ev, { type: 'TaskStarted', work_item_id: 'T1' }], { phase: 'F1' }, { http: noNet });
-    assert.ok(back.skipped.some((s) => /já em in_review/.test(s.why)));
+    assert.ok(back.skipped.some((s) => /já em review/.test(s.why)));
     ops = alm.pendingOps(pdir);
     assert.equal(ops.length, 0);
   });

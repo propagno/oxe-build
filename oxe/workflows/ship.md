@@ -34,7 +34,12 @@ Levar o trabalho verificado até produção, um passo verde por vez: **PR → CI
 - Mostre a URL. A falha de promoção vem com o motivo: corrija e promova de novo; não force.
 
 ### Passo 2 — CI e merge
-- Rode `oxe-cc ship status` até o PR aparecer com merge. Se o CI estiver vermelho, leia o log (`gh run view <id> --log-failed`) e volte ao `/oxe-execute --debug` com o motivo. Não faça merge com CI vermelho.
+- Rode `oxe-cc ship status` até o PR aparecer com merge. Ele classifica o CI de cada PR:
+  - **falha conhecida:** o teste bate com `oxe-cc ship known-failure add "<teste>" --item <chave>` e o item segue aberto. Rode a sugestão (`gh run rerun <id> --failed`); não é regressão.
+  - **vermelho:** leia o log (`gh run view <id> --log-failed`) e volte ao `/oxe-execute --debug` com o motivo.
+  - Não faça merge com CI vermelho. Registre a falha conhecida com `--pr <n do conserto>`: ela fica no repositório (todas as worktrees) e expira sozinha quando esse PR é mergeado (`oxe-cc ship known-failure prune`).
+- PR fora de fase, de um card ou o repositório inteiro: `oxe-cc ship status --pr <n>` · `--card <KEY>` · `--repo` (com os rótulos do trem); `--comment --apply` põe o veredito no PR, onde o trem e a CI leem.
+- Antes do merge: `oxe-cc ship check-origin <#PR>`. Todo commit vem do `runtime execute` (`OXE-Task`) ou de um quick registrado (`OXE-Quick`); as isenções são só as de `origin.exempt`.
 - O merge é do usuário ou do trem de merge do repositório. O OXE detecta o merge (`gh pr view`) e registra.
 - Fase com CI exigido no close: `oxe-cc runtime ci --attach <run> --head <sha>`.
 
@@ -44,11 +49,11 @@ Levar o trabalho verificado até produção, um passo verde por vez: **PR → CI
 ### Passo 4 — Documentos e fechamento
 1. Com `docs_publish` configurado: `oxe-cc docs publish` (PRD, RFCs, ADRs, glossário, SYSTEM-DESIGN).
 2. `oxe-cc runtime program close`: regressão congelada, contratos e commit da fase. Num branch com PR aberto, o close não commita (use um branch separado ou `--force-branch`).
-3. Com ALM: `oxe-cc alm sync`, que leva os itens a "lançado".
+3. Com ALM: `oxe-cc alm sync --apply`, que leva os itens a "lançado".
 
 ### Passo X — Defeito depois da entrega (`--defect`)
 1. Pergunte a reprodução, o impacto e o critério ou a história de origem (uma pergunta por vez, com a recomendada).
-2. `oxe-cc alm defect --title "…" --origin <US-n|Fn-Tn>` (com ALM) e `oxe-cc runtime feedback --class defect --summary "…" --criteria A<n>`.
+2. `oxe-cc alm defect --title "…" --origin <US-n|Fn-Tn> --apply` (com ALM) e `oxe-cc runtime feedback --class defect --summary "…" --criteria A<n>`.
 3. O próximo passo é `/oxe-plan --replan`, para cobrir o CR com teste de aceite na fase atual ou numa fase nova (ver `references/change-management.md`).
 
 ### Passo L — Commit local (`--local`)

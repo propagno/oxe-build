@@ -8,6 +8,33 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-build, mais o roteiro de excelência e os backlogs de comparação aprovados pelo TECH LEAD. Cada item tem uma seção em `docs/oxespace-1.5/BACKLOG.md`, com a evidência e o teste que a reproduz (`tests/oxe-1212-*.test.cjs`). Para usar só a trilha recomendada, veja [docs/HAPPY-PATH.md](docs/HAPPY-PATH.md).
 
+### ALM: simulação que nunca grava, e escrita explícita (OXB-G12 a G15)
+- **`--dry-run` nunca grava no ALM, em nenhum comando (G13, P0):** antes, `alm refine apply --dry-run` aplicava de verdade.
+  - O transporte REST recusa POST, PUT, PATCH e DELETE em simulação; a consulta WIQL do Azure é a única leitura liberada.
+  - O apply simula: lê, roda o lint e diz o que gravaria e para onde moveria.
+  - Um teste por comando que escreve, com um Jira falso que falha em qualquer escrita: intake, version ensure, push, sync, move, comment, link, defect, refine --claim, refine apply, grill publish e trace publish.
+- **`alm.require_apply`:** com `true`, gravar exige `--apply`; sem ele, todo comando que escreve vira simulação.
+  - **Deprecação:** nesta versão o padrão continua `false`, mas uma escrita sem `--apply` avisa: "na próxima versão vai exigir --apply". Na próxima minor o padrão passa a `true`.
+  - Os workflows já passam `--apply` onde gravam.
+- **`refine --claim` diz o que fez (G14):** cada card mostra "→ movido para Em refinamento", "moveria para …" ou "não moveu: <motivo>". Antes, o claim movia o card e o CLI imprimia "só leitura".
+- **Comentário do grooming (G12):** os fatos ficam em "Fatos (fonte): N", cada um com a fonte, e as perguntas em "Perguntas: N (X respondida(s), Y em aberto)". Antes, os fatos eram contados como perguntas.
+- **`grill answer` (G15):** o eco mostra a fonte dada em `--source`, não "decisão do usuário".
+
+### Origem dos commits, quick com registro e CI por PR (G5, G8, G9, G11)
+- **`oxe-cc quick <KEY> "<objetivo>"` (G9):** o quick vira comando, com um registro verificável em `.oxe/quick/<id>.json` e a minispec no QUICK.md.
+  - `quick commit -m "…"` faz o commit com os trailers `OXE-Quick` e `OXE-Card`, para o commit à mão não virar o buraco da trava.
+  - `quick done --verify "<cmd>"` roda a verificação e fecha com os commits achados pelo trailer.
+  - Com ALM, o card recebe a minispec e vai para "em desenvolvimento", só de uma coluna anterior, nunca para trás. No `done`, o card recebe os commits e a verificação.
+- **Trava de origem (G11):** `oxe-cc ship check-origin [<#PR>|<a..b>]` exige que todo commit venha do `runtime execute` (`OXE-Task`) ou de um quick registrado (`OXE-Quick`, mais `OXE-Card` com ALM).
+  - As isenções ficam só em `origin.exempt`: merges, autores (bots do trem e da release) e caminhos (`.oxe/`, `docs/releases/`).
+  - O `guards install` instala o hook `commit-msg`. Com um quick aberto, o hook acrescenta os trailers; sem quick, recusa o commit (`origin.commit_msg`).
+- **CI por PR, por card e do repositório (G5/G8):** `ship status --pr <n> | --card <KEY> | --repo` dá o veredito de PRs fora de fase, com os rótulos do trem.
+  - Um número passado ao comando é PR, nunca pasta.
+  - `--comment --apply` põe o veredito no PR, num comentário "CI (OXE)" atualizado no lugar.
+- **Falhas conhecidas do repositório:** ficam em `<git common dir>/oxe/`, compartilhadas por todas as worktrees, e expiram no merge do PR do conserto (`ship known-failure prune`).
+- **`ship --help`** e a ajuda geral passam a listar `ship`, `quick` e `workflow`.
+- **`oxe-cc workflow path <slug>`:** os comandos `/oxe-*` caem para os workflows do pacote instalado quando o repositório não tem `.oxe/workflows`. O `doctor` avisa e dá a correção (`install --oxe-only .`).
+
 ### Jornada SDLC guiada e grill na spec
 - **Grill (`oxe-cc grill …`, padrão do `/oxe-spec`):** a descoberta da spec virou uma árvore de decisões (problema → personas → escopo → fluxos → regras/glossário → bordas → NFR → integrações → rollout → métricas → riscos), percorrida uma pergunta por vez, cada uma com a resposta recomendada e o porquê.
   - O que o código responde vira fato com fonte e não é perguntado.
@@ -44,6 +71,33 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
   - Nunca empurra para main/master ou branch protegido, e nunca usa `--force`. Sem upstream, só com `--push`.
   - Um job vermelho reprova o critério, com o link. GitHub indisponível ou tempo esgotado deixam o check como "não verificado", e a fase segue (`required: true` exige o remoto).
   - O run vira evidência de CI da fase. `runtime verify --no-remote` roda tudo local.
+- **Da coordenação de ALM (13–14/11):**
+  - **Um escritor por programa** (`alm.writer` + `OXE_ALM_WRITER`): as demais sessões só leem e comentam (`oxe-cc alm comment`), e uma trava local recusa dois escritores na mesma máquina. Duas sessões tinham criado o mesmo lote, com 19 duplicados.
+  - **Versão-alvo por id** (`update.fixVersions[].set`): um PUT de `fields.fixVersions` voltava vazio. Agora ela é conferida e aplicada também em item adotado e em item criado sem ela.
+  - **Falhas conhecidas de CI** (`oxe-cc ship known-failure add|list|remove`): o `ship status` classifica o CI de cada PR. Uma falha cujo teste bate com uma falha conhecida de item aberto sugere `gh run rerun <id> --failed` em vez de regressão.
+  - **`verify.remote` mais leve:** espera por consultas curtas e retomáveis (estado em `remote-verify.json`, `detach`), trace da CI baixado quando um job falha, e `where: "both"` marca `ci_only`.
+  - **`verify.min_free_mb`:** abaixo do piso, nenhum check pesado roda na máquina.
+  - **`oxe-cc alm refine`** (pedido do usuário, 14/11): relê os cards do Jira para um spec guiado por tipo.
+    - História: Como/Quero/Para, critérios Dado/Quando/Então com o teste que prova cada um, regras de negócio e técnicas, fora de escopo e definição de pronto. Bug: reprodução, esperado × obtido, causa, critérios de correção e teste de regressão. Tarefa e épico têm modelos próprios.
+    - A coleta só lê: card, comentários, ligações, épico, PRs, commits e builds, design e código citado. O agente da sessão reescreve sem inventar: o que não tem fonte vira "A confirmar", com a pergunta. O `oxe-cc` não chama modelo pago.
+    - O lint reprova critério vago, critério sem teste, fora de escopo vazio e "A confirmar" sem pergunta.
+    - O `apply` é só do escritor: grava a descrição em ADF com títulos, guarda o texto original num comentário e aplica `spec-v1` (mais `needs-info`, com as perguntas comentadas). Nunca sobrescreve um card editado depois da coleta sem `--confirm-overwrite`.
+    - `alm.ready_gate`: sem `spec-v1`, o item não vai para "Em andamento".
+  - **12 etapas canônicas no ALM:** intake, grooming, refinement, ready, in_progress, review, verified, queued, integrated, staging, accepted e released, cada uma mapeada para a coluna do quadro em `alm.states`. Os nomes antigos continuam aceitos.
+    - O refine move as etapas dele: `--claim` leva para refinement; o `apply` leva para ready (sem perguntas) ou de volta para grooming (com needs-info).
+    - O ready gate vale antes de ready e de in_progress: exige `spec-v1` e nenhum `needs-info`.
+    - O teto padrão do lote do refine é 15 cards.
+  - **Ids de tarefa estáveis e reabertura explícita** (lição do F2 CR-36, que motivou um wrapper no OxeSpace):
+    - O `plan merge` sobre o PLAN.json atual mantém o id de cada tarefa pela chave (`rid`); a tarefa nova recebe o próximo id livre, e as concluídas continuam concluídas, com o commit. Antes, a numeração por profundidade deslocava ids, e o executor devolve trabalho interrompido pelo id.
+    - O `runtime feedback` só reabre tarefa com `--reopen`; sem ele, liga o CR às tarefas e mostra o comando.
+  - **`oxe-cc trace`:** o grafo de rastreabilidade. Cada referência vem do lado filho e o reverso é derivado. O comando lista os órfãos, cada um com a correção: história sem critério ou card, critério sem história ou teste, decisão sem âncora, CA ↔ A divergentes, CR de defeito sem bug e bug sem CR, tarefa citando decisão não vigente.
+    - `trace publish [--apply]` mantém um comentário "Documentos (OXE)" por card, atualizado no lugar: o link para o PRD, os critérios com a última evidência do verify, as decisões com o link do ADR (`alm.docs: { repo, branch }`) e os CRs.
+    - O ADR lista as histórias com a chave do card. O `alm defect --cr CR-n` liga o bug ao CR. O lint do refine confere os sinônimos proibidos do glossário.
+  - **Decisões com âncora:** o RFC aceito grava como critérios e histórias os A-n e US-n citados na Motivação e no Resumo, e a decisão do grill herda o `--affects` da pergunta. O ADR lista "Critérios" e "Histórias"; antes, os dois nasciam sem ligação.
+  - **CA ↔ A explícito:** o `oxe-cc alm refine import <KEY>` leva os critérios do card refinado para a SPEC: um A-n novo, citando a chave e com o teste e o risco do CA, e o `(A-n)` escrito de volta no CA. Um CA que já tem o seu A é conferido. O lint do refine passa a checar os dois lados. Uma fase executando ou fechada está congelada: com `--phase` dela, o import recusa e mostra o comando de CR; um CA que muda um A congelado vira proposta de CR com versão nova (`--amend-to`), nunca edição direta.
+  - **`alm.stories_source`:** com `"alm"`, o push nunca cria história nem épico; liga a US do PRD ao card citado na linha dela e lista as que faltam. Um item que cita a chave do card (`(OXE-20)`) é adotado pela chave, confirmada por GET, sem a busca por rótulo.
+  - **`oxe-cc alm metrics`:** tempo em cada coluna (mediana, p85), lead time, cycle time, vazão por semana ISO, quantidade em cada coluna agora, limites de WIP (`alm.wip`, só aviso) e o gargalo pela mediana. Uma coluna renomeada no quadro é contada pelo id. O relatório vai para `.oxe/alm/metrics.md`.
+  - **O ALM nunca recua um item:** antes de mover, o OXE lê o estado real e pula se outra ferramenta já o levou mais adiante (por exemplo, um workflow de jira-sync que move PR, trem, main e release). Com `track: ["in_progress"]`, o OXE só move A fazer → Em andamento.
 
 ### Execução que não desperdiça nem esconde a causa
 - **Turnos por tarefa (OXB-185):**

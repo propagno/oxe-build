@@ -35,13 +35,19 @@ function tableRows(text, heading) {
   return rows.slice(1); // header row
 }
 
+/** ALM keys cited in a row (OXE-48, CODE-8), never the OXE's own ids (US-, R-, A-, M-, D-, CA-, RN-, RT-, F). */
+const OWN_ID = /^(US|R|RB|A|G|M|D|CA|RN|RT|F|Q|CR|KF|RFC)$/;
+function cardKeys(text) {
+  return [...new Set((String(text || '').match(/\b[A-Z][A-Z0-9]+-\d+\b/g) || []).filter((k) => !OWN_ID.test(k.split('-')[0])))];
+}
+
 /** @returns {{ version: number, status: string|null, stories: object[], metrics: object[], personas: object[] }} */
 function parsePrd(text) {
   const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(text || ''));
   const field = (k) => { const m = fm && new RegExp(`^${k}:\\s*(.+)$`, 'm').exec(fm[1]); return m ? m[1].trim() : null; };
   const stories = tableRows(text, 'Hist[óo]rias de usu[áa]rio')
     .filter((c) => /^US-\d+$/i.test(c[0] || ''))
-    .map((c) => ({ id: c[0].toUpperCase(), persona: c[1] || '', want: c[2] || '', benefit: c[3] || '', requirements: ID_LIST(c[4]).filter((x) => /^R/.test(x)), criteria: ID_LIST(c[5]).filter((x) => /^A/.test(x)), priority: c[6] || null }));
+    .map((c) => ({ id: c[0].toUpperCase(), persona: c[1] || '', want: c[2] || '', benefit: c[3] || '', requirements: ID_LIST(c[4]).filter((x) => /^R/.test(x)), criteria: ID_LIST(c[5]).filter((x) => /^A/.test(x)), priority: c[6] || null, cards: cardKeys(c.slice(1).join(' ')) }));
   const metrics = tableRows(text, 'Objetivos e m[ée]tricas')
     .filter((c) => /^M-\d+$/i.test(c[0] || ''))
     .map((c) => ({ id: c[0].toUpperCase(), goal: c[1] || '', metric: c[2] || '', target: c[3] || '', how: c[4] || '' }));
@@ -98,4 +104,4 @@ function requirementIds(...texts) {
   return [...new Set(texts.flatMap((t) => String(t || '').match(/\bR(?:-RB)?-?\d+\b/g) || []).map((x) => x.toUpperCase()))];
 }
 
-module.exports = { parsePrd, lintPrd, readPrd, storySentence, requirementIds, tableRows };
+module.exports = { cardKeys, parsePrd, lintPrd, readPrd, storySentence, requirementIds, tableRows };

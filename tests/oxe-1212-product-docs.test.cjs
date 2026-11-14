@@ -45,7 +45,8 @@ describe('PRD', () => {
   it('parses stories, metrics and version', () => {
     const p = prdLib.parsePrd(PRD(['| US-1 | operador | enviar | ganhar tempo | R1 | A1, A2 | Must |']));
     assert.equal(p.version, 2);
-    assert.deepEqual(p.stories[0], { id: 'US-1', persona: 'operador', want: 'enviar', benefit: 'ganhar tempo', requirements: ['R1'], criteria: ['A1', 'A2'], priority: 'Must' });
+    assert.deepEqual(p.stories[0], { id: 'US-1', persona: 'operador', want: 'enviar', benefit: 'ganhar tempo', requirements: ['R1'], criteria: ['A1', 'A2'], priority: 'Must', cards: [] });
+    assert.deepEqual(prdLib.parsePrd(PRD(['| US-2 | operador | ver (OXE-48) | saber | R1 | A1 | Must |'])).stories[0].cards, ['OXE-48'], 'the ALM key of the row; never US-/R-/A- ids');
     assert.equal(prdLib.storySentence(p.stories[0]), 'Como operador, quero enviar, para ganhar tempo.');
     assert.equal(p.metrics.length, 2);
   });
@@ -106,6 +107,9 @@ describe('RFC', () => {
     assert.match(adrText, /## Contexto\n\nA rede do celular cai \(US-1, A1\)\./);
     assert.match(adrText, /\*\*Enviar direto sem fila\*\* — recusada: perde mensagens quando cai a rede/);
     assert.match(adrText, /\*\*Origem:\*\* RFC-F1-1/);
+    // the Motivação's US-1 / A1 became the decision's anchors (they were text only)
+    assert.match(adrText, /\*\*Critérios:\*\* A1/);
+    assert.match(adrText, /\*\*Histórias:\*\* US-1/);
     assert.throws(() => op.runtimeRfc(dir, null, { action: 'accept', id: 'RFC-F1-1' }), /já está aceito/);
     const list = op.runtimeRfc(dir, null, { action: 'list' }).rfcs;
     assert.equal(list[0].status, 'accepted');

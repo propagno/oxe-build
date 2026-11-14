@@ -129,7 +129,18 @@ function mergeRolePlans(inputs, options = {}) {
   };
   for (const k of keys) depthOf(k);
   const ordered = keys.slice().sort((a, b) => depth.get(a) - depth.get(b) || groups.get(a).order - groups.get(b).order);
-  const idOf = new Map(ordered.map((k, i) => [k, `T${i + 1}`]));
+  // Stable ids: a task that already has an id in the current PLAN.json (same merge key) keeps it; a new task (a CR's)
+  // takes the next free id. The execution order comes from the dependencies, never from the id — and the executor
+  // gives interrupted work back by id, so a shifted id would hand one task's partial edits to another (F2 CR-36).
+  const previous = new Map();
+  for (const t of (options.existing && Array.isArray(options.existing.tasks) ? options.existing.tasks : [])) if (t && t.id && t[key] != null) previous.set(String(t[key]), t);
+  const idOf = new Map();
+  if (previous.size) {
+    let next = Math.max(0, ...[...previous.values()].map((t) => Number(String(t.id).replace(/^T/, '')) || 0)) + 1;
+    for (const k of ordered) idOf.set(k, previous.has(k) ? String(previous.get(k).id) : `T${next++}`);
+  } else ordered.forEach((k, i) => idOf.set(k, `T${i + 1}`));
+  const dropped = [...previous.keys()].filter((k) => !groups.has(k));
+  if (dropped.length) warnings.push(`tarefa(s) do PLAN.json atual que nenhum papel trouxe: ${dropped.map((k) => `${previous.get(k).id} (${k})`).join(', ')} — o id delas fica reservado (não é reaproveitado)`);
 
   // Acceptance tests: union, deduplicated by criterion + files + command; proves merged.
   const testKey = (t) => JSON.stringify([t.criterion || t.id || null, uniq(t.files || []).sort(), String(t.command || '').trim()]);
@@ -183,6 +194,9 @@ function mergeRolePlans(inputs, options = {}) {
       ...(g.notes.length ? { notes: uniq(g.notes).join('\n') } : {}),
     };
     if (!task.files.length && !['external_delivery', 'verify_only', 'spike'].includes(task.kind)) warnings.push(`${k}: nenhum papel declarou files`);
+    // a task already done (with its commit) stays done: a re-merge never reopens it in silence
+    const prev = previous.get(k);
+    if (prev) for (const [f, v] of Object.entries(prev)) if (/^done/.test(f) && task[f] === undefined) task[f] = v;
     return task;
   });
   const plan = { schema_version: 1, merged_from: inputs.map((i) => path.basename(i.file)), merge_key: key, tasks, ...(acceptanceTests.length ? { acceptance_tests: acceptanceTests } : {}) };

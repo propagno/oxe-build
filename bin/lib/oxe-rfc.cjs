@@ -115,6 +115,9 @@ function accept(projectRoot, id, options = {}, recordDecision) {
     alternatives: r.alternatives.map((a) => `${a.text}::${a.reason}`),
     by: options.by || r.by || 'usuário',
     source: r.id,
+    // the criteria and stories the proposal is about (Motivação / Resumo cite them): the ADR keeps its anchor
+    criteria: [...new Set(`${r.motivation || ''} ${r.summary || ''}`.match(/\b[AG]\d+(?:\.\d+)?\b/g) || [])],
+    stories: [...new Set(`${r.motivation || ''} ${r.summary || ''}`.match(/\bUS-\d+\b/g) || [])],
   });
   setMeta(r.file, 'Status', `aceito (${new Date().toISOString().slice(0, 10)}${options.by ? `, por ${options.by}` : ''})`);
   setMeta(r.file, 'Decisão', decision.id);

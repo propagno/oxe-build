@@ -31,6 +31,9 @@ const NESTED_ONLY = new Set([
   'adopt_prefixes', // alm
   'search_settle_ms', // alm
   'ledger_guard', // alm
+  'ready_gate', // alm
+  'stories_source', // alm
+  'require_apply', // alm (OXB-G13)
 ]);
 
 function sourceFiles() {

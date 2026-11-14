@@ -25,9 +25,11 @@ Só se aplica com `alm.provider` no `.oxe/config.json` (ver `oxe/templates/CONFI
 - **Depois do plano aprovado:** `oxe-cc alm push --tasks-only --dry-run`, e depois sem `--dry-run`. Cria uma tarefa no ALM por tarefa pendente, filha do épico e ligada à história dos critérios dela. Rodar de novo não duplica.
 - **A partir daí** a chave do item entra no título do PR (`promote`), no assunto do commit de checkpoint e no nome do branch.
 - **Os itens se movem sozinhos** em quatro momentos: tarefa iniciada, PR aberto, merge e deploy. `alm.track` limita isso às etapas que outra ferramenta não move.
-- **Depois do deploy:** um defeito vira `oxe-cc alm defect --title "…" --origin US-n|Fn-Tn`, ligado ao item de origem.
+- **Depois do deploy:** um defeito vira `oxe-cc alm defect --title "…" --origin US-n|Fn-Tn --apply`, ligado ao item de origem.
 
-Uma falha do ALM nunca derruba o comando do OXE: a escrita fica pendente para o próximo `oxe-cc alm sync`.
+Uma falha do ALM nunca derruba o comando do OXE: a escrita fica pendente para o próximo `oxe-cc alm sync --apply`. Todo comando que grava leva `--apply` (hoje, sem ele, grava com aviso; na próxima versão `alm.require_apply` passa a true e sem `--apply` vira simulação).
+
+**Um escritor por programa** (`alm.writer`): várias sessões no mesmo programa duplicam itens. Só a sessão escritora (`OXE_ALM_WRITER=<nome>`) roda push, sync, move e defect; as outras rodam `--dry-run`, `status` e `oxe-cc alm comment`. A busca por rótulo leva minutos para ver um item novo, por isso o registro local (`alm-links.ndjson`) é a fonte, conferida por GET da chave; nunca se conclui que um item "não existe" só pela busca.
 
 ### Via MCP (`alm.transport: "mcp"`)
 
@@ -41,6 +43,7 @@ Com o Jira ou o Azure DevOps ligados à sessão por um servidor MCP, o `oxe-cc` 
      - Em seguida: `oxe-cc alm ack <id> --key <chave>` (no Azure, o número).
    - **`transition`:** mude o item `key` para o estado `state` (pelo nome) e publique os `comments` como comentário. Depois, `oxe-cc alm ack <id>`.
    - **`link`:** ligue `key` a `other_key` com o tipo `type` (Relates). Depois, `oxe-cc alm ack <id>`.
+   - **`comment`:** publique os `comments` no item `key`. Depois, `oxe-cc alm ack <id>`.
    - **`release_version`:** marque a versão `version` do projeto como lançada. Depois, `oxe-cc alm ack <id>`.
 3. Se uma operação falhar, rode `oxe-cc alm ack <id> --error "…"` e siga para a próxima. Ela fica na fila com o erro registrado.
 4. Se não houver ferramenta MCP para uma operação (por exemplo, ligar itens), avise o usuário e deixe a operação na fila.

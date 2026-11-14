@@ -83,7 +83,7 @@ function replay(records) {
       st.questions.set(r.id, {
         id: r.id, branch: r.branch, question: r.question || r.text, options: r.options || [], recommended: r.recommended || null, why: r.why || null,
         affects: r.affects || [], depends: r.depends || [], decision: Boolean(r.decision),
-        status: r.t === 'fact' ? 'decided' : 'open', answer: r.t === 'fact' ? r.text : null, decided_by: r.t === 'fact' ? 'code' : null, source: r.source || null, by: null, history: [],
+        status: r.t === 'fact' ? 'decided' : 'open', answer: r.t === 'fact' ? r.text : null, decided_by: r.t === 'fact' ? 'code' : null, source: r.source || null, by: null, history: [], ...(r.stale ? { stale: true } : {}),
       });
       if (r.t === 'fact' || r.t === 'ask') st.confirmed.delete(r.branch);
       continue;
@@ -93,6 +93,7 @@ function replay(records) {
       const changed = q.status === 'decided' && q.answer !== r.answer;
       if (q.answer != null) q.history.push({ answer: q.answer, decided_by: q.decided_by, at: r.at });
       q.answer = r.answer; q.decided_by = r.decided_by; q.by = r.by || null; q.status = 'decided';
+      if (r.source) q.answer_source = r.source;
       if (r.decision != null) q.decision = Boolean(r.decision);
       // an answer that changed reopens what was decided on top of it: the questions that name it, the dependent branches
       if (changed) {
@@ -106,6 +107,8 @@ function replay(records) {
       st.closed = null;
       continue;
     }
+    // a fact that shows the card is behind the code (the code already does what the card asks): grooming input quality
+    if (r.t === 'mark' && q) { if (r.stale != null) q.stale = Boolean(r.stale); continue; }
     if (r.t === 'defer' && q) { q.status = 'deferred'; q.reason = r.reason; st.confirmed.delete(q.branch); continue; }
     if (r.t === 'confirm') { st.confirmed.add(r.branch); continue; }
     if (r.t === 'term') {
@@ -153,7 +156,7 @@ function status(dir) {
     started: st.started, type: st.type, title: st.title, closed: st.closed,
     branches, blockers, next_branch: next ? next.id : null,
     assumptions: [...st.questions.values()].filter((q) => q.status === 'deferred').map((q) => ({ id: q.id, branch: q.branch, question: q.question, reason: q.reason || null })),
-    decisions: [...st.questions.values()].filter((q) => q.decision && q.status === 'decided').map((q) => ({ id: q.id, branch: q.branch, question: q.question, answer: q.answer, alternatives: q.options.filter((o) => o !== q.answer), why: q.why, decided_by: q.decided_by })),
+    decisions: [...st.questions.values()].filter((q) => q.decision && q.status === 'decided').map((q) => ({ id: q.id, branch: q.branch, question: q.question, answer: q.answer, alternatives: q.options.filter((o) => o !== q.answer), why: q.why, decided_by: q.decided_by, affects: q.affects })),
     terms: [...st.terms.values()],
     questions: [...st.questions.values()],
     conflicts: [...st.conflicts.values()],
@@ -212,10 +215,10 @@ function answer(dir, id, input = {}) {
   let decidedBy = 'user';
   if (/^(ok|sim|recomendad[ao]|rec)$/i.test(raw)) { value = q.recommended; decidedBy = 'recommended'; } else if (/^\d+$/.test(raw) && q.options[Number(raw) - 1]) value = q.options[Number(raw) - 1];
   if (value === q.recommended && decidedBy === 'user') decidedBy = 'recommended';
-  append(dir, { t: 'answer', id: q.id, answer: value, decided_by: decidedBy, by: input.by || null, ...(input.decision != null ? { decision: Boolean(input.decision) } : {}) });
+  append(dir, { t: 'answer', id: q.id, answer: value, decided_by: decidedBy, by: input.by || null, ...(input.source ? { source: String(input.source) } : {}), ...(input.decision != null ? { decision: Boolean(input.decision) } : {}) });
   const after = status(dir);
   const reopened = after.questions.filter((x) => x.status === 'reopened' && x.reopened_by === q.id).map((x) => x.id);
-  return { id: q.id, answer: value, decided_by: decidedBy, changed: q.status === 'decided' && q.answer !== value, reopened, next_branch: after.next_branch };
+  return { id: q.id, answer: value, decided_by: decidedBy, source: input.source ? String(input.source) : null, changed: q.status === 'decided' && q.answer !== value, reopened, next_branch: after.next_branch };
 }
 
 /** An answer the code / artifacts already give: recorded with its source, never asked. */
@@ -226,8 +229,18 @@ function fact(dir, input = {}) {
   if (text.length < 4) throw new Error('informe o fato (--text "…")');
   if (!input.source) throw new Error('um fato do grill cita a fonte (--source "src/x.ts:12" ou "SPEC.md")');
   const id = `Q-${st.seq + 1}`;
-  append(dir, { t: 'fact', id, branch, question: input.question ? String(input.question) : text, text, source: String(input.source), affects: ids(input.affects), decision: Boolean(input.decision) });
+  append(dir, { t: 'fact', id, branch, question: input.question ? String(input.question) : text, text, source: String(input.source), affects: ids(input.affects), decision: Boolean(input.decision), ...(input.stale ? { stale: true } : {}) });
   return { id, branch, text, source: String(input.source) };
+}
+
+/** Marks a recorded fact: --stale = the card is behind the code (it asks for what the code already does). */
+function mark(dir, id, input = {}) {
+  const st = requireStarted(dir);
+  const q = st.questions.get(String(id).toUpperCase());
+  if (!q) throw new Error(`${id}: pergunta ou fato inexistente`);
+  if (q.decided_by !== 'code') throw new Error(`${q.id}: só um fato (grill fact) pode ser marcado como card defasado`);
+  append(dir, { t: 'mark', id: q.id, stale: input.stale !== false });
+  return { id: q.id, stale: input.stale !== false };
 }
 
 function defer(dir, id, input = {}) {
@@ -362,6 +375,6 @@ function readGlossary(file) {
 }
 
 module.exports = {
-  BRANCHES, BRANCH_IDS, BLOCKING_BY_TYPE, TYPES, dirFor, readRecords, replay, status, start, ask, answer, fact, defer, confirm, term, conflict, resolve, close,
+  BRANCHES, BRANCH_IDS, BLOCKING_BY_TYPE, TYPES, dirFor, readRecords, replay, status, start, ask, answer, fact, mark, defer, confirm, term, conflict, resolve, close,
   renderMarkdown, writeProjection, writeGlossary, readGlossary, dependents,
 };

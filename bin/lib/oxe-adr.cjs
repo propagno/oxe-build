@@ -45,6 +45,7 @@ function renderAdr(d, byId) {
   lines.push(`- **Data:** ${date(d.at)}${d.status_at && status !== 'active' ? ` · status em ${date(d.status_at)}` : ''}`);
   if (d.phase) lines.push(`- **Fase:** ${d.phase}`);
   if (Array.isArray(d.criteria) && d.criteria.length) lines.push(`- **Critérios:** ${d.criteria.join(', ')}`);
+  if (Array.isArray(d.stories) && d.stories.length) lines.push(`- **Histórias:** ${d.stories.map((s) => (d.story_keys && d.story_keys[s] ? `${s} (${d.story_keys[s]})` : s)).join(', ')}`);
   lines.push(`- **Por:** ${d.by || '—'}`);
   if (d.supersedes) lines.push(`- **Substitui:** [${d.supersedes}](${fileOf(byId.get(d.supersedes)) || ''})`);
   if (d.source) lines.push(`- **Origem:** ${d.source}`);

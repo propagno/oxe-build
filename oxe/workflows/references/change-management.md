@@ -23,6 +23,6 @@ Depois que a spec foi aprovada (`oxe-cc spec approve`), nada se edita à mão em
 - Uma mudança de comportamento que já estava aprovado tem dono: sempre `--by` e `--reason`.
 - Depois da mudança:
   - rode `oxe-cc spec check`; se a SPEC mudou depois da aprovação, aprove de novo;
-  - com ALM configurado, rode `oxe-cc alm push` (cria só o que falta);
+  - com ALM configurado, rode `oxe-cc alm push --apply` (cria só o que falta);
   - com plano em andamento, rode `oxe-cc plan lint`.
 - Pedido grande ou ambíguo ("refaz o fluxo de pagamento"): volte ao grill do ramo afetado (`oxe-cc grill ask --branch flows …`) em vez de emendar o critério.

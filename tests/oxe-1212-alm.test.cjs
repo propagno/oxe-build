@@ -236,7 +236,7 @@ describe('ALM: sync and failures', () => {
     const k = fakeJira({ seed: [{ key: 'OXE-201' }] });
     const r2 = await alm.sync(p2, alm.almConfig({ alm: { ...JIRA, track: ['in_progress'] } }), ev.slice(0, 2), { phase: 'F1' }, { http: k.http, env: ENV, sleep: async () => {} });
     assert.equal(k.issues.get('OXE-201').fields.status.name, 'Em andamento');
-    assert.ok(r2.skipped.some((s) => s.stage === 'in_review' && /alm\.track/.test(s.why)));
+    assert.ok(r2.skipped.some((s) => s.stage === 'review' && /alm\.track/.test(s.why)));
   });
 
   it('a network failure is retried with backoff; a lasting one stays pending and goes on the next sync', async () => {
@@ -255,7 +255,7 @@ describe('ALM: sync and failures', () => {
     assert.equal(alm.readState(pdir).pending.length, 1);
     const up = fakeJira({ seed: [{ key: 'OXE-201', status: 'Em andamento' }] });
     const r3 = await alm.sync(pdir, cfg, [{ type: 'TaskStarted', work_item_id: 'T1' }, { type: 'TaskPromoted', work_item_id: 'T1', payload: { pr: 'u' } }], { phase: 'F1' }, { http: up.http, env: ENV, sleep: async () => {} });
-    assert.equal(r3.moved[0].stage, 'in_review', 'the pending write went through');
+    assert.equal(r3.moved[0].stage, 'review', 'the pending write went through');
     assert.equal(alm.readState(pdir).pending.length, 0);
   });
 

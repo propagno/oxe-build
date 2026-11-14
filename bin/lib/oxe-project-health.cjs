@@ -101,8 +101,12 @@ const ALLOWED_CONFIG_KEYS = [
   'rfc',
   'docs_publish',
   'alm',
+  // G11: the origin gate (commit-msg hook, ship check-origin)
+  'origin',
   'delivery',
   'verify',
+  // G8: ship.train_labels (the merge train's labels shown by ship status --repo)
+  'ship',
 ];
 
 /**

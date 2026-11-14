@@ -1265,7 +1265,7 @@ function runtimeDecision(projectRoot, activeSession, options = {}) {
   const publishAdrs = () => {
     const dir = options.adrDir || require('./oxe-adr.cjs').adrDir(readProjectConfig(projectRoot) || {});
     if (!dir) return null;
-    try { return require('./oxe-adr.cjs').publish(projectRoot, dir, lib.list(programDir)); } catch (err) { return { error: err.message }; }
+    try { return require('./oxe-adr.cjs').publish(projectRoot, dir, decisionsForAdr(programDir)); } catch (err) { return { error: err.message }; }
   };
   if (options.action === 'add') {
     const rec = lib.add(programDir, { ...options, phase: options.phase || activePhase });
@@ -1287,13 +1287,23 @@ function runtimeDecision(projectRoot, activeSession, options = {}) {
   }
   if (options.action === 'publish') {
     const dir = options.adrDir || require('./oxe-adr.cjs').adrDir(readProjectConfig(projectRoot) || {}) || 'docs/adr';
-    return { adr: require('./oxe-adr.cjs').publish(projectRoot, dir, lib.list(programDir)) };
+    return { adr: require('./oxe-adr.cjs').publish(projectRoot, dir, decisionsForAdr(programDir)) };
   }
   return { decisions: lib.list(programDir) };
 }
 
+/** The decisions as the ADRs show them: each story with its ALM card key (US-2 (OXE-12)), from the ledger of links. */
+function decisionsForAdr(programDir) {
+  const list = require('./oxe-decisions.cjs').list(programDir);
+  let links = new Map();
+  try { links = require('./oxe-alm.cjs').links(programDir); } catch { links = new Map(); }
+  return list.map((d) => (Array.isArray(d.stories) && d.stories.some((u) => links.has(u)) ? { ...d, story_keys: Object.fromEntries(d.stories.filter((u) => links.has(u)).map((u) => [u, links.get(u).key])) } : d));
+}
+
 /** Where the grill and the glossary live: next to the SPEC (.oxe/ or .oxe/<session>/spec/). */
-function grillPaths(projectRoot, activeSession) {
+function grillPaths(projectRoot, activeSession, card = null) {
+  // a Jira card's own grooming (grill --card OXE-n): its own record, no project glossary
+  if (card) return { dir: path.join(projectRoot, '.oxe', 'alm', 'grill', String(card).toUpperCase()), glossary: null, specFile: null, card: String(card).toUpperCase() };
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const specFile = paths.spec || path.join(projectRoot, '.oxe', 'SPEC.md');
   return { dir: require('./oxe-grill.cjs').dirFor(specFile), glossary: path.join(path.dirname(specFile), 'GLOSSARY.md'), specFile };
@@ -1303,20 +1313,21 @@ function grillPaths(projectRoot, activeSession) {
  * The grill's decisions → the decision ledger (and the ADRs), once each: a decision already recorded with
  * source grill:Q-n is skipped. The options not taken become the rejected alternatives.
  */
-function grillExportDecisions(projectRoot, activeSession, decisions, by) {
+function grillExportDecisions(projectRoot, activeSession, decisions, by, card = null) {
   const lib = require('./oxe-decisions.cjs');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const known = new Set(lib.list(programDir).map((d) => d.source).filter(Boolean));
   const recorded = [];
   for (const d of decisions) {
-    const source = `grill:${d.id}`;
+    const source = card ? `grill:${card}:${d.id}` : `grill:${d.id}`;
     if (known.has(source)) continue;
     const author = by || 'usuário';
     const alternatives = (d.alternatives || []).filter((o) => o && String(o).length >= 3).map((o) => ({ text: String(o), reason: d.decided_by === 'recommended' ? `não escolhida no grill ${d.id}${d.why ? `: ${d.why}` : ''}` : `recusada pelo usuário no grill ${d.id}`, by: author }));
     // a short answer ("sim", "B") only reads as a decision next to its question
     const title = String(d.answer).length >= 12 ? String(d.answer) : `${String(d.question).replace(/\s*\?\s*$/, '')}: ${d.answer}`;
-    const out = runtimeDecision(projectRoot, activeSession, { action: 'add', title: title.slice(0, 160), text: d.answer.length > 160 ? d.answer : null, context: d.question, consequences: d.why || null, source, by: author, alternatives });
+    const affects = Array.isArray(d.affects) ? d.affects : [];
+    const out = runtimeDecision(projectRoot, activeSession, { action: 'add', criteria: affects.filter((x) => /^[AG]\d+(\.\d+)?$/.test(x)), stories: affects.filter((x) => /^US-\d+$/.test(x)), title: title.slice(0, 160), text: d.answer.length > 160 ? d.answer : null, context: d.question, consequences: d.why || null, source, by: author, alternatives });
     recorded.push({ grill: d.id, decision: out.decision.id });
   }
   return recorded;
@@ -1329,7 +1340,7 @@ function grillExportDecisions(projectRoot, activeSession, decisions, by) {
  */
 function runtimeGrill(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-grill.cjs');
-  const gp = grillPaths(projectRoot, activeSession);
+  const gp = grillPaths(projectRoot, activeSession, options.card);
   const a = options.action || 'status';
   let out;
   if (a === 'start') out = lib.start(gp.dir, { type: options.type, title: options.title, restart: options.restart });
@@ -1338,6 +1349,7 @@ function runtimeGrill(projectRoot, activeSession, options = {}) {
     out = lib.answer(gp.dir, options.id, options);
     appendEvent(projectRoot, activeSession, { type: 'GrillAnswered', payload: { id: out.id, decided_by: out.decided_by, changed: out.changed, reopened: out.reopened } });
   } else if (a === 'fact') out = lib.fact(gp.dir, options);
+  else if (a === 'mark') out = lib.mark(gp.dir, options.id, options);
   else if (a === 'defer') out = lib.defer(gp.dir, options.id, options);
   else if (a === 'confirm') out = lib.confirm(gp.dir, options.branch, options);
   else if (a === 'term') out = lib.term(gp.dir, options);
@@ -1346,14 +1358,82 @@ function runtimeGrill(projectRoot, activeSession, options = {}) {
   else if (a === 'close' || a === 'export') {
     if (a === 'close') out = lib.close(gp.dir, { by: options.by });
     const s = lib.status(gp.dir);
-    const glossary = s.terms.length ? lib.writeGlossary(gp.glossary, s.terms) : null;
-    const decisions = grillExportDecisions(projectRoot, activeSession, s.decisions, options.by);
+    const glossary = s.terms.length && gp.glossary ? lib.writeGlossary(gp.glossary, s.terms) : null;
+    const decisions = grillExportDecisions(projectRoot, activeSession, s.decisions, options.by, gp.card || null);
     out = { ...(out || {}), glossary: glossary ? path.relative(projectRoot, glossary.file).replace(/\\/g, '/') : null, decisions_recorded: decisions, assumptions: s.assumptions };
     if (a === 'close') appendEvent(projectRoot, activeSession, { type: 'GrillClosed', payload: { decisions: s.decisions.length, terms: s.terms.length, assumptions: s.assumptions.length } });
   } else if (a !== 'status') throw new Error(`grill ${a}: ação desconhecida (start | ask | answer | fact | defer | confirm | term | conflict | resolve | status | close | export)`);
   const s = lib.writeProjection(gp.dir);
   const view = { type: s.type, closed: s.closed, next_branch: s.next_branch, blockers: s.blockers, branches: s.branches.map((b) => ({ id: b.id, title: b.title, blocking: b.blocking, decided: b.decided, open: b.open, deferred: b.deferred, confirmed: b.confirmed, ready: b.ready, asks: b.asks })), file: path.relative(projectRoot, path.join(gp.dir, 'GRILL.md')).replace(/\\/g, '/') };
   return a === 'status' ? { ...view, open_questions: s.questions.filter((q) => q.status === 'open' || q.status === 'reopened'), assumptions: s.assumptions, terms: s.terms } : { ...out, grill: view };
+}
+
+/** Updates the comment of a card that starts with `marker`, or posts it (one comment per card, in place). */
+async function upsertCardComment(rest, key, marker, text) {
+  const refine = require('./oxe-alm-refine.cjs');
+  const r = await rest.request('GET', `${rest.site}/rest/api/3/issue/${key}/comment?maxResults=100`);
+  const mine = ((r && r.comments) || []).find((c) => refine.adfToText(c.body).trim().startsWith(marker));
+  const body = { body: refine.mdToAdf(text) };
+  if (mine) await rest.request('PUT', `${rest.site}/rest/api/3/issue/${key}/comment/${mine.id}`, body);
+  else await rest.request('POST', `${rest.site}/rest/api/3/issue/${key}/comment`, body);
+  return { updated: Boolean(mine) };
+}
+
+/**
+ * `oxe-cc grill publish --card OXE-n [--apply]`: the card's "Grooming (OXE)" comment (questions, recommended answers,
+ * answers with their source), and the card to "Em grooming" when it is still in the Backlog (never backwards).
+ * `oxe-cc grill report [--card …] [--out docs/grooming-quality.md]`: the quality of input and output.
+ */
+async function runtimeGrooming(projectRoot, activeSession, options = {}) {
+  const grillLib = require('./oxe-grill.cjs');
+  const grooming = require('./oxe-grooming.cjs');
+  const base = path.join(projectRoot, '.oxe', 'alm', 'grill');
+  if (options.action === 'report') {
+    const refine = require('./oxe-alm-refine.cjs');
+    const keys = options.card ? [String(options.card).toUpperCase()] : (fs.existsSync(base) ? fs.readdirSync(base).filter((k) => fs.existsSync(path.join(base, k, 'grill.ndjson'))) : []);
+    const cards = keys.map((key) => {
+      const specFile = path.join(refine.dirs(projectRoot).specs, `${key}.md`);
+      const dataFile = path.join(refine.dirs(projectRoot).data, `${key}.json`);
+      const md = fs.existsSync(specFile) ? fs.readFileSync(specFile, 'utf8') : null;
+      const kind = fs.existsSync(dataFile) ? JSON.parse(fs.readFileSync(dataFile, 'utf8')).kind : 'task';
+      // a spec still at the collect skeleton is "not written yet", not a lint failure (rework is a written spec that failed)
+      const written = md && !md.includes('(preencha com cada');
+      return { key, status: grillLib.status(path.join(base, key)), criteria: written ? refine.parseCriteria(md) : null, lint: written ? refine.lintSpec(md, kind) : null };
+    });
+    const r = grooming.report(cards);
+    const out = path.resolve(projectRoot, options.out || path.join('docs', 'grooming-quality.md'));
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, grooming.renderReport(r));
+    return { ...r, file: path.relative(projectRoot, out).replace(/\\/g, '/') };
+  }
+  if (!options.card) throw new Error('grill publish precisa do card: --card OXE-n');
+  const key = String(options.card).toUpperCase();
+  const status = grillLib.status(path.join(base, key));
+  const text = grooming.renderComment(key, status);
+  const asked = status.questions.filter((q) => q.decided_by !== 'code');
+  const counts = { questions: asked.length, facts: status.questions.length - asked.length, open: asked.filter((q) => q.status === 'open' || q.status === 'reopened').length };
+  if (!options.apply) return { key, dry_run: true, text, ...counts };
+  const lib = require('./oxe-alm.cjs');
+  const config = readProjectConfig(projectRoot) || {};
+  const cfg = lib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) });
+  if (!cfg) throw new Error('ALM não configurado (alm.provider)');
+  const env = options.env || process.env;
+  if (!lib.isWriter(cfg, env)) throw lib.writerError(cfg);
+  const problems = lib.checkConfig(cfg, env);
+  if (problems.length) throw new Error(`ALM: ${problems.join('; ')}`);
+  const rest = lib.jiraRest(cfg, options);
+  const c = await upsertCardComment(rest, key, grooming.MARKER, text);
+  // into "Em grooming" only from the Backlog: refineMove never moves a card that is already past it
+  let moved = null;
+  try {
+    const prov = lib.provider(cfg, { ...options, env });
+    const live = await prov.status(key);
+    const liveStage = lib.STAGES.find((s) => cfg.states[s] && live && String(cfg.states[s]).toLowerCase() === String(live).toLowerCase()) || null;
+    if (liveStage === 'intake' && cfg.states.grooming && cfg.track.includes('grooming')) moved = await refineMove(lib, cfg, key, 'grooming', { ...options, env });
+    else moved = { skipped: true, state: live };
+  } catch (err) { moved = { error: err.message }; }
+  appendEvent(projectRoot, activeSession, { type: 'GroomingPublished', payload: { key, ...counts } });
+  return { key, published: true, updated: c.updated, moved, ...counts };
 }
 
 /** `oxe-cc spec check [--fast]`: the quality gate of the upstream (oxe-spec-check.cjs) over the files of the scope. */
@@ -1380,6 +1460,13 @@ function runtimeSpecCheck(projectRoot, activeSession, options = {}) {
     rfcs: require('./oxe-rfc.cjs').list(projectRoot),
     rfcMode: require('./oxe-rfc.cjs').rfcMode(config),
   });
+  // alm.trace_gate: the loose ends of the traceability graph (warnings here unless "strict")
+  try {
+    const tg = traceGateFindings(projectRoot, activeSession, 'spec');
+    out.errors.push(...tg.errors);
+    out.warnings.push(...tg.warnings);
+    if (tg.errors.length) out.ok = false;
+  } catch { /* auxiliar */ }
   return { ...out, spec: path.relative(projectRoot, paths.spec || '').replace(/\\/g, '/') };
 }
 
@@ -1426,6 +1513,19 @@ function runtimeDeliveryStatus(projectRoot, activeSession, options = {}) {
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   let deploys = [];
   try { deploys = require('./oxe-phase-gates.cjs').readDeploys(programDir, phase ? phase.id : null).map((d) => ({ env: d.env, version: d.version, ok: d.ok !== false, at: d.at || null })); } catch { deploys = []; }
+  // OXB-d: the CI of each open PR — a red that matches a known failure (whose item is still open) is a flake to rerun,
+  // not a regression.
+  if (options.refresh !== false) {
+    const kf = require('./oxe-known-failures.cjs');
+    // G5: the repository's known failures (shared by every worktree), without the ones whose fix PR already merged
+    const known = kf.listAll(projectRoot, programDir, { prState: require('./oxe-ship-pr.cjs').prState(options.ghSpawn || spawnSync, projectRoot) }).filter((k) => !k.expired);
+    // the tracking item counts as open until the known failure is removed (ship known-failure remove, when the fix
+    // lands); a host may inject the live status of the item
+    const itemOpen = typeof options.itemOpen === 'function' ? options.itemOpen : () => null;
+    for (const p of prs.filter((x) => !x.merged)) {
+      try { p.ci = kf.classifyPr(p.pr, known, { spawn: options.ghSpawn || spawnSync, cwd: projectRoot, itemOpen }); } catch { p.ci = { state: 'unknown', failed: [] }; }
+    }
+  }
   const mode = require('./oxe-journey.cjs').deliveryMode(readProjectConfig(projectRoot) || {});
   const next = require('./oxe-project-health.cjs').suggestNextStep(projectRoot, readProjectConfig(projectRoot) || {});
   return { mode: mode.mode, deploy_env: mode.deploy_env, phase: phase ? { id: phase.id, status: phase.status } : null, prs, deploys, next };
@@ -2150,6 +2250,11 @@ function productDocsLint(projectRoot, activeSession, ctx = {}) {
     errors.push(...r.errors);
     warnings.push(...r.warnings);
   }
+  try {
+    const tg = traceGateFindings(projectRoot, activeSession, 'plan');
+    errors.push(...tg.errors);
+    warnings.push(...tg.warnings);
+  } catch { /* auxiliar */ }
   return { errors, warnings };
 }
 
@@ -2198,7 +2303,7 @@ function runtimeDocsPublish(projectRoot, activeSession, options = {}) {
     prdFile: prdPathFor(projectRoot, activeSession),
     almLinks: require('./oxe-alm.cjs').links(programDir),
     rfcs: require('./oxe-rfc.cjs').list(projectRoot),
-    decisions: require('./oxe-decisions.cjs').list(programDir),
+    decisions: decisionsForAdr(programDir),
     adrDir: require('./oxe-adr.cjs').adrDir(config),
     designFile: path.join(projectRoot, '.oxe', 'SYSTEM-DESIGN.md'),
     glossaryFile: grillPaths(projectRoot, activeSession).glossary,
@@ -2255,11 +2360,25 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
     return { provider: cfg ? cfg.provider : 'none', transport: cfg ? cfg.transport : null, ops: lib.pendingOps(programDir) };
   }
   if (!cfg) throw new Error('ALM não configurado: defina "alm": { "provider": "jira" | "azure-devops", … } no .oxe/config.json (sem ALM, o OXE segue normalmente)');
-  const dryRun = Boolean(options.dryRun || cfg.dry_run);
+  const dryRun = lib.isDry(cfg, options);
   if (problems.length && !dryRun) throw new Error(`ALM: ${problems.join('; ')}`);
   // A dry run with the credentials in place still READS (what exists, what would be adopted); it never writes.
-  const net = { http: options.http, env, sleep: options.sleep, provider: options.provider, retries: options.retries, dryRun, readOnlyLookup: dryRun && !problems.length };
+  const net = { http: options.http, env, sleep: options.sleep, provider: options.provider, retries: options.retries, dryRun, apply: options.apply, readOnlyLookup: dryRun && !problems.length };
   const phase = activeProgramPhase(projectRoot, activeSession);
+  // OXB-b: one writer per program (alm.writer); the other sessions read and comment. A local lock keeps two writers
+  // on the same machine from creating the same batch at once.
+  const WRITES = ['push', 'sync', 'move', 'defect', 'ack', 'link'];
+  if ([...WRITES, 'comment'].includes(options.action) && !dryRun && !options.auto) lib.warnApply(cfg, options);
+  if (WRITES.includes(options.action) && !dryRun) {
+    if (!lib.isWriter(cfg, env)) throw lib.writerError(cfg);
+    if (['push', 'sync', 'defect'].includes(options.action) && !options.noLock) {
+      return lib.withWriteLock(programDir, () => runtimeAlm(projectRoot, activeSession, { ...options, noLock: true }));
+    }
+  }
+  if (options.action === 'comment') {
+    const ref = /^T\d+$/i.test(options.ref || '') ? lib.taskRef(phase ? phase.id : null, options.ref.toUpperCase()) : options.ref;
+    return lib.comment(programDir, cfg, ref, options.text || options.comment, net);
+  }
   if (options.action === 'ack') {
     if (!options.ref) throw new Error('uso: oxe-cc alm ack <id-da-operação|US-n|Fn-Tn> [--key <chave>] [--url <url>] [--error "…"]');
     const ref = /^T\d+$/i.test(options.ref) ? lib.taskRef(phase ? phase.id : null, options.ref.toUpperCase()) : options.ref;
@@ -2301,17 +2420,526 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
     const ref = /^T\d+$/i.test(options.ref || '') ? lib.taskRef(phase ? phase.id : null, options.ref.toUpperCase()) : options.ref;
     return lib.move(programDir, cfg, ref, options.stage, { ...net, comment: options.comment });
   }
+  if (options.action === 'link' && options.pr) {
+    // OXB-G18: the card to the pull request that delivered it (Jira remote link / Azure hyperlink)
+    return lib.linkPr(programDir, cfg, options.ref, { pr: options.pr, repo: options.repo || (config.alm && config.alm.docs && config.alm.docs.repo) || null, title: options.title }, net);
+  }
   if (options.action === 'link') {
-    if (!options.ref || !options.key) throw new Error('uso: oxe-cc alm link <US-n|Tn> <chave>');
+    if (!options.ref || !options.key) throw new Error('uso: oxe-cc alm link <US-n|Tn> <chave> · oxe-cc alm link <chave> --pr <n> [--repo <url>]');
     const ref = /^T\d+$/i.test(options.ref) ? lib.taskRef(phase ? phase.id : null, options.ref.toUpperCase()) : options.ref;
     if (!dryRun) { lib.addLink(programDir, { ref, key: options.key, kind: /^US-/.test(ref) ? 'story' : 'task', provider: cfg.provider, manual: true }); lib.dropEnsure(programDir, ref); }
     return { ref, key: options.key, dry_run: dryRun };
   }
   if (options.action === 'defect') {
     const ref = options.ref || `BUG-${Date.now().toString(36).toUpperCase()}`;
-    return lib.reportDefect(programDir, cfg, { ref, title: options.title || 'defeito', description: options.description, origin: options.origin }, net);
+    // the bug and its CR know each other (--cr CR-n): the trace flags a defect CR without bug and a bug without CR
+    if (options.cr && !require('./oxe-change.cjs').listChanges(programDir).some((c) => c.id === options.cr)) throw new Error(`${options.cr}: CR inexistente (oxe-cc runtime feedback list)`);
+    return lib.reportDefect(programDir, cfg, { ref, title: options.title || 'defeito', description: options.description, origin: options.origin, cr: options.cr }, net);
   }
-  throw new Error(`alm ${options.action}: ação desconhecida (status | push | sync | move | link | defect | queue | ack)`);
+  throw new Error(`alm ${options.action}: ação desconhecida (status | push | sync | move | link | defect | comment | queue | ack)`);
+}
+
+/**
+ * `oxe-cc alm refine import <KEY…> [--risk P2] [--phase Fn] [--dry-run] --by <papel>`: the refined card's criteria
+ * become the program SPEC's. A CA without a SPEC id becomes a new A-n (its text cites the card key, its test is the
+ * "Como verificar", its "Risco: Px" the Risco column) and gets `(A-n)` written back into the card spec; a CA that
+ * already has one is checked against the SPEC (exists, cites the card). The CA ↔ A link is then explicit both ways.
+ */
+function runtimeAlmRefineImport(projectRoot, activeSession, options = {}) {
+  const refine = require('./oxe-alm-refine.cjs');
+  const specEdit = require('./oxe-spec-edit.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const d = refine.dirs(projectRoot);
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  if (!paths.spec || !fs.existsSync(paths.spec)) throw new Error('SPEC.md ausente: o import leva os critérios do card para a SPEC do programa (/oxe-spec primeiro)');
+  if (!options.dryRun && !options.by) throw new Error('o import emenda a SPEC: informe --by <papel>');
+  let specText = fs.readFileSync(paths.spec, 'utf8');
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const results = [];
+  // A phase that is executing or closed is frozen (its SPEC rows, its PLAN, its tests): a change there is a CR,
+  // never a direct edit, and a later phase amends a frozen test with a new version instead of replacing it.
+  let program = null;
+  try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; }
+  const phases = (program && program.phases) || [];
+  const frozen = (ph) => Boolean(ph) && (['executing', 'verifying', 'closed'].includes(ph.status) || Boolean(ph.run_id));
+  const phaseOfA = (a) => phases.find((ph) => (ph.acceptance || []).includes(a)) || null;
+  const keysAll = (options.keys || []).map((k) => String(k).toUpperCase());
+  if (options.phase) {
+    const target = phases.find((ph) => ph.id === String(options.phase).toUpperCase());
+    if (target && frozen(target)) {
+      const cas = keysAll.join(', ');
+      return {
+        dry_run: true,
+        refused: true,
+        spec: path.relative(projectRoot, paths.spec).replace(/\\/g, '/'),
+        reason: `a fase ${target.id} está ${target.status}${target.run_id ? ' (com run)' : ''}: os arquivos dela estão congelados e nada foi escrito. Critério novo entra por CR nesta fase ou numa fase posterior`,
+        commands: [
+          `oxe-cc runtime feedback --class new_scope --summary "critérios dos cards refinados ${cas}" --by <papel>`,
+          `oxe-cc alm refine import ${keysAll.join(' ')} --phase <fase ainda não iniciada> --by <papel>`,
+        ],
+        results: [],
+      };
+    }
+  }
+  const specCriteria = new Map(require('./oxe-spec-check.cjs').criteria(specText).list.map((c) => [c.id, c]));
+  const norm = (t) => String(t || '').replace(/\([A-Z][A-Z0-9]+-\d+\)/g, '').replace(/[`*_]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  for (const key of keysAll) {
+    const specFile = path.join(d.specs, `${key}.md`);
+    if (!fs.existsSync(specFile)) { results.push({ key, error: `sem spec refinado: oxe-cc alm refine ${key}` }); continue; }
+    let md = fs.readFileSync(specFile, 'utf8');
+    const criteria = refine.parseCriteria(md);
+    const existing = specEdit.criteriaIds(specText);
+    const added = new Map();
+    const out = { key, added: [], linked: [], problems: [] };
+    for (const c of criteria) {
+      if (c.spec_id) {
+        if (!existing.includes(c.spec_id)) out.problems.push(`${c.id} aponta para ${c.spec_id}, que não existe na SPEC`);
+        else {
+          const row = String(specText).split(/\r?\n/).find((l) => new RegExp(`^\\|\\s*\\**${c.spec_id}\\**\\s*\\|`).test(l)) || '';
+          const ph = phaseOfA(c.spec_id);
+          const isFrozen = frozen(ph);
+          if (!row.includes(key)) {
+            out.problems.push(isFrozen
+              ? `${c.spec_id} (de ${c.id}) não cita ${key}, e a fase ${ph.id} está ${ph.status}: registre a ligação por CR — oxe-cc runtime feedback --class spec_gap --criteria ${c.spec_id} --summary "${c.spec_id} é o ${c.id} de ${key}" --additive --by <papel>`
+              : `${c.spec_id} (de ${c.id}) não cita ${key} na SPEC — emende com oxe-cc spec amend ${c.spec_id} --append "(${key})"`);
+          }
+          // the card's CA says something else than the SPEC's A: on a frozen A that is a CR proposal, never an edit
+          const a = specCriteria.get(c.spec_id);
+          if (a && norm(a.text) && norm(c.text) && norm(a.text) !== norm(c.text)) {
+            out.proposals = out.proposals || [];
+            out.proposals.push(isFrozen
+              ? { ca: c.id, a: c.spec_id, frozen: true, command: `oxe-cc runtime feedback --class spec_gap --criteria ${c.spec_id} --amend-to <N> --summary "${key} ${c.id}: ${c.text.slice(0, 80)}" --by <papel>`, why: `${c.spec_id} pertence à fase ${ph.id} (${ph.status}): o teste congelado dela ganha uma versão nova (vN), não é trocado` }
+              : { ca: c.id, a: c.spec_id, frozen: false, command: `oxe-cc spec amend ${c.spec_id} --text "${c.text.replace(/"/g, '\\"').slice(0, 160)} (${key})" --by <papel> --reason "alm refine ${key} ${c.id}"`, why: `o ${c.id} do card diz outra coisa que o ${c.spec_id} da SPEC` });
+          }
+          out.linked.push({ ca: c.id, a: c.spec_id });
+        }
+        continue;
+      }
+      if (!c.test || /a confirmar/i.test(c.test)) { out.problems.push(`${c.id} sem teste: não vira critério da SPEC (rode o lint do refine)`); continue; }
+      const max = [...existing, ...added.values()].filter((x) => /^A\d+$/.test(x)).reduce((m, x) => Math.max(m, Number(x.slice(1))), 0);
+      const id = `A${max + 1}`;
+      try {
+        const edit = specEdit.addCriterion(specText, id, { text: `${c.text} (${key})`, verify: c.test, risk: c.risk || options.risk });
+        specText = edit.text;
+        added.set(c.id, id);
+        out.added.push({ ca: c.id, a: id, row: edit.after });
+      } catch (err) { out.problems.push(`${c.id}: ${err.message}`); }
+    }
+    if (!options.dryRun && added.size) {
+      md = refine.setSpecIds(md, added);
+      fs.writeFileSync(specFile, md);
+      for (const a of out.added) changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'spec_edit', action: 'add_criterion', id: a.a, by: options.by, reason: `alm refine import ${key} ${a.ca}`, origin: 'alm_refine', at: new Date().toISOString(), after: a.row });
+    }
+    results.push(out);
+  }
+  if (!options.dryRun && results.some((r) => r.added && r.added.length)) {
+    writeTextAtomic(paths.spec, specText);
+    appendEvent(projectRoot, activeSession, { type: 'SpecEdited', payload: { action: 'alm_refine_import', keys: results.map((r) => r.key), added: results.flatMap((r) => (r.added || []).map((a) => a.a)) } });
+    if (options.phase) {
+      const ids = results.flatMap((r) => (r.added || []).map((a) => a.a));
+      try { runtimeProgramPhaseEdit(projectRoot, activeSession, { phase: options.phase, addAcceptance: ids.join(','), by: options.by, reason: `alm refine import ${results.map((r) => r.key).join(', ')}` }); } catch (err) { results.push({ key: '(fase)', problems: [`os critérios entraram na SPEC, mas não na fase ${options.phase}: ${err.message}`], added: [], linked: [] }); }
+    }
+  }
+  return { dry_run: Boolean(options.dryRun), spec: path.relative(projectRoot, paths.spec).replace(/\\/g, '/'), results };
+}
+
+/**
+ * alm.trace_gate: the traceability orphans in the gates. "warn": warnings everywhere. "close": warnings in spec check
+ * and plan lint (the cards are still being refined), errors at the phase close. "strict": errors everywhere.
+ * Without alm.trace_gate, nothing (the trace stays an explicit command).
+ * @param {'spec'|'plan'|'close'} stage
+ */
+function traceGateFindings(projectRoot, activeSession, stage) {
+  const config = readProjectConfig(projectRoot) || {};
+  const mode = config.alm && ['warn', 'close', 'strict'].includes(config.alm.trace_gate) ? config.alm.trace_gate : null;
+  if (!mode) return { errors: [], warnings: [], mode: null };
+  const graph = require('./oxe-trace.cjs').build(traceSnapshot(projectRoot, activeSession));
+  const blocking = mode === 'strict' || (mode === 'close' && stage === 'close');
+  const lines = graph.orphans.map((o) => `rastreabilidade: ${o.kind} ${o.id}: ${o.why} — ${o.fix}`);
+  return blocking ? { errors: lines, warnings: [], mode } : { errors: [], warnings: lines, mode };
+}
+
+/** A whole-word, accent-aware, case-insensitive match of `word` (glossary synonyms). */
+function wholeWord(word) {
+  const esc = String(word).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${esc}(?=$|[^\\p{L}\\p{N}])`, 'iu');
+}
+
+/**
+ * `oxe-cc alm intake | doctor | version ensure | usage` (oxe-alm-admin.cjs). intake and version create (writer only,
+ * --dry-run shows); doctor and usage only read.
+ */
+async function runtimeAlmAdmin(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-alm.cjs');
+  const admin = require('./oxe-alm-admin.cjs');
+  if (options.action === 'usage') return admin.usageReport(projectRoot);
+  const config = readProjectConfig(projectRoot) || {};
+  const cfg = lib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) });
+  if (!cfg) throw new Error('ALM não configurado: veja o exemplo em oxe/templates/CONFIG.md (seção ALM) ou rode /oxe-alm setup');
+  if (cfg.provider !== 'jira') throw new Error(`alm ${options.action}: por enquanto só Jira`);
+  const env = options.env || process.env;
+  const problems = lib.checkConfig(cfg, env);
+  if (problems.length) throw new Error(`ALM: ${problems.join('; ')}`);
+  if (options.action === 'doctor') return admin.doctor(lib.jiraRest(cfg, { ...options, readOnly: true }), cfg);
+  options = { ...options, dryRun: lib.isDry(cfg, options) };
+  const rest = lib.jiraRest(cfg, options);
+  if (!options.dryRun && !lib.isWriter(cfg, env)) throw lib.writerError(cfg);
+  if (!options.dryRun) lib.warnApply(cfg, options);
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  if (options.action === 'version') return admin.versionEnsure(rest, cfg, options.name, options);
+  if (options.action === 'intake') {
+    let fromText = null;
+    if (options.from && !/^https?:\/\//i.test(options.from)) {
+      const f = path.resolve(projectRoot, options.from);
+      if (!fs.existsSync(f)) throw new Error(`--from ${options.from}: arquivo não encontrado`);
+      fromText = fs.readFileSync(f, 'utf8');
+    }
+    const out = await admin.intake(rest, cfg, { ...options, fromText }, { programDir, options: { ...options, env } });
+    if (out.created) appendEvent(projectRoot, activeSession, { type: 'AlmIntake', payload: { ref: out.ref, key: out.key, type: options.type } });
+    return out;
+  }
+  throw new Error(`alm ${options.action}: ação desconhecida`);
+}
+
+/** The snapshot oxe-trace.cjs builds the graph from: every artifact's own ids and references, read-only. */
+function traceSnapshot(projectRoot, activeSession) {
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const config = readProjectConfig(projectRoot) || {};
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const prdLib = require('./oxe-prd.cjs');
+  const specCheck = require('./oxe-spec-check.cjs');
+  const refine = require('./oxe-alm-refine.cjs');
+  const almLib = require('./oxe-alm.cjs');
+  const prdFile = prdPathFor(projectRoot, activeSession);
+  const prd = fs.existsSync(prdFile) ? prdLib.readPrd(prdFile) : null;
+  const specText = readTextIfExists(paths.spec) || '';
+  let doc = null;
+  try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
+  const cardSpecs = new Map();
+  const specsDir = refine.dirs(projectRoot).specs;
+  if (fs.existsSync(specsDir)) for (const f of fs.readdirSync(specsDir).filter((x) => /\.md$/.test(x))) cardSpecs.set(f.replace(/\.md$/, ''), refine.parseCriteria(fs.readFileSync(path.join(specsDir, f), 'utf8')));
+  let almCfg = null;
+  try { almCfg = almLib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) }); } catch { almCfg = null; }
+  let run = null;
+  try { run = readRunState(projectRoot, activeSession); } catch { run = null; }
+  const phase = activeProgramPhase(projectRoot, activeSession);
+  return {
+    stories: prd ? prd.stories : [],
+    criteria: specCheck.criteria(specText).list,
+    requirements: specCheck.requirements(specText),
+    decisions: require('./oxe-decisions.cjs').list(programDir),
+    rfcs: require('./oxe-rfc.cjs').list(projectRoot),
+    tasks: (doc && doc.tasks) || [],
+    tests: (doc && doc.acceptance_tests) || [],
+    changes: require('./oxe-change.cjs').listChanges(programDir),
+    links: almLib.links(programDir),
+    cardSpecs,
+    checks: (run && run.verification_check_results) || [],
+    phase: phase ? phase.id : (doc && doc.phase) || null,
+    almConfigured: Boolean(almCfg),
+    storiesSource: almCfg ? almCfg.stories_source : 'prd',
+    cardKeysOf: prdLib.cardKeys,
+    _cfg: almCfg,
+    _config: config,
+    _programDir: programDir,
+  };
+}
+
+/**
+ * `oxe-cc trace` (the graph and its orphans → .oxe/trace.json) · `oxe-cc trace publish [--apply]`: the "Documentos
+ * (OXE)" comment of each linked card — its story and PRD link, criteria with the latest evidence, decisions with ADR
+ * links, open CRs — upserted (one comment per card, updated in place). Dry run unless --apply; --apply is the writer's.
+ */
+async function runtimeTrace(projectRoot, activeSession, options = {}) {
+  const snap = traceSnapshot(projectRoot, activeSession);
+  const graph = require('./oxe-trace.cjs').build(snap);
+  fs.mkdirSync(path.join(projectRoot, '.oxe'), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, '.oxe', 'trace.json'), JSON.stringify({ at: new Date().toISOString(), ...graph }, null, 2));
+  if (options.action !== 'publish') return { file: '.oxe/trace.json', ...graph };
+  const lib = require('./oxe-alm.cjs');
+  const cfg = snap._cfg;
+  if (!cfg) throw new Error('trace publish escreve nos cards: configure alm.provider');
+  const docs = snap._config.alm && snap._config.alm.docs && typeof snap._config.alm.docs === 'object' ? snap._config.alm.docs : null;
+  const dirRel = (docs && docs.dir) || (snap._config.docs_publish && snap._config.docs_publish.dir) || 'docs';
+  const docsBase = docs && docs.repo ? `${String(docs.repo).replace(/\/+$/, '')}/blob/${docs.branch || 'main'}/${dirRel}` : null;
+  const adrDirAbs = path.join(projectRoot, require('./oxe-adr.cjs').adrDir(snap._config) || 'docs/adr');
+  const adrFiles = fs.existsSync(adrDirAbs) ? fs.readdirSync(adrDirAbs) : [];
+  const adrFile = (id) => adrFiles.find((f) => f.startsWith(`${id}-`)) || null;
+  const trace = require('./oxe-trace.cjs');
+  const posts = [];
+  for (const st of graph.stories.filter((x) => x.card)) posts.push({ key: st.card, text: trace.cardDocs({ story: st.id, criteria: st.criteria, decisions: st.decisions }, { docsBase, adrFile }) });
+  const critById = new Map(graph.criteria.map((c) => [c.id, c]));
+  const decTitle = new Map(snap.decisions.map((d) => [d.id, d.title]));
+  for (const t of graph.tasks.filter((x) => x.card)) {
+    const crit = t.criteria.map((a) => ({ id: a, evidence: critById.get(a) ? critById.get(a).evidence : null, tests: critById.get(a) ? critById.get(a).tests : [], changes: critById.get(a) ? critById.get(a).changes : [] }));
+    const decs = [...new Set([...t.decisions, ...t.criteria.flatMap((a) => (critById.get(a) ? critById.get(a).decisions : []))])].map((id) => ({ id, title: decTitle.get(id) || null }));
+    posts.push({ key: t.card, text: trace.cardDocs({ criteria: crit, decisions: decs }, { docsBase, adrFile }) });
+  }
+  if (!options.apply) return { file: '.oxe/trace.json', dry_run: true, publish: posts.map((p) => ({ key: p.key, lines: p.text.split('\n').length, text: p.text })), ...graph };
+  const env = options.env || process.env;
+  if (!lib.isWriter(cfg, env)) throw lib.writerError(cfg);
+  if (cfg.transport === 'mcp') {
+    lib.enqueue(snap._programDir, posts.map((p) => ({ id: `docs:${p.key}`, op: 'comment', ref: p.key, key: p.key, upsert_marker: 'Documentos (OXE)', comments: [p.text] })));
+    return { file: '.oxe/trace.json', queued: posts.length, ...graph };
+  }
+  const problems = lib.checkConfig(cfg, env);
+  if (problems.length) throw new Error(`ALM: ${problems.join('; ')}`);
+  const rest = lib.jiraRest(cfg, options);
+  const refine = require('./oxe-alm-refine.cjs');
+  const done = [];
+  for (const p of posts) {
+    try {
+      const r = await rest.request('GET', `${rest.site}/rest/api/3/issue/${p.key}/comment?maxResults=100`);
+      const mine = ((r && r.comments) || []).find((c) => refine.adfToText(c.body).trim().startsWith('Documentos (OXE)'));
+      const body = { body: refine.mdToAdf(p.text) };
+      if (mine) await rest.request('PUT', `${rest.site}/rest/api/3/issue/${p.key}/comment/${mine.id}`, body);
+      else await rest.request('POST', `${rest.site}/rest/api/3/issue/${p.key}/comment`, body);
+      done.push({ key: p.key, updated: Boolean(mine) });
+    } catch (err) { done.push({ key: p.key, error: err.message }); }
+  }
+  appendEvent(projectRoot, activeSession, { type: 'TracePublished', payload: { cards: done.length, failed: done.filter((d) => d.error).length } });
+  return { file: '.oxe/trace.json', published: done, ...graph };
+}
+
+/** `oxe-cc alm metrics [--jql "…"] [--max N]`: the board in numbers (oxe-alm-metrics.cjs), read-only. */
+async function runtimeAlmMetrics(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-alm.cjs');
+  const metrics = require('./oxe-alm-metrics.cjs');
+  const config = readProjectConfig(projectRoot) || {};
+  const cfg = lib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) });
+  if (!cfg || cfg.provider !== 'jira') throw new Error('alm metrics: precisa de alm.provider "jira"');
+  const env = options.env || process.env;
+  const problems = lib.checkConfig(cfg, env);
+  if (problems.length) throw new Error(`ALM: ${problems.join('; ')}`);
+  const rest = lib.jiraRest(cfg, options);
+  const jql = options.jql || `project = "${cfg.p.project}" AND updated >= -90d ORDER BY created ASC`;
+  const max = Number(options.max) > 0 ? Number(options.max) : 300;
+  const issues = [];
+  let token = null;
+  do {
+    const r = await rest.request('GET', `${rest.site}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=status,created,issuetype,summary&expand=changelog&maxResults=100${token ? `&nextPageToken=${encodeURIComponent(token)}` : ''}`);
+    for (const i of (r && r.issues) || []) issues.push({ key: i.key, created: i.fields.created, status: i.fields.status ? i.fields.status.name : null, statusId: i.fields.status ? i.fields.status.id : null, summary: i.fields.summary, changes: metrics.changesFromJira(i) });
+    token = r && !r.isLast ? r.nextPageToken : null;
+  } while (token && issues.length < max);
+  metrics.renameByStatusId(issues);
+  const out = metrics.compute(issues.slice(0, max), { states: cfg.states, wip: cfg.wip, stages: lib.STAGES }, { now: options.now });
+  const dir = path.join(projectRoot, '.oxe', 'alm');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'metrics.json'), JSON.stringify({ jql, at: new Date().toISOString(), ...out }, null, 2));
+  fs.writeFileSync(path.join(dir, 'metrics.md'), metrics.renderMarkdown(out, { project: cfg.p.project, jql, doneName: cfg.states.released || cfg.states.integrated }));
+  return { jql, file: '.oxe/alm/metrics.md', ...out };
+}
+
+/** The refine moves its own stages (when mapped and in alm.track): refinement while writing, then ready or back to grooming. */
+async function refineMove(lib, cfg, key, stage, options) {
+  if (!cfg.states[stage] || !cfg.track.includes(stage)) return { stage, skipped: true, why: !cfg.states[stage] ? `etapa "${stage}" sem estado em alm.states: nada movido` : `etapa "${stage}" fora de alm.track: nada movido` };
+  try {
+    const prov = lib.provider(cfg, options);
+    // The refine only moves a card that is still before development (Backlog, Em grooming, Em refinamento). A card
+    // already Ready or past it (in development, review, train, main, staging, released) keeps its column: the apply
+    // writes the spec, spec-v1 and the original-text comment, and no transition.
+    if (typeof prov.status === 'function') {
+      const live = await prov.status(key);
+      const liveStage = lib.STAGES.find((s) => cfg.states[s] && live && String(cfg.states[s]).toLowerCase() === String(live).toLowerCase()) || null;
+      const movable = ['intake', 'grooming', 'refinement'];
+      if (!liveStage || !movable.includes(liveStage)) return { stage, skipped: true, state: live, why: liveStage ? `o card está em "${live}" (${liveStage}): o refine só move cards antes de "pronto"` : `estado "${live}" sem etapa mapeada: nada movido` };
+      if (String(live).toLowerCase() === String(cfg.states[stage]).toLowerCase()) return { stage, state: live, changed: false };
+      if (options.dryRun) return { stage, planned: true, from: live, state: cfg.states[stage] };
+    } else if (options.dryRun) return { stage, planned: true, state: cfg.states[stage] };
+    const r = await prov.transition(key, cfg.states[stage]);
+    return { stage, state: r.status, changed: r.changed };
+  } catch (err) { return { stage, error: err.message }; }
+}
+
+/**
+ * `oxe-cc alm refine <KEY…> | --jql "…" [--max-cards N]` (collect, read-only) · `alm refine lint <KEY…>` ·
+ * `alm refine apply <KEY…> [--confirm-overwrite]` (writer only). Jira over REST. No paid model: the agent of the
+ * session rewrites the skeleton (oxe/workflows/references/alm-refine.md).
+ */
+async function runtimeAlmRefine(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-alm.cjs');
+  const refine = require('./oxe-alm-refine.cjs');
+  const config = readProjectConfig(projectRoot) || {};
+  const cfg = lib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) });
+  if (!cfg) throw new Error('ALM não configurado: alm refine lê os cards do Jira (alm.provider: "jira")');
+  if (cfg.provider !== 'jira') throw new Error('alm refine: por enquanto só Jira');
+  const env = options.env || process.env;
+  const d = refine.dirs(projectRoot);
+  const action = options.action || 'collect';
+  let keys = (options.keys || []).map((k) => String(k).toUpperCase());
+  if (action === 'lint' || action === 'apply') {
+    if (!keys.length) keys = fs.existsSync(d.specs) ? fs.readdirSync(d.specs).filter((f) => /\.md$/.test(f)).map((f) => f.replace(/\.md$/, '')) : [];
+    const out = [];
+    for (const key of keys) {
+      const specFile = path.join(d.specs, `${key}.md`);
+      const dataFile = path.join(d.data, `${key}.json`);
+      if (!fs.existsSync(specFile) || !fs.existsSync(dataFile)) { out.push({ key, error: `sem coleta: rode oxe-cc alm refine ${key}` }); continue; }
+      const collected = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
+      const md = fs.readFileSync(specFile, 'utf8');
+      if (action === 'lint') {
+        const l = refine.lintSpec(md, collected.kind);
+        // CA ↔ A: with a program SPEC, every CA names its criterion and that criterion exists
+        const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+        const specText = paths.spec && fs.existsSync(paths.spec) ? fs.readFileSync(paths.spec, 'utf8') : null;
+        if (specText) {
+          const ids = require('./oxe-spec-edit.cjs').criteriaIds(specText);
+          for (const c of refine.parseCriteria(md)) {
+            if (!c.spec_id) l.warnings.push(`${c.id} sem o critério da SPEC — oxe-cc alm refine import ${key} cria e liga (${c.id} (A-n))`);
+            else if (!ids.includes(c.spec_id)) { l.errors.push(`${c.id} aponta para ${c.spec_id}, que não existe na SPEC`); l.ok = false; }
+          }
+        }
+        // the domain glossary: a forbidden synonym in the card spec (one term, one meaning, in the card too)
+        try {
+          const gl = require('./oxe-grill.cjs').readGlossary(grillPaths(projectRoot, activeSession).glossary);
+          for (const t of gl) for (const syn of t.synonyms || []) {
+            if (syn.length >= 3 && wholeWord(syn).test(md)) l.warnings.push(`glossário: "${syn}" é sinônimo proibido de "${t.term}" — use "${t.term}"`);
+          }
+        } catch { /* sem glossário */ }
+        out.push({ key, kind: collected.kind, ...l });
+        continue;
+      }
+      const dry = lib.isDry(cfg, options);
+      // a simulation only reads: any session may run it; writing is the writer's
+      if (!dry && !lib.isWriter(cfg, env)) throw lib.writerError(cfg);
+      if (!dry) lib.warnApply(cfg, options);
+      const problems = lib.checkConfig(cfg, env);
+      if (problems.length) throw new Error(`ALM: ${problems.join('; ')}`);
+      try {
+        const r = await refine.apply(lib.jiraRest(cfg, { ...options, dryRun: dry }), collected, md, { confirmOverwrite: options.confirmOverwrite, dryRun: dry });
+        // with no open question the card is Ready; with questions it goes back to grooming, where they are answered
+        const target = r.questions ? 'grooming' : 'ready';
+        if (r.applied) r.moved = await refineMove(lib, cfg, key, target, { ...options, env });
+        else if (r.dry_run) r.moved = await refineMove(lib, cfg, key, target, { ...options, env, dryRun: true });
+        if (r.dry_run && cfg.require_apply && !options.dryRun && !options.apply) r.why_dry = 'alm.require_apply: gravar exige --apply';
+        if (!dry) appendEvent(projectRoot, activeSession, { type: 'AlmRefined', payload: { key, sha: r.sha || null, applied: Boolean(r.applied) } });
+        out.push(r);
+      } catch (err) { out.push({ key, error: err.message, ...(err.lint ? { lint: err.lint } : {}) }); }
+    }
+    return { action, results: out };
+  }
+  // collect (read-only)
+  const problems = lib.checkConfig(cfg, env);
+  if (problems.length) throw new Error(`ALM: ${problems.join('; ')} — o refine lê o card pela API do Jira`);
+  const rest = lib.jiraRest(cfg, options);
+  if (options.jql) {
+    const r = await rest.request('GET', `${rest.site}/rest/api/3/search/jql?jql=${encodeURIComponent(options.jql)}&fields=summary&maxResults=${Math.min(100, Number(options.maxCards) || 20)}`);
+    keys = [...keys, ...((r && r.issues) || []).map((i) => i.key)];
+  }
+  const max = Number(options.maxCards) > 0 ? Number(options.maxCards) : 15;
+  if (keys.length > max) throw new Error(`${keys.length} card(s) passam do teto --max-cards ${max}: refine em lote só com o OK do usuário (aumente --max-cards de propósito)`);
+  fs.mkdirSync(d.data, { recursive: true });
+  fs.mkdirSync(d.specs, { recursive: true });
+  const out = [];
+  for (const key of keys) {
+    try {
+      const c = await refine.collect(rest, key, { projectRoot });
+      fs.writeFileSync(path.join(d.data, `${key}.json`), JSON.stringify(c, null, 2));
+      const specFile = path.join(d.specs, `${key}.md`);
+      const kept = fs.existsSync(specFile) && !options.reset;
+      if (!kept) fs.writeFileSync(specFile, refine.skeleton(c));
+      // --claim (writer): the card shows "in refinement" while the spec is being written. Never silent (OXB-G14): a
+      // reader session, a dry run or an unmapped stage says why the card did not move.
+      const claimDry = lib.isDry(cfg, options);
+      if (options.claim && !claimDry && lib.isWriter(cfg, env)) lib.warnApply(cfg, options);
+      const claimed = !options.claim ? null
+        : !lib.isWriter(cfg, env) && !claimDry ? { stage: 'refinement', skipped: true, why: lib.writerError(cfg).message }
+          : await refineMove(lib, cfg, key, 'refinement', { ...options, env, dryRun: claimDry });
+      out.push({ key, ...(claimed ? { moved: claimed } : {}), kind: c.kind, type: c.type, status: c.status, summary: c.summary, comments: c.comments.length, links: c.links.length, code_refs: c.code_refs.length, already_refined: c.already_refined, spec: path.relative(projectRoot, specFile).replace(/\\/g, '/'), kept });
+    } catch (err) { out.push({ key, error: err.message }); }
+  }
+  // collect itself only reads; --claim (without --dry-run) is the one write of this step
+  return { action: 'collect', dry_run: !options.claim || lib.isDry(cfg, options), claim: Boolean(options.claim), results: out };
+}
+
+/**
+ * G9 — `oxe-cc quick <KEY> "<objetivo>"` · `quick status|trailers|list` · `quick done [--verify "<cmd>"] [--no-commit]`.
+ * With an ALM and a card: the start comments the mini-spec on the card and moves it to in_progress (only from a column
+ * before it, never backwards); the done comments the commits and the verification. ALM writes follow --apply /
+ * --dry-run / alm.require_apply and the writer rule, as every alm command.
+ */
+async function runtimeQuick(projectRoot, activeSession, options = {}) {
+  const q = require('./oxe-quick.cjs');
+  const action = options.action || 'status';
+  if (action === 'status') return { open: q.current(projectRoot) };
+  if (action === 'list') return { quicks: q.list(projectRoot) };
+  if (action === 'commit') {
+    const out = q.commit(projectRoot, { message: options.message, paths: options.paths, all: options.all });
+    appendEvent(projectRoot, activeSession, { type: 'QuickCommitted', payload: { id: out.id, sha: out.sha, files: out.files.length } });
+    return out;
+  }
+  if (action === 'trailers') {
+    const open = q.current(projectRoot);
+    if (!open) throw new Error('nenhum quick aberto (oxe-cc quick <KEY> "<objetivo>")');
+    return { id: open.id, trailers: q.trailers(open) };
+  }
+  const config = readProjectConfig(projectRoot) || {};
+  const lib = require('./oxe-alm.cjs');
+  const cfg = lib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) });
+  if (action === 'start' && cfg && cfg.provider !== 'none' && !options.key) throw new Error('com ALM configurado, o quick nomeia o card: oxe-cc quick <KEY> "<objetivo>"');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const rec = action === 'start'
+    ? q.start(projectRoot, { key: options.key, objective: options.objective, by: options.by, replace: options.replace, quickFile: paths.quick || path.join(projectRoot, '.oxe', 'QUICK.md') })
+    : q.done(projectRoot, { verify: options.verify, noCommit: options.noCommit, by: options.by, id: options.id });
+  if (action === 'start' && !rec.resumed) appendEvent(projectRoot, activeSession, { type: 'QuickStarted', payload: { id: rec.id, key: rec.key } });
+  if (action === 'done' && rec.closed) appendEvent(projectRoot, activeSession, { type: 'QuickDone', payload: { id: rec.id, key: rec.key, commits: rec.commits.length, verify_ok: rec.verify ? rec.verify.ok : null } });
+  // the card: only when there is one, an ALM, and the quick is not a resume or a failed verification
+  if (!cfg || !rec.key || rec.resumed || (action === 'done' && !rec.closed)) return { ...rec, alm: null };
+  const env = options.env || process.env;
+  const dry = lib.isDry(cfg, options);
+  if (!dry && !lib.isWriter(cfg, env)) return { ...rec, alm: { skipped: true, why: lib.writerError(cfg).message } };
+  if (!dry) lib.warnApply(cfg, options);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const net = { http: options.http, env, sleep: options.sleep, retries: options.retries, dryRun: dry, apply: options.apply };
+  const alm = {};
+  try {
+    alm.comment = await lib.comment(programDir, cfg, rec.key, q.cardComment(rec, action === 'start' ? 'start' : 'done'), net);
+    if (action === 'start' && cfg.states.in_progress) {
+      const prov = lib.provider(cfg, net);
+      const live = typeof prov.status === 'function' && !prov.deferred ? await prov.status(rec.key) : null;
+      const liveStage = lib.STAGES.find((s) => cfg.states[s] && live && String(cfg.states[s]).toLowerCase() === String(live).toLowerCase()) || null;
+      const before = liveStage && lib.STAGES.indexOf(liveStage) < lib.STAGES.indexOf('in_progress');
+      alm.move = before || prov.deferred
+        ? await lib.move(programDir, cfg, rec.key, 'in_progress', net)
+        : { skipped: true, why: liveStage ? `o card está em "${live}" (${liveStage}): o quick não move para trás nem para o lado` : `estado "${live}" sem etapa mapeada: nada movido` };
+    }
+  } catch (err) { alm.error = err.message; }
+  return { ...rec, alm: { dry_run: dry, ...alm } };
+}
+
+/**
+ * G5/G8 — `oxe-cc ship status --pr <n> | --card <KEY> | --repo [--comment [--apply]]`: PRs outside a phase, a card's
+ * PRs, or the whole repository (with the merge-train labels), each with its CI verdict against the repository's known
+ * failures. `--comment` puts the verdict on the PR (a write: --apply, as every write).
+ */
+function runtimeShipPr(projectRoot, activeSession, options = {}) {
+  const kf = require('./oxe-known-failures.cjs');
+  const shipPr = require('./oxe-ship-pr.cjs');
+  const spawn = options.ghSpawn || spawnSync;
+  const config = readProjectConfig(projectRoot) || {};
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const known = kf.listAll(projectRoot, programDir, { spawn, prState: shipPr.prState(spawn, projectRoot) });
+  const trainLabels = config.ship && Array.isArray(config.ship.train_labels) ? config.ship.train_labels.map(String) : undefined;
+  const out = shipPr.status(projectRoot, { pr: options.pr, card: options.card, repo: options.repo, limit: options.limit }, { spawn, known, trainLabels, itemOpen: options.itemOpen });
+  out.expired = known.filter((k) => k.expired).map((k) => ({ id: k.id, pattern: k.pattern, why: k.expired_by }));
+  if (options.comment) {
+    const rows = out.prs.filter((p) => p.ci);
+    out.comments = options.apply && !options.dryRun
+      ? rows.map((r) => { try { return shipPr.publishVerdict(projectRoot, r, { spawn }); } catch (err) { return { pr: r.pr, error: err.message }; } })
+      : rows.map((r) => ({ pr: r.pr, planned: true, body: shipPr.verdictComment(r) }));
+  }
+  return out;
+}
+
+/** G11 — `oxe-cc ship check-origin [<#PR>|<range>]`. */
+function runtimeCheckOrigin(projectRoot, activeSession, options = {}) {
+  return require('./oxe-origin.cjs').check(projectRoot, { target: options.target, config: readProjectConfig(projectRoot) || {}, spawn: options.spawn });
+}
+
+/** G11 — the commit-msg hook (`oxe-cc ship commit-msg <file>`), installed by `oxe-cc guards install`. */
+function runtimeCommitMsg(projectRoot, activeSession, options = {}) {
+  return require('./oxe-origin.cjs').commitMsg(projectRoot, options.file, { config: readProjectConfig(projectRoot) || {}, currentQuick: require('./oxe-quick.cjs').current(projectRoot), spawn: options.spawn });
 }
 
 /**
@@ -2323,7 +2951,8 @@ function almAutoSync(projectRoot, activeSession) {
     const cfg = require('./oxe-alm.cjs').almConfig(readProjectConfig(projectRoot) || {});
     if (!cfg || !cfg.auto || process.env.OXE_ALM_OFF === '1') return null;
     if (require('./oxe-alm.cjs').checkConfig(cfg).length) return null;
-    return runtimeAlm(projectRoot, activeSession, { action: 'sync' }).catch(() => null);
+    if (!require('./oxe-alm.cjs').isWriter(cfg)) return null; // a reader session never moves items
+    return runtimeAlm(projectRoot, activeSession, { action: 'sync', auto: true }).catch(() => null);
   } catch { return null; }
 }
 
@@ -4196,13 +4825,30 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
   const rcfg = options.remote === false ? null : remoteLib.remoteConfig(projectConfig);
   let localSuite = runSuite;
   let remoteChecks = [];
+  let bothIds = new Set();
   let hints = { jobs: new Map() };
   if (rcfg) {
     let planDoc = null;
     try { planDoc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { planDoc = null; }
     hints = remoteLib.planHints(planDoc);
-    remoteChecks = (runSuite.checks || []).filter((c) => remoteLib.whereFor(c, rcfg, hints) === 'remote');
-    if (remoteChecks.length) localSuite = { ...runSuite, checks: (runSuite.checks || []).filter((c) => !remoteChecks.includes(c)) };
+    const where = new Map((runSuite.checks || []).map((c) => [c, remoteLib.whereFor(c, rcfg, hints)]));
+    remoteChecks = (runSuite.checks || []).filter((c) => where.get(c) === 'remote' || where.get(c) === 'both');
+    // `both`: also here — a red only in the CI is then told apart (ci_only)
+    bothIds = new Set(remoteChecks.filter((c) => where.get(c) === 'both').map((c) => c.id));
+    localSuite = { ...runSuite, checks: (runSuite.checks || []).filter((c) => where.get(c) !== 'remote') };
+  }
+  // OXB-f: below verify.min_free_mb of free memory, no heavy check runs on this machine — it goes to the CI when
+  // verify.remote exists, otherwise it is "not verified" (low memory) instead of being killed half-way.
+  const minFree = projectConfig.verify && Number(projectConfig.verify.min_free_mb) > 0 ? Number(projectConfig.verify.min_free_mb) : 0;
+  const freeMb = Math.round((options.freeMemBytes != null ? options.freeMemBytes : require('os').freemem()) / (1024 * 1024));
+  let lowMemSkipped = [];
+  if (minFree && freeMb < minFree) {
+    const heavy = (localSuite.checks || []).filter((c) => remoteLib.HEAVY_RE.test(String(c.command || '')));
+    if (heavy.length) {
+      localSuite = { ...localSuite, checks: localSuite.checks.filter((c) => !heavy.includes(c)) };
+      if (rcfg) remoteChecks = [...remoteChecks, ...heavy.filter((c) => !remoteChecks.includes(c))];
+      else lowMemSkipped = heavy;
+    }
   }
   const report = localSuite.checks && localSuite.checks.length
     ? await runtime.verifyRun({
@@ -4218,11 +4864,24 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
       timeoutMs: options.timeoutMs || (Number(projectConfig.verify_timeout_ms) > 0 ? Number(projectConfig.verify_timeout_ms) : 600_000),
     })
     : { status: remoteChecks.length ? 'passed' : 'partial', suite: localSuite, executed: null, gaps: remoteChecks.length ? [] : ['Nenhum check executável foi compilado a partir de SPEC/PLAN.'], verification_results: [], check_results: [], manifest: null, risk_ledger: null, evidence_coverage: null };
+  if (lowMemSkipped.length) {
+    report.check_results = [...(report.check_results || []), ...lowMemSkipped.map((c) => ({ check_id: c.id, acceptance_ref: c.acceptance_ref || null, status: 'skip', stdout: '', stderr: `memória livre ${freeMb} MB < verify.min_free_mb ${minFree} MB`, exit_code: null, duration_ms: 0, error: null, evidence_refs: [], skip_reason: 'low_memory' }))];
+    report.gaps = [...(report.gaps || []), `Memória baixa (${freeMb} MB livres < ${minFree} MB): ${lowMemSkipped.length} check(s) pesado(s) não rodaram aqui — ${lowMemSkipped.map((c) => c.id).join(', ')}; configure verify.remote para mandá-los à CI, ou rode de novo com memória livre`];
+    if (report.status === 'passed') report.status = 'partial';
+  }
   if (remoteChecks.length) {
-    const remote = remoteLib.runRemote({ checks: remoteChecks, rcfg, cwd: options.cwd || projectRoot, spawn: options.ghSpawn, push: Boolean(options.push), sleep: options.sleep, jobs: hints.jobs });
-    const merged = remote.results.map((r) => remoteLib.toCheckResult(r, remote.run));
+    const programDirR = artifactPaths.programDir || path.join(projectRoot, '.oxe', 'program');
+    const remote = remoteLib.runRemote({ checks: remoteChecks, rcfg, cwd: options.cwd || projectRoot, spawn: options.ghSpawn, push: Boolean(options.push), sleep: options.sleep, now: options.now, jobs: hints.jobs, stateFile: path.join(programDirR, 'remote-verify.json'), artifactsDir: path.join(projectRoot, '.oxe', 'evidence', 'remote', String(Date.now())) });
+    const localById = new Map((report.check_results || []).map((r) => [r.check_id, r]));
+    const merged = remote.results.map((r) => {
+      const cr = remoteLib.toCheckResult(r, remote.run);
+      if (!bothIds.has(r.check.id)) return cr;
+      const local = localById.get(r.check.id);
+      const ciOnly = cr.status === 'fail' && local && local.status === 'pass';
+      return { ...cr, check_id: `${r.check.id}@ci`, ...(ciOnly ? { ci_only: true, stderr: `falhou só na CI (passa aqui) — leia o trace da CI${remote.artifacts && remote.artifacts.dir ? ` em ${path.relative(projectRoot, remote.artifacts.dir).split(path.sep).join('/')}` : ''}, não a reprodução local. ${cr.stderr}`.trim() } : {}) };
+    });
     report.check_results = [...(report.check_results || []), ...merged];
-    report.remote = { status: remote.status, reason: remote.reason || null, run: remote.run || null, checks: merged.map((m) => ({ id: m.check_id, status: m.remote.status, job: m.remote.job, url: m.remote.url })) };
+    report.remote = { status: remote.status, reason: remote.reason || null, run: remote.run || null, pending: Boolean(remote.pending), artifacts: remote.artifacts || null, checks: merged.map((m) => ({ id: m.check_id, status: m.remote.status, job: m.remote.job, url: m.remote.url, ...(m.ci_only ? { ci_only: true } : {}) })) };
     const failed = merged.filter((m) => m.status === 'fail');
     const notVerified = merged.filter((m) => m.remote.status === 'not_verified');
     if (failed.length) report.status = 'failed';
@@ -5331,14 +5990,19 @@ function runtimeFeedback(projectRoot, activeSession, options = {}) {
   // OXB-173: `--tasks` LINKS the CR to the tasks; it reopens them only with `--reopen` (F2 CR-36 flipped T5, done with
   // 335fc004, to open in silence — the next execute would have paid for merge-ready work again).
   const explicitTasks = Boolean(options.tasks && String(options.tasks).trim());
-  const mayReopen = !explicitTasks || options.reopen === true;
+  // 1.21.2: reopening is always explicit (--reopen). A task done with its commit is never reopened in silence — the
+  // CR only links it, and the output says the command that reopens (F2 CR-36: T5 had to be restored by hand).
+  const mayReopen = options.reopen === true;
   if ((result.cr.class === 'defect' || result.cr.class === 'spec_gap') && mayReopen) {
     const planJsonLib = require('./oxe-plan-json.cjs');
     for (const taskId of selection.targets) {
       if (planJsonLib.markPlanTaskOpen(paths.plan, taskId, { by: result.cr.id })) reopenedTasks.push(taskId);
     }
   }
-  if (explicitTasks && !mayReopen) result.linked_tasks = selection.targets;
+  if (!mayReopen && (result.cr.class === 'defect' || result.cr.class === 'spec_gap') && selection.targets.length) {
+    result.linked_tasks = selection.targets;
+    result.reopen_hint = `oxe-cc runtime feedback … --tasks ${selection.targets.join(',')} --reopen (reabre ${selection.targets.join(', ')} para o próximo execute)`;
+  } else if (explicitTasks && !mayReopen) result.linked_tasks = selection.targets;
   result.reopened_tasks = reopenedTasks;
   result.impacted_not_reopened = (result.impacted || []).filter((id) => !reopenedTasks.includes(id) && !selection.external.includes(id));
   result.external_not_reopened = selection.external;
@@ -8645,6 +9309,12 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
       if (defects.open.length > 15) closeGates.reasons.push(`e mais ${defects.open.length - 15} defeito(s) aberto(s) em .oxe/OPEN-DEFECTS.json`);
     } catch { /* auxiliar */ }
   }
+  // 1.21.2: alm.trace_gate "close" / "strict" — a loose end of the traceability graph blocks the close, each with its fix.
+  try {
+    const tg = traceGateFindings(projectRoot, activeSession, 'close');
+    for (const e of tg.errors.slice(0, 20)) closeGates.reasons.push(e);
+    if (tg.errors.length > 20) closeGates.reasons.push(`e mais ${tg.errors.length - 20} ponta(s) solta(s) — oxe-cc trace`);
+  } catch { /* auxiliar */ }
   // OXB-091: every standing criterion needs a sign-off of this phase with evidence (not deferrable: "erros na
   // interface não serão admitidos" holds at every close).
   const standing = require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot);
@@ -10212,6 +10882,18 @@ module.exports = {
   runtimeContextUsage,
   runtimeDecision,
   runtimeGrill,
+  runtimeAlmRefine,
+  runtimeQuick,
+  runtimeCheckOrigin,
+  runtimeShipPr,
+  runtimeCommitMsg,
+  runtimeTrace,
+  runtimeGrooming,
+  runtimeAlmAdmin,
+  traceGateFindings,
+  traceSnapshot,
+  runtimeAlmRefineImport,
+  runtimeAlmMetrics,
   grillPaths,
   runtimeSpecCheck,
   runtimeSpecApprove,
