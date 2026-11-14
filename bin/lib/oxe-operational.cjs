@@ -1258,15 +1258,177 @@ function runtimeDecision(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-decisions.cjs');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  let program = null;
+  try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; }
+  const activePhase = (program && program.active_phase) || null;
+  // ADRs (docs/adr by default; config `adr: false` turns them off) follow every change to the ledger.
+  const publishAdrs = () => {
+    const dir = options.adrDir || require('./oxe-adr.cjs').adrDir(readProjectConfig(projectRoot) || {});
+    if (!dir) return null;
+    try { return require('./oxe-adr.cjs').publish(projectRoot, dir, lib.list(programDir)); } catch (err) { return { error: err.message }; }
+  };
   if (options.action === 'add') {
-    let program = null;
-    try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; }
-    const rec = lib.add(programDir, { ...options, phase: options.phase || (program && program.active_phase) || null });
-    appendEvent(projectRoot, activeSession, { type: 'DecisionRecorded', payload: { id: rec.id, title: rec.title, phase: rec.phase } });
+    const rec = lib.add(programDir, { ...options, phase: options.phase || activePhase });
+    appendEvent(projectRoot, activeSession, { type: 'DecisionRecorded', payload: { id: rec.id, title: rec.title, phase: rec.phase, ...(rec.supersedes ? { supersedes: rec.supersedes } : {}) } });
     try { autoExportProgram(projectRoot, activeSession); } catch { /* */ }
-    return { decision: rec };
+    return { decision: rec, adr: publishAdrs() };
+  }
+  if (options.action === 'status') {
+    const rec = lib.setStatus(programDir, options.id, { status: options.status, reason: options.reason, by: options.by, superseded_by: options.supersededBy });
+    appendEvent(projectRoot, activeSession, { type: 'DecisionStatusChanged', payload: { id: rec.id, status: rec.status, reason: rec.reason } });
+    return { status: rec, adr: publishAdrs() };
+  }
+  if (options.action === 'import') {
+    const discussPath = options.from ? path.resolve(projectRoot, options.from) : path.join(projectRoot, '.oxe', 'DISCUSS.md');
+    if (!fs.existsSync(discussPath)) throw new Error(`DISCUSS.md não encontrado em ${path.relative(projectRoot, discussPath) || discussPath}`);
+    const out = lib.importDiscuss(programDir, fs.readFileSync(discussPath, 'utf8'), { phase: options.phase || activePhase, by: options.by });
+    for (const id of out.imported) appendEvent(projectRoot, activeSession, { type: 'DecisionRecorded', payload: { id, source: 'DISCUSS.md' } });
+    return { ...out, adr: publishAdrs() };
+  }
+  if (options.action === 'publish') {
+    const dir = options.adrDir || require('./oxe-adr.cjs').adrDir(readProjectConfig(projectRoot) || {}) || 'docs/adr';
+    return { adr: require('./oxe-adr.cjs').publish(projectRoot, dir, lib.list(programDir)) };
   }
   return { decisions: lib.list(programDir) };
+}
+
+/** Where the grill and the glossary live: next to the SPEC (.oxe/ or .oxe/<session>/spec/). */
+function grillPaths(projectRoot, activeSession) {
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const specFile = paths.spec || path.join(projectRoot, '.oxe', 'SPEC.md');
+  return { dir: require('./oxe-grill.cjs').dirFor(specFile), glossary: path.join(path.dirname(specFile), 'GLOSSARY.md'), specFile };
+}
+
+/**
+ * The grill's decisions → the decision ledger (and the ADRs), once each: a decision already recorded with
+ * source grill:Q-n is skipped. The options not taken become the rejected alternatives.
+ */
+function grillExportDecisions(projectRoot, activeSession, decisions, by) {
+  const lib = require('./oxe-decisions.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const known = new Set(lib.list(programDir).map((d) => d.source).filter(Boolean));
+  const recorded = [];
+  for (const d of decisions) {
+    const source = `grill:${d.id}`;
+    if (known.has(source)) continue;
+    const author = by || 'usuário';
+    const alternatives = (d.alternatives || []).filter((o) => o && String(o).length >= 3).map((o) => ({ text: String(o), reason: d.decided_by === 'recommended' ? `não escolhida no grill ${d.id}${d.why ? `: ${d.why}` : ''}` : `recusada pelo usuário no grill ${d.id}`, by: author }));
+    // a short answer ("sim", "B") only reads as a decision next to its question
+    const title = String(d.answer).length >= 12 ? String(d.answer) : `${String(d.question).replace(/\s*\?\s*$/, '')}: ${d.answer}`;
+    const out = runtimeDecision(projectRoot, activeSession, { action: 'add', title: title.slice(0, 160), text: d.answer.length > 160 ? d.answer : null, context: d.question, consequences: d.why || null, source, by: author, alternatives });
+    recorded.push({ grill: d.id, decision: out.decision.id });
+  }
+  return recorded;
+}
+
+/**
+ * `oxe-cc grill start|ask|answer|fact|defer|confirm|term|conflict|resolve|status|close|export` — the spec's
+ * discovery as a decision tree (oxe/workflows/references/grill.md). Every change rewrites GRILL.md; close writes the
+ * glossary and records the decisions (→ ADRs).
+ */
+function runtimeGrill(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-grill.cjs');
+  const gp = grillPaths(projectRoot, activeSession);
+  const a = options.action || 'status';
+  let out;
+  if (a === 'start') out = lib.start(gp.dir, { type: options.type, title: options.title, restart: options.restart });
+  else if (a === 'ask') out = lib.ask(gp.dir, options);
+  else if (a === 'answer') {
+    out = lib.answer(gp.dir, options.id, options);
+    appendEvent(projectRoot, activeSession, { type: 'GrillAnswered', payload: { id: out.id, decided_by: out.decided_by, changed: out.changed, reopened: out.reopened } });
+  } else if (a === 'fact') out = lib.fact(gp.dir, options);
+  else if (a === 'defer') out = lib.defer(gp.dir, options.id, options);
+  else if (a === 'confirm') out = lib.confirm(gp.dir, options.branch, options);
+  else if (a === 'term') out = lib.term(gp.dir, options);
+  else if (a === 'conflict') out = lib.conflict(gp.dir, options);
+  else if (a === 'resolve') out = lib.resolve(gp.dir, options.id, options);
+  else if (a === 'close' || a === 'export') {
+    if (a === 'close') out = lib.close(gp.dir, { by: options.by });
+    const s = lib.status(gp.dir);
+    const glossary = s.terms.length ? lib.writeGlossary(gp.glossary, s.terms) : null;
+    const decisions = grillExportDecisions(projectRoot, activeSession, s.decisions, options.by);
+    out = { ...(out || {}), glossary: glossary ? path.relative(projectRoot, glossary.file).replace(/\\/g, '/') : null, decisions_recorded: decisions, assumptions: s.assumptions };
+    if (a === 'close') appendEvent(projectRoot, activeSession, { type: 'GrillClosed', payload: { decisions: s.decisions.length, terms: s.terms.length, assumptions: s.assumptions.length } });
+  } else if (a !== 'status') throw new Error(`grill ${a}: ação desconhecida (start | ask | answer | fact | defer | confirm | term | conflict | resolve | status | close | export)`);
+  const s = lib.writeProjection(gp.dir);
+  const view = { type: s.type, closed: s.closed, next_branch: s.next_branch, blockers: s.blockers, branches: s.branches.map((b) => ({ id: b.id, title: b.title, blocking: b.blocking, decided: b.decided, open: b.open, deferred: b.deferred, confirmed: b.confirmed, ready: b.ready, asks: b.asks })), file: path.relative(projectRoot, path.join(gp.dir, 'GRILL.md')).replace(/\\/g, '/') };
+  return a === 'status' ? { ...view, open_questions: s.questions.filter((q) => q.status === 'open' || q.status === 'reopened'), assumptions: s.assumptions, terms: s.terms } : { ...out, grill: view };
+}
+
+/** `oxe-cc spec check [--fast]`: the quality gate of the upstream (oxe-spec-check.cjs) over the files of the scope. */
+function runtimeSpecCheck(projectRoot, activeSession, options = {}) {
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const config = readProjectConfig(projectRoot) || {};
+  const prdFile = prdPathFor(projectRoot, activeSession);
+  const prdLib = require('./oxe-prd.cjs');
+  const grillLib = require('./oxe-grill.cjs');
+  const gp = grillPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const grill = grillLib.readRecords(gp.dir).length ? grillLib.status(gp.dir) : null;
+  const out = require('./oxe-spec-check.cjs').checkSpec({
+    specText: readTextIfExists(paths.spec) || '',
+    roadmapText: readTextIfExists(paths.roadmap) || '',
+    prd: fs.existsSync(prdFile) ? prdLib.readPrd(prdFile) : null,
+    prdText: readTextIfExists(prdFile) || '',
+    lintPrd: prdLib.lintPrd,
+    prdRequired: Boolean(config.prd && typeof config.prd === 'object' && config.prd.required === true),
+    glossary: grillLib.readGlossary(gp.glossary),
+    grill,
+    fast: Boolean(options.fast),
+    decisionSources: require('./oxe-decisions.cjs').list(programDir).map((d) => d.source).filter(Boolean),
+    rfcs: require('./oxe-rfc.cjs').list(projectRoot),
+    rfcMode: require('./oxe-rfc.cjs').rfcMode(config),
+  });
+  return { ...out, spec: path.relative(projectRoot, paths.spec || '').replace(/\\/g, '/') };
+}
+
+const specHash = (text) => require('crypto').createHash('sha256').update(String(text || '').replace(/\r\n/g, '\n')).digest('hex').slice(0, 16);
+
+/** The last approval of the spec, and whether the SPEC changed since (null: never approved). */
+function specApproval(projectRoot, activeSession) {
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  let last = null;
+  try { for (const e of readEvents(projectRoot, activeSession)) if (e.type === 'SpecApproved') last = e; } catch { /* */ }
+  if (!last) return null;
+  const now = specHash(readTextIfExists(paths.spec));
+  return { at: last.timestamp || null, by: last.payload && last.payload.by, hash: last.payload && last.payload.hash, changed_since: Boolean(last.payload && last.payload.hash && last.payload.hash !== now) };
+}
+
+/** `oxe-cc spec approve --by <papel> [--fast]`: only over a green spec check; recorded (event + changes.ndjson). */
+function runtimeSpecApprove(projectRoot, activeSession, options = {}) {
+  if (!options.by) throw new Error('a aprovação tem dono: oxe-cc spec approve --by <papel>');
+  const check = runtimeSpecCheck(projectRoot, activeSession, options);
+  if (!check.ok) throw Object.assign(new Error(`spec check com ${check.errors.length} erro(s) — corrija antes de aprovar:\n  - ${check.errors.join('\n  - ')}`), { check });
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const hash = specHash(readTextIfExists(paths.spec));
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const changeLib = require('./oxe-change.cjs');
+  const record = { kind: 'spec_approval', by: String(options.by), at: new Date().toISOString(), hash, file: check.spec, warnings: check.warnings.length, ...(options.fast ? { mode: 'fast' } : {}) };
+  changeLib.appendNdjson(changeLib.changesFile(programDir), record);
+  appendEvent(projectRoot, activeSession, { type: 'SpecApproved', payload: { by: record.by, hash, warnings: record.warnings } });
+  return { approved: true, ...record, check };
+}
+
+/**
+ * `oxe-cc ship status`: where the delivery of the active phase is — PRs opened by promote, merged (asked to gh, which
+ * records AlmMerged), deploys attached, and the next step. `refresh: false` reads only the events.
+ */
+function runtimeDeliveryStatus(projectRoot, activeSession, options = {}) {
+  if (options.refresh !== false) { try { detectMergedPrs(projectRoot, activeSession, readEvents(projectRoot, activeSession), options); } catch { /* sem gh: segue com os eventos */ } }
+  const events = readEvents(projectRoot, activeSession);
+  const phase = activeProgramPhase(projectRoot, activeSession);
+  const since = phase && phase.started_at ? Date.parse(phase.started_at) : 0;
+  const merged = new Map(events.filter((e) => e.type === 'AlmMerged').map((e) => [e.work_item_id, e.payload || {}]));
+  const prs = events.filter((e) => e.type === 'TaskPromoted' && e.payload && e.payload.pr && (!since || !e.timestamp || Date.parse(e.timestamp) >= since))
+    .map((e) => ({ task: e.work_item_id, pr: e.payload.pr, merged: merged.has(e.work_item_id), merged_at: merged.has(e.work_item_id) ? merged.get(e.work_item_id).merged_at || null : null }));
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  let deploys = [];
+  try { deploys = require('./oxe-phase-gates.cjs').readDeploys(programDir, phase ? phase.id : null).map((d) => ({ env: d.env, version: d.version, ok: d.ok !== false, at: d.at || null })); } catch { deploys = []; }
+  const mode = require('./oxe-journey.cjs').deliveryMode(readProjectConfig(projectRoot) || {});
+  const next = require('./oxe-project-health.cjs').suggestNextStep(projectRoot, readProjectConfig(projectRoot) || {});
+  return { mode: mode.mode, deploy_env: mode.deploy_env, phase: phase ? { id: phase.id, status: phase.status } : null, prs, deploys, next };
 }
 
 /** OXB-160: the tests' own tree for a frozen test file: up to its tests/test/__tests__/spec/e2e dir, else its own dir. */
@@ -1948,6 +2110,279 @@ function reduceCanonicalRunState(projectRoot, activeSession, options = {}) {
   return serializeCanonicalState(reduceCanonicalRunStateLive(projectRoot, activeSession, options));
 }
 
+// ── 1.21.2: product and technical documents (PRD, RFC, ADR, publish) and the ALM ──────────────────────────────────
+
+function prdPathFor(projectRoot, activeSession) {
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  return path.join(paths.spec ? path.dirname(paths.spec) : path.join(projectRoot, '.oxe'), 'PRD.md');
+}
+
+function activeProgramPhase(projectRoot, activeSession) {
+  try {
+    const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+    const prog = require('./oxe-program.cjs').readProgram(paths.programDir || path.join(projectRoot, '.oxe', 'program'));
+    if (!prog || !prog.active_phase) return null;
+    return (prog.phases || []).find((p) => p.id === prog.active_phase) || null;
+  } catch { return null; }
+}
+
+/** PRD ↔ SPEC traceability and the active phase's RFC (plan lint). */
+function productDocsLint(projectRoot, activeSession, ctx = {}) {
+  const config = readProjectConfig(projectRoot) || {};
+  const errors = [];
+  const warnings = [];
+  const prdLib = require('./oxe-prd.cjs');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const prdFile = prdPathFor(projectRoot, activeSession);
+  const prd = fs.existsSync(prdFile) ? prdLib.readPrd(prdFile) : null;
+  const required = Boolean(config.prd && typeof config.prd === 'object' && config.prd.required === true);
+  if (prd || required) {
+    const specText = ctx.specText != null ? ctx.specText : readTextIfExists(paths.spec);
+    const r = prdLib.lintPrd(prd, { criteria: ctx.specCriteria || [], requirements: prdLib.requirementIds(specText, readTextIfExists(paths.roadmap)), required });
+    errors.push(...r.errors.map((e) => `PRD: ${e}`));
+    warnings.push(...r.warnings.map((w) => `PRD: ${w}`));
+  }
+  const phase = activeProgramPhase(projectRoot, activeSession);
+  if (phase) {
+    const rfcLib = require('./oxe-rfc.cjs');
+    const risks = require('./oxe-risk-decision.cjs').criterionRisks(ctx.specText != null ? ctx.specText : readTextIfExists(paths.spec));
+    const r = rfcLib.lintPhaseRfc(projectRoot, { phase: phase.id, phaseCriteria: phase.acceptance || [], risks, mode: rfcLib.rfcMode(config) });
+    errors.push(...r.errors);
+    warnings.push(...r.warnings);
+  }
+  return { errors, warnings };
+}
+
+/** `oxe-cc prd lint`. */
+function runtimePrd(projectRoot, activeSession) {
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const prdFile = prdPathFor(projectRoot, activeSession);
+  const specText = readTextIfExists(paths.spec);
+  let criteria = [];
+  try { const parsers = loadSdkParsers(); criteria = specText && parsers ? (parsers.parseSpec(specText).criteria || []).map((c) => c.id) : []; } catch { criteria = []; }
+  const prd = fs.existsSync(prdFile) ? require('./oxe-prd.cjs').readPrd(prdFile) : null;
+  const r = productDocsLint(projectRoot, activeSession, { specText, specCriteria: criteria });
+  return { file: path.relative(projectRoot, prdFile).replace(/\\/g, '/'), exists: Boolean(prd), stories: prd ? prd.stories.length : 0, metrics: prd ? prd.metrics.length : 0, version: prd ? prd.version : null, ...r, ok: r.errors.length === 0 };
+}
+
+/** `oxe-cc rfc new|list|accept|reject`. */
+function runtimeRfc(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-rfc.cjs');
+  if (options.action === 'new') {
+    const phase = options.phase || (activeProgramPhase(projectRoot, activeSession) || {}).id || null;
+    const out = lib.create(projectRoot, { title: options.title, phase, by: options.by });
+    appendEvent(projectRoot, activeSession, { type: 'RfcCreated', payload: { id: out.id, phase } });
+    return { ...out, file: path.relative(projectRoot, out.file).replace(/\\/g, '/') };
+  }
+  if (options.action === 'accept') {
+    const out = lib.accept(projectRoot, options.id, { by: options.by, force: options.force }, (input) => runtimeDecision(projectRoot, activeSession, { action: 'add', ...input }).decision);
+    appendEvent(projectRoot, activeSession, { type: 'RfcAccepted', payload: { id: out.rfc, decision: out.decision } });
+    return { ...out, file: path.relative(projectRoot, out.file).replace(/\\/g, '/') };
+  }
+  if (options.action === 'reject') {
+    const out = lib.reject(projectRoot, options.id, { reason: options.reason });
+    appendEvent(projectRoot, activeSession, { type: 'RfcRejected', payload: { id: out.rfc, reason: options.reason } });
+    return out;
+  }
+  return { rfcs: lib.list(projectRoot).map((r) => ({ ...r, file: r.file ? path.relative(projectRoot, r.file).replace(/\\/g, '/') : null })) };
+}
+
+/** `oxe-cc docs publish` (also at the phase close): PRD, RFCs, ADRs, SYSTEM-DESIGN → docs/. */
+function runtimeDocsPublish(projectRoot, activeSession, options = {}) {
+  const config = readProjectConfig(projectRoot) || {};
+  const dir = options.dir || require('./oxe-docs-publish.cjs').docsDir(config);
+  if (!dir) return { disabled: true, written: [], unchanged: 0, skipped: [] };
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  return require('./oxe-docs-publish.cjs').publish(projectRoot, dir, {
+    prdFile: prdPathFor(projectRoot, activeSession),
+    almLinks: require('./oxe-alm.cjs').links(programDir),
+    rfcs: require('./oxe-rfc.cjs').list(projectRoot),
+    decisions: require('./oxe-decisions.cjs').list(programDir),
+    adrDir: require('./oxe-adr.cjs').adrDir(config),
+    designFile: path.join(projectRoot, '.oxe', 'SYSTEM-DESIGN.md'),
+    glossaryFile: grillPaths(projectRoot, activeSession).glossary,
+  });
+}
+
+/** The open PR whose head is the current branch (gh pr list --head), or null (no gh, no PR, detached HEAD). */
+function branchOpenPr(projectRoot, ghSpawn) {
+  try {
+    const branch = (gitLines(projectRoot, ['rev-parse', '--abbrev-ref', 'HEAD']) || [])[0];
+    if (!branch || branch === 'HEAD') return null;
+    const r = (ghSpawn || spawnSync)('gh', ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,url', '--limit', '1'], { cwd: projectRoot, encoding: 'utf8', windowsHide: true, timeout: 20_000 });
+    if (r.status !== 0) return null;
+    const list = JSON.parse(String(r.stdout || '[]'));
+    return Array.isArray(list) && list[0] ? { branch, number: list[0].number, url: list[0].url || null } : null;
+  } catch { return null; }
+}
+
+/** Promoted PRs that got merged since: an `AlmMerged` event each (gh pr view; no gh → nothing). */
+function detectMergedPrs(projectRoot, activeSession, events, options = {}) {
+  const merged = new Set(events.filter((e) => e.type === 'AlmMerged').map((e) => e.work_item_id));
+  const found = [];
+  for (const e of events.filter((x) => x.type === 'TaskPromoted' && x.payload && x.payload.pr && !merged.has(x.work_item_id))) {
+    const r = (options.ghSpawn || spawnSync)('gh', ['pr', 'view', String(e.payload.pr), '--json', 'state,mergedAt'], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+    if (r.status !== 0) continue;
+    let j = null;
+    try { j = JSON.parse(String(r.stdout || '{}')); } catch { j = null; }
+    if (j && String(j.state).toUpperCase() === 'MERGED') {
+      appendEvent(projectRoot, activeSession, { type: 'AlmMerged', work_item_id: e.work_item_id, payload: { pr: e.payload.pr, merged_at: j.mergedAt || null } });
+      merged.add(e.work_item_id);
+      found.push(e.work_item_id);
+    }
+  }
+  return found;
+}
+
+/**
+ * `oxe-cc alm status|push|sync|move|link|defect`. Async (network). With `dryRun` nothing is written anywhere.
+ * options: { action, dryRun, stories (bool), tasks (bool), ref, stage, key, title, origin, http, env, ghSpawn, provider }
+ */
+async function runtimeAlm(projectRoot, activeSession, options = {}) {
+  const lib = require('./oxe-alm.cjs');
+  const config = readProjectConfig(projectRoot) || {};
+  const cfg = lib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) });
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const env = options.env || process.env;
+  const problems = lib.checkConfig(cfg, env);
+  if (options.action === 'status' || !options.action) {
+    const st = lib.readState(programDir);
+    return { configured: Boolean(cfg), provider: cfg ? cfg.provider : 'none', transport: cfg ? cfg.transport : null, problems, links: lib.links(programDir).size, pending: (st.pending || []).length, queue: lib.readQueue(programDir).ops.length, last_sync: st.last_sync || null, auto: cfg ? cfg.auto : false };
+  }
+  if (options.action === 'queue') {
+    return { provider: cfg ? cfg.provider : 'none', transport: cfg ? cfg.transport : null, ops: lib.pendingOps(programDir) };
+  }
+  if (!cfg) throw new Error('ALM não configurado: defina "alm": { "provider": "jira" | "azure-devops", … } no .oxe/config.json (sem ALM, o OXE segue normalmente)');
+  const dryRun = Boolean(options.dryRun || cfg.dry_run);
+  if (problems.length && !dryRun) throw new Error(`ALM: ${problems.join('; ')}`);
+  // A dry run with the credentials in place still READS (what exists, what would be adopted); it never writes.
+  const net = { http: options.http, env, sleep: options.sleep, provider: options.provider, retries: options.retries, dryRun, readOnlyLookup: dryRun && !problems.length };
+  const phase = activeProgramPhase(projectRoot, activeSession);
+  if (options.action === 'ack') {
+    if (!options.ref) throw new Error('uso: oxe-cc alm ack <id-da-operação|US-n|Fn-Tn> [--key <chave>] [--url <url>] [--error "…"]');
+    const ref = /^T\d+$/i.test(options.ref) ? lib.taskRef(phase ? phase.id : null, options.ref.toUpperCase()) : options.ref;
+    const out = lib.ack(programDir, cfg, ref, { key: options.key, url: options.url, error: options.error, adopted: options.adopted });
+    if (out.done) appendEvent(projectRoot, activeSession, { type: 'AlmAcked', payload: { id: out.id, key: options.key || null } });
+    return out;
+  }
+  if (options.action === 'push') {
+    const prdFile = prdPathFor(projectRoot, activeSession);
+    const prd = fs.existsSync(prdFile) ? require('./oxe-prd.cjs').readPrd(prdFile) : null;
+    const doc = readPlanJsonDoc(projectRoot, activeSession).doc;
+    const wantStories = options.stories !== false;
+    const wantTasks = options.tasks !== false;
+    const title = (() => { const m = prd && /^#\s+(?:PRD\s+[—-]\s+)?(.+)$/m.exec(readTextIfExists(prdFile) || ''); return m ? m[1].trim() : null; })();
+    const out = await lib.push(programDir, cfg, {
+      stories: wantStories && prd ? prd.stories : [],
+      tasks: wantTasks && doc ? doc.tasks || [] : [],
+      phase: phase ? phase.id : (doc && doc.phase) || null,
+      epicTitle: title && !/^\(/.test(title) ? title : null,
+      dryRun,
+      rebuild: Boolean(options.rebuildLedger),
+      firstPush: Boolean(options.firstPush),
+    }, net);
+    if (!dryRun) appendEvent(projectRoot, activeSession, { type: 'AlmPushed', payload: { created: out.created.length, reused: out.reused.length, failed: out.failed.length } });
+    return { provider: cfg.provider, dry_run: dryRun, ...out };
+  }
+  if (options.action === 'sync') {
+    if (!dryRun) { try { detectMergedPrs(projectRoot, activeSession, readEvents(projectRoot, activeSession), options); } catch { /* sem gh: segue */ } }
+    const events = readEvents(projectRoot, activeSession);
+    const links = lib.links(programDir);
+    const doc = readPlanJsonDoc(projectRoot, activeSession).doc;
+    const phaseId = phase ? phase.id : (doc && doc.phase) || null;
+    const refsOfPhase = (ph) => [...links.keys()].filter((ref) => (ph ? ref.startsWith(`${ph}-`) : /^(F\d+-)?T\d+/.test(ref)) || /^US-/.test(ref));
+    const releasedEnv = config.alm && typeof config.alm.released_env === 'string' ? config.alm.released_env : null;
+    const out = await lib.sync(programDir, cfg, events, { phase: phaseId, refsOfPhase, releasedEnv }, net);
+    return { provider: cfg.provider, dry_run: dryRun, ...out };
+  }
+  if (options.action === 'move') {
+    const ref = /^T\d+$/i.test(options.ref || '') ? lib.taskRef(phase ? phase.id : null, options.ref.toUpperCase()) : options.ref;
+    return lib.move(programDir, cfg, ref, options.stage, { ...net, comment: options.comment });
+  }
+  if (options.action === 'link') {
+    if (!options.ref || !options.key) throw new Error('uso: oxe-cc alm link <US-n|Tn> <chave>');
+    const ref = /^T\d+$/i.test(options.ref) ? lib.taskRef(phase ? phase.id : null, options.ref.toUpperCase()) : options.ref;
+    if (!dryRun) { lib.addLink(programDir, { ref, key: options.key, kind: /^US-/.test(ref) ? 'story' : 'task', provider: cfg.provider, manual: true }); lib.dropEnsure(programDir, ref); }
+    return { ref, key: options.key, dry_run: dryRun };
+  }
+  if (options.action === 'defect') {
+    const ref = options.ref || `BUG-${Date.now().toString(36).toUpperCase()}`;
+    return lib.reportDefect(programDir, cfg, { ref, title: options.title || 'defeito', description: options.description, origin: options.origin }, net);
+  }
+  throw new Error(`alm ${options.action}: ação desconhecida (status | push | sync | move | link | defect | queue | ack)`);
+}
+
+/**
+ * The automatic sync at the lifecycle points (alm.auto, default on when an ALM is configured). Fire and forget: it
+ * never throws and never fails the OXE command; a failed write stays pending for the next sync.
+ */
+function almAutoSync(projectRoot, activeSession) {
+  try {
+    const cfg = require('./oxe-alm.cjs').almConfig(readProjectConfig(projectRoot) || {});
+    if (!cfg || !cfg.auto || process.env.OXE_ALM_OFF === '1') return null;
+    if (require('./oxe-alm.cjs').checkConfig(cfg).length) return null;
+    return runtimeAlm(projectRoot, activeSession, { action: 'sync' }).catch(() => null);
+  } catch { return null; }
+}
+
+/**
+ * Pack symbols on a file that already exists and does not define them, for pending tasks. In the task's files: a
+ * warning (the task must create the export, or every attempt fails the stub-check). Outside them: an error (the
+ * task cannot add it there). Another task that declares the same symbol on the same file is its creator: no finding.
+ * @returns {{ errors: string[], warnings: string[] }}
+ */
+function packSymbolProblems(projectRoot, plan) {
+  const out = { errors: [], warnings: [] };
+  const packFile = path.join(projectRoot, '.oxe', 'IMPLEMENTATION-PACK.json');
+  if (!fs.existsSync(packFile)) return out;
+  const pack = JSON.parse(fs.readFileSync(packFile, 'utf8'));
+  const entries = Array.isArray(pack && pack.tasks) ? pack.tasks.filter(Boolean) : [];
+  const stub = require('./oxe-stub-check.cjs');
+  const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const tasks = new Map((plan && plan.tasks ? plan.tasks : []).map((t) => [t.id, t]));
+  const declaredBy = new Map();
+  for (const e of entries) for (const s of Array.isArray(e.symbols) ? e.symbols : []) {
+    if (!s || typeof s !== 'object') continue;
+    const key = `${norm(s.path || s.file)}#${String(s.name || '').trim()}`;
+    declaredBy.set(key, [...(declaredBy.get(key) || []), e.id || e.task]);
+  }
+  const texts = new Map();
+  const read = (f) => { if (!texts.has(f)) { try { texts.set(f, fs.readFileSync(path.join(projectRoot, f), 'utf8')); } catch { texts.set(f, null); } } return texts.get(f); };
+  for (const e of entries) {
+    const id = e.id || e.task;
+    const task = tasks.get(id);
+    if (!task || task.done) continue;
+    const scope = (task.files || []).map(norm);
+    for (const s of Array.isArray(e.symbols) ? e.symbols : []) {
+      if (!s || typeof s !== 'object' || s.exported === false) continue;
+      const name = String(s.name || '').trim();
+      const file = norm(s.path || s.file);
+      if (!/^[A-Za-z_$][\w$]*$/.test(name) || !file || file.includes('*')) continue;
+      const text = read(file);
+      if (text == null || stub.definesSymbol(text, name)) continue;
+      if ((declaredBy.get(`${file}#${name}`) || []).some((other) => other !== id)) continue;
+      const inScope = scope.some((f) => f === file || (f.endsWith('/') ? file.startsWith(f) : file.startsWith(`${f}/`)));
+      if (inScope) out.warnings.push(`${id}: o pack declara \`${name}\` em ${file}, que existe e não define \`${name}\` — a tarefa terá de criar esse export, senão o stub-check reprova e o execute para (plan_defect). Se o nome foi deduzido do nome do arquivo, corrija o IMPLEMENTATION-PACK`);
+      else out.errors.push(`${id}: o pack declara \`${name}\` em ${file}, que existe, não define \`${name}\` e está fora de files de ${id} — a tarefa não pode criá-lo; corrija o símbolo no IMPLEMENTATION-PACK ou inclua o arquivo em files`);
+    }
+  }
+  return out;
+}
+
+/** An index.html (root, public/, src/ or www/) and no bundler, framework or Electron among the package.json deps. */
+function looksLikeStaticFileApp(projectRoot) {
+  if (!projectRoot) return false;
+  const hasIndex = ['index.html', 'public/index.html', 'src/index.html', 'www/index.html'].some((p) => fs.existsSync(path.join(projectRoot, p)));
+  if (!hasIndex) return false;
+  let pkg = null;
+  try { pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8')); } catch { return true; }
+  const deps = Object.keys({ ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) });
+  const BUILT = /^(electron|electron-vite|vite|webpack|webpack-cli|rollup|esbuild|parcel|@parcel\/.*|next|nuxt|react-scripts|@angular\/.*|@vue\/cli-service|@sveltejs\/kit|astro|expo|react-native|@remix-run\/.*|gatsby|snowpack|turbopack|tsup|vitepress)$/;
+  return !deps.some((d) => BUILT.test(d));
+}
+
 /**
  * Static-analysis lints for common pitfalls detectable before execution.
  * Returns hint strings to be appended to validationErrors (shown at compile time).
@@ -1963,7 +2398,9 @@ function lintPlanForCommonPitfalls(parsedPlan, parsedSpec, projectRoot, rawSpecT
   // Detects: spec mentions HTML/SPA + no files restriction, but no verify command
   // checks for fetch() absence. Warns to add a fetch-detection verify.
   const isHtmlApp = /html|spa|browser|page|frontend|estático|static|aplicação web|web app|web page|interface web|\.html/i.test(specText);
-  if (isHtmlApp) {
+  // Only a project that looks like a static file:// app: an index.html and no bundler, framework or Electron in
+  // package.json. An Electron app (oxespace-152-mobile) got this hint for a SPEC that never mentions file:// or fetch.
+  if (isHtmlApp && looksLikeStaticFileApp(projectRoot)) {
     const hasFetchGuard = planTasks.some(t =>
       t.verifyCommand && /fetch|XMLHttpRequest|file:\/\//i.test(t.verifyCommand)
     );
@@ -3754,18 +4191,50 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
       regression_checks: regressionChecks.length,
     },
   });
-  const report = await runtime.verifyRun({
-    projectRoot,
-    runId: current.run_id,
-    workItemId: String(targetWorkItem),
-    cwd: options.cwd || projectRoot,
-    suite: runSuite,
-    pluginRegistry: registry || undefined,
-    evidenceStore,
-    attemptNumber: options.attemptNumber || 1,
-    // OXB-072: --timeout-ms > config verify_timeout_ms > 10 min. The runtime's 60 s default timed out Electron suites.
-    timeoutMs: options.timeoutMs || (Number(projectConfig.verify_timeout_ms) > 0 ? Number(projectConfig.verify_timeout_ms) : 600_000),
-  });
+  // 1.21.2: verify.remote — the heavy checks (e2e, packaged build, Android) run in the repository's CI; the rest here.
+  const remoteLib = require('./oxe-verify-remote.cjs');
+  const rcfg = options.remote === false ? null : remoteLib.remoteConfig(projectConfig);
+  let localSuite = runSuite;
+  let remoteChecks = [];
+  let hints = { jobs: new Map() };
+  if (rcfg) {
+    let planDoc = null;
+    try { planDoc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { planDoc = null; }
+    hints = remoteLib.planHints(planDoc);
+    remoteChecks = (runSuite.checks || []).filter((c) => remoteLib.whereFor(c, rcfg, hints) === 'remote');
+    if (remoteChecks.length) localSuite = { ...runSuite, checks: (runSuite.checks || []).filter((c) => !remoteChecks.includes(c)) };
+  }
+  const report = localSuite.checks && localSuite.checks.length
+    ? await runtime.verifyRun({
+      projectRoot,
+      runId: current.run_id,
+      workItemId: String(targetWorkItem),
+      cwd: options.cwd || projectRoot,
+      suite: localSuite,
+      pluginRegistry: registry || undefined,
+      evidenceStore,
+      attemptNumber: options.attemptNumber || 1,
+      // OXB-072: --timeout-ms > config verify_timeout_ms > 10 min. The runtime's 60 s default timed out Electron suites.
+      timeoutMs: options.timeoutMs || (Number(projectConfig.verify_timeout_ms) > 0 ? Number(projectConfig.verify_timeout_ms) : 600_000),
+    })
+    : { status: remoteChecks.length ? 'passed' : 'partial', suite: localSuite, executed: null, gaps: remoteChecks.length ? [] : ['Nenhum check executável foi compilado a partir de SPEC/PLAN.'], verification_results: [], check_results: [], manifest: null, risk_ledger: null, evidence_coverage: null };
+  if (remoteChecks.length) {
+    const remote = remoteLib.runRemote({ checks: remoteChecks, rcfg, cwd: options.cwd || projectRoot, spawn: options.ghSpawn, push: Boolean(options.push), sleep: options.sleep, jobs: hints.jobs });
+    const merged = remote.results.map((r) => remoteLib.toCheckResult(r, remote.run));
+    report.check_results = [...(report.check_results || []), ...merged];
+    report.remote = { status: remote.status, reason: remote.reason || null, run: remote.run || null, checks: merged.map((m) => ({ id: m.check_id, status: m.remote.status, job: m.remote.job, url: m.remote.url })) };
+    const failed = merged.filter((m) => m.status === 'fail');
+    const notVerified = merged.filter((m) => m.remote.status === 'not_verified');
+    if (failed.length) report.status = 'failed';
+    if (notVerified.length) {
+      report.gaps = [...(report.gaps || []), `Verificação remota: ${notVerified.length} check(s) não verificado(s) — ${notVerified[0].remote.reason || remote.reason}${rcfg.required ? ' (verify.remote.required: o close exige o remoto)' : ' (a fase segue com o local)'}`];
+      if (rcfg.required && report.status === 'passed') report.status = 'partial';
+    }
+    if (remote.run && remote.run.id) {
+      try { gatesLib.attachCiRun(artifactPaths.programDir || path.join(projectRoot, '.oxe', 'program'), { run: String(remote.run.id), head: remote.run.head, phase: programPhaseId }); } catch { /* evidência auxiliar */ }
+    }
+    appendEvent(projectRoot, activeSession, { type: 'RemoteVerification', run_id: current.run_id, payload: { status: remote.status, run: remote.run ? remote.run.url : null, reused: Boolean(remote.run && remote.run.reused), passed: merged.filter((m) => m.status === 'pass').length, failed: failed.length, not_verified: notVerified.length } });
+  }
   // A passing re-verify of a fully executed run restores `completed` (a previous failed verify
   // must not leave it stuck in `running`).
   const graphNodes = current.compiled_graph && current.compiled_graph.nodes
@@ -4003,6 +4472,7 @@ function runtimeDeployAttach(projectRoot, activeSession, options = {}) {
   const envVars = rt && typeof rt.childProcessEnv === 'function' ? rt.childProcessEnv(process.env) : { ...process.env };
   const record = require('./oxe-phase-gates.cjs').attachDeploy(programDir, { env: options.env, version: options.version, ref: options.ref, phase, by: options.by || null, checks: options.checks || [], cwd: projectRoot, spawn: options.spawn, env_vars: envVars });
   appendEvent(projectRoot, activeSession, { type: 'DeployAttached', payload: { phase, env: record.env, version: record.version, ref: record.ref, ok: record.ok, checks: record.checks.map((c) => ({ id: c.id, ok: c.ok, exit: c.exit })) } });
+  almAutoSync(projectRoot, activeSession);
   return record;
 }
 
@@ -4242,6 +4712,14 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
         if (ids.length > 1) result.warnings.push(`acoplamento de compilação: ${ids.join(', ')} compilam juntos em \`${cmd.slice(0, 80)}\` — os testes congelados de uma tarefa não compilam enquanto faltarem os símbolos das outras; commite antes um esqueleto (stubs com TODO) dos symbols do pack`);
       }
     }
+    // A pack symbol on a file that exists and does not define it: the task must create it, or the stub-check fails
+    // every attempt. oxespace-152-mobile: `text` in remote/text.ts (a name guessed from the file) cost two correct
+    // attempts. Outside the task's files it cannot be created there at all → error.
+    try {
+      const ps = packSymbolProblems(projectRoot, plan);
+      result.errors.push(...ps.errors);
+      result.warnings.push(...ps.warnings);
+    } catch { /* the pack is checked by the rationality gaps */ }
     // OXB-152: on Windows a `./script.sh` verify needs a .cmd/.bat sibling (gradlew/mvnw are mapped automatically).
     if (process.platform === 'win32' || options.platform === 'win32') {
       for (const task of plan.tasks || []) {
@@ -4290,6 +4768,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       spec: paths.spec || p.spec,
       visualInputsJson: p.visualInputsJson,
       visualInputsMd: p.visualInputsMd,
+      assumeApplicable: !planText && options.preflight !== false && config.plan_lint_preflight !== false,
     });
     // OXB-041: the preflight blocks on these whenever it applies (a PLAN.md exists), pack or not — so lint does too.
     // (Before, without an IMPLEMENTATION-PACK they were warnings: lint said "ok" and execute refused.)
@@ -4451,6 +4930,12 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       result.errors.push(...dl.errors);
       result.warnings.push(...dl.warnings);
     }
+  } catch { /* auxiliar */ }
+  // 1.21.2: PRD traceability (stories ↔ SPEC criteria) and the phase's RFC.
+  try {
+    const docs = productDocsLint(projectRoot, activeSession, { specText, specCriteria: spec && Array.isArray(spec.criteria) ? spec.criteria.map((c) => c.id) : [] });
+    result.errors.push(...docs.errors);
+    result.warnings.push(...docs.warnings);
   } catch { /* auxiliar */ }
   // OXB-123: the probe sections of the SPEC (statuses, reasons, open edges without an assumption in the plan).
   try {
@@ -5025,7 +5510,7 @@ function runtimeSpecAmend(projectRoot, activeSession, options = {}) {
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const specText = readTextIfExists(paths.spec);
   if (!specText) throw new Error(`SPEC.md não encontrada (${paths.spec})`);
-  const edit = specEdit.amendCriterion(specText, id, { text: options.text, append: options.append, verify: options.verify });
+  const edit = specEdit.amendCriterion(specText, id, { text: options.text, append: options.append, verify: options.verify, risk: options.risk });
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const program = programLib.readProgram(programDir);
   const current = changeLib.amendmentRequirements(programDir).get(id);
@@ -5054,7 +5539,7 @@ function runtimeSpecAdd(projectRoot, activeSession, options = {}) {
   const specText = readTextIfExists(paths.spec);
   if (!specText) throw new Error(`SPEC.md não encontrada (${paths.spec})`);
   const edit = kind === 'criterion'
-    ? specEdit.addCriterion(specText, options.id, { text: options.text, verify: options.verify, allowGap: options.allowGap })
+    ? specEdit.addCriterion(specText, options.id, { text: options.text, verify: options.verify, risk: options.risk, allowGap: options.allowGap })
     : specEdit.addRequirement(specText, options.id, { text: options.text, version: options.version, criteria: options.criteria, before: options.before, allowGap: options.allowGap });
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const record = {
@@ -5480,7 +5965,16 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   const assumed = promoteAssumedTasks(projectRoot, range, ordered, idSet, phaseCtx);
   const original = (gitLines(projectRoot, ['rev-parse', '--abbrev-ref', 'HEAD']) || [])[0];
   const originalSha = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
-  const branch = String(options.branch || `oxe/promote-${taskId.toLowerCase()}`).trim();
+  // ALM: with an item for the task, the branch starts with its key ("oxe-12-t3"; Azure DevOps "ab-123-t3").
+  let branchKey = null;
+  try {
+    const almLib = require('./oxe-alm.cjs');
+    const almCfg = almLib.almConfig(readProjectConfig(projectRoot) || {});
+    const ph = activeProgramPhase(projectRoot, activeSession);
+    const k = almCfg ? almLib.keyFor(resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program'), almCfg, ph ? ph.id : null, taskId) : null;
+    branchKey = k ? k.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : null;
+  } catch { branchKey = null; }
+  const branch = String(options.branch || (branchKey ? `${branchKey}-${taskId.toLowerCase()}` : `oxe/promote-${taskId.toLowerCase()}`)).trim();
   // Never a force-push: a branch already on the remote with commits we do not have is refused before anything changes.
   const remote = String(options.remote || 'origin');
   // OXB-160: a local branch an earlier (failed) promote left behind — created by the promote, never pushed — is
@@ -5677,7 +6171,16 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   const bodyFile = path.join(projectRoot, '.oxe', 'promote', `${taskId}.md`);
   writeTextAtomic(bodyFile, body);
   result.body_file = path.relative(projectRoot, bodyFile).replace(/\\/g, '/');
-  const title = `${taskId}: ${task.title || 'promote'}`;
+  // ALM: the item key goes in the PR title (Jira "(OXE-12)", Azure DevOps "(AB#123)") so the provider links PR ↔ item.
+  let almKey = null;
+  try {
+    const almLib = require('./oxe-alm.cjs');
+    const cfgAlm = almLib.almConfig(readProjectConfig(projectRoot) || {});
+    const ph = activeProgramPhase(projectRoot, activeSession);
+    if (cfgAlm) almKey = almLib.keyFor(resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program'), cfgAlm, ph ? ph.id : null, taskId);
+  } catch { almKey = null; }
+  if (almKey) result.alm_key = almKey;
+  const title = `${taskId}: ${task.title || 'promote'}${almKey ? ` (${almKey})` : ''}`;
   // OXB-157: the PR targets the branch NAME on the remote (`main`), not the local tracking ref (`origin/main`).
   const prBase = base.replace(new RegExp(`^${remote}/`), '');
   result.commands = [
@@ -5699,6 +6202,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     }
   }
   appendEvent(projectRoot, activeSession, { type: 'TaskPromoted', work_item_id: taskId, payload: { base, branch, commits: ordered, pr_ready: result.pr_ready ? result.pr_ready.ok : null, pr: result.pr, ...(stack ? { stacked_on: result.stacked_on } : {}) } });
+  almAutoSync(projectRoot, activeSession);
   return result;
 }
 
@@ -5727,6 +6231,14 @@ function planWithoutCriteria(doc, criteria) {
   if (blockers.length) throw new Error(`não dá para tirar ${criteria.join(', ')} do plano atual: ${blockers.join('; ')} — ajuste o plano (/oxe-plan) antes`);
   next.tasks = (next.tasks || []).filter((t) => !removedTasks.includes(t.id));
   return { doc: next, removedTasks, removedTests: (doc.acceptance_tests || []).filter((t) => t && drop.has(t.criterion)).map((t) => t.id || t.criterion) };
+}
+
+/** An execution attempt of the phase already happened: a run or a task started since the phase started. */
+function phaseAttemptRan(projectRoot, activeSession, phase) {
+  const since = phase.started_at ? Date.parse(phase.started_at) : 0;
+  let events = [];
+  try { events = readEvents(projectRoot, activeSession); } catch { return false; }
+  return events.some((e) => ['RunStarted', 'TaskStarted', 'TaskCompleted', 'ExecutorTurn'].includes(e.type) && (!since || !e.timestamp || Date.parse(e.timestamp) >= since));
 }
 
 /**
@@ -5774,8 +6286,11 @@ function runtimeProgramPhaseEdit(projectRoot, activeSession, options = {}, inter
     throw new Error('nada a editar: use --title, --scope, --add-requirements, --remove-requirements, --add-acceptance ou --remove-acceptance');
   }
   const notStarted = phase.status === 'pending' && !phase.plan_ref && !phase.run_id && !phase.started_at && state.active_phase !== phase.id;
+  // 1.21.2: `program start` puts the phase in planning; until an attempt runs, its scope is still being planned, so
+  // new criteria and requirements go in directly (the CR path is for executing onwards).
+  const stillPlanning = phase.status === 'planning' && !phase.run_id && !phaseAttemptRan(projectRoot, activeSession, phase);
   if (phase.status === 'closed') throw new Error(`${phase.id} está fechada — mude o escopo de uma fase fechada com um CR (runtime feedback), não editando a fase`);
-  if ((addReq.length || addAcc.length) && !notStarted) throw new Error(`${phase.id} já começou (${phase.status}${phase.plan_ref ? ', com plano' : ''}) — critérios e requisitos novos entram numa fase ainda não iniciada (ou via CR)`);
+  if ((addReq.length || addAcc.length) && !notStarted && !stillPlanning) throw new Error(`${phase.id} já começou (${phase.status}${phase.plan_ref ? ', com plano' : ''}${phase.run_id ? ', com run' : ''}) — critérios e requisitos novos entram numa fase ainda não iniciada ou em planning sem tentativa executada (depois disso, via CR)`);
   const standingIds = require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot);
   for (const a of addAcc) if (standingIds.includes(a)) throw new Error(`${a} é permanente (program.standing_acceptance): vale em todo close de fase, por sign-off com evidência — não se adiciona a uma fase`);
   for (const a of addAcc) {
@@ -5810,6 +6325,7 @@ function runtimeProgramPhaseEdit(projectRoot, activeSession, options = {}, inter
   const knownR = new Set(specEdit.requirementIds(specText));
   for (const a of addAcc) if (knownA.size && !knownA.has(a)) warnings.push(`${a} não está na tabela de critérios da SPEC (oxe-cc spec add criterion ${a} …)`);
   for (const r of addReq) if (knownR.size && !knownR.has(r)) warnings.push(`${r} não está nos requisitos da SPEC (oxe-cc spec add requirement ${r} …)`);
+  if (stillPlanning && phase.plan_ref && addAcc.length) warnings.push(`${phase.id} já tem plano: cubra ${addAcc.join(', ')} no PLAN e rode oxe-cc plan lint antes do execute`);
   const roadmapText = internal.roadmapText != null ? internal.roadmapText : readTextIfExists(paths.roadmap);
   if (!roadmapText) throw new Error(`ROADMAP.md não encontrado (${paths.roadmap})`);
   const roadmap = specEdit.editRoadmapPhase(roadmapText, phase.id, {
@@ -6711,6 +7227,7 @@ function runtimeStartTask(projectRoot, activeSession, options = {}) {
     work_item_id: taskId,
     payload: { task: taskId, executor, base_sha: baseSha },
   });
+  almAutoSync(projectRoot, activeSession);
   return { ok: true, task: taskId, status: 'in_progress', executor, base_sha: baseSha, started_at: at };
 }
 
@@ -7522,13 +8039,22 @@ function modeFor(projectRoot, rel) {
 function checkpointMessageFor(projectRoot, runState, taskId, planTask, phase, config = null) {
   const node = (runState && runState.compiled_graph && runState.compiled_graph.nodes && runState.compiled_graph.nodes[taskId]) || {};
   const t = planTask || {};
+  const cfg0 = config || readProjectConfig(projectRoot);
+  // ALM: the item key goes in the commit subject ("… (OXE-12)") so the provider links commit ↔ item.
+  let almKey = null;
+  try {
+    const almLib = require('./oxe-alm.cjs');
+    const almCfg = almLib.almConfig(cfg0 || {});
+    if (almCfg) almKey = almLib.keyFor(resolveRuntimeArtifactPaths(projectRoot, null).programDir || path.join(projectRoot, '.oxe', 'program'), almCfg, phase || null, taskId);
+  } catch { almKey = null; }
   return require('./oxe-commit-convention.cjs').checkpointMessage({
     id: taskId,
     title: t.title || node.title || taskId,
     commit: t.meta && t.meta.commit ? t.meta.commit : t.commit,
     phase: phase || null,
     run_id: (runState && runState.run_id) || null,
-  }, config || readProjectConfig(projectRoot));
+    alm_key: almKey,
+  }, cfg0);
 }
 
 /**
@@ -7902,7 +8428,28 @@ function runtimeProgramStatus(projectRoot, activeSession) {
       }
     }
   } catch { /* auxiliar */ }
-  return { exists: true, state, progress: runtime.programProgress(state), paths: where, amended_closed: amendedClosed };
+  const progress = runtime.programProgress(state);
+  return { exists: true, state, progress, paths: where, amended_closed: amendedClosed, phase_plan: phasePlanReadiness(projectRoot, activeSession, progress && progress.phase) };
+}
+
+/**
+ * A phase in `planning` whose plan already exists (PLAN.json for that phase, with tasks): the next step is the
+ * execute, not /oxe-plan. `program start` on oxespace-152 said "Próximo: /oxe-plan" with PLAN.json, PLAN.md and the
+ * packs of F1 in place and `plan lint` OK. The lint here is the plan-only one (no preflight, no dry-verify): cheap.
+ * @returns {{ exists: boolean, tasks: number, lint_ok: boolean | null, errors: number } | null}
+ */
+function phasePlanReadiness(projectRoot, activeSession, phase) {
+  if (!phase || phase.status !== 'planning') return null;
+  try {
+    const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+    const tasks = doc && Array.isArray(doc.tasks) ? doc.tasks.filter(Boolean) : [];
+    if (!doc || !tasks.length || (doc.phase && doc.phase !== phase.id)) return { exists: false, tasks: 0, lint_ok: null, errors: 0 };
+    let lint = null;
+    try { lint = runtimePlanLint(projectRoot, activeSession, { preflight: false }); } catch { lint = null; }
+    return { exists: true, tasks: tasks.length, lint_ok: lint ? Boolean(lint.ok) : null, errors: lint && Array.isArray(lint.errors) ? lint.errors.length : 0 };
+  } catch {
+    return null;
+  }
 }
 
 function runtimeProgramInit(projectRoot, activeSession, options = {}) {
@@ -7923,7 +8470,13 @@ function runtimeProgramInit(projectRoot, activeSession, options = {}) {
     type: 'ProgramCreated',
     payload: { phases: state.phases.map((phase) => phase.id), roadmap: state.roadmap_ref },
   });
-  return { ...runtimeProgramStatus(projectRoot, activeSession), warnings: roadmapCriteriaWarnings(readTextIfExists(paths.spec) || '', state) };
+  // 1.21.2: every program starts with its SYSTEM-DESIGN skeleton, so the design-drift gate of the close applies from
+  // phase 1 (before, only programs where someone ran `design build` had it).
+  let design = null;
+  try {
+    if (!fs.existsSync(require('./oxe-system-design.cjs').FILE(projectRoot))) design = runtimeDesignBuild(projectRoot, activeSession);
+  } catch { design = null; }
+  return { ...runtimeProgramStatus(projectRoot, activeSession), warnings: roadmapCriteriaWarnings(readTextIfExists(paths.spec) || '', state), ...(design ? { design_created: true } : {}) };
 }
 
 /**
@@ -8199,10 +8752,22 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     : { tasks: [] };
   const modules = programLib.buildInterfaces(projectRoot, runtime, programLib.contractedFiles(parsedPlan));
   const interfacesFile = programLib.writeInterfaces(paths.programDir, phase.id, modules);
+  // 1.21.2: a branch with an open PR (a merge train may forbid pushes to it) never gets the phase commit unless asked
+  // with --force-branch. oxespace-152-code: the close committed onto PR #792, already queued in the train.
+  const openPr = options.commit === false || options.forceBranch ? null : branchOpenPr(projectRoot, options.ghSpawn);
+  // The documents go into the phase commit only when the project asked for it (`docs_publish` configured): the close
+  // never writes files nobody requested.
+  let docsPublished = null;
+  const cfgClose = readProjectConfig(projectRoot) || {};
+  if (!openPr && options.commit !== false && cfgClose.docs_publish && typeof cfgClose.docs_publish === 'object') {
+    try { docsPublished = runtimeDocsPublish(projectRoot, activeSession, {}); } catch (err) { docsPublished = { error: err.message }; }
+  }
 
   const commit = options.commit === false
     ? { commit: null, committed: false, reason: 'commit desativado (--no-commit)' }
-    : programLib.commitPhase(projectRoot, options.message || `feat(phase-${phase.id.toLowerCase()}): ${phase.title}`);
+    : openPr
+      ? { commit: null, committed: false, reason: `o branch ${openPr.branch} tem PR aberto (${openPr.url || `#${openPr.number}`}) — fase fechada sem commit; commite num branch separado ou rode de novo com --force-branch` }
+      : programLib.commitPhase(projectRoot, options.message || `feat(phase-${phase.id.toLowerCase()}): ${phase.title}`);
 
   if (gate.deferred && gate.deferred.length && gateInput.verify_status === 'blocked') {
     const onlyManual = (run.verification_check_results || []).every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));
@@ -8265,6 +8830,7 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
       interface_modules: modules.length,
     },
   });
+  almAutoSync(projectRoot, activeSession);
   return {
     closed: true,
     phase: phase.id,
@@ -8274,6 +8840,7 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     rollback_rehearsal: rollbackRehearsal,
     regression_checks: regressionChecks.length,
     interface_modules: modules.length,
+    docs: docsPublished,
     next: runtime.nextOpenPhase(closed.state),
   };
 }
@@ -9644,6 +10211,16 @@ module.exports = {
   runtimeHandoff,
   runtimeContextUsage,
   runtimeDecision,
+  runtimeGrill,
+  grillPaths,
+  runtimeSpecCheck,
+  runtimeSpecApprove,
+  specApproval,
+  runtimeDeliveryStatus,
+  readPlanJsonDoc,
+  activeProgramPhase,
+  prdPathFor,
+  resolveRuntimeArtifactPaths,
   runtimeDefects,
   projectStatusPaths,
   runtimePlanReopen,
@@ -9693,6 +10270,17 @@ module.exports = {
   buildNodeContextProvider,
   detectRuntimeAdapters,
   runtimeProgramStatus,
+  phasePlanReadiness,
+  looksLikeStaticFileApp,
+  packSymbolProblems,
+  productDocsLint,
+  runtimePrd,
+  runtimeRfc,
+  runtimeDocsPublish,
+  runtimeAlm,
+  almAutoSync,
+  detectMergedPrs,
+  lintPlanForCommonPitfalls,
   runtimeRollback,
   commitTaskCheckpoint,
   runtimeStartTask,

@@ -12,6 +12,7 @@ export * from './evidence/index';
 export {
   compile as compileVerification,
   runCheck,
+  isRunnerTimeoutOnly,
   runSuite,
   executeSuite,
   verifyRun,

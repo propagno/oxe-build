@@ -5,7 +5,7 @@ export * from './compiler/index';
 export * from './scheduler/index';
 export * from './workspace/index';
 export * from './evidence/index';
-export { compile as compileVerification, runCheck, runSuite, executeSuite, verifyRun, summarizeSuite, extractCommandFromHowToVerify, looksLikeShellCommand, sha256File, } from './verification/verification-compiler';
+export { compile as compileVerification, runCheck, isRunnerTimeoutOnly, runSuite, executeSuite, verifyRun, summarizeSuite, extractCommandFromHowToVerify, looksLikeShellCommand, sha256File, } from './verification/verification-compiler';
 export * from './verification/test-report-parsers';
 export type { CheckType, AcceptanceCheck, AcceptanceCheckSuite, CheckResult, ExecutedVerificationSuite, VerifyRunResult, FrozenFile, AcceptanceTestLike, } from './verification/verification-compiler';
 export * from './verification/verification-manifest';

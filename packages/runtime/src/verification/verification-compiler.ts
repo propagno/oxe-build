@@ -5,6 +5,8 @@ import { spawnSync } from 'child_process';
 import { parseTestReport, extractTestFileArgs, missingProofs, extractTestResults } from './test-report-parsers';
 import { shellInvocation, childProcessEnv, decodeConsoleOutput } from '../executor/shell-argv';
 import { checkExpectedExports } from './contract-exports';
+import { isRunnerTimeoutOnly } from './runner-timeout';
+export { isRunnerTimeoutOnly } from './runner-timeout';
 import type { ExpectedExport } from './contract-exports';
 import type { EvidenceType } from '../models/evidence';
 import type { VerificationStatus } from '../models/verification-result';
@@ -107,6 +109,13 @@ export interface CheckResult {
   tests_executed?: number | null;
   /** Evidence id of the structured summary record (kept out of `evidence_refs` so coverage counts real output only). */
   summary_evidence_ref?: string | null;
+  /**
+   * A failure whose only cause was a test runner's own per-test timeout ("Test timed out in 5000ms") — no assertion
+   * failed. Such a check is run once more by itself; `first` is the original outcome, the result is the rerun's.
+   */
+  rerun?: { reason: 'runner_timeout'; first: { status: VerificationStatus; duration_ms: number; error: string | null }; status: VerificationStatus; duration_ms: number } | null;
+  /** The failure was only a runner timeout (on the rerun too, when there was one). */
+  runner_timeout?: boolean;
 }
 
 export interface ExecutedVerificationSuite {
@@ -312,7 +321,32 @@ export function compile(
   };
 }
 
+/**
+ * Runs a check. A failure caused only by a test runner's per-test timeout (machine load, not the code: the same file
+ * passed alone in 4 s) is run once more by itself before it counts; both outcomes are kept.
+ */
 export async function runCheck(
+  check: AcceptanceCheck,
+  cwd: string,
+  timeoutMs = 60_000
+): Promise<CheckResult> {
+  const first = await runCheckOnce(check, cwd, timeoutMs);
+  if (first.status !== 'fail' || !isRunnerTimeoutOnly(`${first.stdout}\n${first.stderr}`)) return first;
+  const second = await runCheckOnce(check, cwd, timeoutMs);
+  const stillTimeoutOnly = second.status === 'fail' && isRunnerTimeoutOnly(`${second.stdout}\n${second.stderr}`);
+  return {
+    ...second,
+    runner_timeout: stillTimeoutOnly,
+    rerun: {
+      reason: 'runner_timeout',
+      first: { status: first.status, duration_ms: first.duration_ms, error: first.error },
+      status: second.status,
+      duration_ms: second.duration_ms,
+    },
+  };
+}
+
+async function runCheckOnce(
   check: AcceptanceCheck,
   cwd: string,
   timeoutMs = 60_000

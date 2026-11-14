@@ -1720,6 +1720,13 @@ function scopeInsufficientReason(nodeId: string, ctx: SchedulerContext, verifyOu
     const files = [...new Set([...blocked[0].matchAll(/precisa de ([^,(]+(?:, [^,(]+)*), fora do escopo/g)].flatMap((m) => m[1].split(', ').map((x) => x.trim())))];
     return { reason: 'blocked_stub', files, detail: blocked[0] };
   }
+  // The pack names a symbol absent at the base that the attempt did not create (a name guessed from the file): a
+  // plan defect, never fixed by a retry.
+  const packDefect = /plan_defect: o pack nomeia um símbolo que não existe[^\n]*/.exec(String(verifyOutput || ''));
+  if (packDefect) {
+    const files = [...new Set([...packDefect[0].matchAll(/\b[\w$]+ em ([^,:]+?)(?=, |: )/g)].map((m) => m[1].trim()))];
+    return { reason: 'pack_symbol_missing', files, detail: packDefect[0] };
+  }
   return null;
 }
 

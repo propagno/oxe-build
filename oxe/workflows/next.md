@@ -14,6 +14,7 @@ Inspecionar `.oxe/STATE.md` global, a sessão ativa quando existir, e a existên
 </context>
 
 <process>
+0. **Fonte única:** se o `oxe-cc` estiver disponível, rode `oxe-cc status --json` e use o `next` (step, cursorCmd, reason) como resposta. Ele já cobre o grill e a aprovação da spec, o ALM (histórias, tarefas, fila do MCP), o RFC da fase, o programa por fases e a entrega (PR, CI/merge, deploy, close). Os passos abaixo são o fallback sem CLI. Para o mapa completo: `oxe-cc status --journey`.
 1. Se `.oxe/` ou `STATE.md` não existir → **único** passo: **scan** (ou `oxe-cc init-oxe` seguido de scan).
 2. Se não houver `.oxe/codebase/*.md` completos (sete mapas) e o trabalho **não** for só um quick isolado → **scan**.
 3. Se fase `quick_active` ou existir `QUICK.md` no escopo resolvido **sem** `PLAN.md`:
@@ -30,7 +31,7 @@ Inspecionar `.oxe/STATE.md` global, a sessão ativa quando existir, e a existên
 
 **Saída obrigatória (só isto, nesta ordem):**
 
-- **Próximo passo:** um único entre `scan` | `spec` | `discuss` | `plan` | `quick` | `execute` | `verify`
+- **Próximo passo:** um único entre `scan` | `spec` | `spec-approve` | `alm-push` | `alm-queue` | `discuss` | `plan` | `quick` | `execute` | `verify` | `signoff` | `ship` | `ship-wait` | `deploy` | `program-close`
 - **Comando:** o slash correspondente (ex.: `/oxe-scan`) **ou** `npx oxe-cc status` para conferir de novo
 - **Por quê:** uma frase
 - **Confiança / lacuna:** só quando o estado estiver incompleto ou ambíguo

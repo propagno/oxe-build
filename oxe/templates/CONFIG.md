@@ -50,6 +50,75 @@ Copie `oxe/templates/config.template.json` para **`.oxe/config.json`** no seu pr
 | `program.standing_acceptance` | array | Opcional (OXB-091). Critérios permanentes (ex.: `["A70"]`, um gate de UI): valem em **todo** close de fase por sign-off daquela fase com evidência (`runtime signoff --phase Fn --criteria A70 --evidence …`), nunca são "de outra fase" nem "sem tarefa" no lint. `spec add criterion … --standing` os registra aqui. |
 | `program` | object | Opcional. `program.export_dir`: pasta versionada (fora de `.oxe/`) onde `oxe-cc program export` grava SPEC.md, ROADMAP.md, PROGRAM.json e changes.ndjson. Com ela definida, `spec amend`/`spec add`/`program phase add` atualizam o export, e o `doctor` deixa de avisar sobre `.oxe/` no .gitignore. |
 | `install` | object | Opcional. Preferências de **instalação** quando corre `npx oxe-cc` **sem** flags de CLI. Ver tabela abaixo. |
+| `prd` | object | Opcional. `{ "required": true }` torna o `.oxe/PRD.md` obrigatório no `plan lint`, e a rastreabilidade história ↔ critério vira erro (o padrão é aviso, e só quando o PRD existe). |
+| `rfc` | object \| false | Opcional. `{ "required": "risk" }`: fase com critério P0/P1 precisa de RFC aceito antes do plano (erro); `"always"`: toda fase; `"never"` ou `false`: desliga. Padrão: aviso nas fases de risco. |
+| `adr` | object \| false | Opcional. Pasta dos ADRs publicados do registro de decisões: `{ "dir": "docs/adr" }` (padrão). `false` desliga. |
+| `docs_publish` | object \| false | Opcional. Pasta versionada para PRD, RFCs, ADRs e SYSTEM-DESIGN (`{ "dir": "docs" }`). O `oxe-cc docs publish` usa `docs/` sem a chave. Com a chave configurada, o close da fase também publica e inclui os documentos no commit dela, exceto num branch com PR aberto. `false` desliga. |
+| `alm` | object | Opcional. ALM do projeto (Jira ou Azure DevOps); sem ele, o fluxo segue igual. Ver a seção abaixo. |
+| `delivery` | string | object | Opcional. `"pr"` ou `{ "mode": "pr", "deploy_env": "staging" }`: depois do verify verde, o próximo passo guia a entrega (`/oxe-ship`: PR → CI/merge → deploy anexado → close). Sem ela, a fase fecha com o commit local do close, como antes. |
+| `verify` | object | Opcional. `verify.remote` roda os checks pesados no CI do repositório (ver a seção abaixo); `verify.where` força onde roda cada check, critério ou tarefa (`{ "A7": "remote", "gate-lint": "local" }`). |
+
+## ALM (`alm`): Jira ou Azure DevOps
+
+As credenciais nunca ficam no arquivo: o bloco diz o **nome** da variável de ambiente.
+
+```json
+"alm": {
+  "provider": "jira",
+  "program": "152code",
+  "jira": { "project": "OXE" },
+  "epic": "OXE-4",
+  "fix_version": { "F1": "1.5.2", "F3": "1.5.3" },
+  "labels": ["area-oxecode"],
+  "states": { "in_progress": "Em andamento", "in_review": "Em revisão", "queued": "Na fila", "merged": "Na main", "released": "Lançado" },
+  "track": ["in_progress"],
+  "adopt_prefixes": ["CODE", "VIS", "BRD"]
+}
+```
+
+| Chave | O que faz |
+|---|---|
+| `provider` | `jira`, `azure-devops` ou `none`. |
+| `transport` | `rest` (padrão): o `oxe-cc` fala com a API, e o token fica na variável de ambiente. `mcp`: sem token. O `oxe-cc` põe as escritas na fila `.oxe/program/alm-mcp-queue.json`, e o agente as executa com as ferramentas MCP do Jira ou do Azure DevOps ligadas à sessão (`oxe-cc alm queue` e `alm ack`). A fila só anda com um agente na sessão. Ver `oxe/workflows/references/product-docs-alm.md`. |
+| `jira` | `project` (chave), `site_env` / `email_env` / `token_env` (padrão `JIRA_SITE`, `JIRA_EMAIL`, `JIRA_API_TOKEN`), `types` (`{ "epic": "Epic", "story": "Story", "task": "Task", "bug": "Task" }`), `bug_label` (padrão `bug`). |
+| `azure_devops` | `project`, `org_env` / `token_env` (padrão `AZURE_DEVOPS_ORG`, `AZURE_DEVOPS_EXT_PAT`), `types` (`User Story`, `Task`, `Bug`), `area_path`, `iteration_path`. |
+| `program` | Entra no rótulo de idempotência `ref-<programa>-<ref>` (ex.: `ref-152code-F2-T5`). Padrão: o nome da pasta do projeto. |
+| `epic` | Pai das histórias e tarefas: uma chave ou uma por fase (`{ "F1": "OXE-4" }`). Sem ela, o `alm push` cria o épico a partir do título do PRD. |
+| `fix_version` | Versão-alvo dos itens: uma, ou uma por fase. |
+| `labels` | Somados aos rótulos da própria tarefa (`labels` no PLAN.json), nunca no lugar deles. |
+| `states` | Estado de cada etapa, pelo **nome**; o id da transição é resolvido na hora. |
+| `track` | Etapas que o OXE move (padrão: todas). Um repositório que já move PR, trem e tag por conta própria deixa só `["in_progress"]`. |
+| `release_version` | `true` lança a versão no deploy. Desligado quando uma pipeline de tag já faz isso. |
+| `adopt_prefixes` | Códigos antigos (`CODE-8` no título da tarefa, ou `refs: ["CODE-8"]`): o item com o rótulo `ref-CODE-8` é adotado em vez de criar outro. |
+| `ledger_guard` / `search_settle_ms` | A busca do Jira por rótulo pode levar minutos para ver um item novo, e o registro local (`.oxe/program/alm-links.ndjson`) é a defesa principal contra duplicata. Com `ledger_guard: true`, um push sem esse registro se recusa a criar. `alm push --rebuild-ledger` refaz o registro pela busca, sem criar nada; `--first-push` vale para o primeiro push de um programa. `search_settle_ms` é a espera antes da segunda busca: 5 s, ou 60 s com o guard. |
+| `dry_run` / `auto` | `dry_run: true` só mostra; `auto: false` desliga a sincronização automática nos pontos do ciclo. |
+
+Uma falha do ALM nunca derruba o comando do OXE: a escrita é tentada 3 vezes com backoff, é relida depois de feita, e, se não passar, fica pendente para o próximo `oxe-cc alm sync`.
+
+## Verificação remota (`verify.remote`)
+
+Os checks pesados (e2e, build empacotado, Android) rodam no CI do repositório no GitHub; vitest, tsc e lint ficam locais. Não há token novo: usa o `gh` já autenticado.
+
+```json
+"verify": {
+  "remote": { "provider": "github", "workflow": "ci.yml", "wait_minutes": 60, "required": false, "protected": ["release/*"] },
+  "where": { "A7": "remote" }
+}
+```
+
+- **Onde roda cada check:** o `where` explícito vence (no check, em `acceptance_tests[]` ou `tasks[]` do PLAN.json, ou em `verify.where`). Sem ele, um comando pesado (playwright, cypress, detox, gradlew, electron-builder, smoke…) vai para o remoto. `remote_job` liga o check ao nome do job no workflow; sem ele, vale o id do check.
+- **Execução:**
+  1. Empurra o branch da fase, só se ele já tem upstream (sem upstream: `oxe-cc runtime verify --push`).
+  2. Reaproveita um run já verde no mesmo commit. Se não houver, dispara `gh workflow run <workflow> --ref <branch>` **sem inputs** e acha o run pelo commit e pelo evento `workflow_dispatch`.
+  3. Espera até `wait_minutes` e lê o resultado por job. O run vira evidência de CI da fase.
+- **Travas:**
+  - nunca empurra para main/master nem para um branch protegido (`protected` aceita globs, e a proteção do GitHub também conta);
+  - nunca usa `--force`: um push recusado deixa o check "não verificado";
+  - um input de publish, release ou deploy em `inputs` é recusado.
+- **Falhas:**
+  - Um job vermelho reprova o critério, com o link do run no VERIFY.
+  - GitHub fora do ar, `gh` ausente ou tempo esgotado deixam o check como "não verificado", e a fase segue com o local. Com `required: true`, a fase só fecha com o remoto verde.
+  - `--no-remote` roda tudo local.
 
 ## Profiles de execução (`profile`)
 

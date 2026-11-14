@@ -14,13 +14,17 @@
 const fs = require('fs');
 const path = require('path');
 
+// ALM item keys (OXE-104, CODE-8, AB#123): every criterion carries one since the ALM integration; they are references,
+// not behavior — "(OXE-104)" made 104 look like a status code the test had to exercise.
+const ITEM_KEY_RE = /\b[A-Z][A-Z0-9]+-\d+\b|\bAB#\d+\b/g;
+
 function verifiableTerms(criterionText) {
   const text = String(criterionText || '');
   const terms = new Set();
-  for (const m of text.matchAll(/(?<![\w.])([1-5]\d\d)(?![\w.])/g)) terms.add(m[1]);
+  for (const m of text.replace(ITEM_KEY_RE, ' ').matchAll(/(?<![\w.])([1-5]\d\d)(?![\w.])/g)) terms.add(m[1]);
   for (const m of text.matchAll(/`([^`]{2,60})`/g)) terms.add(m[1].trim());
   for (const m of text.matchAll(/"([^"]{2,60})"/g)) terms.add(m[1].trim());
-  return [...terms].filter(Boolean);
+  return [...terms].filter((t) => t && !new RegExp(`^(?:${ITEM_KEY_RE.source})$`).test(t));
 }
 
 /**

@@ -1,10 +1,11 @@
 ---
 name: oxe:spec
 description: >
-  Conduz as 5 fases do processo de especificação: perguntas (blocos coesos por domínio), pesquisa
+  Conduz as 5 fases do processo de especificação: grill (árvore de decisões, uma pergunta por vez com a
+  resposta recomendada, até não sobrar ambiguidade; --fast para blocos), pesquisa
   (investigação de incertezas técnicas), requisitos (tabela R-ID com v1/v2/fora e critérios A*
   verificáveis), elevação de robustez (checklist de segurança por domínio AUTH/API/DB/FRONTEND/FILE),
-  e aprovação com roteiro ROADMAP.md. Flags: --refresh (atualiza codebase/ antes), --full (scan
+  PRD, glossário, ADRs e RFC, spec check e aprovação com roteiro ROADMAP.md. Flags: --refresh (atualiza codebase/ antes), --full (scan
   completo), --research (Fase 2 explícita), --ui (gera UI-SPEC.md ao final).
 argument-hint: "[descrição da feature | --refresh | --full | --research | --ui]"
 allowed-tools:

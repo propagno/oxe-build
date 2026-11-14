@@ -1,5 +1,5 @@
 ---
-description: "OXE — Spec em 5 fases: perguntas → pesquisa → requisitos (R-ID v1/v2/fora) → roteiro (.oxe/ROADMAP.md) → aprovação → plan"
+description: "OXE — Spec em 5 fases: grill (1 pergunta por vez, com a recomendada) → pesquisa → requisitos (R-ID v1/v2/fora) → roteiro (.oxe/ROADMAP.md) → PRD/glossário/ADRs/RFC → spec check → aprovação → plan"
 argument-hint: "[descrição da feature ou ideia]"
 oxe_workflow_slug: spec
 oxe_reasoning_mode: discovery
@@ -12,7 +12,7 @@ oxe_contract_version: 2.0.0
 oxe_semantics_hash: 4ec66ac1e704fdbf
 ---
 
-OXE — Spec em 5 fases: perguntas → pesquisa → requisitos (R-ID v1/v2/fora) → roteiro (.oxe/ROADMAP.md) → aprovação → plan
+OXE — Spec em 5 fases: grill (1 pergunta por vez, com a recomendada) → pesquisa → requisitos (R-ID v1/v2/fora) → roteiro (.oxe/ROADMAP.md) → PRD/glossário/ADRs/RFC → spec check → aprovação → plan
 
 <!-- oxe-reasoning-contract:start -->
 

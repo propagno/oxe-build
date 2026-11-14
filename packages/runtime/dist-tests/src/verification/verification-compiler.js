@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.VERIFICATION_COMPILER_VERSION = exports.SHELL_COMMAND_RE = void 0;
+exports.VERIFICATION_COMPILER_VERSION = exports.SHELL_COMMAND_RE = exports.isRunnerTimeoutOnly = void 0;
 exports.sha256File = sha256File;
 exports.stripQuotedArgs = stripQuotedArgs;
 exports.looksLikeShellCommand = looksLikeShellCommand;
@@ -21,6 +21,9 @@ const child_process_1 = require("child_process");
 const test_report_parsers_1 = require("./test-report-parsers");
 const shell_argv_1 = require("../executor/shell-argv");
 const contract_exports_1 = require("./contract-exports");
+const runner_timeout_1 = require("./runner-timeout");
+var runner_timeout_2 = require("./runner-timeout");
+Object.defineProperty(exports, "isRunnerTimeoutOnly", { enumerable: true, get: function () { return runner_timeout_2.isRunnerTimeoutOnly; } });
 const verification_manifest_1 = require("./verification-manifest");
 function sha256File(absPath) {
     try {
@@ -167,7 +170,28 @@ function compile(spec, plan) {
         plan_hash: hashObject({ plan, compiler: exports.VERIFICATION_COMPILER_VERSION }),
     };
 }
+/**
+ * Runs a check. A failure caused only by a test runner's per-test timeout (machine load, not the code: the same file
+ * passed alone in 4 s) is run once more by itself before it counts; both outcomes are kept.
+ */
 async function runCheck(check, cwd, timeoutMs = 60000) {
+    const first = await runCheckOnce(check, cwd, timeoutMs);
+    if (first.status !== 'fail' || !(0, runner_timeout_1.isRunnerTimeoutOnly)(`${first.stdout}\n${first.stderr}`))
+        return first;
+    const second = await runCheckOnce(check, cwd, timeoutMs);
+    const stillTimeoutOnly = second.status === 'fail' && (0, runner_timeout_1.isRunnerTimeoutOnly)(`${second.stdout}\n${second.stderr}`);
+    return {
+        ...second,
+        runner_timeout: stillTimeoutOnly,
+        rerun: {
+            reason: 'runner_timeout',
+            first: { status: first.status, duration_ms: first.duration_ms, error: first.error },
+            status: second.status,
+            duration_ms: second.duration_ms,
+        },
+    };
+}
+async function runCheckOnce(check, cwd, timeoutMs = 60000) {
     if (typeof check.timeout_ms === 'number' && check.timeout_ms > 0)
         timeoutMs = check.timeout_ms;
     const frozen = check.frozen_files ?? [];

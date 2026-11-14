@@ -241,6 +241,8 @@ O `calibration_error` de cada dimensão = `|score declarado - resultado observad
    - **Resumo**
 </process>
 
+**Ao terminar o verify verde:** com `docs_publish` configurado, `oxe-cc docs publish` antes do `program close`; com `alm.transport: "mcp"`, `oxe-cc alm queue`; com `delivery.mode: "pr"`, a entrega segue no `/oxe-ship` (PR, CI e merge, deploy, close). Termine com o **Próximo passo** de `oxe-cc status --json` (ver `references/next-step-footer.md`).
+
 <success_criteria>
 - [ ] VERIFY.md contém as quatro seções: Auditoria de pré-execução, Tabela de tarefas, Tabela de critérios SPEC, Fidelidade de decisões (quando aplicável), Checklist UAT.
 - [ ] Auditoria de pré-execução passou ou divergências foram documentadas.

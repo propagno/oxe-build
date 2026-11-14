@@ -64,6 +64,10 @@ describe('OXB-041/044: plan lint runs the execute preflight', () => {
     const out = op.runtimePlanLint(project(), null, {});
     assert.equal(out.ok, false);
     assert.ok(out.errors.some((e) => /preflight: PLAN\.md ausente/.test(e)), out.errors.join('\n'));
+    // the packs the preflight will require once PLAN.md exists are listed in the same run, not on the next one
+    for (const re of [/IMPLEMENTATION-PACK\.json inválido ou ausente/, /REFERENCE-ANCHORS\.md ausente/, /FIXTURE-PACK\.json inválido ou ausente/]) {
+      assert.ok(out.errors.some((e) => re.test(e)), `${re} — ${out.errors.join('\n')}`);
+    }
   });
 
   it('a PLAN.md without the self-evaluation: ONE pass lists the whole contract (fields, rubric, vector with global and dims)', () => {

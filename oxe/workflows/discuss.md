@@ -4,7 +4,16 @@
 Esclarecer requisitos **antes** do plano: registrar perguntas, respostas e decisões em **`.oxe/DISCUSS.md`**, e atualizar **`.oxe/STATE.md`**. Mantido enxuto (máx. **7** perguntas).
 
 Usar quando: SPEC existe mas há ambiguidade, risco técnico, ou `discuss_before_plan: true` em `.oxe/config.json`.
+
+**`--rfc`** — decidir a proposta técnica da fase antes do plano (critério P0/P1, componente novo ou contrato público; o próximo passo aponta isso). Ver o bloco `<rfc>`.
 </objective>
+
+<rfc>
+1. `oxe-cc rfc list`: RFCs da fase. Sem nenhum → `oxe-cc rfc new --title "…"` e preencha resumo, motivação (US/R/A), proposta, alternativas recusadas com o motivo, riscos, implantação/rollback e perguntas em aberto, a partir do grill e do código.
+2. Conduza as **perguntas em aberto** do RFC no estilo do grill (`references/grill.md`): uma por mensagem, cada uma com o que decide e a resposta recomendada com o porquê. Registre cada resposta no próprio RFC.
+3. Apresente a proposta final em até 10 linhas e peça a decisão: **aceitar** → `oxe-cc rfc accept RFC-…` (vira decisão D-NN e ADR); **recusar** → `oxe-cc rfc reject RFC-… --reason "…"` e escreva a alternativa.
+4. O plano cita a decisão nas tarefas que a implementam (`decisions` no PLAN.json).
+</rfc>
 
 <context>
 - Aplicar `oxe/workflows/references/reasoning-discovery.md`. Antes de perguntar, explorar SPEC, STATE, codebase e notas para reduzir perguntas desnecessárias.
@@ -26,6 +35,7 @@ Regras:
 3. `PLAN.md` deve referenciar os IDs nas tarefas (campo **Decisão vinculada:** `D-01, D-03`).
 4. `VERIFY.md` deve cruzar os IDs na seção **Fidelidade de decisões**.
 5. O ID é o vínculo de rastreabilidade discuss → plan → verify.
+6. O registro de decisões do projeto é **`.oxe/program/decisions.ndjson`** — é dele que saem os ADRs versionados (`docs/adr/`), o gate de evidência (`--check`) e o aviso de alternativa já recusada. Ao fechar o DISCUSS, rode **`oxe-cc decision import`**: as linhas D-NN da tabela entram no registro com o mesmo ID (as marcadas *(revertida por D-NN)* entram como substituídas). Para uma decisão com evidência verificável, contexto, consequências ou alternativas recusadas, registre direto com `oxe-cc decision add --title "…" --context "…" --consequences "…" [--check "<comando>"] [--alt "texto::motivo"] [--supersedes D-…]`.
 </decision_ids>
 
 <process>
@@ -38,12 +48,13 @@ Regras:
    - **Decisões** — tabela com colunas **ID** / **Decisão** / **Data** / **Impacto no plano** (só as já fechadas). Atribuir IDs **D-01**, **D-02**, … em sequência.
    - **Implicações para o plano** — bullets (ex.: "migrations necessárias", "feature flag").
 5. Se ainda houver perguntas **pendentes** críticas, listá-las no chat (máx. 7) e parar até resposta; depois atualizar DISCUSS.md.
-6. Atualizar **`.oxe/STATE.md`** global: fase `discuss_complete`, próximo passo `oxe:plan`. Registrar os IDs de decisão na seção **Decisões persistentes** do STATE (ex.: `D-01: escolheu JWT — 2025-01-15`).
-7. Resumo no chat em ≤8 linhas, nesta ordem:
+6. Com as decisões fechadas, rodar **`oxe-cc decision import`** (traz a tabela para o registro e publica os ADRs em `docs/adr/`; `adr: false` no config desliga a publicação).
+7. Atualizar **`.oxe/STATE.md`** global: fase `discuss_complete`, próximo passo `oxe:plan`. Registrar os IDs de decisão na seção **Decisões persistentes** do STATE (ex.: `D-01: escolheu JWT — 2025-01-15`).
+8. Resumo no chat em ≤8 linhas, nesta ordem:
    - **Fatos**
    - **Inferências**
    - **Lacunas**
-   - **Próximo passo**
+   - **Próximo passo** — o de `oxe-cc status --json` (ver `references/next-step-footer.md`)
    Listar decisões com seus IDs sempre que existirem.
 </process>
 
@@ -80,6 +91,7 @@ updated: YYYY-MM-DD
 <success_criteria>
 - [ ] `DISCUSS.md` existe no escopo correto com perguntas e decisões alinhadas à SPEC.
 - [ ] Cada decisão fechada tem ID único **D-NN** na tabela de Decisões.
+- [ ] As decisões fechadas estão no registro (`oxe-cc decision list` as mostra) e os ADRs foram publicados (`docs/adr/`, salvo `adr: false`).
 - [ ] Se existir `.oxe/NOTES.md`, as entradas relevantes foram tratadas (promovidas, descartadas ou adiadas com nota).
 - [ ] Nenhuma ambiguidade crítica ficou sem registro (como pendente ou suposição explícita na SPEC).
 - [ ] `STATE.md` indica próximo passo **plan** e lista IDs de decisão em **Decisões persistentes**.

@@ -48,6 +48,61 @@ const ALLOWED_CONFIG_KEYS = [
   'repo_rules',
   'commit_convention',
   'project_env_check',
+  // 1.21.2: chaves que o runtime já lia e o doctor chamava de desconhecidas (tests/oxe-1212-config-keys.test.cjs
+  // varre o código e falha quando uma chave lida falta aqui).
+  'oxe_config_version',
+  'oxe_stale_days',
+  'execute',
+  'executor',
+  'program',
+  'models',
+  'review',
+  'close',
+  'context',
+  'lint',
+  'signal',
+  'guards',
+  'nfr',
+  'api_surface',
+  'design_drift',
+  'plan_read',
+  'plan_lint_preflight',
+  'stub_check',
+  'verify_timeout_ms',
+  'task_gates',
+  'task_suite_command',
+  'suite_rules',
+  'gate_plugins',
+  'checkpoint_check',
+  'checkpoint_check_timeout_ms',
+  'checkpoint_related_tests',
+  'parked_tests',
+  'parked_acceptance_check',
+  'integration_checks',
+  'coupled_scope',
+  'builtin_coupled_scope',
+  'ui_evidence',
+  'ui_verify',
+  'parallel',
+  'worktree',
+  'deps',
+  'deps_strategy',
+  'deps_link_from',
+  'deps_protected',
+  'deps_optional_ignore',
+  'native_check',
+  'native_check_timeout_ms',
+  'post_install',
+  'sync_deps',
+  // ADRs projetados do registro de decisões (docs/adr por padrão; false desliga).
+  'adr',
+  // PRD acima da SPEC, RFC antes do plano, publicação em docs/ e ALM (Jira / Azure DevOps).
+  'prd',
+  'rfc',
+  'docs_publish',
+  'alm',
+  'delivery',
+  'verify',
 ];
 
 /**
@@ -2127,6 +2182,10 @@ function suggestProgramStep(target, activeSession, activeRun) {
     if (planPhase === phase.id) {
       return { step: 'execute', cursorCmd: '/oxe-execute', reason: `${label}: plano da fase pronto — executar.`, artifacts: ['.oxe/PLAN.json'], program };
     }
+    // 1.21.2: a draft RFC of the phase, or rfc.required with risk, is decided before the plan.
+    let rfc = null;
+    try { rfc = require('./oxe-journey.cjs').rfcStep(target, activeSession, phase, { label, program }); } catch { rfc = null; }
+    if (rfc) return rfc;
     return {
       step: 'plan',
       cursorCmd: '/oxe-plan',
@@ -2153,6 +2212,10 @@ function suggestProgramStep(target, activeSession, activeRun) {
       };
     }
     if (activeRun && activeRun.status === 'completed') {
+      // 1.21.2: with delivery.mode "pr", the green verify goes PR → CI/merge → deploy before the close.
+      let delivery = null;
+      try { delivery = require('./oxe-journey.cjs').deliveryStep(target, activeSession, phase, { label, program }); } catch { delivery = null; }
+      if (delivery) return delivery;
       return {
         step: 'program-close',
         cursorCmd: 'oxe-cc runtime program close',
@@ -2214,6 +2277,11 @@ function suggestNextStep(target, cfg = {}) {
       ],
     };
   }
+
+  // 1.21.2: the upstream of the guided journey — MCP queue, grill, spec approval, ALM stories/tasks.
+  let upstream = null;
+  try { upstream = require('./oxe-journey.cjs').upstreamStep(target, activeSession, cfg); } catch { upstream = null; }
+  if (upstream) return upstream;
 
   const programStep = suggestProgramStep(target, activeSession, activeRun);
   if (programStep) return programStep;

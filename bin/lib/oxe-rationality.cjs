@@ -521,7 +521,9 @@ function buildExecutionRationality(paths = {}) {
     visualInputsJson: paths.visualInputsJson || null,
     visualInputsMd: paths.visualInputsMd || null,
   });
-  const applicable = Boolean(paths.plan && fs.existsSync(paths.plan));
+  // `assumeApplicable`: plan lint lists what the preflight WILL require once PLAN.md exists — a hand-written PLAN.json
+  // without PLAN.md learned of the packs only on the second round.
+  const applicable = Boolean((paths.plan && fs.existsSync(paths.plan)) || paths.assumeApplicable);
   const criticalExecutionGaps = applicable
     ? Array.from(
       new Set([

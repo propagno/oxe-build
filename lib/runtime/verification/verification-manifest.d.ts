@@ -17,6 +17,8 @@ export interface ManifestCheck {
     tests_executed?: number | null;
     /** Why a check did not pass (e.g. `no_tests_executed`, `test_file_missing: …`). */
     error?: string | null;
+    /** The check failed on a runner timeout only and ran once more by itself: the first outcome and the rerun's. */
+    rerun?: CheckResult['rerun'];
 }
 export interface VerificationManifest {
     manifest_id: string;

@@ -93,6 +93,28 @@ describe('OXB-171: frozen test needs vs the task scope', () => {
     assert.match(vc.payload.failed_segment.output_tail, /AssertionError/, 'failed_segment carries the output tail');
   });
 
+  it('a file the task creates, imported without extension, is in scope (files: menu.tsx, test imports …/menu)', () => {
+    const test = "import { menu } from '../../../src/components/Terminal/terminalContextMenu';\nimport { idx } from '../../../src/lib/newdir';\n";
+    const dir = project({
+      files: { 'tests/acceptance/f2/r4-removal.test.js': test },
+      tasks: [{ id: 'T8', title: 'menu', wave: 1, files: ['src/components/Terminal/terminalContextMenu.tsx', 'src/lib/newdir/index.ts'], acceptance: ['A1'], verify: { commands: ['node -e 0'] } }],
+    });
+    assert.deepEqual(testScope.scopeGaps(dir, JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'))), {});
+    assert.ok(!op.runtimePlanLint(dir, null, {}).warnings.some((w) => /fora de files/.test(w)));
+    // owned by another task without the dependency: the gap names the declared path, so plan review finds its owner
+    const doc = { tasks: [
+      { id: 'T1', files: ['src/components/Terminal/terminalContextMenu.tsx', 'src/lib/newdir/index.ts'] },
+      { id: 'T8', files: ['electron/main/rtk/remove.ts'], acceptance: ['A1'] },
+    ], acceptance_tests: [{ criterion: 'A1', task: 'T8', files: ['tests/acceptance/f2/r4-removal.test.js'] }] };
+    assert.deepEqual(testScope.scopeGaps(dir, doc).T8.files.sort(), ['src/components/Terminal/terminalContextMenu.tsx', 'src/lib/newdir/index.ts']);
+  });
+
+  it('several out-of-scope imports of one test are one lint line', () => {
+    const msgs = testScope.scopeGapMessages({ T2: { files: [], tests: [], detail: ['a.ts', 'b.ts', 'c.ts'].map((p) => ({ test: 't.test.ts', path: p, kind: 'import' })) } });
+    assert.equal(msgs.length, 1);
+    assert.match(msgs[0], /^T2: o teste congelado t\.test\.ts importa a\.ts, b\.ts, c\.ts, fora de files/);
+  });
+
   it('the agent saying the change is out of scope stops after attempt 1 too', async () => {
     const dir = project({ tasks: [{ id: 'T9', title: 'x', wave: 1, files: ['src/x.js'], verify: { commands: ['node -e 0'] } }], files: { 'src/x.js': 'x\n' } });
     let calls = 0;

@@ -1,0 +1,174 @@
+'use strict';
+
+/**
+ * 1.21.2 — `oxe-cc spec check`: the deterministic quality gate of the upstream, before the spec is approved. It joins
+ * what used to be checked in pieces (or not at all): every v1 requirement proved by an existing criterion, every
+ * criterion with "Como verificar" and a risk, the PRD's stories tied to the criteria, the glossary's forbidden
+ * synonyms absent, the grill closed with its decisions in the ledger, an RFC for every P0/P1, and the ROADMAP
+ * covering every criterion. Pure: the caller reads the files.
+ */
+
+const RISKS = ['P0', 'P1', 'P2', 'P3'];
+const PLACEHOLDER = /^(—|-|\?|tbd|todo|a definir|\(.*\))$/i;
+
+function splitRow(line) {
+  const t = String(line).trim();
+  if (!t.startsWith('|')) return null;
+  return t.replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+}
+const isSep = (cells) => cells.every((c) => /^:?-{2,}:?$/.test(c));
+
+/** Every table: header + rows. */
+function tables(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  const out = [];
+  for (let i = 0; i < lines.length - 1; i += 1) {
+    const h = splitRow(lines[i]);
+    const s = splitRow(lines[i + 1]);
+    if (!h || !s || !isSep(s)) continue;
+    const rows = [];
+    let j = i + 2;
+    for (; j < lines.length && splitRow(lines[j]); j += 1) rows.push(splitRow(lines[j]));
+    out.push({ header: h.map((x) => x.replace(/\*/g, '').trim()), rows });
+    i = j - 1;
+  }
+  return out;
+}
+
+const col = (header, re) => header.findIndex((h, i) => i > 0 && re.test(h));
+
+/** Criteria of the SPEC: id, text, verify, risk. */
+function criteria(specText) {
+  const out = [];
+  let hasRiskColumn = false;
+  for (const t of tables(specText)) {
+    if (!/^id$/i.test(t.header[0] || '') || !/crit[ée]rio|criterion/i.test(t.header[1] || '')) continue;
+    const ci = col(t.header, /crit[ée]rio|criterion/i);
+    const vi = col(t.header, /verific|verify/i);
+    const ri = col(t.header, /^(risco|risk)\b/i);
+    if (ri >= 0) hasRiskColumn = true;
+    for (const r of t.rows) {
+      const id = String(r[0] || '').replace(/\*/g, '').trim().toUpperCase();
+      if (!/^(A\d+(\.\d+)?|G\d+)$/.test(id)) continue;
+      out.push({ id, text: r[ci] || '', verify: vi >= 0 ? r[vi] || '' : null, risk: ri >= 0 ? String(r[ri] || '').toUpperCase() : null });
+    }
+  }
+  return { list: out, hasRiskColumn };
+}
+
+const A_RE = /\b(A\d+(?:\.\d+)?|G\d+)\b/g;
+
+/** Requirements of the SPEC (table or bullets): id, version (v1/v2/fora), criteria cited. */
+function requirements(specText) {
+  const out = new Map();
+  for (const t of tables(specText)) {
+    if (!/^r-?id$/i.test(t.header[0] || '')) continue;
+    const vi = col(t.header, /vers[aã]o|version/i);
+    const ai = col(t.header, /crit[ée]rio|criteria|aceite/i);
+    for (const r of t.rows) {
+      const id = String(r[0] || '').replace(/\*/g, '').trim().toUpperCase();
+      if (!/^R(-RB)?-?\d+$/.test(id)) continue;
+      out.set(id, { id, version: vi >= 0 ? String(r[vi] || '').toLowerCase() : 'v1', criteria: ai >= 0 ? (String(r[ai] || '').match(A_RE) || []) : [] });
+    }
+  }
+  for (const line of String(specText || '').split(/\r?\n/)) {
+    const m = /^\s*[-*]\s+\*\*(R(?:-RB)?-?\d+)\*\*\s*[—–:-]\s*(.*)$/.exec(line);
+    if (m && !out.has(m[1].toUpperCase())) out.set(m[1].toUpperCase(), { id: m[1].toUpperCase(), version: /\b(v2|fora)\b/i.test(m[2]) ? (/\bfora\b/i.test(m[2]) ? 'fora' : 'v2') : 'v1', criteria: m[2].match(A_RE) || [] });
+  }
+  return [...out.values()];
+}
+
+const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * @param {{ specText: string, roadmapText?: string, prdText?: string, prd?: object|null, lintPrd?: Function, prdRequired?: boolean,
+ *           glossary?: Array<{term:string, synonyms:string[]}>, grill?: object|null, fast?: boolean,
+ *           decisionSources?: string[], rfcs?: Array<{id:string,status:string}>, rfcMode?: string }} input
+ * @returns {{ ok: boolean, errors: string[], warnings: string[], summary: object }}
+ */
+function checkSpec(input) {
+  const errors = [];
+  const warnings = [];
+  const specText = String(input.specText || '');
+  if (!specText.trim()) return { ok: false, errors: ['SPEC.md ausente — rode /oxe-spec'], warnings, summary: {} };
+  const crit = criteria(specText);
+  if (!crit.list.length) errors.push('SPEC sem tabela de critérios de aceite (| ID | Critério | Risco | Como verificar |)');
+  const ids = crit.list.map((c) => c.id);
+  const dup = ids.filter((x, i) => ids.indexOf(x) !== i);
+  if (dup.length) errors.push(`critério(s) duplicado(s): ${[...new Set(dup)].join(', ')}`);
+  for (const c of crit.list) {
+    if (c.verify == null) { errors.push('a tabela de critérios não tem a coluna "Como verificar"'); break; }
+    if (!c.verify.trim() || PLACEHOLDER.test(c.verify.trim())) errors.push(`${c.id}: sem "Como verificar" — critério sem verificação não fecha`);
+  }
+  if (!crit.hasRiskColumn) warnings.push('tabela de critérios sem a coluna Risco (P0–P3): o close da fase decide PASS/CONCERNS/FAIL por ela');
+  else for (const c of crit.list) if (!RISKS.includes(c.risk)) errors.push(`${c.id}: risco "${c.risk || ''}" inválido (P0 | P1 | P2 | P3)`);
+
+  // requirements → criteria
+  const reqs = requirements(specText);
+  const known = new Set(ids);
+  const cited = new Set();
+  for (const r of reqs) {
+    for (const a of r.criteria) cited.add(a);
+    if (r.version !== 'v1' && !/^v1/.test(r.version)) continue;
+    if (!r.criteria.length) errors.push(`${r.id} (v1): não aponta para nenhum critério A* — nada prova que foi entregue`);
+    const missing = r.criteria.filter((a) => !known.has(a));
+    if (missing.length) errors.push(`${r.id}: cita ${missing.join(', ')}, que não existe(m) na tabela de critérios`);
+  }
+  if (reqs.length) {
+    const orphan = ids.filter((a) => /^A/.test(a) && !cited.has(a) && !cited.has(a.replace(/\.\d+$/, '')));
+    if (orphan.length) warnings.push(`critério(s) sem requisito que os cite: ${orphan.join(', ')}`);
+  } else warnings.push('SPEC sem requisitos R-ID: a rastreabilidade requisito → critério não pode ser checada');
+
+  // ROADMAP covers every criterion
+  if (input.roadmapText != null) {
+    const inRoadmap = new Set(String(input.roadmapText).match(A_RE) || []);
+    const out = ids.filter((a) => /^A\d+$/.test(a) && !inRoadmap.has(a));
+    if (!String(input.roadmapText).trim()) errors.push('ROADMAP.md ausente — o roteiro é parte da spec');
+    else if (out.length) warnings.push(`critério(s) fora de todas as fases do ROADMAP: ${out.join(', ')}`);
+  }
+
+  // PRD
+  if (input.lintPrd && (input.prd || input.prdRequired)) {
+    const r = input.lintPrd(input.prd, { criteria: ids, requirements: reqs.map((x) => x.id), required: input.prdRequired === true });
+    errors.push(...r.errors.map((e) => `PRD: ${e}`));
+    warnings.push(...r.warnings.map((w) => `PRD: ${w}`));
+  } else if (!input.prd) warnings.push('PRD.md ausente: histórias de usuário e métricas não foram escritas (oxe/templates/PRD.template.md)');
+
+  // glossary: forbidden synonyms absent from SPEC and PRD
+  const corpus = `${specText}\n${input.prdText || ''}`;
+  for (const t of input.glossary || []) {
+    for (const s of t.synonyms || []) {
+      if (!s || s.length < 3) continue;
+      const re = new RegExp(`(^|[^\\p{L}\\p{N}])${escRe(s)}(?=$|[^\\p{L}\\p{N}])`, 'iu');
+      if (re.test(corpus)) warnings.push(`glossário: "${s}" é sinônimo proibido de "${t.term}" e aparece na SPEC/PRD — use "${t.term}"`);
+    }
+  }
+
+  // grill
+  const g = input.grill;
+  if (!g || !g.started) {
+    if (!input.fast) errors.push('grill não feito: rode a descoberta (oxe-cc grill start --type …) ou confirme o modo rápido (oxe-cc spec check --fast)');
+  } else if (!g.closed) errors.push(`grill aberto (${(g.blockers || []).length} pendência(s)) — oxe-cc grill status`);
+  else {
+    const sources = new Set(input.decisionSources || []);
+    const missing = (g.decisions || []).filter((d) => !sources.has(`grill:${d.id}`)).map((d) => d.id);
+    if (missing.length) errors.push(`decisões do grill fora do registro: ${missing.join(', ')} — oxe-cc grill export`);
+    if ((g.assumptions || []).length && !/##\s*Suposi/i.test(specText)) errors.push(`o grill adiou ${g.assumptions.map((a) => a.id).join(', ')}, mas a SPEC não tem a seção Suposições`);
+  }
+
+  // RFC for P0/P1
+  const mode = input.rfcMode || 'advisory';
+  const risky = crit.list.filter((c) => c.risk === 'P0' || c.risk === 'P1').map((c) => c.id);
+  if (mode !== 'never' && risky.length && !(input.rfcs || []).length) {
+    (mode === 'risk' || mode === 'always' ? errors : warnings).push(`critério(s) de risco ${risky.join(', ')} sem RFC — rascunhe a proposta técnica: oxe-cc rfc new --title "…"`);
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
+    warnings,
+    summary: { criteria: ids.length, requirements: reqs.length, risky, stories: input.prd && input.prd.stories ? input.prd.stories.length : 0, terms: (input.glossary || []).length, grill: g && g.started ? (g.closed ? 'fechado' : 'aberto') : (input.fast ? 'rápido' : 'ausente') },
+  };
+}
+
+module.exports = { checkSpec, criteria, requirements, tables };

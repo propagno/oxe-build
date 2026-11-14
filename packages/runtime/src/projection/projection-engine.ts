@@ -156,7 +156,12 @@ export class ProjectionEngine {
       lines.push('| Check | Aceite | Status | Duração |');
       lines.push('|-------|--------|--------|---------|');
       for (const cr of checkResults) {
-        lines.push(`| ${cr.check_id} | ${cr.acceptance_ref ?? '—'} | ${verifyIcon(cr.status)} | ${cr.duration_ms}ms |`);
+        // A runner-timeout failure ran once more by itself: both outcomes, first → rerun.
+        const status = cr.rerun
+          ? `${verifyIcon(cr.rerun.first.status)} → ${verifyIcon(cr.status)} (timeout do runner; rodou de novo sozinho)`
+          : verifyIcon(cr.status);
+        const duration = cr.rerun ? `${cr.rerun.first.duration_ms}ms + ${cr.duration_ms}ms` : `${cr.duration_ms}ms`;
+        lines.push(`| ${cr.check_id} | ${cr.acceptance_ref ?? '—'} | ${status} | ${duration} |`);
       }
       lines.push('');
     }

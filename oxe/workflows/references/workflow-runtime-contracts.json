@@ -764,8 +764,7 @@
         "project_summary"
       ],
       "blocking_conditions": [
-        "missing:verify_without_override",
-        "missing:tracked_changes"
+        "missing:verify_without_override"
       ],
       "extraction_intent": "execution_input"
     },
@@ -1147,6 +1146,20 @@
         ]
       },
       "extraction_intent": "verification"
+    },
+    "alm": {
+      "reasoning_mode": "execution",
+      "question_policy": "explore_first",
+      "required_artifacts": [
+        "state"
+      ],
+      "optional_artifacts": [
+        "spec",
+        "plan",
+        "runtime",
+        "project_summary"
+      ],
+      "extraction_intent": "execution_input"
     }
   }
 }

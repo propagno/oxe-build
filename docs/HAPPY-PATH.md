@@ -2,18 +2,24 @@
 
 Guia curto para quem usa só a trilha recomendada. O detalhe de cada passo está em `oxe/workflows/<passo>.md` e em [WALKTHROUGH.md](WALKTHROUGH.md).
 
-## Uma feature, do zero ao close
+## A jornada (SDLC), do zero ao deploy
 
-| # | Você roda | O que sai | Pare aqui se… |
-|---|---|---|---|
-| 1 | `/oxe` | onde você está e o próximo passo | — |
-| 2 | `/oxe-spec` | SPEC.md (critérios A\* com a coluna **Risco**), ROADMAP.md | algum critério não tem como verificar |
-| 3 | `oxe-cc spec probe` | bordas e proibições por critério | uma proibição "julgamento" ficou sem dono |
-| 4 | `/oxe-plan` | PLAN.json + PLAN.md + IMPLEMENTATION-PACK.json, com os testes de aceite congelados | — |
-| 5 | `oxe-cc plan lint` | erros (bloqueiam) e avisos | há qualquer erro |
-| 6 | `/oxe-execute` (`oxe-cc runtime execute`) | uma tarefa por vez, com verify e checkpoint commit | aparece **ATENÇÃO** no `oxe-cc status` |
-| 7 | `/oxe-verify` (`oxe-cc runtime verify`) | VERIFY.md, os gates do projeto e a regressão das fases fechadas | há um gate vermelho (vira CR sozinho) |
-| 8 | `oxe-cc program close` | dossiê da fase e a decisão PASS / CONCERNS / FAIL | o close lista motivos (todos são acionáveis) |
+Cada etapa termina com **um** próximo passo (`oxe-cc status --json`), e `oxe-cc status --journey` mostra o mapa abaixo com o que já foi feito.
+
+| # | Etapa | Você roda | O que sai | Pare aqui se… |
+|---|---|---|---|---|
+| 0 | Preparar | `/oxe` | `.oxe/`, scan e o próximo passo | — |
+| 1 | Descobrir | `/oxe-spec` | **grill**: uma pergunta por vez, cada uma com a resposta recomendada, até não sobrar ambiguidade (`.oxe/grill/GRILL.md`, retomável). Depois, SPEC (A* com **Risco** e **Como verificar**), ROADMAP, PRD (histórias US-n e métricas), GLOSSARY, decisões e ADRs, RFC em rascunho para P0/P1 | o `oxe-cc grill close` recusa (mostra o que falta) |
+| 2 | Validar | `oxe-cc spec check` → `spec probe` → `spec approve --by <papel>` | rastreabilidade R→A→US, glossário, bordas e proibições, aprovação registrada | há erro no check |
+| 3 | Programar | `/oxe` (`program start`) · `oxe-cc alm push --stories-only` | fases e, com ALM, épico e histórias no Jira ou no Azure DevOps | — |
+| 4 | Decidir | `/oxe-discuss` · `/oxe-discuss --rfc` | DISCUSS, RFC aceito ou recusado → D-NN e ADR | a fase tem P0/P1 sem RFC decidido |
+| 5 | Planejar | `/oxe-plan` · `oxe-cc plan lint` · `alm push --tasks-only` | PLAN.json com testes de aceite congelados; tarefas no ALM | o lint tem erro |
+| 6 | Construir | `/oxe-execute` | uma tarefa por vez, com verify, checkpoint e a chave do ALM no commit | aparece **ATENÇÃO** no `oxe-cc status` |
+| 7 | Verificar | `/oxe-verify` | VERIFY, gates, regressão; checks pesados no CI (`verify.remote`); sign-off e dossiê | há um gate vermelho (vira CR sozinho) |
+| 8 | Entregar | `/oxe-ship` (`oxe-cc ship status`) | PR com a chave do ALM → CI e merge → deploy anexado → docs → `program close` | o CI está vermelho (não se faz merge) |
+| 9 | Operar | `/oxe-ship --defect "…" --origin US-n` · `/oxe "muda o A3"` | defeito no ALM e CR; mudanças pela trilha (`references/change-management.md`) | — |
+
+Para trabalho pequeno: `/oxe-quick`. Para uma spec rápida, sem o grill: `/oxe-spec --fast`. Sem `delivery.mode: "pr"`, a etapa 8 é o `program close` com commit local, como antes.
 
 ## Quando a execução para
 
@@ -65,6 +71,34 @@ Os opt-ins ficam em `.oxe/config.json`:
 - A próxima fase recebe as interfaces congeladas e o handoff da anterior.
 - `oxe-cc program queue` diz o próximo item de cada papel.
 - `oxe-cc docs check` aponta documentos de fases fechadas que o código já desmentiu.
+
+## Documentos de produto e técnicos
+
+- **PRD** (`.oxe/PRD.md`): o `/oxe-spec` escreve o problema, as personas, as métricas e as histórias de usuário (US-n), cada uma ligada aos critérios A* da SPEC. Confira com `oxe-cc prd lint`.
+- **RFC** (`.oxe/rfc/`): antes do plano de uma fase com critério P0/P1, rode `oxe-cc rfc new --title "…"`. Com as perguntas respondidas, `oxe-cc rfc accept RFC-…` registra a decisão.
+- **ADR** (`docs/adr/`): sai do registro de decisões (ver abaixo).
+- **Publicação**: `oxe-cc docs publish` copia PRD, RFCs, ADRs e SYSTEM-DESIGN para `docs/`. Com `docs_publish: { "dir": "docs" }` no config, o close de cada fase faz o mesmo e inclui os documentos no commit da fase. O `program init` já cria o SYSTEM-DESIGN, para o gate de documento desatualizado valer desde a primeira fase.
+- **Branch com PR aberto**: o `program close` fecha a fase sem commitar e avisa; use um branch separado, ou `--force-branch`.
+
+## ALM (Jira / Azure DevOps)
+
+Com `alm` no `.oxe/config.json` (ver `oxe/templates/CONFIG.md`):
+
+1. Depois da spec: `oxe-cc alm push --stories-only --dry-run`, e sem `--dry-run` com o OK. Cria o épico e as histórias.
+2. Depois do plano: `oxe-cc alm push --tasks-only`. Cria uma tarefa por tarefa do plano; rodar de novo não duplica.
+3. Daí em diante a chave vai no branch, nos commits e no título do PR. Início de tarefa, PR, merge e deploy movem os itens sozinhos; `alm.track` limita isso ao que outra ferramenta não move.
+4. Defeito depois do deploy: `oxe-cc alm defect --title "…" --origin US-3`.
+
+Sem token, com o Jira ou o Azure DevOps ligados à sessão por MCP, use `alm.transport: "mcp"`. Os mesmos comandos põem as escritas numa fila. O agente a executa com as ferramentas MCP (`oxe-cc alm queue`) e confirma cada operação com `oxe-cc alm ack <id> --key <chave>`.
+
+Sem ALM, nada muda no fluxo.
+
+## Decisões e ADRs
+
+- Uma decisão fechada vai para o registro: `oxe-cc decision add --title "…" --context "…" --consequences "…"`, ou `oxe-cc decision import` para trazer a tabela do DISCUSS.md com os mesmos IDs.
+- Cada mudança no registro publica os ADRs em `docs/adr/`, versionados junto com o código. O texto escrito fora dos marcadores é preservado.
+- Uma decisão com `--check "<comando>"` é conferida no verify de toda fase que a cita, e de novo pelo `oxe-cc docs check` depois que a fase fecha.
+- Para mudar de ideia: `oxe-cc decision add … --supersedes D-…`. O `plan lint` avisa a tarefa que ainda cita a decisão antiga.
 
 ## Depois de atualizar o OXE
 

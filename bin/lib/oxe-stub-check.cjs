@@ -108,8 +108,14 @@ function definesSymbol(text, name) {
   return new RegExp(`\\b(function\\*?|class|const|let|var|interface|type|enum|fun|object|val|def|struct|trait|func)\\s+${n}\\b|export\\s*\\{[^}]*\\b${n}\\b|\\b${n}\\s*[:=]\\s*(async\\s*)?(\\(|function)|\\b(module\\.)?exports\\.${n}\\s*=|module\\.exports\\s*=\\s*\\{[^}]*\\b${n}\\b`).test(text);
 }
 
+/** The file's text at `base` (a commit), or null when it did not exist there. */
+function textAt(root, base, file) {
+  const r = git(root, ['show', `${base || 'HEAD'}:${file}`]);
+  return r.status === 0 ? String(r.stdout || '') : null;
+}
+
 /** Level 1: symbols the pack declares for the task, defined in their files. */
-function existsFindings(root, taskId) {
+function existsFindings(root, taskId, base) {
   const out = [];
   let pack = null;
   for (const p of [path.join(root, '.oxe', 'IMPLEMENTATION-PACK.json')]) { try { pack = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { /* */ } }
@@ -122,7 +128,13 @@ function existsFindings(root, taskId) {
     let text = null;
     try { text = fs.readFileSync(path.join(root, file), 'utf8'); } catch { text = null; }
     if (text == null) out.push({ level: 'exists', file, line: 0, why: `arquivo do símbolo ${name} não existe` });
-    else if (!definesSymbol(text, name)) out.push({ level: 'exists', file, line: 0, why: `${name} declarado no pack, não definido no arquivo` });
+    else if (!definesSymbol(text, name)) {
+      // Absent at the base too: the attempt did not create it. A name guessed from the file (text.ts → `text`) can
+      // never be satisfied by a retry — oxespace-152-mobile paid two correct attempts for it.
+      const before = textAt(root, base, file);
+      const absentAtBase = before != null && !definesSymbol(before, name);
+      out.push({ level: 'exists', file, line: 0, why: `${name} declarado no pack, não definido no arquivo`, symbol: name, absent_at_base: absentAtBase });
+    }
   }
   return out;
 }
@@ -190,7 +202,7 @@ function stubFindings(root, options = {}) {
   const changed = changedFiles(root, options.since || 'HEAD', options.scope || []);
   const files = [...changed.keys()];
   const out = [];
-  if (levels.has('exists') && options.task) out.push(...existsFindings(root, options.task));
+  if (levels.has('exists') && options.task) out.push(...existsFindings(root, options.task, options.since || 'HEAD'));
   if (levels.has('substantive')) out.push(...substantiveFindings(root, files, options.since || 'HEAD', ignore, options.scope || []));
   if (levels.has('wired')) out.push(...wiredFindings(root, files.filter((f) => changed.get(f)), entries, ignore));
   return out;
@@ -206,6 +218,17 @@ function blockedLine(findings) {
   if (!b.length) return null;
   const needs = [...new Set(b.flatMap((f) => (f.needs || []).map((n) => n.file)))];
   return `scope_insufficient: stub marcado como bloqueado em ${b.map((f) => `${f.file}:${f.line}`).join(', ')}${needs.length ? ` — a mudança precisa de ${needs.join(', ')}, fora do escopo da tarefa` : ''} (OXB-188)`;
+}
+
+/**
+ * The line the scheduler reads to stop without a retry: every remaining finding is a pack symbol that the file did not
+ * define before the task either, and the attempt did not create it — the pack most likely names a symbol that does
+ * not exist (a plan defect a retry cannot fix).
+ */
+function packSymbolLine(findings) {
+  if (!findings.length || !findings.every((f) => f.level === 'exists' && f.absent_at_base)) return null;
+  const list = findings.map((f) => `${f.symbol} em ${f.file}`).join(', ');
+  return `plan_defect: o pack nomeia um símbolo que não existe — ${list}: não existia na base e a tentativa não o criou. Se o nome está errado (ex.: tirado do nome do arquivo), corrija o IMPLEMENTATION-PACK.json; se a tarefa deve criá-lo, deixe isso explícito no pack e rode de novo`;
 }
 
 if (require.main === module) {
@@ -225,10 +248,12 @@ if (require.main === module) {
   if (findings.length) {
     const bl = blockedLine(findings);
     if (bl) console.error(bl);
+    const pd = packSymbolLine(findings);
+    if (pd) console.error(pd);
     console.error(`oxe stub-check: ${findings.length} problema(s) — a tarefa ainda não está pronta (OXB-108)\n${format(findings)}\n(exceção revisada: comente "oxe-stub-ok" na linha, ou stub_check.ignore no .oxe/config.json)`);
     process.exit(1);
   }
   console.log('oxe stub-check: ok');
 }
 
-module.exports = { blockedLine, blockedTargets, BLOCKED_PATTERNS, stubFindings, format, addedLines, STUB_PATTERNS };
+module.exports = { definesSymbol, blockedLine, packSymbolLine, blockedTargets, BLOCKED_PATTERNS, stubFindings, format, addedLines, STUB_PATTERNS };

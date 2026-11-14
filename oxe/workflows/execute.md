@@ -247,12 +247,15 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
    - [ ] Comando Verificar de cada tarefa executado (ou agendado)
    ```
 10a. Quando o runtime enterprise estiver ativo, executar ou solicitar `oxe-cc runtime project --dir <projeto>` após cada onda ou bloco concluído para projetar os markdowns derivados a partir do estado canónico, em vez de depender só de edição manual.
+10b. **ALM via MCP** (`alm.transport: "mcp"`): ao fim de cada onda, `oxe-cc alm queue` — execute as operações com as ferramentas MCP da sessão e confirme cada uma com `oxe-cc alm ack <id> [--key …]` (ver `references/product-docs-alm.md`).
 11. Atualizar **`.oxe/STATE.md`** global com progresso resumido e, com sessão ativa, escrever o detalhe operacional em `execution/STATE.md`.
 11a. Se o runtime enterprise estiver ativo, preferir o `STATE.md`, `PLAN.md`, `VERIFY.md` e summaries projetados por `runtime project` como superfície oficial; complementar manualmente apenas o que o projection engine ainda não cobrir.
 12. Atualizar ou criar `CHECKPOINTS.md` quando surgir gate humano explícito; refletir o status resumido no `STATE.md` global (`checkpoint_status`) e no runtime (`runtime_status`).
 13. Marcar OBS incorporadas como `incorporada → execute (data)` em `OBSERVATIONS.md` do escopo resolvido.
 14. Se a execução parar por hipótese crítica não verificada, conflito estrutural ou falta de evidência operacional, terminar com bloqueio explícito e um único próximo passo. Se o bloqueio tiver vindo de pack stale/incompleto, dizer isso explicitamente.
 </process>
+
+**Ao terminar:** o **Próximo passo** de `oxe-cc status --json` (ver `references/next-step-footer.md`).
 
 <success_criteria>
 - [ ] Modo de execução foi selecionado (ou herdado do STATE) antes de implementar.

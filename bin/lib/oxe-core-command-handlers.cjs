@@ -75,7 +75,7 @@ function createCoreCommandRegistry(deps) {
       requireDirectory(opts.dir, false);
       return opts.statusFull
         ? runStatusFull(opts.dir)
-        : runStatus(opts.dir, { json: opts.jsonOutput, hints: opts.statusHints, summary: opts.statusSummary, allWorktrees: opts.allWorktrees });
+        : runStatus(opts.dir, { json: opts.jsonOutput, hints: opts.statusHints, summary: opts.statusSummary, allWorktrees: opts.allWorktrees, ...(opts.statusJourney ? { journey: true } : {}) });
     } },
   ]);
 }

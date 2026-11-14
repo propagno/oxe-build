@@ -25,14 +25,20 @@ function testRoot(file) {
   return i >= 0 ? parts.slice(0, i + 1).join('/') : parts.slice(0, -1).join('/');
 }
 
-/** Resolves like node/TS: the file, extensions, `.js`→`.ts`, then dir/index.* — to a file path or the raw path. */
+/** The paths node/TS would try for a specifier: the file, extensions, `.js`→`.ts`, then dir/index.*. */
+function importCandidates(rel) {
+  const stripped = rel.replace(/\.(js|jsx|mjs|cjs)$/, '');
+  return [rel, ...EXTS.map((e) => rel + e), ...(stripped !== rel ? EXTS.map((e) => stripped + e) : []), ...EXTS.map((e) => `${rel}/index${e}`)].map(norm);
+}
+
+/** Resolves like node/TS against the disk — to a file path or the raw path (with the candidates, for a file still to be created). */
 function resolveLike(projectRoot, rel) {
   const isFile = (p) => { try { return fs.statSync(path.join(projectRoot, p)).isFile(); } catch { return false; } };
-  const stripped = rel.replace(/\.(js|jsx|mjs|cjs)$/, '');
-  for (const cand of [rel, ...EXTS.map((e) => rel + e), ...(stripped !== rel ? EXTS.map((e) => stripped + e) : []), ...EXTS.map((e) => `${rel}/index${e}`)]) {
-    if (isFile(cand)) return { path: norm(cand), exists: true };
+  const candidates = importCandidates(rel);
+  for (const cand of candidates) {
+    if (isFile(cand)) return { path: cand, exists: true };
   }
-  return { path: norm(rel), exists: false };
+  return { path: norm(rel), exists: false, candidates };
 }
 
 /** Product paths one test file needs: [{ path, kind: 'import'|'read', exists }]. */
@@ -45,7 +51,7 @@ function testRequirements(projectRoot, testFile) {
     const joined = path.posix.normalize(path.posix.join(base, spec));
     if (joined.startsWith('..') || SKIP_DIRS.test(joined)) return;
     const r = kind === 'import' ? resolveLike(projectRoot, joined) : { path: norm(joined), exists: fs.existsSync(path.join(projectRoot, joined)) };
-    if (!out.has(r.path)) out.set(r.path, { path: r.path, kind, exists: r.exists });
+    if (!out.has(r.path)) out.set(r.path, { path: r.path, kind, exists: r.exists, ...(r.candidates ? { candidates: r.candidates } : {}) });
   };
   for (const m of text.matchAll(/(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*|\bvi\.mock\s*\(\s*|\bjest\.mock\s*\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g)) addRel(m[1], dir, 'import');
   for (const m of text.matchAll(/\b(?:readFileSync|existsSync|readdirSync|statSync|readFile|lstatSync)\s*\(\s*['"]([^'"\n]+)['"]/g)) {
@@ -101,6 +107,14 @@ function scopeGaps(projectRoot, doc) {
     return files;
   };
   const acceptance = Array.isArray(doc && doc.acceptance_tests) ? doc.acceptance_tests : [];
+  // A file still to be created is imported without extension ('../src/x/menu' for files: ['src/x/menu.tsx']): it
+  // matches a declared path by the same candidates node/TS would try, and is named by that declared path.
+  const declared = [...new Set(tasks.flatMap((x) => (x.files || []).map(norm)))];
+  const canonical = (r) => (r.exists || !r.candidates ? r.path : declared.find((f) => r.candidates.includes(f)) || r.path);
+  const inScope = (scope, r) => {
+    const paths = r.exists || !r.candidates ? [r.path] : r.candidates;
+    return paths.some((p) => scope.some((e) => covers(e, p)));
+  };
   const out = {};
   for (const t of tasks) {
     if (t.done === true || ['external_delivery', 'verify_only', 'spike'].includes(t.kind)) continue;
@@ -111,7 +125,7 @@ function scopeGaps(projectRoot, doc) {
     const detail = [];
     for (const test of tests) {
       for (const r of testRequirements(projectRoot, test)) {
-        if (!scope.some((e) => covers(e, r.path))) detail.push({ test, path: r.path, kind: r.kind });
+        if (!inScope(scope, r)) detail.push({ test, path: canonical(r), kind: r.kind });
       }
     }
     if (detail.length) out[t.id] = { files: [...new Set(detail.map((d) => d.path))], tests: [...new Set(detail.map((d) => d.test))], detail };
@@ -119,14 +133,21 @@ function scopeGaps(projectRoot, doc) {
   return out;
 }
 
-/** Lint lines for the gaps. */
+/** Lint lines for the gaps: one line per task × test × kind, naming up to 6 paths. */
 function scopeGapMessages(gaps) {
   const msgs = [];
   for (const [id, g] of Object.entries(gaps)) {
-    for (const d of g.detail.slice(0, 6)) {
-      msgs.push(`${id}: o teste congelado ${d.test} ${d.kind === 'import' ? 'importa' : 'lê'} ${d.path}, fora de files — se a asserção depende de mudar esse arquivo, inclua-o em files de ${id} (ou de uma tarefa de que ${id} depende); senão o execute para na 1ª tentativa com scope_insufficient`);
+    const groups = new Map();
+    for (const d of g.detail) {
+      const k = `${d.test}\0${d.kind}`;
+      if (!groups.has(k)) groups.set(k, { test: d.test, kind: d.kind, paths: [] });
+      groups.get(k).paths.push(d.path);
     }
-    if (g.detail.length > 6) msgs.push(`${id}: e mais ${g.detail.length - 6} caminho(s) fora de files nos testes congelados`);
+    for (const x of groups.values()) {
+      const shown = x.paths.slice(0, 6).join(', ') + (x.paths.length > 6 ? ` e mais ${x.paths.length - 6}` : '');
+      const one = x.paths.length === 1;
+      msgs.push(`${id}: o teste congelado ${x.test} ${x.kind === 'import' ? 'importa' : 'lê'} ${shown}, fora de files — se a asserção depende de mudar ${one ? 'esse arquivo' : 'algum deles'}, inclua-o em files de ${id} (ou de uma tarefa de que ${id} depende); senão o execute para na 1ª tentativa com scope_insufficient`);
+    }
   }
   return msgs;
 }

@@ -118,6 +118,24 @@ function requirementIds(specText) {
 }
 
 /**
+ * The column of each field in a criteria table, by its header: | ID | Critério | Risco | Como verificar | (the SPEC
+ * template) or | ID | Critério | Como verificar | (older SPECs). Writing by position put the verify under Risco.
+ */
+function criteriaColumns(header) {
+  const cols = { criterion: -1, risk: -1, verify: -1, unknown: [] };
+  header.forEach((h, i) => {
+    if (i === 0) return;
+    const name = h.replace(/\*/g, '').trim();
+    if (cols.criterion < 0 && /crit[ée]rio|criterion/i.test(name)) cols.criterion = i;
+    else if (cols.risk < 0 && /^(risco|risk)\b/i.test(name)) cols.risk = i;
+    else if (cols.verify < 0 && /verific|verify/i.test(name)) cols.verify = i;
+    else cols.unknown.push(name || `coluna ${i + 1}`);
+  });
+  if (cols.criterion < 0) cols.criterion = 1;
+  return cols;
+}
+
+/**
  * Amends criterion `id`: `text` replaces the criterion; `append` adds a clause to it; `verify` replaces "Como verificar".
  * @returns {{ text: string, before: string, after: string }}
  */
@@ -127,7 +145,7 @@ function amendCriterion(specText, id, change = {}) {
   const key = String(id || '').trim().toUpperCase();
   const tables = findTables(lines, isCriteriaHeader);
   if (!tables.length) throw new Error('SPEC sem tabela de critérios de aceite (| ID | Critério | Como verificar |)');
-  if (!change.text && !change.append && !change.verify) throw new Error('informe --text <novo critério>, --append <cláusula> ou --verify <como verificar>');
+  if (!change.text && !change.append && !change.verify && !change.risk) throw new Error('informe --text <novo critério>, --append <cláusula>, --verify <como verificar> ou --risk <risco>');
   for (const t of tables) {
     for (let i = t.firstRow; i <= t.lastRow; i += 1) {
       const cells = splitRow(lines[i]);
@@ -135,9 +153,13 @@ function amendCriterion(specText, id, change = {}) {
       const before = lines[i];
       const next = [...cells];
       while (next.length < t.header.length) next.push('');
-      if (change.text) next[1] = String(change.text).trim();
-      if (change.append) next[1] = `${next[1].replace(/[.;\s]+$/, '')}; ${String(change.append).trim()}`;
-      if (change.verify) next[2] = String(change.verify).trim();
+      const col = criteriaColumns(t.header);
+      if (change.verify && col.verify < 0) throw new Error('a tabela de critérios não tem coluna "Como verificar"');
+      if (change.risk && col.risk < 0) throw new Error('a tabela de critérios não tem coluna "Risco"');
+      if (change.text) next[col.criterion] = String(change.text).trim();
+      if (change.append) next[col.criterion] = `${next[col.criterion].replace(/[.;\s]+$/, '')}; ${String(change.append).trim()}`;
+      if (change.verify) next[col.verify] = String(change.verify).trim();
+      if (change.risk) next[col.risk] = String(change.risk).trim();
       lines[i] = joinRow(next);
       return { text: lines.join(eol), before, after: lines[i] };
     }
@@ -165,8 +187,17 @@ function addCriterion(specText, id, change = {}) {
     key = checkNewId(idsInTables(lines, tables, 'A'), id, 'A', change.allowGap);
   }
   const t = tables[tables.length - 1];
-  const cells = [key, String(change.text).trim(), String(change.verify).trim()];
-  while (cells.length < t.header.length) cells.push('');
+  // By the header's columns, never by position; a column the command cannot fill is an error, not an empty cell.
+  const col = criteriaColumns(t.header);
+  if (col.unknown.length) throw new Error(`a tabela de critérios tem coluna(s) que o comando não preenche: ${col.unknown.join(', ')} — adicione a linha à mão ou ajuste o cabeçalho`);
+  if (col.verify < 0) throw new Error('a tabela de critérios não tem coluna "Como verificar"');
+  if (col.risk >= 0 && !change.risk) throw new Error('a tabela de critérios tem a coluna Risco: informe --risk <P0|P1|P2|…>');
+  if (col.risk < 0 && change.risk) throw new Error('a tabela de critérios não tem coluna "Risco" — retire --risk');
+  const cells = t.header.map(() => '');
+  cells[0] = key;
+  cells[col.criterion] = String(change.text).trim();
+  cells[col.verify] = String(change.verify).trim();
+  if (col.risk >= 0) cells[col.risk] = String(change.risk).trim();
   const row = joinRow(cells);
   lines.splice(t.lastRow + 1, 0, row);
   return { text: lines.join(eol), id: key, before: null, after: row };

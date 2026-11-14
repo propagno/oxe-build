@@ -22,7 +22,7 @@ function list(programDir) {
     try {
       const r = JSON.parse(line);
       if (r && r.kind === 'decision' && r.id) byId.set(r.id, { ...(byId.get(r.id) || {}), ...r });
-      if (r && r.kind === 'decision_status' && byId.has(r.id)) Object.assign(byId.get(r.id), { status: r.status, status_reason: r.reason, status_at: r.at });
+      if (r && r.kind === 'decision_status' && byId.has(r.id)) Object.assign(byId.get(r.id), { status: r.status, status_reason: r.reason, status_at: r.at, superseded_by: r.status === 'superseded' ? (r.superseded_by || null) : null });
     } catch { /* */ }
   }
   return [...byId.values()];
@@ -80,34 +80,100 @@ function add(programDir, input = {}) {
   const author = String(input.by || '').trim() || 'usuário';
   const alternatives = parseAlternatives(input.alternatives || input.alt, author);
   const existing = list(programDir);
+  const supersedes = input.supersedes ? String(input.supersedes).trim() : null;
+  if (supersedes) {
+    const old = existing.find((d) => d.id === supersedes);
+    if (!old) throw new Error(`--supersedes ${supersedes}: decisão inexistente (oxe-cc decision list)`);
+    if (old.status && old.status !== 'active') throw new Error(`--supersedes ${supersedes}: a decisão já está ${old.status}`);
+  }
   const record = {
     kind: 'decision',
-    id: nextId(existing, input.phase),
+    id: input.id && DECISION_ID_RE.test(String(input.id)) && !existing.some((d) => d.id === input.id) ? String(input.id) : nextId(existing, input.phase),
     title,
     text: String(input.text || '').trim() || null,
     phase: input.phase || null,
     criteria: (Array.isArray(input.criteria) ? input.criteria : String(input.criteria || '').split(',')).map((c) => c.trim().toUpperCase()).filter(Boolean),
     check: input.check ? String(input.check) : null,
     by: String(input.by || '').trim() || 'usuário',
-    at: new Date().toISOString(),
+    at: input.at ? String(input.at) : new Date().toISOString(),
     status: 'active',
+    // ADR sections: why the decision was needed and what it costs (both optional; the title and text carry the rest).
+    ...(input.context ? { context: String(input.context).trim() } : {}),
+    ...(input.consequences ? { consequences: String(input.consequences).trim() } : {}),
+    ...(supersedes ? { supersedes } : {}),
+    ...(input.source ? { source: String(input.source) } : {}),
     ...(alternatives.length ? { alternatives } : {}),
   };
   fs.mkdirSync(programDir, { recursive: true });
   fs.appendFileSync(FILE(programDir), `${JSON.stringify(record)}\n`, 'utf8');
+  if (supersedes) setStatus(programDir, supersedes, { status: 'superseded', by: record.by, reason: `substituída por ${record.id}`, superseded_by: record.id });
   return record;
+}
+
+const STATUSES = ['active', 'superseded', 'retired'];
+
+/**
+ * A decision changes status by an appended `decision_status` record (the ledger stays append-only): `superseded`
+ * (by another decision, named), `retired` (no longer applies, with the reason) or back to `active`.
+ */
+function setStatus(programDir, id, input = {}) {
+  const status = String(input.status || '').trim();
+  if (!STATUSES.includes(status)) throw new Error(`status inválido "${status}" (use ${STATUSES.join(' | ')})`);
+  const existing = list(programDir);
+  const d = existing.find((x) => x.id === id);
+  if (!d) throw new Error(`decisão ${id} inexistente (oxe-cc decision list)`);
+  const reason = String(input.reason || '').trim();
+  if (status !== 'active' && reason.length < 4) throw new Error(`informe o motivo (--reason "…") para marcar ${id} como ${status}`);
+  const superseded_by = input.superseded_by ? String(input.superseded_by) : null;
+  if (status === 'superseded' && superseded_by && !existing.some((x) => x.id === superseded_by)) throw new Error(`a decisão substituta ${superseded_by} não existe`);
+  const rec = { kind: 'decision_status', id, status, reason: reason || null, by: String(input.by || '').trim() || 'usuário', at: new Date().toISOString(), ...(superseded_by ? { superseded_by } : {}) };
+  fs.appendFileSync(FILE(programDir), `${JSON.stringify(rec)}\n`, 'utf8');
+  return rec;
+}
+
+/**
+ * The decisions of a DISCUSS.md table (| D-01 | decisão | data | impacto |) brought into the ledger, keeping their ids
+ * (plans cite them as "Decisão vinculada: D-01"). A row marked "(revertida por D-NN)" comes in superseded by D-NN.
+ * An id already in the ledger with the same title is skipped; with another title it is reported, never overwritten.
+ */
+function importDiscuss(programDir, discussText, options = {}) {
+  const rows = [];
+  for (const line of String(discussText || '').split(/\r?\n/)) {
+    const cells = line.split('|').map((c) => c.trim());
+    if (cells.length < 4 || !/^D-\d+$/.test(cells[1] || '')) continue;
+    const [, id, text, date, impact] = cells;
+    if (!text || /^\(descrição/.test(text)) continue;
+    const reverted = /revertida por (D-\d+)/i.exec(line);
+    rows.push({ id, title: text.replace(/\*?\(revertida por D-\d+\)\*?/i, '').replace(/[*_]/g, '').trim(), date: /^\d{4}-\d{2}-\d{2}$/.test(date || '') ? date : null, impact: impact || null, reverted_by: reverted ? reverted[1] : null });
+  }
+  const imported = [];
+  const skipped = [];
+  const conflicts = [];
+  for (const r of rows) {
+    const existing = list(programDir).find((d) => d.id === r.id);
+    if (existing) { (existing.title === r.title ? skipped : conflicts).push(r.id); continue; }
+    if (r.title.length < 4) { skipped.push(r.id); continue; }
+    imported.push(add(programDir, { id: r.id, title: r.title, text: r.impact ? `Impacto no plano: ${r.impact}` : null, phase: options.phase || null, by: options.by || 'DISCUSS.md', at: r.date ? `${r.date}T00:00:00.000Z` : undefined, source: 'DISCUSS.md' }));
+  }
+  for (const r of rows.filter((x) => x.reverted_by)) {
+    const d = list(programDir).find((x) => x.id === r.id);
+    if (d && (!d.status || d.status === 'active') && list(programDir).some((x) => x.id === r.reverted_by)) setStatus(programDir, r.id, { status: 'superseded', reason: `revertida por ${r.reverted_by} (DISCUSS.md)`, by: 'DISCUSS.md', superseded_by: r.reverted_by });
+  }
+  return { imported: imported.map((d) => d.id), skipped, conflicts };
 }
 
 /** Lint: unknown decisions cited by tasks (error), decisions of the phase no task cites (warning). */
 function lintDecisions(doc, decisions, phase) {
   const errors = [];
   const warnings = [];
-  const known = new Set(decisions.map((d) => d.id));
+  const known = new Map(decisions.map((d) => [d.id, d]));
   const cited = new Set();
   for (const t of (doc && doc.tasks) || []) {
     for (const id of (t && t.decisions) || []) {
       cited.add(id);
-      if (!known.has(id)) errors.push(`${t.id}: cita a decisão ${id}, que não existe (oxe-cc decision list; registre com oxe-cc decision add)`);
+      const d = known.get(id);
+      if (!d) errors.push(`${t.id}: cita a decisão ${id}, que não existe (oxe-cc decision list; registre com oxe-cc decision add)`);
+      else if (!t.done && d.status && d.status !== 'active') warnings.push(`${t.id}: cita ${id}, que está ${d.status === 'superseded' ? `substituída${d.superseded_by ? ` por ${d.superseded_by}` : ''}` : 'aposentada'}${d.status_reason ? ` (${d.status_reason})` : ''} — cite a decisão vigente`);
     }
   }
   for (const d of decisions) {
@@ -128,4 +194,4 @@ function decisionGates(decisions, doc, phase) {
     .map((d) => ({ id: `decision-${d.id}`, when: 'phase_verify', command: d.check, description: `evidência da decisão ${d.id}: ${d.title}`, on_fail: 'cr_defect' }));
 }
 
-module.exports = { parseAlternatives, rejectedApproachWarnings, DECISION_ID_RE, list, add, nextId, lintDecisions, decisionGates, FILE };
+module.exports = { parseAlternatives, rejectedApproachWarnings, DECISION_ID_RE, list, add, setStatus, importDiscuss, STATUSES, nextId, lintDecisions, decisionGates, FILE };

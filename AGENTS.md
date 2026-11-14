@@ -4,12 +4,12 @@ Este repositório empacota o fluxo **OXE** (spec-driven, artefatos em `.oxe/`). 
 
 - **npm:** `npx oxe-cc@latest` · pacote `oxe-cc` · [README.md](README.md)
 - **Workflows canónicos:** [oxe/workflows/](oxe/workflows/) — editar aqui primeiro; todas as integrações apontam para estes ficheiros. Referência **legado / brownfield:** [oxe/workflows/references/legacy-brownfield.md](oxe/workflows/references/legacy-brownfield.md).
-- **CLI:** `oxe-cc install | doctor | doctor --release | status | init-oxe | update | uninstall` + `oxe-cc runtime <status|compile|execute|verify|gates|replay|recover|ci|promote|agents|program|feedback|signoff|dossier|rollback|scorecard>` + `oxe-cc plan lint|done` — ver [README.md](README.md#cli-oxe-cc).
+- **CLI:** `oxe-cc install | doctor | doctor --release | status | init-oxe | update | uninstall` + `oxe-cc runtime <status|compile|execute|verify|gates|replay|recover|ci|promote|agents|program|feedback|signoff|dossier|rollback|scorecard>` + `oxe-cc plan lint|done` + jornada `oxe-cc status --journey | grill … | spec check|approve | ship status` + documentos `oxe-cc prd lint | rfc new|accept|reject|list | decision add|status|import|publish | docs publish|check` + ALM `oxe-cc alm status|push|sync|move|link|defect|queue|ack` (Jira / Azure DevOps, por REST ou pelas ferramentas MCP da sessão) — ver [README.md](README.md#cli-oxe-cc).
 - **SDK:** `require('oxe-cc')` expõe `runDoctorChecks`, `health`, `workflows`, `install`, `manifest`, `agents`, `verifyRun` e bridges `operational.*` do runtime enterprise — ver [lib/sdk/README.md](lib/sdk/README.md).
 
 ---
 
-## Trilha principal (6 comandos)
+## Trilha principal (7 comandos)
 
 ```
 /oxe              → onde estou / o que faço / help / perguntas situacionais
@@ -21,7 +21,11 @@ Este repositório empacota o fluxo **OXE** (spec-driven, artefatos em `.oxe/`). 
                     flags: --note, --debug, --deep-diagnosis, --checkpoint, --iterative
 /oxe-verify       → validar e fechar o ciclo (retro automática)
                     flags: --gaps, --security, --ui, --pr, --diff, --skip-retro
+/oxe-ship         → entregar: PR → CI/merge → deploy → docs → close
+                    flags: --local (só commit), --defect "…" --origin US-n
 ```
+
+`/oxe-spec` conduz a descoberta como **grill** (uma pergunta por vez, com a resposta recomendada; `--fast` para blocos). Toda etapa termina com **um** próximo passo (`oxe-cc status --json`); `oxe-cc status --journey` mostra o mapa da jornada.
 
 ## Trilha avançada
 
@@ -34,6 +38,7 @@ Este repositório empacota o fluxo **OXE** (spec-driven, artefatos em `.oxe/`). 
 
 ```
 /oxe-capabilities → catálogo nativo de capabilities
+/oxe-alm          → ALM (Jira / Azure DevOps): setup, push, fila do MCP, defeitos
 /oxe-skill        → skills OXE via @<id>
 oxe-cc azure      → provider Azure local-first
 ```

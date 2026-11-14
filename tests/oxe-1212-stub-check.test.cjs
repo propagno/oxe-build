@@ -100,3 +100,60 @@ describe('OXB-108: in the execute loop', () => {
     assert.match(String(seen[1]), /src\/used\.js:1 {2}\[substantive\] marcador "not implemented"/, 'the retry sees the stub with file:line');
   });
 });
+
+// 1.21.2 — oxespace-152-mobile: the pack named `text` in remote/text.ts (a name guessed from the file); text.ts had no
+// `text` export. Lint said OK; two correct attempts failed only the stub-check (US$ 2.36, 13 turns).
+describe('a pack symbol that does not exist', () => {
+  const PACK = { tasks: [{ id: 'T1', symbols: [{ name: 'text', path: 'src/text.js', kind: 'function' }] }] };
+
+  it('plan lint: in the task files → warning; outside them → error; created by another task → nothing', () => {
+    const dir = repo({ 'src/text.js': 'exports.sendText = () => 1;\n' }, { schema_version: 1, tasks: [{ id: 'T1', title: 'x', wave: 1, files: ['src/text.js'], verify: { commands: ['node -e 0'] } }] });
+    write(dir, '.oxe/IMPLEMENTATION-PACK.json', JSON.stringify(PACK));
+    let p = op.packSymbolProblems(dir, { tasks: [{ id: 'T1', files: ['src/text.js'] }] });
+    assert.equal(p.errors.length, 0);
+    assert.match(p.warnings[0], /^T1: o pack declara `text` em src\/text\.js, que existe e não define `text`/);
+    p = op.packSymbolProblems(dir, { tasks: [{ id: 'T1', files: ['src/other.js'] }] });
+    assert.match(p.errors[0], /fora de files de T1/);
+    write(dir, '.oxe/IMPLEMENTATION-PACK.json', JSON.stringify({ tasks: [...PACK.tasks, { id: 'T0', symbols: PACK.tasks[0].symbols }] }));
+    p = op.packSymbolProblems(dir, { tasks: [{ id: 'T0', files: ['src/text.js'] }, { id: 'T1', files: ['src/text.js'] }] });
+    assert.equal(p.warnings.filter((w) => /^T1:/.test(w)).length, 0, 'T0 declares it too: T0 creates it');
+    // a symbol the file defines is fine
+    write(dir, '.oxe/IMPLEMENTATION-PACK.json', JSON.stringify({ tasks: [{ id: 'T1', symbols: [{ name: 'sendText', path: 'src/text.js' }] }] }));
+    assert.deepEqual(op.packSymbolProblems(dir, { tasks: [{ id: 'T1', files: ['src/text.js'] }] }), { errors: [], warnings: [] });
+    // and it reaches the real lint
+    write(dir, '.oxe/IMPLEMENTATION-PACK.json', JSON.stringify(PACK));
+    assert.ok(op.runtimePlanLint(dir, null, { preflight: false }).warnings.some((w) => /o pack declara `text` em src\/text\.js/.test(w)));
+  });
+
+  it('stub-check: absent at the base and not created → the plan_defect line; a symbol the base had → no line', () => {
+    const dir = repo({ 'src/text.js': 'exports.sendText = () => 1;\n' }, { schema_version: 1, tasks: [{ id: 'T1', title: 'x', wave: 1, files: ['src/text.js'] }] });
+    write(dir, '.oxe/IMPLEMENTATION-PACK.json', JSON.stringify(PACK));
+    write(dir, 'src/text.js', 'exports.sendText = () => 2;\n');
+    const f = stub.stubFindings(dir, { task: 'T1', levels: ['exists'] });
+    assert.equal(f[0].absent_at_base, true);
+    assert.match(stub.packSymbolLine(f), /^plan_defect: o pack nomeia um símbolo que não existe — text em src\/text\.js/);
+    write(dir, '.oxe/IMPLEMENTATION-PACK.json', JSON.stringify({ tasks: [{ id: 'T1', symbols: [{ name: 'sendText', path: 'src/text.js' }] }] }));
+    write(dir, 'src/text.js', 'exports.other = 1;\n');
+    const g = stub.stubFindings(dir, { task: 'T1', levels: ['exists'] });
+    assert.equal(g[0].absent_at_base, false, 'the attempt removed it: a retry can fix that');
+    assert.equal(stub.packSymbolLine(g), null);
+  });
+
+  it('execute: stops after the first attempt as pack_symbol_missing — no paid retry', async () => {
+    const plan = { schema_version: 1, budget: { max_retries: 2 }, tasks: [{ id: 'T1', title: 'send', wave: 1, files: ['src/text.js'], verify: { commands: ['node -e 0'] } }] };
+    const dir = repo({ 'src/text.js': 'exports.sendText = () => 1;\n' }, plan);
+    write(dir, '.oxe/IMPLEMENTATION-PACK.json', JSON.stringify(PACK));
+    let n = 0;
+    const executor = { async execute() {
+      n += 1;
+      write(dir, 'src/text.js', `exports.sendText = () => ${n + 1};\n`);
+      return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' };
+    } };
+    await op.runRuntimeExecute(dir, null, { executor, skipPreflight: true });
+    assert.equal(n, 1, 'no retry');
+    const si = op.readEvents(dir, null).find((e) => e.type === 'ScopeInsufficient');
+    assert.ok(si, 'ScopeInsufficient emitted');
+    assert.equal(si.payload.reason, 'pack_symbol_missing');
+    assert.deepEqual(si.payload.files, ['src/text.js']);
+  });
+});

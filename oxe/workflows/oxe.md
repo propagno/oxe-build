@@ -20,7 +20,7 @@ Ponto de entrada inteligente do OXE. Faz uma de três coisas dependendo do input
 <modo_status>
 ## Modo: Status + Próximo Passo (sem input ou "o que faço agora?")
 
-Aplicar a lógica completa de `oxe/workflows/next.md`:
+Aplicar a lógica completa de `oxe/workflows/next.md`. **Com o `oxe-cc` disponível, a resposta é o `next` de `oxe-cc status --json`**, que já cobre o grill e a aprovação da spec, o ALM, o RFC da fase e a entrega. A lista abaixo é o fallback; `oxe-cc status --journey` mostra o mapa das etapas 0 a 9.
 
 0. Se existir `.oxe/program/PROGRAM.json` com fase aberta → seguir a **fase ativa** (`oxe-cc runtime program status`): `pending` → `runtime program start`; `planning` → **plan** só da fase (a menos que `PLAN.json` já declare essa fase → **execute**); `executing` → **execute**; `verifying` com verify verde → `runtime program close`, com verify reprovado → **execute**. Sempre dizer "Fase k/N — Fx". O PLAN/run de uma fase fechada nunca é reaproveitado.
 1. Se `.oxe/` ou `STATE.md` não existir → **scan** (`npx oxe-cc@latest` primeiro se OXE não instalado)
@@ -64,7 +64,12 @@ Mapear o input para o workflow correto e executar ou orientar:
 | "revisa PR / diff" | **`/oxe-verify --pr`** |
 | "auditoria de segurança" | **`/oxe-verify --security`** |
 | "valida / verifica" | **verify** |
-| "commita / entrega / ship" | **`/oxe-ship`** |
+| "entrega / abre o PR / deploy / ship" | **`/oxe-ship`** (PR, CI e merge, deploy, close); "só commita" → **`/oxe-ship --local`** |
+| "achei um bug em produção / defeito depois do deploy" | **`/oxe-ship --defect "…" --origin US-n`** |
+| "muda o critério A3 / põe A8 na F2 / critério novo / fase nova" | seguir **`oxe/workflows/references/change-management.md`** (spec amend/add, program phase/criterion) |
+| "decide a proposta técnica / RFC" | **`/oxe-discuss --rfc`** |
+| "configura Jira / Azure DevOps / ALM" | **`/oxe-alm`** |
+| "onde estou na jornada / mapa" | **`oxe-cc status --journey`** |
 | "milestone / release / versão" | **`/oxe-session milestone`** |
 | "trilha paralela / workstream" | **`/oxe-session workstream`** |
 | "snapshot / checkpoint" | **`/oxe-execute --checkpoint "<nome>"`** |

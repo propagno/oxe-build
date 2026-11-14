@@ -3,6 +3,7 @@
 <objective>
 1. **`.oxe/SPEC.md`** — contrato formal com critérios de aceite estáveis (A1, A2, …) e coluna **Como verificar**.
 2. **`.oxe/ROADMAP.md`** — fases de entrega mapeadas a requisitos (R-ID) e critérios (A*).
+3. **`.oxe/PRD.md`** — a camada de produto acima da SPEC (`oxe/templates/PRD.template.md`): problema, personas, objetivos com métricas (M-n) e **histórias de usuário** (US-n: Como / Quero / Para), cada uma ligada aos R* e A* que a entregam. As histórias são o que vai para o ALM (Jira / Azure DevOps) quando o projeto usa um.
 **Foco em redução de requisições:** as fases são estruturadas para extrair o máximo de informação por rodada — nunca uma pergunta por vez, sempre blocos coesos.
 Para trabalho **muito pequeno** que não justifica spec completa: redirecionar para **`oxe:quick`**.
 Se **`.oxe/config.json`** tiver `discuss_before_plan: true`: mencionar no final da Fase 5 que o próximo passo é **`oxe:discuss`** antes do plano.
@@ -16,9 +17,13 @@ Se **`.oxe/config.json`** tiver `discuss_before_plan: true`: mencionar no final 
 - `EXECUTION-RUNTIME.md`, `CHECKPOINTS.md` e `memory/` do escopo ativo se existirem — usar como contexto auxiliar, nunca como substituto da SPEC
 - Se o problema tocar Azure, ler `.oxe/cloud/azure/profile.json`, `auth-status.json` e `INVENTORY.md` antes de fechar requisitos; se o inventário estiver ausente ou stale, exigir discovery via `oxe-cc azure sync` antes de consolidar a spec
 </context>
-## Fase 1 — Perguntas
-**Regra de ouro:** nunca uma pergunta por vez — sempre um **bloco coeso** de 3-5 perguntas por rodada. Máximo **3 rodadas**; sinalize quando achar que tem entendimento completo e peça confirmação antes de avançar.
-- Quais tecnologias ou frameworks são obrigatórios ou proibidos?
+## Fase 1 — Perguntas (grill)
+1. `oxe-cc grill start --type <tipo>`. Se já houver grill aberto, ele é retomado: `oxe-cc grill status` mostra onde parou.
+2. Explore o repo e os artefatos primeiro. O que já tem resposta vira `oxe-cc grill fact … --source`, nunca pergunta.
+3. **Uma pergunta por mensagem**, seguindo o `next_branch` da árvore (problema → personas → escopo → fluxos → regras/glossário → bordas → NFR → integrações → rollout → métricas → riscos). Cada pergunta traz o que decide, as opções com consequência e a **resposta recomendada com o porquê**. Registre com `grill ask` antes de perguntar e com `grill answer` depois.
+4. Contradição → `grill conflict`; "não sei" → `grill defer --reason` (vira suposição); termos de negócio → `grill term`; decisão de arquitetura, produto ou trade-off → `--decision` (vira ADR).
+5. Ao fechar cada ramo, faça o playback em 3 a 5 linhas e, com o "sim", rode `oxe-cc grill confirm <ramo>`.
+6. Não há limite de rodadas: o grill termina quando `oxe-cc grill close` aceita. Se ele recusar, mostre o que falta e continue.
 - quais anchors, fixtures ou investigações serão obrigatórios para permitir `Confiança > 90%` no plano.
 ## Fase 2 — Pesquisa (opcional, recomendada)
 <domain_question_library>
@@ -78,22 +83,33 @@ Complemento adaptativo para a Fase 1. Quando o domínio for confirmado (via scan
 ### Requisito verificável apenas em produção
 </spec_anti_patterns>
 ## Fase 5 — Aprovação e próximo passo
+1. `oxe-cc spec check`: rastreabilidade R→A, Risco e Como verificar em todo A*, PRD (`prd lint`), glossário (sinônimos proibidos), grill fechado, decisões registradas, RFC para P0/P1. Corrija tudo o que ele apontar.
+2. `oxe-cc spec probe`: bordas e proibições por critério. Resolva cada borda: coberta, descartada com motivo ou suposição.
+3. Opcional: `oxe-cc spec stress`, com leitores independentes que propõem mudanças. Roda processos pagos, então peça o OK do usuário antes.
+4. Com o resumo aprovado: `oxe-cc spec approve --by <papel>`. Daí em diante, mudança de critério passa por `oxe-cc spec amend` (ver `references/change-management.md`).
+- Rodar **`oxe-cc prd lint`**: história sem critério, critério sem história, referência a A*/R* inexistente. Corrigir antes de seguir.
+- **ALM:** se `.oxe/config.json` tem `alm.provider` (`jira` ou `azure-devops`), rodar `oxe-cc alm push --stories-only --dry-run`, mostrar ao usuário o que será criado (épico, histórias com a versão-alvo) e, com o OK, `oxe-cc alm push --stories-only`. Sem ALM configurado, seguir sem ele — nada no fluxo depende disso.
 <process>
 0. **Processar flags recebidas:**
 1. Ler `.oxe/STATE.md`, `OVERVIEW.md`, `STACK.md` e `OBSERVATIONS.md` do escopo ativo (verificar pendentes).
 2. Fazer uma exploração inicial do repo e dos artefatos antes da primeira rodada de perguntas. Consolidar internamente: fatos confirmados, inferências e lacunas.
 3. Aplicar `adaptive-discovery.md`: classificar a demanda, verificar se há capabilities úteis e se investigações anteriores reduzem incerteza.
-4. **Fase 1 — Perguntas:** enviar bloco coeso de 3-5 perguntas; máx 3 rodadas; confirmar entendimento.
+4. **Fase 1 — Grill:** `oxe-cc grill start` ou retomar; uma pergunta por mensagem, com a recomendada; playback e `grill confirm` por ramo; `grill close` (gera o glossário e as decisões). Com `--fast`: blocos de 3 a 5 perguntas, máximo 3 rodadas.
 5. **Fase 2 — Pesquisa:** propor áreas de investigação; aguardar aprovação; executar se aprovado.
 6. **Fase 3 — Requisitos:** extrair tabela R-ID com v1/v2/fora e critérios A*; incorporar OBS pendentes; apresentar para validação.
 7. **Fase 4 — Roteiro:** agrupar requisitos v1 em fases (incluindo R-RB aprovados); escrever `ROADMAP.md` no escopo ativo.
 8. Escrever **`SPEC.md`** usando `oxe/templates/SPEC.template.md` no escopo ativo:
    - Objetivo, Escopo (dentro/fora), Critérios de aceite (tabela A*, com a coluna `Risco` P0–P3: o close da fase decide PASS, CONCERNS ou FAIL por ela, e um P2/P3 com lacuna só fecha com `oxe-cc runtime waive`), Suposições e riscos, Referências
+8a. Escrever **`PRD.md`** usando `oxe/templates/PRD.template.md` no mesmo escopo: problema, personas, métricas (M-n), histórias US-n ligadas aos R*/A*, fora de escopo, riscos de negócio. Mudança de escopo depois da aprovação: nova `version:` e uma linha no histórico, nunca reescrever o passado.
 8b. **Auto-reflexão:** executar integralmente o bloco `<auto_reflexao>` antes de avançar. Corrigir a spec conforme necessário. Não apresentar a lista de verificação ao usuário — apenas a spec corrigida.
 9. **Fase 5 — Aprovação:** apresentar resumo, aguardar aprovação do roteiro, redirecionar.
 10. Atualizar **`.oxe/STATE.md`** global: `phase: spec_ready`, próximo passo e referência curta à sessão ativa quando existir.
 11. Marcar OBS incorporadas em `OBSERVATIONS.md` do escopo ativo se houver pendentes de impacto `spec`.
 </process>
+**Ao terminar:** o **Próximo passo** de `oxe-cc status --json` (ver `references/next-step-footer.md`).
 <success_criteria>
+- [ ] `PRD.md` existe com histórias US-n ligadas aos A*, e `oxe-cc prd lint` passa; com ALM configurado, as histórias foram enviadas (`oxe-cc alm push --stories-only`).
 - [ ] Usuário foi consultado no gate da Fase 5 e escolheu o próximo passo.
+- [ ] Grill fechado (`oxe-cc grill close`), com cada critério, história e termo rastreável a uma pergunta; ou `--fast` com no máximo 3 rodadas.
+- [ ] `oxe-cc spec check` verde e spec aprovada (`oxe-cc spec approve`); RFC em rascunho para cada P0/P1.
 </success_criteria>
