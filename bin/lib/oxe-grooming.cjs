@@ -72,6 +72,8 @@ function report(cards) {
       facts_from_code: by.code,
       // input quality: the card asks for what the code already does (a fact marked --stale)
       stale_vs_code: qs.some((q) => q.decided_by === 'code' && q.stale),
+      // grill depth: facts the grooming did not find, found later (planning, execution, HML)
+      found_late: qs.filter((q) => q.decided_by === 'code' && q.late).map((q) => q.late_at || 'depois'),
       answered_by_user_decision: by.user_decision,
       answered_by_coordination: by.coordination,
       no_basis: by.no_basis,
@@ -88,7 +90,7 @@ function report(cards) {
     };
   });
   const sum = (k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
-  const total = { cards: rows.length, questions: sum('questions'), facts: sum('facts_from_card') + sum('facts_from_code'), user_decision: sum('answered_by_user_decision'), coordination: sum('answered_by_coordination'), no_basis: sum('no_basis'), open: sum('open'), noise: sum('noise'), stale: rows.filter((r) => r.stale_vs_code).length, rec_kept: sum('rec_kept'), rec_changed: sum('rec_changed'), criteria: sum('criteria'), lint_failed: rows.filter((r) => r.lint_ok === false).length };
+  const total = { cards: rows.length, questions: sum('questions'), facts: sum('facts_from_card') + sum('facts_from_code'), user_decision: sum('answered_by_user_decision'), coordination: sum('answered_by_coordination'), no_basis: sum('no_basis'), open: sum('open'), noise: sum('noise'), stale: rows.filter((r) => r.stale_vs_code).length, found_late: rows.reduce((a, r) => a + r.found_late.length, 0), rec_kept: sum('rec_kept'), rec_changed: sum('rec_changed'), criteria: sum('criteria'), lint_failed: rows.filter((r) => r.lint_ok === false).length };
   return { total, rows };
 }
 
@@ -101,10 +103,11 @@ function renderReport(r, ctx = {}) {
   L.push(`- **Respondidas pelo próprio card ou pelo código** (fatos, sem perguntar): ${t.facts}. **Ruído** (perguntado, mas o card ou o código já respondia): ${t.noise}.`);
   L.push(`- **Por decisão registrada do usuário:** ${t.user_decision} (${pct(t.user_decision, t.questions)}). **Por julgamento da coordenação:** ${t.coordination} (${pct(t.coordination, t.questions)}). **Sem base (para o usuário):** ${t.no_basis} (${pct(t.no_basis, t.questions)}). **Em aberto:** ${t.open}.`);
   L.push(`- **Card defasado em relação ao código** (pede o que o código já faz): ${t.stale} card(s)${t.stale ? ` (${r.rows.filter((x) => x.stale_vs_code).map((x) => x.key).join(', ')})` : ''}.`);
+  L.push(`- **Profundidade do grill** (fato que o grooming não achou e apareceu depois): ${t.found_late}${t.found_late ? ` (${r.rows.filter((x) => x.found_late.length).map((x) => `${x.key}: no ${x.found_late.join(', ')}`).join('; ')})` : ''}.`);
   L.push(`- **Qualidade da recomendação do grill:** ${t.rec_kept} respondida(s) com a recomendada, ${t.rec_changed} com outra resposta (${pct(t.rec_changed, t.rec_kept + t.rec_changed)} trocadas).`);
   L.push(`- **Saída:** ${t.criteria} critério(s) de aceite nos specs; ${t.lint_failed} card(s) com o lint do refine reprovado (retrabalho).`);
-  L.push('', '## Por card', '', '| Card | Perguntas | Fatos (card/código) | Decisão do usuário | Coordenação | Sem base | Aberto | Ruído | Defasado | Recomendada mantida/trocada | CA (com teste) | Lint |', '|---|---|---|---|---|---|---|---|---|---|---|---|');
-  for (const x of r.rows) L.push(`| ${x.key} | ${x.questions} | ${x.facts_from_card}/${x.facts_from_code} | ${x.answered_by_user_decision} | ${x.answered_by_coordination} | ${x.no_basis} | ${x.open} | ${x.noise} | ${x.stale_vs_code ? 'sim' : '—'} | ${x.rec_kept}/${x.rec_changed} | ${x.criteria == null ? '—' : `${x.criteria} (${x.criteria_with_test})`} | ${x.lint_ok == null ? '—' : x.lint_ok ? 'ok' : `${x.lint_errors} erro(s)`} |`);
+  L.push('', '## Por card', '', '| Card | Perguntas | Fatos (card/código) | Decisão do usuário | Coordenação | Sem base | Aberto | Ruído | Defasado | Achado tarde | Recomendada mantida/trocada | CA (com teste) | Lint |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|');
+  for (const x of r.rows) L.push(`| ${x.key} | ${x.questions} | ${x.facts_from_card}/${x.facts_from_code} | ${x.answered_by_user_decision} | ${x.answered_by_coordination} | ${x.no_basis} | ${x.open} | ${x.noise} | ${x.stale_vs_code ? 'sim' : '—'} | ${x.found_late.length ? x.found_late.join(', ') : '—'} | ${x.rec_kept}/${x.rec_changed} | ${x.criteria == null ? '—' : `${x.criteria} (${x.criteria_with_test})`} | ${x.lint_ok == null ? '—' : x.lint_ok ? 'ok' : `${x.lint_errors} erro(s)`} |`);
   L.push('', 'Input = o card original (quanto ele já respondia); output = o spec (critérios com teste, lint). Tempo por etapa: oxe-cc alm metrics.');
   return `${L.join('\n')}\n`;
 }

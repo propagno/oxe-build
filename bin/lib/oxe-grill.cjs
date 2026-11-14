@@ -108,7 +108,7 @@ function replay(records) {
       continue;
     }
     // a fact that shows the card is behind the code (the code already does what the card asks): grooming input quality
-    if (r.t === 'mark' && q) { if (r.stale != null) q.stale = Boolean(r.stale); continue; }
+    if (r.t === 'mark' && q) { if (r.stale != null) q.stale = Boolean(r.stale); if (r.late != null) { q.late = Boolean(r.late); q.late_at = r.late_at || null; } continue; }
     if (r.t === 'defer' && q) { q.status = 'deferred'; q.reason = r.reason; st.confirmed.delete(q.branch); continue; }
     if (r.t === 'confirm') { st.confirmed.add(r.branch); continue; }
     if (r.t === 'term') {
@@ -165,9 +165,16 @@ function status(dir) {
 
 // ── commands ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The Jira / ALM item kinds the refine and the intake use, mapped to the grill's own (OxeSpace 14/11: `grill start
+ * --type task --card OXE-137` was refused). A task is generic work: it gets the feature tree, the most complete.
+ */
+const KIND_ALIASES = { story: 'feature', 'história': 'feature', historia: 'feature', task: 'feature', tarefa: 'feature', subtask: 'feature', epic: 'feature', 'épico': 'feature', bug: 'bugfix', defect: 'bugfix', defeito: 'bugfix', spike: 'investigação', investigacao: 'investigação', migracao: 'migração', integracao: 'integração', seguranca: 'segurança' };
+
 function start(dir, input = {}) {
-  const type = String(input.type || 'feature').toLowerCase();
-  if (!BLOCKING_BY_TYPE[type]) throw new Error(`tipo "${input.type}" desconhecido (feature | bugfix | refactor | investigação | migração | integração | infra | dados | ui | segurança)`);
+  const raw = String(input.type || 'feature').toLowerCase();
+  const type = BLOCKING_BY_TYPE[raw] ? raw : KIND_ALIASES[raw] || raw;
+  if (!BLOCKING_BY_TYPE[type]) throw new Error(`tipo "${input.type}" desconhecido (feature | bugfix | refactor | investigação | migração | integração | infra | dados | ui | segurança; do ALM: story | task | bug | epic | spike)`);
   const st = replay(readRecords(dir));
   if (st.started && !input.restart) return { resumed: true, type: st.type, ...status(dir) };
   append(dir, { t: 'start', type, title: input.title || null });
@@ -238,7 +245,12 @@ function mark(dir, id, input = {}) {
   const st = requireStarted(dir);
   const q = st.questions.get(String(id).toUpperCase());
   if (!q) throw new Error(`${id}: pergunta ou fato inexistente`);
-  if (q.decided_by !== 'code') throw new Error(`${q.id}: só um fato (grill fact) pode ser marcado como card defasado`);
+  if (q.decided_by !== 'code') throw new Error(`${q.id}: só um fato (grill fact) pode ser marcado (card defasado ou achado tarde)`);
+  // --late <etapa>: a fact the grooming did not find, found later (planning, execution, HML): grill depth
+  if (input.late) {
+    append(dir, { t: 'mark', id: q.id, late: true, late_at: String(input.late) === 'true' ? null : String(input.late) });
+    return { id: q.id, late: true, late_at: String(input.late) === 'true' ? null : String(input.late) };
+  }
   append(dir, { t: 'mark', id: q.id, stale: input.stale !== false });
   return { id: q.id, stale: input.stale !== false };
 }

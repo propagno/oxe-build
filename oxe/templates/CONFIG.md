@@ -93,6 +93,7 @@ As credenciais nunca ficam no arquivo: o bloco diz o **nome** da variável de am
 | `adopt_prefixes` | Códigos antigos (`CODE-8` no título da tarefa, ou `refs: ["CODE-8"]`): o item com o rótulo `ref-CODE-8` é adotado em vez de criar outro. |
 | `ledger_guard` / `search_settle_ms` | A busca do Jira por rótulo pode levar minutos para ver um item novo, e o registro local (`.oxe/program/alm-links.ndjson`) é a defesa principal contra duplicata. Com `ledger_guard: true`, um push sem esse registro se recusa a criar. `alm push --rebuild-ledger` refaz o registro pela busca, sem criar nada; `--first-push` vale para o primeiro push de um programa. `search_settle_ms` é a espera antes da segunda busca: 5 s, ou 60 s com o guard. |
 | `dry_run` / `auto` | `dry_run: true` só mostra; `auto: false` desliga a sincronização automática nos pontos do ciclo. |
+| `ref_label` | `"program"` (padrão): o rótulo do intake é `ref-<programa>-<ref>`, porque refs como F2-T5 se repetem entre programas. `"plain"`: `ref-<ref>`, para ids de intake únicos por si (ref-TOKENS-1-CAMADA, a convenção do quadro). |
 | `require_apply` | `true`: gravar exige `--apply` explícito. Sem ele, todo comando que escreve (`push`, `sync`, `move`, `comment`, `defect`, `intake`, `version ensure`, `refine --claim`, `refine apply`) roda como simulação. A sincronização automática também vira simulação. Em qualquer modo, `--dry-run` nunca grava: o transporte recusa POST, PUT, PATCH e DELETE. |
 | `docs` | `{ "repo": "https://github.com/<org>/<repo>", "branch": "main", "dir": "docs" }`: a base dos links do comentário "Documentos (OXE)" que o `oxe-cc trace publish` mantém em cada card (PRD, ADRs). |
 | `stories_source` | `"prd"` (padrão, projeto novo: o push cria as histórias do PRD) ou `"alm"` (os cards já existem): o push só liga a história do PRD ao card que a linha dela cita (ex.: `OXE-48` na linha da US) e nunca cria história nem épico. Uma história sem card fica listada como pendente. Em qualquer modo, um item que cita a chave do seu card (`(OXE-20)` no título da tarefa) é adotado por ela, conferido por GET. |
@@ -157,8 +158,12 @@ Regra: nada chega a um PR sem vir do `oxe-cc runtime execute` (trailer `OXE-Task
 | `exempt.authors` | autores que passam sem trailer: o bot do trem de merge, o bot de release (padrão: nenhum) |
 | `exempt.paths` | um commit que só toca esses caminhos passa (padrão `[".oxe/"]`; terminado em `/` é pasta) |
 | `commit_msg` | o hook `commit-msg` do `oxe-cc guards install`: `require` (padrão) recusa commit sem origem; `append` só avisa; `off` desliga. Com um quick aberto, o hook acrescenta os trailers dele |
+| `exempt.authored` | um autor isento só nos caminhos dele: `[{ "author": "github-actions[bot]", "paths": ["<pasta das goldens>/"] }]`. É o bot que regrava as goldens, e o mesmo bot em outro caminho é recusado |
 | `require_card` | o commit de quick precisa de `OXE-Card` (padrão: `true` quando há ALM) |
 | `base` | a base do `oxe-cc ship check-origin` sem argumento (padrão `origin/main`) |
+| `since` | o corte: um commit (SHA) ou uma data. O que já está nesse commit, ou é anterior a essa data, é histórico e não é cobrado |
+
+**Repositório que não versiona `.oxe/`:** ponha o bloco `origin` num `oxe.config.json` versionado na raiz. Ele vence o `.oxe/config.json`, e o pr:ready, a CI e as worktrees leem o mesmo arquivo. `--config <arquivo>` aponta outro arquivo. O `check-origin` roda sem `.oxe/`: só precisa do git e dessa config.
 
 Conferência: `oxe-cc ship check-origin [<#PR>|<a..b>] [--json]` sai com 1 e lista cada commit sem origem. O commit do quick é feito por `oxe-cc quick commit -m "<mensagem>" <arquivos…>`, que acrescenta os trailers.
 

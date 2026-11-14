@@ -20,6 +20,16 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Comentário do grooming (G12):** os fatos ficam em "Fatos (fonte): N", cada um com a fonte, e as perguntas em "Perguntas: N (X respondida(s), Y em aberto)". Antes, os fatos eram contados como perguntas.
 - **`grill answer` (G15):** o eco mostra a fonte dada em `--source`, não "decisão do usuário".
 
+### Simulação local, corte da trava e guarda-chuva (depois do e421105)
+- **P0: `quick --dry-run` não grava nada local:** nenhum registro, QUICK.md, evento nem commit, e não roda a verificação. A regra do G13 passa a valer também para as escritas locais.
+- **G19, corte e config versionada:** `origin.since` aceita um commit ou uma data, e o que é anterior ao corte vira histórico. O `oxe.config.json` versionado vence o `.oxe/config.json`; `--config <arquivo>` aponta outro. O `check-origin` roda sem `.oxe/`.
+- **G20:** `origin.exempt.authored` isenta um autor só nos caminhos dele, por exemplo o bot que regrava as goldens.
+- **Guarda-chuva:** `alm label <chave> --add <rótulo>` e `alm link <chave> --relates <chave,…>`, os dois com `--apply` e sem repetir. `alm.ref_label: "plain"` gera o rótulo do intake como `ref-<id>`.
+- **`grill start` aceita os tipos do ALM** (story, task, bug, epic, spike). Com `--card` e sem `--type`, usa o tipo do card.
+- **`grill mark --late <etapa>`:** marca um fato que o grooming não achou e que apareceu depois, no planejamento ou na execução. O `grill report` mostra a profundidade do grill.
+- **`alm intake --dry-run` sem credencial** confere o arquivo offline, com o lint do refine.
+- **Gates internos do oxe-build** (stub-check e os demais scripts do pacote) rodam sempre locais. O `phase_gates_runner` remoto só envolve os comandos do repositório.
+
 ### Origem dos commits, quick com registro e CI por PR (G5, G8, G9, G11)
 - **`oxe-cc quick <KEY> "<objetivo>"` (G9):** o quick vira comando, com um registro verificável em `.oxe/quick/<id>.json` e a minispec no QUICK.md.
   - `quick commit -m "…"` faz o commit com os trailers `OXE-Quick` e `OXE-Card`, para o commit à mão não virar o buraco da trava.

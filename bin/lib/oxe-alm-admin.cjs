@@ -59,7 +59,7 @@ async function intake(rest, cfg, input, ctx) {
   const ref = String(input.ref || `IN-${Date.now().toString(36).toUpperCase()}`);
   const known = alm.links(ctx.programDir);
   if (known.has(ref)) return { ref, key: known.get(ref).key, reused: true };
-  const label = alm.refLabel(ref, cfg);
+  const label = cfg.ref_label === 'plain' ? `ref-${ref}` : alm.refLabel(ref, cfg);
   const labels = [...new Set([...cfg.labels, label, ...(kind === 'bug' ? [cfg.p.bug_label || 'bug'] : []), ...String(input.labels || '').split(',').map((s) => s.trim()).filter(Boolean)])];
   // the description: the given file (a study, a report) or the skeleton of the type, every gap "A confirmar"
   let body;
@@ -79,7 +79,12 @@ async function intake(rest, cfg, input, ctx) {
     ...(input.epic && kind !== 'epic' ? { parent: { key: String(input.epic) } } : {}),
     ...(input.version ? { fixVersions: [{ name: String(input.version) }] } : {}),
   };
-  if (input.dryRun) return { ref, planned: { type: types[kind], summary, labels, epic: input.epic || null, version: input.version || null, description_lines: body.split('\n').length } };
+  if (input.dryRun) {
+    // the file is checked offline too: the sections of the type, the CA format, the refine lint (a reader session
+    // validates the card before handing it to the writer)
+    const lint = input.fromText ? refine.lintSpec(input.fromText, kind) : null;
+    return { ref, planned: { type: types[kind], summary, labels, epic: input.epic || null, version: input.version || null, description_lines: body.split('\n').length }, ...(lint ? { lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings, criteria: lint.criteria.length, needs_info: lint.needs_info } } : {}), offline: Boolean(input.offline) };
+  }
   const found = await rest.request('GET', `${rest.site}/rest/api/3/search/jql?jql=${encodeURIComponent(`project = "${cfg.p.project}" AND labels = "${label}"`)}&fields=summary&maxResults=1`);
   if (found && found.issues && found.issues[0]) {
     alm.addLink(ctx.programDir, { ref, key: found.issues[0].key, kind, provider: 'jira', intake: true });

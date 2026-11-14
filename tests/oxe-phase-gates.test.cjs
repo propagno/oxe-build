@@ -51,6 +51,19 @@ describe('phase gates: declaração', () => {
     assert.equal(check.phase_gate, 'typecheck');
   });
 
+  it('os gates internos do oxe-build (stub-check) rodam aqui: o phase_gates_runner remoto não os envolve (OxeSpace 14/11)', () => {
+    const stub = path.join(__dirname, '..', 'bin', 'lib', 'oxe-stub-check.cjs').replace(/\\/g, '/');
+    const remote = 'node C:/deps/scripts/remote-verify.mjs -- {command}';
+    const checks = gates.gateChecks([
+      { id: 'stub-check', when: 'phase_verify', command: `node "${stub}" --phase --since abc123` },
+      { id: 'typecheck', when: 'phase_verify', command: 'npm run typecheck' },
+      { id: 'own', when: 'phase_verify', command: `node "${stub}" --phase`, runner: 'lock -- {command}' },
+    ], 'phase_verify', { defaultRunner: remote });
+    assert.equal(checks[0].command, `node "${stub}" --phase --since abc123`, 'internal: local');
+    assert.equal(checks[1].command, 'node C:/deps/scripts/remote-verify.mjs -- npm run typecheck', 'a repo command: remote');
+    assert.equal(checks[2].command, `lock -- node "${stub}" --phase`, 'an explicit gate.runner still applies');
+  });
+
   it('o lint avisa quando o repo tem gates e o plano não declara nenhum', () => {
     const dir = tmpDir();
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ scripts: { typecheck: 'tsc --noEmit', test: 'vitest' } }));

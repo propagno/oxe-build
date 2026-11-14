@@ -34,6 +34,7 @@ const NESTED_ONLY = new Set([
   'ready_gate', // alm
   'stories_source', // alm
   'require_apply', // alm (OXB-G13)
+  'ref_label', // alm (intake label "plain")
 ]);
 
 function sourceFiles() {

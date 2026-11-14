@@ -123,7 +123,12 @@ function gateCommand(gate, options = {}) {
     if (gate.repo) args.push('--repo', quote(gate.repo));
     return args.join(' ');
   }
-  const runner = gate.runner || options.defaultRunner || null;
+  // the oxe-build's own gates (stub-check and the other scripts of this package) run here: their path exists only
+  // on this machine, so a remote phase_gates_runner (heavy work on GitHub) broke them (OxeSpace 14/11, F2 close).
+  // An explicit gate.runner still applies.
+  const pkg = path.resolve(__dirname, '..', '..').replace(/\\/g, '/').toLowerCase();
+  const internal = String(gate.command || '').replace(/\\/g, '/').toLowerCase().includes(pkg);
+  const runner = gate.runner || (internal ? null : options.defaultRunner) || null;
   return runner ? expandRunner(runner, gate.command) : gate.command;
 }
 

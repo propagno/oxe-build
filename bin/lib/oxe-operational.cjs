@@ -1343,7 +1343,12 @@ function runtimeGrill(projectRoot, activeSession, options = {}) {
   const gp = grillPaths(projectRoot, activeSession, options.card);
   const a = options.action || 'status';
   let out;
-  if (a === 'start') out = lib.start(gp.dir, { type: options.type, title: options.title, restart: options.restart });
+  if (a === 'start') {
+    // with --card and no --type: the card's own kind, from the refine collect (.oxe/alm/refine/<KEY>.json)
+    let type = options.type;
+    if (!type && options.card) { try { type = JSON.parse(fs.readFileSync(path.join(projectRoot, '.oxe', 'alm', 'refine', `${String(options.card).toUpperCase()}.json`), 'utf8')).kind || null; } catch { type = null; } }
+    out = lib.start(gp.dir, { type, title: options.title, restart: options.restart });
+  }
   else if (a === 'ask') out = lib.ask(gp.dir, options);
   else if (a === 'answer') {
     out = lib.answer(gp.dir, options.id, options);
@@ -2367,7 +2372,7 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
   const phase = activeProgramPhase(projectRoot, activeSession);
   // OXB-b: one writer per program (alm.writer); the other sessions read and comment. A local lock keeps two writers
   // on the same machine from creating the same batch at once.
-  const WRITES = ['push', 'sync', 'move', 'defect', 'ack', 'link'];
+  const WRITES = ['push', 'sync', 'move', 'defect', 'ack', 'link', 'label'];
   if ([...WRITES, 'comment'].includes(options.action) && !dryRun && !options.auto) lib.warnApply(cfg, options);
   if (WRITES.includes(options.action) && !dryRun) {
     if (!lib.isWriter(cfg, env)) throw lib.writerError(cfg);
@@ -2420,6 +2425,9 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
     const ref = /^T\d+$/i.test(options.ref || '') ? lib.taskRef(phase ? phase.id : null, options.ref.toUpperCase()) : options.ref;
     return lib.move(programDir, cfg, ref, options.stage, { ...net, comment: options.comment });
   }
+  // the umbrella card: a label and "Relates" links between cards, by key (OxeSpace 14/11, OXE-22/23)
+  if (options.action === 'label') return lib.labelItem(programDir, cfg, options.ref, options.add, net);
+  if (options.action === 'link' && options.relates) return lib.relateItems(programDir, cfg, options.ref, options.relates, net);
   if (options.action === 'link' && options.pr) {
     // OXB-G18: the card to the pull request that delivered it (Jira remote link / Azure hyperlink)
     return lib.linkPr(programDir, cfg, options.ref, { pr: options.pr, repo: options.repo || (config.alm && config.alm.docs && config.alm.docs.repo) || null, title: options.title }, net);
@@ -2579,7 +2587,10 @@ async function runtimeAlmAdmin(projectRoot, activeSession, options = {}) {
   if (cfg.provider !== 'jira') throw new Error(`alm ${options.action}: por enquanto só Jira`);
   const env = options.env || process.env;
   const problems = lib.checkConfig(cfg, env);
-  if (problems.length) throw new Error(`ALM: ${problems.join('; ')}`);
+  // intake --dry-run needs no credential: it only builds and checks the item, offline (OxeSpace 14/11)
+  const offlineIntake = options.action === 'intake' && lib.isDry(cfg, options) && problems.length > 0;
+  if (problems.length && !offlineIntake) throw new Error(`ALM: ${problems.join('; ')}`);
+  if (offlineIntake) options = { ...options, offline: true };
   if (options.action === 'doctor') return admin.doctor(lib.jiraRest(cfg, { ...options, readOnly: true }), cfg);
   options = { ...options, dryRun: lib.isDry(cfg, options) };
   const rest = lib.jiraRest(cfg, options);
@@ -2864,8 +2875,8 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
   if (action === 'status') return { open: q.current(projectRoot) };
   if (action === 'list') return { quicks: q.list(projectRoot) };
   if (action === 'commit') {
-    const out = q.commit(projectRoot, { message: options.message, paths: options.paths, all: options.all });
-    appendEvent(projectRoot, activeSession, { type: 'QuickCommitted', payload: { id: out.id, sha: out.sha, files: out.files.length } });
+    const out = q.commit(projectRoot, { message: options.message, paths: options.paths, all: options.all, dryRun: options.dryRun });
+    if (!out.dry_run) appendEvent(projectRoot, activeSession, { type: 'QuickCommitted', payload: { id: out.id, sha: out.sha, files: out.files.length } });
     return out;
   }
   if (action === 'trailers') {
@@ -2879,9 +2890,10 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
   if (action === 'start' && cfg && cfg.provider !== 'none' && !options.key) throw new Error('com ALM configurado, o quick nomeia o card: oxe-cc quick <KEY> "<objetivo>"');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const rec = action === 'start'
-    ? q.start(projectRoot, { key: options.key, objective: options.objective, by: options.by, replace: options.replace, quickFile: paths.quick || path.join(projectRoot, '.oxe', 'QUICK.md') })
-    : q.done(projectRoot, { verify: options.verify, noCommit: options.noCommit, by: options.by, id: options.id });
-  if (action === 'start' && !rec.resumed) appendEvent(projectRoot, activeSession, { type: 'QuickStarted', payload: { id: rec.id, key: rec.key } });
+    ? q.start(projectRoot, { key: options.key, objective: options.objective, by: options.by, replace: options.replace, dryRun: options.dryRun, quickFile: paths.quick || path.join(projectRoot, '.oxe', 'QUICK.md') })
+    : q.done(projectRoot, { verify: options.verify, noCommit: options.noCommit, by: options.by, id: options.id, dryRun: options.dryRun });
+  // a dry run writes no local state either (no record, no QUICK.md, no event, no commit) — the G13 rule, locally
+  if (action === 'start' && !rec.resumed && !rec.dry_run) appendEvent(projectRoot, activeSession, { type: 'QuickStarted', payload: { id: rec.id, key: rec.key } });
   if (action === 'done' && rec.closed) appendEvent(projectRoot, activeSession, { type: 'QuickDone', payload: { id: rec.id, key: rec.key, commits: rec.commits.length, verify_ok: rec.verify ? rec.verify.ok : null } });
   // the card: only when there is one, an ALM, and the quick is not a resume or a failed verification
   if (!cfg || !rec.key || rec.resumed || (action === 'done' && !rec.closed)) return { ...rec, alm: null };
@@ -2934,7 +2946,8 @@ function runtimeShipPr(projectRoot, activeSession, options = {}) {
 
 /** G11 — `oxe-cc ship check-origin [<#PR>|<range>]`. */
 function runtimeCheckOrigin(projectRoot, activeSession, options = {}) {
-  return require('./oxe-origin.cjs').check(projectRoot, { target: options.target, config: readProjectConfig(projectRoot) || {}, spawn: options.spawn });
+  // works without a local .oxe/ (a CI checkout): git + the versioned oxe.config.json, or --config <file>
+  return require('./oxe-origin.cjs').check(projectRoot, { target: options.target, config: readProjectConfig(projectRoot) || {}, configFile: options.config || null, spawn: options.spawn });
 }
 
 /** G11 — the commit-msg hook (`oxe-cc ship commit-msg <file>`), installed by `oxe-cc guards install`. */

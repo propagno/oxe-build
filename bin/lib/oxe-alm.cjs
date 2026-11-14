@@ -85,6 +85,9 @@ function almConfig(config, options = {}) {
     dry_run: a.dry_run === true,
     // OXB-G13: write only with an explicit --apply; without it every writing command is a simulation
     require_apply: a.require_apply === true,
+    // the intake label: ref-<program>-<ref> (default; push refs like F2-T5 repeat across programs) or, with "plain",
+    // ref-<ref> for intake ids that are unique by themselves (ref-TOKENS-1-CAMADA, the board convention)
+    ref_label: a.ref_label === "plain" ? "plain" : "program",
     auto: a.auto !== false,
     // The program name in the idempotency label (ref-<program>-<ref>): refs like F2-T5 repeat across programs.
     program: String(a.program || options.defaultProgram || 'oxe').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'oxe',
@@ -271,6 +274,9 @@ function jiraProvider(cfg, env, ctx) {
     async labels(key) {
       const r = await request(c, 'GET', `${site}/rest/api/3/issue/${key}?fields=labels`);
       return (r && r.fields && r.fields.labels) || [];
+    },
+    async addLabels(key, labels) {
+      await request(c, 'PUT', `${site}/rest/api/3/issue/${key}`, { update: { labels: labels.map((l) => ({ add: l })) } });
     },
     /** The fix versions of an item (names). */
     async fixVersions(key) {
@@ -866,6 +872,49 @@ function resolveItem(programDir, cfg, refOrKey) {
   return direct ? { ref: s.toUpperCase(), key: s.toUpperCase(), direct: true } : null;
 }
 
+/**
+ * A label on an item and "Relates" links between items — the umbrella card (OxeSpace 14/11: OXE-22/23 point to the
+ * BRD items that split them). By key, idempotent (Jira adds a label once; an existing link is not repeated).
+ */
+async function labelItem(programDir, cfg, refOrKey, labels, options = {}) {
+  const item = resolveItem(programDir, cfg, refOrKey);
+  if (!item) throw new Error(`${refOrKey}: sem item no ALM (use a chave do item)`);
+  const add = (Array.isArray(labels) ? labels : String(labels || '').split(',')).map((s) => String(s).trim()).filter(Boolean);
+  if (!add.length) throw new Error('informe o rótulo: --add <rótulo>[,<rótulo>]');
+  if (add.some((l) => /\s/.test(l))) throw new Error('rótulo do Jira não tem espaço');
+  if (options.dryRun || cfg.dry_run) return { planned: { key: item.key, add } };
+  const prov = options.provider || provider(cfg, options);
+  if (typeof prov.addLabels !== 'function') throw new Error(`${cfg.provider}: rótulo ainda não suportado (Azure: tags)`);
+  const have = typeof prov.labels === 'function' ? await prov.labels(item.key) : [];
+  const missing = add.filter((l) => !have.includes(l));
+  if (missing.length) await prov.addLabels(item.key, missing);
+  return { key: item.key, added: missing, existed: add.filter((l) => have.includes(l)) };
+}
+
+async function relateItems(programDir, cfg, refOrKey, others, options = {}) {
+  const item = resolveItem(programDir, cfg, refOrKey);
+  if (!item) throw new Error(`${refOrKey}: sem item no ALM (use a chave do item)`);
+  const targets = (Array.isArray(others) ? others : String(others || '').split(',')).map((s) => resolveItem(programDir, cfg, String(s).trim())).filter(Boolean);
+  if (!targets.length) throw new Error('informe os itens: --relates <KEY>[,<KEY>]');
+  if (options.dryRun || cfg.dry_run) return { planned: { key: item.key, relates: targets.map((t) => t.key) } };
+  const prov = options.provider || provider(cfg, options);
+  const linked = [];
+  const existed = [];
+  let current = [];
+  if (cfg.provider === 'jira' && typeof prov.read === 'function') {
+    try {
+      const r = await (options.rest || jiraRest(cfg, options)).request('GET', `${String((options.env || process.env)[cfg.p.site_env || 'JIRA_SITE'] || '').replace(/\/+$/, '')}/rest/api/3/issue/${item.key}?fields=issuelinks`);
+      current = ((r && r.fields && r.fields.issuelinks) || []).map((l) => (l.outwardIssue || l.inwardIssue || {}).key).filter(Boolean);
+    } catch { current = []; }
+  }
+  for (const t of targets) {
+    if (current.includes(t.key)) { existed.push(t.key); continue; }
+    await prov.link(item.key, t.key, 'Relates');
+    linked.push(t.key);
+  }
+  return { key: item.key, linked, existed };
+}
+
 /** A link from the item to a pull request (Jira remote link / Azure hyperlink): "entregue no #771". Idempotent. */
 async function linkPr(programDir, cfg, refOrKey, input, options = {}) {
   const item = resolveItem(programDir, cfg, refOrKey);
@@ -909,4 +958,4 @@ function keyFor(programDir, cfg, phase, taskId) {
   return cfg && cfg.provider === 'azure-devops' ? `AB#${l.key}` : l.key;
 }
 
-module.exports = { almConfig, checkConfig, jiraRest, isWriter, writerError, withWriteLock, comment, provider, readQueue, pendingOps, enqueue, ack, dropEnsure, push, sync, move, stagesFromEvents, reportDefect, links, addLink, readState, keyFor, refLabel, taskRef, oldRefs, perPhase, STAGES, STAGE_INFO, STAGE_ALIASES, canonStage, adf, request, isDry, warnApply, resolveItem, linkPr };
+module.exports = { almConfig, checkConfig, jiraRest, isWriter, writerError, withWriteLock, comment, provider, readQueue, pendingOps, enqueue, ack, dropEnsure, push, sync, move, stagesFromEvents, reportDefect, links, addLink, readState, keyFor, refLabel, taskRef, oldRefs, perPhase, STAGES, STAGE_INFO, STAGE_ALIASES, canonStage, adf, request, isDry, warnApply, resolveItem, linkPr, labelItem, relateItems };

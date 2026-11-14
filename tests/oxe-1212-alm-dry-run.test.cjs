@@ -177,6 +177,18 @@ describe('OXB-G13: --dry-run never writes to the ALM, in any command', () => {
     assert.equal(out.dry_run, true);
   });
 
+  it('intake --dry-run with no credential checks the file offline (a reader session validates before the writer)', async () => {
+    const dir = project();
+    write(dir, 'card.md', TASK_SPEC('NEW-1'));
+    write(dir, 'bad.md', '# x\n\n## Objetivo\n\nalgo\n');
+    const ok = await op.runtimeAlmAdmin(dir, null, { action: 'intake', type: 'task', summary: 'uma camada de tokens', from: 'card.md', dryRun: true, env: {} });
+    assert.equal(ok.offline, true);
+    assert.equal(ok.lint.ok, true, ok.lint.errors.join('; '));
+    const bad = await op.runtimeAlmAdmin(dir, null, { action: 'intake', type: 'task', summary: 'uma camada de tokens', from: 'bad.md', dryRun: true, env: {} });
+    assert.equal(bad.lint.ok, false);
+    await assert.rejects(op.runtimeAlmAdmin(dir, null, { action: 'intake', type: 'task', summary: 'uma camada de tokens', from: 'card.md', apply: true, env: {} }), /JIRA_SITE/, 'writing still needs the credentials');
+  });
+
   it('intake and version ensure --dry-run write nothing', async () => {
     const dir = project();
     const j = fakeJira();
@@ -305,6 +317,48 @@ describe('OXB-G17/G18: under require_apply, --apply reaches every writing comman
   });
 });
 
+describe('the umbrella card: alm label --add and alm link --relates, by key, idempotent (OxeSpace 14/11, OXE-22/23)', () => {
+  it('a simulation without --apply; with it the label and the Relates links are written once', async () => {
+    const dir = project({ require_apply: true });
+    const j = fakeJira();
+    const net = { http: j.http, env: ENV, sleep };
+    j.arm();
+    assert.ok((await op.runtimeAlm(dir, null, { action: 'label', ref: 'OXE-22', add: 'guarda-chuva', ...net })).planned);
+    assert.ok((await op.runtimeAlm(dir, null, { action: 'link', ref: 'OXE-22', relates: 'OXE-20,OXE-21', ...net })).planned);
+    assert.deepEqual(j.writes, []);
+    j.disarm();
+    const l1 = await op.runtimeAlm(dir, null, { action: 'label', ref: 'OXE-22', add: 'guarda-chuva', apply: true, ...net });
+    assert.deepEqual(l1.added, ['guarda-chuva']);
+    assert.deepEqual(j.issues.get('OXE-22').fields.labels, ['guarda-chuva']);
+    const l2 = await op.runtimeAlm(dir, null, { action: 'label', ref: 'OXE-22', add: 'guarda-chuva', apply: true, ...net });
+    assert.deepEqual([l2.added, l2.existed], [[], ['guarda-chuva']], 'not repeated');
+    const r1 = await op.runtimeAlm(dir, null, { action: 'link', ref: 'OXE-22', relates: 'OXE-20,OXE-21', apply: true, ...net });
+    assert.deepEqual(r1.linked, ['OXE-20', 'OXE-21']);
+    assert.equal(j.writes.filter((w) => w === 'POST /rest/api/3/issueLink').length, 2);
+    await assert.rejects(op.runtimeAlm(dir, null, { action: 'label', ref: 'OXE-22', add: 'com espaco nao', apply: true, ...net }), /não tem espaço/);
+  });
+
+  it('alm.ref_label "plain": the intake label is ref-<id> (the board convention); the default keeps the program', async () => {
+    const plain = project({ ref_label: 'plain' });
+    const p = await op.runtimeAlmAdmin(plain, null, { action: 'intake', type: 'task', summary: 'uma camada de tokens', ref: 'TOKENS-1-CAMADA', dryRun: true, env: ENV, http: fakeJira().http, sleep });
+    assert.ok(p.planned.labels.includes('ref-TOKENS-1-CAMADA'), p.planned.labels.join(','));
+    const def = await op.runtimeAlmAdmin(project(), null, { action: 'intake', type: 'task', summary: 'uma camada de tokens', ref: 'TOKENS-1-CAMADA', dryRun: true, env: ENV, http: fakeJira().http, sleep });
+    assert.ok(def.planned.labels.includes('ref-p-TOKENS-1-CAMADA'));
+  });
+});
+
+describe('G20: an author exempt only for its own paths (the CI bot re-recording goldens), never for any path', () => {
+  it('origin.exempt.authored', () => {
+    const origin = require('../bin/lib/oxe-origin.cjs');
+    const cfg = origin.originConfig({ origin: { exempt: { authored: [{ author: 'github-actions[bot]', paths: ['mobile/android/app/src/test/snapshots/'] }] } } });
+    const bot = { name: 'github-actions[bot]' };
+    const c = (files, author = bot) => ({ sha: 'abc1234567', parents: 1, author, message: 'chore: record goldens', files });
+    assert.equal(origin.classify(c(['mobile/android/app/src/test/snapshots/a.png']), cfg).ok, true);
+    assert.equal(origin.classify(c(['mobile/android/app/src/test/snapshots/a.png', 'src/x.ts']), cfg).ok, false, 'a file outside its paths');
+    assert.equal(origin.classify(c(['mobile/android/app/src/test/snapshots/a.png'], { name: 'Dev' }), cfg).ok, false, 'another author');
+  });
+});
+
 describe('deprecation: a write without --apply warns (require_apply becomes the default in the next minor)', () => {
   it('warns once on stderr when it writes without --apply; never with --apply, in a dry run or with require_apply', () => {
     const fresh = () => { delete require.cache[require.resolve('../bin/lib/oxe-alm.cjs')]; return require('../bin/lib/oxe-alm.cjs'); };
@@ -401,6 +455,14 @@ describe('OXB-G12: the grooming comment keeps facts apart from questions', () =>
     const rep = report([{ key: 'OXE-11', status: st, criteria: null, lint: null }]);
     assert.equal(rep.rows[0].stale_vs_code, true);
     assert.equal(rep.total.stale, 1);
+    // grill depth: a fact the grooming missed, found at planning (OXE-107: the cause found by the F3 planner)
+    const late = g('fact', { branch: 'problem', text: 'local-rpc-server.ts:145 monta o contexto sem androidAccess', source: 'planejamento F3' });
+    g('mark', { id: late.id, late: 'planejamento' });
+    const st2 = require('../bin/lib/oxe-grill.cjs').status(path.join(dir, '.oxe', 'alm', 'grill', 'OXE-11'));
+    const rep2 = report([{ key: 'OXE-11', status: st2, criteria: null, lint: null }]);
+    assert.deepEqual(rep2.rows[0].found_late, ['planejamento']);
+    assert.equal(rep2.total.found_late, 1);
+    assert.match(require('../bin/lib/oxe-grooming.cjs').renderReport(rep2), /Profundidade do grill[^\n]*OXE-11: no planejamento/);
     const big = renderComment('X-1', { questions: many });
     assert.match(big, /^Fatos \(fonte\): 35/m);
     assert.match(big, /^Perguntas: 18 \(18 respondida\(s\), 0 em aberto\)/m);

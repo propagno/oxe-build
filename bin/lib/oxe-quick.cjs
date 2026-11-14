@@ -67,8 +67,10 @@ function start(root, input = {}) {
   if (open && (open.key === key || (!key && !objective)) && !input.replace) return { resumed: true, ...open, trailers: trailers(open) };
   if (objective.length < 8) throw new Error('informe o objetivo do quick em uma frase: oxe-cc quick <KEY> "<objetivo>"');
   if (open && !input.replace) throw new Error(`o quick ${open.id}${open.key ? ` (${open.key})` : ''} está aberto: feche com oxe-cc quick done, ou abra outro com --replace`);
-  if (open && input.replace) write(root, { ...open, status: 'replaced', closed_at: new Date().toISOString() });
   const rec = { schema: 1, id: newId(input.now), key, objective, by: input.by || null, started_at: new Date().toISOString(), status: 'open', commits: [], verify: null, closed_at: null };
+  // --dry-run: validated, nothing written (no record, no QUICK.md, no current)
+  if (input.dryRun) return { resumed: false, dry_run: true, ...rec, trailers: trailers(rec), would_replace: open ? open.id : null };
+  if (open && input.replace) write(root, { ...open, status: 'replaced', closed_at: new Date().toISOString() });
   write(root, rec);
   fs.writeFileSync(currentFile(root), `${JSON.stringify({ id: rec.id }, null, 2)}\n`);
   if (input.quickFile) {
@@ -96,6 +98,8 @@ function done(root, input = {}) {
   const spawn = input.spawn || spawnSync;
   const commits = commitsOf(root, rec.id, spawn);
   if (!commits.length && !input.noCommit) throw new Error(`${rec.id}: nenhum commit com "OXE-Quick: ${rec.id}" — commite com o trailer (o hook commit-msg acrescenta) ou feche com --no-commit se nada precisou mudar`);
+  // --dry-run: the commits found, the verification it would run; nothing run, nothing written
+  if (input.dryRun) return { ...rec, dry_run: true, commits, closed: null, would_verify: input.verify || null };
   let verify = null;
   if (input.verify) {
     const r = spawn(input.verify, { cwd: root, encoding: 'utf8', shell: true, windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
@@ -127,6 +131,12 @@ function commit(root, input = {}) {
     if (r.status !== 0) throw new Error(`git ${args[0]}: ${String(r.stderr || r.stdout || '').trim().split('\n')[0]}`);
     return String(r.stdout || '');
   };
+  if (input.dryRun) {
+    // --dry-run: what would be committed and the message with the trailers; nothing staged, nothing committed
+    const files = input.all ? git(['status', '--porcelain']).split('\n').map((l) => l.slice(3).trim()).filter(Boolean)
+      : input.paths && input.paths.length ? input.paths : git(['diff', '--cached', '--name-only']).split('\n').map((l) => l.trim()).filter(Boolean);
+    return { id: rec.id, key: rec.key, dry_run: true, files, message: require('./oxe-origin.cjs').appendTrailers(message, trailers(rec)).trim() };
+  }
   if (input.all) git(['add', '-A']);
   else if (input.paths && input.paths.length) git(['add', '--', ...input.paths]);
   const staged = git(['diff', '--cached', '--name-only']).split('\n').map((l) => l.trim()).filter(Boolean);

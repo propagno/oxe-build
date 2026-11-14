@@ -32,12 +32,39 @@ function originConfig(config = {}) {
       merges: ex.merges !== false,
       authors: Array.isArray(ex.authors) ? ex.authors.map(String) : [],
       paths: Array.isArray(ex.paths) ? ex.paths.map((p) => String(p).replace(/\\/g, '/')) : ['.oxe/'],
+      // G20: an author exempt ONLY for its own paths (github-actions[bot] for the goldens the CI re-records, not for
+      // any path): [{ "author": "github-actions[bot]", "paths": ["mobile/android/app/src/test/snapshots/"] }]
+      authored: Array.isArray(ex.authored) ? ex.authored.filter((r) => r && r.author && Array.isArray(r.paths) && r.paths.length).map((r) => ({ author: String(r.author), paths: r.paths.map((p) => String(p).replace(/\\/g, '/')) })) : [],
     },
     commit_msg: ['require', 'append', 'off'].includes(o.commit_msg) ? o.commit_msg : 'require',
     require_card: o.require_card != null ? o.require_card === true : almOn,
     base: typeof o.base === 'string' && o.base ? o.base : null,
+    // G19: the cut — only commits after it are charged (a date, or a commit: what it already contains is history)
+    since: typeof o.since === 'string' && o.since.trim() ? o.since.trim() : null,
   };
 }
+
+/**
+ * G19: the origin config of a repo that does not version .oxe/ (OxeSpace): .oxe/config.json, then the versioned
+ * `oxe.config.json` at the root (its `origin` wins, so the CI and every worktree read the same rules), then an
+ * explicit `--config <file>`.
+ */
+function resolveConfig(root, base = {}, file = null) {
+  const read = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
+  const out = { ...base };
+  const versioned = read(path.join(root, 'oxe.config.json'));
+  if (versioned && versioned.origin) out.origin = { ...(out.origin || {}), ...versioned.origin };
+  if (versioned && versioned.alm && !out.alm) out.alm = versioned.alm;
+  if (file) {
+    const explicit = read(path.resolve(root, file));
+    if (!explicit) throw new Error(`--config ${file}: arquivo ausente ou JSON inválido`);
+    if (explicit.origin) out.origin = { ...(out.origin || {}), ...explicit.origin };
+    if (explicit.alm) out.alm = explicit.alm;
+  }
+  return out;
+}
+
+const isDateCut = (s) => /^\d{4}-\d{2}-\d{2}([T ][\d:.]+(Z|[+-]\d{2}:?\d{2})?)?$/.test(String(s));
 
 const underPaths = (file, paths) => paths.some((p) => (p.endsWith('/') ? String(file).replace(/\\/g, '/').startsWith(p) : String(file).replace(/\\/g, '/') === p));
 
@@ -47,11 +74,19 @@ const underPaths = (file, paths) => paths.some((p) => (p.endsWith('/') ? String(
  */
 function classify(commit, ocfg, ctx = {}) {
   const base = { sha: commit.sha, subject: String(commit.message || '').split('\n')[0] };
+  if (ocfg.since) {
+    const before = isDateCut(ocfg.since)
+      ? Boolean(commit.date) && Date.parse(commit.date) < Date.parse(ocfg.since)
+      : typeof ctx.isAncestor === 'function' && ctx.isAncestor(commit.sha, ocfg.since) === true;
+    if (before) return { ...base, ok: true, kind: 'exempt', reason: `antes do corte (origin.since ${ocfg.since})` };
+  }
   if (ocfg.exempt.merges && Number(commit.parents) > 1) return { ...base, ok: true, kind: 'exempt', reason: 'merge' };
   const who = [commit.author && commit.author.name, commit.author && commit.author.email, commit.author && commit.author.login].filter(Boolean).map((s) => String(s).toLowerCase());
   const byAuthor = ocfg.exempt.authors.find((a) => who.includes(String(a).toLowerCase()));
   if (byAuthor) return { ...base, ok: true, kind: 'exempt', reason: `autor ${byAuthor}` };
   const files = commit.files || [];
+  const authored = ocfg.exempt.authored.find((r) => who.includes(r.author.toLowerCase()) && files.length && files.every((f) => underPaths(f, r.paths)));
+  if (authored) return { ...base, ok: true, kind: 'exempt', reason: `autor ${authored.author} só em ${authored.paths.join(', ')}` };
   if (files.length && files.every((f) => underPaths(f, ocfg.exempt.paths))) return { ...base, ok: true, kind: 'exempt', reason: `só ${ocfg.exempt.paths.join(', ')}` };
   const msg = String(commit.message || '');
   if (TASK_RE.test(msg)) return { ...base, ok: true, kind: 'task', task: TASK_RE.exec(msg)[0].replace(/^OXE-Task:\s*/, '').trim(), run: RUN_RE.test(msg) ? RUN_RE.exec(msg)[0].replace(/^OXE-Run:\s*/, '').trim() : null };
@@ -74,11 +109,11 @@ function run(spawn, cmd, args, cwd) {
 
 /** The commits of a git range, with parents, author, full message and files. */
 function commitsFromGit(root, range, spawn = spawnSync) {
-  const raw = run(spawn, 'git', ['log', '--format=%H%x1f%P%x1f%an%x1f%ae%x1f%B%x1e', range], root);
+  const raw = run(spawn, 'git', ['log', '--format=%H%x1f%P%x1f%an%x1f%ae%x1f%cI%x1f%B%x1e', range], root);
   return raw.split('\x1e').map((s) => s.replace(/^\s+/, '')).filter(Boolean).map((rec) => {
-    const [sha, parents, name, email, message] = rec.split('\x1f');
+    const [sha, parents, name, email, date, message] = rec.split('\x1f');
     const files = run(spawn, 'git', ['show', '--name-only', '--format=', '--no-renames', sha], root).split('\n').map((l) => l.trim()).filter(Boolean);
-    return { sha, parents: String(parents || '').trim().split(/\s+/).filter(Boolean).length, author: { name, email }, message: String(message || '').trim(), files };
+    return { sha, parents: String(parents || '').trim().split(/\s+/).filter(Boolean).length, author: { name, email }, date, message: String(message || '').trim(), files };
   });
 }
 
@@ -100,7 +135,7 @@ function commitsFromPr(root, pr, spawn = spawnSync) {
       files = (api.files || []).map((f) => f.filename);
     }
     const a = (c.authors || [])[0] || {};
-    out.push({ sha, parents, author: { name: a.name, email: a.email, login: a.login }, message: [c.messageHeadline, c.messageBody].filter(Boolean).join('\n\n'), files });
+    out.push({ sha, parents, date: c.committedDate || c.authoredDate || null, author: { name: a.name, email: a.email, login: a.login }, message: [c.messageHeadline, c.messageBody].filter(Boolean).join('\n\n'), files });
   }
   return { pr: Number(pr), url: view.url || null, base: view.baseRefName || null, head: view.headRefName || null, commits: out };
 }
@@ -110,7 +145,7 @@ function commitsFromPr(root, pr, spawn = spawnSync) {
  * (`<origin.base | origin/main>..HEAD`).
  */
 function check(root, options = {}) {
-  const config = options.config || {};
+  const config = resolveConfig(root, options.config || {}, options.configFile || null);
   const ocfg = originConfig(config);
   const spawn = options.spawn || spawnSync;
   const target = String(options.target || '').trim();
@@ -127,9 +162,11 @@ function check(root, options = {}) {
     source = { range };
     commits = commitsFromGit(root, range, spawn);
   }
-  const results = commits.map((c) => classify(c, ocfg, { quickExists }));
+  // a commit cut (origin.since = sha): what that commit already contains is history; needs the commit locally
+  const isAncestor = (sha, cut) => { const r = spawn('git', ['merge-base', '--is-ancestor', sha, cut], { cwd: root, windowsHide: true }); return r.status === 0 ? true : r.status === 1 ? false : null; };
+  const results = commits.map((c) => classify(c, ocfg, { quickExists, isAncestor }));
   const violations = results.filter((r) => !r.ok);
-  return { ok: violations.length === 0, ...source, commits: results.length, by_kind: results.reduce((a, r) => ({ ...a, [r.kind]: (a[r.kind] || 0) + 1 }), {}), results, violations, exempt: ocfg.exempt };
+  return { ok: violations.length === 0, ...source, commits: results.length, by_kind: results.reduce((a, r) => ({ ...a, [r.kind]: (a[r.kind] || 0) + 1 }), {}), results, violations, exempt: ocfg.exempt, since: ocfg.since };
 }
 
 /** The trailers lines to append to a message that has none of them. */
@@ -150,7 +187,7 @@ function appendTrailers(message, trailers) {
  * refused, with the way out.
  */
 function commitMsg(root, file, options = {}) {
-  const config = options.config || {};
+  const config = resolveConfig(root, options.config || {}, options.configFile || null);
   const ocfg = originConfig(config);
   if (ocfg.commit_msg === 'off') return { ok: true, skipped: 'origin.commit_msg off' };
   const spawn = options.spawn || spawnSync;
@@ -170,8 +207,10 @@ function commitMsg(root, file, options = {}) {
   const byAuthor = ocfg.exempt.authors.find((a) => ident.includes(String(a).toLowerCase()));
   if (byAuthor) return { ok: true, exempt: `autor ${byAuthor}` };
   const staged = (() => { try { return run(spawn, 'git', ['diff', '--cached', '--name-only'], root).split('\n').map((l) => l.trim()).filter(Boolean); } catch { return []; } })();
+  const authored = ocfg.exempt.authored.find((r) => ident.includes(r.author.toLowerCase()) && staged.length && staged.every((f) => underPaths(f, r.paths)));
+  if (authored) return { ok: true, exempt: `autor ${authored.author} só em ${authored.paths.join(', ')}` };
   if (staged.length && staged.every((f) => underPaths(f, ocfg.exempt.paths))) return { ok: true, exempt: `só ${ocfg.exempt.paths.join(', ')}` };
   return { ok: false, reason: 'commit sem origem: abra um quick (oxe-cc quick <KEY> "<objetivo>") ou rode a tarefa por oxe-cc runtime execute. Isenções só em origin.exempt (.oxe/config.json)' };
 }
 
-module.exports = { originConfig, classify, check, commitsFromGit, commitsFromPr, commitMsg, appendTrailers, TASK_RE, QUICK_RE, CARD_RE };
+module.exports = { resolveConfig, originConfig, classify, check, commitsFromGit, commitsFromPr, commitMsg, appendTrailers, TASK_RE, QUICK_RE, CARD_RE };

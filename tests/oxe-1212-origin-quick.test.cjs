@@ -112,6 +112,78 @@ describe('G9: oxe-cc quick — a verifiable record, the QUICK.md mini-spec, the 
   });
 });
 
+describe('P0 (OxeSpace 14/11): quick --dry-run writes nothing locally either — no record, QUICK.md, event or commit', () => {
+  it('start, commit and done with --dry-run leave the project exactly as it was', async () => {
+    const dir = repo();
+    const snapshot = () => { const out = []; const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.name === '.git') continue; const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else out.push(`${path.relative(dir, p)}:${fs.statSync(p).size}`); } }; walk(dir); return out.sort().join('|'); };
+    const before = snapshot();
+    const s = await op.runtimeQuick(dir, null, { action: 'start', objective: 'ajustar a cor do realce', dryRun: true });
+    assert.equal(s.dry_run, true);
+    assert.equal(quick.current(dir), null);
+    assert.equal(snapshot(), before, 'start --dry-run wrote nothing');
+    const cli1 = cli(dir, 'quick', 'X-9', 'ajustar a cor do realce', '--dry-run');
+    assert.equal(cli1.status, 0, cli1.stderr);
+    assert.match(cli1.stdout, /\(simulação\) abriria Q-\d{8}-[a-z0-9]{4} \(X-9\)/);
+    assert.equal(snapshot(), before, 'the CLI --dry-run wrote nothing');
+    // with a real quick open, commit and done in dry run change nothing
+    const real = await op.runtimeQuick(dir, null, { action: 'start', objective: 'ajustar a cor do realce' });
+    fs.writeFileSync(path.join(dir, 'a.css'), 'a{}\n');
+    const head = git(dir, 'rev-parse', 'HEAD');
+    const c = await op.runtimeQuick(dir, null, { action: 'commit', message: 'feat: cor', paths: ['a.css'], dryRun: true });
+    assert.equal(c.dry_run, true);
+    assert.match(c.message, new RegExp(`OXE-Quick: ${real.id}`));
+    assert.equal(git(dir, 'rev-parse', 'HEAD'), head, 'no commit');
+    assert.equal(git(dir, 'diff', '--cached', '--name-only'), '', 'nothing staged');
+    const recBefore = fs.readFileSync(path.join(dir, '.oxe', 'quick', `${real.id}.json`), 'utf8');
+    const d = await op.runtimeQuick(dir, null, { action: 'done', noCommit: true, verify: 'node -e "require(\'fs\').writeFileSync(\'ran.txt\',\'x\')"', dryRun: true });
+    assert.equal(d.dry_run, true);
+    assert.ok(!fs.existsSync(path.join(dir, 'ran.txt')), 'the verification was not run');
+    assert.equal(fs.readFileSync(path.join(dir, '.oxe', 'quick', `${real.id}.json`), 'utf8'), recBefore, 'the record did not change');
+    assert.ok(quick.current(dir), 'still open');
+  });
+});
+
+describe('grill accepts the ALM kinds (task, story, bug, epic) and reads the card\'s kind with --card', () => {
+  it('--type task is the feature tree; with --card and no --type, the kind from the refine collect', () => {
+    const dir = repo();
+    const t = op.runtimeGrill(dir, null, { action: 'start', card: 'OXE-137', type: 'task' });
+    assert.equal(t.type, 'feature');
+    assert.equal(op.runtimeGrill(dir, null, { action: 'start', card: 'OXE-140', type: 'bug' }).type, 'bugfix');
+    fs.mkdirSync(path.join(dir, '.oxe', 'alm', 'refine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.oxe', 'alm', 'refine', 'OXE-141.json'), JSON.stringify({ key: 'OXE-141', kind: 'bug' }));
+    assert.equal(op.runtimeGrill(dir, null, { action: 'start', card: 'OXE-141' }).type, 'bugfix');
+    assert.throws(() => op.runtimeGrill(dir, null, { action: 'start', card: 'OXE-142', type: 'xyz' }), /do ALM: story \| task \| bug/);
+  });
+});
+
+describe('G19: the cut (origin.since) and the origin config of a repo that does not version .oxe/', () => {
+  it('commits before the cut (a date or a commit) are history; the versioned oxe.config.json and --config are read; no .oxe needed', () => {
+    const dir = repo();
+    fs.rmSync(path.join(dir, '.oxe'), { recursive: true, force: true });
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'chore: sem .oxe');
+    commitFile(dir, 'src/old.ts', 'feat: antigo, sem trailer');
+    const cut = git(dir, 'rev-parse', 'HEAD');
+    commitFile(dir, 'src/new.ts', 'feat: novo, sem trailer');
+    // no .oxe at all: still runs (git + defaults) and charges both (the commit that only removed .oxe/ is exempt)
+    const all = op.runtimeCheckOrigin(dir, null, { target: 'base..HEAD' });
+    assert.equal(all.violations.length, 2);
+    // the versioned config with a commit cut: only the commit after it is charged
+    fs.writeFileSync(path.join(dir, 'oxe.config.json'), JSON.stringify({ origin: { since: cut } }));
+    const cutSha = op.runtimeCheckOrigin(dir, null, { target: 'base..HEAD' });
+    assert.deepEqual(cutSha.violations.map((v) => v.subject), ['feat: novo, sem trailer']);
+    assert.equal(cutSha.since, cut);
+    // a date cut in the future: everything is history
+    const alt = path.join(dir, 'origin-ci.json');
+    fs.writeFileSync(alt, JSON.stringify({ origin: { since: '2999-01-01' } }));
+    assert.equal(op.runtimeCheckOrigin(dir, null, { target: 'base..HEAD', config: 'origin-ci.json' }).ok, true);
+    // exemptions from the versioned file reach the commit-msg hook too
+    fs.writeFileSync(path.join(dir, 'oxe.config.json'), JSON.stringify({ origin: { exempt: { paths: ['docs/releases/'] } } }));
+    assert.equal(origin.resolveConfig(dir, {}).origin.exempt.paths[0], 'docs/releases/');
+    assert.throws(() => origin.resolveConfig(dir, {}, 'missing.json'), /--config missing\.json/);
+  });
+});
+
 describe('G9 with ALM: the card gets the mini-spec and moves to in_progress, only forward', () => {
   const ENV = { JIRA_SITE: 'https://example.atlassian.net', JIRA_EMAIL: 'bot@example.com', JIRA_API_TOKEN: 'secret-token', OXE_ALM_WRITER: 'w' };
   const STATES = { intake: 'Backlog', grooming: 'Em grooming', refinement: 'Em refinamento', ready: 'Pronto para desenvolvimento', in_progress: 'Em desenvolvimento', review: 'Em revisão' };
