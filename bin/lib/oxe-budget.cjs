@@ -100,7 +100,19 @@ function exhaustedReason(ledger) {
   if (ledger.limit_usd != null && ledger.used_usd >= ledger.limit_usd) {
     return `budget_usd: US$ ${ledger.used_usd.toFixed(2)}/${ledger.limit_usd.toFixed(2)} usados (acumulado da fase: o --budget-usd é o teto total, não o desta execução — para mais US$ X nesta, use --budget-usd ${(ledger.used_usd + 1).toFixed(0)}+X)`;
   }
+  // OxeSpace 14/11 (OxeCode F4): at US$ 59.69 of 60 the next task started and ended above the cap. An attempt starts
+  // only if what is left covers the average cost of the recent attempts (no history: the plain rule above).
+  const est = attemptEstimate(ledger);
+  if (ledger.limit_usd != null && est > 0 && ledger.limit_usd - ledger.used_usd < est) {
+    return `budget_usd: restam US$ ${(ledger.limit_usd - ledger.used_usd).toFixed(2)} de ${ledger.limit_usd.toFixed(2)} e uma tentativa custa em média US$ ${est.toFixed(2)} — a próxima passaria do teto (acumulado da fase; para seguir, use --budget-usd ${Math.ceil(ledger.used_usd + est)}+X)`;
+  }
   return null;
+}
+
+/** Average cost of the last attempts with a cost (up to 10); 0 without history. */
+function attemptEstimate(ledger) {
+  const costs = (Array.isArray(ledger && ledger.attempts) ? ledger.attempts : []).map((a) => Number(a && a.cost_usd) || 0).filter((c) => c > 0).slice(-10);
+  return costs.length ? costs.reduce((s, c) => s + c, 0) / costs.length : 0;
 }
 
 /** The scheduler's RunBudget over a live ledger. */
@@ -124,4 +136,4 @@ function describeBudget(ledger) {
   return `${parts.join(' · ')}${reason ? ' — esgotado' : ''}`;
 }
 
-module.exports = { ledgerPath, readLedger, openBudget, recordUsage, remainingTurns, exhaustedReason, schedulerBudget, describeBudget };
+module.exports = { ledgerPath, readLedger, openBudget, recordUsage, remainingTurns, exhaustedReason, schedulerBudget, describeBudget, attemptEstimate };

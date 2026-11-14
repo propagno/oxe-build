@@ -182,6 +182,14 @@ describe('alm refine: apply (writer only, idempotent, never over a later human e
     assert.ok(texts.some((t) => /Perguntas em aberto[\s\S]*perda da fila offline/.test(t)));
     const again = await op.runtimeAlmRefine(dir, null, { action: 'apply', keys: ['OXE-20'], http: j.http, env: ENV });
     assert.equal(again.results[0].unchanged, true);
+    // an amended spec is v2: spec-v1 stays (the ready gate), spec-v2 is added, the marker says v2 (OxeSpace 14/11)
+    const specFile = path.join(dir, '.oxe', 'alm', 'specs', 'OXE-20.md');
+    fs.appendFileSync(specFile, '\nNota da emenda de 14/11.\n');
+    const amended = await op.runtimeAlmRefine(dir, null, { action: 'apply', keys: ['OXE-20'], http: j.http, env: ENV, confirmOverwrite: true });
+    assert.equal(amended.results[0].version, 2, JSON.stringify(amended.results[0]));
+    assert.ok(j.issues.get('OXE-20').fields.labels.includes('spec-v1'));
+    assert.ok(j.issues.get('OXE-20').fields.labels.includes('spec-v2'));
+    assert.match(refine.adfToText(j.issues.get('OXE-20').fields.description), /oxe-refine spec-v2 · sha/);
   });
 
   it('a card edited by a person after the collect is not overwritten without --confirm-overwrite', async () => {

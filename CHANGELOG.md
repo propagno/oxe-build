@@ -24,6 +24,11 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Eventos:** `AutoResumed` e `AutoResumeSkipped`.
 - **Teste:** `tests/oxe-1212-autoresume.test.cjs`. O CA-1 é um reinício simulado num programa de teste: o execute é morto em T2 com SIGKILL e o `autoresume run` o retoma em T2 sem chamar o executor para T1.
 
+### Teto de US$ antes da próxima tentativa e versão da spec emendada (OxeSpace 14/11)
+
+- **`--budget-usd` vale antes da próxima tentativa:** uma tentativa só começa se o que resta cobre o custo médio das últimas tentativas (até 10) registradas no ledger da fase. Sem histórico de custo, vale o teto puro. Antes, com US$ 59,69 de 60 gastos, a T21 do OxeCode F4 começou e terminou acima do teto.
+- **`alm refine apply` numera a spec emendada:** a versão segue o marcador do próprio card. Um sha diferente do aplicado vira `spec-vN+1`, no marcador e no rótulo. O `spec-v1` fica, porque significa "refinado" e é o que o ready gate lê. Antes, uma spec emendada voltava a ser rotulada `spec-v1` (OXE-134, OXE-89, OXE-87).
+
 ### Card em desenvolvimento na hora e pedidos da sessão leitora (G27 e G21)
 
 - **G27, o card vai para `in_progress` quando a tarefa começa:** o `runtime execute` dispara a sincronização com o ALM no `TaskStarted`, e não só no fim do execute. Antes, o card ficava em "Pronto" a fase inteira.

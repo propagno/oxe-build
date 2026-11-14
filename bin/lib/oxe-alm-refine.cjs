@@ -325,12 +325,17 @@ async function apply(ctx, collected, md, options = {}) {
   const currentText = adfToText(now && now.fields ? now.fields.description : null).trim();
   const body = descriptionBody(md);
   const specHash = hash(body);
-  const marker = `oxe-refine spec-v1 · sha ${specHash}`;
+  // OxeSpace 14/11 (OXE-134/89/87): an amended spec was labelled spec-v1 again — the card could not tell it from the
+  // first. The version follows the card's own marker: a different sha than the applied one is the next version. spec-v1
+  // stays (it means "refined", what the ready gate reads); spec-vN is added from v2 on.
+  const prev = /oxe-refine spec-v(\d+) · sha ([0-9a-f]+)/.exec(currentText);
+  const version = prev ? Number(prev[1]) + (prev[2] === specHash ? 0 : 1) : 1;
+  const marker = `oxe-refine spec-v${version} · sha ${specHash}`;
   if (currentText.includes(`sha ${specHash}`)) return { key: collected.key, unchanged: true, sha: specHash };
   if (hash(currentText) !== collected.description_hash && !options.confirmOverwrite) {
     throw Object.assign(new Error(`${collected.key} mudou depois da coleta (alguém editou o card): nada foi gravado. Colete de novo (oxe-cc alm refine ${collected.key}) ou, depois de revisar a diferença, rode com --confirm-overwrite`), { changed: true, current: currentText });
   }
-  const labels = ['spec-v1', ...(lint.needs_info ? ['needs-info'] : [])];
+  const labels = ['spec-v1', ...(version > 1 ? [`spec-v${version}`] : []), ...(lint.needs_info ? ['needs-info'] : [])];
   // --dry-run: everything above only read; report what the apply would write and stop (OXB-G13)
   if (options.dryRun) return { key: collected.key, dry_run: true, sha: specHash, labels, questions: lint.questions.length, would: { original_comment: Boolean(collected.description), description: true, labels, questions_comment: Boolean(lint.needs_info && lint.questions.length) } };
   const adf = mdToAdf(`${body}\n\n---\n${marker}`);
@@ -343,7 +348,7 @@ async function apply(ctx, collected, md, options = {}) {
   }
   const back = await request('GET', `${site}/rest/api/3/issue/${collected.key}?fields=description,labels`);
   const ok = adfToText(back.fields.description).includes(`sha ${specHash}`) && labels.every((l) => (back.fields.labels || []).includes(l));
-  return { key: collected.key, applied: true, confirmed: ok, sha: specHash, labels, questions: lint.questions.length };
+  return { key: collected.key, applied: true, confirmed: ok, sha: specHash, version, labels, questions: lint.questions.length };
 }
 
 module.exports = { parseCriteria, setSpecIds, collect, skeleton, lintSpec, apply, mdToAdf, adfToText, descriptionBody, kindOf, sectionsOf, dirs, hash, SECTIONS, REQUIRED };
