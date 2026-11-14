@@ -314,6 +314,9 @@ function planJsonToParsedPlan(doc) {
     command: entry.command.trim(),
     proves: Array.isArray(entry.proves) ? entry.proves.map((name) => String(name).trim()).filter(Boolean) : [],
     resolves: Array.isArray(entry.resolves) ? [...entry.resolves] : [],
+    // the task the test belongs to (bound by task; without it, by criterion) — kept, so the binding reaches the
+    // dry-verify and the executor (OxeSpace 14/11: a CR test bound by task was dropped here)
+    ...(typeof entry.task === 'string' && entry.task.trim() ? { task: entry.task.trim().toUpperCase() } : {}),
     version: Number.isInteger(entry.version) ? entry.version : 1,
     // OXB-072: own timeout for a slow suite (e.g. Electron).
     ...(Number.isInteger(entry.timeout_ms) && entry.timeout_ms > 0 ? { timeout_ms: entry.timeout_ms } : {}),

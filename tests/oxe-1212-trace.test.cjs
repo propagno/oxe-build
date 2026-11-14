@@ -68,6 +68,32 @@ describe('oxe-cc trace: the graph and its loose ends', () => {
     assert.ok(!g.orphans.some((o) => /CR de defeito sem bug|sem CR/.test(o.why)));
   });
 
+  it('alm link <ref> <key> --cr keeps the bug a bug and writes the CR; a known CI failure is no "bug sem CR" (OxeSpace 14/11)', async () => {
+    const dir = project();
+    const programDir = path.join(dir, '.oxe', 'program');
+    alm.addLink(programDir, { ref: 'FLAKY-F6-FOCUS', key: 'OXE-135', kind: 'bug', intake: true });
+    let g = await op.runtimeTrace(dir, null, {});
+    assert.ok(g.orphans.some((o) => /bug FLAKY-F6-FOCUS sem CR/.test(o.why)));
+    await assert.rejects(op.runtimeAlm(dir, null, { action: 'link', ref: 'FLAKY-F6-FOCUS', key: 'OXE-135', cr: 'CR-9', env: ENV }), /CR-9: CR inexistente/);
+    const out = await op.runtimeAlm(dir, null, { action: 'link', ref: 'FLAKY-F6-FOCUS', key: 'OXE-135', cr: 'CR-1', env: ENV });
+    assert.deepEqual([out.kind, out.cr], ['bug', 'CR-1']);
+    const rec = alm.links(programDir).get('FLAKY-F6-FOCUS');
+    assert.deepEqual([rec.kind, rec.cr, rec.intake], ['bug', 'CR-1', true], 'kind and fields kept, CR written');
+    // the record the old link wrote (task, no intake): --kind bug brings it back, the intake flag from the history
+    alm.addLink(programDir, { ref: 'FLAKY-F6-FOCUS', key: 'OXE-135', kind: 'task', manual: true });
+    const fixed = await op.runtimeAlm(dir, null, { action: 'link', ref: 'FLAKY-F6-FOCUS', key: 'OXE-135', kind: 'bug', cr: 'CR-1', env: ENV });
+    assert.equal(fixed.kind, 'bug');
+    const rec2 = alm.links(programDir).get('FLAKY-F6-FOCUS');
+    assert.deepEqual([rec2.kind, rec2.cr, rec2.intake], ['bug', 'CR-1', true]);
+    await assert.rejects(op.runtimeAlm(dir, null, { action: 'link', ref: 'FLAKY-F6-FOCUS', key: 'OXE-135', kind: 'nope', env: ENV }), /--kind nope/);
+    // a bug tracked as a known CI failure needs no CR
+    const dir2 = project();
+    alm.addLink(path.join(dir2, '.oxe', 'program'), { ref: 'FLAKY-X', key: 'OXE-140', kind: 'bug' });
+    require('../bin/lib/oxe-known-failures.cjs').add(path.join(dir2, '.oxe', 'program'), { pattern: 'terminal-focus-exit.spec.ts:35', item: 'OXE-140' });
+    g = await op.runtimeTrace(dir2, null, {});
+    assert.ok(!g.orphans.some((o) => /bug FLAKY-X sem CR/.test(o.why)));
+  });
+
   it('publish: dry run shows the comment; --apply upserts one "Documentos (OXE)" per card (updated in place on rerun)', async () => {
     const dir = project();
     const dry = await op.runtimeTrace(dir, null, { action: 'publish' });

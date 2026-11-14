@@ -35,7 +35,11 @@ function originConfig(config = {}) {
       // G20: an author exempt ONLY for its own paths (github-actions[bot] for the goldens the CI re-records, not for
       // any path): [{ "author": "github-actions[bot]", "paths": ["mobile/android/app/src/test/snapshots/"] }]
       authored: Array.isArray(ex.authored) ? ex.authored.filter((r) => r && r.author && Array.isArray(r.paths) && r.paths.length).map((r) => ({ author: String(r.author), paths: r.paths.map((p) => String(p).replace(/\\/g, '/')) })) : [],
+      // a one-off commit, by its full SHA, with the reason and who decided (audited: listed in every report)
+      commits: Array.isArray(ex.commits) ? ex.commits.filter((c) => c && /^[0-9a-f]{40}$/i.test(String(c.sha || '')) && String(c.reason || '').trim().length >= 8 && String(c.by || '').trim()).map((c) => ({ sha: String(c.sha).toLowerCase(), reason: String(c.reason).trim(), by: String(c.by).trim() })) : [],
     },
+    // entries of origin.exempt.commits that are refused (short SHA, no reason, no by): never a silent exemption
+    problems: Array.isArray(ex.commits) ? ex.commits.filter((c) => !(c && /^[0-9a-f]{40}$/i.test(String(c.sha || '')) && String(c.reason || '').trim().length >= 8 && String(c.by || '').trim())).map((c) => `origin.exempt.commits: entrada recusada ${JSON.stringify(c)} — exige sha completo (40 hex), reason (uma frase) e by`) : [],
     commit_msg: ['require', 'append', 'off'].includes(o.commit_msg) ? o.commit_msg : 'require',
     require_card: o.require_card != null ? o.require_card === true : almOn,
     base: typeof o.base === 'string' && o.base ? o.base : null,
@@ -74,10 +78,15 @@ const underPaths = (file, paths) => paths.some((p) => (p.endsWith('/') ? String(
  */
 function classify(commit, ocfg, ctx = {}) {
   const base = { sha: commit.sha, subject: String(commit.message || '').split('\n')[0] };
+  const pinned = (ocfg.exempt.commits || []).find((c) => c.sha === String(commit.sha || '').toLowerCase());
+  if (pinned) return { ...base, ok: true, kind: 'exempt', reason: `commit isento por ${pinned.by}: ${pinned.reason}`, pinned: true };
   if (ocfg.since) {
+    // a commit cut: what the cut commit contains, and also every commit dated before the cut commit (a long branch
+    // opened before the rule is history too — OxeSpace 14/11, G23: 4af13af37 of 13/11 was charged in #808)
     const before = isDateCut(ocfg.since)
       ? Boolean(commit.date) && Date.parse(commit.date) < Date.parse(ocfg.since)
-      : typeof ctx.isAncestor === 'function' && ctx.isAncestor(commit.sha, ocfg.since) === true;
+      : (typeof ctx.isAncestor === 'function' && ctx.isAncestor(commit.sha, ocfg.since) === true)
+        || (Boolean(commit.date) && Boolean(ctx.cutDate) && Date.parse(commit.date) < Date.parse(ctx.cutDate));
     if (before) return { ...base, ok: true, kind: 'exempt', reason: `antes do corte (origin.since ${ocfg.since})` };
   }
   if (ocfg.exempt.merges && Number(commit.parents) > 1) return { ...base, ok: true, kind: 'exempt', reason: 'merge' };
@@ -164,9 +173,10 @@ function check(root, options = {}) {
   }
   // a commit cut (origin.since = sha): what that commit already contains is history; needs the commit locally
   const isAncestor = (sha, cut) => { const r = spawn('git', ['merge-base', '--is-ancestor', sha, cut], { cwd: root, windowsHide: true }); return r.status === 0 ? true : r.status === 1 ? false : null; };
-  const results = commits.map((c) => classify(c, ocfg, { quickExists, isAncestor }));
+  const cutDate = ocfg.since && !isDateCut(ocfg.since) ? (() => { const r = spawn('git', ['log', '-1', '--format=%cI', ocfg.since], { cwd: root, encoding: 'utf8', windowsHide: true }); return r.status === 0 ? String(r.stdout || '').trim() || null : null; })() : null;
+  const results = commits.map((c) => classify(c, ocfg, { quickExists, isAncestor, cutDate }));
   const violations = results.filter((r) => !r.ok);
-  return { ok: violations.length === 0, ...source, commits: results.length, by_kind: results.reduce((a, r) => ({ ...a, [r.kind]: (a[r.kind] || 0) + 1 }), {}), results, violations, exempt: ocfg.exempt, since: ocfg.since };
+  return { ok: violations.length === 0, ...source, commits: results.length, by_kind: results.reduce((a, r) => ({ ...a, [r.kind]: (a[r.kind] || 0) + 1 }), {}), results, violations, exempt: ocfg.exempt, since: ocfg.since, exempt_commits_used: results.filter((r) => r.pinned).map((r) => ({ sha: r.sha, reason: r.reason })), config_problems: ocfg.problems };
 }
 
 /** The trailers lines to append to a message that has none of them. */

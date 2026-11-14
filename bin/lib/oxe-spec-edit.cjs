@@ -90,7 +90,8 @@ function criteriaIds(specText) {
 }
 
 // OXB-075: requirements written as bullets — `- **R10** — text (A1, A2)`, possibly with indented continuation lines.
-const REQ_BULLET_RE = /^(\s*)([-*])\s+\*\*(R\d+)\*\*\s*([—–:-])\s*/;
+// `- **R1** — …`, and also `- R1 (CODE-8): …` (OxeSpace 14/11: the OxeCode SPEC; R5 was refused as a gap after R0)
+const REQ_BULLET_RE = /^(\s*)([-*])\s+(?:\*\*)?(R\d+)(?:\*\*)?(?:\s*\([^)\n]*\))?\s*([—–:-])\s*/;
 
 /** Bullet requirements: ids, and the line after the last bullet's block (its indented continuation included). */
 function bulletRequirements(lines) {
@@ -99,17 +100,19 @@ function bulletRequirements(lines) {
   let indent = '';
   let marker = '-';
   let sep = '—';
+  let bold = true;
   for (let i = 0; i < lines.length; i += 1) {
     const m = REQ_BULLET_RE.exec(lines[i]);
     if (!m) continue;
     ids.push(m[3].toUpperCase());
     last = i;
     [, indent, marker, , sep] = m;
+    bold = /\*\*R\d+\*\*/.test(lines[i]);
   }
-  if (last < 0) return { ids, insertAt: -1, indent, marker, sep };
+  if (last < 0) return { ids, insertAt: -1, indent, marker, sep, bold };
   let end = last + 1;
   while (end < lines.length && lines[end].trim() && /^\s+/.test(lines[end]) && !REQ_BULLET_RE.test(lines[end])) end += 1;
-  return { ids, insertAt: end, indent, marker, sep };
+  return { ids, insertAt: end, indent, marker, sep, bold };
 }
 
 function requirementIds(specText) {
@@ -219,7 +222,7 @@ function addRequirement(specText, id, change = {}) {
   const values = [key, String(change.text).trim(), change.version || 'v1', criteria || '—'];
   // OXB-075: the SPEC lists requirements as bullets → append a bullet in the same style, after the last one's block.
   if (!tables.length && bullets.insertAt >= 0) {
-    const row = `${bullets.indent}${bullets.marker} **${key}** ${bullets.sep} ${String(change.text).trim().replace(/\s*\.$/, '')}${criteria ? ` (${criteria})` : ''}`;
+    const row = `${bullets.indent}${bullets.marker} ${bullets.bold === false ? key : `**${key}**`}${bullets.sep === ':' ? ':' : ` ${bullets.sep}`} ${String(change.text).trim().replace(/\s*\.$/, '')}${criteria ? ` (${criteria})` : ''}`;
     lines.splice(bullets.insertAt, 0, row);
     return { text: lines.join(eol), id: key, before: null, after: row };
   }
@@ -232,7 +235,14 @@ function addRequirement(specText, id, change = {}) {
     return { text: lines.join(eol), id: key, before: null, after: row };
   }
   if (!change.before) throw new Error('SPEC sem tabela de requisitos (| R-ID | Requisito | …); use --before "<cabeçalho>" para criar uma');
-  const at = lines.findIndex((l) => l.trim() === String(change.before).trim());
+  // the heading exactly, or the one heading that starts with it ("### Fora do escopo" → "### Fora do escopo (não objetivos)")
+  const want = String(change.before).trim();
+  let at = lines.findIndex((l) => l.trim() === want);
+  if (at < 0) {
+    const pref = lines.map((l, i) => [l.trim(), i]).filter(([l]) => /^#{1,6}\s/.test(l) && l.toLowerCase().startsWith(want.toLowerCase()));
+    if (pref.length > 1) throw new Error(`--before "${want}" casa com ${pref.length} cabeçalhos: ${pref.map(([l]) => l).join(' · ')}`);
+    at = pref.length ? pref[0][1] : -1;
+  }
   if (at < 0) throw new Error(`cabeçalho não encontrado na SPEC: ${change.before}`);
   const row = joinRow(values);
   lines.splice(at, 0, '| R-ID | Requisito | Versão | Critério de aceite |', '|------|-----------|--------|--------------------|', row, '');

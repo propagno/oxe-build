@@ -96,7 +96,14 @@ function build(s) {
     for (const c of s.changes.filter((x) => x.class === 'defect' && x.status === 'open')) {
       if (!bugs.some((b) => b.cr === c.id)) push('warning', 'change', c.id, 'CR de defeito sem bug no ALM', `oxe-cc alm defect --title "…" --cr ${c.id} --origin <US-n|Fn-Tn>`);
     }
-    for (const b of bugs) if (!b.cr) push('warning', 'card', b.key, `bug ${b.ref} sem CR: o defeito não reabre nada no OXE`, `oxe-cc runtime feedback --class defect --summary "${b.ref}" --criteria A… e depois oxe-cc alm link ${b.ref} ${b.key} (ou alm defect --cr)`);
+    const known = s.knownFailureItems || new Set();
+    for (const b of bugs) {
+      if (b.cr) continue;
+      // a known CI failure (ship known-failure, item = this card) is a flake tracked by its own fix, not a defect of
+      // this phase's criteria: no CR asked (OxeSpace 14/11, FLAKY-F6-FOCUS / OXE-135)
+      if (known.has(String(b.key).toUpperCase()) || known.has(String(b.ref).toUpperCase())) continue;
+      push('warning', 'card', b.key, `bug ${b.ref} sem CR: o defeito não reabre nada no OXE`, `oxe-cc runtime feedback --class defect --summary "${b.ref}" --criteria A… e depois oxe-cc alm link ${b.ref} ${b.key} --cr CR-n --apply (ou alm defect --cr); um flake anterior à fase: oxe-cc ship known-failure add "<teste>" --item ${b.key}`);
+    }
   }
   for (const t of s.tasks) for (const d of t.decisions || []) if (D.has(d) && D.get(d).status && D.get(d).status !== 'active') push('warning', 'task', t.id, `cita ${d}, que está ${D.get(d).status}`, 'atualize o PLAN.json para a decisão vigente');
 

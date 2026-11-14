@@ -309,6 +309,42 @@ describe('G11: the origin of every commit, with exemptions only in origin.exempt
     assert.equal(git(dir, 'log', '-1', '--format=%s'), 'chore: estado', 'only .oxe/: exempt');
   });
 
+  it('G23: with since = a commit, a commit of a long branch dated before the cut commit is history too', () => {
+    const dir = repo();
+    git(dir, 'checkout', '-q', '-b', 'old-branch');
+    const env = { ...process.env, GIT_AUTHOR_DATE: '2026-11-13T10:00:00Z', GIT_COMMITTER_DATE: '2026-11-13T10:00:00Z' };
+    fs.writeFileSync(path.join(dir, 'old.ts'), 'x\n');
+    spawnSync('git', ['add', '-A'], { cwd: dir });
+    spawnSync('git', ['commit', '-q', '-m', 'test: congelado antigo do planner'], { cwd: dir, env });
+    git(dir, 'checkout', '-q', 'main');
+    const envCut = { ...process.env, GIT_AUTHOR_DATE: '2026-11-14T12:14:31Z', GIT_COMMITTER_DATE: '2026-11-14T12:14:31Z' };
+    fs.writeFileSync(path.join(dir, 'cut.txt'), 'x\n');
+    spawnSync('git', ['add', '-A'], { cwd: dir });
+    spawnSync('git', ['commit', '-q', '-m', 'chore: corte'], { cwd: dir, env: envCut });
+    const cut = git(dir, 'rev-parse', 'HEAD');
+    git(dir, 'checkout', '-q', 'old-branch');
+    commitFile(dir, 'new.ts', 'feat: novo, depois do corte');
+    fs.writeFileSync(path.join(dir, 'oxe.config.json'), JSON.stringify({ origin: { since: cut } }));
+    const out = op.runtimeCheckOrigin(dir, null, { target: 'base..HEAD' });
+    assert.deepEqual(out.violations.map((v) => v.subject), ['feat: novo, depois do corte'], 'the old commit is history, though not an ancestor of the cut');
+  });
+
+  it('origin.exempt.commits: one-off, by full SHA with reason and by; listed in the report; a bad entry is refused', () => {
+    const dir = repo();
+    commitFile(dir, 'tests/cr02.test.ts', 'test: congelado do CR-02');
+    const sha = git(dir, 'rev-parse', 'HEAD');
+    commitFile(dir, 'src/x.ts', 'feat: sem origem');
+    fs.writeFileSync(path.join(dir, 'oxe.config.json'), JSON.stringify({ origin: { exempt: { commits: [{ sha, reason: 'teste congelado do CR-02 (planner), antes do OXE-Freeze', by: 'coordenação' }, { sha: sha.slice(0, 9), reason: 'curto', by: 'x' }] } } }));
+    const out = op.runtimeCheckOrigin(dir, null, { target: 'base..HEAD' });
+    assert.deepEqual(out.violations.map((v) => v.subject), ['feat: sem origem']);
+    assert.equal(out.exempt_commits_used.length, 1);
+    assert.match(out.exempt_commits_used[0].reason, /coordenação: teste congelado do CR-02/);
+    assert.equal(out.config_problems.length, 1, 'the short SHA entry is refused, never a silent exemption');
+    const cliOut = cli(dir, 'ship', 'check-origin', 'base..HEAD');
+    assert.match(cliOut.stdout, /isenção pontual usada: [0-9a-f]{12}/);
+    assert.match(cliOut.stdout, /entrada recusada/);
+  });
+
   it('appendTrailers joins an existing trailer block and never duplicates', () => {
     assert.equal(origin.appendTrailers('fix: x\n\nCo-Authored-By: A <a@x>', ['OXE-Quick: Q-20261114-ab12']), 'fix: x\n\nCo-Authored-By: A <a@x>\nOXE-Quick: Q-20261114-ab12\n');
     assert.equal(origin.appendTrailers('fix: x', ['OXE-Quick: Q-20261114-ab12']), 'fix: x\n\nOXE-Quick: Q-20261114-ab12\n');

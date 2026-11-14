@@ -51,7 +51,7 @@ function listChanges(programDir) {
   const byId = new Map();
   for (const entry of readNdjson(changesFile(programDir))) {
     if (entry.kind === 'cr') byId.set(entry.id, { ...entry });
-    else if (entry.kind === 'status' && byId.has(entry.id)) Object.assign(byId.get(entry.id), { status: entry.status, resolution: entry.resolution || null, resolved_at: entry.at, resolved_by: entry.by || null });
+    else if (entry.kind === 'status' && byId.has(entry.id)) Object.assign(byId.get(entry.id), { status: entry.status, resolution: entry.resolution || null, resolved_at: entry.at, resolved_by: entry.by || null }, entry.no_amendment ? { no_amendment: true } : {});
   }
   return [...byId.values()];
 }
@@ -277,6 +277,8 @@ function amendmentRequirements(programDir) {
   const out = new Map();
   for (const cr of listChanges(programDir)) {
     if (cr.class !== 'spec_gap') continue;
+    // a spec_gap withdrawn, or resolved with no amendment (a scope gap), amended nothing: no new version
+    if (cr.status === 'withdrawn' || cr.no_amendment) continue;
     const version = cr.amend_to || 2;
     const additive = cr.amendment === 'additive';
     for (const a of cr.criteria || []) {
@@ -297,6 +299,7 @@ function requiredVersions(programDir) {
   const out = new Map();
   for (const cr of listChanges(programDir)) {
     if (cr.class !== 'spec_gap') continue;
+    if (cr.status === 'withdrawn' || cr.no_amendment) continue;
     for (const a of cr.criteria || []) out.set(a, Math.max(out.get(a) || 1, cr.amend_to || 2));
   }
   return out;

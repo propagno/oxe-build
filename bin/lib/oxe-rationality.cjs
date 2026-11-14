@@ -307,7 +307,15 @@ function specRequiresVisualInput(specPath) {
   if (/##+\s*entradas visuais e interpreta[çc][ãa]o/i.test(raw) && !/not_applicable|não aplicável|nao aplicavel/i.test(raw)) {
     return true;
   }
-  return /\b(visual-?inputs?|visual attachment|screenshot|mockup|imagem anexada|anexo visual)\b/i.test(text);
+  // the prose only: a code span, a fenced block or a path (tests/…/oxe107-device-screenshot.test.ts) names a file,
+  // not a visual input of the spec (OxeSpace 14/11, F3 preflight)
+  const prose = text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`\n]*`/g, ' ')
+    .replace(/[\w.-]*[/\\][\w./\\-]+/g, ' ')
+    .replace(/\b[\w-]+\.(test|spec)\.[a-z]+\b/g, ' ')
+    .replace(/[\w-]*-(screenshot|mockup)[\w.-]*|[\w.-]*(screenshot|mockup)-[\w.-]*/g, ' ');
+  return /(^|[^\w-])(visual-?inputs?|visual attachment|screenshot|mockup|imagem anexada|anexo visual)($|[^\w-])/i.test(prose);
 }
 
 function normalizeInspectionStatus(value) {
@@ -324,7 +332,9 @@ function summarizeVisualInputs(paths = {}) {
   const json = readJsonIfExists(jsonPath);
   const mdExists = Boolean(readTextIfExists(mdPath));
   const exists = Boolean(json.ok || mdExists);
-  const applicable = specRequires || exists;
+  // an explicit "not_applicable" in VISUAL-INPUTS.json ends it (a phase with no visual input says so once)
+  const declaredNa = json.ok && json.data && /^not_applicable$/i.test(String(json.data.visualInputReadiness || json.data.status || ''));
+  const applicable = !declaredNa && (specRequires || exists);
   /** @type {string[]} */
   const criticalGaps = [];
   if (!applicable) {

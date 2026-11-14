@@ -46,6 +46,7 @@ function contentAt(root, ref, file, spawn = spawnSync) {
 }
 
 function freeze(root, jsonPath, doc, options = {}) {
+  if (options.task && !(doc.tasks || []).some((t) => t && String(t.id).toUpperCase() === String(options.task).toUpperCase())) throw new Error(`--task ${options.task}: tarefa inexistente no PLAN.json`);
   const origin = resolveRef(root, options.from, options.spawn);
   const globs = options.paths ? String(options.paths).split(',').map((g) => globRe(g.trim())) : null;
   const files = origin.files.filter((f) => TEST_RE.test(f) && (!globs || globs.some((re) => re.test(f))));
@@ -76,6 +77,8 @@ function freeze(root, jsonPath, doc, options = {}) {
       sha256: hash,
       origin: { kind: origin.kind, ref: origin.ref, sha: origin.sha, ...(origin.url ? { url: origin.url } : {}) },
       ...(options.cr ? { resolves: [...new Set([...((existing && existing.resolves) || []), String(options.cr).toUpperCase()])], version: ((existing && existing.version) || 1) + (existing ? 1 : 0) } : {}),
+      // --task T3: the test belongs to that task (no hand edit of "task" in an executing phase's PLAN.json)
+      ...(options.task ? { task: String(options.task).toUpperCase() } : {}),
     };
     if (existing) Object.assign(existing, entry); else doc.acceptance_tests.push(entry);
     frozen.push({ file: f, criterion, proves: proves.length, origin: origin.ref });

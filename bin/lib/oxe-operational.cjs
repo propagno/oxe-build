@@ -2435,8 +2435,25 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
   if (options.action === 'link') {
     if (!options.ref || !options.key) throw new Error('uso: oxe-cc alm link <US-n|Tn> <chave> · oxe-cc alm link <chave> --pr <n> [--repo <url>]');
     const ref = /^T\d+$/i.test(options.ref) ? lib.taskRef(phase ? phase.id : null, options.ref.toUpperCase()) : options.ref;
-    if (!dryRun) { lib.addLink(programDir, { ref, key: options.key, kind: /^US-/.test(ref) ? 'story' : 'task', provider: cfg.provider, manual: true }); lib.dropEnsure(programDir, ref); }
-    return { ref, key: options.key, dry_run: dryRun };
+    // an existing link keeps its kind and fields (a bug stays a bug); --cr is written, never dropped (OxeSpace 14/11:
+    // "link --cr CR-06" turned the bug FLAKY-F6-FOCUS into a task and the close gate passed without the CR)
+    // the fields of every earlier record of this ref, merged in order (a later line that lost one, as the old
+    // link did, does not erase it); --kind sets the kind explicitly
+    let prev = null;
+    try {
+      for (const line of fs.readFileSync(path.join(programDir, 'alm-links.ndjson'), 'utf8').split(/\r?\n/)) {
+        let r = null;
+        try { r = JSON.parse(line); } catch { r = null; }
+        if (r && r.ref === ref) prev = { ...(prev || {}), ...r };
+      }
+    } catch { prev = null; }
+    if (prev) delete prev.at;
+    if (options.kind && !['bug', 'task', 'story', 'epic'].includes(String(options.kind))) throw new Error(`--kind ${options.kind}: use bug | task | story | epic`);
+    if (options.cr && !require('./oxe-change.cjs').listChanges(programDir).some((c) => c.id === options.cr)) throw new Error(`${options.cr}: CR inexistente (oxe-cc runtime feedback list)`);
+    const kind = options.kind ? String(options.kind) : prev && prev.kind ? prev.kind : /^US-/.test(ref) ? 'story' : 'task';
+    const rec = { ...(prev || {}), ref, key: options.key, kind, provider: cfg.provider, manual: true, ...(options.cr ? { cr: String(options.cr) } : {}) };
+    if (!dryRun) { lib.addLink(programDir, rec); lib.dropEnsure(programDir, ref); }
+    return { ref, key: options.key, kind: rec.kind, ...(rec.cr ? { cr: rec.cr } : {}), dry_run: dryRun };
   }
   if (options.action === 'defect') {
     const ref = options.ref || `BUG-${Date.now().toString(36).toUpperCase()}`;
@@ -2645,6 +2662,8 @@ function traceSnapshot(projectRoot, activeSession) {
     tests: (doc && doc.acceptance_tests) || [],
     changes: require('./oxe-change.cjs').listChanges(programDir),
     links: almLib.links(programDir),
+    // the cards tracked as known CI failures (a flake older than the phase is no defect of it: no CR needed)
+    knownFailureItems: (() => { try { return new Set(require('./oxe-known-failures.cjs').listAll(projectRoot, programDir).filter((k) => !k.expired).map((k) => String(k.item).toUpperCase())); } catch { return new Set(); } })(),
     cardSpecs,
     checks: (run && run.verification_check_results) || [],
     phase: phase ? phase.id : (doc && doc.phase) || null,
@@ -5484,10 +5503,18 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     // anexa (gap B). Um "Como verificar" velho na SPEC quebrava o verify inline sem o dry-run perceber.
     const criteriaById = new Map(((spec && spec.criteria) || []).map((c) => [c.id, c]));
     const closersForDry = planJson.criterionClosers(plan.tasks);
+    // a task reopened by an open CR also runs the frozen test that resolves it (bound by task, or by criterion when the
+    // entry names no task): a reopened task whose CR test is red is never "already green" (OxeSpace 14/11, CR-02)
+    const openCrIds = new Set((paths.programDir ? require('./oxe-change.cjs').listChanges(paths.programDir) : []).filter((c) => c.status === 'open').map((c) => c.id));
+    const crTestsOf = (task) => (Array.isArray(plan.acceptanceTests) ? plan.acceptanceTests : [])
+      .filter((a) => a && a.command && Array.isArray(a.resolves) && a.resolves.some((id) => openCrIds.has(id))
+        && ((a.task && a.task === task.id) || (!a.task && (task.aceite || []).includes(a.criterion))))
+      .map((a) => a.command);
     const effective = {
       ...plan,
       tasks: plan.tasks.map((task) => {
         const extra = [];
+        for (const cmd of crTestsOf(task)) if (!(task.verifyCommand || '').includes(cmd) && !extra.includes(cmd)) extra.push(cmd);
         for (const ref of task.aceite || []) {
           const closing = closersForDry.get(ref);
           if (closing && closing.closer !== task.id) continue; // OXB-053: only the closing task runs the criterion check
@@ -7511,10 +7538,15 @@ function runtimeChangeSetStatus(projectRoot, activeSession, options = {}) {
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const cr = changeLib.listChanges(programDir).find((c) => c.id === id);
   if (!cr) throw new Error(`${id} não existe`);
-  if (cr.status !== 'open') throw new Error(`${id} já está ${cr.status}`);
-  changeLib.setChangeStatus(programDir, id, status, { resolution: `${status === 'resolved' ? 'resolvido' : 'retirado'} manualmente: ${reason}`, by, manual: true });
-  appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', payload: { id, status, by, manual: true } });
-  return { id, status, by, reason, export: autoExportProgram(projectRoot, activeSession) };
+  // --no-amendment: a spec_gap that ended without amending the criterion (a scope gap; OxeSpace 14/11, Celular F2
+  // CR-01): its criteria do not go to v2 and the frozen tests stay valid. Allowed on an already resolved spec_gap too.
+  const noAmendment = Boolean(options.noAmendment);
+  if (noAmendment && cr.class !== 'spec_gap') throw new Error(`${id} é ${cr.class}: --no-amendment vale só para spec_gap`);
+  if (cr.status !== 'open' && !(noAmendment && cr.status === 'resolved')) throw new Error(`${id} já está ${cr.status}`);
+  const finalStatus = cr.status === 'resolved' ? 'resolved' : status;
+  changeLib.setChangeStatus(programDir, id, finalStatus, { resolution: `${finalStatus === 'resolved' ? 'resolvido' : 'retirado'} manualmente: ${reason}${noAmendment ? ' (sem emenda da SPEC)' : ''}`, by, manual: true, ...(noAmendment ? { no_amendment: true } : {}) });
+  appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', payload: { id, status: finalStatus, by, manual: true, ...(noAmendment ? { no_amendment: true } : {}) } });
+  return { id, status: finalStatus, by, reason, ...(noAmendment ? { no_amendment: true } : {}), export: autoExportProgram(projectRoot, activeSession) };
 }
 
 function runtimeChanges(projectRoot, activeSession) {

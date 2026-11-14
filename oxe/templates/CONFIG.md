@@ -161,7 +161,8 @@ Regra: nada chega a um PR sem vir do `oxe-cc runtime execute` (trailer `OXE-Task
 | `exempt.authored` | um autor isento só nos caminhos dele: `[{ "author": "github-actions[bot]", "paths": ["<pasta das goldens>/"] }]`. É o bot que regrava as goldens, e o mesmo bot em outro caminho é recusado |
 | `require_card` | o commit de quick precisa de `OXE-Card` (padrão: `true` quando há ALM) |
 | `base` | a base do `oxe-cc ship check-origin` sem argumento (padrão `origin/main`) |
-| `since` | o corte: um commit (SHA) ou uma data. O que já está nesse commit, ou é anterior a essa data, é histórico e não é cobrado |
+| `since` | o corte: um commit (SHA) ou uma data. É histórico, e não é cobrado, o que já está no commit de corte, o que tem data anterior à dele ou, com uma data, o que é anterior a ela |
+| `exempt.commits` | isenção pontual: `[{ "sha": "<40 hex>", "reason": "…", "by": "<papel>" }]`. Toda isenção usada aparece no relatório; uma entrada sem SHA completo, reason ou by é recusada e o check-origin sai com 1. O caminho normal continua sendo o trailer |
 
 **Repositório que não versiona `.oxe/`:** ponha o bloco `origin` num `oxe.config.json` versionado na raiz. Ele vence o `.oxe/config.json`, e o pr:ready, a CI e as worktrees leem o mesmo arquivo. `--config <arquivo>` aponta outro arquivo. O `check-origin` roda sem `.oxe/`: só precisa do git e dessa config.
 

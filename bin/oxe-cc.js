@@ -2664,7 +2664,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime signoff --phase F1 --criteria A8 --by <quem> [--message <nota>] [--evidence <caminho|url>]
   npx oxe-cc runtime feedback --class <defect|spec_gap|constraint|new_scope> --summary "..." [--criteria A4] [--tasks T7[,T8]] [--by <quem>] [--amend-to 2] [--additive]
   npx oxe-cc runtime feedback list [--json]
-  npx oxe-cc runtime feedback resolve|withdraw CR-<n> --by <papel> --reason "…"
+  npx oxe-cc runtime feedback resolve|withdraw CR-<n> --by <papel> --reason "…" [--no-amendment]   (spec_gap que não emendou o critério: os testes não ficam stale)
   npx oxe-cc alm <status|doctor|intake|push|sync|move|link|comment|defect|queue|ack|refine|metrics|version|usage> [--help]
                                               ALM (Jira / Azure DevOps): oxe-cc alm --help lista tudo, alm <sub> --help dá uso e exemplo
   npx oxe-cc trace [publish [--apply]] [--json]   rastreabilidade (PRD, SPEC, decisões, PLAN, CRs, cards) e pontas soltas
@@ -4361,6 +4361,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--task' && argv[i + 1]) out.task = String(argv[++i]);
     else if (a === '--mode' && argv[i + 1]) out.mode = String(argv[++i]);
     else if (a === '--reason' && argv[i + 1]) out.reason = String(argv[++i]);
+    else if (a === '--no-amendment') out.noAmendment = true;
     else if (a === '--run' && argv[i + 1]) out.runId = String(argv[++i]);
     else if (a === '--from' && argv[i + 1]) out.fromEventId = String(argv[++i]);
     else if (a === '--write') out.writeReport = true;
@@ -5266,7 +5267,7 @@ async function runRuntime(opts) {
     try {
       // OXB-078: close a CR that can no longer close by evidence (its gate was removed, its scope was dropped).
       if (opts.subAction === 'resolve' || opts.subAction === 'withdraw') {
-        const out = oxeOperational.runtimeChangeSetStatus(opts.dir, activeSession, { id: opts.crId, status: opts.subAction === 'resolve' ? 'resolved' : 'withdrawn', by: opts.by, reason: opts.reason });
+        const out = oxeOperational.runtimeChangeSetStatus(opts.dir, activeSession, { id: opts.crId, status: opts.subAction === 'resolve' ? 'resolved' : 'withdrawn', by: opts.by, reason: opts.reason, noAmendment: opts.noAmendment });
         if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimeFeedbackSchema: 1, ...out }, null, 2));
         else console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.id} ${out.status} por ${out.by}: ${out.reason}`);
         return;
@@ -7117,12 +7118,12 @@ async function main() {
     for (let i = 1; i < argv.length; i += 1) {
       const a = argv[i];
       if (a === '--json') o.json = true;
-      else if (['--from', '--paths', '--criteria', '--cr', '--command'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (['--from', '--paths', '--criteria', '--cr', '--command', '--task'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
       else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
     }
     try {
-      if (!o.from) throw new Error('use: oxe-cc spec freeze --from <#PR|sha> [--paths "tests/acceptance/**"] [--criteria A12] [--cr CR-n]');
+      if (!o.from) throw new Error('use: oxe-cc spec freeze --from <#PR|sha> [--paths "tests/acceptance/**"] [--criteria A12] [--cr CR-n] [--task Tn]');
       const out = oxeOperational.runtimeSpecFreeze(o.dir, null, o);
       if (o.json) { console.log(JSON.stringify({ oxeSpecFreezeSchema: 1, ...out }, null, 2)); if (out.refused.length) process.exitCode = 1; return; }
       for (const f of out.frozen) console.log(`  ${green}✓${reset} ${f.file} → ${f.criterion} (${f.proves} título(s), origem ${f.origin})`);
@@ -7777,7 +7778,7 @@ async function main() {
       else if (a === '--rebuild-ledger') o.rebuildLedger = true;
       else if (a === '--first-push') o.firstPush = true;
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
-      else if (['--title', '--origin', '--comment', '--description', '--ref', '--key', '--url', '--error', '--adopted', '--text', '--cr', '--pr', '--repo', '--relates', '--add'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (['--title', '--origin', '--comment', '--description', '--ref', '--key', '--url', '--error', '--adopted', '--text', '--cr', '--pr', '--repo', '--relates', '--add', '--kind'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
       else if (!a.startsWith('-')) positional.push(a);
       else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
     }
@@ -7985,6 +7986,9 @@ async function main() {
     try {
       const out = oxeOperational.runtimeCheckOrigin(o.dir, null, o);
       if (out.since && !o.json) console.log(`  ${dim}corte: só commits depois de ${out.since} (origin.since)${reset}`);
+      if (!o.json) for (const p of out.config_problems || []) console.log(`  ${red}✗${reset} ${p}`);
+      if (!o.json) for (const u of out.exempt_commits_used || []) console.log(`  ${yellow}!${reset} isenção pontual usada: ${u.sha.slice(0, 12)} — ${u.reason}`);
+      if ((out.config_problems || []).length) process.exitCode = 1;
       if (o.json) { console.log(JSON.stringify({ oxeOriginSchema: 1, ...out }, null, 2)); if (!out.ok) process.exitCode = 1; return; }
       const where = out.pr ? `PR #${out.pr}` : out.range;
       console.log(`  ${out.ok ? `${green}✓${reset}` : `${red}✗${reset}`} origem de ${out.commits} commit(s) em ${where}: ${['task', 'quick', 'exempt', 'missing'].filter((k) => out.by_kind[k]).map((k) => [k, out.by_kind[k]]).map(([k, n]) => `${n} ${{ task: 'do execute', quick: 'de quick', exempt: 'isento(s)', missing: 'sem origem' }[k] || k}`).join(' · ') || 'nenhum'}`);

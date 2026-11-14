@@ -20,6 +20,19 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Comentário do grooming (G12):** os fatos ficam em "Fatos (fonte): N", cada um com a fonte, e as perguntas em "Perguntas: N (X respondida(s), Y em aberto)". Antes, os fatos eram contados como perguntas.
 - **`grill answer` (G15):** o eco mostra a fonte dada em `--source`, não "decisão do usuário".
 
+### Do uso real no OxeSpace (depois do 9389450)
+- **`origin.exempt.commits`:** isenção pontual por SHA completo, com `reason` e `by` obrigatórios. Toda isenção usada aparece no relatório, e uma entrada inválida faz o check-origin sair com 1.
+- **G23:** com `origin.since` por commit, os commits com data anterior à do commit de corte também contam como histórico. É o caso de uma branch longa aberta antes da regra.
+- **Dry-verify de tarefa reaberta:** roda o teste congelado que resolve o CR aberto, ligado por tarefa ou por critério. Uma tarefa reaberta com o teste do CR vermelho nunca sai "já verde".
+- A normalização do plano preserva o `task` de cada entrada de aceite.
+- **`spec freeze --task Tn`.**
+- **`runtime feedback resolve CR-n --no-amendment`:** um spec_gap que não emendou o critério, ou que foi retirado, não versiona o critério nem deixa os testes stale.
+- **`alm link --cr` / `--kind`:** o vínculo mantém o tipo e os campos do histórico e grava o CR; antes, o bug virava tarefa.
+- **Falha conhecida não é "bug sem CR"** no trace nem no gate do close.
+- **Preflight visual:** passa a ler só a prosa da SPEC, então um nome de arquivo ou um trecho de código não conta mais como entrada visual. Também aceita `not_applicable` no VISUAL-INPUTS.json.
+- **`spec add requirement`:** lê requisitos em bullets (`- R1 (CODE-8): …`), e o `--before` acha o cabeçalho pelo prefixo.
+- **`program start`** de uma fase inexistente aponta o `program phase add`.
+
 ### Simulação local, corte da trava e guarda-chuva (depois do e421105)
 - **P0: `quick --dry-run` não grava nada local:** nenhum registro, QUICK.md, evento nem commit, e não roda a verificação. A regra do G13 passa a valer também para as escritas locais.
 - **G19, corte e config versionada:** `origin.since` aceita um commit ou uma data, e o que é anterior ao corte vira histórico. O `oxe.config.json` versionado vence o `.oxe/config.json`; `--config <arquivo>` aponta outro. O `check-origin` roda sem `.oxe/`.
