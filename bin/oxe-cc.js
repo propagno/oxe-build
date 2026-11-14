@@ -4362,6 +4362,8 @@ function parseRuntimeArgs(argv) {
     else if (a === '--mode' && argv[i + 1]) out.mode = String(argv[++i]);
     else if (a === '--reason' && argv[i + 1]) out.reason = String(argv[++i]);
     else if (a === '--no-amendment') out.noAmendment = true;
+    else if (a === '--together') out.together = true;
+    else if (a === '--skip-verify') out.skipVerify = true;
     else if (a === '--run' && argv[i + 1]) out.runId = String(argv[++i]);
     else if (a === '--from' && argv[i + 1]) out.fromEventId = String(argv[++i]);
     else if (a === '--write') out.writeReport = true;
@@ -4415,7 +4417,11 @@ function parseRuntimeArgs(argv) {
     if (positionals[2]) out.dir = path.resolve(positionals[2]);
   } else if (out.action === 'commit-task' || out.action === 'start-task') {
     // OXB-200 / OXB-204: `runtime commit-task|start-task T<n> [--by <agent|role>]`
-    if (/^T\d+$/i.test(positionals[1] || '')) {
+    if (/^T\d+(,T\d+)+$/i.test(positionals[1] || '')) {
+      // a list (commit-task T11,T12 --together): one commit for tasks mixed in shared files
+      out.tasks = positionals[1].toUpperCase().split(',');
+      if (positionals[2]) out.dir = path.resolve(positionals[2]);
+    } else if (/^T\d+$/i.test(positionals[1] || '')) {
       out.task = positionals[1].toUpperCase();
       if (positionals[2]) out.dir = path.resolve(positionals[2]);
     } else if (positionals[1]) {
@@ -5215,6 +5221,15 @@ async function runRuntime(opts) {
     return;
   }
 
+  if (opts.action === 'commit-task' && Array.isArray(opts.tasks) && opts.tasks.length > 1) {
+    try {
+      if (!opts.together) throw new Error(`várias tarefas num commit só exigem --together: oxe-cc runtime commit-task ${opts.tasks.join(',')} --together (a atribuição fica por lista de tarefas, não por trecho)`);
+      const r = oxeOperational.runtimeCommitTasksTogether(opts.dir, activeSession, { tasks: opts.tasks, by: opts.by || undefined, phase: opts.phase || undefined, skipVerify: Boolean(opts.skipVerify), verifyTimeoutMs: opts.verifyTimeoutMs || opts.timeoutMs || undefined, force: Boolean(opts.force) });
+      if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeCommitTaskSchema: 1, ...r }, null, 2)); return; }
+      console.log(`  ${green}✓${reset} commit conjunto ${r.commit.slice(0, 9)} · ${r.tasks.join(', ')} · ${(r.files || []).length} arquivo(s)${r.crs.length ? ` · ${r.crs.join(', ')}` : ''}${r.verified ? ' · verify rodado' : ''}`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
   if (opts.action === 'commit-task') {
     try {
       const result = oxeOperational.runtimeCommitTask(opts.dir, activeSession, {

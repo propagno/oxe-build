@@ -3132,6 +3132,26 @@ function applyTaskGatesToGraph(projectRoot, artifactPaths, compiledGraph) {
       if (!String(node.verify.command || '').includes(cmd)) node.verify.command = [node.verify.command, cmd].filter(Boolean).join(' && ');
     }
   }
+  // P0 (OxeSpace 14/11, Celular F2 CR-03): a task reopened by an open CR runs, in its own verify, the frozen tests
+  // that resolve that CR (bound by task, or by criterion when the entry names none). Without them the redo passed
+  // the old verify and reused the old checkpoint: a false green.
+  try {
+    const programDir0 = resolveRuntimeArtifactPaths(projectRoot, null).programDir || path.join(projectRoot, '.oxe', 'program');
+    const openCr = new Set(require('./oxe-change.cjs').listChanges(programDir0).filter((c) => c.status === 'open').map((c) => c.id));
+    if (openCr.size) {
+      const nodesCr = Array.isArray(compiledGraph.nodes) ? compiledGraph.nodes : Object.values(compiledGraph.nodes);
+      const tasksById = new Map((doc.tasks || []).filter(Boolean).map((t) => [t.id, t]));
+      for (const node of nodesCr) {
+        const task = node && tasksById.get(node.id);
+        if (!task || task.done) continue;
+        const crCmds = (doc.acceptance_tests || []).filter((a) => a && typeof a.command === 'string' && a.command.trim() && Array.isArray(a.resolves) && a.resolves.some((id) => openCr.has(id))
+          && ((a.task && String(a.task).toUpperCase() === node.id) || (!a.task && (task.acceptance || []).includes(a.criterion)))).map((a) => a.command.trim());
+        node.verify = node.verify && typeof node.verify === 'object' ? node.verify : {};
+        for (const cmd of crCmds) if (!String(node.verify.command || '').includes(cmd)) node.verify.command = [node.verify.command, cmd].filter(Boolean).join(' && ');
+        if (crCmds.length) node.verify.cr_tests = crCmds;
+      }
+    }
+  } catch { /* sem CRs: segue */ }
   if (!gates.length && !anySuites) { appendStubCheck(projectRoot, doc, compiledGraph); return; }
   const byId = new Map((doc.tasks || []).filter(Boolean).map((t) => [t.id, t]));
   const nodeList = Array.isArray(compiledGraph.nodes) ? compiledGraph.nodes : Object.values(compiledGraph.nodes);
@@ -3145,6 +3165,14 @@ function applyTaskGatesToGraph(projectRoot, artifactPaths, compiledGraph) {
     node.verify.task_gates = commands.map((c) => c.id);
   }
   appendStubCheck(projectRoot, doc, compiledGraph);
+}
+
+/** The open CRs that reopened a task (cr.tasks names it). */
+function reopeningCrsOf(projectRoot, taskId) {
+  try {
+    const programDir = resolveRuntimeArtifactPaths(projectRoot, null).programDir || path.join(projectRoot, '.oxe', 'program');
+    return require('./oxe-change.cjs').listChanges(programDir).filter((c) => c.status === 'open' && (c.tasks || []).map((t) => String(t).toUpperCase()).includes(String(taskId).toUpperCase())).map((c) => c.id);
+  } catch { return []; }
 }
 
 /** OXB-108: every code task's verify ends with the anti-stub check (exists + substantive, on what the task added). */
@@ -3892,7 +3920,13 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
       };
     }
     touchProgramPhase(projectRoot, activeSession, 'executing', { run_id: current.run_id });
-    const checkpointCommits = Boolean(options.checkpointCommits || readProjectConfig(projectRoot).checkpoint_commits);
+    // with the origin gate on (an origin block in .oxe/config.json or the versioned oxe.config.json), the execute
+    // commits each task by default: its OXE-Task commit is the only way the work passes check-origin (OxeSpace 14/11:
+    // a CR redo verified green and stayed unstaged). checkpoint_commits: false still turns it off.
+    const cfgCp = readProjectConfig(projectRoot) || {};
+    const originOn = (() => { try { return Boolean(require('./oxe-origin.cjs').resolveConfig(projectRoot, cfgCp).origin); } catch { return false; } })();
+    const checkpointCommits = Boolean(options.checkpointCommits || cfgCp.checkpoint_commits || (originOn && cfgCp.checkpoint_commits !== false));
+    if (originOn && !checkpointCommits) process.stderr.write('  ! trava de origem ligada e checkpoint_commits: false — as tarefas vão terminar sem commit e não passam no check-origin; ao fim, oxe-cc runtime commit-task Tn (ou T1,T2 --together)\n');
     const checkpointFailures = [];
     const schedulerRef = { current: null };
     // OXB-114: live UI verification after each wave with completed UI tasks (opt-in: PLAN.json ui_verify).
@@ -4223,6 +4257,11 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
               const dirtyNow = scopeNow.length ? changedPathsUnder(projectRoot, scopeNow) : [];
               if (!scopeNow.length || isVerifyOnlyNode(event.work_item_id) || planTaskNow.kind === 'external_delivery' || (planTaskNow.meta && ['external_delivery', 'spike'].includes(planTaskNow.meta.kind))) {
                 // no file scope (verify-only / external / spike): nothing to commit, done as before
+              } else if (earlier && !dirtyNow.length && reopeningCrsOf(projectRoot, event.work_item_id).length) {
+                // P0: a task reopened by an open CR never reuses the checkpoint it had before the CR — the redo must
+                // change something, or the CR is not resolved (OxeSpace 14/11, Celular F2 CR-03: f1cbce07 reused)
+                const crsNow = reopeningCrsOf(projectRoot, event.work_item_id);
+                checkpointFailure = { kind: 'empty_checkpoint', reason: `empty_checkpoint: ${event.work_item_id} foi reaberta por ${crsNow.join(', ')} e a tentativa não mudou nada — o checkpoint anterior (${String(earlier).slice(0, 8)}) é de antes do CR e não vale` };
               } else if (earlier && !dirtyNow.length) {
                 checkpoint = earlier;
                 appendEvent(projectRoot, activeSession, { type: 'GateResolved', run_id: current.run_id, work_item_id: event.work_item_id, payload: { gate: 'checkpoint', commit: earlier, reused: true } });
@@ -8207,6 +8246,71 @@ function runtimePlanAmendTest(projectRoot, activeSession, options = {}) {
  *   4. Commits ONLY `Tn`'s scope changes with trailer `OXE-Task: <Phase>/<Tn>`;
  *   5. Marks `Tn` as `done` in `PLAN.json` and writes `CheckpointCreated` + `TaskCompleted` (+ `WorkItemCompleted` / `GateResolved`) in `OXE-EVENTS.ndjson`.
  */
+/**
+ * `oxe-cc runtime commit-task T11,T12,T13 --together`: ONE commit for tasks done without commits whose changes are
+ * mixed in shared files (OxeSpace 14/11, OxeCode F3: an execute without --checkpoint-commits; tool-handlers.ts held
+ * T12, T14 and T16 hunks). The scope is the union of the tasks' files; anything dirty outside it is refused; every
+ * task's verify runs; the commit carries one OXE-Task per task (+ OXE-Run, OXE-CR), and each task gets that commit as
+ * its done_commit. Attribution is by task list, not by hunk — honest about what it is.
+ */
+function runtimeCommitTasksTogether(projectRoot, activeSession, options = {}) {
+  const ids = [...new Set((options.tasks || []).map((t) => String(t).trim().toUpperCase()).filter(Boolean))];
+  if (ids.length < 2) throw new Error('use: oxe-cc runtime commit-task T11,T12[,…] --together (duas tarefas ou mais)');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+  if (!doc) throw new Error('runtime commit-task exige PLAN.json.');
+  const tasks = ids.map((id) => {
+    const t = (doc.tasks || []).find((x) => x && String(x.id).toUpperCase() === id);
+    if (!t) throw new Error(`Tarefa ${id} não encontrada em PLAN.json.`);
+    if (t.done === true && t.done_commit && !options.force) throw new Error(`Tarefa ${id} já está concluída (${String(t.done_commit).slice(0, 8)}): tire-a da lista`);
+    return t;
+  });
+  const runState = readRunState(projectRoot, activeSession);
+  const runId = (runState && runState.run_id) || null;
+  const phaseCtx = taskPhaseContext(projectRoot, activeSession);
+  const phase = options.phase || doc.phase || (phaseCtx && phaseCtx.phase) || null;
+  const actor = String(options.by || 'external_agent').trim();
+  const normPath = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const frozenPaths = verifyFrozenAcceptanceUntampered(projectRoot, activeSession, doc, runState);
+  const scope = [...new Set(tasks.flatMap((t) => [...(t.files || []), ...(t.removed_paths || []), ...taskScopeFiles(runState, t.id)]).map(normPath).filter(Boolean))].filter((p) => !frozenPaths.has(p));
+  const dirty = [...new Set(changedEntriesUnder(projectRoot, ['.']).map((e) => normPath(e.path)).filter((p) => p && !p.startsWith('.oxe/')))];
+  const amended = frozenPaths._amended || new Set();
+  const tampered = dirty.filter((p) => frozenPaths.has(p) && !amended.has(p));
+  if (tampered.length) throw new Error(`acceptance_tampered: teste congelado modificado (${tampered.join(', ')})`);
+  const outside = dirty.filter((p) => !isPathInScope(p, scope));
+  if (outside.length) {
+    appendEvent(projectRoot, activeSession, { type: 'ScopeViolation', run_id: runId, work_item_id: ids.join(','), payload: { tasks: ids, paths: outside } });
+    throw new Error(`ScopeViolation: arquivos modificados fora de ${ids.join(', ')} (${outside.join(', ')})`);
+  }
+  const verifyTimeoutMs = Number(options.verifyTimeoutMs) > 0 ? Number(options.verifyTimeoutMs) : 10 * 60_000;
+  const commands = [...new Set(tasks.flatMap((t) => {
+    const v = t.verify;
+    return (Array.isArray(v) ? v : v && Array.isArray(v.commands) ? v.commands : typeof v === 'string' ? [v] : t.verifyCommand ? [t.verifyCommand] : []).map((c) => String(c || '').trim()).filter(Boolean);
+  }))];
+  if (!options.skipVerify) {
+    for (const cmd of commands) {
+      const res = runChildCommandFull(projectRoot, cmd, verifyTimeoutMs);
+      if (!res.ok) throw new Error(`verify falhou (\`${cmd}\`): ${String(res.tail || res.output || '').trim().slice(-500)}`);
+    }
+  }
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const crs = (() => { try { return [...new Set(require('./oxe-change.cjs').listChanges(programDir).filter((c) => c.status === 'open' && (c.tasks || []).some((t) => ids.includes(String(t).toUpperCase()))).map((c) => c.id))]; } catch { return []; } })();
+  const ref = (id) => (phase ? `${phase}/${id}` : id);
+  const message = [
+    `${phase ? `${phase}: ` : ''}${ids.join(', ')} — commit conjunto (arquivos compartilhados)`,
+    tasks.map((t) => `- ${t.id}: ${t.title || ''}`).join('\n'),
+    [...ids.map((id) => `OXE-Task: ${ref(id)}`), ...(runId ? [`OXE-Run: ${runId}`] : []), ...crs.map((c) => `OXE-CR: ${c}`)].join('\n'),
+  ].join('\n\n');
+  const cp = commitTaskCheckpoint(projectRoot, runState || { run_id: runId }, ids[0], { task: { id: ids[0], files: scope }, phase, config: readProjectConfig(projectRoot), message });
+  if (!cp.committed || !cp.commit) throw new Error(cp.reason || `falha ao criar o commit conjunto de ${ids.join(', ')}`);
+  for (const id of ids) {
+    planJsonLib.markPlanTaskDone(paths.plan, id, { commit: cp.commit });
+    appendEvent(projectRoot, activeSession, { type: 'CheckpointCreated', run_id: runId, work_item_id: id, payload: { task: id, phase, commit: cp.commit, files: cp.files, by: actor, together: ids } });
+  }
+  return { ok: true, tasks: ids, commit: cp.commit, files: cp.files, verified: !options.skipVerify, crs };
+}
+
 function runtimeCommitTask(projectRoot, activeSession, options = {}) {
   const taskId = String(options.task || '').trim().toUpperCase();
   if (!/^T\d+$/.test(taskId)) {
@@ -8223,8 +8327,10 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
   if (!task) {
     throw new Error(`Tarefa ${taskId} não encontrada em PLAN.json.`);
   }
-  if (task.done === true && !options.force) {
-    throw new Error(`Tarefa ${taskId} já está concluída (done) em PLAN.json${task.done_commit ? ` (${String(task.done_commit).slice(0, 8)})` : ''}.`);
+  // done WITH its commit: nothing to do. Done without one (an execute with checkpoint commits off, a CR redo): the
+  // commit is what is missing, and this command makes it (OxeSpace 14/11, Celular F2 CR-02 / T3).
+  if (task.done === true && task.done_commit && !options.force) {
+    throw new Error(`Tarefa ${taskId} já está concluída (done) em PLAN.json (${String(task.done_commit).slice(0, 8)}).`);
   }
 
   const runState = readRunState(projectRoot, activeSession);
@@ -8763,6 +8869,8 @@ function checkpointMessageFor(projectRoot, runState, taskId, planTask, phase, co
     phase: phase || null,
     run_id: (runState && runState.run_id) || null,
     alm_key: almKey,
+    // a redo of a task reopened by open CRs names them (OXE-CR trailer): the commit says why the task came back
+    crs: (() => { try { return require('./oxe-change.cjs').listChanges(resolveRuntimeArtifactPaths(projectRoot, null).programDir || path.join(projectRoot, '.oxe', 'program')).filter((c) => c.status === 'open' && (c.tasks || []).includes(taskId)).map((c) => c.id); } catch { return []; } })(),
   }, cfg0);
 }
 
@@ -9038,7 +9146,7 @@ function commitTaskCheckpoint(projectRoot, runState, taskId, options = {}) {
       }
     } catch { /* o guard nunca derruba o checkpoint por erro próprio */ }
   }
-  const message = checkpointMessageFor(projectRoot, runState, taskId, options.task || {}, options.phase, options.config || null);
+  const message = options.message || checkpointMessageFor(projectRoot, runState, taskId, options.task || {}, options.phase, options.config || null);
   const res = commitExactContent(projectRoot, own.entries, message, { ...options, scope: files });
   return { ...res, scope: files, ...(scopeAbsent.length ? { scope_absent: scopeAbsent } : {}), snapshot: res.committed ? undefined : own.entries };
 }
@@ -10982,6 +11090,9 @@ module.exports = {
   runtimeScorecard,
   runtimePlanDone,
   runtimeCommitTask,
+  runtimeCommitTasksTogether,
+  applyTaskGatesToGraph,
+  reopeningCrsOf,
   writeTaskVerifyFresh,
   findTaskCheckpoint,
   taskCommitShas,

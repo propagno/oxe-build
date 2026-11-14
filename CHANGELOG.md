@@ -20,6 +20,14 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Comentário do grooming (G12):** os fatos ficam em "Fatos (fonte): N", cada um com a fonte, e as perguntas em "Perguntas: N (X respondida(s), Y em aberto)". Antes, os fatos eram contados como perguntas.
 - **`grill answer` (G15):** o eco mostra a fonte dada em `--source`, não "decisão do usuário".
 
+### Refazer por CR sem verde falso, e commit das tarefas (depois do 253492c)
+- **P0, verde falso:** uma tarefa reaberta por um CR aberto passa a rodar, no próprio verify (compile), os testes congelados que resolvem o CR, ligados por tarefa ou por critério.
+  - Ela nunca reaproveita o checkpoint de antes do CR. Uma tentativa que não mudou nada vira `empty_checkpoint`, com o CR no motivo.
+- **`runtime commit-task`:**
+  - commita uma tarefa marcada done sem commit, e o commit leva `OXE-CR` para cada CR aberto que a reabriu;
+  - `commit-task T11,T12 --together` faz um commit só para tarefas misturadas em arquivos compartilhados, com um `OXE-Task` por tarefa e esse commit como done_commit de cada uma.
+- **Commit por tarefa com a trava de origem:** se ela estiver ligada, o execute commita cada tarefa por padrão. Com `checkpoint_commits: false`, avisa no início.
+
 ### Do uso real no OxeSpace (depois do 9389450)
 - **`origin.exempt.commits`:** isenção pontual por SHA completo, com `reason` e `by` obrigatórios. Toda isenção usada aparece no relatório, e uma entrada inválida faz o check-origin sair com 1.
 - **G23:** com `origin.since` por commit, os commits com data anterior à do commit de corte também contam como histórico. É o caso de uma branch longa aberta antes da regra.

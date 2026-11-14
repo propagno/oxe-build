@@ -75,7 +75,7 @@ function checkpointMessage(task, config) {
   const own = task && typeof task.commit === 'string' ? task.commit.trim().split(/\r?\n/).slice(1).join('\n').trim() : '';
   // OXB-166: T-ids restart per phase — the trailer names the phase (`OXE-Task: F2/T4`) and the run when known.
   const taskRef = task && task.phase ? `${task.phase}/${task.id}` : (task && task.id);
-  const trailers = [...(settings && Array.isArray(settings.trailers) ? settings.trailers : []), `OXE-Task: ${taskRef}`, ...(task && task.run_id ? [`OXE-Run: ${task.run_id}`] : [])];
+  const trailers = [...(settings && Array.isArray(settings.trailers) ? settings.trailers : []), `OXE-Task: ${taskRef}`, ...(task && task.run_id ? [`OXE-Run: ${task.run_id}`] : []), ...(task && Array.isArray(task.crs) ? task.crs.map((id) => `OXE-CR: ${id}`) : [])];
   return [subject, own, trailers.join('\n')].filter(Boolean).join('\n\n');
 }
 
