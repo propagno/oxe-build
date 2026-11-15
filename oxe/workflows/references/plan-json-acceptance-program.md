@@ -30,6 +30,8 @@ O teste fixa a interface exigida em código (nomes, assinatura, formato de retor
 - Antes de medir geometria dentro de um overlay (dialog, menu, popover, tooltip), espere a animação de entrada terminar: `await el.evaluate((e) => Promise.all(e.getAnimations({ subtree: true }).map((a) => a.finished)))`, ou o helper do repo em `lint.e2e_ready_helpers` (G40c).
 - Um nome acessível com regex é sensível a maiúsculas; prefira string ou `/…/i` (G40b).
 
+**Escopo de quem é citado:** todo arquivo que as notas da tarefa ou o cabeçalho dos testes congelados dela citam (pelo caminho ou pelo nome do componente) entra em `files`, ou em `read_only: [...]` quando a tarefa só o lê (G44).
+
 Antes de declarar o plano pronto, rodar **`oxe-cc plan lint`** e corrigir todos os erros: ids únicos, dependências existentes e em onda anterior, escopos disjuntos na mesma onda, A* existentes na SPEC, tarefa mutável com entrada no IMPLEMENTATION-PACK e `plan_max_tasks_per_wave`.
 
 **Programa por fases:** se existir `.oxe/program/PROGRAM.json` com fase ativa, planejar **somente essa fase**: os A* do plano devem ser exatamente os da fase (o lint reprova A* de outra fase e A* da fase sem tarefa) e `PLAN.json` declara `"phase": "<id>"`. Ler `.oxe/program/interfaces/*.json` das fases fechadas: tarefas que consomem esses módulos devem importá-los pelos nomes/assinaturas registrados, não reimplementá-los. No IMPLEMENTATION-PACK, todo símbolo público de módulo (`kind` function/class/const/type) vira contrato verificado: o verify reprova com `exports_missing` se o arquivo não o exportar.

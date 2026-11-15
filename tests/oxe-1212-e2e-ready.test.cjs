@@ -70,6 +70,13 @@ describe('G40: frozen e2e act only after the app is ready', () => {
     // OQ pq-07-17 (true positive): a locator derived from the dialog
     const oq = "test('import map', async () => {\n  const dialog = page.getByRole('dialog');\n  const map = dialog.locator('.oq-import-map');\n  const b = await map.boundingBox();\n});";
     assert.deepEqual(r.overlayGeometryReads(oq).map((f) => f.line), [4]);
+    // R50: a chain broken by a formatter; a second overlay keeps the first one's variable
+    const chain = "test('x', async () => {\n  const dialog = page.getByRole('dialog');\n  const b = await dialog\n    .locator('.oq-import-map')\n    .boundingBox();\n});";
+    assert.deepEqual(r.overlayGeometryReads(chain).map((f) => f.line), [5]);
+    const css = "test('x', async () => {\n  const dialog = page.getByRole('dialog');\n  await expect(dialog.locator('.header'))\n    .toHaveCSS('height', '48px');\n});";
+    assert.equal(r.overlayGeometryReads(css).length, 1);
+    const two = "test('x', async () => {\n  const dialog = page.getByRole('dialog');\n  const list = dialog.getByRole('listbox');\n  const b = await dialog.locator('.row').boundingBox();\n});";
+    assert.equal(r.overlayGeometryReads(two).length, 1);
     const doneDoc = { tasks: [{ id: 'T1', done: true, acceptance: ['A1'] }], acceptance_tests: [{ criterion: 'A1', files: ['e2e/x.spec.ts'] }] };
     assert.equal(r.overlayGeometryFrozenE2e('.', doneDoc, { readText: () => racy }).length, 0, 'owners all done: not read');
   });

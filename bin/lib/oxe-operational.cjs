@@ -6205,6 +6205,19 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
           result.registry_manifest_gaps = rg;
         }
       } catch { /* auxiliar */ }
+      // G44 (OxeSpace 15/11, OxeCode F6 T34): a path or component cited in the task / its frozen tests, out of its scope
+      try {
+        const lintCfg44 = ((readProjectConfig(projectRoot) || {}).lint || {});
+        const cp = require('./oxe-cited-paths.cjs');
+        const gaps = cp.citedPathGaps(projectRoot, pjs);
+        if (gaps.length) {
+          const level = (lintCfg44.cited_paths_level || lintCfg44.registry_pairs_level) === 'error' ? 'error' : 'warn';
+          const cm = cp.citedPathMessages(gaps, { level });
+          result.errors.push(...cm.errors);
+          result.warnings.push(...cm.warnings);
+          result.cited_path_gaps = gaps;
+        }
+      } catch { /* auxiliar */ }
       // G39 (OxeSpace 15/11, OxeQuery polish T1): an existing frozen test pins by exact equality what a task extends
       const pinned = si.pinnedByExisting(projectRoot, pjs);
       if (pinned.length) {
