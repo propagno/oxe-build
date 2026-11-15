@@ -8321,7 +8321,7 @@ async function main() {
       if ((out.config_problems || []).length) process.exitCode = 1;
       if (o.json) { console.log(JSON.stringify({ oxeOriginSchema: 1, ...out }, null, 2)); if (!out.ok) process.exitCode = 1; return; }
       const where = out.pr ? `PR #${out.pr}` : out.range;
-      console.log(`  ${out.ok ? `${green}✓${reset}` : `${red}✗${reset}`} origem de ${out.commits} commit(s) em ${where}: ${['task', 'quick', 'exempt', 'missing'].filter((k) => out.by_kind[k]).map((k) => [k, out.by_kind[k]]).map(([k, n]) => `${n} ${{ task: 'do execute', quick: 'de quick', exempt: 'isento(s)', missing: 'sem origem' }[k] || k}`).join(' · ') || 'nenhum'}`);
+      console.log(`  ${out.ok ? `${green}✓${reset}` : `${red}✗${reset}`} origem de ${out.commits} commit(s) em ${where}: ${['task', 'quick', 'quick_unrecorded', 'exempt', 'missing'].filter((k) => out.by_kind[k]).map((k) => [k, out.by_kind[k]]).map(([k, n]) => `${n} ${{ task: 'do execute', quick: 'de quick', quick_unrecorded: 'quick sem registro', exempt: 'isento(s)', missing: 'sem origem' }[k] || k}`).join(' · ') || 'nenhum'}`);
       for (const v of out.violations) console.log(`      ${red}✗${reset} ${v.sha.slice(0, 9)} ${v.subject} — ${v.reason}`);
       if (!out.ok) { console.log(`  ${dim}isenções só em origin.exempt (oxe.config.json versionado, .oxe/config.json ou --config): merges ${out.exempt.merges ? 'sim' : 'não'} · autores ${out.exempt.authors.join(', ') || '—'} · caminhos ${out.exempt.paths.join(', ') || '—'}${reset}`); process.exitCode = 1; }
     } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }

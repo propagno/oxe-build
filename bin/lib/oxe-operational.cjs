@@ -7012,7 +7012,8 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   // whose changes in the range come from this task or from no task (a CR quick re-freeze) is carried.
   const otherTaskTouched = (file) => {
     const bodies = (gitRun(projectRoot, ['log', '--format=%B%x00', `${baseSha}..HEAD`, '--', file]).stdout || '').split('\0');
-    return bodies.some((b) => [...b.matchAll(/^OXE-Task:\s*(?:F\d+\/)?(T\d+)\s*$/gm)].some((m) => !idSet.has(m[1])));
+    // phase-aware (OXB-166): F5/T3 is not the T3 of F6 being promoted
+    return bodies.some((b) => [...b.matchAll(/^OXE-Task:\s*(?:(F\d+)\/)?(T\d+)\s*$/gm)].some((m) => (phaseCtx.phase && m[1] && m[1] !== phaseCtx.phase) || !idSet.has(m[2])));
   };
   const scopeTests = scopeCandidates.filter((f) => !otherTaskTouched(f));
   const sharedSkipped = scopeCandidates.filter((f) => !scopeTests.includes(f));
@@ -7023,7 +7024,8 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   // runs the base version — named, with the commits that changed it, never carried silently
   const verifyTests = [...new Set(planTasks.flatMap((t) => [...((t.verify && t.verify.commands) || []), t.verify && t.verify.command, t.verifyCommand].filter(Boolean).join(' ').replace(/\\/g, '/').match(/[^\s"'`]+/g) || []))]
     .map(normRel).filter((s) => s.includes('/') && TEST_FILE_RE.test(s) && /\.[cm]?[jt]sx?$/i.test(s));
-  const notCarried = [...new Set([...verifyTests.filter((f) => !testFiles.includes(f) && differsFromBase(f)), ...sharedSkipped])];
+  // a shared suite that is ALSO the task's own frozen entry is carried (as before): never reported as not carried
+  const notCarried = [...new Set([...verifyTests.filter((f) => !testFiles.includes(f) && differsFromBase(f)), ...sharedSkipped.filter((f) => !testFiles.includes(f))])];
   if (!shas.size && !testFiles.length) throw new Error(`${taskId}: nenhum commit da tarefa fora de ${base} (sem trailer OXE-Task/done_commit em ${base}..HEAD) — já está na base?`);
   // local fixtures the frozen tests import (relative specifiers), one level deep — OXB-160: only what resolves INSIDE
   // the tests' own tree (fixtures, helpers), resolved like node/TS (file, extensions, then dir/index.*) and only to a

@@ -288,6 +288,9 @@ describe('G11: the origin of every commit, with exemptions only in origin.exempt
     assert.match(old.reason, /registro ausente, trailer presente: Q-20261114-6000 é anterior ao primeiro registro/);
     // a commit after the first record kept: its record should exist — a fail, as before
     assert.equal(lost('2026-11-15T08:00:00Z').ok, false);
+    // rebased today: the committer date moved, the author date keeps when `quick commit` made it (cross-review 15/11)
+    const rebased = origin.classify(c('test: frozen\n\nOXE-Quick: Q-20261114-6000', { date: '2026-11-15T09:00:00Z', authored_date: '2026-11-14T19:02:59-03:00' }), cfg, { quickExists: () => false, quickStoreSince: '2026-11-14T22:20:36.981Z' });
+    assert.equal(rebased.kind, 'quick_unrecorded');
     // an id dated after the commit (a hand-made trailer): a fail
     assert.equal(lost('2026-11-14T19:02:59-03:00', 'Q-20261120-aaaa').ok, false);
     // no record store to date from: a fail

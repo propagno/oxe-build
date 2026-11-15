@@ -142,9 +142,10 @@ function classify(commit, ocfg, ctx = {}) {
     // OxeSpace 15/11 (#854, coordination): a commit made by `quick commit` (its trailers) whose local record was lost —
     // the commit is OLDER than the first record this checkout keeps, and the quick id's date is not after the commit.
     // A distinct, audited status: neither a pass nor a fail, listed in every report.
-    if (known === false && ctx.quickStoreSince && commit.date) {
+    if (known === false && ctx.quickStoreSince && (commit.date || commit.authored_date)) {
       const idDay = /^Q-(\d{4})(\d{2})(\d{2})-/.exec(q[1]);
-      const commitMs = Date.parse(commit.date);
+      // a rebase / cherry-pick moves the COMMITTER date to now; the author date keeps when `quick commit` made it
+      const commitMs = Math.min(...[commit.authored_date, commit.date].map((d) => Date.parse(d)).filter(Number.isFinite));
       const idOk = idDay ? Date.parse(`${idDay[1]}-${idDay[2]}-${idDay[3]}T00:00:00Z`) <= commitMs + 24 * 3600_000 : false;
       if (idOk && commitMs < Date.parse(ctx.quickStoreSince)) {
         return { ...base, ok: true, kind: 'quick_unrecorded', quick: q[1], card: card ? card[1] : null, reason: `registro ausente, trailer presente: ${q[1]} é anterior ao primeiro registro em .oxe/quick (${ctx.quickStoreSince})` };
@@ -164,11 +165,11 @@ function run(spawn, cmd, args, cwd) {
 
 /** The commits of a git range, with parents, author, full message and files. */
 function commitsFromGit(root, range, spawn = spawnSync) {
-  const raw = run(spawn, 'git', ['log', '--format=%H%x1f%P%x1f%an%x1f%ae%x1f%cI%x1f%B%x1e', range], root);
+  const raw = run(spawn, 'git', ['log', '--format=%H%x1f%P%x1f%an%x1f%ae%x1f%cI%x1f%aI%x1f%B%x1e', range], root);
   return raw.split('\x1e').map((s) => s.replace(/^\s+/, '')).filter(Boolean).map((rec) => {
-    const [sha, parents, name, email, date, message] = rec.split('\x1f');
+    const [sha, parents, name, email, date, authoredDate, message] = rec.split('\x1f');
     const files = run(spawn, 'git', ['show', '--name-only', '--format=', '--no-renames', sha], root).split('\n').map((l) => l.trim()).filter(Boolean);
-    return { sha, parents: String(parents || '').trim().split(/\s+/).filter(Boolean).length, author: { name, email }, date, message: String(message || '').trim(), files };
+    return { sha, parents: String(parents || '').trim().split(/\s+/).filter(Boolean).length, author: { name, email }, date, authored_date: authoredDate || null, message: String(message || '').trim(), files };
   });
 }
 
@@ -190,7 +191,7 @@ function commitsFromPr(root, pr, spawn = spawnSync) {
       files = (api.files || []).map((f) => f.filename);
     }
     const a = (c.authors || [])[0] || {};
-    out.push({ sha, parents, date: c.committedDate || c.authoredDate || null, author: { name: a.name, email: a.email, login: a.login }, message: [c.messageHeadline, c.messageBody].filter(Boolean).join('\n\n'), files });
+    out.push({ sha, parents, date: c.committedDate || c.authoredDate || null, authored_date: c.authoredDate || null, author: { name: a.name, email: a.email, login: a.login }, message: [c.messageHeadline, c.messageBody].filter(Boolean).join('\n\n'), files });
   }
   return { pr: Number(pr), url: view.url || null, base: view.baseRefName || null, head: view.headRefName || null, commits: out };
 }
