@@ -277,3 +277,101 @@ describe('1.21.2: oxe-plan-review coupling and verification precision', () => {
     assert.equal(rev.dimensions.verification.findings.length, 2);
   });
 });
+
+describe('1.21.2: symbol-aware transitive barrel / re-export resolution in oxe-test-scope', () => {
+  it('traces multi-hop ESM barrels by imported symbol without pulling sibling barrel modules or raising false barrel scopeGaps', () => {
+    const dir = mkDir({
+      'tsconfig.json': JSON.stringify({
+        compilerOptions: { paths: { '@/*': ['./src/*'] } },
+      }),
+      'src/services/index.ts': [
+        "export * from './pairing';",
+        "export { formatInvoice as renderInvoice } from './billing';",
+      ].join('\n'),
+      'src/services/pairing.ts': [
+        "// commented re-export must be ignored: export * from './ghost';",
+        "export { internalPair as pairDevice } from './pairingCore';",
+      ].join('\n'),
+      'src/services/pairingCore.ts': 'export function internalPair(id: string) { return Boolean(id); }\n',
+      'src/services/billing.ts': 'export function formatInvoice(n: number) { return `$${n}`; }\n',
+      'tests/acceptance/f4/pair-barrel.test.ts': [
+        "// import { ghost } from '@/services/ghost';",
+        'const re = /a/*b/;',
+        'import {',
+        '  pairDevice as runPair,',
+        "} from '@/services';",
+        'void re; void runPair;',
+      ].join('\n'),
+    });
+
+    const reqPaths = testScope
+      .testRequirements(dir, 'tests/acceptance/f4/pair-barrel.test.ts')
+      .map((r) => r.path)
+      .sort();
+    // Includes the barrel and the leaf defining pairDevice, NOT sibling billing.ts!
+    assert.deepEqual(reqPaths, ['src/services/index.ts', 'src/services/pairingCore.ts']);
+
+    // Case 1: task owns the leaf implementation file -> pass-through barrel does NOT cause a false scopeGap!
+    const okPlan = {
+      tasks: [{ id: 'T1', files: ['src/services/pairingCore.ts'], acceptance: ['A1'] }],
+      acceptance_tests: [{ criterion: 'A1', task: 'T1', files: ['tests/acceptance/f4/pair-barrel.test.ts'] }],
+    };
+    assert.deepEqual(testScope.scopeGaps(dir, okPlan), {});
+
+    // Case 2: T1 owns only UI while T2 owns pairingCore.ts without depends_on -> scopeGaps names pairingCore.ts & coupling flags T1 -> T2!
+    const coupledPlan = {
+      tasks: [
+        { id: 'T1', title: 'ui', files: ['src/ui/PairModal.tsx'], acceptance: ['A1'], verify: { commands: ['npx vitest run pair-barrel.test.ts'] } },
+        { id: 'T2', title: 'core', files: ['src/services/pairingCore.ts'], acceptance: ['A1'], verify: { commands: ['node -e 0'] } },
+      ],
+      acceptance_tests: okPlan.acceptance_tests,
+    };
+    const gaps = testScope.scopeGaps(dir, coupledPlan);
+    assert.deepEqual(gaps.T1.files, ['src/services/pairingCore.ts']);
+    const rev = reviewLib.review(dir, coupledPlan, { phaseCriteria: ['A1'] });
+    assert.equal(rev.dimensions.coupling.verdict, 'WARN');
+    assert.ok(rev.dimensions.coupling.findings.some((f) => /T1: o teste congelado precisa de src\/services\/pairingCore\.ts, que T2 entrega/.test(f.text)));
+  });
+
+  it('flags the barrel itself when an imported symbol is not yet exported by the barrel', () => {
+    const dir = mkDir({
+      'tsconfig.json': JSON.stringify({
+        compilerOptions: { paths: { '@/*': ['./src/*'] } },
+      }),
+      'src/services/index.ts': "export { formatInvoice } from './billing';\n",
+      'src/services/billing.ts': 'export function formatInvoice() { return 1; }\n',
+      'src/services/pairing.ts': 'export function pairDevice() { return true; }\n',
+      'tests/acceptance/f4/unexported.test.ts': "import { pairDevice } from '@/services';\n",
+    });
+
+    const planMissingBarrel = {
+      tasks: [{ id: 'T1', files: ['src/services/pairing.ts'], acceptance: ['A1'] }],
+      acceptance_tests: [{ criterion: 'A1', task: 'T1', files: ['tests/acceptance/f4/unexported.test.ts'] }],
+    };
+    assert.deepEqual(testScope.scopeGaps(dir, planMissingBarrel).T1.files, ['src/services/index.ts']);
+  });
+
+  it('resolves CJS barrel re-exports, narrows namespace member calls, and stays cycle-safe on circular export *', () => {
+    const dir = mkDir({
+      'src/cjs/index.cjs': "module.exports = { ...require('./a.cjs'), computeTax: require('./tax.cjs').calc };\n",
+      'src/cjs/a.cjs': "export * from './b.cjs';\nexports.alpha = 1;\n",
+      'src/cjs/b.cjs': "export * from './a.cjs';\nexports.beta = 2;\n",
+      'src/cjs/tax.cjs': 'exports.calc = (x) => x * 0.1;\n',
+      'tests/acceptance/f4/cjs-barrel.test.cjs': [
+        "const svc = require('../../../src/cjs/index.cjs');",
+        'svc.computeTax(100);',
+      ].join('\n'),
+      'tests/acceptance/f4/cycle.test.cjs': [
+        "const { beta } = require('../../../src/cjs/index.cjs');",
+        'void beta;',
+      ].join('\n'),
+    });
+
+    const taxPaths = testScope.testRequirements(dir, 'tests/acceptance/f4/cjs-barrel.test.cjs').map((r) => r.path).sort();
+    assert.deepEqual(taxPaths, ['src/cjs/index.cjs', 'src/cjs/tax.cjs']);
+
+    const cyclePaths = testScope.testRequirements(dir, 'tests/acceptance/f4/cycle.test.cjs').map((r) => r.path).sort();
+    assert.deepEqual(cyclePaths, ['src/cjs/b.cjs', 'src/cjs/index.cjs']);
+  });
+});
+

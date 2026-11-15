@@ -323,38 +323,436 @@ function resolveAliasedImport(projectRoot, fromDir, rawSpec) {
   return null;
 }
 
+const CODE_IMPORT_RE = /\.(?:[cm]?[jt]sx?)$/i;
+const MAX_REEXPORT_DEPTH = 6;
+
+/** Strips // and closed /* *\/ comments while keeping strings, templates, regex literals and newlines intact. */
+function stripCodeComments(raw) {
+  const src = String(raw || '');
+  let out = '';
+  let prevSig = '(';
+  for (let i = 0; i < src.length; i += 1) {
+    const ch = src[i];
+    if (ch === '\'' || ch === '"' || ch === '`') {
+      const quote = ch;
+      out += ch;
+      i += 1;
+      while (i < src.length) {
+        const c = src[i];
+        out += c;
+        if (c === '\\' && i + 1 < src.length) { out += src[++i]; }
+        else if (c === quote) break;
+        i += 1;
+      }
+      prevSig = quote;
+    } else if (ch === '/' && src[i + 1] === '/') {
+      while (i < src.length && src[i] !== '\n') { out += ' '; i += 1; }
+      if (i < src.length) out += '\n';
+    } else if (ch === '/' && src[i + 1] === '*') {
+      const close = src.indexOf('*/', i + 2);
+      if (close === -1) { out += ch; prevSig = ch; continue; }
+      for (let k = i; k < close + 2; k += 1) out += src[k] === '\n' ? '\n' : ' ';
+      i = close + 1;
+    } else if (ch === '/' && /[=(,:!&|?[{;+\-~*%<>^\n]/.test(prevSig)) {
+      out += ch;
+      let inClass = false;
+      i += 1;
+      while (i < src.length && src[i] !== '\n') {
+        const c = src[i];
+        out += c;
+        if (c === '\\' && i + 1 < src.length && src[i + 1] !== '\n') { out += src[++i]; }
+        else if (c === '[') inClass = true;
+        else if (c === ']') inClass = false;
+        else if (c === '/' && !inClass) break;
+        i += 1;
+      }
+      prevSig = '/';
+    } else {
+      out += ch;
+      if (!/[ \t\r]/.test(ch)) prevSig = ch;
+    }
+  }
+  return out;
+}
+
+function resolveModuleSpec(projectRoot, fromDir, rawSpec) {
+  const clean = String(rawSpec || '').replace(/\?.*$/, '');
+  if (!clean) return null;
+  if (/^\.{1,2}(\/|$)/.test(clean)) {
+    const joined = path.posix.normalize(path.posix.join(fromDir, clean));
+    if (joined.startsWith('..') || SKIP_DIRS.test(joined)) return null;
+    return resolveLike(projectRoot, joined);
+  }
+  return resolveAliasedImport(projectRoot, fromDir, clean);
+}
+
+function unquoteIdent(tok) {
+  return String(tok || '').trim().replace(/^['"]|['"]$/g, '');
+}
+
+function narrowedNamespaceMembers(cleanText, ident) {
+  const esc = ident.replace(/\$/g, '\\$');
+  const totalUses = [...cleanText.matchAll(new RegExp(`\\b${esc}\\b`, 'g'))].length;
+  const memberMatches = [...cleanText.matchAll(new RegExp(`\\b${esc}\\s*\\.\\s*([A-Za-z_$][\\w$]*)`, 'g'))];
+  // 1 declaration + N dot-member accesses: if every other reference is `ns.prop`, only those symbols are used.
+  if (memberMatches.length > 0 && totalUses === 1 + memberMatches.length) {
+    return memberMatches.map((m) => m[1]);
+  }
+  return ['*'];
+}
+
+/** Extracts imported specifiers and the exported symbol names requested from each (`'*'` when open/unknown). */
+function extractImports(cleanText) {
+  const bySpec = new Map();
+  const addSyms = (spec, syms) => {
+    if (!spec) return;
+    if (!bySpec.has(spec)) bySpec.set(spec, new Set());
+    const set = bySpec.get(spec);
+    if (set.has('*')) return;
+    for (const s of syms) {
+      if (!s) continue;
+      if (s === '*') { set.clear(); set.add('*'); return; }
+      set.add(s);
+    }
+  };
+
+  // Static ESM/TS imports (single or multi-line clauses, never crossing statements)
+  const importStmtRe = /\bimport\s+(?:type\s+)?((?:\*\s*as\s+[A-Za-z_$][\w$]*|\{[^;{}]*\}|[A-Za-z_$][\w$]*(?:\s*,\s*(?:\*\s*as\s+[A-Za-z_$][\w$]*|\{[^;{}]*\}))?))\s*from\s*['"]([^'"\n]+)['"]/g;
+  for (const m of cleanText.matchAll(importStmtRe)) {
+    const clause = m[1].trim();
+    const spec = m[2];
+    const syms = [];
+    const braceStart = clause.indexOf('{');
+    const head = (braceStart >= 0 ? clause.slice(0, braceStart) : clause).replace(/,\s*$/, '').trim();
+    if (head) {
+      const nsMatch = /^\*\s*as\s+([A-Za-z_$][\w$]*)$/.exec(head);
+      if (nsMatch) syms.push(...narrowedNamespaceMembers(cleanText, nsMatch[1]));
+      else {
+        const parts = head.split(',').map((p) => p.trim()).filter(Boolean);
+        for (const p of parts) {
+          const ns2 = /^\*\s*as\s+([A-Za-z_$][\w$]*)$/.exec(p);
+          if (ns2) syms.push(...narrowedNamespaceMembers(cleanText, ns2[1]));
+          else syms.push('default');
+        }
+      }
+    }
+    if (braceStart >= 0) {
+      const inner = clause.slice(braceStart + 1, clause.lastIndexOf('}'));
+      for (const item of inner.split(',')) {
+        const trimmed = item.trim().replace(/^(?:type|typeof)\s+/, '').trim();
+        if (!trimmed) continue;
+        const asParts = trimmed.split(/\s+as\s+/);
+        syms.push(unquoteIdent(asParts[0]));
+      }
+    }
+    addSyms(spec, syms.length ? syms : ['*']);
+  }
+
+  // Destructured require / dynamic import: const { a, b: localB } = require('...')
+  const destructRe = /\b(?:const|let|var)\s+\{([^;{}]*)\}\s*=\s*(?:await\s+)?(?:require|import)\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g;
+  for (const m of cleanText.matchAll(destructRe)) {
+    const inner = m[1];
+    const spec = m[2];
+    if (inner.includes('...')) { addSyms(spec, ['*']); continue; }
+    const syms = [];
+    for (const item of inner.split(',')) {
+      const prop = item.split(':')[0].split('=')[0].trim();
+      if (prop) syms.push(unquoteIdent(prop));
+    }
+    addSyms(spec, syms.length ? syms : ['*']);
+  }
+
+  // Namespace require / dynamic import: const svc = require('...')
+  const nsReqRe = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?(?:require|import)\s*\(\s*['"]([^'"\n]+)['"]\s*\)(?!\s*\.)/g;
+  for (const m of cleanText.matchAll(nsReqRe)) {
+    addSyms(m[2], narrowedNamespaceMembers(cleanText, m[1]));
+  }
+
+  // Direct member access: require('...').foo
+  for (const m of cleanText.matchAll(/\b(?:require|import)\s*\(\s*['"]([^'"\n]+)['"]\s*\)\s*\.\s*([A-Za-z_$][\w$]*)/g)) {
+    addSyms(m[1], [m[2]]);
+  }
+
+  // Fallback scanner for side-effect imports, vi.mock/jest.mock, require.resolve, standalone import(), etc.
+  const fallbackRe = /(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+|\brequire(?:\.resolve)?\s*\(\s*|\bvi\.(?:mock|importActual)\s*(?:<[^>]*>)?\s*\(\s*|\bjest\.(?:mock|requireActual)\s*\(\s*)['"]([^'"\n]+)['"]/g;
+  for (const m of cleanText.matchAll(fallbackRe)) {
+    if (!bySpec.has(m[1])) addSyms(m[1], ['*']);
+  }
+  return bySpec;
+}
+
+const exportCache = new Map();
+
+function parseModuleExports(projectRoot, fileRel) {
+  if (!CODE_IMPORT_RE.test(fileRel)) return null;
+  const abs = path.join(projectRoot, fileRel);
+  let st = null;
+  try { st = fs.statSync(abs); } catch { return null; }
+  if (!st.isFile() || st.size > 512_000) return null;
+  const cacheKey = `${abs}\0${st.mtimeMs}:${st.size}`;
+  const hit = exportCache.get(cacheKey);
+  if (hit) return hit;
+
+  let raw = '';
+  try { raw = fs.readFileSync(abs, 'utf8'); } catch { return null; }
+  const clean = stripCodeComments(raw);
+  const localExports = new Set();
+  const namedReexports = new Map();
+  const wildcardReexports = [];
+  const wildcardWithDefault = new Set();
+  const addNamedRe = (exported, spec, orig) => {
+    if (!exported || !spec) return;
+    if (!namedReexports.has(exported)) namedReexports.set(exported, []);
+    namedReexports.get(exported).push({ spec, orig: orig || exported });
+  };
+
+  // ESM: export { a, b as c } from './mod'
+  for (const m of clean.matchAll(/\bexport\s+(?:type\s+)?\{([^;{}]*)\}\s*from\s*['"]([^'"\n]+)['"]/g)) {
+    const spec = m[2];
+    for (const item of m[1].split(',')) {
+      const trimmed = item.trim().replace(/^(?:type|typeof)\s+/, '').trim();
+      if (!trimmed) continue;
+      const parts = trimmed.split(/\s+as\s+/);
+      const orig = unquoteIdent(parts[0]);
+      const exported = unquoteIdent(parts[1] || parts[0]);
+      addNamedRe(exported, spec, orig);
+    }
+  }
+  // ESM: export * as ns from './mod'
+  for (const m of clean.matchAll(/\bexport\s*\*\s*as\s+([A-Za-z_$][\w$]*|'[^']+'|"[^"]+")\s+from\s*['"]([^'"\n]+)['"]/g)) {
+    addNamedRe(unquoteIdent(m[1]), m[2], '*');
+  }
+  // ESM: export * from './mod'
+  for (const m of clean.matchAll(/\bexport\s+(?:type\s+)?\*\s*from\s*['"]([^'"\n]+)['"]/g)) {
+    if (!wildcardReexports.includes(m[1])) wildcardReexports.push(m[1]);
+  }
+  // ESM: local export declarations
+  if (/\bexport\s+default\b/.test(clean)) localExports.add('default');
+  for (const m of clean.matchAll(/\bexport\s+(?:declare\s+)?(?:async\s+)?(?:function\s*\*?|class|abstract\s+class|interface|type|enum|namespace)\s+([A-Za-z_$][\w$]*)/g)) {
+    localExports.add(m[1]);
+  }
+  for (const m of clean.matchAll(/\bexport\s+(?:declare\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g)) {
+    localExports.add(m[1]);
+  }
+  for (const m of clean.matchAll(/\bexport\s+(?:declare\s+)?(?:const|let|var)\s+\{([^;{}]*)\}/g)) {
+    for (const item of m[1].split(',')) {
+      const segs = item.split('=')[0].trim().split(':').map((s) => s.trim()).filter(Boolean);
+      const localName = segs[segs.length - 1];
+      if (localName && /^[A-Za-z_$][\w$]*$/.test(localName)) localExports.add(localName);
+    }
+  }
+  // ESM: local export { a, b as c } (without `from`)
+  for (const m of clean.matchAll(/\bexport\s+(?:type\s+)?\{([^;{}]*)\}(?!\s*from\b)/g)) {
+    for (const item of m[1].split(',')) {
+      const trimmed = item.trim().replace(/^(?:type|typeof)\s+/, '').trim();
+      if (!trimmed) continue;
+      const parts = trimmed.split(/\s+as\s+/);
+      localExports.add(unquoteIdent(parts[1] || parts[0]));
+    }
+  }
+
+  // CJS: module.exports = require('./mod')
+  for (const m of clean.matchAll(/\bmodule\.exports\s*=\s*require\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g)) {
+    if (!wildcardReexports.includes(m[1])) wildcardReexports.push(m[1]);
+    wildcardWithDefault.add(m[1]);
+    localExports.delete('default');
+  }
+  // CJS: Object.assign(module.exports, require('./a'), require('./b'))
+  for (const m of clean.matchAll(/\bObject\.assign\s*\(\s*(?:module\.)?exports\s*,([^)]*)\)/g)) {
+    for (const r of m[1].matchAll(/\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g)) {
+      if (!wildcardReexports.includes(r[1])) wildcardReexports.push(r[1]);
+    }
+  }
+  // CJS: exports.foo = require('./mod')(.bar)?
+  const cjsReexportedProps = new Set();
+  for (const m of clean.matchAll(/\b(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"]([^'"\n]+)['"]\s*\)(?:\s*\.\s*([A-Za-z_$][\w$]*))?/g)) {
+    cjsReexportedProps.add(m[1]);
+    addNamedRe(m[1], m[2], m[3] || '*');
+  }
+  for (const m of clean.matchAll(/\b(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=(?!=)/g)) {
+    if (!cjsReexportedProps.has(m[1])) localExports.add(m[1]);
+  }
+  // CJS: module.exports = { ...require('./a'), foo: require('./b').bar, localFn }
+  for (const m of clean.matchAll(/\bmodule\.exports\s*=\s*\{([^}]*)\}/g)) {
+    const body = m[1];
+    for (const sp of body.matchAll(/\.\.\.\s*require\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g)) {
+      if (!wildcardReexports.includes(sp[1])) wildcardReexports.push(sp[1]);
+    }
+    const propReq = new Set();
+    for (const pr of body.matchAll(/\b([A-Za-z_$][\w$]*)\s*:\s*require\s*\(\s*['"]([^'"\n]+)['"]\s*\)(?:\s*\.\s*([A-Za-z_$][\w$]*))?/g)) {
+      propReq.add(pr[1]);
+      addNamedRe(pr[1], pr[2], pr[3] || '*');
+    }
+    for (const item of body.split(',')) {
+      const t = item.trim();
+      if (!t || t.startsWith('...')) continue;
+      const key = /^([A-Za-z_$][\w$]*)(?:\s*:|\s*\(|$)/.exec(t);
+      if (key && !propReq.has(key[1])) localExports.add(key[1]);
+    }
+  }
+
+  const info = { localExports, namedReexports, wildcardReexports, wildcardWithDefault };
+  exportCache.set(cacheKey, info);
+  return info;
+}
+
+function collectPureBarrelTargets(projectRoot, curResolved, depth = 0, visited = new Set()) {
+  if (!curResolved || !validRel(curResolved.path) || depth > MAX_REEXPORT_DEPTH) return [];
+  if (visited.has(curResolved.path)) return [];
+  visited.add(curResolved.path);
+  if (!curResolved.exists) return [curResolved];
+  const exp = parseModuleExports(projectRoot, curResolved.path);
+  if (!exp) return [curResolved];
+  const curDir = normDir(path.posix.dirname(curResolved.path));
+  const nextSpecs = [
+    ...[...exp.namedReexports.values()].flatMap((arr) => arr.map((e) => e.spec)),
+    ...exp.wildcardReexports,
+  ];
+  if (!nextSpecs.length) return [curResolved];
+  const out = exp.localExports.size > 0 ? [curResolved] : [];
+  for (const s of new Set(nextSpecs)) {
+    const target = resolveModuleSpec(projectRoot, curDir, s);
+    if (!target || !validRel(target.path)) continue;
+    const sub = collectPureBarrelTargets(projectRoot, target, depth + 1, visited);
+    out.push(...(sub.length ? sub : [target]));
+  }
+  return out;
+}
+
+function findSymbolDefinitions(projectRoot, curResolved, sym, depth = 0, visited = new Set()) {
+  if (!curResolved || !validRel(curResolved.path) || depth > MAX_REEXPORT_DEPTH) return [];
+  const key = `${curResolved.path}\0${sym}`;
+  if (visited.has(key)) return [];
+  visited.add(key);
+  if (!curResolved.exists) return [curResolved];
+  const exp = parseModuleExports(projectRoot, curResolved.path);
+  if (!exp) return [curResolved];
+  if (exp.localExports.has(sym)) return [curResolved];
+  const curDir = normDir(path.posix.dirname(curResolved.path));
+  if (exp.namedReexports.has(sym)) {
+    const found = [];
+    for (const edge of exp.namedReexports.get(sym)) {
+      const target = resolveModuleSpec(projectRoot, curDir, edge.spec);
+      if (!target || !validRel(target.path)) continue;
+      if (edge.orig === '*') {
+        const sub = collectPureBarrelTargets(projectRoot, target, depth + 1, new Set([curResolved.path]));
+        found.push(...(sub.length ? sub : [target]));
+      } else {
+        found.push(...findSymbolDefinitions(projectRoot, target, edge.orig, depth + 1, visited));
+      }
+    }
+    if (found.length) return found;
+  }
+  const defs = [];
+  for (const wSpec of exp.wildcardReexports) {
+    if (sym === 'default' && !exp.wildcardWithDefault.has(wSpec)) continue;
+    const target = resolveModuleSpec(projectRoot, curDir, wSpec);
+    if (!target || !validRel(target.path)) continue;
+    if (!target.exists) defs.push(target);
+    else defs.push(...findSymbolDefinitions(projectRoot, target, sym, depth + 1, visited));
+  }
+  return defs;
+}
+
 /** Product paths one test file needs: [{ path, kind: 'import'|'read', exists }]. */
 function testRequirements(projectRoot, testFile) {
-  let text = '';
-  try { text = fs.readFileSync(path.join(projectRoot, testFile), 'utf8'); } catch { return []; }
+  let rawText = '';
+  try { rawText = fs.readFileSync(path.join(projectRoot, testFile), 'utf8'); } catch { return []; }
+  const text = stripCodeComments(rawText);
   const dir = path.posix.dirname(norm(testFile));
   const out = new Map();
-  const addResolved = (r, kind) => {
-    if (!r || !validRel(r.path)) return;
-    if (!out.has(r.path)) out.set(r.path, { path: r.path, kind, exists: r.exists, ...(r.candidates ? { candidates: r.candidates } : {}) });
+  const upsertImport = (r, extra = {}) => {
+    if (!r || !validRel(r.path)) return null;
+    let entry = out.get(r.path);
+    if (!entry) {
+      entry = { path: r.path, kind: 'import', exists: r.exists, ...(r.candidates ? { candidates: r.candidates } : {}) };
+      out.set(r.path, entry);
+    }
+    if (extra.directImport) {
+      entry.directImport = true;
+      delete entry.wildcardOnly;
+    }
+    if (extra.viaBarrel && !entry.directImport && !entry.viaBarrel && entry.path !== extra.viaBarrel) {
+      entry.viaBarrel = extra.viaBarrel;
+    }
+    if (extra.wildcardOnly) {
+      if (!entry.directImport && !entry.symbolMatched) entry.wildcardOnly = true;
+    } else if (extra.viaBarrel) {
+      entry.symbolMatched = true;
+      delete entry.wildcardOnly;
+    }
+    if (Array.isArray(extra.reexportTargets) && extra.reexportTargets.length) {
+      const prev = entry.reexportTargets || [];
+      entry.reexportTargets = [...new Set([...prev, ...extra.reexportTargets])];
+      entry.barrelForwarded = entry.barrelForwarded === false ? false : Boolean(extra.barrelForwarded);
+      if (extra.wildcardBarrel) entry.wildcardBarrel = true;
+    } else if (extra.barrelForwarded === false) {
+      entry.barrelForwarded = false;
+    }
+    return entry;
   };
-  const addRel = (spec, base, kind) => {
-    const clean = kind === 'import' ? String(spec).replace(/\?.*$/, '') : spec;
-    const joined = path.posix.normalize(path.posix.join(base, clean));
+  const addRelRead = (spec, base) => {
+    const joined = path.posix.normalize(path.posix.join(base, spec));
     if (joined.startsWith('..') || SKIP_DIRS.test(joined)) return;
-    const r = kind === 'import' ? resolveLike(projectRoot, joined) : { path: norm(joined), exists: fs.existsSync(path.join(projectRoot, joined)) };
-    addResolved(r, kind);
+    const p = norm(joined);
+    if (!validRel(p) || out.has(p)) return;
+    out.set(p, { path: p, kind: 'read', exists: fs.existsSync(path.join(projectRoot, joined)) });
   };
-  for (const m of text.matchAll(/(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+|\brequire(?:\.resolve)?\s*\(\s*|\bvi\.(?:mock|importActual)\s*(?:<[^>]*>)?\s*\(\s*|\bjest\.(?:mock|requireActual)\s*\(\s*)['"]([^'"\n]+)['"]/g)) {
-    const spec = m[1];
-    if (/^\.{1,2}(\/|$)/.test(spec)) addRel(spec, dir, 'import');
-    else addResolved(resolveAliasedImport(projectRoot, dir, spec), 'import');
+
+  for (const [spec, syms] of extractImports(text)) {
+    const direct = resolveModuleSpec(projectRoot, dir, spec);
+    if (!direct || !validRel(direct.path)) continue;
+    if (!direct.exists) {
+      upsertImport(direct, { directImport: true, barrelForwarded: false });
+      continue;
+    }
+    const exp = parseModuleExports(projectRoot, direct.path);
+    const hasReexports = Boolean(exp && (exp.namedReexports.size > 0 || exp.wildcardReexports.length > 0));
+    if (!hasReexports) {
+      upsertImport(direct, { directImport: true, barrelForwarded: false });
+      continue;
+    }
+    if (syms.has('*')) {
+      if (exp.localExports.size === 0) {
+        const leaves = collectPureBarrelTargets(projectRoot, direct).filter((t) => t.path !== direct.path);
+        const leafPaths = [...new Set(leaves.map((t) => t.path))];
+        upsertImport(direct, { directImport: true, reexportTargets: leafPaths, barrelForwarded: leafPaths.length > 0, wildcardBarrel: true });
+        for (const leaf of leaves) upsertImport(leaf, { viaBarrel: direct.path, wildcardOnly: true });
+      } else {
+        upsertImport(direct, { directImport: true, barrelForwarded: false });
+      }
+      continue;
+    }
+    let allResolved = true;
+    const leafMap = new Map();
+    for (const sym of syms) {
+      const defs = findSymbolDefinitions(projectRoot, direct, sym);
+      if (!defs.length) {
+        allResolved = false;
+      } else {
+        for (const d of defs) leafMap.set(d.path, d);
+      }
+    }
+    const externalLeaves = [...leafMap.values()].filter((d) => d.path !== direct.path);
+    const needsDirectSelf = !allResolved || leafMap.has(direct.path) || externalLeaves.length === 0;
+    upsertImport(direct, {
+      directImport: true,
+      reexportTargets: externalLeaves.map((d) => d.path),
+      barrelForwarded: !needsDirectSelf,
+    });
+    for (const leaf of externalLeaves) upsertImport(leaf, { viaBarrel: direct.path });
   }
+
   for (const m of text.matchAll(/\b(?:readFileSync|existsSync|readdirSync|statSync|readFile|lstatSync)\s*\(\s*['"]([^'"\n]+)['"]/g)) {
     const p = m[1];
     if (/^(https?:|[A-Za-z]:|\/)/.test(p)) continue;
-    addRel(p, p.startsWith('.') ? dir : '', 'read');
+    addRelRead(p, p.startsWith('.') ? dir : '');
   }
   for (const m of text.matchAll(/\bpath\.(?:join|resolve)\s*\(\s*(__dirname|process\.cwd\(\))\s*,((?:\s*['"][^'"\n]+['"]\s*,?)+)\s*\)/g)) {
     const parts = [...m[2].matchAll(/['"]([^'"\n]+)['"]/g)].map((x) => x[1]);
-    addRel(parts.join('/'), m[1] === '__dirname' ? dir : '', 'read');
+    addRelRead(parts.join('/'), m[1] === '__dirname' ? dir : '');
   }
-  for (const m of text.matchAll(/new\s+URL\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*,\s*import\.meta\.url\s*\)/g)) addRel(m[1], dir, 'read');
+  for (const m of text.matchAll(/new\s+URL\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*,\s*import\.meta\.url\s*\)/g)) addRelRead(m[1], dir);
   // the tests' own tree (fixtures, helpers) is not product code
   const root = testRoot(testFile);
   return [...out.values()].filter((r) => !(`${r.path}/`).startsWith(`${root}/`) && r.path !== norm(testFile));
@@ -395,7 +793,7 @@ function scopeGaps(projectRoot, doc) {
       for (const d of x.depends_on || x.dependsOn || []) walk(byId.get(d));
     };
     walk(t);
-    return files;
+    return { files, ids: seen };
   };
   const acceptance = Array.isArray(doc && doc.acceptance_tests) ? doc.acceptance_tests : [];
   // A file still to be created is imported without extension ('../src/x/menu' for files: ['src/x/menu.tsx']): it
@@ -406,17 +804,46 @@ function scopeGaps(projectRoot, doc) {
     const paths = r.exists || !r.candidates ? [r.path] : r.candidates;
     return paths.some((p) => scope.some((e) => covers(e, p)));
   };
+  const pendingWriters = tasks.filter((x) => x.done !== true && !['external_delivery', 'verify_only', 'spike'].includes(x.kind));
+  const ownedByOtherPending = (ids, r) => {
+    const paths = r.exists || !r.candidates ? [r.path] : r.candidates;
+    return pendingWriters.some((o) => !ids.has(o.id) && (o.files || []).some((e) => paths.some((p) => covers(e, p))));
+  };
   const out = {};
   for (const t of tasks) {
     if (t.done === true || ['external_delivery', 'verify_only', 'spike'].includes(t.kind)) continue;
     const crit = new Set(t.acceptance || t.aceite || []);
     const tests = [...new Set(acceptance.filter((a) => a && (a.task === t.id || (!a.task && crit.has(a.criterion)))).flatMap((a) => (a.files || []).map((f) => norm(typeof f === 'string' ? f : f.path))))];
     if (!tests.length) continue;
-    const scope = scopeOf(t);
+    const { files: scope, ids: depIds } = scopeOf(t);
     const detail = [];
     for (const test of tests) {
-      for (const r of testRequirements(projectRoot, test)) {
-        if (!inScope(scope, r)) detail.push({ test, path: canonical(r), kind: r.kind });
+      const reqs = testRequirements(projectRoot, test);
+      const byPath = new Map(reqs.map((r) => [r.path, r]));
+      for (const r of reqs) {
+        if (r.kind === 'read') {
+          if (!inScope(scope, r)) detail.push({ test, path: canonical(r), kind: 'read' });
+          continue;
+        }
+        if (r.wildcardOnly) continue;
+        if (r.barrelForwarded && Array.isArray(r.reexportTargets) && r.reexportTargets.length > 0) {
+          if (r.wildcardBarrel) {
+            const anyCovered = inScope(scope, r) || r.reexportTargets.some((tp) => {
+              const tr = byPath.get(tp) || { path: tp, exists: true };
+              return inScope(scope, tr);
+            });
+            if (!anyCovered) detail.push({ test, path: canonical(r), kind: 'import' });
+          }
+          continue;
+        }
+        if (!r.directImport && r.viaBarrel && byPath.has(r.viaBarrel)) {
+          const barrel = byPath.get(r.viaBarrel);
+          if (inScope(scope, r)) continue;
+          if (inScope(scope, barrel) && !ownedByOtherPending(depIds, r)) continue;
+          detail.push({ test, path: canonical(r), kind: 'import' });
+          continue;
+        }
+        if (!inScope(scope, r)) detail.push({ test, path: canonical(r), kind: 'import' });
       }
     }
     if (detail.length) out[t.id] = { files: [...new Set(detail.map((d) => d.path))], tests: [...new Set(detail.map((d) => d.test))], detail };
