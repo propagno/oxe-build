@@ -39,7 +39,17 @@ function mirrorDirOf(root) {
     const out = r.status === 0 ? String(r.stdout || '').trim() : '';
     if (out) dir = path.join(path.resolve(root, out), 'oxe', 'quick');
   } catch { dir = null; }
+  if (!dir) return null; // not cached: a repo initialised later is found next time
   mirrorCache.set(key, dir);
+  // cross-review 15/11: the records made BEFORE the mirror existed go in once (backfill), or a sibling worktree that
+  // only sees the mirror would read them as lost
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    for (const f of fs.readdirSync(dirOf(root))) {
+      if (!ID_RE.test(f.replace(/\.json$/, '')) || fs.existsSync(path.join(dir, f))) continue;
+      try { fs.copyFileSync(path.join(dirOf(root), f), path.join(dir, f)); } catch { /* */ }
+    }
+  } catch { /* no local records */ }
   return dir;
 }
 

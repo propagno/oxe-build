@@ -26,8 +26,13 @@ describe('quick records mirrored in the git common dir', () => {
     fs.writeFileSync(path.join(main, '.gitignore'), '.oxe/\n');
     fs.writeFileSync(path.join(main, 'a.txt'), 'a\n');
     git(main, 'add', '-A'); git(main, 'commit', '-qm', 'base');
+    // a record made BEFORE the mirror existed, in the main checkout: backfilled at the first mirror lookup
+    fs.mkdirSync(path.join(main, '.oxe', 'quick'), { recursive: true });
+    fs.writeFileSync(path.join(main, '.oxe', 'quick', 'Q-20261114-0c70.json'), JSON.stringify({ id: 'Q-20261114-0c70', status: 'done', started_at: '2026-11-14T10:00:00Z' }));
     const wt = path.join(base, 'wt');
     git(main, 'worktree', 'add', '-q', '-b', 'feat', wt);
+    quick.mirrorDirOf(main);
+    assert.equal(quick.exists(wt, 'Q-20261114-0c70'), true, 'the old record reaches the other worktree through the backfill');
     const rec = quick.start(wt, { key: 'OXE-75', objective: 'ajustar o tom do workspace' });
     quick.cancel(wt, { id: rec.id, reason: 'teste do espelho de registros' });
     // the worktree's .oxe is re-created (the loss): the record is gone locally

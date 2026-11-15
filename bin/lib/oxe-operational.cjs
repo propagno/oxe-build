@@ -9659,9 +9659,17 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
   if (!check || check.ok) {
     try {
       const pcfg = readProjectConfig(projectRoot) || {};
-      const dh = require('./oxe-dom-hooks.cjs');
-      const gen = dh.generatedEdits(paths, pcfg.generated_files);
-      if (gen.length) check = { ok: false, kind: 'generated_file', command: 'generated_files (estático)', tail: dh.generatedMessage(gen), generated: gen };
+      if (Array.isArray(pcfg.generated_files) && pcfg.generated_files.length) {
+        const dh = require('./oxe-dom-hooks.cjs');
+        // what the commit REALLY changed (a snapshot entry can equal the parent)
+        const realChanged = (gitOut(projectRoot, ['diff', '--name-only', oldHead, head]).stdout || '').split(/\r?\n/).filter(Boolean);
+        const lastAt = (p) => Number((gitOut(projectRoot, ['log', '-1', '--format=%ct', oldHead, '--', p]).stdout || '').trim()) || 0;
+        const asList = (v) => (Array.isArray(v) ? v : [v]);
+        // regeneration after an earlier task changed the source: the source's last change is newer than the file's
+        const regenerated = (r) => Math.max(0, ...asList(r.source).map((s) => lastAt(`:(glob)${s}`))) > Math.max(0, ...asList(r.file).map((f) => lastAt(`:(glob)${f}`)));
+        const gen = dh.generatedEdits(realChanged, pcfg.generated_files, { scope: options.scope || null, regenerated });
+        if (gen.length) check = { ok: false, kind: gen.some((g) => g.source_outside_scope) ? 'scope_insufficient' : 'generated_file', command: 'generated_files (estático)', tail: dh.generatedMessage(gen), generated: gen };
+      }
     } catch { /* auxiliar */ }
   }
   if (!check || check.ok) {
@@ -9679,10 +9687,21 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
       }
     } catch { /* auxiliar */ }
   }
-  if (check && !check.ok && check.kind === 'generated_file') {
+  if (check && !check.ok && check.generated) {
     gitOut(projectRoot, ['update-ref', '-m', 'oxe: checkpoint generated file', 'HEAD', oldHead, head]);
     restore();
-    return { committed: false, failed: true, kind: 'generated_file', generated: check.generated, reason: `a tarefa editou arquivo gerado: ${check.tail}`, snapshot: entries };
+    const outside = check.kind === 'scope_insufficient';
+    return {
+      committed: false,
+      failed: true,
+      kind: check.kind,
+      generated: check.generated,
+      ...(outside ? { related_red: [] } : {}),
+      reason: outside
+        ? `scope_insufficient: a tarefa editou arquivo gerado, e a fonte dele está fora dos files dela — ${check.tail}. Inclua a fonte nos files (ou abra um CR/tarefa), depois rode oxe-cc plan reopen`
+        : `a tarefa editou arquivo gerado: ${check.tail}`,
+      snapshot: entries,
+    };
   }
   if (check && !check.ok && check.kind === 'dom_hooks') {
     gitOut(projectRoot, ['update-ref', '-m', 'oxe: checkpoint dom hooks', 'HEAD', oldHead, head]);

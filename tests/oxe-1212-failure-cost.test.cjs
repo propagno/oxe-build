@@ -39,6 +39,26 @@ describe('report failure-cost', () => {
     assert.match(fc.render(r), /US\$ 36\.10 descartados de US\$ 51\.10/);
   });
 
+  it('fixes match the cause by its parts; ratio and _pct; a wait after VerificationStarted is verifying_hours (OxeSpace 15/11)', () => {
+    const events = [
+      usage('T1', 1, 4, 0), { type: 'WorkItemBlocked', run_id: 'r1', work_item_id: 'T1', timestamp: t(1), payload: { failure_class: 'no_progress' } },
+      usage('T2', 1, 6, 2), { type: 'RetryScheduled', run_id: 'r1', work_item_id: 'T2', timestamp: t(3), payload: { reason: 'Env' } },
+      usage('T2', 2, 10, 4), { type: 'WorkItemCompleted', run_id: 'r1', work_item_id: 'T2', timestamp: t(5) },
+      { type: 'VerificationStarted', run_id: 'r1', timestamp: t(6) },
+      { type: 'VerificationCompleted', run_id: 'r1', timestamp: t(76) },
+    ];
+    const crs = [{ id: 'CR-F5-2', class: 'constraint', status: 'open', tasks: ['T1'], at: t(1.5) }];
+    const r = fc.report(events, crs, { fixes: { no_progress: 'OXB-186', env: 'G29' } });
+    const by = Object.fromEntries(r.causes.map((c) => [c.cause, c]));
+    assert.equal(by['CR constraint (no_progress)'].fix, 'OXB-186');
+    assert.deepEqual(by['CR constraint (no_progress)'].fix_keys, ['CR constraint (no_progress)', 'no_progress', 'constraint']);
+    assert.equal(by.Env.fix, 'G29', 'case-insensitive');
+    assert.equal(r.discarded_share_pct, r.discarded_share);
+    assert.equal(r.discarded_ratio, Math.round((10 / 20) * 10000) / 10000);
+    assert.equal(r.verifying_hours, 1.2);
+    assert.equal(r.stopped_hours, 0);
+  });
+
   it('--since cuts the events and the CRs', () => {
     const r = fc.report([usage('T1', 1, 5, 0), { type: 'RetryScheduled', run_id: 'r1', work_item_id: 'T1', timestamp: t(1), payload: { reason: 'x' } }], [], { since: t(30) });
     assert.equal(r.spent_usd, 0);

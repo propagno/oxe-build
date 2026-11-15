@@ -209,7 +209,8 @@ function check(root, options = {}) {
   // OxeSpace 15/11: the records are mirrored in the git common dir (shared by every worktree): a record missing here
   // but in the mirror counts as recorded
   let mirrorDir = null;
-  try { mirrorDir = require('./oxe-quick.cjs').mirrorDirOf(root); } catch { mirrorDir = null; }
+  // never with a mocked spawn (a test of the classification): the mirror lookup runs real git
+  if (!options.spawn) { try { mirrorDir = require('./oxe-quick.cjs').mirrorDirOf(root); } catch { mirrorDir = null; } }
   const stores = [quickDir, mirrorDir].filter((d) => d && fs.existsSync(d));
   const quickExists = stores.length ? (id) => stores.some((d) => fs.existsSync(path.join(d, `${id}.json`))) : () => null;
   // the start of the record stores this checkout sees: the earliest started_at among their records

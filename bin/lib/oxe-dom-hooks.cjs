@@ -68,15 +68,19 @@ function localeText(root, ref, localeFile, key) {
 }
 
 /** An accessible name removed from markup and gone from the product, still read by tests by its TEXT. */
-function ariaFinding(root, sha, h, options) {
-  const text = h.value != null ? h.value : localeText(root, sha, options.locale, h.i18nKey);
+function ariaFinding(root, sha, h, options, parent) {
+  // cross-review 15/11: a key removed from the locale in the same commit still has its text in the parent
+  const text = h.value != null ? h.value : (localeText(root, sha, options.locale, h.i18nKey) || (parent ? localeText(root, parent, options.locale, h.i18nKey) : null));
   if (!text || text.length < 3) return null;
-  // kept: the key still used in code (i18n), or the static name still in markup
+  // kept: the key still used in code (i18n), or the name still in markup (also when a key became the literal)
+  const inMarkup = () => grepAll(root, sha, [text]).filter((l) => { const f = l.split(':')[0]; return MARKUP_RE.test(f) && !TEST_PATH_RE.test(f); });
   const kept = h.i18nKey
-    ? grepAll(root, sha, [h.i18nKey]).filter((l) => { const f = l.split(':')[0]; return !TEST_PATH_RE.test(f) && !NON_DOM_RE.test(f) && !/\.json$/i.test(f); })
-    : grepAll(root, sha, [text]).filter((l) => { const f = l.split(':')[0]; return MARKUP_RE.test(f) && !TEST_PATH_RE.test(f); });
+    ? [...grepAll(root, sha, [h.i18nKey]).filter((l) => { const f = l.split(':')[0]; return !TEST_PATH_RE.test(f) && !NON_DOM_RE.test(f) && !/\.json$/i.test(f); }), ...inMarkup()]
+    : inMarkup();
   if (kept.length) return null;
-  const readers = grepAll(root, sha, [text]).filter((l) => TEST_PATH_RE.test(l.split(':')[0]));
+  // only lines that READ an accessible name (getByRole / getByLabel / name: / aria-label…): a common word ("Search",
+  // "Close") in a describe() or a comment is not a reader
+  const readers = grepAll(root, sha, [text]).filter((l) => TEST_PATH_RE.test(l.split(':')[0]) && /ByRole|ByLabel|aria-label|AccessibleName|\bname\s*:|toHaveAccessibleName|\btitle\b/i.test(l));
   if (!readers.length) return null;
   return { hook: `aria-label="${text}"${h.i18nKey ? ` (${h.i18nKey})` : ''}`, removed_in: h.file, readers: readers.slice(0, 12).map((l) => l.slice(0, 200)), readers_total: readers.length };
 }
@@ -102,7 +106,7 @@ function hooksStillRead(root, parent, sha, options = {}) {
   if (!hooks.length) return [];
   const findings = [];
   for (const h of hooks) {
-    if (h.name === 'aria-label') { const f = ariaFinding(root, sha, h, options); if (f) findings.push(f); continue; }
+    if (h.name === 'aria-label') { const f = ariaFinding(root, sha, h, options, parent); if (f) findings.push(f); continue; }
     const token = h.value != null ? h.value : h.prefix;
     const productNeedles = token != null ? [token] : [h.name];
     // still in the product (another component keeps it): not removed
@@ -132,20 +136,33 @@ function message(findings) {
  */
 function globRe(glob) {
   const g = String(glob).replace(/\\/g, '/');
-  return new RegExp(`^${g.replace(/[.+^$()|[\]\\]/g, '\\$&').replace(/\*\*\/?/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\u0000/g, '.*')}$`);
+  // `**/` keeps the directory boundary (mobile/android/**/strings.xml never matches not-strings.xml)
+  return new RegExp(`^${g.replace(/[.+^$()|[\]\\]/g, '\\$&').replace(/\*\*\//g, '\u0001').replace(/\*\*/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\u0001/g, '(?:.+/)?').replace(/\u0000/g, '.*')}$`);
 }
 
-function generatedEdits(changedPaths, rules) {
+/**
+ * @param {string[]} changedPaths the paths the commit really changed
+ * @param {object[]} rules config generated_files
+ * @param {{ scope?: string[], regenerated?: (rule) => boolean }} [options] scope: the task's files (a source outside
+ *   them → scope_insufficient); regenerated(rule): the source changed AFTER the last generation (an earlier task's
+ *   edit) — then this commit regenerating the file is legitimate
+ */
+function generatedEdits(changedPaths, rules, options = {}) {
   const changed = (changedPaths || []).map((p) => String(p).replace(/\\/g, '/'));
+  const scope = Array.isArray(options.scope) ? options.scope.map((p) => String(p).replace(/\\/g, '/')) : null;
   const out = [];
   for (const r of Array.isArray(rules) ? rules : []) {
     if (!r || !r.file || !r.source) continue;
+    const sources = Array.isArray(r.source) ? r.source : [r.source];
     const fileRes = (Array.isArray(r.file) ? r.file : [r.file]).map(globRe);
-    const srcRes = (Array.isArray(r.source) ? r.source : [r.source]).map(globRe);
+    const srcRes = sources.map(globRe);
     const edited = changed.filter((p) => fileRes.some((re) => re.test(p)));
     if (!edited.length) continue;
     if (changed.some((p) => srcRes.some((re) => re.test(p)))) continue; // the source changed too: the generator ran
-    out.push({ files: edited, source: Array.isArray(r.source) ? r.source : [r.source], test: r.test || null, generator: r.generator || null });
+    if (typeof options.regenerated === 'function' && options.regenerated(r)) continue;
+    // a source the task cannot touch (outside its files): a plan matter, not something a retry can fix
+    const outside = scope ? !sources.some((s) => scope.some((p) => p === s || globRe(s).test(p) || globRe(p).test(String(s).replace(/\*.*$/, 'x')))) : false;
+    out.push({ files: edited, source: sources, test: r.test || null, generator: r.generator || null, source_outside_scope: outside });
   }
   return out;
 }

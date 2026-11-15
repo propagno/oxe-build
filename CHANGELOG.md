@@ -72,6 +72,19 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
   - O cache das entradas já aprovadas é gravado mesmo quando o processo morre no meio.
   - Cada suíte também ganha uma linha de progresso.
 
+### `report failure-cost`: conserto por causa, razão explícita, horas de verify (OxeSpace 15/11)
+
+- O mapa `failure_cost.fixes` casa a causa como impressa e também pelas partes dela: "CR constraint (no_progress)" tenta `no_progress` e depois `constraint`, sem diferenciar maiúsculas. Cada causa mostra as chaves tentadas (`fix_keys`). Antes, todo "fix" saía null.
+- `discarded_share_pct` e `discarded_ratio` (0..1) ao lado do `discarded_share`, que continua igual por compatibilidade.
+- Uma parada depois de `VerificationStarted` é verify esperando a CI: vai para `verifying_hours`, separada das `stopped_hours`.
+- Revisão cruzada de `generated_files`, aria e espelho de quick:
+  - os leitores de `aria-label` precisam parecer uma consulta de nome acessível;
+  - o texto da chave vem do locale do commit pai quando a chave sai junto;
+  - uma regeneração depois de uma tarefa anterior mudar a fonte passa;
+  - uma fonte fora dos files é `scope_insufficient`;
+  - os registros de quick anteriores ao espelho entram nele uma vez (backfill);
+  - o `**/` respeita a fronteira de diretório.
+
 ### Arquivo gerado e nomes acessíveis no checkpoint (OxeSpace 15/11, Celular F3 #856, OxeCode F5 T22)
 
 - **`generated_files`:** `[{ file, source, test?, generator? }]`. Um commit que muda um arquivo gerado sem mudar as fontes dele desfaz o checkpoint (`generated_file`), com "edite a fonte e rode o gerador". Caso real: 14 strings escritas direto no `strings.xml`, e o teste do gerador reprovou primeiro no CI do PR.

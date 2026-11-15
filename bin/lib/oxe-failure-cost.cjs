@@ -90,19 +90,36 @@ function report(events, changes = [], options = {}) {
   for (const [run, l] of byRun) {
     for (let i = 1; i < l.length; i += 1) {
       const gap = at(l[i]) - at(l[i - 1]);
-      if (gap > gapMs) stops.push({ run, after: l[i - 1].type, task: key(l[i - 1]), minutes: Math.round(gap / 60000), from: l[i - 1].timestamp || null });
+      // OxeSpace 15/11: a gap after VerificationStarted is a verify waiting on the CI (remote), not a stall
+      if (gap > gapMs) stops.push({ run, after: l[i - 1].type, task: key(l[i - 1]), minutes: Math.round(gap / 60000), from: l[i - 1].timestamp || null, kind: /^Verification(Started|CheckStarted)$/.test(String(l[i - 1].type)) ? 'verifying' : 'stopped' });
     }
   }
   const fixes = (options.fixes && typeof options.fixes === 'object') ? options.fixes : {};
-  const rows = [...causes.values()].map((c) => ({ cause: c.cause, occurrences: c.occurrences, usd: round2(c.usd), tasks: [...c.tasks].sort(), crs: [...c.crs].sort(), fix: fixes[c.cause] || null }))
+  // OxeSpace 15/11: the fixes map is matched by the cause as printed, then by its parts — "CR constraint (no_progress)"
+  // tries "no_progress" and "constraint" — case-insensitive; the keys tried are reported (fix_keys)
+  const fixKeys = (cause) => {
+    const s = String(cause || '');
+    const inner = /\(([^)]+)\)\s*$/.exec(s);
+    const cls = /^CR\s+(\S+)/.exec(s);
+    return [...new Set([s, inner && inner[1], cls && cls[1]].filter(Boolean))];
+  };
+  const lowerFixes = new Map(Object.entries(fixes).map(([k, v]) => [k.toLowerCase(), v]));
+  const fixFor = (cause) => { for (const k of fixKeys(cause)) { const v = fixes[k] != null ? fixes[k] : lowerFixes.get(k.toLowerCase()); if (v != null) return v; } return null; };
+  const rows = [...causes.values()].map((c) => ({ cause: c.cause, occurrences: c.occurrences, usd: round2(c.usd), tasks: [...c.tasks].sort(), crs: [...c.crs].sort(), fix: fixFor(c.cause), fix_keys: fixKeys(c.cause) }))
     .sort((a, b) => b.usd - a.usd || b.occurrences - a.occurrences);
   const discarded = round2(rows.reduce((s, r) => s + r.usd, 0));
+  const pct = spent > 0 ? Math.round((discarded / spent) * 1000) / 10 : 0;
+  const hours = (list) => Math.round((list.reduce((s, x) => s + x.minutes, 0) / 60) * 10) / 10;
   return {
     since: options.since || null,
     spent_usd: round2(spent),
     discarded_usd: discarded,
-    discarded_share: spent > 0 ? Math.round((discarded / spent) * 1000) / 10 : 0,
-    stopped_hours: Math.round((stops.reduce((s, x) => s + x.minutes, 0) / 60) * 10) / 10,
+    // a percentage (kept for compatibility); the explicit forms make sums across worktrees unambiguous
+    discarded_share: pct,
+    discarded_share_pct: pct,
+    discarded_ratio: spent > 0 ? Math.round((discarded / spent) * 10000) / 10000 : 0,
+    stopped_hours: hours(stops.filter((s) => s.kind !== 'verifying')),
+    verifying_hours: hours(stops.filter((s) => s.kind === 'verifying')),
     causes: rows,
     stops: stops.sort((a, b) => b.minutes - a.minutes),
     crs: crs.map((c) => ({ id: c.id, class: c.class, status: c.status, tasks: c.tasks || [], summary: c.summary || '' })),
@@ -111,7 +128,7 @@ function report(events, changes = [], options = {}) {
 
 function render(r) {
   const lines = [
-    `Custo de falha${r.since ? ` desde ${r.since}` : ''}: US$ ${r.discarded_usd.toFixed(2)} descartados de US$ ${r.spent_usd.toFixed(2)} gastos (${r.discarded_share}%) · ${r.stopped_hours} h paradas`,
+    `Custo de falha${r.since ? ` desde ${r.since}` : ''}: US$ ${r.discarded_usd.toFixed(2)} descartados de US$ ${r.spent_usd.toFixed(2)} gastos (${r.discarded_share}%) · ${r.stopped_hours} h paradas${r.verifying_hours ? ` · ${r.verifying_hours} h em verify (CI)` : ''}`,
     '',
     '| Causa | Vezes | US$ | Tarefas | CRs | Conserto |',
     '|---|---|---|---|---|---|',
