@@ -55,6 +55,21 @@ describe('G40: frozen e2e act only after the app is ready', () => {
     const closed = "test('x', async () => {\n  const d = page.getByRole('dialog');\n  await d.getByRole('button').click();\n  await expect(d).toBeHidden();\n  const b = await page.locator('#main').boundingBox();\n});";
     assert.equal(r.overlayGeometryReads(closed).length, 0);
     assert.equal(r.overlayGeometryReads("test('x', async () => {\n  const m = page.locator('[data-test=user-menu]');\n  const b = await m.boundingBox();\n});").length, 1, 'a locator naming a menu counts');
+    // chat-f5 T12 (false positive live on 58cc988): a listbox opened and closed with Escape, then a toolbar measured
+    const f5 = [
+      "test('composer bar', async () => {",
+      "  const list = page.getByRole('listbox');",
+      "  await expect(list).toBeVisible();",
+      "  await page.keyboard.press('Escape');",
+      "  await resizeWindow(app, 900, 700);",
+      "  const box = await toolbar.locator('[data-ui=\"mode-switch\"]').boundingBox();",
+      '});',
+    ].join('\n');
+    assert.equal(r.overlayGeometryReads(f5).length, 0, 'Escape closes it');
+    assert.equal(r.overlayGeometryReads(f5.replace("  await page.keyboard.press('Escape');\n", '')).length, 0, 'the toolbar is not the listbox');
+    // OQ pq-07-17 (true positive): a locator derived from the dialog
+    const oq = "test('import map', async () => {\n  const dialog = page.getByRole('dialog');\n  const map = dialog.locator('.oq-import-map');\n  const b = await map.boundingBox();\n});";
+    assert.deepEqual(r.overlayGeometryReads(oq).map((f) => f.line), [4]);
     const doneDoc = { tasks: [{ id: 'T1', done: true, acceptance: ['A1'] }], acceptance_tests: [{ criterion: 'A1', files: ['e2e/x.spec.ts'] }] };
     assert.equal(r.overlayGeometryFrozenE2e('.', doneDoc, { readText: () => racy }).length, 0, 'owners all done: not read');
   });

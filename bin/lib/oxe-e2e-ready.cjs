@@ -283,7 +283,8 @@ const OVERLAY_RE = /getByRole\(\s*['"](dialog|alertdialog|menu|listbox|tooltip)[
 const GEOMETRY_RE = /\.boundingBox\(|getBoundingClientRect\(|toHaveCSS\(\s*['"](width|height|top|left|right|bottom|transform|translate|inset)['"]/;
 const ANIM_WAIT_RE = /getAnimations\(|\.finished\b|animationend|transitionend/;
 // the overlay closed (R45): what is measured after it is the page
-const OVERLAY_CLOSED_RE = /\.toBeHidden\(|\.not\.toBeVisible\(|toHaveCount\(\s*0\s*\)/;
+const OVERLAY_CLOSED_RE = /\.toBeHidden\(|\.not\.toBeVisible\(|toHaveCount\(\s*0\s*\)|\.press\(\s*['"]Escape['"]/;
+const ASSIGN_RE = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/;
 
 function overlayGeometryReads(text, options = {}) {
   const helpers = (options.helpers || []).map((h) => String(h).trim()).filter(Boolean);
@@ -297,10 +298,19 @@ function overlayGeometryReads(text, options = {}) {
     if (BLOCK_RE.test(l)) { overlay = null; continue; } // a test title is never an overlay
     if (ANIM_WAIT_RE.test(l) || (helperRe && helperRe.test(l)) || OVERLAY_CLOSED_RE.test(l)) { overlay = null; continue; }
     const om = OVERLAY_RE.exec(l);
-    if (om) overlay = { line: i + 1, text: l.trim().slice(0, 120) };
+    const assigned = ASSIGN_RE.exec(l);
+    if (om) overlay = { line: i + 1, text: l.trim().slice(0, 120), vars: new Set(assigned ? [assigned[1]] : []) };
+    // a locator derived from the overlay's variable is inside it too (`const row = dialog.locator(...)`)
+    else if (overlay && assigned && [...overlay.vars].some((v) => new RegExp(`(?<![\\w$])${v.replace(/\$/g, '\\$')}\\s*\\.`).test(l))) overlay.vars.add(assigned[1]);
     if (overlay && GEOMETRY_RE.test(l)) {
-      out.push({ line: i + 1, overlay: overlay.text, read: l.trim().slice(0, 120) });
-      overlay = null; // one finding per overlay
+      // R (chat-f5 T12): only a measurement OF the overlay counts — its locator inline, or a variable that derives
+      // from it; a toolbar measured while a listbox was open (and closed) is the page
+      const usesVar = [...overlay.vars].some((v) => new RegExp(`(?<![\\w$])${v.replace(/\$/g, '\\$')}\\s*[.)]`).test(l));
+      const inline = Boolean(om) || OVERLAY_RE.test(l.replace(/^[^=]*=/, ''));
+      if (usesVar || inline || (!overlay.vars.size && Boolean(om))) {
+        out.push({ line: i + 1, overlay: overlay.text, read: l.trim().slice(0, 120) });
+        overlay = null; // one finding per overlay
+      }
     }
   }
   return out;
