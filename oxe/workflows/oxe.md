@@ -66,14 +66,14 @@ Mapear o input para o workflow correto e executar ou orientar:
 | "valida / verifica" | **verify** |
 | "entrega / abre o PR / deploy / ship" | **`/oxe-ship`** (PR, CI e merge, deploy, close); "só commita" → **`/oxe-ship --local`** |
 | "achei um bug em produção / defeito depois do deploy" | **`/oxe-ship --defect "…" --origin US-n`** |
-| "muda o critério A3 / põe A8 na F2 / critério novo / fase nova" | seguir **`oxe/workflows/references/change-management.md`** (spec amend/add, program phase/criterion) |
+| "muda o critério A3 / põe A8 na F2 / critério novo / fase nova / tira ou junta tarefas / pausa / fecha pelo CI" | seguir **`oxe/workflows/references/change-management.md`** (tabela pedido → comando; sempre `--dry-run` antes, quando houver) |
 | "decide a proposta técnica / RFC" | **`/oxe-discuss --rfc`** |
 | "configura Jira / Azure DevOps / ALM" | **`/oxe-alm`** |
 | "onde estou na jornada / mapa" | **`oxe-cc status --journey`** |
 | "milestone / release / versão" | **`/oxe-session milestone`** |
 | "trilha paralela / workstream" | **`/oxe-session workstream`** |
 | "snapshot / checkpoint" | **`/oxe-execute --checkpoint "<nome>"`** |
-| "recuperação / erro / algo quebrou" | **`/oxe-execute --deep-diagnosis`** |
+| "recuperação / erro / algo quebrou" | primeiro **`oxe-cc status --json`**: o próximo passo nomeia a saída (pausa, checkpoint falho, CR aberto, adiamento, verify vermelho). Sem estado de falha reconhecido → **`/oxe-execute --deep-diagnosis`** |
 | "debug / teste falhando" | **`/oxe-execute --debug`** |
 | "obs / observação / nota" | **`/oxe-execute --note "..."`** |
 | "atualiza / update OXE" | **update** |

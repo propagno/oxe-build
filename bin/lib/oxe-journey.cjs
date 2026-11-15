@@ -19,8 +19,10 @@ function readConfig(target) {
 /** `delivery: "pr"` or `{ mode: "pr", deploy_env: "staging" }`; anything else keeps the local close (the default). */
 function deliveryMode(cfg) {
   const d = cfg && cfg.delivery;
-  if (d === 'pr' || (d && typeof d === 'object' && d.mode === 'pr')) return { mode: 'pr', deploy_env: d && typeof d === 'object' && d.deploy_env ? String(d.deploy_env) : null };
-  return { mode: 'local', deploy_env: null };
+  // close: "ci" (OxeSpace 15/11, user decision): the phase closes on its green CI (program close --by-ci), no final verify
+  const close = d && typeof d === 'object' && d.close === 'ci' ? 'ci' : 'verify';
+  if (d === 'pr' || (d && typeof d === 'object' && d.mode === 'pr')) return { mode: 'pr', deploy_env: d && typeof d === 'object' && d.deploy_env ? String(d.deploy_env) : null, close };
+  return { mode: 'local', deploy_env: null, close };
 }
 
 function almState(target, activeSession, cfg) {
@@ -195,4 +197,30 @@ function journey(target, next, activeSession = null) {
   };
 }
 
-module.exports = { upstreamStep, deliveryStep, deliveryMode, rfcStep, journey, STAGES, STEP_STAGE };
+/**
+ * `delivery.close: "ci"`: with the phase's work done, the steps are the delivery (PR, merge, deploy — when
+ * mode is pr), then a CI run attached to the phase, then `program close --by-ci`. Null when the config closes by verify.
+ */
+function ciCloseStep(target, activeSession, phase, ctx = {}) {
+  const cfg = ctx.cfg || readConfig(target);
+  const mode = deliveryMode(cfg);
+  if (mode.close !== 'ci') return null;
+  const o = op();
+  let work = null;
+  try { work = o.runtimePhaseWork(target, activeSession); } catch { work = null; }
+  if (!work || !work.complete) return null;
+  if (mode.mode === 'pr') {
+    const d = deliveryStep(target, activeSession, phase, { ...ctx, cfg });
+    if (d) return d;
+  }
+  const label = ctx.label || phase.id;
+  const base = { artifacts: ['.oxe/program/PROGRAM.json', '.oxe/program/ci.ndjson'], ...(ctx.program ? { program: ctx.program } : {}) };
+  const paths = o.resolveRuntimeArtifactPaths(target, activeSession);
+  const programDir = paths.programDir || path.join(target, '.oxe', 'program');
+  let attached = [];
+  try { attached = fs.readFileSync(path.join(programDir, 'ci.ndjson'), 'utf8').split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((r) => r && r.kind === 'ci' && (!r.phase || r.phase === phase.id)); } catch { attached = []; }
+  if (!attached.length) return { step: 'ci-attach', cursorCmd: 'oxe-cc runtime ci --attach <run|url>', reason: `${label}: trabalho da fase pronto — anexe o run de CI verde que contém a fase (o dos PRs dela, ou o de main depois do merge); o close é pelo CI, sem verify final.`, ...base };
+  return { step: 'program-close', cursorCmd: 'oxe-cc runtime program close --by-ci --by <papel> --reason "…"', reason: `${label}: CI anexado (${attached[attached.length - 1].run}) — feche a fase pelo CI (confere que o run está verde e contém o HEAD; dossiê, sign-offs e drift continuam valendo).`, ...base };
+}
+
+module.exports = { upstreamStep, deliveryStep, deliveryMode, ciCloseStep, rfcStep, journey, STAGES, STEP_STAGE };

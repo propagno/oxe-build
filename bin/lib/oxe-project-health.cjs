@@ -2208,6 +2208,10 @@ function suggestProgramStep(target, activeSession, activeRun) {
     };
   }
   if (phase.status === 'executing') {
+    // delivery.close "ci": the work done, the phase closes on its CI (no final verify)
+    let ciClose = null;
+    try { ciClose = require('./oxe-journey.cjs').ciCloseStep(target, activeSession, phase, { label, program }); } catch { ciClose = null; }
+    if (ciClose) return ciClose;
     return { step: 'execute', cursorCmd: '/oxe-execute', reason: `${label}: em execução — concluir e verificar.`, artifacts: programArtifacts, program };
   }
   if (phase.status === 'verifying') {
@@ -2264,8 +2268,9 @@ function suggestNextStep(target, cfg = {}) {
   if (!has(p.oxe) || !has(p.state)) {
     return {
       step: 'scan',
-      cursorCmd: '/oxe-scan',
-      reason: 'Pasta .oxe/ ou STATE.md ausente — inicialize com oxe-cc init-oxe e rode o primeiro scan',
+      // 1.21.2: never a legacy command as the first step (/oxe-scan is /oxe-spec --refresh now)
+      cursorCmd: 'oxe-cc init-oxe',
+      reason: 'Pasta .oxe/ ou STATE.md ausente — inicialize com oxe-cc init-oxe; depois /oxe diz o próximo passo',
       artifacts: ['.oxe/'],
     };
   }
@@ -2291,6 +2296,12 @@ function suggestNextStep(target, cfg = {}) {
     };
   }
 
+  // 1.21.2: guided recovery — a pause, a failed checkpoint, an open spec gap, a deferral or a red verify comes first,
+  // with the exact command out of it (the happy path below assumed nothing had failed)
+  let recovery = null;
+  try { recovery = require('./oxe-recovery.cjs').recoveryStep(target, activeSession); } catch { recovery = null; }
+  if (recovery) return recovery;
+
   // 1.21.2: the upstream of the guided journey — MCP queue, grill, spec approval, ALM stories/tasks.
   let upstream = null;
   try { upstream = require('./oxe-journey.cjs').upstreamStep(target, activeSession, cfg); } catch { upstream = null; }
@@ -2312,8 +2323,8 @@ function suggestNextStep(target, cfg = {}) {
   if (!mapsComplete && !has(p.quick) && !has(p.plan)) {
     return {
       step: 'scan',
-      cursorCmd: '/oxe-scan',
-      reason: 'Mapas do codebase incompletos e sem QUICK.md — atualize o contexto com scan',
+      cursorCmd: '/oxe-spec --refresh',
+      reason: 'Mapas do codebase incompletos e sem QUICK.md — atualize o contexto (/oxe-spec --refresh)',
       artifacts: ['.oxe/codebase/'],
     };
   }

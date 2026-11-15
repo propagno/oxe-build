@@ -12633,6 +12633,7 @@ module.exports = {
   runtimePlanVerifyPrune,
   runtimePlanTaskSupersede,
   runtimePauseHold,
+  isClosedPhaseRun,
   pruneVerifyCommand,
   isExternallyDelivered,
   runtimeReuseAttempt,
