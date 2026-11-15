@@ -143,9 +143,15 @@ function alreadyWrapped(runner, command) {
   const cmd = normalize(command);
   if (!prefix) return false;
   if (cmd.startsWith(prefix)) return true;
-  const script = (s) => { const m = /(?:^|\s)([^\s]+\.(?:[cm]?js|ts|sh|ps1|py))(?=\s|$)/.exec(s); return m ? m[1].split('/').pop() : null; };
-  const runnerScript = script(prefix);
-  return Boolean(runnerScript && script(cmd) === runnerScript);
+  const SCRIPT_RE = /(?:^|\s)([^\s]+\.(?:[cm]?js|ts|sh|ps1|py))(?=\s|$)/g;
+  const scripts = (s) => [...s.matchAll(SCRIPT_RE)].map((m) => m[1]);
+  const runnerPath = scripts(prefix)[0];
+  if (!runnerPath) return false;
+  const base = runnerPath.split('/').pop();
+  // cross-review 15/11: any segment of a chain (`node prep.mjs && node …/remote-verify.mjs -- …`) counts; a generic name
+  // (index.js, run.js…) matches only by its full path, never by the basename alone
+  const generic = /^(index|run|main|cli|start|script)\.[cm]?[jt]s$/i.test(base);
+  return scripts(cmd).some((p) => (generic ? p === runnerPath : p.split('/').pop() === base));
 }
 
 /** Verification checks (same shape as the runtime's AcceptanceCheck) for the gates of one moment. */

@@ -246,6 +246,23 @@ describe('OXB-078: an orphaned gate CR can be closed', () => {
     assert.deepEqual(r.open.map((c) => c.gate), ['lint']);
   });
 
+  it('the close keeps the CR of an IMPLICIT gate (stub-check) open, and a red implicit gate blocks it (cross-review 15/11)', () => {
+    const { dir } = setup();
+    const programDir = path.join(dir, '.oxe', 'program');
+    fs.mkdirSync(programDir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '.oxe', 'config.json'), '{}');
+    change.recordChange({ programDir, program: null, plan: { tasks: [] }, class: 'constraint', summary: "gate do projeto 'stub-check' reprovou", by: 'phase_gate:stub-check', gate: 'stub-check' });
+    const ctx = {
+      phase: { id: 'F1' },
+      state: { phases: [{ id: 'F1', base_commit: 'abc1234' }] },
+      run: { run_id: 'r1', verification_gates: { passed: [], failed: ['stub-check'] } },
+      paths: { plan: path.join(dir, '.oxe', 'PLAN.md'), programDir },
+    };
+    const out = op.programCloseGateReasons(dir, null, ctx);
+    assert.equal(change.listChanges(programDir).find((c) => c.gate === 'stub-check').status, 'open', 'not withdrawn as "gate removed"');
+    assert.ok(out.reasons.some((r) => /vermelho no último verify: stub-check/.test(r)), out.reasons.join(' | '));
+  });
+
   it('runtime feedback withdraw CR-n --by --reason, logged; refused without a reason or for a closed CR', () => {
     const { dir } = setup();
     const programDir = path.join(dir, '.oxe', 'program');

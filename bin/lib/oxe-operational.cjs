@@ -5222,15 +5222,24 @@ function programCloseGateReasons(projectRoot, activeSession, ctx) {
     plan = null;
   }
   const gates = gatesLib.readPhaseGates({ phase_gates: plan && plan.phaseGates }, config);
+  // cross-review 15/11: the verify runs the IMPLICIT gates too (stub-check, nfr-*, deps, decision-*); the close read
+  // only the declared ones and withdrew their open CRs as "gate removed from the plan"
+  let implicit = [];
+  try { implicit = implicitPhaseGates(projectRoot, ctx.state, ctx.phase && ctx.phase.id, config) || []; } catch { implicit = []; }
   // OXB-078: a CR of a gate no longer declared is withdrawn before the close counts open CRs.
   try {
     const orphanDir = ctx.paths.programDir || path.join(projectRoot, '.oxe', 'program');
-    const withdrawn = require('./oxe-change.cjs').reconcileChanges(orphanDir, ctx.phase.id, plan, [], { declaredGates: gates.map((g) => g.id) });
+    const withdrawn = require('./oxe-change.cjs').reconcileChanges(orphanDir, ctx.phase.id, plan, [], { declaredGates: [...gates, ...implicit].map((g) => g.id) });
     for (const id of withdrawn.resolved) appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', run_id: ctx.run && ctx.run.run_id, payload: { id, reason: 'gate_removed' } });
   } catch { /* auxiliar */ }
+  const ran = (ctx.run && ctx.run.verification_gates) || null;
+  // an implicit gate RED in the last verify blocks the close like a declared one (one that did not run does not: a
+  // verify of an older version never ran it)
+  for (const g of implicit) {
+    if (g && g.when === 'phase_verify' && ran && (ran.failed || []).includes(g.id)) out.reasons.push(`gate do projeto vermelho no último verify: ${g.id}`);
+  }
   if (!gates.length) return out;
   const verifyGates = gates.filter((g) => g.when === 'phase_verify');
-  const ran = (ctx.run && ctx.run.verification_gates) || null;
   for (const g of verifyGates) {
     if (!ran || !(ran.passed || []).includes(g.id)) {
       out.reasons.push(ran && (ran.failed || []).includes(g.id)
@@ -5306,22 +5315,32 @@ function runtimeCiAttach(projectRoot, activeSession, options = {}) {
   // was attached (the close passed anyway; `feedback resolve --no-amendment` is for spec_gap). A GREEN attached run
   // resolves the open CRs of this phase raised by its ci gates — the run is the proof the gate asked for.
   try {
-    const status = gatesLib.ciRunStatus(record, { spawn: options.spawn });
-    if (status && status.ok) {
-      const config = readProjectConfig(projectRoot) || {};
-      let planDoc = null;
-      try { planDoc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { planDoc = null; }
-      const ciGates = new Set([...gatesLib.readPhaseGates(planDoc, config), ...implicitPhaseGates(projectRoot, program, phase, config)].filter((g) => g && g.kind === 'ci').map((g) => g.id));
-      const changeLib = require('./oxe-change.cjs');
-      const resolved = [];
-      for (const cr of changeLib.listChanges(programDir)) {
-        if (cr.status !== 'open' || !cr.gate || !ciGates.has(cr.gate) || (phase && cr.phase && cr.phase !== phase)) continue;
-        changeLib.setChangeStatus(programDir, cr.id, 'resolved', { resolution: `run de CI ${record.run} verde anexado (gate ${cr.gate})`, by: 'ci_attach' });
-        appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', payload: { id: cr.id, status: 'resolved', by: 'ci_attach', run: String(record.run) } });
-        resolved.push(cr.id);
-      }
-      if (resolved.length) return { ...record, resolved_changes: resolved };
+    const config = readProjectConfig(projectRoot) || {};
+    let planDoc = null;
+    try { planDoc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { planDoc = null; }
+    const ciGates = [...gatesLib.readPhaseGates(planDoc, config), ...implicitPhaseGates(projectRoot, program, phase, config)].filter((g) => g && g.kind === 'ci');
+    const lower = (s) => String(s || '').toLowerCase();
+    // cross-review 15/11: a gate's own repo counts — the run is checked in the gate's repo when the attach names none,
+    // and a run of one repo never settles the CR of a gate of another (multi-repo phases)
+    const statusByRepo = new Map();
+    const greenFor = (gate) => {
+      if (record.repo && gate.repo && lower(record.repo) !== lower(gate.repo)) return false;
+      const repo = record.repo || gate.repo || null;
+      if (!statusByRepo.has(lower(repo))) statusByRepo.set(lower(repo), gatesLib.ciRunStatus({ ...record, repo }, { spawn: options.spawn }));
+      const st = statusByRepo.get(lower(repo));
+      return Boolean(st && st.ok);
+    };
+    const changeLib = require('./oxe-change.cjs');
+    const resolved = [];
+    for (const cr of changeLib.listChanges(programDir)) {
+      if (cr.status !== 'open' || !cr.gate || (phase && cr.phase && cr.phase !== phase)) continue;
+      const gate = ciGates.find((g) => g.id === cr.gate);
+      if (!gate || !greenFor(gate)) continue;
+      changeLib.setChangeStatus(programDir, cr.id, 'resolved', { resolution: `run de CI ${record.run} verde anexado (gate ${cr.gate})`, by: 'ci_attach' });
+      appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', payload: { id: cr.id, status: 'resolved', by: 'ci_attach', run: String(record.run) } });
+      resolved.push(cr.id);
     }
+    if (resolved.length) return { ...record, resolved_changes: resolved };
   } catch { /* auxiliar: the attach itself stands */ }
   return record;
 }
@@ -11717,6 +11736,7 @@ module.exports = {
   runtimePlanBuild,
   runtimeSpecStress,
   implicitPhaseGates,
+  programCloseGateReasons,
   runtimeNfr,
   runtimeWaive,
   runtimeRepair,

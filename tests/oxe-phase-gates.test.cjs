@@ -74,6 +74,15 @@ describe('phase gates: declaração', () => {
     assert.equal(checks[0].command, 'node C:\\deps\\scripts\\remote-verify.mjs -- node gradle152.mjs test');
     assert.equal(checks[1].command, 'node "D:/elsewhere/remote-verify.mjs" -- npm test', 'same runner script elsewhere: not wrapped');
     assert.equal(checks[2].command, 'node C:/deps/scripts/remote-verify.mjs -- node gradle152.mjs lint', 'a plain gate is still wrapped');
+    // a chain where the runner script is not first; a generic runner name matches only by its full path
+    const chained = gates.gateChecks([{ id: 'c', when: 'phase_verify', command: 'node scripts/prep.mjs && node C:/deps/scripts/remote-verify.mjs -- npm test' }], 'phase_verify', { defaultRunner: remote });
+    assert.equal(chained[0].command, 'node scripts/prep.mjs && node C:/deps/scripts/remote-verify.mjs -- npm test');
+    const generic = gates.gateChecks([
+      { id: 'g1', when: 'phase_verify', command: 'node src/index.js --check' },
+      { id: 'g2', when: 'phase_verify', command: 'node tools/lock/index.js -- npm test' },
+    ], 'phase_verify', { defaultRunner: 'node tools/lock/index.js -- {command}' });
+    assert.equal(generic[0].command, 'node tools/lock/index.js -- node src/index.js --check', 'another index.js is wrapped');
+    assert.equal(generic[1].command, 'node tools/lock/index.js -- npm test', 'the same full path is not');
   });
 
   it('o lint avisa quando o repo tem gates e o plano não declara nenhum', () => {
@@ -136,6 +145,23 @@ describe('phase gates: CI anexado', () => {
     assert.deepEqual(green.resolved_changes, [cr.id]);
     assert.equal(change.listChanges(pdir).find((c) => c.id === cr.id).status, 'resolved');
     assert.equal(change.listChanges(pdir).find((c) => c.id === other.id).status, 'open', 'a non-ci gate CR is not touched');
+  });
+
+  it('multi-repo: the run is checked in the gate repo, and a run of one repo never settles another repo gate', () => {
+    const tmp = project({ ...basePlan, phase_gates: [{ id: 'ci-android', kind: 'ci', repo: 'org/celular' }, { id: 'ci-api', kind: 'ci', repo: 'org/api' }] });
+    const pdir = path.join(tmp, '.oxe', 'program');
+    const mk = (g) => change.recordChange({ programDir: pdir, program: null, plan: null, class: 'constraint', summary: `gate do projeto '${g}' reprovou`, by: `phase_gate:${g}`, gate: g }).cr;
+    const android = mk('ci-android');
+    const api = mk('ci-api');
+    const seen = [];
+    const spawn = (cmd, args) => { seen.push(args[args.indexOf('-R') + 1]); return { status: 0, stdout: JSON.stringify({ status: 'completed', conclusion: 'success' }), stderr: '' }; };
+    const r = op.runtimeCiAttach(tmp, null, { run: 'https://github.com/org/celular/actions/runs/77', spawn });
+    assert.deepEqual(r.resolved_changes, [android.id]);
+    assert.equal(change.listChanges(pdir).find((c) => c.id === api.id).status, 'open', 'org/api gate untouched by an org/celular run');
+    // an id with no repo: each gate is checked in its own repo
+    const r2 = op.runtimeCiAttach(tmp, null, { run: '78', spawn });
+    assert.deepEqual(r2.resolved_changes, [api.id]);
+    assert.ok(seen.includes('org/api'));
   });
 });
 
