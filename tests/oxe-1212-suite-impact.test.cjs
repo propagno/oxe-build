@@ -160,7 +160,8 @@ describe('G38: a verify that holds a test only a later task turns green', () => 
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-g39-'));
     dirs.push(dir);
     const w = (rel, text) => { fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); fs.writeFileSync(path.join(dir, rel), text); };
-    w('shared/ipc.ts', "export const IPC_CHANNELS = { agentActivity: { list: 'l', detail: 'd', badge: 'b' } };\n");
+    // a comment with an apostrophe inside the literal never breaks the scan (cross-review 15/11)
+    w('shared/ipc.ts', "export const IPC_CHANNELS = { agentActivity: {\n  // user's activity channels\n  list: 'l', detail: 'd', badge: 'b' } };\n");
     w('tests/acceptance/f3/a10.test.ts', "expect(IPC_CHANNELS.agentActivity).toEqual({ list: 'l', detail: 'd', badge: 'b' })\n");
     w('tests/unit/loose.test.ts', "expect(IPC_CHANNELS.agentActivity).toMatchObject({ list: 'l' })\n");
     w('tests/polish/pq07.test.ts', "expect(IPC_CHANNELS.agentActivity.changed).toBe('agent-activity:changed')\nexpect(IPC_CHANNELS.agentActivity.list).toBe('l')\n");

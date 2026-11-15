@@ -322,7 +322,11 @@ function pinnedByExisting(root, planDoc, options = {}) {
     let q = null;
     for (let i = at; i < text.length && i < at + 65536; i += 1) {
       const ch = text[i];
+      const nx = text[i + 1];
       if (q) { if (ch === '\\') { i += 1; continue; } if (ch === q) q = null; continue; }
+      // comments first: an apostrophe in `// user's channels` never opens a string (cross-review 15/11)
+      if (ch === '/' && nx === '/') { const e = text.indexOf('\n', i); i = e < 0 ? text.length : e; continue; }
+      if (ch === '/' && nx === '*') { const e = text.indexOf('*/', i + 2); i = e < 0 ? text.length : e + 1; continue; }
       if (ch === '"' || ch === "'" || ch === '`') { q = ch; continue; }
       if (ch === '{') depth += 1;
       else if (ch === '}') { depth -= 1; if (depth === 0) return text.slice(at, i + 1); }
@@ -384,7 +388,8 @@ function pinnedByExisting(root, planDoc, options = {}) {
     for (const [file, parents] of filesWithParent) {
       if (!parents.has(c.parent)) continue;
       // a mutable test in the task's own scope (or an ancestor's) is the task's to update — not a conflict
-      if (scope.has(file) && !/(^|\/)acceptance\//i.test(file)) continue;
+      const inScope = scope.has(file) || [...scope].some((s) => s && file.startsWith(`${s.replace(/\/+$/, '')}/`));
+      if (inScope && !/(^|\/)acceptance\//i.test(file)) continue;
       const text = read(file);
       for (const m of text.matchAll(re)) {
         const open = m.index + m[0].length - 1;
