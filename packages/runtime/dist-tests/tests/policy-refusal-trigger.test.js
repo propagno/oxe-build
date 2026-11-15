@@ -55,6 +55,28 @@ const refusal = () => Object.assign(new Error('API Error: safeguards flagged thi
         const u = events.find((e) => e.type === 'executor_usage')?.detail;
         strict_1.default.deepEqual(u.policy_trigger_candidates?.map((t) => t.target), ['Conversation.kt', 'ThreadScreen.kt']);
     });
+    (0, node_test_1.test)('the outputs are saved verbatim next to the attempt log; the hint says the trigger is not in the pack (OxeChat F4 T12)', async () => {
+        const dir = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-policy-out-'));
+        try {
+            fs_1.default.writeFileSync(path_1.default.join(dir, 'thread-fixtures.ts'), "export const rows = [{ phase: 'reasoning', text: 'linha 171' }];\n");
+            let turn = 0;
+            const exec = new llm_task_executor_1.LlmTaskExecutor({ baseUrl: '', apiKey: '', model: '', maxTurns: 4 }, null, () => { }, async () => {
+                turn += 1;
+                if (turn === 1)
+                    return { content: '', finish_reason: 'tool_calls', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'thread-fixtures.ts' }) } }] };
+                throw refusal();
+            });
+            const result = await exec.execute(node, { workspace_id: 'w', strategy: 'inplace', isolation_level: 'shared', branch: null, base_commit: null, root_path: dir, ttl_minutes: 5 }, 'run-x', 3);
+            const saved = path_1.default.join(dir, '.oxe', 'runs', 'run-x', 'attempts', 'T9-3.policy-tools.txt');
+            strict_1.default.ok(fs_1.default.existsSync(saved), 'saved next to the attempt log');
+            strict_1.default.match(fs_1.default.readFileSync(saved, 'utf8'), /===== read_file thread-fixtures\.ts \(\d+ chars\) =====[\s\S]*phase: 'reasoning'/);
+            strict_1.default.match(result.output, /O gatilho veio de saídas de ferramenta do turno anterior, salvas na íntegra em \.oxe\/runs\/run-x\/attempts\/T9-3\.policy-tools\.txt — não do pack/);
+            strict_1.default.doesNotMatch(result.output, /tire o trecho que dispara a recusa/);
+        }
+        finally {
+            fs_1.default.rmSync(dir, { recursive: true, force: true });
+        }
+    });
     (0, node_test_1.test)('at the first request: the trigger is in the starting prompt', async () => {
         const { result } = await run(async () => { throw refusal(); });
         strict_1.default.equal(result.failure_class, 'policy');

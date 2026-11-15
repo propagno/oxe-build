@@ -57,6 +57,27 @@ describe('policy refusal names its likely trigger', () => {
     assert.deepEqual(u.policy_trigger_candidates?.map((t) => t.target), ['Conversation.kt', 'ThreadScreen.kt']);
   });
 
+  test('the outputs are saved verbatim next to the attempt log; the hint says the trigger is not in the pack (OxeChat F4 T12)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-policy-out-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'thread-fixtures.ts'), "export const rows = [{ phase: 'reasoning', text: 'linha 171' }];\n");
+      let turn = 0;
+      const exec = new LlmTaskExecutor({ baseUrl: '', apiKey: '', model: '', maxTurns: 4 }, null, () => {}, async () => {
+        turn += 1;
+        if (turn === 1) return { content: '', finish_reason: 'tool_calls', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'thread-fixtures.ts' }) } }] };
+        throw refusal();
+      });
+      const result = await exec.execute(node, { workspace_id: 'w', strategy: 'inplace', isolation_level: 'shared', branch: null, base_commit: null, root_path: dir, ttl_minutes: 5 }, 'run-x', 3);
+      const saved = path.join(dir, '.oxe', 'runs', 'run-x', 'attempts', 'T9-3.policy-tools.txt');
+      assert.ok(fs.existsSync(saved), 'saved next to the attempt log');
+      assert.match(fs.readFileSync(saved, 'utf8'), /===== read_file thread-fixtures\.ts \(\d+ chars\) =====[\s\S]*phase: 'reasoning'/);
+      assert.match(result.output, /O gatilho veio de saídas de ferramenta do turno anterior, salvas na íntegra em \.oxe\/runs\/run-x\/attempts\/T9-3\.policy-tools\.txt — não do pack/);
+      assert.doesNotMatch(result.output, /tire o trecho que dispara a recusa/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('at the first request: the trigger is in the starting prompt', async () => {
     const { result } = await run(async () => { throw refusal(); });
     assert.equal(result.failure_class, 'policy');

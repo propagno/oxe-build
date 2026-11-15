@@ -68,7 +68,7 @@ describe('pausa pedida de fora (runtime pause)', () => {
       async execute(): Promise<TaskResult> {
         calls += 1;
         paused = true; // pause requested while attempt 1 runs; attempt 1 fails
-        return { success: false, failure_class: 'logic', evidence: [], output: 'falhou' };
+        return { success: false, failure_class: 'test', evidence: [], output: 'falhou' };
       },
     };
     const events: OxeEvent[] = [];

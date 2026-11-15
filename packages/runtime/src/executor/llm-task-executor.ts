@@ -276,6 +276,9 @@ export class LlmTaskExecutor implements TaskExecutor {
     // OxeSpace 15/11 (Celular F3 T9): what the previous turn added to the prompt — a policy refusal names it, so the
     // trigger can be located (a tool result is the only new content between two requests)
     let lastTurnTools: Array<{ tool: string; target: string | null; chars: number }> = [];
+    // OxeSpace 15/11 (OxeChat F4 T12, US$ 18.69): the verbatim outputs of that turn — a refusal triggered by a tool
+    // result (a grep over fixtures) cannot be located from names and sizes alone
+    let lastTurnOutputs: Array<{ tool: string; target: string | null; content: string }> = [];
     for (; turn < maxTurns; turn++) {
       this.emit({ type: 'turn_start', nodeId: node.id, attempt, detail: { turn } });
       // OXB-026: the last turn finishes and reports; the runtime runs the task's verify itself afterwards.
@@ -340,9 +343,24 @@ export class LlmTaskExecutor implements TaskExecutor {
           ? `\n\nConteúdo novo desde a requisição anterior (turno ${turn}): ${lastTurnTools.map((t) => `${t.tool}${t.target ? ` ${t.target}` : ''} (${t.chars} chars)`).join(' · ')}`
           : kind === 'policy' ? '\n\nA recusa veio na primeira requisição: o gatilho está no prompt inicial.' : '';
         if (kind === 'policy') usage.policy_trigger_candidates = lastTurnTools;
-        const out = kind === 'policy'
-          ? `${errMsg}${trail}\n\nRecusa da política de uso do modelo: não há nova tentativa automática. Veja o prompt com oxe-cc runtime execute --task ${node.id} --print-prompt e tire o trecho que dispara a recusa (um fixture, um snippet). Se parecer falso positivo, uma única nova tentativa: oxe-cc runtime execute --retry-policy-once.`
-          : errMsg;
+        // the outputs themselves, next to the attempt log (attempts/<Tn>-<k>.policy-tools.txt), capped at 2 MB
+        let savedOutputs: string | null = null;
+        if (kind === 'policy' && lastTurnOutputs.length) {
+          try {
+            const file = path.join(cwd, '.oxe', 'runs', runId || 'run', 'attempts', `${node.id}-${attempt}.policy-tools.txt`);
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            const body = lastTurnOutputs.map((o) => `===== ${o.tool}${o.target ? ` ${o.target}` : ''} (${o.content.length} chars) =====\n${o.content}`).join('\n\n');
+            fs.writeFileSync(file, body.length > 2_000_000 ? `${body.slice(0, 2_000_000)}\n…(cortado em 2 MB)` : body, 'utf8');
+            savedOutputs = path.relative(cwd, file).replace(/\\/g, '/');
+          } catch { savedOutputs = null; }
+        }
+        // a trigger from tool output is not in the pack: "remove the passage from the pack" cannot work there (T12)
+        const hint = kind !== 'policy'
+          ? ''
+          : lastTurnTools.length
+            ? `\n\nRecusa da política de uso do modelo: não há nova tentativa automática. O gatilho veio de saídas de ferramenta do turno anterior${savedOutputs ? `, salvas na íntegra em ${savedOutputs}` : ''} — não do pack. Uma nova tentativa começa um contexto novo (o pack mais o que ficou na árvore), sem essas saídas: oxe-cc runtime execute --retry-policy-once. Se a mesma busca voltar a ler o trecho, restrinja o escopo da tarefa (files) para não varrer fixtures.`
+            : `\n\nRecusa da política de uso do modelo: não há nova tentativa automática. Veja o prompt com oxe-cc runtime execute --task ${node.id} --print-prompt e tire o trecho que dispara a recusa (um fixture, um snippet). Se parecer falso positivo, uma única nova tentativa: oxe-cc runtime execute --retry-policy-once.`;
+        const out = kind === 'policy' ? `${errMsg}${trail}${hint}` : errMsg;
         return done({ success: false, failure_class: failureClass, evidence: evidencePaths, output: out });
       }
       usage.turns += 1;
@@ -387,6 +405,7 @@ export class LlmTaskExecutor implements TaskExecutor {
         const res = [...concurrentResults, ...serialResults][i];
         return { tool: tc.function.name, target, chars: String(res?.content ?? '').length };
       });
+      lastTurnOutputs = [...concurrent, ...serial].map((tc, i) => ({ tool: tc.function.name, target: lastTurnTools[i] ? lastTurnTools[i].target : null, content: String([...concurrentResults, ...serialResults][i]?.content ?? '') }));
 
       // OXB-196: if run_command was invoked, check if any in-scope file was modified, created, or deleted on disk
       const ranCommand = [...concurrent, ...serial].some((tc) => tc.function.name === 'run_command');
