@@ -14,7 +14,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
-const MISSING_TARGET_RE = /cannot find module|failed to resolve import|does the file exist|enoent|no such file|could not resolve|module not found|não encontrad|cannot open file|file not found|not found/i;
+const MISSING_TARGET_RE = /cannot find module|modulenotfounderror|no module named|failed to resolve import|does the file exist|enoent|no such file|could not resolve|module not found|não encontrad|cannot open file|file not found|not found/i;
 
 function scrubbedEnv(env = process.env) {
   const out = {};
@@ -65,10 +65,14 @@ const TOOL_ERROR_RE = /Must use|Unknown (option|argument)|command not found|is n
 
 /** A target and its directories, with `/` separators (Windows prints `src\design\icons`). */
 function targetForms(file, projectRoot = null) {
-  const norm = String(file).replace(/\\/g, '/');
+  const norm = String(typeof file === 'string' ? file : (file && file.path) || file).replace(/\\/g, '/');
   const forms = [norm];
-  const base = path.posix.basename(norm).replace(/\.(c|m)?[jt]sx?$/, '');
+  const base = path.posix.basename(norm).replace(/\.(?:(?:c|m)?[jt]sx?|py|kts?|java|rs|go|rb|cs)$/i, '');
   if (base.length > 2) forms.push(base);
+  if (/\.py$/i.test(norm)) {
+    const dotted = norm.replace(/^\.\//, '').replace(/\.py$/i, '').replace(/\/__init__$/i, '').replace(/\//g, '.');
+    if (dotted.length > 2) forms.push(dotted);
+  }
   // OXB-040: a missing target DIRECTORY ("ENOENT scandir src\design\icons") is the right red too — only directories
   // that do not exist yet (an existing `src/design` in a message proves nothing).
   let dir = path.posix.dirname(norm);
@@ -181,6 +185,11 @@ function splitSegments(command) {
   let quote = null;
   for (let i = 0; i < command.length; i += 1) {
     const ch = command[i];
+    if (quote === '"' && ch === '\\' && i + 1 < command.length) {
+      current += ch + command[i + 1];
+      i += 1;
+      continue;
+    }
     if (quote) {
       if (ch === quote) quote = null;
     } else if (ch === '"' || ch === "'") {
@@ -203,7 +212,7 @@ function splitSegments(command) {
  */
 /** `'…'` used as a shell argument (not an apostrophe inside double quotes). */
 function hasSingleQuotedArgument(command) {
-  const outsideDouble = String(command || '').replace(/"[^"]*"/g, '""');
+  const outsideDouble = String(command || '').replace(/"(?:\\.|[^"\\])*"/g, '""');
   return /(^|\s)'[^']*'(\s|$)/.test(outsideDouble);
 }
 
@@ -222,10 +231,18 @@ function treeHash(projectRoot) {
   const h = crypto.createHash('sha256');
   h.update(String(head || 'no-head').trim());
   h.update(git(projectRoot, ['diff', 'HEAD', '--binary', '--', '.', ':(exclude).oxe']) || '');
-  const untracked = (git(projectRoot, ['ls-files', '--others', '--exclude-standard', '--', '.', ':(exclude).oxe']) || '').split('\n').map((l) => l.trim()).filter(Boolean).sort();
+  const rawUntracked = git(projectRoot, ['-c', 'core.quotePath=false', 'ls-files', '-z', '--others', '--exclude-standard', '--', '.', ':(exclude).oxe']) || '';
+  const untracked = rawUntracked.split('\0').filter(Boolean).sort();
   if (untracked.length) {
-    h.update(untracked.join('\n'));
-    h.update(git(projectRoot, ['hash-object', '--stdin-paths'], untracked.join('\n')) || '');
+    h.update(untracked.join('\0'));
+    const stdinClean = untracked.filter((p) => !p.includes('\n') && !p.includes('\r'));
+    const blobs = stdinClean.length ? git(projectRoot, ['hash-object', '--stdin-paths'], `${stdinClean.join('\n')}\n`) : '';
+    if (blobs) h.update(blobs);
+    else {
+      for (const rel of untracked) {
+        try { h.update(crypto.createHash('sha256').update(fs.readFileSync(path.resolve(projectRoot, rel))).digest('hex')); } catch { /* removed concurrently */ }
+      }
+    }
   }
   return h.digest('hex').slice(0, 24);
 }
@@ -249,7 +266,7 @@ function writeCache(file, doc) {
 }
 
 const segmentKey = (tree, taskId, segment) => crypto.createHash('sha256').update(`${tree}\0${taskId}\0${segment}`).digest('hex').slice(0, 24);
-const taskDefinitionHash = (task) => crypto.createHash('sha256').update(JSON.stringify([task.verifyCommand || '', [...(task.files || [])].sort()])).digest('hex').slice(0, 16);
+const taskDefinitionHash = (task) => crypto.createHash('sha256').update(JSON.stringify([task.verifyCommand || '', [...(task.files || [])].map((f) => (typeof f === 'string' ? f : (f && f.path) || String(f))).sort()])).digest('hex').slice(0, 16);
 /** Results worth reusing on the same tree: the right red and the already green. A timeout or a broken command reruns. */
 const REUSABLE = new Set(['missing_target', 'assertion_red', 'already_green']);
 
@@ -513,7 +530,8 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
     results.push({ task: task.id, verdict, code, excerpt, segments: segments.length });
     if (cache && cachePath) {
       cache.tasks = cache.tasks || {};
-      cache.tasks[task.id] = taskDefinitionHash(task);
+      if (REUSABLE.has(verdict)) cache.tasks[task.id] = taskDefinitionHash(task);
+      else delete cache.tasks[task.id];
       writeCache(cachePath, cache);
     }
     // OXB-040: cmd.exe does not group arguments with single quotes (`--jq '.[0].conclusion'` reaches gh split).
@@ -529,4 +547,4 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
   return { ok: errors.length === 0, results, errors, warnings, reused, skipped, tree, ...(depsBroken ? { deps_broken: depsBroken } : {}) };
 }
 
-module.exports = { compileMissingSymbols, junitFailures, dryRunVerifyCommands, classifyFailure, hasSingleQuotedArgument, treeHash, depsProblem, windowsCommand, STUB_RE };
+module.exports = { compileMissingSymbols, junitFailures, dryRunVerifyCommands, classifyFailure, splitSegments, hasSingleQuotedArgument, treeHash, depsProblem, windowsCommand, STUB_RE };

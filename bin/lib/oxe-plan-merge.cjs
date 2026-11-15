@@ -21,7 +21,13 @@ const path = require('path');
 
 const ACCEPT_RE = require('./oxe-plan-json.cjs').ACCEPT_RE;
 
+const COMPLEXITY_RANK = { XS: 1, S: 2, M: 3, L: 4, XL: 5 };
+const KIND_RANK = { verify_only: 1, 'test-only': 2, 'config-only': 2, remove: 3, move: 4, add: 4, code: 5, spike: 5, external_delivery: 5 };
+const MODEL_HINT_RANK = { fast: 1, balanced: 2, powerful: 3 };
+
+const pathStr = (f) => (typeof f === 'string' ? f.trim() : f && typeof f.path === 'string' ? f.path.trim() : '');
 const uniq = (list) => [...new Set(list.filter((v) => v != null && String(v).trim() !== '').map((v) => (typeof v === 'string' ? v.trim() : v)))];
+const uniqPaths = (list) => uniq((Array.isArray(list) ? list : []).map(pathStr).filter(Boolean));
 
 function verifyCommands(task) {
   const v = task.verify;
@@ -54,14 +60,19 @@ function mergeRolePlans(inputs, options = {}) {
       if (!k) { errors.push(`${at}: sem "${key}" — a chave que junta as tarefas dos papéis (ex.: "${key}": "R5")`); return; }
       let g = groups.get(k);
       if (!g) {
-        g = { key: k, order: groups.size, title: null, roles: [], files: [], verify: [], acceptance: [], deps: [], notes: [], kind: null, blocked_by: [], complexity: null, proves: [], ids: [] };
+        g = { key: k, order: groups.size, title: null, roles: [], files: [], edited_paths: [], removed_paths: [], symbols_removed: [], decisions: [], gates: [], verify: [], acceptance: [], deps: [], notes: [], kind: null, blocked_by: [], complexity: null, max_turns: null, model_hint: null, proves: [], ids: [] };
         groups.set(k, g);
       }
       if (!g.roles.includes(role)) g.roles.push(role);
       if (task.id) g.ids.push(`${role}:${task.id}`);
       if (!g.title && typeof task.title === 'string' && task.title.trim()) g.title = task.title.trim();
       else if (typeof task.title === 'string' && task.title.trim() && task.title.trim() !== g.title) g.notes.push(`${role}: ${task.title.trim()}`);
-      g.files.push(...(Array.isArray(task.files) ? task.files : []));
+      g.files.push(...uniqPaths(task.files));
+      g.edited_paths.push(...uniqPaths(task.edited_paths));
+      g.removed_paths.push(...uniqPaths(task.removed_paths));
+      if (Array.isArray(task.symbols_removed)) g.symbols_removed.push(...task.symbols_removed.map(String));
+      if (Array.isArray(task.decisions)) g.decisions.push(...task.decisions.map(String));
+      if (Array.isArray(task.gates)) g.gates.push(...task.gates.map(String));
       g.verify.push(...verifyCommands(task));
       for (const c of [...(Array.isArray(task.acceptance) ? task.acceptance : []), ...(Array.isArray(task.criteria) ? task.criteria : typeof task.criteria === 'string' ? [task.criteria] : [])]) {
         const v = String(c).trim();
@@ -75,11 +86,18 @@ function mergeRolePlans(inputs, options = {}) {
       if (typeof task.notes === 'string' && task.notes.trim()) g.notes.push(`${role}: ${task.notes.trim()}`);
       else if (Array.isArray(task.notes)) g.notes.push(...task.notes.map((n) => `${role}: ${n}`));
       if (task.kind) {
-        if (g.kind && g.kind !== task.kind) warnings.push(`${k}: kind diferente entre papéis (${g.kind} × ${task.kind}) — fica ${g.kind}`);
-        else g.kind = task.kind;
+        if (g.kind && g.kind !== task.kind) {
+          const prevKind = g.kind;
+          if ((KIND_RANK[task.kind] || 0) > (KIND_RANK[g.kind] || 0)) g.kind = task.kind;
+          warnings.push(`${k}: kind diferente entre papéis (${prevKind} × ${task.kind}) — fica ${g.kind}`);
+        } else g.kind = task.kind;
       }
       if (Array.isArray(task.blocked_by)) g.blocked_by.push(...task.blocked_by);
-      if (task.complexity && !g.complexity) g.complexity = task.complexity;
+      if (task.complexity) {
+        if (!g.complexity || (COMPLEXITY_RANK[task.complexity] || 0) > (COMPLEXITY_RANK[g.complexity] || 0)) g.complexity = task.complexity;
+      }
+      if (Number.isInteger(task.max_turns) && task.max_turns > 0) g.max_turns = Math.max(g.max_turns || 0, task.max_turns);
+      if (task.model_hint && (!g.model_hint || (MODEL_HINT_RANK[task.model_hint] || 0) > (MODEL_HINT_RANK[g.model_hint] || 0))) g.model_hint = task.model_hint;
       if (task.proves && typeof task.proves === 'object' && !Array.isArray(task.proves)) g.proves.push({ role, map: task.proves, at });
       else if (Array.isArray(task.proves) && task.proves.length) warnings.push(`${at} (${k}): "proves" em lista na tarefa — use acceptance_tests[] ou { arquivo: [títulos] }; ignorado`);
     });
@@ -143,7 +161,7 @@ function mergeRolePlans(inputs, options = {}) {
   if (dropped.length) warnings.push(`tarefa(s) do PLAN.json atual que nenhum papel trouxe: ${dropped.map((k) => `${previous.get(k).id} (${k})`).join(', ')} — o id delas fica reservado (não é reaproveitado)`);
 
   // Acceptance tests: union, deduplicated by criterion + files + command; proves merged.
-  const testKey = (t) => JSON.stringify([t.criterion || t.id || null, uniq(t.files || []).sort(), String(t.command || '').trim()]);
+  const testKey = (t) => JSON.stringify([t.criterion || t.id || null, uniqPaths(t.files).sort(), String(t.command || '').trim()]);
   const merged = new Map();
   for (const t of tests) {
     const { _from, ...entry } = t;
@@ -151,7 +169,7 @@ function mergeRolePlans(inputs, options = {}) {
     const k = testKey(entry);
     const cur = merged.get(k);
     if (cur) cur.proves = uniq([...(cur.proves || []), ...(entry.proves || [])]);
-    else merged.set(k, { ...entry, files: uniq(entry.files || []), ...(entry.proves ? { proves: uniq(entry.proves) } : {}) });
+    else merged.set(k, { ...entry, files: uniqPaths(entry.files), ...(entry.proves ? { proves: uniq(entry.proves) } : {}) });
   }
   const acceptanceTests = [...merged.values()];
   // proves as { file: [titles] } (BACKEND's shape) → into the entry that already freezes that file, or a new one.
@@ -161,7 +179,7 @@ function mergeRolePlans(inputs, options = {}) {
       for (const [file, titles] of Object.entries(map)) {
         const list = (Array.isArray(titles) ? titles : [titles]).map(String).filter(Boolean);
         const norm = file.replace(/\\/g, '/');
-        const hit = acceptanceTests.find((t) => (t.files || []).some((f) => f.replace(/\\/g, '/') === norm));
+        const hit = acceptanceTests.find((t) => (t.files || []).some((f) => pathStr(f).replace(/\\/g, '/') === norm));
         if (hit) { hit.proves = uniq([...(hit.proves || []), ...list]); continue; }
         const ids = uniq(g.acceptance);
         const base = path.posix.basename(norm);
@@ -178,6 +196,11 @@ function mergeRolePlans(inputs, options = {}) {
   const tasks = ordered.map((k) => {
     const g = groups.get(k);
     const deps = uniq(g.deps).filter((d) => groups.has(d)).map((d) => idOf.get(d));
+    const editedPaths = uniqPaths(g.edited_paths);
+    const removedPaths = uniqPaths(g.removed_paths);
+    const symbolsRemoved = uniq(g.symbols_removed);
+    const decisions = uniq(g.decisions);
+    const gates = uniq(g.gates);
     const task = {
       id: idOf.get(k),
       title: g.title || k,
@@ -185,18 +208,29 @@ function mergeRolePlans(inputs, options = {}) {
       [key]: k,
       roles: g.roles,
       ...(deps.length ? { depends_on: deps } : {}),
-      files: uniq(g.files),
+      files: uniqPaths(g.files),
+      ...(editedPaths.length ? { edited_paths: editedPaths } : {}),
+      ...(removedPaths.length ? { removed_paths: removedPaths } : {}),
+      ...(symbolsRemoved.length ? { symbols_removed: symbolsRemoved } : {}),
+      ...(decisions.length ? { decisions } : {}),
+      ...(gates.length ? { gates } : {}),
       ...(uniq(g.verify).length ? { verify: { commands: uniq(g.verify) } } : {}),
       ...(uniq(g.acceptance).length ? { acceptance: uniq(g.acceptance) } : {}),
       ...(g.kind ? { kind: g.kind } : {}),
       ...(g.blocked_by.length ? { blocked_by: dedupeBlocked(g.blocked_by) } : {}),
       ...(g.complexity ? { complexity: g.complexity } : {}),
+      ...(g.max_turns ? { max_turns: g.max_turns } : {}),
+      ...(g.model_hint ? { model_hint: g.model_hint } : {}),
       ...(g.notes.length ? { notes: uniq(g.notes).join('\n') } : {}),
     };
-    if (!task.files.length && !['external_delivery', 'verify_only', 'spike'].includes(task.kind)) warnings.push(`${k}: nenhum papel declarou files`);
-    // a task already done (with its commit) stays done: a re-merge never reopens it in silence
+    const hasScopedPaths = task.files.length > 0 || editedPaths.length > 0 || removedPaths.length > 0;
+    if (!hasScopedPaths && !['external_delivery', 'verify_only', 'spike'].includes(task.kind)) warnings.push(`${k}: nenhum papel declarou files`);
+    // a task already done (with its commit or status: 'done') stays done: a re-merge never reopens it in silence
     const prev = previous.get(k);
-    if (prev) for (const [f, v] of Object.entries(prev)) if (/^done/.test(f) && task[f] === undefined) task[f] = v;
+    if (prev) {
+      for (const [f, v] of Object.entries(prev)) if (/^done/.test(f) && task[f] === undefined) task[f] = v;
+      if (prev.status === 'done' && task.status === undefined) task.status = 'done';
+    }
     return task;
   });
   const plan = { schema_version: 1, merged_from: inputs.map((i) => path.basename(i.file)), merge_key: key, tasks, ...(acceptanceTests.length ? { acceptance_tests: acceptanceTests } : {}) };

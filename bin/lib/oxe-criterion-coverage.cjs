@@ -27,6 +27,18 @@ function verifiableTerms(criterionText) {
   return [...terms].filter((t) => t && !new RegExp(`^(?:${ITEM_KEY_RE.source})$`).test(t));
 }
 
+function coveredInTestContent(content, term) {
+  if (content.includes(term)) return true;
+  const lower = term.toLowerCase();
+  for (const m of content.matchAll(/\/((?:\\.|[^/\\\r\n])+)\/([dgimsuvy]*)/g)) {
+    if (m[2].includes('i') && m[1].replace(/\\(.)/g, '$1').toLowerCase().includes(lower)) return true;
+  }
+  for (const m of content.matchAll(/new\s+RegExp\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1\s*,\s*(['"`])([^'"`]*)\3\s*\)/g)) {
+    if (m[4].includes('i') && m[2].replace(/\\(.)/g, '$1').toLowerCase().includes(lower)) return true;
+  }
+  return false;
+}
+
 /**
  * @param {{ spec: { criteria?: Array<{ id: string, text?: string, criterion?: string, description?: string }> } | null,
  *           plan: { acceptanceTests?: Array<{ criterion?: string|null, files: string[] }> }, projectRoot: string }} input
@@ -51,7 +63,7 @@ function uncoveredCriterionTerms(input) {
       }
     }
     if (!content) continue;
-    const missing = terms.filter((term) => !content.includes(term));
+    const missing = terms.filter((term) => !coveredInTestContent(content, term));
     if (missing.length) {
       out.push(`${entry.criterion}: o teste de aceite não exercita ${missing.map((t) => `"${t}"`).join(', ')} citado(s) no critério — cubra no teste congelado ou tire do critério (OXB-030)`);
     }

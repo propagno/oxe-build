@@ -115,6 +115,7 @@ function mergeChanges(ourDir, theirDir, options = {}) {
     } else if (r.id && renamed[r.id]) {
       rec = { ...r, id: renamed[r.id], origin_id: r.id };
     }
+    if (rec.cr && renamed[rec.cr]) rec = { ...rec, cr: renamed[rec.cr], origin_cr: rec.cr };
     if (Array.isArray(rec.resolves)) rec.resolves = rec.resolves.map((x) => renamed[x] || x);
     appendNdjson(changesFile(ourDir), rec);
     have.add(key(rec));

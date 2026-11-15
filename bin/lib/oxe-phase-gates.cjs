@@ -107,7 +107,7 @@ function gateCommand(gate, options = {}) {
   if (gate.kind === 'script') {
     const args = [quote(process.execPath), quote(__filename), '--script-gate', '--program-dir', quote(options.programDir || '.oxe/program'), '--module', quote(gate.module), '--gate-id', quote(gate.id)];
     if (options.phase) args.push('--phase', quote(options.phase));
-    if (gate.options) args.push('--options', quote(JSON.stringify(gate.options)));
+    if (gate.options) args.push('--options-b64', Buffer.from(JSON.stringify(gate.options), 'utf8').toString('base64'));
     return args.join(' ');
   }
   if (gate.kind === 'deploy') {
@@ -224,10 +224,11 @@ function recordGateFailures(input) {
   const failing = (checkResults || []).filter((r) => /^gate-/.test(String(r.check_id || '')) && (r.status === 'fail' || r.status === 'error'));
   if (!failing.length) return { created, program };
   const open = changeLib.listChanges(programDir).filter((cr) => cr.status === 'open' && cr.gate);
+  const phaseId = (plan && plan.phase) || (program && program.active_phase) || null;
   const infra = [];
   for (const result of failing) {
     const gateId = String(result.check_id).replace(/^gate-/, '');
-    if (open.some((cr) => cr.gate === gateId)) continue;
+    if (open.some((cr) => cr.gate === gateId && (!phaseId || !cr.phase || cr.phase === phaseId))) continue;
     const excerpt = firstErrorLines(result);
     // a network failure (the runner, gh, the registry) says nothing about the code: infra, no CR (OxeSpace 14/11,
     // gate-android-unit: "dial tcp … connectex" from gh in remote-verify, while the run itself passed)
@@ -359,7 +360,7 @@ function ciRunStatus(record, options = {}) {
   const run = options.spawn || spawnSync;
   const args = ['run', 'view', String(record.run), '--json', 'status,conclusion,headSha,url'];
   if (record.repo) args.push('-R', record.repo);
-  const res = run('gh', args, { encoding: 'utf8', timeout: 30000 });
+  const res = run('gh', args, { encoding: 'utf8', timeout: 30000, windowsHide: true });
   if (!res || res.status !== 0) return { ok: false, state: 'unknown', message: `gh run view falhou: ${(res && (res.stderr || res.error)) || 'sem saída'}`.trim() };
   let data = null;
   try {
@@ -369,7 +370,9 @@ function ciRunStatus(record, options = {}) {
   }
   if (data.status !== 'completed') return { ok: false, state: 'pending', message: `run ${record.run} ainda ${data.status}`, data };
   if (data.conclusion !== 'success') return { ok: false, state: 'red', message: `run ${record.run} terminou ${data.conclusion}`, data };
-  if (record.head && data.headSha && !String(data.headSha).startsWith(record.head)) {
+  const recHead = record.head ? String(record.head).trim().toLowerCase() : '';
+  const runHead = data.headSha ? String(data.headSha).trim().toLowerCase() : '';
+  if (recHead && runHead && !runHead.startsWith(recHead) && !recHead.startsWith(runHead)) {
     return { ok: false, state: 'stale', message: `run ${record.run} cobre ${String(data.headSha).slice(0, 8)}, não a head ${record.head}`, data };
   }
   return { ok: true, state: 'green', message: `run ${record.run} verde (${data.url || ''})`.trim(), data };
@@ -484,8 +487,9 @@ function runDeployGateCli(argv) {
 function signoffGateStatus(programDir, phase, criteria) {
   let lines = [];
   try { lines = fs.readFileSync(path.join(programDir, 'signoffs.ndjson'), 'utf8').split(/\r?\n/).filter(Boolean); } catch { lines = []; }
-  const recs = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((s) => s && (!phase || s.phase === phase) && s.evidence);
-  const missing = criteria.filter((c) => !recs.some((s) => (s.criteria || []).includes(c)));
+  const recs = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((s) => s && (!phase || !s.phase || s.phase === phase) && s.evidence);
+  const signedCriteria = new Set(recs.flatMap((s) => (s.criteria || []).map((x) => String(x).trim().toUpperCase())));
+  const missing = criteria.filter((c) => !signedCriteria.has(String(c).trim().toUpperCase()));
   return missing.length ? { ok: false, message: `sign-off com evidência faltando para ${missing.join(', ')} na fase ${phase || ''} — oxe-cc runtime signoff --criteria ${missing.join(',')} --by <papel> --evidence …` } : { ok: true, message: `sign-off de ${criteria.join(', ')} presente` };
 }
 
@@ -498,7 +502,10 @@ async function runScriptGateCli(argv) {
   try { fn = require(mod); fn = typeof fn === 'function' ? fn : fn && (fn.default || fn.gate); } catch (err) { console.error(`gate ${get('--gate-id')}: não carregou ${mod}: ${err.message}`); return 1; }
   if (typeof fn !== 'function') { console.error(`gate ${get('--gate-id')}: ${mod} não exporta uma função (async (ctx) => ({ ok, message }))`); return 1; }
   try {
-    const out = await fn({ root, programDir, phase: get('--phase'), gate: { id: get('--gate-id'), options: get('--options') ? JSON.parse(get('--options')) : null } });
+    const rawB64 = get('--options-b64');
+    const rawJson = get('--options');
+    const parsedOptions = rawB64 ? JSON.parse(Buffer.from(rawB64, 'base64').toString('utf8')) : rawJson ? JSON.parse(rawJson) : null;
+    const out = await fn({ root, programDir, phase: get('--phase'), gate: { id: get('--gate-id'), options: parsedOptions } });
     (out && out.ok ? console.log : console.error)(String((out && out.message) || (out && out.ok ? 'ok' : 'reprovou')));
     return out && out.ok ? 0 : 1;
   } catch (err) { console.error(`gate ${get('--gate-id')}: ${err && err.message ? err.message : err}`); return 1; }

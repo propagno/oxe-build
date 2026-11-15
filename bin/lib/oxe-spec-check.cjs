@@ -8,19 +8,34 @@
  * covering every criterion. Pure: the caller reads the files.
  */
 
+const criteriaIds = require('./oxe-criteria-ids.cjs');
+
 const RISKS = ['P0', 'P1', 'P2', 'P3'];
 const PLACEHOLDER = /^(—|-|\?|tbd|todo|a definir|\(.*\))$/i;
+
+/** Strip HTML comments and fenced code blocks (and optionally inline code spans) so prose/table scans ignore noise. */
+function stripMarkdownNoise(text, { inlineCode = false } = {}) {
+  let out = String(text || '')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/^(?:```|~~~)[^\n]*\n[\s\S]*?^(?:```|~~~)\s*$/gm, ' ');
+  if (inlineCode) out = out.replace(/`[^`\r\n]*`/g, ' ');
+  return out;
+}
 
 function splitRow(line) {
   const t = String(line).trim();
   if (!t.startsWith('|')) return null;
-  return t.replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+  return t
+    .replace(/^\|/, '')
+    .replace(/(?<!\\)\|$/, '')
+    .split(/(?<!\\)\|/)
+    .map((c) => c.replace(/\\\|/g, '|').trim());
 }
-const isSep = (cells) => cells.every((c) => /^:?-{2,}:?$/.test(c));
+const isSep = (cells) => cells.length > 0 && cells.every((c) => /^:?-{2,}:?$/.test(c));
 
 /** Every table: header + rows. */
 function tables(text) {
-  const lines = String(text || '').split(/\r?\n/);
+  const lines = stripMarkdownNoise(text).split(/\r?\n/);
   const out = [];
   for (let i = 0; i < lines.length - 1; i += 1) {
     const h = splitRow(lines[i]);
@@ -71,10 +86,30 @@ function requirements(specText) {
       out.set(id, { id, version: vi >= 0 ? String(r[vi] || '').toLowerCase() : 'v1', criteria: ai >= 0 ? (String(r[ai] || '').match(A_RE) || []) : [] });
     }
   }
-  for (const line of String(specText || '').split(/\r?\n/)) {
-    const m = /^\s*[-*]\s+\*\*(R(?:-RB)?-?\d+)\*\*\s*[—–:-]\s*(.*)$/.exec(line);
-    if (m && !out.has(m[1].toUpperCase())) out.set(m[1].toUpperCase(), { id: m[1].toUpperCase(), version: /\b(v2|fora)\b/i.test(m[2]) ? (/\bfora\b/i.test(m[2]) ? 'fora' : 'v2') : 'v1', criteria: m[2].match(A_RE) || [] });
+  const bulletLines = stripMarkdownNoise(specText).split(/\r?\n/);
+  let currentReq = null;
+  const commitBullet = () => {
+    if (!currentReq || out.has(currentReq.id)) return;
+    const body = currentReq.body;
+    out.set(currentReq.id, {
+      id: currentReq.id,
+      version: /\b(v2|fora)\b/i.test(body) ? (/\bfora\b/i.test(body) ? 'fora' : 'v2') : 'v1',
+      criteria: [...new Set(body.match(A_RE) || [])],
+    });
+  };
+  for (const line of bulletLines) {
+    const m = /^\s*[-*]\s+(?:\*\*)?(R(?:-RB)?-?\d+)(?:\*\*)?(?:\s*\([^)]*\))?\s*[—–:-]\s*(.*)$/.exec(line);
+    if (m) {
+      commitBullet();
+      currentReq = { id: m[1].toUpperCase(), body: m[2] };
+    } else if (currentReq && /^\s{2,}(?![-*]\s|\d+\.\s)(.+)$/.test(line)) {
+      currentReq.body += ` ${line.trim()}`;
+    } else {
+      commitBullet();
+      currentReq = null;
+    }
   }
+  commitBullet();
   return [...out.values()];
 }
 
@@ -119,10 +154,12 @@ function checkSpec(input) {
     if (orphan.length) warnings.push(`critério(s) sem requisito que os cite: ${orphan.join(', ')}`);
   } else warnings.push('SPEC sem requisitos R-ID: a rastreabilidade requisito → critério não pode ser checada');
 
-  // ROADMAP covers every criterion
+  // ROADMAP covers every criterion (including subcriteria A19.1, ignoring HTML comments and fenced code)
   if (input.roadmapText != null) {
-    const inRoadmap = new Set(String(input.roadmapText).match(A_RE) || []);
-    const out = ids.filter((a) => /^A\d+$/.test(a) && !inRoadmap.has(a));
+    const cleanRoadmap = stripMarkdownNoise(input.roadmapText);
+    const inRoadmap = new Set(cleanRoadmap.match(A_RE) || []);
+    const subs = criteriaIds.subcriteriaOf(ids);
+    const out = ids.filter((a) => /^A\d+(?:\.\d+)?$/.test(a) && !criteriaIds.inPhase(a, inRoadmap) && !(subs.get(a) && subs.get(a).every((s) => inRoadmap.has(s))));
     if (!String(input.roadmapText).trim()) errors.push('ROADMAP.md ausente — o roteiro é parte da spec');
     else if (out.length) warnings.push(`critério(s) fora de todas as fases do ROADMAP: ${out.join(', ')}`);
   }
@@ -134,8 +171,8 @@ function checkSpec(input) {
     warnings.push(...r.warnings.map((w) => `PRD: ${w}`));
   } else if (!input.prd) warnings.push('PRD.md ausente: histórias de usuário e métricas não foram escritas (oxe/templates/PRD.template.md)');
 
-  // glossary: forbidden synonyms absent from SPEC and PRD
-  const corpus = `${specText}\n${input.prdText || ''}`;
+  // glossary: forbidden synonyms absent from SPEC and PRD (prose only — ignore code spans, fenced blocks and comments)
+  const corpus = stripMarkdownNoise(`${specText}\n${input.prdText || ''}`, { inlineCode: true });
   for (const t of input.glossary || []) {
     for (const s of t.synonyms || []) {
       if (!s || s.length < 3) continue;

@@ -64,7 +64,7 @@ function uncovered(criteria, covered, specIds) {
 }
 
 const UI_FILE_RE = /\.(tsx|jsx|vue|svelte|css|scss|sass|less|html)$/i;
-const isUiTask = (task) => (task && (task.files || [])).some((f) => UI_FILE_RE.test(String(f)));
+const isUiTask = (task) => (task && (task.files || [])).some((f) => UI_FILE_RE.test(String(typeof f === 'string' ? f : (f && f.path) || '')));
 
 /**
  * OXB-091: standing criteria (`program.standing_acceptance` in .oxe/config.json, e.g. ["A70"] — the per-phase UI gate
