@@ -72,6 +72,10 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
   - O cache das entradas já aprovadas é gravado mesmo quando o processo morre no meio.
   - Cada suíte também ganha uma linha de progresso.
 
+### Isenção pontual não some atrás do `oxe.config.json` (OxeSpace 15/11, #854)
+
+- O `origin` do `oxe.config.json` versionado substituía o bloco `exempt` inteiro do `.oxe/config.json`, e uma isenção pontual (`exempt.commits`) sumia sem aviso. As regras continuam vencendo chave a chave. As **listas** de isenção (`commits` por sha, `paths`, `authors`, `authored`) agora se juntam, e uma lista que nenhum lado declara mantém o padrão.
+
 ### Promote leva o teste re-congelado do escopo da tarefa (OxeSpace 15/11, OxeCode F6 T30)
 
 - **O que entra:** o `runtime promote` também leva, como arquivos da ponta do programa, os testes nos `files` da tarefa que diferem da base. Isso inclui um teste re-congelado pelo quick de um CR (o u83 do CR-F6-5). Antes, o PR levava o u83 antigo da main, que o código da T30 deixa vermelho.

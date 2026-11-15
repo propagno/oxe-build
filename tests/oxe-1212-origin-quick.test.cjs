@@ -201,6 +201,19 @@ describe('G19: the cut (origin.since) and the origin config of a repo that does 
     fs.writeFileSync(path.join(dir, 'oxe.config.json'), JSON.stringify({ origin: { exempt: { paths: ['docs/releases/'] } } }));
     assert.equal(origin.resolveConfig(dir, {}).origin.exempt.paths[0], 'docs/releases/');
     assert.throws(() => origin.resolveConfig(dir, {}, 'missing.json'), /--config missing\.json/);
+    // OxeSpace 15/11 (#854): a one-off exemption pinned in .oxe/config.json survives the versioned exempt block — the
+    // lists are joined (the versioned rules still win key by key)
+    const A = 'a'.repeat(40);
+    const B = 'b'.repeat(40);
+    fs.writeFileSync(path.join(dir, 'oxe.config.json'), JSON.stringify({ origin: { require_card: true, exempt: { merges: true, paths: ['docs/releases/'], commits: [{ sha: A, by: 'coord', reason: 'isenção versionada' }] } } }));
+    const merged = origin.resolveConfig(dir, { origin: { require_card: false, exempt: { commits: [{ sha: B, by: 'planner', reason: 'quick perdido, trailer no commit' }, { sha: A, by: 'dup', reason: 'duplicada aqui' }] } } }).origin;
+    assert.deepEqual(merged.exempt.commits.map((c) => c.sha), [B, A], 'both kept, a duplicate sha once');
+    assert.deepEqual(merged.exempt.paths, ['docs/releases/']);
+    assert.equal(merged.require_card, true, 'the versioned rule wins');
+    assert.ok(origin.originConfig({ origin: merged }).exempt.commits.some((c) => c.sha === B));
+    // neither side declares paths: the default .oxe/ stays
+    fs.writeFileSync(path.join(dir, 'oxe.config.json'), JSON.stringify({ origin: { exempt: { merges: true } } }));
+    assert.deepEqual(origin.originConfig(origin.resolveConfig(dir, { origin: { exempt: { authors: ['bot'] } } })).exempt.paths, ['.oxe/']);
   });
 });
 

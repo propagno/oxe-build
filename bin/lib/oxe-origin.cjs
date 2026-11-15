@@ -57,13 +57,35 @@ function resolveConfig(root, base = {}, file = null) {
   const read = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
   const out = { ...base };
   const versioned = read(path.join(root, 'oxe.config.json'));
-  if (versioned && versioned.origin) out.origin = { ...(out.origin || {}), ...versioned.origin };
+  if (versioned && versioned.origin) out.origin = mergeOrigin(out.origin, versioned.origin);
   if (versioned && versioned.alm && !out.alm) out.alm = versioned.alm;
   if (file) {
     const explicit = read(path.resolve(root, file));
     if (!explicit) throw new Error(`--config ${file}: arquivo ausente ou JSON inválido`);
-    if (explicit.origin) out.origin = { ...(out.origin || {}), ...explicit.origin };
+    if (explicit.origin) out.origin = mergeOrigin(out.origin, explicit.origin);
     if (explicit.alm) out.alm = explicit.alm;
+  }
+  return out;
+}
+
+/**
+ * OxeSpace 15/11 (#854): the versioned `origin` replaced the whole `exempt` block of .oxe/config.json, so a one-off
+ * exemption pinned locally (exempt.commits) vanished. The rules still win key by key; the exemption LISTS are joined
+ * (commits by sha, paths, authors, authored), so an exemption is never dropped by another file's list.
+ */
+function mergeOrigin(base, over) {
+  const a = base && typeof base === 'object' ? base : {};
+  const b = over && typeof over === 'object' ? over : {};
+  const out = { ...a, ...b };
+  const ea = a.exempt && typeof a.exempt === 'object' ? a.exempt : null;
+  const eb = b.exempt && typeof b.exempt === 'object' ? b.exempt : null;
+  if (ea && eb) {
+    const list = (k) => [...(Array.isArray(ea[k]) ? ea[k] : []), ...(Array.isArray(eb[k]) ? eb[k] : [])];
+    const uniq = (arr, key) => { const seen = new Set(); return arr.filter((x) => { const k = key(x); if (seen.has(k)) return false; seen.add(k); return true; }); };
+    const keys = { commits: (c) => String((c && c.sha) || '').toLowerCase() || JSON.stringify(c), paths: (p) => String(p), authors: (p) => String(p).toLowerCase(), authored: (r) => JSON.stringify(r) };
+    out.exempt = { ...ea, ...eb };
+    // a list neither side declares stays absent (paths keeps its default ['.oxe/'])
+    for (const [k, key] of Object.entries(keys)) if (Array.isArray(ea[k]) || Array.isArray(eb[k])) out.exempt[k] = uniq(list(k), key);
   }
   return out;
 }
