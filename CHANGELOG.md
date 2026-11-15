@@ -72,6 +72,13 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
   - O cache das entradas já aprovadas é gravado mesmo quando o processo morre no meio.
   - Cada suíte também ganha uma linha de progresso.
 
+### Quick sem registro, trailer presente (OxeSpace 15/11, #854)
+
+- **O caso:** um commit feito por `quick commit` cujo registro local se perdeu. O commit é **anterior ao primeiro registro** que esta cópia guarda em `.oxe/quick`, e o id do quick não é posterior ao commit.
+- **O status:** o `ship check-origin` dá a esse commit um status próprio e auditado, `quick_unrecorded` ("registro ausente, trailer presente"). Ele aparece em todo relatório (`quick sem registro: …`, `quick_unrecorded[]`). Antes, isso exigia uma isenção manual.
+- **O que continua reprovando:** um commit depois do primeiro registro, um id datado depois do commit, ou a falta de qualquer registro de onde datar.
+- **Revisão cruzada do merge das isenções:** num `sha` duplicado vence a entrada versionada (ou a do `--config`), e o `authored` do mesmo autor nos dois arquivos vira uma regra só, com a união dos paths.
+
 ### Isenção pontual não some atrás do `oxe.config.json` (OxeSpace 15/11, #854)
 
 - O `origin` do `oxe.config.json` versionado substituía o bloco `exempt` inteiro do `.oxe/config.json`, e uma isenção pontual (`exempt.commits`) sumia sem aviso. As regras continuam vencendo chave a chave. As **listas** de isenção (`commits` por sha, `paths`, `authors`, `authored`) agora se juntam, e uma lista que nenhum lado declara mantém o padrão.

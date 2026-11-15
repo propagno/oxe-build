@@ -80,12 +80,25 @@ function mergeOrigin(base, over) {
   const ea = a.exempt && typeof a.exempt === 'object' ? a.exempt : null;
   const eb = b.exempt && typeof b.exempt === 'object' ? b.exempt : null;
   if (ea && eb) {
-    const list = (k) => [...(Array.isArray(ea[k]) ? ea[k] : []), ...(Array.isArray(eb[k]) ? eb[k] : [])];
+    // `over` first: on the same key (a commit sha) the versioned / --config entry wins (cross-review 15/11)
+    const list = (k) => [...(Array.isArray(eb[k]) ? eb[k] : []), ...(Array.isArray(ea[k]) ? ea[k] : [])];
     const uniq = (arr, key) => { const seen = new Set(); return arr.filter((x) => { const k = key(x); if (seen.has(k)) return false; seen.add(k); return true; }); };
     const keys = { commits: (c) => String((c && c.sha) || '').toLowerCase() || JSON.stringify(c), paths: (p) => String(p), authors: (p) => String(p).toLowerCase(), authored: (r) => JSON.stringify(r) };
     out.exempt = { ...ea, ...eb };
     // a list neither side declares stays absent (paths keeps its default ['.oxe/'])
     for (const [k, key] of Object.entries(keys)) if (Array.isArray(ea[k]) || Array.isArray(eb[k])) out.exempt[k] = uniq(list(k), key);
+    // the same author in both files: ONE rule with the union of its paths (a commit touching a/ and b/ fits it)
+    if (Array.isArray(out.exempt.authored)) {
+      const byAuthor = new Map();
+      for (const r of out.exempt.authored) {
+        if (!r || !r.author) continue;
+        const k = String(r.author).toLowerCase();
+        const prev = byAuthor.get(k);
+        const paths = (Array.isArray(r.paths) ? r.paths : []).map((p) => String(p).replace(/\\/g, '/'));
+        byAuthor.set(k, prev ? { ...prev, paths: [...new Set([...prev.paths, ...paths])] } : { ...r, paths });
+      }
+      out.exempt.authored = [...byAuthor.values()];
+    }
   }
   return out;
 }
@@ -126,6 +139,17 @@ function classify(commit, ocfg, ctx = {}) {
     const card = CARD_RE.exec(msg);
     if (ocfg.require_card && !card) return { ...base, ok: false, kind: 'quick', quick: q[1], reason: 'OXE-Quick sem OXE-Card (com ALM, o quick nomeia o card)' };
     const known = typeof ctx.quickExists === 'function' ? ctx.quickExists(q[1]) : null;
+    // OxeSpace 15/11 (#854, coordination): a commit made by `quick commit` (its trailers) whose local record was lost —
+    // the commit is OLDER than the first record this checkout keeps, and the quick id's date is not after the commit.
+    // A distinct, audited status: neither a pass nor a fail, listed in every report.
+    if (known === false && ctx.quickStoreSince && commit.date) {
+      const idDay = /^Q-(\d{4})(\d{2})(\d{2})-/.exec(q[1]);
+      const commitMs = Date.parse(commit.date);
+      const idOk = idDay ? Date.parse(`${idDay[1]}-${idDay[2]}-${idDay[3]}T00:00:00Z`) <= commitMs + 24 * 3600_000 : false;
+      if (idOk && commitMs < Date.parse(ctx.quickStoreSince)) {
+        return { ...base, ok: true, kind: 'quick_unrecorded', quick: q[1], card: card ? card[1] : null, reason: `registro ausente, trailer presente: ${q[1]} é anterior ao primeiro registro em .oxe/quick (${ctx.quickStoreSince})` };
+      }
+    }
     if (known === false) return { ...base, ok: false, kind: 'quick', quick: q[1], card: card ? card[1] : null, reason: `${q[1]} não está registrado em .oxe/quick/ (oxe-cc quick <KEY> "<objetivo>")` };
     return { ...base, ok: true, kind: 'quick', quick: q[1], card: card ? card[1] : null, verified: known };
   }
@@ -182,6 +206,20 @@ function check(root, options = {}) {
   const target = String(options.target || '').trim();
   const quickDir = path.join(root, '.oxe', 'quick');
   const quickExists = fs.existsSync(quickDir) ? (id) => fs.existsSync(path.join(quickDir, `${id}.json`)) : () => null;
+  // the start of the record store this checkout keeps: the earliest started_at among .oxe/quick/*.json
+  const quickStoreSince = (() => {
+    let min = null;
+    try {
+      for (const f of fs.readdirSync(quickDir)) {
+        if (!/^Q-.*\.json$/.test(f)) continue;
+        let r = null;
+        try { r = JSON.parse(fs.readFileSync(path.join(quickDir, f), 'utf8')); } catch { r = null; }
+        const at = r && (r.started_at || r.created_at);
+        if (at && Number.isFinite(Date.parse(at)) && (!min || Date.parse(at) < Date.parse(min))) min = at;
+      }
+    } catch { /* no store */ }
+    return min;
+  })();
   let source;
   let commits;
   if (/^#?\d+$/.test(target)) {
@@ -196,9 +234,9 @@ function check(root, options = {}) {
   // a commit cut (origin.since = sha): what that commit already contains is history; needs the commit locally
   const isAncestor = (sha, cut) => { const r = spawn('git', ['merge-base', '--is-ancestor', sha, cut], { cwd: root, windowsHide: true }); return r.status === 0 ? true : r.status === 1 ? false : null; };
   const cutDate = ocfg.since && !isDateCut(ocfg.since) ? (() => { const r = spawn('git', ['log', '-1', '--format=%cI', ocfg.since], { cwd: root, encoding: 'utf8', windowsHide: true }); return r.status === 0 ? String(r.stdout || '').trim() || null : null; })() : null;
-  const results = commits.map((c) => classify(c, ocfg, { quickExists, isAncestor, cutDate }));
+  const results = commits.map((c) => classify(c, ocfg, { quickExists, isAncestor, cutDate, quickStoreSince }));
   const violations = results.filter((r) => !r.ok);
-  return { ok: violations.length === 0, ...source, commits: results.length, by_kind: results.reduce((a, r) => ({ ...a, [r.kind]: (a[r.kind] || 0) + 1 }), {}), results, violations, exempt: ocfg.exempt, since: ocfg.since, exempt_commits_used: results.filter((r) => r.pinned).map((r) => ({ sha: r.sha, reason: r.reason })), config_problems: ocfg.problems };
+  return { ok: violations.length === 0, ...source, commits: results.length, by_kind: results.reduce((a, r) => ({ ...a, [r.kind]: (a[r.kind] || 0) + 1 }), {}), results, violations, exempt: ocfg.exempt, since: ocfg.since, exempt_commits_used: results.filter((r) => r.pinned).map((r) => ({ sha: r.sha, reason: r.reason })), quick_unrecorded: results.filter((r) => r.kind === 'quick_unrecorded').map((r) => ({ sha: r.sha, quick: r.quick, reason: r.reason })), config_problems: ocfg.problems };
 }
 
 /** The trailers lines to append to a message that has none of them. */

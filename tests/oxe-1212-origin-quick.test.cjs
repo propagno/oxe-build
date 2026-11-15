@@ -207,7 +207,14 @@ describe('G19: the cut (origin.since) and the origin config of a repo that does 
     const B = 'b'.repeat(40);
     fs.writeFileSync(path.join(dir, 'oxe.config.json'), JSON.stringify({ origin: { require_card: true, exempt: { merges: true, paths: ['docs/releases/'], commits: [{ sha: A, by: 'coord', reason: 'isenção versionada' }] } } }));
     const merged = origin.resolveConfig(dir, { origin: { require_card: false, exempt: { commits: [{ sha: B, by: 'planner', reason: 'quick perdido, trailer no commit' }, { sha: A, by: 'dup', reason: 'duplicada aqui' }] } } }).origin;
-    assert.deepEqual(merged.exempt.commits.map((c) => c.sha), [B, A], 'both kept, a duplicate sha once');
+    assert.deepEqual(merged.exempt.commits.map((c) => c.sha).sort(), [A, B], 'both kept, a duplicate sha once');
+    assert.equal(merged.exempt.commits.find((c) => c.sha === A).by, 'coord', 'on the same sha the versioned entry wins');
+    // the same author in both files: one rule, the union of the paths
+    fs.writeFileSync(path.join(dir, 'oxe.config.json'), JSON.stringify({ origin: { exempt: { authored: [{ author: 'github-actions[bot]', paths: ['b/'] }] } } }));
+    const au = origin.resolveConfig(dir, { origin: { exempt: { authored: [{ author: 'GitHub-Actions[bot]', paths: ['a\\'] }] } } }).origin.exempt.authored;
+    assert.equal(au.length, 1);
+    assert.deepEqual(au[0].paths.sort(), ['a/', 'b/']);
+    fs.writeFileSync(path.join(dir, 'oxe.config.json'), JSON.stringify({ origin: { require_card: true, exempt: { merges: true, paths: ['docs/releases/'], commits: [{ sha: A, by: 'coord', reason: 'isenção versionada' }] } } }));
     assert.deepEqual(merged.exempt.paths, ['docs/releases/']);
     assert.equal(merged.require_card, true, 'the versioned rule wins');
     assert.ok(origin.originConfig({ origin: merged }).exempt.commits.some((c) => c.sha === B));
@@ -271,6 +278,21 @@ describe('G9 with ALM: the card gets the mini-spec and moves to in_progress, onl
 describe('G11: the origin of every commit, with exemptions only in origin.exempt', () => {
   const ocfg = (o = {}, alm = false) => origin.originConfig({ origin: o, ...(alm ? { alm: { provider: 'jira' } } : {}) });
   const c = (message, extra = {}) => ({ sha: 'abc1234567', parents: 1, author: { name: 'Dev', email: 'dev@example.com' }, message, files: ['src/a.ts'], ...extra });
+
+  it('a quick commit whose record was lost, OLDER than the first record kept: "registro ausente, trailer presente" (OxeSpace 15/11, #854)', () => {
+    const cfg = ocfg();
+    const lost = (date, id = 'Q-20261114-6000') => origin.classify(c(`test: frozen\n\nOXE-Quick: ${id}`, { date }), cfg, { quickExists: () => false, quickStoreSince: '2026-11-14T22:20:36.981Z' });
+    const old = lost('2026-11-14T19:02:59-03:00');
+    assert.equal(old.ok, true);
+    assert.equal(old.kind, 'quick_unrecorded');
+    assert.match(old.reason, /registro ausente, trailer presente: Q-20261114-6000 é anterior ao primeiro registro/);
+    // a commit after the first record kept: its record should exist — a fail, as before
+    assert.equal(lost('2026-11-15T08:00:00Z').ok, false);
+    // an id dated after the commit (a hand-made trailer): a fail
+    assert.equal(lost('2026-11-14T19:02:59-03:00', 'Q-20261120-aaaa').ok, false);
+    // no record store to date from: a fail
+    assert.equal(origin.classify(c('test: x\n\nOXE-Quick: Q-20261114-6000', { date: '2026-11-14T10:00:00Z' }), cfg, { quickExists: () => false }).ok, false);
+  });
 
   it('task and quick trailers pass; nothing else does, unless exempt by merge, author or paths', () => {
     const cfg = ocfg({ exempt: { authors: ['github-actions[bot]'], paths: ['.oxe/', 'docs/releases/'] } });

@@ -8317,6 +8317,7 @@ async function main() {
       if (out.since && !o.json) console.log(`  ${dim}corte: só commits depois de ${out.since} (origin.since)${reset}`);
       if (!o.json) for (const p of out.config_problems || []) console.log(`  ${red}✗${reset} ${p}`);
       if (!o.json) for (const u of out.exempt_commits_used || []) console.log(`  ${yellow}!${reset} isenção pontual usada: ${u.sha.slice(0, 12)} — ${u.reason}`);
+      if (!o.json) for (const u of out.quick_unrecorded || []) console.log(`  ${yellow}!${reset} quick sem registro: ${u.sha.slice(0, 12)} — ${u.reason}`);
       if ((out.config_problems || []).length) process.exitCode = 1;
       if (o.json) { console.log(JSON.stringify({ oxeOriginSchema: 1, ...out }, null, 2)); if (!out.ok) process.exitCode = 1; return; }
       const where = out.pr ? `PR #${out.pr}` : out.range;
