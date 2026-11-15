@@ -25,6 +25,11 @@
 
 O teste fixa a interface exigida em código (nomes, assinatura, formato de retorno, erros) — é a SPEC executável. O runtime congela o hash no compile; o executor recebe o teste no prompt, não pode escrevê-lo (`tool denied`) e o verify reprova se ele mudar (`acceptance_tampered`) ou faltar. Motivo: quando o mesmo agente implementa e escreve a prova, uma leitura errada do requisito é "provada" pelo próprio teste (falso verde do e2e real da 1.19). O executor pode e deve escrever testes próprios adicionais em outros arquivos. `acceptance_tests_required: true` no `config.json` torna obrigatório um teste de aceite por A* da fase.
 
+**e2e congelado sem corrida:** um teste que corre contra a montagem ou a animação falha por tempo, não por código, e paga tentativas.
+- Depois de abrir o app, navegar ou redimensionar, espere um elemento da shell antes da primeira ação (G40).
+- Antes de medir geometria dentro de um overlay (dialog, menu, popover, tooltip), espere a animação de entrada terminar: `await el.evaluate((e) => Promise.all(e.getAnimations({ subtree: true }).map((a) => a.finished)))`, ou o helper do repo em `lint.e2e_ready_helpers` (G40c).
+- Um nome acessível com regex é sensível a maiúsculas; prefira string ou `/…/i` (G40b).
+
 Antes de declarar o plano pronto, rodar **`oxe-cc plan lint`** e corrigir todos os erros: ids únicos, dependências existentes e em onda anterior, escopos disjuntos na mesma onda, A* existentes na SPEC, tarefa mutável com entrada no IMPLEMENTATION-PACK e `plan_max_tasks_per_wave`.
 
 **Programa por fases:** se existir `.oxe/program/PROGRAM.json` com fase ativa, planejar **somente essa fase**: os A* do plano devem ser exatamente os da fase (o lint reprova A* de outra fase e A* da fase sem tarefa) e `PLAN.json` declara `"phase": "<id>"`. Ler `.oxe/program/interfaces/*.json` das fases fechadas: tarefas que consomem esses módulos devem importá-los pelos nomes/assinaturas registrados, não reimplementá-los. No IMPLEMENTATION-PACK, todo símbolo público de módulo (`kind` function/class/const/type) vira contrato verificado: o verify reprova com `exports_missing` se o arquivo não o exportar.

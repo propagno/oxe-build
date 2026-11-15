@@ -255,8 +255,67 @@ function containerGuardMessages(found) {
     : `${f.task ? `${f.task}: ` : ''}${f.file}:${f.line} pula sem dizer o motivo (\`${f.code}\`) — passe a descrição (test.skip(cond, 'sem engine Linux de containers')) para o relatório mostrar por que pulou [G42]`));
 }
 
+/**
+ * G40c (OxeSpace 15/11, OQ T14, 3 paid attempts): a frozen e2e measured two boxes inside a dialog with separate
+ * boundingBox() calls while the dialog was still rising in its entrance animation (@starting-style translate) — the
+ * layout was aligned on every frame, the test saw 1–2 px and failed 3 of 5 runs. Within each test body, a geometry
+ * read (boundingBox, getBoundingClientRect, toHaveCSS of size/position) after an overlay (dialog, menu, popover,
+ * tooltip, listbox, drawer, sheet, modal) with no wait for its animations in between.
+ * @returns {{ line: number, overlay: string, read: string }[]}
+ */
+const OVERLAY_RE = /getByRole\(\s*['"](dialog|alertdialog|menu|menuitem|listbox|tooltip)['"]|['"`][^'"`]*\b(dialog|popover|menu|modal|drawer|sheet|tooltip)\b[^'"`]*['"`]/i;
+const GEOMETRY_RE = /\.boundingBox\(|getBoundingClientRect\(|toHaveCSS\(\s*['"](width|height|top|left|right|bottom|transform|translate|inset)['"]/;
+const ANIM_WAIT_RE = /getAnimations\(|\.finished\b|animationend|transitionend/;
+
+function overlayGeometryReads(text, options = {}) {
+  const helpers = (options.helpers || []).map((h) => String(h).trim()).filter(Boolean);
+  const helperRe = helpers.length ? new RegExp(`\\b(${helpers.map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\s*\\(`) : null;
+  const lines = String(text || '').split(/\r?\n/);
+  const out = [];
+  let overlay = null; // the overlay opened in this test body and not yet waited for
+  for (let i = 0; i < lines.length; i += 1) {
+    const l = stripComment(lines[i]);
+    if (BLOCK_RE.test(l)) overlay = null;
+    if (ANIM_WAIT_RE.test(l) || (helperRe && helperRe.test(l))) { overlay = null; continue; }
+    const om = OVERLAY_RE.exec(l);
+    if (om) overlay = { line: i + 1, text: l.trim().slice(0, 120) };
+    if (overlay && GEOMETRY_RE.test(l)) {
+      out.push({ line: i + 1, overlay: overlay.text, read: l.trim().slice(0, 120) });
+      overlay = null; // one finding per overlay
+    }
+  }
+  return out;
+}
+
+/** For the plan's frozen e2e specs (pending tasks): the geometry reads inside an overlay with no animation wait. */
+function overlayGeometryFrozenE2e(root, planDoc, options = {}) {
+  const fs = require('fs');
+  const path = require('path');
+  const read = options.readText || ((f) => { try { return fs.readFileSync(path.join(root, f), 'utf8'); } catch { return ''; } });
+  const tasks = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter((t) => t && !(t.done === true || t.status === 'done'));
+  const pendingIds = new Set(tasks.map((t) => t.id));
+  const out = [];
+  const seen = new Set();
+  for (const a of planDoc && Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : []) {
+    if (!a) continue;
+    const owner = a.task || (tasks.find((t) => (t.acceptance || []).includes(a.criterion)) || {}).id || null;
+    if (owner && !pendingIds.has(owner)) continue;
+    for (const f of a.files || []) {
+      const file = String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/');
+      if (seen.has(file) || !E2E_FILE_RE.test(file)) continue;
+      seen.add(file);
+      for (const r of overlayGeometryReads(read(file), options)) out.push({ task: owner, criterion: a.criterion || null, file, ...r });
+    }
+  }
+  return out;
+}
+
+function overlayGeometryMessages(found) {
+  return found.map((f) => `${f.task ? `${f.task}: ` : ''}${f.file}:${f.line} mede geometria (\`${f.read}\`) dentro de um overlay (\`${f.overlay}\`) sem esperar a animação de entrada — a medição pega o overlay ainda subindo e falha intermitente (OxeSpace OQ T14: alinhado em todo frame, 1–2 px no teste, 3 de 5 falham). Antes de medir: await el.evaluate((e) => Promise.all(e.getAnimations({ subtree: true }).map((a) => a.finished))) (ou o helper do repo em lint.e2e_ready_helpers) [G40c]`);
+}
+
 function racyMessages(found) {
   return found.map((f) => `${f.task ? `${f.task}: ` : ''}${f.file}:${f.line} age logo depois de abrir o app (\`${f.launch}\` → \`${f.action}\`) sem esperar o app ficar pronto — corrida com a montagem da UI (OxeSpace #863): espere um elemento da shell antes (ex.: locator(...).waitFor() / expect(...).toBeVisible(), ou o helper do repo em lint.e2e_ready_helpers) [G40]`);
 }
 
-module.exports = { racyActions, racyFrozenE2e, racyMessages, labelMismatches, labelMessages, layoutlibHazards, layoutlibMessages, containerGuardHazards, containerGuardMessages, E2E_FILE_RE };
+module.exports = { racyActions, racyFrozenE2e, racyMessages, overlayGeometryReads, overlayGeometryFrozenE2e, overlayGeometryMessages, labelMismatches, labelMessages, layoutlibHazards, layoutlibMessages, containerGuardHazards, containerGuardMessages, E2E_FILE_RE };

@@ -35,6 +35,23 @@ describe('G40: frozen e2e act only after the app is ready', () => {
     assert.equal(r.racyActions(two).length, 1, 'no launch in the second test: nothing pending');
   });
 
+  it('G40c: geometry read inside an overlay before its entrance animation finished (OxeSpace OQ T14)', () => {
+    const racy = [
+      "test('pq-07-12 alinha', async () => {",
+      "  const dialog = page.getByRole('dialog');",
+      "  await expect(dialog).toBeVisible();",
+      "  const a = await dialog.locator('.label').boundingBox();",
+      "  const b = await dialog.locator('.value').boundingBox();",
+      '});',
+    ].join('\n');
+    assert.deepEqual(r.overlayGeometryReads(racy).map((f) => f.line), [4]);
+    const waited = racy.replace("  const a =", "  await dialog.evaluate((e) => Promise.all(e.getAnimations({ subtree: true }).map((x) => x.finished)));\n  const a =");
+    assert.equal(r.overlayGeometryReads(waited).length, 0);
+    assert.equal(r.overlayGeometryReads(racy.replace("  const a =", "  await waitForEntrance(dialog);\n  const a ="), { helpers: ['waitForEntrance'] }).length, 0);
+    assert.equal(r.overlayGeometryReads("test('x', async () => {\n  const b = await page.locator('#card').boundingBox();\n});").length, 0, 'no overlay: no finding');
+    assert.match(r.overlayGeometryMessages([{ task: 'T14', file: 'e2e/pq-07-12.spec.ts', line: 4, overlay: 'x', read: 'y' }])[0], /getAnimations.*\[G40c\]/);
+  });
+
   it('R29: a URL in a string is no comment; a hook starts anew; a launch and an action on one line count', () => {
     const url = "test('a', async () => {\n  await page.goto('http://localhost:3000'); await page.locator('#ready').waitFor();\n  await page.click('#x');\n});";
     assert.equal(r.racyActions(url).length, 0, 'the wait after the URL is read');

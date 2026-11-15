@@ -6179,6 +6179,9 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
         const lintCfg = ((readProjectConfig(projectRoot) || {}).lint || {});
         const racy = require('./oxe-e2e-ready.cjs').racyFrozenE2e(projectRoot, pjs, { helpers: Array.isArray(lintCfg.e2e_ready_helpers) ? lintCfg.e2e_ready_helpers : [] });
         if (racy.length) { result.warnings.push(...require('./oxe-e2e-ready.cjs').racyMessages(racy)); result.racy_e2e = racy; }
+        // G40c (OQ T14): geometry measured inside an overlay before its entrance animation finished
+        const og = require('./oxe-e2e-ready.cjs').overlayGeometryFrozenE2e(projectRoot, pjs, { helpers: Array.isArray(lintCfg.e2e_ready_helpers) ? lintCfg.e2e_ready_helpers : [] });
+        if (og.length) { (lintCfg.e2e_overlay_geometry === 'error' ? result.errors : result.warnings).push(...require('./oxe-e2e-ready.cjs').overlayGeometryMessages(og)); result.overlay_geometry = og; }
         // G40b (#862): a case-sensitive regex accessible name that the app's real string (catalogs) cannot match
         const er = require('./oxe-e2e-ready.cjs');
         const labels = er.labelMismatches(projectRoot, pjs, { catalogs: Array.isArray(lintCfg.ui_strings) ? lintCfg.ui_strings : [] });
