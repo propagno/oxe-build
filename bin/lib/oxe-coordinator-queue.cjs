@@ -12,30 +12,42 @@
 
 const SEV = { critical: 0, high: 1, medium: 2, low: 3, unrated: 4 };
 
+const rolesOfTask = (t) => (t && Array.isArray(t.roles) && t.roles.length ? t.roles : t && t.role ? [String(t.role)] : []);
+const critMatch = (a, b) => {
+  const x = String(a || '').trim().toUpperCase();
+  const y = String(b || '').trim().toUpperCase();
+  return Boolean(x && y) && (x === y || x.startsWith(`${y}.`) || y.startsWith(`${x}.`));
+};
+
 function readyPhases(program) {
   const phases = (program && program.phases) || [];
   const status = new Map(phases.map((p) => [p.id, p.status]));
-  return phases.filter((p, i) => p.status === 'pending' && (Array.isArray(p.depends_on) ? p.depends_on : phases.slice(0, i).map((q) => q.id)).every((d) => ['closed', 'planning', 'executing', 'verifying'].includes(status.get(d))));
+  return phases.filter((p, i) => p && p.status === 'pending' && (Array.isArray(p.depends_on) ? p.depends_on : Array.isArray(p.dependsOn) ? p.dependsOn : phases.slice(0, i).map((q) => q.id)).every((d) => ['closed', 'done', 'planning', 'executing', 'verifying'].includes(status.get(d))));
 }
 
-function build(ctx) {
+function build(ctx = {}) {
   const roles = { tests: 'qa', planner: 'tech lead', lead: 'tech lead', ...((ctx.config && ctx.config.program && ctx.config.program.roles) || {}) };
   const tasks = ((ctx.doc && ctx.doc.tasks) || []).filter(Boolean);
-  const rolesOfCriterion = (c) => [...new Set(tasks.filter((t) => (t.acceptance || []).includes(c)).flatMap((t) => t.roles || []))];
+  const rolesOfCriterion = (c) => [...new Set(tasks.filter((t) => (t.acceptance || []).some((tc) => critMatch(tc, c))).flatMap(rolesOfTask))];
   const items = [];
   const push = (role, item) => items.push({ role, ...item });
-  for (const cr of (ctx.changes || []).filter((c) => c.status === 'open').sort((a, b) => (SEV[a.severity] ?? 4) - (SEV[b.severity] ?? 4))) {
-    const rs = [...new Set([...(cr.tasks || []).flatMap((id) => (tasks.find((t) => t.id === id) || {}).roles || []), ...(cr.criteria || []).flatMap(rolesOfCriterion)])];
+  const sevRank = (s) => SEV[String(s || '').toLowerCase()] ?? 4;
+  for (const cr of (ctx.changes || []).filter((c) => c && c.status === 'open').sort((a, b) => sevRank(a.severity) - sevRank(b.severity))) {
+    const rs = [...new Set([...(cr.tasks || []).flatMap((id) => rolesOfTask(tasks.find((t) => t.id === id))), ...(cr.criteria || []).flatMap(rolesOfCriterion)])];
     for (const r of rs.length ? rs : [roles.lead]) push(r, { kind: 'cr', ref: cr.id, phase: cr.phase || null, text: `${cr.id} (${cr.class}${cr.severity ? `, ${cr.severity}` : ''}): ${String(cr.summary || '').slice(0, 140)}` });
   }
-  const frozen = new Set(((ctx.doc && ctx.doc.acceptance_tests) || []).map((a) => a && a.criterion).filter(Boolean));
-  for (const f of ctx.frozenByPhase || []) frozen.add(f);
+  const accept = (ctx.doc && (Array.isArray(ctx.doc.acceptance_tests) ? ctx.doc.acceptance_tests : Array.isArray(ctx.doc.acceptanceTests) ? ctx.doc.acceptanceTests : [])) || [];
+  const frozen = new Set(accept.map((a) => a && a.criterion).filter(Boolean));
+  for (const f of ctx.frozenByPhase || []) if (f) frozen.add(f);
+  const isFrozen = (c) => frozen.has(c) || (String(c).includes('.') && frozen.has(String(c).split('.')[0]));
   for (const p of readyPhases(ctx.program)) {
     if (!p.plan_ref) push(roles.planner, { kind: 'plan', ref: p.id, phase: p.id, text: `planejar ${p.id} — ${p.title || ''} (critérios ${(p.acceptance || []).join(', ') || '—'})` });
-    for (const c of (p.acceptance || []).filter((x) => !frozen.has(x))) push(roles.tests, { kind: 'frozen_test', ref: c, phase: p.id, text: `escrever o teste congelado de ${c} (${p.id}) antes do plano` });
+    for (const c of (p.acceptance || []).filter((x) => !isFrozen(x))) push(roles.tests, { kind: 'frozen_test', ref: c, phase: p.id, text: `escrever o teste congelado de ${c} (${p.id}) antes do plano` });
   }
   const active = ctx.program && ctx.program.active_phase;
-  for (const t of tasks.filter((x) => !x.done)) for (const r of (t.roles && t.roles.length ? t.roles : [])) push(r, { kind: 'task', ref: t.id, phase: active || null, text: `${t.id} — ${t.title} (onda ${t.wave})` });
+  for (const t of tasks.filter((x) => !(x.done === true || x.status === 'done') && !x.superseded && !x.merged_into)) {
+    for (const r of rolesOfTask(t)) push(r, { kind: 'task', ref: t.id, phase: active || null, text: `${t.id} — ${t.title} (onda ${t.wave})` });
+  }
   const byRole = {};
   for (const it of items) (byRole[it.role] = byRole[it.role] || []).push(it);
   return { generated_at: new Date().toISOString(), active_phase: active || null, roles: byRole, next: Object.fromEntries(Object.entries(byRole).map(([r, xs]) => [r, xs[0]])) };
