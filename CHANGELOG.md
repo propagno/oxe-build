@@ -24,6 +24,11 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Eventos:** `AutoResumed` e `AutoResumeSkipped`.
 - **Teste:** `tests/oxe-1212-autoresume.test.cjs`. O CA-1 é um reinício simulado num programa de teste: o execute é morto em T2 com SIGKILL e o `autoresume run` o retoma em T2 sem chamar o executor para T1.
 
+### Recusa da política de uso não vira retry (OxeChat F3 T7, 15/11)
+
+- **Recusa de política:** um "safeguards flagged" / "usage policy" do modelo passa a ser `failure_class: policy`. O scheduler bloqueia a tarefa sem nova tentativa automática, e a saída aponta o `--print-prompt` para achar o trecho que dispara a recusa.
+- **Antes:** era lida como falha de ambiente e retentada com o mesmo prompt, que seria recusado de novo. Na T7 do OxeChat F3, a primeira tentativa custou US$ 5,02 até a recusa.
+
 ### `alm supersede` não fecha como "Lançado"; `alm version none`; lint sem fase ativa (OxeSpace 15/11)
 
 - **`alm supersede` nunca escolhe um status de release:**

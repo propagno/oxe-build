@@ -153,7 +153,14 @@ export function buildBridgePrompt(messages: ChatMessage[], tools: ToolSchema[] =
 
 /** Parse the model's reply into content + tool calls; null when it is not the expected JSON. */
 /** An adapter failure with what the CLI said, classified (context / quota / llm / env) and the cost already spent. */
-export interface CliFailure extends Error { kind: 'context' | 'quota' | 'llm' | 'env' | 'timeout'; costUsd: number; subtype: string | null; exitCode: number | null; }
+export interface CliFailure extends Error { kind: 'context' | 'quota' | 'llm' | 'env' | 'timeout' | 'policy'; costUsd: number; subtype: string | null; exitCode: number | null; }
+
+/**
+ * OxeSpace 15/11 (OxeChat F3 T7): "API Error: … safeguards flagged this message … [reasoning_extraction]" was read as
+ * env and retried — the same prompt is flagged again, so the retry only spends. A refusal by the model's usage policy
+ * is `policy`: no automatic retry, the reason in the output (the prompt has to change: `--print-prompt` shows it).
+ */
+const POLICY_RE = /safeguards? (have )?flagged|usage polic(y|ies)|violat(e|es|ing) (our|the|anthropic'?s?) (usage )?polic|\[reasoning_extraction\]|request was (refused|blocked) by/i;
 
 const CONTEXT_RE = /prompt is too long|too many tokens|context (window|length)|input is too long|maximum context|exceeds? the (model'?s? )?(context|token)/i;
 const QUOTA_RE = CLI_FAILURE_QUOTA_RE;
@@ -165,7 +172,7 @@ export function cliFailure(input: { code: number | null; stdout: string; stderr:
   const stdoutTail = env ? '' : String(input.stdout || '').trim().slice(-400);
   const stderr = String(input.stderr || '').trim().slice(0, 400);
   const text = [subtype, result, stdoutTail, stderr].filter(Boolean).join(' · ');
-  const kind: CliFailure['kind'] = CONTEXT_RE.test(text) ? 'context' : QUOTA_RE.test(text) ? 'quota' : subtype === 'error_max_turns' ? 'llm' : 'env';
+  const kind: CliFailure['kind'] = POLICY_RE.test(text) ? 'policy' : CONTEXT_RE.test(text) ? 'context' : QUOTA_RE.test(text) ? 'quota' : subtype === 'error_max_turns' ? 'llm' : 'env';
   const parts = [
     `claude exit ${input.code ?? '?'}`,
     subtype ? `subtype=${subtype}` : null,
