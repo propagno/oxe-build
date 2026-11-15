@@ -80,6 +80,18 @@ describe('program close --by-ci', () => {
     assert.equal(close(dir, { ...opts, ghSpawn: gh({ headSha: head }) }).closed, true);
   });
 
+  it('R37: the phase own run keeps its run_id (and acceptance lock) under --by-ci; only its verification fields go', () => {
+    const dir = project();
+    const compiled = op.compileExecutionGraphFromArtifacts(dir, null, {});
+    const runId = compiled.run.run_id;
+    const head = git(dir, 'rev-parse', 'HEAD').stdout.trim();
+    attach(dir, 12);
+    const out = close(dir, { byCi: true, by: 'tl', reason: 'decisão do usuário 15/11', ghSpawn: gh({ headSha: head }) });
+    assert.equal(out.closed, true, JSON.stringify(out.gate && out.gate.reasons));
+    const program = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'program', 'PROGRAM.json'), 'utf8'));
+    assert.equal(program.phases.find((p) => p.id === 'F1').run_id, runId);
+  });
+
   it('R36: by CI, a criterion with no frozen test and no verify result asks for a sign-off in the dossier', () => {
     const dir = project();
     const d = op.runtimeDossier(dir, null, { phase: 'F1', runState: {}, byCi: true });

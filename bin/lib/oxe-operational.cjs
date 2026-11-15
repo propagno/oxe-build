@@ -10800,7 +10800,10 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
       // R36: a verify of another commit is not this close's proof — its old reds (fixed since, green on CI) and its
       // proof results do not count; the CI run is the proof
       const headNow = require('./oxe-verdicts.cjs').headOf(projectRoot);
-      if (run && run.verification_head !== headNow) run = null;
+      // only the verification fields go (R37): the run's acceptance_lock (tamper check) and run_id stay
+      if (run && run.verification_head !== headNow) {
+        run = { ...run, verification_check_results: [], verification_results: [], verification_gates: null, verification_status: null, verification_head: null };
+      }
       gateInput = phaseGateInputFromRun(run);
       gateInput.verify_status = 'completed';
     }
