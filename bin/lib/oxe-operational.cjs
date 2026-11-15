@@ -6958,7 +6958,9 @@ function runChildCommandFull(projectRoot, command, timeoutMs = 600_000) {
   const env = rt && typeof rt.childProcessEnv === 'function' ? rt.childProcessEnv(process.env) : (() => { const e = { ...process.env }; delete e.NODE_TEST_CONTEXT; return e; })();
   const res = spawnSync(command, { cwd: projectRoot, shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true, env });
   const output = `${res.stdout || ''}\n${res.stderr || ''}`;
-  return { ok: res.status === 0, status: res.status, tail: output.split(/\r?\n/).filter(Boolean).slice(-15).join('\n'), output: output.slice(-200_000) };
+  // killed by the timeout (OxeSpace 15/11, OQ T18): a timed-out verify is not a failed one
+  const timedOut = Boolean(res.error && res.error.code === 'ETIMEDOUT');
+  return { ok: res.status === 0, status: res.status, timedOut, tail: output.split(/\r?\n/).filter(Boolean).slice(-15).join('\n'), output: output.slice(-200_000) };
 }
 
 function runChildCommand(projectRoot, command, timeoutMs = 600_000) {
@@ -8978,7 +8980,9 @@ function runtimeCommitTasksTogether(projectRoot, activeSession, options = {}) {
     appendEvent(projectRoot, activeSession, { type: 'ScopeViolation', run_id: runId, work_item_id: ids.join(','), payload: { tasks: ids, paths: outside } });
     throw new Error(`ScopeViolation: arquivos modificados fora de ${ids.join(', ')} (${outside.join(', ')})`);
   }
-  const verifyTimeoutMs = Number(options.verifyTimeoutMs) > 0 ? Number(options.verifyTimeoutMs) : 10 * 60_000;
+  // the project's verify_timeout_ms, as the execute reads it (OxeSpace 15/11, OQ T18: killed at 10 min while the
+  // remote run went on); --verify-timeout-ms still wins
+  const verifyTimeoutMs = Number(options.verifyTimeoutMs) > 0 ? Number(options.verifyTimeoutMs) : Number((readProjectConfig(projectRoot) || {}).verify_timeout_ms) > 0 ? Number(readProjectConfig(projectRoot).verify_timeout_ms) : 10 * 60_000;
   const commands = [...new Set(tasks.flatMap((t) => {
     const v = t.verify;
     return (Array.isArray(v) ? v : v && Array.isArray(v.commands) ? v.commands : typeof v === 'string' ? [v] : t.verifyCommand ? [t.verifyCommand] : []).map((c) => String(c || '').trim()).filter(Boolean);
@@ -8986,6 +8990,7 @@ function runtimeCommitTasksTogether(projectRoot, activeSession, options = {}) {
   if (!options.skipVerify) {
     for (const cmd of commands) {
       const res = runChildCommandFull(projectRoot, cmd, verifyTimeoutMs);
+      if (!res.ok && res.timedOut) throw new Error(`verify estourou o tempo (\`${cmd}\`, ${verifyTimeoutMs >= 60_000 ? `${Math.round(verifyTimeoutMs / 60_000)} min` : `${Math.round(verifyTimeoutMs / 1000)} s`}; verify_timeout_ms no config ou --verify-timeout-ms): ${String(res.tail || res.output || '').trim().slice(-300)}`);
       if (!res.ok) throw new Error(`verify falhou (\`${cmd}\`): ${String(res.tail || res.output || '').trim().slice(-500)}`);
     }
   }
@@ -9190,7 +9195,9 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
     .filter(Boolean);
 
   const scopeHash = computeScopeFingerprint(projectRoot, inScopeDirty);
-  const verifyTimeoutMs = Number(options.verifyTimeoutMs) > 0 ? Number(options.verifyTimeoutMs) : 10 * 60_000;
+  // the project's verify_timeout_ms, as the execute reads it (OxeSpace 15/11, OQ T18: killed at 10 min while the
+  // remote run went on); --verify-timeout-ms still wins
+  const verifyTimeoutMs = Number(options.verifyTimeoutMs) > 0 ? Number(options.verifyTimeoutMs) : Number((readProjectConfig(projectRoot) || {}).verify_timeout_ms) > 0 ? Number(readProjectConfig(projectRoot).verify_timeout_ms) : 10 * 60_000;
   let verifySkipped = false;
 
   if (commands.length > 0) {
@@ -9199,6 +9206,9 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
     } else {
       for (const cmd of commands) {
         const res = runChildCommandFull(projectRoot, cmd, verifyTimeoutMs);
+        if (!res.ok && res.timedOut) {
+          throw new Error(`verify de ${taskId} estourou o tempo (\`${cmd}\`, ${verifyTimeoutMs >= 60_000 ? `${Math.round(verifyTimeoutMs / 60_000)} min` : `${Math.round(verifyTimeoutMs / 1000)} s`}; verify_timeout_ms no config ou --verify-timeout-ms)`);
+        }
         if (!res.ok) {
           throw new Error(`verify de ${taskId} falhou (\`${cmd}\`): ${String(res.tail || res.output || '').trim().slice(-500)}`);
         }
