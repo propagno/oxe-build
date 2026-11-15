@@ -163,7 +163,10 @@ function buildDossier(input) {
     const accept = (plan.acceptanceTests || []).find((a) => a.criterion === c.id);
     const acceptCheck = checkById.get(`check-accept-${c.id.toLowerCase()}`);
     const criterionCheck = checkById.get(`check-${c.id.toLowerCase()}`);
-    const isManual = criterionCheck && criterionCheck.status === 'skip' && criterionCheck.skip_reason === 'needs_structured_check';
+    // R36: closed --by-ci (no phase verify), a criterion with no frozen test and no verify result has nothing on CI
+    // proving it — it needs a sign-off (or --defer-signoff), like a manual one
+    const isManual = (criterionCheck && criterionCheck.status === 'skip' && criterionCheck.skip_reason === 'needs_structured_check')
+      || Boolean(input.byCi && !accept && !acceptCheck && !criterionCheck);
     const signed = signoffs.find((s) => (s.criteria || []).includes(c.id));
     let result = acceptCheck ? `${acceptCheck.status}${acceptCheck.tests_executed ? ` (${acceptCheck.tests_executed} testes)` : ''}` : criterionCheck ? criterionCheck.status : 'não verificado';
     if (acceptCheck && acceptCheck.error) result += ` — ${acceptCheck.error}`;

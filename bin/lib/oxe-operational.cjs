@@ -6280,6 +6280,7 @@ function runtimeDossier(projectRoot, activeSession, options = {}) {
     decisions: readNdjsonQuiet(path.join(programDir, 'decisions.ndjson')),
     notes: readNdjsonQuiet(path.join(programDir, 'notes.ndjson')).filter((n) => !phaseId || !n.phase || n.phase === phaseId),
     signoffs: readNdjsonQuiet(path.join(programDir, 'signoffs.ndjson')).filter((s) => !phaseId || s.phase === phaseId),
+    byCi: Boolean(options.byCi),
     deploys: readNdjsonQuiet(path.join(programDir, 'deploy.ndjson')).filter((d) => !phaseId || !d.phase || d.phase === phaseId),
   });
   // Gatekeeper: regras do projeto (config.json policy_rules) sobre os arquivos tocados na fase.
@@ -10729,6 +10730,11 @@ function closeProofByCi(projectRoot, programDir, phaseId, options = {}) {
   const mine = records.filter((r) => r.kind === 'ci' && (!r.phase || r.phase === phaseId)).reverse();
   if (!mine.length) return { ok: false, why: `nenhum run de CI anexado à fase ${phaseId} (oxe-cc runtime ci --attach <run|url>)`, checked: [] };
   const head = require('./oxe-verdicts.cjs').headOf(projectRoot);
+  const docOnly = (p) => p.startsWith('.oxe/') || /^docs\//.test(p) || /\.md$/i.test(p);
+  // R36: code not committed would go into the phase commit untested by CI
+  const st0 = gitOut(projectRoot, ['-c', 'core.quotepath=false', 'status', '--porcelain', '--untracked-files=all']);
+  const dirty = String(st0.stdout || '').split(/\r?\n/).filter(Boolean).map((l) => l.slice(3).replace(/^.* -> /, '').replace(/^"|"$/g, '')).filter((p) => p && !docOnly(p));
+  if (dirty.length) return { ok: false, why: `há código fora de commit (${dirty.slice(0, 5).join(', ')}${dirty.length > 5 ? ', …' : ''}) — o CI não o testou; commite (e anexe o run que o contém) ou descarte antes do close`, checked: [] };
   const checked = [];
   for (const rec of mine) {
     const st = gatesLib.ciRunStatus({ ...rec, head: null }, { spawn: options.ghSpawn });
@@ -10739,8 +10745,8 @@ function closeProofByCi(projectRoot, programDir, phaseId, options = {}) {
     const ancestor = gitOut(projectRoot, ['merge-base', '--is-ancestor', head, runHead]).status === 0;
     let sameCode = false;
     if (!ancestor) {
-      const d = gitOut(projectRoot, ['diff', '--name-only', runHead, head, '--']);
-      sameCode = d.status === 0 && String(d.stdout || '').split(/\r?\n/).filter(Boolean).every((p) => p.startsWith('.oxe/') || /^docs\//.test(p) || /\.md$/i.test(p));
+      const d = gitOut(projectRoot, ['-c', 'core.quotepath=false', 'diff', '--name-only', runHead, head, '--']);
+      sameCode = d.status === 0 && String(d.stdout || '').split(/\r?\n/).filter(Boolean).every(docOnly);
     }
     entry.contains_head = ancestor || sameCode;
     if (entry.contains_head) return { ok: true, run: rec.run, head: runHead, url: (st.data && st.data.url) || null, checked };
@@ -10757,8 +10763,10 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   if (!state) throw new Error('Sem programa. Rode `oxe-cc runtime program init`.');
   const phase = options.phase ? runtime.findPhase(state, options.phase) : runtime.activePhase(state);
   if (!phase) throw new Error('Nenhuma fase ativa. Rode `oxe-cc runtime program start`.');
-  const run = options.runState || readRunState(projectRoot, activeSession);
-  const gateInput = phaseGateInputFromRun(run);
+  let run = options.runState || readRunState(projectRoot, activeSession);
+  // R36: the run of a phase already closed is not this phase's (its checks would be frozen again as this regression)
+  if (run && run.run_id && !options.runState) { try { if (isClosedPhaseRun(projectRoot, activeSession, run.run_id)) run = null; } catch { /* */ } }
+  let gateInput = phaseGateInputFromRun(run);
   // OXB-079: "verify não concluído (status: running)" right after a passed verify — the run stays `running` while an
   // external task of the graph is pending. A passed verify counts when the plan's work is done or external-only.
   if (gateInput.verify_status !== 'completed' && run && run.verification_status === 'passed') {
@@ -10788,7 +10796,14 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     const reason = String(options.reason || '').trim();
     if (!by || reason.length < 8) throw new Error('--by-ci exige --by <papel> e --reason "…" (o close sem verify fica registrado)');
     byCi = closeProofByCi(projectRoot, paths.programDir || path.join(projectRoot, '.oxe', 'program'), phase.id, options);
-    if (byCi.ok) gateInput.verify_status = 'completed';
+    if (byCi.ok) {
+      // R36: a verify of another commit is not this close's proof — its old reds (fixed since, green on CI) and its
+      // proof results do not count; the CI run is the proof
+      const headNow = require('./oxe-verdicts.cjs').headOf(projectRoot);
+      if (run && run.verification_head !== headNow) run = null;
+      gateInput = phaseGateInputFromRun(run);
+      gateInput.verify_status = 'completed';
+    }
   }
   const closeGates = programCloseGateReasons(projectRoot, activeSession, { phase, run, paths, state, skip: options.gates === false, byCi: Boolean(byCi && byCi.ok) });
   if (byCi && !byCi.ok) closeGates.reasons.push(`close --by-ci: ${byCi.why}`);
@@ -10882,7 +10897,7 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     }
   }
   // 1.20: um critério UAT com sign-off conta como verificado; o dossiê precisa estar sem drift e com handoff.
-  const dossier = options.dossier === false ? null : runtimeDossier(projectRoot, activeSession, { phase: phase.id, runState: run });
+  const dossier = options.dossier === false ? null : runtimeDossier(projectRoot, activeSession, { phase: phase.id, runState: run || {}, byCi: Boolean(byCi && byCi.ok) });
   if (dossier && gateInput.verify_status === 'blocked' && dossier.pending.length === 0) {
     const onlyManual = ((run && run.verification_check_results) || []).every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));
     if (onlyManual) gateInput.verify_status = 'completed';

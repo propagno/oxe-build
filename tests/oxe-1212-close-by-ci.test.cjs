@@ -67,4 +67,24 @@ describe('program close --by-ci', () => {
     write(dir, 'docs/n.md', 'x\n'); git(dir, 'add', '-A'); git(dir, 'commit', '-qm', 'docs');
     assert.equal(close(dir, { ...opts, ghSpawn: gh({ headSha: codeHead }) }).closed, true);
   });
+
+  it('R36: code not committed refuses; a docs file with an accent after the run is still the same code', () => {
+    const dir = project();
+    const opts = { byCi: true, by: 'tl', reason: 'decisão do usuário 15/11' };
+    const head = git(dir, 'rev-parse', 'HEAD').stdout.trim();
+    attach(dir, 11);
+    write(dir, 'src/novo.ts', 'export const y = 2;\n');
+    assert.match(close(dir, { ...opts, ghSpawn: gh({ headSha: head }) }).gate.reasons.join('\n'), /código fora de commit \(src\/novo\.ts\)/);
+    fs.rmSync(path.join(dir, 'src', 'novo.ts'));
+    write(dir, 'docs/decisões.md', 'x\n'); git(dir, 'add', '-A'); git(dir, 'commit', '-qm', 'docs com acento');
+    assert.equal(close(dir, { ...opts, ghSpawn: gh({ headSha: head }) }).closed, true);
+  });
+
+  it('R36: by CI, a criterion with no frozen test and no verify result asks for a sign-off in the dossier', () => {
+    const dir = project();
+    const d = op.runtimeDossier(dir, null, { phase: 'F1', runState: {}, byCi: true });
+    assert.ok(d.pending.includes('signoff_pending: A1'), JSON.stringify(d.pending));
+    const plain = op.runtimeDossier(dir, null, { phase: 'F1', runState: {} });
+    assert.ok(!plain.pending.includes('signoff_pending: A1'), 'without --by-ci the verify is what asks for it');
+  });
 });
