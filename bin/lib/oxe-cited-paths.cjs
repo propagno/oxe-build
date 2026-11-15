@@ -88,14 +88,16 @@ function citedPathGaps(root, planDoc, options = {}) {
     const siblingScopes = new Map();
     for (const a of entries.filter((x) => !x.task)) {
       for (const f of (a.files || []).map(norm)) {
-        const sibs = pending.filter((o) => o.id !== t.id && (o.acceptance || []).includes(a.criterion)).flatMap((o) => scopeOf(o));
-        siblingScopes.set(f, sibs);
+        // R52: a sibling already done still owns its files (a plan lint mid-phase), and two entries may share a file
+        const sibs = all.filter((o) => o.id !== t.id && !o.superseded && !o.merged_into && (o.acceptance || []).includes(a.criterion)).flatMap((o) => scopeOf(o));
+        siblingScopes.set(f, [...(siblingScopes.get(f) || []), ...sibs]);
       }
     }
     // R51: a sentence that marks a scope boundary ("não alterar X", "fora do escopo: X", "do not touch X") cites X
     // precisely to keep it out
     const NOT_IN_SCOPE = /\b(?:n[aã]o\s+(?:tocar|alterar|mexer|editar|mudar|incluir)|sem\s+(?:tocar|alterar|mexer|editar)|fora\s+d[eo]\s+escopo|do\s+not\s+(?:touch|edit|modify|change)|don'?t\s+(?:touch|edit|modify|change)|out\s+of\s+scope|leave\s+(?:\S+\s+)?(?:as\s+is|untouched))\b/i;
-    const keepIn = (text) => String(text || '').split(/(?<=[.;!?])\s+|\r?\n/).filter((s) => !NOT_IN_SCOPE.test(s)).join('\n');
+    // a sentence ends at . ; ! ? — never after an abbreviation ("p.ex.", "e.g.", "i.e.", R52)
+    const keepIn = (text) => String(text || '').split(/(?<!\b(?:e\.g|i\.e|p\.ex|ex|etc|vs|cf)\.)(?<=[.;!?])\s+|\r?\n/i).filter((s) => !NOT_IN_SCOPE.test(s)).join('\n');
     const sources = [
       { where: 'title/notes', text: keepIn([t.title, t.notes, t.description].filter(Boolean).join('\n')) },
       ...frozen.map((f) => ({ where: f, text: keepIn(testHeader(read(f))), siblings: siblingScopes.get(f) || [] })),

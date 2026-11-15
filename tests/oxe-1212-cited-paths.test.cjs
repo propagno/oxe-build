@@ -45,6 +45,11 @@ describe('G44: a cited path or component out of the task scope', () => {
       acceptance_tests: [{ criterion: 'A15', files: ['tests/acceptance/brd15.test.tsx'] }],
     };
     assert.equal(cp.citedPathGaps('.', shared, { files, readText }).length, 0, 'T2 owns it for the shared criterion');
+    // R52: the sibling done mid-phase still owns it; an abbreviation does not split the boundary sentence
+    const sharedDone = { ...shared, tasks: [shared.tasks[0], { ...shared.tasks[1], done: true }] };
+    assert.equal(cp.citedPathGaps('.', sharedDone, { files, readText }).length, 0);
+    assert.equal(cp.citedPathGaps('.', { ...base, tasks: [{ id: 'T1', notes: 'Não alterar p.ex. ChangesPanel.', files: ['x.ts'] }] }, { files, readText }).length, 0);
+    assert.equal(cp.citedPathGaps('.', { ...base, tasks: [{ id: 'T1', notes: 'Do not touch e.g. ChangesPanel.', files: ['x.ts'] }] }, { files, readText }).length, 0);
     const shim = [...files, 'src/polyfills/ResizeObserver.ts'];
     assert.equal(cp.citedPathGaps('.', { ...base, tasks: [{ id: 'T1', notes: 'reage ao ResizeObserver', files: ['x.ts'] }] }, { files: shim, readText }).length, 0);
     assert.equal(cp.citedPathGaps('.', { ...base, tasks: [{ id: 'T1', notes: 'usa @scope/ChangesPanel', files: ['x.ts'] }] }, { files, readText }).length, 0);
