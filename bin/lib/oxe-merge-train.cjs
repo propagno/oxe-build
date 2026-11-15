@@ -17,15 +17,18 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const TRAIN_RE = /^\s*merge-train:\s*(.+)$/im;
+const TRAIN_RE_GLOBAL = /^\s*merge-train:\s*(.+)$/gim;
 
 /** The train state from labels and the latest merge-train comment. */
 function trainState(pr) {
   if (!pr) return { state: 'unknown' };
   if (String(pr.state || '').toUpperCase() === 'MERGED') return { state: 'merged' };
   const labels = (pr.labels || []).map((l) => String(l.name || l).toLowerCase());
-  const comments = (pr.comments || []).map((c) => String(c.body || c)).filter((b) => TRAIN_RE.test(b));
-  const last = comments.length ? TRAIN_RE.exec(comments[comments.length - 1])[1].trim().toLowerCase() : '';
+  const directives = [];
+  for (const c of pr.comments || []) {
+    for (const m of String(c && (c.body || c)).matchAll(TRAIN_RE_GLOBAL)) directives.push(m[1].trim().toLowerCase());
+  }
+  const last = directives.length ? directives[directives.length - 1] : '';
   if (/merged|mergeado/.test(last)) return { state: 'merged', note: last };
   if (/removed|kicked|dequeued|ejected|saiu|removido/.test(last) || labels.includes('merge-train:removed')) return { state: 'left', note: last || 'label merge-train:removed' };
   if (/car\s*\d+|vag[aã]o|riding|testing/.test(last)) return { state: 'riding', note: last };
@@ -67,7 +70,7 @@ function resync(ctx) {
   if (item.state !== 'left') return { steps: [{ step: 'skip', why: `estado ${item.state}: só um PR que saiu do trem é sincronizado` }], ok: false };
   if (ctx.reopen) { ctx.reopen(item.task); steps.push({ step: 'reopen', ok: true }); }
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-train-'));
-  const add = run('git', ['worktree', 'add', ws, item.branch], ctx.root);
+  const add = run('git', ['worktree', 'add', '--detach', ws, item.branch], ctx.root);
   if (add.status !== 0) { fs.rmSync(ws, { recursive: true, force: true }); return { steps: [...steps, { step: 'worktree', ok: false, error: String(add.stderr).trim() }], ok: false }; }
   try {
     run('git', ['fetch', 'origin', item.base], ctx.root);

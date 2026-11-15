@@ -30,7 +30,7 @@ const lowerIsBetter = (th) => th.op === '<=' || th.op === '<';
 
 function declare(programDir, criterion, input) {
   const id = String(criterion || '').toUpperCase();
-  if (!/^A\d+$/.test(id)) throw new Error('informe o critério: oxe-cc runtime nfr declare --criteria A12 …');
+  if (!/^(?:A\d+(?:\.\d+)?|G\d+)$/.test(id)) throw new Error('informe o critério: oxe-cc runtime nfr declare --criteria A12 …');
   if (!input.metric || !input.method) throw new Error('nfr exige --metric <nome> e --method "<comando que imprime o valor>"');
   parseThreshold(input.threshold);
   const samples = Number(input.samples || 5);
@@ -43,12 +43,17 @@ function declare(programDir, criterion, input) {
   return { criterion: id, ...d.criteria[id] };
 }
 
-/** The value a run printed: `<metric>=<n>` / `<metric>: <n>`, else the last number. */
+const ANSI_CSI_RE = new RegExp('\\u001b\\[[0-9;]*[A-Za-z]', 'g');
+
+/** The value a run printed: `<metric>=<n>` / `<metric>: <n>`, else the last number (ANSI CSI stripped). */
 function parseValue(out, metric) {
-  const text = String(out || '');
-  const re = new RegExp(`${String(metric).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[=:]\\s*(-?\\d+(?:\\.\\d+)?)`, 'i');
-  const m = re.exec(text);
-  if (m) return Number(m[1]);
+  const text = String(out || '').replace(ANSI_CSI_RE, '');
+  const escMetric = String(metric || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (escMetric) {
+    const re = new RegExp(`(?<![A-Za-z0-9_.-])${escMetric}\\s*[=:]\\s*(-?\\d+(?:\\.\\d+)?)`, 'i');
+    const m = re.exec(text);
+    if (m) return Number(m[1]);
+  }
   const nums = text.match(/-?\d+(?:\.\d+)?/g);
   return nums && nums.length ? Number(nums[nums.length - 1]) : null;
 }
@@ -88,10 +93,15 @@ function measure(root, programDir, criterion, ctx = {}) {
   const prev = history(programDir).filter((h) => h.criterion === criterion && h.phase && h.phase !== ctx.phase && h.median != null).pop() || null;
   const pct = Number((ctx.config && ctx.config.nfr && ctx.config.nfr.regression_pct) ?? 10);
   let regression = null;
-  if (s && prev && prev.median) {
-    const delta = (s.median - prev.median) / Math.abs(prev.median);
-    const worse = lowerIsBetter(th) ? delta : -delta;
-    if (worse * 100 > pct) regression = { from_phase: prev.phase, from: prev.median, to: s.median, worse_pct: Math.round(worse * 1000) / 10 };
+  if (s && prev && prev.median != null) {
+    if (prev.median === 0) {
+      const regressedFromZero = (lowerIsBetter(th) && s.median > 0) || (!lowerIsBetter(th) && s.median < 0);
+      if (regressedFromZero) regression = { from_phase: prev.phase, from: 0, to: s.median, worse_pct: 100 };
+    } else {
+      const delta = (s.median - prev.median) / Math.abs(prev.median);
+      const worse = lowerIsBetter(th) ? delta : -delta;
+      if (worse * 100 > pct) regression = { from_phase: prev.phase, from: prev.median, to: s.median, worse_pct: Math.round(worse * 1000) / 10 };
+    }
   }
   const rec = { kind: 'nfr', criterion, phase: ctx.phase || null, metric: d.metric, threshold: d.threshold, environment: d.environment, samples: d.samples, measured: values.length, failed_samples: failures, ...(s || { median: null }), pass, regression, at: new Date().toISOString() };
   fs.mkdirSync(programDir, { recursive: true });

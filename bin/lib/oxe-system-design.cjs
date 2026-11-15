@@ -22,9 +22,26 @@ const norm = (p) => String(p).replace(/\\/g, '/');
 function globRe(g) { return new RegExp(`^${norm(g).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*\//g, '\u0000').replace(/\*\*/g, '\u0001').replace(/\*/g, '[^/]*').replace(/\u0000/g, '(?:.*/)?').replace(/\u0001/g, '.*')}$`); }
 
 function requirements(specText) {
+  const clean = String(specText || '')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/^(?:```|~~~)[^\n]*\n[\s\S]*?^(?:```|~~~)\s*$/gm, ' ');
   const out = [];
-  for (const m of String(specText || '').matchAll(/^\|\s*(R\d+)\s*\|\s*([^|]+?)\s*\|[^|]*\|\s*([^|]*)\|/gm)) out.push({ id: m[1], text: m[2], criteria: [...m[3].matchAll(/A\d+/g)].map((x) => x[0]) });
-  for (const m of String(specText || '').matchAll(/^\s*[-*]\s+\*\*(R\d+)\*\*\s*[—:-]\s*(.+?)(?:\(([^)]*)\))?\s*$/gm)) if (!out.some((r) => r.id === m[1])) out.push({ id: m[1], text: m[2].trim(), criteria: [...String(m[3] || '').matchAll(/A\d+/g)].map((x) => x[0]) });
+  for (const ln of clean.split(/\r?\n/)) {
+    const trimmed = ln.trim();
+    if (!trimmed.startsWith('|')) continue;
+    const cells = trimmed.replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map((c) => c.replace(/\\\|/g, '|').trim());
+    const id = (cells[0] || '').replace(/\*/g, '').trim().toUpperCase();
+    if (!/^R(?:-RB)?-?\d+$/.test(id)) continue;
+    const critCell = cells.length >= 4 ? cells[3] : cells[2] || '';
+    const crits = [...String(critCell).matchAll(/\b(?:A\d+(?:\.\d+)?|G\d+)\b/gi)].map((x) => x[0].toUpperCase());
+    if (!out.some((r) => r.id === id)) out.push({ id, text: cells[1] || '', criteria: crits });
+  }
+  for (const m of clean.matchAll(/^\s*[-*]\s+(?:\*\*)?(R(?:-RB)?-?\d+)(?:\*\*)?\s*[—–:-]\s*(.+?)(?:\(([^)]*)\))?\s*$/gm)) {
+    const id = m[1].toUpperCase();
+    if (!out.some((r) => r.id === id)) {
+      out.push({ id, text: m[2].trim(), criteria: [...String(m[3] || '').matchAll(/\b(?:A\d+(?:\.\d+)?|G\d+)\b/gi)].map((x) => x[0].toUpperCase()) });
+    }
+  }
   return out;
 }
 
@@ -57,7 +74,12 @@ function build(root, ctx = {}) {
     const m = /<!--\s*oxe-design:\s*id=([^\s]+)/.exec(chunk);
     if (m) bodies.set(m[1], chunk.replace(/^### [^\n]*\n/, '').replace(/<!--\s*oxe-design:[^>]*-->\s*\n?/, '').trim());
   }
-  const reqFor = (dir) => reqs.filter((r) => new RegExp(`\\b${path.posix.basename(dir).replace(/[-_]/g, '[-_ ]?')}\\b`, 'i').test(r.text));
+  const reqFor = (dir) => {
+    const baseName = path.posix.basename(dir).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[-_]/g, '[-_ ]?');
+    if (!baseName) return [];
+    const re = new RegExp(`(?<![A-Za-z0-9])${baseName}(?![A-Za-z0-9])`, 'i');
+    return reqs.filter((r) => re.test(r.text));
+  };
   const section = (id, title, paths, ids, fallback) => [`### ${title}`, `<!-- oxe-design: id=${id} paths=${paths.join(',')} ids=${ids.join(',')} -->`, '', bodies.get(id) || fallback, ''].join('\n');
   const lines = ['# SYSTEM-DESIGN', '', '> Gerado por `oxe-cc design build` e mantido pelo scan/spec. Cada seção liga caminhos a ids R/A: o close da fase (OXB-105) recusa um diff que muda esses caminhos sem atualizar a seção.', '', '## Componentes e processos', ''];
   for (const d of dirs) {
@@ -70,7 +92,7 @@ function build(root, ctx = {}) {
   for (const d of (ctx.decisions || []).filter((x) => !x.status || x.status === 'active')) {
     lines.push(section(`adr/${d.id}`, `${d.id} — ${d.title}`, [], d.criteria || [], [`- **Contexto:** ${d.text || '—'}`, `- **Decisão:** ${d.title}`, ...(d.alternatives || []).map((a) => `- **Alternativa recusada:** ${a.text} — ${a.reason} (${a.by})`), `- **Fonte:** decisions.ndjson ${d.id}, ${d.by}`].join('\n')));
   }
-  lines.push('## Diagramas', '', '### C4 — contexto e containers', '<!-- oxe-design: id=diagram/c4 paths= ids= -->', '', '```mermaid', 'flowchart LR', '  user([Usuário]) --> system[Sistema]', ...dirs.map((d, i) => `  system --> c${i}[${d}]`), '```', '');
+  lines.push('## Diagramas', '', '### C4 — contexto e containers', '<!-- oxe-design: id=diagram/c4 paths= ids= -->', '', '```mermaid', 'flowchart LR', '  user([Usuário]) --> system[Sistema]', ...dirs.map((d, i) => `  system --> c${i}["${String(d).replace(/"/g, "'")}"]`), '```', '');
   const seqReqs = reqs.slice(0, 3);
   if (seqReqs.length) {
     lines.push('### Sequências principais', '<!-- oxe-design: id=diagram/sequences paths= ids=' + seqReqs.map((r) => r.id).join(',') + ' -->', '');

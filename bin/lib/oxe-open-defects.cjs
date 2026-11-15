@@ -12,6 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
+const criteriaIds = require('./oxe-criteria-ids.cjs');
 
 const FILE = (projectRoot) => path.join(projectRoot, '.oxe', 'OPEN-DEFECTS.json');
 const CODE_RE = /\.(c|m)?[jt]sx?$|\.(kt|kts|java|py|go|rs|swift|cs|vue|svelte)$/i;
@@ -20,6 +21,7 @@ const TODO_RE = /\b(TODO|FIXME|XXX|HACK)\b/;
 const SKIP_RE = /\b(it|test|describe|context|suite)\.(skip|only|todo)\s*\(|\b(xit|xdescribe|fit|fdescribe)\s*\(|@Disabled\b|@Ignore\b|\bpytest\.mark\.skip\b|\bt\.Skip\(/;
 
 const idOf = (kind, key) => `OD-${kind}-${crypto.createHash('sha1').update(String(key)).digest('hex').slice(0, 8)}`;
+const normPath = (p) => String(p || '').replace(/\\/g, '/');
 
 function read(projectRoot) {
   try { return JSON.parse(fs.readFileSync(FILE(projectRoot), 'utf8')); } catch { return null; }
@@ -31,16 +33,18 @@ function addedLines(projectRoot, base) {
   let file = null;
   let ln = 0;
   for (const l of diff.split(/\r?\n/)) {
-    if (l.startsWith('+++ ')) { file = l.slice(4).replace(/^b\//, ''); continue; }
+    if (l.startsWith('+++ ')) { file = normPath(l.slice(4).replace(/^b\//, '')); continue; }
     const h = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(l);
     if (h) { ln = Number(h[1]); continue; }
-    if (!file || file === '/dev/null') continue;
+    if (!file || file === '/dev/null' || file.startsWith('.oxe/')) continue;
     if (l.startsWith('+') && !l.startsWith('+++')) { out.push({ file, line: ln, text: l.slice(1) }); ln += 1; }
     else if (!l.startsWith('-') && !l.startsWith('\\')) ln += 1;
   }
   // untracked new files count whole
   const others = spawnSync('git', ['ls-files', '--others', '--exclude-standard'], { cwd: projectRoot, encoding: 'utf8', windowsHide: true }).stdout || '';
-  for (const f of others.split(/\r?\n/).filter(Boolean)) {
+  for (const rawF of others.split(/\r?\n/).filter(Boolean)) {
+    const f = normPath(rawF);
+    if (f.startsWith('.oxe/')) continue;
     try {
       const st = fs.statSync(path.join(projectRoot, f));
       if (st.size > 1_000_000) continue;
@@ -70,17 +74,17 @@ function collect(projectRoot, ctx = {}) {
     } catch { /* */ }
   }
   for (const t of (ctx.doc && Array.isArray(ctx.doc.tasks) ? ctx.doc.tasks : [])) {
-    if (!t || t.done !== true || ['external_delivery', 'verify_only'].includes(t.kind)) continue;
+    if (!t || !(t.done === true || t.status === 'done') || ['external_delivery', 'verify_only'].includes(t.kind)) continue;
     const cmds = t.verify && Array.isArray(t.verify.commands) ? t.verify.commands.filter((c) => String(c).trim()) : [];
     if (!cmds.length && !(t.verify && t.verify.command)) push('verify_missing', `${ctx.phase || ''}|${t.id}|${t.title}`, { task: t.id, text: `${t.id} concluída sem verify` });
   }
   // OXB-138: deferred tasks still open block the close too (waivable like any defect)
   for (const d of ctx.deferred || []) push('deferred', d.id, { task: d.task, text: `${d.id}: ${d.task} adiada (${d.reason})` });
-  const standing = new Set(ctx.standing || []);
+  const standing = new Set((ctx.standing || []).map((x) => String(x).toUpperCase()));
   for (const cr of ctx.changes || []) {
-    if (!cr || cr.status !== 'open') continue;
+    if (!cr || String(cr.status || '').toLowerCase() !== 'open') continue;
     if (/^signal/.test(String(cr.by || ''))) push('signal_cr', cr.id, { cr: cr.id, text: cr.summary });
-    else if ((cr.criteria || []).some((c) => standing.has(c))) push('standing_cr', cr.id, { cr: cr.id, text: `${cr.summary} (${cr.criteria.join(',')})` });
+    else if ((cr.criteria || []).some((c) => criteriaIds.inPhase(String(c).toUpperCase(), standing))) push('standing_cr', cr.id, { cr: cr.id, text: `${cr.summary} (${cr.criteria.join(',')})` });
   }
   // dedupe by id
   const byId = new Map();

@@ -16,23 +16,49 @@
 
 const fs = require('fs');
 const path = require('path');
+const criteriaIds = require('./oxe-criteria-ids.cjs');
 
 const RISKS = ['P0', 'P1', 'P2', 'P3'];
 const FILE = (programDir) => path.join(programDir, 'waivers.ndjson');
 
+function stripNoise(text) {
+  return String(text || '')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/^(?:```|~~~)[^\n]*\n[\s\S]*?^(?:```|~~~)\s*$/gm, ' ');
+}
+
+function splitTableCells(line) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('|')) return null;
+  return trimmed
+    .replace(/^\|/, '')
+    .replace(/(?<!\\)\|$/, '')
+    .split(/(?<!\\)\|/)
+    .map((c) => c.replace(/\\\|/g, '|').trim());
+}
+
 function criterionRisks(specText) {
   const out = new Map();
   let riskCol = -1;
-  for (const ln of String(specText || '').split(/\r?\n/)) {
-    if (!/^\s*\|/.test(ln)) { riskCol = ln.trim() ? riskCol : riskCol; continue; }
-    const cells = ln.split('|').slice(1, -1).map((c) => c.trim());
-    if (cells[0] === 'ID') { riskCol = cells.findIndex((c) => /^(risco|risk)$/i.test(c)); continue; }
-    const id = /^(A\d+)$/.exec(cells[0] || '');
+  let inCriteriaTable = true;
+  for (const ln of stripNoise(specText).split(/\r?\n/)) {
+    const cells = splitTableCells(ln);
+    if (!cells) continue;
+    if (cells.length && cells.every((c) => /^:?-{2,}:?$/.test(c))) continue;
+    const c0 = (cells[0] || '').replace(/\*/g, '').trim();
+    if (/^(?:r-?)?id$/i.test(c0)) {
+      const c1 = (cells[1] || '').replace(/\*/g, '').trim();
+      inCriteriaTable = /^id$/i.test(c0) && /crit[ée]rio|criterion/i.test(c1);
+      riskCol = inCriteriaTable ? cells.findIndex((c) => /^(risco|risk)\b/i.test(c.replace(/\*/g, '').trim())) : -1;
+      continue;
+    }
+    if (!inCriteriaTable) continue;
+    const id = /^(A\d+(?:\.\d+)?|G\d+)$/i.exec(c0);
     if (!id) continue;
-    const col = riskCol >= 0 ? String(cells[riskCol] || '').toUpperCase() : '';
-    const tag = /\[(P[0-3])\]/.exec(ln);
-    const r = RISKS.includes(col) ? col : tag ? tag[1] : null;
-    if (r) out.set(id[1], r);
+    const col = riskCol >= 0 ? String(cells[riskCol] || '').replace(/\*/g, '').trim().toUpperCase() : '';
+    const tag = /\[(P[0-3])\]/i.exec(ln);
+    const r = RISKS.includes(col) ? col : tag ? tag[1].toUpperCase() : null;
+    if (r) out.set(id[1].toUpperCase(), r);
   }
   return out;
 }
@@ -48,7 +74,7 @@ function addWaiver(programDir, input) {
   if (!criteria.length) throw new Error('waive exige --criteria A12[,A13]');
   if (!input.reason || String(input.reason).trim().length < 8) throw new Error('waive exige --reason (o risco aceito, em uma frase)');
   if (!input.by) throw new Error('waive exige --by <dono>');
-  if (!/^F\d+$/i.test(String(input.until || ''))) throw new Error('waive exige --until Fn (a fase em que o item volta)');
+  if (!/^F\d+(?:\.\d+)?$/i.test(String(input.until || ''))) throw new Error('waive exige --until Fn (a fase em que o item volta)');
   fs.mkdirSync(programDir, { recursive: true });
   const recs = criteria.map((c) => ({ kind: 'waiver', criterion: c, reason: String(input.reason), by: String(input.by), until: String(input.until).toUpperCase(), phase: input.phase || null, at: new Date().toISOString() }));
   for (const r of recs) fs.appendFileSync(FILE(programDir), `${JSON.stringify(r)}\n`, 'utf8');
@@ -65,19 +91,33 @@ function decide(ctx) {
   const risks = criterionRisks(ctx.specText);
   const enabled = cfg.risk_decision === true || risks.size > 0;
   const defaultRisk = RISKS.includes(cfg.default_risk) ? cfg.default_risk : 'P2';
-  const criteria = (ctx.phase && ctx.phase.acceptance) || [];
-  const tests = ((ctx.doc && ctx.doc.acceptance_tests) || []).filter(Boolean);
+  const criteria = ((ctx.phase && ctx.phase.acceptance) || []).map((x) => String(x).toUpperCase());
+  const tests = ((ctx.doc && (ctx.doc.acceptance_tests || ctx.doc.acceptanceTests)) || []).filter(Boolean);
   const tasks = ((ctx.doc && ctx.doc.tasks) || []).filter(Boolean);
+  const phaseId = ctx.phase && ctx.phase.id ? String(ctx.phase.id).toUpperCase() : null;
   const curIdx = phaseIndex(ctx.program, ctx.phase && ctx.phase.id);
+  const testedSet = new Set(tests.map((a) => String(a.criterion || '').toUpperCase()).filter(Boolean));
+  const signedSet = new Set(
+    (ctx.signoffs || [])
+      .filter((s) => s && s.evidence && (!phaseId || !s.phase || String(s.phase).toUpperCase() === phaseId))
+      .flatMap((s) => (s.criteria || []).map((x) => String(x).toUpperCase())),
+  );
+  const taskSet = new Set(tasks.flatMap((t) => (t.acceptance || []).map((x) => String(x).toUpperCase())));
+  const allKnownIds = [...new Set([...risks.keys(), ...testedSet, ...signedSet, ...taskSet])];
+  const subsByParent = criteriaIds.subcriteriaOf(allKnownIds);
   const warnings = [];
   const rows = criteria.map((c) => {
-    const risk = risks.get(c) || defaultRisk;
-    if (!risks.has(c) && enabled) warnings.push(`${c}: sem prioridade de risco — herdou ${defaultRisk} (declare a coluna Risco ou [P1] no critério)`);
-    const frozen = tests.some((a) => a.criterion === c);
-    const signed = (ctx.signoffs || []).some((s) => (s.criteria || []).includes(c) && s.evidence);
-    const byTask = tasks.some((t) => (t.acceptance || []).includes(c));
+    const subs = subsByParent.get(c) || [];
+    const subRisks = subs.map((s) => risks.get(s)).filter(Boolean);
+    const derivedSubRisk = subRisks.length ? subRisks.sort((a, b) => RISKS.indexOf(a) - RISKS.indexOf(b))[0] : null;
+    const directOrParentRisk = risks.get(c) || risks.get(criteriaIds.parentOf(c)) || derivedSubRisk;
+    const risk = directOrParentRisk || defaultRisk;
+    if (!directOrParentRisk && enabled) warnings.push(`${c}: sem prioridade de risco — herdou ${defaultRisk} (declare a coluna Risco ou [P1] no critério)`);
+    const frozen = criteriaIds.inPhase(c, testedSet) || (subs.length > 0 && subs.every((s) => testedSet.has(s)));
+    const signed = criteriaIds.inPhase(c, signedSet) || (subs.length > 0 && subs.every((s) => signedSet.has(s)));
+    const byTask = criteriaIds.inPhase(c, taskSet) || (subs.length > 0 && subs.some((s) => taskSet.has(s)));
     const coverage = (frozen && ctx.verifyCompleted) || signed ? 'full' : byTask || frozen ? 'partial' : 'none';
-    const waiver = (ctx.waivers || []).filter((w) => w.criterion === c).pop() || null;
+    const waiver = (ctx.waivers || []).filter((w) => String(w.criterion || '').toUpperCase() === c).pop() || null;
     const expired = waiver ? phaseIndex(ctx.program, waiver.until) >= 0 && curIdx >= phaseIndex(ctx.program, waiver.until) : false;
     return { criterion: c, risk, coverage, waiver: waiver && !expired ? { by: waiver.by, reason: waiver.reason, until: waiver.until } : null, waiver_expired: Boolean(waiver && expired) };
   });

@@ -17,21 +17,33 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
+const criteriaIds = require('./oxe-criteria-ids.cjs');
 
 const git = (root, args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
 const CODE_RE = /\.(c|m)?[jt]sx?$|\.(kt|kts|java|py|go|rs)$/i;
 const TEST_RE = /(^|\/)(tests?|__tests__|specs?|e2e)\/|\.(test|spec)\.[^/]+$/i;
+
+function maskStringsAndComments(text) {
+  return String(text || '').replace(
+    /('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`)|\/\/[^\r\n]*|\/\*[\s\S]*?\*\//g,
+    (m, str) => {
+      if (!str) return m.replace(/[^\r\n]/g, ' ');
+      const q = str[0];
+      return `${q}${str.slice(1, -1).replace(/[^\r\n]/g, '_')}${q}`;
+    },
+  );
+}
 
 function filesByTask(root, base) {
   const map = new Map(); // file → Set(task)
   const log = git(root, ['log', '--format=%x00%B%x01', '--name-only', `${base}..HEAD`]).stdout || '';
   for (const chunk of log.split('\0').filter(Boolean)) {
     const [body, files] = chunk.split('\x01');
-    const m = /^OXE-Task: (?:F\d+\/)?(T\d+)\s*$/m.exec(body || '');
-    if (!m) continue;
-    for (const f of String(files || '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean)) {
+    const tasksInCommit = [...String(body || '').matchAll(/^OXE-Task:\s*(?:F\d+(?:\.\d+)?\/)?(T\d+)\s*$/gm)].map((m) => m[1]);
+    if (!tasksInCommit.length) continue;
+    for (const f of String(files || '').split(/\r?\n/).map((x) => x.trim().replace(/\\/g, '/')).filter(Boolean)) {
       if (!map.has(f)) map.set(f, new Set());
-      map.get(f).add(m[1]);
+      for (const tid of tasksInCommit) map.get(f).add(tid);
     }
   }
   return map;
@@ -39,17 +51,18 @@ function filesByTask(root, base) {
 
 function bodiesOf(text) {
   const out = [];
-  const src = String(text || '');
+  const raw = String(text || '');
+  const masked = maskStringsAndComments(raw);
   const re = /\b(?:function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)|(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>)\s*\{/g;
   let m;
-  while ((m = re.exec(src))) {
-    const open = src.indexOf('{', m.index + m[0].length - 1);
+  while ((m = re.exec(masked))) {
+    const open = masked.indexOf('{', m.index + m[0].length - 1);
     let depth = 0;
     let end = -1;
-    for (let i = open; i < src.length; i += 1) { if (src[i] === '{') depth += 1; else if (src[i] === '}') { depth -= 1; if (!depth) { end = i; break; } } }
+    for (let i = open; i < masked.length; i += 1) { if (masked[i] === '{') depth += 1; else if (masked[i] === '}') { depth -= 1; if (!depth) { end = i; break; } } }
     if (end < 0) continue;
-    const body = src.slice(open + 1, end);
-    const lines = body.split('\n').filter((l) => l.trim()).length;
+    const body = raw.slice(open + 1, end);
+    const lines = masked.slice(open + 1, end).split('\n').filter((l) => l.trim()).length;
     if (lines < 4) continue;
     const normalized = body.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ').trim();
     out.push({ name: m[1] || m[2], hash: crypto.createHash('sha1').update(normalized).digest('hex').slice(0, 12), lines });
@@ -76,7 +89,8 @@ function seamsReport(root, base, ctx = {}) {
         if (file === x.file || ![...owner].some((t) => !tasks.has(t))) continue;
         let text = '';
         try { text = fs.readFileSync(path.join(root, file), 'utf8'); } catch { continue; }
-        if (new RegExp(`\\b${name.replace(/[$]/g, '\\$')}\\b`).test(text)) consumers.push({ file, tasks: [...tasks] });
+        const escName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (new RegExp(`(?<![A-Za-z0-9_$])${escName}(?![A-Za-z0-9_$])`).test(text)) consumers.push({ file, tasks: [...tasks] });
       }
       if (consumers.length) report.export_consumers.push({ file: x.file, export: name, change: x.after ? 'mudou' : 'removido', consumers });
     }
@@ -106,9 +120,26 @@ function seamsReport(root, base, ctx = {}) {
 /** Criteria whose "Como verificar" says the flow runs end to end. */
 function behaviorCriteriaFromSpec(specText, phaseCriteria) {
   const out = [];
-  for (const line of String(specText || '').split(/\r?\n/)) {
-    const m = /^\|\s*(A\d+(?:\.\d+)?)\s*\|[^|]*\|([^|]*)\|/.exec(line);
-    if (m && (!phaseCriteria || phaseCriteria.includes(m[1])) && /ponta a ponta|end[- ]to[- ]end|\be2e\b|executar o fluxo|fluxo completo/i.test(m[2])) out.push(m[1]);
+  const phaseSet = Array.isArray(phaseCriteria) ? new Set(phaseCriteria.map((x) => String(x).toUpperCase())) : null;
+  const clean = String(specText || '')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/^(?:```|~~~)[^\n]*\n[\s\S]*?^(?:```|~~~)\s*$/gm, ' ');
+  let verifyCol = -1;
+  for (const line of clean.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('|')) continue;
+    const cells = trimmed.replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map((c) => c.replace(/\\\|/g, '|').trim());
+    if (cells.length < 3 || cells.every((c) => /^:?-{2,}:?$/.test(c))) continue;
+    const c0 = (cells[0] || '').replace(/\*/g, '').trim();
+    if (/^id$/i.test(c0)) {
+      verifyCol = cells.findIndex((c) => /verific|verify/i.test(c.replace(/\*/g, '')));
+      continue;
+    }
+    if (!/^(?:A\d+(?:\.\d+)?|G\d+)$/i.test(c0)) continue;
+    const id = c0.toUpperCase();
+    if (phaseSet && !criteriaIds.inPhase(id, phaseSet)) continue;
+    const verifyText = verifyCol >= 0 ? (cells[verifyCol] || '') : cells.slice(2).join(' ');
+    if (/ponta a ponta|end[- ]to[- ]end|\be2e\b|executar o fluxo|fluxo completo/i.test(verifyText)) out.push(id);
   }
   return out;
 }

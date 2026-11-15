@@ -18,11 +18,19 @@ function git(root, args) {
 }
 
 const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+const normPath = (p) => String(p || '').replace(/\\/g, '/');
+
+function stripJsComments(src) {
+  return String(src || '').replace(
+    /('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`)|\/\/[^\r\n]*|\/\*[\s\S]*?\*\//g,
+    (m, str) => (str ? str : ' '),
+  );
+}
 
 /** Surface of one file: Map key → signature. Keys: `export:<name>`, `ipc:<channel>`, `mcp:<tool>`. */
 function surfaceOf(text) {
   const out = new Map();
-  const src = String(text || '');
+  const src = stripJsComments(text);
   for (const m of src.matchAll(/export\s+(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*(\([^)]*\))\s*(:\s*[^{]+)?/g)) out.set(`export:${m[1]}`, norm(`function ${m[1]}${m[2]}${m[3] || ''}`));
   for (const m of src.matchAll(/export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(:\s*[^=]+)?=\s*(?:async\s*)?(\([^)]*\))?/g)) out.set(`export:${m[1]}`, norm(`const ${m[1]}${m[2] || ''}${m[3] ? ` = ${m[3]} =>` : ''}`));
   for (const m of src.matchAll(/export\s+(?:abstract\s+)?(class|interface|type|enum)\s+([A-Za-z_$][\w$]*)/g)) out.set(`export:${m[2]}`, `${m[1]} ${m[2]}`);
@@ -40,18 +48,21 @@ function changedFiles(root, base) {
   for (const l of (git(root, ['diff', '--name-status', base, '--']).stdout || '').split(/\r?\n/)) {
     const m = /^([AMDRC])\d*\t(?:([^\t]+)\t)?(.+)$/.exec(l);
     if (!m) continue;
-    if (m[2]) out.set(m[2], 'D');
-    out.set(m[3], m[1] === 'D' ? 'D' : 'M');
+    if (m[2]) out.set(normPath(m[2]), 'D');
+    out.set(normPath(m[3]), m[1] === 'D' ? 'D' : 'M');
   }
-  for (const l of (git(root, ['ls-files', '--others', '--exclude-standard']).stdout || '').split(/\r?\n/)) if (l.trim()) out.set(l.trim(), 'M');
-  return [...out].filter(([f]) => CODE_RE.test(f) && !TEST_RE.test(f));
+  for (const l of (git(root, ['ls-files', '--others', '--exclude-standard']).stdout || '').split(/\r?\n/)) if (l.trim()) out.set(normPath(l.trim()), 'M');
+  return [...out].filter(([f]) => !f.startsWith('.oxe/') && CODE_RE.test(f) && !TEST_RE.test(f));
 }
 
 /** @returns {{ added, removed, changed, flagged }} each an array of { file, key, before?, after? } */
 function apiDiff(root, base, pack) {
   const declared = new Set();
   for (const t of (pack && Array.isArray(pack.tasks) ? pack.tasks : [])) {
-    for (const s of [...(t.symbols || []), ...(t.symbols_removed || [])]) if (s && s.name) declared.add(String(s.name));
+    for (const s of [...(t.symbols || []), ...(t.symbols_removed || [])]) {
+      const symName = typeof s === 'string' ? s : s && s.name;
+      if (symName) declared.add(String(symName));
+    }
   }
   const res = { added: [], removed: [], changed: [], flagged: [] };
   for (const [file, status] of changedFiles(root, base)) {
