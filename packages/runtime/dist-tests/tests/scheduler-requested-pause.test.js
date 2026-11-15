@@ -88,6 +88,27 @@ function graph() {
             fs_1.default.rmSync(tmp, { recursive: true, force: true });
         }
     });
+    (0, node_test_1.test)('R44: uma tentativa fechada por contexto cheio com trabalho escrito é verificada antes de pagar outra', async () => {
+        const tmp = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-ctxcap-'));
+        let calls = 0;
+        const executor = {
+            async execute(node) {
+                calls += 1;
+                if (node.id !== 'T1')
+                    return { success: true, failure_class: null, evidence: [], output: 'ok' };
+                return { success: false, failure_class: 'context_full', evidence: ['a.js'], output: 'contexto cheio', completed_by: 'context_cap', turns_used: 5, turns_cap: 10 };
+            },
+        };
+        const ctx = { projectRoot: tmp, sessionId: null, runId: `r-cap-${Date.now()}`, executor, workspaceManager: new inplace_1.InplaceWorkspaceManager(tmp) };
+        try {
+            const result = await new scheduler_1.Scheduler().run(graph(), ctx);
+            strict_1.default.ok(result.completed.includes('T1'), JSON.stringify(result));
+            strict_1.default.equal(calls, 2, 'T1 once (its verify is green), then T2');
+        }
+        finally {
+            fs_1.default.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
     (0, node_test_1.test)('sem pausa pedida, as duas rodam', async () => {
         const tmp = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-pause-'));
         const ran = [];

@@ -104,6 +104,32 @@ const refusal = () => Object.assign(new Error('API Error: safeguards flagged thi
             fs_1.default.rmSync(dir, { recursive: true, force: true });
         }
     });
+    (0, node_test_1.test)('R44: the file goes to projectRoot (never a disposed worktree); tool-call arguments count toward the cap', async () => {
+        const lease = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-lease-'));
+        const root = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-root-'));
+        try {
+            fs_1.default.writeFileSync(path_1.default.join(lease, 'f.ts'), 'x');
+            let t = 0;
+            const refuse = async () => { t += 1; if (t === 1)
+                return { content: '', finish_reason: 'tool_calls', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'f.ts' }) } }] }; throw refusal(); };
+            const exec = new llm_task_executor_1.LlmTaskExecutor({ baseUrl: '', apiKey: '', model: '', maxTurns: 4 }, null, () => { }, refuse, { projectRoot: root });
+            await exec.execute(node, { workspace_id: 'w', strategy: 'git_worktree', isolation_level: 'isolated', branch: null, base_commit: null, root_path: lease, ttl_minutes: 5 }, 'run-y', 1);
+            strict_1.default.ok(fs_1.default.existsSync(path_1.default.join(root, '.oxe', 'runs', 'run-y', 'attempts', 'T9-1.policy-tools.txt')));
+            strict_1.default.ok(!fs_1.default.existsSync(path_1.default.join(lease, '.oxe')), 'nothing in the lease');
+            // a large write_file: null content, the code in the arguments — it counts
+            const big = 'y'.repeat(4000);
+            let w = 0;
+            const writes = async () => { w += 1; return { content: '', finish_reason: 'tool_calls', tool_calls: [{ id: `w${w}`, type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'a.kt', content: big }) } }] }; };
+            const capExec = new llm_task_executor_1.LlmTaskExecutor({ baseUrl: '', apiKey: '', model: '', maxTurns: 4 }, null, () => { }, writes, { maxContextChars: 3000, maxContextAction: 'retry', noProgressTurns: 0 });
+            const res = await capExec.execute(node, { workspace_id: 'w', strategy: 'inplace', isolation_level: 'shared', branch: null, base_commit: null, root_path: lease, ttl_minutes: 5 }, 'r', 1);
+            strict_1.default.equal(res.completed_by, 'context_cap');
+            strict_1.default.equal(w, 1, 'closed after the first write: its arguments are over the cap');
+        }
+        finally {
+            fs_1.default.rmSync(lease, { recursive: true, force: true });
+            fs_1.default.rmSync(root, { recursive: true, force: true });
+        }
+    });
     (0, node_test_1.test)('at the first request: the trigger is in the starting prompt', async () => {
         const { result } = await run(async () => { throw refusal(); });
         strict_1.default.equal(result.failure_class, 'policy');

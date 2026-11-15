@@ -278,20 +278,24 @@ function containerGuardMessages(found) {
  * tooltip, listbox, drawer, sheet, modal) with no wait for its animations in between.
  * @returns {{ line: number, overlay: string, read: string }[]}
  */
-const OVERLAY_RE = /getByRole\(\s*['"](dialog|alertdialog|menu|menuitem|listbox|tooltip)['"]|['"`][^'"`]*\b(dialog|popover|menu|modal|drawer|sheet|tooltip)\b[^'"`]*['"`]/i;
+// an overlay LOCATOR (R45): a role, or a locator / test id naming one — never any string (a test title, a URL, a text)
+const OVERLAY_RE = /getByRole\(\s*['"](dialog|alertdialog|menu|listbox|tooltip)['"]|(?:locator|getByTestId)\(\s*['"`][^'"`]*\b(dialog|popover|menu|modal|drawer|sheet|tooltip)\b/i;
 const GEOMETRY_RE = /\.boundingBox\(|getBoundingClientRect\(|toHaveCSS\(\s*['"](width|height|top|left|right|bottom|transform|translate|inset)['"]/;
 const ANIM_WAIT_RE = /getAnimations\(|\.finished\b|animationend|transitionend/;
+// the overlay closed (R45): what is measured after it is the page
+const OVERLAY_CLOSED_RE = /\.toBeHidden\(|\.not\.toBeVisible\(|toHaveCount\(\s*0\s*\)/;
 
 function overlayGeometryReads(text, options = {}) {
   const helpers = (options.helpers || []).map((h) => String(h).trim()).filter(Boolean);
   const helperRe = helpers.length ? new RegExp(`\\b(${helpers.map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\s*\\(`) : null;
-  const lines = String(text || '').split(/\r?\n/);
+  const { commentStripped } = maskJsSource(String(text || ''));
+  const lines = commentStripped.split(/\r?\n/);
   const out = [];
   let overlay = null; // the overlay opened in this test body and not yet waited for
   for (let i = 0; i < lines.length; i += 1) {
-    const l = stripComment(lines[i]);
-    if (BLOCK_RE.test(l)) overlay = null;
-    if (ANIM_WAIT_RE.test(l) || (helperRe && helperRe.test(l))) { overlay = null; continue; }
+    const l = lines[i];
+    if (BLOCK_RE.test(l)) { overlay = null; continue; } // a test title is never an overlay
+    if (ANIM_WAIT_RE.test(l) || (helperRe && helperRe.test(l)) || OVERLAY_CLOSED_RE.test(l)) { overlay = null; continue; }
     const om = OVERLAY_RE.exec(l);
     if (om) overlay = { line: i + 1, text: l.trim().slice(0, 120) };
     if (overlay && GEOMETRY_RE.test(l)) {
@@ -307,14 +311,14 @@ function overlayGeometryFrozenE2e(root, planDoc, options = {}) {
   const fs = require('fs');
   const path = require('path');
   const read = options.readText || ((f) => { try { return fs.readFileSync(path.join(root, f), 'utf8'); } catch { return ''; } });
-  const tasks = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter((t) => t && !(t.done === true || t.status === 'done'));
-  const pendingIds = new Set(tasks.map((t) => t.id));
+  // the same pending-owner rule as G40 (R45): an entry whose owners are all done is not read
+  const ctx = pendingContextOf(planDoc);
   const out = [];
   const seen = new Set();
   for (const a of planDoc && Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : []) {
     if (!a) continue;
-    const owner = a.task || (tasks.find((t) => (t.acceptance || []).includes(a.criterion)) || {}).id || null;
-    if (owner && !pendingIds.has(owner)) continue;
+    const { skip, owner } = resolveEntryPendingOwner(a, ctx);
+    if (skip) continue;
     for (const f of a.files || []) {
       const file = String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/');
       if (seen.has(file) || !E2E_FILE_RE.test(file)) continue;

@@ -81,6 +81,8 @@ export interface LlmTaskExecutorOptions {
    */
   maxContextChars?: number;
   maxContextAction?: 'warn' | 'retry';
+  /** The project root (R44): run artifacts go there, never into an ephemeral worktree lease that is disposed. */
+  projectRoot?: string;
   /** OXB-204: max automatic backoff wait (ms) on 429 / rate-limit reset before failing as quota (default 300000). */
   maxQuotaWaitMs?: number;
   /** OXB-204: max consecutive automatic 429 waits inside an attempt before failing as quota (default 3). */
@@ -293,11 +295,19 @@ export class LlmTaskExecutor implements TaskExecutor {
       this.emit({ type: 'turn_start', nodeId: node.id, attempt, detail: { turn } });
       // the context this request would send: past the soft cap, warn once (default) or close the attempt (retry)
       if (contextCap && turn > 0) {
-        const chars = messages.reduce((n, m) => n + String((m as { content?: unknown }).content ?? '').length, 0);
+        // R44: what is sent again each turn — the text, a non-string content, and the tool-call arguments (a large
+        // write_file / patch_file has null content and its code in the arguments)
+        const chars = messages.reduce((n, m) => {
+          const mm = m as { content?: unknown; tool_calls?: Array<{ function?: { name?: unknown; arguments?: unknown } }> };
+          const c = typeof mm.content === 'string' ? mm.content.length : mm.content ? JSON.stringify(mm.content).length : 0;
+          const tc = (mm.tool_calls || []).reduce((s, t) => s + String(t?.function?.name ?? '').length + String(t?.function?.arguments ?? '').length, 0);
+          return n + c + tc;
+        }, 0);
         if (chars > contextCap) {
           if (this.options.maxContextAction === 'retry') {
             this.emit({ type: 'executor_context_cap', nodeId: node.id, attempt, detail: { turn, chars, cap: contextCap, action: 'retry' } });
-            return done({ success: false, failure_class: 'llm', evidence: evidencePaths, output: `contexto cheio: ${chars} caracteres acumulados no turno ${turn} (teto ${contextCap}, execute.max_context_chars) — a tentativa fecha aqui; a próxima começa um contexto novo com o que ficou na árvore` });
+            // completed_by context_cap (R44): with work written, the scheduler verifies it before paying a retry
+            return done({ success: false, failure_class: 'context_full', evidence: evidencePaths, completed_by: 'context_cap', turns_used: usage.turns, turns_cap: maxTurns, output: `contexto cheio: ${chars} caracteres acumulados no turno ${turn} (teto ${contextCap}, execute.max_context_chars) — a tentativa fecha aqui; a próxima começa um contexto novo com o que ficou na árvore` });
           }
           if (!contextCapWarned) {
             contextCapWarned = true;
@@ -371,11 +381,16 @@ export class LlmTaskExecutor implements TaskExecutor {
         let savedOutputs: string | null = null;
         if (kind === 'policy' && lastTurnOutputs.length) {
           try {
-            const file = path.join(cwd, '.oxe', 'runs', runId || 'run', 'attempts', `${node.id}-${attempt}.policy-tools.txt`);
+            const root = this.options.projectRoot || cwd;
+            const file = path.join(root, '.oxe', 'runs', runId || 'run', 'attempts', `${node.id}-${attempt}.policy-tools.txt`);
             fs.mkdirSync(path.dirname(file), { recursive: true });
+            // a later execute of the same run restarts the attempt numbers: keep the earlier file (like OXB-184)
+            if (fs.existsSync(file)) {
+              try { fs.renameSync(file, file.replace(/\.policy-tools\.txt$/, `.before-${fs.statSync(file).mtime.toISOString().replace(/[:.]/g, '-')}.policy-tools.txt`)); } catch { /* */ }
+            }
             const body = lastTurnOutputs.map((o) => `===== ${o.tool}${o.target ? ` ${o.target}` : ''} (${o.content.length} chars) =====\n${o.content}`).join('\n\n');
             fs.writeFileSync(file, body.length > 2_000_000 ? `${body.slice(0, 2_000_000)}\n…(cortado em 2 MB)` : body, 'utf8');
-            savedOutputs = path.relative(cwd, file).replace(/\\/g, '/');
+            savedOutputs = path.relative(root, file).replace(/\\/g, '/');
           } catch { savedOutputs = null; }
         }
         // a trigger from tool output is not in the pack: "remove the passage from the pack" cannot work there (T12)

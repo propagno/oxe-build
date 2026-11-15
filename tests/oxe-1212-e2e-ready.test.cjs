@@ -50,6 +50,13 @@ describe('G40: frozen e2e act only after the app is ready', () => {
     assert.equal(r.overlayGeometryReads(racy.replace("  const a =", "  await waitForEntrance(dialog);\n  const a ="), { helpers: ['waitForEntrance'] }).length, 0);
     assert.equal(r.overlayGeometryReads("test('x', async () => {\n  const b = await page.locator('#card').boundingBox();\n});").length, 0, 'no overlay: no finding');
     assert.match(r.overlayGeometryMessages([{ task: 'T14', file: 'e2e/pq-07-12.spec.ts', line: 4, overlay: 'x', read: 'y' }])[0], /getAnimations.*\[G40c\]/);
+    // R45: a title, a URL or a text with "menu" is no overlay; a closed overlay does not count
+    assert.equal(r.overlayGeometryReads("test('sidebar menu stays aligned', async () => {\n  await page.goto('/settings/menu');\n  await expect(h1).toHaveText('Menu');\n  const b = await page.locator('#header').boundingBox();\n});").length, 0);
+    const closed = "test('x', async () => {\n  const d = page.getByRole('dialog');\n  await d.getByRole('button').click();\n  await expect(d).toBeHidden();\n  const b = await page.locator('#main').boundingBox();\n});";
+    assert.equal(r.overlayGeometryReads(closed).length, 0);
+    assert.equal(r.overlayGeometryReads("test('x', async () => {\n  const m = page.locator('[data-test=user-menu]');\n  const b = await m.boundingBox();\n});").length, 1, 'a locator naming a menu counts');
+    const doneDoc = { tasks: [{ id: 'T1', done: true, acceptance: ['A1'] }], acceptance_tests: [{ criterion: 'A1', files: ['e2e/x.spec.ts'] }] };
+    assert.equal(r.overlayGeometryFrozenE2e('.', doneDoc, { readText: () => racy }).length, 0, 'owners all done: not read');
   });
 
   it('R29: a URL in a string is no comment; a hook starts anew; a launch and an action on one line count', () => {

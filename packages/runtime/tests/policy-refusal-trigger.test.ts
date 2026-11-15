@@ -105,6 +105,31 @@ describe('policy refusal names its likely trigger', () => {
     }
   });
 
+  test('R44: the file goes to projectRoot (never a disposed worktree); tool-call arguments count toward the cap', async () => {
+    const lease = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-lease-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-root-'));
+    try {
+      fs.writeFileSync(path.join(lease, 'f.ts'), 'x');
+      let t = 0;
+      const refuse: CompletionFn = async () => { t += 1; if (t === 1) return { content: '', finish_reason: 'tool_calls', tool_calls: [{ id: 'c1', type: 'function' as const, function: { name: 'read_file', arguments: JSON.stringify({ path: 'f.ts' }) } }] }; throw refusal(); };
+      const exec = new LlmTaskExecutor({ baseUrl: '', apiKey: '', model: '', maxTurns: 4 }, null, () => {}, refuse, { projectRoot: root });
+      await exec.execute(node, { workspace_id: 'w', strategy: 'git_worktree', isolation_level: 'isolated', branch: null, base_commit: null, root_path: lease, ttl_minutes: 5 }, 'run-y', 1);
+      assert.ok(fs.existsSync(path.join(root, '.oxe', 'runs', 'run-y', 'attempts', 'T9-1.policy-tools.txt')));
+      assert.ok(!fs.existsSync(path.join(lease, '.oxe')), 'nothing in the lease');
+      // a large write_file: null content, the code in the arguments — it counts
+      const big = 'y'.repeat(4000);
+      let w = 0;
+      const writes: CompletionFn = async () => { w += 1; return { content: '', finish_reason: 'tool_calls', tool_calls: [{ id: `w${w}`, type: 'function' as const, function: { name: 'write_file', arguments: JSON.stringify({ path: 'a.kt', content: big }) } }] }; };
+      const capExec = new LlmTaskExecutor({ baseUrl: '', apiKey: '', model: '', maxTurns: 4 }, null, () => {}, writes, { maxContextChars: 3000, maxContextAction: 'retry', noProgressTurns: 0 });
+      const res = await capExec.execute(node, { workspace_id: 'w', strategy: 'inplace', isolation_level: 'shared', branch: null, base_commit: null, root_path: lease, ttl_minutes: 5 }, 'r', 1);
+      assert.equal(res.completed_by, 'context_cap');
+      assert.equal(w, 1, 'closed after the first write: its arguments are over the cap');
+    } finally {
+      fs.rmSync(lease, { recursive: true, force: true });
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('at the first request: the trigger is in the starting prompt', async () => {
     const { result } = await run(async () => { throw refusal(); });
     assert.equal(result.failure_class, 'policy');

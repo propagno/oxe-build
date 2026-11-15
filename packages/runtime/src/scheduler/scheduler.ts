@@ -926,8 +926,10 @@ export class Scheduler {
         // OXB-026: the verify judges the work, not the end of the LLM conversation. An attempt that ran out of turns
         // after writing in its scope is verified before it is classified: green completes the task, red goes to the
         // informed retry. Discarding it unverified paid a whole second attempt for finished work.
+        // a context-cap close (R44) is the same: work written, the verify decides before another paid attempt
+        const contextCap = lastResult.completed_by === 'context_cap';
         const turnLimitWithWork = !lastResult.success
-          && lastResult.completed_by === 'turn_limit_exhausted'
+          && (lastResult.completed_by === 'turn_limit_exhausted' || contextCap)
           && Boolean(node.verify?.command)
           && (lastResult.evidence?.length ?? 0) > 0;
 
@@ -940,9 +942,9 @@ export class Scheduler {
             lastResult = {
               success: false,
               // OXB-185: out of turns, the red verify is a consequence — the class stays turns_exhausted.
-              failure_class: turnLimitWithWork ? 'turns_exhausted' : 'verify',
+              failure_class: turnLimitWithWork ? (contextCap ? lastResult.failure_class : 'turns_exhausted') : 'verify',
               evidence: lastResult.evidence,
-              output: `${turnLimitWithWork ? `turns_exhausted: ${lastResult.turns_used ?? '?'}/${lastResult.turns_cap ?? '?'} turnos usados sem finish_task; o verify do trabalho parcial:\n` : ''}${describeVerifyFailure(node.verify.command, verifyResult.check, verifyResult.gaps, verifyResult.segment)}`,
+              output: `${turnLimitWithWork ? (contextCap ? `contexto cheio no turno ${lastResult.turns_used ?? '?'}; o verify do trabalho parcial:\n` : `turns_exhausted: ${lastResult.turns_used ?? '?'}/${lastResult.turns_cap ?? '?'} turnos usados sem finish_task; o verify do trabalho parcial:\n`) : ''}${describeVerifyFailure(node.verify.command, verifyResult.check, verifyResult.gaps, verifyResult.segment)}`,
               verify_log: buildVerifyLog(verifyResult.segments),
               ...(turnLimitWithWork ? { turns_used: lastResult.turns_used, turns_cap: lastResult.turns_cap } : {}),
             };

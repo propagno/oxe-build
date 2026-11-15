@@ -57,6 +57,8 @@ export interface LlmTaskExecutorOptions {
      */
     maxContextChars?: number;
     maxContextAction?: 'warn' | 'retry';
+    /** The project root (R44): run artifacts go there, never into an ephemeral worktree lease that is disposed. */
+    projectRoot?: string;
     /** OXB-204: max automatic backoff wait (ms) on 429 / rate-limit reset before failing as quota (default 300000). */
     maxQuotaWaitMs?: number;
     /** OXB-204: max consecutive automatic 429 waits inside an attempt before failing as quota (default 3). */
