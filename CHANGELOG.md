@@ -72,6 +72,15 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
   - O cache das entradas já aprovadas é gravado mesmo quando o processo morre no meio.
   - Cada suíte também ganha uma linha de progresso.
 
+### Marcação que os testes ainda leem (OxeSpace 15/11, OxeCode F6 T30 → #852)
+
+- **O check:** no checkpoint, sem rodar e2e. Um atributo `data-*` ou `cmdk-*` que o commit **remove** da marcação, que some do produto inteiro e que ainda é lido por um arquivo de e2e ou de teste, desfaz o checkpoint (`dom_hooks`). Os atributos e os leitores são nomeados.
+  - Um valor dinâmico (`data-value={`cmd-${id}`}`) é procurado pelo prefixo.
+  - O `data-testid` também é procurado via `getByTestId`.
+  - Um atributo mantido em outro componente, ou cujos leitores saem no mesmo commit, não conta.
+- **O caso real:** a T30 trocou o CommandMenu pela paleta e tirou o `[cmdk-root]`/`[cmdk-item][data-value=cmd-…]` que uns 30 specs e2e liam. A quebra só apareceu no CI do PR.
+- **Configuração:** `checkpoint_dom_hooks: "warn"` só avisa; `false` desliga.
+
 ### Quick sem registro, trailer presente (OxeSpace 15/11, #854)
 
 - **O caso:** um commit feito por `quick commit` cujo registro local se perdeu. O commit é **anterior ao primeiro registro** que esta cópia guarda em `.oxe/quick`, e o id do quick não é posterior ao commit.

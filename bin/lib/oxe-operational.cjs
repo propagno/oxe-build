@@ -9593,6 +9593,34 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
     if (!own.length) check = { ...check, ok: true, ignored_reds: check.failing_tests.map((t) => t.file), ...(flakyReds.length ? { flaky_reds: flakyReds } : {}) };
     else check = { ...check, failing_tests: own, ignored_reds: check.failing_tests.filter((t) => !own.some((o) => o.file === t.file)).map((t) => t.file), ...(flakyReds.length ? { flaky_reds: flakyReds } : {}) };
   }
+  // OxeSpace 15/11 (OxeCode F6 T30 → #852): a DOM hook the commit removes from markup (data-* / cmdk-*) that is gone
+  // from the product but still read by e2e/tests — static, no e2e run. config checkpoint_dom_hooks: false | "warn".
+  let domHooks = null;
+  if (!check || check.ok) {
+    try {
+      const mode = (readProjectConfig(projectRoot) || {}).checkpoint_dom_hooks;
+      if (mode !== false) {
+        const dh = require('./oxe-dom-hooks.cjs');
+        const found = dh.hooksStillRead(projectRoot, oldHead, head);
+        if (found.length) {
+          domHooks = { mode: mode === 'warn' ? 'warn' : 'error', findings: found, message: dh.message(found) };
+          if (domHooks.mode === 'error') check = { ok: false, kind: 'dom_hooks', command: 'dom hooks (estático)', tail: domHooks.message, dom_hooks: found };
+        }
+      }
+    } catch { /* auxiliar */ }
+  }
+  if (check && !check.ok && check.kind === 'dom_hooks') {
+    gitOut(projectRoot, ['update-ref', '-m', 'oxe: checkpoint dom hooks', 'HEAD', oldHead, head]);
+    restore();
+    return {
+      committed: false,
+      failed: true,
+      kind: 'dom_hooks',
+      dom_hooks: check.dom_hooks,
+      reason: `a mudança remove marcação que testes ainda leem: ${check.tail}. Mantenha esses atributos (data-*/cmdk-*) na nova marcação, ou ajuste os testes/helpers no escopo da tarefa`,
+      snapshot: entries,
+    };
+  }
   if (check && !check.ok) {
     gitOut(projectRoot, ['update-ref', '-m', 'oxe: checkpoint_check vermelho', 'HEAD', oldHead, head]);
     restore();
@@ -9625,7 +9653,7 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
     return entries[p] === 'deleted' ? Boolean(inCommit) : inCommit !== entries[p];
   });
   const committedFiles = (gitOut(projectRoot, ['show', '--name-only', '--format=', 'HEAD']).stdout || '').split(/\r?\n/).filter(Boolean);
-  return { committed: true, commit: head, files: committedFiles, leftover, ...(check ? { check: { command: check.command, ok: true, ...(check.ignored_reds && check.ignored_reds.length ? { ignored_reds: check.ignored_reds } : {}), ...(check.flaky_reds && check.flaky_reds.length ? { flaky_reds: check.flaky_reds } : {}), ...(check.related_set_size != null ? { related_set_size: check.related_set_size } : {}) } } : {}) };
+  return { committed: true, commit: head, files: committedFiles, leftover, ...(domHooks ? { dom_hooks_warning: domHooks.message } : {}), ...(check ? { check: { command: check.command, ok: true, ...(check.ignored_reds && check.ignored_reds.length ? { ignored_reds: check.ignored_reds } : {}), ...(check.flaky_reds && check.flaky_reds.length ? { flaky_reds: check.flaky_reds } : {}), ...(check.related_set_size != null ? { related_set_size: check.related_set_size } : {}) } } : {}) };
 }
 
 /**
