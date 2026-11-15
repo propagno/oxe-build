@@ -253,4 +253,133 @@ describe('default precheck in plan lint when frozen tests are new (--no-precheck
     assert.equal(lintRes.precheck.ran, 1);
     assert.ok(lintRes.warnings.some((w) => /precheck_passes_on_stub/.test(w)));
   });
+
+  it('auto mode skips remote-verify commands without calling run or creating a worktree, and emits the CI guidance warning', () => {
+    const dir = makeLintProject();
+    write(dir, '.oxe/SPEC.md', '# SPEC\n\n## Critérios de aceite\n\n| ID | Critério | Como verificar |\n|---|---|---|\n| A1 | old | node |\n| A7 | remote e2e | node |\n');
+    write(dir, 'tests/a7-remote.test.js', "const t = require('node:test');\nt('A7 e2e', () => { throw new Error('stub'); });\n");
+    const planDoc = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'));
+    planDoc.tasks[1] = { id: 'T2', title: 'remote task', wave: 1, files: ['src/new.js'], acceptance: ['A7'], verify: { commands: ['node -e "process.exit(1)"'] } };
+    planDoc.acceptance_tests.push({
+      criterion: 'A7',
+      task: 'T2',
+      files: ['tests/a7-remote.test.js'],
+      command: 'node ../deps/scripts/remote-verify.mjs -- node scripts/test-electron.mjs tests/a7-remote.test.js',
+      proves: ['A7 e2e'],
+    });
+    write(dir, '.oxe/PLAN.json', JSON.stringify(planDoc, null, 2));
+
+    let wsCreated = 0;
+    const calls = [];
+    const workspace = {
+      create: () => { wsCreated += 1; return dir; },
+      dispose: () => {},
+    };
+    const run = (_cwd, _cmd, timeoutMs) => {
+      calls.push(timeoutMs);
+      return { code: 1, timedOut: false, output: 'not ok 1 - A7 e2e' };
+    };
+
+    const autoRes = op.runtimePlanLint(dir, null, {
+      preflight: false,
+      precheckWorkspace: workspace,
+      precheckRun: run,
+    });
+    assert.equal(calls.length, 0, 'fake run must NOT be called in auto mode for remote-verify');
+    assert.equal(wsCreated, 0, 'temporary worktree must NOT be created when only remote-verify entries exist');
+    assert.equal(autoRes.precheck.mode, 'auto');
+    assert.equal(autoRes.precheck.ran, 0);
+    assert.equal(autoRes.precheck.skipped_remote, 1);
+    assert.ok(
+      autoRes.warnings.includes('precheck: A7 é remote-verify — pulado no modo padrão; rode plan lint --precheck-tests para checar contra o stub na CI'),
+      `expected remote-verify skip warning, got: ${JSON.stringify(autoRes.warnings)}`
+    );
+
+    // Explicit mode (--precheck-tests) still runs remote-verify once with 30 min ceiling
+    const explicitRes = op.runtimePlanLint(dir, null, {
+      preflight: false,
+      precheckTests: true,
+      precheckWorkspace: workspace,
+      precheckRun: run,
+    });
+    assert.equal(explicitRes.precheck.mode, 'explicit');
+    assert.ok(calls.includes(30 * 60_000), `expected 30 min remote-verify run in explicit mode, got: ${JSON.stringify(calls)}`);
+  });
+
+  it('caches approved frozen test LF hashes in precheck-cache.json, skips unchanged files in auto mode, never caches findings, and ignores cache on --precheck-tests', () => {
+    const dir = makeLintProject();
+    const RED_CLEAN = "const t = require('node:test');\nt('A2 fails deterministically against stub', () => { throw new Error('not implemented'); });\n";
+    write(dir, 'tests/new-red.test.js', RED_CLEAN);
+    const planDoc = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'));
+    planDoc.acceptance_tests.push({
+      criterion: 'A2',
+      task: 'T2',
+      files: ['tests/new-red.test.js'],
+      command: 'node --test tests/new-red.test.js',
+      proves: ['A2 fails deterministically against stub'],
+    });
+    write(dir, '.oxe/PLAN.json', JSON.stringify(planDoc, null, 2));
+
+    let wsCreated = 0;
+    const calls = [];
+    const workspace = {
+      create: () => { wsCreated += 1; return dir; },
+      dispose: () => {},
+    };
+    let mockOutput = 'not ok 1 - A2 fails deterministically against stub';
+    const run = (_cwd, cmd, timeoutMs) => {
+      calls.push({ cmd, timeoutMs });
+      return { code: 1, timedOut: false, output: mockOutput };
+    };
+
+    // 1st plan lint (auto): runs 2 times, records LF sha256 in .oxe/precheck-cache.json
+    const first = op.runtimePlanLint(dir, null, { preflight: false, precheckWorkspace: workspace, precheckRun: run });
+    assert.equal(calls.length, 2, 'first auto lint runs the new frozen test 2 times');
+    assert.equal(first.precheck.ran, 1);
+    assert.equal(first.precheck.cached, 0);
+    const cachePath = path.join(dir, '.oxe', 'precheck-cache.json');
+    assert.equal(fs.existsSync(cachePath), true, 'precheck-cache.json written alongside PLAN.json');
+    const cachedJson = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    assert.deepEqual(Object.keys(cachedJson), ['tests/new-red.test.js']);
+    assert.equal(cachedJson['tests/new-red.test.js'].ok, true);
+    assert.equal(cachedJson['tests/new-red.test.js'].hash, pre.sha256Lf(path.join(dir, 'tests/new-red.test.js')));
+    assert.match(cachedJson['tests/new-red.test.js'].at, /^\d{4}-\d{2}-\d{2}T/);
+
+    // 2nd plan lint without editing file (and even with CRLF line endings): fake run NOT called
+    calls.length = 0;
+    wsCreated = 0;
+    write(dir, 'tests/new-red.test.js', RED_CLEAN.replace(/\n/g, '\r\n'));
+    const second = op.runtimePlanLint(dir, null, { preflight: false, precheckWorkspace: workspace, precheckRun: run });
+    assert.equal(calls.length, 0, 'second auto lint must NOT call run when LF hash matches cache');
+    assert.equal(wsCreated, 0, 'second auto lint must NOT create worktree when all entries hit cache');
+    assert.equal(second.precheck.ran, 0);
+    assert.equal(second.precheck.cached, 1);
+
+    // --precheck-tests ignores cache and runs anyway
+    calls.length = 0;
+    const forced = op.runtimePlanLint(dir, null, { preflight: false, precheckTests: true, precheckWorkspace: workspace, precheckRun: run });
+    assert.equal(forced.precheck.mode, 'explicit');
+    assert.equal(calls.length, 4, 'explicit --precheck-tests runs both A1 and A2 (2x each), ignoring cache');
+
+    // Editing the frozen test invalidates hash match -> auto lint runs again
+    calls.length = 0;
+    write(dir, 'tests/new-red.test.js', `${RED_CLEAN}// edited\n`);
+    const afterEdit = op.runtimePlanLint(dir, null, { preflight: false, precheckWorkspace: workspace, precheckRun: run });
+    assert.equal(calls.length, 2, 'editing frozen test triggers auto precheck again');
+    assert.equal(afterEdit.precheck.ran, 1);
+
+    // Editing into a test with a finding (passes_on_stub) does NOT cache ok: true, so the next lint repeats
+    calls.length = 0;
+    write(dir, 'tests/new-red.test.js', ALWAYS);
+    mockOutput = 'ok 1 - A2 fails deterministically against stub';
+    const withFinding = op.runtimePlanLint(dir, null, { preflight: false, precheckWorkspace: workspace, precheckRun: run });
+    assert.equal(calls.length, 2);
+    assert.ok(withFinding.warnings.some((w) => /precheck_passes_on_stub/.test(w)));
+    const cacheAfterFinding = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    assert.equal(cacheAfterFinding['tests/new-red.test.js'], undefined, 'finding must remove/exclude file from cache');
+
+    calls.length = 0;
+    op.runtimePlanLint(dir, null, { preflight: false, precheckWorkspace: workspace, precheckRun: run });
+    assert.equal(calls.length, 2, 'unchanged file with prior finding must NOT be skipped on next lint');
+  });
 });

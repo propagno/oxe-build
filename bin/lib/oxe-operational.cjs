@@ -5873,13 +5873,18 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
         if (shouldRunPrecheck) {
           const entriesToRun = explicitPrecheck ? pre.pendingAcceptance(pjp) : newEntries;
           const mode = explicitPrecheck ? 'explicit' : 'auto';
+          const cachePath = options.precheckCache === false ? false : path.join(path.dirname(pp.plan), 'precheck-cache.json');
           const runsLabel = Math.max(2, Number(options.precheckRuns) || 2);
           if (typeof options.onProgress === 'function') {
-            options.onProgress(
-              mode === 'auto'
-                ? `precheck (padrão — ${entriesToRun.length} teste(s) congelado(s) novo(s); desligue com --no-precheck): contra o stub, até ${runsLabel} vez(es) cada`
-                : `precheck: ${entriesToRun.length} teste(s) de aceite contra o stub, ${runsLabel} vez(es) cada`
-            );
+            if (mode === 'explicit') {
+              options.onProgress(`precheck: ${entriesToRun.length} teste(s) de aceite contra o stub, ${runsLabel} vez(es) cada`);
+            } else {
+              const cachePreview = cachePath ? pre.readPrecheckCache(cachePath) : null;
+              const runnableAuto = entriesToRun.filter((a) => !(cachePreview && pre.isEntryCachedOk(projectRoot, a, cachePreview)) && !pre.isRemoteVerify(a.command));
+              if (runnableAuto.length > 0) {
+                options.onProgress(`precheck (padrão — ${runnableAuto.length} teste(s) congelado(s) novo(s); desligue com --no-precheck): contra o stub, até ${runsLabel} vez(es) cada`);
+              }
+            }
           }
           // G30b part 2: with --precheck-tests, the suites outside the verify that import the task files run once at HEAD
           let suites = [];
@@ -5895,6 +5900,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
           const r = pre.precheck(projectRoot, pjp, readJsonQuiet(pp.implementationPack), {
             entries: entriesToRun,
             mode,
+            cachePath,
             runs: options.precheckRuns,
             suites,
             onProgress: options.onProgress,
@@ -5903,10 +5909,17 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
             ...(options.precheckWorkspace ? { workspace: options.precheckWorkspace } : {}),
           });
           if (mode === 'auto') {
-            r.notes = [
-              `precheck padrão ativado: ${entriesToRun.length} teste(s) congelado(s) novo(s) detectado(s) (use --no-precheck para desligar)`,
-              ...(r.notes || []),
-            ];
+            if (r.ran > 0) {
+              r.notes = [
+                `precheck padrão ativado: ${r.ran} teste(s) congelado(s) novo(s) detectado(s) (use --no-precheck para desligar)`,
+                ...(r.notes || []),
+              ];
+            } else if (r.cached > 0) {
+              r.notes = [
+                `precheck padrão: ${r.cached} teste(s) congelado(s) novo(s) já aprovado(s) no cache (sem mudança de hash)`,
+                ...(r.notes || []),
+              ];
+            }
           }
           const msg = pre.messages(r);
           result.errors.push(...msg.errors);

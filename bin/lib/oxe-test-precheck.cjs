@@ -78,6 +78,43 @@ function fileMatchesSha(absPath, expectedSha) {
   return hex(Buffer.from(lf, 'utf8')) === expectedSha || hex(Buffer.from(lf.replace(/\n/g, '\r\n'), 'utf8')) === expectedSha;
 }
 
+function sha256Lf(absPath) {
+  if (!absPath || !fs.existsSync(absPath)) return null;
+  const lf = fs.readFileSync(absPath, 'utf8').replace(/\r\n/g, '\n');
+  return crypto.createHash('sha256').update(lf, 'utf8').digest('hex');
+}
+
+function entryFiles(entry) {
+  return ((entry && entry.files) || []).map((f) => norm(typeof f === 'string' ? f : f && f.path)).filter(Boolean);
+}
+
+function readPrecheckCache(cachePath) {
+  if (!cachePath || !fs.existsSync(cachePath)) return {};
+  try {
+    const parsed = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writePrecheckCache(cachePath, cache) {
+  if (!cachePath) return;
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  fs.writeFileSync(cachePath, `${JSON.stringify(cache, null, 2)}\n`, 'utf8');
+}
+
+function isEntryCachedOk(root, entry, cache) {
+  if (!root || !cache) return false;
+  const files = entryFiles(entry);
+  if (!files.length) return false;
+  return files.every((rel) => {
+    const item = cache[rel];
+    if (!item || item.ok !== true || typeof item.hash !== 'string' || !item.hash) return false;
+    return fileMatchesSha(path.join(root, rel), item.hash);
+  });
+}
+
 /**
  * Runs the command in a child node that kills the WHOLE process tree on timeout. A plain spawnSync timeout kills only
  * the shell on Windows: the hung test (the very thing this check looks for) kept running, leaked, and held the
@@ -170,22 +207,65 @@ function newFrozenAcceptance(root, doc, options = {}) {
  * @param {string} root project root (a git checkout)
  * @param {object} doc PLAN.json
  * @param {object} pack IMPLEMENTATION-PACK.json
- * @param {{ entries?: Array, mode?: string, runs?: number, timeoutMs?: number, onProgress?: Function, run?: Function, workspace?: { create: Function, dispose: Function } }} options
+ * @param {{ entries?: Array, mode?: string, cachePath?: string | false, runs?: number, timeoutMs?: number, onProgress?: Function, run?: Function, workspace?: { create: Function, dispose: Function } }} options
  */
 function precheck(root, doc, pack, options = {}) {
+  const mode = options.mode || 'explicit';
+  const isAuto = mode === 'auto';
   const allPending = pendingAcceptance(doc);
   const entries = Array.isArray(options.entries) ? options.entries : allPending;
-  if (!entries.length && !(options.suites || []).length) return { ran: 0, suites: 0, runs: 0, mode: options.mode || 'explicit', findings: [], notes: [], details: [] };
-  const runs = Math.max(2, Number(options.runs) || 2);
-  const run = options.run || defaultRun;
-  const ws = options.workspace || gitWorkspace(root);
-  const wt = ws.create();
+  if (!entries.length && !(options.suites || []).length) {
+    return { ran: 0, cached: 0, skipped_remote: 0, suites: 0, runs: 0, mode, findings: [], notes: [], details: [] };
+  }
+  const cachePath = options.cachePath === false
+    ? null
+    : (options.cachePath || (root ? path.join(root, '.oxe', 'precheck-cache.json') : null));
+  const cache = cachePath ? readPrecheckCache(cachePath) : null;
   const findings = [];
   const notes = [];
   const details = [];
+  const runnableEntries = [];
+  let cachedCount = 0;
+  let skippedRemoteCount = 0;
+
+  for (const a of entries) {
+    if (isAuto && cache && isEntryCachedOk(root, a, cache)) {
+      cachedCount += 1;
+      continue;
+    }
+    if (isAuto && isRemoteVerify(a.command)) {
+      const id = a.id || a.criterion;
+      const skipMsg = `precheck: ${id} é remote-verify — pulado no modo padrão; rode plan lint --precheck-tests para checar contra o stub na CI`;
+      skippedRemoteCount += 1;
+      findings.push({
+        criterion: a.criterion || null,
+        id,
+        task: a.task || null,
+        command: a.command,
+        level: 'warn',
+        kind: 'precheck_skipped_remote',
+        why: 'pulado no modo padrão; rode plan lint --precheck-tests para checar contra o stub na CI',
+        message: skipMsg,
+      });
+      if (typeof options.onProgress === 'function') options.onProgress(skipMsg);
+      continue;
+    }
+    runnableEntries.push(a);
+  }
+
+  const runs = Math.max(2, Number(options.runs) || 2);
+  if (!runnableEntries.length && !(options.suites || []).length) {
+    return { ran: 0, cached: cachedCount, skipped_remote: skippedRemoteCount, suites: 0, runs: 0, mode, findings, notes, details };
+  }
+
+  const run = options.run || defaultRun;
+  const ws = options.workspace || gitWorkspace(root);
+  const wt = ws.create();
+  const cleanFiles = new Set();
+  const dirtyFiles = new Set();
   try {
     // Copy all pending frozen tests from the working tree (they may not be committed yet), then write planned stubs so they import
-    for (const a of allPending.length ? allPending : entries) for (const f of a.files || []) {
+    for (const a of allPending.length ? allPending : runnableEntries) for (const f of a.files || []) {
       const rel = norm(typeof f === 'string' ? f : f.path);
       const from = path.join(root, rel);
       if (fs.existsSync(from) && path.resolve(wt) !== path.resolve(root)) { fs.mkdirSync(path.dirname(path.join(wt, rel)), { recursive: true }); fs.copyFileSync(from, path.join(wt, rel)); }
@@ -194,8 +274,9 @@ function precheck(root, doc, pack, options = {}) {
       const sk = require('./oxe-plan-skeleton.cjs');
       sk.write(wt, sk.plan(wt, doc, pack, {}));
     } catch { /* no pack symbols: the tests run as they are */ }
-    for (const a of entries) {
+    for (const a of runnableEntries) {
       const id = a.id || a.criterion;
+      const findingsBefore = findings.length;
       // OxeSpace 15/11 (OxeChat sessions): a command that runs on the CI (remote-verify) waits in its queue — wall time
       // is not the test's. Remote: 30 min by default, one run (no CI quota doubled), and a timeout is a warning.
       const resolved = resolveTimeout(a.command, a.timeout_ms, options.timeoutMs);
@@ -222,19 +303,25 @@ function precheck(root, doc, pack, options = {}) {
       if (hang && remote) {
         const limitLabel = timeoutMs >= 60_000 ? `${Math.round(timeoutMs / 60_000)} min` : `${Math.round(timeoutMs / 1000)} s`;
         findings.push({ ...base, level: 'warn', kind: 'precheck_timeout_remote', timeout_ms: timeoutMs, timeout_reason: resolved.reason, why: `o run remoto (${resolved.reason}) passou de ${limitLabel} (fila da CI?) — não é travamento do teste; rode de novo ou aumente --precheck-timeout` });
-        continue;
+      } else if (hang) {
+        findings.push({ ...base, level: 'error', kind: 'precheck_hang', timeout_ms: timeoutMs, timeout_reason: resolved.reason, why: `passou de ${Math.round(timeoutMs / 1000)} s (${resolved.reason}) contra o stub sem terminar — act + fake timers, um await que nunca resolve ou um servidor que não fecha` });
+      } else {
+        const sig = (x) => `${x.passed.join('|')}#${x.failed.join('|')}`;
+        if (new Set(seen.map(sig)).size > 1) {
+          const diff = seen[0].passed.filter((n) => !seen[1].passed.includes(n)).concat(seen[1].passed.filter((n) => !seen[0].passed.includes(n)));
+          findings.push({ ...base, level: 'error', kind: 'precheck_flaky', why: `resultado diferente entre ${runs} execuções contra o mesmo stub (${diff.slice(0, 4).join(' | ') || 'contagem'}) — o teste depende de tempo, ordem ou estado de fora` });
+        } else {
+          const proves = Array.isArray(a.proves) ? a.proves : [];
+          const passed = seen[0] ? seen[0].passed : [];
+          if (proves.length && proves.every((p) => passed.some((n) => n.toLowerCase().includes(String(p).toLowerCase())))) {
+            findings.push({ ...base, level: 'warn', kind: 'precheck_passes_on_stub', why: 'todos os testes nomeados passam contra o stub, sem a implementação — o teste não prova o critério' });
+          }
+        }
       }
-      if (hang) { findings.push({ ...base, level: 'error', kind: 'precheck_hang', timeout_ms: timeoutMs, timeout_reason: resolved.reason, why: `passou de ${Math.round(timeoutMs / 1000)} s (${resolved.reason}) contra o stub sem terminar — act + fake timers, um await que nunca resolve ou um servidor que não fecha` }); continue; }
-      const sig = (x) => `${x.passed.join('|')}#${x.failed.join('|')}`;
-      if (new Set(seen.map(sig)).size > 1) {
-        const diff = seen[0].passed.filter((n) => !seen[1].passed.includes(n)).concat(seen[1].passed.filter((n) => !seen[0].passed.includes(n)));
-        findings.push({ ...base, level: 'error', kind: 'precheck_flaky', why: `resultado diferente entre ${runs} execuções contra o mesmo stub (${diff.slice(0, 4).join(' | ') || 'contagem'}) — o teste depende de tempo, ordem ou estado de fora` });
-        continue;
-      }
-      const proves = Array.isArray(a.proves) ? a.proves : [];
-      const passed = seen[0] ? seen[0].passed : [];
-      if (proves.length && proves.every((p) => passed.some((n) => n.toLowerCase().includes(String(p).toLowerCase())))) {
-        findings.push({ ...base, level: 'warn', kind: 'precheck_passes_on_stub', why: 'todos os testes nomeados passam contra o stub, sem a implementação — o teste não prova o critério' });
+      const hasFinding = findings.length > findingsBefore;
+      for (const rel of entryFiles(a)) {
+        if (hasFinding) dirtyFiles.add(rel);
+        else cleanFiles.add(rel);
       }
     }
     // G30b part 2: the existing suites the G30 found (they import a task's files) run once at HEAD. Already red there
@@ -254,7 +341,28 @@ function precheck(root, doc, pack, options = {}) {
   } finally {
     ws.dispose(wt);
   }
-  return { ran: entries.length, suites: (options.suites || []).length, runs, mode: options.mode || 'explicit', findings, notes, details };
+  if (cachePath && cache && root) {
+    let cacheChanged = false;
+    const nowIso = new Date().toISOString();
+    for (const rel of dirtyFiles) {
+      if (Object.prototype.hasOwnProperty.call(cache, rel)) {
+        delete cache[rel];
+        cacheChanged = true;
+      }
+    }
+    for (const rel of cleanFiles) {
+      if (dirtyFiles.has(rel)) continue;
+      const hash = sha256Lf(path.join(root, rel));
+      if (hash) {
+        cache[rel] = { hash, ok: true, at: nowIso };
+        cacheChanged = true;
+      }
+    }
+    if (cacheChanged) {
+      try { writePrecheckCache(cachePath, cache); } catch { /* non-fatal cache write */ }
+    }
+  }
+  return { ran: runnableEntries.length, cached: cachedCount, skipped_remote: skippedRemoteCount, suites: (options.suites || []).length, runs, mode, findings, notes, details };
 }
 
 /** A temporary detached worktree at HEAD with node_modules linked; disposed link-first. */
@@ -286,9 +394,11 @@ function messages(result) {
   const errors = [];
   const warnings = [];
   for (const f of result.findings || []) {
-    const line = f.criterion
-      ? `teste de aceite ${f.id}${f.task ? ` (${f.task})` : ''}: ${f.kind} — ${f.why} [G36]`
-      : `${f.task ? `${f.task}: ` : ''}suíte ${f.id}: ${f.kind} — ${f.why} [G30b]`;
+    const line = f.message
+      ? f.message
+      : f.criterion
+        ? `teste de aceite ${f.id}${f.task ? ` (${f.task})` : ''}: ${f.kind} — ${f.why} [G36]`
+        : `${f.task ? `${f.task}: ` : ''}suíte ${f.id}: ${f.kind} — ${f.why} [G30b]`;
     (f.level === 'error' ? errors : warnings).push(line);
   }
   return { errors, warnings };
@@ -299,6 +409,9 @@ module.exports = {
   REMOTE_VERIFY_TIMEOUT_MS,
   isRemoteVerify,
   resolveTimeout,
+  sha256Lf,
+  readPrecheckCache,
+  isEntryCachedOk,
   precheck,
   messages,
   pendingAcceptance,

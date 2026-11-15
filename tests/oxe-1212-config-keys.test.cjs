@@ -35,6 +35,7 @@ const NESTED_ONLY = new Set([
   'stories_source', // alm
   'require_apply', // alm (OXB-G13)
   'ref_label', // alm (intake label "plain")
+  'precheck', // lint.precheck
 ]);
 
 function sourceFiles() {
@@ -111,6 +112,7 @@ describe('doctor: config keys the runtime reads are known', () => {
       task_suite_command: 'npx vitest run {suites}',
       coupled_scope: [],
       integration_checks: false,
+      lint: { precheck: false },
       models: { tiers: [] },
     };
     fs.writeFileSync(path.join(dir, '.oxe', 'config.json'), JSON.stringify(cfg, null, 2));
