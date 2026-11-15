@@ -60,12 +60,21 @@ function planHash(doc) {
   return crypto.createHash('sha256').update(JSON.stringify({ tasks: doc.tasks, acceptance_tests: doc.acceptance_tests || [] })).digest('hex').slice(0, 16);
 }
 
+function extractTestPathsFromCmd(rawCmd) {
+  const cmd = norm(rawCmd || '');
+  return cmd
+    .split(/[\s'"`;|&()=]+/)
+    .map((tok) => norm(tok.endsWith('$') ? tok.slice(0, -1) : tok))
+    .filter((tok) => tok && !tok.startsWith('-') && TEST_RE.test(tok));
+}
+
 function review(projectRoot, doc, ctx = {}) {
   const tasks = (doc.tasks || []).filter(Boolean);
-  const pending = tasks.filter((t) => t.done !== true);
+  const isDone = (t) => Boolean(t && (t.done === true || t.status === 'done'));
+  const pending = tasks.filter((t) => !isDone(t));
   const tests = (doc.acceptance_tests || []).filter(Boolean);
   const byId = new Map(tasks.map((t) => [t.id, t]));
-  const isCode = (t) => !['external_delivery', 'verify_only', 'spike'].includes(t.kind) && (t.files || []).some((f) => CODE_RE.test(String(f)));
+  const isCode = (t) => !['external_delivery', 'verify_only', 'spike'].includes(t.kind) && (t.files || []).some((f) => CODE_RE.test(filePath(f)));
   const out = Object.fromEntries(DIMENSIONS.map((d) => [d, { verdict: 'PASS', findings: [] }]));
   const add = (dim, level, text) => {
     out[dim].findings.push({ level, text });
@@ -118,11 +127,11 @@ function review(projectRoot, doc, ctx = {}) {
   const seenCoupling = new Set();
   for (let i = 0; i < writePending.length; i += 1) {
     const ta = writePending[i];
-    const faList = [...new Set((ta.files || []).map(norm).filter((f) => f && !isBroadGlob(f)))];
+    const faList = [...new Set((ta.files || []).map(filePath).filter((f) => f && !isBroadGlob(f)))];
     for (let j = i + 1; j < writePending.length; j += 1) {
       const tb = writePending[j];
       if (ta.id === tb.id || ordered(ta.id, tb.id)) continue;
-      const fbList = [...new Set((tb.files || []).map(norm).filter((f) => f && !isBroadGlob(f)))];
+      const fbList = [...new Set((tb.files || []).map(filePath).filter((f) => f && !isBroadGlob(f)))];
       for (const fa of faList) {
         for (const fb of fbList) {
           let label = null;
@@ -142,27 +151,33 @@ function review(projectRoot, doc, ctx = {}) {
     const gaps = testScope.scopeGaps(projectRoot, doc);
     for (const [id, g] of Object.entries(gaps)) {
       for (const f of g.files) {
-        const owner = writePending.find((t) => t.id !== id && (t.files || []).some((x) => !isBroadGlob(norm(x)) && testScope.covers(x, f)));
+        const owner = writePending.find((t) => t.id !== id && (t.files || []).some((x) => !isBroadGlob(filePath(x)) && testScope.covers(filePath(x), f)));
         if (owner && !deps(id).has(owner.id)) add('coupling', 'WARN', `${id}: o teste congelado precisa de ${f}, que ${owner.id} entrega, sem ${id} depender de ${owner.id}`);
       }
     }
   } catch { /* */ }
-  // links: a new source file nothing else in the plan mentions
-  const planText = JSON.stringify({ tasks: tasks.map((t) => ({ id: t.id, title: t.title, files: t.files, commit: t.commit })), pack: ctx.pack || null });
+  // links: a new source file nothing else in the plan mentions (excluding the creating task's own fields/pack entry)
+  const packObj = ctx.pack && typeof ctx.pack === 'object' ? ctx.pack : null;
   for (const t of pending) {
+    const otherTasks = tasks.filter((o) => o.id !== t.id).map((o) => ({ id: o.id, title: o.title, files: o.files, commit: o.commit }));
+    const otherPack = packObj && Array.isArray(packObj.tasks)
+      ? { ...packObj, tasks: packObj.tasks.filter((pt) => pt && (pt.id || pt.task) !== t.id) }
+      : packObj;
+    const otherPlanText = JSON.stringify({ tasks: otherTasks, pack: otherPack });
     for (const f of t.files || []) {
-      const p = norm(f);
-      if (p.includes('*') || !CODE_RE.test(p) || TEST_RE.test(p) || fs.existsSync(path.join(projectRoot, p))) continue;
+      const p = filePath(f);
+      if (!p || p.includes('*') || !CODE_RE.test(p) || TEST_RE.test(p) || fs.existsSync(path.join(projectRoot, p))) continue;
       const stem = path.posix.basename(p).replace(/\.[^.]+$/, '');
       if (/^(index|main)$/.test(stem)) continue;
-      const mentions = (planText.match(new RegExp(stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
-      const importedByTest = tests.some((a) => (a.files || []).some((tf) => { try { return fs.readFileSync(path.join(projectRoot, filePath(tf)), 'utf8').includes(stem); } catch { return false; } }));
-      if (mentions <= 1 && !importedByTest) add('links', 'WARN', `${t.id}: cria ${p}, mas nenhuma outra tarefa, pack ou teste congelado o menciona — quem liga este módulo?`);
+      const stemRe = new RegExp(`(?<![\\w$])${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w$])`);
+      const mentionedElsewhere = stemRe.test(otherPlanText);
+      const importedByTest = tests.some((a) => (a.files || []).some((tf) => { try { return stemRe.test(fs.readFileSync(path.join(projectRoot, filePath(tf)), 'utf8')); } catch { return false; } }));
+      if (!mentionedElsewhere && !importedByTest) add('links', 'WARN', `${t.id}: cria ${p}, mas nenhuma outra tarefa, pack ou teste congelado o menciona — quem liga este módulo?`);
     }
   }
   // scope
   for (const t of pending) {
-    const files = (t.files || []).map(norm);
+    const files = (t.files || []).map(filePath).filter(Boolean);
     if (files.some(isBroadGlob)) add('scope', 'FAIL', `${t.id}: escopo amplo demais (${files.filter((f) => f.includes('*')).join(', ')})`);
     else if (files.length > (ctx.maxFiles || 25)) add('scope', 'WARN', `${t.id}: ${files.length} arquivos no escopo — divida a tarefa`);
   }
@@ -173,7 +188,11 @@ function review(projectRoot, doc, ctx = {}) {
     if (!mine.length) continue;
     const verifyCmds = verifyCmdsOf(t);
     const verifyText = verifyCmds.join(' ').replace(/\\/g, '/');
-    const runsOne = mine.some((a) => (a.command && verifyText.includes(norm(a.command.trim()))) || (a.files || []).some((f) => verifyRunsFile(verifyCmds, f)));
+    const runsOne = mine.some((a) => {
+      if (a.command && verifyText.includes(norm(a.command.trim()))) return true;
+      const entryFiles = (a.files && a.files.length) ? a.files : extractTestPathsFromCmd(a.command);
+      return entryFiles.some((f) => verifyRunsFile(verifyCmds, f));
+    });
     if (!runsOne) add('verification', 'FAIL', `${t.id}: o verify não roda nenhum dos testes congelados dos critérios dela (${mine.flatMap((a) => (a.files || []).map(filePath)).slice(0, 3).join(', ')})`);
   }
   // decisions

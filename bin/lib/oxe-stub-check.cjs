@@ -173,7 +173,13 @@ function definesSymbol(text, name) {
     }
   }
 
-  // 5. Function / arrow assignment or object method (`foo = (...) =>`, `foo: async function(...)`, `foo: x =>`)
+  // 5. Java / C# typed method or field declarations (`public int size()`, `private static final int MAX = 1;`)
+  const jvmMemberRe = new RegExp(
+    `(?:^|[;{}])\\s*(?:@[\\w$.]+(?:\\([^)]*\\))?\\s*)*(?:(?:public|protected|private|static|final|synchronized|abstract|default|native)\\s+)+(?:<[^>]+>\\s+)?[A-Za-z_$][\\w$<>\\[\\],.?\\s]*\\s+${esc}\\s*(?:\\(|=|;)`
+  );
+  if (jvmMemberRe.test(cleaned)) return true;
+
+  // 6. Function / arrow assignment or object method (`foo = (...) =>`, `foo: async function(...)`, `foo: x =>`)
   const fnAssignRe = new RegExp(`(?<![.\\w$])${idL}${esc}${idR}\\s*[:=]\\s*(?:async\\s*)?(?:\\(|function\\b|<[^>]+>\\s*\\(|[A-Za-z_$][\\w$]*\\s*=>)`);
   return fnAssignRe.test(cleaned);
 }

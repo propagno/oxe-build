@@ -20,6 +20,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const { spawnSync } = require('child_process');
+const { definesSymbol } = require('./oxe-stub-check.cjs');
 
 const LANG = (p) => {
   const s = String(p || '');
@@ -230,11 +231,39 @@ function skipLeadingTypeParams(str) {
   return s;
 }
 
+function skipKotlinReceiver(str) {
+  const s = String(str || '').trimStart();
+  let i = 0;
+  if (!/[A-Za-z_$]/.test(s[0] || '')) return s;
+  while (i < s.length && /[\w$.]/.test(s[i])) {
+    if (s[i] === '.') {
+      const rest = s.slice(i + 1).trimStart();
+      if (/^[A-Za-z_$][\w$]*\s*(?:<|\(|=|:|$)/.test(rest)) return rest;
+    }
+    i += 1;
+  }
+  if (s[i] === '<') {
+    let depth = 0;
+    while (i < s.length) {
+      if (s[i] === '<') depth += 1;
+      else if (s[i] === '>') {
+        depth -= 1;
+        if (depth === 0) { i += 1; break; }
+      }
+      i += 1;
+    }
+  }
+  while (i < s.length && (s[i] === '?' || /\s/.test(s[i]))) i += 1;
+  if (s[i] === '.') return s.slice(i + 1).trimStart();
+  return s;
+}
+
 function nameOf(sig) {
   const s = String(sig || '');
-  const kw = /\b(?:fun|function|def|class|interface|enum|type|object|record)\s+/.exec(s);
+  const kw = /\b(fun|function\s*\*?|def|class|interface|typealias|enum|type|object|record|struct|trait|func|protocol)\s+/.exec(s);
   if (kw) {
-    const afterKw = skipLeadingTypeParams(s.slice(kw.index + kw[0].length));
+    let afterKw = skipLeadingTypeParams(s.slice(kw.index + kw[0].length));
+    if (kw[1] === 'fun') afterKw = skipKotlinReceiver(afterKw);
     const id = /^([A-Za-z_$][\w$]*)/.exec(afterKw);
     if (id) return id[1];
   }
@@ -248,7 +277,8 @@ function plan(root, doc, pack, options = {}) {
   const only = options.tasks ? new Set(String(options.tasks).split(',').map((x) => x.trim().toUpperCase())) : null;
   const byPath = new Map();
   const missingSignature = [];
-  for (const t of ((doc && doc.tasks) || []).filter((x) => x && !x.done && (!only || only.has(x.id)))) {
+  const isDone = (x) => Boolean(x && (x.done === true || x.status === 'done'));
+  for (const t of ((doc && doc.tasks) || []).filter((x) => x && !isDone(x) && (!only || only.has(x.id)))) {
     const entry = ((pack && pack.tasks) || []).find((x) => x && (x.id === t.id || x.task === t.id));
     for (const s of (entry && entry.symbols) || []) {
       const p = String(s.path || s.file || '').replace(/\\/g, '/');
@@ -258,7 +288,7 @@ function plan(root, doc, pack, options = {}) {
       const abs = path.join(root, p);
       const text = fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : '';
       const name = s.name || nameOf(s.signature);
-      if (text && name && new RegExp(`\\b${name}\\b`).test(text)) continue;
+      if (text && name && definesSymbol(text, name)) continue;
       const body = stub(lang, s.signature, t);
       if (!body) continue;
       if (!byPath.has(p)) byPath.set(p, { path: p, lang, exists: Boolean(text), stubs: [], _seen: new Set() });
@@ -336,12 +366,42 @@ function checkEsmWithNode(file, code) {
   return lineMatch ? `${file}:${lineMatch[1]}: ${detail}` : `${file}: ${detail}`;
 }
 
+function gitWorktreeMainRoot(startDir) {
+  let cur = path.resolve(startDir);
+  for (let depth = 0; depth < 12; depth += 1) {
+    const dotGit = path.join(cur, '.git');
+    try {
+      const st = fs.statSync(dotGit);
+      if (st.isDirectory()) return null;
+      if (st.isFile()) {
+        const m = /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(dotGit, 'utf8'));
+        if (!m) return null;
+        const gitdir = path.resolve(cur, m[1].trim());
+        const commondirFile = path.join(gitdir, 'commondir');
+        const commonGitDir = fs.existsSync(commondirFile)
+          ? path.resolve(gitdir, fs.readFileSync(commondirFile, 'utf8').trim())
+          : (/[\\/]worktrees[\\/][^\\/]+$/.test(gitdir) ? path.resolve(gitdir, '..', '..') : null);
+        if (commonGitDir && path.basename(commonGitDir) === '.git') return path.dirname(commonGitDir);
+        return null;
+      }
+    } catch {
+      // keep walking up
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  return null;
+}
+
 function resolveProjectTypescript(file, opts) {
   if (opts && Object.prototype.hasOwnProperty.call(opts, 'tsModule')) return opts.tsModule;
   const searchPaths = [];
   if (opts && typeof opts.root === 'string' && opts.root) searchPaths.push(path.resolve(opts.root));
   else if (file && path.isAbsolute(file)) searchPaths.push(path.dirname(file));
   else searchPaths.push(process.cwd());
+  const wtRoot = gitWorktreeMainRoot(searchPaths[0]);
+  if (wtRoot && !searchPaths.includes(wtRoot)) searchPaths.push(wtRoot);
   try {
     const resolved = require.resolve('typescript', { paths: searchPaths });
     return require(resolved);

@@ -12,33 +12,34 @@ const BUILTIN_WAIT_RE = /\b(waitFor\(|waitForSelector\(|waitForLoadState\(|waitF
 
 const E2E_FILE_RE = /(^|\/)(e2e|playwright)\/|\.(e2e|spec)\.[cm]?[jt]sx?$/i;
 
+const { maskJsSource } = require('./oxe-test-rigor.cjs');
+
 // a test body or a hook starts a new sequence
 const BLOCK_RE = /^\s*(?:test|it|describe)(?:\.(?:only|skip|describe|serial|parallel))*\s*\(|^\s*(?:test\.)?(?:beforeEach|afterEach|beforeAll|afterAll)\s*\(/;
 
-/** The line without its `//` and block comments — never cut inside a string (`'http://localhost'`). */
-function stripComment(line) {
-  const l = String(line || '');
-  let q = null;
-  let out = '';
-  for (let i = 0; i < l.length; i += 1) {
-    const ch = l[i];
-    if (q) {
-      out += ch;
-      if (ch === '\\') { out += l[i + 1] || ''; i += 1; } else if (ch === q) q = null;
-      continue;
-    }
-    if (ch === '"' || ch === "'" || ch === '`') { q = ch; out += ch; continue; }
-    if (ch === '/' && l[i + 1] === '/') break;
-    if (ch === '/' && l[i + 1] === '*') {
-      const end = l.indexOf('*/', i + 2);
-      if (end < 0) break;
-      i = end + 1;
-      out += ' ';
-      continue;
-    }
-    out += ch;
+function pendingContextOf(planDoc) {
+  const allTasks = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter(Boolean);
+  const isDone = (t) => t.done === true || t.status === 'done';
+  const pendingTasks = allTasks.filter((t) => !isDone(t));
+  const pendingIds = new Set(pendingTasks.map((t) => t.id));
+  return { allTasks, pendingTasks, pendingIds };
+}
+
+function resolveEntryPendingOwner(entry, ctx) {
+  if (!entry) return { skip: true, owner: null };
+  if (entry.task) {
+    return ctx.pendingIds.has(entry.task) ? { skip: false, owner: entry.task } : { skip: true, owner: entry.task };
   }
-  return out;
+  if (entry.criterion) {
+    const owners = ctx.allTasks.filter((t) => {
+      const acc = Array.isArray(t.acceptance) ? t.acceptance : Array.isArray(t.aceite) ? t.aceite : [];
+      return acc.includes(entry.criterion);
+    });
+    const pendingOwner = owners.find((t) => ctx.pendingIds.has(t.id));
+    if (owners.length > 0 && !pendingOwner) return { skip: true, owner: null };
+    return { skip: false, owner: pendingOwner ? pendingOwner.id : null };
+  }
+  return { skip: false, owner: null };
 }
 
 /**
@@ -50,13 +51,14 @@ function stripComment(line) {
 function racyActions(text, options = {}) {
   const helpers = (options.helpers || []).map((h) => String(h).trim()).filter(Boolean);
   const helperRe = helpers.length ? new RegExp(`\\b(${helpers.map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\s*\\(`, 'g') : null;
-  const lines = String(text || '').split(/\r?\n/);
+  const { commentStripped } = maskJsSource(String(text || ''));
+  const lines = commentStripped.split(/\r?\n/);
   const out = [];
   let pending = null; // the last launch not yet followed by a wait
   const g = (re) => new RegExp(re.source, 'g');
   const kinds = [['launch', g(LAUNCH_RE)], ['wait', g(BUILTIN_WAIT_RE)], ['act', g(ACT_RE)], ...(helperRe ? [['wait', helperRe]] : [])];
   for (let i = 0; i < lines.length; i += 1) {
-    const l = stripComment(lines[i]);
+    const l = lines[i];
     // a new test body or hook: what the previous one launched does not carry over (cross-review 15/11)
     if (BLOCK_RE.test(l)) pending = null;
     // the events of the line in order: a launch and an action on the same line (`goto(u); click(x)`) count too
@@ -84,14 +86,13 @@ function racyFrozenE2e(root, planDoc, options = {}) {
   const fs = require('fs');
   const path = require('path');
   const read = options.readText || ((f) => { try { return fs.readFileSync(path.join(root, f), 'utf8'); } catch { return ''; } });
-  const tasks = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter((t) => t && !(t.done === true || t.status === 'done'));
-  const pendingIds = new Set(tasks.map((t) => t.id));
+  const ctx = pendingContextOf(planDoc);
   const out = [];
   const seen = new Set();
   for (const a of planDoc && Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : []) {
     if (!a) continue;
-    const owner = a.task || (tasks.find((t) => (t.acceptance || []).includes(a.criterion)) || {}).id || null;
-    if (owner && !pendingIds.has(owner)) continue;
+    const { skip, owner } = resolveEntryPendingOwner(a, ctx);
+    if (skip) continue;
     for (const f of a.files || []) {
       const file = String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/');
       if (seen.has(file) || !E2E_FILE_RE.test(file)) continue;
@@ -120,21 +121,20 @@ function labelMismatches(root, planDoc, options = {}) {
   const walk = (v) => { if (typeof v === 'string') strings.push(v); else if (v && typeof v === 'object') for (const x of Object.values(v)) walk(x); };
   for (const c of catalogs) { try { walk(JSON.parse(read(c) || 'null')); } catch { /* not JSON */ } }
   if (!strings.length) return [];
-  const tasks = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter((t) => t && !(t.done === true || t.status === 'done'));
-  const pendingIds = new Set(tasks.map((t) => t.id));
+  const ctx = pendingContextOf(planDoc);
   const NAME_RE = /getByRole\(\s*['"`]([\w-]+)['"`]\s*,\s*\{[^}]*?\bname\s*:\s*\/((?:\\\/|[^/\n])+)\/([a-z]*)/g;
   const out = [];
   const seen = new Set();
   for (const a of planDoc && Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : []) {
     if (!a) continue;
-    const owner = a.task || (tasks.find((t) => (t.acceptance || []).includes(a.criterion)) || {}).id || null;
-    if (owner && !pendingIds.has(owner)) continue;
+    const { skip, owner } = resolveEntryPendingOwner(a, ctx);
+    if (skip) continue;
     for (const f of a.files || []) {
       const file = String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/');
       if (seen.has(file) || !E2E_FILE_RE.test(file)) continue;
       seen.add(file);
-      const text = read(file);
-      for (const m of text.matchAll(NAME_RE)) {
+      const { commentStripped } = maskJsSource(read(file));
+      for (const m of commentStripped.matchAll(NAME_RE)) {
         const [, role, src, flags] = m;
         if (flags.includes('i')) continue;
         let exact;
@@ -143,7 +143,7 @@ function labelMismatches(root, planDoc, options = {}) {
         if (strings.some((s) => exact.test(s))) continue;
         const real = strings.find((s) => loose.test(s));
         if (!real) continue; // not in the catalogs (a dynamic label): nothing to compare
-        out.push({ task: owner, file, line: text.slice(0, m.index).split('\n').length, role, pattern: `/${src}/${flags}`, real });
+        out.push({ task: owner, file, line: commentStripped.slice(0, m.index).split('\n').length, role, pattern: `/${src}/${flags}`, real });
       }
     }
   }
@@ -164,23 +164,26 @@ function layoutlibHazards(root, planDoc, options = {}) {
   const fs = require('fs');
   const path = require('path');
   const read = options.readText || ((f) => { try { return fs.readFileSync(path.join(root, f), 'utf8'); } catch { return ''; } });
-  const tasks = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter((t) => t && !(t.done === true || t.status === 'done'));
-  const pendingIds = new Set(tasks.map((t) => t.id));
+  const ctx = pendingContextOf(planDoc);
   const out = [];
   const seen = new Set();
   for (const a of planDoc && Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : []) {
     if (!a) continue;
-    const owner = a.task || (tasks.find((t) => (t.acceptance || []).includes(a.criterion)) || {}).id || null;
-    if (owner && !pendingIds.has(owner)) continue;
+    const { skip, owner } = resolveEntryPendingOwner(a, ctx);
+    if (skip) continue;
     for (const f of a.files || []) {
       const file = String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/');
       if (seen.has(file) || !/\.(kt|java)$/i.test(file)) continue;
       seen.add(file);
-      const text = read(file);
-      if (!/\bPaparazzi\b|paparazzi/i.test(text)) continue;
-      const lines = text.split(/\r?\n/);
-      lines.forEach((l, i) => {
-        if (/createConfigurationContext\s*\(/.test(l) || /\b(setLocale|setLocales|fontScale\s*=)/.test(l)) out.push({ task: owner, file, line: i + 1, code: l.trim().slice(0, 140) });
+      const rawText = read(file);
+      const { commentStripped } = maskJsSource(rawText);
+      if (!/\bPaparazzi\b|paparazzi/i.test(commentStripped)) continue;
+      const rawLines = rawText.split(/\r?\n/);
+      const codeLines = commentStripped.split(/\r?\n/);
+      codeLines.forEach((l, i) => {
+        if (/createConfigurationContext\s*\(/.test(l) || /\b(setLocale|setLocales|fontScale\s*=)/.test(l)) {
+          out.push({ task: owner, file, line: i + 1, code: (rawLines[i] || l).trim().slice(0, 140) });
+        }
       });
     }
   }
@@ -201,49 +204,61 @@ function containerGuardHazards(root, planDoc, options = {}) {
   const fs = require('fs');
   const path = require('path');
   const read = options.readText || ((f) => { try { return fs.readFileSync(path.join(root, f), 'utf8'); } catch { return ''; } });
-  const tasks = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter((t) => t && !(t.done === true || t.status === 'done'));
-  const pendingIds = new Set(tasks.map((t) => t.id));
+  const ctx = pendingContextOf(planDoc);
   const out = [];
   const seen = new Set();
+  const inspectSkipCall = (src, openIdx) => {
+    let depth = 0;
+    let q = null;
+    let hasCommaAtTop = false;
+    const endLimit = Math.min(src.length, openIdx + 1500);
+    for (let i = openIdx; i < endLimit; i += 1) {
+      const ch = src[i];
+      if (q) { if (ch === '\\') { i += 1; continue; } if (ch === q) q = null; continue; }
+      if (ch === '"' || ch === "'" || ch === '`') { q = ch; continue; }
+      if (ch === '(') depth += 1;
+      else if (ch === ')') {
+        depth -= 1;
+        if (depth === 0) {
+          const inner = src.slice(openIdx + 1, i);
+          if (!/\S/.test(inner)) return { unconditional: true, hasReason: true };
+          return { unconditional: false, hasReason: hasCommaAtTop };
+        }
+      } else if (ch === ',' && depth === 1) {
+        const afterComma = src.slice(i + 1);
+        // Ignore a trailing comma `test.skip(cond,)` with nothing before `)`
+        if (!/^\s*\)/.test(afterComma)) hasCommaAtTop = true;
+      }
+    }
+    return { unconditional: false, hasReason: true };
+  };
   for (const a of planDoc && Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : []) {
     if (!a) continue;
-    const owner = a.task || (tasks.find((t) => (t.acceptance || []).includes(a.criterion)) || {}).id || null;
-    if (owner && !pendingIds.has(owner)) continue;
+    const { skip, owner } = resolveEntryPendingOwner(a, ctx);
+    if (skip) continue;
     for (const f of a.files || []) {
       const file = String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/');
       if (seen.has(file) || !/\.[cm]?[jt]sx?$/i.test(file)) continue;
       seen.add(file);
-      const text = read(file);
-      const startsContainers = /docker['"`]?\s*,?\s*\[?\s*['"`]?\s*(run|compose)\b|docker\s+(run|compose)\b|GenericContainer|testcontainers/i.test(text);
+      const rawText = read(file);
+      const { commentStripped } = maskJsSource(rawText);
+      const startsContainers = /docker['"`]?\s*,?\s*\[?\s*['"`]?\s*(run|compose)\b|docker\s+(run|compose)\b|GenericContainer|testcontainers/i.test(commentStripped);
       if (!startsContainers) continue;
-      const lines = text.split(/\r?\n/);
-      const guardIdx = lines.findIndex((l) => /docker['"`]?\s*,?\s*\[?\s*['"`]?\s*info\b|docker\s+info\b/.test(l));
-      if (guardIdx >= 0 && !/OSType|--platform|platform\s*:/i.test(text)) {
-        out.push({ task: owner, file, line: guardIdx + 1, kind: 'ostype', code: lines[guardIdx].trim().slice(0, 140) });
+      const rawLines = rawText.split(/\r?\n/);
+      const codeLines = commentStripped.split(/\r?\n/);
+      const guardIdx = codeLines.findIndex((l) => /docker['"`]?\s*,?\s*\[?\s*['"`]?\s*info\b|docker\s+info\b/.test(l));
+      if (guardIdx >= 0 && !/OSType|--platform|platform\s*:/i.test(commentStripped)) {
+        out.push({ task: owner, file, line: guardIdx + 1, kind: 'ostype', code: (rawLines[guardIdx] || codeLines[guardIdx]).trim().slice(0, 140) });
       }
-      // a skip with no reason: test.skip(cond) / it.skip without a message
-      // the arguments read with balanced parentheses: a reason is a SECOND top-level argument (`skip(!ready(), 'why')`)
-      const skipHasReason = (l, at) => {
-        let depth = 0;
-        let q = null;
-        for (let i = at; i < l.length; i += 1) {
-          const ch = l[i];
-          if (q) { if (ch === '\\') { i += 1; continue; } if (ch === q) q = null; continue; }
-          if (ch === '"' || ch === "'" || ch === '`') { q = ch; continue; }
-          if (ch === '(') depth += 1;
-          else if (ch === ')') { depth -= 1; if (depth === 0) return false; }
-          else if (ch === ',' && depth === 1) return true;
-        }
-        return true; // the call continues on the next line: not judged
-      };
-      lines.forEach((raw, i) => {
-        const l = stripComment(raw); // a commented-out skip is no skip (R30)
-        const m = /\b(test|it|describe)\.skip\(/.exec(l);
-        if (!m) return;
+      const skipRe = /\b(test|it|describe)\.skip\s*\(/g;
+      let m;
+      while ((m = skipRe.exec(commentStripped)) !== null) {
         const open = m.index + m[0].length - 1;
-        if (/^\(\s*\)/.test(l.slice(open))) return; // test.skip() inside a test: unconditional, no condition to explain
-        if (!skipHasReason(l, open)) out.push({ task: owner, file, line: i + 1, kind: 'skip_reason', code: l.trim().slice(0, 140) });
-      });
+        const info = inspectSkipCall(commentStripped, open);
+        if (info.unconditional || info.hasReason) continue;
+        const lineNo = commentStripped.slice(0, m.index).split('\n').length;
+        out.push({ task: owner, file, line: lineNo, kind: 'skip_reason', code: (rawLines[lineNo - 1] || '').trim().slice(0, 140) });
+      }
     }
   }
   return out;

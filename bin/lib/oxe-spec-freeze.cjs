@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
+const { unquoteGitPath } = require('./oxe-origin.cjs');
 
 const TEST_RE = /(^|\/)(tests?|__tests__|spec|e2e)\/|\.(test|spec)\.[cm]?[jt]sx?$/i;
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
@@ -76,12 +77,12 @@ function fullTestNames(text) {
   };
   const unq = (s) => s.replace(/\\(['"`\\])/g, '$1');
   const describes = [];
-  for (const m of src.matchAll(/\bdescribe(?:\.\w+)*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g)) {
+  for (const m of src.matchAll(/(?:\btest\.)?\bdescribe(?:\.\w+)*\s*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g)) {
     const open = m.index + m[0].indexOf('(');
     describes.push({ title: unq(m[2]), start: open, end: closeOf(open) });
   }
   const out = [];
-  for (const m of src.matchAll(/\b(?:it|test)(?:\.\w+)*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g)) {
+  for (const m of src.matchAll(/\b(?:it|test)(?!\.(?:describe|suite|step|beforeEach|afterEach|beforeAll|afterAll|before|after|use|info|expect|extend|setTimeout|configure)\b)(?:\.\w+)*\s*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g)) {
     if (m[1] === '`' && m[2].includes('${')) continue;
     const at = m.index;
     const chain = describes.filter((d) => d.start < at && at < d.end).sort((a, b) => a.start - b.start).map((d) => d.title);
@@ -141,7 +142,14 @@ function filterTitles(text, titles, pattern, file = '') {
   return titles.filter((t) => selected.has(t));
 }
 
-function criterionOf(text) { const m = /\b(?:describe|it|test)\s*\(\s*['"`][^'"`]*\b(A\d+)\b/.exec(String(text)); return m ? m[1] : null; }
+function criterionOf(text) {
+  const src = blankComments(text);
+  for (const m of src.matchAll(/\b(?:describe|it|test)(?:\.\w+)*\s*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g)) {
+    const hit = /\b(A\d+(?:\.\d+)?|AC-\d+(?:\.\d+)?)\b/.exec(m[2]);
+    if (hit) return hit[1];
+  }
+  return null;
+}
 
 /** The ref's commit sha and changed files: a PR via `gh`, a sha via git. spawn is injectable (tests). */
 function resolveRef(root, from, spawn = spawnSync) {
@@ -155,8 +163,8 @@ function resolveRef(root, from, spawn = spawnSync) {
   const v = spawn('git', ['rev-parse', '--verify', `${from}^{commit}`], { cwd: root, encoding: 'utf8', windowsHide: true });
   if (v.status !== 0) throw new Error(`${from}: não é um PR (#n) nem um commit deste repositório`);
   const s = v.stdout.trim();
-  const d = spawn('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', s], { cwd: root, encoding: 'utf8', windowsHide: true });
-  return { kind: 'sha', ref: s.slice(0, 12), sha: s, files: String(d.stdout || '').split(/\r?\n/).filter(Boolean).map(norm) };
+  const d = spawn('git', ['diff-tree', '--root', '-m', '--first-parent', '--no-commit-id', '--name-only', '-r', s], { cwd: root, encoding: 'utf8', windowsHide: true });
+  return { kind: 'sha', ref: s.slice(0, 12), sha: s, files: String(d.stdout || '').split(/\r?\n/).filter(Boolean).map((f) => norm(unquoteGitPath(f))) };
 }
 
 function contentAt(root, ref, file, spawn = spawnSync) {

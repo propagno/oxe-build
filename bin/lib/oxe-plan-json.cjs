@@ -186,9 +186,34 @@ function validatePlanJson(doc) {
  * `@Test void name()` (any modifiers, other annotations in between), with `@DisplayName("…")` when present. F10's
  * AttnUsageTest.kt was read as ONE test named "Notice" (a string literal in the body).
  */
+function blankCodeComments(text) {
+  const s = String(text || '');
+  let out = '';
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (ch === '"' || ch === "'" || ch === '`') {
+      let j = i + 1;
+      for (; j < s.length && s[j] !== ch; j += 1) if (s[j] === '\\') j += 1;
+      out += s.slice(i, j + 1);
+      i = j;
+    } else if (ch === '/' && s[i + 1] === '/') {
+      let j = s.indexOf('\n', i);
+      if (j < 0) j = s.length;
+      out += ' '.repeat(j - i);
+      i = j - 1;
+    } else if (ch === '/' && s[i + 1] === '*') {
+      let j = s.indexOf('*/', i + 2);
+      j = j < 0 ? s.length : j + 2;
+      out += s.slice(i, j).replace(/[^\n]/g, ' ');
+      i = j - 1;
+    } else out += ch;
+  }
+  return out;
+}
+
 function declaredJvmTestTitles(text) {
   const out = [];
-  const src = String(text || '');
+  const src = blankCodeComments(text);
   const re = /@(?:Test|ParameterizedTest|RepeatedTest|TestFactory)\b(?:\([^)]*\))?((?:\s*@[\w.]+(?:\((?:[^()"]|"(?:\\.|[^"\\])*")*\))?)*)\s*(?:(?:public|private|protected|internal|open|override|final|suspend|static)\s+)*(?:fun\s+(?:`([^`]+)`|([A-Za-z_$][\w$]*))|(?:[\w<>[\],.?]+\s+)?([A-Za-z_$][\w$]*)\s*\()/g;
   for (const m of src.matchAll(re)) {
     const name = m[2] || m[3] || m[4];
@@ -208,7 +233,7 @@ function declaredJvmTestTitles(text) {
  */
 function eachTestTitles(text) {
   const out = [];
-  const src = String(text || '');
+  const src = blankCodeComments(text);
   const re = /\b(?:it|test|describe)(?:\.(?:only|skip|concurrent))?\.each\s*/g;
   let m;
   while ((m = re.exec(src))) {
@@ -255,9 +280,10 @@ function eachTestTitles(text) {
 
 function declaredTestTitles(text, file) {
   if (file && /\.(kt|kts|java|groovy|scala)$/i.test(String(file))) return declaredJvmTestTitles(text);
-  const out = eachTestTitles(text);
-  const re = /\b(?:it|test)(?:\.\w+)*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
-  for (const m of String(text || '').matchAll(re)) {
+  const src = blankCodeComments(text);
+  const out = eachTestTitles(src);
+  const re = /\b(?:it|test)(?!\.(?:describe|suite|step|beforeEach|afterEach|beforeAll|afterAll|before|after|use|info|expect|extend|setTimeout|configure)\b)(?:\.\w+)*\s*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
+  for (const m of src.matchAll(re)) {
     if (m[1] === '`' && m[2].includes('${')) continue;
     out.push(m[2].replace(/\\(['"`\\])/g, '$1'));
   }

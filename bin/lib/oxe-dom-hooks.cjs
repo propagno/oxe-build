@@ -13,6 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { unquoteGitPath } = require('./oxe-origin.cjs');
 
 const MARKUP_RE = /\.(tsx|jsx|vue|svelte|html?|astro)$/i;
 const TEST_PATH_RE = /(^|\/)(e2e|tests?|__tests__|spec|playwright|cypress)\/|\.(test|spec|e2e)\.[cm]?[jt]sx?$/i;
@@ -26,8 +27,41 @@ const ATTR_RE = /(?<![\w-])((?:data|cmdk)-[a-z0-9-]+)(?:\s*=\s*(?:"([^"{}]*)"|'(
 const ARIA_RE = /(?<![\w-])aria-label\s*=\s*(?:"([^"{}]{3,})"|'([^'{}]{3,})'|\{\s*t\(\s*['"`]([\w.:-]+)['"`][^)]*\)\s*\})/gi;
 
 function git(root, args) {
-  const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync('git', ['-c', 'core.quotepath=false', ...args], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
   return r.status === 0 ? r.stdout : '';
+}
+
+/** Blank HTML (`<!-- -->`), block (`/* *\/`) and line (`//`) comments while keeping string literals intact. */
+function stripMarkupComments(text) {
+  const s = String(text || '');
+  let out = '';
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (ch === '"' || ch === "'" || ch === '`') {
+      let j = i + 1;
+      for (; j < s.length && s[j] !== ch; j += 1) if (s[j] === '\\') j += 1;
+      out += s.slice(i, Math.min(j + 1, s.length));
+      i = j;
+    } else if (ch === '<' && s.slice(i, i + 4) === '<!--') {
+      const end = s.indexOf('-->', i + 4);
+      const stop = end < 0 ? s.length : end + 3;
+      out += s.slice(i, stop).replace(/[^\r\n]/g, ' ');
+      i = stop - 1;
+    } else if (ch === '/' && s[i + 1] === '*') {
+      const end = s.indexOf('*/', i + 2);
+      const stop = end < 0 ? s.length : end + 2;
+      out += s.slice(i, stop).replace(/[^\r\n]/g, ' ');
+      i = stop - 1;
+    } else if (ch === '/' && s[i + 1] === '/') {
+      let end = s.indexOf('\n', i + 2);
+      if (end < 0) end = s.length;
+      out += ' '.repeat(end - i);
+      i = end - 1;
+    } else {
+      out += ch;
+    }
+  }
+  return out;
 }
 
 /** Hooks on removed (`-`) lines of a unified diff of markup files: [{ name, value, prefix, file }]. */
@@ -36,10 +70,14 @@ function removedHooks(diffText) {
   let file = null;
   for (const line of String(diffText || '').split(/\r?\n/)) {
     if (line === '--- /dev/null') { file = null; continue; } // an added file: nothing removed from it
-    const m = /^\+\+\+ "?b\/(.+?)"?$/.exec(line) || /^--- "?a\/(.+?)"?$/.exec(line);
-    if (m) { if (line.startsWith('---')) file = m[1]; continue; }
+    const hdr = /^(?:\+\+\+ b\/|--- a\/)(.+)$/.exec(line) || /^(?:\+\+\+ "b\/|--- "a\/)(.+)"$/.exec(line);
+    if (hdr) {
+      if (line.startsWith('---')) file = unquoteGitPath(line.startsWith('--- "') ? `"${hdr[1]}"` : hdr[1]);
+      continue;
+    }
     if (!file || !MARKUP_RE.test(file) || TEST_PATH_RE.test(file) || !line.startsWith('-') || line.startsWith('---')) continue;
-    for (const a of line.slice(1).matchAll(ATTR_RE)) {
+    const cleanLine = stripMarkupComments(line.slice(1));
+    for (const a of cleanLine.matchAll(ATTR_RE)) {
       const name = a[1].toLowerCase();
       // an empty value (cmdk-root="") is the attribute alone
       const raw = a[2] != null ? a[2] : a[3] != null ? a[3] : (a[4] != null && !a[5] ? a[4] : null);
@@ -49,7 +87,7 @@ function removedHooks(diffText) {
       const key = `${name}=${value != null ? value : prefix != null ? `${prefix}*` : ''}`;
       if (!out.has(key)) out.set(key, { name, value, prefix, file });
     }
-    for (const a of line.slice(1).matchAll(ARIA_RE)) {
+    for (const a of cleanLine.matchAll(ARIA_RE)) {
       const value = a[1] != null ? a[1] : a[2] != null ? a[2] : null;
       const i18nKey = a[3] || null;
       const key = `aria-label=${value != null ? value : `t:${i18nKey}`}`;
@@ -93,7 +131,7 @@ function ariaFinding(root, sha, h, options, parent) {
   return { hook: `aria-label="${text}"${h.i18nKey ? ` (${h.i18nKey})` : ''}`, removed_in: h.file, readers: readers.slice(0, 12).map((l) => l.slice(0, 200)), readers_total: readers.length };
 }
 
-/** Lines of the tree at `ref` that contain every needle (git grep -F, all needles on one line), as "file:line: text". */
+/** Lines of the tree at `ref` that contain every needle outside single-line comments, as "file:line: text". */
 function grepAll(root, ref, needles) {
   // git grep -e A -e B matches EITHER: the lines holding ALL needles are kept afterwards
   const args = ['grep', '-n', '-I', '-F'];
@@ -101,7 +139,11 @@ function grepAll(root, ref, needles) {
   const raw = git(root, [...args, ref]);
   const prefix = `${ref}:`;
   return raw.split(/\r?\n/).filter(Boolean).map((l) => (l.startsWith(prefix) ? l.slice(prefix.length) : l))
-    .filter((l) => needles.every((n) => l.includes(n)));
+    .filter((l) => {
+      const m = /^(.+?):(\d+):(.*)$/.exec(l);
+      const body = stripMarkupComments(m ? m[3] : l);
+      return needles.every((n) => body.includes(n));
+    });
 }
 
 /**
@@ -133,7 +175,7 @@ function hooksStillRead(root, parent, sha, options = {}) {
 }
 
 function extractHooksFromText(text, file, out = new Map()) {
-  const src = String(text || '');
+  const src = stripMarkupComments(text);
   for (const a of src.matchAll(ATTR_RE)) {
     const name = a[1].toLowerCase();
     const raw = a[2] != null ? a[2] : a[3] != null ? a[3] : (a[4] != null && !a[5] ? a[4] : null);
@@ -247,8 +289,10 @@ function hooksReadInFiles(root, files, options = {}) {
       if (seenLine.has(stripped)) continue;
       const m = /^(.+?):(\d+):(.*)$/.exec(stripped);
       if (!m || !TEST_PATH_RE.test(m[1])) continue;
+      const cleanBody = stripMarkupComments(m[3]);
+      if (!cleanBody.trim()) continue;
       seenLine.add(stripped);
-      testLines.push({ file: m[1], line: stripped, body: m[3] });
+      testLines.push({ file: m[1], line: stripped, body: cleanBody });
     }
   }
   if (!testLines.length) return [];
@@ -350,4 +394,5 @@ module.exports = {
   generatedMessage,
   MARKUP_RE,
   TEST_PATH_RE,
+  stripMarkupComments,
 };
