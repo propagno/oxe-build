@@ -312,6 +312,24 @@ describe('OXB-170: a checkpoint holds only its own task\'s hunks', () => {
     assert.equal(planOf(dir).tasks[0].done, true);
   });
 
+  it('runtime pause holds a NEW execute (no attempt) until runtime resume (OxeSpace 15/11, OQ polish wave 8)', async () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T1', title: 'A', wave: 1, files: ['a.txt'], verify: { commands: [ok] } }] };
+    const dir = project({ plan, files: { 'a.txt': 'a\n' } });
+    let calls = 0;
+    const exec = { async execute() { calls += 1; return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    op.compileExecutionGraphFromArtifacts(dir, null, {});
+    op.applyRuntimeAction(dir, null, { action: 'pause', reason: 'janela de promoção' });
+    const res = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true });
+    assert.equal(res.paused, true);
+    assert.equal(res.result.status, 'paused');
+    assert.match(res.result.reason, /runtime pause .*janela de promoção.*runtime resume/);
+    assert.equal(calls, 0, 'no attempt under the pause');
+    op.applyRuntimeAction(dir, null, { action: 'resume' });
+    const after = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true });
+    assert.notEqual(after.paused, true);
+    assert.equal(calls, 1);
+  });
+
   it('R32: a check script the task itself brings is not "already red on the parent" (MODULE_NOT_FOUND there)', async () => {
     const plan = { schema_version: 1, tasks: [{ id: 'T4', title: 'D', wave: 1, files: ['small.ts', 'scripts/check-file-size.mjs'], verify: { commands: [ok] } }] };
     const sizeCheck = "import fs from 'fs';\nconst n = fs.readFileSync('legacy.ts', 'utf8').split('\\n').length; if (n > 5) { console.error('arquivo grande: ' + n + ' linhas'); process.exit(1); }\n";

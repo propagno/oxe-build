@@ -3910,6 +3910,18 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
   const parsers = loadSdkParsers();
   if (!parsers) throw new Error('SDK parsers não disponíveis.');
 
+  // OxeSpace 15/11 (OQ polish wave 8): a new execute after `runtime pause` refuses — nothing runs, no model call —
+  // until `runtime resume` (a wave loop's next `execute --wave N` started a paid attempt under the pause)
+  {
+    let held = null;
+    try { const rs = readRunState(projectRoot, activeSession); held = rs && rs.pause_requested ? { rs, p: rs.pause_requested } : null; } catch { held = null; }
+    if (held) {
+      const reason = `run pausado por runtime pause em ${held.p.at || '?'}${held.p.reason ? ` (${held.p.reason})` : ''} — nada roda até oxe-cc runtime resume`;
+      appendEvent(projectRoot, activeSession, { type: 'ExecuteRefusedPaused', run_id: held.rs.run_id || null, payload: { pause: held.p } });
+      return { mode: options.wave != null ? 'wave' : 'single', agentPlan: null, paused: true, result: { run_id: held.rs.run_id || null, status: 'paused', completed: [], failed: [], blocked: ['runtime_paused'], reason }, run: held.rs };
+    }
+  }
+
   // Auto-wire LlmTaskExecutor (via adapter) if providerConfig or adapter is supplied
   let executor = options.executor || null;
   let usageRunId = null;
@@ -4535,6 +4547,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
   const executeStartedMs = Date.now();
   ctx.pauseRequested = () => {
     const rs = readRunState(projectRoot, activeSession);
+    if (rs && rs.pause_requested) return `runtime pause${rs.pause_requested.reason ? `: ${rs.pause_requested.reason}` : ''}`;
     if (!rs || rs.status !== 'paused') return null;
     const at = Date.parse(rs.updated_at || '') || 0;
     if (at < executeStartedMs) return null;
@@ -4633,7 +4646,11 @@ function syncRunStateAfterExecute(projectRoot, activeSession, current, result, m
   ];
   // `failures` must be in the state handed to the reducer: the scheduler reports an exhausted
   // task as WorkItemBlocked, so the failed set comes from here, not from the event log.
-  const base = { ...current, status, updated_at: now, failures, active_tasks: [] };
+  // a pause requested while this execute ran (on disk, not in this execute's snapshot) survives its end
+  let onDisk = null;
+  try { onDisk = readRunState(projectRoot, activeSession); } catch { onDisk = null; }
+  const held = onDisk && onDisk.run_id === current.run_id && onDisk.pause_requested ? onDisk.pause_requested : null;
+  const base = { ...current, status: held ? 'paused' : status, updated_at: now, failures, active_tasks: [], ...(held ? { pause_requested: held } : {}) };
   const canonical = reduceCanonicalRunState(projectRoot, activeSession, { runState: base, runId: current.run_id })
     || current.canonical_state
     || null;
@@ -9334,6 +9351,117 @@ function runtimePlanTaskEdit(projectRoot, activeSession, options = {}) {
 }
 
 /**
+ * A verify command without some test arguments (`drop`), or with some anchored (`anchor`, vitest `arg$`), per
+ * SUBCOMMAND (R31): `a.test.ts && npm run typecheck` keeps the typecheck; a subcommand whose test arguments all went
+ * goes away with its separator — never a bare `vitest run` (the whole suite). R32: the command is never rewritten as a
+ * whole (a `-t "v1\.5"` keeps its backslash); a path matches with either separator; the replacement is a function.
+ */
+function pruneVerifyCommand(c, drop, anchor) {
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const TEST_ARG = /[^\s"'`]+\.(test|spec)\.[cm]?[jt]sx?/g;
+  const pat = (s) => esc(String(s).replace(/\\/g, '/')).replace(/\//g, '[\\\\/]');
+  const parts = String(c).split(/(\s*(?:&&|\|\||;)\s*)/);
+  const keep = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    let n = parts[i];
+    for (const arg of drop || []) n = n.replace(new RegExp(`(^|\\s)(["'\`]?)${pat(arg)}\\$?\\2(?=\\s|$)`, 'g'), (_m, p1) => p1);
+    for (const arg of anchor || []) n = n.replace(new RegExp(`(^|\\s)(["'\`]?)(${pat(arg)})\\2(?=\\s|$)`, 'g'), (_m, p1, q, a) => `${p1}${q}${a}$${q}`);
+    if (n !== parts[i]) n = n.replace(/\s{2,}/g, ' ').trim();
+    const had = (parts[i].match(TEST_ARG) || []).length;
+    const has = (n.match(TEST_ARG) || []).length;
+    if (had && !has) continue;
+    if (n) keep.push({ sep: i ? parts[i - 1] : null, text: n });
+  }
+  return keep.map((k, j) => (j ? (k.sep || ' && ') : '') + k.text).join('');
+}
+
+/** pruneVerifyCommand over a task's verify.commands, verify.command and verifyCommand; null when nothing changes. */
+function pruneTaskVerify(t, drop, anchor, { apply = true } = {}) {
+  const before = { commands: t.verify && Array.isArray(t.verify.commands) ? [...t.verify.commands] : null, command: t.verify && t.verify.command ? t.verify.command : null, verifyCommand: t.verifyCommand || null };
+  const after = {
+    commands: before.commands ? before.commands.map((c) => pruneVerifyCommand(c, drop, anchor)).filter(Boolean) : null,
+    command: before.command ? pruneVerifyCommand(before.command, drop, anchor) || null : null,
+    verifyCommand: before.verifyCommand ? pruneVerifyCommand(before.verifyCommand, drop, anchor) || null : null,
+  };
+  const flat = (x) => [...(x.commands || []), ...(x.command ? [x.command] : []), ...(x.verifyCommand ? [x.verifyCommand] : [])];
+  if (JSON.stringify(flat(after)) === JSON.stringify(flat(before))) return null;
+  if (apply) {
+    if (before.commands) t.verify.commands = after.commands;
+    if (before.command) { if (after.command) t.verify.command = after.command; else delete t.verify.command; }
+    if (before.verifyCommand) { if (after.verifyCommand) t.verifyCommand = after.verifyCommand; else delete t.verifyCommand; }
+  }
+  return { before: flat(before), after: flat(after) };
+}
+
+/**
+ * OxeSpace 15/11 (OxeChat F4: T10/T11 superseded by AG-10/AG-11, user decision): `oxe-cc plan task supersede
+ * T10,T11 --by-phase "…" --by <papel> --reason "…" [--cr CR-n] [--dry-run]`. For a plan with or without a program:
+ * the tasks become done with `superseded` (never scheduled, never reopened), their criteria leave them, the frozen
+ * entries of criteria only they held move to `superseded_tests` (kept, not run, nothing released), and those test
+ * files leave the pending tasks' verify (per subcommand). Refused for a task with a checkpoint or with pending dependents.
+ */
+function runtimePlanTaskSupersede(projectRoot, activeSession, options = {}) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const ids = String(options.tasks || '').split(/[\s,]+/).map((s) => s.trim().toUpperCase()).filter(Boolean);
+  if (!ids.length || ids.some((id) => !/^T\d+$/.test(id))) throw new Error('use: oxe-cc plan task supersede T<n>[,T<m>] --by-phase "…" --by <papel> --reason "…" [--cr CR-n] [--dry-run]');
+  const byPhase = String(options.byPhase || '').trim();
+  if (!byPhase) throw new Error('informe o que as substitui (--by-phase "AG-10/AG-11")');
+  const { by, reason } = requireEditReason({ by: options.by, reason: options.reason });
+  const cr = options.cr ? String(options.cr).toUpperCase() : null;
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan task supersede exige PLAN.json');
+  const at = new Date().toISOString();
+  const norm = (p) => String(typeof p === 'string' ? p : (p && p.path) || '').replace(/\\/g, '/');
+  const out = planJsonLib.withPlanLock(jsonPath, () => {
+    const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const tasks = (doc.tasks || []).filter(Boolean);
+    const set = new Set(ids);
+    const problems = [];
+    for (const id of ids) {
+      const t = tasks.find((x) => String(x.id).toUpperCase() === id);
+      if (!t) { problems.push(`${id} não existe no plano`); continue; }
+      if (t.done === true || t.status === 'done') problems.push(`${id} já está done`);
+      if (t.done_commit) problems.push(`${id} tem checkpoint (${String(t.done_commit).slice(0, 8)})`);
+      const dependents = tasks.filter((x) => !set.has(String(x.id).toUpperCase()) && x.done !== true && (x.depends_on || x.dependsOn || []).map((d) => String(d).toUpperCase()).includes(id));
+      if (dependents.length) problems.push(`${dependents.map((x) => x.id).join(', ')} depende(m) de ${id} (oxe-cc plan task edit … --depends-on)`);
+    }
+    if (problems.length) throw new Error(`plan task supersede recusado: ${problems.join('; ')}`);
+    const sup = tasks.filter((t) => set.has(String(t.id).toUpperCase()));
+    const criteria = [...new Set(sup.flatMap((t) => t.acceptance || []))];
+    // a criterion another pending task still holds stays (only its entries owned by a superseded task go)
+    const heldElsewhere = new Set(tasks.filter((t) => !set.has(String(t.id).toUpperCase()) && t.done !== true).flatMap((t) => t.acceptance || []));
+    const goes = (a) => a && ((a.task && set.has(String(a.task).toUpperCase())) || (!a.task && criteria.includes(a.criterion) && !heldElsewhere.has(a.criterion)));
+    const moved = (doc.acceptance_tests || []).filter(goes);
+    const files = [...new Set(moved.flatMap((a) => (a.files || []).map(norm)).filter(Boolean))];
+    const verifyChanges = [];
+    for (const t of tasks) {
+      if (set.has(String(t.id).toUpperCase()) || t.done === true) continue;
+      const c = pruneTaskVerify(t, files, [], { apply: !options.dryRun });
+      if (!c) continue;
+      verifyChanges.push({ task: t.id, before: c.before, after: c.after });
+      if (!options.dryRun) t.edits = [...(Array.isArray(t.edits) ? t.edits : []), { by, reason, at, verify_pruned: files, superseded: ids }];
+    }
+    if (!options.dryRun) {
+      for (const t of sup) Object.assign(t, { done: true, status: 'done', superseded: { by_phase: byPhase, cr, by, reason, at, acceptance: [...(t.acceptance || [])] }, acceptance: [] });
+      doc.acceptance_tests = (doc.acceptance_tests || []).filter((a) => !goes(a));
+      doc.superseded_tests = [...(Array.isArray(doc.superseded_tests) ? doc.superseded_tests : []), ...moved.map((a) => ({ ...a, superseded: { by_phase: byPhase, tasks: ids, at } }))];
+      const tmp = `${jsonPath}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+      fs.renameSync(tmp, jsonPath);
+    }
+    return { tasks: ids, criteria, tests_kept: moved.map((a) => a.criterion), files, verify_changes: verifyChanges };
+  });
+  if (!options.dryRun) {
+    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'task_supersede', tasks: ids, by_phase: byPhase, cr, criteria: out.criteria, tests_kept: out.tests_kept, verify_pruned: out.verify_changes.map((c) => c.task), by, reason, at });
+    appendEvent(projectRoot, activeSession, { type: 'PlanTasksSuperseded', payload: { tasks: ids, by_phase: byPhase, cr, by, reason } });
+  }
+  return { dry_run: Boolean(options.dryRun), by_phase: byPhase, ...out };
+}
+
+/**
  * OxeSpace 15/11 (OxeChat F4 install): `oxe-cc plan verify prune --later-owned --by <papel> --reason "…" [--dry-run]`.
  * The G38 findings applied: from each pending task's verify, the test arguments that select a frozen test only a LATER
  * task turns green are removed (the exact path, or the argument that matched it as a vitest substring). A command left
@@ -9364,48 +9492,14 @@ function runtimePlanVerifyPrune(projectRoot, activeSession, options = {}) {
       else e.anchor.add(f.via);
     }
     for (const e of byTask.values()) for (const a of e.anchor) if (e.drop.has(a)) e.anchor.delete(a);
-    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const TEST_ARG = /[^\s"'`]+\.(test|spec)\.[cm]?[jt]sx?/g;
-    const norm = (s) => String(s).replace(/\\/g, '/');
-    // per SUBCOMMAND (R31 P1): `a.test.ts && npm run typecheck` keeps the typecheck; a subcommand whose test arguments
-    // were all removed goes away with its separator — never a bare `vitest run` (the whole suite)
-    // R32: the command is never rewritten as a whole (a `-t "v1\.5"` keeps its backslash); a path argument matches with
-    // either separator, and the replacement is a function (a `$` in a path is no replacement pattern)
-    const pat = (s) => esc(norm(s)).replace(/\//g, '[\\\\/]');
-    const pruneCommand = (c, drop, anchor) => {
-      const parts = String(c).split(/(\s*(?:&&|\|\||;)\s*)/);
-      const keep = [];
-      for (let i = 0; i < parts.length; i += 2) {
-        let n = parts[i];
-        for (const arg of drop) n = n.replace(new RegExp(`(^|\\s)(["'\`]?)${pat(arg)}\\$?\\2(?=\\s|$)`, 'g'), (_m, p1) => p1);
-        for (const arg of anchor) n = n.replace(new RegExp(`(^|\\s)(["'\`]?)(${pat(arg)})\\2(?=\\s|$)`, 'g'), (_m, p1, q, a) => `${p1}${q}${a}$${q}`);
-        if (n !== parts[i]) n = n.replace(/\s{2,}/g, ' ').trim();
-        const had = (parts[i].match(TEST_ARG) || []).length;
-        const has = (n.match(TEST_ARG) || []).length;
-        if (had && !has) continue;
-        if (n) keep.push({ sep: i ? parts[i - 1] : null, text: n });
-      }
-      return keep.map((k, j) => (j ? (k.sep || ' && ') : '') + k.text).join('');
-    };
     const changes = [];
     for (const t of (doc.tasks || []).filter(Boolean)) {
       const e = byTask.get(t.id);
       if (!e) continue;
-      const before = { commands: t.verify && Array.isArray(t.verify.commands) ? [...t.verify.commands] : null, command: t.verify && t.verify.command ? t.verify.command : null, verifyCommand: t.verifyCommand || null };
-      const after = {
-        commands: before.commands ? before.commands.map((c) => pruneCommand(c, e.drop, e.anchor)).filter(Boolean) : null,
-        command: before.command ? pruneCommand(before.command, e.drop, e.anchor) || null : null,
-        verifyCommand: before.verifyCommand ? pruneCommand(before.verifyCommand, e.drop, e.anchor) || null : null,
-      };
-      const flat = (x) => [...(x.commands || []), ...(x.command ? [x.command] : []), ...(x.verifyCommand ? [x.verifyCommand] : [])];
-      if (JSON.stringify(flat(after)) === JSON.stringify(flat(before))) continue;
-      changes.push({ task: t.id, removed: [...e.drop], anchored: [...e.anchor], before: flat(before), after: flat(after) });
-      if (!options.dryRun) {
-        if (before.commands) t.verify.commands = after.commands;
-        if (before.command) { if (after.command) t.verify.command = after.command; else delete t.verify.command; }
-        if (before.verifyCommand) { if (after.verifyCommand) t.verifyCommand = after.verifyCommand; else delete t.verifyCommand; }
-        t.edits = [...(Array.isArray(t.edits) ? t.edits : []), { by, reason, at, verify_pruned: [...e.drop], ...(e.anchor.size ? { verify_anchored: [...e.anchor] } : {}) }];
-      }
+      const c = pruneTaskVerify(t, e.drop, e.anchor, { apply: !options.dryRun });
+      if (!c) continue;
+      changes.push({ task: t.id, removed: [...e.drop], anchored: [...e.anchor], before: c.before, after: c.after });
+      if (!options.dryRun) t.edits = [...(Array.isArray(t.edits) ? t.edits : []), { by, reason, at, verify_pruned: [...e.drop], ...(e.anchor.size ? { verify_anchored: [...e.anchor] } : {}) }];
     }
     if (!options.dryRun && changes.length) {
       const tmp = `${jsonPath}.${process.pid}.tmp`;
@@ -11758,6 +11852,8 @@ function writeRunState(projectRoot, activeSession, runState = {}) {
     },
     active_tasks: Array.isArray(runState.active_tasks) ? runState.active_tasks.map(String) : [],
     pending_checkpoints: Array.isArray(runState.pending_checkpoints) ? runState.pending_checkpoints.map(String) : [],
+    // an explicit `runtime pause`, held until `runtime resume` (OxeSpace 15/11)
+    ...(runState.pause_requested && typeof runState.pause_requested === 'object' ? { pause_requested: { reason: String(runState.pause_requested.reason || ''), at: runState.pause_requested.at || null } } : {}),
     retries: Array.isArray(runState.retries) ? runState.retries : [],
     failures: Array.isArray(runState.failures) ? runState.failures : [],
     evidence: Array.isArray(runState.evidence) ? runState.evidence : [],
@@ -11842,6 +11938,7 @@ function markRunLive(projectRoot, activeSession, taskId, sinceMs) {
   try {
     const rs = readRunState(projectRoot, activeSession);
     if (!rs || !rs.run_id) return null;
+    if (rs.pause_requested) return null; // an explicit pause holds until runtime resume
     if (rs.status === 'paused' && (Date.parse(rs.updated_at || '') || 0) >= sinceMs) return null;
     return writeRunState(projectRoot, activeSession, { ...rs, status: 'running', updated_at: new Date().toISOString(), cursor: { ...(rs.cursor || {}), task: taskId } });
   } catch { return null; }
@@ -12103,7 +12200,11 @@ function applyRuntimeAction(projectRoot, activeSession, input = {}) {
   if (action === 'pause') {
     next.status = 'paused';
     next.metrics.pause_count = Number((current.metrics || {}).pause_count || 0) + 1;
+    // OxeSpace 15/11 (OQ polish wave 8, OxeChat F4 T9): an explicit pause holds until `runtime resume` — a new execute
+    // refuses and a running one stops at the next attempt boundary (a status alone was overwritten as "running")
+    next.pause_requested = { reason: input.reason || '', at: now };
   } else if (action === 'resume') {
+    delete next.pause_requested;
     next.status = pendingCheckpoints.length ? 'waiting_approval' : 'running';
   } else if (action === 'replay') {
     next.status = 'replaying';
@@ -12374,6 +12475,8 @@ module.exports = {
   runtimePlanTaskEdit,
   runtimePlanTaskFold,
   runtimePlanVerifyPrune,
+  runtimePlanTaskSupersede,
+  pruneVerifyCommand,
   isExternallyDelivered,
   runtimeReuseAttempt,
   runtimeFailureCost,

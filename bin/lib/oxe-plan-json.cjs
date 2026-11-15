@@ -986,6 +986,7 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
   if (!task || (task.done !== true && !task.checkpoint_failed && task.status !== 'done')) return false;
   // a task folded into another (plan task fold) never comes back: its scope now belongs to the target
   if (task.merged_into) throw new Error(`${taskId} foi fundida em ${task.merged_into} (plan task fold): reabra ${task.merged_into}, não ${taskId}`);
+  if (task.superseded) throw new Error(`${taskId} foi substituída por ${task.superseded.by_phase} (plan task supersede): não volta a este plano`);
   delete task.checkpoint_failed; // OXB-172: reopen also clears a failed checkpoint (scope fixed by a plan edit / CR)
   task.done = false;
   if (task.status != null) delete task.status;

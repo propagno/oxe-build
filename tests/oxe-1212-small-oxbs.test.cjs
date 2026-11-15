@@ -303,6 +303,44 @@ describe('plan verify prune --later-owned (OxeSpace 15/11, OxeChat F4 install)',
     assert.equal(get('T10').verifyCommand, 'vitest run tests/oxc-1.test.ts');
   });
 
+  it('plan task supersede: done and never reopened, frozen entries kept aside, their tests leave the others verify (OxeSpace 15/11, OxeChat F4)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-supersede-'));
+    dirs.push(dir);
+    fs.mkdirSync(path.join(dir, '.oxe', 'program'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.md'), '# PLAN\n');
+    const doc = { schema_version: 1, tasks: [
+      { id: 'T10', wave: 2, files: ['src/conv.ts'], acceptance: ['A11'] },
+      { id: 'T11', wave: 2, files: ['src/composer.ts'], acceptance: ['A12'] },
+      { id: 'T12', wave: 3, files: ['src/x.ts'], acceptance: ['A13'], depends_on: ['T10'] },
+      { id: 'T13', wave: 4, files: ['src/y.ts'], acceptance: ['A14'], verify: { commands: ['vitest run tests/oxc-2-conversation.test.ts tests/oxc-4.test.ts && npm run typecheck', 'vitest run tests/oxc-2b-composer.test.ts'] } },
+    ], acceptance_tests: [
+      { task: 'T10', criterion: 'A11', files: ['tests/oxc-2-conversation.test.ts'], command: 'x' },
+      { task: 'T11', criterion: 'A12', files: ['tests/oxc-2b-composer.test.ts'], command: 'x' },
+      { task: 'T13', criterion: 'A14', files: ['tests/oxc-4.test.ts'], command: 'x' },
+    ] };
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify(doc));
+    const base = { tasks: 'T10,T11', byPhase: 'AG-10/AG-11 (OxeChat F5)', by: 'tl', reason: 'substituídas por AG-10/AG-11 (decisão do usuário 15/11)' };
+    assert.throws(() => op.runtimePlanTaskSupersede(dir, null, base), /T12 depende\(m\) de T10/);
+    doc.tasks[2].depends_on = [];
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify(doc));
+    const dry = op.runtimePlanTaskSupersede(dir, null, { ...base, dryRun: true });
+    assert.deepEqual(dry.verify_changes.map((c) => c.task), ['T13']);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8')).tasks[0].done, undefined, 'dry run writes nothing');
+    const out = op.runtimePlanTaskSupersede(dir, null, base);
+    assert.deepEqual(out.criteria.sort(), ['A11', 'A12']);
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'));
+    const get = (id) => saved.tasks.find((t) => t.id === id);
+    assert.equal(get('T10').done, true);
+    assert.equal(get('T10').superseded.by_phase, 'AG-10/AG-11 (OxeChat F5)');
+    assert.deepEqual(get('T10').acceptance, []);
+    assert.deepEqual(saved.acceptance_tests.map((a) => a.criterion), ['A14']);
+    assert.deepEqual(saved.superseded_tests.map((a) => a.criterion), ['A11', 'A12']);
+    assert.deepEqual(get('T13').verify.commands, ['vitest run tests/oxc-4.test.ts && npm run typecheck']);
+    assert.throws(() => require('../bin/lib/oxe-plan-json.cjs').markPlanTaskOpen(path.join(dir, '.oxe', 'PLAN.md'), 'T10'), /substituída por AG-10/);
+    const ch = fs.readFileSync(path.join(dir, '.oxe', 'program', 'changes.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(ch.filter((c) => c.kind === 'task_supersede').length, 1);
+  });
+
   it('R32: a $ in a path is no replacement pattern; the rest of the command (a -t with a backslash) is kept as written', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-vprune3-'));
     dirs.push(dir);

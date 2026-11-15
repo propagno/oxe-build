@@ -8950,6 +8950,29 @@ async function main() {
     return;
   }
 
+  // oxe-cc plan task supersede T10,T11 --by-phase "…" --by --reason [--cr CR-n] [--dry-run] (OxeSpace 15/11, OxeChat F4)
+  if (command === 'plan' && argv[0] === 'task' && argv[1] === 'supersede') {
+    const o = { dir: process.cwd(), json: false };
+    for (let i = 2; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dry-run') o.dryRun = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (a === '--by-phase' && argv[i + 1] != null) o.byPhase = String(argv[++i]);
+      else if (['--cr', '--by', '--reason'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
+      else if (/^T\d+(,T\d+)*$/i.test(a)) o.tasks = [o.tasks, a].filter(Boolean).join(',');
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    try {
+      const out = oxeOperational.runtimePlanTaskSupersede(o.dir, null, o);
+      if (o.json) { console.log(JSON.stringify({ oxePlanTaskSupersedeSchema: 1, ...out }, null, 2)); return; }
+      console.log(`  ${green}✓${reset} ${out.dry_run ? '(dry-run) ' : ''}${out.tasks.join(', ')} substituída(s) por ${out.by_phase} — nunca agendadas, nunca reabertas`);
+      console.log(`    critérios fora delas: ${out.criteria.join(', ') || '—'} · testes congelados mantidos (superseded_tests): ${out.tests_kept.join(', ') || '—'}`);
+      for (const c of out.verify_changes) console.log(`    verify de ${c.task}: sem ${out.files.join(', ')}`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   // oxe-cc plan task edit T<n> [--wave n] [--depends-on T1,T2|none] [--remove-paths a,b] [--notes "…"] --by --reason
   // (OxeSpace 14/11, Celular F3: no hand edit of an executing PLAN.json)
   if (command === 'plan' && argv[0] === 'task' && argv[1] === 'edit') {

@@ -58,6 +58,34 @@ function graph() {
             fs_1.default.rmSync(tmp, { recursive: true, force: true });
         }
     });
+    (0, node_test_1.test)('pausa pedida durante a tentativa 1: a tentativa 2 não começa e a tarefa fica pendente (OxeSpace 15/11, OxeChat F4 T9)', async () => {
+        const tmp = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-pause-'));
+        let paused = false;
+        let calls = 0;
+        const executor = {
+            async execute() {
+                calls += 1;
+                paused = true; // pause requested while attempt 1 runs; attempt 1 fails
+                return { success: false, failure_class: 'logic', evidence: [], output: 'falhou' };
+            },
+        };
+        const events = [];
+        const ctx = {
+            projectRoot: tmp, sessionId: null, runId: `r-pause-att-${Date.now()}`, executor,
+            workspaceManager: new inplace_1.InplaceWorkspaceManager(tmp), onEvent: (e) => events.push(e),
+            pauseRequested: () => (paused ? 'runtime pause: janela' : null),
+        };
+        try {
+            const result = await new scheduler_1.Scheduler().run(graph(), ctx);
+            strict_1.default.equal(calls, 1, 'no attempt 2 under the pause');
+            strict_1.default.equal(result.status, 'paused');
+            strict_1.default.ok(!result.failed.includes('T1') && !result.blocked.includes('T1'), JSON.stringify(result));
+            strict_1.default.ok(events.some((e) => e.type === 'PolicyWarning' && e.payload.reason === 'paused_before_attempt'));
+        }
+        finally {
+            fs_1.default.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
     (0, node_test_1.test)('sem pausa pedida, as duas rodam', async () => {
         const tmp = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-pause-'));
         const ran = [];

@@ -60,6 +60,34 @@ describe('pausa pedida de fora (runtime pause)', () => {
     }
   });
 
+  test('pausa pedida durante a tentativa 1: a tentativa 2 não começa e a tarefa fica pendente (OxeSpace 15/11, OxeChat F4 T9)', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-pause-'));
+    let paused = false;
+    let calls = 0;
+    const executor: TaskExecutor = {
+      async execute(): Promise<TaskResult> {
+        calls += 1;
+        paused = true; // pause requested while attempt 1 runs; attempt 1 fails
+        return { success: false, failure_class: 'logic', evidence: [], output: 'falhou' };
+      },
+    };
+    const events: OxeEvent[] = [];
+    const ctx: SchedulerContext = {
+      projectRoot: tmp, sessionId: null, runId: `r-pause-att-${Date.now()}`, executor,
+      workspaceManager: new InplaceWorkspaceManager(tmp), onEvent: (e) => events.push(e),
+      pauseRequested: () => (paused ? 'runtime pause: janela' : null),
+    };
+    try {
+      const result = await new Scheduler().run(graph(), ctx);
+      assert.equal(calls, 1, 'no attempt 2 under the pause');
+      assert.equal(result.status, 'paused');
+      assert.ok(!result.failed.includes('T1') && !result.blocked.includes('T1'), JSON.stringify(result));
+      assert.ok(events.some((e) => e.type === 'PolicyWarning' && (e.payload as Record<string, unknown>).reason === 'paused_before_attempt'));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   test('sem pausa pedida, as duas rodam', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-pause-'));
     const ran: string[] = [];

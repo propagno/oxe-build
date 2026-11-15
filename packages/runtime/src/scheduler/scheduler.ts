@@ -826,6 +826,16 @@ export class Scheduler {
     let quotaWaits = 0;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // OxeSpace 15/11 (OxeChat F4 T9): a pause requested during attempt 1 holds attempt 2 — the attempt boundary is a
+      // boundary too, not only the next node. The task stays PENDING (never blocked) for the execute after resume.
+      if (attempt > 1) {
+        this.checkRequestedPause(ctx);
+        if (this.paused) {
+          this.emit(ctx, { type: 'PolicyWarning', work_item_id: nodeId, payload: { reason: 'paused_before_attempt', attempt, detail: `runtime pause: a tentativa ${attempt} não começa` } });
+          status.set(nodeId, 'pending');
+          return;
+        }
+      }
       const attemptId = `${nodeId}-a${attempt}`;
       const attemptModel = ctx.modelFor ? ctx.modelFor(nodeId, attempt, attempt > 1 ? (lastResult?.failure_class ?? null) : null) : null;
 
