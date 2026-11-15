@@ -50,11 +50,25 @@ describe('OXB-108: anti-stub levels', () => {
     assert.match(stub.format(f), /src\/used\.js:2 {2}\[substantive\] marcador "not implemented"/);
   });
 
-  it('exists: a pack symbol not defined in its file', () => {
+  it('exists: a pack symbol not defined in its file (including signature-only pack entries via skeleton nameOf)', () => {
     const dir = repo({}, { schema_version: 1, tasks: [{ id: 'T1', title: 'x', wave: 1, files: ['src/used.js'] }] });
-    write(dir, '.oxe/IMPLEMENTATION-PACK.json', JSON.stringify({ tasks: [{ id: 'T1', symbols: [{ name: 'used', path: 'src/used.js', kind: 'const' }, { name: 'saveDraft', path: 'src/used.js', kind: 'function' }, { name: 'gone', path: 'src/missing.js' }] }] }));
+    write(dir, '.oxe/IMPLEMENTATION-PACK.json', JSON.stringify({
+      tasks: [{
+        id: 'T1',
+        symbols: [
+          { name: 'used', path: 'src/used.js', kind: 'const' },
+          { name: 'saveDraft', path: 'src/used.js', kind: 'function' },
+          { path: 'src/used.js', signature: 'export function parse<T>(raw: string): T' },
+          { path: 'src/missing.js', signature: 'export const MAX_ITEMS: number' },
+        ],
+      }],
+    }));
     const f = stub.stubFindings(dir, { task: 'T1', levels: ['exists'] });
-    assert.deepEqual(f.map((x) => x.why), ['saveDraft declarado no pack, não definido no arquivo', 'arquivo do símbolo gone não existe']);
+    assert.deepEqual(f.map((x) => x.why), [
+      'saveDraft declarado no pack, não definido no arquivo',
+      'parse declarado no pack, não definido no arquivo',
+      'arquivo do símbolo MAX_ITEMS não existe',
+    ]);
   });
 
   it('wired: a NEW source file nobody imports is flagged; imported, entry or test files are not', () => {

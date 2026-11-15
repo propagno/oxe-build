@@ -120,9 +120,14 @@ function existsFindings(root, taskId, base) {
   let pack = null;
   for (const p of [path.join(root, '.oxe', 'IMPLEMENTATION-PACK.json')]) { try { pack = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { /* */ } }
   const entry = pack && Array.isArray(pack.tasks) ? pack.tasks.find((t) => t && (t.id === taskId || t.task === taskId)) : null;
+  let nameOfSig = null;
   for (const s of (entry && Array.isArray(entry.symbols) ? entry.symbols : [])) {
     if (!s || typeof s !== 'object' || s.exported === false) continue;
-    const name = String(s.name || '').trim();
+    let name = String(s.name || '').trim();
+    if (!name && s.signature) {
+      if (!nameOfSig) nameOfSig = require('./oxe-plan-skeleton.cjs').nameOf;
+      name = String(nameOfSig(s.signature) || '').trim();
+    }
     const file = norm(s.path || s.file || '');
     if (!/^[A-Za-z_$][\w$]*$/.test(name) || !file || file.includes('*')) continue;
     let text = null;

@@ -113,7 +113,7 @@ function classifyFailure(output, targets, options = {}) {
 }
 
 /** OXB-154: stubs that run — the planned skeleton, not a broken command. */
-const STUB_RE = /kotlin\.NotImplementedError|An operation is not implemented|NotImplementedError|UnsupportedOperationException[^\n]{0,80}\b(TODO|not implemented)|\bnot implemented yet\b/i;
+const STUB_RE = /kotlin\.NotImplementedError|An operation is not implemented|NotImplementedError|UnsupportedOperationException[^\n]{0,80}\b(TODO|not implemented)|\bError(?::\s*|\(\s*['"`])TODO\s+T\d+\b|\bnot implemented yet\b/i;
 /** Build configuration problems: never the right red. */
 const CONFIG_ERROR_RE = /Task '[^']+' not found|Could not resolve (all )?(dependencies|plugin)|A problem occurred configuring|Plugin \[id: [^\]]+\] was not found|Unknown (option|argument)/i;
 
@@ -529,4 +529,4 @@ function dryRunVerifyCommands(projectRoot, plan, options = {}) {
   return { ok: errors.length === 0, results, errors, warnings, reused, skipped, tree, ...(depsBroken ? { deps_broken: depsBroken } : {}) };
 }
 
-module.exports = { compileMissingSymbols, junitFailures, dryRunVerifyCommands, classifyFailure, hasSingleQuotedArgument, treeHash, depsProblem, windowsCommand };
+module.exports = { compileMissingSymbols, junitFailures, dryRunVerifyCommands, classifyFailure, hasSingleQuotedArgument, treeHash, depsProblem, windowsCommand, STUB_RE };

@@ -11,6 +11,7 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 ### Skeleton (`plan skeleton`) sem erro de sintaxe em TS/JS e checagem `checkStubSyntax`
 
 - `oxe-plan-skeleton.cjs` preserva o corpo já declarado em `interface`/`class`, gera `export const X: T = undefined as unknown as T;` em TS (`export const X = undefined;` em JS), extrai o nome certo em funções genéricas (`parse<T>(`) e constantes sem duplicar símbolos, e expõe `checkStubSyntax(file, text)` (`vm.Script` / `node --check` em CJS/JS/MJS e `ts.transpileModule` só de sintaxe quando o projeto tem `typescript`, caindo para aviso sem `typescript`).
+- `oxe-verify-dryrun.cjs` reconhece os stubs TS/JS gerados pelo skeleton (`Error: TODO T<n>` na saída e `throw new Error('TODO T<n>: …')` no corpo) como `missing_target`, e `oxe-stub-check.cjs` resolve `nameOf(signature)` no nível `exists` quando a entrada do pack traz só `signature`.
 
 ### Retomada automática do execute (G24, OXE-143)
 
