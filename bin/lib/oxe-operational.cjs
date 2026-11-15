@@ -5366,11 +5366,17 @@ function programCloseGateReasons(projectRoot, activeSession, ctx) {
   const ran = (ctx.run && ctx.run.verification_gates) || null;
   // an implicit gate RED in the last verify blocks the close like a declared one (one that did not run does not: a
   // verify of an older version never ran it)
-  for (const g of implicit) {
-    if (g && g.when === 'phase_verify' && ran && (ran.failed || []).includes(g.id)) out.reasons.push(`gate do projeto vermelho no último verify: ${g.id}`);
+  // close --by-ci (OxeSpace 15/11, user decision): the phase's green CI is the proof — the gates that run only in the
+  // phase verify are not asked; they are listed in the close record instead (out.verify_gates_skipped)
+  if (ctx.byCi) {
+    out.verify_gates_skipped = [...implicit, ...gates].filter((g) => g && g.when === 'phase_verify').map((g) => g.id);
+  } else {
+    for (const g of implicit) {
+      if (g && g.when === 'phase_verify' && ran && (ran.failed || []).includes(g.id)) out.reasons.push(`gate do projeto vermelho no último verify: ${g.id}`);
+    }
   }
   if (!gates.length) return out;
-  const verifyGates = gates.filter((g) => g.when === 'phase_verify');
+  const verifyGates = ctx.byCi ? [] : gates.filter((g) => g.when === 'phase_verify');
   for (const g of verifyGates) {
     if (!ran || !(ran.passed || []).includes(g.id)) {
       out.reasons.push(ran && (ran.failed || []).includes(g.id)
@@ -10711,6 +10717,38 @@ function phaseGateInputFromRun(run) {
  * Gate de fase: verify `completed`, regressão verde e contratos ok. Passando, congela a regressão,
  * grava as interfaces reais, faz o commit local da fase (sem push) e fecha a fase.
  */
+/**
+ * The CI proof of `program close --by-ci`: an attached run of the phase (ci.ndjson) that is green and whose head
+ * contains this HEAD's code — HEAD is an ancestor of the run's head, or nothing but .oxe/docs/*.md changed between them.
+ * @returns {{ ok: boolean, why?: string, run?: string|number, head?: string, url?: string|null, checked: object[] }}
+ */
+function closeProofByCi(projectRoot, programDir, phaseId, options = {}) {
+  const gatesLib = require('./oxe-phase-gates.cjs');
+  let records = [];
+  try { records = fs.readFileSync(path.join(programDir, 'ci.ndjson'), 'utf8').split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch { records = []; }
+  const mine = records.filter((r) => r.kind === 'ci' && (!r.phase || r.phase === phaseId)).reverse();
+  if (!mine.length) return { ok: false, why: `nenhum run de CI anexado à fase ${phaseId} (oxe-cc runtime ci --attach <run|url>)`, checked: [] };
+  const head = require('./oxe-verdicts.cjs').headOf(projectRoot);
+  const checked = [];
+  for (const rec of mine) {
+    const st = gatesLib.ciRunStatus({ ...rec, head: null }, { spawn: options.ghSpawn });
+    const runHead = st && st.data && st.data.headSha ? String(st.data.headSha) : null;
+    const entry = { run: rec.run, state: st.state || (st.ok ? 'green' : 'unknown'), head: runHead, message: st.message || null };
+    checked.push(entry);
+    if (!st.ok || !runHead || !head) continue;
+    const ancestor = gitOut(projectRoot, ['merge-base', '--is-ancestor', head, runHead]).status === 0;
+    let sameCode = false;
+    if (!ancestor) {
+      const d = gitOut(projectRoot, ['diff', '--name-only', runHead, head, '--']);
+      sameCode = d.status === 0 && String(d.stdout || '').split(/\r?\n/).filter(Boolean).every((p) => p.startsWith('.oxe/') || /^docs\//.test(p) || /\.md$/i.test(p));
+    }
+    entry.contains_head = ancestor || sameCode;
+    if (entry.contains_head) return { ok: true, run: rec.run, head: runHead, url: (st.data && st.data.url) || null, checked };
+  }
+  const why = checked.map((c) => `${c.run}: ${c.state === 'green' || c.state === undefined ? (c.contains_head === false ? `verde, mas não contém HEAD ${String(head || '').slice(0, 8)} (git fetch, ou anexe o run de main que contém a fase)` : c.message || 'sem head') : c.message || c.state}`).join(' · ');
+  return { ok: false, why: `nenhum run de CI verde anexado contém HEAD — ${why}`, checked };
+}
+
 function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   const runtime = requireProgramRuntime();
   const programLib = require('./oxe-program.cjs');
@@ -10740,9 +10778,23 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     changeLib.appendNdjson(changeLib.changesFile(paths.programDir || path.join(projectRoot, '.oxe', 'program')), { kind: 'drift_waiver', phase: phase.id, globs: acceptDrift, by, reason, at: new Date().toISOString() });
     appendEvent(projectRoot, activeSession, { type: 'DriftWaived', payload: { phase: phase.id, globs: acceptDrift, by } });
   }
-  const closeGates = programCloseGateReasons(projectRoot, activeSession, { phase, run, paths, state, skip: options.gates === false });
+  // OxeSpace 15/11 (user decision, ~18:00Z): `program close --by-ci --by <papel> --reason "…"` — the phase closes on
+  // the green CI attached to it (runtime ci --attach: its PRs' runs or the main run that contains it), without a phase
+  // verify. Only the verify requirement is replaced; dossier, hashes, drift, handoff, rollback, sign-offs, defects and
+  // CRs still hold.
+  let byCi = null;
+  if (options.byCi) {
+    const by = String(options.by || '').trim();
+    const reason = String(options.reason || '').trim();
+    if (!by || reason.length < 8) throw new Error('--by-ci exige --by <papel> e --reason "…" (o close sem verify fica registrado)');
+    byCi = closeProofByCi(projectRoot, paths.programDir || path.join(projectRoot, '.oxe', 'program'), phase.id, options);
+    if (byCi.ok) gateInput.verify_status = 'completed';
+  }
+  const closeGates = programCloseGateReasons(projectRoot, activeSession, { phase, run, paths, state, skip: options.gates === false, byCi: Boolean(byCi && byCi.ok) });
+  if (byCi && !byCi.ok) closeGates.reasons.push(`close --by-ci: ${byCi.why}`);
   // OXB-124: the phase verify must be of the code being closed — no code commit after the commit it judged.
-  if (run && run.verification_head) {
+  // With --by-ci the proof is the CI run that contains HEAD (checked above), not the verify's head.
+  if (run && run.verification_head && !(byCi && byCi.ok)) {
     const headNow = require('./oxe-verdicts.cjs').headOf(projectRoot);
     if (headNow && headNow !== run.verification_head) {
       const changedAfter = (gitLines(projectRoot, ['diff', '--name-only', run.verification_head, headNow, '--']) || []).filter((p) => !p.startsWith('.oxe/') && !/^docs\//.test(p) && !/\.md$/i.test(p));
@@ -10832,7 +10884,7 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   // 1.20: um critério UAT com sign-off conta como verificado; o dossiê precisa estar sem drift e com handoff.
   const dossier = options.dossier === false ? null : runtimeDossier(projectRoot, activeSession, { phase: phase.id, runState: run });
   if (dossier && gateInput.verify_status === 'blocked' && dossier.pending.length === 0) {
-    const onlyManual = (run.verification_check_results || []).every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));
+    const onlyManual = ((run && run.verification_check_results) || []).every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));
     if (onlyManual) gateInput.verify_status = 'completed';
   }
   // OXB-135: the members close in order — a dirty member stops; the landed shas go to the phase and the dossier.
@@ -10907,7 +10959,7 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   // OXB-105: what the phase touched, for the compact (structural CODEBASE-DELTA entry).
   try { require('./oxe-system-design.cjs').deltaEntry(projectRoot, phase.id, phase.base_commit); } catch { /* auxiliar */ }
   // a copy: re-pinning below must not touch the run's own suite
-  const regressionChecks = JSON.parse(JSON.stringify(programLib.freezeRegressionChecks(run.verification_check_results, run.verification_suite)));
+  const regressionChecks = JSON.parse(JSON.stringify(programLib.freezeRegressionChecks((run || {}).verification_check_results || [], (run || {}).verification_suite || null)));
   // OxeSpace 15/11 (OxeChat F3): the snapshot copied the suite's hash — compiled BEFORE a CR re-froze the test — and
   // every later verify read the re-frozen file as tampered. The close gate has just accepted the files as they are,
   // so the regression record pins each frozen file at its content NOW.
@@ -10924,7 +10976,7 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
       }
     }
   } catch { /* auxiliar: the compiled hashes stay */ }
-  const regressionFile = programLib.writeRegression(paths.programDir, phase.id, regressionChecks, { run_id: run.run_id || null });
+  const regressionFile = programLib.writeRegression(paths.programDir, phase.id, regressionChecks, { run_id: (run && run.run_id) || null });
 
   const parsers = loadSdkParsers();
   const planText = readTextIfExists(paths.plan);
@@ -10951,14 +11003,14 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
       : programLib.commitPhase(projectRoot, options.message || `feat(phase-${phase.id.toLowerCase()}): ${phase.title}`);
 
   if (gate.deferred && gate.deferred.length && gateInput.verify_status === 'blocked') {
-    const onlyManual = (run.verification_check_results || []).every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));
+    const onlyManual = ((run && run.verification_check_results) || []).every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));
     if (onlyManual) gateInput.verify_status = 'completed';
   }
   const closed = runtime.closePhase(state, phase.id, gateInput, {
     closed_commit: commit.commit,
     regression_ref: programLib.relativeRef(projectRoot, regressionFile),
     interfaces_ref: programLib.relativeRef(projectRoot, interfacesFile),
-    run_id: run.run_id || null,
+    run_id: (run && run.run_id) || null,
     plan_ref: paths.plan ? programLib.relativeRef(projectRoot, paths.plan) : null,
   });
   if (gate.deferred && gate.deferred.length) {
@@ -10966,6 +11018,11 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     if (target) target.deferred = [...(target.deferred || []), ...gate.deferred];
   }
   programLib.writeProgram(paths.programDir, closed.state);
+  // close --by-ci: who closed without a phase verify, on which CI run, and the verify gates that were not asked
+  const closeByCi = byCi && byCi.ok ? { run: byCi.run, head: byCi.head, url: byCi.url || null, verify_gates_skipped: closeGates.verify_gates_skipped || [], by: String(options.by), reason: String(options.reason) } : null;
+  if (closeByCi) {
+    try { require('./oxe-change.cjs').appendNdjson(require('./oxe-change.cjs').changesFile(paths.programDir), { kind: 'close_by_ci', phase: phase.id, ...closeByCi, at: new Date().toISOString() }); } catch { /* auxiliar */ }
+  }
   try { projectStateMd(projectRoot, activeSession); } catch { /* projeção auxiliar */ }
   // OXB-117 (e): the one-page phase report, for people.
   let reportFile = null;
@@ -11001,7 +11058,7 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   } catch { /* o relatório é auxiliar */ }
   appendEvent(projectRoot, activeSession, {
     type: 'PhaseClosed',
-    run_id: run.run_id,
+    run_id: (run && run.run_id) || null,
     payload: {
       phase: phase.id,
       commit: commit.commit,
@@ -11009,6 +11066,7 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
       commit_note: commit.reason,
       regression_checks: regressionChecks.length,
       interface_modules: modules.length,
+      ...(closeByCi ? { close_by_ci: closeByCi } : {}),
     },
   });
   almAutoSync(projectRoot, activeSession);
@@ -11017,6 +11075,7 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     phase: phase.id,
     gate,
     commit,
+    ...(closeByCi ? { close_by_ci: closeByCi } : {}),
     report: reportFile,
     rollback_rehearsal: rollbackRehearsal,
     regression_checks: regressionChecks.length,

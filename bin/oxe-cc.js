@@ -2683,7 +2683,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime signal --from <relatório do HML>|<url de issue>|github:<owner/repo> [--dry-run] [--by <papel>]   (achado → CR na fase dele)
   npx oxe-cc runtime deploy --attach <env> --version <v> --ref <tag|url> [--check "<cmd>"]… [--phase Fn]   (registra e verifica; nunca faz o deploy)
   npx oxe-cc runtime program budget [--mode cap|track_only] [--budget-usd N] [--budget-turns N] --by <papel> --reason "…"
-  npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"] [--no-gates] [--accept-drift <glob> --by <papel> --reason "…"] [--no-rollback-check --by <papel> --reason "…"]
+  npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"] [--no-gates] [--accept-drift <glob> --by <papel> --reason "…"] [--no-rollback-check --by <papel> --reason "…"] [--by-ci --by <papel> --reason "…"]
   npx oxe-cc runtime sync --from origin/main [--no-fetch] [--no-reverify]   (merge local; reverify das tarefas done tocadas pela base)
   npx oxe-cc runtime promote T<n> --base main [--branch <nome>] [--open-pr] [--remote origin] [--no-pr-ready]
   npx oxe-cc spec amend A<n> (--text "…"|--append "…"|--verify "…") --by <papel> --reason "…" [--additive] [--phase Fn]
@@ -4333,6 +4333,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--note' && argv[i + 1]) out.note = String(argv[++i]);
     else if (a === '--no-defects') out.noDefects = true;
     else if (a === '--no-rollback-check') out.noRollbackCheck = true;
+    else if (a === '--by-ci') out.byCi = true;
     else if (a === '--hold-deps' || a === '--promote-hold-deps') out.holdDeps = true;
     else if (a === '--allow-undelivered') out.allowUndelivered = true;
     else if (a === '--strict-delivery') out.strictDelivery = true;
@@ -5448,6 +5449,7 @@ async function runRuntime(opts) {
           gates: !opts.noGates,
           defects: !opts.noDefects,
           rollbackCheck: !opts.noRollbackCheck,
+          byCi: Boolean(opts.byCi),
           message: opts.message || undefined,
           deferSignoff: opts.deferSignoff,
           by: opts.by || undefined,
@@ -5462,6 +5464,7 @@ async function runRuntime(opts) {
           for (const reason of result.gate.reasons) console.log(`    - ${reason}`);
         } else {
           console.log(`  ${c ? green : ''}✓${c ? reset : ''} Fase ${result.phase} fechada.`);
+          if (result.close_by_ci) console.log(`  ${c ? dim : ''}Prova:${c ? reset : ''} CI ${result.close_by_ci.run} (${String(result.close_by_ci.head || '').slice(0, 8)}) — sem verify da fase${result.close_by_ci.verify_gates_skipped.length ? `; gates só do verify não pedidos: ${result.close_by_ci.verify_gates_skipped.join(', ')}` : ''}`);
           console.log(`  ${c ? dim : ''}Regressão congelada:${c ? reset : ''} ${result.regression_checks} checks · interfaces: ${result.interface_modules} módulos`);
           if (!result.commit.committed && /PR aberto/.test(result.commit.reason || '')) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${result.commit.reason}`);
           else console.log(`  ${c ? dim : ''}Commit:${c ? reset : ''} ${result.commit.commit || '—'}${result.commit.reason ? ` (${result.commit.reason})` : ''}`);
