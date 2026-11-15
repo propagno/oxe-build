@@ -5933,7 +5933,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
           const runsLabel = Math.max(2, Number(options.precheckRuns) || 2);
           if (typeof options.onProgress === 'function') {
             if (mode === 'explicit') {
-              options.onProgress(`precheck: ${entriesToRun.length} teste(s) de aceite contra o stub, ${runsLabel} vez(es) cada (remote-verify: 1 vez) — veredito parcial em .oxe/precheck-last.json`);
+              options.onProgress(`precheck: ${entriesToRun.length} teste(s) de aceite contra o stub, ${runsLabel} vez(es) cada (remote-verify: 1 vez) — veredito parcial em ${path.relative(projectRoot, path.join(path.dirname(pp.plan), 'precheck-last.json')).split(path.sep).join('/')}`);
             } else {
               const cachePreview = cachePath ? pre.readPrecheckCache(cachePath) : null;
               const runnableAuto = entriesToRun.filter((a) => !(cachePreview && pre.isEntryCachedOk(projectRoot, a, cachePreview)) && !pre.isRemoteVerify(a.command));
@@ -5957,6 +5957,8 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
             entries: entriesToRun,
             mode,
             cachePath,
+            // next to the session's PLAN.json, like the cache (the auto mode writes precheck-auto-last.json there)
+            progressPath: options.precheckProgress === false ? false : path.join(path.dirname(pp.plan), 'precheck-last.json'),
             runs: options.precheckRuns,
             suites,
             onProgress: options.onProgress,
@@ -6992,11 +6994,28 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   // OXB-156: the PR carries (a) the task's OWN commits (OXE-Task trailer / done_commit) and (b) the frozen tests it
   // proves, taken as FILES from the program tip (+ the local fixtures they import) — never the program branch's import
   // commits, which also carry other tasks' and parked tests (F2-T1: a conflict on tests/acceptance/parked-f3/…).
-  const testFiles = [...new Set((Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])
-    .filter((a) => a && ((a.task && idSet.has(a.task)) || (!a.task && criteria.has(a.criterion))))
-    .flatMap((a) => a.files || []))];
-  if (!shas.size && !testFiles.length) throw new Error(`${taskId}: nenhum commit da tarefa fora de ${base} (sem trailer OXE-Task/done_commit em ${base}..HEAD) — já está na base?`);
   const programTip = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
+  const TEST_FILE_RE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$/i;
+  const normRel = (f) => String(typeof f === 'string' ? f : (f && f.path) || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const differsFromBase = (file) => {
+    const tip = gitRun(projectRoot, ['show', `${programTip}:${file}`]);
+    if (!tip.ok) return false;
+    const onBase = gitRun(projectRoot, ['show', `${baseSha}:${file}`]);
+    return !(onBase.ok && onBase.stdout === tip.stdout);
+  };
+  // OxeSpace 15/11 (OxeCode F6 T30): the task was built against u83 as RE-FROZEN by a CR's quick (cdfd414f9) — a test
+  // in its FILES, not an acceptance entry of it — and the PR carried main's old u83, which its code turns red. The
+  // test files of the task's own scope that differ from the base go in too, as files from the program tip.
+  const scopeTests = [...new Set(planTasks.flatMap((t) => (t.files || []).map(normRel)))].filter((f) => f && !f.includes('*') && !f.endsWith('/') && TEST_FILE_RE.test(f) && differsFromBase(f));
+  const testFiles = [...new Set([...(Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])
+    .filter((a) => a && ((a.task && idSet.has(a.task)) || (!a.task && criteria.has(a.criterion))))
+    .flatMap((a) => (a.files || []).map(normRel)), ...scopeTests])];
+  // a test the verify runs that differs from the base but is NOT the task's (not in its files nor its entries): the PR
+  // runs the base version — named, with the commits that changed it, never carried silently
+  const verifyTests = [...new Set(planTasks.flatMap((t) => [...((t.verify && t.verify.commands) || []), t.verify && t.verify.command].filter(Boolean).join(' ').replace(/\\/g, '/').match(/[^\s"'`]+/g) || []))]
+    .map(normRel).filter((s) => s.includes('/') && TEST_FILE_RE.test(s) && /\.[cm]?[jt]sx?$/i.test(s));
+  const notCarried = verifyTests.filter((f) => !testFiles.includes(f) && differsFromBase(f));
+  if (!shas.size && !testFiles.length) throw new Error(`${taskId}: nenhum commit da tarefa fora de ${base} (sem trailer OXE-Task/done_commit em ${base}..HEAD) — já está na base?`);
   // local fixtures the frozen tests import (relative specifiers), one level deep — OXB-160: only what resolves INSIDE
   // the tests' own tree (fixtures, helpers), resolved like node/TS (file, extensions, then dir/index.*) and only to a
   // file: product modules the test imports (`../../../shared/types/ipc`, a directory) are never copied.
@@ -7066,6 +7085,11 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     resolvedBase.warnings.push(`${taskId} vem depois de ${assumed.map((a) => `${a.task} (${a.sha.slice(0, 8)})`).join(', ')} no histórico e mexe nos mesmos arquivos (${[...new Set(assumed.flatMap((a) => a.files))].slice(0, 4).join(', ')}) — o cherry-pick pode conflitar; promova junto: oxe-cc runtime promote --tasks ${[...new Set([...assumed.map((a) => a.task), ...taskIds])].join(',')}`);
   }
   const result = { task: taskId, base, base_sha: baseSha, ...(stack ? { stacked_on: { task: stack.task, branch: stack.branch, pr: stack.pr || null, sha: stack.sha } } : {}), base_requested: resolvedBase.requested, warnings: resolvedBase.warnings, branch, commits: ordered, conflict: null, pr_ready: null, body_file: null, pr: null, commands: [], worktree: null, ...(replacedBranch ? { replaced_branch: replacedBranch } : {}), ...(forceLease ? { replaced_remote: forceLease } : {}) };
+  for (const f of notCarried) {
+    const by = (gitLines(projectRoot, ['log', '--format=%h %s', range, '--', f]) || []).slice(0, 3);
+    result.warnings.push(`${f} está no verify de ${taskId} e difere de ${base}, mas não é da tarefa (fora dos files e dos testes congelados dela): o PR roda a versão de ${base}${by.length ? ` — mudado por ${by.join('; ')}` : ''}. Se a tarefa foi construída contra a nova, ponha o arquivo nos files dela (ou promova junto com a dona)`);
+  }
+  if (notCarried.length) result.not_carried_tests = notCarried;
   // Where the branch is built: a temporary worktree (default) or, with --in-place, the program checkout.
   let work = projectRoot;
   let cleanup = () => {};

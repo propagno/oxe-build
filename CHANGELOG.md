@@ -65,6 +65,17 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 
 - O precheck grava o veredito até ali em `.oxe/precheck-last.json` depois de **cada** entrada: `finished`, `done/total`, achados e detalhes. Também mostra uma linha de progresso por entrada (`precheck 3/20: A7 — ok`). Antes, 20 runs remotos (1 h) e o processo encerrado no fim não deixavam veredito nenhum.
 - A linha inicial diz que um remote-verify roda 1 vez, mesmo com `--precheck-runs 2`, e onde fica o veredito parcial.
+- Revisão cruzada:
+  - O arquivo fica ao lado do PLAN.json da sessão.
+  - O precheck padrão de um `plan lint` comum grava `precheck-auto-last.json`, sem sobrescrever o parcial de um `--precheck-tests` de uma hora.
+  - A gravação é atômica (tmp + rename).
+  - O cache das entradas já aprovadas é gravado mesmo quando o processo morre no meio.
+  - Cada suíte também ganha uma linha de progresso.
+
+### Promote leva o teste re-congelado do escopo da tarefa (OxeSpace 15/11, OxeCode F6 T30)
+
+- **O que entra:** o `runtime promote` também leva, como arquivos da ponta do programa, os testes nos `files` da tarefa que diferem da base. Isso inclui um teste re-congelado pelo quick de um CR (o u83 do CR-F6-5). Antes, o PR levava o u83 antigo da main, que o código da T30 deixa vermelho.
+- **O que só é avisado:** um teste do verify que difere da base, mas não é da tarefa, não entra. O aviso o nomeia, com os commits que o mudaram, e fica em `not_carried_tests`.
 
 ### Gates: sem embrulho duplo; CR do gate de CI resolvido pelo run verde (OxeSpace 15/11, Celular F3)
 

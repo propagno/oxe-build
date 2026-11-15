@@ -83,6 +83,15 @@ describe('G36 part 2: precheck of the frozen tests (FIRST)', () => {
     assert.equal(last.done, 1);
     assert.equal(last.total, 3);
     assert.ok(lines.some((l) => /^precheck 1\/3: /.test(l)), lines.join(' | '));
+    // cross-review 15/11: the entry already approved is cached although the process died (flushed in finally)
+    const cache = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'precheck-cache.json'), 'utf8'));
+    assert.equal(Object.keys(cache).length, 1, JSON.stringify(cache));
+    // a plain plan lint (auto mode) never overwrites that partial explicit verdict: it writes its own file
+    pre.precheck(dir, DOC, null, { mode: 'auto', runs: 2, run: () => ({ code: 1, output: 'not ok 1 - a\n', timedOut: false }), workspace: ws, progressPath, suites: [{ file: 'tests/s.test.js', task: 'T1', command: 'x' }], onProgress: (l) => lines.push(l) });
+    assert.equal(JSON.parse(fs.readFileSync(progressPath, 'utf8')).finished, false, 'explicit partial kept');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'precheck-auto-last.json'), 'utf8')).mode, 'auto');
+    assert.ok(lines.some((l) => /^precheck \d+\/\d+: suíte tests\/s\.test\.js — suite_red_at_head/.test(l)), 'a progress line per suite too');
+    assert.ok(!fs.readdirSync(path.join(dir, '.oxe')).some((f) => f.endsWith('.tmp')), 'no temp file left');
   });
 });
 

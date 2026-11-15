@@ -68,6 +68,33 @@ describe('OXB-160: promote fixtures and its own leftover branch', () => {
     assert.match(body, /^test\(acceptance\): frozen tests of T3/);
     assert.match(body, /^OXE-Task: (F\d+\/)?T3$/m);  });
 
+  it('a test of the task scope re-frozen by a CR quick goes in from the program tip; a verify test of another task is named, not carried (OxeSpace 15/11, F6 T30)', () => {
+    const dir = setup();
+    const g = (...a) => git(dir, ...a);
+    // main has the 1.5.0 u83; the program branch re-froze it (CR quick, no OXE-Task of T3) and changed another test
+    g('checkout', '-q', 'main');
+    write(dir, 'tests/acceptance/f8/u83.test.ts', "it('old', () => {});\n");
+    write(dir, 'tests/unit/other.test.ts', "it('old', () => {});\n");
+    g('add', '-A'); g('commit', '-qm', 'u83 1.5.0');
+    g('checkout', '-q', 'program');
+    g('merge', '-q', '--no-edit', 'main');
+    write(dir, 'tests/acceptance/f8/u83.test.ts', "it('new hints', () => {});\n");
+    g('add', '-A'); g('commit', '-qm', 'test(quick): re-freeze u83 for CR-F6-5');
+    write(dir, 'tests/unit/other.test.ts', "it('changed by T9', () => {});\n");
+    g('add', '-A'); g('commit', '-qm', 'test: other changed by T9', '-m', 'OXE-Task: T9');
+    const plan = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'));
+    plan.tasks[0].files.push('tests/acceptance/f8/u83.test.ts');
+    plan.tasks[0].verify = { commands: ['vitest run tests/acceptance/f8/u83.test.ts tests/unit/other.test.ts'] };
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify(plan));
+    const out = op.runtimePromote(dir, null, { task: 'T3', base: 'main' });
+    assert.equal(out.error, undefined, out.error);
+    assert.ok(out.frozen_tests.includes('tests/acceptance/f8/u83.test.ts'), JSON.stringify(out.frozen_tests));
+    assert.equal(git(dir, 'show', 'oxe/promote-t3:tests/acceptance/f8/u83.test.ts'), "it('new hints', () => {});");
+    assert.deepEqual(out.not_carried_tests, ['tests/unit/other.test.ts']);
+    assert.ok(out.warnings.some((w) => /tests\/unit\/other\.test\.ts está no verify de T3 e difere de main.*mudado por [0-9a-f]+ test: other changed by T9/.test(w)), out.warnings.join(' | '));
+    assert.equal(git(dir, 'show', 'oxe/promote-t3:tests/unit/other.test.ts'), "it('old', () => {});", 'not carried');
+  });
+
   it('the dirty worktree of a failed promote (pid gone) never blocks the next one (OxeSpace 14/11)', () => {
     const dir = setup();
     const first = op.runtimePromote(dir, null, { task: 'T3', base: 'main' });

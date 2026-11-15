@@ -261,7 +261,11 @@ function precheck(root, doc, pack, options = {}) {
   const run = options.run || defaultRun;
   // OxeSpace 15/11 (OxeQuery polish): 20 remote runs (1 h) and then the process ended with no verdict table. The verdict
   // so far is written after EACH entry to .oxe/precheck-last.json — a process killed mid-way leaves what it found.
-  const progressPath = options.progressPath === false ? null : (options.progressPath || (root ? path.join(root, '.oxe', 'precheck-last.json') : null));
+  // cross-review 15/11: the default (auto) precheck of a plain `plan lint` writes its own file — it never overwrites the
+  // partial verdict of an explicit run of an hour; the caller puts it next to the session's PLAN.json
+  const progressPath = options.progressPath === false ? null : (options.progressPath
+    ? (isAuto ? options.progressPath.replace(/precheck-last\.json$/, 'precheck-auto-last.json') : options.progressPath)
+    : (root ? path.join(root, '.oxe', isAuto ? 'precheck-auto-last.json' : 'precheck-last.json') : null));
   const startedAt = new Date().toISOString();
   const total = runnableEntries.length + (options.suites || []).length;
   let doneCount = 0;
@@ -269,14 +273,19 @@ function precheck(root, doc, pack, options = {}) {
     if (!progressPath) return;
     try {
       fs.mkdirSync(path.dirname(progressPath), { recursive: true });
-      fs.writeFileSync(progressPath, `${JSON.stringify({ schema_version: 1, mode, started_at: startedAt, updated_at: new Date().toISOString(), finished, total, done: doneCount, runs, findings, details, notes }, null, 2)}\n`);
+      // atomic: a kill during the write never leaves a truncated JSON
+      const tmp = `${progressPath}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, `${JSON.stringify({ schema_version: 1, mode, started_at: startedAt, updated_at: new Date().toISOString(), finished, total, done: doneCount, runs, findings, details, notes }, null, 2)}\n`);
+      fs.renameSync(tmp, progressPath);
     } catch { /* auxiliar */ }
   };
+  const cleanFiles = new Set();
+  const dirtyFiles = new Set();
+  let cacheFlushed = false;
+  const flushCache = () => { if (cacheFlushed) return; cacheFlushed = true; flushPrecheckCache(cachePath, cache, root, cleanFiles, dirtyFiles); };
   const ws = options.workspace || gitWorkspace(root);
   const wt = ws.create();
   writeProgress(false);
-  const cleanFiles = new Set();
-  const dirtyFiles = new Set();
   try {
     // Copy all pending frozen tests from the working tree (they may not be committed yet), then write planned stubs so they import
     for (const a of allPending.length ? allPending : runnableEntries) for (const f of a.files || []) {
@@ -359,11 +368,21 @@ function precheck(root, doc, pack, options = {}) {
       else if (r.code !== 0) findings.push({ criterion: null, id: s.file, task: s.task || null, command: s.command, level: 'warn', kind: 'suite_red_at_head', why: 'a suíte que importa os arquivos da tarefa já está vermelha no HEAD — não é vermelho da tarefa; conserte ou exclua antes da tentativa paga' });
       doneCount += 1;
       writeProgress(false);
+      if (typeof options.onProgress === 'function') {
+        const last = findings[findings.length - 1];
+        options.onProgress(`precheck ${doneCount}/${total}: suíte ${s.file} — ${last && last.id === s.file ? last.kind : 'verde no HEAD'}`);
+      }
     }
   } finally {
     ws.dispose(wt);
+    // cross-review 15/11: the entries already approved are cached even when the process dies mid-way (paid work)
+    flushCache();
   }
   writeProgress(true);
+  return { ran: runnableEntries.length, cached: cachedCount, skipped_remote: skippedRemoteCount, suites: (options.suites || []).length, runs, mode, findings, notes, details };
+}
+
+function flushPrecheckCache(cachePath, cache, root, cleanFiles, dirtyFiles) {
   if (cachePath && cache && root) {
     let cacheChanged = false;
     const nowIso = new Date().toISOString();
@@ -385,7 +404,6 @@ function precheck(root, doc, pack, options = {}) {
       try { writePrecheckCache(cachePath, cache); } catch { /* non-fatal cache write */ }
     }
   }
-  return { ran: runnableEntries.length, cached: cachedCount, skipped_remote: skippedRemoteCount, suites: (options.suites || []).length, runs, mode, findings, notes, details };
 }
 
 /** A temporary detached worktree at HEAD with node_modules linked; disposed link-first. */
