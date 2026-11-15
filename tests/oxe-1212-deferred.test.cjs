@@ -66,6 +66,22 @@ describe('OXB-138: deferred tasks', () => {
     assert.equal(op.runtimeDeferred(dir, null, {}).open.length, 0);
   });
 
+  it('the CLI: runtime deferred retry --dir <p> / runtime deferred retry <p> / runtime deferred <p> (OxeSpace 15/11: "retry" read as the folder)', async () => {
+    const dir = project();
+    await op.runRuntimeExecute(dir, null, { executor: exec([]), skipPreflight: true });
+    const cli = (...a) => spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'oxe-cc.js'), 'runtime', 'deferred', ...a], { encoding: 'utf8' });
+    for (const args of [['retry', '--dir', dir, '--dry-run', '--json'], ['retry', dir, '--dry-run', '--json']]) {
+      const r = cli(...args);
+      assert.equal(r.status, 0, r.stderr + r.stdout);
+      assert.doesNotMatch(r.stdout + r.stderr, /Diretório não encontrado/);
+      const out = JSON.parse(r.stdout.slice(r.stdout.indexOf('{')));
+      assert.equal(out.retry[0].id, 'AD-F1-1', args.join(' '));
+    }
+    const list = cli(dir, '--json');
+    assert.equal(list.status, 0, list.stderr);
+    assert.equal(JSON.parse(list.stdout.slice(list.stdout.indexOf('{'))).open[0].id, 'AD-F1-1');
+  });
+
   it('execute.defer_failed: false keeps the old stop-at-the-failed-wave', async () => {
     const dir = project({ execute: { defer_failed: false } });
     const calls = [];

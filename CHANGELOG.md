@@ -61,6 +61,15 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Recusa de política:** um "safeguards flagged" / "usage policy" do modelo passa a ser `failure_class: policy`. O scheduler bloqueia a tarefa sem nova tentativa automática, e a saída aponta o `--print-prompt` para achar o trecho que dispara a recusa.
 - **Antes:** era lida como falha de ambiente e retentada com o mesmo prompt, que seria recusado de novo. Na T7 do OxeChat F3, a primeira tentativa custou US$ 5,02 até a recusa.
 
+### Teste que só fica verde com uma tarefa posterior (G38, OxeCode F6 T27)
+
+- **O `plan lint` acusa um verify que roda um teste de aceite que só uma tarefa pendente posterior torna verde:** o teste fica fora do alcance naquele ponto da ordem. "Teste de aceite" aqui é a entrada congelada da tarefa dona, ou um arquivo `acceptance/` no escopo dela.
+  - A tarefa dona roda na mesma onda ou depois, e não é dependência da tarefa que roda o teste.
+  - O padrão segue `lint.suite_impact`, e a mensagem diz como sair: tirar o teste do verify, ou depender da tarefa dona.
+  - Caso real: a T27 (onda 1) foi adiada depois de 3 tentativas (US$ 16,91) com o u83 da T30 (onda 3) no verify.
+- O G30 deixa de pedir no verify uma suíte de aceite que é de uma tarefa posterior.
+- **`runtime deferred retry [dir]`:** o "retry" virava a pasta do projeto ("Diretório não encontrado: …\\retry"), mesmo com `--dir`.
+
 ### "A confirmar" só como marcador (OxeSpace 15/11, OXE-274)
 
 - O lint do refine e do intake, o needs-info, o grooming e o intake da SPEC contam "A confirmar" só como frase inteira, sem letra ou dígito colados; o "a" minúsculo entre palavras ("obrigando-o a confirmar a exclusão") é preposição, e `_A confirmar_` em itálico conta. Antes, "…, pa**ra confirmar** com segurança …" virava um item em aberto sem pergunta e reprovava o `alm intake`.

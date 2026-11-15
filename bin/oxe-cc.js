@@ -4442,6 +4442,12 @@ function parseRuntimeArgs(argv) {
       out.task = positionals[1].toUpperCase();
       if (positionals[2]) out.dir = path.resolve(positionals[2]);
     } else if (positionals[1]) out.dir = path.resolve(positionals[1]);
+  } else if (out.action === 'deferred') {
+    // OxeSpace 15/11 (OxeCode F6): `runtime deferred retry` read "retry" as the project folder
+    if (/^(list|retry)$/.test(positionals[1] || '')) {
+      out.subAction = positionals[1];
+      if (positionals[2]) out.dir = path.resolve(positionals[2]);
+    } else if (positionals[1]) out.dir = path.resolve(positionals[1]);
   } else if (out.action === 'autoresume') {
     // G24: runtime autoresume [status|run|install|uninstall] [pasta]
     if (/^(status|run|install|uninstall)$/.test(positionals[1] || '')) {
@@ -6025,7 +6031,7 @@ async function runRuntime(opts) {
   // OXB-138: the deferred ledger.
   if (opts.action === 'deferred') {
     try {
-      const sub = (opts.positionals || [])[1] === 'retry' || process.argv.includes('retry') ? 'retry' : 'list';
+      const sub = opts.subAction === 'retry' ? 'retry' : 'list';
       const out = oxeOperational.runtimeDeferred(opts.dir, activeSession, { action: sub, dryRun: Boolean(opts.dryRun) });
       if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeDeferredSchema: 1, ...out }, null, 2)); return; }
       if (sub === 'retry') for (const r of out.retry) console.log(`  ${r.id} ${r.task}: ${r.status}${r.tail ? ` — ${r.tail}` : ''}${r.status === 'ready' ? ' (o próximo oxe-cc runtime execute refaz)' : ''}`);

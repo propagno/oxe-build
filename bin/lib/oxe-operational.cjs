@@ -5954,6 +5954,14 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       result.errors.push(...msg.errors);
       result.warnings.push(...msg.warnings);
       result.suite_impact = findings;
+      // G38 (OxeSpace 15/11, OxeCode F6 T27): a test in the verify that only a later pending task turns green
+      const later = si.laterOwnedTests(pjs);
+      if (later.length) {
+        const lm = si.laterOwnedMessages(later, { mode });
+        result.errors.push(...lm.errors);
+        result.warnings.push(...lm.warnings);
+        result.later_owned_tests = later;
+      }
     }
   } catch { /* auxiliar */ }
   // OXB-171: the product files a task's frozen tests import/read must be in its scope (or a dependency's); T8 of F2

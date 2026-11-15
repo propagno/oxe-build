@@ -106,6 +106,14 @@ function suiteImpact(root, planDoc, options = {}) {
   const { byTarget, read } = options.index || importIndex(root, options);
   const known = new Set(options.files || trackedFiles(root));
   const accept = (planDoc && Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : []);
+  // G38: a suite another pending task owns (in its files) at the same or a later wave is not asked into this verify —
+  // it turns green only with that task (OxeCode F6: u83, owned by T30, was put in T27's verify)
+  const laterOwner = new Map();
+  for (const o of tasks) for (const f of o.files || []) {
+    const p = norm(typeof f === 'string' ? f : f && f.path);
+    if (p && TEST_RE.test(p) && /(^|\/)acceptance\//i.test(p)) laterOwner.set(p, [...(laterOwner.get(p) || []), o]);
+  }
+  const ownedLater = (test, t) => (laterOwner.get(test) || []).some((o) => o.id !== t.id && !(Number(o.wave) < Number(t.wave)));
   const findings = [];
   for (const t of tasks) {
     const scope = (t.files || []).map((f) => norm(typeof f === 'string' ? f : f && f.path)).filter(Boolean);
@@ -131,7 +139,7 @@ function suiteImpact(root, planDoc, options = {}) {
         // G30b: the data the suite reads, outside the task's files — also for a suite already in the verify (the T20
         // guard was in the verify; its baseline fixture was not in files)
         if (!inScope(imp.test)) for (const d of dataFilesOf(root, imp.test, read(imp.test), known)) if (!inScope(d)) data.push({ test: imp.test, file: d });
-        if (inScope(imp.test) || ownAccept.has(imp.test) || namedInVerify(imp.test)) continue;
+        if (inScope(imp.test) || ownAccept.has(imp.test) || namedInVerify(imp.test) || ownedLater(imp.test, t)) continue;
         const asserted = imp.names.filter((n) => consts.has(n) && mentioned.has(n));
         suites.push({ test: imp.test, level: asserted.length ? 'error' : 'warn', names: asserted });
       }
@@ -139,6 +147,62 @@ function suiteImpact(root, planDoc, options = {}) {
     }
   }
   return findings;
+}
+
+/**
+ * OxeSpace 15/11 (OxeCode F6 T27, US$ 16.91 in 3 attempts): a test in a task's verify that a LATER pending task owns
+ * (in its files, or its frozen acceptance test) — e.g. u83 released for T30 (wave 3) in T27's verify (wave 1) — is
+ * unpassable at the task's point in the order. Per pending task: each such test, with its owner.
+ * @returns {{ task: string, wave: number|null, test: string, owner: string, owner_wave: number|null }[]}
+ */
+function laterOwnedTests(planDoc) {
+  const all = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter(Boolean);
+  const pending = all.filter((t) => !(t.done === true || t.status === 'done'));
+  if (pending.length < 2) return [];
+  const byId = new Map(all.map((t) => [t.id, t]));
+  const ancestors = (id, seen = new Set()) => {
+    for (const d of (byId.get(id) || {}).depends_on || (byId.get(id) || {}).dependsOn || []) if (!seen.has(d)) { seen.add(d); ancestors(d, seen); }
+    return seen;
+  };
+  const owners = new Map(); // test file → pending owner ids
+  const own = (file, id) => { const f = norm(file); if (f && TEST_RE.test(f)) owners.set(f, [...new Set([...(owners.get(f) || []), id])]); };
+  // a shared suite many tasks extend (brand-targets, design-lint) is not "green only later": only ACCEPTANCE tests count —
+  // a frozen entry of the owner, or a file of its scope under an acceptance/ folder
+  const ACCEPT_DIR = /(^|\/)acceptance\//i;
+  for (const t of pending) for (const f of t.files || []) { const p = norm(typeof f === 'string' ? f : f && f.path); if (ACCEPT_DIR.test(p)) own(p, t.id); }
+  for (const a of (planDoc && Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : [])) {
+    if (!a) continue;
+    const ids = a.task ? [a.task] : pending.filter((t) => (t.acceptance || []).includes(a.criterion)).map((t) => t.id);
+    for (const id of ids) if (pending.some((t) => t.id === id)) for (const f of a.files || []) own(typeof f === 'string' ? f : f.path, id);
+  }
+  const waveOf = (t) => (Number.isFinite(Number(t && t.wave)) ? Number(t.wave) : null);
+  const out = [];
+  for (const t of pending) {
+    const verifyText = [...((t.verify && t.verify.commands) || []), t.verify && t.verify.command, t.verifyCommand].filter(Boolean).join(' ').replace(/\\/g, '/');
+    const tests = [...new Set((verifyText.match(/[^\s"'`]+/g) || []).map((s) => norm(s)).filter((s) => s.includes('/') && TEST_RE.test(s) && /\.[cm]?[jt]sx?$/i.test(s)))];
+    const anc = ancestors(t.id);
+    for (const test of tests) {
+      for (const ownerId of owners.get(test) || []) {
+        if (ownerId === t.id || anc.has(ownerId)) continue; // its own, or done before it by the dependency order
+        const owner = byId.get(ownerId);
+        const w = waveOf(t);
+        const ow = waveOf(owner);
+        if (w != null && ow != null && ow < w) continue; // the owner's wave runs first
+        out.push({ task: t.id, wave: w, test, owner: ownerId, owner_wave: ow });
+      }
+    }
+  }
+  return out;
+}
+
+function laterOwnedMessages(findings, { mode = 'error' } = {}) {
+  const errors = [];
+  const warnings = [];
+  for (const f of findings) {
+    const line = `${f.task}${f.wave != null ? ` (onda ${f.wave})` : ''}: o verify roda ${f.test}, que só fica verde com ${f.owner}${f.owner_wave != null ? ` (onda ${f.owner_wave})` : ''} — inalcançável neste ponto da ordem: tire do verify de ${f.task}, ou faça ${f.task} depender de ${f.owner} [G38]`;
+    if (mode === 'error') errors.push(line); else warnings.push(line);
+  }
+  return { errors, warnings };
 }
 
 function messages(findings, { mode = 'error' } = {}) {
@@ -159,4 +223,4 @@ function messages(findings, { mode = 'error' } = {}) {
   return { errors, warnings };
 }
 
-module.exports = { suiteImpact, messages, importIndex, exportedConstants, TEST_RE };
+module.exports = { suiteImpact, messages, laterOwnedTests, laterOwnedMessages, importIndex, exportedConstants, TEST_RE };

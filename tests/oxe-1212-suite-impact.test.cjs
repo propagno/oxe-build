@@ -92,3 +92,36 @@ describe('G30 · suítes que importam os arquivos da tarefa', () => {
     assert.deepEqual([...c].sort(), ['A', 'B', 'C', 'D']);
   });
 });
+
+// G38 (OxeSpace 15/11, OxeCode F6 T27: US$ 16.91 in 3 attempts): a test in a task's verify that only a LATER pending
+// task turns green (u83, in T30's files at wave 3, inside T27's verify at wave 1) is unpassable at that point.
+describe('G38: a verify that holds a test only a later task turns green', () => {
+  const U83 = 'tests/acceptance/f8/u83-command-bar.test.tsx';
+  const plan = (over = {}) => ({
+    acceptance_tests: over.acceptance_tests || [],
+    tasks: [
+      { id: 'T27', wave: 1, files: ['src/bar.tsx'], verify: { commands: [`node run.mjs tests/unit/x.test.ts ${U83} tests/shared.test.ts`] }, ...(over.T27 || {}) },
+      { id: 'T30', wave: 3, files: ['src/cmd.tsx', U83, 'tests/shared.test.ts'], verify: { commands: [`node run.mjs ${U83}`] } },
+      { id: 'T29', wave: 7, files: ['src/q.tsx'], verify: { commands: [`node run.mjs ${U83}`] } },
+    ],
+  });
+  it('flags the earlier task, names the owner; a later task, a shared non-acceptance suite and the owner itself are not flagged', () => {
+    const f = si.laterOwnedTests(plan());
+    assert.deepEqual(f.map((x) => [x.task, x.test, x.owner]), [['T27', U83, 'T30']]);
+    const msg = si.laterOwnedMessages(f);
+    assert.match(msg.errors[0], /T27 \(onda 1\): o verify roda tests\/acceptance\/f8\/u83-command-bar\.test\.tsx, que só fica verde com T30 \(onda 3\).*\[G38\]/);
+    assert.equal(si.laterOwnedMessages(f, { mode: 'warn' }).warnings.length, 1);
+  });
+  it('a dependency on the owner, or the owner done, clears it', () => {
+    assert.equal(si.laterOwnedTests(plan({ T27: { depends_on: ['T30'] } })).length, 0);
+    const done = plan();
+    done.tasks[1].done = true;
+    assert.equal(si.laterOwnedTests(done).length, 0);
+  });
+  it('a frozen acceptance entry owned by a later task by criterion counts too', () => {
+    const p = plan({ acceptance_tests: [{ criterion: 'A27', files: [{ path: 'tests/e2e/a27.spec.ts' }], command: 'x' }] });
+    p.tasks[1].acceptance = ['A27'];
+    p.tasks[0].verify.commands.push('npx playwright test tests/e2e/a27.spec.ts');
+    assert.ok(si.laterOwnedTests(p).some((x) => x.task === 'T27' && x.test === 'tests/e2e/a27.spec.ts' && x.owner === 'T30'));
+  });
+});
