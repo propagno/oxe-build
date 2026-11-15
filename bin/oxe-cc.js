@@ -2675,7 +2675,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
                                               quick com registro verificável (.oxe/quick/), trailers OXE-Quick/OXE-Card, card no ALM
   npx oxe-cc workflow path <slug> · workflow list   o workflow do pacote instalado (para repositório sem .oxe/workflows)
   npx oxe-cc runtime rollback --task T3 [--yes]
-  npx oxe-cc runtime execute ... [--checkpoint-commits] [--budget-turns N] [--budget-usd X] [--budget-reset] [--max-retries N] [--wave N] [--strict-external] [--parallel-mutating [--max-parallel N]] [--json → NDJSON por evento de tarefa]
+  npx oxe-cc runtime execute ... [--checkpoint-commits] [--budget-turns N] [--budget-usd X] [--budget-reset] [--max-retries N] [--wave N] [--strict-external] [--retry-policy-once] [--parallel-mutating [--max-parallel N]] [--json → NDJSON por evento de tarefa]
   (qualquer comando) --plain  saída ASCII sem banner (padrão quando o stdout não é TTY; OXE_PLAIN=0 desliga)
   npx oxe-cc runtime verify [--no-gates]
   npx oxe-cc runtime scorecard [--since <data>] [--write] [--release-report <arquivo> --name <projeto>] [--json]
@@ -4349,6 +4349,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--strict-external') out.strictExternal = true;
     else if (a === '--supervise') out.supervise = true;
     else if (a === '--reuse-attempt') out.reuseAttempt = true;
+    else if (a === '--retry-policy-once') out.retryPolicyOnce = true;
     else if (a === '--parallel-mutating') out.parallelMutating = true;
     else if (a === '--max-parallel' && argv[i + 1]) out.maxParallel = Number(argv[++i]);
     else if (a === '--release-report' && argv[i + 1]) out.releaseReport = String(argv[++i]);
@@ -5889,6 +5890,8 @@ async function runRuntime(opts) {
         promoteEach: opts.promoteEach ? { base: opts.baseBranch || null, remote: opts.remote || 'origin', holdDeps: Boolean(opts.holdDeps) } : null,
         maxParallel: opts.maxParallel || undefined,
         agentsPlanPath: opts.agentsPlanPath || undefined,
+        // OxeSpace 15/11 (Celular F3 T9): one more attempt after a policy refusal, chosen by a person
+        ...(opts.retryPolicyOnce ? { schedulerOptions: { retryPolicyOnce: true } } : {}),
         onProgress: (event) => {
           // OXB-065: with --json, one NDJSON line per task event on stdout; the final result is the last line.
           if (opts.jsonOutput) {

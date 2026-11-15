@@ -584,7 +584,8 @@ class Scheduler {
         // 1.20c: the same verify failure twice (normalized output) = suspect ruler or stuck executor: stop paying retries.
         let lastVerifySignature = null;
         let verifySuspect = false;
-        const maxAttempts = node.policy.max_retries + 1;
+        let maxAttempts = node.policy.max_retries + 1;
+        let policyRetried = false;
         // 1.21.1 (OXB-047): work that arrives by another path never pays an agent and never becomes a human gate.
         // An explicit human gate (PLAN.json `gate`) still comes first: the attempt loop requests it as before.
         const humanGatePending = node.policy.requires_human_approval && !this.hasApprovedGate(node, ctx);
@@ -844,8 +845,20 @@ class Scheduler {
                     this.blockNode(nodeId, ctx, status, blocked, 'waiting_answer', tailLines(lastResult.output || '', 3));
                     return;
                 }
-                if (lastResult.failure_class === 'policy')
-                    break;
+                if (lastResult.failure_class === 'policy') {
+                    if (!ctx.options?.retryPolicyOnce || policyRetried)
+                        break;
+                    policyRetried = true;
+                    if (attempt >= maxAttempts)
+                        maxAttempts = attempt + 1;
+                    this.emit(ctx, {
+                        type: 'RetryScheduled',
+                        work_item_id: nodeId,
+                        attempt_id: attemptId,
+                        payload: { task: nodeId, attempt_number: attempt, next_attempt: attempt + 1, reason: 'policy_retry_once' },
+                    });
+                    continue;
+                }
                 // The output of a red verify (or of an attempt that ran out of turns / made no progress) is the project's test
                 // log: a test called "resets the form" or an error at line 429 is logic, not the provider.
                 const executorLevelFailure = !lastResult.failure_class || ['env', 'llm', 'timeout', 'quota'].includes(String(lastResult.failure_class));
@@ -876,9 +889,12 @@ class Scheduler {
                     return;
                 }
                 quotaWaits = 0;
-                if (execClass?.kind === 'environment') {
-                    this.pauseForFailure(ctx, nodeId, 'environment', execClass.diagnosis, null);
-                    this.blockNode(nodeId, ctx, status, blocked, 'paused_environment', execClass.diagnosis);
+                // cross-review 15/11: the http adapter reports a refused credential / missing endpoint (401/403/404) as
+                // `environment` itself — configuration, not a reason to pay another attempt
+                if (execClass?.kind === 'environment' || lastResult.failure_class === 'environment') {
+                    const diag = execClass?.kind === 'environment' ? execClass.diagnosis : tailLines(lastResult.output || '', 3);
+                    this.pauseForFailure(ctx, nodeId, 'environment', diag, null);
+                    this.blockNode(nodeId, ctx, status, blocked, 'paused_environment', diag);
                     return;
                 }
                 // OXB-148: a prompt that does not fit fails the same way on a blind retry.

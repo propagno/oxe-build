@@ -11168,8 +11168,9 @@ function readRunState(projectRoot, activeSession) {
     }
   }
   if (!runId && fs.existsSync(p.runsDir)) {
-    // the run files only — never the budget ledger next to them (oxe-run-x.budget.json)
-    const files = fs.readdirSync(p.runsDir).filter((name) => name.endsWith('.json') && !/\.budget\.json$/i.test(name)).sort();
+    // the run files only — never the budget ledger next to them (oxe-run-x.budget.json) nor a cache file
+    // (cross-review 15/11: "precheck-cache.json" sorts after "oxe-run-…" and would be read as the latest run)
+    const files = fs.readdirSync(p.runsDir).filter((name) => name.endsWith('.json') && !/\.budget\.json$|cache\.json$/i.test(name)).sort();
     if (files.length) runId = files[files.length - 1].replace(/\.json$/i, '');
   }
   if (!runId) return null;

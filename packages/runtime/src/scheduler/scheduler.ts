@@ -75,6 +75,12 @@ export interface SchedulerOptions {
   /** OXB-120: project patterns (regex sources) added to the built-in environment / quota classifiers. */
   failureClasses?: { environment?: string[]; quota?: string[] };
   /**
+   * OxeSpace 15/11 (Celular F3 T9): a refusal by the model's usage policy is never retried automatically — but a
+   * classifier false positive passed on a plain retry before. With this (runtime execute --retry-policy-once, chosen by
+   * a person) each task gets ONE more attempt after a policy refusal, even past its max_retries.
+   */
+  retryPolicyOnce?: boolean;
+  /**
    * OXB-138: a task that exhausts its attempts is DEFERRED and the run goes on with every task that does not depend on
    * it (its dependents end `blocked_by_deferred`). false keeps the old stop-at-the-failed-wave behavior.
    */
@@ -789,7 +795,8 @@ export class Scheduler {
     // 1.20c: the same verify failure twice (normalized output) = suspect ruler or stuck executor: stop paying retries.
     let lastVerifySignature: string | null = null;
     let verifySuspect = false;
-    const maxAttempts = node.policy.max_retries + 1;
+    let maxAttempts = node.policy.max_retries + 1;
+    let policyRetried = false;
     // 1.21.1 (OXB-047): work that arrives by another path never pays an agent and never becomes a human gate.
     // An explicit human gate (PLAN.json `gate`) still comes first: the attempt loop requests it as before.
     const humanGatePending = node.policy.requires_human_approval && !this.hasApprovedGate(node, ctx);
@@ -1058,7 +1065,18 @@ export class Scheduler {
           this.blockNode(nodeId, ctx, status, blocked, 'waiting_answer', tailLines(lastResult.output || '', 3));
           return;
         }
-        if (lastResult.failure_class === 'policy') break;
+        if (lastResult.failure_class === 'policy') {
+          if (!(ctx.options as SchedulerOptions | undefined)?.retryPolicyOnce || policyRetried) break;
+          policyRetried = true;
+          if (attempt >= maxAttempts) maxAttempts = attempt + 1;
+          this.emit(ctx, {
+            type: 'RetryScheduled',
+            work_item_id: nodeId,
+            attempt_id: attemptId,
+            payload: { task: nodeId, attempt_number: attempt, next_attempt: attempt + 1, reason: 'policy_retry_once' },
+          });
+          continue;
+        }
         // The output of a red verify (or of an attempt that ran out of turns / made no progress) is the project's test
         // log: a test called "resets the form" or an error at line 429 is logic, not the provider.
         const executorLevelFailure = !lastResult.failure_class || ['env', 'llm', 'timeout', 'quota'].includes(String(lastResult.failure_class));

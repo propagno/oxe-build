@@ -24,8 +24,8 @@ const call = (baseUrl) => (0, stream_completion_1.streamCompletion)({ baseUrl, a
 (0, node_test_1.describe)('http adapter: errors are errors', () => {
     (0, node_test_1.test)('401, 404 and 500 reject with a kind and a hint; a 400 about the context is context', async () => {
         for (const [status, body, kind, hint] of [
-            [401, '{"error":"invalid x-api-key"}', 'env', /credencial recusada/],
-            [404, 'not found', 'env', /chat\/completions não existe/],
+            [401, '{"error":"invalid x-api-key"}', 'environment', /credencial recusada/],
+            [404, 'not found', 'environment', /chat\/completions não existe/],
             [500, 'boom', 'env', /transitório/],
             [400, '{"error":"prompt is too long: 250000 tokens"}', 'context', /prompt is too long/],
         ]) {
@@ -63,5 +63,15 @@ const call = (baseUrl) => (0, stream_completion_1.streamCompletion)({ baseUrl, a
         const r = (0, stream_completion_1.parseSseResponse)('data: {"choices":[{"delta":{"content":"a"}}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":30}}\n\ndata: [DONE]\n');
         strict_1.default.deepEqual(r.usage, { input_tokens: 120, output_tokens: 30 });
         strict_1.default.equal((0, stream_completion_1.httpFailureKind)(429, ''), 'quota');
+        const t = (0, stream_completion_1.parseSseResponse)('data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":9,"completion_tokens_details":{"reasoning_tokens":7}}}\n\ndata: [DONE]\n');
+        strict_1.default.equal(t.usage?.thinking_tokens, 7);
+    });
+    (0, node_test_1.test)('cross-review 15/11: a policy refusal is policy, a refused credential / missing endpoint is environment', () => {
+        strict_1.default.equal((0, stream_completion_1.httpFailureKind)(400, '{"error":{"code":"content_filter","message":"flagged"}}'), 'policy');
+        strict_1.default.equal((0, stream_completion_1.httpFailureKind)(403, 'Request blocked by our usage policies'), 'policy');
+        strict_1.default.equal((0, stream_completion_1.httpFailureKind)(403, 'forbidden'), 'environment');
+        strict_1.default.equal((0, stream_completion_1.httpFailureKind)(401, ''), 'environment');
+        strict_1.default.equal((0, stream_completion_1.httpFailureKind)(404, ''), 'environment');
+        strict_1.default.equal((0, stream_completion_1.httpFailureKind)(502, ''), 'env');
     });
 });

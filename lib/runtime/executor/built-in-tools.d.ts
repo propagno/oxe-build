@@ -16,7 +16,9 @@ export declare function resolveWithin(cwd: string, candidate: unknown): string;
  * The real path of `p`, following links. For a path that does not exist yet (a new file), the real path of its
  * nearest existing ancestor joined with the rest — a write through a linked directory is resolved too.
  */
-export declare function realPathOf(p: string): string;
+export declare function realPathOf(p: string, depth?: number): string;
+/** Case-insensitive file systems (Windows, macOS): paths compare in lower case. */
+export declare function samePathKey(p: string): string;
 /**
  * OxeSpace 14/11 (P0): a command that printed more than ~512 MB (a recursive grep that followed the node_modules
  * junction) made `Buffer.concat(out).toString()` throw ERR_STRING_TOO_LONG and killed the whole run. The output is now

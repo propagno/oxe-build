@@ -58,6 +58,12 @@ export interface SchedulerOptions {
         quota?: string[];
     };
     /**
+     * OxeSpace 15/11 (Celular F3 T9): a refusal by the model's usage policy is never retried automatically — but a
+     * classifier false positive passed on a plain retry before. With this (runtime execute --retry-policy-once, chosen by
+     * a person) each task gets ONE more attempt after a policy refusal, even past its max_retries.
+     */
+    retryPolicyOnce?: boolean;
+    /**
      * OXB-138: a task that exhausts its attempts is DEFERRED and the run goes on with every task that does not depend on
      * it (its dependents end `blocked_by_deferred`). false keeps the old stop-at-the-failed-wave behavior.
      */

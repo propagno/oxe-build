@@ -1,0 +1,65 @@
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import os from 'os';
+import path from 'path';
+import fs from 'fs';
+import { LlmTaskExecutor } from '../src/executor/llm-task-executor';
+import type { LlmExecutorEvent, CompletionFn } from '../src/executor/llm-task-executor';
+import type { GraphNode } from '../src/compiler/graph-compiler';
+
+// OxeSpace 15/11 (Celular F3 T9): a policy refusal at turn 2 after reading five files — which one triggered it? The
+// failure names what the previous turn added to the prompt (the only new content between the two requests).
+
+const node: GraphNode = {
+  id: 'T9', title: 'tela', wave: 1, depends_on: [], workspace_strategy: 'inplace', mutation_scope: ['a.kt'],
+  actions: [{ type: 'generate_patch', targets: ['a.kt'] }],
+  verify: { must_pass: [], acceptance_refs: [], command: null },
+  policy: { requires_human_approval: false, max_retries: 0 },
+};
+
+async function run(complete: CompletionFn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-policy-trig-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'Conversation.kt'), 'class Conversation');
+    fs.writeFileSync(path.join(dir, 'ThreadScreen.kt'), 'fun ThreadScreen() {}');
+    const events: LlmExecutorEvent[] = [];
+    const exec = new LlmTaskExecutor({ baseUrl: '', apiKey: '', model: '', maxTurns: 4 }, null, (e) => events.push(e), complete);
+    const result = await exec.execute(node, { workspace_id: 'w', strategy: 'inplace', isolation_level: 'shared', branch: null, base_commit: null, root_path: dir, ttl_minutes: 5 }, 'r', 1);
+    return { result, events };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const refusal = () => Object.assign(new Error('API Error: safeguards flagged this request [reasoning_extraction]'), { kind: 'policy' });
+
+describe('policy refusal names its likely trigger', () => {
+  test('at turn 2: the tool results of turn 1, with sizes; the hint offers --retry-policy-once', async () => {
+    let turn = 0;
+    const { result, events } = await run(async () => {
+      turn += 1;
+      if (turn === 1) {
+        return {
+          content: '', finish_reason: 'tool_calls',
+          tool_calls: [
+            { id: 'c1', type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'Conversation.kt' }) } },
+            { id: 'c2', type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'ThreadScreen.kt' }) } },
+          ],
+        };
+      }
+      throw refusal();
+    });
+    assert.equal(result.success, false);
+    assert.equal(result.failure_class, 'policy');
+    assert.match(result.output, /Conteúdo novo desde a requisição anterior[^\n]*read_file Conversation\.kt \(\d+ chars\) · read_file ThreadScreen\.kt/);
+    assert.match(result.output, /--retry-policy-once/);
+    const u = events.find((e) => e.type === 'executor_usage')?.detail as { policy_trigger_candidates?: Array<{ tool: string; target: string }> };
+    assert.deepEqual(u.policy_trigger_candidates?.map((t) => t.target), ['Conversation.kt', 'ThreadScreen.kt']);
+  });
+
+  test('at the first request: the trigger is in the starting prompt', async () => {
+    const { result } = await run(async () => { throw refusal(); });
+    assert.equal(result.failure_class, 'policy');
+    assert.match(result.output, /primeira requisição: o gatilho está no prompt inicial/);
+  });
+});

@@ -117,6 +117,13 @@ describe('readRunState: the newer of ACTIVE-RUN and runs/<id>.json, never the bu
     fs.rmSync(path.join(dir, '.oxe', 'ACTIVE-RUN.json'));
     fs.writeFileSync(path.join(runs, 'oxe-run-a.budget.json'), JSON.stringify({ run_id: 'oxe-run-a', limit_usd: 45 }));
     assert.equal(op.readRunState(dir, null).status, 'running');
+    // cross-review 15/11: a cache file sorting after the run is not the run either
+    fs.writeFileSync(path.join(runs, 'precheck-cache.json'), JSON.stringify({ 'a.test.js': { hash: 'h', ok: true } }));
+    assert.equal(op.readRunState(dir, null).status, 'running');
+    // a run file without updated_at still takes a newer ACTIVE-RUN status (Date.parse('') is NaN)
+    fs.writeFileSync(path.join(runs, 'oxe-run-a.json'), JSON.stringify({ run_id: 'oxe-run-a', status: 'planned' }));
+    fs.writeFileSync(path.join(dir, '.oxe', 'ACTIVE-RUN.json'), JSON.stringify({ run_id: 'oxe-run-a', status: 'paused', updated_at: '2026-11-15T04:00:00.000Z' }));
+    assert.equal(op.readRunState(dir, null).status, 'paused');
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

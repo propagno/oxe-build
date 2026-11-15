@@ -166,6 +166,8 @@ export interface ExecutorUsage {
   input_tokens?: number;
   output_tokens?: number;
   thinking_tokens?: number;
+  /** A policy refusal: the tool results the previous turn added to the prompt (the likely trigger). */
+  policy_trigger_candidates?: Array<{ tool: string; target: string | null; chars: number }>;
   /**
    * OXB-118: what the attempt did, for the project's action rules checked after the fact (a command run, a path
    * read or written). Capped; long commands are cut.
@@ -271,6 +273,9 @@ export class LlmTaskExecutor implements TaskExecutor {
     const slowTurnMs = this.options.slowTurnMs ?? 180_000;
     let turnsWithoutProgress = 0;
     let turnWrites = 0;
+    // OxeSpace 15/11 (Celular F3 T9): what the previous turn added to the prompt — a policy refusal names it, so the
+    // trigger can be located (a tool result is the only new content between two requests)
+    let lastTurnTools: Array<{ tool: string; target: string | null; chars: number }> = [];
     for (; turn < maxTurns; turn++) {
       this.emit({ type: 'turn_start', nodeId: node.id, attempt, detail: { turn } });
       // OXB-026: the last turn finishes and reports; the runtime runs the task's verify itself afterwards.
@@ -331,8 +336,12 @@ export class LlmTaskExecutor implements TaskExecutor {
         const failureClass = isQuota
           ? 'quota'
           : (kind === 'context' || kind === 'llm' || kind === 'timeout' || kind === 'policy' || kind === 'environment' ? kind : 'env');
+        const trail = kind === 'policy' && lastTurnTools.length
+          ? `\n\nConteúdo novo desde a requisição anterior (turno ${turn}): ${lastTurnTools.map((t) => `${t.tool}${t.target ? ` ${t.target}` : ''} (${t.chars} chars)`).join(' · ')}`
+          : kind === 'policy' ? '\n\nA recusa veio na primeira requisição: o gatilho está no prompt inicial.' : '';
+        if (kind === 'policy') usage.policy_trigger_candidates = lastTurnTools;
         const out = kind === 'policy'
-          ? `${errMsg}\n\nRecusa da política de uso do modelo: o mesmo prompt seria recusado de novo, então não há nova tentativa automática. Veja o prompt com oxe-cc runtime execute --task ${node.id} --print-prompt e tire o trecho que dispara a recusa (um fixture, um snippet).`
+          ? `${errMsg}${trail}\n\nRecusa da política de uso do modelo: não há nova tentativa automática. Veja o prompt com oxe-cc runtime execute --task ${node.id} --print-prompt e tire o trecho que dispara a recusa (um fixture, um snippet). Se parecer falso positivo, uma única nova tentativa: oxe-cc runtime execute --retry-policy-once.`
           : errMsg;
         return done({ success: false, failure_class: failureClass, evidence: evidencePaths, output: out });
       }
@@ -371,6 +380,13 @@ export class LlmTaskExecutor implements TaskExecutor {
       }
 
       messages.push(...concurrentResults, ...serialResults);
+      lastTurnTools = [...concurrent, ...serial].map((tc, i) => {
+        let a: Record<string, unknown> = {};
+        try { a = JSON.parse(String(tc.function.arguments ?? '').trim() || '{}') || {}; } catch { a = {}; }
+        const target = typeof a.path === 'string' ? a.path : typeof a.command === 'string' ? a.command.slice(0, 120) : typeof a.pattern === 'string' ? a.pattern.slice(0, 120) : null;
+        const res = [...concurrentResults, ...serialResults][i];
+        return { tool: tc.function.name, target, chars: String(res?.content ?? '').length };
+      });
 
       // OXB-196: if run_command was invoked, check if any in-scope file was modified, created, or deleted on disk
       const ranCommand = [...concurrent, ...serial].some((tc) => tc.function.name === 'run_command');

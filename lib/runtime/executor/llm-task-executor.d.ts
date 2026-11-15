@@ -63,6 +63,16 @@ export interface ExecutorUsage {
     /** Calls per tool name (e.g. how many `run_command`). */
     tools: Record<string, number>;
     cost_usd: number | null;
+    /** Tokens the backend reported (http adapter: the usage chunk), summed over the turns. */
+    input_tokens?: number;
+    output_tokens?: number;
+    thinking_tokens?: number;
+    /** A policy refusal: the tool results the previous turn added to the prompt (the likely trigger). */
+    policy_trigger_candidates?: Array<{
+        tool: string;
+        target: string | null;
+        chars: number;
+    }>;
     /**
      * OXB-118: what the attempt did, for the project's action rules checked after the fact (a command run, a path
      * read or written). Capped; long commands are cut.

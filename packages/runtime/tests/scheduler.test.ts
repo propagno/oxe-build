@@ -153,6 +153,27 @@ describe('Scheduler', () => {
     assert.equal(callCount, 1);
   });
 
+  test('retryPolicyOnce: one more attempt after a policy refusal, even past max_retries; never a second', async () => {
+    for (const [maxRetries, passesOnRetry, expectedCalls, expectedStatus] of [[0, true, 2, 'completed'], [2, false, 2, 'failed']] as const) {
+      let callCount = 0;
+      const executor: TaskExecutor = {
+        async execute(): Promise<TaskResult> {
+          callCount++;
+          return callCount === 2 && passesOnRetry
+            ? { success: true, failure_class: null, evidence: [], output: 'ok' }
+            : { success: false, failure_class: 'policy', evidence: [], output: 'safeguards flagged' };
+        },
+      };
+      const plan = makePlan([
+        { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false },
+      ]);
+      const graph = compile(plan, SPEC, { default_workspace_strategy: 'inplace', default_max_retries: maxRetries });
+      const result = await new Scheduler().run(graph, { ...makeCtx(tmpDir, executor), options: { retryPolicyOnce: true } });
+      assert.equal(callCount, expectedCalls, `max_retries ${maxRetries}`);
+      assert.equal(result.status, expectedStatus);
+    }
+  });
+
   test('cancel stops execution mid-run', async () => {
     const scheduler = new Scheduler();
     const executor: TaskExecutor = {

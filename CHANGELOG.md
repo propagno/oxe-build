@@ -56,6 +56,11 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Recusa de política:** um "safeguards flagged" / "usage policy" do modelo passa a ser `failure_class: policy`. O scheduler bloqueia a tarefa sem nova tentativa automática, e a saída aponta o `--print-prompt` para achar o trecho que dispara a recusa.
 - **Antes:** era lida como falha de ambiente e retentada com o mesmo prompt, que seria recusado de novo. Na T7 do OxeChat F3, a primeira tentativa custou US$ 5,02 até a recusa.
 
+### Recusa de política: o gatilho provável e uma nova tentativa escolhida (OxeSpace 15/11, Celular F3 T9)
+
+- A falha `policy` diz o que o turno anterior acrescentou ao prompt: ferramenta, caminho e tamanho de cada resultado. Isso vai no texto e em `executor_usage.policy_trigger_candidates`. Uma recusa na primeira requisição aponta o prompt inicial.
+- **`runtime execute --retry-policy-once`:** cada tarefa ganha **uma** tentativa a mais depois de uma recusa de política, mesmo além do `max_retries`, e nunca uma segunda. É para um falso positivo do classificador, que já passou num retry simples (OxeChat F3 T7). O padrão continua sem retry automático.
+
 ### `alm label --remove`; o refine tira o `needs-info` respondido (OxeSpace 15/11, OXE-189)
 
 - **`alm label <chave> --remove <rótulo>[,<rótulo>]`:** tira rótulos do card. Pode vir junto com o `--add`; um rótulo nos dois é recusado. Um rótulo que o card não tem é informado, não é erro.

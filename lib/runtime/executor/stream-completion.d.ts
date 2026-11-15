@@ -57,7 +57,7 @@ export declare function streamCompletion(opts: StreamCompletionOptions): Promise
  * answer resolved as text, parsed as zero tool calls, and a 401/404/500 ended the attempt as "no tool call" in
  * silence (a read-only node could even succeed).
  */
-export declare function httpFailureKind(status: number, text: string): 'quota' | 'context' | 'env';
+export declare function httpFailureKind(status: number, text: string): 'quota' | 'context' | 'policy' | 'environment' | 'env';
 declare function parseSseResponse(raw: string): CompletionResponse;
 /** For tests: the SSE parser. */
 export { parseSseResponse };

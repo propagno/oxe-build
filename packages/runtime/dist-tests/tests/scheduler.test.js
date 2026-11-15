@@ -173,6 +173,26 @@ function alwaysFail(failureClass = 'test') {
         await scheduler.run(graph, makeCtx(tmpDir, executor));
         strict_1.default.equal(callCount, 1);
     });
+    (0, node_test_1.test)('retryPolicyOnce: one more attempt after a policy refusal, even past max_retries; never a second', async () => {
+        for (const [maxRetries, passesOnRetry, expectedCalls, expectedStatus] of [[0, true, 2, 'completed'], [2, false, 2, 'failed']]) {
+            let callCount = 0;
+            const executor = {
+                async execute() {
+                    callCount++;
+                    return callCount === 2 && passesOnRetry
+                        ? { success: true, failure_class: null, evidence: [], output: 'ok' }
+                        : { success: false, failure_class: 'policy', evidence: [], output: 'safeguards flagged' };
+                },
+            };
+            const plan = makePlan([
+                { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false },
+            ]);
+            const graph = (0, graph_compiler_1.compile)(plan, SPEC, { default_workspace_strategy: 'inplace', default_max_retries: maxRetries });
+            const result = await new scheduler_1.Scheduler().run(graph, { ...makeCtx(tmpDir, executor), options: { retryPolicyOnce: true } });
+            strict_1.default.equal(callCount, expectedCalls, `max_retries ${maxRetries}`);
+            strict_1.default.equal(result.status, expectedStatus);
+        }
+    });
     (0, node_test_1.test)('cancel stops execution mid-run', async () => {
         const scheduler = new scheduler_1.Scheduler();
         const executor = {
