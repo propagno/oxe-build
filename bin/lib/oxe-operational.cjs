@@ -9369,14 +9369,17 @@ function runtimePlanVerifyPrune(projectRoot, activeSession, options = {}) {
     const norm = (s) => String(s).replace(/\\/g, '/');
     // per SUBCOMMAND (R31 P1): `a.test.ts && npm run typecheck` keeps the typecheck; a subcommand whose test arguments
     // were all removed goes away with its separator — never a bare `vitest run` (the whole suite)
+    // R32: the command is never rewritten as a whole (a `-t "v1\.5"` keeps its backslash); a path argument matches with
+    // either separator, and the replacement is a function (a `$` in a path is no replacement pattern)
+    const pat = (s) => esc(norm(s)).replace(/\//g, '[\\\\/]');
     const pruneCommand = (c, drop, anchor) => {
-      const parts = norm(c).split(/(\s*(?:&&|\|\||;)\s*)/);
+      const parts = String(c).split(/(\s*(?:&&|\|\||;)\s*)/);
       const keep = [];
       for (let i = 0; i < parts.length; i += 2) {
         let n = parts[i];
-        for (const arg of drop) n = n.replace(new RegExp(`(^|\\s)(["'\`]?)${esc(arg)}\\$?\\2(?=\\s|$)`, 'g'), '$1');
-        for (const arg of anchor) n = n.replace(new RegExp(`(^|\\s)(["'\`]?)${esc(arg)}\\2(?=\\s|$)`, 'g'), `$1$2${arg}$$$2`);
-        n = n.replace(/\s{2,}/g, ' ').trim();
+        for (const arg of drop) n = n.replace(new RegExp(`(^|\\s)(["'\`]?)${pat(arg)}\\$?\\2(?=\\s|$)`, 'g'), (_m, p1) => p1);
+        for (const arg of anchor) n = n.replace(new RegExp(`(^|\\s)(["'\`]?)(${pat(arg)})\\2(?=\\s|$)`, 'g'), (_m, p1, q, a) => `${p1}${q}${a}$${q}`);
+        if (n !== parts[i]) n = n.replace(/\s{2,}/g, ' ').trim();
         const had = (parts[i].match(TEST_ARG) || []).length;
         const has = (n.match(TEST_ARG) || []).length;
         if (had && !has) continue;
@@ -9394,7 +9397,7 @@ function runtimePlanVerifyPrune(projectRoot, activeSession, options = {}) {
         command: before.command ? pruneCommand(before.command, e.drop, e.anchor) || null : null,
         verifyCommand: before.verifyCommand ? pruneCommand(before.verifyCommand, e.drop, e.anchor) || null : null,
       };
-      const flat = (x) => [...(x.commands || []), ...(x.command ? [x.command] : []), ...(x.verifyCommand ? [x.verifyCommand] : [])].map(norm);
+      const flat = (x) => [...(x.commands || []), ...(x.command ? [x.command] : []), ...(x.verifyCommand ? [x.verifyCommand] : [])];
       if (JSON.stringify(flat(after)) === JSON.stringify(flat(before))) continue;
       changes.push({ task: t.id, removed: [...e.drop], anchored: [...e.anchor], before: flat(before), after: flat(after) });
       if (!options.dryRun) {
@@ -10121,16 +10124,25 @@ function integrationRedIsPreexisting(projectRoot, wt, sha, check, result, change
   const output = norm(`${result.output || ''}\n${result.tail || ''}`);
   const changed = (changedFiles || []).map(norm).filter(Boolean);
   if (changed.some((f) => output.includes(f) || output.includes(path.posix.basename(f)))) return false;
-  if (/\bnpm\b|\bpnpm\b|\byarn\b/.test(check.command) && changed.some((f) => /(^|\/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/.test(f))) return false;
+  // the task changed the check itself (its script, or the package.json / lockfile behind it) — R32
+  const command = norm(check.command);
+  if (changed.some((f) => command.includes(f))) return false;
+  if (changed.some((f) => /(^|\/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/.test(f))) return false;
   const parent = gitOut(projectRoot, ['rev-parse', '-q', '--verify', `${sha}^`]).stdout.trim();
   if (!parent) return false;
   if (gitOut(wt, ['checkout', '-q', '--detach', '-f', parent]).status !== 0) return false;
   let parentRed = false;
+  let back = false;
   try {
-    parentRed = !runChildCommandFull(wt, check.command, check.timeout).ok;
+    // the check must exist on the parent: a script the commit brought fails there with MODULE_NOT_FOUND, not "red" (R32)
+    let existed = false;
+    try { existed = require('./oxe-integration-checks.cjs').integrationCommands(wt, readProjectConfig(projectRoot) || {}).includes(check.command); } catch { existed = false; }
+    if (existed) parentRed = !runChildCommandFull(wt, check.command, check.timeout).ok;
   } finally {
-    gitOut(wt, ['checkout', '-q', '--detach', '-f', sha]);
+    back = gitOut(wt, ['checkout', '-q', '--detach', '-f', sha]).status === 0;
   }
+  // never go on with the workspace on the parent: the next checks would judge the wrong tree
+  if (!back) throw new Error(`checkpoint: o workspace não voltou ao commit ${String(sha).slice(0, 8)} depois de conferir o pai`);
   return parentRed;
 }
 

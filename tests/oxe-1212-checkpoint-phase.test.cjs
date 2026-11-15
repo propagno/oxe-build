@@ -311,6 +311,22 @@ describe('OXB-170: a checkpoint holds only its own task\'s hunks', () => {
     assert.notEqual(git(dir, 'rev-parse', 'HEAD').stdout.trim(), before, 'committed');
     assert.equal(planOf(dir).tasks[0].done, true);
   });
+
+  it('R32: a check script the task itself brings is not "already red on the parent" (MODULE_NOT_FOUND there)', async () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T4', title: 'D', wave: 1, files: ['small.ts', 'scripts/check-file-size.mjs'], verify: { commands: [ok] } }] };
+    const sizeCheck = "import fs from 'fs';\nconst n = fs.readFileSync('legacy.ts', 'utf8').split('\\n').length; if (n > 5) { console.error('arquivo grande: ' + n + ' linhas'); process.exit(1); }\n";
+    const dir = project({ plan, files: { 'small.ts': 'a\n', 'legacy.ts': '1\n2\n3\n4\n5\n6\n7\n' } });
+    const before = git(dir, 'rev-parse', 'HEAD').stdout.trim();
+    const exec = { async execute() {
+      fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'scripts', 'check-file-size.mjs'), sizeCheck);
+      fs.writeFileSync(path.join(dir, 'small.ts'), 'a\nb\n');
+      return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' };
+    } };
+    const res = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, checkpointCommits: true });
+    assert.match((res.result.checkpoint_failed || [])[0] ? res.result.checkpoint_failed[0].reason : '', /check de integração vermelho/);
+    assert.equal(git(dir, 'rev-parse', 'HEAD').stdout.trim(), before, 'commit undone');
+  });
 });
 
 describe('OXB-172: the checkpoint runs the tests related to the task\'s own changed files', () => {
