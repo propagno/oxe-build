@@ -8,6 +8,10 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-build, mais o roteiro de excelência e os backlogs de comparação aprovados pelo TECH LEAD. Cada item tem uma seção em `docs/oxespace-1.5/BACKLOG.md`, com a evidência e o teste que a reproduz (`tests/oxe-1212-*.test.cjs`). Para usar só a trilha recomendada, veja [docs/HAPPY-PATH.md](docs/HAPPY-PATH.md).
 
+### Skeleton (`plan skeleton`) sem erro de sintaxe em TS/JS e checagem `checkStubSyntax`
+
+- `oxe-plan-skeleton.cjs` preserva o corpo já declarado em `interface`/`class`, gera `export const X: T = undefined as unknown as T;` em TS (`export const X = undefined;` em JS), extrai o nome certo em funções genéricas (`parse<T>(`) e constantes sem duplicar símbolos, e expõe `checkStubSyntax(file, text)` (`vm.Script` / `node --check` em CJS/JS/MJS e `ts.transpileModule` só de sintaxe quando o projeto tem `typescript`, caindo para aviso sem `typescript`).
+
 ### Retomada automática do execute (G24, OXE-143)
 
 - **Lease do execute:** todo `runtime execute` grava `EXECUTE-LEASE.json` com o pid, os argumentos sem segredo e o estado. Um fim limpo fecha o lease e Ctrl+C o fecha como `stopped`. Um reinício ou um kill o deixam aberto, e isso passa a ser visível: `runtime autoresume status` mostra o estado, a decisão e a próxima tarefa.
