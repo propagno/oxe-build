@@ -84,7 +84,7 @@ function report(cards) {
       open: by.open,
       noise,
       criteria: c.criteria ? c.criteria.length : null,
-      criteria_with_test: c.criteria ? c.criteria.filter((x) => x.test && !/a confirmar/i.test(x.test)).length : null,
+      criteria_with_test: c.criteria ? c.criteria.filter((x) => x.test && !require('./oxe-alm-refine.cjs').TBC_RE.test(x.test)).length : null,
       lint_ok: c.lint ? c.lint.ok : null,
       lint_errors: c.lint ? c.lint.errors.length : null,
     };

@@ -61,6 +61,10 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Recusa de política:** um "safeguards flagged" / "usage policy" do modelo passa a ser `failure_class: policy`. O scheduler bloqueia a tarefa sem nova tentativa automática, e a saída aponta o `--print-prompt` para achar o trecho que dispara a recusa.
 - **Antes:** era lida como falha de ambiente e retentada com o mesmo prompt, que seria recusado de novo. Na T7 do OxeChat F3, a primeira tentativa custou US$ 5,02 até a recusa.
 
+### "A confirmar" só como marcador (OxeSpace 15/11, OXE-274)
+
+- O lint do refine e do intake, o needs-info, o grooming e o intake da SPEC contam "A confirmar" só como frase inteira, sem letra ou dígito colados. Antes, "…, pa**ra confirmar** com segurança …" virava um item em aberto sem pergunta e reprovava o `alm intake`.
+
 ### Registro de regressão com o hash re-congelado (OxeSpace 15/11, OxeChat F3)
 
 - **No `program close`:** o snapshot de regressão fixa cada teste congelado pelo conteúdo no fechamento, que é o que o gate acabou de aceitar. Antes copiava o hash da suíte compilada antes de um CR re-congelar o teste, e toda verificação posterior lia o teste re-congelado como `acceptance_tampered`. O hash anterior fica em `sha256_compiled`.

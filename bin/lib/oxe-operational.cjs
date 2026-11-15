@@ -2568,7 +2568,7 @@ function runtimeAlmRefineImport(projectRoot, activeSession, options = {}) {
         }
         continue;
       }
-      if (!c.test || /a confirmar/i.test(c.test)) { out.problems.push(`${c.id} sem teste: não vira critério da SPEC (rode o lint do refine)`); continue; }
+      if (!c.test || require('./oxe-alm-refine.cjs').TBC_RE.test(c.test)) { out.problems.push(`${c.id} sem teste: não vira critério da SPEC (rode o lint do refine)`); continue; }
       const max = [...existing, ...added.values()].filter((x) => /^A\d+$/.test(x)).reduce((m, x) => Math.max(m, Number(x.slice(1))), 0);
       const id = `A${max + 1}`;
       try {

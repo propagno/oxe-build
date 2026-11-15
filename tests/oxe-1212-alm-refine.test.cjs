@@ -159,6 +159,15 @@ describe('alm refine: lint', () => {
     assert.ok(r.errors.some((e) => /CA-1 sem o teste/.test(e)));
     assert.ok(r.errors.some((e) => /Fora de escopo sem nenhum item/.test(e)));
     assert.ok(r.errors.some((e) => /"A confirmar" sem pergunta/.test(e)));
+    // OxeSpace 15/11 (OXE-274): "para confirmar" in prose is not the marker; "(A confirmar)" and "- A confirmar" are
+    const prose = GOOD_STORY().replace('- A confirmar', '- Perda aceita.').replace('- Qual o risco aceito para perda da fila offline ao fechar o app?', '- Nenhuma')
+      .replace('## Dependências', 'O operador quer o envio, para confirmar com segurança que chegou; e reconfirmar depois.\n\n## Dependências');
+    assert.match(prose, /para confirmar com segurança/);
+    const pr = refine.lintSpec(prose, 'story');
+    assert.ok(!pr.errors.some((e) => /"A confirmar" sem pergunta/.test(e)), pr.errors.join(' | '));
+    assert.equal(pr.needs_info, false);
+    assert.ok(refine.TBC_RE.test('_(A confirmar)_') && refine.TBC_RE.test('- A confirmar') && refine.TBC_RE.test('Teste: a confirmar'));
+    assert.ok(!refine.TBC_RE.test('para confirmar') && !refine.TBC_RE.test('a confirmarão'));
   });
 
   it('a good story passes, with its criteria and the open question (needs-info)', () => {

@@ -160,6 +160,12 @@ async function collect(ctx, key, options = {}) {
 // ── skeletons per type ───────────────────────────────────────────────────────────────────────────────────────────
 
 const TBC = 'A confirmar';
+/**
+ * The "A confirmar" MARKER, never a substring: OxeSpace 15/11 (OXE-274) "…, para confirmar com segurança …" read as an
+ * open item ("pAra confirmar"). A whole phrase: no letter/digit right before "a" nor right after "confirmar".
+ */
+const TBC_RE = /(?<![\p{L}\p{N}_])a confirmar(?![\p{L}\p{N}_])/iu;
+const TBC_RE_G = new RegExp(TBC_RE.source, 'giu');
 const SECTIONS = {
   story: ['História', 'Contexto', 'Critérios de aceite', 'Regras de negócio', 'Regras técnicas', 'Fora de escopo', 'Dependências', 'Riscos', 'Definição de pronto', 'Referências', 'Perguntas em aberto'],
   bug: ['Resumo', 'Passos para reproduzir', 'Resultado esperado', 'Resultado obtido', 'Ambiente e versão', 'Causa', 'Critérios de correção', 'Teste de regressão', 'Fora de escopo', 'Definição de pronto', 'Referências', 'Perguntas em aberto'],
@@ -312,13 +318,13 @@ function lintSpec(md, kind) {
     while ((vm = vague.exec(c.text))) {
       if (!HAS_NUMBER_RE.test(c.text.slice(vm.index, vm.index + vm[0].length + 30))) { errors.push(`${c.id} é vago ("${vm[0]}" sem número ou limiar): diga o que se mede e quanto`); break; }
     }
-    if (!c.test || /a confirmar/i.test(c.test)) errors.push(`${c.id} sem o teste que o prova (· Teste: <arquivo ou nome do teste>)`);
+    if (!c.test || TBC_RE.test(c.test)) errors.push(`${c.id} sem o teste que o prova (· Teste: <arquivo ou nome do teste>)`);
     if (!/\b(dado|quando|então|entao|given|when|then)\b/i.test(c.text)) warnings.push(`${c.id} fora do formato Dado/Quando/Então`);
   }
   const fora = sec.get('Fora de escopo');
   if (fora != null && /^[-\s]*(a confirmar)?\s*$/i.test(fora)) errors.push('Fora de escopo sem nenhum item: diga o que esta entrega NÃO faz');
   const body = [...sec.entries()].filter(([k]) => k !== 'Perguntas em aberto').map(([, v]) => v).join('\n');
-  const tbc = (body.match(/a confirmar/gi) || []).length;
+  const tbc = (body.match(TBC_RE_G) || []).length;
   const questions = (sec.get('Perguntas em aberto') || '').split('\n').map((l) => l.replace(/^\s*[-*\d.)]+\s*/, '').trim()).filter((l) => l && !/^\(preencha/.test(l) && !/^\(?\s*nenhuma\b/i.test(l));
   if (tbc && !questions.length) errors.push(`${tbc} item(ns) "A confirmar" sem pergunta em "Perguntas em aberto"`);
   if (tbc) warnings.push(`${tbc} item(ns) "A confirmar": o card recebe needs-info, com as perguntas num comentário`);
@@ -377,4 +383,4 @@ async function apply(ctx, collected, md, options = {}) {
   return { key: collected.key, applied: true, confirmed: ok, sha: specHash, version, labels, questions: lint.questions.length, ...(clearNeedsInfo ? { removed: ['needs-info'] } : {}) };
 }
 
-module.exports = { parseCriteria, setSpecIds, collect, skeleton, lintSpec, apply, mdToAdf, adfToText, descriptionBody, kindOf, sectionsOf, dirs, hash, SECTIONS, REQUIRED };
+module.exports = { TBC_RE, parseCriteria, setSpecIds, collect, skeleton, lintSpec, apply, mdToAdf, adfToText, descriptionBody, kindOf, sectionsOf, dirs, hash, SECTIONS, REQUIRED };
