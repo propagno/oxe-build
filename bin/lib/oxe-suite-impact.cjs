@@ -489,4 +489,78 @@ function messages(findings, { mode = 'error' } = {}) {
   return { errors, warnings };
 }
 
-module.exports = { suiteImpact, messages, laterOwnedTests, laterOwnedMessages, pinnedByExisting, pinnedMessages, importIndex, exportedConstants, trackedFiles, dataFilesOf, TEST_RE };
+/**
+ * G43 (OxeSpace 15/11, OxeCode F6 T42, US$ 8 in 3 attempts): T42 added a channel to shared/types/ipc.ts, and
+ * tests/mcp-coverage.test.ts ("gives every IPC channel a capability") checks it against shared/mcp-coverage.ts, which
+ * was not in T42's scope — unpassable at every attempt. Per pending task: a REGISTRY in its scope whose MANIFEST is out
+ * of its scope (and its ancestors'), when a repo suite checks both. The pairs: declared (`lint.registry_pairs`:
+ * [{ registry, manifest }]) or found — a suite imports the registry and a file that itself imports the registry.
+ * @returns {{ task: string, registry: string, manifest: string, suite: string|null, declared: boolean }[]}
+ */
+function registryManifestGaps(root, planDoc, options = {}) {
+  const all = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter(Boolean);
+  const pending = all.filter((t) => !(t.done === true || t.status === 'done') && !t.superseded && !t.merged_into);
+  if (!pending.length) return [];
+  const testScope = require('./oxe-test-scope.cjs');
+  const pb = require('./oxe-plan-build.cjs');
+  const byId = new Map(all.map((t) => [t.id, t]));
+  const scopeOf = (t) => {
+    const out = [];
+    const seen = new Set();
+    const stack = [t.id];
+    while (stack.length) {
+      const id = stack.pop();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const x = byId.get(id);
+      if (!x) continue;
+      for (const f of x.files || []) { const p = norm(typeof f === 'string' ? f : f && f.path); if (p) out.push(p); }
+      for (const d of x.depends_on || x.dependsOn || []) stack.push(d);
+    }
+    return out;
+  };
+  const declared = (Array.isArray(options.pairs) ? options.pairs : []).map((p) => ({ registry: norm(p && p.registry), manifest: norm(p && p.manifest) })).filter((p) => p.registry && p.manifest);
+  // found pairs: a suite that imports the registry and a manifest which imports the registry too
+  let index = null;
+  const lazyIndex = () => { if (!index) index = options.index || importIndex(root, options); return index; };
+  const read = options.readText || ((f) => { try { return fs.readFileSync(path.join(root, f), 'utf8'); } catch { return ''; } });
+  const known = () => new Set(options.files || trackedFiles(root));
+  let knownSet = null;
+  let aliases = null;
+  const importsOf = (file) => {
+    if (!knownSet) knownSet = known();
+    if (!aliases) aliases = pb.loadPathAliases(root);
+    return pb.extractModuleImports(read(file)).map((imp) => pb.resolveModuleSpecifier(file, imp.specifier, knownSet, aliases)).filter(Boolean);
+  };
+  const out = [];
+  const seen = new Set();
+  for (const t of pending) {
+    const own = (t.files || []).map((f) => norm(typeof f === 'string' ? f : f && f.path)).filter(Boolean);
+    const scope = scopeOf(t);
+    const inScope = (f) => scope.some((s) => testScope.covers(s, f));
+    const registries = own.filter((f) => CODE_RE.test(f) && !TEST_RE.test(f));
+    const push = (registry, manifest, suite, isDeclared) => {
+      const k = `${t.id}\u0000${registry}\u0000${manifest}`;
+      if (seen.has(k) || inScope(manifest)) return;
+      seen.add(k);
+      out.push({ task: t.id, registry, manifest, suite, declared: isDeclared });
+    };
+    for (const p of declared) if (own.some((f) => testScope.covers(f, p.registry))) push(p.registry, p.manifest, null, true);
+    if (options.detect === false) continue;
+    const { byTarget } = lazyIndex();
+    for (const registry of registries) {
+      for (const hit of byTarget.get(registry) || []) {
+        const suiteTargets = importsOf(hit.test).filter((m) => m !== registry && !TEST_RE.test(m) && CODE_RE.test(m));
+        for (const m of suiteTargets) if (!inScope(m) && importsOf(m).includes(registry)) push(registry, m, hit.test, false);
+      }
+    }
+  }
+  return out;
+}
+
+function registryManifestMessages(found, { level = 'warn' } = {}) {
+  const lines = found.map((f) => `${f.task} muda ${f.registry}, e ${f.manifest} fica fora do escopo${f.suite ? ` — ${f.suite} confere um contra o outro` : ' (par declarado em lint.registry_pairs)'}: uma chave nova no registro sem o manifesto não passa nessa suíte em nenhuma tentativa (OxeCode F6 T42) — inclua ${f.manifest} nos files de ${f.task} (ou numa tarefa de que ela dependa) [G43]`);
+  return level === 'error' ? { errors: lines, warnings: [] } : { errors: [], warnings: lines };
+}
+
+module.exports = { suiteImpact, messages, laterOwnedTests, laterOwnedMessages, pinnedByExisting, pinnedMessages, registryManifestGaps, registryManifestMessages, importIndex, exportedConstants, trackedFiles, dataFilesOf, TEST_RE };

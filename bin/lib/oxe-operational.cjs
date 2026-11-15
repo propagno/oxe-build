@@ -6182,6 +6182,17 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
         const cg = er.containerGuardHazards(projectRoot, pjs);
         if (cg.length) { result.warnings.push(...er.containerGuardMessages(cg)); result.container_guard_hazards = cg; }
       } catch { /* auxiliar */ }
+      // G43 (OxeSpace 15/11, OxeCode F6 T42): a registry in the task's scope whose checked manifest is not
+      try {
+        const lintCfg43 = ((readProjectConfig(projectRoot) || {}).lint || {});
+        const rg = si.registryManifestGaps(projectRoot, pjs, { pairs: lintCfg43.registry_pairs });
+        if (rg.length) {
+          const rm = si.registryManifestMessages(rg, { level: lintCfg43.registry_pairs_level === 'error' ? 'error' : 'warn' });
+          result.errors.push(...rm.errors);
+          result.warnings.push(...rm.warnings);
+          result.registry_manifest_gaps = rg;
+        }
+      } catch { /* auxiliar */ }
       // G39 (OxeSpace 15/11, OxeQuery polish T1): an existing frozen test pins by exact equality what a task extends
       const pinned = si.pinnedByExisting(projectRoot, pjs);
       if (pinned.length) {
