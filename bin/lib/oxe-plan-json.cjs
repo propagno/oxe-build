@@ -264,6 +264,16 @@ function declaredTestTitles(text, file) {
   return out;
 }
 
+/**
+ * OxeSpace 15/11 (R34): the criteria only `plan task supersede` tasks held (their `superseded.acceptance`), that no other
+ * task of the plan covers — exempt from coverage in plan lint, verify and trace, like a standing criterion.
+ */
+function supersededCriteria(doc) {
+  const tasks = (doc && Array.isArray(doc.tasks) ? doc.tasks : []).filter(Boolean);
+  const held = new Set(tasks.filter((t) => !t.superseded).flatMap((t) => [...(t.acceptance || []), ...(t.aceite || [])]));
+  return [...new Set(tasks.filter((t) => t.superseded).flatMap((t) => (t.superseded.acceptance || [])))].filter((a) => !held.has(a));
+}
+
 /** PLAN.json → mesmo formato de `sdk.parsePlan` (o graph compiler e o verify não mudam). */
 function planJsonToParsedPlan(doc) {
   const spikeLib = require('./oxe-spike.cjs');
@@ -348,7 +358,7 @@ function planJsonToParsedPlan(doc) {
   const phaseGates = Array.isArray(doc.phase_gates) ? doc.phase_gates.map((gate) => ({ ...gate })) : [];
   // Teto da execução (1.21, OXB-023): turnos/US$ por run e tentativas por tarefa.
   const budget = doc.budget && typeof doc.budget === 'object' && !Array.isArray(doc.budget) ? { ...doc.budget } : null;
-  return { tasks, waves, totalTasks: tasks.length, source: 'PLAN.json', phase: doc.phase || null, acceptanceTests, phaseGates, budget };
+  return { tasks, waves, totalTasks: tasks.length, source: 'PLAN.json', phase: doc.phase || null, acceptanceTests, phaseGates, budget, supersededCriteria: supersededCriteria(doc) };
 }
 
 /**
@@ -818,7 +828,7 @@ function lintPlan(input) {
   if (phase && Array.isArray(phase.acceptance) && phase.acceptance.length) {
     const allowed = new Set(phase.acceptance);
     // A subcriterion belongs to its parent's phase; a G* is global.
-    const standing = new Set(input.standing || []);
+    const standing = new Set([...(input.standing || []), ...((input.plan && input.plan.supersededCriteria) || [])]);
     const outside = [...covered].filter((ref) => !critIds.inPhase(ref, allowed) && !standing.has(ref));
     if (outside.length) errors.push(`fase ${phase.id}: o plano usa A* de outras fases: ${outside.join(', ')}`);
     // A parent with subcriteria declared in the SPEC is covered when each subcriterion is (OXB-037).
@@ -828,7 +838,8 @@ function lintPlan(input) {
       errors.push(`PLAN.json declara fase ${input.plan.phase}, mas a fase ativa é ${phase.id}`);
     }
   } else if (criteria.length) {
-    const missing = critIds.uncovered(criteria.filter((ref) => !critIds.isGlobal(ref) && !critIds.isSub(ref)), covered, criteria);
+    const superseded = new Set((input.plan && input.plan.supersededCriteria) || []);
+    const missing = critIds.uncovered(criteria.filter((ref) => !critIds.isGlobal(ref) && !critIds.isSub(ref) && !superseded.has(ref)), covered, criteria);
     if (missing.length) warnings.push(`A* da SPEC sem tarefa: ${missing.join(', ')}`);
   }
 
@@ -882,7 +893,9 @@ function lintPlan(input) {
   const amendments = input.amendments instanceof Map
     ? input.amendments
     : new Map([...(input.requiredVersions instanceof Map ? input.requiredVersions : new Map())].map(([c, v]) => [c, { required: v, staleBelow: v }]));
+  const supersededForAmend = new Set((input.plan && input.plan.supersededCriteria) || []);
   for (const [criterion, req] of amendments) {
+    if (supersededForAmend.has(criterion)) continue; // superseded (plan task supersede): proven by the phase that replaces it
     const entries = acceptanceTests.filter((a) => a.criterion === criterion);
     if (!entries.some((e) => (e.version || 1) >= req.required)) {
       errors.push(entries.length && req.staleBelow < req.required
@@ -900,7 +913,7 @@ function lintPlan(input) {
   }
   const scopeAcceptance = phase && Array.isArray(phase.acceptance) && phase.acceptance.length ? phase.acceptance : [...covered];
   // OXB-091: a standing criterion is proven by the phase sign-off + evidence, not by a frozen test.
-  const standingSet = new Set(input.standing || []);
+  const standingSet = new Set([...(input.standing || []), ...((input.plan && input.plan.supersededCriteria) || [])]);
   const untested = scopeAcceptance.filter((ref) => !testedCriteria.has(ref) && !standingSet.has(ref));
   if (untested.length) {
     (input.requireAcceptanceTests ? errors : warnings).push(`A* sem teste de aceite congelado: ${untested.join(', ')}`);
@@ -1003,6 +1016,7 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
 }
 
 module.exports = {
+  supersededCriteria,
   eachTestTitles,
   markPlanTaskCheckpointFailed,
   markPlanTaskStarted,

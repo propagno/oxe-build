@@ -339,6 +339,19 @@ describe('plan verify prune --later-owned (OxeSpace 15/11, OxeChat F4 install)',
     assert.throws(() => require('../bin/lib/oxe-plan-json.cjs').markPlanTaskOpen(path.join(dir, '.oxe', 'PLAN.md'), 'T10'), /substituída por AG-10/);
     const ch = fs.readFileSync(path.join(dir, '.oxe', 'program', 'changes.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     assert.equal(ch.filter((c) => c.kind === 'task_supersede').length, 1);
+    // R34: plan lint, verify scope and trace no longer ask A11/A12 of this plan (no program here)
+    const pj = require('../bin/lib/oxe-plan-json.cjs');
+    const parsed = pj.planJsonToParsedPlan(saved);
+    assert.deepEqual(parsed.supersededCriteria.sort(), ['A11', 'A12']);
+    const spec = { criteria: ['A11', 'A12', 'A13', 'A14'].map((id) => ({ id })) };
+    const lint = pj.lintPlan({ plan: parsed, spec });
+    assert.ok(![...lint.errors, ...lint.warnings].some((m) => /A11|A12/.test(m)), JSON.stringify([...lint.errors, ...lint.warnings]));
+    const trace = require('../bin/lib/oxe-trace.cjs').build({
+      stories: [], criteria: spec.criteria, requirements: [{ id: 'R1', version: 'v1', criteria: ['A11', 'A12', 'A13', 'A14'] }],
+      decisions: [], rfcs: [], tasks: saved.tasks, tests: saved.acceptance_tests, changes: [], links: new Map(), cardSpecs: new Map(), checks: [],
+      phase: null, almConfigured: false, storiesSource: 'prd', cardKeysOf: () => [],
+    });
+    assert.ok(!trace.orphans.some((o) => /A11|A12/.test(o.id)), JSON.stringify(trace.orphans));
   });
 
   it('R32: a $ in a path is no replacement pattern; the rest of the command (a -t with a backslash) is kept as written', () => {

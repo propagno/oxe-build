@@ -69,8 +69,11 @@ function build(s) {
     if (s.almConfigured && !cardOf(u.id) && !(u.cards || []).length) push('warning', 'story', u.id, 'história sem card no ALM', s.storiesSource === 'alm' ? `ponha a chave do card na linha da US no PRD, ou oxe-cc alm link ${u.id} <chave>` : 'oxe-cc alm push --stories-only');
   }
   const v1 = new Set(s.requirements.filter((r) => !r.version || /^v1/.test(r.version)).flatMap((r) => r.criteria || []));
+  // R34: a criterion superseded by another phase (plan task supersede) is that phase's to test
+  const superseded = new Set(require('./oxe-plan-json.cjs').supersededCriteria({ tasks: s.tasks || [] }));
   for (const a of s.criteria) {
     if (!/^A\d/.test(a.id)) continue;
+    if (superseded.has(a.id) || superseded.has(require('./oxe-criteria-ids.cjs').parentOf(a.id))) continue;
     if (s.stories.length && !storiesOfA.has(a.id)) push('warning', 'criterion', a.id, 'critério sem história no PRD', 'ligue-o a uma US (coluna Critérios do PRD)');
     // a subcriterion (A19.1) of a phase criterion and the global G* are the phase's too (OXB-037)
     const inThisPhase = !(Array.isArray(s.phaseCriteria) && s.phaseCriteria.length) || require('./oxe-criteria-ids.cjs').inPhase(a.id, s.phaseCriteria);

@@ -81,6 +81,8 @@ function graph() {
             strict_1.default.equal(result.status, 'paused');
             strict_1.default.ok(!result.failed.includes('T1') && !result.blocked.includes('T1'), JSON.stringify(result));
             strict_1.default.ok(events.some((e) => e.type === 'PolicyWarning' && e.payload.reason === 'paused_before_attempt'));
+            // R34: no retry quota spent and no "retry 2" banner under the pause
+            strict_1.default.equal(events.filter((e) => e.type === 'RetryScheduled').length, 0);
         }
         finally {
             fs_1.default.rmSync(tmp, { recursive: true, force: true });

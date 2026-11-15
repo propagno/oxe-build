@@ -824,18 +824,22 @@ export class Scheduler {
     const maxQuotaWaits = (ctx.options as SchedulerOptions | undefined)?.maxQuotaWaits ?? 3;
     const sleepFn = (ctx.options as SchedulerOptions | undefined)?.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     let quotaWaits = 0;
+    // OxeSpace 15/11 (OxeChat F4 T9): a pause requested during an attempt holds the next one — the attempt boundary is a
+    // boundary too, not only the next node. The task stays PENDING (never blocked) for the execute after resume. Checked
+    // before the retry quota / RetryScheduled and after a rate-limit wait (cross-review R34).
+    const holdForPause = (next: number): boolean => {
+      this.checkRequestedPause(ctx);
+      if (!this.paused) return false;
+      this.emit(ctx, { type: 'PolicyWarning', work_item_id: nodeId, payload: { reason: 'paused_before_attempt', attempt: next, detail: `runtime pause: a tentativa ${next} não começa` } });
+      status.set(nodeId, 'pending');
+      return true;
+    };
+    let iteration = 0;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      // OxeSpace 15/11 (OxeChat F4 T9): a pause requested during attempt 1 holds attempt 2 — the attempt boundary is a
-      // boundary too, not only the next node. The task stays PENDING (never blocked) for the execute after resume.
-      if (attempt > 1) {
-        this.checkRequestedPause(ctx);
-        if (this.paused) {
-          this.emit(ctx, { type: 'PolicyWarning', work_item_id: nodeId, payload: { reason: 'paused_before_attempt', attempt, detail: `runtime pause: a tentativa ${attempt} não começa` } });
-          status.set(nodeId, 'pending');
-          return;
-        }
-      }
+      iteration += 1;
+      // a real iteration count: a rate-limit wait re-enters with the same attempt number (R34)
+      if (iteration > 1 && holdForPause(attempt)) return;
       const attemptId = `${nodeId}-a${attempt}`;
       const attemptModel = ctx.modelFor ? ctx.modelFor(nodeId, attempt, attempt > 1 ? (lastResult?.failure_class ?? null) : null) : null;
 
@@ -1088,6 +1092,7 @@ export class Scheduler {
         if (lastResult.failure_class === 'policy') {
           if (!(ctx.options as SchedulerOptions | undefined)?.retryPolicyOnce || policyRetried) break;
           policyRetried = true;
+          if (holdForPause(attempt + 1)) return;
           // the run's retry quota counts this attempt too (cross-review 15/11)
           const policyRetryBlocked = this.consumeRetryQuota(ctx);
           if (policyRetryBlocked) {
@@ -1128,6 +1133,7 @@ export class Scheduler {
             });
             await sleepFn(waitMs);
             this.recordProgress();
+            if (holdForPause(attempt)) return; // a pause during the wait: no paid call after it (R34)
             attempt -= 1;
             continue;
           }
@@ -1161,6 +1167,8 @@ export class Scheduler {
           }
         }
         if (attempt < maxAttempts) {
+          // a pause: no retry quota spent, no RetryScheduled banner (R34)
+          if (holdForPause(attempt + 1)) return;
           const retryBlocked = this.consumeRetryQuota(ctx);
           if (retryBlocked) {
             this.blockNode(nodeId, ctx, status, blocked, 'quota_exceeded', retryBlocked);

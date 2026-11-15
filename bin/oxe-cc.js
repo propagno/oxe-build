@@ -5793,6 +5793,18 @@ async function runRuntime(opts) {
         process.exit(1);
       }
     } catch { /* auxiliar */ }
+    // OxeSpace 15/11 (R34): under `runtime pause` nothing starts — refused before the lease (it would overwrite the
+    // lease of an execute still finishing its task) and with a non-zero exit, so a wave loop stops
+    {
+      let held = null;
+      try { held = oxeOperational.runtimePauseHold(opts.dir, activeSession); } catch { held = null; }
+      if (held) {
+        if (opts.jsonOutput) process.stdout.write(`${JSON.stringify({ type: 'result', mode: opts.wave != null ? 'wave' : 'single', paused: true, result: { run_id: held.run.run_id || null, status: 'paused', completed: [], failed: [], blocked: ['runtime_paused'], reason: held.reason } })}\n`);
+        else console.error(`  ${yellow}PAUSADA:${reset} ${held.reason}`);
+        process.exitCode = 1;
+        return;
+      }
+    }
     // G24: the lease says this execute is running; a clean end closes it, a restart or a kill leaves it open
     const arLease = (() => {
       try {
@@ -5958,8 +5970,13 @@ async function runRuntime(opts) {
       // OXB-120: paused for the environment or a quota — not the code; no attempt was spent.
       if (r.status === 'paused') {
         try {
-          const ev = oxeOperational.readEvents(opts.dir, activeSession).filter((e) => e.type === 'RunPaused').pop();
-          if (ev) console.log(`  ${c ? yellow : ''}PAUSADA: ${ev.payload.reason === 'quota' ? 'cota do provedor' : ev.payload.reason === 'requested' ? 'pedida (runtime pause): a tarefa em curso terminou, a próxima não começou' : 'ambiente'}${c ? reset : ''} — ${ev.payload.diagnosis || ''}${ev.payload.resume_at ? ` (retoma: ${ev.payload.resume_at})` : ''}. Corrija e rode oxe-cc runtime execute de novo (pula o que está done; nenhuma tentativa foi cobrada).`);
+          const ev = result.paused ? null : oxeOperational.readEvents(opts.dir, activeSession).filter((e) => e.type === 'RunPaused').pop();
+          if (result.paused || (ev && ev.payload.reason === 'requested')) {
+            process.exitCode = process.exitCode || 1; // a requested pause is not "concluded": a wave loop stops (R34)
+            console.log(`  ${c ? yellow : ''}PAUSADA: pedida (runtime pause)${c ? reset : ''} — ${r.reason || (ev && ev.payload.diagnosis) || ''}. Para seguir: oxe-cc runtime resume, depois oxe-cc runtime execute.`);
+          } else if (ev) {
+            console.log(`  ${c ? yellow : ''}PAUSADA: ${ev.payload.reason === 'quota' ? 'cota do provedor' : 'ambiente'}${c ? reset : ''} — ${ev.payload.diagnosis || ''}${ev.payload.resume_at ? ` (retoma: ${ev.payload.resume_at})` : ''}. Corrija e rode oxe-cc runtime execute de novo (pula o que está done; nenhuma tentativa foi cobrada).`);
+          } else if (r.reason) console.log(`  ${c ? yellow : ''}PAUSADA${c ? reset : ''} — ${r.reason}`);
         } catch { /* auxiliar */ }
       }
       if (result.preflight) {

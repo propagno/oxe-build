@@ -324,6 +324,10 @@ describe('OXB-170: a checkpoint holds only its own task\'s hunks', () => {
     assert.equal(res.result.status, 'paused');
     assert.match(res.result.reason, /runtime pause .*janela de promoção.*runtime resume/);
     assert.equal(calls, 0, 'no attempt under the pause');
+    // R34: the CLI refuses before the lease, says why, exits non-zero (a wave loop stops)
+    const cliRes = require('child_process').spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'oxe-cc.js'), 'runtime', 'execute', '--dir', dir], { cwd: dir, encoding: 'utf8', windowsHide: true, env: { ...process.env, NO_COLOR: '1' } });
+    assert.equal(cliRes.status, 1, cliRes.stdout + cliRes.stderr);
+    assert.match(cliRes.stderr, /PAUSADA: run pausado por runtime pause .*runtime resume/);
     op.applyRuntimeAction(dir, null, { action: 'resume' });
     const after = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true });
     assert.notEqual(after.paused, true);

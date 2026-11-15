@@ -83,6 +83,8 @@ describe('pausa pedida de fora (runtime pause)', () => {
       assert.equal(result.status, 'paused');
       assert.ok(!result.failed.includes('T1') && !result.blocked.includes('T1'), JSON.stringify(result));
       assert.ok(events.some((e) => e.type === 'PolicyWarning' && (e.payload as Record<string, unknown>).reason === 'paused_before_attempt'));
+      // R34: no retry quota spent and no "retry 2" banner under the pause
+      assert.equal(events.filter((e) => e.type === 'RetryScheduled').length, 0);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

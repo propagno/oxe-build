@@ -3594,6 +3594,13 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
  * @returns {{ spec: object, outOfPhase: { count: number, phases: string[] } | null }}
  */
 function scopeSpecToActivePhase(artifactPaths, parsedSpec, parsedPlan) {
+  // R34: a criterion only superseded tasks held (plan task supersede) is the replacing phase's to prove — with or
+  // without a program, it leaves the verify's criteria (its subcriteria too)
+  const sup = new Set((parsedPlan && parsedPlan.supersededCriteria) || []);
+  if (sup.size && parsedSpec && Array.isArray(parsedSpec.criteria)) {
+    const ids = require('./oxe-criteria-ids.cjs');
+    parsedSpec = { ...parsedSpec, criteria: parsedSpec.criteria.filter((c) => !sup.has(c.id) && !sup.has(ids.parentOf(c.id))) };
+  }
   if (!parsedSpec || !Array.isArray(parsedSpec.criteria) || !artifactPaths.programDir) return { spec: parsedSpec, outOfPhase: null };
   let state = null;
   try { state = require('./oxe-program.cjs').readProgram(artifactPaths.programDir); } catch { state = null; }
@@ -3913,12 +3920,10 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
   // OxeSpace 15/11 (OQ polish wave 8): a new execute after `runtime pause` refuses — nothing runs, no model call —
   // until `runtime resume` (a wave loop's next `execute --wave N` started a paid attempt under the pause)
   {
-    let held = null;
-    try { const rs = readRunState(projectRoot, activeSession); held = rs && rs.pause_requested ? { rs, p: rs.pause_requested } : null; } catch { held = null; }
+    const held = runtimePauseHold(projectRoot, activeSession);
     if (held) {
-      const reason = `run pausado por runtime pause em ${held.p.at || '?'}${held.p.reason ? ` (${held.p.reason})` : ''} — nada roda até oxe-cc runtime resume`;
-      appendEvent(projectRoot, activeSession, { type: 'ExecuteRefusedPaused', run_id: held.rs.run_id || null, payload: { pause: held.p } });
-      return { mode: options.wave != null ? 'wave' : 'single', agentPlan: null, paused: true, result: { run_id: held.rs.run_id || null, status: 'paused', completed: [], failed: [], blocked: ['runtime_paused'], reason }, run: held.rs };
+      appendEvent(projectRoot, activeSession, { type: 'ExecuteRefusedPaused', run_id: held.run.run_id || null, payload: { pause: held.pause } });
+      return { mode: options.wave != null ? 'wave' : 'single', agentPlan: null, paused: true, result: { run_id: held.run.run_id || null, status: 'paused', completed: [], failed: [], blocked: ['runtime_paused'], reason: held.reason }, run: held.run };
     }
   }
 
@@ -9430,9 +9435,9 @@ function runtimePlanTaskSupersede(projectRoot, activeSession, options = {}) {
     }
     if (problems.length) throw new Error(`plan task supersede recusado: ${problems.join('; ')}`);
     const sup = tasks.filter((t) => set.has(String(t.id).toUpperCase()));
-    const criteria = [...new Set(sup.flatMap((t) => t.acceptance || []))];
+    const criteria = [...new Set(sup.flatMap((t) => [...(t.acceptance || []), ...(t.aceite || [])]))];
     // a criterion another pending task still holds stays (only its entries owned by a superseded task go)
-    const heldElsewhere = new Set(tasks.filter((t) => !set.has(String(t.id).toUpperCase()) && t.done !== true).flatMap((t) => t.acceptance || []));
+    const heldElsewhere = new Set(tasks.filter((t) => !set.has(String(t.id).toUpperCase()) && t.done !== true).flatMap((t) => [...(t.acceptance || []), ...(t.aceite || [])]));
     const goes = (a) => a && ((a.task && set.has(String(a.task).toUpperCase())) || (!a.task && criteria.includes(a.criterion) && !heldElsewhere.has(a.criterion)));
     const moved = (doc.acceptance_tests || []).filter(goes);
     const files = [...new Set(moved.flatMap((a) => (a.files || []).map(norm)).filter(Boolean))];
@@ -9445,7 +9450,7 @@ function runtimePlanTaskSupersede(projectRoot, activeSession, options = {}) {
       if (!options.dryRun) t.edits = [...(Array.isArray(t.edits) ? t.edits : []), { by, reason, at, verify_pruned: files, superseded: ids }];
     }
     if (!options.dryRun) {
-      for (const t of sup) Object.assign(t, { done: true, status: 'done', superseded: { by_phase: byPhase, cr, by, reason, at, acceptance: [...(t.acceptance || [])] }, acceptance: [] });
+      for (const t of sup) Object.assign(t, { done: true, status: 'done', superseded: { by_phase: byPhase, cr, by, reason, at, acceptance: [...new Set([...(t.acceptance || []), ...(t.aceite || [])])] }, acceptance: [], ...(t.aceite ? { aceite: [] } : {}) });
       doc.acceptance_tests = (doc.acceptance_tests || []).filter((a) => !goes(a));
       doc.superseded_tests = [...(Array.isArray(doc.superseded_tests) ? doc.superseded_tests : []), ...moved.map((a) => ({ ...a, superseded: { by_phase: byPhase, tasks: ids, at } }))];
       const tmp = `${jsonPath}.${process.pid}.tmp`;
@@ -9454,11 +9459,21 @@ function runtimePlanTaskSupersede(projectRoot, activeSession, options = {}) {
     }
     return { tasks: ids, criteria, tests_kept: moved.map((a) => a.criterion), files, verify_changes: verifyChanges };
   });
+  // their open deferred entries close as superseded — never an open deferral at the close (R34, like the fold)
+  const closedDeferred = [];
+  try {
+    const dlib = require('./oxe-deferred.cjs');
+    for (const e of dlib.open(programDir)) {
+      if (!ids.includes(String(e.task).toUpperCase())) continue;
+      if (!options.dryRun) dlib.close(programDir, e.id, `superseded_by:${byPhase}`);
+      closedDeferred.push(e.id);
+    }
+  } catch { /* no ledger */ }
   if (!options.dryRun) {
-    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'task_supersede', tasks: ids, by_phase: byPhase, cr, criteria: out.criteria, tests_kept: out.tests_kept, verify_pruned: out.verify_changes.map((c) => c.task), by, reason, at });
-    appendEvent(projectRoot, activeSession, { type: 'PlanTasksSuperseded', payload: { tasks: ids, by_phase: byPhase, cr, by, reason } });
+    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'task_supersede', tasks: ids, by_phase: byPhase, cr, criteria: out.criteria, tests_kept: out.tests_kept, verify_pruned: out.verify_changes.map((c) => c.task), closed_deferred: closedDeferred, by, reason, at });
+    appendEvent(projectRoot, activeSession, { type: 'PlanTasksSuperseded', payload: { tasks: ids, by_phase: byPhase, cr, by, reason, closed_deferred: closedDeferred } });
   }
-  return { dry_run: Boolean(options.dryRun), by_phase: byPhase, ...out };
+  return { dry_run: Boolean(options.dryRun), by_phase: byPhase, ...out, closed_deferred: closedDeferred };
 }
 
 /**
@@ -11930,6 +11945,20 @@ function writeRunState(projectRoot, activeSession, runState = {}) {
 }
 
 /**
+ * The explicit `runtime pause` that holds a new execute, or null. A pause left on the run of a phase already closed
+ * never holds the next phase (R34).
+ * @returns {{ run: object, pause: { reason: string, at: string|null }, reason: string }|null}
+ */
+function runtimePauseHold(projectRoot, activeSession) {
+  let rs = null;
+  try { rs = readRunState(projectRoot, activeSession); } catch { rs = null; }
+  if (!rs || !rs.pause_requested) return null;
+  try { if (rs.run_id && isClosedPhaseRun(projectRoot, activeSession, rs.run_id)) return null; } catch { /* */ }
+  const p = rs.pause_requested;
+  return { run: rs, pause: p, reason: `run pausado por runtime pause em ${p.at || '?'}${p.reason ? ` (${p.reason})` : ''} — nada roda até oxe-cc runtime resume` };
+}
+
+/**
  * OxeSpace 15/11: during an execute, neither run file said "running" — `runtime status` showed the old "paused" while
  * T8 ran. At each task start the run is marked running, with the task as cursor. A pause requested after `sinceMs`
  * (the execute's start) is never overwritten: the scheduler reads it before the next task.
@@ -12476,6 +12505,7 @@ module.exports = {
   runtimePlanTaskFold,
   runtimePlanVerifyPrune,
   runtimePlanTaskSupersede,
+  runtimePauseHold,
   pruneVerifyCommand,
   isExternallyDelivered,
   runtimeReuseAttempt,
