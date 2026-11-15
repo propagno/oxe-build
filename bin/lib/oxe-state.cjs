@@ -31,7 +31,10 @@ function buildStateJson(src) {
       external: w.external_pending || [],
       checkpoint_failed: src.checkpointFailed || [],
     },
-    open_crs: (src.changes || []).filter((c) => c.status === 'open').map((c) => c.id),
+    // the active phase's open CRs (and the phase-less ones); a CR of another phase — an amendment of a pending phase's
+    // criterion — is listed apart, never as the active run's (OxeSpace 15/11, OxeChat F3 with CR-F4-1/2)
+    open_crs: (src.changes || []).filter((c) => c.status === 'open' && (!src.program || !src.program.active_phase || !c.phase || c.phase === src.program.active_phase)).map((c) => c.id),
+    open_crs_other_phases: (src.changes || []).filter((c) => c.status === 'open' && src.program && src.program.active_phase && c.phase && c.phase !== src.program.active_phase).map((c) => ({ id: c.id, phase: c.phase })),
     next: (w.next_steps && w.next_steps[0]) || null,
     updated_at: src.at || new Date().toISOString(),
   };

@@ -11087,26 +11087,36 @@ function readRunState(projectRoot, activeSession) {
   const p = operationalPaths(projectRoot, activeSession);
   const activeRaw = readTextIfExists(p.activeRun);
   let runId = null;
+  let active = null;
   if (activeRaw) {
     try {
-      runId = JSON.parse(activeRaw).run_id || null;
+      active = JSON.parse(activeRaw);
+      runId = active.run_id || null;
     } catch {
       runId = null;
     }
   }
   if (!runId && fs.existsSync(p.runsDir)) {
-    const files = fs.readdirSync(p.runsDir).filter((name) => name.endsWith('.json')).sort();
+    // the run files only — never the budget ledger next to them (oxe-run-x.budget.json)
+    const files = fs.readdirSync(p.runsDir).filter((name) => name.endsWith('.json') && !/\.budget\.json$/i.test(name)).sort();
     if (files.length) runId = files[files.length - 1].replace(/\.json$/i, '');
   }
   if (!runId) return null;
   const filePath = path.join(p.runsDir, `${runId}.json`);
   const raw = readTextIfExists(filePath);
   if (!raw) return null;
+  let run;
   try {
-    return JSON.parse(raw);
+    run = JSON.parse(raw);
   } catch {
     return null;
   }
+  // OxeSpace 15/11 (OxeChat F3): state.json showed "planned" for the run whose ACTIVE-RUN said paused/running — the two
+  // files had drifted. The newer of the two (updated_at) wins for the live fields.
+  if (active && active.run_id === run.run_id && active.status && Date.parse(active.updated_at || '') > Date.parse(run.updated_at || '')) {
+    run = { ...run, status: active.status, updated_at: active.updated_at, ...(active.cursor ? { cursor: active.cursor } : {}), ...(active.current_wave != null ? { current_wave: active.current_wave } : {}) };
+  }
+  return run;
 }
 
 function readGitActivity(projectRoot, since) {

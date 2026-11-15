@@ -24,6 +24,12 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Eventos:** `AutoResumed` e `AutoResumeSkipped`.
 - **Teste:** `tests/oxe-1212-autoresume.test.cjs`. O CA-1 é um reinício simulado num programa de teste: o execute é morto em T2 com SIGKILL e o `autoresume run` o retoma em T2 sem chamar o executor para T1.
 
+### `state.json` separa os CRs de outras fases (OxeChat F3, 15/11)
+
+- O status do run vem do mais recente entre o `ACTIVE-RUN.json` e o `runs/<id>.json`, pelo `updated_at`: status, cursor e onda. Antes, o `state.json` mostrava "planned" para o mesmo run que o `ACTIVE-RUN` dava como pausado.
+- Sem `ACTIVE-RUN`, o ledger de orçamento (`oxe-run-x.budget.json`) nunca é lido como o run.
+- `open_crs` lista os CRs abertos da fase ativa e os sem fase. Os de outra fase, como uma emenda de critério de uma fase pendente, vão para `open_crs_other_phases` ({ id, phase }) e nunca aparecem como do run ativo. Antes, os CR-F4-1 e CR-F4-2 apareceram no estado da F3.
+
 ### Recusa da política de uso não vira retry (OxeChat F3 T7, 15/11)
 
 - **Recusa de política:** um "safeguards flagged" / "usage policy" do modelo passa a ser `failure_class: policy`. O scheduler bloqueia a tarefa sem nova tentativa automática, e a saída aponta o `--print-prompt` para achar o trecho que dispara a recusa.
