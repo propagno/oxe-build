@@ -46,8 +46,11 @@ function verifyRunsFile(verifyCmds, rawFile) {
     const cmd = norm(rawCmd);
     const tokens = cmd.split(/[\s'"`;|&()=]+/).map(norm).filter((tok) => tok && !tok.startsWith('-'));
     for (const tok of tokens) {
-      if (tok === tf || tf.endsWith(`/${tok}`)) return true;
-      if (tok !== '.' && (tok.includes('/') || tok.includes('*') || /^(tests?|__tests__|specs?|e2e)$/i.test(tok)) && testScope.covers(tok, tf)) return true;
+      const anchored = tok.endsWith('$');
+      const cleanTok = anchored ? tok.slice(0, -1) : tok;
+      if (!cleanTok) continue;
+      if (cleanTok === tf || tf.endsWith(`/${cleanTok}`)) return true;
+      if (!anchored && cleanTok !== '.' && (cleanTok.includes('/') || cleanTok.includes('*') || /^(tests?|__tests__|specs?|e2e)$/i.test(cleanTok)) && testScope.covers(cleanTok, tf)) return true;
     }
   }
   return false;

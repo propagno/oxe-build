@@ -88,10 +88,12 @@ function dataFilesOf(root, test, text, known) {
   };
   const src = String(text || '');
   for (const m of src.matchAll(/\b(?:import|export)\s+[\s\S]*?\s+from\s*['"]([^'"]+)['"]|\brequire\(\s*['"]([^'"]+)['"]\s*\)|\bimport\(\s*['"]([^'"]+)['"]\s*\)/g)) consider(m[1] || m[2] || m[3]);
-  // readFileSync('a/b.json') / path.join(__dirname, 'fixtures', 'x.json') / path.resolve('tests/fixtures/x.json')
-  for (const m of src.matchAll(/\b(?:readFileSync|readFile|path\.(?:join|resolve))\(([^)]*)\)/g)) {
-    const parts = [...m[1].matchAll(/['"`]([^'"`$]+)['"`]/g)].map((p) => p[1]);
-    if (parts.length) consider(parts.join('/'));
+  // readFileSync('a/b.json', 'utf8') / path.join(__dirname, 'fixtures', 'x.json') / path.resolve('tests/fixtures/x.json')
+  for (const m of src.matchAll(/\b(readFileSync|readFile|path\.(?:join|resolve))\(([^)]*)\)/g)) {
+    const parts = [...m[2].matchAll(/['"`]([^'"`$]+)['"`]/g)].map((p) => p[1]);
+    if (!parts.length) continue;
+    const isJoined = /^path\./.test(m[1]) || /\bpath\.(?:join|resolve)\s*\(/.test(m[2]);
+    consider(isJoined ? parts.join('/') : parts[0]);
   }
   return [...out];
 }
@@ -196,7 +198,8 @@ function laterOwnedTests(planDoc) {
     // narrowed by -t / --testNamePattern is taken as running its own cases only.
     const commands = [...((t.verify && t.verify.commands) || []), t.verify && t.verify.command, t.verifyCommand].filter(Boolean).map((c) => String(c).replace(/\\/g, '/'));
     const tests = [];
-    const via = new Map(); // matched file → the verify argument that selects it (when not the same path)
+    const directHits = new Set(); // matched file named directly as a verify argument
+    const viaMap = new Map(); // matched file → Set of verify arguments that substring-select it (when not the same path)
     // cross-review 15/11: each SUBCOMMAND on its own (`a -t x && b`): a -t narrows only its subcommand, and only the
     // substring expansion — a path named exactly is always run; a trailing `$` anchors the argument; `node --test`
     // takes exact paths (never a substring filter)
@@ -209,7 +212,14 @@ function laterOwnedTests(planDoc) {
         if (!(a.includes('/') && TEST_RE.test(a) && /\.[cm]?[jt]sx?$/i.test(a))) continue;
         const substring = !narrowed && !anchored && !exactRunner;
         for (const known of owners.keys()) {
-          if (known === a || (substring && known.includes(a))) { tests.push(known); if (known !== a && !via.has(known)) via.set(known, a); }
+          if (known === a) {
+            tests.push(known);
+            directHits.add(known);
+          } else if (substring && known.includes(a)) {
+            tests.push(known);
+            if (!viaMap.has(known)) viaMap.set(known, new Set());
+            viaMap.get(known).add(a);
+          }
         }
       }
     }
@@ -225,7 +235,10 @@ function laterOwnedTests(planDoc) {
         const w = waveOf(t);
         const ow = waveOf(owner);
         if (w != null && ow != null && ow < w) continue; // the owner's wave runs first
-        out.push({ task: t.id, wave: w, test, owner: ownerId, owner_wave: ow, ...(via.has(test) ? { via: via.get(test) } : {}) });
+        if (directHits.has(test)) out.push({ task: t.id, wave: w, test, owner: ownerId, owner_wave: ow });
+        for (const viaArg of viaMap.get(test) || []) {
+          out.push({ task: t.id, wave: w, test, owner: ownerId, owner_wave: ow, via: viaArg });
+        }
       }
     }
   }
