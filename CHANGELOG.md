@@ -72,6 +72,14 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
   - O cache das entradas já aprovadas é gravado mesmo quando o processo morre no meio.
   - Cada suíte também ganha uma linha de progresso.
 
+### Verify da fase roda as suítes do repo que leem os arquivos dela (OxeSpace 15/11, OxeCode F5 → #854)
+
+- **`verify.phase_suites`:** opcional. Liga um gate implícito `phase-suites`, que roda:
+  - as suítes de aceite do repo (`include`, padrão `tests/acceptance/`) que importam um arquivo mudado pela fase ou o citam (um caminho de `readFileSync`, como o CSS do cr15);
+  - os `guards` do repo, sempre (a guarda estática de classes CSS).
+- **O caso real:** o verify da F5 passou 40/40, e o CI do PR reprovou três guardas que o verify nunca rodou.
+- **e2e/axe:** um `phase_gate` com `remote-verify`.
+
 ### Marcação que os testes ainda leem (OxeSpace 15/11, OxeCode F6 T30 → #852)
 
 - **O check:** no checkpoint, sem rodar e2e. Um atributo `data-*` ou `cmdk-*` que o commit **remove** da marcação, que some do produto inteiro e que ainda é lido por um arquivo de e2e ou de teste, desfaz o checkpoint (`dom_hooks`). Os atributos e os leitores são nomeados.

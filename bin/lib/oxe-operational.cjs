@@ -725,9 +725,9 @@ function implicitPhaseGates(projectRoot, programState, phaseId, projectConfig) {
   if (!programState || !phaseId) return [];
   const phase = (programState.phases || []).find((p) => p.id === phaseId);
   const base = phase && phase.base_commit;
-  if (!projectConfig || projectConfig.stub_check === false || !base) return [...decisionPhaseGates(projectRoot, phaseId), ...nfrPhaseGates(projectRoot, phase, phaseId)];
+  if (!projectConfig || projectConfig.stub_check === false || !base) return [...decisionPhaseGates(projectRoot, phaseId), ...nfrPhaseGates(projectRoot, phase, phaseId), ...(base ? phaseSuitesGates(projectRoot, base, projectConfig) : [])];
   const script = path.join(__dirname, 'oxe-stub-check.cjs').replace(/\\/g, '/');
-  return [{ id: 'stub-check', when: 'phase_verify', command: `node "${script}" --phase --since ${base}`, description: 'anti-stub da fase: stubs e arquivos novos sem ligação (OXB-108)', on_fail: 'cr_defect' }, ...decisionPhaseGates(projectRoot, phaseId), ...depsPhaseGates(projectRoot, base), ...nfrPhaseGates(projectRoot, phase, phaseId)];
+  return [{ id: 'stub-check', when: 'phase_verify', command: `node "${script}" --phase --since ${base}`, description: 'anti-stub da fase: stubs e arquivos novos sem ligação (OXB-108)', on_fail: 'cr_defect' }, ...decisionPhaseGates(projectRoot, phaseId), ...depsPhaseGates(projectRoot, base), ...nfrPhaseGates(projectRoot, phase, phaseId), ...phaseSuitesGates(projectRoot, base, projectConfig)];
 }
 
 /** OXB-144: each non-functional criterion of the phase is measured at the phase verify (gate nfr-A<n>). */
@@ -748,6 +748,43 @@ function depsPhaseGates(projectRoot, base) {
     if (!changed.length) return [];
     const cli = path.join(__dirname, '..', 'oxe-cc.js').replace(/\\/g, '/');
     return [{ id: 'deps', when: 'phase_verify', command: `node "${cli}" runtime deps --base ${base}`, description: 'auditoria de dependências da fase (OXB-127)', on_fail: 'cr_defect' }];
+  } catch { return []; }
+}
+
+/**
+ * OxeSpace 15/11 (OxeCode F5 → #854): the phase verify passed 40/40, and main's CI then failed repo-wide guards the
+ * verify never ran — a frozen 1.5.0 acceptance suite reading a CSS file the phase changed, the static CSS-class guard.
+ * With config `verify.phase_suites` (true | { include, guards, run_command, max_files, runner }), the phase verify runs
+ * as an implicit gate the suites under `include` (default tests/acceptance/) that import a changed file or name it
+ * (a readFileSync path, a static import), plus the `guards` (repo guard suites) always.
+ */
+function phaseSuitesGates(projectRoot, base, projectConfig) {
+  try {
+    const vcfg = (projectConfig && projectConfig.verify) || {};
+    const opt = vcfg.phase_suites;
+    if (!opt || !base) return [];
+    const o = opt === true ? {} : opt;
+    const changed = (gitLines(projectRoot, ['diff', '--name-only', base]) || []).map((f) => f.replace(/\\/g, '/')).filter((f) => f && !f.startsWith('.oxe/'));
+    if (!changed.length) return [];
+    const si = require('./oxe-suite-impact.cjs');
+    const include = (Array.isArray(o.include) && o.include.length ? o.include : ['tests/acceptance/']).map((p) => String(p).replace(/\\/g, '/'));
+    const tracked = si.trackedFiles(projectRoot);
+    const candidates = new Set(tracked.filter((f) => si.TEST_RE.test(f) && include.some((p) => f.startsWith(p))));
+    const picked = new Set();
+    const { byTarget } = si.importIndex(projectRoot, { files: tracked });
+    for (const c of changed) for (const imp of byTarget.get(c) || []) if (candidates.has(imp.test)) picked.add(imp.test);
+    for (const t of candidates) {
+      if (picked.has(t)) continue;
+      let text = '';
+      try { text = fs.readFileSync(path.join(projectRoot, t), 'utf8'); } catch { continue; }
+      if (changed.some((c) => text.includes(c) || (path.posix.basename(c).length >= 8 && text.includes(path.posix.basename(c))))) picked.add(t);
+    }
+    for (const g of Array.isArray(o.guards) ? o.guards : []) { const p = String(g).replace(/\\/g, '/'); if (fs.existsSync(path.join(projectRoot, p))) picked.add(p); }
+    if (!picked.size) return [];
+    const max = Number(o.max_files) > 0 ? Number(o.max_files) : 60;
+    const files = [...picked].sort().slice(0, max);
+    const template = typeof o.run_command === 'string' && o.run_command.includes('{files}') ? o.run_command : 'npx vitest run {files}';
+    return [{ id: 'phase-suites', when: 'phase_verify', command: template.replace('{files}', files.join(' ')), description: `suítes do repo que leem arquivos da fase e guardas do repo (${files.length}${picked.size > max ? ` de ${picked.size}` : ''})`, on_fail: 'cr_defect', ...(typeof o.runner === 'string' && o.runner.includes('{command}') ? { runner: o.runner } : {}) }];
   } catch { return []; }
 }
 
@@ -11801,6 +11838,7 @@ module.exports = {
   runtimePlanBuild,
   runtimeSpecStress,
   implicitPhaseGates,
+  phaseSuitesGates,
   programCloseGateReasons,
   runtimeNfr,
   runtimeWaive,

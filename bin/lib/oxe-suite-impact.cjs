@@ -240,4 +240,4 @@ function messages(findings, { mode = 'error' } = {}) {
   return { errors, warnings };
 }
 
-module.exports = { suiteImpact, messages, laterOwnedTests, laterOwnedMessages, importIndex, exportedConstants, TEST_RE };
+module.exports = { suiteImpact, messages, laterOwnedTests, laterOwnedMessages, importIndex, exportedConstants, trackedFiles, dataFilesOf, TEST_RE };
