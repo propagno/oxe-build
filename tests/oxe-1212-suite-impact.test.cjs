@@ -124,4 +124,32 @@ describe('G38: a verify that holds a test only a later task turns green', () => 
     p.tasks[0].verify.commands.push('npx playwright test tests/e2e/a27.spec.ts');
     assert.ok(si.laterOwnedTests(p).some((x) => x.task === 'T27' && x.test === 'tests/e2e/a27.spec.ts' && x.owner === 'T30'));
   });
+  it('a mutable acceptance/ test the task itself writes (a later task only extends it) is its own to run', () => {
+    const p = plan();
+    p.tasks[0].files.push(U83);
+    assert.equal(si.laterOwnedTests(p).filter((x) => x.task === 'T27').length, 0);
+    // but a later task's FROZEN entry stays out of reach even when the earlier task lists the file
+    p.acceptance_tests = [{ task: 'T30', criterion: 'A27', files: [{ path: U83 }], command: 'x' }];
+    assert.equal(si.laterOwnedTests(p).filter((x) => x.task === 'T27').length, 1);
+  });
+  it('G30 never asks a later task frozen test (nor its data) into an earlier verify — no G30×G38 deadlock', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-g38-'));
+    dirs.push(dir);
+    const w = (rel, text) => { fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); fs.writeFileSync(path.join(dir, rel), text); };
+    w('src/bar.ts', 'export const HINTS = ["a"];\n');
+    w('tests/e2e/a27.test.ts', "import { HINTS } from '../../src/bar';\nimport data from './fixtures/a27.json';\ntest('x', () => expect(HINTS).toEqual(data));\n");
+    w('tests/e2e/fixtures/a27.json', '["a"]');
+    spawnSync('git', ['init', '-q'], { cwd: dir });
+    spawnSync('git', ['add', '-A'], { cwd: dir });
+    const doc = {
+      acceptance_tests: [{ task: 'T30', criterion: 'A27', files: [{ path: 'tests/e2e/a27.test.ts' }], command: 'npx vitest run tests/e2e/a27.test.ts' }],
+      tasks: [
+        { id: 'T27', wave: 1, files: ['src/bar.ts'], notes: 'muda HINTS', verify: { commands: ['npx tsc --noEmit'] } },
+        { id: 'T30', wave: 3, files: ['src/cmd.ts'], acceptance: ['A27'], verify: { commands: ['npx vitest run tests/e2e/a27.test.ts'] } },
+      ],
+    };
+    const t27 = si.suiteImpact(dir, doc).filter((f) => f.task === 'T27');
+    assert.deepEqual(t27.flatMap((f) => [...f.suites.map((s) => s.test), ...f.data.map((d) => d.file)]), [], JSON.stringify(t27));
+    assert.equal(si.laterOwnedTests(doc).length, 0, 'and G38 is quiet while the test stays out of the verify');
+  });
 });

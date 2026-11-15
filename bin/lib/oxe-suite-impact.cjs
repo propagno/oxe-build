@@ -113,6 +113,16 @@ function suiteImpact(root, planDoc, options = {}) {
     const p = norm(typeof f === 'string' ? f : f && f.path);
     if (p && TEST_RE.test(p) && /(^|\/)acceptance\//i.test(p)) laterOwner.set(p, [...(laterOwner.get(p) || []), o]);
   }
+  // cross-review 15/11: the frozen entries count as G38 counts them — a frozen test is never in its owner's files, and
+  // G30 asking it into the earlier verify while G38 asks it out was a deadlock
+  for (const a of accept) {
+    if (!a) continue;
+    const owners = a.task ? tasks.filter((o) => o.id === a.task) : tasks.filter((o) => (o.acceptance || []).includes(a.criterion));
+    for (const f of a.files || []) {
+      const p = norm(typeof f === 'string' ? f : f && f.path);
+      if (p) laterOwner.set(p, [...(laterOwner.get(p) || []), ...owners]);
+    }
+  }
   const ownedLater = (test, t) => (laterOwner.get(test) || []).some((o) => o.id !== t.id && !(Number(o.wave) < Number(t.wave)));
   const findings = [];
   for (const t of tasks) {
@@ -136,10 +146,12 @@ function suiteImpact(root, planDoc, options = {}) {
       for (const imp of byTarget.get(file)) {
         if (seen.has(imp.test)) continue;
         seen.add(imp.test);
+        // G38: a later task's acceptance test is that task's — neither its suite nor its data are asked of this one
+        if (!inScope(imp.test) && !ownAccept.has(imp.test) && ownedLater(imp.test, t)) continue;
         // G30b: the data the suite reads, outside the task's files — also for a suite already in the verify (the T20
         // guard was in the verify; its baseline fixture was not in files)
         if (!inScope(imp.test)) for (const d of dataFilesOf(root, imp.test, read(imp.test), known)) if (!inScope(d)) data.push({ test: imp.test, file: d });
-        if (inScope(imp.test) || ownAccept.has(imp.test) || namedInVerify(imp.test) || ownedLater(imp.test, t)) continue;
+        if (inScope(imp.test) || ownAccept.has(imp.test) || namedInVerify(imp.test)) continue;
         const asserted = imp.names.filter((n) => consts.has(n) && mentioned.has(n));
         suites.push({ test: imp.test, level: asserted.length ? 'error' : 'warn', names: asserted });
       }
@@ -165,7 +177,8 @@ function laterOwnedTests(planDoc) {
     return seen;
   };
   const owners = new Map(); // test file → pending owner ids
-  const own = (file, id) => { const f = norm(file); if (f && TEST_RE.test(f)) owners.set(f, [...new Set([...(owners.get(f) || []), id])]); };
+  const frozenOwners = new Set(); // `${file}\0${id}`: the owner holds the file as a FROZEN acceptance entry
+  const own =(file, id) => { const f = norm(file); if (f && TEST_RE.test(f)) owners.set(f, [...new Set([...(owners.get(f) || []), id])]); };
   // a shared suite many tasks extend (brand-targets, design-lint) is not "green only later": only ACCEPTANCE tests count —
   // a frozen entry of the owner, or a file of its scope under an acceptance/ folder
   const ACCEPT_DIR = /(^|\/)acceptance\//i;
@@ -173,7 +186,7 @@ function laterOwnedTests(planDoc) {
   for (const a of (planDoc && Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : [])) {
     if (!a) continue;
     const ids = a.task ? [a.task] : pending.filter((t) => (t.acceptance || []).includes(a.criterion)).map((t) => t.id);
-    for (const id of ids) if (pending.some((t) => t.id === id)) for (const f of a.files || []) own(typeof f === 'string' ? f : f.path, id);
+    for (const id of ids) if (pending.some((t) => t.id === id)) for (const f of a.files || []) { own(typeof f === 'string' ? f : f.path, id); frozenOwners.add(`${norm(typeof f === 'string' ? f : f.path)}\u0000${id}`); }
   }
   const waveOf = (t) => (Number.isFinite(Number(t && t.wave)) ? Number(t.wave) : null);
   const out = [];
@@ -181,9 +194,13 @@ function laterOwnedTests(planDoc) {
     const verifyText = [...((t.verify && t.verify.commands) || []), t.verify && t.verify.command, t.verifyCommand].filter(Boolean).join(' ').replace(/\\/g, '/');
     const tests = [...new Set((verifyText.match(/[^\s"'`]+/g) || []).map((s) => norm(s)).filter((s) => s.includes('/') && TEST_RE.test(s) && /\.[cm]?[jt]sx?$/i.test(s)))];
     const anc = ancestors(t.id);
+    const ownFiles = new Set((t.files || []).map((f) => norm(typeof f === 'string' ? f : f && f.path)));
     for (const test of tests) {
       for (const ownerId of owners.get(test) || []) {
         if (ownerId === t.id || anc.has(ownerId)) continue; // its own, or done before it by the dependency order
+        // cross-review 15/11: a mutable test this task writes (in its files), that a later task only extends, is this
+        // task's to run — only a later task's FROZEN entry is out of its reach
+        if (ownFiles.has(test) && !frozenOwners.has(`${test}\u0000${ownerId}`)) continue;
         const owner = byId.get(ownerId);
         const w = waveOf(t);
         const ow = waveOf(owner);
