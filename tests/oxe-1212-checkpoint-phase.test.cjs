@@ -280,6 +280,11 @@ describe('OXB-170: a checkpoint holds only its own task\'s hunks', () => {
     assert.equal(res.result.status, 'completed');
     assert.deepEqual(res.result.blocked, []);
     assert.match(res.result.reason, /onda 3: nada a rodar/);
+    assert.match(res.result.reason, /\(T3\)/, 'the done tasks of the wave are named');
+    assert.equal(calls, 0);
+    // R29: a wave the plan does not have, or not a number, is an error — never "nothing to run" with exit 0
+    await assert.rejects(op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, wave: 99 }), /onda 99 não existe no plano \(ondas: 1, 3\)/);
+    await assert.rejects(op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, wave: 'abc' }), /--wave abc/);
     assert.equal(calls, 0);
   });
 
@@ -293,6 +298,18 @@ describe('OXB-170: a checkpoint holds only its own task\'s hunks', () => {
     assert.match(res.result.checkpoint_failed[0].reason, /check de integração vermelho .*check-file-size\.mjs.*o promote recusaria esta tarefa/s);
     assert.match(res.result.checkpoint_failed[0].reason, /big\.ts: 8 linhas \(teto 5\)/);
     assert.equal(git(dir, 'rev-parse', 'HEAD').stdout.trim(), before, 'commit undone');
+  });
+
+  it('R29: an integration check already red on the parent, for a file the task did not touch, does not hold the checkpoint', async () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T3', title: 'C', wave: 1, files: ['small.ts'], verify: { commands: [ok] } }] };
+    const sizeCheck = "import fs from 'fs';\nconst n = fs.readFileSync('legacy.ts', 'utf8').split('\\n').length; if (n > 5) { console.error('legacy.ts: ' + n + ' linhas (teto 5)'); process.exit(1); }\n";
+    const dir = project({ plan, files: { 'small.ts': 'a\n', 'legacy.ts': '1\n2\n3\n4\n5\n6\n7\n', 'scripts/check-file-size.mjs': sizeCheck } });
+    const before = git(dir, 'rev-parse', 'HEAD').stdout.trim();
+    const exec = { async execute() { fs.writeFileSync(path.join(dir, 'small.ts'), 'a\nb\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    const res = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, checkpointCommits: true });
+    assert.ok(!(res.result.checkpoint_failed || []).length, JSON.stringify(res.result.checkpoint_failed));
+    assert.notEqual(git(dir, 'rev-parse', 'HEAD').stdout.trim(), before, 'committed');
+    assert.equal(planOf(dir).tasks[0].done, true);
   });
 });
 

@@ -271,14 +271,18 @@ function planJsonToParsedPlan(doc) {
   // the plan but sharing PairingFlow.kt, ran on top of it and the hunks became inseparable. A pending task whose files
   // overlap a task with UNCOMMITTED work (checkpoint_failed, not done) waits for that commit — no paid attempt.
   const normF = (f) => String(typeof f === 'string' ? f : (f && f.path) || '').replace(/\\/g, '/').replace(/^\.\//, '');
-  const uncommitted = (doc.tasks || []).filter((t) => t && t.done !== true && t.status !== 'done' && t.checkpoint_failed);
+  // an empty_checkpoint that left nothing in the tree (no leftover) holds no edits to wait on (cross-review 15/11)
+  const uncommitted = (doc.tasks || []).filter((t) => t && t.done !== true && t.status !== 'done' && t.checkpoint_failed
+    && !(t.checkpoint_failed.kind === 'empty_checkpoint' && !(Array.isArray(t.checkpoint_failed.leftover) && t.checkpoint_failed.leftover.length)));
+  // a directory in either scope covers the files under it (`app/pairing` × `app/pairing/PairingFlow.kt`)
+  const under = (a, b) => a === b || b.startsWith(`${a.replace(/\/+$/, '')}/`);
   const sharedWait = (task) => {
     if (!task || task.done === true || task.checkpoint_failed) return [];
-    const mine = new Set((task.files || []).map(normF).filter((f) => f && !f.includes('*')));
+    const mine = [...new Set((task.files || []).map(normF).filter((f) => f && !f.includes('*')))];
     const out = [];
     for (const u of uncommitted) {
       if (u.id === task.id) continue;
-      const shared = (u.files || []).map(normF).filter((f) => mine.has(f));
+      const shared = (u.files || []).map(normF).filter((f) => f && !f.includes('*') && mine.some((m) => under(m, f) || under(f, m)));
       if (shared.length) out.push(`waiting_shared_files: ${u.id} (${shared.slice(0, 3).join(', ')}${shared.length > 3 ? ', …' : ''}) — commit ${u.id} first (runtime commit-task ${u.id}, or --together)`);
     }
     return out;

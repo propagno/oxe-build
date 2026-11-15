@@ -277,15 +277,31 @@ function reconcileChanges(programDir, phaseId, plan, checkResults, options = {})
  * amendment was additive, so nothing goes stale).
  * @returns {Map<string, { required: number, staleBelow: number, additive: boolean }>}
  */
+/**
+ * Cross-review 15/11 (R29): the version a CR set for each criterion it amended (`spec amend --cr` records it per
+ * criterion — a criterion attached to a CR may need a higher version than the CR's own amend_to).
+ * @returns {Map<string, number>} `${cr}\u0000${criterion}` -> version
+ */
+function amendedVersions(programDir) {
+  const out = new Map();
+  for (const r of readNdjson(changesFile(programDir))) {
+    if (!r || r.kind !== 'spec_edit' || r.action !== 'amend_criterion' || !r.cr || !r.id || !Number.isFinite(Number(r.version))) continue;
+    const k = `${r.cr}\u0000${r.id}`;
+    out.set(k, Math.max(out.get(k) || 0, Number(r.version)));
+  }
+  return out;
+}
+
 function amendmentRequirements(programDir) {
   const out = new Map();
+  const perCriterion = amendedVersions(programDir);
   for (const cr of listChanges(programDir)) {
     if (cr.class !== 'spec_gap') continue;
     // a spec_gap withdrawn, or resolved with no amendment (a scope gap), amended nothing: no new version
     if (cr.status === 'withdrawn' || cr.no_amendment) continue;
-    const version = cr.amend_to || 2;
     const additive = cr.amendment === 'additive';
     for (const a of cr.criteria || []) {
+      const version = Math.max(cr.amend_to || 2, perCriterion.get(`${cr.id}\u0000${a}`) || 0);
       const cur = out.get(a) || { required: 1, staleBelow: 1, additive: true, crs: [], last_at: null };
       cur.required = Math.max(cur.required, version);
       if (cr.id && !cur.crs.includes(cr.id)) cur.crs.push(cr.id);
@@ -301,10 +317,11 @@ function amendmentRequirements(programDir) {
 /** Emendas de SPEC (spec_gap): versão mínima exigida por critério. */
 function requiredVersions(programDir) {
   const out = new Map();
+  const perCriterion = amendedVersions(programDir);
   for (const cr of listChanges(programDir)) {
     if (cr.class !== 'spec_gap') continue;
     if (cr.status === 'withdrawn' || cr.no_amendment) continue;
-    for (const a of cr.criteria || []) out.set(a, Math.max(out.get(a) || 1, cr.amend_to || 2));
+    for (const a of cr.criteria || []) out.set(a, Math.max(out.get(a) || 1, cr.amend_to || 2, perCriterion.get(`${cr.id}\u0000${a}`) || 0));
   }
   return out;
 }

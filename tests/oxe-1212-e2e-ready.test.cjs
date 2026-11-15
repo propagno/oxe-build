@@ -35,6 +35,17 @@ describe('G40: frozen e2e act only after the app is ready', () => {
     assert.equal(r.racyActions(two).length, 1, 'no launch in the second test: nothing pending');
   });
 
+  it('R29: a URL in a string is no comment; a hook starts anew; a launch and an action on one line count', () => {
+    const url = "test('a', async () => {\n  await page.goto('http://localhost:3000'); await page.locator('#ready').waitFor();\n  await page.click('#x');\n});";
+    assert.equal(r.racyActions(url).length, 0, 'the wait after the URL is read');
+    const hook = "test('a', async () => {\n  await page.reload();\n});\ntest.afterEach(async () => {\n  await page.click('#logout');\n});";
+    assert.equal(r.racyActions(hook).length, 0, 'the afterEach is its own sequence');
+    const same = "test('a', async () => {\n  await page.goto(u); await page.click('#x');\n});";
+    assert.deepEqual(r.racyActions(same).map((f) => f.line), [2]);
+    const commented = "test('a', async () => {\n  await page.goto(u); // then page.click('#x')\n  await page.locator('#ready').waitFor();\n});";
+    assert.equal(r.racyActions(commented).length, 0);
+  });
+
   it('G40b: a case-sensitive regex name the real catalog string cannot match is named; /i and string names pass (#862)', () => {
     const spec = [
       "test('density', async () => {",
@@ -97,6 +108,26 @@ describe('G40: frozen e2e act only after the app is ready', () => {
     const by = Object.fromEntries(parsed.tasks.map((t) => [t.id, t]));
     assert.ok((by.T15.meta.blocked_by || []).some((b) => /waiting_shared_files: T14 \(app\/pairing\/PairingFlow\.kt\)/.test(b)), JSON.stringify(by.T15.meta));
     assert.equal(by.T16.meta.blocked_by, undefined, 'no shared file: runs');
+  });
+
+  it('R31: a directory scope overlaps; an empty_checkpoint with nothing left in the tree holds no wait; the own waits are not a delivery', () => {
+    const { planJsonToParsedPlan } = require('../bin/lib/oxe-plan-json.cjs');
+    const { isExternallyDelivered } = require('../bin/lib/oxe-operational.cjs');
+    const doc = { schema_version: 1, tasks: [
+      { id: 'T14', title: 'a', wave: 1, files: ['app/pairing'], checkpoint_failed: { kind: 'integration', reason: 'x' } },
+      { id: 'T15', title: 'b', wave: 1, files: ['app/pairing/PairingFlow.kt'] },
+      { id: 'T20', title: 'c', wave: 1, files: ['app/z/Z.kt'], checkpoint_failed: { kind: 'empty_checkpoint', reason: 'nada mudou' } },
+      { id: 'T21', title: 'd', wave: 1, files: ['app/z/Z.kt'] },
+      { id: 'T22', title: 'e', wave: 1, files: ['app/y/Y.kt'], checkpoint_failed: { kind: 'empty_checkpoint', reason: 'restos', leftover: ['app/y/Y.kt'] } },
+      { id: 'T23', title: 'f', wave: 1, files: ['app/y/Y.kt'] },
+    ] };
+    const by = Object.fromEntries(planJsonToParsedPlan(doc).tasks.map((t) => [t.id, t]));
+    assert.ok((by.T15.meta.blocked_by || []).some((b) => /^waiting_shared_files: T14 \(app\/pairing\)/.test(b)), JSON.stringify(by.T15.meta));
+    assert.equal(by.T21.meta.blocked_by, undefined, 'empty_checkpoint without leftover: no wait');
+    assert.ok((by.T23.meta.blocked_by || []).some((b) => /waiting_shared_files: T22/.test(b)));
+    assert.equal(isExternallyDelivered(doc.tasks[1], by.T15), false, 'waiting_shared_files is not an external delivery');
+    assert.equal(isExternallyDelivered({}, { meta: { blocked_by: ['scope_insufficient: tests/x.test.ts'] } }), false);
+    assert.equal(isExternallyDelivered({}, { meta: { blocked_by: ['PR #12 do repo-b'] } }), true);
   });
 
   it('racyFrozenE2e reads only the plan frozen e2e specs of pending tasks', () => {

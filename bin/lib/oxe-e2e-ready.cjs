@@ -12,6 +12,35 @@ const BUILTIN_WAIT_RE = /\b(waitFor\(|waitForSelector\(|waitForLoadState\(|waitF
 
 const E2E_FILE_RE = /(^|\/)(e2e|playwright)\/|\.(e2e|spec)\.[cm]?[jt]sx?$/i;
 
+// a test body or a hook starts a new sequence
+const BLOCK_RE = /^\s*(?:test|it|describe)(?:\.(?:only|skip|describe|serial|parallel))*\s*\(|^\s*(?:test\.)?(?:beforeEach|afterEach|beforeAll|afterAll)\s*\(/;
+
+/** The line without its `//` and block comments — never cut inside a string (`'http://localhost'`). */
+function stripComment(line) {
+  const l = String(line || '');
+  let q = null;
+  let out = '';
+  for (let i = 0; i < l.length; i += 1) {
+    const ch = l[i];
+    if (q) {
+      out += ch;
+      if (ch === '\\') { out += l[i + 1] || ''; i += 1; } else if (ch === q) q = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') { q = ch; out += ch; continue; }
+    if (ch === '/' && l[i + 1] === '/') break;
+    if (ch === '/' && l[i + 1] === '*') {
+      const end = l.indexOf('*/', i + 2);
+      if (end < 0) break;
+      i = end + 1;
+      out += ' ';
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
 /**
  * Within each test body, the first interaction after a launch with no wait in between.
  * @param {string} text the spec source
@@ -20,19 +49,31 @@ const E2E_FILE_RE = /(^|\/)(e2e|playwright)\/|\.(e2e|spec)\.[cm]?[jt]sx?$/i;
  */
 function racyActions(text, options = {}) {
   const helpers = (options.helpers || []).map((h) => String(h).trim()).filter(Boolean);
-  const helperRe = helpers.length ? new RegExp(`\\b(${helpers.map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\s*\\(`) : null;
+  const helperRe = helpers.length ? new RegExp(`\\b(${helpers.map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\s*\\(`, 'g') : null;
   const lines = String(text || '').split(/\r?\n/);
   const out = [];
   let pending = null; // the last launch not yet followed by a wait
+  const g = (re) => new RegExp(re.source, 'g');
+  const kinds = [['launch', g(LAUNCH_RE)], ['wait', g(BUILTIN_WAIT_RE)], ['act', g(ACT_RE)], ...(helperRe ? [['wait', helperRe]] : [])];
   for (let i = 0; i < lines.length; i += 1) {
-    const l = lines[i].replace(/\/\/.*$/, '');
-    if (/^\s*(test|it)(\.only|\.skip)?\s*\(/.test(l)) pending = null; // a new test body
-    const waits = BUILTIN_WAIT_RE.test(l) || (helperRe && helperRe.test(l));
-    if (LAUNCH_RE.test(l) && !waits) { pending = { line: i + 1, launch: l.trim().slice(0, 120) }; continue; }
-    if (waits) { pending = null; continue; }
-    if (pending && ACT_RE.test(l)) {
-      out.push({ line: i + 1, launch: pending.launch, action: l.trim().slice(0, 120) });
-      pending = null;
+    const l = stripComment(lines[i]);
+    // a new test body or hook: what the previous one launched does not carry over (cross-review 15/11)
+    if (BLOCK_RE.test(l)) pending = null;
+    // the events of the line in order: a launch and an action on the same line (`goto(u); click(x)`) count too
+    const events = [];
+    for (const [kind, re] of kinds) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(l))) { events.push({ kind, at: m.index }); if (!m[0]) re.lastIndex += 1; }
+    }
+    events.sort((a, b) => a.at - b.at);
+    for (const e of events) {
+      if (e.kind === 'launch') pending = { line: i + 1, launch: l.trim().slice(0, 120) };
+      else if (e.kind === 'wait') pending = null;
+      else if (pending) {
+        out.push({ line: i + 1, launch: pending.launch, action: l.trim().slice(0, 120) });
+        pending = null;
+      }
     }
   }
   return out;
@@ -195,7 +236,8 @@ function containerGuardHazards(root, planDoc, options = {}) {
         }
         return true; // the call continues on the next line: not judged
       };
-      lines.forEach((l, i) => {
+      lines.forEach((raw, i) => {
+        const l = stripComment(raw); // a commented-out skip is no skip (R30)
         const m = /\b(test|it|describe)\.skip\(/.exec(l);
         if (!m) return;
         const open = m.index + m[0].length - 1;

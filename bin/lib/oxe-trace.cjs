@@ -72,7 +72,8 @@ function build(s) {
   for (const a of s.criteria) {
     if (!/^A\d/.test(a.id)) continue;
     if (s.stories.length && !storiesOfA.has(a.id)) push('warning', 'criterion', a.id, 'critério sem história no PRD', 'ligue-o a uma US (coluna Critérios do PRD)');
-    const inThisPhase = !Array.isArray(s.phaseCriteria) || s.phaseCriteria.includes(a.id);
+    // a subcriterion (A19.1) of a phase criterion and the global G* are the phase's too (OXB-037)
+    const inThisPhase = !(Array.isArray(s.phaseCriteria) && s.phaseCriteria.length) || require('./oxe-criteria-ids.cjs').inPhase(a.id, s.phaseCriteria);
     if ((s.tasks.length || s.tests.length) && inThisPhase && v1.has(a.id) && !testsOfA.has(a.id) && !tasksOfA.has(a.id)) push('warning', 'criterion', a.id, 'critério v1 sem teste de aceite nem tarefa no plano', '/oxe-plan: um teste de aceite com "criterion": "' + a.id + '"');
   }
   for (const d of activeD) {

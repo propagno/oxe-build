@@ -50,6 +50,10 @@ describe('trace: v1 criteria of OTHER phases are not the current plan to test (O
     const ids = (s) => trace.build(s).orphans.filter((o) => /critério v1 sem teste/.test(o.why)).map((o) => o.id).sort();
     assert.deepEqual(ids(snap), ['A19', 'A8'], 'without a program: every v1 criterion');
     assert.deepEqual(ids({ ...snap, phaseCriteria: ['A19'] }), ['A19'], 'with the active phase: only its own');
+    // R31: a phase with acceptance: [] is not scoped (never silences every criterion); a subcriterion is its parent's
+    assert.deepEqual(ids({ ...snap, phaseCriteria: [] }), ['A19', 'A8'], 'empty phase list: every v1 criterion');
+    const sub = { ...snap, criteria: [...snap.criteria, { id: 'A19.1', text: 'sub' }], requirements: [{ id: 'R1', version: 'v1', criteria: ['A8', 'A19', 'A19.1'] }] };
+    assert.deepEqual(ids({ ...sub, phaseCriteria: ['A19'] }), ['A19', 'A19.1']);
   });
 });
 

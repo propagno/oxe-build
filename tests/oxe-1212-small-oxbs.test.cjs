@@ -274,6 +274,34 @@ describe('plan verify prune --later-owned (OxeSpace 15/11, OxeChat F4 install)',
     assert.deepEqual(t9.verify.commands, ['vitest run tests/oxe152/chat/oxc-1.test.ts', 'npm run typecheck']);
     assert.deepEqual(t9.edits[0].verify_pruned.sort(), ['tests/oxe152/chat/oxc-4-panels.test.ts', 'tests/oxe152/chat/oxc-5-parallel-ui.test.ts']);
   });
+
+  it('R31: a substring collision anchors the own test (T44/T59); prunes per subcommand; reads verifyCommand', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-vprune2-'));
+    dirs.push(dir);
+    fs.mkdirSync(path.join(dir, '.oxe', 'program'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.md'), '# PLAN\n');
+    const doc = { schema_version: 1, tasks: [
+      { id: 'T44', wave: 18, files: ['src/version.ts'], verify: { commands: ['vitest run tests/pu03-app-version.test.ts'] } },
+      { id: 'T9', wave: 1, files: ['src/a.ts'], verify: { commands: ['npx vitest run tests/oxc-5-parallel-ui.test.ts && npm run typecheck', 'npx vitest run tests/oxc-1.test.ts && npx vitest run tests/oxc-5-parallel-ui.test.ts'] } },
+      { id: 'T10', wave: 2, files: ['src/d.ts'], verifyCommand: 'vitest run tests/oxc-1.test.ts tests/oxc-5-parallel-ui.test.ts' },
+      { id: 'T59', wave: 33, files: ['src/about.tsx'], verify: { commands: ['vitest run tests/pu03-app-version.test.tsx'] } },
+      { id: 'T14', wave: 5, files: ['src/c.ts'], verify: { commands: ['vitest run tests/oxc-5-parallel-ui.test.ts'] } },
+    ], acceptance_tests: [
+      { task: 'T44', criterion: 'A41', files: ['tests/pu03-app-version.test.ts'], command: 'x' },
+      { task: 'T59', criterion: 'A56', files: ['tests/pu03-app-version.test.tsx'], command: 'x' },
+      { task: 'T9', criterion: 'A1', files: ['tests/oxc-1.test.ts'], command: 'x' },
+      { task: 'T14', criterion: 'A5', files: ['tests/oxc-5-parallel-ui.test.ts'], command: 'x' },
+    ] };
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify(doc));
+    const out = op.runtimePlanVerifyPrune(dir, null, { laterOwned: true, by: 'planner', reason: 'G38 após o merge da main' });
+    assert.equal(out.remaining, 0);
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8')).tasks;
+    const get = (id) => saved.find((t) => t.id === id);
+    assert.deepEqual(get('T44').verify.commands, ['vitest run tests/pu03-app-version.test.ts$'], 'own test kept, anchored');
+    assert.deepEqual(get('T44').edits[0].verify_anchored, ['tests/pu03-app-version.test.ts']);
+    assert.deepEqual(get('T9').verify.commands, ['npm run typecheck', 'npx vitest run tests/oxc-1.test.ts'], 'typecheck kept, no bare vitest run');
+    assert.equal(get('T10').verifyCommand, 'vitest run tests/oxc-1.test.ts');
+  });
 });
 
 describe('plan task fold T44 --into T59 (OxeSpace 15/11, OxeCode F6 CR-F6-14)', () => {

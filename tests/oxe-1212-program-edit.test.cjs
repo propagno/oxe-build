@@ -143,6 +143,21 @@ describe('OXB-058: spec amend / spec add', () => {
     assert.deepEqual(cr.criteria.sort(), ['A40', 'A41']);
   });
 
+  it('R29: a criterion already at v2 that joins an open CR goes to v3 (never back), and the plan sees v3 as required', () => {
+    const dir = project();
+    // A41 → v2 by its own CR (left open: what matters is its version)
+    const first = op.runtimeSpecAmend(dir, null, { id: 'A41', append: 'primeira', by: 'tl', reason: 'emenda anterior do A41' });
+    assert.equal(first.version, 2);
+    const fb = op.runtimeFeedback(dir, null, { class: 'spec_gap', summary: 'A40 precisa citar o install-over', criteria: 'A40', by: 'tl' });
+    const out = op.runtimeSpecAmend(dir, null, { id: 'A41', append: 'segunda', cr: fb.cr.id, by: 'tl', reason: 'a mesma mudança toca o A41' });
+    assert.equal(out.version, 3);
+    const change = require('../bin/lib/oxe-change.cjs');
+    const programDir = path.join(dir, '.oxe', 'program');
+    assert.equal(change.amendmentRequirements(programDir).get('A41').required, 3);
+    assert.equal(change.requiredVersions(programDir).get('A41'), 3);
+    assert.equal(change.amendmentRequirements(programDir).get('A40').required, 2, 'the CR own criterion keeps its version');
+  });
+
   it('amend refuses an unknown criterion and a missing reason, without touching the SPEC', () => {
     const dir = project();
     assert.throws(() => op.runtimeSpecAmend(dir, null, { id: 'A99', text: 'x', by: 'tl', reason: 'motivo suficiente' }), /A99 não está/);

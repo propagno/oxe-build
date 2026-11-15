@@ -2764,7 +2764,8 @@ function traceSnapshot(projectRoot, activeSession) {
     phase: phase ? phase.id : (doc && doc.phase) || null,
     // OxeSpace 15/11 (OxeCode F5 close): with a program, the active phase's criteria — another phase's v1 criteria
     // are not this plan's to test (they are judged at their own close)
-    phaseCriteria: phase && Array.isArray(phase.acceptance) ? phase.acceptance : null,
+    // (R31) a phase with no declared criteria (acceptance: []) is not scoped; the standing criteria count in every phase
+    phaseCriteria: phase && Array.isArray(phase.acceptance) && phase.acceptance.length ? [...phase.acceptance, ...require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot)] : null,
     almConfigured: Boolean(almCfg),
     storiesSource: almCfg ? almCfg.stories_source : 'prd',
     cardKeysOf: prdLib.cardKeys,
@@ -4123,13 +4124,24 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     // OXB-051: `--wave N` runs only that wave (it used to run every pending wave and paid for the next one too).
     if (options.wave != null && graph && Array.isArray(graph.waves)) {
       const only = Number(options.wave);
+      // cross-review 15/11 (R29): `--wave abc` / `--wave 99` is a typo, never "nothing to run, all done" with exit 0
+      if (!Number.isInteger(only) || only < 1) throw new Error(`--wave ${options.wave}: informe o número de uma onda do plano (1, 2, …)`);
+      let planTasks = [];
+      try { planTasks = ((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).filter(Boolean); } catch { planTasks = []; }
+      const waveTasks = planTasks.filter((t) => Number(t.wave) === only);
+      const compiledWaves = graph.waves.map((w) => Number(w.wave_number));
+      if (planTasks.length && !waveTasks.length && !compiledWaves.includes(only)) {
+        const known = [...new Set(planTasks.map((t) => Number(t.wave)).filter(Number.isFinite))].sort((a, b) => a - b);
+        throw new Error(`onda ${only} não existe no plano (ondas: ${known.join(', ') || 'nenhuma'})`);
+      }
       graph.waves = graph.waves.filter((w) => Number(w.wave_number) === only);
       // OxeSpace 15/11 (OxeQuery polish wave 3): every task of the wave already done (a checkpoint retry in the
       // preflight committed it) → nothing to run, a success — never "Bloqueados: 18" listing other waves' tasks
-      let planDone = new Set();
-      try { planDone = new Set(((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).filter((t) => t && t.done === true).map((t) => t.id)); } catch { planDone = new Set(); }
-      const ids = graph.waves.flatMap((w) => w.node_ids || []);
-      if (!ids.length || ids.every((id) => planDone.has(id))) {
+      const planDone = new Set(planTasks.filter((t) => t.done === true).map((t) => t.id));
+      const compiledIds = graph.waves.flatMap((w) => w.node_ids || []);
+      // the compile drops done tasks from the waves: the plan's own list names them
+      const ids = compiledIds.length ? compiledIds : waveTasks.map((t) => t.id);
+      if (!compiledIds.length || compiledIds.every((id) => planDone.has(id))) {
         appendEvent(projectRoot, activeSession, { type: 'WaveNothingToRun', run_id: current.run_id, payload: { wave: only, tasks: ids } });
         return {
           mode: 'wave',
@@ -4465,6 +4477,8 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
               } else {
                 checkpointFailure = {
                   kind: 'empty_checkpoint',
+                  // the uncommitted edits in the scope (waiting_shared_files waits only on a task that left some)
+                  ...(dirtyNow.length ? { leftover: dirtyNow } : {}),
                   reason: dirtyNow.length
                     ? `empty_checkpoint: a tentativa não acrescentou diff, e as mudanças no escopo (${dirtyNow.slice(0, 6).join(', ')}) estavam na árvore antes dela sem serem atribuídas à tarefa — o próximo execute as atribui (restos da própria tarefa) e commita`
                     : 'empty_checkpoint: a tarefa completou sem nenhuma mudança e sem checkpoint anterior dela — confira se o trabalho já está na base (oxe-cc plan done Tn --commit <sha>) ou reabra',
@@ -6663,6 +6677,7 @@ function runtimeSpecAmend(projectRoot, activeSession, options = {}) {
     if (!(target.criteria || []).includes(id)) {
       changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'criteria', id: target.id, criteria: [id], by, reason, at: new Date().toISOString() });
       target.criteria = [...(target.criteria || []), id];
+      target._attached = true;
     }
   } else {
     // a CR whose amendment is already in the SPEC (its own spec_edit, or one attached later) asks for nothing more
@@ -6671,11 +6686,16 @@ function runtimeSpecAmend(projectRoot, activeSession, options = {}) {
     if (pending.length === 1) target = pending[0];
   }
   if (target) {
-    const version = target.amend_to || 2;
+    // cross-review 15/11 (R29): a criterion that joins the CR now may already be at v2/v3 by an earlier CR — its version
+    // goes one past its current one (never back); a criterion the CR cited keeps the CR's version (one bump per CR)
+    const joined = Boolean(target._attached);
+    delete target._attached;
+    const version = joined ? Math.max(target.amend_to || 2, (current ? current.required : 1) + 1) : target.amend_to || 2;
+    const additive = Boolean(options.additive || target.amendment === 'additive');
     const record = { kind: 'spec_edit', action: 'amend_criterion', id, cr: target.id, version, by, reason, file: path.relative(projectRoot, paths.spec).replace(/\\/g, '/'), before: edit.before, after: edit.after, at: new Date().toISOString() };
     changeLib.appendNdjson(changeLib.changesFile(programDir), record);
     writeTextAtomic(paths.spec, edit.text);
-    appendEvent(projectRoot, activeSession, { type: 'SpecAmended', payload: { id, version, cr: target.id, attached: true, additive: Boolean(options.additive), phase } });
+    appendEvent(projectRoot, activeSession, { type: 'SpecAmended', payload: { id, version, cr: target.id, attached: true, additive, phase } });
     return { cr: target, attached: true, id, version, phase, before: edit.before, after: edit.after, reopened_tasks: [], export: autoExportProgram(projectRoot, activeSession) };
   }
   const version = (current ? current.required : 1) + 1;
@@ -8052,7 +8072,9 @@ function isExternallyDelivered(rawTask, parsedTask) {
   // OXB-085: only string entries mean "delivered by another path"; a precondition object is a wait, not a delivery.
   if (require('./oxe-plan-json.cjs').externalRefs(raw).length) return true;
   const pendingLabels = new Set(meta.precondition_pending || []);
-  if (Array.isArray(meta.blocked_by) && meta.blocked_by.some((ref) => !pendingLabels.has(ref))) return true;
+  // cross-review 15/11 (R31): the runtime's own waits (scope_insufficient, waiting_shared_files) are not a delivery
+  const ownWait = (ref) => /^(scope_insufficient|waiting_shared_files):/.test(String(ref));
+  if (Array.isArray(meta.blocked_by) && meta.blocked_by.some((ref) => !pendingLabels.has(ref) && !ownWait(ref))) return true;
   if (Array.isArray(meta.external_resolved) && meta.external_resolved.length) return true;
   const policy = raw.policy || {};
   return Boolean(policy.verify_only || (Array.isArray(policy.external_dependency) && policy.external_dependency.length));
@@ -9331,34 +9353,55 @@ function runtimePlanVerifyPrune(projectRoot, activeSession, options = {}) {
   const out = planJsonLib.withPlanLock(jsonPath, () => {
     const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
     const findings = si.laterOwnedTests(doc);
+    // cross-review 15/11 (R31 P0): an argument that selects a later test only as a vitest SUBSTRING (T44's
+    // `pu03-app-version.test.ts` pulling T59's `.test.tsx`) is the task's own test — it is ANCHORED (`arg$`), never
+    // removed; only an argument that names a later-owned test itself is removed
     const byTask = new Map();
     for (const f of findings) {
-      if (!byTask.has(f.task)) byTask.set(f.task, new Set());
-      byTask.get(f.task).add(f.via || f.test); // the argument as written in the command
+      if (!byTask.has(f.task)) byTask.set(f.task, { drop: new Set(), anchor: new Set() });
+      const e = byTask.get(f.task);
+      if (!f.via) e.drop.add(f.test);
+      else e.anchor.add(f.via);
     }
+    for (const e of byTask.values()) for (const a of e.anchor) if (e.drop.has(a)) e.anchor.delete(a);
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const TEST_ARG = /[^\s"'`]+\.(test|spec)\.[cm]?[jt]sx?/g;
+    const norm = (s) => String(s).replace(/\\/g, '/');
+    // per SUBCOMMAND (R31 P1): `a.test.ts && npm run typecheck` keeps the typecheck; a subcommand whose test arguments
+    // were all removed goes away with its separator — never a bare `vitest run` (the whole suite)
+    const pruneCommand = (c, drop, anchor) => {
+      const parts = norm(c).split(/(\s*(?:&&|\|\||;)\s*)/);
+      const keep = [];
+      for (let i = 0; i < parts.length; i += 2) {
+        let n = parts[i];
+        for (const arg of drop) n = n.replace(new RegExp(`(^|\\s)(["'\`]?)${esc(arg)}\\$?\\2(?=\\s|$)`, 'g'), '$1');
+        for (const arg of anchor) n = n.replace(new RegExp(`(^|\\s)(["'\`]?)${esc(arg)}\\2(?=\\s|$)`, 'g'), `$1$2${arg}$$$2`);
+        n = n.replace(/\s{2,}/g, ' ').trim();
+        const had = (parts[i].match(TEST_ARG) || []).length;
+        const has = (n.match(TEST_ARG) || []).length;
+        if (had && !has) continue;
+        if (n) keep.push({ sep: i ? parts[i - 1] : null, text: n });
+      }
+      return keep.map((k, j) => (j ? (k.sep || ' && ') : '') + k.text).join('');
+    };
     const changes = [];
     for (const t of (doc.tasks || []).filter(Boolean)) {
-      const drop = byTask.get(t.id);
-      if (!drop || !t.verify) continue;
-      const before = [...(t.verify.commands || []), ...(t.verify.command ? [t.verify.command] : [])];
-      const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const after = [];
-      for (const c of before) {
-        let n = c;
-        for (const arg of drop) n = n.replace(new RegExp(`(^|\\s)["'\`]?${esc(arg)}\\$?["'\`]?(?=\\s|$)`, 'g'), '$1');
-        n = n.replace(/\s{2,}/g, ' ').trim();
-        // a command whose test arguments were all removed (it named only later tests) goes away
-        const hadTests = (c.match(/[^\s"'`]+\.(test|spec)\.[cm]?[jt]sx?/g) || []).length;
-        const hasTests = (n.match(/[^\s"'`]+\.(test|spec)\.[cm]?[jt]sx?/g) || []).length;
-        if (hadTests && !hasTests) continue;
-        after.push(n);
-      }
-      if (JSON.stringify(after) === JSON.stringify(before)) continue;
-      changes.push({ task: t.id, removed: [...drop], before, after });
+      const e = byTask.get(t.id);
+      if (!e) continue;
+      const before = { commands: t.verify && Array.isArray(t.verify.commands) ? [...t.verify.commands] : null, command: t.verify && t.verify.command ? t.verify.command : null, verifyCommand: t.verifyCommand || null };
+      const after = {
+        commands: before.commands ? before.commands.map((c) => pruneCommand(c, e.drop, e.anchor)).filter(Boolean) : null,
+        command: before.command ? pruneCommand(before.command, e.drop, e.anchor) || null : null,
+        verifyCommand: before.verifyCommand ? pruneCommand(before.verifyCommand, e.drop, e.anchor) || null : null,
+      };
+      const flat = (x) => [...(x.commands || []), ...(x.command ? [x.command] : []), ...(x.verifyCommand ? [x.verifyCommand] : [])].map(norm);
+      if (JSON.stringify(flat(after)) === JSON.stringify(flat(before))) continue;
+      changes.push({ task: t.id, removed: [...e.drop], anchored: [...e.anchor], before: flat(before), after: flat(after) });
       if (!options.dryRun) {
-        t.verify.commands = after;
-        delete t.verify.command;
-        t.edits = [...(Array.isArray(t.edits) ? t.edits : []), { by, reason, at, verify_pruned: [...drop] }];
+        if (before.commands) t.verify.commands = after.commands;
+        if (before.command) { if (after.command) t.verify.command = after.command; else delete t.verify.command; }
+        if (before.verifyCommand) { if (after.verifyCommand) t.verifyCommand = after.verifyCommand; else delete t.verifyCommand; }
+        t.edits = [...(Array.isArray(t.edits) ? t.edits : []), { by, reason, at, verify_pruned: [...e.drop], ...(e.anchor.size ? { verify_anchored: [...e.anchor] } : {}) }];
       }
     }
     if (!options.dryRun && changes.length) {
@@ -9369,7 +9412,7 @@ function runtimePlanVerifyPrune(projectRoot, activeSession, options = {}) {
     return { changes, remaining: options.dryRun ? findings.length : si.laterOwnedTests(doc).length };
   });
   if (!options.dryRun && out.changes.length) {
-    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'verify_prune', by, reason, at, changes: out.changes.map((c) => ({ task: c.task, removed: c.removed })) });
+    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'verify_prune', by, reason, at, changes: out.changes.map((c) => ({ task: c.task, removed: c.removed, anchored: c.anchored })) });
     appendEvent(projectRoot, activeSession, { type: 'PlanVerifyPruned', payload: { by, reason, tasks: out.changes.map((c) => c.task) } });
   }
   return { dry_run: Boolean(options.dryRun), ...out };
@@ -10037,7 +10080,7 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
     return entries[p] === 'deleted' ? Boolean(inCommit) : inCommit !== entries[p];
   });
   const committedFiles = (gitOut(projectRoot, ['show', '--name-only', '--format=', 'HEAD']).stdout || '').split(/\r?\n/).filter(Boolean);
-  return { committed: true, commit: head, files: committedFiles, leftover, ...(domHooks ? { dom_hooks_warning: domHooks.message } : {}), ...(check ? { check: { command: check.command, ok: true, ...(check.ignored_reds && check.ignored_reds.length ? { ignored_reds: check.ignored_reds } : {}), ...(check.flaky_reds && check.flaky_reds.length ? { flaky_reds: check.flaky_reds } : {}), ...(check.related_set_size != null ? { related_set_size: check.related_set_size } : {}) } } : {}) };
+  return { committed: true, commit: head, files: committedFiles, leftover, ...(domHooks ? { dom_hooks_warning: domHooks.message } : {}), ...(check ? { check: { command: check.command, ok: true, ...(check.integration_preexisting ? { integration_preexisting: check.integration_preexisting } : {}), ...(check.ignored_reds && check.ignored_reds.length ? { ignored_reds: check.ignored_reds } : {}), ...(check.flaky_reds && check.flaky_reds.length ? { flaky_reds: check.flaky_reds } : {}), ...(check.related_set_size != null ? { related_set_size: check.related_set_size } : {}) } } : {}) };
 }
 
 /**
@@ -10069,6 +10112,29 @@ function sweepCheckpointWorkspaces(projectRoot, { maxAgeMs = 2 * 3600_000, now =
 }
 
 /**
+ * Cross-review 15/11 (R29): an integration check red on the commit is the task's only when the task brought it — red
+ * on the parent commit too, with no changed file named in the output (and, for an npm script, no package.json /
+ * lockfile changed), it was already red. The workspace goes to the parent and back to the commit.
+ */
+function integrationRedIsPreexisting(projectRoot, wt, sha, check, result, changedFiles) {
+  const norm = (p) => String(p).replace(/\\/g, '/');
+  const output = norm(`${result.output || ''}\n${result.tail || ''}`);
+  const changed = (changedFiles || []).map(norm).filter(Boolean);
+  if (changed.some((f) => output.includes(f) || output.includes(path.posix.basename(f)))) return false;
+  if (/\bnpm\b|\bpnpm\b|\byarn\b/.test(check.command) && changed.some((f) => /(^|\/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/.test(f))) return false;
+  const parent = gitOut(projectRoot, ['rev-parse', '-q', '--verify', `${sha}^`]).stdout.trim();
+  if (!parent) return false;
+  if (gitOut(wt, ['checkout', '-q', '--detach', '-f', parent]).status !== 0) return false;
+  let parentRed = false;
+  try {
+    parentRed = !runChildCommandFull(wt, check.command, check.timeout).ok;
+  } finally {
+    gitOut(wt, ['checkout', '-q', '--detach', '-f', sha]);
+  }
+  return parentRed;
+}
+
+/**
  * OXB-170: config `checkpoint_check` (e.g. "npm run typecheck"): runs on the commit's own tree — a temporary detached
  * worktree with a junction to node_modules (unlinked before removal, never a forced removal with it in place).
  */
@@ -10080,19 +10146,31 @@ function checkpointCheck(projectRoot, sha, options = {}) {
   const related = relatedTestsCommand(cfg, options.changedFiles || [], projectRoot);
   // OxeSpace 15/11 (OxeQuery polish T2): the integration checks promote runs (check-file-size, notices:check) run at
   // the checkpoint too — a task never passes its checkpoint to fail promote. Off with checkpoint_integration_checks: false.
-  let integration = [];
-  if (cfg.checkpoint_integration_checks !== false && options.integrationChecks !== false) {
-    try { integration = require('./oxe-integration-checks.cjs').integrationCommands(projectRoot, cfg).map((command) => ({ kind: 'integration', command, timeout: 15 * 60_000 })); } catch { integration = []; }
+  const integrationOn = cfg.checkpoint_integration_checks !== false && options.integrationChecks !== false;
+  const integrationOf = (root) => {
+    if (!integrationOn) return [];
+    try { return require('./oxe-integration-checks.cjs').integrationCommands(root, cfg).map((command) => ({ kind: 'integration', command, timeout: 15 * 60_000 })); } catch { return []; }
+  };
+  const typecheckCmd = typecheck && typeof typecheck === 'string' ? [{ kind: 'check', command: typecheck, timeout: Number(cfg.checkpoint_check_timeout_ms) > 0 ? Number(cfg.checkpoint_check_timeout_ms) : 900_000 }] : [];
+  // the live tree only decides whether a workspace is needed; the commands come from the commit's own tree (R29)
+  let commands = [...typecheckCmd, ...integrationOf(projectRoot), ...(related ? [related] : [])];
+  if (!commands.length && !integrationOn) return null;
+  if (!commands.length) {
+    // the commit may bring the check script the live tree does not have yet
+    const inCommit = (p) => gitOut(projectRoot, ['cat-file', '-e', `${sha}:${p}`]).status === 0;
+    const pkgHasNotices = /"notices:check"\s*:/.test(gitOut(projectRoot, ['show', `${sha}:package.json`]).stdout || '');
+    if (!inCommit('scripts/check-file-size.mjs') && !pkgHasNotices) return null;
   }
-  const commands = [...(typecheck && typeof typecheck === 'string' ? [{ kind: 'check', command: typecheck, timeout: Number(cfg.checkpoint_check_timeout_ms) > 0 ? Number(cfg.checkpoint_check_timeout_ms) : 900_000 }] : []), ...integration, ...(related ? [related] : [])];
-  if (!commands.length) return null;
-  const command = commands.map((c) => c.command).join(' ; ');
   const wt = path.join(projectRoot, '.oxe', 'checkpoint-ws', `${String(sha).slice(0, 10)}-${Date.now().toString(36)}`);
   fs.mkdirSync(path.dirname(wt), { recursive: true });
   const add = gitOut(projectRoot, ['worktree', 'add', '-q', '--detach', wt, sha]);
-  if (add.status !== 0) return { ok: false, command, tail: `worktree add falhou: ${add.stderr.trim()}` };
+  if (add.status !== 0) return { ok: false, command: commands.map((c) => c.command).join(' ; '), tail: `worktree add falhou: ${add.stderr.trim()}` };
+  commands = [...typecheckCmd, ...integrationOf(wt), ...(related ? [related] : [])];
+  const command = commands.map((c) => c.command).join(' ; ');
   let res = null;
+  const preexisting = [];
   try {
+    if (!commands.length) return null;
     const nm = path.join(projectRoot, 'node_modules');
     if (fs.existsSync(nm)) fs.symlinkSync(fs.realpathSync(nm), path.join(wt, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
     try { require('./oxe-local-config.cjs').copyLocalFiles(projectRoot, wt); } catch { /* */ }
@@ -10101,6 +10179,13 @@ function checkpointCheck(projectRoot, sha, options = {}) {
       try { process.stderr.write(`\n  [checkpoint ${String(sha).slice(0, 8)}] ${c.kind === 'related' ? 'testes relacionados' : c.kind === 'integration' ? 'check de integração' : 'checkpoint_check'}: ${String(c.command).slice(0, 160)} (até ${Math.round((c.timeout || 0) / 60000)} min)\n`); } catch { /* */ }
       const r = runChildCommandFull(wt, c.command, c.timeout);
       res = { ok: r.ok, tail: r.tail, kind: c.kind, command: c.command, output: r.output, skipped: c.skipped || [] };
+      if (!r.ok && c.kind === 'integration' && integrationRedIsPreexisting(projectRoot, wt, sha, c, r, options.changedFiles || [])) {
+        // cross-review 15/11 (R29): red on the parent too, and nothing the task changed is named — not this task's to
+        // fix (it could not, without a scope violation); recorded, the checkpoint goes on
+        preexisting.push({ command: c.command, tail: String(r.tail || '').split(/\r?\n/).slice(-4).join(' · ') });
+        res = { ok: true, kind: c.kind, command: c.command, output: r.output, skipped: [] };
+        continue;
+      }
       if (!r.ok) break;
     }
   } finally {
@@ -10114,7 +10199,7 @@ function checkpointCheck(projectRoot, sha, options = {}) {
     if (!linkLeft) gitOut(projectRoot, ['worktree', 'remove', '--force', wt]);
     gitOut(projectRoot, ['worktree', 'prune']);
   }
-  const out = { ok: Boolean(res && res.ok), command: (res && res.command) || command, kind: res && res.kind, tail: String((res && res.tail) || '').split(/\r?\n/).slice(-6).join(' · ') };
+  const out = { ok: Boolean(res && res.ok), command: (res && res.command) || command, kind: res && res.kind, tail: String((res && res.tail) || '').split(/\r?\n/).slice(-6).join(' · '), ...(preexisting.length ? { integration_preexisting: preexisting } : {}) };
   if (res && !res.ok && res.kind === 'related') out.failing_tests = failingTestFiles(res.output || res.tail || '');
   // OXB-189: the size of the related set vitest ran (Test Files … (N)), so an oversized related run is visible.
   if (res && res.kind === 'related') { const m = /Test Files\s+[^\n(]*\((\d+)\)/.exec(String(res.output || res.tail || '')); if (m) out.related_set_size = Number(m[1]); }
@@ -12277,6 +12362,7 @@ module.exports = {
   runtimePlanTaskEdit,
   runtimePlanTaskFold,
   runtimePlanVerifyPrune,
+  isExternallyDelivered,
   runtimeReuseAttempt,
   runtimeFailureCost,
   attachAcceptanceLock,
