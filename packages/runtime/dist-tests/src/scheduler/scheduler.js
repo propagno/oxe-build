@@ -585,7 +585,7 @@ class Scheduler {
         let lastVerifySignature = null;
         let verifySuspect = false;
         let maxAttempts = node.policy.max_retries + 1;
-        let policyRetried = false;
+        let policyRetried = Boolean(ctx.options?.policyRefusedBefore?.includes(nodeId));
         // 1.21.1 (OXB-047): work that arrives by another path never pays an agent and never becomes a human gate.
         // An explicit human gate (PLAN.json `gate`) still comes first: the attempt loop requests it as before.
         const humanGatePending = node.policy.requires_human_approval && !this.hasApprovedGate(node, ctx);
@@ -849,13 +849,20 @@ class Scheduler {
                     if (!ctx.options?.retryPolicyOnce || policyRetried)
                         break;
                     policyRetried = true;
+                    // the run's retry quota counts this attempt too (cross-review 15/11)
+                    const policyRetryBlocked = this.consumeRetryQuota(ctx);
+                    if (policyRetryBlocked) {
+                        this.blockNode(nodeId, ctx, status, blocked, 'quota_exceeded', policyRetryBlocked);
+                        return;
+                    }
                     if (attempt >= maxAttempts)
                         maxAttempts = attempt + 1;
                     this.emit(ctx, {
                         type: 'RetryScheduled',
                         work_item_id: nodeId,
                         attempt_id: attemptId,
-                        payload: { task: nodeId, attempt_number: attempt, next_attempt: attempt + 1, reason: 'policy_retry_once' },
+                        // output_tail: the refused attempt keeps its log (attempts/<task>-<n>.log) with the trigger candidates
+                        payload: { task: nodeId, attempt_number: attempt, next_attempt: attempt + 1, reason: 'policy_retry_once', output_tail: tailLines(lastResult.output || '', 60) },
                     });
                     continue;
                 }

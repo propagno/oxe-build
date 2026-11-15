@@ -174,6 +174,28 @@ describe('Scheduler', () => {
     }
   });
 
+  test('retryPolicyOnce in a later execute: a task refused before gets attempt 1 only; the refused attempt keeps its output', async () => {
+    let callCount = 0;
+    const executor: TaskExecutor = {
+      async execute(): Promise<TaskResult> {
+        callCount++;
+        return { success: false, failure_class: 'policy', evidence: [], output: 'safeguards flagged\nConteúdo novo: read_file a.kt (10 chars)' };
+      },
+    };
+    const plan = makePlan([
+      { id: 'T1', title: 'T1', wave: 1, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false },
+      { id: 'T2', title: 'T2', wave: 1, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false },
+    ]);
+    const graph = compile(plan, SPEC, { default_workspace_strategy: 'inplace', default_max_retries: 0 });
+    const events: Array<{ type: string; work_item_id?: string; payload?: Record<string, unknown> }> = [];
+    const ctx = { ...makeCtx(tmpDir, executor), options: { retryPolicyOnce: true, policyRefusedBefore: ['T1'] }, onEvent: (e: { type: string; work_item_id?: string; payload?: Record<string, unknown> }) => events.push(e) };
+    await new Scheduler().run(graph, ctx as SchedulerContext);
+    assert.equal(callCount, 3, 'T1 once (already refused before), T2 twice (its one extra attempt)');
+    const retry = events.find((e) => e.type === 'RetryScheduled' && e.payload?.reason === 'policy_retry_once');
+    assert.equal(retry?.work_item_id, 'T2');
+    assert.match(String(retry?.payload?.output_tail), /read_file a\.kt/);
+  });
+
   test('cancel stops execution mid-run', async () => {
     const scheduler = new Scheduler();
     const executor: TaskExecutor = {

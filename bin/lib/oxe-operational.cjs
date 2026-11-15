@@ -4106,6 +4106,20 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
   const execVerifyTimeoutMs = Number(options.verifyTimeoutMs) > 0
     ? Number(options.verifyTimeoutMs)
     : Number(readProjectConfig(projectRoot).verify_timeout_ms) > 0 ? Number(readProjectConfig(projectRoot).verify_timeout_ms) : 600_000;
+  // cross-review 15/11: with --retry-policy-once in a LATER execute, attempt 1 already is the one extra attempt for a
+  // task this run saw refused — the scheduler must not add a second one
+  const policyRefusedBefore = [];
+  if (options.schedulerOptions && options.schedulerOptions.retryPolicyOnce) {
+    try {
+      for (const e of readEvents(projectRoot, activeSession)) {
+        if (!e || !e.work_item_id || (e.run_id && e.run_id !== current.run_id)) continue;
+        const p = e.payload || {};
+        if ((e.type === 'WorkItemBlocked' && p.failure_class === 'policy') || (e.type === 'RetryScheduled' && p.reason === 'policy_retry_once')) {
+          if (!policyRefusedBefore.includes(e.work_item_id)) policyRefusedBefore.push(e.work_item_id);
+        }
+      }
+    } catch { /* no event log: nothing refused before */ }
+  }
   const ctx = createExecutionContext(projectRoot, activeSession, {
     runId: current.run_id,
     executor,
@@ -4113,7 +4127,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     pluginRegistry: options.pluginRegistry || buildRuntimePluginRegistry(projectRoot),
     // OXB-165: no run-level timeout by default (the scheduler's 30 min aborted at the first wave past it); the
     // stale-progress guard covers hangs. --max-run-ms > config executor.max_run_ms.
-    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, outOfScopeRequirements: execScopeGaps, deferFailed: ((readProjectConfig(projectRoot) || {}).execute || {}).defer_failed !== false, dispatch: ((readProjectConfig(projectRoot) || {}).execute || {}).dispatch === 'stream' ? 'stream' : 'wave', failureClasses: ((readProjectConfig(projectRoot) || {}).execute || {}).failure_classes || undefined, ...(options.schedulerOptions || {}) },
+    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, outOfScopeRequirements: execScopeGaps, deferFailed: ((readProjectConfig(projectRoot) || {}).execute || {}).defer_failed !== false, dispatch: ((readProjectConfig(projectRoot) || {}).execute || {}).dispatch === 'stream' ? 'stream' : 'wave', failureClasses: ((readProjectConfig(projectRoot) || {}).execute || {}).failure_classes || undefined, ...(options.schedulerOptions || {}), ...(policyRefusedBefore.length ? { policyRefusedBefore } : {}) },
     // The scheduler already persists every event through the runtime bus (events/bus.ts →
     // appendEvent). This hook only forwards progress; writing here again duplicated the log.
     attemptChanges: (id) => lastAttemptChanges.get(id) || null,

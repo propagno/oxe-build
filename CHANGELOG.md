@@ -64,6 +64,9 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 
 - A falha `policy` diz o que o turno anterior acrescentou ao prompt: ferramenta, caminho e tamanho de cada resultado. Isso vai no texto e em `executor_usage.policy_trigger_candidates`. Uma recusa na primeira requisição aponta o prompt inicial.
 - **`runtime execute --retry-policy-once`:** cada tarefa ganha **uma** tentativa a mais depois de uma recusa de política, mesmo além do `max_retries`, e nunca uma segunda. É para um falso positivo do classificador, que já passou num retry simples (OxeChat F3 T7). O padrão continua sem retry automático.
+  - Num execute posterior do mesmo run, a tentativa 1 de uma tarefa já recusada **é** essa tentativa extra; não ganha uma segunda.
+  - A tentativa extra conta na cota de retries do run.
+  - A tentativa recusada guarda o seu log (`attempts/<tarefa>-<n>.log`).
 
 ### `alm label --remove`; o refine tira o `needs-info` respondido (OxeSpace 15/11, OXE-189)
 

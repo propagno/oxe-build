@@ -80,6 +80,8 @@ export interface SchedulerOptions {
    * a person) each task gets ONE more attempt after a policy refusal, even past its max_retries.
    */
   retryPolicyOnce?: boolean;
+  /** Tasks this run already saw refused by policy (a later execute): their attempt 1 IS the one extra attempt. */
+  policyRefusedBefore?: string[];
   /**
    * OXB-138: a task that exhausts its attempts is DEFERRED and the run goes on with every task that does not depend on
    * it (its dependents end `blocked_by_deferred`). false keeps the old stop-at-the-failed-wave behavior.
@@ -796,7 +798,7 @@ export class Scheduler {
     let lastVerifySignature: string | null = null;
     let verifySuspect = false;
     let maxAttempts = node.policy.max_retries + 1;
-    let policyRetried = false;
+    let policyRetried = Boolean((ctx.options as SchedulerOptions | undefined)?.policyRefusedBefore?.includes(nodeId));
     // 1.21.1 (OXB-047): work that arrives by another path never pays an agent and never becomes a human gate.
     // An explicit human gate (PLAN.json `gate`) still comes first: the attempt loop requests it as before.
     const humanGatePending = node.policy.requires_human_approval && !this.hasApprovedGate(node, ctx);
@@ -1068,12 +1070,19 @@ export class Scheduler {
         if (lastResult.failure_class === 'policy') {
           if (!(ctx.options as SchedulerOptions | undefined)?.retryPolicyOnce || policyRetried) break;
           policyRetried = true;
+          // the run's retry quota counts this attempt too (cross-review 15/11)
+          const policyRetryBlocked = this.consumeRetryQuota(ctx);
+          if (policyRetryBlocked) {
+            this.blockNode(nodeId, ctx, status, blocked, 'quota_exceeded', policyRetryBlocked);
+            return;
+          }
           if (attempt >= maxAttempts) maxAttempts = attempt + 1;
           this.emit(ctx, {
             type: 'RetryScheduled',
             work_item_id: nodeId,
             attempt_id: attemptId,
-            payload: { task: nodeId, attempt_number: attempt, next_attempt: attempt + 1, reason: 'policy_retry_once' },
+            // output_tail: the refused attempt keeps its log (attempts/<task>-<n>.log) with the trigger candidates
+            payload: { task: nodeId, attempt_number: attempt, next_attempt: attempt + 1, reason: 'policy_retry_once', output_tail: tailLines(lastResult.output || '', 60) },
           });
           continue;
         }

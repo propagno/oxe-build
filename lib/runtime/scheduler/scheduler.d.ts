@@ -63,6 +63,8 @@ export interface SchedulerOptions {
      * a person) each task gets ONE more attempt after a policy refusal, even past its max_retries.
      */
     retryPolicyOnce?: boolean;
+    /** Tasks this run already saw refused by policy (a later execute): their attempt 1 IS the one extra attempt. */
+    policyRefusedBefore?: string[];
     /**
      * OXB-138: a task that exhausts its attempts is DEFERRED and the run goes on with every task that does not depend on
      * it (its dependents end `blocked_by_deferred`). false keeps the old stop-at-the-failed-wave behavior.
