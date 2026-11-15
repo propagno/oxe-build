@@ -166,8 +166,12 @@ describe('alm refine: lint', () => {
     const pr = refine.lintSpec(prose, 'story');
     assert.ok(!pr.errors.some((e) => /"A confirmar" sem pergunta/.test(e)), pr.errors.join(' | '));
     assert.equal(pr.needs_info, false);
-    assert.ok(refine.TBC_RE.test('_(A confirmar)_') && refine.TBC_RE.test('- A confirmar') && refine.TBC_RE.test('Teste: a confirmar'));
-    assert.ok(!refine.TBC_RE.test('para confirmar') && !refine.TBC_RE.test('a confirmarão'));
+    for (const yes of ['_(A confirmar)_', '- A confirmar', 'Teste: a confirmar', 'Teste: A confirmar', '_A confirmar_', '_a confirmar_', '**a confirmar**', '- a confirmar', '1. a confirmar', 'a confirmar', 'Desconhecida (A confirmar)', '— a confirmar (arquivos)']) {
+      assert.ok(refine.TBC_RE.test(yes), `marker: ${yes}`);
+    }
+    for (const no of ['para confirmar', 'a confirmarão', 'obrigando-o a confirmar a exclusão', 'ajuda a confirmar o envio', 'volta a confirmar.', 'reconfirmar']) {
+      assert.ok(!refine.TBC_RE.test(no), `prose: ${no}`);
+    }
   });
 
   it('a good story passes, with its criteria and the open question (needs-info)', () => {

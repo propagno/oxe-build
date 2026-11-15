@@ -163,9 +163,12 @@ const TBC = 'A confirmar';
 /**
  * The "A confirmar" MARKER, never a substring: OxeSpace 15/11 (OXE-274) "…, para confirmar com segurança …" read as an
  * open item ("pAra confirmar"). A whole phrase: no letter/digit right before "a" nor right after "confirmar".
+ * Cross-review 15/11: prose also says "obrigando-o a confirmar a exclusão" — a lower-case "a confirmar" between words is
+ * the preposition, not the marker. So: "A confirmar" with a capital A anywhere; lower-case only where it stands alone
+ * (not preceded by "<word> " nor followed by " <word>"). `_` is a boundary (Markdown italics: _A confirmar_).
  */
-const TBC_RE = /(?<![\p{L}\p{N}_])a confirmar(?![\p{L}\p{N}_])/iu;
-const TBC_RE_G = new RegExp(TBC_RE.source, 'giu');
+const TBC_RE = /(?<![\p{L}\p{N}])(?:A[ \t]+(?:confirmar|Confirmar|CONFIRMAR)|(?<![\p{L}\p{N}][ \t]+)a[ \t]+confirmar(?![ \t]+[\p{L}\p{N}]))(?![\p{L}\p{N}])/u;
+const TBC_RE_G = new RegExp(TBC_RE.source, 'gu');
 const SECTIONS = {
   story: ['História', 'Contexto', 'Critérios de aceite', 'Regras de negócio', 'Regras técnicas', 'Fora de escopo', 'Dependências', 'Riscos', 'Definição de pronto', 'Referências', 'Perguntas em aberto'],
   bug: ['Resumo', 'Passos para reproduzir', 'Resultado esperado', 'Resultado obtido', 'Ambiente e versão', 'Causa', 'Critérios de correção', 'Teste de regressão', 'Fora de escopo', 'Definição de pronto', 'Referências', 'Perguntas em aberto'],

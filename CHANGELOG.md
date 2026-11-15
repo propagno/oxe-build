@@ -63,7 +63,7 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 
 ### "A confirmar" só como marcador (OxeSpace 15/11, OXE-274)
 
-- O lint do refine e do intake, o needs-info, o grooming e o intake da SPEC contam "A confirmar" só como frase inteira, sem letra ou dígito colados. Antes, "…, pa**ra confirmar** com segurança …" virava um item em aberto sem pergunta e reprovava o `alm intake`.
+- O lint do refine e do intake, o needs-info, o grooming e o intake da SPEC contam "A confirmar" só como frase inteira, sem letra ou dígito colados; o "a" minúsculo entre palavras ("obrigando-o a confirmar a exclusão") é preposição, e `_A confirmar_` em itálico conta. Antes, "…, pa**ra confirmar** com segurança …" virava um item em aberto sem pergunta e reprovava o `alm intake`.
 
 ### Registro de regressão com o hash re-congelado (OxeSpace 15/11, OxeChat F3)
 
