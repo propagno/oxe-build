@@ -14,8 +14,12 @@ const { spawnSync } = require('child_process');
 
 const MARKUP_RE = /\.(tsx|jsx|vue|svelte|html?|astro)$/i;
 const TEST_PATH_RE = /(^|\/)(e2e|tests?|__tests__|spec|playwright|cypress)\/|\.(test|spec|e2e)\.[cm]?[jt]sx?$/i;
+const NON_DOM_RE = /\.(css|scss|sass|less|styl|md|mdx|txt|svg|map|lock|ya?ml)$|(^|\/)(docs|\.oxe|\.github)\/|(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|CHANGELOG\.md)$/i;
 // data-* / cmdk-* attributes in markup: name, then an optional static value ("x", 'x', {"x"}, {`x-${…}`} → prefix)
 const ATTR_RE = /(?<![\w-])((?:data|cmdk)-[a-z0-9-]+)(?:\s*=\s*(?:"([^"{}]*)"|'([^'{}]*)'|\{\s*["'`]([^"'`$]*)(\$\{)?[^}]*\}))?/gi;
+// OxeSpace 15/11 (OxeCode F5 T22): an ACCESSIBLE NAME e2e reads by role + name ("Primary navigation", "Clear search"):
+// aria-label="…" static, or aria-label={t('nav.primary')} resolved through the locale file
+const ARIA_RE = /(?<![\w-])aria-label\s*=\s*(?:"([^"{}]{3,})"|'([^'{}]{3,})'|\{\s*t\(\s*['"`]([\w.:-]+)['"`][^)]*\)\s*\})/gi;
 
 function git(root, args) {
   const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
@@ -27,7 +31,8 @@ function removedHooks(diffText) {
   const out = new Map();
   let file = null;
   for (const line of String(diffText || '').split(/\r?\n/)) {
-    const m = /^\+\+\+ b\/(.+)$/.exec(line) || /^--- a\/(.+)$/.exec(line);
+    if (line === '--- /dev/null') { file = null; continue; } // an added file: nothing removed from it
+    const m = /^\+\+\+ "?b\/(.+?)"?$/.exec(line) || /^--- "?a\/(.+?)"?$/.exec(line);
     if (m) { if (line.startsWith('---')) file = m[1]; continue; }
     if (!file || !MARKUP_RE.test(file) || TEST_PATH_RE.test(file) || !line.startsWith('-') || line.startsWith('---')) continue;
     for (const a of line.slice(1).matchAll(ATTR_RE)) {
@@ -40,8 +45,40 @@ function removedHooks(diffText) {
       const key = `${name}=${value != null ? value : prefix != null ? `${prefix}*` : ''}`;
       if (!out.has(key)) out.set(key, { name, value, prefix, file });
     }
+    for (const a of line.slice(1).matchAll(ARIA_RE)) {
+      const value = a[1] != null ? a[1] : a[2] != null ? a[2] : null;
+      const i18nKey = a[3] || null;
+      const key = `aria-label=${value != null ? value : `t:${i18nKey}`}`;
+      if (!out.has(key)) out.set(key, { name: 'aria-label', value, prefix: null, i18nKey, file });
+    }
   }
   return [...out.values()];
+}
+
+/** The text of a dotted i18n key in a locale JSON file at `ref` ({ nav: { primary: "Primary navigation" } }). */
+function localeText(root, ref, localeFile, key) {
+  if (!localeFile || !key) return null;
+  let doc = null;
+  try { doc = JSON.parse(git(root, ['show', `${ref}:${String(localeFile).replace(/\\/g, '/')}`]) || 'null'); } catch { doc = null; }
+  if (!doc) return null;
+  if (typeof doc[key] === 'string') return doc[key]; // flat keys ("nav.primary": "…")
+  let cur = doc;
+  for (const part of String(key).split(/[.:]/)) { if (!cur || typeof cur !== 'object') return null; cur = cur[part]; }
+  return typeof cur === 'string' ? cur : null;
+}
+
+/** An accessible name removed from markup and gone from the product, still read by tests by its TEXT. */
+function ariaFinding(root, sha, h, options) {
+  const text = h.value != null ? h.value : localeText(root, sha, options.locale, h.i18nKey);
+  if (!text || text.length < 3) return null;
+  // kept: the key still used in code (i18n), or the static name still in markup
+  const kept = h.i18nKey
+    ? grepAll(root, sha, [h.i18nKey]).filter((l) => { const f = l.split(':')[0]; return !TEST_PATH_RE.test(f) && !NON_DOM_RE.test(f) && !/\.json$/i.test(f); })
+    : grepAll(root, sha, [text]).filter((l) => { const f = l.split(':')[0]; return MARKUP_RE.test(f) && !TEST_PATH_RE.test(f); });
+  if (kept.length) return null;
+  const readers = grepAll(root, sha, [text]).filter((l) => TEST_PATH_RE.test(l.split(':')[0]));
+  if (!readers.length) return null;
+  return { hook: `aria-label="${text}"${h.i18nKey ? ` (${h.i18nKey})` : ''}`, removed_in: h.file, readers: readers.slice(0, 12).map((l) => l.slice(0, 200)), readers_total: readers.length };
 }
 
 /** Lines of the tree at `ref` that contain every needle (git grep -F, all needles on one line), as "file:line: text". */
@@ -65,11 +102,14 @@ function hooksStillRead(root, parent, sha, options = {}) {
   if (!hooks.length) return [];
   const findings = [];
   for (const h of hooks) {
+    if (h.name === 'aria-label') { const f = ariaFinding(root, sha, h, options); if (f) findings.push(f); continue; }
     const token = h.value != null ? h.value : h.prefix;
     const productNeedles = token != null ? [token] : [h.name];
     // still in the product (another component keeps it): not removed
     // conservative: the token anywhere in a non-test file (a markup attribute, an id list that builds it) counts as kept
-    const inProduct = grepAll(root, sha, productNeedles).filter((l) => !TEST_PATH_RE.test(l.split(':')[0]));
+    // cross-review 15/11: a leftover CSS rule ([cmdk-root] {…}), a doc, a lockfile never RENDER the hook — they do not
+    // keep it in the product
+    const inProduct = grepAll(root, sha, productNeedles).filter((l) => { const f = l.split(':')[0]; return !TEST_PATH_RE.test(f) && !NON_DOM_RE.test(f); });
     if (inProduct.length) continue;
     const readerNeedles = h.name === 'data-testid' && token != null ? [token] : token != null ? [h.name, token] : [h.name];
     let readers = grepAll(root, sha, readerNeedles).filter((l) => TEST_PATH_RE.test(l.split(':')[0]));
@@ -84,4 +124,34 @@ function message(findings) {
   return findings.map((f) => `${f.hook} (removido de ${f.removed_in}) ainda é lido por ${f.readers_total} linha(s) de teste — ${f.readers.slice(0, 3).map((r) => r.split(':').slice(0, 2).join(':')).join(', ')}${f.readers_total > 3 ? ', …' : ''}`).join('; ');
 }
 
-module.exports = { removedHooks, hooksStillRead, message, MARKUP_RE, TEST_PATH_RE };
+/**
+ * OxeSpace 15/11 (Celular F3, #856): tasks wrote strings straight into a GENERATED file (strings.xml, generated from
+ * shared/locales/*\/mobile.json); the generator's test failed first in the PR. Config `generated_files`:
+ * [{ file, source, test? }] (globs). A commit that changes a generated file without changing any of its sources is
+ * refused — the edit goes in the source, then the generator runs.
+ */
+function globRe(glob) {
+  const g = String(glob).replace(/\\/g, '/');
+  return new RegExp(`^${g.replace(/[.+^$()|[\]\\]/g, '\\$&').replace(/\*\*\/?/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\u0000/g, '.*')}$`);
+}
+
+function generatedEdits(changedPaths, rules) {
+  const changed = (changedPaths || []).map((p) => String(p).replace(/\\/g, '/'));
+  const out = [];
+  for (const r of Array.isArray(rules) ? rules : []) {
+    if (!r || !r.file || !r.source) continue;
+    const fileRes = (Array.isArray(r.file) ? r.file : [r.file]).map(globRe);
+    const srcRes = (Array.isArray(r.source) ? r.source : [r.source]).map(globRe);
+    const edited = changed.filter((p) => fileRes.some((re) => re.test(p)));
+    if (!edited.length) continue;
+    if (changed.some((p) => srcRes.some((re) => re.test(p)))) continue; // the source changed too: the generator ran
+    out.push({ files: edited, source: Array.isArray(r.source) ? r.source : [r.source], test: r.test || null, generator: r.generator || null });
+  }
+  return out;
+}
+
+function generatedMessage(found) {
+  return found.map((g) => `${g.files.join(', ')} é gerado de ${g.source.join(', ')}: edite a fonte e rode o gerador${g.generator ? ` (${g.generator})` : ''}${g.test ? `; o teste ${g.test} compara a saída com o arquivo commitado` : ''}`).join('; ');
+}
+
+module.exports = { removedHooks, hooksStillRead, message, localeText, generatedEdits, generatedMessage, MARKUP_RE, TEST_PATH_RE };

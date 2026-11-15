@@ -47,6 +47,27 @@ describe('verify.phase_suites: the repo suites that read the phase files, in the
     assert.doesNotMatch(g.command, /missing\.test/, 'a guard that does not exist is skipped');
   });
 
+  it('only real suites (no helper, fixture, e2e spec or parked suite); path.join names a file; max_files never cuts the guards (cross-review 15/11)', () => {
+    const { dir, base } = repo();
+    write(dir, 'tests/acceptance/helpers/h.ts', "import { tint } from '../../../src/tint';\n");
+    write(dir, 'tests/acceptance/fixtures/notes.md', 'reads src/tint.ts\n');
+    write(dir, 'tests/acceptance/f1/menu.e2e.test.ts', "import { tint } from '../../../src/tint';\n");
+    write(dir, 'tests/acceptance/parked-f9/later.test.ts', "import { tint } from '../../../src/tint';\n");
+    write(dir, 'src/css/app.css', '.a {}\n');
+    write(dir, 'tests/acceptance/f1/joined.test.ts', "const p = require('path').join('src', 'css', 'app.css');\n");
+    git(dir, 'add', '-A'); git(dir, 'commit', '-qm', 'more');
+    write(dir, 'src/css/app.css', '.a { color: red }\n');
+    git(dir, 'commit', '-qam', 'phase 2');
+    const [g] = op.phaseSuitesGates(dir, base, { verify: { phase_suites: true } });
+    const files = g.command.replace('npx vitest run ', '').split(' ');
+    assert.ok(files.includes('tests/acceptance/f1/joined.test.ts'), files.join(' '));
+    for (const bad of ['tests/acceptance/helpers/h.ts', 'tests/acceptance/fixtures/notes.md', 'tests/acceptance/f1/menu.e2e.test.ts', 'tests/acceptance/parked-f9/later.test.ts']) assert.ok(!files.includes(bad), bad);
+    const [capped] = op.phaseSuitesGates(dir, base, { verify: { phase_suites: { max_files: 1, guards: ['tests/unit/css-classes-guard.test.ts'] } } });
+    const cf = capped.command.replace('npx vitest run ', '').split(' ');
+    assert.equal(cf.length, 2);
+    assert.equal(cf[1], 'tests/unit/css-classes-guard.test.ts', 'the guard survives the cap');
+  });
+
   it('it is one of the implicit phase gates (stub-check off too)', () => {
     const { dir, base } = repo();
     const state = { phases: [{ id: 'F5', base_commit: base }] };

@@ -206,19 +206,26 @@ function check(root, options = {}) {
   const spawn = options.spawn || spawnSync;
   const target = String(options.target || '').trim();
   const quickDir = path.join(root, '.oxe', 'quick');
-  const quickExists = fs.existsSync(quickDir) ? (id) => fs.existsSync(path.join(quickDir, `${id}.json`)) : () => null;
-  // the start of the record store this checkout keeps: the earliest started_at among .oxe/quick/*.json
+  // OxeSpace 15/11: the records are mirrored in the git common dir (shared by every worktree): a record missing here
+  // but in the mirror counts as recorded
+  let mirrorDir = null;
+  try { mirrorDir = require('./oxe-quick.cjs').mirrorDirOf(root); } catch { mirrorDir = null; }
+  const stores = [quickDir, mirrorDir].filter((d) => d && fs.existsSync(d));
+  const quickExists = stores.length ? (id) => stores.some((d) => fs.existsSync(path.join(d, `${id}.json`))) : () => null;
+  // the start of the record stores this checkout sees: the earliest started_at among their records
   const quickStoreSince = (() => {
     let min = null;
-    try {
-      for (const f of fs.readdirSync(quickDir)) {
-        if (!/^Q-.*\.json$/.test(f)) continue;
-        let r = null;
-        try { r = JSON.parse(fs.readFileSync(path.join(quickDir, f), 'utf8')); } catch { r = null; }
-        const at = r && (r.started_at || r.created_at);
-        if (at && Number.isFinite(Date.parse(at)) && (!min || Date.parse(at) < Date.parse(min))) min = at;
-      }
-    } catch { /* no store */ }
+    for (const dir of stores) {
+      try {
+        for (const f of fs.readdirSync(dir)) {
+          if (!/^Q-.*\.json$/.test(f)) continue;
+          let r = null;
+          try { r = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { r = null; }
+          const at = r && (r.started_at || r.created_at);
+          if (at && Number.isFinite(Date.parse(at)) && (!min || Date.parse(at) < Date.parse(min))) min = at;
+        }
+      } catch { /* no store */ }
+    }
     return min;
   })();
   let source;

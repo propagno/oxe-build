@@ -77,6 +77,7 @@ const ALLOWED_CONFIG_KEYS = [
   'checkpoint_check_timeout_ms',
   'checkpoint_related_tests',
   'checkpoint_dom_hooks',
+  'generated_files',
   'parked_tests',
   'parked_acceptance_check',
   'integration_checks',

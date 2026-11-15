@@ -72,6 +72,16 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
   - O cache das entradas já aprovadas é gravado mesmo quando o processo morre no meio.
   - Cada suíte também ganha uma linha de progresso.
 
+### Arquivo gerado e nomes acessíveis no checkpoint (OxeSpace 15/11, Celular F3 #856, OxeCode F5 T22)
+
+- **`generated_files`:** `[{ file, source, test?, generator? }]`. Um commit que muda um arquivo gerado sem mudar as fontes dele desfaz o checkpoint (`generated_file`), com "edite a fonte e rode o gerador". Caso real: 14 strings escritas direto no `strings.xml`, e o teste do gerador reprovou primeiro no CI do PR.
+- **Nomes acessíveis no check de DOM hooks:** um `aria-label` removido, estático ou por chave de i18n (`{ "locale": "…en….json" }` resolve a chave no texto), que some do produto e que o e2e lê por role + nome. Caso real: o `<nav>` "Primary navigation" e o botão "Clear search".
+- **Revisão cruzada:**
+  - Uma tarefa reprovada por `dom_hooks` ou `generated_file` não é re-commitada às cegas.
+  - A tentativa que volta recebe o motivo do checkpoint desfeito no prompt.
+  - CSS, docs e lockfiles não "mantêm" um hook.
+  - O `phase_suites` só pega suítes reais: sem helpers, e2e ou `parked-*`. Os guards nunca são cortados pelo `max_files`, e o `path.join` conta como citar o arquivo.
+
 ### Verify da fase roda as suítes do repo que leem os arquivos dela (OxeSpace 15/11, OxeCode F5 → #854)
 
 - **`verify.phase_suites`:** opcional. Liga um gate implícito `phase-suites`, que roda:
@@ -88,6 +98,12 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
   - Um atributo mantido em outro componente, ou cujos leitores saem no mesmo commit, não conta.
 - **O caso real:** a T30 trocou o CommandMenu pela paleta e tirou o `[cmdk-root]`/`[cmdk-item][data-value=cmd-…]` que uns 30 specs e2e liam. A quebra só apareceu no CI do PR.
 - **Configuração:** `checkpoint_dom_hooks: "warn"` só avisa; `false` desliga.
+
+### Registros de quick espelhados no git (OxeSpace 15/11, worktrees t30 e F5)
+
+- **O problema:** registros sumiam do `.oxe/quick`, que não é versionado, de uma worktree (um `.oxe` recriado, uma pasta sincronizada). Depois disso, o `check-origin` recusava commits feitos pelo `quick commit`.
+- **O espelho:** todo registro também é gravado em `<git-common-dir>/oxe/quick/`, compartilhado por todas as worktrees do repositório e nunca tocado por um checkout.
+- **A leitura:** um registro ausente no local é lido do espelho e restaurado. O `quick list` e o `check-origin` enxergam os dois lugares.
 
 ### Quick sem registro, trailer presente (OxeSpace 15/11, #854)
 

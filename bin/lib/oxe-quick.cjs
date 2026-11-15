@@ -23,13 +23,52 @@ function newId(now = new Date()) {
   return `Q-${d}-${crypto.randomBytes(3).toString('hex').slice(0, 4)}`;
 }
 
+/**
+ * OxeSpace 15/11 (t30, F5): quick records vanished from a worktree's untracked .oxe/quick (a re-created .oxe, a
+ * synced folder) and check-origin then refused commits `quick commit` made. Every record is mirrored in the git COMMON
+ * dir (`git rev-parse --git-common-dir`/oxe/quick), shared by all the worktrees of the repo and never touched by a
+ * checkout; a record missing locally is read — and restored — from there.
+ */
+const mirrorCache = new Map();
+function mirrorDirOf(root) {
+  const key = path.resolve(root);
+  if (mirrorCache.has(key)) return mirrorCache.get(key);
+  let dir = null;
+  try {
+    const r = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: root, encoding: 'utf8', windowsHide: true });
+    const out = r.status === 0 ? String(r.stdout || '').trim() : '';
+    if (out) dir = path.join(path.resolve(root, out), 'oxe', 'quick');
+  } catch { dir = null; }
+  mirrorCache.set(key, dir);
+  return dir;
+}
+
 function read(root, id) {
-  try { return JSON.parse(fs.readFileSync(fileOf(root, id), 'utf8')); } catch { return null; }
+  try { return JSON.parse(fs.readFileSync(fileOf(root, id), 'utf8')); } catch { /* not here: the mirror */ }
+  const m = mirrorDirOf(root);
+  if (!m) return null;
+  try {
+    const text = fs.readFileSync(path.join(m, `${id}.json`), 'utf8');
+    const rec = JSON.parse(text);
+    // restore the local copy (best effort): the worktree's record store is whole again
+    try { fs.mkdirSync(dirOf(root), { recursive: true }); fs.writeFileSync(fileOf(root, id), text); } catch { /* */ }
+    return rec;
+  } catch { return null; }
 }
 
 function write(root, rec) {
   fs.mkdirSync(dirOf(root), { recursive: true });
-  fs.writeFileSync(fileOf(root, rec.id), `${JSON.stringify(rec, null, 2)}\n`);
+  const text = `${JSON.stringify(rec, null, 2)}\n`;
+  fs.writeFileSync(fileOf(root, rec.id), text);
+  const m = mirrorDirOf(root);
+  if (m) { try { fs.mkdirSync(m, { recursive: true }); fs.writeFileSync(path.join(m, `${rec.id}.json`), text); } catch { /* auxiliar */ } }
+}
+
+/** A quick record exists here or in the repo's mirror (the check-origin question). */
+function exists(root, id) {
+  if (fs.existsSync(fileOf(root, id))) return true;
+  const m = mirrorDirOf(root);
+  return Boolean(m && fs.existsSync(path.join(m, `${id}.json`)));
 }
 
 /** The open quick of this project, or null. */
@@ -201,9 +240,12 @@ function cancel(root, input = {}) {
 }
 
 function list(root) {
-  try {
-    return fs.readdirSync(dirOf(root)).filter((f) => ID_RE.test(f.replace(/\.json$/, ''))).map((f) => read(root, f.replace(/\.json$/, ''))).filter(Boolean).sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)));
-  } catch { return []; }
+  const ids = new Set();
+  const take = (dir) => { try { for (const f of fs.readdirSync(dir)) { const id = f.replace(/\.json$/, ''); if (ID_RE.test(id)) ids.add(id); } } catch { /* */ } };
+  take(dirOf(root));
+  const m = mirrorDirOf(root);
+  if (m) take(m);
+  return [...ids].map((id) => read(root, id)).filter(Boolean).sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)));
 }
 
 /** The ALM comment of a quick: the mini-spec at the start, the commits and the verification at the end. */
@@ -215,4 +257,4 @@ function cardComment(rec, phase) {
     '', rec.verify ? `Verificação: \`${rec.verify.command}\` → ${rec.verify.ok ? 'passou' : `falhou (exit ${rec.verify.exit})`}` : 'Verificação: não informada (quick done --verify "<comando>")'].join('\n');
 }
 
-module.exports = { start, done, commit, cancel, current, list, read, trailers, commitsOf, quickMd, cardComment, newId, ID_RE };
+module.exports = { start, done, commit, cancel, current, list, read, exists, mirrorDirOf, trailers, commitsOf, quickMd, cardComment, newId, ID_RE };

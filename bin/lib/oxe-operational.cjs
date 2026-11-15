@@ -539,7 +539,19 @@ function buildNodeContextProvider(projectRoot, activeSession) {
       repoRules,
       handoffs,
       gitStatus,
-      lessons: [...lessons, ...(reviewSentinel ? [`Marcador desta sessão de execução (não o repita em arquivos): ${reviewSentinel}`] : [])],
+      lessons: [
+        ...lessons,
+        ...(reviewSentinel ? [`Marcador desta sessão de execução (não o repita em arquivos): ${reviewSentinel}`] : []),
+        // cross-review 15/11: the attempt that comes back after a failed checkpoint (dom_hooks, related tests) is told
+        // why the last one was undone — otherwise it redelivers the same change
+        ...(() => {
+          try {
+            const t = ((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).find((x) => x && x.id === node.id);
+            const cf = t && t.done !== true ? t.checkpoint_failed : null;
+            return cf && cf.reason ? [`O checkpoint anterior desta tarefa foi desfeito (${cf.kind || 'checkpoint'}): ${String(cf.reason).slice(0, 600)} — corrija isso nesta tentativa`] : [];
+          } catch { return []; }
+        })(),
+      ],
       externalSignals: externalSignalsFor(node),
     };
   };
@@ -765,11 +777,16 @@ function phaseSuitesGates(projectRoot, base, projectConfig) {
     if (!opt || !base) return [];
     const o = opt === true ? {} : opt;
     const changed = (gitLines(projectRoot, ['diff', '--name-only', base]) || []).map((f) => f.replace(/\\/g, '/')).filter((f) => f && !f.startsWith('.oxe/'));
-    if (!changed.length) return [];
+    // the guards run always (cross-review 15/11): even a phase whose diff the suites do not read
+    const guardFiles = (Array.isArray(o.guards) ? o.guards : []).map((g) => String(g).replace(/\\/g, '/')).filter((p) => fs.existsSync(path.join(projectRoot, p)));
+    if (!changed.length && !guardFiles.length) return [];
     const si = require('./oxe-suite-impact.cjs');
     const include = (Array.isArray(o.include) && o.include.length ? o.include : ['tests/acceptance/']).map((p) => String(p).replace(/\\/g, '/'));
+    const exclude = (Array.isArray(o.exclude) ? o.exclude : []).map((p) => String(p).replace(/\\/g, '/'));
     const tracked = si.trackedFiles(projectRoot);
-    const candidates = new Set(tracked.filter((f) => si.TEST_RE.test(f) && include.some((p) => f.startsWith(p))));
+    // real suite files only (not helpers, fixtures or docs under tests/), never e2e specs nor parked future-phase suites
+    const isSuite = (f) => /\.(test|spec)\.[cm]?[jt]sx?$/i.test(f) && !/\.e2e\./i.test(f) && !/(^|\/)parked[^/]*\//i.test(f);
+    const candidates = new Set(tracked.filter((f) => isSuite(f) && include.some((p) => f.startsWith(p)) && !exclude.some((p) => f.startsWith(p))));
     const picked = new Set();
     const { byTarget } = si.importIndex(projectRoot, { files: tracked });
     for (const c of changed) for (const imp of byTarget.get(c) || []) if (candidates.has(imp.test)) picked.add(imp.test);
@@ -777,12 +794,14 @@ function phaseSuitesGates(projectRoot, base, projectConfig) {
       if (picked.has(t)) continue;
       let text = '';
       try { text = fs.readFileSync(path.join(projectRoot, t), 'utf8'); } catch { continue; }
-      if (changed.some((c) => text.includes(c) || (path.posix.basename(c).length >= 8 && text.includes(path.posix.basename(c))))) picked.add(t);
+      // path.join('src', 'css', 'app.css') names src/css/app.css too
+      const joined = text.replace(/(['"`])\s*,\s*(['"`])/g, '/');
+      if (changed.some((c) => text.includes(c) || joined.includes(c) || (path.posix.basename(c).length >= 8 && text.includes(path.posix.basename(c))))) picked.add(t);
     }
-    for (const g of Array.isArray(o.guards) ? o.guards : []) { const p = String(g).replace(/\\/g, '/'); if (fs.existsSync(path.join(projectRoot, p))) picked.add(p); }
-    if (!picked.size) return [];
+    if (!picked.size && !guardFiles.length) return [];
     const max = Number(o.max_files) > 0 ? Number(o.max_files) : 60;
-    const files = [...picked].sort().slice(0, max);
+    // the cap is on the discovered suites only: the guards are never cut
+    const files = [...new Set([...[...picked].filter((f) => !guardFiles.includes(f)).sort().slice(0, max), ...guardFiles])];
     const template = typeof o.run_command === 'string' && o.run_command.includes('{files}') ? o.run_command : 'npx vitest run {files}';
     return [{ id: 'phase-suites', when: 'phase_verify', command: template.replace('{files}', files.join(' ')), description: `suítes do repo que leem arquivos da fase e guardas do repo (${files.length}${picked.size > max ? ` de ${picked.size}` : ''})`, on_fail: 'cr_defect', ...(typeof o.runner === 'string' && o.runner.includes('{command}') ? { runner: o.runner } : {}) }];
   } catch { return []; }
@@ -9434,7 +9453,8 @@ function retryFailedCheckpoints(projectRoot, activeSession, options = {}) {
   let doc = null;
   try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
   // OXB-172: a related-tests red is work for the task (or a scope gap), not a commit to retry.
-  const pending = doc && Array.isArray(doc.tasks) ? doc.tasks.filter((t) => t && t.done !== true && t.checkpoint_failed && !t.checkpoint_failed.related_red) : [];
+  // cross-review 15/11: a dom_hooks red is work too — re-committing the same snapshot fails the same way
+  const pending = doc && Array.isArray(doc.tasks) ? doc.tasks.filter((t) => t && t.done !== true && t.checkpoint_failed && !t.checkpoint_failed.related_red && !['dom_hooks', 'generated_file'].includes(t.checkpoint_failed.kind)) : [];
   // OXB-170: an interrupted task's leftovers are attributed first (event), whatever is retried.
   const interrupted = interruptedTaskWork(projectRoot, activeSession).filter((w) => !pending.some((t) => t.id === w.task));
   if (interrupted.length) appendEvent(projectRoot, activeSession, { type: 'InterruptedWorkFound', payload: { tasks: interrupted } });
@@ -9635,18 +9655,34 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
   // OxeSpace 15/11 (OxeCode F6 T30 → #852): a DOM hook the commit removes from markup (data-* / cmdk-*) that is gone
   // from the product but still read by e2e/tests — static, no e2e run. config checkpoint_dom_hooks: false | "warn".
   let domHooks = null;
+  // OxeSpace 15/11 (Celular F3 #856): a GENERATED file edited without its source (config generated_files)
   if (!check || check.ok) {
     try {
-      const mode = (readProjectConfig(projectRoot) || {}).checkpoint_dom_hooks;
-      if (mode !== false) {
+      const pcfg = readProjectConfig(projectRoot) || {};
+      const dh = require('./oxe-dom-hooks.cjs');
+      const gen = dh.generatedEdits(paths, pcfg.generated_files);
+      if (gen.length) check = { ok: false, kind: 'generated_file', command: 'generated_files (estático)', tail: dh.generatedMessage(gen), generated: gen };
+    } catch { /* auxiliar */ }
+  }
+  if (!check || check.ok) {
+    try {
+      const raw = (readProjectConfig(projectRoot) || {}).checkpoint_dom_hooks;
+      // false | "warn" | { mode, locale } (locale: the JSON whose texts the aria-label i18n keys resolve to)
+      const opt = raw && typeof raw === 'object' ? raw : { mode: raw };
+      if (opt.mode !== false && opt.mode !== 'off') {
         const dh = require('./oxe-dom-hooks.cjs');
-        const found = dh.hooksStillRead(projectRoot, oldHead, head);
+        const found = dh.hooksStillRead(projectRoot, oldHead, head, { locale: opt.locale || null });
         if (found.length) {
-          domHooks = { mode: mode === 'warn' ? 'warn' : 'error', findings: found, message: dh.message(found) };
+          domHooks = { mode: opt.mode === 'warn' ? 'warn' : 'error', findings: found, message: dh.message(found) };
           if (domHooks.mode === 'error') check = { ok: false, kind: 'dom_hooks', command: 'dom hooks (estático)', tail: domHooks.message, dom_hooks: found };
         }
       }
     } catch { /* auxiliar */ }
+  }
+  if (check && !check.ok && check.kind === 'generated_file') {
+    gitOut(projectRoot, ['update-ref', '-m', 'oxe: checkpoint generated file', 'HEAD', oldHead, head]);
+    restore();
+    return { committed: false, failed: true, kind: 'generated_file', generated: check.generated, reason: `a tarefa editou arquivo gerado: ${check.tail}`, snapshot: entries };
   }
   if (check && !check.ok && check.kind === 'dom_hooks') {
     gitOut(projectRoot, ['update-ref', '-m', 'oxe: checkpoint dom hooks', 'HEAD', oldHead, head]);
