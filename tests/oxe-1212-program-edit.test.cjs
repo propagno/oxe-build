@@ -131,6 +131,18 @@ describe('OXB-058: spec amend / spec add', () => {
     assert.throws(() => op.runtimeSpecAmend(dir, null, { id: 'A40', append: 'x', cr: 'CR-99', by: 'tl', reason: 'motivo suficiente' }), /CR-99 não existe/);
   });
 
+  it('amend of another criterion with --cr CR-n attaches to that CR (joins its criteria), never a new CR (OxeSpace 15/11, Approvals polish)', () => {
+    const dir = project();
+    const fb = op.runtimeFeedback(dir, null, { class: 'spec_gap', summary: 'A40 precisa citar o install-over', criteria: 'A40', by: 'tl' });
+    const crs = () => ndjson(dir).filter((r) => r.kind === 'cr');
+    const out = op.runtimeSpecAmend(dir, null, { id: 'A41', append: 'update também', cr: fb.cr.id, by: 'tl', reason: 'a mesma mudança toca o A41' });
+    assert.equal(out.attached, true);
+    assert.equal(out.cr.id, fb.cr.id);
+    assert.equal(crs().length, 1, 'no new CR');
+    const cr = require('../bin/lib/oxe-change.cjs').listChanges(path.join(dir, '.oxe', 'program')).find((c) => c.id === fb.cr.id);
+    assert.deepEqual(cr.criteria.sort(), ['A40', 'A41']);
+  });
+
   it('amend refuses an unknown criterion and a missing reason, without touching the SPEC', () => {
     const dir = project();
     assert.throws(() => op.runtimeSpecAmend(dir, null, { id: 'A99', text: 'x', by: 'tl', reason: 'motivo suficiente' }), /A99 não está/);

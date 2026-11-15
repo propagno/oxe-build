@@ -72,6 +72,18 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
   - O cache das entradas já aprovadas é gravado mesmo quando o processo morre no meio.
   - Cada suíte também ganha uma linha de progresso.
 
+### G40: e2e congelado que age antes do app ficar pronto; checks de integração no checkpoint (OxeSpace 15/11)
+
+- **G40:** em cada e2e congelado do plano, de tarefa pendente, a primeira interação depois de abrir o app (`launchApp`, `goto`, `resizeWindow`…) precisa vir depois de uma espera de prontidão (`waitFor`, `toBeVisible`, `waitForLoadState`… ou um helper do repo em `lint.e2e_ready_helpers`). Sai como aviso, com `arquivo:linha`. Caso real: o PR #863 apertou Ctrl+Shift+U uns 50 ms antes de a shell montar os atalhos.
+- **Checkpoint com os checks de integração do promote:** o checkpoint roda os mesmos checks que o promote (`check-file-size`, `notices:check`) na árvore do commit. Uma tarefa nunca passa no checkpoint para depois falhar no promote. Desliga com `checkpoint_integration_checks: false`. Caso real: a T2 do OxeQuery polish passou de 1000 linhas no `index.ts`.
+- **A mensagem do promote:** num check de integração vermelho, ela mostra o fim da saída (o arquivo culpado) e diz que a branch local fica e é refeita no próximo promote.
+- **G40b, rótulo de e2e contra o catálogo:** com `lint.ui_strings` (os JSON de strings do app), um e2e congelado que fixa `getByRole(papel, { name: /Regex/ })` sensível a maiúsculas, que não casa nenhuma string do catálogo mas casaria ignorando maiúsculas, é nomeado com a string real e a correção `/…/i`. Caso real (#862): `/Comfortable/` contra "Use comfortable density".
+- **G41, Paparazzi/layoutlib:** um teste congelado Paparazzi que troca locale ou fontScale pelo `createConfigurationContext`, ou à mão, é nomeado com `arquivo:linha` e com a correção: um `DeviceConfig` na regra, ou uma classe por locale. No layoutlib, o `createConfigurationContext` devolve o próprio contexto. Caso real: a T13 do Celular F4, com cerca de US$ 23 em três tentativas.
+- **G42, guarda de containers:** um teste congelado que sobe container (`docker run`/`compose`, testcontainers) protegido só por `docker info`, sem checar o `OSType` nem `--platform`, é nomeado. Um `test.skip(cond)` sem motivo também. Caso real: no PR #867, o runner Windows tem Docker com containers Windows, e o `postgres:16-alpine` falhou em vez de pular.
+- **`runtime feedback`:** o `--reason` vale como resumo quando falta o `--summary`. O `feedback resolve|withdraw` diz de uma vez todas as flags que faltam.
+- **`runtime execute --wave N` sem nada a rodar:** quando todas as tarefas da onda já estão done, o comando sai 0 com "onda N: nada a rodar" e o evento `WaveNothingToRun`. Antes saía 1 com "Bloqueados: 18", listando tarefas de outras ondas, e um laço por onda parava ali.
+- **`spec amend --cr CR-n`:** um critério que o CR não citava passa a entrar nele, com o registro `kind: criteria`, em vez de abrir um CR novo. Caso real: A2 e A3 emendados sob o CR-01 abriram o CR-02 e o CR-03 sozinhos.
+
 ### G39: teste existente que fixa o que uma tarefa estende (OxeSpace 15/11, OxeQuery polish T1, US$ 11,70)
 
 - **O check:** para cada caminho de membro que um teste congelado de uma tarefa pendente pede, e que o produto ainda não tem (`IPC_CHANNELS.agentActivity.changed`), o `plan lint` acusa os testes **fora** das entradas do plano que fixam o pai por igualdade exata (`expect(IPC_CHANNELS.agentActivity).toEqual({ list, detail, badge })`) sem ter essa folha. A mensagem nomeia `arquivo:linha` e diz que o teste precisa de um release antes da tarefa.

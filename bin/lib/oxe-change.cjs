@@ -53,6 +53,8 @@ function listChanges(programDir) {
     if (entry.kind === 'cr') byId.set(entry.id, { ...entry });
     else if (entry.kind === 'status' && byId.has(entry.id)) Object.assign(byId.get(entry.id), { status: entry.status, resolution: entry.resolution || null, resolved_at: entry.at, resolved_by: entry.by || null }, entry.no_amendment ? { no_amendment: true } : {});
     // plan scope add: the files a CR added to a task's scope (who, why)
+    // spec amend --cr: a criterion amended under a CR that did not cite it yet joins that CR (who, why)
+    else if (entry.kind === 'criteria' && byId.has(entry.id)) { const cr = byId.get(entry.id); cr.criteria = [...new Set([...(cr.criteria || []), ...(entry.criteria || [])])]; }
     else if (entry.kind === 'scope' && byId.has(entry.id)) { const cr = byId.get(entry.id); cr.scope_added = [...(cr.scope_added || []), { task: entry.task, paths: entry.paths || [], by: entry.by || null, reason: entry.reason || null, at: entry.at }]; }
   }
   return [...byId.values()];

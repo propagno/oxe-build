@@ -266,6 +266,34 @@ describe('OXB-170: a checkpoint holds only its own task\'s hunks', () => {
     assert.equal(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), 'bad\n', 'work kept in the tree');
     assert.ok(!fs.existsSync(path.join(dir, '.oxe', 'checkpoint-ws')) || fs.readdirSync(path.join(dir, '.oxe', 'checkpoint-ws')).length === 0);
   });
+
+  it('--wave N with every task of the wave done: nothing to run, a success, no other wave listed (OxeSpace 15/11, OxeQuery polish wave 3)', async () => {
+    const plan = { schema_version: 1, tasks: [
+      { id: 'T1', title: 'A', wave: 1, files: ['a.txt'], verify: { commands: [ok] } },
+      { id: 'T3', title: 'C', wave: 3, files: ['c.txt'], verify: { commands: [ok] }, done: true },
+    ] };
+    const dir = project({ plan, files: { 'a.txt': 'a\n', 'c.txt': 'c\n' } });
+    let calls = 0;
+    const exec = { async execute() { calls += 1; return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    const res = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, wave: 3 });
+    assert.equal(res.nothing_to_run, true);
+    assert.equal(res.result.status, 'completed');
+    assert.deepEqual(res.result.blocked, []);
+    assert.match(res.result.reason, /onda 3: nada a rodar/);
+    assert.equal(calls, 0);
+  });
+
+  it('the integration checks promote runs (check-file-size) run at the checkpoint too (OxeSpace 15/11, OxeQuery polish T2)', async () => {
+    const plan = { schema_version: 1, tasks: [{ id: 'T2', title: 'B', wave: 1, files: ['big.ts'], verify: { commands: [ok] } }] };
+    const sizeCheck = "import fs from 'fs';\nconst n = fs.readFileSync('big.ts', 'utf8').split('\\n').length; if (n > 5) { console.error('big.ts: ' + n + ' linhas (teto 5)'); process.exit(1); }\n";
+    const dir = project({ plan, files: { 'big.ts': 'a\n', 'scripts/check-file-size.mjs': sizeCheck } });
+    const before = git(dir, 'rev-parse', 'HEAD').stdout.trim();
+    const exec = { async execute() { fs.writeFileSync(path.join(dir, 'big.ts'), 'a\nb\nc\nd\ne\nf\ng\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    const res = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, checkpointCommits: true });
+    assert.match(res.result.checkpoint_failed[0].reason, /check de integração vermelho .*check-file-size\.mjs.*o promote recusaria esta tarefa/s);
+    assert.match(res.result.checkpoint_failed[0].reason, /big\.ts: 8 linhas \(teto 5\)/);
+    assert.equal(git(dir, 'rev-parse', 'HEAD').stdout.trim(), before, 'commit undone');
+  });
 });
 
 describe('OXB-172: the checkpoint runs the tests related to the task\'s own changed files', () => {

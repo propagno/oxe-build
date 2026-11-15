@@ -5325,7 +5325,8 @@ async function runRuntime(opts) {
         return;
       }
       const result = oxeOperational.runtimeFeedback(opts.dir, activeSession, {
-        class: opts.changeClass, summary: opts.summary, criteria: opts.criteria, by: opts.by, rule: opts.rule || null, severity: opts.severity || null,
+        // OxeSpace 15/11 (Celular F4): --reason stands for the summary when --summary is not given
+        class: opts.changeClass, summary: opts.summary || opts.reason, criteria: opts.criteria, by: opts.by, rule: opts.rule || null, severity: opts.severity || null,
         phase: opts.phase || null, amendTo: opts.amendTo || null, evidence: opts.evidence || null,
         tasks: opts.tasks || null, additive: Boolean(opts.additive), reopen: Boolean(opts.reopen),
       });
@@ -5974,6 +5975,7 @@ async function runRuntime(opts) {
         console.log(`  ${c ? green : ''}Orçamento:${c ? reset : ''} ${budgetLine}`);
       }
       if (r.reason && result.mode === 'budget') console.log(`  ${yellow}BLOCKER${reset} ${r.reason} — aumente com --budget-turns/--budget-usd ou peça OK antes de seguir`);
+      if (result.nothing_to_run) console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${r.reason}`);
       console.log(`  ${c ? green : ''}Completados:${c ? reset : ''} ${completed.length}`);
       if (failed.length > 0)
         console.log(`  ${c ? red : ''}Falhos:${c ? reset : ''} ${failed.length} — ${failed.join(', ')}`);

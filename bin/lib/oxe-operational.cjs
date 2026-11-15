@@ -4121,6 +4121,21 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     if (options.wave != null && graph && Array.isArray(graph.waves)) {
       const only = Number(options.wave);
       graph.waves = graph.waves.filter((w) => Number(w.wave_number) === only);
+      // OxeSpace 15/11 (OxeQuery polish wave 3): every task of the wave already done (a checkpoint retry in the
+      // preflight committed it) → nothing to run, a success — never "Bloqueados: 18" listing other waves' tasks
+      let planDone = new Set();
+      try { planDone = new Set(((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).filter((t) => t && t.done === true).map((t) => t.id)); } catch { planDone = new Set(); }
+      const ids = graph.waves.flatMap((w) => w.node_ids || []);
+      if (!ids.length || ids.every((id) => planDone.has(id))) {
+        appendEvent(projectRoot, activeSession, { type: 'WaveNothingToRun', run_id: current.run_id, payload: { wave: only, tasks: ids } });
+        return {
+          mode: 'wave',
+          agentPlan: null,
+          nothing_to_run: true,
+          result: { run_id: current.run_id, status: 'completed', completed: [], failed: [], blocked: [], reason: `onda ${only}: nada a rodar, todas as tarefas já estão done${ids.length ? ` (${ids.join(', ')})` : ''}` },
+          run: current,
+        };
+      }
     }
     // OXB-023: `--max-retries` / PLAN.json budget.max_retries replace the compile default (2) for this execution.
     if (maxRetriesOverride != null && graph && graph.nodes) {
@@ -6083,6 +6098,22 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
         result.warnings.push(...lm.warnings);
         result.later_owned_tests = later;
       }
+      // G40 (OxeSpace 15/11, PR #863): a frozen e2e that acts right after launch, before a readiness wait (a warning)
+      try {
+        const lintCfg = ((readProjectConfig(projectRoot) || {}).lint || {});
+        const racy = require('./oxe-e2e-ready.cjs').racyFrozenE2e(projectRoot, pjs, { helpers: Array.isArray(lintCfg.e2e_ready_helpers) ? lintCfg.e2e_ready_helpers : [] });
+        if (racy.length) { result.warnings.push(...require('./oxe-e2e-ready.cjs').racyMessages(racy)); result.racy_e2e = racy; }
+        // G40b (#862): a case-sensitive regex accessible name that the app's real string (catalogs) cannot match
+        const er = require('./oxe-e2e-ready.cjs');
+        const labels = er.labelMismatches(projectRoot, pjs, { catalogs: Array.isArray(lintCfg.ui_strings) ? lintCfg.ui_strings : [] });
+        if (labels.length) { result.warnings.push(...er.labelMessages(labels)); result.label_mismatches = labels; }
+        // G41 (Celular F4 T13): a frozen Paparazzi test that changes locale/fontScale through the context
+        const lh = er.layoutlibHazards(projectRoot, pjs);
+        if (lh.length) { result.warnings.push(...er.layoutlibMessages(lh)); result.layoutlib_hazards = lh; }
+        // G42 (PR #867): a container guard that does not check the engine's OSType; a skip with no reason
+        const cg = er.containerGuardHazards(projectRoot, pjs);
+        if (cg.length) { result.warnings.push(...er.containerGuardMessages(cg)); result.container_guard_hazards = cg; }
+      } catch { /* auxiliar */ }
       // G39 (OxeSpace 15/11, OxeQuery polish T1): an existing frozen test pins by exact equality what a task extends
       const pinned = si.pinnedByExisting(projectRoot, pjs);
       if (pinned.length) {
@@ -6624,7 +6655,12 @@ function runtimeSpecAmend(projectRoot, activeSession, options = {}) {
     target = changeLib.listChanges(programDir).find((cr) => cr.id === want) || null;
     if (!target) throw new Error(`${want} não existe (oxe-cc runtime feedback list)`);
     if (target.status !== 'open' || target.class !== 'spec_gap') throw new Error(`${want} é ${target.class} ${target.status}: só um spec_gap aberto recebe emenda`);
-    if (!(target.criteria || []).includes(id)) throw new Error(`${want} não cita ${id} (critérios: ${(target.criteria || []).join(', ') || '—'})`);
+    // OxeSpace 15/11 (Approvals polish): A2 and A3 amended under CR-01 opened CR-02/CR-03 by themselves. The CR named
+    // with --cr takes the amendment: a criterion it did not cite joins it (recorded), never a new CR.
+    if (!(target.criteria || []).includes(id)) {
+      changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'criteria', id: target.id, criteria: [id], by, reason, at: new Date().toISOString() });
+      target.criteria = [...(target.criteria || []), id];
+    }
   } else {
     // a CR whose amendment is already in the SPEC (its own spec_edit, or one attached later) asks for nothing more
     const attached = new Set(changeLib.readNdjson(changeLib.changesFile(programDir)).filter((r) => r && r.kind === 'spec_edit' && r.action === 'amend_criterion' && r.cr).map((r) => r.cr));
@@ -7295,7 +7331,8 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     if (!result.conflict && !result.error && options.integrationChecks !== false) {
       const ic = require('./oxe-integration-checks.cjs').runIntegrationChecks(work, { configRoot: projectRoot, baseRef: baseSha });
       if (ic.ran.length) result.integration_checks = ic.ran;
-      if (!ic.ok) result.error = `check de integração vermelho em ${branch}: \`${ic.failed.command}\` (exit ${ic.failed.exit}) — nada foi enviado; corrija (ex.: npm run notices:generate, ou reduza o arquivo acima do teto) e promova de novo`;
+      // OxeSpace 15/11 (OxeQuery polish T2): the failing output (the file above the cap) and what happens to the branch
+      if (!ic.ok) result.error = `check de integração vermelho em ${branch}: \`${ic.failed.command}\` (exit ${ic.failed.exit})${ic.failed.tail ? `\n${String(ic.failed.tail).split(/\r?\n/).slice(-5).map((l) => `    ${l}`).join('\n')}\n` : ''} — nada foi enviado; a branch local ${branch} fica (não enviada). Corrija no programa (ex.: um quick que reduz o arquivo acima do teto, ou npm run notices:generate) e rode o promote de novo: a branch é refeita com o conserto`;
     }
     // OXB-158: with --open-pr the branch is pushed FIRST — pr:ready posts its GitHub status on the pushed sha (before,
     // it passed its checks, failed to post "… is not on GitHub yet: push it first", and the PR was never opened).
@@ -8079,8 +8116,8 @@ function runtimeChangeSetStatus(projectRoot, activeSession, options = {}) {
   const status = options.status === 'resolved' ? 'resolved' : 'withdrawn';
   const by = String(options.by || '').trim();
   const reason = String(options.reason || '').trim();
-  if (!by) throw new Error('informe quem decide (--by <papel>)');
-  if (reason.length < 8) throw new Error('informe o motivo em uma frase (--reason "…") — fica no registro do CR');
+  // OxeSpace 15/11 (Celular F4): name every required flag at once
+  if (!by || reason.length < 8) throw new Error(`faltam: ${[!by ? '--by <papel>' : null, reason.length < 8 ? '--reason "<o motivo em uma frase>"' : null].filter(Boolean).join(' e ')} — use: oxe-cc runtime feedback ${status === 'resolved' ? 'resolve' : 'withdraw'} ${id} --by <papel> --reason "…"`);
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const cr = changeLib.listChanges(programDir).find((c) => c.id === id);
@@ -9629,7 +9666,7 @@ function retryFailedCheckpoints(projectRoot, activeSession, options = {}) {
   try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
   // OXB-172: a related-tests red is work for the task (or a scope gap), not a commit to retry.
   // cross-review 15/11: a dom_hooks red is work too — re-committing the same snapshot fails the same way
-  const pending = doc && Array.isArray(doc.tasks) ? doc.tasks.filter((t) => t && t.done !== true && t.checkpoint_failed && !t.checkpoint_failed.related_red && !['dom_hooks', 'generated_file'].includes(t.checkpoint_failed.kind)) : [];
+  const pending = doc && Array.isArray(doc.tasks) ? doc.tasks.filter((t) => t && t.done !== true && t.checkpoint_failed && !t.checkpoint_failed.related_red && !['dom_hooks', 'generated_file', 'integration'].includes(t.checkpoint_failed.kind)) : [];
   // OXB-170: an interrupted task's leftovers are attributed first (event), whatever is retried.
   const interrupted = interruptedTaskWork(projectRoot, activeSession).filter((w) => !pending.some((t) => t.id === w.task));
   if (interrupted.length) appendEvent(projectRoot, activeSession, { type: 'InterruptedWorkFound', payload: { tasks: interrupted } });
@@ -9921,6 +9958,9 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
         snapshot: entries,
       };
     }
+    if (check.kind === 'integration') {
+      return { committed: false, failed: true, kind: 'integration', reason: `check de integração vermelho na árvore do commit (\`${check.command}\`) — o promote recusaria esta tarefa: ${check.tail}`, snapshot: entries };
+    }
     return { committed: false, failed: true, reason: `checkpoint_check vermelho na árvore do commit (\`${check.command}\`): ${check.tail}`, snapshot: entries };
   }
   restore();
@@ -9971,7 +10011,13 @@ function checkpointCheck(projectRoot, sha, options = {}) {
   const typecheck = options.checkpointCheck != null ? options.checkpointCheck : cfg.checkpoint_check;
   // OXB-172: the tests that import the task's OWN changed files (vitest related), not only the task's verify.
   const related = relatedTestsCommand(cfg, options.changedFiles || [], projectRoot);
-  const commands = [...(typecheck && typeof typecheck === 'string' ? [{ kind: 'check', command: typecheck, timeout: Number(cfg.checkpoint_check_timeout_ms) > 0 ? Number(cfg.checkpoint_check_timeout_ms) : 900_000 }] : []), ...(related ? [related] : [])];
+  // OxeSpace 15/11 (OxeQuery polish T2): the integration checks promote runs (check-file-size, notices:check) run at
+  // the checkpoint too — a task never passes its checkpoint to fail promote. Off with checkpoint_integration_checks: false.
+  let integration = [];
+  if (cfg.checkpoint_integration_checks !== false && options.integrationChecks !== false) {
+    try { integration = require('./oxe-integration-checks.cjs').integrationCommands(projectRoot, cfg).map((command) => ({ kind: 'integration', command, timeout: 15 * 60_000 })); } catch { integration = []; }
+  }
+  const commands = [...(typecheck && typeof typecheck === 'string' ? [{ kind: 'check', command: typecheck, timeout: Number(cfg.checkpoint_check_timeout_ms) > 0 ? Number(cfg.checkpoint_check_timeout_ms) : 900_000 }] : []), ...integration, ...(related ? [related] : [])];
   if (!commands.length) return null;
   const command = commands.map((c) => c.command).join(' ; ');
   const wt = path.join(projectRoot, '.oxe', 'checkpoint-ws', `${String(sha).slice(0, 10)}-${Date.now().toString(36)}`);
@@ -9985,7 +10031,7 @@ function checkpointCheck(projectRoot, sha, options = {}) {
     try { require('./oxe-local-config.cjs').copyLocalFiles(projectRoot, wt); } catch { /* */ }
     for (const c of commands) {
       // OxeSpace 14/11: minutes of silence after WorkItemCompleted looked like a hang — say what runs, and for how long
-      try { process.stderr.write(`\n  [checkpoint ${String(sha).slice(0, 8)}] ${c.kind === 'related' ? 'testes relacionados' : 'checkpoint_check'}: ${String(c.command).slice(0, 160)} (até ${Math.round((c.timeout || 0) / 60000)} min)\n`); } catch { /* */ }
+      try { process.stderr.write(`\n  [checkpoint ${String(sha).slice(0, 8)}] ${c.kind === 'related' ? 'testes relacionados' : c.kind === 'integration' ? 'check de integração' : 'checkpoint_check'}: ${String(c.command).slice(0, 160)} (até ${Math.round((c.timeout || 0) / 60000)} min)\n`); } catch { /* */ }
       const r = runChildCommandFull(wt, c.command, c.timeout);
       res = { ok: r.ok, tail: r.tail, kind: c.kind, command: c.command, output: r.output, skipped: c.skipped || [] };
       if (!r.ok) break;
