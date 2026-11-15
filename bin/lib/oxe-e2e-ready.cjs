@@ -299,10 +299,12 @@ function overlayGeometryReads(text, options = {}) {
     if (ANIM_WAIT_RE.test(l) || (helperRe && helperRe.test(l)) || OVERLAY_CLOSED_RE.test(l)) { overlay = null; continue; }
     // the whole statement (R50): a fluent chain broken across lines by a formatter (`dialog` / `.locator(...)` /
     // `.boundingBox()`) is read as one — back to the line the continuation lines (`^\s*\.`) hang from
+    // a continuation line starts with "." or ")." (`await expect(\n  dialog.locator('.h'),\n).toHaveCSS(...)`, R51)
+    const cont = /^\s*\)?\s*\./;
     let start = i;
-    while (start > 0 && /^\s*\./.test(lines[start])) start -= 1;
+    while (start > 0 && cont.test(lines[start])) start -= 1;
     let end = i;
-    while (end + 1 < lines.length && /^\s*\./.test(lines[end + 1])) end += 1;
+    while (end + 1 < lines.length && cont.test(lines[end + 1])) end += 1;
     const stmt = lines.slice(start, end + 1).join(' ');
     const om = OVERLAY_RE.exec(l);
     const assigned = ASSIGN_RE.exec(start === i ? stmt : l);

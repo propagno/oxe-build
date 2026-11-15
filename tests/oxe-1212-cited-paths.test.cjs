@@ -33,4 +33,22 @@ describe('G44: a cited path or component out of the task scope', () => {
     assert.equal(cp.citedPathGaps('.', { ...base, tasks: [{ id: 'T1', done: true, notes: 'the ChangesPanel wait', files: ['x.ts'] }] }, { files, readText }).length, 0);
     assert.deepEqual(cp.citedPathGaps('.', { ...base, tasks: [{ id: 'T1', notes: 'touches src/state/store.ts', files: ['x.ts'] }] }, { files, readText }).map((f) => f.file), ['src/state/store.ts'], 'an explicit path counts');
   });
+
+  it('R51: a scope boundary, a sibling of the same criterion, a builtin or a package segment never counts', () => {
+    const base = { acceptance_tests: [] };
+    for (const notes of ['Não alterar ChangesPanel (fica para T35).', 'Fora do escopo: ChangesPanel', 'Do not touch src/state/store.ts', 'sem tocar em ChangesPanel']) {
+      assert.equal(cp.citedPathGaps('.', { ...base, tasks: [{ id: 'T1', notes, files: ['x.ts'] }] }, { files, readText }).length, 0, notes);
+    }
+    assert.equal(cp.citedPathGaps('.', { ...base, tasks: [{ id: 'T1', notes: 'Não alterar ChangesPanel. Ajustar src/state/store.ts', files: ['x.ts'] }] }, { files, readText }).map((f) => f.file).join(), 'src/state/store.ts', 'only the boundary sentence is dropped');
+    const shared = {
+      tasks: [{ id: 'T1', files: ['src/api/changes.ts'], acceptance: ['A15'] }, { id: 'T2', files: ['src/components/Changes/ChangesPanel.tsx'], acceptance: ['A15'] }],
+      acceptance_tests: [{ criterion: 'A15', files: ['tests/acceptance/brd15.test.tsx'] }],
+    };
+    assert.equal(cp.citedPathGaps('.', shared, { files, readText }).length, 0, 'T2 owns it for the shared criterion');
+    const shim = [...files, 'src/polyfills/ResizeObserver.ts'];
+    assert.equal(cp.citedPathGaps('.', { ...base, tasks: [{ id: 'T1', notes: 'reage ao ResizeObserver', files: ['x.ts'] }] }, { files: shim, readText }).length, 0);
+    assert.equal(cp.citedPathGaps('.', { ...base, tasks: [{ id: 'T1', notes: 'usa @scope/ChangesPanel', files: ['x.ts'] }] }, { files, readText }).length, 0);
+    assert.match(cp.testHeader("it(\"ChangesPanel's skeleton waits\", () => {});"), /ChangesPanel's skeleton/);
+    assert.match(cp.testHeader("/*\n  brd15: ChangesPanel wait\n*/\nimport {\n  render,\n} from 'x';\n// SecondNote here\nconst a = 1;"), /brd15: ChangesPanel wait[\s\S]*SecondNote/);
+  });
 });

@@ -75,6 +75,8 @@ describe('G40: frozen e2e act only after the app is ready', () => {
     assert.deepEqual(r.overlayGeometryReads(chain).map((f) => f.line), [5]);
     const css = "test('x', async () => {\n  const dialog = page.getByRole('dialog');\n  await expect(dialog.locator('.header'))\n    .toHaveCSS('height', '48px');\n});";
     assert.equal(r.overlayGeometryReads(css).length, 1);
+    const prettier = "test('x', async () => {\n  const dialog = page.getByRole('dialog');\n  await expect(\n    dialog.locator('.h'),\n  ).toHaveCSS('height', '48px');\n});";
+    assert.equal(r.overlayGeometryReads(prettier).length, 1, 'R51: ").toHaveCSS" continues the statement');
     const two = "test('x', async () => {\n  const dialog = page.getByRole('dialog');\n  const list = dialog.getByRole('listbox');\n  const b = await dialog.locator('.row').boundingBox();\n});";
     assert.equal(r.overlayGeometryReads(two).length, 1);
     const doneDoc = { tasks: [{ id: 'T1', done: true, acceptance: ['A1'] }], acceptance_tests: [{ criterion: 'A1', files: ['e2e/x.spec.ts'] }] };

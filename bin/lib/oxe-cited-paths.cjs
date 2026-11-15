@@ -15,18 +15,27 @@ const path = require('path');
 const CODE_RE = /\.(c|m)?[jt]sx?$|\.(kt|java|swift|py|rs|go|vue|svelte)$/i;
 const TEST_RE = /(^|\/)(tests?|__tests__|spec|e2e)\/|\.(test|spec)\.[cm]?[jt]sx?$/i;
 const norm = (p) => String(typeof p === 'string' ? p : (p && p.path) || '').replace(/\\/g, '/').replace(/^\.\//, '');
+// Web / JS builtins with two humps a repo may shim (ResizeObserver.ts) and the prose names as the platform type
+const BUILTINS = new Set(['ResizeObserver', 'IntersectionObserver', 'MutationObserver', 'PerformanceObserver', 'AbortController', 'AbortSignal', 'EventEmitter', 'EventTarget', 'FormData', 'WebSocket', 'TypeError', 'RangeError', 'SyntaxError', 'ReferenceError', 'TextEncoder', 'TextDecoder', 'ReadableStream', 'WritableStream', 'TransformStream', 'BroadcastChannel', 'MessageChannel', 'MessagePort', 'SharedWorker', 'WeakMap', 'WeakSet', 'WeakRef', 'ArrayBuffer', 'DataView', 'BigInt', 'TypeScript', 'JavaScript', 'GitHub', 'GitLab', 'PowerShell']);
 
 /** The leading comment block and the describe/test titles of a test file (what the planner wrote about it). */
 function testHeader(text) {
   const src = String(text || '');
   const lines = src.split(/\r?\n/);
   const head = [];
+  let inBlock = false;
+  let inImport = false;
   for (const l of lines) {
-    if (/^\s*(\/\/|\/\*|\*|#)/.test(l) || !l.trim()) { head.push(l); continue; }
-    if (/^\s*(import|const|let|var|require|from|package|using)\b/.test(l)) continue;
+    // R51: a block comment spans lines without a leading "*"; a multi-line import is skipped as a whole
+    if (inBlock) { head.push(l); if (/\*\//.test(l)) inBlock = false; continue; }
+    if (inImport) { if (/\bfrom\s*['"]|['"]\s*\)?\s*;?\s*$/.test(l)) inImport = false; continue; }
+    if (/^\s*\/\*/.test(l)) { head.push(l); if (!/\*\//.test(l)) inBlock = true; continue; }
+    if (/^\s*(\/\/|\*|#)/.test(l) || !l.trim()) { head.push(l); continue; }
+    if (/^\s*(import|const|let|var|require|from|package|using)\b/.test(l)) { if (/^\s*import\b/.test(l) && !/\bfrom\b|^\s*import\s*['"]/.test(l)) inImport = true; continue; }
     break;
   }
-  const titles = [...src.matchAll(/\b(?:describe|test|it)(?:\.\w+)*\s*\(\s*(['"`])([^'"`]{2,200})\1/g)].map((m) => m[2]);
+  // a title may hold the other quote ("ChangesPanel's skeleton") and escapes (R51)
+  const titles = [...src.matchAll(/\b(?:describe|test|it)(?:\.\w+)*\s*\(\s*(['"`])((?:\\.|(?!\1)[^\\]){2,200})\1/g)].map((m) => m[2]);
   return [...head, ...titles].join('\n');
 }
 
@@ -67,27 +76,44 @@ function citedPathGaps(root, planDoc, options = {}) {
     }
     return out;
   };
-  const accept = planDoc && Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : [];
+  const accept = planDoc && Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : planDoc && Array.isArray(planDoc.acceptanceTests) ? planDoc.acceptanceTests : [];
   const out = [];
   for (const t of pending) {
     const scope = scopeOf(t);
     const inScope = (f) => scope.some((s) => testScope.covers(s, f));
-    const frozen = accept.filter((a) => a && (a.task === t.id || (!a.task && (t.acceptance || []).includes(a.criterion)))).flatMap((a) => (a.files || []).map(norm)).filter(Boolean);
+    const entries = accept.filter((a) => a && (a.task === t.id || (!a.task && (t.acceptance || []).includes(a.criterion))));
+    const frozen = entries.flatMap((a) => (a.files || []).map(norm)).filter(Boolean);
+    // R51: a frozen test bound only by criterion is shared by the criterion's tasks — a file another of them already
+    // owns is not this task's gap
+    const siblingScopes = new Map();
+    for (const a of entries.filter((x) => !x.task)) {
+      for (const f of (a.files || []).map(norm)) {
+        const sibs = pending.filter((o) => o.id !== t.id && (o.acceptance || []).includes(a.criterion)).flatMap((o) => scopeOf(o));
+        siblingScopes.set(f, sibs);
+      }
+    }
+    // R51: a sentence that marks a scope boundary ("não alterar X", "fora do escopo: X", "do not touch X") cites X
+    // precisely to keep it out
+    const NOT_IN_SCOPE = /\b(?:n[aã]o\s+(?:tocar|alterar|mexer|editar|mudar|incluir)|sem\s+(?:tocar|alterar|mexer|editar)|fora\s+d[eo]\s+escopo|do\s+not\s+(?:touch|edit|modify|change)|don'?t\s+(?:touch|edit|modify|change)|out\s+of\s+scope|leave\s+(?:\S+\s+)?(?:as\s+is|untouched))\b/i;
+    const keepIn = (text) => String(text || '').split(/(?<=[.;!?])\s+|\r?\n/).filter((s) => !NOT_IN_SCOPE.test(s)).join('\n');
     const sources = [
-      { where: 'title/notes', text: [t.title, t.notes, t.description].filter(Boolean).join('\n') },
-      ...frozen.map((f) => ({ where: f, text: testHeader(read(f)) })),
+      { where: 'title/notes', text: keepIn([t.title, t.notes, t.description].filter(Boolean).join('\n')) },
+      ...frozen.map((f) => ({ where: f, text: keepIn(testHeader(read(f))), siblings: siblingScopes.get(f) || [] })),
     ];
     const seen = new Set();
     for (const src of sources) {
       if (!src.text) continue;
       const hits = [];
       for (const m of src.text.matchAll(/[\w@.-]+(?:\/[\w@.-]+)+\.[A-Za-z0-9]{1,5}\b/g)) { const p = norm(m[0]); if (trackedSet.has(p)) hits.push({ file: p, cited: m[0] }); }
-      for (const m of src.text.matchAll(/\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+\b/g)) {
+      // never a segment of a path, a URL or a package (`@scope/ChangesPanel`), nor a platform builtin a shim may share
+      for (const m of src.text.matchAll(/(?<![/@.\w])[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+\b/g)) {
+        if (BUILTINS.has(m[0])) continue;
         const files = byBase.get(m[0]);
         if (files && files.length === 1) hits.push({ file: files[0], cited: m[0] });
       }
       for (const h of hits) {
         if (frozen.includes(h.file) || TEST_RE.test(h.file) || inScope(h.file) || seen.has(h.file)) continue;
+        if ((src.siblings || []).some((s) => testScope.covers(s, h.file))) continue;
         seen.add(h.file);
         out.push({ task: t.id, file: h.file, cited: h.cited, where: src.where });
       }
