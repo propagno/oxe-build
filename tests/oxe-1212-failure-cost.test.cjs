@@ -57,6 +57,12 @@ describe('report failure-cost', () => {
     assert.equal(r.discarded_ratio, Math.round((10 / 20) * 10000) / 10000);
     assert.equal(r.verifying_hours, 1.2);
     assert.equal(r.stopped_hours, 0);
+    // a redo after done, by a CR naming the task WITH its phase prefix (F2/T6): attributed to the CR
+    const redo = fc.report([
+      usage('T6', 1, 25, 10), { type: 'WorkItemCompleted', run_id: 'r1', work_item_id: 'T6', timestamp: t(11) },
+      usage('T6', 1, 9, 140), { type: 'WorkItemCompleted', run_id: 'r1', work_item_id: 'T6', timestamp: t(141) },
+    ], [{ id: 'CR-F2-7', class: 'defect', status: 'resolved', tasks: ['F2/T6'], at: t(60) }]);
+    assert.deepEqual(redo.causes.map((c) => [c.cause, c.crs]), [['CR defect', ['CR-F2-7']]]);
   });
 
   it('--since cuts the events and the CRs', () => {

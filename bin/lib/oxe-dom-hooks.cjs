@@ -161,7 +161,8 @@ function generatedEdits(changedPaths, rules, options = {}) {
     if (changed.some((p) => srcRes.some((re) => re.test(p)))) continue; // the source changed too: the generator ran
     if (typeof options.regenerated === 'function' && options.regenerated(r)) continue;
     // a source the task cannot touch (outside its files): a plan matter, not something a retry can fix
-    const outside = scope ? !sources.some((s) => scope.some((p) => p === s || globRe(s).test(p) || globRe(p).test(String(s).replace(/\*.*$/, 'x')))) : false;
+    // a directory in the task files ("shared/locales/") covers the sources under it
+    const outside = scope ? !sources.some((s) => scope.some((p) => p === s || globRe(s).test(p) || globRe(p).test(String(s).replace(/\*.*$/, 'x')) || String(s).startsWith(`${p.replace(/\/+$/, '')}/`))) : false;
     out.push({ files: edited, source: sources, test: r.test || null, generator: r.generator || null, source_outside_scope: outside });
   }
   return out;

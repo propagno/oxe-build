@@ -111,6 +111,7 @@ describe('DOM hooks removed while tests still read them', () => {
     const scoped = dh.generatedEdits(['mobile/android/app/strings.xml'], rules, { scope: ['mobile/android/app/strings.xml'] });
     assert.equal(scoped[0].source_outside_scope, true);
     assert.equal(dh.generatedEdits(['mobile/android/app/strings.xml'], rules, { scope: ['mobile/android/app/strings.xml', 'shared/locales/pt/mobile.json'] })[0].source_outside_scope, false);
+    assert.equal(dh.generatedEdits(['mobile/android/app/strings.xml'], rules, { scope: ['mobile/android/app/strings.xml', 'shared/locales/'] })[0].source_outside_scope, false, 'a directory in files covers the source');
   });
 
   it('removedHooks reads only removed markup lines (not tests, not added lines)', () => {

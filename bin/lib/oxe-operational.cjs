@@ -9663,10 +9663,17 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
         const dh = require('./oxe-dom-hooks.cjs');
         // what the commit REALLY changed (a snapshot entry can equal the parent)
         const realChanged = (gitOut(projectRoot, ['diff', '--name-only', oldHead, head]).stdout || '').split(/\r?\n/).filter(Boolean);
-        const lastAt = (p) => Number((gitOut(projectRoot, ['log', '-1', '--format=%ct', oldHead, '--', p]).stdout || '').trim()) || 0;
         const asList = (v) => (Array.isArray(v) ? v : [v]);
-        // regeneration after an earlier task changed the source: the source's last change is newer than the file's
-        const regenerated = (r) => Math.max(0, ...asList(r.source).map((s) => lastAt(`:(glob)${s}`))) > Math.max(0, ...asList(r.file).map((f) => lastAt(`:(glob)${f}`)));
+        const lastSha = (globs) => (gitOut(projectRoot, ['log', '-1', '--format=%H', oldHead, '--', ...asList(globs).map((g) => `:(glob)${g}`)]).stdout || '').trim() || null;
+        // regeneration after an earlier task changed the source: the source's last commit comes AFTER the generated
+        // file's (by ancestry, not by clock — two commits in the same second tie on %ct; cross-review 15/11)
+        const regenerated = (r) => {
+          const src = lastSha(r.source);
+          if (!src) return false;
+          const gen = lastSha(r.file);
+          if (!gen) return true;
+          return src !== gen && gitOut(projectRoot, ['merge-base', '--is-ancestor', gen, src]).status === 0;
+        };
         const gen = dh.generatedEdits(realChanged, pcfg.generated_files, { scope: options.scope || null, regenerated });
         if (gen.length) check = { ok: false, kind: gen.some((g) => g.source_outside_scope) ? 'scope_insufficient' : 'generated_file', command: 'generated_files (estático)', tail: dh.generatedMessage(gen), generated: gen };
       }
@@ -9696,7 +9703,8 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
       failed: true,
       kind: check.kind,
       generated: check.generated,
-      ...(outside ? { related_red: [] } : {}),
+      // the sources named in blocked_by ("scope_insufficient: shared/locales/*/mobile.json")
+      ...(outside ? { related_red: [...new Set(check.generated.flatMap((g) => g.source))] } : {}),
       reason: outside
         ? `scope_insufficient: a tarefa editou arquivo gerado, e a fonte dele está fora dos files dela — ${check.tail}. Inclua a fonte nos files (ou abra um CR/tarefa), depois rode oxe-cc plan reopen`
         : `a tarefa editou arquivo gerado: ${check.tail}`,

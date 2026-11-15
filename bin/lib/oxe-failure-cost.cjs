@@ -78,7 +78,8 @@ function report(events, changes = [], options = {}) {
     if (doneIdx >= 0 && list.slice(doneIdx + 1).some((a) => a.at > list[doneIdx].end.at)) {
       const doneAt = list[doneIdx].end.at;
       const later = list.slice(doneIdx + 1).find((a) => a.at > doneAt);
-      const cr = crs.find((c) => (c.tasks || []).map((t) => String(t).toUpperCase()).includes(task) && Date.parse(c.at || '') >= doneAt && Date.parse(c.at || '') <= later.at);
+      // the phase prefix (F2/T6) normalised like crNaming (cross-review 15/11)
+      const cr = crNaming(task, doneAt, later.at);
       const firstOfDone = list.slice(0, doneIdx + 1).filter((a) => a.end && a.end.kind === 'done').length ? list[doneIdx] : null;
       if (firstOfDone) add(cr ? `CR ${cr.class || 'cr'}` : 'redo', firstOfDone.usd, task, cr ? cr.id : null);
     }
