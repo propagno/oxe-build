@@ -350,24 +350,31 @@ async function apply(ctx, collected, md, options = {}) {
   const prev = /oxe-refine spec-v(\d+) · sha ([0-9a-f]+)/.exec(currentText);
   const version = prev ? Number(prev[1]) + (prev[2] === specHash ? 0 : 1) : 1;
   const marker = `oxe-refine spec-v${version} · sha ${specHash}`;
-  if (currentText.includes(`sha ${specHash}`)) return { key: collected.key, unchanged: true, sha: specHash };
+  // OxeSpace 15/11 (OXE-189): a spec with no open question left takes needs-info off the card (apply only added it)
+  const hadLabels = now && now.fields && Array.isArray(now.fields.labels) ? now.fields.labels : [];
+  const clearNeedsInfo = !lint.needs_info && hadLabels.includes('needs-info');
+  if (currentText.includes(`sha ${specHash}`)) {
+    if (clearNeedsInfo && !options.dryRun) await request('PUT', `${site}/rest/api/3/issue/${collected.key}`, { update: { labels: [{ remove: 'needs-info' }] } });
+    return { key: collected.key, unchanged: true, sha: specHash, ...(clearNeedsInfo ? { [options.dryRun ? 'would_remove' : 'removed']: ['needs-info'] } : {}) };
+  }
   if (hash(currentText) !== collected.description_hash && !options.confirmOverwrite) {
     throw Object.assign(new Error(`${collected.key} mudou depois da coleta (alguém editou o card): nada foi gravado. Colete de novo (oxe-cc alm refine ${collected.key}) ou, depois de revisar a diferença, rode com --confirm-overwrite`), { changed: true, current: currentText });
   }
   const labels = ['spec-v1', ...(version > 1 ? [`spec-v${version}`] : []), ...(lint.needs_info ? ['needs-info'] : [])];
   // --dry-run: everything above only read; report what the apply would write and stop (OXB-G13)
-  if (options.dryRun) return { key: collected.key, dry_run: true, sha: specHash, labels, questions: lint.questions.length, would: { original_comment: Boolean(collected.description), description: true, labels, questions_comment: Boolean(lint.needs_info && lint.questions.length) } };
+  if (options.dryRun) return { key: collected.key, dry_run: true, sha: specHash, labels, questions: lint.questions.length, would: { original_comment: Boolean(collected.description), description: true, labels, questions_comment: Boolean(lint.needs_info && lint.questions.length), ...(clearNeedsInfo ? { remove_labels: ['needs-info'] } : {}) } };
   const adf = mdToAdf(`${body}\n\n---\n${marker}`);
   if (collected.description) {
     await request('POST', `${site}/rest/api/3/issue/${collected.key}/comment`, { body: mdToAdf(`**Texto original (antes do refine)**\n\n${collected.description}`) });
   }
-  await request('PUT', `${site}/rest/api/3/issue/${collected.key}`, { fields: { description: adf }, update: { labels: labels.map((l) => ({ add: l })) } });
+  await request('PUT', `${site}/rest/api/3/issue/${collected.key}`, { fields: { description: adf }, update: { labels: [...labels.map((l) => ({ add: l })), ...(clearNeedsInfo ? [{ remove: 'needs-info' }] : [])] } });
   if (lint.needs_info && lint.questions.length) {
     await request('POST', `${site}/rest/api/3/issue/${collected.key}/comment`, { body: mdToAdf(`**Perguntas em aberto (refine)**\n\n${lint.questions.map((q) => `- ${q}`).join('\n')}`) });
   }
   const back = await request('GET', `${site}/rest/api/3/issue/${collected.key}?fields=description,labels`);
-  const ok = adfToText(back.fields.description).includes(`sha ${specHash}`) && labels.every((l) => (back.fields.labels || []).includes(l));
-  return { key: collected.key, applied: true, confirmed: ok, sha: specHash, version, labels, questions: lint.questions.length };
+  const ok = adfToText(back.fields.description).includes(`sha ${specHash}`) && labels.every((l) => (back.fields.labels || []).includes(l))
+    && !(clearNeedsInfo && (back.fields.labels || []).includes('needs-info'));
+  return { key: collected.key, applied: true, confirmed: ok, sha: specHash, version, labels, questions: lint.questions.length, ...(clearNeedsInfo ? { removed: ['needs-info'] } : {}) };
 }
 
 module.exports = { parseCriteria, setSpecIds, collect, skeleton, lintSpec, apply, mdToAdf, adfToText, descriptionBody, kindOf, sectionsOf, dirs, hash, SECTIONS, REQUIRED };

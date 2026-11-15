@@ -32,7 +32,10 @@ function fakeJira() {
     if (m && method === 'PUT') {
       const it = issues.get(m[1]);
       if (body.fields && body.fields.description) it.fields.description = body.fields.description;
-      for (const l of (body.update && body.update.labels) || []) if (l.add && !it.fields.labels.includes(l.add)) it.fields.labels.push(l.add);
+      for (const l of (body.update && body.update.labels) || []) {
+        if (l.add && !it.fields.labels.includes(l.add)) it.fields.labels.push(l.add);
+        if (l.remove) it.fields.labels = it.fields.labels.filter((x) => x !== l.remove);
+      }
       return { status: 204, json: null };
     }
     m = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)\/comment$/.exec(p);
@@ -203,6 +206,18 @@ describe('alm refine: apply (writer only, idempotent, never over a later human e
     assert.ok(j.issues.get('OXE-20').fields.labels.includes('spec-v1'));
     assert.ok(j.issues.get('OXE-20').fields.labels.includes('spec-v2'));
     assert.match(refine.adfToText(j.issues.get('OXE-20').fields.description), /oxe-refine spec-v2 · sha/);
+    assert.ok(j.issues.get('OXE-20').fields.labels.includes('needs-info'), 'questions still open: needs-info stays');
+    // OxeSpace 15/11 (OXE-189): the question answered and recorded → the next apply takes needs-info off
+    const answered = fs.readFileSync(specFile, 'utf8')
+      .replace(/## Riscos\n\n- A confirmar/, '## Riscos\n\n- Perda da fila offline ao fechar: aceita (decisão do PO, 15/11)')
+      .replace(/## Perguntas em aberto\n\n- Qual o risco aceito[^\n]*/, '## Perguntas em aberto\n\n- Nenhuma');
+    assert.doesNotMatch(answered, /a confirmar/i, 'fixture: no open question left');
+    fs.writeFileSync(specFile, answered);
+    const cleared = await op.runtimeAlmRefine(dir, null, { action: 'apply', keys: ['OXE-20'], http: j.http, env: ENV, confirmOverwrite: true });
+    assert.deepEqual(cleared.results[0].removed, ['needs-info'], JSON.stringify(cleared.results[0]));
+    assert.equal(cleared.results[0].confirmed, true);
+    assert.ok(!j.issues.get('OXE-20').fields.labels.includes('needs-info'));
+    assert.ok(j.issues.get('OXE-20').fields.labels.includes('spec-v1'));
   });
 
   it('a card edited by a person after the collect is not overwritten without --confirm-overwrite', async () => {

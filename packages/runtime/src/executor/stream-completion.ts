@@ -93,9 +93,13 @@ export async function streamCompletion(opts: StreamCompletionOptions): Promise<C
  * answer resolved as text, parsed as zero tool calls, and a 401/404/500 ended the attempt as "no tool call" in
  * silence (a read-only node could even succeed).
  */
-export function httpFailureKind(status: number, text: string): 'quota' | 'context' | 'env' {
+export function httpFailureKind(status: number, text: string): 'quota' | 'context' | 'policy' | 'environment' | 'env' {
   if (status === 429 || /RESOURCE_EXHAUSTED|rate[ _-]?limit|too many requests|quota exceeded|insufficient_quota/i.test(text)) return 'quota';
   if ((status === 400 || status === 413 || status === 422) && /context|too long|too many tokens|maximum.*tokens|prompt is too long/i.test(text)) return 'context';
+  // cross-review 15/11: a refusal by the provider's content/usage policy repeats on the same prompt — never retried
+  if ((status === 400 || status === 403) && /content[ _-]?filter|content[ _-]?policy|usage[ _-]?polic|safety system|flagged/i.test(text)) return 'policy';
+  // a refused credential or a missing endpoint is configuration: the next attempt fails the same way (pauses the run)
+  if (status === 401 || status === 403 || status === 404) return 'environment';
   return 'env';
 }
 
@@ -180,6 +184,8 @@ function parseSseResponse(raw: string): CompletionResponse {
         ...(typeof u.completion_tokens === 'number' ? { output_tokens: u.completion_tokens } : {}),
         ...(typeof u.cost === 'number' ? { cost_usd: u.cost } : {}),
       };
+      const details = u.completion_tokens_details as Record<string, unknown> | undefined | null;
+      if (details && typeof details.reasoning_tokens === 'number') usage.thinking_tokens = details.reasoning_tokens;
     }
 
     const choices = chunk.choices as Array<Record<string, unknown>> | undefined;

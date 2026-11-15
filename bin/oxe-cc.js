@@ -5840,6 +5840,11 @@ async function runRuntime(opts) {
         console.error(`  Ou persista com: oxe-cc runtime configure --model <modelo> --api-key-env ANTHROPIC_API_KEY`);
         process.exit(1);
       }
+      // cross-review 15/11: the http adapter speaks the OpenAI format; against the Anthropic host it uses the
+      // OpenAI-compatible layer — said up front, not discovered by a 404 mid-run
+      if (adapterId === 'http' && !opts.baseUrl && /(^|\.)api\.anthropic\.com$/i.test((() => { try { return new URL(baseUrl).hostname; } catch { return ''; } })())) {
+        console.error(`${yellow}!${reset} adapter http contra api.anthropic.com usa a camada OpenAI-compatível; para o adapter nativo use --adapter claude (ou --base-url de um proxy OpenAI-compatível).`);
+      }
       // OXB-153: per-call timeout — --llm-timeout-ms > config executor.timeout_ms > 20 min (it was a fixed 5 min).
       let execCfg = {};
       try { execCfg = (JSON.parse(fs.readFileSync(path.join(opts.dir, '.oxe', 'config.json'), 'utf8')) || {}).executor || {}; } catch { execCfg = {}; }
@@ -7836,7 +7841,7 @@ async function main() {
       push: ['oxe-cc alm push [--stories-only|--tasks-only] [--dry-run] [--rebuild-ledger] [--first-push]', 'histórias do PRD e tarefas do PLAN viram itens, sem duplicar; com stories_source "alm" só liga a cards existentes', 'oxe-cc alm push --tasks-only --dry-run'],
       sync: ['oxe-cc alm sync [--dry-run]', 'move os itens pelas etapas do ciclo (eventos do OXE), nunca para trás', 'oxe-cc alm sync --dry-run'],
       move: ['oxe-cc alm move <US-n|Tn|chave> <etapa> [--comment "…"] [--apply]', 'move um item à mão (etapas: intake grooming refinement ready in_progress review verified queued integrated staging accepted released)', 'oxe-cc alm move OXE-20 review --comment "PR #801"'],
-      label: ['oxe-cc alm label <chave> --add <rótulo>[,<rótulo>] --apply', 'acrescenta rótulos a um card (ex.: guarda-chuva), sem repetir', 'oxe-cc alm label OXE-22 --add guarda-chuva --apply'],
+      label: ['oxe-cc alm label <chave> [--add <rótulo>[,<rótulo>]] [--remove <rótulo>[,<rótulo>]] --apply', 'acrescenta ou tira rótulos de um card (ex.: guarda-chuva, needs-info respondido), sem repetir', 'oxe-cc alm label OXE-189 --remove needs-info --apply'],
       link: ['oxe-cc alm link <US-n|Tn> <chave> · oxe-cc alm link <chave> --pr <n> [--repo <url>] --apply · oxe-cc alm link <chave> --relates <chave>[,<chave>] --apply', 'liga um ref do OXE a um item que já existe; com --pr, liga o card ao PR que o entregou (link remoto no Jira, hyperlink no Azure; repositório de alm.docs.repo)', 'oxe-cc alm link OXE-11 --pr 771 --apply'],
       comment: ['oxe-cc alm comment <ref|chave> --text "…"', 'comenta num item (vale também para sessões que só leem)', 'oxe-cc alm comment OXE-20 --text "visto na revisão"'],
       defect: ['oxe-cc alm defect --title "…" --origin <US-n|Fn-Tn> [--cr CR-n] [--ref BUG-n]', 'defeito depois do deploy, ligado à origem e ao CR', 'oxe-cc alm defect --title "não chega offline" --origin US-1 --cr CR-4'],
@@ -8012,7 +8017,7 @@ async function main() {
       else if (a === '--by' && sub === 'supersede' && argv[i + 1]) o.newKeys = String(argv[++i]);
       else if (a === '--close-to' && sub === 'supersede' && argv[i + 1]) o.closeTo = String(argv[++i]);
       else if (a === '--no-close' && sub === 'supersede') o.noClose = true;
-      else if (['--title', '--origin', '--comment', '--description', '--ref', '--key', '--url', '--error', '--adopted', '--text', '--cr', '--pr', '--repo', '--relates', '--add', '--kind'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (['--title', '--origin', '--comment', '--description', '--ref', '--key', '--url', '--error', '--adopted', '--text', '--cr', '--pr', '--repo', '--relates', '--add', '--remove', '--kind'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
       else if (!a.startsWith('-')) positional.push(a);
       else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
     }

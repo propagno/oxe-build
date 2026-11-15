@@ -30,7 +30,7 @@ export function resolveWithin(cwd: string, candidate: unknown): string {
   // External review 15/11 (P0-2): a path through a symlink or a junction (the runtime itself links node_modules into
   // worktrees) lexically inside the root can land outside it. The REAL path must stay inside the real root.
   const realRoot = realPathOf(root);
-  const realRel = path.relative(realRoot, realPathOf(target));
+  const realRel = path.relative(samePathKey(realRoot), samePathKey(realPathOf(target)));
   if (realRel !== '' && (realRel.startsWith('..') || path.isAbsolute(realRel))) throw new PathContainmentError(candidate);
   return target;
 }
@@ -39,7 +39,7 @@ export function resolveWithin(cwd: string, candidate: unknown): string {
  * The real path of `p`, following links. For a path that does not exist yet (a new file), the real path of its
  * nearest existing ancestor joined with the rest — a write through a linked directory is resolved too.
  */
-export function realPathOf(p: string): string {
+export function realPathOf(p: string, depth = 0): string {
   let cur = path.resolve(p);
   const rest: string[] = [];
   for (;;) {
@@ -47,12 +47,26 @@ export function realPathOf(p: string): string {
       const real = fs.realpathSync.native(cur);
       return rest.length ? path.join(real, ...rest.reverse()) : real;
     } catch {
+      // Cross-review 15/11: a DANGLING link (its target does not exist yet) fails realpath too; climbing past it
+      // would answer "inside" while a write follows the link out. Resolve the link's target instead.
+      let link: string | null = null;
+      try { if (fs.lstatSync(cur).isSymbolicLink()) link = fs.readlinkSync(cur); } catch { link = null; }
+      if (link !== null) {
+        if (depth >= 40) throw new PathContainmentError(p);
+        const target = path.resolve(path.dirname(cur), link);
+        return realPathOf(rest.length ? path.join(target, ...rest.reverse()) : target, depth + 1);
+      }
       const parent = path.dirname(cur);
       if (parent === cur) return path.resolve(p);
       rest.push(path.basename(cur));
       cur = parent;
     }
   }
+}
+
+/** Case-insensitive file systems (Windows, macOS): paths compare in lower case. */
+export function samePathKey(p: string): string {
+  return process.platform === 'win32' || process.platform === 'darwin' ? p.toLowerCase() : p;
 }
 
 // ─── read_file ────────────────────────────────────────────────────────────────
@@ -186,6 +200,8 @@ function globSync(pattern: string, root: string): string[] {
     for (const entry of entries) {
       const matches = micromatch(entry.name, head);
       if (!matches) continue;
+      // links (symlinks, junctions) are never walked into: the search stays in the real workspace
+      if (entry.isSymbolicLink()) continue;
       const full = path.join(dir, entry.name);
       if (tail.length === 0) {
         results.push(path.relative(root, full).replace(/\\/g, '/'));
@@ -258,6 +274,7 @@ function grepDir(dir: string, regex: RegExp, root: string, out: string[]): void 
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (out.length > GREP_MAX_MATCHES * 5) return;
+    if (entry.isSymbolicLink()) continue; // links are not followed (see globSync)
     if (entry.isDirectory() && !entry.name.startsWith('.') && !GREP_SKIP_DIRS.has(entry.name)) {
       grepDir(full, regex, root, out);
     } else if (entry.isFile() && !GREP_SKIP_FILE.test(entry.name)) {

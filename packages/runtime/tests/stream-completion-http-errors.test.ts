@@ -19,8 +19,8 @@ const call = (baseUrl: string) => streamCompletion({ baseUrl, apiKey: 'k', model
 describe('http adapter: errors are errors', () => {
   test('401, 404 and 500 reject with a kind and a hint; a 400 about the context is context', async () => {
     for (const [status, body, kind, hint] of [
-      [401, '{"error":"invalid x-api-key"}', 'env', /credencial recusada/],
-      [404, 'not found', 'env', /chat\/completions não existe/],
+      [401, '{"error":"invalid x-api-key"}', 'environment', /credencial recusada/],
+      [404, 'not found', 'environment', /chat\/completions não existe/],
       [500, 'boom', 'env', /transitório/],
       [400, '{"error":"prompt is too long: 250000 tokens"}', 'context', /prompt is too long/],
     ] as const) {
@@ -56,5 +56,16 @@ describe('http adapter: errors are errors', () => {
     const r = parseSseResponse('data: {"choices":[{"delta":{"content":"a"}}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":30}}\n\ndata: [DONE]\n');
     assert.deepEqual(r.usage, { input_tokens: 120, output_tokens: 30 });
     assert.equal(httpFailureKind(429, ''), 'quota');
+    const t = parseSseResponse('data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":9,"completion_tokens_details":{"reasoning_tokens":7}}}\n\ndata: [DONE]\n');
+    assert.equal(t.usage?.thinking_tokens, 7);
+  });
+
+  test('cross-review 15/11: a policy refusal is policy, a refused credential / missing endpoint is environment', () => {
+    assert.equal(httpFailureKind(400, '{"error":{"code":"content_filter","message":"flagged"}}'), 'policy');
+    assert.equal(httpFailureKind(403, 'Request blocked by our usage policies'), 'policy');
+    assert.equal(httpFailureKind(403, 'forbidden'), 'environment');
+    assert.equal(httpFailureKind(401, ''), 'environment');
+    assert.equal(httpFailureKind(404, ''), 'environment');
+    assert.equal(httpFailureKind(502, ''), 'env');
   });
 });

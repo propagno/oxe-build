@@ -44,7 +44,7 @@ function fakeJira() {
     if (method === 'POST' && p === '/rest/api/3/issue') { n += 1; const key = `OXE-${n}`; issues.set(key, { key, id: String(n), fields: { ...body.fields, status: { name: 'Backlog' }, issuelinks: [], comment: { comments: [] } } }); return { status: 201, json: { key, id: String(n) } }; }
     let m = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)$/.exec(p);
     if (m && method === 'GET') return issues.has(m[1]) ? { status: 200, json: issues.get(m[1]) } : { status: 404, json: null, text: 'nf' };
-    if (m && method === 'PUT') { const it = issues.get(m[1]); if (body.fields && body.fields.description) it.fields.description = body.fields.description; if (body.fields && body.fields.summary) it.fields.summary = body.fields.summary; for (const l of (body.update && body.update.labels) || []) if (l.add && !it.fields.labels.includes(l.add)) it.fields.labels.push(l.add); for (const fv of (body.update && body.update.fixVersions) || []) if (fv.set) it.fields.fixVersions = fv.set.map((s) => versions.find((v) => v.id === s.id)); return { status: 204, json: null }; }
+    if (m && method === 'PUT') { const it = issues.get(m[1]); if (body.fields && body.fields.description) it.fields.description = body.fields.description; if (body.fields && body.fields.summary) it.fields.summary = body.fields.summary; for (const l of (body.update && body.update.labels) || []) { if (l.add && !it.fields.labels.includes(l.add)) it.fields.labels.push(l.add); if (l.remove) it.fields.labels = it.fields.labels.filter((x) => x !== l.remove); } for (const fv of (body.update && body.update.fixVersions) || []) if (fv.set) it.fields.fixVersions = fv.set.map((s) => versions.find((v) => v.id === s.id)); return { status: 204, json: null }; }
     m = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)\/transitions$/.exec(p);
     if (m && method === 'GET') return { status: 200, json: { transitions: names.map((s, i) => ({ id: String(i + 1), name: s, to: { name: s } })) } };
     if (m && method === 'POST') { issues.get(m[1]).fields.status = { name: names[Number(body.transition.id) - 1] }; return { status: 204, json: null }; }
@@ -336,6 +336,15 @@ describe('the umbrella card: alm label --add and alm link --relates, by key, ide
     assert.deepEqual(r1.linked, ['OXE-20', 'OXE-21']);
     assert.equal(j.writes.filter((w) => w === 'POST /rest/api/3/issueLink').length, 2);
     await assert.rejects(op.runtimeAlm(dir, null, { action: 'label', ref: 'OXE-22', add: 'com espaco nao', apply: true, ...net }), /não tem espaço/);
+    // OxeSpace 15/11 (OXE-189): --remove takes a label off; a missing one is reported, not an error
+    j.issues.get('OXE-22').fields.labels.push('needs-info');
+    const sim = await op.runtimeAlm(dir, null, { action: 'label', ref: 'OXE-22', remove: 'needs-info', ...net });
+    assert.deepEqual(sim.planned.remove, ['needs-info']);
+    assert.ok(j.issues.get('OXE-22').fields.labels.includes('needs-info'), 'simulation writes nothing');
+    const rm = await op.runtimeAlm(dir, null, { action: 'label', ref: 'OXE-22', remove: 'needs-info,nao-tem', apply: true, ...net });
+    assert.deepEqual([rm.removed, rm.absent], [['needs-info'], ['nao-tem']]);
+    assert.deepEqual(j.issues.get('OXE-22').fields.labels, ['guarda-chuva']);
+    await assert.rejects(op.runtimeAlm(dir, null, { action: 'label', ref: 'OXE-22', add: 'x', remove: 'x', apply: true, ...net }), /ao mesmo tempo/);
   });
 
   it('alm version <KEY> <versão>: a simulation without --apply; with it the fix version changes once, with the comment (OXE-10 → 1.5.3)', async () => {

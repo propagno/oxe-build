@@ -1089,9 +1089,12 @@ export class Scheduler {
           return;
         }
         quotaWaits = 0;
-        if (execClass?.kind === 'environment') {
-          this.pauseForFailure(ctx, nodeId, 'environment', execClass.diagnosis, null);
-          this.blockNode(nodeId, ctx, status, blocked, 'paused_environment', execClass.diagnosis);
+        // cross-review 15/11: the http adapter reports a refused credential / missing endpoint (401/403/404) as
+        // `environment` itself — configuration, not a reason to pay another attempt
+        if (execClass?.kind === 'environment' || lastResult.failure_class === 'environment') {
+          const diag = execClass?.kind === 'environment' ? execClass.diagnosis : tailLines(lastResult.output || '', 3);
+          this.pauseForFailure(ctx, nodeId, 'environment', diag, null);
+          this.blockNode(nodeId, ctx, status, blocked, 'paused_environment', diag);
           return;
         }
         // OXB-148: a prompt that does not fit fails the same way on a blind retry.

@@ -6,7 +6,7 @@ import type { PluginRegistry } from '../plugins/plugin-registry';
 import { streamCompletion } from './stream-completion';
 import { CLI_FAILURE_QUOTA_RE } from './quota-patterns';
 import type { ChatMessage, ToolCall } from './stream-completion';
-import { BUILT_IN_TOOLS, realPathOf } from './built-in-tools';
+import { BUILT_IN_TOOLS, realPathOf, samePathKey } from './built-in-tools';
 import { selectToolsForActions } from './action-tool-map';
 import { buildNodePrompt } from './node-prompt-builder';
 import type { NodeContextProvider } from './node-context';
@@ -162,6 +162,10 @@ export interface ExecutorUsage {
   /** Calls per tool name (e.g. how many `run_command`). */
   tools: Record<string, number>;
   cost_usd: number | null;
+  /** Tokens the backend reported (http adapter: the usage chunk), summed over the turns. */
+  input_tokens?: number;
+  output_tokens?: number;
+  thinking_tokens?: number;
   /**
    * OXB-118: what the attempt did, for the project's action rules checked after the fact (a command run, a path
    * read or written). Capped; long commands are cut.
@@ -326,7 +330,7 @@ export class LlmTaskExecutor implements TaskExecutor {
         }
         const failureClass = isQuota
           ? 'quota'
-          : (kind === 'context' || kind === 'llm' || kind === 'timeout' || kind === 'policy' ? kind : 'env');
+          : (kind === 'context' || kind === 'llm' || kind === 'timeout' || kind === 'policy' || kind === 'environment' ? kind : 'env');
         const out = kind === 'policy'
           ? `${errMsg}\n\nRecusa da política de uso do modelo: o mesmo prompt seria recusado de novo, então não há nova tentativa automática. Veja o prompt com oxe-cc runtime execute --task ${node.id} --print-prompt e tire o trecho que dispara a recusa (um fixture, um snippet).`
           : errMsg;
@@ -336,6 +340,10 @@ export class LlmTaskExecutor implements TaskExecutor {
       timeoutsInARow = 0;
       quotaWaitsInARow = 0;
       if (typeof response.usage?.cost_usd === 'number') usage.cost_usd = (usage.cost_usd ?? 0) + response.usage.cost_usd;
+      for (const k of ['input_tokens', 'output_tokens', 'thinking_tokens'] as const) {
+        const n = response.usage?.[k];
+        if (typeof n === 'number') usage[k] = (usage[k] ?? 0) + n;
+      }
       usage.tool_calls += response.tool_calls.length;
       for (const tc of response.tool_calls) usage.tools[tc.function.name] = (usage.tools[tc.function.name] ?? 0) + 1;
 
@@ -482,11 +490,12 @@ export class LlmTaskExecutor implements TaskExecutor {
     // field and the model never learned its JSON was invalid. It gets an explicit error instead.
     let args: Record<string, unknown> = {};
     try {
-      const parsed = JSON.parse(tc.function.arguments || '{}');
+      const parsed = JSON.parse(String(tc.function.arguments ?? '').trim() || '{}');
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
       args = parsed as Record<string, unknown>;
     } catch (err) {
       this.emit({ type: 'tool_denied', nodeId: node.id, attempt, detail: { tool: tc.function.name, reason: 'invalid_tool_arguments' } });
+      this.emit({ type: 'tool_result', nodeId: node.id, attempt, detail: { tool: tc.function.name, length: 0, error: 'invalid_tool_arguments' } });
       return {
         role: 'tool',
         tool_call_id: tc.id,
@@ -556,11 +565,11 @@ export class LlmTaskExecutor implements TaskExecutor {
     const list = this.options.protectedPaths ?? [];
     if (!list.length) return false;
     const rel = normalizeRel(path.isAbsolute(target) ? path.relative(cwd, target) : target);
-    if (list.some((p) => normalizeRel(p) === rel)) return true;
+    if (list.some((p) => samePathKey(normalizeRel(p)) === samePathKey(rel))) return true;
     // P0-2: through a link (a junction the runtime made, a symlink) a different spelling can reach the same file —
     // compare the real paths too
-    const real = realPathOf(path.resolve(cwd, String(target)));
-    return list.some((p) => realPathOf(path.resolve(cwd, p)) === real);
+    const real = samePathKey(realPathOf(path.resolve(cwd, String(target))));
+    return list.some((p) => samePathKey(realPathOf(path.resolve(cwd, p))) === real);
   }
 
   private emit(event: LlmExecutorEvent): void {

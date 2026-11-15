@@ -2437,7 +2437,7 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
     return lib.move(programDir, cfg, ref, options.stage, { ...net, comment: options.comment });
   }
   // the umbrella card: a label and "Relates" links between cards, by key (OxeSpace 14/11, OXE-22/23)
-  if (options.action === 'label') return lib.labelItem(programDir, cfg, options.ref, options.add, net);
+  if (options.action === 'label') return lib.labelItem(programDir, cfg, options.ref, options.add, { ...net, remove: options.remove });
   // G21: the requests reader sessions recorded; apply (writer) drains them, then a sync catches up the events
   if (options.action === 'pending') {
     if (options.sub !== 'apply') return { pending: lib.listPending(projectRoot) };
@@ -11131,7 +11131,7 @@ function readRunState(projectRoot, activeSession) {
   }
   // OxeSpace 15/11 (OxeChat F3): state.json showed "planned" for the run whose ACTIVE-RUN said paused/running — the two
   // files had drifted. The newer of the two (updated_at) wins for the live fields.
-  if (active && active.run_id === run.run_id && active.status && Date.parse(active.updated_at || '') > Date.parse(run.updated_at || '')) {
+  if (active && active.run_id === run.run_id && active.status && (Date.parse(active.updated_at || '') || 0) > (Date.parse(run.updated_at || '') || 0)) {
     run = { ...run, status: active.status, updated_at: active.updated_at, ...(active.cursor ? { cursor: active.cursor } : {}), ...(active.current_wave != null ? { current_wave: active.current_wave } : {}) };
   }
   return run;

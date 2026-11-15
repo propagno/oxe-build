@@ -33,6 +33,17 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Adapter http (P0-1):**
   - Todo status ≥ 400 é erro classificado: 429 e cota são `quota`, contexto longo é `context`, o resto é `env`. Vem com dica: credencial; endpoint inexistente, para usar `--adapter claude` ou um proxy OpenAI-compatível; erro transitório do provedor. Antes, um 401, 404 ou 500 terminava a tentativa como "sem chamada de ferramenta" em silêncio.
   - O `usage` do stream é lido (`stream_options.include_usage`). Um backend que recusa esse campo recebe uma chamada a mais, sem ele.
+- **Revisão cruzada (15/11):**
+  - Um link pendente (destino ainda inexistente) para fora do workspace é recusado. Antes, o `realPathOf` subia além dele e a escrita seguia o link para fora.
+  - No Windows e no macOS, a contenção e o `isProtected` comparam sem diferenciar maiúsculas.
+  - `glob` e `grep` não entram em links.
+  - No adapter http:
+    - recusa de política (`content_filter`, usage policy) é `policy`, sem retry;
+    - 401, 403 e 404 são `environment` e pausam o run em vez de pagar outra tentativa;
+    - os tokens (`input`, `output`, `reasoning`) vão para o `executor_usage`;
+    - o preflight avisa quando o http aponta para api.anthropic.com.
+  - Argumentos só com espaços valem `{}`, e o `invalid_tool_arguments` também emite `tool_result`.
+  - O `readRunState` não perde o ACTIVE-RUN quando o run não tem `updated_at`.
 
 ### `state.json` separa os CRs de outras fases (OxeChat F3, 15/11)
 
@@ -44,6 +55,11 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 
 - **Recusa de política:** um "safeguards flagged" / "usage policy" do modelo passa a ser `failure_class: policy`. O scheduler bloqueia a tarefa sem nova tentativa automática, e a saída aponta o `--print-prompt` para achar o trecho que dispara a recusa.
 - **Antes:** era lida como falha de ambiente e retentada com o mesmo prompt, que seria recusado de novo. Na T7 do OxeChat F3, a primeira tentativa custou US$ 5,02 até a recusa.
+
+### `alm label --remove`; o refine tira o `needs-info` respondido (OxeSpace 15/11, OXE-189)
+
+- **`alm label <chave> --remove <rótulo>[,<rótulo>]`:** tira rótulos do card. Pode vir junto com o `--add`; um rótulo nos dois é recusado. Um rótulo que o card não tem é informado, não é erro.
+- **`alm refine apply` tira o `needs-info`:** quando o spec não tem mais nenhum "A confirmar" e o card ainda traz `needs-info`, o rótulo sai. Isso vale também com o spec inalterado. Antes, o apply só acrescentava o rótulo.
 
 ### `alm supersede` não fecha como "Lançado"; `alm version none`; lint sem fase ativa (OxeSpace 15/11)
 

@@ -321,6 +321,9 @@ function jiraProvider(cfg, env, ctx) {
     async addLabels(key, labels) {
       await request(c, 'PUT', `${site}/rest/api/3/issue/${key}`, { update: { labels: labels.map((l) => ({ add: l })) } });
     },
+    async removeLabels(key, labels) {
+      await request(c, 'PUT', `${site}/rest/api/3/issue/${key}`, { update: { labels: labels.map((l) => ({ remove: l })) } });
+    },
     /** The fix versions of an item (names). */
     async fixVersions(key) {
       const r = await request(c, 'GET', `${site}/rest/api/3/issue/${key}?fields=fixVersions`);
@@ -934,16 +937,23 @@ function resolveItem(programDir, cfg, refOrKey) {
 async function labelItem(programDir, cfg, refOrKey, labels, options = {}) {
   const item = resolveItem(programDir, cfg, refOrKey);
   if (!item) throw new Error(`${refOrKey}: sem item no ALM (use a chave do item)`);
-  const add = (Array.isArray(labels) ? labels : String(labels || '').split(',')).map((s) => String(s).trim()).filter(Boolean);
-  if (!add.length) throw new Error('informe o rótulo: --add <rótulo>[,<rótulo>]');
-  if (add.some((l) => /\s/.test(l))) throw new Error('rótulo do Jira não tem espaço');
-  if (options.dryRun || cfg.dry_run) return { planned: { key: item.key, add } };
+  const list = (v) => (Array.isArray(v) ? v : String(v || '').split(',')).map((s) => String(s).trim()).filter(Boolean);
+  const add = list(labels);
+  // OxeSpace 15/11 (OXE-189): an answered needs-info stayed on the card — `--remove` takes a label off
+  const remove = list(options.remove);
+  if (!add.length && !remove.length) throw new Error('informe o rótulo: --add <rótulo>[,<rótulo>] ou --remove <rótulo>[,<rótulo>]');
+  if ([...add, ...remove].some((l) => /\s/.test(l))) throw new Error('rótulo do Jira não tem espaço');
+  const both = add.filter((l) => remove.includes(l));
+  if (both.length) throw new Error(`rótulo em --add e --remove ao mesmo tempo: ${both.join(', ')}`);
+  if (options.dryRun || cfg.dry_run) return { planned: { key: item.key, add, remove } };
   const prov = options.provider || provider(cfg, options);
-  if (typeof prov.addLabels !== 'function') throw new Error(`${cfg.provider}: rótulo ainda não suportado (Azure: tags)`);
+  if ((add.length && typeof prov.addLabels !== 'function') || (remove.length && typeof prov.removeLabels !== 'function')) throw new Error(`${cfg.provider}: rótulo ainda não suportado (Azure: tags)`);
   const have = typeof prov.labels === 'function' ? await prov.labels(item.key) : [];
   const missing = add.filter((l) => !have.includes(l));
   if (missing.length) await prov.addLabels(item.key, missing);
-  return { key: item.key, added: missing, existed: add.filter((l) => have.includes(l)) };
+  const present = remove.filter((l) => have.includes(l));
+  if (present.length) await prov.removeLabels(item.key, present);
+  return { key: item.key, added: missing, existed: add.filter((l) => have.includes(l)), removed: present, absent: remove.filter((l) => !have.includes(l)) };
 }
 
 /**
