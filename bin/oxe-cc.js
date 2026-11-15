@@ -2692,6 +2692,7 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc program phase add --after Fn --title "…" [--requirements R14] [--acceptance A42,A43] [--scope "…"] --by <papel>
   npx oxe-cc program phase edit Fn [--title "…"] [--add-requirements R17] [--remove-requirements R2] [--add-acceptance A58] [--remove-acceptance A3] [--scope "…" [--keep-bullets] | --scope-file escopo.md] --by <papel>
   npx oxe-cc program criterion move A<n> --from Fn --to Fm --by <papel>
+  npx oxe-cc program regression repin Fn --criteria A<n> --by <papel> --reason "<por quê>" [--dry-run]   (re-fixa o teste congelado commitado no registro de regressão de uma fase fechada)
   npx oxe-cc program export [<projeto>] [--out <pasta>]   (saída padrão: program.export_dir do .oxe/config.json)
     npx oxe-cc azure <status|doctor|auth|sync|find|servicebus|eventgrid|sql|operations> [opções] [pasta-do-projeto]
     npx oxe-cc capabilities <list|install|remove|update> [opções] [id]
@@ -7148,6 +7149,29 @@ async function main() {
       for (const [role, it] of Object.entries(q.next)) console.log(`  ${role}: ${it.text}`);
       if (!Object.keys(q.next).length) console.log('  nada na fila');
       console.log('  → .oxe/program/QUEUE.md');
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // OxeSpace 15/11 (OxeChat F3): re-pin a closed phase's regression entry to the committed re-frozen test.
+  if (command === 'program' && argv[0] === 'regression') {
+    if (argv[1] !== 'repin') { console.error(`${red}use:${reset} oxe-cc program regression repin F<n> --criteria A<n>[,A<m>] --by <papel> --reason "<por quê>" [--dry-run] [--json]`); process.exit(1); }
+    const o = { dir: process.cwd(), json: false, dryRun: false };
+    for (let i = 2; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dry-run') o.dryRun = true;
+      else if (['--criteria', '--by', '--reason'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-') && !o.phase) o.phase = a;
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = oxeOperational.runtimeProgramRegressionRepin(o.dir, null, o);
+      if (o.json) { console.log(JSON.stringify({ oxeRegressionRepinSchema: 1, ...out }, null, 2)); return; }
+      if (!out.changes.length) console.log(`  ${dim}= ${out.phase} ${out.criteria.join(', ')}: o registro de regressão já bate com os arquivos commitados${reset}`);
+      for (const c of out.changes) console.log(`  ${out.dry_run ? `${yellow}(simulação)${reset} ` : `${green}✓${reset} `}${out.phase} ${c.check}: ${c.path} ${String(c.from || '—').slice(0, 12)} → ${c.to.slice(0, 12)}`);
+      if (out.dry_run && out.changes.length) console.log(`  ${dim}nada gravado; sem --dry-run grava em ${out.file} (com by/reason em repins[])${reset}`);
     } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
     return;
   }

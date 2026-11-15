@@ -61,6 +61,13 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Recusa de política:** um "safeguards flagged" / "usage policy" do modelo passa a ser `failure_class: policy`. O scheduler bloqueia a tarefa sem nova tentativa automática, e a saída aponta o `--print-prompt` para achar o trecho que dispara a recusa.
 - **Antes:** era lida como falha de ambiente e retentada com o mesmo prompt, que seria recusado de novo. Na T7 do OxeChat F3, a primeira tentativa custou US$ 5,02 até a recusa.
 
+### Registro de regressão com o hash re-congelado (OxeSpace 15/11, OxeChat F3)
+
+- **No `program close`:** o snapshot de regressão fixa cada teste congelado pelo conteúdo no fechamento, que é o que o gate acabou de aceitar. Antes copiava o hash da suíte compilada antes de um CR re-congelar o teste, e toda verificação posterior lia o teste re-congelado como `acceptance_tampered`. O hash anterior fica em `sha256_compiled`.
+- **`program regression repin Fn --criteria A<n> --by <papel> --reason "…" [--dry-run]`:** re-fixa os testes congelados de um critério de uma fase **fechada** no arquivo commitado.
+  - Recusa um arquivo com mudança não commitada ou não versionado, uma fase aberta e um critério sem teste. Quando recusa, nada é gravado.
+  - Grava `repins[]` (quem, por quê, de → para) e o evento `RegressionRepinned`.
+
 ### Recusa de política: o gatilho provável e uma nova tentativa escolhida (OxeSpace 15/11, Celular F3 T9)
 
 - A falha `policy` diz o que o turno anterior acrescentou ao prompt: ferramenta, caminho e tamanho de cada resultado. Isso vai no texto e em `executor_usage.policy_trigger_candidates`. Uma recusa na primeira requisição aponta o prompt inicial.

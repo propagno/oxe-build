@@ -7368,6 +7368,62 @@ function runtimeProgramPhaseEdit(projectRoot, activeSession, options = {}, inter
  * written (remove from --from, with the plan clean-up when it is the active phase; add to --to, which must not have
  * started), then PROGRAM.json, ROADMAP and the plan are written together, with one program_edit record.
  */
+/**
+ * OxeSpace 15/11 (OxeChat F3, chat-sess): a closed phase's regression record kept the pre-CR hash of a re-frozen test,
+ * so every later verify failed `reg-f2-check-accept-a6: acceptance_tampered`. `program regression repin` re-pins the
+ * frozen files of one criterion of a CLOSED phase to the file as committed now — audited (by, reason, from → to) and
+ * only for a file whose working copy equals HEAD (an uncommitted edit is never pinned).
+ */
+function runtimeProgramRegressionRepin(projectRoot, activeSession, options = {}) {
+  const programLib = require('./oxe-program.cjs');
+  const phaseId = String(options.phase || '').trim().toUpperCase();
+  const criteria = String(options.criteria || '').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+  if (!/^F\d+$/.test(phaseId) || !criteria.length || criteria.some((c) => !/^A\d+$/.test(c))) {
+    throw new Error('use: oxe-cc program regression repin F<n> --criteria A<n>[,A<m>] --by <papel> --reason "<por quê>" [--dry-run]');
+  }
+  const { by, reason } = requireEditReason({ by: options.by, reason: options.reason });
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const state = programLib.readProgram(programDir);
+  const phase = state && Array.isArray(state.phases) ? state.phases.find((p) => p.id === phaseId) : null;
+  if (!phase) throw new Error(`${phaseId}: fase inexistente no programa`);
+  if (phase.status !== 'closed') throw new Error(`${phaseId} não está fechada (status ${phase.status}): o registro de regressão só existe para fase fechada`);
+  const file = path.join(programDir, 'regression', `${phaseId}.json`);
+  const doc = readJsonQuiet(file);
+  if (!doc || !Array.isArray(doc.checks)) throw new Error(`${phaseId}: sem registro de regressão (${path.relative(projectRoot, file)})`);
+  const runtime = loadRuntimeModule();
+  const git = (args) => spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+  const changes = [];
+  const problems = [];
+  for (const crit of criteria) {
+    const checks = doc.checks.filter((c) => c && (String(c.acceptance_ref || '').toUpperCase() === crit || c.id === `check-accept-${crit.toLowerCase()}`) && Array.isArray(c.frozen_files) && c.frozen_files.length);
+    if (!checks.length) { problems.push(`${crit}: nenhum teste congelado de ${crit} no registro de regressão de ${phaseId}`); continue; }
+    for (const check of checks) {
+      for (const f of check.frozen_files) {
+        const rel = String(f.path || '').replace(/\\/g, '/');
+        const abs = path.resolve(projectRoot, rel);
+        if (!fs.existsSync(abs)) { problems.push(`${check.id}: ${rel} não existe`); continue; }
+        if (git(['ls-files', '--error-unmatch', '--', rel]).status !== 0) { problems.push(`${check.id}: ${rel} não está versionado — commite o teste antes`); continue; }
+        if ((git(['status', '--porcelain', '--', rel]).stdout || '').trim()) { problems.push(`${check.id}: ${rel} tem mudança não commitada — o repin fixa só o que está commitado`); continue; }
+        const now = runtime && typeof runtime.sha256File === 'function' ? runtime.sha256File(abs) : null;
+        if (!now) { problems.push(`${check.id}: não consegui calcular o sha256 de ${rel}`); continue; }
+        const matches = runtime && typeof runtime.frozenFileMatches === 'function' ? runtime.frozenFileMatches(abs, f.sha256) : now === f.sha256;
+        if (matches) continue; // already pinned to this content (raw, LF or CRLF form)
+        changes.push({ check: check.id, criterion: crit, path: rel, from: f.sha256 || null, to: now, _f: f });
+      }
+    }
+  }
+  if (problems.length) throw new Error(`repin recusado, nada foi gravado:\n  - ${problems.join('\n  - ')}`);
+  const result = { phase: phaseId, criteria, file: path.relative(projectRoot, file).replace(/\\/g, '/'), changes: changes.map(({ _f, ...c }) => c), dry_run: Boolean(options.dryRun) };
+  if (options.dryRun || !changes.length) return result;
+  const at = new Date().toISOString();
+  for (const c of changes) c._f.sha256 = c.to;
+  doc.repins = [...(Array.isArray(doc.repins) ? doc.repins : []), ...changes.map(({ _f, ...c }) => ({ at, by, reason, ...c }))];
+  writeTextAtomic(file, `${JSON.stringify(doc, null, 2)}\n`);
+  appendEvent(projectRoot, activeSession, { type: 'RegressionRepinned', payload: { phase: phaseId, criteria, by, reason, changes: result.changes } });
+  return result;
+}
+
 function runtimeProgramCriterionMove(projectRoot, activeSession, options = {}) {
   const changeLib = require('./oxe-change.cjs');
   const programLib = require('./oxe-program.cjs');
@@ -10135,7 +10191,24 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   }
   // OXB-105: what the phase touched, for the compact (structural CODEBASE-DELTA entry).
   try { require('./oxe-system-design.cjs').deltaEntry(projectRoot, phase.id, phase.base_commit); } catch { /* auxiliar */ }
-  const regressionChecks = programLib.freezeRegressionChecks(run.verification_check_results, run.verification_suite);
+  // a copy: re-pinning below must not touch the run's own suite
+  const regressionChecks = JSON.parse(JSON.stringify(programLib.freezeRegressionChecks(run.verification_check_results, run.verification_suite)));
+  // OxeSpace 15/11 (OxeChat F3): the snapshot copied the suite's hash — compiled BEFORE a CR re-froze the test — and
+  // every later verify read the re-frozen file as tampered. The close gate has just accepted the files as they are,
+  // so the regression record pins each frozen file at its content NOW.
+  try {
+    const rt = loadRuntimeModule();
+    for (const check of regressionChecks) {
+      for (const f of Array.isArray(check.frozen_files) ? check.frozen_files : []) {
+        if (!f || !f.path) continue;
+        const abs = path.resolve(projectRoot, String(f.path));
+        if (!fs.existsSync(abs) || !rt || typeof rt.sha256File !== 'function') continue;
+        if (typeof rt.frozenFileMatches === 'function' && f.sha256 && rt.frozenFileMatches(abs, f.sha256)) continue;
+        const now = rt.sha256File(abs);
+        if (now && now !== f.sha256) { f.sha256_compiled = f.sha256 || null; f.sha256 = now; }
+      }
+    }
+  } catch { /* auxiliar: the compiled hashes stay */ }
   const regressionFile = programLib.writeRegression(paths.programDir, phase.id, regressionChecks, { run_id: run.run_id || null });
 
   const parsers = loadSdkParsers();
@@ -11675,6 +11748,7 @@ module.exports = {
   runtimeProgramPhaseEdit,
   runtimeChangeSetStatus,
   runtimeProgramCriterionMove,
+  runtimeProgramRegressionRepin,
   oxeHistoryWarning,
   runtimeSync,
   runtimePromote,
