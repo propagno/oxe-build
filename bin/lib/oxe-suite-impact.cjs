@@ -191,11 +191,20 @@ function laterOwnedTests(planDoc) {
   const waveOf = (t) => (Number.isFinite(Number(t && t.wave)) ? Number(t.wave) : null);
   const out = [];
   for (const t of pending) {
-    const verifyText = [...((t.verify && t.verify.commands) || []), t.verify && t.verify.command, t.verifyCommand].filter(Boolean).join(' ').replace(/\\/g, '/');
-    const tests = [...new Set((verifyText.match(/[^\s"'`]+/g) || []).map((s) => norm(s)).filter((s) => s.includes('/') && TEST_RE.test(s) && /\.[cm]?[jt]sx?$/i.test(s)))];
+    // OxeSpace 15/11 (F6 T44, wave 18): a vitest file argument is a SUBSTRING filter — `pu03-app-version.test.ts` also
+    // ran T59's `pu03-app-version.test.tsx` (wave 33). Each command's arguments are matched as filters; a command
+    // narrowed by -t / --testNamePattern is taken as running its own cases only.
+    const commands = [...((t.verify && t.verify.commands) || []), t.verify && t.verify.command, t.verifyCommand].filter(Boolean).map((c) => String(c).replace(/\\/g, '/'));
+    const tests = [];
+    const via = new Map(); // matched file → the verify argument that selects it (when not the same path)
+    for (const cmd of commands) {
+      if (/(^|\s)(-t|--testNamePattern)(\s|=)/.test(cmd)) continue;
+      const args = (cmd.match(/[^\s"'`]+/g) || []).map((s) => norm(s)).filter((s) => s.includes('/') && TEST_RE.test(s) && /\.[cm]?[jt]sx?$/i.test(s));
+      for (const a of args) for (const known of owners.keys()) if (known === a || known.includes(a)) { tests.push(known); if (known !== a && !via.has(known)) via.set(known, a); }
+    }
     const anc = ancestors(t.id);
     const ownFiles = new Set((t.files || []).map((f) => norm(typeof f === 'string' ? f : f && f.path)));
-    for (const test of tests) {
+    for (const test of [...new Set(tests)]) {
       for (const ownerId of owners.get(test) || []) {
         if (ownerId === t.id || anc.has(ownerId)) continue; // its own, or done before it by the dependency order
         // cross-review 15/11: a mutable test this task writes (in its files), that a later task only extends, is this
@@ -205,7 +214,7 @@ function laterOwnedTests(planDoc) {
         const w = waveOf(t);
         const ow = waveOf(owner);
         if (w != null && ow != null && ow < w) continue; // the owner's wave runs first
-        out.push({ task: t.id, wave: w, test, owner: ownerId, owner_wave: ow });
+        out.push({ task: t.id, wave: w, test, owner: ownerId, owner_wave: ow, ...(via.has(test) ? { via: via.get(test) } : {}) });
       }
     }
   }
@@ -216,7 +225,7 @@ function laterOwnedMessages(findings, { mode = 'error' } = {}) {
   const errors = [];
   const warnings = [];
   for (const f of findings) {
-    const line = `${f.task}${f.wave != null ? ` (onda ${f.wave})` : ''}: o verify roda ${f.test}, que só fica verde com ${f.owner}${f.owner_wave != null ? ` (onda ${f.owner_wave})` : ''} — inalcançável neste ponto da ordem: tire do verify de ${f.task}, ou faça ${f.task} depender de ${f.owner} [G38]`;
+    const line = `${f.task}${f.wave != null ? ` (onda ${f.wave})` : ''}: o verify roda ${f.test}${f.via ? ` (o argumento ${f.via} casa como filtro de substring do vitest)` : ''}, que só fica verde com ${f.owner}${f.owner_wave != null ? ` (onda ${f.owner_wave})` : ''} — inalcançável neste ponto da ordem: tire do verify de ${f.task}${f.via ? ' (ou ancore o caminho, ou estreite com -t)' : ''}, ou faça ${f.task} depender de ${f.owner} [G38]`;
     if (mode === 'error') errors.push(line); else warnings.push(line);
   }
   return { errors, warnings };

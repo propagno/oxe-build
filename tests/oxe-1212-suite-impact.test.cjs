@@ -124,6 +124,24 @@ describe('G38: a verify that holds a test only a later task turns green', () => 
     p.tasks[0].verify.commands.push('npx playwright test tests/e2e/a27.spec.ts');
     assert.ok(si.laterOwnedTests(p).some((x) => x.task === 'T27' && x.test === 'tests/e2e/a27.spec.ts' && x.owner === 'T30'));
   });
+  it('a vitest argument is a substring filter: .test.ts also runs a later task .test.tsx; -t narrows it (OxeSpace 15/11, F6 T44)', () => {
+    const p = {
+      acceptance_tests: [
+        { task: 'T44', criterion: 'A41', files: ['tests/oxe152/polish/pu03-app-version.test.ts'], command: 'x' },
+        { task: 'T59', criterion: 'A56', files: ['tests/oxe152/polish/pu03-app-version.test.tsx'], command: 'y' },
+      ],
+      tasks: [
+        { id: 'T44', wave: 18, files: ['src/version.ts'], verify: { commands: ['node scripts/test-electron.mjs tests/oxe152/polish/pu03-app-version.test.ts --maxWorkers=2'] } },
+        { id: 'T59', wave: 33, files: ['src/about.tsx'], verify: { commands: ['node scripts/test-electron.mjs tests/oxe152/polish/pu03-app-version.test.tsx'] } },
+      ],
+    };
+    const f = si.laterOwnedTests(p);
+    assert.deepEqual(f.map((x) => [x.task, x.test, x.owner, x.via]), [['T44', 'tests/oxe152/polish/pu03-app-version.test.tsx', 'T59', 'tests/oxe152/polish/pu03-app-version.test.ts']]);
+    assert.match(si.laterOwnedMessages(f).errors[0], /casa como filtro de substring do vitest/);
+    p.tasks[0].verify.commands[0] += ' -t "version label"';
+    assert.equal(si.laterOwnedTests(p).length, 0, '-t narrows the run');
+  });
+
   it('a mutable acceptance/ test the task itself writes (a later task only extends it) is its own to run', () => {
     const p = plan();
     p.tasks[0].files.push(U83);
