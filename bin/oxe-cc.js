@@ -8959,15 +8959,34 @@ async function main() {
     let reviewWaive = null;
     let reviewBy = null;
     let reviewReason = null;
-    let precheckTests = false;
+    let precheckTests = null;
+    let noPrecheck = false;
     let precheckRuns = 0;
     let precheckTimeoutMs = 0;
     for (let i = 0; i < rest.length; i += 1) {
       const a = rest[i];
       if (a === '--json') json = true;
-      else if (a === '--precheck-tests') precheckTests = true;
-      else if (a === '--precheck-runs' && rest[i + 1]) { precheckTests = true; precheckRuns = Number(rest[++i]) || 0; }
-      else if (a === '--precheck-timeout' && rest[i + 1]) { precheckTests = true; precheckTimeoutMs = (Number(rest[++i]) || 0) * 1000; }
+      else if (a === '--precheck-tests') { precheckTests = true; noPrecheck = false; }
+      else if (a === '--no-precheck') { noPrecheck = true; precheckTests = false; }
+      else if ((a === '--precheck-runs' && rest[i + 1]) || a.startsWith('--precheck-runs=')) {
+        const raw = a.includes('=') ? a.slice('--precheck-runs='.length) : rest[++i];
+        precheckRuns = Number(raw) || 0;
+        if (!noPrecheck && precheckTests === null) precheckTests = true;
+      }
+      else if ((a === '--precheck-timeout' && rest[i + 1]) || a.startsWith('--precheck-timeout=')) {
+        const raw = a.includes('=') ? a.slice('--precheck-timeout='.length) : rest[++i];
+        const secs = Number(raw);
+        if (!Number.isFinite(secs) || secs <= 0) {
+          console.error(`${red}Valor inválido para --precheck-timeout:${reset} ${raw} (informe segundos > 0)`);
+          process.exit(1);
+        }
+        precheckTimeoutMs = Math.round(secs * 1000);
+        if (!noPrecheck && precheckTests === null) precheckTests = true;
+      }
+      else if (a === '--precheck-timeout') {
+        console.error(`${red}Falta o valor em segundos para:${reset} --precheck-timeout`);
+        process.exit(1);
+      }
       else if (a === '--mutation') mutation = true;
       else if (a === '--review') review = true;
       else if (a === '--read') planRead = true;
@@ -9017,7 +9036,8 @@ async function main() {
     try {
       // Progress goes to stderr, so --json on stdout stays parseable.
       const onProgress = quiet ? null : (line) => process.stderr.write(`  ${line}\n`);
-      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave, dryVerify, preflight: !noPreflight, onProgress, resume, changed, only, dryVerifyAnyway, mutation, mutationMax, review, reviewWaive, by: reviewBy, reason: reviewReason, precheckTests, precheckRuns, precheckTimeoutMs });
+      const effectivePrecheck = noPrecheck ? false : precheckTests;
+      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave, dryVerify, preflight: !noPreflight, onProgress, resume, changed, only, dryVerifyAnyway, mutation, mutationMax, review, reviewWaive, by: reviewBy, reason: reviewReason, precheckTests: effectivePrecheck, noPrecheck, precheckRuns, precheckTimeoutMs });
     } catch (err) {
       console.error(`${red}✗${reset} ${err && err.message ? err.message : err}`);
       process.exit(1);
@@ -9027,6 +9047,9 @@ async function main() {
     } else {
       const c = useAnsiColors();
       console.log(`  ${c ? dim : ''}Fonte:${c ? reset : ''} ${result.source} · ${result.tasks} tarefas${result.phase ? ` · fase ${result.phase}` : ''}`);
+      if (result.precheck && Array.isArray(result.precheck.notes)) {
+        for (const n of result.precheck.notes) console.log(`  ${c ? dim : ''}ℹ${c ? reset : ''} ${n}`);
+      }
       for (const e of result.errors) console.log(`  ${c ? red : ''}✗${c ? reset : ''} ${e}`);
       for (const w of result.warnings) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${w}`);
       console.log(result.ok ? `  ${c ? green : ''}✓ plan lint ok${c ? reset : ''}` : `  ${c ? red : ''}✗ plan lint: ${result.errors.length} erro(s)${c ? reset : ''}`);

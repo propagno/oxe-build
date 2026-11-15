@@ -5852,27 +5852,67 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     }
   } catch { /* auxiliar */ }
   // G36 part 2: each pending task's frozen test against a stub, repeated — a hang or a flaky result is an error before
-  // any paid attempt depends on it (opt-in: it runs the suites).
-  if (options.precheckTests) {
+  // any paid attempt depends on it. Runs by default when the plan has new/modified frozen tests (disable with --no-precheck).
+  const cfgPrecheck = ((readProjectConfig(projectRoot) || {}).lint || {}).precheck;
+  const precheckDisabled = options.noPrecheck === true || options.precheckTests === false || (cfgPrecheck === false && options.precheckTests !== true);
+  if (!precheckDisabled) {
     try {
       const { doc: pjp, paths: pp } = readPlanJsonDoc(projectRoot, activeSession);
       if (pjp) {
         const pre = require('./oxe-test-precheck.cjs');
-        if (typeof options.onProgress === 'function') options.onProgress(`precheck: ${pre.pendingAcceptance(pjp).length} teste(s) de aceite contra o stub, ${Math.max(2, Number(options.precheckRuns) || 2)} vez(es) cada`);
-        // G30b part 2: the suites outside the verify that import the task files, by the project's test runner
-        const rt0 = (readProjectConfig(projectRoot) || {}).checkpoint_related_tests;
-        const tpl = rt0 && typeof rt0 === 'object' && typeof rt0.run_command === 'string' && rt0.run_command.includes('{files}') ? rt0.run_command : 'npx vitest run {files}';
-        let suites = [];
-        try {
-          const found = require('./oxe-suite-impact.cjs').suiteImpact(projectRoot, pjp);
-          const seenS = new Set();
-          for (const f of found) for (const s of f.suites || []) if (!seenS.has(s.test)) { seenS.add(s.test); suites.push({ file: s.test, task: f.task, command: tpl.replace('{files}', s.test) }); }
-        } catch { suites = []; }
-        const r = pre.precheck(projectRoot, pjp, readJsonQuiet(pp.implementationPack), { runs: options.precheckRuns, suites, ...(options.precheckTimeoutMs > 0 ? { timeoutMs: options.precheckTimeoutMs } : {}), ...(options.precheckRun ? { run: options.precheckRun } : {}), ...(options.precheckWorkspace ? { workspace: options.precheckWorkspace } : {}) });
-        const msg = pre.messages(r);
-        result.errors.push(...msg.errors);
-        result.warnings.push(...msg.warnings);
-        result.precheck = r;
+        const explicitPrecheck = options.precheckTests === true;
+        const runStateForPrecheck = explicitPrecheck ? null : readRunState(projectRoot, activeSession);
+        const newEntries = explicitPrecheck
+          ? null
+          : pre.newFrozenAcceptance(projectRoot, pjp, {
+            baseCommit: phase ? phase.base_commit : null,
+            acceptanceLock: runStateForPrecheck ? runStateForPrecheck.acceptance_lock : null,
+            allowWithoutGit: Boolean(options.precheckWorkspace),
+          });
+        const shouldRunPrecheck = explicitPrecheck || (Array.isArray(newEntries) && newEntries.length > 0);
+        if (shouldRunPrecheck) {
+          const entriesToRun = explicitPrecheck ? pre.pendingAcceptance(pjp) : newEntries;
+          const mode = explicitPrecheck ? 'explicit' : 'auto';
+          const runsLabel = Math.max(2, Number(options.precheckRuns) || 2);
+          if (typeof options.onProgress === 'function') {
+            options.onProgress(
+              mode === 'auto'
+                ? `precheck (padrão — ${entriesToRun.length} teste(s) congelado(s) novo(s); desligue com --no-precheck): contra o stub, até ${runsLabel} vez(es) cada`
+                : `precheck: ${entriesToRun.length} teste(s) de aceite contra o stub, ${runsLabel} vez(es) cada`
+            );
+          }
+          // G30b part 2: with --precheck-tests, the suites outside the verify that import the task files run once at HEAD
+          let suites = [];
+          if (explicitPrecheck) {
+            const rt0 = (readProjectConfig(projectRoot) || {}).checkpoint_related_tests;
+            const tpl = rt0 && typeof rt0 === 'object' && typeof rt0.run_command === 'string' && rt0.run_command.includes('{files}') ? rt0.run_command : 'npx vitest run {files}';
+            try {
+              const found = require('./oxe-suite-impact.cjs').suiteImpact(projectRoot, pjp);
+              const seenS = new Set();
+              for (const f of found) for (const s of f.suites || []) if (!seenS.has(s.test)) { seenS.add(s.test); suites.push({ file: s.test, task: f.task, command: tpl.replace('{files}', s.test) }); }
+            } catch { suites = []; }
+          }
+          const r = pre.precheck(projectRoot, pjp, readJsonQuiet(pp.implementationPack), {
+            entries: entriesToRun,
+            mode,
+            runs: options.precheckRuns,
+            suites,
+            onProgress: options.onProgress,
+            ...(options.precheckTimeoutMs > 0 ? { timeoutMs: options.precheckTimeoutMs } : {}),
+            ...(options.precheckRun ? { run: options.precheckRun } : {}),
+            ...(options.precheckWorkspace ? { workspace: options.precheckWorkspace } : {}),
+          });
+          if (mode === 'auto') {
+            r.notes = [
+              `precheck padrão ativado: ${entriesToRun.length} teste(s) congelado(s) novo(s) detectado(s) (use --no-precheck para desligar)`,
+              ...(r.notes || []),
+            ];
+          }
+          const msg = pre.messages(r);
+          result.errors.push(...msg.errors);
+          result.warnings.push(...msg.warnings);
+          result.precheck = r;
+        }
       }
     } catch (err) { result.warnings.push(`precheck dos testes não rodou: ${err && err.message ? err.message : err}`); }
   }
@@ -7398,7 +7438,7 @@ function runtimePlanAppend(projectRoot, activeSession, options = {}) {
     // had — e.g. a missing pack the TL waived — are not the batch's and do not block it; they stay in the warnings).
     const runLint = () => {
       try {
-        return runtimePlanLint(projectRoot, activeSession, { preflight: false, ...(options.lintOptions || {}) });
+        return runtimePlanLint(projectRoot, activeSession, { preflight: false, noPrecheck: true, ...(options.lintOptions || {}) });
       } catch (err) {
         return { ok: false, errors: [err.message], warnings: [] };
       }
@@ -9758,7 +9798,7 @@ function phasePlanReadiness(projectRoot, activeSession, phase) {
     const tasks = doc && Array.isArray(doc.tasks) ? doc.tasks.filter(Boolean) : [];
     if (!doc || !tasks.length || (doc.phase && doc.phase !== phase.id)) return { exists: false, tasks: 0, lint_ok: null, errors: 0 };
     let lint = null;
-    try { lint = runtimePlanLint(projectRoot, activeSession, { preflight: false }); } catch { lint = null; }
+    try { lint = runtimePlanLint(projectRoot, activeSession, { preflight: false, noPrecheck: true }); } catch { lint = null; }
     return { exists: true, tasks: tasks.length, lint_ok: lint ? Boolean(lint.ok) : null, errors: lint && Array.isArray(lint.errors) ? lint.errors.length : 0 };
   } catch {
     return null;

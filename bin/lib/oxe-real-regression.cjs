@@ -43,7 +43,7 @@ function measure(snapshotDir, op) {
     fs.writeFileSync(path.join(work, '.gitignore'), '.oxe/\n');
     git('init', '-q'); git('config', 'user.email', 'r@r'); git('config', 'user.name', 'r'); git('add', '-A'); git('commit', '-qm', 'snapshot', '--allow-empty');
     const step = (name, fn) => { try { return { step: name, ok: true, ...fn() }; } catch (err) { return { step: name, ok: false, error: String(err && err.message || err).split('\n')[0].slice(0, 300) }; } };
-    const lint = step('plan lint', () => { const r = op.runtimePlanLint(work, null, { preflight: false }); return { errors: r.errors.length, warnings: r.warnings.length }; });
+    const lint = step('plan lint', () => { const r = op.runtimePlanLint(work, null, { preflight: false, noPrecheck: true }); return { errors: r.errors.length, warnings: r.warnings.length }; });
     const compile = step('compile', () => { const r = op.compileExecutionGraphFromArtifacts(work, null); const n = r && r.graph && r.graph.nodes; return { nodes: n ? (typeof n.size === 'number' ? n.size : Object.keys(n).length) : 0, validation_errors: (r && r.validationErrors || []).length }; });
     let program = null;
     try { program = require('./oxe-program.cjs').readProgram(path.join(work, '.oxe', 'program')); } catch { program = null; }

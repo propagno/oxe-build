@@ -16,11 +16,67 @@
  * The temporary worktree loses its node_modules link before it is removed (never a forced removal with it in place).
  */
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
 const norm = (p) => String(p || '').replace(/\\/g, '/');
+const DEFAULT_TIMEOUT_MS = 120_000;
+const REMOTE_VERIFY_TIMEOUT_MS = 30 * 60_000;
+
+function isRemoteVerify(command) {
+  return /(?:^|[\s/\\"'])remote-verify(?:\.[cm]?js|\b)/i.test(String(command || ''));
+}
+
+function resolveTimeout(command, entryTimeoutMs, optionTimeoutMs) {
+  const remote = isRemoteVerify(command);
+  if (Number(optionTimeoutMs) > 0) {
+    const ms = Number(optionTimeoutMs);
+    return {
+      remote,
+      timeoutMs: ms,
+      reason: remote
+        ? `--precheck-timeout (${Math.round(ms / 1000)} s); comando remote-verify roda 1 vez`
+        : `--precheck-timeout (${Math.round(ms / 1000)} s)`,
+    };
+  }
+  if (Number(entryTimeoutMs) > 0) {
+    const ms = Number(entryTimeoutMs);
+    return {
+      remote,
+      timeoutMs: ms,
+      reason: remote
+        ? `timeout_ms do teste (${Math.round(ms / 1000)} s); comando remote-verify roda 1 vez`
+        : `timeout_ms do teste (${Math.round(ms / 1000)} s)`,
+    };
+  }
+  if (remote) {
+    return {
+      remote: true,
+      timeoutMs: REMOTE_VERIFY_TIMEOUT_MS,
+      reason: `remote-verify detectado — timeout próprio de ${Math.round(REMOTE_VERIFY_TIMEOUT_MS / 60_000)} min (${Math.round(REMOTE_VERIFY_TIMEOUT_MS / 1000)} s, 1 execução: inclui fila e execução remota da CI)`,
+    };
+  }
+  return {
+    remote: false,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    reason: `padrão (${Math.round(DEFAULT_TIMEOUT_MS / 1000)} s)`,
+  };
+}
+
+function fileMatchesSha(absPath, expectedSha) {
+  if (!expectedSha || !fs.existsSync(absPath)) return false;
+  try {
+    const fn = require('../../lib/runtime/index.js').frozenFileMatches;
+    if (typeof fn === 'function') return Boolean(fn(absPath, expectedSha));
+  } catch { /* fallback below */ }
+  const raw = fs.readFileSync(absPath);
+  const hex = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+  if (hex(raw) === expectedSha) return true;
+  const lf = raw.toString('utf8').replace(/\r\n/g, '\n');
+  return hex(Buffer.from(lf, 'utf8')) === expectedSha || hex(Buffer.from(lf.replace(/\n/g, '\r\n'), 'utf8')) === expectedSha;
+}
 
 /**
  * Runs the command in a child node that kills the WHOLE process tree on timeout. A plain spawnSync timeout kills only
@@ -70,22 +126,66 @@ function pendingAcceptance(doc) {
 }
 
 /**
+ * Pending acceptance tests whose frozen test files are new or modified (vs HEAD, phase base_commit, or active run lock).
+ * Used by default `plan lint` so newly authored/amended frozen tests run precheck automatically unless `--no-precheck`.
+ */
+function newFrozenAcceptance(root, doc, options = {}) {
+  const entries = pendingAcceptance(doc);
+  if (!entries.length || !root) return [];
+  const hasHead = spawnSync('git', ['rev-parse', '--verify', '-q', 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true }).status === 0;
+  if (!hasHead && !options.allowWithoutGit) return [];
+  const locked = new Map();
+  const lockTests = options.acceptanceLock && Array.isArray(options.acceptanceLock.tests) ? options.acceptanceLock.tests : [];
+  for (const t of lockTests) {
+    for (const f of (t && t.files) || []) {
+      if (f && f.path && f.sha256 && !locked.has(norm(f.path))) locked.set(norm(f.path), f.sha256);
+    }
+  }
+  const baseCommit = options.baseCommit && hasHead
+    && spawnSync('git', ['cat-file', '-e', `${options.baseCommit}^{commit}`], { cwd: root, windowsHide: true }).status === 0
+    ? String(options.baseCommit)
+    : null;
+  const blobMatches = (ref, rel, diskLf) => {
+    const show = spawnSync('git', ['show', `${ref}:${norm(rel)}`], { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, windowsHide: true });
+    if (show.status !== 0) return false;
+    return String(show.stdout || '').replace(/\r\n/g, '\n') === diskLf;
+  };
+  return entries.filter((a) => {
+    const files = (a.files || []).map((f) => norm(typeof f === 'string' ? f : f && f.path)).filter(Boolean);
+    if (!files.length) return false;
+    return files.some((rel) => {
+      const abs = path.join(root, rel);
+      if (!fs.existsSync(abs)) return false;
+      if (!hasHead) return true;
+      const diskLf = fs.readFileSync(abs, 'utf8').replace(/\r\n/g, '\n');
+      if (!blobMatches('HEAD', rel, diskLf)) return true;
+      if (locked.size > 0) return !fileMatchesSha(abs, locked.get(rel));
+      if (baseCommit && !blobMatches(baseCommit, rel, diskLf)) return true;
+      return false;
+    });
+  });
+}
+
+/**
  * @param {string} root project root (a git checkout)
  * @param {object} doc PLAN.json
  * @param {object} pack IMPLEMENTATION-PACK.json
- * @param {{ runs?: number, timeoutMs?: number, run?: Function, workspace?: { create: Function, dispose: Function } }} options
+ * @param {{ entries?: Array, mode?: string, runs?: number, timeoutMs?: number, onProgress?: Function, run?: Function, workspace?: { create: Function, dispose: Function } }} options
  */
 function precheck(root, doc, pack, options = {}) {
-  const entries = pendingAcceptance(doc);
-  if (!entries.length && !(options.suites || []).length) return { ran: 0, findings: [] };
+  const allPending = pendingAcceptance(doc);
+  const entries = Array.isArray(options.entries) ? options.entries : allPending;
+  if (!entries.length && !(options.suites || []).length) return { ran: 0, suites: 0, runs: 0, mode: options.mode || 'explicit', findings: [], notes: [], details: [] };
   const runs = Math.max(2, Number(options.runs) || 2);
   const run = options.run || defaultRun;
   const ws = options.workspace || gitWorkspace(root);
   const wt = ws.create();
   const findings = [];
+  const notes = [];
+  const details = [];
   try {
-    // the frozen tests as they are now (they may not be committed yet), then the planned stubs so they import
-    for (const a of entries) for (const f of a.files || []) {
+    // Copy all pending frozen tests from the working tree (they may not be committed yet), then write planned stubs so they import
+    for (const a of allPending.length ? allPending : entries) for (const f of a.files || []) {
       const rel = norm(typeof f === 'string' ? f : f.path);
       const from = path.join(root, rel);
       if (fs.existsSync(from) && path.resolve(wt) !== path.resolve(root)) { fs.mkdirSync(path.dirname(path.join(wt, rel)), { recursive: true }); fs.copyFileSync(from, path.join(wt, rel)); }
@@ -98,9 +198,19 @@ function precheck(root, doc, pack, options = {}) {
       const id = a.id || a.criterion;
       // OxeSpace 15/11 (OxeChat sessions): a command that runs on the CI (remote-verify) waits in its queue — wall time
       // is not the test's. Remote: 30 min by default, one run (no CI quota doubled), and a timeout is a warning.
-      const remote = /remote-verify/.test(String(a.command));
-      const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : Number(a.timeout_ms) > 0 ? Number(a.timeout_ms) : remote ? 30 * 60_000 : 120_000;
+      const resolved = resolveTimeout(a.command, a.timeout_ms, options.timeoutMs);
+      const { remote, timeoutMs } = resolved;
       const n = remote ? 1 : runs;
+      const note = remote
+        ? `teste de aceite ${id}${a.task ? ` (${a.task})` : ''}: ${resolved.reason}`
+        : Number(options.timeoutMs) > 0
+          ? `teste de aceite ${id}${a.task ? ` (${a.task})` : ''}: timeout ajustado por ${resolved.reason}`
+          : null;
+      if (note) {
+        notes.push(note);
+        if (typeof options.onProgress === 'function') options.onProgress(`precheck: ${note}`);
+      }
+      details.push({ criterion: a.criterion || null, id, task: a.task || null, command: a.command, remote, runs: n, timeout_ms: timeoutMs, timeout_reason: resolved.reason });
       const seen = [];
       let hang = null;
       for (let i = 0; i < n; i += 1) {
@@ -109,8 +219,12 @@ function precheck(root, doc, pack, options = {}) {
         seen.push(resultNames(r.output));
       }
       const base = { criterion: a.criterion, id, task: a.task || null, command: a.command };
-      if (hang && remote) { findings.push({ ...base, level: 'warn', kind: 'precheck_timeout_remote', why: `o run remoto passou de ${Math.round(timeoutMs / 60000)} min (fila da CI?) — não é travamento do teste; rode de novo ou aumente --precheck-timeout` }); continue; }
-      if (hang) { findings.push({ ...base, level: 'error', kind: 'precheck_hang', why: `passou de ${Math.round(timeoutMs / 1000)} s contra o stub sem terminar — act + fake timers, um await que nunca resolve ou um servidor que não fecha` }); continue; }
+      if (hang && remote) {
+        const limitLabel = timeoutMs >= 60_000 ? `${Math.round(timeoutMs / 60_000)} min` : `${Math.round(timeoutMs / 1000)} s`;
+        findings.push({ ...base, level: 'warn', kind: 'precheck_timeout_remote', timeout_ms: timeoutMs, timeout_reason: resolved.reason, why: `o run remoto (${resolved.reason}) passou de ${limitLabel} (fila da CI?) — não é travamento do teste; rode de novo ou aumente --precheck-timeout` });
+        continue;
+      }
+      if (hang) { findings.push({ ...base, level: 'error', kind: 'precheck_hang', timeout_ms: timeoutMs, timeout_reason: resolved.reason, why: `passou de ${Math.round(timeoutMs / 1000)} s (${resolved.reason}) contra o stub sem terminar — act + fake timers, um await que nunca resolve ou um servidor que não fecha` }); continue; }
       const sig = (x) => `${x.passed.join('|')}#${x.failed.join('|')}`;
       if (new Set(seen.map(sig)).size > 1) {
         const diff = seen[0].passed.filter((n) => !seen[1].passed.includes(n)).concat(seen[1].passed.filter((n) => !seen[0].passed.includes(n)));
@@ -126,15 +240,21 @@ function precheck(root, doc, pack, options = {}) {
     // G30b part 2: the existing suites the G30 found (they import a task's files) run once at HEAD. Already red there
     // is not the task's red: fix or exclude it before the paid attempt (it would read as the task's failure).
     for (const s of options.suites || []) {
-      const remoteS = /remote-verify/.test(String(s.command));
-      const r = run(wt, s.command, Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : remoteS ? 30 * 60_000 : 120_000);
-      if (r.timedOut) findings.push({ criterion: null, id: s.file, task: s.task || null, command: s.command, level: 'warn', kind: remoteS ? 'suite_timeout_remote' : 'suite_hangs_at_head', why: remoteS ? 'o run remoto da suíte passou do teto (fila da CI?) — não é travamento' : 'a suíte que importa os arquivos da tarefa trava no HEAD, antes de qualquer mudança' });
+      const resolvedS = resolveTimeout(s.command, null, options.timeoutMs);
+      const remoteS = resolvedS.remote;
+      if (remoteS) {
+        const suiteNote = `${s.task ? `${s.task}: ` : ''}suíte ${s.file}: ${resolvedS.reason}`;
+        notes.push(suiteNote);
+        if (typeof options.onProgress === 'function') options.onProgress(`precheck: ${suiteNote}`);
+      }
+      const r = run(wt, s.command, resolvedS.timeoutMs);
+      if (r.timedOut) findings.push({ criterion: null, id: s.file, task: s.task || null, command: s.command, level: 'warn', kind: remoteS ? 'suite_timeout_remote' : 'suite_hangs_at_head', timeout_ms: resolvedS.timeoutMs, timeout_reason: resolvedS.reason, why: remoteS ? `o run remoto da suíte (${resolvedS.reason}) passou do teto (fila da CI?) — não é travamento` : 'a suíte que importa os arquivos da tarefa trava no HEAD, antes de qualquer mudança' });
       else if (r.code !== 0) findings.push({ criterion: null, id: s.file, task: s.task || null, command: s.command, level: 'warn', kind: 'suite_red_at_head', why: 'a suíte que importa os arquivos da tarefa já está vermelha no HEAD — não é vermelho da tarefa; conserte ou exclua antes da tentativa paga' });
     }
   } finally {
     ws.dispose(wt);
   }
-  return { ran: entries.length, suites: (options.suites || []).length, runs, findings };
+  return { ran: entries.length, suites: (options.suites || []).length, runs, mode: options.mode || 'explicit', findings, notes, details };
 }
 
 /** A temporary detached worktree at HEAD with node_modules linked; disposed link-first. */
@@ -174,4 +294,14 @@ function messages(result) {
   return { errors, warnings };
 }
 
-module.exports = { precheck, messages, pendingAcceptance, gitWorkspace };
+module.exports = {
+  DEFAULT_TIMEOUT_MS,
+  REMOTE_VERIFY_TIMEOUT_MS,
+  isRemoteVerify,
+  resolveTimeout,
+  precheck,
+  messages,
+  pendingAcceptance,
+  newFrozenAcceptance,
+  gitWorkspace,
+};

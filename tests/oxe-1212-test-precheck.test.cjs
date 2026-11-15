@@ -83,19 +83,174 @@ describe('G30b part 2: the suites the G30 found run once at HEAD', () => {
 });
 
 describe('precheck with remote-verify commands (OxeSpace 15/11, OxeChat sessions)', () => {
-  it('a remote command runs once with a 30 min ceiling, and its timeout is a warning, never a hang; --precheck-timeout wins', () => {
+  it('a remote command runs once with a 30 min ceiling, reports the timeout reason in output/notes, and --precheck-timeout wins', () => {
     const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-precheck-remote-'));
     dirs.push(wsDir);
     const workspace = { create: () => wsDir, dispose: () => {} };
     const calls = [];
+    const progress = [];
     const run = (cwd, command, timeoutMs) => { calls.push(timeoutMs); return { code: null, timedOut: true, output: '' }; };
     const doc = { tasks: [{ id: 'T7', acceptance: ['A7'] }], acceptance_tests: [{ criterion: 'A7', task: 'T7', files: [], command: 'node ../deps/scripts/remote-verify.mjs -- node scripts/test-electron.mjs a7.test.ts', proves: ['x'] }] };
-    const r = pre.precheck(wsDir, doc, null, { workspace, run, runs: 2 });
+    const r = pre.precheck(wsDir, doc, null, { workspace, run, runs: 2, onProgress: (line) => progress.push(line) });
     assert.deepEqual(calls, [30 * 60_000], 'one run, 30 min');
     assert.equal(r.findings[0].kind, 'precheck_timeout_remote');
     assert.equal(r.findings[0].level, 'warn');
+    assert.match(r.findings[0].why, /remote-verify detectado/);
+    assert.ok(r.notes.some((n) => /remote-verify detectado.*30 min/i.test(n)), `missing remote-verify reason in notes: ${JSON.stringify(r.notes)}`);
+    assert.ok(progress.some((p) => /remote-verify detectado.*30 min/i.test(p)), `missing remote-verify reason in progress: ${JSON.stringify(progress)}`);
+    assert.equal(r.details[0].remote, true);
+    assert.equal(r.details[0].runs, 1);
+    assert.match(r.details[0].timeout_reason, /remote-verify detectado/);
+
+    // Even when the remote-verify command finishes red (normal case, no timeout), the reason is still emitted in notes/details
     calls.length = 0;
-    pre.precheck(wsDir, doc, null, { workspace, run, timeoutMs: 45 * 60_000 });
+    const redOk = pre.precheck(wsDir, doc, null, {
+      workspace,
+      run: (_cwd, _cmd, timeoutMs) => { calls.push(timeoutMs); return { code: 1, timedOut: false, output: 'not ok 1 - x' }; },
+      runs: 3,
+    });
+    assert.deepEqual(calls, [30 * 60_000]);
+    assert.equal(redOk.findings.length, 0);
+    assert.ok(redOk.notes.some((n) => /A7 \(T7\): remote-verify detectado.*30 min/.test(n)));
+
+    calls.length = 0;
+    const overridden = pre.precheck(wsDir, doc, null, { workspace, run, timeoutMs: 45 * 60_000 });
     assert.deepEqual(calls, [45 * 60_000]);
+    assert.match(overridden.details[0].timeout_reason, /--precheck-timeout \(2700 s\)/);
+  });
+
+  it('CLI --precheck-timeout <s> sets custom timeout in seconds, prints reason on stdout, and rejects invalid values', () => {
+    const cli = path.resolve(__dirname, '..', 'bin', 'oxe-cc.js');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-precheck-cli-timeout-'));
+    dirs.push(dir);
+    write(dir, '.gitignore', '.oxe/\n');
+    write(dir, '.oxe/STATE.md', '# STATE\n');
+    write(dir, '.oxe/PLAN.md', '# PLAN\n');
+    write(dir, '.oxe/SPEC.md', '# SPEC\n\n## Critérios de aceite\n\n| ID | Critério | Como verificar |\n|---|---|---|\n| A1 | slow | node |\n');
+    write(dir, '.oxe/config.json', JSON.stringify({ external_dependency_check: false, plan_lint_preflight: false }));
+    write(dir, 'tests/slow.test.js', "setTimeout(() => process.exit(1), 2500);\n");
+    write(dir, '.oxe/PLAN.json', JSON.stringify({
+      schema_version: 1,
+      tasks: [{ id: 'T1', title: 'slow', wave: 1, files: ['src/x.js'], acceptance: ['A1'], verify: { commands: ['node -e "process.exit(1)"'] } }],
+      acceptance_tests: [{ criterion: 'A1', task: 'T1', files: ['tests/slow.test.js'], command: 'node tests/slow.test.js' }],
+    }, null, 2));
+    git(dir, 'init', '-q');
+    git(dir, 'config', 'user.email', 't@oxe.dev');
+    git(dir, 'config', 'user.name', 'T');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'base');
+
+    // Invalid --precheck-timeout rejected
+    const bad = spawnSync(process.execPath, [cli, 'plan', 'lint', '--precheck-timeout', '0', dir], { encoding: 'utf8', windowsHide: true });
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, /Valor inválido para --precheck-timeout/);
+
+    // 1 second timeout triggers precheck_hang with "--precheck-timeout (1 s)" in output
+    const shortRun = spawnSync(process.execPath, [cli, 'plan', 'lint', '--no-preflight', '--precheck-timeout', '1', dir], { encoding: 'utf8', windowsHide: true });
+    assert.equal(shortRun.status, 1);
+    assert.match(shortRun.stdout, /precheck_hang/);
+    assert.match(shortRun.stdout, /--precheck-timeout \(1 s\)/);
+  });
+});
+
+describe('default precheck in plan lint when frozen tests are new (--no-precheck to opt out)', () => {
+  const op = require('../bin/lib/oxe-operational.cjs');
+  const cli = path.resolve(__dirname, '..', 'bin', 'oxe-cc.js');
+
+  function makeLintProject() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-precheck-default-'));
+    dirs.push(dir);
+    write(dir, '.gitignore', '.oxe/\n');
+    write(dir, '.oxe/STATE.md', '# STATE\n');
+    write(dir, '.oxe/SPEC.md', '# SPEC\n\n## Critérios de aceite\n\n| ID | Critério | Como verificar |\n|---|---|---|\n| A1 | old | node |\n| A2 | new | node |\n');
+    write(dir, '.oxe/config.json', JSON.stringify({ external_dependency_check: false, plan_lint_preflight: false }));
+    write(dir, 'tests/old.test.js', "const t = require('node:test');\nt('A1 fails cleanly without impl', () => { throw new Error('missing'); });\n");
+    write(dir, '.oxe/PLAN.json', JSON.stringify({
+      schema_version: 1,
+      tasks: [
+        { id: 'T1', title: 'old task', wave: 1, files: ['src/old.js'], acceptance: ['A1'], verify: { commands: ['node -e "process.exit(1)"'] } },
+        { id: 'T2', title: 'new task', wave: 1, files: ['src/new.js'], acceptance: ['A2'], verify: { commands: ['node -e "process.exit(1)"'] } },
+      ],
+      acceptance_tests: [
+        { criterion: 'A1', task: 'T1', files: ['tests/old.test.js'], command: 'node --test tests/old.test.js', proves: ['A1 fails cleanly without impl'] },
+      ],
+    }, null, 2));
+    git(dir, 'init', '-q');
+    git(dir, 'config', 'user.email', 't@oxe.dev');
+    git(dir, 'config', 'user.name', 'T');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'commit old frozen test');
+    return dir;
+  }
+
+  it('skips precheck by default when no frozen test is new, runs automatically on new frozen tests, and honors --no-precheck', () => {
+    const dir = makeLintProject();
+
+    // 1. All frozen tests already committed at HEAD → default plan lint does NOT run precheck
+    const noNew = op.runtimePlanLint(dir, null, { preflight: false });
+    assert.equal(noNew.precheck, undefined, 'precheck must not run when all frozen tests are already committed at HEAD');
+
+    // 2. Add a new uncommitted frozen test (flaky) to the plan → default plan lint runs precheck ONLY on the new test!
+    write(dir, 'tests/new-flaky.test.js', FLAKY);
+    const planWithNew = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'));
+    planWithNew.acceptance_tests.push({
+      criterion: 'A2',
+      task: 'T2',
+      files: ['tests/new-flaky.test.js'],
+      command: 'node --test tests/new-flaky.test.js',
+      proves: ['A2 counts the live region once'],
+    });
+    write(dir, '.oxe/PLAN.json', JSON.stringify(planWithNew, null, 2));
+
+    const autoCli = spawnSync(process.execPath, [cli, 'plan', 'lint', '--no-preflight', dir], { encoding: 'utf8', windowsHide: true });
+    assert.equal(autoCli.status, 1, `expected default plan lint to fail on flaky new frozen test: ${autoCli.stdout}\n${autoCli.stderr}`);
+    assert.match(autoCli.stdout, /precheck padrão ativado: 1 teste\(s\) congelado\(s\) novo\(s\)/);
+    assert.match(autoCli.stdout, /precheck_flaky/);
+
+    const autoJsonRes = op.runtimePlanLint(dir, null, { preflight: false });
+    assert.ok(autoJsonRes.precheck, 'runtimePlanLint should populate result.precheck');
+    assert.equal(autoJsonRes.precheck.mode, 'auto');
+    assert.equal(autoJsonRes.precheck.ran, 1, 'only the 1 new frozen test should run in auto mode');
+
+    // 3. --no-precheck disables the default precheck even when new frozen tests exist
+    const optedOut = spawnSync(process.execPath, [cli, 'plan', 'lint', '--no-preflight', '--no-precheck', '--json', dir], { encoding: 'utf8', windowsHide: true });
+    assert.equal(optedOut.status, 0, `expected --no-precheck to skip precheck: ${optedOut.stdout}\n${optedOut.stderr}`);
+    const parsedOptOut = JSON.parse(optedOut.stdout);
+    assert.equal(parsedOptOut.precheck, undefined);
+  });
+
+  it('also detects committed frozen tests added after phase.base_commit as new until locked by an active run', () => {
+    const dir = makeLintProject();
+    const baseSha = git(dir, 'rev-parse', 'HEAD').stdout.trim();
+    write(dir, '.oxe/program/PROGRAM.json', JSON.stringify({
+      schema_version: 1,
+      name: 'p',
+      active_phase: 'F1',
+      phases: [{ id: 'F1', title: 'Phase 1', status: 'planning', base_commit: baseSha, acceptance: ['A1', 'A2'] }],
+    }, null, 2));
+
+    // Planner writes and commits a new frozen test on the phase branch after base_commit
+    write(dir, 'tests/committed-in-phase.test.js', ALWAYS);
+    const planDoc = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'));
+    planDoc.phase = 'F1';
+    planDoc.acceptance_tests.push({
+      criterion: 'A2',
+      task: 'T2',
+      files: ['tests/committed-in-phase.test.js'],
+      command: 'node --test tests/committed-in-phase.test.js',
+      proves: ['A3 shows the label'],
+    });
+    write(dir, '.oxe/PLAN.json', JSON.stringify(planDoc, null, 2));
+    git(dir, 'add', 'tests/committed-in-phase.test.js');
+    git(dir, 'commit', '-qm', 'test(F1): add A2 frozen test');
+
+    const newOnes = pre.newFrozenAcceptance(dir, planDoc, { baseCommit: baseSha });
+    assert.deepEqual(newOnes.map((e) => e.criterion), ['A2']);
+
+    const lintRes = op.runtimePlanLint(dir, null, { preflight: false });
+    assert.ok(lintRes.precheck, 'committed test added after phase.base_commit triggers auto precheck');
+    assert.equal(lintRes.precheck.mode, 'auto');
+    assert.equal(lintRes.precheck.ran, 1);
+    assert.ok(lintRes.warnings.some((w) => /precheck_passes_on_stub/.test(w)));
   });
 });
