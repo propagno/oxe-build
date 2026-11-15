@@ -245,7 +245,26 @@ function pinnedByExisting(root, planDoc, options = {}) {
   const tasks = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter((t) => t && !(t.done === true || t.status === 'done'));
   const accept = planDoc && Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : [];
   const planFrozen = new Set(accept.flatMap((a) => (a && a.files) || []).map((f) => norm(typeof f === 'string' ? f : f.path)));
-  const PATH_RE = /(?<![\w$.])([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*){2,})(?![\w$])/g;
+  // a member path, never a method call (`X.y.includes(`) — cross-review 15/11
+  const PATH_RE = /(?<![\w$.])([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*){2,})(?![\w$(])/g;
+  const NATIVE_LEAF = /^(length|prototype|constructor|size|name)$/;
+  // the scope a task can change: its files and its ancestors' files (a mutable test there is the task's to update)
+  const byId = new Map((planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter(Boolean).map((t) => [t.id, t]));
+  const scopeOf = (t) => {
+    const out = new Set();
+    const stack = [t.id];
+    const seenIds = new Set();
+    while (stack.length) {
+      const id = stack.pop();
+      if (seenIds.has(id)) continue;
+      seenIds.add(id);
+      const x = byId.get(id);
+      if (!x) continue;
+      for (const f of x.files || []) out.add(norm(typeof f === 'string' ? f : f && f.path));
+      stack.push(...(x.depends_on || x.dependsOn || []));
+    }
+    return out;
+  };
   // 1. the candidates: member paths the pending tasks' frozen tests name
   const candidates = [];
   const seen = new Set();
@@ -257,6 +276,7 @@ function pinnedByExisting(root, planDoc, options = {}) {
         for (const m of read(entry).matchAll(PATH_RE)) {
           const full = m[1];
           if (/^(expect|vi|jest|Object|Array|JSON|Math|Promise|console|process|window|document|this|module|exports|require|t|it|describe|screen|page|user)\./.test(full)) continue;
+          if (NATIVE_LEAF.test(full.slice(full.lastIndexOf('.') + 1))) continue;
           const key = `${t.id}\u0000${full}`;
           if (seen.has(key)) continue;
           seen.add(key);
@@ -273,7 +293,8 @@ function pinnedByExisting(root, planDoc, options = {}) {
     for (let i = 0; i < list.length; i += 150) {
       const args = ['grep', ...extra, '-I', '-F'];
       for (const n of list.slice(i, i + 150)) args.push('-e', n);
-      lines.push(...git([...args, 'HEAD']).split(/\r?\n/).filter(Boolean).map((l) => l.replace(/^HEAD:/, '')));
+      // the working tree (tracked files), as read() sees it — line numbers and contents stay in sync (cross-review)
+      lines.push(...git(args).split(/\r?\n/).filter(Boolean));
     }
     return lines;
   };
@@ -283,26 +304,95 @@ function pinnedByExisting(root, planDoc, options = {}) {
     const i = l.indexOf(':');
     if (i > 0 && !TEST_RE.test(l.slice(0, i))) inProduct.add(l.slice(i + 1));
   }
-  const fresh = candidates.filter((c) => !inProduct.has(c.full));
+  // …nor as an object-literal key of its parent (`agentActivity: { list: … }` already has .list): a non-test file that
+  // names the parent's last segment and has `leaf:` keeps the member
+  const lastSeg = (p) => p.slice(p.lastIndexOf('.') + 1);
+  // only the files that DECLARE the parent as an object literal (`seg: {` / `seg = {`), and only inside that literal
+  const parentFiles = new Map();
+  const declNeedles = [...new Set(candidates.map((c) => lastSeg(c.parent)))].flatMap((s) => [`${s}: {`, `${s}:{`, `${s} = {`]);
+  for (const l of grepBatch(declNeedles, ['-o'])) {
+    const i = l.indexOf(':');
+    if (i <= 0 || TEST_RE.test(l.slice(0, i))) continue;
+    const seg = l.slice(i + 1).replace(/\s*(:|=)\s*\{$/, '');
+    if (!parentFiles.has(seg)) parentFiles.set(seg, new Set());
+    parentFiles.get(seg).add(l.slice(0, i));
+  }
+  const literalOf = (text, at) => {
+    let depth = 0;
+    let q = null;
+    for (let i = at; i < text.length && i < at + 65536; i += 1) {
+      const ch = text[i];
+      if (q) { if (ch === '\\') { i += 1; continue; } if (ch === q) q = null; continue; }
+      if (ch === '"' || ch === "'" || ch === '`') { q = ch; continue; }
+      if (ch === '{') depth += 1;
+      else if (ch === '}') { depth -= 1; if (depth === 0) return text.slice(at, i + 1); }
+    }
+    return '';
+  };
+  const keyed = (c) => {
+    const seg = lastSeg(c.parent);
+    const leaf = c.full.slice(c.full.lastIndexOf('.') + 1).replace(/[$]/g, '\\$');
+    const leafRe = new RegExp(`(^|[^\\w$.])${leaf}\\s*:`);
+    const declRe = new RegExp(`(^|[^\\w$.])${seg.replace(/[$]/g, '\\$')}\\s*(:|=)\\s*\\{`, 'g');
+    for (const f of parentFiles.get(seg) || []) {
+      const text = read(f);
+      for (const m of text.matchAll(declRe)) {
+        const obj = literalOf(text, m.index + m[0].length - 1);
+        // the leaf at the literal's own level is enough here (nested keys rarely share the name)
+        if (leafRe.test(obj)) return true;
+      }
+    }
+    return false;
+  };
+  const fresh = candidates.filter((c) => !inProduct.has(c.full) && !keyed(c));
   if (!fresh.length) return [];
-  // 3. the tests outside the plan that pin the parent by exact equality
-  const lines = grepBatch(fresh.map((c) => `expect(${c.parent})`), ['-n']);
+  // 3. the tests outside the plan (and outside the task's scope) that pin the parent by exact equality — the matcher's
+  // argument is extracted with a balanced-parenthesis scanner (strings and comments skipped), never by indentation
+  const filesWithParent = new Map(); // file → set of parents it names
+  for (const l of grepBatch(fresh.map((c) => c.parent), ['-o'])) {
+    const i = l.indexOf(':');
+    if (i <= 0) continue;
+    const file = l.slice(0, i);
+    if (!TEST_RE.test(file) || planFrozen.has(file)) continue;
+    if (!filesWithParent.has(file)) filesWithParent.set(file, new Set());
+    filesWithParent.get(file).add(l.slice(i + 1));
+  }
+  const argOf = (text, open) => {
+    let depth = 0;
+    let q = null;
+    for (let i = open; i < text.length && i < open + 16384; i += 1) {
+      const ch = text[i];
+      const nx = text[i + 1];
+      if (q) { if (ch === '\\') { i += 1; continue; } if (ch === q) q = null; continue; }
+      if (ch === '/' && nx === '/') { const e = text.indexOf('\n', i); i = e < 0 ? text.length : e; continue; }
+      if (ch === '/' && nx === '*') { const e = text.indexOf('*/', i + 2); i = e < 0 ? text.length : e + 1; continue; }
+      if (ch === '"' || ch === "'" || ch === '`') { q = ch; continue; }
+      if (ch === '(') depth += 1;
+      else if (ch === ')') { depth -= 1; if (depth === 0) return text.slice(open + 1, i); }
+    }
+    return null;
+  };
   const out = [];
   for (const c of fresh) {
+    const t = byId.get(c.task);
+    const scope = t ? scopeOf(t) : new Set();
     const esc = c.parent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp(`expect\\(\\s*${esc}\\s*\\)\\s*\\.\\s*(toEqual|toStrictEqual|toHaveLength)\\s*\\(`);
-    for (const l of lines) {
-      const file = l.split(':')[0];
-      if (planFrozen.has(file) || !TEST_RE.test(file) || !re.test(l)) continue;
-      // the pinned object/array already has the leaf (a key `leaf:` or the value 'leaf' up to the closing of the
-      // assertion): no conflict — only a member the pinned shape LACKS is a conflict
-      const leaf = c.full.slice(c.full.lastIndexOf('.') + 1);
-      const lineNo = Number(l.split(':')[1]) || 1;
-      const body = read(file).split(/\r?\n/).slice(lineNo - 1, lineNo + 39);
-      const endIdx = body.findIndex((x, i) => i > 0 && /^\s*[})\]]+\s*\)?;?\s*$/.test(x));
-      const region = (endIdx >= 0 ? body.slice(0, endIdx + 1) : body.slice(0, 1)).join('\n').replace(/^[\s\S]*?\.\s*(toEqual|toStrictEqual|toHaveLength)\s*\(/, '');
-      if (new RegExp(`(^|[^\\w$])${leaf.replace(/[$]/g, '\\$')}\\s*:|['"\`]${leaf.replace(/[$]/g, '\\$')}['"\`]`).test(region)) continue;
-      out.push({ task: c.task, path: c.full, parent: c.parent, entry: c.entry, pinned_by: l.split(':').slice(0, 2).join(':'), line: l.split(':').slice(2).join(':').trim().slice(0, 160) });
+    // expect(X.y) or expect(Object.keys(X.y)) / (…).sort(), then (across a line break) .toEqual( / .toStrictEqual( / .toHaveLength(
+    const re = new RegExp(`expect\\(\\s*(?:Object\\.(?:keys|values|entries)\\(\\s*)?${esc}\\s*\\)?(?:\\s*\\.\\s*sort\\(\\s*\\))?\\s*\\)\\s*\\.\\s*(toEqual|toStrictEqual|toHaveLength)\\s*\\(`, 'g');
+    const leaf = c.full.slice(c.full.lastIndexOf('.') + 1);
+    const leafRe = new RegExp(`(^|[^\\w$])${leaf.replace(/[$]/g, '\\$')}\\s*:|['"\`]${leaf.replace(/[$]/g, '\\$')}['"\`]`);
+    for (const [file, parents] of filesWithParent) {
+      if (!parents.has(c.parent)) continue;
+      // a mutable test in the task's own scope (or an ancestor's) is the task's to update — not a conflict
+      if (scope.has(file) && !/(^|\/)acceptance\//i.test(file)) continue;
+      const text = read(file);
+      for (const m of text.matchAll(re)) {
+        const open = m.index + m[0].length - 1;
+        const arg = argOf(text, open);
+        if (arg == null || leafRe.test(arg)) continue; // the pinned shape already has the leaf
+        const lineNo = text.slice(0, m.index).split('\n').length;
+        out.push({ task: c.task, path: c.full, parent: c.parent, entry: c.entry, pinned_by: `${file}:${lineNo}`, line: m[0].replace(/\s+/g, ' ').trim().slice(0, 160), frozen: /(^|\/)acceptance\//i.test(file) });
+      }
     }
   }
   return out;
@@ -312,7 +402,10 @@ function pinnedMessages(findings, { mode = 'error' } = {}) {
   const errors = [];
   const warnings = [];
   for (const f of findings) {
-    const line = `${f.task}: o teste congelado ${f.entry} pede ${f.path}, mas ${f.pinned_by} fixa ${f.parent} por igualdade exata (\`${f.line}\`) — nenhuma mudança passa os dois: precisa de um release desse teste (CR + spec freeze/amend) antes de ${f.task} [G39]`;
+    const fix = f.frozen
+      ? `precisa de um release desse teste (CR + spec freeze/amend) antes de ${f.task}`
+      : `inclua ${f.pinned_by.split(':')[0]} nos files de ${f.task} (ou de uma dependência) para atualizá-lo junto, ou release por CR se for congelado`;
+    const line = `${f.task}: o teste congelado ${f.entry} pede ${f.path}, mas ${f.pinned_by} fixa ${f.parent} por igualdade exata (\`${f.line}\`) — nenhuma mudança passa os dois: ${fix} [G39]`;
     if (mode === 'error') errors.push(line); else warnings.push(line);
   }
   return { errors, warnings };

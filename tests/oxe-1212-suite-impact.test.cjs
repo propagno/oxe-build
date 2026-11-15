@@ -174,8 +174,21 @@ describe('G38: a verify that holds a test only a later task turns green', () => 
     const f = si.pinnedByExisting(dir, doc);
     assert.deepEqual(f.map((x) => [x.task, x.path, x.pinned_by]), [['T1', 'IPC_CHANNELS.agentActivity.changed', 'tests/acceptance/f3/a10.test.ts:1']], 'toMatchObject does not pin; .list already exists in the product');
     assert.match(si.pinnedMessages(f).errors[0], /precisa de um release desse teste \(CR \+ spec freeze\/amend\) antes de T1 \[G39\]/);
+    // cross-review 15/11: a multi-line nested shape that HAS the leaf is not a conflict; Object.keys pins too; a method
+    // call is never a member path; a mutable test in the task scope is the task's to update
+    w('tests/unit/nested.test.ts', "expect(IPC_CHANNELS.agentActivity)\n  .toEqual({\n    sub: [\n      { a: 1 },\n    ],\n    changed: 'c', // the new one\n  });\n");
+    w('tests/unit/keys.test.ts', "expect(Object.keys(IPC_CHANNELS.agentActivity)).toEqual(['list', 'detail', 'badge']);\n");
+    w('tests/unit/ipc-contracts.test.ts', "expect(IPC_CHANNELS.agentActivity).toEqual({ list: 'l' });\n");
+    w('tests/polish/pq07.test.ts', "expect(IPC_CHANNELS.agentActivity.changed).toBe('agent-activity:changed')\nexpect(IPC_CHANNELS.agentActivity.list).toBe('l')\nexpect(ALLOWED.roles.includes('x')).toBe(true)\n");
+    spawnSync('git', ['add', '-A'], { cwd: dir });
+    spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'more'], { cwd: dir });
+    doc.tasks[0].files.push('tests/unit/ipc-contracts.test.ts');
+    const f2 = si.pinnedByExisting(dir, doc).map((x) => x.pinned_by).sort();
+    assert.deepEqual(f2, ['tests/acceptance/f3/a10.test.ts:1', 'tests/unit/keys.test.ts:1'], f2.join(' | '));
+    assert.match(si.pinnedMessages(si.pinnedByExisting(dir, doc)).errors.find((e) => /keys\.test/.test(e)), /inclua tests\/unit\/keys\.test\.ts nos files de T1/);
     // the pinning test released (it now knows .changed): nothing
     w('tests/acceptance/f3/a10.test.ts', "expect(IPC_CHANNELS.agentActivity).toEqual({ list: 'l', detail: 'd', badge: 'b', changed: 'c' })\n// IPC_CHANNELS.agentActivity.changed\n");
+    w('tests/unit/keys.test.ts', "expect(Object.keys(IPC_CHANNELS.agentActivity)).toEqual(['list', 'detail', 'badge', 'changed']);\n");
     spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qam', 'release'], { cwd: dir });
     assert.equal(si.pinnedByExisting(dir, doc).length, 0);
   });
