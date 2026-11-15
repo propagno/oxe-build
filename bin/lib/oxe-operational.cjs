@@ -470,12 +470,15 @@ function buildNodeContextProvider(projectRoot, activeSession) {
     handoffs = [];
   }
   // 1.21 (OXB-020): what the repo enforces on its own goes into every node prompt, collected once per run.
+  const projectConfig = readProjectConfig(projectRoot) || {};
   let repoRules = [];
   try {
-    repoRules = require('./oxe-repo-rules.cjs').collectRepoRules(projectRoot, { config: readProjectConfig(projectRoot) });
+    repoRules = require('./oxe-repo-rules.cjs').collectRepoRules(projectRoot, { config: projectConfig });
   } catch {
     repoRules = [];
   }
+  const rawDomHooks = projectConfig.checkpoint_dom_hooks;
+  const domCfg = rawDomHooks && typeof rawDomHooks === 'object' ? rawDomHooks : { mode: rawDomHooks };
   const runtimeForExports = loadRuntimeModule();
   let planAcceptance = [];
   try {
@@ -490,8 +493,9 @@ function buildNodeContextProvider(projectRoot, activeSession) {
     const contract = packTasks.find((task) => String(task && (task.id || task.task_id) || '').trim() === node.id) || null;
     const fixture = fixtures.find((entry) => rationality.fixtureTaskIds(entry).includes(node.id)) || null;
     const contractPaths = contract && Array.isArray(contract.exact_paths) ? contract.exact_paths : [];
-    const files = [...new Set([...(node.mutation_scope || []), ...contractPaths].map((value) => String(value || '').trim()))]
-      .filter((value) => looksLikeFilePath(value) && !value.includes('*'))
+    const scopeCandidates = [...new Set([...(node.mutation_scope || []), ...contractPaths].map((value) => String(value || '').trim()))]
+      .filter((value) => looksLikeFilePath(value) && !value.includes('*'));
+    const files = scopeCandidates
       .slice(0, 12)
       .map((rel) => snapshotWorkspaceFile(root, rel))
       .filter(Boolean);
@@ -549,6 +553,13 @@ function buildNodeContextProvider(projectRoot, activeSession) {
             const t = ((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).find((x) => x && x.id === node.id);
             const cf = t && t.done !== true ? t.checkpoint_failed : null;
             return cf && cf.reason ? [`O checkpoint anterior desta tarefa foi desfeito (${cf.kind || 'checkpoint'}): ${String(cf.reason).slice(0, 600)} — corrija isso nesta tentativa`] : [];
+          } catch { return []; }
+        })(),
+        ...(() => {
+          try {
+            if (domCfg.mode === false || domCfg.mode === 'off') return [];
+            const line = require('./oxe-dom-hooks.cjs').activeHooksLesson(root, scopeCandidates.slice(0, 30), { locale: domCfg.locale || null });
+            return line ? [line] : [];
           } catch { return []; }
         })(),
       ],
@@ -5578,7 +5589,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     amendments = new Map([...amendments].filter(([criterion]) => critIds.inPhase(criterion, own) && !critIds.isGlobal(criterion) || own.has(criterion)));
   }
   const result = planJson.lintPlan({
-    plan, spec, pack, phase, maxTasksPerWave, projectRoot,
+    plan, spec, pack, phase, maxTasksPerWave, projectRoot, config,
     standing: require('./oxe-criteria-ids.cjs').standingAcceptance(projectRoot),
     amendments,
     requireAcceptanceTests: Boolean(options.requireAcceptanceTests || config.acceptance_tests_required),

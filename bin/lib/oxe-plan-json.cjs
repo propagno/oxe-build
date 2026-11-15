@@ -683,6 +683,73 @@ function lintPlan(input) {
       }
     }
   }
+
+  // 1.21.2 shift-left generated_files: warn before execute if a task includes a generated file without its source
+  // in files or in an ancestor dependency (at checkpoint that deterministically blocks as scope_insufficient).
+  let genRules = input.config && Array.isArray(input.config.generated_files) ? input.config.generated_files : null;
+  if (!genRules && input.projectRoot) {
+    try {
+      const cfgPath = path.join(input.projectRoot, '.oxe', 'config.json');
+      if (fs.existsSync(cfgPath)) {
+        const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+        if (Array.isArray(cfg.generated_files)) genRules = cfg.generated_files;
+      }
+    } catch { /* ignore */ }
+  }
+  if (Array.isArray(genRules) && genRules.length) {
+    const dh = require('./oxe-dom-hooks.cjs');
+    const scopeCoversSource = (scope, s) => scope.some((p) => p === s || dh.globRe(s).test(p) || dh.globRe(p).test(String(s).replace(/\*.*$/, 'x')) || String(s).startsWith(`${p.replace(/\/+$/, '')}/`));
+    const acceptanceByCrit = new Map();
+    for (const entry of input.plan && Array.isArray(input.plan.acceptanceTests) ? input.plan.acceptanceTests : []) {
+      if (entry && entry.criterion) acceptanceByCrit.set(entry.criterion, [...(acceptanceByCrit.get(entry.criterion) || []), entry]);
+    }
+    for (const task of tasks) {
+      if (task.done === true) continue;
+      const taskFiles = (task.files || []).map((f) => String(f || '').replace(/\\/g, '/').replace(/^\.\//, '')).filter(Boolean);
+      if (!taskFiles.length) continue;
+      const ancestorFiles = [];
+      const seenDeps = new Set([task.id]);
+      const depQueue = [...(task.dependsOn || task.depends_on || [])];
+      while (depQueue.length) {
+        const depId = depQueue.shift();
+        if (!depId || seenDeps.has(depId)) continue;
+        seenDeps.add(depId);
+        const depTask = byId.get(depId);
+        if (!depTask) continue;
+        for (const f of depTask.files || []) {
+          const norm = String(f || '').replace(/\\/g, '/').replace(/^\.\//, '');
+          if (norm) ancestorFiles.push(norm);
+        }
+        for (const d of depTask.dependsOn || depTask.depends_on || []) depQueue.push(d);
+      }
+      const combinedScope = [...taskFiles, ...ancestorFiles];
+      for (const rule of genRules) {
+        if (!rule || !rule.file || !rule.source) continue;
+        const filePatterns = (Array.isArray(rule.file) ? rule.file : [rule.file]).map((g) => String(g).replace(/\\/g, '/'));
+        const fileRes = filePatterns.map(dh.globRe);
+        const edited = taskFiles.filter((p) => filePatterns.includes(p) || fileRes.some((re) => re.test(p)));
+        if (!edited.length) continue;
+        const sources = (Array.isArray(rule.source) ? rule.source : [rule.source]).map((s) => String(s).replace(/\\/g, '/'));
+        if (!sources.some((s) => scopeCoversSource(combinedScope, s))) {
+          warnings.push(`${task.id}: files inclui arquivo gerado (${edited.join(', ')}) sem a fonte (${sources.join(', ')}) em files nem nas dependências — no checkpoint isso bloqueia como scope_insufficient`);
+        }
+        if (rule.test) {
+          const normTest = String(rule.test).replace(/\\/g, '/').replace(/^\.\//, '');
+          const critEntries = (task.aceite || []).flatMap((c) => acceptanceByCrit.get(c) || []);
+          const verifyTexts = [
+            task.verifyCommand || '',
+            ...((task.verify && Array.isArray(task.verify.commands)) ? task.verify.commands : []),
+            ...(Array.isArray(task.affected_suites) ? task.affected_suites : []),
+            ...taskFiles,
+            ...critEntries.flatMap((e) => [e.command || '', ...(e.files || [])]),
+          ].map((v) => String(v || '').replace(/\\/g, '/'));
+          if (!verifyTexts.some((v) => v.includes(normTest))) {
+            warnings.push(`${task.id}: files inclui arquivo gerado (${edited.join(', ')}) sem o teste do gerador (${normTest}) em verify`);
+          }
+        }
+      }
+    }
+  }
   if (tasks.length && hasCycle(tasks)) errors.push('dependência circular entre tarefas');
 
   const waves = new Map();
