@@ -7377,7 +7377,7 @@ function runtimeProgramPhaseEdit(projectRoot, activeSession, options = {}, inter
 function runtimeProgramRegressionRepin(projectRoot, activeSession, options = {}) {
   const programLib = require('./oxe-program.cjs');
   const phaseId = String(options.phase || '').trim().toUpperCase();
-  const criteria = String(options.criteria || '').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+  const criteria = [...new Set(String(options.criteria || '').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean))];
   if (!/^F\d+$/.test(phaseId) || !criteria.length || criteria.some((c) => !/^A\d+$/.test(c))) {
     throw new Error('use: oxe-cc program regression repin F<n> --criteria A<n>[,A<m>] --by <papel> --reason "<por quê>" [--dry-run]');
   }
@@ -7395,16 +7395,22 @@ function runtimeProgramRegressionRepin(projectRoot, activeSession, options = {})
   const git = (args) => spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
   const changes = [];
   const problems = [];
+  const seen = new Set(); // one change per check+file, even when two criteria name the same check
   for (const crit of criteria) {
     const checks = doc.checks.filter((c) => c && (String(c.acceptance_ref || '').toUpperCase() === crit || c.id === `check-accept-${crit.toLowerCase()}`) && Array.isArray(c.frozen_files) && c.frozen_files.length);
     if (!checks.length) { problems.push(`${crit}: nenhum teste congelado de ${crit} no registro de regressão de ${phaseId}`); continue; }
     for (const check of checks) {
       for (const f of check.frozen_files) {
         const rel = String(f.path || '').replace(/\\/g, '/');
+        if (seen.has(`${check.id}:${rel}`)) continue;
+        seen.add(`${check.id}:${rel}`);
         const abs = path.resolve(projectRoot, rel);
         if (!fs.existsSync(abs)) { problems.push(`${check.id}: ${rel} não existe`); continue; }
         if (git(['ls-files', '--error-unmatch', '--', rel]).status !== 0) { problems.push(`${check.id}: ${rel} não está versionado — commite o teste antes`); continue; }
-        if ((git(['status', '--porcelain', '--', rel]).stdout || '').trim()) { problems.push(`${check.id}: ${rel} tem mudança não commitada — o repin fixa só o que está commitado`); continue; }
+        // fail closed: a git error (index.lock, broken repo) is not "clean"
+        const st = git(['status', '--porcelain', '--', rel]);
+        if (st.status !== 0) { problems.push(`${check.id}: git status falhou para ${rel} (${String(st.stderr || '').trim().split('\n')[0] || `exit ${st.status}`})`); continue; }
+        if ((st.stdout || '').trim()) { problems.push(`${check.id}: ${rel} tem mudança não commitada — o repin fixa só o que está commitado`); continue; }
         const now = runtime && typeof runtime.sha256File === 'function' ? runtime.sha256File(abs) : null;
         if (!now) { problems.push(`${check.id}: não consegui calcular o sha256 de ${rel}`); continue; }
         const matches = runtime && typeof runtime.frozenFileMatches === 'function' ? runtime.frozenFileMatches(abs, f.sha256) : now === f.sha256;

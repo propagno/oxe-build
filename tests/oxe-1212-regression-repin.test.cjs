@@ -63,6 +63,7 @@ describe('program regression repin', () => {
     assert.equal(doc.repins[0].by, 'TL');
     assert.match(doc.repins[0].reason, /CR-F2-8/);
     assert.equal(op.runtimeProgramRegressionRepin(dir, null, { phase: 'F1', criteria: 'A6', by: 'TL', reason: 'de novo, nada muda' }).changes.length, 0);
+    assert.equal(doc.repins.length, 1);
     // the loaded regression check of the next phase now carries the new hash
     const loaded = programLib.loadRegressionChecks(path.join(dir, '.oxe', 'program'), programLib.readProgram(path.join(dir, '.oxe', 'program')), 'F2');
     assert.equal(loaded[0].id, 'reg-f1-check-accept-a6');
@@ -79,6 +80,26 @@ describe('program regression repin', () => {
     assert.throws(() => op.runtimeProgramRegressionRepin(dir, null, { phase: 'F1', criteria: 'A9', by: 'TL', reason: 'critério que não existe' }), /nenhum teste congelado de A9/);
     assert.throws(() => op.runtimeProgramRegressionRepin(dir, null, { phase: 'F1', criteria: 'A6', by: 'TL' }), /motivo/);
     assert.equal(fs.readFileSync(regFile, 'utf8'), before);
+  });
+
+  it('a repeated criterion (A6,A6) records one change', () => {
+    const { dir, regFile } = project();
+    const r = op.runtimeProgramRegressionRepin(dir, null, { phase: 'F1', criteria: 'A6,a6', by: 'TL', reason: 'critério repetido no pedido' });
+    assert.equal(r.changes.length, 1);
+    assert.equal(JSON.parse(fs.readFileSync(regFile, 'utf8')).repins.length, 1);
+  });
+
+  it('the CLI follows the active session of STATE.md (the program under .oxe/sessions/<s>/program)', () => {
+    const { dir } = project();
+    // move the program into a session, the layout of a project with an active session
+    const sdir = path.join(dir, '.oxe', 'sessions', 'chat-sess');
+    fs.mkdirSync(sdir, { recursive: true });
+    fs.renameSync(path.join(dir, '.oxe', 'program'), path.join(sdir, 'program'));
+    fs.writeFileSync(path.join(dir, '.oxe', 'STATE.md'), '# STATE\n\n**active_session:** sessions/chat-sess\n');
+    const r = spawnSync(process.execPath, [CLI, 'program', 'regression', 'repin', 'F1', '--criteria', 'A6', '--by', 'TL', '--reason', 'sessão ativa do projeto', '--dir', dir, '--json'], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr + r.stdout);
+    assert.equal(JSON.parse(r.stdout).changes.length, 1);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(sdir, 'program', 'regression', 'F1.json'), 'utf8')).checks[0].frozen_files[0].sha256, sha(NEW));
   });
 
   it('the CLI: program regression repin F1 --criteria A6 --by --reason', () => {

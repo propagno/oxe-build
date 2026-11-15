@@ -7163,11 +7163,19 @@ async function main() {
       else if (a === '--dry-run') o.dryRun = true;
       else if (['--criteria', '--by', '--reason'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (a === '--session' && argv[i + 1]) o.session = String(argv[++i]).replace(/\\/g, '/');
       else if (!a.startsWith('-') && !o.phase) o.phase = a;
       else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
     }
+    // cross-review 15/11: a project with an active session keeps its program under .oxe/sessions/<s>/program
+    if (!o.session) {
+      try {
+        const statePath = oxeHealth.oxePaths(o.dir).state;
+        o.session = oxeHealth.parseActiveSession(fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : '') || null;
+      } catch { o.session = null; }
+    }
     try {
-      const out = oxeOperational.runtimeProgramRegressionRepin(o.dir, null, o);
+      const out = oxeOperational.runtimeProgramRegressionRepin(o.dir, o.session, o);
       if (o.json) { console.log(JSON.stringify({ oxeRegressionRepinSchema: 1, ...out }, null, 2)); return; }
       if (!out.changes.length) console.log(`  ${dim}= ${out.phase} ${out.criteria.join(', ')}: o registro de regressão já bate com os arquivos commitados${reset}`);
       for (const c of out.changes) console.log(`  ${out.dry_run ? `${yellow}(simulação)${reset} ` : `${green}✓${reset} `}${out.phase} ${c.check}: ${c.path} ${String(c.from || '—').slice(0, 12)} → ${c.to.slice(0, 12)}`);
