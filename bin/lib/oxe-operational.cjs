@@ -5864,7 +5864,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
           const seenS = new Set();
           for (const f of found) for (const s of f.suites || []) if (!seenS.has(s.test)) { seenS.add(s.test); suites.push({ file: s.test, task: f.task, command: tpl.replace('{files}', s.test) }); }
         } catch { suites = []; }
-        const r = pre.precheck(projectRoot, pjp, readJsonQuiet(pp.implementationPack), { runs: options.precheckRuns, suites, ...(options.precheckRun ? { run: options.precheckRun } : {}), ...(options.precheckWorkspace ? { workspace: options.precheckWorkspace } : {}) });
+        const r = pre.precheck(projectRoot, pjp, readJsonQuiet(pp.implementationPack), { runs: options.precheckRuns, suites, ...(options.precheckTimeoutMs > 0 ? { timeoutMs: options.precheckTimeoutMs } : {}), ...(options.precheckRun ? { run: options.precheckRun } : {}), ...(options.precheckWorkspace ? { workspace: options.precheckWorkspace } : {}) });
         const msg = pre.messages(r);
         result.errors.push(...msg.errors);
         result.warnings.push(...msg.warnings);

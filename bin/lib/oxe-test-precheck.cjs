@@ -96,15 +96,20 @@ function precheck(root, doc, pack, options = {}) {
     } catch { /* no pack symbols: the tests run as they are */ }
     for (const a of entries) {
       const id = a.id || a.criterion;
-      const timeoutMs = Number(a.timeout_ms) > 0 ? Number(a.timeout_ms) : Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 120_000;
+      // OxeSpace 15/11 (OxeChat sessions): a command that runs on the CI (remote-verify) waits in its queue — wall time
+      // is not the test's. Remote: 30 min by default, one run (no CI quota doubled), and a timeout is a warning.
+      const remote = /remote-verify/.test(String(a.command));
+      const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : Number(a.timeout_ms) > 0 ? Number(a.timeout_ms) : remote ? 30 * 60_000 : 120_000;
+      const n = remote ? 1 : runs;
       const seen = [];
       let hang = null;
-      for (let i = 0; i < runs; i += 1) {
+      for (let i = 0; i < n; i += 1) {
         const r = run(wt, a.command, timeoutMs);
         if (r.timedOut) { hang = r; break; }
         seen.push(resultNames(r.output));
       }
       const base = { criterion: a.criterion, id, task: a.task || null, command: a.command };
+      if (hang && remote) { findings.push({ ...base, level: 'warn', kind: 'precheck_timeout_remote', why: `o run remoto passou de ${Math.round(timeoutMs / 60000)} min (fila da CI?) — não é travamento do teste; rode de novo ou aumente --precheck-timeout` }); continue; }
       if (hang) { findings.push({ ...base, level: 'error', kind: 'precheck_hang', why: `passou de ${Math.round(timeoutMs / 1000)} s contra o stub sem terminar — act + fake timers, um await que nunca resolve ou um servidor que não fecha` }); continue; }
       const sig = (x) => `${x.passed.join('|')}#${x.failed.join('|')}`;
       if (new Set(seen.map(sig)).size > 1) {
@@ -121,8 +126,9 @@ function precheck(root, doc, pack, options = {}) {
     // G30b part 2: the existing suites the G30 found (they import a task's files) run once at HEAD. Already red there
     // is not the task's red: fix or exclude it before the paid attempt (it would read as the task's failure).
     for (const s of options.suites || []) {
-      const r = run(wt, s.command, Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 120_000);
-      if (r.timedOut) findings.push({ criterion: null, id: s.file, task: s.task || null, command: s.command, level: 'warn', kind: 'suite_hangs_at_head', why: 'a suíte que importa os arquivos da tarefa trava no HEAD, antes de qualquer mudança' });
+      const remoteS = /remote-verify/.test(String(s.command));
+      const r = run(wt, s.command, Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : remoteS ? 30 * 60_000 : 120_000);
+      if (r.timedOut) findings.push({ criterion: null, id: s.file, task: s.task || null, command: s.command, level: 'warn', kind: remoteS ? 'suite_timeout_remote' : 'suite_hangs_at_head', why: remoteS ? 'o run remoto da suíte passou do teto (fila da CI?) — não é travamento' : 'a suíte que importa os arquivos da tarefa trava no HEAD, antes de qualquer mudança' });
       else if (r.code !== 0) findings.push({ criterion: null, id: s.file, task: s.task || null, command: s.command, level: 'warn', kind: 'suite_red_at_head', why: 'a suíte que importa os arquivos da tarefa já está vermelha no HEAD — não é vermelho da tarefa; conserte ou exclua antes da tentativa paga' });
     }
   } finally {

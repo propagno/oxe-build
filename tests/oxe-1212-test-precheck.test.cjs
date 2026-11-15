@@ -81,3 +81,21 @@ describe('G30b part 2: the suites the G30 found run once at HEAD', () => {
     assert.ok(pre.messages(r).warnings.every((w) => /^T13: suíte tests\/(red|hang)\.test\.ts: suite_/.test(w)));
   });
 });
+
+describe('precheck with remote-verify commands (OxeSpace 15/11, OxeChat sessions)', () => {
+  it('a remote command runs once with a 30 min ceiling, and its timeout is a warning, never a hang; --precheck-timeout wins', () => {
+    const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-precheck-remote-'));
+    dirs.push(wsDir);
+    const workspace = { create: () => wsDir, dispose: () => {} };
+    const calls = [];
+    const run = (cwd, command, timeoutMs) => { calls.push(timeoutMs); return { code: null, timedOut: true, output: '' }; };
+    const doc = { tasks: [{ id: 'T7', acceptance: ['A7'] }], acceptance_tests: [{ criterion: 'A7', task: 'T7', files: [], command: 'node ../deps/scripts/remote-verify.mjs -- node scripts/test-electron.mjs a7.test.ts', proves: ['x'] }] };
+    const r = pre.precheck(wsDir, doc, null, { workspace, run, runs: 2 });
+    assert.deepEqual(calls, [30 * 60_000], 'one run, 30 min');
+    assert.equal(r.findings[0].kind, 'precheck_timeout_remote');
+    assert.equal(r.findings[0].level, 'warn');
+    calls.length = 0;
+    pre.precheck(wsDir, doc, null, { workspace, run, timeoutMs: 45 * 60_000 });
+    assert.deepEqual(calls, [45 * 60_000]);
+  });
+});

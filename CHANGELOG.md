@@ -51,6 +51,7 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
     - **trava contra o stub** (`precheck_hang`, erro): act com fake timers, um await sem fim, um servidor que não fecha;
     - **resultado diferente entre execuções** (`precheck_flaky`, erro);
     - **passa sem a implementação** (`precheck_passes_on_stub`, aviso).
+  - Um comando via `remote-verify` roda uma vez só, com teto padrão de 30 min, e o estouro é aviso (`precheck_timeout_remote`), nunca travamento. A fila da CI conta no tempo de relógio, e antes três testes do OxeChat sessions deram falso `precheck_hang` aos 120 s. `--precheck-timeout <s>` define o teto. Os stubs e os testes copiados ficam na worktree temporária, que é onde o `remote-verify` tira o snapshot (`git add -A` do toplevel).
   - O executor mata a árvore de processos no timeout. Um teste travado nunca fica vazado nem prende a worktree.
   - Antes, os três defeitos de teste do planner desta noite (T5, T6 e o CA-6 da T20) custaram cerca de US$ 50 em tentativas sobre código certo.
 - **G30b parte 2:** com `--precheck-tests`, as suítes achadas pelo G30 rodam uma vez no HEAD. Já vermelha ou travada antes da tarefa vira aviso nomeando a suíte, para o vermelho não ser lido como da tarefa. O conflito de uma regra da suíte com o CA só aparece com a implementação: o G30 põe essa suíte no verify, e ele surge na primeira tentativa.
