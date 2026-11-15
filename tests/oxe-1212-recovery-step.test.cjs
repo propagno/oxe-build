@@ -79,6 +79,12 @@ describe('R42: recovery priorities', () => {
       { id: 'T1', files: ['a.ts'], checkpoint_failed: { reason: 'hook', snapshot: {} } },
     ] } });
     assert.equal(r.cursorCmd, 'oxe-cc runtime commit-task T1');
+    // R43: a scope gap sharing the file is never committed together (it reopens with the scope fixed)
+    const s = step({ doc: { tasks: [
+      { id: 'T1', files: ['a.ts'], checkpoint_failed: { reason: 'hook', snapshot: {} } },
+      { id: 'T2', files: ['a.ts'], checkpoint_failed: { kind: 'scope_insufficient', related_red: ['tests/x.test.ts'], reason: 'x' } },
+    ] } });
+    assert.equal(s.cursorCmd, 'oxe-cc runtime commit-task T1');
   });
 
   it('a deferral waits while other tasks of the plan are still pending; another phase\'s deferral never counts', () => {

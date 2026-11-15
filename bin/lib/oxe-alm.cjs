@@ -974,6 +974,20 @@ async function labelItem(programDir, cfg, refOrKey, labels, options = {}) {
 /**
  * Moves a card to `stage` only forward (a card already at or past it stays, with the reason). The quick's rule, shared.
  */
+/**
+ * Whether the card is already at or past `stage` on the board (R43). An unmapped live state ("Backlog", "Em revisão")
+ * is NOT past it — the caller moves. A deferred provider (MCP queue) cannot read: never past.
+ * @returns {Promise<{ past: boolean, live: string|null, liveStage: string|null }>}
+ */
+async function stageAtOrPast(programDir, cfg, key, stage, options = {}) {
+  const prov = options.provider || provider(cfg, options);
+  if (prov.deferred || typeof prov.status !== 'function') return { past: false, live: null, liveStage: null };
+  const link = resolveItem(programDir, cfg, key);
+  const live = await prov.status(link ? link.key : key);
+  const liveStage = STAGES.find((s) => cfg.states[s] && live && String(cfg.states[s]).toLowerCase() === String(live).toLowerCase()) || null;
+  return { past: Boolean(liveStage) && STAGES.indexOf(liveStage) >= STAGES.indexOf(stage), live, liveStage };
+}
+
 async function moveForward(programDir, cfg, key, stage, options = {}) {
   if (!cfg.states[stage]) return { skipped: true, why: `alm.states sem "${stage}": nada movido` };
   const prov = options.provider || provider(cfg, options);
@@ -1182,4 +1196,4 @@ function keyFor(programDir, cfg, phase, taskId) {
   return cfg && cfg.provider === 'azure-devops' ? `AB#${l.key}` : l.key;
 }
 
-module.exports = { almConfig, checkConfig, jiraRest, isWriter, writerError, withWriteLock, comment, provider, readQueue, pendingOps, enqueue, ack, dropEnsure, push, sync, move, stagesFromEvents, reportDefect, links, addLink, readState, keyFor, refLabel, taskRef, oldRefs, perPhase, STAGES, STAGE_INFO, STAGE_ALIASES, canonStage, adf, request, isDry, warnApply, resolveItem, linkPr, labelItem, relateItems, setItemVersion, setItemSummary, supersede, moveForward, addPending, listPending, applyPending, pendingFile };
+module.exports = { almConfig, checkConfig, jiraRest, isWriter, writerError, withWriteLock, comment, provider, readQueue, pendingOps, enqueue, ack, dropEnsure, push, sync, move, stagesFromEvents, reportDefect, links, addLink, readState, keyFor, refLabel, taskRef, oldRefs, perPhase, STAGES, STAGE_INFO, STAGE_ALIASES, canonStage, adf, request, isDry, warnApply, resolveItem, linkPr, labelItem, relateItems, setItemVersion, setItemSummary, supersede, moveForward, stageAtOrPast, addPending, listPending, applyPending, pendingFile };

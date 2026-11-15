@@ -46,7 +46,8 @@ describe('alm pr-merged: Fecha moves, Parte de comments, a bare key is reported'
     const programDir = path.join(dir, '.oxe', 'program');
     const calls = [];
     const almLib = {
-      async moveForward(_pd, _c, key, stage, o) { calls.push(['move', key, stage, o.comment]); return { key, changed: true }; },
+      async stageAtOrPast() { return { past: false, live: null, liveStage: null }; },
+      async move(_pd, _c, key, stage, o) { calls.push(['move', key, stage, o.comment]); return { key, changed: true }; },
       async comment(_pd, _c, key, text) { calls.push(['comment', key, text]); return { key }; },
     };
     const prData = { number: 871, url: 'https://x/pull/871', state: 'MERGED', title: 'T5 (OXE-9)', branch: 'b', body: 'Fecha OXE-72\nParte de OXE-105', commits: [] };
@@ -126,6 +127,26 @@ describe('runtimeAlm pr-merged / list against a fake Jira', () => {
     const later = await op.runtimeAlm(dir, null, { action: 'pr-merged', prData: { ...prData, number: 900, body: 'Fecha OXE-1' }, apply: true, http: j.http, env: ENV, sleep: async () => {} });
     assert.equal(j.issues.get('OXE-1').status, 'Entregue com prova');
     assert.equal(later.moved[0].already, true);
+    // R43: a card in a state the config does not map ("Backlog") is before integrated — it moves
+    j.issues.set('OXE-50', { key: 'OXE-50', status: 'Backlog', comments: [] });
+    const unmapped = await op.runtimeAlm(dir, null, { action: 'pr-merged', prData: { ...prData, number: 901, body: 'Fecha OXE-50' }, apply: true, http: j.http, env: ENV, sleep: async () => {} });
+    assert.deepEqual(unmapped.errors, []);
+    assert.equal(j.issues.get('OXE-50').status, 'Na main');
+  });
+
+  it('R43: without alm.states.integrated nothing moves and nothing is recorded as done', async () => {
+    const dir = project();
+    const cfgPath = path.join(dir, '.oxe', 'config.json');
+    const c = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    delete c.alm.states.integrated;
+    fs.writeFileSync(cfgPath, JSON.stringify(c));
+    const j = jira();
+    const out = await op.runtimeAlm(dir, null, { action: 'pr-merged', prData, apply: true, http: j.http, env: ENV, sleep: async () => {} });
+    // almConfig defaults integrated to "Done"; a board without that state makes the move an error, never a record
+    assert.match(out.errors.join('\n'), /OXE-72:/);
+    assert.equal(j.issues.get('OXE-72').status, 'Em desenvolvimento');
+    const ledger = path.join(dir, '.oxe', 'program', 'alm-pr-merged.ndjson');
+    assert.ok(!fs.existsSync(ledger) || !/"moved"/.test(fs.readFileSync(ledger, 'utf8')));
   });
 
   it('list: the cards in the given states, with the merged PRs citing each one', async () => {

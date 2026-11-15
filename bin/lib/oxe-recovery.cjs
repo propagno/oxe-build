@@ -68,7 +68,8 @@ function recoveryStep(target, activeSession, ctx = {}) {
     const mine = new Set((t.files || []).map(normF));
     const shares = (o) => (o.files || []).map(normF).some((f) => mine.has(f));
     const waiting = tasks.filter((o) => o !== t && pendingTask(o) && !o.checkpoint_failed && shares(o)).map((o) => o.id);
-    const together = failed.filter((o) => o !== t && shares(o) && !emptyNoWork(o.checkpoint_failed)).map((o) => o.id);
+    // a scope gap is never committed as done (R43): its task reopens with the scope fixed
+    const together = failed.filter((o) => o !== t && shares(o) && !emptyNoWork(o.checkpoint_failed) && o.checkpoint_failed.kind !== 'scope_insufficient').map((o) => o.id);
     const ids = [t.id, ...together];
     const cmd = `oxe-cc runtime commit-task ${ids.join(',')}${together.length ? ' --together' : ''}`;
     if (cf.kind === 'integration') {

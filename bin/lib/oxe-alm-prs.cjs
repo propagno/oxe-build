@@ -98,10 +98,19 @@ async function prMerged(root, programDir, cfg, almLib, options = {}) {
   for (const c of plan.close) {
     if (c.skip) continue;
     try {
-      // only forward (R42): a card already in staging / accepted / released is never moved back to integrated
-      const r = await almLib.moveForward(programDir, cfg, c.key, 'integrated', { ...net, comment: `PR #${pr.number} mergeado (${pr.url || ''}) — fecha o card` });
+      // R43: without the integrated state mapped nothing can move — an error, never recorded as done
+      if (!cfg.states || !cfg.states.integrated) { out.errors.push(`${c.key}: alm.states.integrated não está mapeado no .oxe/config.json — nada movido`); continue; }
+      // only forward (R42): a card already at/after integrated is never moved back; an unmapped live state
+      // ("Backlog", "Em revisão") is before it and moves (R43)
+      const at = await almLib.stageAtOrPast(programDir, cfg, c.key, 'integrated', net);
+      if (at.past) {
+        out.moved.push({ key: c.key, already: true, why: `o card já está em "${at.live}" (${at.liveStage})` });
+        rec({ action: 'moved', key: c.key });
+        continue;
+      }
+      const r = await almLib.move(programDir, cfg, c.key, 'integrated', { ...net, comment: `PR #${pr.number} mergeado (${pr.url || ''}) — fecha o card` });
       if (r && r.planned) continue; // cfg.dry_run: nothing was written, nothing recorded
-      out.moved.push({ key: c.key, ...(r && r.queued ? { queued: true } : {}), ...(r && (r.changed === false || r.skipped) ? { already: true, ...(r.why ? { why: r.why } : {}) } : {}) });
+      out.moved.push({ key: c.key, ...(r && r.queued ? { queued: true } : {}), ...(r && r.changed === false ? { already: true } : {}) });
       rec({ action: 'moved', key: c.key });
     } catch (err) { out.errors.push(`${c.key}: ${err.message}`); }
   }
