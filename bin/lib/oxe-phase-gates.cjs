@@ -129,7 +129,23 @@ function gateCommand(gate, options = {}) {
   const pkg = path.resolve(__dirname, '..', '..').replace(/\\/g, '/').toLowerCase();
   const internal = String(gate.command || '').replace(/\\/g, '/').toLowerCase().includes(pkg);
   const runner = gate.runner || (internal ? null : options.defaultRunner) || null;
-  return runner ? expandRunner(runner, gate.command) : gate.command;
+  return runner && !alreadyWrapped(runner, gate.command) ? expandRunner(runner, gate.command) : gate.command;
+}
+
+/**
+ * OxeSpace 15/11 (Celular F3 android-unit): a gate written as `node …/remote-verify.mjs -- node gradle152.mjs …` with the
+ * runner `node …/remote-verify.mjs -- {command}` was wrapped twice, and CI ran a Windows path. A command that already
+ * starts with the runner's own prefix — or runs the same script as the runner's first one — is not wrapped again.
+ */
+function alreadyWrapped(runner, command) {
+  const normalize = (s) => String(s || '').replace(/\\/g, '/').replace(/["']/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const prefix = normalize(expandRunner(String(runner).split('{command}')[0], ''));
+  const cmd = normalize(command);
+  if (!prefix) return false;
+  if (cmd.startsWith(prefix)) return true;
+  const script = (s) => { const m = /(?:^|\s)([^\s]+\.(?:[cm]?js|ts|sh|ps1|py))(?=\s|$)/.exec(s); return m ? m[1].split('/').pop() : null; };
+  const runnerScript = script(prefix);
+  return Boolean(runnerScript && script(cmd) === runnerScript);
 }
 
 /** Verification checks (same shape as the runtime's AcceptanceCheck) for the gates of one moment. */

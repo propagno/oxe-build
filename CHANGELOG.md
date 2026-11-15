@@ -61,6 +61,11 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Recusa de política:** um "safeguards flagged" / "usage policy" do modelo passa a ser `failure_class: policy`. O scheduler bloqueia a tarefa sem nova tentativa automática, e a saída aponta o `--print-prompt` para achar o trecho que dispara a recusa.
 - **Antes:** era lida como falha de ambiente e retentada com o mesmo prompt, que seria recusado de novo. Na T7 do OxeChat F3, a primeira tentativa custou US$ 5,02 até a recusa.
 
+### Gates: sem embrulho duplo; CR do gate de CI resolvido pelo run verde (OxeSpace 15/11, Celular F3)
+
+- **`phase_gates_runner`:** um gate que já começa com o prefixo do runner, ou que roda o mesmo script dele (por exemplo `remote-verify -- node gradle152.mjs …`), não é embrulhado de novo. Antes, a CI rodava um caminho do Windows ("Cannot find module '/home/runner/…/C:/Users/…remote-verify.mjs'").
+- **`runtime ci --attach` com run verde:** resolve os CRs `constraint` abertos da fase que nasceram dos gates `kind: ci`. A resolução fica registrada como `ci_attach`. Antes, o CR ficava aberto sem caminho: o `--no-amendment` vale só para spec_gap, e o close passava mesmo assim. Um run vermelho, ou um CR de outro gate, não muda.
+
 ### Teste que só fica verde com uma tarefa posterior (G38, OxeCode F6 T27)
 
 - **O `plan lint` acusa um verify que roda um teste de aceite que só uma tarefa pendente posterior torna verde:** o teste fica fora do alcance naquele ponto da ordem. "Teste de aceite" aqui é a entrada congelada da tarefa dona, ou um arquivo `acceptance/` no escopo dela.

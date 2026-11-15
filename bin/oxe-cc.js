@@ -6282,6 +6282,7 @@ async function runRuntime(opts) {
       }
       console.log(`  ${c ? green : ''}✓${c ? reset : ''} CI ${record.run}${record.repo ? ` (${record.repo})` : ''} anexado à fase ${record.phase || '—'}${record.head ? ` · head ${record.head}` : ''}`);
       console.log(`  ${c ? dim : ''}Um phase_gate kind "ci" só fica verde quando este run terminar com success.${c ? reset : ''}`);
+      if (Array.isArray(record.resolved_changes) && record.resolved_changes.length) console.log(`  ${c ? green : ''}✓${c ? reset : ''} run verde: ${record.resolved_changes.join(', ')} resolvido(s) (CR do gate de CI)`);
       return;
     } catch (err) {
       console.error(`${red}${err && err.message ? err.message : 'Falha ao anexar o run de CI.'}${reset}`);

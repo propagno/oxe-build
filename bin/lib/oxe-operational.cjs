@@ -5300,7 +5300,30 @@ function runtimeCiAttach(projectRoot, activeSession, options = {}) {
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const program = programLib.readProgram(programDir);
   const phase = options.phase || (program && program.active_phase) || null;
-  return require('./oxe-phase-gates.cjs').attachCiRun(programDir, { run: options.run, repo: options.repo, head: options.head, phase });
+  const gatesLib = require('./oxe-phase-gates.cjs');
+  const record = gatesLib.attachCiRun(programDir, { run: options.run, repo: options.repo, head: options.head, phase });
+  // OxeSpace 15/11 (Celular F3 CR-F3-1): a constraint CR opened by a red `kind: ci` gate stayed open after a green run
+  // was attached (the close passed anyway; `feedback resolve --no-amendment` is for spec_gap). A GREEN attached run
+  // resolves the open CRs of this phase raised by its ci gates — the run is the proof the gate asked for.
+  try {
+    const status = gatesLib.ciRunStatus(record, { spawn: options.spawn });
+    if (status && status.ok) {
+      const config = readProjectConfig(projectRoot) || {};
+      let planDoc = null;
+      try { planDoc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { planDoc = null; }
+      const ciGates = new Set([...gatesLib.readPhaseGates(planDoc, config), ...implicitPhaseGates(projectRoot, program, phase, config)].filter((g) => g && g.kind === 'ci').map((g) => g.id));
+      const changeLib = require('./oxe-change.cjs');
+      const resolved = [];
+      for (const cr of changeLib.listChanges(programDir)) {
+        if (cr.status !== 'open' || !cr.gate || !ciGates.has(cr.gate) || (phase && cr.phase && cr.phase !== phase)) continue;
+        changeLib.setChangeStatus(programDir, cr.id, 'resolved', { resolution: `run de CI ${record.run} verde anexado (gate ${cr.gate})`, by: 'ci_attach' });
+        appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', payload: { id: cr.id, status: 'resolved', by: 'ci_attach', run: String(record.run) } });
+        resolved.push(cr.id);
+      }
+      if (resolved.length) return { ...record, resolved_changes: resolved };
+    }
+  } catch { /* auxiliar: the attach itself stands */ }
+  return record;
 }
 
 /**
