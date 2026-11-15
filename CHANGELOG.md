@@ -72,6 +72,12 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
   - O cache das entradas já aprovadas é gravado mesmo quando o processo morre no meio.
   - Cada suíte também ganha uma linha de progresso.
 
+### G39: teste existente que fixa o que uma tarefa estende (OxeSpace 15/11, OxeQuery polish T1, US$ 11,70)
+
+- **O check:** para cada caminho de membro que um teste congelado de uma tarefa pendente pede, e que o produto ainda não tem (`IPC_CHANNELS.agentActivity.changed`), o `plan lint` acusa os testes **fora** das entradas do plano que fixam o pai por igualdade exata (`expect(IPC_CHANNELS.agentActivity).toEqual({ list, detail, badge })`) sem ter essa folha. A mensagem nomeia `arquivo:linha` e diz que o teste precisa de um release antes da tarefa.
+- **O que não conta:** `toMatchObject` não fixa, e uma folha que o objeto fixado já tem não é conflito.
+- **Custo:** `git grep` em lote, menos de 0,5 s no repositório real.
+
 ### G38 com filtro do vitest; `plan task fold`; contratos antecipados (OxeSpace 15/11, OxeCode F6 T44)
 
 - **G38 e o filtro do vitest:** o G38 lê cada argumento do verify como **filtro de substring** do vitest. `pu03-app-version.test.ts` também rodava o `pu03-app-version.test.tsx` da T59 (onda 33), e a T44 (onda 18) foi adiada depois de 3 tentativas. A mensagem nomeia o argumento que casa. Um comando estreitado por `-t`/`--testNamePattern` conta como rodando só os próprios casos. O G38 roda em todo `plan lint`, inclusive de plano já instalado.

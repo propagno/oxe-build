@@ -6083,6 +6083,14 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
         result.warnings.push(...lm.warnings);
         result.later_owned_tests = later;
       }
+      // G39 (OxeSpace 15/11, OxeQuery polish T1): an existing frozen test pins by exact equality what a task extends
+      const pinned = si.pinnedByExisting(projectRoot, pjs);
+      if (pinned.length) {
+        const pm = si.pinnedMessages(pinned, { mode });
+        result.errors.push(...pm.errors);
+        result.warnings.push(...pm.warnings);
+        result.pinned_by_existing = pinned;
+      }
     }
   } catch { /* auxiliar */ }
   // OXB-171: the product files a task's frozen tests import/read must be in its scope (or a dependency's); T8 of F2

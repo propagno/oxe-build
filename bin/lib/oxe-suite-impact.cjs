@@ -232,6 +232,92 @@ function laterOwnedTests(planDoc) {
   return out;
 }
 
+/**
+ * G39 (OxeSpace 15/11, OxeQuery polish T1, US$ 11.70): the task's frozen A1 needs `IPC_CHANNELS.agentActivity.changed`,
+ * while a 1.5.0 frozen test pins `expect(IPC_CHANNELS.agentActivity).toEqual({ list, detail, badge })` — no change passes
+ * both. For each member path a pending task's frozen test asks for and the product does not have yet (`X.y.z`), the
+ * tests OUTSIDE the plan's frozen entries that assert its parent (`X.y`) by exact equality are named, file:line.
+ * @returns {{ task: string, path: string, parent: string, entry: string, pinned_by: string, line: string }[]}
+ */
+function pinnedByExisting(root, planDoc, options = {}) {
+  const git = (args) => { const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 }); return r.status === 0 ? r.stdout : ''; };
+  const read = options.readText || ((f) => { try { return fs.readFileSync(path.join(root, f), 'utf8'); } catch { return ''; } });
+  const tasks = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter((t) => t && !(t.done === true || t.status === 'done'));
+  const accept = planDoc && Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : [];
+  const planFrozen = new Set(accept.flatMap((a) => (a && a.files) || []).map((f) => norm(typeof f === 'string' ? f : f.path)));
+  const PATH_RE = /(?<![\w$.])([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*){2,})(?![\w$])/g;
+  // 1. the candidates: member paths the pending tasks' frozen tests name
+  const candidates = [];
+  const seen = new Set();
+  for (const t of tasks) {
+    const own = accept.filter((a) => a && (a.task === t.id || (!a.task && (t.acceptance || []).includes(a.criterion))));
+    for (const a of own) {
+      for (const f of a.files || []) {
+        const entry = norm(typeof f === 'string' ? f : f.path);
+        for (const m of read(entry).matchAll(PATH_RE)) {
+          const full = m[1];
+          if (/^(expect|vi|jest|Object|Array|JSON|Math|Promise|console|process|window|document|this|module|exports|require|t|it|describe|screen|page|user)\./.test(full)) continue;
+          const key = `${t.id}\u0000${full}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          candidates.push({ task: t.id, full, parent: full.slice(0, full.lastIndexOf('.')), entry });
+        }
+      }
+    }
+  }
+  if (!candidates.length) return [];
+  // batched git grep (a lint must stay fast): -o says which needle matched each line
+  const grepBatch = (needles, extra) => {
+    const lines = [];
+    const list = [...new Set(needles)];
+    for (let i = 0; i < list.length; i += 150) {
+      const args = ['grep', ...extra, '-I', '-F'];
+      for (const n of list.slice(i, i + 150)) args.push('-e', n);
+      lines.push(...git([...args, 'HEAD']).split(/\r?\n/).filter(Boolean).map((l) => l.replace(/^HEAD:/, '')));
+    }
+    return lines;
+  };
+  // 2. new for the product: the full path is in no tracked non-test file yet
+  const inProduct = new Set();
+  for (const l of grepBatch(candidates.map((c) => c.full), ['-o'])) {
+    const i = l.indexOf(':');
+    if (i > 0 && !TEST_RE.test(l.slice(0, i))) inProduct.add(l.slice(i + 1));
+  }
+  const fresh = candidates.filter((c) => !inProduct.has(c.full));
+  if (!fresh.length) return [];
+  // 3. the tests outside the plan that pin the parent by exact equality
+  const lines = grepBatch(fresh.map((c) => `expect(${c.parent})`), ['-n']);
+  const out = [];
+  for (const c of fresh) {
+    const esc = c.parent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`expect\\(\\s*${esc}\\s*\\)\\s*\\.\\s*(toEqual|toStrictEqual|toHaveLength)\\s*\\(`);
+    for (const l of lines) {
+      const file = l.split(':')[0];
+      if (planFrozen.has(file) || !TEST_RE.test(file) || !re.test(l)) continue;
+      // the pinned object/array already has the leaf (a key `leaf:` or the value 'leaf' up to the closing of the
+      // assertion): no conflict — only a member the pinned shape LACKS is a conflict
+      const leaf = c.full.slice(c.full.lastIndexOf('.') + 1);
+      const lineNo = Number(l.split(':')[1]) || 1;
+      const body = read(file).split(/\r?\n/).slice(lineNo - 1, lineNo + 39);
+      const endIdx = body.findIndex((x, i) => i > 0 && /^\s*[})\]]+\s*\)?;?\s*$/.test(x));
+      const region = (endIdx >= 0 ? body.slice(0, endIdx + 1) : body.slice(0, 1)).join('\n').replace(/^[\s\S]*?\.\s*(toEqual|toStrictEqual|toHaveLength)\s*\(/, '');
+      if (new RegExp(`(^|[^\\w$])${leaf.replace(/[$]/g, '\\$')}\\s*:|['"\`]${leaf.replace(/[$]/g, '\\$')}['"\`]`).test(region)) continue;
+      out.push({ task: c.task, path: c.full, parent: c.parent, entry: c.entry, pinned_by: l.split(':').slice(0, 2).join(':'), line: l.split(':').slice(2).join(':').trim().slice(0, 160) });
+    }
+  }
+  return out;
+}
+
+function pinnedMessages(findings, { mode = 'error' } = {}) {
+  const errors = [];
+  const warnings = [];
+  for (const f of findings) {
+    const line = `${f.task}: o teste congelado ${f.entry} pede ${f.path}, mas ${f.pinned_by} fixa ${f.parent} por igualdade exata (\`${f.line}\`) — nenhuma mudança passa os dois: precisa de um release desse teste (CR + spec freeze/amend) antes de ${f.task} [G39]`;
+    if (mode === 'error') errors.push(line); else warnings.push(line);
+  }
+  return { errors, warnings };
+}
+
 function laterOwnedMessages(findings, { mode = 'error' } = {}) {
   const errors = [];
   const warnings = [];
@@ -260,4 +346,4 @@ function messages(findings, { mode = 'error' } = {}) {
   return { errors, warnings };
 }
 
-module.exports = { suiteImpact, messages, laterOwnedTests, laterOwnedMessages, importIndex, exportedConstants, trackedFiles, dataFilesOf, TEST_RE };
+module.exports = { suiteImpact, messages, laterOwnedTests, laterOwnedMessages, pinnedByExisting, pinnedMessages, importIndex, exportedConstants, trackedFiles, dataFilesOf, TEST_RE };

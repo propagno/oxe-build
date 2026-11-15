@@ -156,6 +156,30 @@ describe('G38: a verify that holds a test only a later task turns green', () => 
     assert.equal(si.laterOwnedTests(nodeTest).length, 0);
   });
 
+  it('G39: an existing frozen test pins by toEqual the parent of a member a task frozen test asks for (OxeSpace 15/11, OxeQuery polish T1)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-g39-'));
+    dirs.push(dir);
+    const w = (rel, text) => { fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); fs.writeFileSync(path.join(dir, rel), text); };
+    w('shared/ipc.ts', "export const IPC_CHANNELS = { agentActivity: { list: 'l', detail: 'd', badge: 'b' } };\n");
+    w('tests/acceptance/f3/a10.test.ts', "expect(IPC_CHANNELS.agentActivity).toEqual({ list: 'l', detail: 'd', badge: 'b' })\n");
+    w('tests/unit/loose.test.ts', "expect(IPC_CHANNELS.agentActivity).toMatchObject({ list: 'l' })\n");
+    w('tests/polish/pq07.test.ts', "expect(IPC_CHANNELS.agentActivity.changed).toBe('agent-activity:changed')\nexpect(IPC_CHANNELS.agentActivity.list).toBe('l')\n");
+    spawnSync('git', ['init', '-q'], { cwd: dir });
+    spawnSync('git', ['add', '-A'], { cwd: dir });
+    spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'base'], { cwd: dir });
+    const doc = {
+      acceptance_tests: [{ task: 'T1', criterion: 'A1', files: ['tests/polish/pq07.test.ts'], command: 'x' }],
+      tasks: [{ id: 'T1', wave: 1, files: ['shared/ipc.ts'], acceptance: ['A1'] }],
+    };
+    const f = si.pinnedByExisting(dir, doc);
+    assert.deepEqual(f.map((x) => [x.task, x.path, x.pinned_by]), [['T1', 'IPC_CHANNELS.agentActivity.changed', 'tests/acceptance/f3/a10.test.ts:1']], 'toMatchObject does not pin; .list already exists in the product');
+    assert.match(si.pinnedMessages(f).errors[0], /precisa de um release desse teste \(CR \+ spec freeze\/amend\) antes de T1 \[G39\]/);
+    // the pinning test released (it now knows .changed): nothing
+    w('tests/acceptance/f3/a10.test.ts', "expect(IPC_CHANNELS.agentActivity).toEqual({ list: 'l', detail: 'd', badge: 'b', changed: 'c' })\n// IPC_CHANNELS.agentActivity.changed\n");
+    spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qam', 'release'], { cwd: dir });
+    assert.equal(si.pinnedByExisting(dir, doc).length, 0);
+  });
+
   it('a mutable acceptance/ test the task itself writes (a later task only extends it) is its own to run', () => {
     const p = plan();
     p.tasks[0].files.push(U83);
