@@ -13,16 +13,25 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const PLANNED_RE = /\b(criar|cria|criado|novo arquivo|nova|novo|a criar|ser criado|new file|to create|will create|create|add(?:ed)? file)\b/i;
+const REMOVED_RE = /\b(removid[oa]s?|exclu[íi]d[oa]s?|apagad[oa]s?|deletad[oa]s?|removed|deleted)\b/i;
 const CITE_RE = /`?((?:[\w@.-]+\/)+[\w@.-]+\.[A-Za-z0-9]{1,8})(?:#([A-Za-z_$][\w$]*))?`?/g;
 
 function readText(p) { try { return fs.readFileSync(p, 'utf8'); } catch { return null; } }
 
-/** Claims of one text: [{ file, symbol, line }]; planned-to-create lines are skipped. */
+function maskNonProsePreserveLines(text) {
+  return String(text || '')
+    .replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\r\n]/g, ' '))
+    .replace(/^(?:```|~~~)[^\n]*\n[\s\S]*?^(?:```|~~~)\s*$/gm, (m) => m.replace(/[^\r\n]/g, ' '));
+}
+
+/** Claims of one text: [{ file, symbol, line }]; planned-to-create and explicitly removed lines are skipped. */
 function claimsOf(text) {
   const out = [];
-  String(text || '').split(/\r?\n/).forEach((ln, i) => {
-    if (PLANNED_RE.test(ln)) return;
+  maskNonProsePreserveLines(text).split(/\r?\n/).forEach((ln, i) => {
+    if (PLANNED_RE.test(ln) || REMOVED_RE.test(ln)) return;
     for (const m of ln.matchAll(CITE_RE)) {
+      const prefix = ln.slice(0, m.index || 0);
+      if (/(?:https?|file|ssh|git):\/\/\S*$/i.test(prefix)) continue;
       const file = m[1].replace(/^\.\//, '');
       if (/^https?:/i.test(file) || file.startsWith('.oxe/') || file.includes('*') || file.includes('..')) continue;
       out.push({ file, symbol: m[2] || null, line: i + 1 });
@@ -32,7 +41,8 @@ function claimsOf(text) {
 }
 
 function symbolDefinedIn(root, symbol) {
-  const r = spawnSync('git', ['grep', '-l', '-E', `(function|class|const|let|var|def|interface|type|enum|export)[[:space:]]+${symbol}\\b|${symbol}[[:space:]]*[:=][[:space:]]*(async[[:space:]]*)?(function|\\()`], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
+  const ereSym = String(symbol || '').replace(/[.\\+*?[^\]$(){}=!<>|:-]/g, '\\$&');
+  const r = spawnSync('git', ['grep', '-l', '-E', `(function|class|const|let|var|def|interface|type|enum|export)[[:space:]]+${ereSym}([^A-Za-z0-9_$]|$)|(^|[^A-Za-z0-9_$])${ereSym}[[:space:]]*[:=][[:space:]]*(async[[:space:]]*)?(function|\\()`], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
   return r.status === 0 ? r.stdout.split(/\r?\n/).filter(Boolean) : [];
 }
 
@@ -41,7 +51,8 @@ function checkClaim(root, c, cache) {
   const exists = fs.existsSync(abs);
   if (!c.symbol) return exists ? null : { why: 'não existe mais' };
   const text = exists ? (cache.get(c.file) ?? (cache.set(c.file, readText(abs) || ''), cache.get(c.file))) : '';
-  if (exists && new RegExp(`\\b${c.symbol}\\b`).test(text)) return null;
+  const escSym = String(c.symbol).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (exists && new RegExp(`(?<![A-Za-z0-9_$])${escSym}(?![A-Za-z0-9_$])`).test(text)) return null;
   const elsewhere = symbolDefinedIn(root, c.symbol).filter((f) => f !== c.file);
   if (elsewhere.length) return { why: 'mudou de lugar', now: elsewhere.slice(0, 3) };
   return { why: 'não existe mais' };

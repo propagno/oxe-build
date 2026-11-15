@@ -40,8 +40,8 @@ function selectPrs(spawn, cwd, sel) {
   if (sel.pr) return [JSON.parse(gh(spawn, cwd, ['pr', 'view', String(sel.pr).replace(/^#/, ''), '--json', FIELDS]))];
   const open = JSON.parse(gh(spawn, cwd, ['pr', 'list', '--state', 'open', '--limit', String(sel.limit || 50), '--json', `${FIELDS},body`]));
   if (!sel.card) return open;
-  const key = String(sel.card).toUpperCase();
-  const re = new RegExp(`(^|[^A-Za-z0-9])${key.replace(/[-]/g, '[-_]?')}($|[^0-9])`, 'i');
+  const key = String(sel.card).trim().toUpperCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(^|[^A-Za-z0-9])${key.replace(/[-#]/g, '[-_#]?')}($|[^0-9])`, 'i');
   return open.filter((p) => re.test(p.title || '') || re.test(p.body || '') || re.test(p.headRefName || ''));
 }
 
@@ -80,15 +80,50 @@ function verdictComment(row) {
   return L.join('\n');
 }
 
+function parsePaginatedJsonArray(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return [];
+  try {
+    const one = JSON.parse(s);
+    return Array.isArray(one) ? one : [];
+  } catch { /* gh api --paginate concatenates pages as `[...][...]` */ }
+  const out = [];
+  let depth = 0;
+  let start = -1;
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '[') { if (depth === 0) start = i; depth += 1; }
+    else if (ch === ']') {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        const page = JSON.parse(s.slice(start, i + 1));
+        if (Array.isArray(page)) out.push(...page);
+        start = -1;
+      }
+    }
+  }
+  if (depth !== 0 || (!out.length && s)) throw new SyntaxError('JSON paginado inválido do gh api');
+  return out;
+}
+
 /** Upserts the verdict comment on the PR (gh api). */
 function publishVerdict(cwd, row, options = {}) {
   const spawn = options.spawn || spawnSync;
   const body = verdictComment(row);
-  const comments = JSON.parse(gh(spawn, cwd, ['api', `repos/{owner}/{repo}/issues/${row.pr}/comments`, '--paginate']));
-  const mine = (Array.isArray(comments) ? comments : []).find((c) => String(c.body || '').includes(MARKER));
+  const comments = parsePaginatedJsonArray(gh(spawn, cwd, ['api', `repos/{owner}/{repo}/issues/${row.pr}/comments`, '--paginate']));
+  const mine = comments.find((c) => c && String(c.body || '').includes(MARKER));
   if (mine) gh(spawn, cwd, ['api', '-X', 'PATCH', `repos/{owner}/{repo}/issues/comments/${mine.id}`, '-F', 'body=@-'], body);
   else gh(spawn, cwd, ['pr', 'comment', String(row.pr), '--body-file', '-'], body);
   return { pr: row.pr, updated: Boolean(mine), created: !mine };
 }
 
-module.exports = { status, selectPrs, prState, verdictComment, publishVerdict, MARKER, DEFAULT_TRAIN, VERDICT };
+module.exports = { status, selectPrs, prState, verdictComment, publishVerdict, parsePaginatedJsonArray, MARKER, DEFAULT_TRAIN, VERDICT };

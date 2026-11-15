@@ -37,17 +37,28 @@ function adrDir(config) {
 
 const date = (iso) => (iso ? String(iso).slice(0, 10) : '—');
 
+function defaultFileName(d) {
+  return d && d.id ? `${d.id}-${slug(d.title)}.md` : null;
+}
+
+function resolveFile(d, fileMap) {
+  if (!d || !d.id) return null;
+  if (fileMap && fileMap.has(d.id)) return fileMap.get(d.id);
+  return defaultFileName(d);
+}
+
 /** The generated block of one ADR. */
-function renderAdr(d, byId) {
+function renderAdr(d, byId = new Map(), fileMap = null) {
   const status = d.status || 'active';
+  const map = byId instanceof Map ? byId : new Map();
   const lines = [`# ${d.id} — ${d.title}`, ''];
-  lines.push(`- **Status:** ${STATUS_PT[status] || status}${status === 'superseded' && d.superseded_by ? ` por [${d.superseded_by}](${fileOf(byId.get(d.superseded_by)) || ''})` : ''}${d.status_reason && status !== 'active' ? ` — ${d.status_reason}` : ''}`);
+  lines.push(`- **Status:** ${STATUS_PT[status] || status}${status === 'superseded' && d.superseded_by ? ` por [${d.superseded_by}](${resolveFile(map.get(d.superseded_by) || { id: d.superseded_by }, fileMap) || ''})` : ''}${d.status_reason && status !== 'active' ? ` — ${d.status_reason}` : ''}`);
   lines.push(`- **Data:** ${date(d.at)}${d.status_at && status !== 'active' ? ` · status em ${date(d.status_at)}` : ''}`);
   if (d.phase) lines.push(`- **Fase:** ${d.phase}`);
   if (Array.isArray(d.criteria) && d.criteria.length) lines.push(`- **Critérios:** ${d.criteria.join(', ')}`);
   if (Array.isArray(d.stories) && d.stories.length) lines.push(`- **Histórias:** ${d.stories.map((s) => (d.story_keys && d.story_keys[s] ? `${s} (${d.story_keys[s]})` : s)).join(', ')}`);
   lines.push(`- **Por:** ${d.by || '—'}`);
-  if (d.supersedes) lines.push(`- **Substitui:** [${d.supersedes}](${fileOf(byId.get(d.supersedes)) || ''})`);
+  if (d.supersedes) lines.push(`- **Substitui:** [${d.supersedes}](${resolveFile(map.get(d.supersedes) || { id: d.supersedes }, fileMap) || ''})`);
   if (d.source) lines.push(`- **Origem:** ${d.source}`);
   lines.push('');
   lines.push('## Contexto', '', d.context || '_(não registrado — `oxe-cc decision add --context "…"`)_', '');
@@ -62,9 +73,6 @@ function renderAdr(d, byId) {
   return lines.join('\n');
 }
 
-let fileIndex = new Map();
-const fileOf = (d) => (d ? fileIndex.get(d.id) || null : null);
-
 /** Keeps the person's text outside the markers; replaces only the generated block. */
 function merge(existing, block) {
   const wrapped = `${BEGIN}\n${block}\n${END}`;
@@ -75,13 +83,13 @@ function merge(existing, block) {
   return existing.slice(0, b) + wrapped + existing.slice(e + END.length);
 }
 
-function renderIndex(decisions) {
+function renderIndex(decisions, fileMap = null) {
   const lines = ['# Decisões de arquitetura (ADR)', '', `Gerado de \`.oxe/program/decisions.ndjson\` pelo \`oxe-cc decision publish\`. Registre com \`oxe-cc decision add\`; substitua com \`--supersedes\`; aposente com \`oxe-cc decision status <id> retired --reason\`.`, ''];
   for (const [status, label] of [['active', 'Aceitas'], ['superseded', 'Substituídas'], ['retired', 'Aposentadas']]) {
     const group = decisions.filter((d) => (d.status || 'active') === status);
     if (!group.length) continue;
     lines.push(`## ${label}`, '', '| ID | Decisão | Fase | Data | Evidência |', '|----|---------|------|------|-----------|');
-    for (const d of group) lines.push(`| [${d.id}](${fileOf(d)}) | ${String(d.title).replace(/\|/g, '\\|')}${d.superseded_by ? ` → ${d.superseded_by}` : ''} | ${d.phase || '—'} | ${date(d.at)} | ${d.check ? 'check' : '—'} |`);
+    for (const d of group) lines.push(`| [${d.id}](${resolveFile(d, fileMap)}) | ${String(d.title).replace(/\|/g, '\\|')}${d.superseded_by ? ` → ${d.superseded_by}` : ''} | ${d.phase || '—'} | ${date(d.at)} | ${d.check ? 'check' : '—'} |`);
     lines.push('');
   }
   return lines.join('\n');
@@ -102,7 +110,7 @@ function publish(projectRoot, dirRel, decisions) {
   fs.mkdirSync(dir, { recursive: true });
   // A file keeps the name of its first publish (the title may be reworded later).
   const present = fs.readdirSync(dir).filter((f) => f.endsWith('.md') && f !== 'README.md');
-  fileIndex = new Map(list.map((d) => [d.id, present.find((f) => f.startsWith(`${d.id}-`) || f === `${d.id}.md`) || `${d.id}-${slug(d.title)}.md`]));
+  const fileMap = new Map(list.map((d) => [d.id, present.find((f) => f.startsWith(`${d.id}-`) || f === `${d.id}.md`) || defaultFileName(d)]));
   const byId = new Map(list.map((d) => [d.id, d]));
   const written = [];
   let unchanged = 0;
@@ -114,12 +122,12 @@ function publish(projectRoot, dirRel, decisions) {
     written.push(path.relative(projectRoot, p).replace(/\\/g, '/'));
   };
   for (const d of list) {
-    const name = fileIndex.get(d.id);
+    const name = fileMap.get(d.id);
     const p = path.join(dir, name);
-    put(name, merge(fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null, renderAdr(d, byId)));
+    put(name, merge(fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null, renderAdr(d, byId, fileMap)));
   }
   const readme = path.join(dir, 'README.md');
-  put('README.md', merge(fs.existsSync(readme) ? fs.readFileSync(readme, 'utf8') : null, renderIndex(list)).replace(/\n\n## Notas\n\n_\(texto livre — preservado a cada publicação\)_\n$/, '\n'));
+  put('README.md', merge(fs.existsSync(readme) ? fs.readFileSync(readme, 'utf8') : null, renderIndex(list, fileMap)).replace(/\n\n## Notas\n\n_\(texto livre — preservado a cada publicação\)_\n$/, '\n'));
   return { dir: path.relative(projectRoot, dir).replace(/\\/g, '/'), written, unchanged };
 }
 

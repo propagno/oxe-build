@@ -15,12 +15,19 @@
  */
 
 const fs = require('fs');
+const criteriaIds = require('./oxe-criteria-ids.cjs');
 
-const ID_LIST = (s) => [...new Set(String(s || '').split(/[,;\s]+/).map((x) => x.trim().toUpperCase()).filter((x) => /^[A-Z][A-Z0-9-]*\d+$/.test(x)))];
+const ID_LIST = (s) => [...new Set(String(s || '').split(/[,;\s]+/).map((x) => x.replace(/\*/g, '').trim().toUpperCase()).filter((x) => /^[A-Z][A-Z0-9.-]*\d+$/.test(x)))];
 const PLACEHOLDER = /^\(.*\)$|^…$|^\.\.\.$/;
 
+function stripNoise(text) {
+  return String(text || '')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/^(?:```|~~~)[^\n]*\n[\s\S]*?^(?:```|~~~)\s*$/gm, ' ');
+}
+
 function tableRows(text, heading) {
-  const lines = String(text || '').split(/\r?\n/);
+  const lines = stripNoise(text).split(/\r?\n/);
   const start = lines.findIndex((l) => new RegExp(`^##\\s+${heading}`, 'i').test(l.trim()));
   if (start < 0) return [];
   const rows = [];
@@ -28,29 +35,39 @@ function tableRows(text, heading) {
     const l = lines[i].trim();
     if (/^##\s/.test(l)) break;
     if (!l.startsWith('|')) continue;
-    const cells = l.replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
-    if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue;
+    const cells = l
+      .replace(/^\|/, '')
+      .replace(/(?<!\\)\|$/, '')
+      .split(/(?<!\\)\|/)
+      .map((c) => c.replace(/\\\|/g, '|').trim());
+    if (cells.length && cells.every((c) => /^:?-{2,}:?$/.test(c))) continue;
     rows.push(cells);
   }
   return rows.slice(1); // header row
 }
 
-/** ALM keys cited in a row (OXE-48, CODE-8), never the OXE's own ids (US-, R-, A-, M-, D-, CA-, RN-, RT-, F). */
+/** ALM keys cited in a row (OXE-48, CODE-8, AB#123), never the OXE's own ids (US-, R-, A-, M-, D-, CA-, RN-, RT-, F). */
 const OWN_ID = /^(US|R|RB|A|G|M|D|CA|RN|RT|F|Q|CR|KF|RFC)$/;
 function cardKeys(text) {
-  return [...new Set((String(text || '').match(/\b[A-Z][A-Z0-9]+-\d+\b/g) || []).filter((k) => !OWN_ID.test(k.split('-')[0])))];
+  const out = [];
+  for (const m of String(text || '').matchAll(/\b([A-Z][A-Z0-9]+)-\d+\b|\bAB#\d+\b/g)) {
+    if (m[1] && OWN_ID.test(m[1])) continue;
+    out.push(m[0]);
+  }
+  return [...new Set(out)];
 }
 
 /** @returns {{ version: number, status: string|null, stories: object[], metrics: object[], personas: object[] }} */
 function parsePrd(text) {
   const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(text || ''));
   const field = (k) => { const m = fm && new RegExp(`^${k}:\\s*(.+)$`, 'm').exec(fm[1]); return m ? m[1].trim() : null; };
+  const cleanId = (v) => String(v || '').replace(/\*/g, '').trim();
   const stories = tableRows(text, 'Hist[óo]rias de usu[áa]rio')
-    .filter((c) => /^US-\d+$/i.test(c[0] || ''))
-    .map((c) => ({ id: c[0].toUpperCase(), persona: c[1] || '', want: c[2] || '', benefit: c[3] || '', requirements: ID_LIST(c[4]).filter((x) => /^R/.test(x)), criteria: ID_LIST(c[5]).filter((x) => /^A/.test(x)), priority: c[6] || null, cards: cardKeys(c.slice(1).join(' ')) }));
+    .filter((c) => /^US-\d+$/i.test(cleanId(c[0])))
+    .map((c) => ({ id: cleanId(c[0]).toUpperCase(), persona: c[1] || '', want: c[2] || '', benefit: c[3] || '', requirements: ID_LIST(c[4]).filter((x) => /^R/.test(x)), criteria: ID_LIST(c[5]).filter((x) => /^[AG]\d+(?:\.\d+)?$/.test(x)), priority: c[6] || null, cards: cardKeys(c.slice(1).join(' ')) }));
   const metrics = tableRows(text, 'Objetivos e m[ée]tricas')
-    .filter((c) => /^M-\d+$/i.test(c[0] || ''))
-    .map((c) => ({ id: c[0].toUpperCase(), goal: c[1] || '', metric: c[2] || '', target: c[3] || '', how: c[4] || '' }));
+    .filter((c) => /^M-\d+$/i.test(cleanId(c[0])))
+    .map((c) => ({ id: cleanId(c[0]).toUpperCase(), goal: c[1] || '', metric: c[2] || '', target: c[3] || '', how: c[4] || '' }));
   const personas = tableRows(text, 'Personas').filter((c) => c[0] && !PLACEHOLDER.test(c[0])).map((c) => ({ name: c[0], who: c[1] || '', needs: c[2] || '' }));
   return { version: Number(field('version')) || 1, status: field('status'), stories, metrics, personas };
 }
@@ -73,20 +90,25 @@ function lintPrd(prd, ctx = {}) {
     if (strict) errors.push('PRD.md ausente — prd.required está ligado; gere-o no /oxe-spec (problema, personas, métricas, histórias de usuário)');
     return { errors, warnings };
   }
-  const criteria = new Set((ctx.criteria || []).map((x) => String(x).toUpperCase()));
+  const criteriaList = (ctx.criteria || []).map((x) => String(x).toUpperCase());
+  const criteria = new Set(criteriaList);
+  const specSubs = criteriaIds.subcriteriaOf(criteriaList);
   const reqs = new Set((ctx.requirements || []).map((x) => String(x).toUpperCase()));
   if (!prd.stories.length) push('PRD.md sem histórias de usuário (tabela "Histórias de usuário" com US-1, US-2, …)');
   for (const s of prd.stories) {
     if ([s.persona, s.want, s.benefit].some((v) => !v || PLACEHOLDER.test(v))) push(`${s.id}: história incompleta — preencha Como / Quero / Para`);
     if (!s.criteria.length) push(`${s.id}: não aponta para nenhum critério A* — nada prova que ela foi entregue`);
-    const unknownA = criteria.size ? s.criteria.filter((a) => !criteria.has(a)) : [];
+    const unknownA = criteria.size ? s.criteria.filter((a) => !criteria.has(a) && !specSubs.has(a)) : [];
     if (unknownA.length) push(`${s.id}: cita ${unknownA.join(', ')}, que não existe(m) na SPEC`);
     const unknownR = reqs.size ? s.requirements.filter((r) => !reqs.has(r)) : [];
     if (unknownR.length) push(`${s.id}: cita ${unknownR.join(', ')}, que não existe(m) na SPEC/ROADMAP`);
   }
   if (prd.stories.length) {
     const covered = new Set(prd.stories.flatMap((s) => s.criteria));
-    const orphan = (ctx.v1Criteria || ctx.criteria || []).map((x) => String(x).toUpperCase()).filter((a) => !covered.has(a));
+    const pool = (ctx.v1Criteria || ctx.criteria || []).map((x) => String(x).toUpperCase()).filter((a) => !criteriaIds.isGlobal(a));
+    const poolSubs = criteriaIds.subcriteriaOf(pool);
+    const isCovered = (a) => criteriaIds.inPhase(a, covered) || (poolSubs.has(a) && poolSubs.get(a).every((sub) => covered.has(sub)));
+    const orphan = pool.filter((a) => !isCovered(a));
     if (orphan.length) push(`critérios da SPEC sem história de usuário no PRD: ${orphan.slice(0, 12).join(', ')}${orphan.length > 12 ? ` e mais ${orphan.length - 12}` : ''} — ligue cada um a uma US (coluna Critérios)`);
   }
   for (const m of prd.metrics) {

@@ -52,7 +52,9 @@ function publish(projectRoot, dirRel, src = {}) {
   if (src.prdFile && fs.existsSync(src.prdFile)) {
     let text = fs.readFileSync(src.prdFile, 'utf8');
     const keys = src.almLinks ? [...src.almLinks.values()].filter((l) => /^US-\d+$/.test(l.ref)) : [];
-    if (keys.length) text = `${text.trimEnd()}\n\n## Itens no ALM\n\n| História | Item |\n|----------|------|\n${keys.map((l) => `| ${l.ref} | ${l.url ? `[${l.key}](${l.url})` : l.key} |`).join('\n')}\n`;
+    if (keys.length && !/^##\s+Itens no ALM\b/im.test(text)) {
+      text = `${text.trimEnd()}\n\n## Itens no ALM\n\n| História | Item |\n|----------|------|\n${keys.map((l) => `| ${l.ref} | ${l.url ? `[${l.key}](${l.url})` : l.key} |`).join('\n')}\n`;
+    }
     put('product/PRD.md', HEADER('.oxe/PRD.md') + text);
   } else skipped.push('PRD (sem .oxe/PRD.md)');
   // RFCs + index
@@ -70,9 +72,9 @@ function publish(projectRoot, dirRel, src = {}) {
   } else skipped.push(src.adrDir ? 'ADR (nenhuma decisão registrada)' : 'ADR (adr: false)');
   // SYSTEM-DESIGN
   if (src.designFile && fs.existsSync(src.designFile)) put('architecture/SYSTEM-DESIGN.md', HEADER('.oxe/SYSTEM-DESIGN.md') + fs.readFileSync(src.designFile, 'utf8'));
+  else skipped.push('SYSTEM-DESIGN (sem .oxe/SYSTEM-DESIGN.md — oxe-cc design build)');
   // 1.21.2: the domain glossary the grill produced (one term, one definition).
   if (src.glossaryFile && fs.existsSync(src.glossaryFile)) put('product/GLOSSARY.md', HEADER('.oxe/GLOSSARY.md') + fs.readFileSync(src.glossaryFile, 'utf8'));
-  else skipped.push('SYSTEM-DESIGN (sem .oxe/SYSTEM-DESIGN.md — oxe-cc design build)');
   return { dir: path.relative(projectRoot, dir).replace(/\\/g, '/'), written, unchanged, skipped };
 }
 

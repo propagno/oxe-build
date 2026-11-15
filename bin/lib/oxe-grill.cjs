@@ -77,7 +77,20 @@ function dependents(branch) {
 function replay(records) {
   const st = { started: false, type: null, title: null, questions: new Map(), confirmed: new Set(), terms: new Map(), noTerms: false, conflicts: new Map(), closed: null, seq: 0, cseq: 0, log: [] };
   for (const r of records) {
-    if (r.t === 'start') { st.started = true; st.type = r.type; st.title = r.title || null; st.closed = null; continue; }
+    if (r.t === 'start') {
+      if (st.started) {
+        st.questions.clear();
+        st.confirmed.clear();
+        st.terms.clear();
+        st.noTerms = false;
+        st.conflicts.clear();
+      }
+      st.started = true;
+      st.type = r.type;
+      st.title = r.title || null;
+      st.closed = null;
+      continue;
+    }
     if (r.t === 'ask' || r.t === 'fact') {
       st.seq = Math.max(st.seq, Number(String(r.id).replace(/\D/g, '')) || 0);
       st.questions.set(r.id, {
@@ -365,8 +378,10 @@ function writeGlossary(file, terms) {
   const block = `${GLOSSARY_BEGIN}\n${table}\n${GLOSSARY_END}`;
   let text = '';
   try { text = fs.readFileSync(file, 'utf8'); } catch { text = ''; }
+  const bIdx = text ? text.indexOf(GLOSSARY_BEGIN) : -1;
+  const eIdx = text ? text.indexOf(GLOSSARY_END) : -1;
   if (!text) text = `# Glossário do domínio\n\nUm termo, uma definição. SPEC, PRD, código e testes usam o termo da primeira coluna; os sinônimos proibidos não aparecem.\n\n${block}\n`;
-  else if (text.includes(GLOSSARY_BEGIN) && text.includes(GLOSSARY_END)) text = text.replace(new RegExp(`${GLOSSARY_BEGIN}[\\s\\S]*?${GLOSSARY_END}`), block);
+  else if (bIdx >= 0 && eIdx > bIdx) text = `${text.slice(0, bIdx)}${block}${text.slice(eIdx + GLOSSARY_END.length)}`;
   else text = `${text.replace(/\s*$/, '')}\n\n${block}\n`;
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text, 'utf8');
@@ -379,7 +394,10 @@ function readGlossary(file) {
   try { text = fs.readFileSync(file, 'utf8'); } catch { return []; }
   const out = [];
   for (const line of text.split(/\r?\n/)) {
-    const cells = line.trim().startsWith('|') ? line.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim()) : null;
+    const trimmed = line.trim();
+    const cells = trimmed.startsWith('|')
+      ? trimmed.replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map((c) => c.replace(/\\\|/g, '|').trim())
+      : null;
     if (!cells || cells.length < 2 || /^termo$/i.test(cells[0]) || /^-{3,}$/.test(cells[0].replace(/:/g, ''))) continue;
     out.push({ term: cells[0], definition: cells[1], synonyms: cells[2] && cells[2] !== '—' ? cells[2].split(',').map((s) => s.trim()).filter(Boolean) : [] });
   }

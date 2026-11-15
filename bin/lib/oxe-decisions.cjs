@@ -10,7 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const DECISION_ID_RE = /^D-(?:(?:F\d+|SPIKE)-)?[A-Za-z0-9]+$/;
+const DECISION_ID_RE = /^D-(?:(?:F\d+(?:\.\d+)?|SPIKE)-)?[A-Za-z0-9]+$/;
 const FILE = (programDir) => path.join(programDir, 'decisions.ndjson');
 
 function list(programDir) {
@@ -29,8 +29,8 @@ function list(programDir) {
 }
 
 function nextId(existing, phase) {
-  const p = phase ? String(phase).toUpperCase() : '';
-  const re = p ? new RegExp(`^D-${p}-(\\d+)$`) : /^D-(\d+)$/;
+  const p = phase ? String(phase).toUpperCase().replace(/[^A-Z0-9.]/g, '') : '';
+  const re = p ? new RegExp(`^D-${p.replace(/\./g, '\\.')}-(\\d+)$`) : /^D-(\d+)$/;
   const max = existing.reduce((m, d) => { const hit = re.exec(String(d.id)); return hit ? Math.max(m, Number(hit[1])) : m; }, 0);
   return p ? `D-${p}-${max + 1}` : `D-${max + 1}`;
 }
@@ -146,12 +146,14 @@ function setStatus(programDir, id, input = {}) {
 function importDiscuss(programDir, discussText, options = {}) {
   const rows = [];
   for (const line of String(discussText || '').split(/\r?\n/)) {
-    const cells = line.split('|').map((c) => c.trim());
-    if (cells.length < 4 || !/^D-\d+$/.test(cells[1] || '')) continue;
-    const [, id, text, date, impact] = cells;
+    const cells = line.split(/(?<!\\)\|/).map((c) => c.replace(/\\\|/g, '|').trim());
+    const rawId = (cells[1] || '').replace(/\*/g, '').trim().toUpperCase();
+    if (cells.length < 4 || !/^D-\d+$/.test(rawId)) continue;
+    const [, , text, date, impact] = cells;
+    const id = rawId;
     if (!text || /^\(descrição/.test(text)) continue;
-    const reverted = /revertida por (D-\d+)/i.exec(line);
-    rows.push({ id, title: text.replace(/\*?\(revertida por D-\d+\)\*?/i, '').replace(/[*_]/g, '').trim(), date: /^\d{4}-\d{2}-\d{2}$/.test(date || '') ? date : null, impact: impact || null, reverted_by: reverted ? reverted[1] : null });
+    const reverted = /revertida por \*?\*?(D-\d+)\*?\*?/i.exec(line);
+    rows.push({ id, title: text.replace(/\*?\(revertida por \*?\*?D-\d+\*?\*?\)\*?/i, '').replace(/[*_]/g, '').trim(), date: /^\d{4}-\d{2}-\d{2}$/.test(date || '') ? date : null, impact: impact || null, reverted_by: reverted ? reverted[1].toUpperCase() : null });
   }
   const imported = [];
   const skipped = [];
@@ -180,7 +182,7 @@ function lintDecisions(doc, decisions, phase) {
       cited.add(id);
       const d = known.get(id);
       if (!d) errors.push(`${t.id}: cita a decisão ${id}, que não existe (oxe-cc decision list; registre com oxe-cc decision add)`);
-      else if (!t.done && d.status && d.status !== 'active') warnings.push(`${t.id}: cita ${id}, que está ${d.status === 'superseded' ? `substituída${d.superseded_by ? ` por ${d.superseded_by}` : ''}` : 'aposentada'}${d.status_reason ? ` (${d.status_reason})` : ''} — cite a decisão vigente`);
+      else if (!(t.done || t.status === 'done') && d.status && d.status !== 'active') warnings.push(`${t.id}: cita ${id}, que está ${d.status === 'superseded' ? `substituída${d.superseded_by ? ` por ${d.superseded_by}` : ''}` : 'aposentada'}${d.status_reason ? ` (${d.status_reason})` : ''} — cite a decisão vigente`);
     }
   }
   for (const d of decisions) {
