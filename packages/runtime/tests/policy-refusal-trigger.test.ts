@@ -78,6 +78,33 @@ describe('policy refusal names its likely trigger', () => {
     }
   });
 
+  test('context soft cap: warn once by default; "retry" closes the attempt as contexto cheio (T12, 277k chars)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-ctx-cap-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'big.txt'), 'x'.repeat(5000));
+      let id = 0;
+      const reads = () => ({ content: '', finish_reason: 'tool_calls', tool_calls: [{ id: `c${id++}`, type: 'function' as const, function: { name: 'read_file', arguments: JSON.stringify({ path: 'big.txt' }) } }] });
+      const lease = { workspace_id: 'w', strategy: 'inplace' as const, isolation_level: 'shared' as const, branch: null, base_commit: null, root_path: dir, ttl_minutes: 5 };
+      const warnEvents: LlmExecutorEvent[] = [];
+      let n = 0;
+      const warnComplete: CompletionFn = async () => { n += 1; return n < 4 ? reads() : { content: 'ok', finish_reason: 'stop', tool_calls: [] }; };
+      const warn = new LlmTaskExecutor({ baseUrl: '', apiKey: '', model: '', maxTurns: 4 }, null, (e) => warnEvents.push(e), warnComplete, { maxContextChars: 800, noProgressTurns: 0 });
+      await warn.execute(node, lease, 'r', 1);
+      const capWarn = warnEvents.filter((e) => e.type === 'executor_context_cap');
+      assert.equal(capWarn.length, 1, 'warned once');
+      assert.equal((capWarn[0].detail as { action: string }).action, 'warn');
+      let m = 0;
+      const retryComplete: CompletionFn = async () => { m += 1; return reads(); };
+      const retry = new LlmTaskExecutor({ baseUrl: '', apiKey: '', model: '', maxTurns: 4 }, null, () => {}, retryComplete, { maxContextChars: 800, maxContextAction: 'retry', noProgressTurns: 0 });
+      const res = await retry.execute(node, lease, 'r', 1);
+      assert.equal(res.success, false);
+      assert.match(res.output, /^contexto cheio: \d+ caracteres acumulados no turno 1/);
+      assert.equal(m, 1, 'no further paid request once full');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('at the first request: the trigger is in the starting prompt', async () => {
     const { result } = await run(async () => { throw refusal(); });
     assert.equal(result.failure_class, 'policy');

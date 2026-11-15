@@ -1894,6 +1894,7 @@ function createAdapterExecutor(runtime, projectRoot, activeSession, options, get
     }
     // OXB-186: the turn heartbeat and the slow turns go to OXE-EVENTS, so a stalled attempt is visible.
     if (event && event.type === 'executor_turn') appendEvent(projectRoot, activeSession, { type: 'ExecutorTurn', run_id: getRunId(), work_item_id: event.nodeId, payload: { attempt: event.attempt, ...(event.detail || {}) } });
+    if (event && event.type === 'executor_context_cap') appendEvent(projectRoot, activeSession, { type: 'ExecutorContextCap', run_id: getRunId(), work_item_id: event.nodeId, payload: { attempt: event.attempt, ...(event.detail || {}) } });
     if (event && event.type === 'executor_slow_turn') appendEvent(projectRoot, activeSession, { type: 'ExecutorSlowTurn', run_id: getRunId(), work_item_id: event.nodeId, payload: { attempt: event.attempt, ...(event.detail || {}) } });
     if (typeof options.onProgress === 'function') options.onProgress(event);
   };
@@ -1916,6 +1917,13 @@ function createAdapterExecutor(runtime, projectRoot, activeSession, options, get
       // OXB-186: execute.no_progress_turns (0 disables) and execute.slow_turn_ms.
       noProgressTurns: Number.isInteger(((readProjectConfig(projectRoot) || {}).execute || {}).no_progress_turns) ? readProjectConfig(projectRoot).execute.no_progress_turns : undefined,
       slowTurnMs: Number(((readProjectConfig(projectRoot) || {}).execute || {}).slow_turn_ms) > 0 ? Number(readProjectConfig(projectRoot).execute.slow_turn_ms) : undefined,
+      // OxeSpace 15/11 (OxeChat F4 T12): execute.max_context_chars (or executor.*), action "warn" (default) | "retry"
+      ...(() => {
+        const cfgX = readProjectConfig(projectRoot) || {};
+        const pick = (k) => ((cfgX.execute || {})[k] != null ? (cfgX.execute || {})[k] : (cfgX.executor || {})[k]);
+        const cap = Number(pick('max_context_chars'));
+        return cap > 0 ? { maxContextChars: cap, maxContextAction: pick('max_context_action') === 'retry' ? 'retry' : 'warn' } : {};
+      })(),
     }
   );
 }

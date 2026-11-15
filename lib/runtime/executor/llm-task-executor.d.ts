@@ -14,7 +14,7 @@ export interface LlmProviderConfig {
     timeoutMs?: number;
     systemPrompt?: string;
 }
-export type LlmExecutorEventType = 'executor_turn' | 'executor_slow_turn' | 'turn_start' | 'turn_complete' | 'tool_call' | 'tool_result' | 'tool_denied' | 'executor_complete'
+export type LlmExecutorEventType = 'executor_turn' | 'executor_slow_turn' | 'executor_context_cap' | 'turn_start' | 'turn_complete' | 'tool_call' | 'tool_result' | 'tool_denied' | 'executor_complete'
 /** Once per attempt: turns, tool calls and backend-reported cost. */
  | 'executor_usage' | 'turn_timeout' | 'rate_limit_wait';
 /** Injectable completion function (defaults to the HTTP OpenAI-compatible client). */
@@ -50,6 +50,13 @@ export interface LlmTaskExecutorOptions {
     noProgressTurns?: number;
     /** OXB-186: a turn slower than this (ms, default 180000) is reported with the prompt size behind it. */
     slowTurnMs?: number;
+    /**
+     * OxeSpace 15/11 (OxeChat F4 T12: a refusal at 277k chars): a soft cap on the context an attempt accumulates. Past it,
+     * `warn` (default) reports once (executor_context_cap) and goes on; `retry` closes the attempt as "contexto cheio"
+     * (a normal failed attempt: the scheduler's retry starts a fresh context with the tree's changes, inside max_retries).
+     */
+    maxContextChars?: number;
+    maxContextAction?: 'warn' | 'retry';
     /** OXB-204: max automatic backoff wait (ms) on 429 / rate-limit reset before failing as quota (default 300000). */
     maxQuotaWaitMs?: number;
     /** OXB-204: max consecutive automatic 429 waits inside an attempt before failing as quota (default 3). */

@@ -26,6 +26,7 @@ export interface LlmProviderConfig {
 export type LlmExecutorEventType =
   | 'executor_turn'
   | 'executor_slow_turn'
+  | 'executor_context_cap'
   | 'turn_start'
   | 'turn_complete'
   | 'tool_call'
@@ -73,6 +74,13 @@ export interface LlmTaskExecutorOptions {
   noProgressTurns?: number;
   /** OXB-186: a turn slower than this (ms, default 180000) is reported with the prompt size behind it. */
   slowTurnMs?: number;
+  /**
+   * OxeSpace 15/11 (OxeChat F4 T12: a refusal at 277k chars): a soft cap on the context an attempt accumulates. Past it,
+   * `warn` (default) reports once (executor_context_cap) and goes on; `retry` closes the attempt as "contexto cheio"
+   * (a normal failed attempt: the scheduler's retry starts a fresh context with the tree's changes, inside max_retries).
+   */
+  maxContextChars?: number;
+  maxContextAction?: 'warn' | 'retry';
   /** OXB-204: max automatic backoff wait (ms) on 429 / rate-limit reset before failing as quota (default 300000). */
   maxQuotaWaitMs?: number;
   /** OXB-204: max consecutive automatic 429 waits inside an attempt before failing as quota (default 3). */
@@ -279,8 +287,24 @@ export class LlmTaskExecutor implements TaskExecutor {
     // OxeSpace 15/11 (OxeChat F4 T12, US$ 18.69): the verbatim outputs of that turn — a refusal triggered by a tool
     // result (a grep over fixtures) cannot be located from names and sizes alone
     let lastTurnOutputs: Array<{ tool: string; target: string | null; content: string }> = [];
+    const contextCap = typeof this.options.maxContextChars === 'number' && this.options.maxContextChars > 0 ? this.options.maxContextChars : null;
+    let contextCapWarned = false;
     for (; turn < maxTurns; turn++) {
       this.emit({ type: 'turn_start', nodeId: node.id, attempt, detail: { turn } });
+      // the context this request would send: past the soft cap, warn once (default) or close the attempt (retry)
+      if (contextCap && turn > 0) {
+        const chars = messages.reduce((n, m) => n + String((m as { content?: unknown }).content ?? '').length, 0);
+        if (chars > contextCap) {
+          if (this.options.maxContextAction === 'retry') {
+            this.emit({ type: 'executor_context_cap', nodeId: node.id, attempt, detail: { turn, chars, cap: contextCap, action: 'retry' } });
+            return done({ success: false, failure_class: 'llm', evidence: evidencePaths, output: `contexto cheio: ${chars} caracteres acumulados no turno ${turn} (teto ${contextCap}, execute.max_context_chars) — a tentativa fecha aqui; a próxima começa um contexto novo com o que ficou na árvore` });
+          }
+          if (!contextCapWarned) {
+            contextCapWarned = true;
+            this.emit({ type: 'executor_context_cap', nodeId: node.id, attempt, detail: { turn, chars, cap: contextCap, action: 'warn' } });
+          }
+        }
+      }
       // OXB-026: the last turn finishes and reports; the runtime runs the task's verify itself afterwards.
       if (maxTurns > 1 && turn === maxTurns - 1 && turn > 0) {
         messages.push({ role: 'user', content: LAST_TURN_NOTICE });
