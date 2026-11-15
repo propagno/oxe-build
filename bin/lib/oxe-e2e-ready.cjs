@@ -181,8 +181,26 @@ function containerGuardHazards(root, planDoc, options = {}) {
         out.push({ task: owner, file, line: guardIdx + 1, kind: 'ostype', code: lines[guardIdx].trim().slice(0, 140) });
       }
       // a skip with no reason: test.skip(cond) / it.skip without a message
+      // the arguments read with balanced parentheses: a reason is a SECOND top-level argument (`skip(!ready(), 'why')`)
+      const skipHasReason = (l, at) => {
+        let depth = 0;
+        let q = null;
+        for (let i = at; i < l.length; i += 1) {
+          const ch = l[i];
+          if (q) { if (ch === '\\') { i += 1; continue; } if (ch === q) q = null; continue; }
+          if (ch === '"' || ch === "'" || ch === '`') { q = ch; continue; }
+          if (ch === '(') depth += 1;
+          else if (ch === ')') { depth -= 1; if (depth === 0) return false; }
+          else if (ch === ',' && depth === 1) return true;
+        }
+        return true; // the call continues on the next line: not judged
+      };
       lines.forEach((l, i) => {
-        if (/\b(test|it|describe)\.skip\(\s*[^,'"`)]+\)/.test(l) && !/\btest\.skip\(\s*\)/.test(l)) out.push({ task: owner, file, line: i + 1, kind: 'skip_reason', code: l.trim().slice(0, 140) });
+        const m = /\b(test|it|describe)\.skip\(/.exec(l);
+        if (!m) return;
+        const open = m.index + m[0].length - 1;
+        if (/^\(\s*\)/.test(l.slice(open))) return; // test.skip() inside a test: unconditional, no condition to explain
+        if (!skipHasReason(l, open)) out.push({ task: owner, file, line: i + 1, kind: 'skip_reason', code: l.trim().slice(0, 140) });
       });
     }
   }
