@@ -249,6 +249,43 @@ describe('plan task edit: onda, dependências, escopo e notas sem editar o PLAN.
   });
 });
 
+describe('plan task fold T44 --into T59 (OxeSpace 15/11, OxeCode F6 CR-F6-14)', () => {
+  it('moves files, criteria, verify and frozen entries; rewires dependents; marks merged_into; closes the deferral', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-taskfold-'));
+    dirs.push(dir);
+    fs.mkdirSync(path.join(dir, '.oxe', 'program'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.md'), '# PLAN\n');
+    const doc = { schema_version: 1, tasks: [
+      { id: 'T44', title: 'versão', wave: 18, files: ['src/version.ts'], acceptance: ['A41'], depends_on: ['T10'], verify: { commands: ['vitest run tests/pu03-app-version.test.ts'] } },
+      { id: 'T59', title: 'about', wave: 33, files: ['src/about.tsx'], acceptance: ['A56'], depends_on: ['T36'], verify: { commands: ['vitest run tests/pu03-app-version.test.tsx'] } },
+      { id: 'T60', title: 'depois', wave: 34, files: ['src/z.ts'], depends_on: ['T44'] },
+      { id: 'T10', title: 'base', wave: 1, files: ['src/base.ts'], done: true },
+      { id: 'T36', title: 'base2', wave: 2, files: ['src/b2.ts'], done: true },
+    ], acceptance_tests: [{ criterion: 'A41', task: 'T44', files: ['tests/pu03-app-version.test.ts'], command: 'x' }] };
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify(doc));
+    require('../bin/lib/oxe-deferred.cjs').add(path.join(dir, '.oxe', 'program'), { task: 'T44', reason: 'logic', evidence: 'x', run_id: 'r', phase: 'F6' });
+    assert.throws(() => op.runtimePlanTaskFold(dir, null, { task: 'T44', into: 'T59', by: 'tl', reason: 'sem CR' }), /--cr/);
+    const out = op.runtimePlanTaskFold(dir, null, { task: 'T44', into: 'T59', cr: 'CR-F6-14', by: 'tl', reason: 'os casos About só a T59 deixa verdes' });
+    assert.deepEqual(out.moved.files, ['src/version.ts']);
+    assert.deepEqual(out.moved.acceptance, ['A41']);
+    assert.deepEqual(out.rewired, ['T60']);
+    assert.equal(out.closed_deferred.length, 1);
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'));
+    const by = Object.fromEntries(saved.tasks.map((t) => [t.id, t]));
+    assert.deepEqual(by.T59.files.sort(), ['src/about.tsx', 'src/version.ts']);
+    assert.deepEqual(by.T59.acceptance.sort(), ['A41', 'A56']);
+    assert.ok(by.T59.verify.commands.includes('vitest run tests/pu03-app-version.test.ts'));
+    assert.deepEqual(by.T59.depends_on.sort(), ['T10', 'T36']);
+    assert.deepEqual(by.T60.depends_on, ['T59']);
+    assert.equal(saved.acceptance_tests[0].task, 'T59');
+    assert.equal(by.T44.done, true);
+    assert.equal(by.T44.merged_into, 'T59');
+    assert.deepEqual(by.T44.acceptance, []);
+    assert.equal(require('../bin/lib/oxe-deferred.cjs').open(path.join(dir, '.oxe', 'program')).length, 0, 'not an open deferral at the close');
+    assert.throws(() => op.runtimePlanTaskFold(dir, null, { task: 'T44', into: 'T59', cr: 'CR-F6-14', by: 'tl', reason: 'de novo, por engano' }), /já está done/);
+  });
+});
+
 describe('re-freeze por CR repina o hash do lock do run (OxeSpace 14/11, fechamento do OxeChat F2)', () => {
   it('uma entrada com resolves + hashes usa o hash novo; sem CR, o lock do run vale', () => {
     const lock = { tests: [{ criterion: 'A6', files: [{ path: 'tests/a6.test.ts', sha256: 'old' }] }] };

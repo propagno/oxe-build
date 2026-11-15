@@ -287,7 +287,7 @@ function activeHooksLesson(root, files, options = {}) {
   if (!found.length) return null;
   const shown = found.slice(0, 12).map((f) => `${f.hook} (${f.files && f.files.length > 1 ? f.files.slice(0, 2).join(', ') : f.file})`).join(', ');
   const more = found.length > 12 ? ` e +${found.length - 12}` : '';
-  return `Contratos de DOM/acessibilidade nos arquivos desta tarefa lidos por testes (${found.length}): ${shown}${more} — preserve esses atributos/nomes na marcação (o checkpoint recusa remoções ainda lidas por testes fora do escopo)`;
+  return `Contratos de DOM/acessibilidade nos arquivos desta tarefa lidos por testes (${found.length}): ${shown}${more} — preserve esses atributos/nomes na marcação (o checkpoint recusa a remoção de um atributo/nome que um teste ainda lê; se a remoção for intencional, ajuste o teste no escopo da tarefa)`;
 }
 
 function message(findings) {

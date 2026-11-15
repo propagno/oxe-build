@@ -9254,6 +9254,104 @@ function runtimePlanTaskEdit(projectRoot, activeSession, options = {}) {
 }
 
 /**
+ * OxeSpace 15/11 (OxeCode F6, CR-F6-14): `oxe-cc plan task fold T<a> --into T<b> --cr CR-n --by <papel> --reason "…"`.
+ * Folds a task into another: its files, criteria, verify commands and pack contract go to the target; the tasks that
+ * depended on it depend on the target; its frozen entries name the target; it becomes `merged_into` (done, never
+ * scheduled) and its open deferred entries close as merged — so the close does not count it as an open deferral.
+ */
+function runtimePlanTaskFold(projectRoot, activeSession, options = {}) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const from = String(options.task || '').toUpperCase();
+  const into = String(options.into || '').toUpperCase();
+  if (!/^T\d+$/.test(from) || !/^T\d+$/.test(into)) throw new Error('use: oxe-cc plan task fold T<n> --into T<m> --cr CR-<n> --by <papel> --reason "…"');
+  if (from === into) throw new Error('--into: uma tarefa não se funde em si mesma');
+  const cr = options.cr ? String(options.cr).toUpperCase() : null;
+  if (!cr) throw new Error('informe o CR que decide a fusão (--cr CR-<n>)');
+  const { by, reason } = requireEditReason({ by: options.by, reason: options.reason });
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan task fold exige PLAN.json');
+  const at = new Date().toISOString();
+  const norm = (p) => String(p).replace(/\\/g, '/');
+  const out = planJsonLib.withPlanLock(jsonPath, () => {
+    const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const tasks = (doc.tasks || []).filter(Boolean);
+    const S = tasks.find((t) => String(t.id).toUpperCase() === from);
+    const T = tasks.find((t) => String(t.id).toUpperCase() === into);
+    if (!S) throw new Error(`${from} não existe no plano`);
+    if (!T) throw new Error(`${into} não existe no plano`);
+    if (S.done === true) throw new Error(`${from} já está done: nada a fundir`);
+    if (T.done === true) throw new Error(`${into} está done: reabra antes (oxe-cc plan reopen ${into})`);
+    const uniq = (arr) => [...new Set(arr)];
+    const moved = { files: [], acceptance: [], verify: [] };
+    const tFiles = (T.files || []).map(norm);
+    for (const f of (S.files || []).map(norm)) if (!tFiles.includes(f)) { tFiles.push(f); moved.files.push(f); }
+    T.files = tFiles;
+    const tAcc = [...(T.acceptance || [])];
+    for (const c of S.acceptance || []) if (!tAcc.includes(c)) { tAcc.push(c); moved.acceptance.push(c); }
+    T.acceptance = tAcc;
+    const sCmds = [...((S.verify && S.verify.commands) || []), ...(S.verify && S.verify.command ? [S.verify.command] : [])];
+    if (sCmds.length) {
+      T.verify = T.verify && typeof T.verify === 'object' ? T.verify : {};
+      const tCmds = [...(T.verify.commands || []), ...(T.verify.command ? [T.verify.command] : [])];
+      for (const c of sCmds) if (!tCmds.includes(c)) { tCmds.push(c); moved.verify.push(c); }
+      T.verify.commands = tCmds;
+      delete T.verify.command;
+    }
+    if (Array.isArray(S.pack_symbols)) T.pack_symbols = uniq([...(Array.isArray(T.pack_symbols) ? T.pack_symbols : []), ...S.pack_symbols].map((x) => (typeof x === 'string' ? x : JSON.stringify(x)))).map((x) => { try { return JSON.parse(x); } catch { return x; } });
+    // the target inherits the source's dependencies (never itself, never a cycle through the source)
+    T.depends_on = uniq([...(T.depends_on || []), ...(S.depends_on || [])].map((d) => String(d).toUpperCase())).filter((d) => d !== into && d !== from);
+    // the dependents of the source depend on the target
+    const rewired = [];
+    for (const t of tasks) {
+      if (t === S || t === T || !Array.isArray(t.depends_on) || !t.depends_on.map((d) => String(d).toUpperCase()).includes(from)) continue;
+      t.depends_on = uniq(t.depends_on.map((d) => (String(d).toUpperCase() === from ? into : String(d).toUpperCase())));
+      rewired.push(t.id);
+    }
+    const entries = [];
+    for (const a of doc.acceptance_tests || []) if (a && String(a.task || '').toUpperCase() === from) { a.task = into; entries.push(a.id || a.criterion); }
+    T.notes = `${T.notes ? `${T.notes}\n` : ''}${from} fundida aqui por ${cr}: ${reason}`;
+    T.edits = [...(Array.isArray(T.edits) ? T.edits : []), { by, reason, cr, at, folded_from: from }];
+    // its criteria now belong to the target only (kept in `folded` for the record)
+    Object.assign(S, { done: true, status: 'merged', merged_into: into, folded: { into, cr, by, reason, at, acceptance: [...(S.acceptance || [])] }, acceptance: [] });
+    delete S.checkpoint_failed;
+    const tmp = `${jsonPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, jsonPath);
+    return { moved, rewired, entries };
+  });
+  // the pack contract (exact_paths, symbols) goes with the files
+  try {
+    const pack = readJsonQuiet(paths.implementationPack);
+    const ptasks = pack && Array.isArray(pack.tasks) ? pack.tasks : null;
+    const idOf = (t) => String((t && (t.id || t.task_id)) || '').toUpperCase();
+    const ps = ptasks ? ptasks.find((t) => idOf(t) === from) : null;
+    if (ps) {
+      let pt = ptasks.find((t) => idOf(t) === into);
+      if (!pt) { pt = { id: into, exact_paths: [], symbols: [] }; ptasks.push(pt); }
+      pt.exact_paths = [...new Set([...(pt.exact_paths || []), ...(ps.exact_paths || [])])];
+      const symKey = (s) => `${s && (s.path || s.file)}#${s && s.name}`;
+      const have = new Set((pt.symbols || []).map(symKey));
+      pt.symbols = [...(pt.symbols || []), ...(ps.symbols || []).filter((s) => !have.has(symKey(s)))];
+      ps.merged_into = into;
+      fs.writeFileSync(paths.implementationPack, `${JSON.stringify(pack, null, 2)}\n`, 'utf8');
+      out.pack = true;
+    }
+  } catch { /* auxiliar: the plan carries the fold */ }
+  // its open deferred entries close as merged (not an open deferral at the close)
+  const closedDeferred = [];
+  try {
+    const dlib = require('./oxe-deferred.cjs');
+    for (const e of dlib.open(programDir)) if (String(e.task).toUpperCase() === from) { dlib.close(programDir, e.id, `merged_into:${into}`); closedDeferred.push(e.id); }
+  } catch { /* no ledger */ }
+  changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'task_fold', task: from, into, cr, by, reason, at, ...out, closed_deferred: closedDeferred });
+  appendEvent(projectRoot, activeSession, { type: 'PlanTaskFolded', work_item_id: from, payload: { task: from, into, cr, by, reason, moved: out.moved, rewired: out.rewired, closed_deferred: closedDeferred } });
+  return { task: from, into, cr, by, ...out, closed_deferred: closedDeferred };
+}
+
+/**
  * `oxe-cc plan pack fix T<n> --symbol <path>#<name> (--internal | --member-of <Class> | --remove) --by <papel>
  * --reason "…" [--cr CR-n]`: corrects a planner's pack symbol during a phase without reopening the task (OxeSpace
  * 14/11, Celular F2: a module-private class and a class method named as exports failed check-pack). The symbol stays
@@ -11998,6 +12096,7 @@ module.exports = {
   reopeningCrsOf,
   runtimePlanScopeAdd,
   runtimePlanTaskEdit,
+  runtimePlanTaskFold,
   runtimeReuseAttempt,
   runtimeFailureCost,
   attachAcceptanceLock,

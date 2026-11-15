@@ -8901,6 +8901,30 @@ async function main() {
     return;
   }
 
+  // oxe-cc plan task fold T<n> --into T<m> --cr CR-n --by --reason (OxeSpace 15/11, OxeCode F6 CR-F6-14)
+  if (command === 'plan' && argv[0] === 'task' && argv[1] === 'fold') {
+    const o = { dir: process.cwd(), json: false };
+    for (let i = 2; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (['--into', '--cr', '--by', '--reason'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
+      else if (/^T\d+$/i.test(a) && !o.task) o.task = a.toUpperCase();
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    try {
+      const out = oxeOperational.runtimePlanTaskFold(o.dir, null, o);
+      if (o.json) { console.log(JSON.stringify({ oxePlanTaskFoldSchema: 1, ...out }, null, 2)); return; }
+      console.log(`  ${green}✓${reset} ${out.task} fundida em ${out.into} (${out.cr}, por ${out.by})`);
+      const m = out.moved;
+      console.log(`    files +${m.files.length} · critérios ${m.acceptance.join(', ') || '—'} · verify +${m.verify.length}${out.pack ? ' · contrato do pack' : ''}`);
+      if (out.rewired.length) console.log(`    dependentes religados: ${out.rewired.join(', ')} → ${out.into}`);
+      if (out.entries.length) console.log(`    testes congelados agora de ${out.into}: ${out.entries.join(', ')}`);
+      if (out.closed_deferred.length) console.log(`    adiamentos fechados: ${out.closed_deferred.join(', ')} (merged_into:${out.into})`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   // oxe-cc plan task edit T<n> [--wave n] [--depends-on T1,T2|none] [--remove-paths a,b] [--notes "…"] --by --reason
   // (OxeSpace 14/11, Celular F3: no hand edit of an executing PLAN.json)
   if (command === 'plan' && argv[0] === 'task' && argv[1] === 'edit') {

@@ -72,6 +72,19 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
   - O cache das entradas já aprovadas é gravado mesmo quando o processo morre no meio.
   - Cada suíte também ganha uma linha de progresso.
 
+### G38 com filtro do vitest; `plan task fold`; contratos antecipados (OxeSpace 15/11, OxeCode F6 T44)
+
+- **G38 e o filtro do vitest:** o G38 lê cada argumento do verify como **filtro de substring** do vitest. `pu03-app-version.test.ts` também rodava o `pu03-app-version.test.tsx` da T59 (onda 33), e a T44 (onda 18) foi adiada depois de 3 tentativas. A mensagem nomeia o argumento que casa. Um comando estreitado por `-t`/`--testNamePattern` conta como rodando só os próprios casos. O G38 roda em todo `plan lint`, inclusive de plano já instalado.
+- **`plan task fold T<a> --into T<b> --cr CR-n --by --reason`:**
+  - move para a tarefa alvo os files, os critérios, os comandos de verify e o contrato do pack;
+  - religa os dependentes ao alvo, e as entradas congeladas passam a nomeá-lo;
+  - marca a tarefa original `merged_into` (done, nunca agendada) e fecha os adiamentos dela como `merged_into:T<b>`, então o close não a conta como adiamento aberto;
+  - fica registrada em `changes.ndjson` e no evento `PlanTaskFolded`.
+- **Contratos antecipados** (Antigravity):
+  - o `plan lint` avisa sobre uma tarefa com arquivo gerado sem a fonte (nem nas dependências) e sem o teste do gerador no verify;
+  - o `generated_files` entra nas regras do repositório do prompt;
+  - o prompt da tarefa lista os `data-*`/`cmdk-*`/`aria-label` dos arquivos dela que algum teste lê, antes da tentativa 1.
+
 ### `report failure-cost`: conserto por causa, razão explícita, horas de verify (OxeSpace 15/11)
 
 - O mapa `failure_cost.fixes` casa a causa como impressa e também pelas partes dela: "CR constraint (no_progress)" tenta `no_progress` e depois `constraint`, sem diferenciar maiúsculas. Cada causa mostra as chaves tentadas (`fix_keys`). Antes, todo "fix" saía null.
