@@ -140,6 +140,20 @@ describe('G38: a verify that holds a test only a later task turns green', () => 
     assert.match(si.laterOwnedMessages(f).errors[0], /casa como filtro de substring do vitest/);
     p.tasks[0].verify.commands[0] += ' -t "version label"';
     assert.equal(si.laterOwnedTests(p).length, 0, '-t narrows the run');
+    // cross-review 15/11: -t never hides a later task's file named EXACTLY, nor a second subcommand
+    const exact = JSON.parse(JSON.stringify(p));
+    exact.tasks[0].verify.commands = ['vitest run tests/oxe152/polish/pu03-app-version.test.tsx -t "x"'];
+    assert.equal(si.laterOwnedTests(exact).length, 1, 'exact path with -t');
+    const chained = JSON.parse(JSON.stringify(p));
+    chained.tasks[0].verify.commands = ['vitest run tests/own.test.ts -t foo && vitest run tests/oxe152/polish/pu03-app-version.test.ts'];
+    assert.equal(si.laterOwnedTests(chained).length, 1, 'the second subcommand still counts');
+    // a trailing $ anchors; node --test takes exact paths
+    const anchored = JSON.parse(JSON.stringify(p));
+    anchored.tasks[0].verify.commands = ['vitest run tests/oxe152/polish/pu03-app-version.test.ts$'];
+    assert.equal(si.laterOwnedTests(anchored).length, 0);
+    const nodeTest = JSON.parse(JSON.stringify(p));
+    nodeTest.tasks[0].verify.commands = ['node --test tests/oxe152/polish/pu03-app-version.test.ts'];
+    assert.equal(si.laterOwnedTests(nodeTest).length, 0);
   });
 
   it('a mutable acceptance/ test the task itself writes (a later task only extends it) is its own to run', () => {

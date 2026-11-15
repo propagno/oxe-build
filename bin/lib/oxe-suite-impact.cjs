@@ -197,10 +197,21 @@ function laterOwnedTests(planDoc) {
     const commands = [...((t.verify && t.verify.commands) || []), t.verify && t.verify.command, t.verifyCommand].filter(Boolean).map((c) => String(c).replace(/\\/g, '/'));
     const tests = [];
     const via = new Map(); // matched file → the verify argument that selects it (when not the same path)
-    for (const cmd of commands) {
-      if (/(^|\s)(-t|--testNamePattern)(\s|=)/.test(cmd)) continue;
-      const args = (cmd.match(/[^\s"'`]+/g) || []).map((s) => norm(s)).filter((s) => s.includes('/') && TEST_RE.test(s) && /\.[cm]?[jt]sx?$/i.test(s));
-      for (const a of args) for (const known of owners.keys()) if (known === a || known.includes(a)) { tests.push(known); if (known !== a && !via.has(known)) via.set(known, a); }
+    // cross-review 15/11: each SUBCOMMAND on its own (`a -t x && b`): a -t narrows only its subcommand, and only the
+    // substring expansion — a path named exactly is always run; a trailing `$` anchors the argument; `node --test`
+    // takes exact paths (never a substring filter)
+    for (const sub of commands.flatMap((c) => c.split(/\s*(?:&&|\|\||;)\s*/)).filter(Boolean)) {
+      const narrowed = /(^|\s)(-t|--testNamePattern|--grep|-g)(\s|=)/.test(sub);
+      const exactRunner = /\bnode\b[^|;&]*\s--test(\s|=|$)/.test(sub);
+      for (const raw of sub.match(/[^\s"'`]+/g) || []) {
+        const anchored = raw.endsWith('$');
+        const a = norm(anchored ? raw.slice(0, -1) : raw);
+        if (!(a.includes('/') && TEST_RE.test(a) && /\.[cm]?[jt]sx?$/i.test(a))) continue;
+        const substring = !narrowed && !anchored && !exactRunner;
+        for (const known of owners.keys()) {
+          if (known === a || (substring && known.includes(a))) { tests.push(known); if (known !== a && !via.has(known)) via.set(known, a); }
+        }
+      }
     }
     const anc = ancestors(t.id);
     const ownFiles = new Set((t.files || []).map((f) => norm(typeof f === 'string' ? f : f && f.path)));
