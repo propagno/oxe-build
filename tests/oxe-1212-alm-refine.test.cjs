@@ -334,7 +334,9 @@ describe('alm refine import: CA-n ↔ A-n explicit both ways', () => {
   it('lint with a program SPEC: a CA without (A-n) is a warning; one pointing at a missing A is an error', async () => {
     const dir = withSpec();
     const out = await op.runtimeAlmRefine(dir, null, { action: 'lint', keys: ['OXE-20'] });
-    assert.ok(out.results[0].warnings.some((w) => /CA-2 sem o critério da SPEC/.test(w)));
+    // one line for every CA not linked yet (OxeSpace 15/11: one warning per CA was noise before the import)
+    assert.ok(out.results[0].warnings.some((w) => /CA\(s\) ainda sem critério da SPEC \([^)]*CA-2/.test(w)), out.results[0].warnings.join('\n'));
+    assert.equal(out.results[0].warnings.filter((w) => /sem critério da SPEC/.test(w)).length, 1);
     const f = path.join(dir, '.oxe', 'alm', 'specs', 'OXE-20.md');
     fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('**CA-1 (A1)**', '**CA-1 (A9)**'));
     const bad = await op.runtimeAlmRefine(dir, null, { action: 'lint', keys: ['OXE-20'] });

@@ -180,7 +180,14 @@ function freeze(root, jsonPath, doc, options = {}) {
     if (text == null) text = local;
     if (text == null) { refused.push({ file: f, why: `o conteúdo de ${f} em ${origin.ref} não está disponível (faça fetch do PR)` }); continue; }
     const hash = sha(text);
-    const existing = doc.acceptance_tests.find((a) => (a.files || []).map(norm).includes(f));
+    // OxeSpace 15/11 (OxeCode F4, CR-F4-6): A17 and A18 share a test file; picking the first entry listing it made
+    // `--criteria A18` overwrite A17's entry. With --criteria, the entry is that criterion's (a new one when the file is
+    // only another criterion's); without it, the first entry listing the file, as before.
+    const wantedCriterion = options.criteria ? String(options.criteria).split(',')[0].trim().toUpperCase() : null;
+    const withFile = doc.acceptance_tests.filter((a) => (a.files || []).map((x) => norm(typeof x === 'string' ? x : x.path)).includes(f));
+    const existing = wantedCriterion
+      ? withFile.find((a) => String(a.criterion || '').toUpperCase() === wantedCriterion) || withFile.find((a) => !a.criterion) || null
+      : withFile[0] || null;
     if (existing && existing.sha256 && existing.sha256 !== hash && !options.cr) { refused.push({ file: f, why: `${f} já está congelado com outro conteúdo — mudar um teste congelado exige um CR (--cr CR-n)` }); continue; }
     const criterion = (options.criteria && String(options.criteria).split(',')[0].trim().toUpperCase()) || criterionOf(text) || (existing && existing.criterion) || null;
     if (!criterion) { refused.push({ file: f, why: `${f}: sem critério — informe --criteria A<n> ou cite o A<n> no describe` }); continue; }

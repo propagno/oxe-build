@@ -282,11 +282,23 @@ function jiraProvider(cfg, env, ctx) {
     },
     async linkDirected(type, inwardKey, outwardKey) { await request(c, 'POST', `${site}/rest/api/3/issueLink`, { type: { name: type }, inwardIssue: { key: inwardKey }, outwardIssue: { key: outwardKey } }); },
     /** The transition to a done-category status (cancel / won't do / superseded first) and its resolution, if any. */
-    async closeTransition(key) {
+    async closeTransition(key, opts = {}) {
       const r = await request(c, 'GET', `${site}/rest/api/3/issue/${key}/transitions?expand=transitions.fields`);
-      const ts = ((r && r.transitions) || []).filter((t) => t.to && t.to.statusCategory && t.to.statusCategory.key === 'done');
-      const pref = /cancel|won.?t|superse|descart|desist|n[aã]o (ser[aá] )?feit|obsolet|duplic/i;
-      const t = ts.find((x) => pref.test(x.name) || pref.test(x.to.name)) || ts[0] || null;
+      const all = (r && r.transitions) || [];
+      const ts = all.filter((t) => t.to && t.to.statusCategory && t.to.statusCategory.key === 'done');
+      // OxeSpace 15/11: on a workflow whose only done status is the release one ("Lançado"), a superseded card would
+      // read as shipped. A release status is never picked unless named with --close-to.
+      const RELEASE = /lan[cç]ad|released?|deploy|entregue|em produ[cç][aã]o|publicad|shipped/i;
+      let t = null;
+      if (opts.closeTo) {
+        t = all.find((x) => x.to && String(x.to.name).toLowerCase() === String(opts.closeTo).toLowerCase()) || null;
+        if (!t) return { none: true, why: `nenhuma transição leva a "${opts.closeTo}" a partir de agora (disponíveis: ${all.map((x) => x.to && x.to.name).filter(Boolean).join(', ') || '—'})` };
+      } else {
+        const pref = /cancel|won.?t|superse|descart|desist|n[aã]o (ser[aá] )?feit|obsolet|duplic/i;
+        const usable = ts.filter((x) => !RELEASE.test(x.to.name) && !RELEASE.test(x.name));
+        t = usable.find((x) => pref.test(x.name) || pref.test(x.to.name)) || usable[0] || null;
+        if (!t && ts.length) return { none: true, why: `o fluxo só tem status done de release (${ts.map((x) => x.to.name).join(', ')}): fechar ali leria como entregue — use --close-to <status> ou --no-close` };
+      }
       if (!t) return null;
       const resField = t.fields && t.fields.resolution;
       const values = (resField && resField.allowedValues) || [];
@@ -331,6 +343,12 @@ function jiraProvider(cfg, env, ctx) {
       await request(c, 'PUT', `${site}/rest/api/3/issue/${key}`, { fields: { summary } });
       const r = await request(c, 'GET', `${site}/rest/api/3/issue/${key}?fields=summary`);
       return { ok: Boolean(r && r.fields && r.fields.summary === summary), summary: r && r.fields ? r.fields.summary : null };
+    },
+    /** No fix version at all (OxeSpace 15/11: a superseded card keeps no version). */
+    async clearFixVersions(key) {
+      await request(c, 'PUT', `${site}/rest/api/3/issue/${key}`, { update: { fixVersions: [{ set: [] }] } });
+      const now = await this.fixVersions(key);
+      return { changed: true, ok: now.length === 0, versions: now };
     },
     async releaseVersion(name) {
       const vs = await request(c, 'GET', `${site}/rest/api/3/project/${project}/versions`);
@@ -997,7 +1015,11 @@ async function setItemVersion(programDir, cfg, refOrKey, version, options = {}) 
   if (prov.deferred) throw new Error('alm.transport "mcp": troque a versão com a ferramenta do Jira do MCP (fixVersions) — este comando grava só por REST');
   if (typeof prov.setFixVersion !== 'function') throw new Error(`${cfg.provider}: versão de correção ainda não suportada (Azure: use a iteração)`);
   const have = typeof prov.fixVersions === 'function' ? await prov.fixVersions(item.key) : [];
-  const out = have.length === 1 && have[0] === name ? { changed: false, ok: true, versions: have } : await prov.setFixVersion(item.key, name);
+  // `none` / `--clear`: the card keeps no fix version
+  const clear = /^(none|nenhuma|--clear)$/i.test(name);
+  const out = clear
+    ? (have.length ? await prov.clearFixVersions(item.key) : { changed: false, ok: true, versions: [] })
+    : have.length === 1 && have[0] === name ? { changed: false, ok: true, versions: have } : await prov.setFixVersion(item.key, name);
   let commented = false;
   if (options.comment) { await comment(programDir, cfg, item.key, options.comment, options); commented = true; }
   return { key: item.key, version: name, before: have, ...out, commented };
@@ -1024,17 +1046,23 @@ async function supersede(programDir, cfg, oldRef, newRefs, options = {}) {
   if (!type) throw new Error(`nenhum tipo de link utilizável no site (tem: ${types.map((t) => t.name).join(', ') || '—'})`);
   const supersedesType = /supersed/i.test(`${type.name} ${type.outward}`);
   const state = await prov.links(old.key);
-  const tr = state.done ? null : await prov.closeTransition(old.key);
+  const found = state.done || options.noClose ? null : await prov.closeTransition(old.key, { closeTo: options.closeTo });
+  const tr = found && !found.none ? found : null;
   const plan = {
     key: old.key,
     by: news.map((n) => n.key),
     link_type: type.name,
     links: news.filter((n) => !state.linked.includes(n.key)).map((n) => n.key),
     already_linked: news.filter((n) => state.linked.includes(n.key)).map((n) => n.key),
-    close: state.done ? { skipped: true, why: `já em "${state.status}" (done)` } : tr ? { transition: tr.name, to: tr.to, resolution: tr.resolution } : { skipped: true, why: 'o fluxo não tem transição para um status done a partir daqui' },
+    close: state.done ? { skipped: true, why: `já em "${state.status}" (done)` }
+      : options.noClose ? { skipped: true, why: '--no-close: só liga e comenta' }
+        : tr ? { transition: tr.name, to: tr.to, resolution: tr.resolution }
+          : { skipped: true, why: (found && found.why) || 'o fluxo não tem transição para um status done a partir daqui' },
     comment: options.comment || `Substituído por ${news.map((n) => n.key).join(', ')}.`,
   };
   if (options.dryRun || cfg.dry_run) return { planned: plan };
+  // no safe close (only a release status, or --close-to not reachable): nothing is written — no half-superseded card
+  if (found && found.none) throw new Error(`${old.key}: ${found.why} — nada foi gravado`);
   // nothing to link and nothing to close: already superseded — no second comment
   if (!plan.links.length && plan.close.skipped) return { ...plan, applied: false, unchanged: true, status: state.status };
   if (tr && tr.resolution_required && !tr.resolution) throw new Error(`${old.key}: a transição "${tr.name}" exige resolution, e nenhuma do tipo won't do / superseded / duplicate existe — feche à mão`);

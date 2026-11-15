@@ -2449,7 +2449,7 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
     return { dry_run: dryRun, ...out, sync: synced };
   }
   if (options.action === 'supersede') {
-    const out = await lib.supersede(programDir, cfg, options.ref, options.newKeys, { ...net, comment: options.comment });
+    const out = await lib.supersede(programDir, cfg, options.ref, options.newKeys, { ...net, comment: options.comment, closeTo: options['close-to'] || options.closeTo, noClose: Boolean(options.noClose) });
     if (out.applied) appendEvent(projectRoot, activeSession, { type: 'AlmSuperseded', payload: { key: out.key, by: out.by, link_type: out.link_type, status: out.status } });
     return { dry_run: dryRun, ...out };
   }
@@ -2851,10 +2851,13 @@ async function runtimeAlmRefine(projectRoot, activeSession, options = {}) {
         const specText = paths.spec && fs.existsSync(paths.spec) ? fs.readFileSync(paths.spec, 'utf8') : null;
         if (specText) {
           const ids = require('./oxe-spec-edit.cjs').criteriaIds(specText);
+          // one line for the CAs not imported yet (before the planner imports, every CA had its own warning — noise)
+          const notLinked = [];
           for (const c of refine.parseCriteria(md)) {
-            if (!c.spec_id) l.warnings.push(`${c.id} sem o critério da SPEC — oxe-cc alm refine import ${key} cria e liga (${c.id} (A-n))`);
+            if (!c.spec_id) notLinked.push(c.id);
             else if (!ids.includes(c.spec_id)) { l.errors.push(`${c.id} aponta para ${c.spec_id}, que não existe na SPEC`); l.ok = false; }
           }
+          if (notLinked.length) l.warnings.push(`${notLinked.length} CA(s) ainda sem critério da SPEC (${notLinked.join(', ')}) — oxe-cc alm refine import ${key} cria e liga`);
         }
         // the domain glossary: a forbidden synonym in the card spec (one term, one meaning, in the card too)
         try {
@@ -2876,7 +2879,10 @@ async function runtimeAlmRefine(projectRoot, activeSession, options = {}) {
         const r = await refine.apply(lib.jiraRest(cfg, { ...options, dryRun: dry }), collected, md, { confirmOverwrite: options.confirmOverwrite, dryRun: dry });
         // with no open question the card is Ready; with questions it goes back to grooming, where they are answered
         const target = r.questions ? 'grooming' : 'ready';
-        if (r.applied) r.moved = await refineMove(lib, cfg, key, target, { ...options, env });
+        // --keep-status: the spec is written, the card stays in its column (OxeSpace 15/11: a re-spec of a card in
+        // progress moved it back to Pronto)
+        if (options.keepStatus) r.moved = { skipped: true, why: '--keep-status: o card fica na coluna em que está' };
+        else if (r.applied) r.moved = await refineMove(lib, cfg, key, target, { ...options, env });
         else if (r.dry_run) r.moved = await refineMove(lib, cfg, key, target, { ...options, env, dryRun: true });
         if (r.dry_run && cfg.require_apply && !options.dryRun && !options.apply) r.why_dry = 'alm.require_apply: gravar exige --apply';
         if (!dry) appendEvent(projectRoot, activeSession, { type: 'AlmRefined', payload: { key, sha: r.sha || null, applied: Boolean(r.applied) } });
@@ -3229,8 +3235,10 @@ function uiCardGaps(md, collected = {}) {
   const isUi = labels.includes('area-marca') || UI_PATHS.test(text);
   if (!isUi) return { isUi: false, gaps: [] };
   const gaps = [];
-  if (!/\bBRD-\d+\b/.test(text)) gaps.push('qual é o BRD-n deste card? (a referência do rebranding)');
-  const target = /(\.brand-audit\/|playground|src\/[\w/.-]+\.(tsx?|css|kt)|mobile\/android\/[\w/.-]+\.kt|[\w/.-]+\.(png|fig|html))/.test(text);
+  // a card with no BRD (a new function, OxeSpace 15/11 OXE-170) says so: "BRD: nenhum" / "sem BRD" / "função nova"
+  if (!/\bBRD-\d+\b/.test(text) && !/\bsem BRD\b|\bBRD:\s*(nenhum|n\/a|—|-)|\bfun[cç][aã]o nova\b|\bnova fun[cç][aã]o\b/i.test(text)) gaps.push('qual é o BRD-n deste card? (a referência do rebranding; sem BRD, escreva "BRD: nenhum (função nova)")');
+  // the approved target: a file (also src/design/targets/brd-NN.json), a playground, or a claude.ai artifact link
+  const target = /(\.brand-audit\/|playground|src\/[\w/.-]+\.(tsx?|css|kt|json)|mobile\/android\/[\w/.-]+\.kt|[\w/.-]+\.(png|fig|html)|https?:\/\/claude\.ai\/[\w/-]*artifact\/[\w-]+|\bartefato\s+[A-Za-z0-9]{12,})/.test(text);
   if (!target) gaps.push('qual é o alvo aprovado (arquivo, playground ou artefato da marca)?');
   const crit = refineLibCriteria(text);
   const measured = crit.filter((c) => /\b\d+(\.\d+)?\s*(px|dp|sp)\b|var\(--[\w-]+\)|--[a-z][\w-]+|Oxe(Radius|Theme|Space)\.\w+|\b(raio|altura|fonte|peso)\s+\d+/i.test(c.text));
@@ -5436,8 +5444,11 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
   const pack = readJsonQuiet(paths.implementationPack);
   const programLib = require('./oxe-program.cjs');
   const program = paths.programDir ? programLib.readProgram(paths.programDir) : null;
-  const phase = program && program.active_phase
-    ? program.phases.find((p) => p.id === program.active_phase) || null
+  // with no active phase (a plan written before `program start`), the plan's own `phase` field names it (OxeSpace
+  // 15/11, OxeChat: the lint required every closed phase's amendments of the new plan)
+  const phaseId = (program && program.active_phase) || (plan && plan.phase) || null;
+  const phase = program && phaseId
+    ? program.phases.find((p) => p.id === phaseId) || null
     : null;
   const config = readJsonQuiet(path.join(projectRoot, '.oxe', 'config.json')) || {};
   const maxTasksPerWave = Number(options.maxTasksPerWave || config.plan_max_tasks_per_wave || 0) || 0;

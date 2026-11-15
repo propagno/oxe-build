@@ -533,7 +533,7 @@ describe('alm summary <KEY> "<título>": the card title after a refine narrowed 
 });
 
 describe('alm supersede <OLD> --by <NEW>: link, comment and close the old card as superseded (OxeSpace 15/11, OxeChat redo)', () => {
-  function supersedeJira() {
+  function supersedeJira({ releaseOnly = false } = {}) {
     const j = fakeJira();
     const links = [];
     let posted = null;
@@ -547,6 +547,7 @@ describe('alm supersede <OLD> --by <NEW>: link, comment and close the old card a
         return { status: 200, json: { key: m[1], fields: { status: { name: it.fields.status.name, statusCategory: { key: /Cancelado/.test(it.fields.status.name) ? 'done' : 'indeterminate' } }, issuelinks: links.filter((l) => l.inwardIssue.key === m[1] || l.outwardIssue.key === m[1]).map((l) => (l.inwardIssue.key === m[1] ? { outwardIssue: l.outwardIssue } : { inwardIssue: l.inwardIssue })) } } };
       }
       m = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)\/transitions$/.exec(p);
+      if (m && method === 'GET' && /expand=transitions\.fields/.test(url) && releaseOnly) return { status: 200, json: { transitions: [{ id: '7', name: 'Lançado', to: { name: 'Lançado', statusCategory: { key: 'done' } } }, { id: '2', name: 'Em desenvolvimento', to: { name: 'Em desenvolvimento', statusCategory: { key: 'indeterminate' } } }] } };
       if (m && method === 'GET' && /expand=transitions\.fields/.test(url)) return { status: 200, json: { transitions: [{ id: '9', name: 'Cancelar', to: { name: 'Cancelado', statusCategory: { key: 'done' } }, fields: { resolution: { required: true, allowedValues: [{ name: 'Done' }, { name: "Won't Do" }] } } }, { id: '2', name: 'Em desenvolvimento', to: { name: 'Em desenvolvimento', statusCategory: { key: 'indeterminate' } } }] } };
       if (m && method === 'POST' && body && body.transition && body.transition.id === '9') { posted = body; j.issues.get(m[1]).fields.status = { name: 'Cancelado' }; return { status: 204, json: null }; }
       if (method === 'POST' && p === '/rest/api/3/issueLink') { links.push(body); }
@@ -580,5 +581,51 @@ describe('alm supersede <OLD> --by <NEW>: link, comment and close the old card a
     assert.equal(again.unchanged, true);
     assert.equal(j.issues.get('OXE-20').fields.comment.comments.length, 1, 'no second comment');
     await assert.rejects(op.runtimeAlm(dir, null, { action: 'supersede', ref: 'OXE-20', newKeys: 'OXE-20', apply: true, ...net }), /não substitui a si mesmo/);
+  });
+});
+
+describe('alm supersede on a workflow whose only done status is the release one; alm version <KEY> none (OxeSpace 15/11)', () => {
+  it('a release status is never picked: the dry run says why, --apply refuses and writes nothing, --no-close links and comments only', async () => {
+    const dir = project({ require_apply: true });
+    const j = fakeJira();
+    const links = [];
+    const base = j.http;
+    j.http = async (method, url, headers, body) => {
+      const p = new URL(url).pathname;
+      if (method === 'GET' && p === '/rest/api/3/issueLinkType') return { status: 200, json: { issueLinkTypes: [{ name: 'Duplicate', inward: 'is duplicated by', outward: 'duplicates' }] } };
+      let m = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)$/.exec(p);
+      if (m && method === 'GET' && new URL(url).searchParams.get('fields') === 'issuelinks,status') return { status: 200, json: { key: m[1], fields: { status: { name: 'Pronto', statusCategory: { key: 'new' } }, issuelinks: [] } } };
+      m = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)\/transitions$/.exec(p);
+      if (m && method === 'GET' && /expand=transitions\.fields/.test(url)) return { status: 200, json: { transitions: [{ id: '7', name: 'Lançar', to: { name: 'Lançado', statusCategory: { key: 'done' } } }] } };
+      if (m && method === 'POST') throw new Error('transição não esperada');
+      if (method === 'POST' && p === '/rest/api/3/issueLink') links.push(body);
+      return base(method, url, headers, body);
+    };
+    const net = { http: j.http, env: ENV, sleep };
+    const dry = await op.runtimeAlm(dir, null, { action: 'supersede', ref: 'OXE-20', newKeys: 'OXE-21', ...net });
+    assert.equal(dry.planned.close.skipped, true);
+    assert.match(dry.planned.close.why, /só tem status done de release \(Lançado\)/);
+    await assert.rejects(op.runtimeAlm(dir, null, { action: 'supersede', ref: 'OXE-20', newKeys: 'OXE-21', apply: true, ...net }), /nada foi gravado/);
+    assert.equal(links.length, 0);
+    const nc = await op.runtimeAlm(dir, null, { action: 'supersede', ref: 'OXE-20', newKeys: 'OXE-21', noClose: true, apply: true, ...net });
+    assert.equal(nc.applied, true);
+    assert.equal(links.length, 1);
+    assert.match(nc.close.why, /--no-close/);
+  });
+
+  it('alm version <KEY> none removes the fix version', async () => {
+    const dir = project({ require_apply: true });
+    const j = fakeJira();
+    j.issues.get('OXE-20').fields.fixVersions = [{ id: '1', name: '1.5.2' }];
+    const net = { http: j.http, env: ENV, sleep };
+    const base = j.http;
+    j.http = async (method, url, headers, body) => {
+      const m = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)$/.exec(new URL(url).pathname);
+      if (m && method === 'PUT' && body && body.update && body.update.fixVersions && body.update.fixVersions[0].set && body.update.fixVersions[0].set.length === 0) { j.issues.get(m[1]).fields.fixVersions = []; return { status: 204, json: null }; }
+      return base(method, url, headers, body);
+    };
+    const v = await op.runtimeAlm(dir, null, { action: 'version', ref: 'OXE-20', version: 'none', apply: true, ...net, http: j.http });
+    assert.equal(v.ok, true);
+    assert.deepEqual(j.issues.get('OXE-20').fields.fixVersions, []);
   });
 });

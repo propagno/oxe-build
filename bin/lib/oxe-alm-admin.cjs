@@ -131,6 +131,14 @@ async function doctor(rest, cfg) {
   const mapped = alm.STAGES.filter((s) => cfg.states[s]);
   const missing = mapped.filter((s) => !statusNames.has(String(cfg.states[s]).toLowerCase()));
   check('estados', !missing.length, missing.length ? `não existem no projeto: ${missing.map((s) => `${s} → "${cfg.states[s]}"`).join(', ')}` : `${mapped.length} etapa(s) mapeada(s), todas existem`);
+  // OxeSpace 15/11 (alm supersede): the done-category statuses — a workflow whose only one is the release status
+  // cannot close a superseded card without it reading as shipped
+  const doneNames = [...new Set([...statusNames.values()].filter((s) => s.statusCategory && s.statusCategory.key === 'done').map((s) => s.name))];
+  const releaseLike = /lan[cç]ad|released?|deploy|entregue|em produ[cç][aã]o|publicad|shipped/i;
+  const closable = doneNames.filter((n) => !releaseLike.test(n));
+  out.done_statuses = doneNames;
+  // informative (never fails the doctor): a workflow without a cancel status is valid, it only limits alm supersede
+  out.checks.push({ name: 'fechar sem entregar', ok: closable.length > 0, info: true, detail: closable.length ? `status done para cancelar/substituir: ${closable.join(', ')}` : `só há status done de release (${doneNames.join(', ') || '—'}): alm supersede só fecha com --close-to ou --no-close; peça ao admin um status como "Cancelado"` });
   const notTracked = (cfg.track || []).filter((s) => !cfg.states[s]);
   check('track', !notTracked.length, notTracked.length ? `etapas em alm.track sem estado mapeado: ${notTracked.join(', ')}` : `o OXE move ${cfg.track.join(', ') || 'nada'}`);
   try {

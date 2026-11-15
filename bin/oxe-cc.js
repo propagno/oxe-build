@@ -7832,9 +7832,12 @@ async function main() {
       defect: ['oxe-cc alm defect --title "…" --origin <US-n|Fn-Tn> [--cr CR-n] [--ref BUG-n]', 'defeito depois do deploy, ligado à origem e ao CR', 'oxe-cc alm defect --title "não chega offline" --origin US-1 --cr CR-4'],
       queue: ['oxe-cc alm queue [--json]', 'transporte MCP: a fila de operações que o agente executa', 'oxe-cc alm queue --json'],
       ack: ['oxe-cc alm ack <id> [--key <chave>] [--error "…"]', 'transporte MCP: confirma (ou registra a falha de) uma operação da fila', 'oxe-cc alm ack ensure:US-1 --key OXE-48'],
-      refine: ['oxe-cc alm refine <KEY…> [--jql "…"] [--max-cards 15] [--claim] [--reset] · refine lint <KEY…> · refine apply <KEY…> [--confirm-overwrite] · refine import <KEY…> --by <papel> [--phase Fn] [--risk P2] [--dry-run]', 'relê cards para um spec guiado por tipo (coleta só lê; apply só o escritor); import leva os CA para a SPEC', 'oxe-cc alm refine OXE-20 OXE-103 && oxe-cc alm refine lint OXE-20'],
+      refine: ['oxe-cc alm refine <KEY…> [--jql "…"] [--max-cards 15] [--claim] [--reset] · refine lint <KEY…> · refine apply <KEY…> [--confirm-overwrite] [--keep-status] · refine import <KEY…> --by <papel> [--phase Fn] [--risk P2] [--dry-run]', 'relê cards para um spec guiado por tipo (coleta só lê; apply só o escritor); import leva os CA para a SPEC', 'oxe-cc alm refine OXE-20 OXE-103 && oxe-cc alm refine lint OXE-20'],
       metrics: ['oxe-cc alm metrics [--jql "…"] [--max N] [--json]', 'tempo por coluna, lead/cycle time, vazão semanal, WIP e gargalo (só leitura)', 'oxe-cc alm metrics'],
-      version: ['oxe-cc alm version ensure <nome> [--dry-run]', 'garante a versão-alvo no projeto (cria se faltar; só o escritor)', 'oxe-cc alm version ensure 1.5.3 --dry-run'],
+      version: ['oxe-cc alm version ensure <nome> [--dry-run] · oxe-cc alm version <chave> <versão|none> [--comment "…"] --apply', 'garante a versão-alvo no projeto (cria se faltar); ou troca/remove (none) a versão de correção de um card (só o escritor)', 'oxe-cc alm version OXE-10 1.5.3 --apply'],
+      summary: ['oxe-cc alm summary <chave> "<título>" [--comment "…"] --apply', 'troca o título de um card existente (só o escritor)', 'oxe-cc alm summary OXE-160 "Menu com 8 itens" --apply'],
+      supersede: ['oxe-cc alm supersede <antigo> --by <novo>[,<novo>] [--comment "…"] [--close-to <status> | --no-close] --apply', 'liga o card antigo aos novos (supersedes/Duplicate/Relates), comenta e o fecha num status done que não é de release (só o escritor)', 'oxe-cc alm supersede OXE-61 --by OXE-166 --no-close --apply'],
+      pending: ['oxe-cc alm pending [apply] [--apply]', 'os pedidos que sessões leitoras gravaram (comentário, movimento); apply drena no escritor, uma vez, e sincroniza', 'oxe-cc alm pending apply --apply'],
       usage: ['oxe-cc alm usage [--json]', 'o relatório de uso dos comandos alm (.oxe/alm/usage.ndjson): execuções, falhas, tempo', 'oxe-cc alm usage'],
     };
     const sub = argv[0] && !argv[0].startsWith('-') ? argv[0] : null;
@@ -7871,7 +7874,7 @@ async function main() {
       const out = await oxeOperational.runtimeAlmAdmin(o.dir, null, { action, ...o });
       if (o.json) { console.log(JSON.stringify({ oxeAlmAdminSchema: 1, action, ...out }, null, 2)); if (out.ok === false) process.exitCode = 1; return; }
       if (action === 'doctor') {
-        for (const c of out.checks) console.log(`  ${c.ok ? `${green}✓${reset}` : `${red}✗${reset}`} ${c.name}: ${c.detail}`);
+        for (const c of out.checks) console.log(`  ${c.ok ? `${green}✓${reset}` : c.info ? `${yellow}!${reset}` : `${red}✗${reset}`} ${c.name}: ${c.detail}`);
         if (!out.ok) process.exitCode = 1;
       } else if (action === 'usage') {
         if (!out.commands.length) console.log('  nenhum comando alm registrado ainda (.oxe/alm/usage.ndjson)');
@@ -7928,6 +7931,7 @@ async function main() {
       const a = argv[i];
       if (a === '--json') o.json = true;
       else if (a === '--confirm-overwrite') o.confirmOverwrite = true;
+      else if (a === '--keep-status') o.keepStatus = true;
       else if (a === '--reset') o.reset = true;
       else if (a === '--claim') o.claim = true;
       else if (a === '--dry-run') o.dryRun = true;
@@ -7996,6 +8000,8 @@ async function main() {
       else if (a === '--first-push') o.firstPush = true;
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
       else if (a === '--by' && sub === 'supersede' && argv[i + 1]) o.newKeys = String(argv[++i]);
+      else if (a === '--close-to' && sub === 'supersede' && argv[i + 1]) o.closeTo = String(argv[++i]);
+      else if (a === '--no-close' && sub === 'supersede') o.noClose = true;
       else if (['--title', '--origin', '--comment', '--description', '--ref', '--key', '--url', '--error', '--adopted', '--text', '--cr', '--pr', '--repo', '--relates', '--add', '--kind'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
       else if (!a.startsWith('-')) positional.push(a);
       else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }

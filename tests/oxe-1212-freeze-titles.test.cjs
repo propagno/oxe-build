@@ -134,3 +134,34 @@ describe('Kotlin: --proves-filter / --tests over package.Class.method (OxeSpace 
     assert.deepEqual(freeze.filterTitles(KT, titles, 'TerminalEnterTest', 'VtTest.kt'), ['anEnterKeySendsCarriageReturn']);
   });
 });
+
+describe('freeze picks the entry by criterion before file (OxeSpace 15/11, OxeCode F4 CR-F4-6)', () => {
+  it('--criteria A18 on a file A17 also uses creates or updates A18 only; A17 keeps its entry', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-freeze-crit-'));
+    dirs.push(dir);
+    git(dir, 'init', '-q');
+    git(dir, 'config', 'user.email', 't@oxe.dev');
+    git(dir, 'config', 'user.name', 'T');
+    fs.writeFileSync(path.join(dir, 'README.md'), '# x\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'base');
+    const file = 'tests/oxe128.test.tsx';
+    fs.mkdirSync(path.join(dir, 'tests'), { recursive: true });
+    fs.writeFileSync(path.join(dir, file), "describe('OXE-128 next', () => { it('opens the next', () => {}); });\ndescribe('OXE-128 ring', () => { it('rings once', () => {}); });\n");
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'tests');
+    const sha = git(dir, 'rev-parse', 'HEAD').stdout.trim();
+    const jsonPath = path.join(dir, 'PLAN.json');
+    const a17 = { criterion: 'A17', task: 'T20', files: [file], command: `npx vitest run ${file} -t "OXE-128 next"`, proves: ['opens the next'], sha256: 'keep-me' };
+    const doc = { schema_version: 1, tasks: [{ id: 'T20', acceptance: ['A17'] }, { id: 'T21', acceptance: ['A18'] }], acceptance_tests: [a17] };
+    const out = freeze.freeze(dir, jsonPath, doc, { from: sha, paths: file, criteria: 'A18', task: 'T21', cr: 'CR-F4-6', command: `npx vitest run ${file} -t "OXE-128 ring"` });
+    assert.equal(out.refused.length, 0, JSON.stringify(out.refused));
+    assert.equal(doc.acceptance_tests.length, 2);
+    const a18 = doc.acceptance_tests.find((a) => a.criterion === 'A18');
+    assert.deepEqual(a18.proves, ['rings once']);
+    assert.ok(a18.sha256 && a18.hashes && a18.hashes[file], 'A18 has its own hash');
+    const kept = doc.acceptance_tests.find((a) => a.criterion === 'A17');
+    assert.equal(kept.sha256, 'keep-me', 'A17 untouched');
+    assert.deepEqual(kept.proves, ['opens the next']);
+  });
+});

@@ -24,6 +24,26 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Eventos:** `AutoResumed` e `AutoResumeSkipped`.
 - **Teste:** `tests/oxe-1212-autoresume.test.cjs`. O CA-1 é um reinício simulado num programa de teste: o execute é morto em T2 com SIGKILL e o `autoresume run` o retoma em T2 sem chamar o executor para T1.
 
+### `alm supersede` não fecha como "Lançado"; `alm version none`; lint sem fase ativa (OxeSpace 15/11)
+
+- **`alm supersede` nunca escolhe um status de release:**
+  - Num fluxo cujo único status done é o de release ("Lançado"), um card substituído pareceria entregue na 1.5.2. Agora a simulação explica isso, e o `--apply` recusa sem gravar nada.
+  - `--close-to <status>` fecha num status nomeado, e `--no-close` só liga e comenta.
+  - `alm doctor` lista os status done e avisa quando só há o de release.
+- **`alm version <KEY> none`:** remove a versão de correção do card.
+- **Refine e help do ALM (OXE-166 a 170):**
+  - O lint de interface aceita como alvo aprovado um JSON em `src/design/targets/` e um link de artefato do claude.ai. Um card sem BRD declara "BRD: nenhum (função nova)".
+  - `refine apply --keep-status` grava a spec sem mover o card.
+  - Os CAs ainda sem critério da SPEC viram um aviso só, não um por CA.
+  - O `alm --help` lista `summary`, `supersede`, `pending` e as formas novas do `version`.
+  - A checagem "fechar sem entregar" do `alm doctor` é só informativa (`!`).
+- **`plan lint` sem fase ativa:** com o plano escrito antes do `program start`, o campo `phase` do PLAN.json define a fase. Antes, o lint cobrava do plano novo as emendas de todas as fases fechadas.
+
+### `spec freeze` escolhe a entrada pelo critério (OxeCode F4, CR-F4-6)
+
+- Com `--criteria`, o freeze atualiza a entrada desse critério. Se o arquivo só aparece na entrada de outro critério, cria uma entrada nova, com o próprio `sha256` e `hashes`. Sem `--criteria`, vale a primeira entrada que lista o arquivo, como antes.
+- Antes, o A17 e o A18 dividem o `oxe128-next-attention.test.tsx`, e um freeze com `--criteria A18` sobrescrevia a entrada do A17. O A18 ficava sem hash, e o lock não via mudança no arquivo para ele.
+
 ### Teste congelado testado antes da tentativa paga (G36 parte 2, G30b parte 2) e pausa sem FAIL
 
 - **`plan lint --precheck-tests [--precheck-runs 2]`, FIRST para os testes de aceite:**
