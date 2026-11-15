@@ -191,6 +191,24 @@ describe('Scheduler', () => {
     const ctx = { ...makeCtx(tmpDir, executor), options: { retryPolicyOnce: true, policyRefusedBefore: ['T1'] }, onEvent: (e: { type: string; work_item_id?: string; payload?: Record<string, unknown> }) => events.push(e) };
     await new Scheduler().run(graph, ctx as SchedulerContext);
     assert.equal(callCount, 3, 'T1 once (already refused before), T2 twice (its one extra attempt)');
+    // cross-review 15/11: the extra attempt is a CLEAN retry (no refusal text in previousError)
+    const prev: Array<string | null | undefined> = [];
+    const exec2: TaskExecutor = {
+      async execute(_n: unknown, _w: unknown, _r: unknown, _a: unknown, input?: { previousError?: string | null }): Promise<TaskResult> {
+        prev.push(input?.previousError);
+        return { success: false, failure_class: 'policy', evidence: [], output: 'safeguards flagged [reasoning_extraction] oxe-cc runtime execute --retry-policy-once' };
+      },
+    } as unknown as TaskExecutor;
+    const g2 = compile(makePlan([{ id: 'T3', title: 'T3', wave: 1, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false }]), SPEC, { default_workspace_strategy: 'inplace', default_max_retries: 0 });
+    await new Scheduler().run(g2, { ...makeCtx(tmpDir, exec2), options: { retryPolicyOnce: true } } as SchedulerContext);
+    assert.equal(prev.length, 2);
+    assert.ok(!String(prev[1] ?? '').includes('reasoning_extraction'), String(prev[1]));
+    // exhausted in this run: blocked before any attempt (no model call)
+    let calls3 = 0;
+    const exec3: TaskExecutor = { async execute(): Promise<TaskResult> { calls3++; return { success: true, failure_class: null, evidence: [], output: 'ok' }; } };
+    const g3 = compile(makePlan([{ id: 'T4', title: 'T4', wave: 1, dependsOn: [], files: [], verifyCommand: null, aceite: [], done: false }]), SPEC, { default_workspace_strategy: 'inplace', default_max_retries: 0 });
+    await new Scheduler().run(g3, { ...makeCtx(tmpDir, exec3), options: { retryPolicyOnce: true, policyRetryExhausted: ['T4'] } } as SchedulerContext);
+    assert.equal(calls3, 0);
     const retry = events.find((e) => e.type === 'RetryScheduled' && e.payload?.reason === 'policy_retry_once');
     assert.equal(retry?.work_item_id, 'T2');
     assert.match(String(retry?.payload?.output_tail), /read_file a\.kt/);

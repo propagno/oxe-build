@@ -80,6 +80,12 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
   - religa os dependentes ao alvo, e as entradas congeladas passam a nomeá-lo;
   - marca a tarefa original `merged_into` (done, nunca agendada) e fecha os adiamentos dela como `merged_into:T<b>`, então o close não a conta como adiamento aberto;
   - fica registrada em `changes.ndjson` e no evento `PlanTaskFolded`.
+  - Revisão cruzada:
+    - o status fica no enum do schema (`done` + `merged_into`), e o `plan reopen` recusa uma tarefa fundida;
+    - um ciclo `S → X → T` é recusado sem gravar nada;
+    - as ondas dos dependentes religados ficam monotônicas;
+    - o pack herda o formato do contrato e as remoções e checks.
+- **`--retry-policy-once`:** a tentativa extra é limpa, sem o texto da recusa no prompt do modelo. Uma tarefa cuja tentativa extra já foi gasta no run (desde o último reopen) é bloqueada antes de qualquer chamada (`policy_retry_exhausted`), também num terceiro execute.
 - **Contratos antecipados** (Antigravity):
   - o `plan lint` avisa sobre uma tarefa com arquivo gerado sem a fonte (nem nas dependências) e sem o teste do gerador no verify;
   - o `generated_files` entra nas regras do repositório do prompt;

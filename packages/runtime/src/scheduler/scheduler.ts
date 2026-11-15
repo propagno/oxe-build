@@ -82,6 +82,8 @@ export interface SchedulerOptions {
   retryPolicyOnce?: boolean;
   /** Tasks this run already saw refused by policy (a later execute): their attempt 1 IS the one extra attempt. */
   policyRefusedBefore?: string[];
+  /** Tasks whose one extra policy attempt was already spent in this run: blocked before any attempt (no model call). */
+  policyRetryExhausted?: string[];
   /**
    * OXB-138: a task that exhausts its attempts is DEFERRED and the run goes on with every task that does not depend on
    * it (its dependents end `blocked_by_deferred`). false keeps the old stop-at-the-failed-wave behavior.
@@ -811,6 +813,12 @@ export class Scheduler {
       this.blockNode(nodeId, ctx, status, blocked, 'quota_exceeded', quotaBlocked);
       return;
     }
+    // cross-review 15/11: --retry-policy-once in a 3rd execute of the same run would pay attempt 1 again for a task
+    // whose one extra policy attempt was already spent — blocked before any model call
+    if ((ctx.options as SchedulerOptions | undefined)?.retryPolicyOnce && (ctx.options as SchedulerOptions | undefined)?.policyRetryExhausted?.includes(nodeId)) {
+      this.blockNode(nodeId, ctx, status, blocked, 'policy_retry_exhausted', 'a tentativa extra de política desta tarefa já foi usada neste run: mude o prompt (oxe-cc runtime execute --task <id> --print-prompt) ou o escopo antes de tentar de novo');
+      return;
+    }
 
     const maxQuotaWaitMs = (ctx.options as SchedulerOptions | undefined)?.maxQuotaWaitMs ?? 5 * 60_000;
     const maxQuotaWaits = (ctx.options as SchedulerOptions | undefined)?.maxQuotaWaits ?? 3;
@@ -1084,6 +1092,9 @@ export class Scheduler {
             // output_tail: the refused attempt keeps its log (attempts/<task>-<n>.log) with the trigger candidates
             payload: { task: nodeId, attempt_number: attempt, next_attempt: attempt + 1, reason: 'policy_retry_once', output_tail: tailLines(lastResult.output || '', 60) },
           });
+          // a clean retry: the refusal text (and the CLI hint) never goes back into the model's prompt — it would feed
+          // the classifier and instruct the model with a human command (cross-review 15/11)
+          lastError = null;
           continue;
         }
         // The output of a red verify (or of an attempt that ran out of turns / made no progress) is the project's test

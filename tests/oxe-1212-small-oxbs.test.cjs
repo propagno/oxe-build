@@ -283,6 +283,37 @@ describe('plan task fold T44 --into T59 (OxeSpace 15/11, OxeCode F6 CR-F6-14)', 
     assert.deepEqual(by.T44.acceptance, []);
     assert.equal(require('../bin/lib/oxe-deferred.cjs').open(path.join(dir, '.oxe', 'program')).length, 0, 'not an open deferral at the close');
     assert.throws(() => op.runtimePlanTaskFold(dir, null, { task: 'T44', into: 'T59', cr: 'CR-F6-14', by: 'tl', reason: 'de novo, por engano' }), /já está done/);
+    // cross-review 15/11: the folded plan is schema-valid, and a folded task never reopens
+    const { validatePlanJson } = require('../bin/lib/oxe-plan-json.cjs');
+    const v = validatePlanJson(saved);
+    assert.ok(!(v.errors || []).some((e) => /status/.test(e)), JSON.stringify(v.errors));
+    assert.equal(by.T44.status, 'done');
+    assert.throws(() => require('../bin/lib/oxe-plan-json.cjs').markPlanTaskOpen(path.join(dir, '.oxe', 'PLAN.md'), 'T44', { by: 'x' }), /foi fundida em T59/);
+  });
+
+  it('a cycle S → X → T is refused with nothing written; waves of the rewired dependents stay monotonic', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-taskfold2-'));
+    dirs.push(dir);
+    fs.mkdirSync(path.join(dir, '.oxe', 'program'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.md'), '# PLAN\n');
+    const write = (tasks) => fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify({ schema_version: 1, tasks, acceptance_tests: [] }));
+    write([
+      { id: 'T44', wave: 18, files: ['a'] },
+      { id: 'T50', wave: 25, files: ['b'], depends_on: ['T44'] },
+      { id: 'T59', wave: 33, files: ['c'], depends_on: ['T50'] },
+    ]);
+    const before = fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8');
+    assert.throws(() => op.runtimePlanTaskFold(dir, null, { task: 'T44', into: 'T59', cr: 'CR-1', by: 'tl', reason: 'teste do ciclo indireto' }), /ciclo T59 → T50 → T59/);
+    assert.equal(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'), before, 'nothing written');
+    write([
+      { id: 'T44', wave: 18, files: ['a'] },
+      { id: 'T45', wave: 19, files: ['d'], depends_on: ['T44'] },
+      { id: 'T59', wave: 33, files: ['c'] },
+    ]);
+    const out = op.runtimePlanTaskFold(dir, null, { task: 'T44', into: 'T59', cr: 'CR-1', by: 'tl', reason: 'teste das ondas religadas' });
+    assert.deepEqual(out.waves_bumped, ['T45']);
+    const t45 = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8')).tasks.find((t) => t.id === 'T45');
+    assert.equal(t45.wave, 34);
   });
 });
 

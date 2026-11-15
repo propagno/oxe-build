@@ -4176,15 +4176,25 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
   // cross-review 15/11: with --retry-policy-once in a LATER execute, attempt 1 already is the one extra attempt for a
   // task this run saw refused — the scheduler must not add a second one
   const policyRefusedBefore = [];
+  // cross-review 15/11: the extra attempt already SPENT (refused, then refused again — or ≥ 2 policy blocks), counted
+  // since the task's last reopen: a further --retry-policy-once execute must not pay attempt 1 again
+  const policyRetryExhausted = [];
   if (options.schedulerOptions && options.schedulerOptions.retryPolicyOnce) {
     try {
+      const blocks = new Map();
+      const retried = new Set();
       for (const e of readEvents(projectRoot, activeSession)) {
         if (!e || !e.work_item_id || (e.run_id && e.run_id !== current.run_id)) continue;
         const p = e.payload || {};
+        const id = e.work_item_id;
+        if (e.type === 'PlanTaskReopened' || e.type === 'TaskReopened') { blocks.delete(id); retried.delete(id); continue; }
+        if (e.type === 'WorkItemBlocked' && p.failure_class === 'policy') blocks.set(id, (blocks.get(id) || 0) + 1);
+        if (e.type === 'RetryScheduled' && p.reason === 'policy_retry_once') retried.add(id);
         if ((e.type === 'WorkItemBlocked' && p.failure_class === 'policy') || (e.type === 'RetryScheduled' && p.reason === 'policy_retry_once')) {
-          if (!policyRefusedBefore.includes(e.work_item_id)) policyRefusedBefore.push(e.work_item_id);
+          if (!policyRefusedBefore.includes(id)) policyRefusedBefore.push(id);
         }
       }
+      for (const [id, n] of blocks) if (n >= 2 || (retried.has(id) && n >= 1)) policyRetryExhausted.push(id);
     } catch { /* no event log: nothing refused before */ }
   }
   const ctx = createExecutionContext(projectRoot, activeSession, {
@@ -4194,7 +4204,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     pluginRegistry: options.pluginRegistry || buildRuntimePluginRegistry(projectRoot),
     // OXB-165: no run-level timeout by default (the scheduler's 30 min aborted at the first wave past it); the
     // stale-progress guard covers hangs. --max-run-ms > config executor.max_run_ms.
-    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, outOfScopeRequirements: execScopeGaps, deferFailed: ((readProjectConfig(projectRoot) || {}).execute || {}).defer_failed !== false, dispatch: ((readProjectConfig(projectRoot) || {}).execute || {}).dispatch === 'stream' ? 'stream' : 'wave', failureClasses: ((readProjectConfig(projectRoot) || {}).execute || {}).failure_classes || undefined, ...(options.schedulerOptions || {}), ...(policyRefusedBefore.length ? { policyRefusedBefore } : {}) },
+    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, outOfScopeRequirements: execScopeGaps, deferFailed: ((readProjectConfig(projectRoot) || {}).execute || {}).defer_failed !== false, dispatch: ((readProjectConfig(projectRoot) || {}).execute || {}).dispatch === 'stream' ? 'stream' : 'wave', failureClasses: ((readProjectConfig(projectRoot) || {}).execute || {}).failure_classes || undefined, ...(options.schedulerOptions || {}), ...(policyRefusedBefore.length ? { policyRefusedBefore } : {}), ...(policyRetryExhausted.length ? { policyRetryExhausted } : {}) },
     // The scheduler already persists every event through the runtime bus (events/bus.ts →
     // appendEvent). This hook only forwards progress; writing here again duplicated the log.
     attemptChanges: (id) => lastAttemptChanges.get(id) || null,
@@ -9300,27 +9310,67 @@ function runtimePlanTaskFold(projectRoot, activeSession, options = {}) {
       T.verify.commands = tCmds;
       delete T.verify.command;
     }
+    if (S.verifyCommand && !moved.verify.includes(S.verifyCommand)) {
+      T.verify = T.verify && typeof T.verify === 'object' ? T.verify : {};
+      T.verify.commands = uniq([...(T.verify.commands || []), S.verifyCommand]);
+      moved.verify.push(S.verifyCommand);
+    }
     if (Array.isArray(S.pack_symbols)) T.pack_symbols = uniq([...(Array.isArray(T.pack_symbols) ? T.pack_symbols : []), ...S.pack_symbols].map((x) => (typeof x === 'string' ? x : JSON.stringify(x)))).map((x) => { try { return JSON.parse(x); } catch { return x; } });
-    // the target inherits the source's dependencies (never itself, never a cycle through the source)
-    T.depends_on = uniq([...(T.depends_on || []), ...(S.depends_on || [])].map((d) => String(d).toUpperCase())).filter((d) => d !== into && d !== from);
+    // the role paths (edited/added/removed) go with the files (cross-review 15/11)
+    for (const k of ['edited_paths', 'added_paths', 'removed_paths']) if (Array.isArray(S[k]) && S[k].length) T[k] = uniq([...(Array.isArray(T[k]) ? T[k] : []), ...S[k]]);
+    const depsOf = (t) => [...(t.depends_on || t.dependsOn || [])].map((d) => String(d).toUpperCase());
+    // the target inherits the source's dependencies (never itself, never the source)
+    T.depends_on = uniq([...depsOf(T), ...depsOf(S)]).filter((d) => d !== into && d !== from);
     // the dependents of the source depend on the target
     const rewired = [];
     for (const t of tasks) {
-      if (t === S || t === T || !Array.isArray(t.depends_on) || !t.depends_on.map((d) => String(d).toUpperCase()).includes(from)) continue;
-      t.depends_on = uniq(t.depends_on.map((d) => (String(d).toUpperCase() === from ? into : String(d).toUpperCase())));
+      if (t === S || t === T || !depsOf(t).includes(from)) continue;
+      t.depends_on = uniq(depsOf(t).map((d) => (d === from ? into : d)));
+      delete t.dependsOn;
       rewired.push(t.id);
+    }
+    // cross-review 15/11: a path S → X → T becomes the cycle X ↔ T — refused (nothing written), naming it
+    const byIdF = new Map(tasks.map((t) => [String(t.id).toUpperCase(), t]));
+    const live = (id) => id !== from;
+    const cycleFrom = (start) => {
+      const stack = [[start, [start]]];
+      const seen = new Set();
+      while (stack.length) {
+        const [id, trail] = stack.pop();
+        for (const d of depsOf(byIdF.get(id) || {}).filter(live)) {
+          if (d === start) return [...trail, d];
+          if (!seen.has(d)) { seen.add(d); stack.push([d, [...trail, d]]); }
+        }
+      }
+      return null;
+    };
+    const cyc = cycleFrom(into);
+    if (cyc) throw new Error(`fold recusado, nada foi gravado: ${from} → ${into} forma o ciclo ${cyc.join(' → ')} (uma tarefa entre as duas depende de ${from} e é dependência de ${into}); desfaça essa dependência antes`);
+    // waves stay monotonic: a pending task never runs before a dependency (bumped wave = dependency wave + 1)
+    const bumped = [];
+    for (let pass = 0; pass < tasks.length; pass += 1) {
+      let changed = false;
+      for (const t of tasks) {
+        if (t === S || t.done === true || !Number.isFinite(Number(t.wave))) continue;
+        for (const d of depsOf(t)) {
+          const dep = byIdF.get(d);
+          if (dep && dep !== S && Number.isFinite(Number(dep.wave)) && Number(dep.wave) >= Number(t.wave)) { t.wave = Number(dep.wave) + 1; changed = true; if (!bumped.includes(t.id)) bumped.push(t.id); }
+        }
+      }
+      if (!changed) break;
     }
     const entries = [];
     for (const a of doc.acceptance_tests || []) if (a && String(a.task || '').toUpperCase() === from) { a.task = into; entries.push(a.id || a.criterion); }
     T.notes = `${T.notes ? `${T.notes}\n` : ''}${from} fundida aqui por ${cr}: ${reason}`;
     T.edits = [...(Array.isArray(T.edits) ? T.edits : []), { by, reason, cr, at, folded_from: from }];
-    // its criteria now belong to the target only (kept in `folded` for the record)
-    Object.assign(S, { done: true, status: 'merged', merged_into: into, folded: { into, cr, by, reason, at, acceptance: [...(S.acceptance || [])] }, acceptance: [] });
+    // its criteria now belong to the target only (kept in `folded` for the record). status stays in the schema's enum
+    // (done): merged_into is what says it was folded (cross-review 15/11: "merged" failed validatePlanJson)
+    Object.assign(S, { done: true, status: 'done', merged_into: into, folded: { into, cr, by, reason, at, acceptance: [...(S.acceptance || [])] }, acceptance: [] });
     delete S.checkpoint_failed;
     const tmp = `${jsonPath}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
     fs.renameSync(tmp, jsonPath);
-    return { moved, rewired, entries };
+    return { moved, rewired, entries, waves_bumped: bumped };
   });
   // the pack contract (exact_paths, symbols) goes with the files
   try {
@@ -9330,11 +9380,19 @@ function runtimePlanTaskFold(projectRoot, activeSession, options = {}) {
     const ps = ptasks ? ptasks.find((t) => idOf(t) === from) : null;
     if (ps) {
       let pt = ptasks.find((t) => idOf(t) === into);
-      if (!pt) { pt = { id: into, exact_paths: [], symbols: [] }; ptasks.push(pt); }
+      // a new entry inherits the source's contract shape (mode, write_set…) so it passes validatePackTask
+      if (!pt) { pt = { ...JSON.parse(JSON.stringify(ps)), id: into, exact_paths: [], symbols: [] }; delete pt.task_id; delete pt.merged_into; ptasks.push(pt); }
       pt.exact_paths = [...new Set([...(pt.exact_paths || []), ...(ps.exact_paths || [])])];
       const symKey = (s) => `${s && (s.path || s.file)}#${s && s.name}`;
       const have = new Set((pt.symbols || []).map(symKey));
       pt.symbols = [...(pt.symbols || []), ...(ps.symbols || []).filter((s) => !have.has(symKey(s)))];
+      // the removals and checks go too (cross-review 15/11): a removed file's contract is not lost in the merge
+      const jkey = (x) => (typeof x === 'string' ? x : JSON.stringify(x));
+      for (const k of ['removed_paths', 'swept_paths', 'symbols_removed', 'contracts', 'expected_checks', 'edited_paths', 'added_paths']) {
+        if (!Array.isArray(ps[k]) || !ps[k].length) continue;
+        const seenK = new Set((Array.isArray(pt[k]) ? pt[k] : []).map(jkey));
+        pt[k] = [...(Array.isArray(pt[k]) ? pt[k] : []), ...ps[k].filter((x) => !seenK.has(jkey(x)))];
+      }
       ps.merged_into = into;
       fs.writeFileSync(paths.implementationPack, `${JSON.stringify(pack, null, 2)}\n`, 'utf8');
       out.pack = true;

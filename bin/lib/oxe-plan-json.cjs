@@ -964,6 +964,8 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
   }
   const task = Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
   if (!task || (task.done !== true && !task.checkpoint_failed && task.status !== 'done')) return false;
+  // a task folded into another (plan task fold) never comes back: its scope now belongs to the target
+  if (task.merged_into) throw new Error(`${taskId} foi fundida em ${task.merged_into} (plan task fold): reabra ${task.merged_into}, não ${taskId}`);
   delete task.checkpoint_failed; // OXB-172: reopen also clears a failed checkpoint (scope fixed by a plan edit / CR)
   task.done = false;
   if (task.status != null) delete task.status;
