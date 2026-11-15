@@ -82,6 +82,8 @@ describe('executor não escreve o aceite do plano', () => {
             tool_calls: [
               { id: 'c1', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'test\\acceptance\\a1.test.js', content: 'hacked' }) } },
               { id: 'c2', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'api.js', content: 'ok' }) } },
+              // P0-2: malformed JSON is an explicit error to the model, never {} in silence
+              { id: 'c4', type: 'function', function: { name: 'write_file', arguments: '{"path": "api.js", "content": ' } },
             ],
           };
         }
@@ -105,6 +107,9 @@ describe('executor não escreve o aceite do plano', () => {
       assert.equal(fs.readFileSync(path.join(dir, 'api.js'), 'utf8'), 'ok');
       const denied = events.find((e) => e.type === 'tool_denied');
       assert.equal(denied?.detail?.reason, 'frozen_acceptance_test');
+      assert.ok(events.some((e) => e.type === 'tool_denied' && e.detail?.reason === 'invalid_tool_arguments'), 'malformed JSON reported');
+      // the events carry the real attempt (it was a fixed 0)
+      assert.ok(events.filter((e) => e.type === 'tool_call').every((e) => e.attempt === 1), JSON.stringify(events.filter((e) => e.type === 'tool_call').map((e) => e.attempt)));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

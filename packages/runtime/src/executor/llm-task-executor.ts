@@ -6,7 +6,7 @@ import type { PluginRegistry } from '../plugins/plugin-registry';
 import { streamCompletion } from './stream-completion';
 import { CLI_FAILURE_QUOTA_RE } from './quota-patterns';
 import type { ChatMessage, ToolCall } from './stream-completion';
-import { BUILT_IN_TOOLS } from './built-in-tools';
+import { BUILT_IN_TOOLS, realPathOf } from './built-in-tools';
 import { selectToolsForActions } from './action-tool-map';
 import { buildNodePrompt } from './node-prompt-builder';
 import type { NodeContextProvider } from './node-context';
@@ -355,11 +355,11 @@ export class LlmTaskExecutor implements TaskExecutor {
       const [concurrent, serial] = partitionToolCalls(response.tool_calls, this.registry ?? undefined);
 
       const concurrentResults = await Promise.all(
-        concurrent.map((tc) => this.invokeToolCall(tc, cwd, node, evidencePaths, allowedTools, usage)),
+        concurrent.map((tc) => this.invokeToolCall(tc, cwd, node, evidencePaths, allowedTools, usage, attempt)),
       );
       const serialResults: ChatMessage[] = [];
       for (const tc of serial) {
-        serialResults.push(await this.invokeToolCall(tc, cwd, node, evidencePaths, allowedTools, usage));
+        serialResults.push(await this.invokeToolCall(tc, cwd, node, evidencePaths, allowedTools, usage, attempt));
       }
 
       messages.push(...concurrentResults, ...serialResults);
@@ -474,14 +474,25 @@ export class LlmTaskExecutor implements TaskExecutor {
     evidencePaths: string[],
     allowedTools: Set<string>,
     usage?: ExecutorUsage,
+    attempt = 0,
   ): Promise<ChatMessage> {
-    this.emit({ type: 'tool_call', nodeId: node.id, attempt: 0, detail: { tool: tc.function.name } });
+    this.emit({ type: 'tool_call', nodeId: node.id, attempt, detail: { tool: tc.function.name } });
 
+    // External review 15/11 (P0-2): malformed arguments became {} in silence — the tool then failed on a missing
+    // field and the model never learned its JSON was invalid. It gets an explicit error instead.
     let args: Record<string, unknown> = {};
     try {
-      args = JSON.parse(tc.function.arguments || '{}');
-    } catch {
-      // malformed args — pass empty
+      const parsed = JSON.parse(tc.function.arguments || '{}');
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+      args = parsed as Record<string, unknown>;
+    } catch (err) {
+      this.emit({ type: 'tool_denied', nodeId: node.id, attempt, detail: { tool: tc.function.name, reason: 'invalid_tool_arguments' } });
+      return {
+        role: 'tool',
+        tool_call_id: tc.id,
+        name: tc.function.name,
+        content: `[invalid_tool_arguments: the arguments of ${tc.function.name} are not a valid JSON object (${(err as Error).message}) — call the tool again with valid JSON]`,
+      };
     }
 
     let result: string;
@@ -489,10 +500,10 @@ export class LlmTaskExecutor implements TaskExecutor {
     const writesFile = tc.function.name === 'write_file' || tc.function.name === 'patch_file';
     const protectedTarget = writesFile && typeof args.path === 'string' && this.isProtected(args.path, cwd);
     if (protectedTarget) {
-      this.emit({ type: 'tool_denied', nodeId: node.id, attempt: 0, detail: { tool: tc.function.name, path: args.path, reason: 'frozen_acceptance_test' } });
+      this.emit({ type: 'tool_denied', nodeId: node.id, attempt, detail: { tool: tc.function.name, path: args.path, reason: 'frozen_acceptance_test' } });
       result = `[tool denied: ${String(args.path)} is a frozen acceptance test owned by the plan — implement the code so this test passes; do not edit it]`;
     } else if (builtIn && !allowedTools.has(tc.function.name)) {
-      this.emit({ type: 'tool_denied', nodeId: node.id, attempt: 0, detail: { tool: tc.function.name } });
+      this.emit({ type: 'tool_denied', nodeId: node.id, attempt, detail: { tool: tc.function.name } });
       result = `[tool denied: ${tc.function.name} is not permitted for this task]`;
     } else if (builtIn) {
       // OXB-118: recorded before running (a command that fails or times out still happened).
@@ -530,7 +541,7 @@ export class LlmTaskExecutor implements TaskExecutor {
       }
     }
 
-    this.emit({ type: 'tool_result', nodeId: node.id, attempt: 0, detail: { tool: tc.function.name, length: result.length } });
+    this.emit({ type: 'tool_result', nodeId: node.id, attempt, detail: { tool: tc.function.name, length: result.length } });
 
     return {
       role: 'tool',
@@ -545,7 +556,11 @@ export class LlmTaskExecutor implements TaskExecutor {
     const list = this.options.protectedPaths ?? [];
     if (!list.length) return false;
     const rel = normalizeRel(path.isAbsolute(target) ? path.relative(cwd, target) : target);
-    return list.some((p) => normalizeRel(p) === rel);
+    if (list.some((p) => normalizeRel(p) === rel)) return true;
+    // P0-2: through a link (a junction the runtime made, a symlink) a different spelling can reach the same file —
+    // compare the real paths too
+    const real = realPathOf(path.resolve(cwd, String(target)));
+    return list.some((p) => realPathOf(path.resolve(cwd, p)) === real);
   }
 
   private emit(event: LlmExecutorEvent): void {

@@ -24,6 +24,16 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Eventos:** `AutoResumed` e `AutoResumeSkipped`.
 - **Teste:** `tests/oxe-1212-autoresume.test.cjs`. O CA-1 é um reinício simulado num programa de teste: o execute é morto em T2 com SIGKILL e o `autoresume run` o retoma em T2 sem chamar o executor para T1.
 
+### P0 da revisão externa: contenção de caminho e adapter http (15/11)
+
+- **Contenção por links (P0-2):** o `resolveWithin` exige que o caminho REAL (links resolvidos) fique dentro da raiz real. Isso vale também para um arquivo novo, pelo ancestral existente mais próximo. O `isProtected` compara os caminhos reais. Antes, um caminho por uma junction ou por um symlink, como os de `node_modules` que o próprio runtime cria nas worktrees, escapava da pasta.
+- **Eventos e argumentos (P0-2):**
+  - `tool_call`, `tool_denied` e `tool_result` levam o número real da tentativa. Antes saíam com 0 fixo.
+  - Argumentos que não são um objeto JSON válido viram `invalid_tool_arguments` explícito para o modelo. Antes viravam `{}` em silêncio.
+- **Adapter http (P0-1):**
+  - Todo status ≥ 400 é erro classificado: 429 e cota são `quota`, contexto longo é `context`, o resto é `env`. Vem com dica: credencial; endpoint inexistente, para usar `--adapter claude` ou um proxy OpenAI-compatível; erro transitório do provedor. Antes, um 401, 404 ou 500 terminava a tentativa como "sem chamada de ferramenta" em silêncio.
+  - O `usage` do stream é lido (`stream_options.include_usage`). Um backend que recusa esse campo recebe uma chamada a mais, sem ele.
+
 ### `state.json` separa os CRs de outras fases (OxeChat F3, 15/11)
 
 - O status do run vem do mais recente entre o `ACTIVE-RUN.json` e o `runs/<id>.json`, pelo `updated_at`: status, cursor e onda. Antes, o `state.json` mostrava "planned" para o mesmo run que o `ACTIVE-RUN` dava como pausado.

@@ -3833,6 +3833,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
 
   async function runRuntimeExecute(projectRoot, activeSession, options = {}) {
     applyChildEnvPolicy(projectRoot);
+    const liveSinceMs = Date.now();
     const runtime = loadRuntimeModule();
     if (!runtime) throw new Error('Runtime package não está disponível. Rode npm run build:runtime.');
   const parsers = loadSdkParsers();
@@ -4185,6 +4186,9 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
           });
           // G27: the card moves to in_progress when the task starts, not only when the execute ends (fire and forget)
           almAutoSync(projectRoot, activeSession);
+          // the run is live: "running" with the task as cursor (runtime status reads it; a stale "paused" while a task
+          // runs invited a second executor) — never over a pause requested during this execute
+          markRunLive(projectRoot, activeSession, taskId, liveSinceMs);
         } catch { /* auxiliary persistence */ }
       }
       if (taskId && inplaceRun && gitRepo) {
@@ -11083,6 +11087,20 @@ function writeRunState(projectRoot, activeSession, runState = {}) {
   return payload;
 }
 
+/**
+ * OxeSpace 15/11: during an execute, neither run file said "running" — `runtime status` showed the old "paused" while
+ * T8 ran. At each task start the run is marked running, with the task as cursor. A pause requested after `sinceMs`
+ * (the execute's start) is never overwritten: the scheduler reads it before the next task.
+ */
+function markRunLive(projectRoot, activeSession, taskId, sinceMs) {
+  try {
+    const rs = readRunState(projectRoot, activeSession);
+    if (!rs || !rs.run_id) return null;
+    if (rs.status === 'paused' && (Date.parse(rs.updated_at || '') || 0) >= sinceMs) return null;
+    return writeRunState(projectRoot, activeSession, { ...rs, status: 'running', updated_at: new Date().toISOString(), cursor: { ...(rs.cursor || {}), task: taskId } });
+  } catch { return null; }
+}
+
 function readRunState(projectRoot, activeSession) {
   const p = operationalPaths(projectRoot, activeSession);
   const activeRaw = readTextIfExists(p.activeRun);
@@ -11661,6 +11679,7 @@ module.exports = {
   summarizeEvents,
   writeRunState,
   readRunState,
+  markRunLive,
   sweepCheckpointWorkspaces,
   readGitActivity,
   verifyGitEvidence,

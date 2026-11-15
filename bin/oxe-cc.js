@@ -5774,6 +5774,16 @@ async function runRuntime(opts) {
   }
 
   if (opts.action === 'execute') {
+    // OxeSpace 15/11: a second execute in the same worktree while another holds the lease is refused, naming its pid
+    // (two executors on one tree write over each other's tasks)
+    try {
+      const lib0 = require('./lib/oxe-autoresume.cjs');
+      const live = lib0.inspect(lib0.leasePath(oxeOperational.operationalPaths(opts.dir, activeSession).executionRoot));
+      if (live.state === 'running' && !live.foreign_host && live.lease && live.lease.pid !== process.pid) {
+        console.error(`${red}outro runtime execute já roda nesta worktree (pid ${live.lease.pid}, desde ${live.lease.started_at}).${reset} Espere ele terminar, ou pause com oxe-cc runtime pause --reason "…".`);
+        process.exit(1);
+      }
+    } catch { /* auxiliar */ }
     // G24: the lease says this execute is running; a clean end closes it, a restart or a kill leaves it open
     const arLease = (() => {
       try {

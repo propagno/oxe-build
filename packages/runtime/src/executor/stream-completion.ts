@@ -67,16 +67,43 @@ export function buildChatCompletionsUrl(baseUrl: string): URL {
 
 export async function streamCompletion(opts: StreamCompletionOptions): Promise<CompletionResponse> {
   const url = buildChatCompletionsUrl(opts.baseUrl);
-  const body = JSON.stringify({
+  const bodyOf = (withUsage: boolean) => JSON.stringify({
     model: opts.model,
     messages: opts.messages,
     max_tokens: opts.maxTokens ?? 4096,
     stream: true,
+    // External review 15/11 (P0-1): the usage of the turn (tokens) comes in the last chunk only when asked for
+    ...(withUsage ? { stream_options: { include_usage: true } } : {}),
     ...(opts.tools?.length ? { tools: opts.tools, tool_choice: 'auto' } : {}),
   });
-
-  const rawText = await fetchWithTimeout(url, opts.apiKey, body, opts.timeoutMs ?? 120_000);
+  let rawText: string;
+  try {
+    rawText = await fetchWithTimeout(url, opts.apiKey, bodyOf(true), opts.timeoutMs ?? 120_000);
+  } catch (err) {
+    // a backend that does not know stream_options answers 400 naming it: once more without it
+    if ((err as { statusCode?: number }).statusCode === 400 && /stream_options|include_usage/i.test(String((err as Error).message))) {
+      rawText = await fetchWithTimeout(url, opts.apiKey, bodyOf(false), opts.timeoutMs ?? 120_000);
+    } else throw err;
+  }
   return parseSseResponse(rawText);
+}
+
+/**
+ * External review 15/11 (P0-1): every HTTP status >= 400 is an error, classified — before, anything but a quota
+ * answer resolved as text, parsed as zero tool calls, and a 401/404/500 ended the attempt as "no tool call" in
+ * silence (a read-only node could even succeed).
+ */
+export function httpFailureKind(status: number, text: string): 'quota' | 'context' | 'env' {
+  if (status === 429 || /RESOURCE_EXHAUSTED|rate[ _-]?limit|too many requests|quota exceeded|insufficient_quota/i.test(text)) return 'quota';
+  if ((status === 400 || status === 413 || status === 422) && /context|too long|too many tokens|maximum.*tokens|prompt is too long/i.test(text)) return 'context';
+  return 'env';
+}
+
+function httpFailureHint(status: number, host: string): string {
+  if (status === 401 || status === 403) return ' — credencial recusada: confira a chave (--api-key / ANTHROPIC_API_KEY / OPENAI_API_KEY) e o --base-url';
+  if (status === 404) return ` — o endpoint <base-url>/chat/completions não existe em ${host}: o adapter http fala o formato OpenAI; para a Anthropic use --adapter claude, ou um proxy OpenAI-compatível em --base-url`;
+  if (status >= 500) return ' — erro do provedor (transitório): a próxima tentativa repete';
+  return '';
 }
 
 function fetchWithTimeout(url: URL, apiKey: string, body: string, timeoutMs: number): Promise<string> {
@@ -102,12 +129,13 @@ function fetchWithTimeout(url: URL, apiKey: string, body: string, timeoutMs: num
         res.on('end', () => {
           const text = Buffer.concat(chunks).toString('utf8');
           const status = res.statusCode ?? 200;
-          if (status === 429 || (status >= 400 && /RESOURCE_EXHAUSTED|rate[ _-]?limit|too many requests|quota exceeded|insufficient_quota/i.test(text))) {
+          if (status >= 400) {
+            const kind = httpFailureKind(status, text);
             const retryAfterHeader = Array.isArray(res.headers['retry-after']) ? res.headers['retry-after'][0] : res.headers['retry-after'];
-            const retryAfterMs = parseRateLimitResetMs(text, Date.now(), retryAfterHeader ?? null);
+            const retryAfterMs = kind === 'quota' ? parseRateLimitResetMs(text, Date.now(), retryAfterHeader ?? null) : null;
             const err = Object.assign(
-              new Error(`HTTP ${status}: ${text.slice(0, 500)}`),
-              { kind: 'quota' as const, statusCode: status, retryAfterMs },
+              new Error(`HTTP ${status}: ${text.slice(0, 500)}${httpFailureHint(status, url.hostname)}`),
+              { kind, statusCode: status, retryAfterMs },
             );
             reject(err);
             return;
@@ -133,6 +161,7 @@ function parseSseResponse(raw: string): CompletionResponse {
   let content = '';
   const toolCallsMap = new Map<number, { id: string; name: string; args: string }>();
   let finish_reason: string | null = null;
+  let usage: CompletionUsage | undefined;
 
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
@@ -142,6 +171,16 @@ function parseSseResponse(raw: string): CompletionResponse {
 
     let chunk: Record<string, unknown>;
     try { chunk = JSON.parse(payload); } catch { continue; }
+
+    // the usage chunk (stream_options.include_usage): OpenAI-compatible prompt/completion tokens, cost if reported
+    const u = chunk.usage as Record<string, unknown> | undefined | null;
+    if (u && typeof u === 'object') {
+      usage = {
+        ...(typeof u.prompt_tokens === 'number' ? { input_tokens: u.prompt_tokens } : {}),
+        ...(typeof u.completion_tokens === 'number' ? { output_tokens: u.completion_tokens } : {}),
+        ...(typeof u.cost === 'number' ? { cost_usd: u.cost } : {}),
+      };
+    }
 
     const choices = chunk.choices as Array<Record<string, unknown>> | undefined;
     if (!choices?.length) continue;
@@ -176,5 +215,8 @@ function parseSseResponse(raw: string): CompletionResponse {
       function: { name: tc.name, arguments: tc.args },
     }));
 
-  return { content, tool_calls, finish_reason };
+  return { content, tool_calls, finish_reason, ...(usage ? { usage } : {}) };
 }
+
+/** For tests: the SSE parser. */
+export { parseSseResponse };

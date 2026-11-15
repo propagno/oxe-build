@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ALL_BUILT_IN_SCHEMAS = exports.BUILT_IN_TOOLS = exports.BoundedOutput = exports.PathContainmentError = void 0;
 exports.resolveWithin = resolveWithin;
+exports.realPathOf = realPathOf;
 exports.windowsNullRedirects = windowsNullRedirects;
 exports.setQuestionResolver = setQuestionResolver;
 const fs_1 = __importDefault(require("fs"));
@@ -30,7 +31,34 @@ function resolveWithin(cwd, candidate) {
         return target;
     if (rel.startsWith('..') || path_1.default.isAbsolute(rel))
         throw new PathContainmentError(candidate);
+    // External review 15/11 (P0-2): a path through a symlink or a junction (the runtime itself links node_modules into
+    // worktrees) lexically inside the root can land outside it. The REAL path must stay inside the real root.
+    const realRoot = realPathOf(root);
+    const realRel = path_1.default.relative(realRoot, realPathOf(target));
+    if (realRel !== '' && (realRel.startsWith('..') || path_1.default.isAbsolute(realRel)))
+        throw new PathContainmentError(candidate);
     return target;
+}
+/**
+ * The real path of `p`, following links. For a path that does not exist yet (a new file), the real path of its
+ * nearest existing ancestor joined with the rest — a write through a linked directory is resolved too.
+ */
+function realPathOf(p) {
+    let cur = path_1.default.resolve(p);
+    const rest = [];
+    for (;;) {
+        try {
+            const real = fs_1.default.realpathSync.native(cur);
+            return rest.length ? path_1.default.join(real, ...rest.reverse()) : real;
+        }
+        catch {
+            const parent = path_1.default.dirname(cur);
+            if (parent === cur)
+                return path_1.default.resolve(p);
+            rest.push(path_1.default.basename(cur));
+            cur = parent;
+        }
+    }
 }
 // ─── read_file ────────────────────────────────────────────────────────────────
 const readFile = {

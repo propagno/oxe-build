@@ -72,6 +72,8 @@ function tmpDir() {
                         tool_calls: [
                             { id: 'c1', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'test\\acceptance\\a1.test.js', content: 'hacked' }) } },
                             { id: 'c2', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'api.js', content: 'ok' }) } },
+                            // P0-2: malformed JSON is an explicit error to the model, never {} in silence
+                            { id: 'c4', type: 'function', function: { name: 'write_file', arguments: '{"path": "api.js", "content": ' } },
                         ],
                     };
                 }
@@ -95,6 +97,9 @@ function tmpDir() {
             strict_1.default.equal(fs_1.default.readFileSync(path_1.default.join(dir, 'api.js'), 'utf8'), 'ok');
             const denied = events.find((e) => e.type === 'tool_denied');
             strict_1.default.equal(denied?.detail?.reason, 'frozen_acceptance_test');
+            strict_1.default.ok(events.some((e) => e.type === 'tool_denied' && e.detail?.reason === 'invalid_tool_arguments'), 'malformed JSON reported');
+            // the events carry the real attempt (it was a fixed 0)
+            strict_1.default.ok(events.filter((e) => e.type === 'tool_call').every((e) => e.attempt === 1), JSON.stringify(events.filter((e) => e.type === 'tool_call').map((e) => e.attempt)));
         }
         finally {
             fs_1.default.rmSync(dir, { recursive: true, force: true });

@@ -27,7 +27,32 @@ export function resolveWithin(cwd: string, candidate: unknown): string {
   const rel = path.relative(root, target);
   if (rel === '') return target;
   if (rel.startsWith('..') || path.isAbsolute(rel)) throw new PathContainmentError(candidate);
+  // External review 15/11 (P0-2): a path through a symlink or a junction (the runtime itself links node_modules into
+  // worktrees) lexically inside the root can land outside it. The REAL path must stay inside the real root.
+  const realRoot = realPathOf(root);
+  const realRel = path.relative(realRoot, realPathOf(target));
+  if (realRel !== '' && (realRel.startsWith('..') || path.isAbsolute(realRel))) throw new PathContainmentError(candidate);
   return target;
+}
+
+/**
+ * The real path of `p`, following links. For a path that does not exist yet (a new file), the real path of its
+ * nearest existing ancestor joined with the rest — a write through a linked directory is resolved too.
+ */
+export function realPathOf(p: string): string {
+  let cur = path.resolve(p);
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      const real = fs.realpathSync.native(cur);
+      return rest.length ? path.join(real, ...rest.reverse()) : real;
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return path.resolve(p);
+      rest.push(path.basename(cur));
+      cur = parent;
+    }
+  }
 }
 
 // ─── read_file ────────────────────────────────────────────────────────────────

@@ -276,3 +276,32 @@ describe('G24 · CA-1: reinício simulado num programa de teste', () => {
     assert.equal(op.readEvents(tmp, null).filter((e) => e.type === 'AutoResumeSkipped').length, 1);
   });
 });
+
+describe('the run is live during the execute; one execute per worktree (OxeSpace 15/11)', () => {
+  it('markRunLive writes running with the task as cursor, never over a pause requested during this execute', () => {
+    const d = tmpDir('oxe-ar-live-');
+    fs.mkdirSync(path.join(d, '.oxe'), { recursive: true });
+    const old = '2026-11-15T02:00:00.000Z';
+    op.writeRunState ? null : null;
+    fs.mkdirSync(path.join(d, '.oxe', 'runs'), { recursive: true });
+    const put = (status, at) => { const rs = { run_id: 'oxe-run-x', status, updated_at: at }; fs.writeFileSync(path.join(d, '.oxe', 'runs', 'oxe-run-x.json'), JSON.stringify(rs)); fs.writeFileSync(path.join(d, '.oxe', 'ACTIVE-RUN.json'), JSON.stringify(rs)); };
+    put('paused', old);
+    const since = Date.parse('2026-11-15T03:00:00.000Z');
+    op.markRunLive(d, null, 'T8', since);
+    const live = op.readRunState(d, null);
+    assert.equal(live.status, 'running', 'an old pause (before this execute) does not hold');
+    assert.equal(live.cursor.task, 'T8');
+    put('paused', '2026-11-15T03:05:00.000Z');
+    op.markRunLive(d, null, 'T9', since);
+    assert.equal(op.readRunState(d, null).status, 'paused', 'a pause requested during this execute is kept');
+  });
+
+  it('a second runtime execute in the same worktree is refused while the lease of a live process is open', () => {
+    const d = tmpDir('oxe-ar-second-');
+    fs.mkdirSync(path.join(d, '.oxe'), { recursive: true });
+    ar.startLease(ar.leasePath(op.operationalPaths(d, null).executionRoot), { pid: process.pid, argv: ['runtime', 'execute'] });
+    const r = spawnSync(process.execPath, [CLI, 'runtime', 'execute', '--dir', d], { encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' } });
+    assert.equal(r.status, 1);
+    assert.ok(r.stderr.includes(`outro runtime execute já roda nesta worktree (pid ${process.pid}`), r.stderr);
+  });
+});

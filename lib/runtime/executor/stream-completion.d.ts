@@ -52,3 +52,12 @@ export interface ToolSchema {
  */
 export declare function buildChatCompletionsUrl(baseUrl: string): URL;
 export declare function streamCompletion(opts: StreamCompletionOptions): Promise<CompletionResponse>;
+/**
+ * External review 15/11 (P0-1): every HTTP status >= 400 is an error, classified — before, anything but a quota
+ * answer resolved as text, parsed as zero tool calls, and a 401/404/500 ended the attempt as "no tool call" in
+ * silence (a read-only node could even succeed).
+ */
+export declare function httpFailureKind(status: number, text: string): 'quota' | 'context' | 'env';
+declare function parseSseResponse(raw: string): CompletionResponse;
+/** For tests: the SSE parser. */
+export { parseSseResponse };
