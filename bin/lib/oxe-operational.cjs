@@ -2471,7 +2471,7 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
   if ((writes || options.action === 'comment') && !dryRun && !options.auto) lib.warnApply(cfg, options);
   if (writes && !dryRun) {
     if (!lib.isWriter(cfg, env)) throw lib.writerError(cfg);
-    if (['push', 'sync', 'defect'].includes(options.action) && !options.noLock) {
+    if (['push', 'sync', 'defect', 'pr-merged'].includes(options.action) && !options.noLock) {
       return lib.withWriteLock(programDir, () => runtimeAlm(projectRoot, activeSession, { ...options, noLock: true }));
     }
   }
@@ -6185,7 +6185,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       // G43 (OxeSpace 15/11, OxeCode F6 T42): a registry in the task's scope whose checked manifest is not
       try {
         const lintCfg43 = ((readProjectConfig(projectRoot) || {}).lint || {});
-        const rg = si.registryManifestGaps(projectRoot, pjs, { pairs: lintCfg43.registry_pairs });
+        const rg = si.registryManifestGaps(projectRoot, pjs, { pairs: lintCfg43.registry_pairs, detect: lintCfg43.registry_detect === true });
         if (rg.length) {
           const rm = si.registryManifestMessages(rg, { level: lintCfg43.registry_pairs_level === 'error' ? 'error' : 'warn' });
           result.errors.push(...rm.errors);

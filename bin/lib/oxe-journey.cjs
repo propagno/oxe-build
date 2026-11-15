@@ -161,6 +161,9 @@ const STEP_STAGE = {
   spec: 'discover', 'spec-approve': 'validate', 'program-start': 'program', 'alm-push': 'program', 'alm-queue': 'program',
   discuss: 'decide', plan: 'plan', dashboard: 'plan', execute: 'build', signoff: 'verify', verify: 'verify', retro: 'verify',
   ship: 'deliver', 'ship-wait': 'deliver', deploy: 'deliver', 'program-close': 'deliver', quick: 'build',
+  // guided recovery and the CI close (R42): the map marks the stage they belong to
+  resume: 'build', 'plan-scope': 'build', 'plan-done': 'build', 'checkpoint-integration': 'build', 'commit-task': 'build',
+  'spec-amend': 'validate', 'deferred-retry': 'build', 'ci-attach': 'deliver',
 };
 
 /** The journey map: each stage done / current / pending / optional, plus the next step. */

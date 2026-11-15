@@ -28,13 +28,25 @@ describe('alm pr-merged: Fecha moves, Parte de comments, a bare key is reported'
     assert.deepEqual(prs.prMarkers(['T9: só a chave (OXE-9)'], cfg).bare, ['OXE-9']);
   });
 
+  it('R42: a negation or prose never closes; an Oxford comma keeps the whole list', () => {
+    const neg = prs.prMarkers(['Parte de OXE-105 (não fecha OXE-105)\nNão fecha OXE-106\nthis does not close OXE-107'], cfg);
+    assert.deepEqual(neg.closes, []);
+    assert.deepEqual(neg.partial, ['OXE-105']);
+    const prose = prs.prMarkers(['Corrige o foco: quando o modal fecha OXE-108 perdia o cursor'], cfg);
+    assert.deepEqual(prose.closes, [], 'a verb in the middle of a sentence is not a directive');
+    assert.deepEqual(prose.bare, ['OXE-108']);
+    assert.deepEqual(prs.prMarkers(['Fecha OXE-1, OXE-2, e OXE-3'], cfg).closes, ['OXE-1', 'OXE-2', 'OXE-3']);
+    assert.deepEqual(prs.prMarkers(['- Closes OXE-4, OXE-5, and OXE-6'], cfg).closes, ['OXE-4', 'OXE-5', 'OXE-6']);
+    assert.deepEqual(prs.prMarkers(['feat: x (fecha: OXE-7)'], cfg).closes, ['OXE-7'], 'a colon makes it a directive mid-line');
+  });
+
   it('dry run plans; apply moves the closed once, comments the partial, never moves a bare key', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-prm-'));
     dirs.push(dir);
     const programDir = path.join(dir, '.oxe', 'program');
     const calls = [];
     const almLib = {
-      async move(_pd, _c, key, stage, o) { calls.push(['move', key, stage, o.comment]); return { key, changed: true }; },
+      async moveForward(_pd, _c, key, stage, o) { calls.push(['move', key, stage, o.comment]); return { key, changed: true }; },
       async comment(_pd, _c, key, text) { calls.push(['comment', key, text]); return { key }; },
     };
     const prData = { number: 871, url: 'https://x/pull/871', state: 'MERGED', title: 'T5 (OXE-9)', branch: 'b', body: 'Fecha OXE-72\nParte de OXE-105', commits: [] };
@@ -109,6 +121,11 @@ describe('runtimeAlm pr-merged / list against a fake Jira', () => {
     assert.equal(j.issues.get('OXE-105').status, 'Em desenvolvimento');
     assert.equal(j.issues.get('OXE-105').comments.length, 1);
     assert.equal(j.issues.get('OXE-9').status, 'Em desenvolvimento', 'bare key not moved');
+    // R42: a card already past integrated is never moved back (a hotfix PR citing "Fecha OXE-1" later)
+    j.issues.get('OXE-1').status = 'Entregue com prova';
+    const later = await op.runtimeAlm(dir, null, { action: 'pr-merged', prData: { ...prData, number: 900, body: 'Fecha OXE-1' }, apply: true, http: j.http, env: ENV, sleep: async () => {} });
+    assert.equal(j.issues.get('OXE-1').status, 'Entregue com prova');
+    assert.equal(later.moved[0].already, true);
   });
 
   it('list: the cards in the given states, with the merged PRs citing each one', async () => {

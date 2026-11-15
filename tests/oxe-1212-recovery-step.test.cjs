@@ -72,6 +72,34 @@ describe('recoveryStep: each failure state → the command out of it', () => {
   });
 });
 
+describe('R42: recovery priorities', () => {
+  it('uncommitted work in the tree comes before another task\'s scope gap or empty checkpoint', () => {
+    const r = step({ doc: { tasks: [
+      { id: 'T4', files: ['b.ts'], checkpoint_failed: { kind: 'scope_insufficient', related_red: ['tests/x.test.ts'], reason: 'x' } },
+      { id: 'T1', files: ['a.ts'], checkpoint_failed: { reason: 'hook', snapshot: {} } },
+    ] } });
+    assert.equal(r.cursorCmd, 'oxe-cc runtime commit-task T1');
+  });
+
+  it('a deferral waits while other tasks of the plan are still pending; another phase\'s deferral never counts', () => {
+    const d = tmp();
+    const pd = path.join(d, '.oxe', 'program');
+    const dl = require('../bin/lib/oxe-deferred.cjs');
+    dl.add(pd, { task: 'T2', reason: 'logic', evidence: 'x', run_id: 'r', phase: 'F1' });
+    const doc = { tasks: [{ id: 'T2' }, { id: 'T3' }] };
+    assert.equal(recoveryStep(d, null, { programDir: pd, run: null, doc, phase: { id: 'F1' } }), null, 'T3 still to run: the plan goes on');
+    assert.equal(recoveryStep(d, null, { programDir: pd, run: null, doc: { tasks: [{ id: 'T2' }, { id: 'T3', done: true }] }, phase: { id: 'F1' } }).recovery, 'deferred');
+    assert.equal(recoveryStep(d, null, { programDir: pd, run: null, doc: { tasks: [{ id: 'T2' }] }, phase: { id: 'F2' } }), null, 'F1 deferral is not F2\'s');
+  });
+
+  it('a red verify of an older commit asks for /oxe-verify; with delivery.close "ci" the CI close decides', () => {
+    const run = { run_id: 'r', verification_status: 'failed', verification_head: 'aaaaaaaa', verification_check_results: [{ check_id: 'check-a1', status: 'fail' }] };
+    assert.equal(step({ run, head: 'bbbbbbbb', cfg: {} }).cursorCmd, '/oxe-verify');
+    assert.equal(step({ run, head: 'bbbbbbbb', cfg: { delivery: { close: 'ci' } } }), null);
+    assert.equal(step({ run, head: 'aaaaaaaa', cfg: {} }).cursorCmd, '/oxe-execute');
+  });
+});
+
 describe('delivery.close "ci": the phase closes on its CI, guided', () => {
   it('work done → attach a CI run; attached → program close --by-ci; closing by verify → null', () => {
     const d = tmp();

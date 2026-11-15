@@ -8107,6 +8107,9 @@ async function main() {
     else if (sub === 'comment') { o.ref = positional[0]; if (positional[1] && !o.text) o.text = positional.slice(1).join(' '); }
     // alm status OXE-144: a card key, not a folder
     else if (sub === 'status' && positional[0] && /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(positional[0])) o.ref = positional[0].toUpperCase();
+    // alm pr-merged 871 / alm list "Na main": a PR number and a board state, not a folder (R42)
+    else if (sub === 'pr-merged' && positional[0] && /^#?\d+$/.test(positional[0])) { if (!o.pr) o.pr = positional[0]; }
+    else if (sub === 'list' && positional[0]) { if (!o.state) o.state = positional[0]; }
     else if (positional[0]) o.dir = path.resolve(positional[0]);
     if (sub === 'move' && (!o.ref || !o.stage)) { console.error(`${red}Uso:${reset} oxe-cc alm move <US-n|Tn|chave> <intake|grooming|refinement|ready|in_progress|review|verified|queued|integrated|staging|accepted|released> [--comment "…"]`); process.exit(1); }
     try {

@@ -527,11 +527,37 @@ function registryManifestGaps(root, planDoc, options = {}) {
   const known = () => new Set(options.files || trackedFiles(root));
   let knownSet = null;
   let aliases = null;
+  // R42: VALUE imports only (an `import type` never checks a key at run time), memoized; per target, the names imported
+  const memo = new Map();
   const importsOf = (file) => {
+    if (memo.has(file)) return memo.get(file);
     if (!knownSet) knownSet = known();
     if (!aliases) aliases = pb.loadPathAliases(root);
-    return pb.extractModuleImports(read(file)).map((imp) => pb.resolveModuleSpecifier(file, imp.specifier, knownSet, aliases)).filter(Boolean);
+    const src = read(file);
+    const out = new Map();
+    const add = (spec, names, wildcard) => {
+      const target = pb.resolveModuleSpecifier(file, spec, knownSet, aliases);
+      if (!target) return;
+      const cur = out.get(target) || { names: new Set(), wildcard: false };
+      for (const n of names) cur.names.add(n);
+      if (wildcard) cur.wildcard = true;
+      out.set(target, cur);
+    };
+    for (const m of src.matchAll(/\bimport\s+(type\s+)?([\s\S]*?)\s+from\s*['"]([^'"]+)['"]/g)) {
+      if (m[1]) continue;
+      const clause = m[2];
+      const named = /\{([\s\S]*)\}/.exec(clause);
+      const names = named ? named[1].split(',').map((x) => x.trim()).filter((x) => x && !/^type\s/.test(x)).map((x) => x.split(/\s+as\s+/)[0].trim()) : [];
+      const wildcard = /\*\s+as\s+/.test(clause) || /^[A-Za-z_$][\w$]*\s*(,|$)/.test(clause.trim());
+      if (names.length || wildcard) add(m[3], names, wildcard);
+    }
+    for (const m of src.matchAll(/\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) add(m[1], [], true);
+    memo.set(file, out);
+    return out;
   };
+  const constsMemo = new Map();
+  const constsOf = (f) => { if (!constsMemo.has(f)) constsMemo.set(f, exportedConstants(read(f))); return constsMemo.get(f); };
+  const usesConst = (imp, consts) => Boolean(imp) && consts.size > 0 && (imp.wildcard || [...imp.names].some((n) => consts.has(n)));
   const out = [];
   const seen = new Set();
   for (const t of pending) {
@@ -546,12 +572,23 @@ function registryManifestGaps(root, planDoc, options = {}) {
       out.push({ task: t.id, registry, manifest, suite, declared: isDeclared });
     };
     for (const p of declared) if (own.some((f) => testScope.covers(f, p.registry))) push(p.registry, p.manifest, null, true);
-    if (options.detect === false) continue;
+    // R42: detection is opt-in (lint.registry_detect: true) — the declared pair is the reliable form (in the real F6
+    // case the manifest does not even import the registry). Detected: the suite uses constants of BOTH, the manifest
+    // imports the registry by value, and both export constants (types, errors and helpers never count).
+    if (options.detect !== true) continue;
     const { byTarget } = lazyIndex();
     for (const registry of registries) {
+      const regConsts = constsOf(registry);
+      if (!regConsts.size) continue;
       for (const hit of byTarget.get(registry) || []) {
-        const suiteTargets = importsOf(hit.test).filter((m) => m !== registry && !TEST_RE.test(m) && CODE_RE.test(m));
-        for (const m of suiteTargets) if (!inScope(m) && importsOf(m).includes(registry)) push(registry, m, hit.test, false);
+        const suiteImps = importsOf(hit.test);
+        if (!usesConst(suiteImps.get(registry), regConsts)) continue;
+        for (const [m, imp] of suiteImps) {
+          if (m === registry || TEST_RE.test(m) || !CODE_RE.test(m) || inScope(m)) continue;
+          if (!usesConst(imp, constsOf(m))) continue;
+          if (!importsOf(m).has(registry)) continue;
+          push(registry, m, hit.test, false);
+        }
       }
     }
   }

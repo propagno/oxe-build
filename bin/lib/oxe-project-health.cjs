@@ -2215,6 +2215,10 @@ function suggestProgramStep(target, activeSession, activeRun) {
     return { step: 'execute', cursorCmd: '/oxe-execute', reason: `${label}: em execução — concluir e verificar.`, artifacts: programArtifacts, program };
   }
   if (phase.status === 'verifying') {
+    // delivery.close "ci" set while the phase was already verifying (R42): the CI close decides here too
+    let ciCloseV = null;
+    try { ciCloseV = require('./oxe-journey.cjs').ciCloseStep(target, activeSession, phase, { label, program }); } catch { ciCloseV = null; }
+    if (ciCloseV) return ciCloseV;
     const runChecks = activeRun && Array.isArray(activeRun.verification_check_results) ? activeRun.verification_check_results : [];
     const onlyManualPending = activeRun && activeRun.status === 'blocked' && runChecks.length > 0
       && runChecks.every((c) => c.status === 'pass' || (c.status === 'skip' && c.skip_reason === 'needs_structured_check'));

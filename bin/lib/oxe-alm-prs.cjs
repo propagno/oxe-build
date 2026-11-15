@@ -30,13 +30,22 @@ const normKey = (k) => String(k).toUpperCase().replace(/^AB#/, 'AB#');
  */
 function prMarkers(texts, cfg) {
   const kp = keyPattern(cfg);
-  const list = `(${kp}(?:\\s*(?:,|e|and|&)\\s*${kp})*)`;
+  // a list of keys: "A, B e C", "A, B, and C" (Oxford comma), "A/B", "A & B" (R42)
+  const sep = '(?:\\s*,\\s*(?:e|and|&)\\s+|\\s*[,/&]\\s*|\\s+(?:e|and)\\s+)';
+  const list = `(${kp}(?:${sep}${kp})*)`;
   const all = (Array.isArray(texts) ? texts : [texts]).map((t) => String(t || '')).join('\n');
   const closes = new Set();
   const partial = new Set();
-  const grab = (re, into) => { for (const m of all.matchAll(re)) for (const k of m[1].match(new RegExp(kp, 'gi')) || []) into.add(normKey(k)); };
-  grab(new RegExp(`\\b${CLOSE_WORDS}\\s*:?\\s+${list}`, 'gi'), closes);
-  grab(new RegExp(`\\b${PART_WORDS}\\s*:?\\s+${list}`, 'gi'), partial);
+  // R42: a marker is a DIRECTIVE — at the start of a line (or after "-", "*", "(", ".", ";", ":"), or with a colon
+  // ("Fecha: X"). Prose ("quando o modal fecha OXE-105") and a negation ("não fecha", "does not close") never count.
+  const lead = '(?:^|[\\r\\n]|[-*(.;:]\\s*)\\s*';
+  const neg = '(?<!\\b(?:n[ãa]o|sem|nunca|not|never|doesn\'t|don\'t|won\'t|isn\'t)\\s+)';
+  const grab = (words, into) => {
+    const res = [new RegExp(`${lead}${neg}${words}\\s*:?\\s+${list}`, 'gim'), new RegExp(`${neg}\\b${words}\\s*:\\s*${list}`, 'gi')];
+    for (const re of res) for (const m of all.matchAll(re)) for (const k of m[1].match(new RegExp(kp, 'gi')) || []) into.add(normKey(k));
+  };
+  grab(CLOSE_WORDS, closes);
+  grab(PART_WORDS, partial);
   for (const k of closes) partial.delete(k);
   const bare = new Set();
   for (const k of all.match(new RegExp(kp, 'gi')) || []) { const n = normKey(k); if (!closes.has(n) && !partial.has(n)) bare.add(n); }
@@ -89,8 +98,10 @@ async function prMerged(root, programDir, cfg, almLib, options = {}) {
   for (const c of plan.close) {
     if (c.skip) continue;
     try {
-      const r = await almLib.move(programDir, cfg, c.key, 'integrated', { ...net, comment: `PR #${pr.number} mergeado (${pr.url || ''}) — fecha o card` });
-      out.moved.push({ key: c.key, ...(r.queued ? { queued: true } : {}), ...(r.changed === false ? { already: true } : {}) });
+      // only forward (R42): a card already in staging / accepted / released is never moved back to integrated
+      const r = await almLib.moveForward(programDir, cfg, c.key, 'integrated', { ...net, comment: `PR #${pr.number} mergeado (${pr.url || ''}) — fecha o card` });
+      if (r && r.planned) continue; // cfg.dry_run: nothing was written, nothing recorded
+      out.moved.push({ key: c.key, ...(r && r.queued ? { queued: true } : {}), ...(r && (r.changed === false || r.skipped) ? { already: true, ...(r.why ? { why: r.why } : {}) } : {}) });
       rec({ action: 'moved', key: c.key });
     } catch (err) { out.errors.push(`${c.key}: ${err.message}`); }
   }

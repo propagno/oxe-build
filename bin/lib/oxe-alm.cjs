@@ -936,7 +936,8 @@ async function move(programDir, cfg, refOrKey, stage, options = {}) {
  * (OXE-12 in Jira, 123 in Azure), the way refine and grill publish take it (OXB-G17). "US-1" is never a key.
  */
 function resolveItem(programDir, cfg, refOrKey) {
-  const s = String(refOrKey || '').trim();
+  // Azure DevOps keys come as "AB#123" from PR text; the ledger and the API use "123" (R42)
+  const s = cfg && cfg.provider === 'azure-devops' ? String(refOrKey || '').trim().replace(/^AB#/i, '') : String(refOrKey || '').trim();
   const all = links(programDir);
   const known = all.get(s) || [...all.values()].find((l) => l.key === s || l.key === s.toUpperCase());
   if (known) return known;
