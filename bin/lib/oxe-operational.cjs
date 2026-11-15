@@ -2442,6 +2442,23 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
     return { provider: cfg ? cfg.provider : 'none', transport: cfg ? cfg.transport : null, ops: lib.pendingOps(programDir) };
   }
   if (!cfg) throw new Error('ALM não configurado: defina "alm": { "provider": "jira" | "azure-devops", … } no .oxe/config.json (sem ALM, o OXE segue normalmente)');
+  // alm list (OxeSpace 15/11): read only — the cards in the given board states, with the merged PRs citing each one
+  if (options.action === 'list') {
+    const states = String(options.state || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (!states.length) throw new Error('uso: oxe-cc alm list --state "<estado do quadro>"[,…] [--with-prs] [--json]');
+    if (problems.length) throw new Error(`ALM: ${problems.join('; ')}`);
+    const prov = lib.provider(cfg, { http: options.http, env, sleep: options.sleep, readOnly: true });
+    if (prov.deferred) throw new Error('alm list lê o quadro pela API REST; com alm.transport "mcp", consulte pela ferramenta MCP da sessão');
+    if (typeof prov.searchByStates !== 'function') throw new Error(`${cfg.provider}: alm list ainda não suportado`);
+    const cards = await prov.searchByStates(states);
+    if (options.withPrs) {
+      const byKey = require('./oxe-alm-prs.cjs').mergedPrsByKey(projectRoot, cfg, { ghSpawn: options.ghSpawn, repo: options.repo });
+      for (const card of cards) card.prs = byKey.get(String(card.key).toUpperCase()) || [];
+    }
+    return { states, count: cards.length, cards, with_prs: Boolean(options.withPrs) };
+  }
+  // alm pr-merged (OxeSpace 15/11, OXE-277): a dry run unless --apply
+  if (options.action === 'pr-merged' && !options.apply) options = { ...options, dryRun: true };
   const dryRun = lib.isDry(cfg, options);
   if (problems.length && !dryRun) throw new Error(`ALM: ${problems.join('; ')}`);
   // A dry run with the credentials in place still READS (what exists, what would be adopted); it never writes.
@@ -2449,7 +2466,7 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
   const phase = activeProgramPhase(projectRoot, activeSession);
   // OXB-b: one writer per program (alm.writer); the other sessions read and comment. A local lock keeps two writers
   // on the same machine from creating the same batch at once.
-  const WRITES = ['push', 'sync', 'move', 'defect', 'ack', 'link', 'label', 'version', 'summary', 'supersede'];
+  const WRITES = ['push', 'sync', 'move', 'defect', 'ack', 'link', 'label', 'version', 'summary', 'supersede', 'pr-merged'];
   const writes = WRITES.includes(options.action) || (options.action === 'pending' && options.sub === 'apply');
   if ((writes || options.action === 'comment') && !dryRun && !options.auto) lib.warnApply(cfg, options);
   if (writes && !dryRun) {
@@ -2461,6 +2478,12 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
   if (options.action === 'comment') {
     const ref = /^T\d+$/i.test(options.ref || '') ? lib.taskRef(phase ? phase.id : null, options.ref.toUpperCase()) : options.ref;
     return lib.comment(programDir, cfg, ref, options.text || options.comment, net);
+  }
+  if (options.action === 'pr-merged') {
+    const prsLib = require('./oxe-alm-prs.cjs');
+    const out = await prsLib.prMerged(projectRoot, programDir, cfg, lib, { pr: options.pr, repo: options.repo, ghSpawn: options.ghSpawn, apply: !dryRun, net, prData: options.prData });
+    if (!out.dry_run) appendEvent(projectRoot, activeSession, { type: 'AlmPrMerged', payload: { pr: out.pr, moved: out.moved.map((m) => m.key), commented: out.commented, bare: out.bare, errors: out.errors } });
+    return out;
   }
   if (options.action === 'ack') {
     if (!options.ref) throw new Error('uso: oxe-cc alm ack <id-da-operação|US-n|Fn-Tn> [--key <chave>] [--url <url>] [--error "…"]');
@@ -7458,6 +7481,22 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     if (cfgAlm) almKey = almLib.keyFor(resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program'), cfgAlm, ph ? ph.id : null, taskId);
   } catch { almKey = null; }
   if (almKey) result.alm_key = almKey;
+  // OxeSpace 15/11 (OXE-277): the body says "Fecha KEY" only for the card's last open task, "Parte de KEY" otherwise —
+  // the merge (alm pr-merged) moves the card only on "Fecha"
+  if (almKey) {
+    try {
+      const almLib = require('./oxe-alm.cjs');
+      const cfgAlm = almLib.almConfig(readProjectConfig(projectRoot) || {});
+      const ph = activeProgramPhase(projectRoot, activeSession);
+      const pd = resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program');
+      const docM = readPlanJsonDoc(projectRoot, activeSession).doc;
+      const mk = require('./oxe-alm-prs.cjs').prMarkerFor(almKey, taskId, docM, (id) => almLib.keyFor(pd, cfgAlm, ph ? ph.id : null, id));
+      if (mk) {
+        result.alm_marker = mk.marker;
+        writeTextAtomic(bodyFile, `${body}\n${mk.marker}${mk.open_tasks.length ? ` (ainda abertas no card: ${mk.open_tasks.join(', ')})` : ''}\n`);
+      }
+    } catch { /* auxiliar: o PR segue sem o marcador */ }
+  }
   const title = `${taskId}: ${task.title || 'promote'}${almKey ? ` (${almKey})` : ''}`;
   // OXB-157: the PR targets the branch NAME on the remote (`main`), not the local tracking ref (`origin/main`).
   const prBase = base.replace(new RegExp(`^${remote}/`), '');

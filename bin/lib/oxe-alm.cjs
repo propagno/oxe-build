@@ -224,6 +224,20 @@ function jiraProvider(cfg, env, ctx) {
     name: 'jira',
     keyText: (key) => key,
     url: keyUrl,
+    // alm list (OxeSpace 15/11): the cards in the given board states, every page (nextPageToken)
+    async searchByStates(states) {
+      const quoted = states.map((s) => `"${String(s).replace(/"/g, '\\"')}"`).join(', ');
+      const jql = `project = "${project}" AND status in (${quoted}) ORDER BY key ASC`;
+      const out = [];
+      let token = null;
+      for (let page = 0; page < 50; page += 1) {
+        const r = await request(c, 'GET', `${site}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=summary,status&maxResults=100${token ? `&nextPageToken=${encodeURIComponent(token)}` : ''}`);
+        for (const i of (r && r.issues) || []) out.push({ key: i.key, summary: i.fields && i.fields.summary ? i.fields.summary : '', status: i.fields && i.fields.status ? i.fields.status.name : null, url: keyUrl(i.key) });
+        token = r && r.nextPageToken ? r.nextPageToken : null;
+        if (!token || (r && r.isLast)) break;
+      }
+      return out;
+    },
     async findByLabel(label) {
       const jql = `project = "${project}" AND labels = "${label}"`;
       const r = await request(c, 'GET', `${site}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=summary,status&maxResults=2`);

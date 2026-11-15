@@ -8064,7 +8064,7 @@ async function main() {
   }
 
   if (command === 'alm') {
-    const SUBS = ['status', 'push', 'sync', 'move', 'link', 'label', 'version', 'summary', 'supersede', 'pending', 'defect', 'comment', 'queue', 'ack'];
+    const SUBS = ['status', 'push', 'sync', 'move', 'link', 'label', 'version', 'summary', 'supersede', 'pending', 'defect', 'comment', 'queue', 'ack', 'pr-merged', 'list'];
     const sub = SUBS.includes(argv[0]) ? argv[0] : 'status';
     const o = { dir: process.cwd(), json: false, dryRun: false };
     const positional = [];
@@ -8077,6 +8077,8 @@ async function main() {
       else if (a === '--tasks-only') o.stories = false;
       else if (a === '--rebuild-ledger') o.rebuildLedger = true;
       else if (a === '--first-push') o.firstPush = true;
+      else if (a === '--with-prs') o.withPrs = true;
+      else if (a === '--state' && argv[i + 1] != null) o.state = String(argv[++i]);
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
       else if (a === '--by' && sub === 'supersede' && argv[i + 1]) o.newKeys = String(argv[++i]);
       else if (a === '--close-to' && sub === 'supersede' && argv[i + 1]) o.closeTo = String(argv[++i]);
@@ -8125,6 +8127,20 @@ async function main() {
             console.log(`  ${cyan}${op.id}${reset}  ${where}${op.last_error ? `  ${red}(última falha: ${op.last_error})${reset}` : ''}`);
           }
           console.log(`  ${dim}detalhe (busca por rótulo, campos): oxe-cc alm queue --json${reset}`);
+        }
+      } else if (sub === 'pr-merged') {
+        const mark = (c) => (c.skip ? ' (já feito por este PR)' : '');
+        for (const c of out.close) console.log(`  ${tag}${out.dry_run ? 'moveria' : 'move'} ${c.key} → integrated${mark(c)}`);
+        for (const c of out.comment) console.log(`  ${tag}${out.dry_run ? 'comentaria' : 'comenta'} ${c.key} (parte do card)${mark(c)}`);
+        if (out.bare.length) console.log(`  ${yellow}!${reset} chave sem Fecha/Parte de (não movida): ${out.bare.join(', ')}`);
+        for (const e of out.errors || []) console.log(`  ${red}✗${reset} ${e}`);
+        if (out.dry_run) console.log(`  ${dim}ensaio: nada foi gravado no ALM. Para gravar: oxe-cc alm pr-merged --pr ${out.pr} --apply${reset}`);
+        if ((out.errors || []).length) process.exitCode = 1;
+      } else if (sub === 'list') {
+        console.log(`  ${out.count} card(s) em ${out.states.join(', ')}`);
+        for (const card of out.cards) {
+          const prsTxt = out.with_prs ? (card.prs.length ? ` · ${card.prs.map((x) => `#${x.pr}${x.kind === 'closes' ? ' fecha' : x.kind === 'partial' ? ' parte' : ''}`).join(', ')}` : ` · ${yellow}sem PR mergeado${reset}`) : '';
+          console.log(`  ${card.key}  ${card.status || '—'}  ${card.summary}${prsTxt}`);
         }
       } else if (sub === 'ack') {
         console.log(out.failed ? `  ${yellow}!${reset} ${out.id}: falha registrada (tentativa ${out.attempts}); continua na fila` : `  ${green}✓${reset} ${out.id} concluída · ${out.remaining} na fila`);
