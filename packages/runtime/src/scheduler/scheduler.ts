@@ -368,9 +368,10 @@ export class Scheduler {
       }
     }
 
-    // Any remaining pending nodes become blocked
+    // Any remaining pending nodes become blocked — not on a pause: they are the work the resume picks up (OxeSpace
+    // 15/11, OxeCode F4: a requested pause after T17 marked T18 "upstream_wave_failed" and printed FAIL)
     for (const [id, s] of status) {
-      if (s === 'pending') {
+      if (s === 'pending' && !this.paused) {
         status.set(id, 'blocked');
         blocked.push(id);
         this.emit(ctx, {
@@ -504,7 +505,7 @@ export class Scheduler {
     }
 
     for (const [id, s] of status) {
-      if (s === 'pending') {
+      if (s === 'pending' && !this.paused) {
         status.set(id, 'blocked');
         blocked.push(id);
         this.emit(ctx, {

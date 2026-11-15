@@ -60,6 +60,10 @@ describe('G9: oxe-cc quick — a verifiable record, the QUICK.md mini-spec, the 
     assert.match(git(dir, 'log', '-1', '--format=%B'), new RegExp(`OXE-Quick: ${s.id}`));
     // prose in --verify is refused before anything runs (OXE-158: "->" became a redirect)
     await assert.rejects(op.runtimeQuick(dir, null, { action: 'done', verify: 'testes verdes -> ok' }), /parece texto/);
+    // POSIX quoting runs in a POSIX shell (Git bash on Windows): exit 3, not cmd.exe's literal-quote exit 0
+    const posix = await op.runtimeQuick(dir, null, { action: 'done', verify: "node -e 'process.exit(3)'" });
+    assert.equal(posix.closed, false);
+    assert.equal(posix.verify.exit, 3, JSON.stringify(posix.verify));
     // a failing verification keeps it open; a passing one closes it with the commit found by the trailer
     const bad = await op.runtimeQuick(dir, null, { action: 'done', verify: 'node -e "process.exit(3)"' });
     assert.equal(bad.closed, false);

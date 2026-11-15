@@ -48,6 +48,9 @@ function graph() {
             strict_1.default.deepEqual(ran, ['T1'], 'T2 nunca começa');
             strict_1.default.equal(result.status, 'paused');
             strict_1.default.ok(result.completed.includes('T1'));
+            // T2 stays pending for the resume: never "blocked" by the pause (OxeSpace 15/11, OxeCode F4 T18)
+            strict_1.default.ok(!result.blocked.includes('T2'), JSON.stringify(result.blocked));
+            strict_1.default.equal(events.filter((e) => e.type === 'WorkItemBlocked').length, 0);
             const ev = events.find((e) => e.type === 'RunPaused');
             strict_1.default.equal((ev?.payload).reason, 'requested');
         }

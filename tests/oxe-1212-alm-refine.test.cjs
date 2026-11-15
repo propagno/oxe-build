@@ -137,6 +137,19 @@ describe('alm refine: lint', () => {
   it('the raw skeleton fails; vague criterion, criterion without test, empty out-of-scope and A confirmar without question are caught', () => {
     const c = { key: 'OXE-1', url: 'u', kind: 'story', type: 'Story', status: 'A fazer', summary: 'x', description: '', description_hash: 'h', labels: [], parent: null, links: [], comments: [], fix_versions: [], dev: null, code_refs: [], code_refs_found: [], design_refs: [], collected_at: 'now' };
     assert.equal(refine.lintSpec(refine.skeleton(c), 'story').ok, false);
+    // OxeSpace 15/11 (OXE-166..169): a card written by alm intake --from <spec> keeps its sections — never reset to
+    // "A confirmar", never the whole description under Contexto cut after ~12 lines
+    const spec = ['O chat novo da 1.5.2.', '', '## História', '', 'Como **operador**, quero **ver cada chamada**, para **confiar no agente**.', '', '## Critérios de aceite', '',
+      ...[1, 2, 3, 4, 5, 6].map((n) => `${n}. **CA-${n}** — Dado o chat, quando a chamada ${n} roda, então aparece em 200 ms · Teste: tests/chat.test.ts`), '',
+      '## Regras de negócio', '', '- **RN-1** — uma chamada por linha', '', '## Regras técnicas', '', '- **RT-1** — sem pacote novo'].join('\n');
+    const kept = refine.skeleton({ ...c, description: spec });
+    const secs = new Map([...kept.replace(/<!--[\s\S]*?-->/g, '').split(/^## /m)].slice(1).map((b) => [b.split('\n')[0].trim(), b]));
+    assert.match(secs.get('História'), /quero \*\*ver cada chamada\*\*/);
+    assert.match(secs.get('Critérios de aceite'), /CA-6/, 'not cut after CA-3');
+    assert.match(secs.get('Regras de negócio'), /RN-1\*\* — uma chamada por linha/);
+    assert.match(secs.get('Regras técnicas'), /sem pacote novo/);
+    assert.match(secs.get('Contexto'), /^Contexto\n+O chat novo da 1\.5\.2\./);
+    assert.doesNotMatch(secs.get('Contexto'), /CA-1/, 'the sections do not go under Contexto');
     const bad = GOOD_STORY().replace('em até 2 s · Teste: e2e/send.spec.ts › envia texto', 'de forma rápida · Teste: A confirmar').replace('- Enviar arquivos e imagens.', '- A confirmar').replace('- Qual o risco aceito para perda da fila offline ao fechar o app?', '');
     const r = refine.lintSpec(bad, 'story');
     assert.ok(r.errors.some((e) => /CA-1 é vago \("rápid/.test(e)));

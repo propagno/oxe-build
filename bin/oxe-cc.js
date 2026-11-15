@@ -7981,7 +7981,7 @@ async function main() {
   }
 
   if (command === 'alm') {
-    const SUBS = ['status', 'push', 'sync', 'move', 'link', 'label', 'version', 'summary', 'pending', 'defect', 'comment', 'queue', 'ack'];
+    const SUBS = ['status', 'push', 'sync', 'move', 'link', 'label', 'version', 'summary', 'supersede', 'pending', 'defect', 'comment', 'queue', 'ack'];
     const sub = SUBS.includes(argv[0]) ? argv[0] : 'status';
     const o = { dir: process.cwd(), json: false, dryRun: false };
     const positional = [];
@@ -7995,6 +7995,7 @@ async function main() {
       else if (a === '--rebuild-ledger') o.rebuildLedger = true;
       else if (a === '--first-push') o.firstPush = true;
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (a === '--by' && sub === 'supersede' && argv[i + 1]) o.newKeys = String(argv[++i]);
       else if (['--title', '--origin', '--comment', '--description', '--ref', '--key', '--url', '--error', '--adopted', '--text', '--cr', '--pr', '--repo', '--relates', '--add', '--kind'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
       else if (!a.startsWith('-')) positional.push(a);
       else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
@@ -8003,6 +8004,10 @@ async function main() {
     else if (sub === 'link') { o.ref = positional[0]; o.key = positional[1]; }
     else if (sub === 'label') { o.ref = positional[0]; if (!o.add && positional[1]) o.add = positional[1]; }
     else if (sub === 'pending') { o.sub = positional[0] === 'apply' ? 'apply' : 'list'; }
+    else if (sub === 'supersede') {
+      o.ref = positional[0];
+      if (!o.ref || !o.newKeys) { console.error(`${red}Uso:${reset} oxe-cc alm supersede <ANTIGO> --by <NOVO>[,<NOVO>] [--comment "…"] [--apply | --dry-run] — liga, comenta e fecha o card antigo como substituído; só o escritor`); process.exit(1); }
+    }
     else if (sub === 'summary') {
       o.ref = positional[0]; o.summary = positional.slice(1).join(' ');
       if (!o.ref || !o.summary) { console.error(`${red}Uso:${reset} oxe-cc alm summary <KEY> "<título>" [--comment "…"] [--apply | --dry-run] — troca o título de um card existente; só o escritor`); process.exit(1); }
@@ -8067,6 +8072,13 @@ async function main() {
           for (const f of out.failed) console.log(`  ${red}✗${reset} ${f.id} ${f.key}: ${f.error} — fica pendente`);
           console.log(`  ${out.applied.length} aplicado(s) · ${out.remaining} pendente(s)${out.sync && out.sync.moved ? ` · sync: ${out.sync.moved.filter((m) => m.changed).length} movido(s)` : ''}`);
         }
+      } else if (sub === 'supersede') {
+        const p = out.planned || out;
+        const head = out.planned ? `${yellow}(simulação)${reset} ` : `${green}✓${reset} `;
+        console.log(`  ${head}${p.key} substituído por ${p.by.join(', ')} · link "${p.link_type}"${p.links.length ? ` (novo: ${p.links.join(', ')})` : ''}${p.already_linked.length ? ` (já ligado: ${p.already_linked.join(', ')})` : ''}`);
+        console.log(`    ${p.close.skipped ? `não fecha: ${p.close.why}` : `fecha por "${p.close.transition}" → "${p.close.to}"${p.close.resolution ? ` (resolution ${p.close.resolution})` : ''}`}${out.applied ? ` · agora em "${out.status}"` : ''}`);
+        console.log(`    comentário: ${p.comment}`);
+        if (out.planned) console.log(`  ${dim}nada foi gravado no ALM; para gravar, rode com --apply${o.dryRun ? ' e sem --dry-run' : ''}${reset}`);
       } else if (sub === 'summary' && !out.planned) {
         console.log(out.ok ? `  ${green}✓${reset} ${out.key}: título "${out.summary}"${out.commented ? ' · comentado' : ''}` : `  ${red}✗${reset} ${out.key}: o Jira não confirmou o título (agora: "${out.summary || '—'}")`);
         if (!out.ok) process.exitCode = 1;
@@ -8926,9 +8938,13 @@ async function main() {
     let reviewWaive = null;
     let reviewBy = null;
     let reviewReason = null;
+    let precheckTests = false;
+    let precheckRuns = 0;
     for (let i = 0; i < rest.length; i += 1) {
       const a = rest[i];
       if (a === '--json') json = true;
+      else if (a === '--precheck-tests') precheckTests = true;
+      else if (a === '--precheck-runs' && rest[i + 1]) { precheckTests = true; precheckRuns = Number(rest[++i]) || 0; }
       else if (a === '--mutation') mutation = true;
       else if (a === '--review') review = true;
       else if (a === '--read') planRead = true;
@@ -8978,7 +8994,7 @@ async function main() {
     try {
       // Progress goes to stderr, so --json on stdout stays parseable.
       const onProgress = quiet ? null : (line) => process.stderr.write(`  ${line}\n`);
-      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave, dryVerify, preflight: !noPreflight, onProgress, resume, changed, only, dryVerifyAnyway, mutation, mutationMax, review, reviewWaive, by: reviewBy, reason: reviewReason });
+      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave, dryVerify, preflight: !noPreflight, onProgress, resume, changed, only, dryVerifyAnyway, mutation, mutationMax, review, reviewWaive, by: reviewBy, reason: reviewReason, precheckTests, precheckRuns });
     } catch (err) {
       console.error(`${red}✗${reset} ${err && err.message ? err.message : err}`);
       process.exit(1);

@@ -266,6 +266,37 @@ function jiraProvider(cfg, env, ctx) {
     },
     async comment(key, text) { await request(c, 'POST', `${site}/rest/api/3/issue/${key}/comment`, { body: adf(text) }); },
     async link(key, otherKey, type = 'Relates') { await request(c, 'POST', `${site}/rest/api/3/issueLink`, { type: { name: type }, inwardIssue: { key }, outwardIssue: { key: otherKey } }); },
+    /** OxeSpace 15/11 (alm supersede): the link types the site has, the issue's links and the close transition. */
+    async linkTypes() {
+      const r = await request(c, 'GET', `${site}/rest/api/3/issueLinkType`);
+      return ((r && r.issueLinkTypes) || []).map((t) => ({ name: t.name, inward: t.inward, outward: t.outward }));
+    },
+    async links(key) {
+      const r = await request(c, 'GET', `${site}/rest/api/3/issue/${key}?fields=issuelinks,status`);
+      const f = (r && r.fields) || {};
+      return {
+        status: f.status ? f.status.name : null,
+        done: Boolean(f.status && f.status.statusCategory && f.status.statusCategory.key === 'done'),
+        linked: (f.issuelinks || []).map((l) => (l.inwardIssue || l.outwardIssue || {}).key).filter(Boolean),
+      };
+    },
+    async linkDirected(type, inwardKey, outwardKey) { await request(c, 'POST', `${site}/rest/api/3/issueLink`, { type: { name: type }, inwardIssue: { key: inwardKey }, outwardIssue: { key: outwardKey } }); },
+    /** The transition to a done-category status (cancel / won't do / superseded first) and its resolution, if any. */
+    async closeTransition(key) {
+      const r = await request(c, 'GET', `${site}/rest/api/3/issue/${key}/transitions?expand=transitions.fields`);
+      const ts = ((r && r.transitions) || []).filter((t) => t.to && t.to.statusCategory && t.to.statusCategory.key === 'done');
+      const pref = /cancel|won.?t|superse|descart|desist|n[aã]o (ser[aá] )?feit|obsolet|duplic/i;
+      const t = ts.find((x) => pref.test(x.name) || pref.test(x.to.name)) || ts[0] || null;
+      if (!t) return null;
+      const resField = t.fields && t.fields.resolution;
+      const values = (resField && resField.allowedValues) || [];
+      const res = values.find((v) => /won.?t|superse|duplic|n[aã]o ser[aá]|descart|obsolet|cancel/i.test(v.name)) || null;
+      return { id: t.id, name: t.name, to: t.to.name, resolution: res ? res.name : null, resolution_required: Boolean(resField && resField.required) };
+    },
+    async applyTransition(key, tr) {
+      await request(c, 'POST', `${site}/rest/api/3/issue/${key}/transitions`, { transition: { id: tr.id }, ...(tr.resolution ? { fields: { resolution: { name: tr.resolution } } } : {}) });
+      return this.status(key);
+    },
     async remoteLink(key, url, title) {
       // globalId makes it idempotent: the same PR posted again updates the link instead of adding a second one
       await request(c, 'POST', `${site}/rest/api/3/issue/${key}/remotelink`, { globalId: `oxe-pr:${url}`, object: { url, title, icon: { url16x16: 'https://github.com/favicon.ico', title: 'GitHub' } } });
@@ -972,6 +1003,48 @@ async function setItemVersion(programDir, cfg, refOrKey, version, options = {}) 
   return { key: item.key, version: name, before: have, ...out, commented };
 }
 
+/**
+ * `alm supersede <OLD> --by <NEW>[,<NEW>] [--comment "…"]` (OxeSpace 15/11: the OxeChat redo closes 7 BRD cards as
+ * superseded by new ones). Links OLD to each NEW with the site's "supersedes" type (else Duplicate, else Relates),
+ * moves OLD to a done-category status (cancel / won't do / superseded first) with the matching resolution when the
+ * workflow has one, and comments. Idempotent: an existing link is not repeated, a card already done is not moved.
+ * A dry run only reads, and says what it would do.
+ */
+async function supersede(programDir, cfg, oldRef, newRefs, options = {}) {
+  const old = resolveItem(programDir, cfg, oldRef);
+  if (!old) throw new Error(`${oldRef}: sem item no ALM (use a chave do item)`);
+  const news = (Array.isArray(newRefs) ? newRefs : String(newRefs || '').split(',')).map((s) => resolveItem(programDir, cfg, String(s).trim())).filter(Boolean);
+  if (!news.length) throw new Error('informe o(s) card(s) novo(s): --by <KEY>[,<KEY>]');
+  if (news.some((n) => n.key === old.key)) throw new Error(`${old.key} não substitui a si mesmo`);
+  const prov = options.provider || provider(cfg, options);
+  if (prov.deferred) throw new Error('alm.transport "mcp": feche com as ferramentas do Jira do MCP — este comando grava só por REST');
+  if (typeof prov.linkTypes !== 'function') throw new Error(`${cfg.provider}: supersede ainda não suportado (só Jira)`);
+  const types = await prov.linkTypes();
+  const type = types.find((t) => /supersed/i.test(`${t.name} ${t.outward} ${t.inward}`)) || types.find((t) => /duplic/i.test(t.name)) || types.find((t) => /relat/i.test(t.name)) || null;
+  if (!type) throw new Error(`nenhum tipo de link utilizável no site (tem: ${types.map((t) => t.name).join(', ') || '—'})`);
+  const supersedesType = /supersed/i.test(`${type.name} ${type.outward}`);
+  const state = await prov.links(old.key);
+  const tr = state.done ? null : await prov.closeTransition(old.key);
+  const plan = {
+    key: old.key,
+    by: news.map((n) => n.key),
+    link_type: type.name,
+    links: news.filter((n) => !state.linked.includes(n.key)).map((n) => n.key),
+    already_linked: news.filter((n) => state.linked.includes(n.key)).map((n) => n.key),
+    close: state.done ? { skipped: true, why: `já em "${state.status}" (done)` } : tr ? { transition: tr.name, to: tr.to, resolution: tr.resolution } : { skipped: true, why: 'o fluxo não tem transição para um status done a partir daqui' },
+    comment: options.comment || `Substituído por ${news.map((n) => n.key).join(', ')}.`,
+  };
+  if (options.dryRun || cfg.dry_run) return { planned: plan };
+  // nothing to link and nothing to close: already superseded — no second comment
+  if (!plan.links.length && plan.close.skipped) return { ...plan, applied: false, unchanged: true, status: state.status };
+  if (tr && tr.resolution_required && !tr.resolution) throw new Error(`${old.key}: a transição "${tr.name}" exige resolution, e nenhuma do tipo won't do / superseded / duplicate existe — feche à mão`);
+  // "A supersedes B": the new card is the outward side; Duplicate/Relates: the old card duplicates the new one
+  for (const k of plan.links) await (supersedesType ? prov.linkDirected(type.name, old.key, k) : prov.linkDirected(type.name, k, old.key));
+  await comment(programDir, cfg, old.key, plan.comment, options);
+  const status = tr ? await prov.applyTransition(old.key, tr) : state.status;
+  return { ...plan, applied: true, status };
+}
+
 /** `alm summary <KEY> "<título>"`: an existing card's summary line (Jira, REST). Writer only. */
 async function setItemSummary(programDir, cfg, refOrKey, summary, options = {}) {
   const item = resolveItem(programDir, cfg, refOrKey);
@@ -1056,4 +1129,4 @@ function keyFor(programDir, cfg, phase, taskId) {
   return cfg && cfg.provider === 'azure-devops' ? `AB#${l.key}` : l.key;
 }
 
-module.exports = { almConfig, checkConfig, jiraRest, isWriter, writerError, withWriteLock, comment, provider, readQueue, pendingOps, enqueue, ack, dropEnsure, push, sync, move, stagesFromEvents, reportDefect, links, addLink, readState, keyFor, refLabel, taskRef, oldRefs, perPhase, STAGES, STAGE_INFO, STAGE_ALIASES, canonStage, adf, request, isDry, warnApply, resolveItem, linkPr, labelItem, relateItems, setItemVersion, setItemSummary, moveForward, addPending, listPending, applyPending, pendingFile };
+module.exports = { almConfig, checkConfig, jiraRest, isWriter, writerError, withWriteLock, comment, provider, readQueue, pendingOps, enqueue, ack, dropEnsure, push, sync, move, stagesFromEvents, reportDefect, links, addLink, readState, keyFor, refLabel, taskRef, oldRefs, perPhase, STAGES, STAGE_INFO, STAGE_ALIASES, canonStage, adf, request, isDry, warnApply, resolveItem, linkPr, labelItem, relateItems, setItemVersion, setItemSummary, supersede, moveForward, addPending, listPending, applyPending, pendingFile };

@@ -2382,7 +2382,7 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
   const phase = activeProgramPhase(projectRoot, activeSession);
   // OXB-b: one writer per program (alm.writer); the other sessions read and comment. A local lock keeps two writers
   // on the same machine from creating the same batch at once.
-  const WRITES = ['push', 'sync', 'move', 'defect', 'ack', 'link', 'label', 'version', 'summary'];
+  const WRITES = ['push', 'sync', 'move', 'defect', 'ack', 'link', 'label', 'version', 'summary', 'supersede'];
   const writes = WRITES.includes(options.action) || (options.action === 'pending' && options.sub === 'apply');
   if ((writes || options.action === 'comment') && !dryRun && !options.auto) lib.warnApply(cfg, options);
   if (writes && !dryRun) {
@@ -2447,6 +2447,11 @@ async function runtimeAlm(projectRoot, activeSession, options = {}) {
     let synced = null;
     try { synced = await runtimeAlm(projectRoot, activeSession, { ...options, action: 'sync', noLock: false }); } catch (err) { synced = { error: err.message }; }
     return { dry_run: dryRun, ...out, sync: synced };
+  }
+  if (options.action === 'supersede') {
+    const out = await lib.supersede(programDir, cfg, options.ref, options.newKeys, { ...net, comment: options.comment });
+    if (out.applied) appendEvent(projectRoot, activeSession, { type: 'AlmSuperseded', payload: { key: out.key, by: out.by, link_type: out.link_type, status: out.status } });
+    return { dry_run: dryRun, ...out };
   }
   if (options.action === 'summary') return { dry_run: dryRun, ...(await lib.setItemSummary(programDir, cfg, options.ref, options.summary, { ...net, comment: options.comment })) };
   if (options.action === 'version') return { dry_run: dryRun, ...(await lib.setItemVersion(programDir, cfg, options.ref, options.version, { ...net, comment: options.comment })) };
@@ -5831,6 +5836,31 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       }
     }
   } catch { /* auxiliar */ }
+  // G36 part 2: each pending task's frozen test against a stub, repeated — a hang or a flaky result is an error before
+  // any paid attempt depends on it (opt-in: it runs the suites).
+  if (options.precheckTests) {
+    try {
+      const { doc: pjp, paths: pp } = readPlanJsonDoc(projectRoot, activeSession);
+      if (pjp) {
+        const pre = require('./oxe-test-precheck.cjs');
+        if (typeof options.onProgress === 'function') options.onProgress(`precheck: ${pre.pendingAcceptance(pjp).length} teste(s) de aceite contra o stub, ${Math.max(2, Number(options.precheckRuns) || 2)} vez(es) cada`);
+        // G30b part 2: the suites outside the verify that import the task files, by the project's test runner
+        const rt0 = (readProjectConfig(projectRoot) || {}).checkpoint_related_tests;
+        const tpl = rt0 && typeof rt0 === 'object' && typeof rt0.run_command === 'string' && rt0.run_command.includes('{files}') ? rt0.run_command : 'npx vitest run {files}';
+        let suites = [];
+        try {
+          const found = require('./oxe-suite-impact.cjs').suiteImpact(projectRoot, pjp);
+          const seenS = new Set();
+          for (const f of found) for (const s of f.suites || []) if (!seenS.has(s.test)) { seenS.add(s.test); suites.push({ file: s.test, task: f.task, command: tpl.replace('{files}', s.test) }); }
+        } catch { suites = []; }
+        const r = pre.precheck(projectRoot, pjp, readJsonQuiet(pp.implementationPack), { runs: options.precheckRuns, suites, ...(options.precheckRun ? { run: options.precheckRun } : {}), ...(options.precheckWorkspace ? { workspace: options.precheckWorkspace } : {}) });
+        const msg = pre.messages(r);
+        result.errors.push(...msg.errors);
+        result.warnings.push(...msg.warnings);
+        result.precheck = r;
+      }
+    } catch (err) { result.warnings.push(`precheck dos testes não rodou: ${err && err.message ? err.message : err}`); }
+  }
   // G30: the existing suites that import a task's files and are not in its verify/scope (three paid redos, 14/11).
   try {
     const { doc: pjs } = readPlanJsonDoc(projectRoot, activeSession);

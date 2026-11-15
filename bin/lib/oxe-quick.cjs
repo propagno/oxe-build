@@ -96,6 +96,19 @@ function commitsOf(root, id, spawn = spawnSync) {
  * Closes the open quick: the commits found by its trailer, the verification (command + exit + tail of the output, run
  * by the CLI) and the result. A quick with no commit closes only with `noCommit` (nothing needed to change).
  */
+/** Git for Windows' bash, when installed (the usual paths, then PATH); null otherwise. */
+function gitBash() {
+  const candidates = [
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Git', 'bin', 'bash.exe'),
+    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'Git', 'bin', 'bash.exe'),
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'),
+  ].filter(Boolean);
+  for (const c of candidates) if (fs.existsSync(c)) return c;
+  const w = spawnSync('where', ['bash'], { encoding: 'utf8', windowsHide: true });
+  const first = w.status === 0 ? String(w.stdout || '').split(/\r?\n/).find((l) => /git/i.test(l) && /bash\.exe$/i.test(l.trim())) : null;
+  return first ? first.trim() : null;
+}
+
 function done(root, input = {}) {
   const rec = input.id ? read(root, input.id) : current(root);
   if (!rec) throw new Error('nenhum quick aberto (oxe-cc quick <KEY> "<objetivo>")');
@@ -110,7 +123,12 @@ function done(root, input = {}) {
   if (input.dryRun) return { ...rec, dry_run: true, commits, closed: null, would_verify: input.verify || null };
   let verify = null;
   if (input.verify) {
-    const r = spawn(input.verify, { cwd: root, encoding: 'utf8', shell: true, windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
+    // OxeSpace 15/11: on Windows `shell: true` is cmd.exe — a POSIX-quoted chain ('…' && …) broke (exit 127,
+    // "'node: command not found"). With POSIX syntax and Git's bash present, the verify runs in bash.
+    const bash = process.platform === 'win32' && /'|\$\(|\$[A-Za-z_{]|\bexport\s/.test(String(input.verify)) ? (input.bashPath !== undefined ? input.bashPath : gitBash()) : null;
+    const r = bash
+      ? spawn(bash, ['-c', input.verify], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 })
+      : spawn(input.verify, { cwd: root, encoding: 'utf8', shell: true, windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
     const outText = `${r.stdout || ''}${r.stderr || ''}`.trim().split('\n');
     verify = { command: input.verify, exit: r.status, ok: r.status === 0, tail: outText.slice(-12).join('\n') };
     if (!verify.ok) {

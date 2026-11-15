@@ -208,8 +208,27 @@ function skeleton(c) {
     'Referências': refs.length ? refs : ['- —'],
     'Perguntas em aberto': ['- (preencha com cada "A confirmar" acima, uma pergunta por linha)'],
   };
+  // OxeSpace 15/11 (OXE-166..169): a card written by `alm intake --from <spec>` already HAS the sections; the
+  // skeleton put the whole description under Contexto (cut after ~12 lines) and reset the rest to "A confirmar", and a
+  // later apply would have overwritten the real spec. Sections the card already has are kept as they are.
+  const norm = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const existing = new Map();
+  if (c.description && /^#{2,3}\s+\S/m.test(c.description)) {
+    for (const [name, text] of sectionsOf(String(c.description).replace(/^###\s+/gm, '## '))) {
+      if (String(text || '').trim()) existing.set(norm(name), String(text).trim().split('\n'));
+    }
+  }
+  const known = SECTIONS[kind].filter((s) => existing.has(norm(s)));
+  if (known.length) {
+    for (const s of known) body[s] = existing.get(norm(s));
+    // what the card says before its first section is the context, when the card has no "Contexto" of its own
+    if (!existing.has(norm('Contexto')) && SECTIONS[kind].includes('Contexto')) {
+      const lead = String(c.description).replace(/\r\n/g, '\n').split(/^#{2,3}\s+/m)[0].trim();
+      body.Contexto = [lead || TBC];
+    }
+  }
   const out = [
-    `<!-- oxe-refine: ${c.key} · tipo ${kind} · coletado ${c.collected_at} · descricao-sha ${c.description_hash} -->`,
+    `<!-- oxe-refine: ${c.key} · tipo ${kind} · coletado ${c.collected_at} · descricao-sha ${c.description_hash}${known.length ? ` · seções do card mantidas: ${known.length}` : ''} -->`,
     `# ${c.key} — ${c.summary || '(sem título)'}`,
     '',
   ];

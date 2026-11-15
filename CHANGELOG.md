@@ -24,6 +24,26 @@ Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-buil
 - **Eventos:** `AutoResumed` e `AutoResumeSkipped`.
 - **Teste:** `tests/oxe-1212-autoresume.test.cjs`. O CA-1 é um reinício simulado num programa de teste: o execute é morto em T2 com SIGKILL e o `autoresume run` o retoma em T2 sem chamar o executor para T1.
 
+### Teste congelado testado antes da tentativa paga (G36 parte 2, G30b parte 2) e pausa sem FAIL
+
+- **`plan lint --precheck-tests [--precheck-runs 2]`, FIRST para os testes de aceite:**
+  - Numa worktree temporária no HEAD, com os testes congelados copiados da árvore de trabalho e os stubs do pack (`plan skeleton`), cada teste de aceite de tarefa pendente roda N vezes. São três achados:
+    - **trava contra o stub** (`precheck_hang`, erro): act com fake timers, um await sem fim, um servidor que não fecha;
+    - **resultado diferente entre execuções** (`precheck_flaky`, erro);
+    - **passa sem a implementação** (`precheck_passes_on_stub`, aviso).
+  - O executor mata a árvore de processos no timeout. Um teste travado nunca fica vazado nem prende a worktree.
+  - Antes, os três defeitos de teste do planner desta noite (T5, T6 e o CA-6 da T20) custaram cerca de US$ 50 em tentativas sobre código certo.
+- **G30b parte 2:** com `--precheck-tests`, as suítes achadas pelo G30 rodam uma vez no HEAD. Já vermelha ou travada antes da tarefa vira aviso nomeando a suíte, para o vermelho não ser lido como da tarefa. O conflito de uma regra da suíte com o CA só aparece com a implementação: o G30 põe essa suíte no verify, e ele surge na primeira tentativa.
+- **`oxe-cc alm supersede <ANTIGO> --by <NOVO>[,<NOVO>] [--comment "…"] [--apply]`:** fecha um card substituído por outros, como os 7 BRD que o refazer do OxeChat na 1.5.2 substitui. Só o escritor.
+  - Liga o antigo aos novos com o tipo de link do site: "supersedes", senão Duplicate, senão Relates.
+  - Comenta e leva o antigo a um status da categoria done, preferindo transições de cancelar ou substituir, com a resolution "Won't Do", "Superseded" ou "Duplicate" quando o fluxo a tem.
+  - A simulação só lê e mostra o tipo de link, a transição e a resolution que usaria.
+  - É idempotente: não repete link, não move card já done e não comenta de novo.
+- **`alm refine` mantém as seções que o card já tem:** um card escrito por `alm intake --from <spec>` já traz História, Critérios, RN e RT. Agora cada seção da descrição vai para a seção de mesmo nome; o texto antes da primeira seção vira o Contexto, quando não há um próprio. Antes, a coleta punha a descrição inteira em Contexto, cortada depois de umas 12 linhas (por volta do CA-3), zerava o resto para "A confirmar" e um `refine apply` sobrescreveria a spec real (OXE-166 a 169).
+- **`quick done --verify` no Windows:** com sintaxe POSIX (aspas simples, `$`, `export`) e o bash do Git instalado, o verify roda no bash. Antes, no cmd.exe, um `'…' && …` quebrava (exit 127).
+- **Tamanho dos workflows em LF:** a checagem do `doctor` conta os bytes em LF. Num checkout do Windows com `core.autocrlf`, o `plan.md` lia 45.155 bytes contra 44.594 no repositório e passava do limite suave.
+- **Pausa não marca os pendentes como bloqueados:** com o run pausado, as tarefas que não começaram ficam pendentes para a retomada. Antes, a pausa do OxeCode F4 depois da T17 marcou a T18 `upstream_wave_failed` e imprimiu FAIL.
+
 ### Custo de falha medido, tentativa reaproveitada e fixtures das suítes (G30b, G36, relatório)
 
 - **`oxe-cc report failure-cost [--since <data>] [--gap-minutes 30] [--json]`:** o custo de falha medido nos eventos e nos CRs do projeto, sem estimativa.

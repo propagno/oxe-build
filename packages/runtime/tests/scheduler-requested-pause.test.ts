@@ -50,6 +50,9 @@ describe('pausa pedida de fora (runtime pause)', () => {
       assert.deepEqual(ran, ['T1'], 'T2 nunca começa');
       assert.equal(result.status, 'paused');
       assert.ok(result.completed.includes('T1'));
+      // T2 stays pending for the resume: never "blocked" by the pause (OxeSpace 15/11, OxeCode F4 T18)
+      assert.ok(!result.blocked.includes('T2'), JSON.stringify(result.blocked));
+      assert.equal(events.filter((e) => e.type === 'WorkItemBlocked').length, 0);
       const ev = events.find((e) => e.type === 'RunPaused');
       assert.equal((ev?.payload as Record<string, unknown>).reason, 'requested');
     } finally {

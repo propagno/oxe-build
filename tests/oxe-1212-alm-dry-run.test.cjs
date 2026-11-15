@@ -531,3 +531,54 @@ describe('alm summary <KEY> "<título>": the card title after a refine narrowed 
     await assert.rejects(op.runtimeAlm(dir, null, { action: 'summary', ref: 'OXE-20', summary: 'outro título', apply: true, http: j.http, env: { ...ENV, OXE_ALM_WRITER: 'outra' }, sleep }), /escritor|writer/i);
   });
 });
+
+describe('alm supersede <OLD> --by <NEW>: link, comment and close the old card as superseded (OxeSpace 15/11, OxeChat redo)', () => {
+  function supersedeJira() {
+    const j = fakeJira();
+    const links = [];
+    let posted = null;
+    const base = j.http;
+    j.http = async (method, url, headers, body) => {
+      const p = new URL(url).pathname;
+      if (method === 'GET' && p === '/rest/api/3/issueLinkType') return { status: 200, json: { issueLinkTypes: [{ name: 'Relates', inward: 'relates to', outward: 'relates to' }, { name: 'Duplicate', inward: 'is duplicated by', outward: 'duplicates' }] } };
+      let m = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)$/.exec(p);
+      if (m && method === 'GET' && new URL(url).searchParams.get('fields') === 'issuelinks,status') {
+        const it = j.issues.get(m[1]);
+        return { status: 200, json: { key: m[1], fields: { status: { name: it.fields.status.name, statusCategory: { key: /Cancelado/.test(it.fields.status.name) ? 'done' : 'indeterminate' } }, issuelinks: links.filter((l) => l.inwardIssue.key === m[1] || l.outwardIssue.key === m[1]).map((l) => (l.inwardIssue.key === m[1] ? { outwardIssue: l.outwardIssue } : { inwardIssue: l.inwardIssue })) } } };
+      }
+      m = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)\/transitions$/.exec(p);
+      if (m && method === 'GET' && /expand=transitions\.fields/.test(url)) return { status: 200, json: { transitions: [{ id: '9', name: 'Cancelar', to: { name: 'Cancelado', statusCategory: { key: 'done' } }, fields: { resolution: { required: true, allowedValues: [{ name: 'Done' }, { name: "Won't Do" }] } } }, { id: '2', name: 'Em desenvolvimento', to: { name: 'Em desenvolvimento', statusCategory: { key: 'indeterminate' } } }] } };
+      if (m && method === 'POST' && body && body.transition && body.transition.id === '9') { posted = body; j.issues.get(m[1]).fields.status = { name: 'Cancelado' }; return { status: 204, json: null }; }
+      if (method === 'POST' && p === '/rest/api/3/issueLink') { links.push(body); }
+      return base(method, url, headers, body);
+    };
+    return { j, links, posted: () => posted };
+  }
+
+  it('a dry run only reads and says what it would do; --apply links (Duplicate), comments and closes with Won\'t Do, once', async () => {
+    const dir = project({ require_apply: true });
+    const { j, links, posted } = supersedeJira();
+    const net = { http: j.http, env: ENV, sleep };
+    j.arm();
+    const dry = await op.runtimeAlm(dir, null, { action: 'supersede', ref: 'OXE-20', newKeys: 'OXE-21,OXE-22', ...net });
+    assert.deepEqual(j.writes, [], 'a dry run never writes');
+    assert.equal(dry.planned.link_type, 'Duplicate');
+    assert.deepEqual(dry.planned.links, ['OXE-21', 'OXE-22']);
+    assert.equal(dry.planned.close.transition, 'Cancelar');
+    assert.equal(dry.planned.close.resolution, "Won't Do");
+    j.disarm();
+    const out = await op.runtimeAlm(dir, null, { action: 'supersede', ref: 'OXE-20', newKeys: 'OXE-21,OXE-22', comment: 'Refeito na 1.5.2: OXE-21 e OXE-22.', apply: true, ...net });
+    assert.equal(out.applied, true);
+    assert.equal(out.status, 'Cancelado');
+    assert.equal(links.length, 2);
+    assert.equal(links[0].outwardIssue.key, 'OXE-20', 'Duplicate: the old card duplicates the new one');
+    assert.deepEqual(posted().fields, { resolution: { name: "Won't Do" } });
+    assert.equal(j.issues.get('OXE-20').fields.comment.comments.length, 1);
+    const again = await op.runtimeAlm(dir, null, { action: 'supersede', ref: 'OXE-20', newKeys: 'OXE-21,OXE-22', apply: true, ...net });
+    assert.deepEqual(again.links, [], 'links not repeated');
+    assert.equal(again.close.skipped, true, 'already done: not moved');
+    assert.equal(again.unchanged, true);
+    assert.equal(j.issues.get('OXE-20').fields.comment.comments.length, 1, 'no second comment');
+    await assert.rejects(op.runtimeAlm(dir, null, { action: 'supersede', ref: 'OXE-20', newKeys: 'OXE-20', apply: true, ...net }), /não substitui a si mesmo/);
+  });
+});
