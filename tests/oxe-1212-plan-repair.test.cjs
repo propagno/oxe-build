@@ -238,11 +238,19 @@ describe('1.21.2: unified deterministic plan repair engine (oxe-plan-repair)', (
       .map((l) => JSON.parse(l));
     assert.ok(changesLog.some((c) => c.kind === 'plan_repair' && c.by === 'tech-lead'));
 
-    // 3. Post-repair lint and semantic review are 100% clean (ignoring unrelated preflight pack files)!
+    // 3. Post-repair lint and semantic review are 100% clean (ignoring unrelated preflight pack files and T3's bare-dir advisory warnings)!
+    assert.ok(
+      t3.verify.commands.some((c) => c.includes('tests/acceptance/f4/pair-modal.test.ts')),
+      'bare-dir scope src/ui on T3 automatically receives impacted suite pair-modal.test.ts in verify',
+    );
     const afterLint = op.runtimePlanLint(dir, null, { preflight: false, noPrecheck: true });
     const structuralLintErrors = (afterLint.errors || []).filter((e) => !e.startsWith('preflight:'));
     const structuralLintWarnings = (afterLint.warnings || []).filter(
-      (w) => !w.startsWith('preflight:') && !w.includes('diretório não expandido em files'),
+      (w) =>
+        !w.startsWith('preflight:') &&
+        !w.includes('diretório não expandido em files') &&
+        // T2 already owns src/locales/pt.json, so repair conservatively keeps it out of T3's write scope while G30b emits an advisory warning
+        !(w.startsWith('T3:') && w.includes('[G30b]')),
     );
     assert.deepEqual(structuralLintErrors, [], `expected 0 lint errors, got: ${structuralLintErrors.join(' | ')}`);
     assert.deepEqual(structuralLintWarnings, [], `expected 0 lint warnings, got: ${structuralLintWarnings.join(' | ')}`);

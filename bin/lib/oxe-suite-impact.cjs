@@ -48,20 +48,51 @@ function exportedConstants(text) {
   return names;
 }
 
-/** target file → [{ test, names, wildcard }] for every test file of the repo. */
+/** target file → [{ test, names, wildcard }] for every test file of the repo (following barrel re-exports by symbol). */
 function importIndex(root, { files = null, readText = null } = {}) {
   const pb = require('./oxe-plan-build.cjs');
+  const testScope = require('./oxe-test-scope.cjs');
   const all = (files || trackedFiles(root)).filter((f) => CODE_RE.test(f) && !SKIP_DIR_RE.test(f));
   const known = new Set(all);
   const aliases = pb.loadPathAliases(root);
   const read = readText || ((f) => { try { return fs.readFileSync(path.join(root, f), 'utf8'); } catch { return ''; } });
   const byTarget = new Map();
+  const addHit = (targetPath, test, names, wildcard) => {
+    if (!targetPath || targetPath === test) return;
+    if (!byTarget.has(targetPath)) byTarget.set(targetPath, []);
+    const list = byTarget.get(targetPath);
+    const existing = list.find((e) => e.test === test);
+    if (existing) {
+      if (wildcard) existing.wildcard = true;
+      for (const n of names || []) if (!existing.names.includes(n)) existing.names.push(n);
+    } else {
+      list.push({ test, names: [...(names || [])], wildcard: Boolean(wildcard) });
+    }
+  };
   for (const test of all.filter((f) => TEST_RE.test(f))) {
     for (const imp of pb.extractModuleImports(read(test))) {
       const target = pb.resolveModuleSpecifier(test, imp.specifier, known, aliases);
       if (!target || target === test) continue;
-      if (!byTarget.has(target)) byTarget.set(target, []);
-      byTarget.get(target).push({ test, names: imp.names || [], wildcard: Boolean(imp.wildcard) });
+      addHit(target, test, imp.names || [], Boolean(imp.wildcard));
+      if (!readText && root && fs.existsSync(path.join(root, target))) {
+        const exp = testScope.parseModuleExports(root, target);
+        if (exp && (exp.namedReexports.size > 0 || exp.wildcardReexports.length > 0)) {
+          const cur = { path: target, exists: true };
+          if (imp.wildcard || !(imp.names && imp.names.length)) {
+            if (exp.localExports.size === 0) {
+              for (const leaf of testScope.collectPureBarrelTargets(root, cur)) {
+                if (leaf.path !== target) addHit(leaf.path, test, [], true);
+              }
+            }
+          } else {
+            for (const sym of imp.names) {
+              for (const def of testScope.findSymbolDefinitions(root, cur, sym)) {
+                if (def.path !== target) addHit(def.path, test, [def.resolvedSymbol || sym], false);
+              }
+            }
+          }
+        }
+      }
     }
   }
   return { byTarget, read };
@@ -131,7 +162,8 @@ function suiteImpact(root, planDoc, options = {}) {
     const scope = (t.files || []).map((f) => norm(typeof f === 'string' ? f : f && f.path)).filter(Boolean);
     const verifyText = [...((t.verify && t.verify.commands) || []), t.verify && t.verify.command, t.verifyCommand].filter(Boolean).join(' \n ').replace(/\\/g, '/');
     const ownAccept = new Set(accept.filter((a) => a && (a.task === t.id || (t.acceptance || []).includes(a.criterion))).flatMap((a) => (a.files || []).map((f) => norm(typeof f === 'string' ? f : f.path))));
-    const inScope = (f) => scope.some((s) => s === f || (s.endsWith('/') && f.startsWith(s)) || (/[*?]/.test(s) && new RegExp(`^${s.replace(/[.+^$()|\\]/g, '\\$&').replace(/\*\*\/?/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\u0000/g, '.*')}$`).test(f)));
+    const testScope = require('./oxe-test-scope.cjs');
+    const inScope = (f) => scope.some((s) => testScope.covers(s, f));
     const namedInVerify = (test) => {
       if (verifyText.includes(test)) return true;
       const base = path.posix.basename(test).replace(/\.(test|spec)\.[cm]?[jt]sx?$/i, '').replace(/\.[cm]?[jt]sx?$/i, '');

@@ -105,7 +105,49 @@ function mergeOrigin(base, over) {
 
 const isDateCut = (s) => /^\d{4}-\d{2}-\d{2}([T ][\d:.]+(Z|[+-]\d{2}:?\d{2})?)?$/.test(String(s));
 
-const underPaths = (file, paths) => paths.some((p) => (p.endsWith('/') ? String(file).replace(/\\/g, '/').startsWith(p) : String(file).replace(/\\/g, '/') === p));
+const normOriginPath = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+
+/**
+ * Decodes git C-quoted output paths (e.g. `".oxe/sess\\303\\265es/notas.md"` → `".oxe/sessões/notas.md"`) without
+ * altering git CLI arguments (preserving compatibility with mocked `spawn` callers).
+ */
+function unquoteGitPath(raw) {
+  const s = String(raw || '').trim();
+  if (s.length < 2 || s[0] !== '"' || s[s.length - 1] !== '"') return s;
+  const inner = s.slice(1, -1);
+  const bytes = [];
+  const escMap = { a: 0x07, b: 0x08, t: 0x09, n: 0x0a, v: 0x0b, f: 0x0c, r: 0x0d, '"': 0x22, '\\': 0x5c };
+  for (let i = 0; i < inner.length; i += 1) {
+    if (inner[i] === '\\' && i + 1 < inner.length) {
+      const oct = /^[0-7]{1,3}/.exec(inner.slice(i + 1));
+      if (oct) {
+        bytes.push(parseInt(oct[0], 8) & 0xff);
+        i += oct[0].length;
+        continue;
+      }
+      const next = inner[i + 1];
+      const code = Object.prototype.hasOwnProperty.call(escMap, next) ? escMap[next] : next.charCodeAt(0);
+      bytes.push(code & 0xff);
+      i += 1;
+      continue;
+    }
+    for (const b of Buffer.from(inner[i], 'utf8')) bytes.push(b);
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
+function underPaths(file, paths) {
+  const f = normOriginPath(unquoteGitPath(file));
+  if (!f || !Array.isArray(paths)) return false;
+  return paths.some((rawP) => {
+    const p = normOriginPath(rawP);
+    if (!p) return false;
+    const clean = p.replace(/\/+$/, '');
+    if (!clean) return false;
+    if (p.endsWith('/')) return f.startsWith(`${clean}/`);
+    return f === clean || f.startsWith(`${clean}/`);
+  });
+}
 
 /**
  * One commit: `{ sha, parents, author: { name, email, login }, message, files }` → its origin verdict.
@@ -168,7 +210,7 @@ function commitsFromGit(root, range, spawn = spawnSync) {
   const raw = run(spawn, 'git', ['log', '--format=%H%x1f%P%x1f%an%x1f%ae%x1f%cI%x1f%aI%x1f%B%x1e', range], root);
   return raw.split('\x1e').map((s) => s.replace(/^\s+/, '')).filter(Boolean).map((rec) => {
     const [sha, parents, name, email, date, authoredDate, message] = rec.split('\x1f');
-    const files = run(spawn, 'git', ['show', '--name-only', '--format=', '--no-renames', sha], root).split('\n').map((l) => l.trim()).filter(Boolean);
+    const files = run(spawn, 'git', ['show', '--name-only', '--format=', '--no-renames', sha], root).split('\n').map((l) => unquoteGitPath(l)).filter(Boolean);
     return { sha, parents: String(parents || '').trim().split(/\s+/).filter(Boolean).length, author: { name, email }, date, authored_date: authoredDate || null, message: String(message || '').trim(), files };
   });
 }
@@ -184,7 +226,7 @@ function commitsFromPr(root, pr, spawn = spawnSync) {
     const local = spawn('git', ['cat-file', '-e', `${sha}^{commit}`], { cwd: root, windowsHide: true });
     if (local.status === 0) {
       parents = run(spawn, 'git', ['log', '-1', '--format=%P', sha], root).trim().split(/\s+/).filter(Boolean).length;
-      files = run(spawn, 'git', ['show', '--name-only', '--format=', '--no-renames', sha], root).split('\n').map((l) => l.trim()).filter(Boolean);
+      files = run(spawn, 'git', ['show', '--name-only', '--format=', '--no-renames', sha], root).split('\n').map((l) => unquoteGitPath(l)).filter(Boolean);
     } else {
       const api = JSON.parse(run(spawn, 'gh', ['api', `repos/{owner}/{repo}/commits/${sha}`], root));
       parents = (api.parents || []).length;
@@ -285,11 +327,11 @@ function commitMsg(root, file, options = {}) {
   const ident = (() => { try { return run(spawn, 'git', ['var', 'GIT_AUTHOR_IDENT'], root).toLowerCase(); } catch { return ''; } })();
   const byAuthor = ocfg.exempt.authors.find((a) => ident.includes(String(a).toLowerCase()));
   if (byAuthor) return { ok: true, exempt: `autor ${byAuthor}` };
-  const staged = (() => { try { return run(spawn, 'git', ['diff', '--cached', '--name-only'], root).split('\n').map((l) => l.trim()).filter(Boolean); } catch { return []; } })();
+  const staged = (() => { try { return run(spawn, 'git', ['diff', '--cached', '--name-only'], root).split('\n').map((l) => unquoteGitPath(l)).filter(Boolean); } catch { return []; } })();
   const authored = ocfg.exempt.authored.find((r) => ident.includes(r.author.toLowerCase()) && staged.length && staged.every((f) => underPaths(f, r.paths)));
   if (authored) return { ok: true, exempt: `autor ${authored.author} só em ${authored.paths.join(', ')}` };
   if (staged.length && staged.every((f) => underPaths(f, ocfg.exempt.paths))) return { ok: true, exempt: `só ${ocfg.exempt.paths.join(', ')}` };
   return { ok: false, reason: 'commit sem origem: abra um quick (oxe-cc quick <KEY> "<objetivo>") ou rode a tarefa por oxe-cc runtime execute. Isenções só em origin.exempt (.oxe/config.json)' };
 }
 
-module.exports = { resolveConfig, originConfig, classify, check, commitsFromGit, commitsFromPr, commitMsg, appendTrailers, TASK_RE, QUICK_RE, CARD_RE };
+module.exports = { resolveConfig, originConfig, classify, check, commitsFromGit, commitsFromPr, commitMsg, appendTrailers, unquoteGitPath, underPaths, TASK_RE, QUICK_RE, CARD_RE };

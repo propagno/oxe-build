@@ -18,6 +18,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { stripCodeComments } = require('./oxe-test-scope.cjs');
 
 const CODE_RE = /\.(c|m)?[jt]sx?$|\.(kt|kts|java|py|go|rs|swift|cs)$/i;
 const TEST_RE = /(^|\/)(tests?|__tests__|specs?|e2e)\/|\.(test|spec)\.[^/]+$/i;
@@ -68,7 +69,7 @@ function globRe(glob) {
   return new RegExp(`^${re}$`, 'i');
 }
 
-const git = (root, args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+const git = (root, args) => spawnSync('git', ['-c', 'core.quotepath=false', ...args], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
 
 /** Added lines of a file vs `base` (working tree), with their line numbers; a new/untracked file: every line. */
 function addedLines(root, file, base) {
@@ -103,9 +104,78 @@ function changedFiles(root, base, scope) {
   return out;
 }
 
+function destructuringBindsSymbol(inner, name, isArray) {
+  for (const part of String(inner || '').split(',')) {
+    const cleaned = part.replace(/^\s*\.\.\./, '').split('=')[0].trim();
+    if (!cleaned) continue;
+    if (!isArray && cleaned.includes(':')) {
+      const rhs = cleaned.slice(cleaned.indexOf(':') + 1).trim();
+      if (rhs === name) return true;
+    } else if (cleaned === name) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function definesSymbol(text, name) {
-  const n = name.replace(/[$]/g, '\\$');
-  return new RegExp(`\\b(function\\*?|class|const|let|var|interface|type|enum|fun|object|val|def|struct|trait|func)\\s+${n}\\b|export\\s*\\{[^}]*\\b${n}\\b|\\b${n}\\s*[:=]\\s*(async\\s*)?(\\(|function)|\\b(module\\.)?exports\\.${n}\\s*=|module\\.exports\\s*=\\s*\\{[^}]*\\b${n}\\b`).test(text);
+  if (!name || typeof name !== 'string') return false;
+  const cleaned = stripCodeComments(String(text || '')).replace(/^[ \t]*#.*$/gm, '');
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const idL = '(?<![\\w$])';
+  const idR = '(?![\\w$])';
+
+  // 1. Direct keyword declarations (JS/TS/Kotlin/Python/Rust/Go/Swift, including Kotlin extension `fun Receiver.name`)
+  const kwRe = new RegExp(
+    `(?<![.\\w$])(?:function\\s*\\*?|class|const|let|var|interface|type|typealias|enum|fun|object|val|def|struct|trait|func|protocol)\\s+(?:[A-Za-z_$][\\w$]*\\.)?${esc}${idR}`
+  );
+  if (kwRe.test(cleaned)) return true;
+
+  // 2. Exported destructuring (`export const { saveDraft, raw: other } = ...` or `export const [a, b] = ...`)
+  const objDestructRe = /\bexport\s+(?:const|let|var)\s*\{([^}]+)\}\s*=/g;
+  let m;
+  while ((m = objDestructRe.exec(cleaned)) !== null) {
+    if (destructuringBindsSymbol(m[1], name, false)) return true;
+  }
+  const arrDestructRe = /\bexport\s+(?:const|let|var)\s*\[([^\]]+)\]\s*=/g;
+  while ((m = arrDestructRe.exec(cleaned)) !== null) {
+    if (destructuringBindsSymbol(m[1], name, true)) return true;
+  }
+
+  // 3. Alias-aware ESM `export { a, orig as exported }` / `export type { ... }`
+  const exportListRe = /\bexport\s+(?:type\s+)?\{([^}]+)\}/g;
+  while ((m = exportListRe.exec(cleaned)) !== null) {
+    for (const rawItem of m[1].split(',')) {
+      const item = rawItem.trim().replace(/^type\s+/, '').trim();
+      if (!item) continue;
+      const asMatch = /^([A-Za-z_$][\w$]*|\bdefault\b)\s+as\s+([A-Za-z_$][\w$]*)$/.exec(item);
+      const exported = asMatch ? asMatch[2] : item;
+      if (exported === name) return true;
+    }
+  }
+
+  // 4. CommonJS exports (`exports.foo =`, `module.exports['$foo'] =`, `module.exports = { foo, alias: impl }`)
+  const cjsPropRe = new RegExp(`(?<![\\w$])(?:module\\.)?exports\\.${esc}\\s*=|(?<![\\w$])(?:module\\.)?exports\\s*\\[\\s*['"\`]${esc}['"\`]\\s*\\]\\s*=`);
+  if (cjsPropRe.test(cleaned)) return true;
+  const cjsObjRe = /\bmodule\.exports\s*=\s*\{([^}]+)\}/g;
+  while ((m = cjsObjRe.exec(cleaned)) !== null) {
+    for (const rawItem of m[1].split(',')) {
+      const item = rawItem.trim();
+      if (!item || item.startsWith('...')) continue;
+      const colonIdx = item.indexOf(':');
+      if (colonIdx > 0) {
+        const key = item.slice(0, colonIdx).trim().replace(/^['"`]|['"`]$/g, '');
+        if (key === name) return true;
+      } else {
+        const shorthand = /^(?:async\s+)?([A-Za-z_$][\w$]*)\s*(?:\(|$)/.exec(item);
+        if (shorthand && shorthand[1] === name) return true;
+      }
+    }
+  }
+
+  // 5. Function / arrow assignment or object method (`foo = (...) =>`, `foo: async function(...)`, `foo: x =>`)
+  const fnAssignRe = new RegExp(`(?<![.\\w$])${idL}${esc}${idR}\\s*[:=]\\s*(?:async\\s*)?(?:\\(|function\\b|<[^>]+>\\s*\\(|[A-Za-z_$][\\w$]*\\s*=>)`);
+  return fnAssignRe.test(cleaned);
 }
 
 /** The file's text at `base` (a commit), or null when it did not exist there. */

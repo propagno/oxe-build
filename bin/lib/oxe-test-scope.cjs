@@ -624,10 +624,10 @@ function findSymbolDefinitions(projectRoot, curResolved, sym, depth = 0, visited
   const key = `${curResolved.path}\0${sym}`;
   if (visited.has(key)) return [];
   visited.add(key);
-  if (!curResolved.exists) return [curResolved];
+  if (!curResolved.exists) return [{ ...curResolved, resolvedSymbol: sym }];
   const exp = parseModuleExports(projectRoot, curResolved.path);
-  if (!exp) return [curResolved];
-  if (exp.localExports.has(sym)) return [curResolved];
+  if (!exp) return [{ ...curResolved, resolvedSymbol: sym }];
+  if (exp.localExports.has(sym)) return [{ ...curResolved, resolvedSymbol: sym }];
   const curDir = normDir(path.posix.dirname(curResolved.path));
   if (exp.namedReexports.has(sym)) {
     const found = [];
@@ -870,4 +870,14 @@ function scopeGapMessages(gaps) {
   return msgs;
 }
 
-module.exports = { testRequirements, scopeGaps, scopeGapMessages, testRoot, covers };
+module.exports = {
+  testRequirements,
+  scopeGaps,
+  scopeGapMessages,
+  testRoot,
+  covers,
+  stripCodeComments,
+  parseModuleExports,
+  findSymbolDefinitions,
+  collectPureBarrelTargets,
+};
