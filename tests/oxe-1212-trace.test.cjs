@@ -38,6 +38,21 @@ function project() {
   return dir;
 }
 
+describe('trace: v1 criteria of OTHER phases are not the current plan to test (OxeSpace 15/11, OxeCode F5 close)', () => {
+  it('with phaseCriteria, only the active phase criteria are asked for a test or a task', () => {
+    const trace = require('../bin/lib/oxe-trace.cjs');
+    const snap = {
+      stories: [], criteria: [{ id: 'A8', text: 'f3' }, { id: 'A19', text: 'f5' }],
+      requirements: [{ id: 'R1', version: 'v1', criteria: ['A8', 'A19'] }],
+      decisions: [], rfcs: [], tasks: [{ id: 'T1', acceptance: [] }], tests: [], changes: [], links: new Map(),
+      cardSpecs: new Map(), checks: [], phase: 'F5', almConfigured: false, storiesSource: 'prd', cardKeysOf: () => [],
+    };
+    const ids = (s) => trace.build(s).orphans.filter((o) => /critério v1 sem teste/.test(o.why)).map((o) => o.id).sort();
+    assert.deepEqual(ids(snap), ['A19', 'A8'], 'without a program: every v1 criterion');
+    assert.deepEqual(ids({ ...snap, phaseCriteria: ['A19'] }), ['A19'], 'with the active phase: only its own');
+  });
+});
+
 describe('oxe-cc trace: the graph and its loose ends', () => {
   it('derives the reverse links (story → decisions through the shared criterion) and lists every orphan with its fix', async () => {
     const dir = project();

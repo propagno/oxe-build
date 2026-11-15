@@ -86,6 +86,19 @@ describe('G40: frozen e2e act only after the app is ready', () => {
     assert.match(r.containerGuardMessages(found)[0], /OSType.*\[G42\]/);
   });
 
+  it('a pending task sharing a file with a task whose checkpoint failed (uncommitted work) waits for it (OxeSpace 15/11, Celular F4 T14/T15)', () => {
+    const { planJsonToParsedPlan } = require('../bin/lib/oxe-plan-json.cjs');
+    const doc = { schema_version: 1, tasks: [
+      { id: 'T14', title: 'a', wave: 1, files: ['app/pairing/PairingFlow.kt', 'app/res/strings.xml'], checkpoint_failed: { kind: 'scope_insufficient', reason: 'x', related_red: [] } },
+      { id: 'T15', title: 'b', wave: 1, files: ['app/pairing/PairingFlow.kt', 'app/Other.kt'] },
+      { id: 'T16', title: 'c', wave: 1, files: ['app/Unrelated.kt'] },
+    ] };
+    const parsed = planJsonToParsedPlan(doc);
+    const by = Object.fromEntries(parsed.tasks.map((t) => [t.id, t]));
+    assert.ok((by.T15.meta.blocked_by || []).some((b) => /waiting_shared_files: T14 \(app\/pairing\/PairingFlow\.kt\)/.test(b)), JSON.stringify(by.T15.meta));
+    assert.equal(by.T16.meta.blocked_by, undefined, 'no shared file: runs');
+  });
+
   it('racyFrozenE2e reads only the plan frozen e2e specs of pending tasks', () => {
     const files = { 'e2e/polish/pm-02-10.spec.ts': RACY, 'tests/unit/x.test.ts': RACY };
     const doc = {

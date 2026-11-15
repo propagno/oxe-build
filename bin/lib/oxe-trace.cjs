@@ -72,7 +72,8 @@ function build(s) {
   for (const a of s.criteria) {
     if (!/^A\d/.test(a.id)) continue;
     if (s.stories.length && !storiesOfA.has(a.id)) push('warning', 'criterion', a.id, 'critério sem história no PRD', 'ligue-o a uma US (coluna Critérios do PRD)');
-    if ((s.tasks.length || s.tests.length) && v1.has(a.id) && !testsOfA.has(a.id) && !tasksOfA.has(a.id)) push('warning', 'criterion', a.id, 'critério v1 sem teste de aceite nem tarefa no plano', '/oxe-plan: um teste de aceite com "criterion": "' + a.id + '"');
+    const inThisPhase = !Array.isArray(s.phaseCriteria) || s.phaseCriteria.includes(a.id);
+    if ((s.tasks.length || s.tests.length) && inThisPhase && v1.has(a.id) && !testsOfA.has(a.id) && !tasksOfA.has(a.id)) push('warning', 'criterion', a.id, 'critério v1 sem teste de aceite nem tarefa no plano', '/oxe-plan: um teste de aceite com "criterion": "' + a.id + '"');
   }
   for (const d of activeD) {
     if (!(d.criteria || []).length && !(d.stories || []).length) push('warning', 'decision', d.id, 'decisão sem critério nem história: nenhum card chega a ela', `oxe-cc decision add --supersedes ${d.id} --criteria A… (ou corrija a origem: ${d.source || 'manual'})`);

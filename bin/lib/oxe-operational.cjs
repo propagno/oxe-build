@@ -2762,6 +2762,9 @@ function traceSnapshot(projectRoot, activeSession) {
     cardSpecs,
     checks: (run && run.verification_check_results) || [],
     phase: phase ? phase.id : (doc && doc.phase) || null,
+    // OxeSpace 15/11 (OxeCode F5 close): with a program, the active phase's criteria — another phase's v1 criteria
+    // are not this plan's to test (they are judged at their own close)
+    phaseCriteria: phase && Array.isArray(phase.acceptance) ? phase.acceptance : null,
     almConfigured: Boolean(almCfg),
     storiesSource: almCfg ? almCfg.stories_source : 'prd',
     cardKeysOf: prdLib.cardKeys,
@@ -9309,6 +9312,70 @@ function runtimePlanTaskEdit(projectRoot, activeSession, options = {}) {
 }
 
 /**
+ * OxeSpace 15/11 (OxeChat F4 install): `oxe-cc plan verify prune --later-owned --by <papel> --reason "…" [--dry-run]`.
+ * The G38 findings applied: from each pending task's verify, the test arguments that select a frozen test only a LATER
+ * task turns green are removed (the exact path, or the argument that matched it as a vitest substring). A command left
+ * with no test argument and nothing else is dropped. Recorded per task (edits[], changes.ndjson, PlanVerifyPruned).
+ */
+function runtimePlanVerifyPrune(projectRoot, activeSession, options = {}) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const si = require('./oxe-suite-impact.cjs');
+  if (!options.laterOwned) throw new Error('use: oxe-cc plan verify prune --later-owned --by <papel> --reason "…" [--dry-run]');
+  const { by, reason } = requireEditReason({ by: options.by, reason: options.reason });
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan verify prune exige PLAN.json');
+  const at = new Date().toISOString();
+  const out = planJsonLib.withPlanLock(jsonPath, () => {
+    const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const findings = si.laterOwnedTests(doc);
+    const byTask = new Map();
+    for (const f of findings) {
+      if (!byTask.has(f.task)) byTask.set(f.task, new Set());
+      byTask.get(f.task).add(f.via || f.test); // the argument as written in the command
+    }
+    const changes = [];
+    for (const t of (doc.tasks || []).filter(Boolean)) {
+      const drop = byTask.get(t.id);
+      if (!drop || !t.verify) continue;
+      const before = [...(t.verify.commands || []), ...(t.verify.command ? [t.verify.command] : [])];
+      const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const after = [];
+      for (const c of before) {
+        let n = c;
+        for (const arg of drop) n = n.replace(new RegExp(`(^|\\s)["'\`]?${esc(arg)}\\$?["'\`]?(?=\\s|$)`, 'g'), '$1');
+        n = n.replace(/\s{2,}/g, ' ').trim();
+        // a command whose test arguments were all removed (it named only later tests) goes away
+        const hadTests = (c.match(/[^\s"'`]+\.(test|spec)\.[cm]?[jt]sx?/g) || []).length;
+        const hasTests = (n.match(/[^\s"'`]+\.(test|spec)\.[cm]?[jt]sx?/g) || []).length;
+        if (hadTests && !hasTests) continue;
+        after.push(n);
+      }
+      if (JSON.stringify(after) === JSON.stringify(before)) continue;
+      changes.push({ task: t.id, removed: [...drop], before, after });
+      if (!options.dryRun) {
+        t.verify.commands = after;
+        delete t.verify.command;
+        t.edits = [...(Array.isArray(t.edits) ? t.edits : []), { by, reason, at, verify_pruned: [...drop] }];
+      }
+    }
+    if (!options.dryRun && changes.length) {
+      const tmp = `${jsonPath}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+      fs.renameSync(tmp, jsonPath);
+    }
+    return { changes, remaining: options.dryRun ? findings.length : si.laterOwnedTests(doc).length };
+  });
+  if (!options.dryRun && out.changes.length) {
+    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'verify_prune', by, reason, at, changes: out.changes.map((c) => ({ task: c.task, removed: c.removed })) });
+    appendEvent(projectRoot, activeSession, { type: 'PlanVerifyPruned', payload: { by, reason, tasks: out.changes.map((c) => c.task) } });
+  }
+  return { dry_run: Boolean(options.dryRun), ...out };
+}
+
+/**
  * OxeSpace 15/11 (OxeCode F6, CR-F6-14): `oxe-cc plan task fold T<a> --into T<b> --cr CR-n --by <papel> --reason "…"`.
  * Folds a task into another: its files, criteria, verify commands and pack contract go to the target; the tasks that
  * depended on it depend on the target; its frozen entries name the target; it becomes `merged_into` (done, never
@@ -12209,6 +12276,7 @@ module.exports = {
   runtimePlanScopeAdd,
   runtimePlanTaskEdit,
   runtimePlanTaskFold,
+  runtimePlanVerifyPrune,
   runtimeReuseAttempt,
   runtimeFailureCost,
   attachAcceptanceLock,

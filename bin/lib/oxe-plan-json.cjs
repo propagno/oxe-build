@@ -267,6 +267,22 @@ function declaredTestTitles(text, file) {
 /** PLAN.json → mesmo formato de `sdk.parsePlan` (o graph compiler e o verify não mudam). */
 function planJsonToParsedPlan(doc) {
   const spikeLib = require('./oxe-spike.cjs');
+  // OxeSpace 15/11 (Celular F4): T14's checkpoint failed (its work stayed uncommitted in the tree); T15, independent in
+  // the plan but sharing PairingFlow.kt, ran on top of it and the hunks became inseparable. A pending task whose files
+  // overlap a task with UNCOMMITTED work (checkpoint_failed, not done) waits for that commit — no paid attempt.
+  const normF = (f) => String(typeof f === 'string' ? f : (f && f.path) || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const uncommitted = (doc.tasks || []).filter((t) => t && t.done !== true && t.status !== 'done' && t.checkpoint_failed);
+  const sharedWait = (task) => {
+    if (!task || task.done === true || task.checkpoint_failed) return [];
+    const mine = new Set((task.files || []).map(normF).filter((f) => f && !f.includes('*')));
+    const out = [];
+    for (const u of uncommitted) {
+      if (u.id === task.id) continue;
+      const shared = (u.files || []).map(normF).filter((f) => mine.has(f));
+      if (shared.length) out.push(`waiting_shared_files: ${u.id} (${shared.slice(0, 3).join(', ')}${shared.length > 3 ? ', …' : ''}) — commit ${u.id} first (runtime commit-task ${u.id}, or --together)`);
+    }
+    return out;
+  };
   const tasks = doc.tasks.map((task) => {
     const commands = task.verify && Array.isArray(task.verify.commands) ? task.verify.commands.map((c) => c.trim()).filter(Boolean) : [];
     // OXB-007: a spike writes only its report and is verified by it (question, answer, evidence).
@@ -296,7 +312,7 @@ function planJsonToParsedPlan(doc) {
         ...(typeof task.question === 'string' ? { question: task.question } : {}),
         ...(task.gate ? { gate: task.gate } : {}),
         // OXB-172: a task whose related tests went red OUTSIDE its scope waits (a CR / a plan edit), never re-runs blind.
-        ...((externalRefs(task).length || (task.checkpoint_failed && task.checkpoint_failed.kind === 'scope_insufficient')) ? { blocked_by: [...externalRefs(task), ...(task.checkpoint_failed && task.checkpoint_failed.kind === 'scope_insufficient' ? [`scope_insufficient: ${(task.checkpoint_failed.related_red || []).join(', ')}`] : [])] } : {}),
+        ...((externalRefs(task).length || (task.checkpoint_failed && task.checkpoint_failed.kind === 'scope_insufficient') || sharedWait(task).length) ? { blocked_by: [...externalRefs(task), ...(task.checkpoint_failed && task.checkpoint_failed.kind === 'scope_insufficient' ? [`scope_insufficient: ${(task.checkpoint_failed.related_red || []).join(', ')}`] : []), ...sharedWait(task)] } : {}),
         ...(taskPreconditions(task).length ? { waits_on: taskPreconditions(task) } : {}),
       },
     };

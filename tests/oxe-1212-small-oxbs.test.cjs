@@ -249,6 +249,33 @@ describe('plan task edit: onda, dependências, escopo e notas sem editar o PLAN.
   });
 });
 
+describe('plan verify prune --later-owned (OxeSpace 15/11, OxeChat F4 install)', () => {
+  it('removes from each verify the frozen tests only a later task turns green; a command left with none goes; recorded', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-vprune-'));
+    dirs.push(dir);
+    fs.mkdirSync(path.join(dir, '.oxe', 'program'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.md'), '# PLAN\n');
+    const doc = { schema_version: 1, tasks: [
+      { id: 'T9', wave: 1, files: ['src/a.ts'], verify: { commands: ['vitest run tests/oxe152/chat/oxc-1.test.ts tests/oxe152/chat/oxc-4-panels.test.ts', 'vitest run tests/oxe152/chat/oxc-5-parallel-ui.test.ts', 'npm run typecheck'] } },
+      { id: 'T11', wave: 3, files: ['src/b.ts'], verify: { commands: ['vitest run tests/oxe152/chat/oxc-4-panels.test.ts'] } },
+      { id: 'T14', wave: 5, files: ['src/c.ts'], verify: { commands: ['vitest run tests/oxe152/chat/oxc-5-parallel-ui.test.ts'] } },
+    ], acceptance_tests: [
+      { task: 'T9', criterion: 'A1', files: ['tests/oxe152/chat/oxc-1.test.ts'], command: 'x' },
+      { task: 'T11', criterion: 'A4', files: ['tests/oxe152/chat/oxc-4-panels.test.ts'], command: 'x' },
+      { task: 'T14', criterion: 'A5', files: ['tests/oxe152/chat/oxc-5-parallel-ui.test.ts'], command: 'x' },
+    ] };
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify(doc));
+    const dry = op.runtimePlanVerifyPrune(dir, null, { laterOwned: true, dryRun: true, by: 'planner', reason: 'G38 após o merge da main' });
+    assert.deepEqual(dry.changes.map((c) => c.task), ['T9']);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8')).tasks[0].verify.commands.length, 3, 'dry run writes nothing');
+    const out = op.runtimePlanVerifyPrune(dir, null, { laterOwned: true, by: 'planner', reason: 'G38 após o merge da main' });
+    assert.equal(out.remaining, 0);
+    const t9 = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8')).tasks[0];
+    assert.deepEqual(t9.verify.commands, ['vitest run tests/oxe152/chat/oxc-1.test.ts', 'npm run typecheck']);
+    assert.deepEqual(t9.edits[0].verify_pruned.sort(), ['tests/oxe152/chat/oxc-4-panels.test.ts', 'tests/oxe152/chat/oxc-5-parallel-ui.test.ts']);
+  });
+});
+
 describe('plan task fold T44 --into T59 (OxeSpace 15/11, OxeCode F6 CR-F6-14)', () => {
   it('moves files, criteria, verify and frozen entries; rewires dependents; marks merged_into; closes the deferral', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-taskfold-'));

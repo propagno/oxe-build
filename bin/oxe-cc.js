@@ -8903,6 +8903,29 @@ async function main() {
     return;
   }
 
+  // oxe-cc plan verify prune --later-owned --by --reason [--dry-run] (OxeSpace 15/11, OxeChat F4 install: G38 applied)
+  if (command === 'plan' && argv[0] === 'verify' && argv[1] === 'prune') {
+    const o = { dir: process.cwd(), json: false };
+    for (let i = 2; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--later-owned') o.laterOwned = true;
+      else if (a === '--dry-run') o.dryRun = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (['--by', '--reason'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    try {
+      const out = oxeOperational.runtimePlanVerifyPrune(o.dir, null, o);
+      if (o.json) { console.log(JSON.stringify({ oxePlanVerifyPruneSchema: 1, ...out }, null, 2)); return; }
+      if (!out.changes.length) console.log(`  ${dim}= nenhum teste de tarefa posterior nos verifies (G38 limpo)${reset}`);
+      for (const c of out.changes) console.log(`  ${out.dry_run ? `${yellow}(simulação)${reset} ` : `${green}✓${reset} `}${c.task}: − ${c.removed.join(', ')}`);
+      if (out.dry_run && out.changes.length) console.log(`  ${dim}nada gravado; sem --dry-run grava no PLAN.json (com by/reason em edits[])${reset}`);
+      else if (out.remaining) console.log(`  ${yellow}!${reset} ainda ${out.remaining} achado(s) G38 (rode plan lint)`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   // oxe-cc plan task fold T<n> --into T<m> --cr CR-n --by --reason (OxeSpace 15/11, OxeCode F6 CR-F6-14)
   if (command === 'plan' && argv[0] === 'task' && argv[1] === 'fold') {
     const o = { dir: process.cwd(), json: false };
