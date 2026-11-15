@@ -95,6 +95,28 @@ describe('OXB-160: promote fixtures and its own leftover branch', () => {
     assert.equal(git(dir, 'show', 'oxe/promote-t3:tests/unit/other.test.ts'), "it('old', () => {});", 'not carried');
   });
 
+  it('a SHARED suite in the task files that another task changed on the program branch is not copied from the tip (cross-review 15/11)', () => {
+    const dir = setup();
+    const g = (...a) => git(dir, ...a);
+    g('checkout', '-q', 'main');
+    write(dir, 'tests/shared.test.ts', "it('base', () => {});\n");
+    g('add', '-A'); g('commit', '-qm', 'shared base');
+    g('checkout', '-q', 'program');
+    g('merge', '-q', '--no-edit', 'main');
+    write(dir, 'tests/shared.test.ts', "it('base', () => {});\nit('T3 case', () => {});\n");
+    g('add', '-A'); g('commit', '-qm', 'feat: T3 shared case', '-m', 'OXE-Task: T3');
+    write(dir, 'tests/shared.test.ts', "import { b } from '../src/b';\nit('base', () => {});\nit('T3 case', () => {});\nit('T32 case', () => b());\n");
+    g('add', '-A'); g('commit', '-qm', 'feat: T32 shared case', '-m', 'OXE-Task: T32');
+    const plan = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'));
+    plan.tasks[0].files.push('tests/shared.test.ts');
+    fs.writeFileSync(path.join(dir, '.oxe', 'PLAN.json'), JSON.stringify(plan));
+    const out = op.runtimePromote(dir, null, { task: 'T3', base: 'main' });
+    assert.equal(out.error, undefined, out.error);
+    assert.ok(!out.frozen_tests.includes('tests/shared.test.ts'), JSON.stringify(out.frozen_tests));
+    assert.equal(git(dir, 'show', 'oxe/promote-t3:tests/shared.test.ts'), "it('base', () => {});\nit('T3 case', () => {});", 'only what the task cherry-pick brought');
+    assert.ok(out.warnings.some((w) => /tests\/shared\.test\.ts está nos files de T3, mas outra tarefa também o mudou/.test(w)), out.warnings.join(' | '));
+  });
+
   it('the dirty worktree of a failed promote (pid gone) never blocks the next one (OxeSpace 14/11)', () => {
     const dir = setup();
     const first = op.runtimePromote(dir, null, { task: 'T3', base: 'main' });
