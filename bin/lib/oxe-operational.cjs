@@ -5933,7 +5933,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
           const runsLabel = Math.max(2, Number(options.precheckRuns) || 2);
           if (typeof options.onProgress === 'function') {
             if (mode === 'explicit') {
-              options.onProgress(`precheck: ${entriesToRun.length} teste(s) de aceite contra o stub, ${runsLabel} vez(es) cada`);
+              options.onProgress(`precheck: ${entriesToRun.length} teste(s) de aceite contra o stub, ${runsLabel} vez(es) cada (remote-verify: 1 vez) — veredito parcial em .oxe/precheck-last.json`);
             } else {
               const cachePreview = cachePath ? pre.readPrecheckCache(cachePath) : null;
               const runnableAuto = entriesToRun.filter((a) => !(cachePreview && pre.isEntryCachedOk(projectRoot, a, cachePreview)) && !pre.isRemoteVerify(a.command));

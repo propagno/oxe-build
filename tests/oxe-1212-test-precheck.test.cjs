@@ -62,6 +62,27 @@ describe('G36 part 2: precheck of the frozen tests (FIRST)', () => {
     // the temporary worktree is gone, the project tree untouched
     assert.deepEqual(fs.existsSync(path.join(dir, '.oxe', 'precheck-ws')) ? fs.readdirSync(path.join(dir, '.oxe', 'precheck-ws')) : [], []);
     assert.equal(fs.existsSync(path.join(dir, '.count')), false, 'the runs happen in the temporary worktree');
+    // OxeSpace 15/11 (OxeQuery polish): the verdict so far lives in .oxe/precheck-last.json, finished at the end
+    const last = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'precheck-last.json'), 'utf8'));
+    assert.equal(last.finished, true);
+    assert.equal(last.done, 3);
+    assert.deepEqual(last.findings.map((f) => f.kind).sort(), ['precheck_flaky', 'precheck_hang', 'precheck_passes_on_stub']);
+  });
+
+  it('a process that dies mid-way leaves the partial verdict: finished false, the entries done so far (and a progress line each)', () => {
+    const dir = project();
+    let calls = 0;
+    const lines = [];
+    const progressPath = path.join(dir, '.oxe', 'precheck-last.json');
+    // the third run "kills" the process: the first entry is done (2 runs), the second never finishes
+    const run = () => { calls += 1; if (calls === 3) throw new Error('killed'); return { code: 1, output: 'not ok 1 - a\n', timedOut: false }; };
+    const ws = { create: () => dir, dispose: () => {} };
+    assert.throws(() => pre.precheck(dir, DOC, null, { runs: 2, run, workspace: ws, progressPath, onProgress: (l) => lines.push(l) }), /killed/);
+    const last = JSON.parse(fs.readFileSync(progressPath, 'utf8'));
+    assert.equal(last.finished, false);
+    assert.equal(last.done, 1);
+    assert.equal(last.total, 3);
+    assert.ok(lines.some((l) => /^precheck 1\/3: /.test(l)), lines.join(' | '));
   });
 });
 

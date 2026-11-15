@@ -259,8 +259,22 @@ function precheck(root, doc, pack, options = {}) {
   }
 
   const run = options.run || defaultRun;
+  // OxeSpace 15/11 (OxeQuery polish): 20 remote runs (1 h) and then the process ended with no verdict table. The verdict
+  // so far is written after EACH entry to .oxe/precheck-last.json — a process killed mid-way leaves what it found.
+  const progressPath = options.progressPath === false ? null : (options.progressPath || (root ? path.join(root, '.oxe', 'precheck-last.json') : null));
+  const startedAt = new Date().toISOString();
+  const total = runnableEntries.length + (options.suites || []).length;
+  let doneCount = 0;
+  const writeProgress = (finished) => {
+    if (!progressPath) return;
+    try {
+      fs.mkdirSync(path.dirname(progressPath), { recursive: true });
+      fs.writeFileSync(progressPath, `${JSON.stringify({ schema_version: 1, mode, started_at: startedAt, updated_at: new Date().toISOString(), finished, total, done: doneCount, runs, findings, details, notes }, null, 2)}\n`);
+    } catch { /* auxiliar */ }
+  };
   const ws = options.workspace || gitWorkspace(root);
   const wt = ws.create();
+  writeProgress(false);
   const cleanFiles = new Set();
   const dirtyFiles = new Set();
   try {
@@ -323,6 +337,12 @@ function precheck(root, doc, pack, options = {}) {
         if (hasFinding) dirtyFiles.add(rel);
         else cleanFiles.add(rel);
       }
+      doneCount += 1;
+      writeProgress(false);
+      if (typeof options.onProgress === 'function') {
+        const fresh = findings.slice(findingsBefore);
+        options.onProgress(`precheck ${doneCount}/${total}: ${id} — ${fresh.length ? fresh.map((f) => f.kind).join(', ') : 'ok (vermelho pelo motivo certo)'}${n === 1 && runs > 1 ? ' (1 execução: remote-verify)' : ''}`);
+      }
     }
     // G30b part 2: the existing suites the G30 found (they import a task's files) run once at HEAD. Already red there
     // is not the task's red: fix or exclude it before the paid attempt (it would read as the task's failure).
@@ -337,10 +357,13 @@ function precheck(root, doc, pack, options = {}) {
       const r = run(wt, s.command, resolvedS.timeoutMs);
       if (r.timedOut) findings.push({ criterion: null, id: s.file, task: s.task || null, command: s.command, level: 'warn', kind: remoteS ? 'suite_timeout_remote' : 'suite_hangs_at_head', timeout_ms: resolvedS.timeoutMs, timeout_reason: resolvedS.reason, why: remoteS ? `o run remoto da suíte (${resolvedS.reason}) passou do teto (fila da CI?) — não é travamento` : 'a suíte que importa os arquivos da tarefa trava no HEAD, antes de qualquer mudança' });
       else if (r.code !== 0) findings.push({ criterion: null, id: s.file, task: s.task || null, command: s.command, level: 'warn', kind: 'suite_red_at_head', why: 'a suíte que importa os arquivos da tarefa já está vermelha no HEAD — não é vermelho da tarefa; conserte ou exclua antes da tentativa paga' });
+      doneCount += 1;
+      writeProgress(false);
     }
   } finally {
     ws.dispose(wt);
   }
+  writeProgress(true);
   if (cachePath && cache && root) {
     let cacheChanged = false;
     const nowIso = new Date().toISOString();
