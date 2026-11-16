@@ -115,9 +115,51 @@ describe('lint.ratchets', () => {
     assert.equal(git(d, 'status', '--porcelain').stdout.trim(), '', 'the lowered cap went into the checkpoint');
   });
 
-  it('onlyCapChanged refuses a change to another line or to the other ratchet', () => {
+  it('onlyCapChanged refuses a change to another line or to the other ratchet, and supports multiple declared ratchets in one file', () => {
     assert.equal(ratchets.onlyCapChanged(capText(5), capText(4), config, CAP_FILE), true);
     assert.equal(ratchets.onlyCapChanged(capText(5), capText(5).replace('LessThanOrEqual(0)', 'LessThanOrEqual(1)'), config, CAP_FILE), false);
     assert.equal(ratchets.onlyCapChanged(capText(5), capText(5), config, CAP_FILE), false);
+
+    // R54: 2nd declared ratchet in the same file is also recognized by onlyCapChanged, and capOf uses group indices
+    const twoCfg = {
+      lint: {
+        ratchets: [
+          { file: CAP_FILE, pattern: 'role="alert"/g\\)\\)\\.toBeLessThanOrEqual\\((\\d+)\\)', counts: 'role="alert"', paths: ['src/**/*.tsx'] },
+          { file: CAP_FILE, pattern: '<button\\\\b/g\\)\\)\\.toBeLessThanOrEqual\\((\\d+)\\)', counts: '<button\\b', paths: ['src/**/*.tsx'], exclude: ['src/ui/**'] },
+        ],
+      },
+    };
+    assert.equal(ratchets.onlyCapChanged(capText(5), capText(3), twoCfg, CAP_FILE), true, '2nd ratchet in same file');
+    const suffixR = ratchets.ratchetsOf({ lint: { ratchets: [{ file: CAP_FILE, pattern: 'MAX_BTN = (\\d+) // brd-01', counts: '<button' }] } })[0];
+    assert.equal(ratchets.capOf('const MAX_BTN = 1 // brd-01\n', suffixR).index, 16, 'captures group 1, not the trailing 1 in brd-01');
+  });
+
+  it('runtimeCommitTask lowers the cap BEFORE running Tn.verify.commands so cap<=count checks pass', () => {
+    const op = require('../bin/lib/oxe-operational.cjs');
+    const d = repo();
+    fs.writeFileSync(path.join(d, '.gitignore'), '.oxe/\n');
+    git(d, 'add', '.gitignore');
+    git(d, 'commit', '-qm', 'ignore oxe');
+    fs.writeFileSync(
+      path.join(d, '.oxe', 'PLAN.json'),
+      JSON.stringify({
+        schema_version: 1,
+        tasks: [
+          {
+            id: 'T34',
+            title: 'primitives',
+            wave: 1,
+            files: ['src/a.tsx', CAP_FILE],
+            acceptance: ['A1'],
+            // Fails unless tests/design-lint.test.ts was already lowered from 5 -> 1 BEFORE verify runs!
+            verify: { commands: [`node -e "const s = require('fs').readFileSync('${CAP_FILE}','utf8'); if (!s.includes('toBeLessThanOrEqual(1)')) process.exit(1)"`] },
+          },
+        ],
+      }),
+    );
+    fs.writeFileSync(path.join(d, 'src', 'a.tsx'), '<Button>1</Button><Button>2</Button>\n');
+    const out = op.runtimeCommitTask(d, null, { task: 'T34', by: 'exec' });
+    assert.equal(out.ok, true);
+    assert.ok(op.readEvents(d, null).some((e) => e.type === 'RatchetLowered' && e.work_item_id === 'T34'));
   });
 });

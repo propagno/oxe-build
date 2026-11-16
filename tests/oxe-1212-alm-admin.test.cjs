@@ -179,4 +179,18 @@ describe('OXE-292: the project Bug type and the card priority', () => {
     await assert.rejects(op.runtimeAlmAdmin(dir, null, { action: 'priority', key: out.key, name: 'Urgentíssima', http: j.http, env: ENV }), /prioridade "Urgentíssima" não existe no Jira/);
     await assert.rejects(op.runtimeAlmAdmin(dir, null, { action: 'priority', key: out.key, name: 'High', http: j.http, env: { ...ENV, OXE_ALM_WRITER: 'outra' } }), /escritor|writer/i);
   });
+
+  it('R54: ignores subtask Bug/Defeito issue types so top-level intake does not 400', async () => {
+    const dir = project();
+    const j = jira2(false);
+    const origHttp = j.http;
+    const subBugHttp = async (method, url, headers, body) => {
+      if (new URL(url).pathname === '/rest/api/3/project/OXE' && method === 'GET') {
+        return { status: 200, json: { id: '100', key: 'OXE', issueTypes: [{ name: 'Task', subtask: false }, { name: 'Defeito', subtask: true }] } };
+      }
+      return origHttp(method, url, headers, body);
+    };
+    const out = await op.runtimeAlmAdmin(dir, null, { action: 'intake', type: 'bug', summary: 'Falha de tela no login', ref: 'REL-SUB', http: subBugHttp, env: ENV });
+    assert.equal(out.type, 'Task');
+  });
 });

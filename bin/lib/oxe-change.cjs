@@ -87,13 +87,14 @@ function idPrefixFor(program, phaseId) {
 function mergeChanges(ourDir, theirDir, options = {}) {
   const ours = readNdjson(changesFile(ourDir));
   const theirs = readNdjson(changesFile(theirDir));
-  // a CR's summary is part of its identity: two different CRs with the same id written in the same millisecond (a fork
-  // and the main program) are not one — the fork's was skipped and never renamed (flaky in the R9 test)
-  const key = (r) => `${r.kind}|${r.id || ''}|${r.at || ''}|${r.status || r.action || ''}${r.kind === 'cr' ? `|${r.summary || ''}` : ''}`;
+  // a CR's summary, a status's resolution, and a spec_edit's cr+criterion are part of their identity (R54):
+  // records written in the same millisecond for different CRs are not one, and non-CR records map through `renamed` first
+  const key = (r) => `${r.kind}|${r.id || ''}|${r.at || ''}|${r.status || r.action || ''}${r.kind === 'cr' ? `|${r.summary || ''}` : `|${r.cr || ''}|${r.criterion || ''}|${r.resolution || ''}`}`;
   const have = new Set();
   for (const r of ours) {
     have.add(key(r));
     if (r.origin_id) have.add(key({ ...r, id: r.origin_id }));
+    if (r.origin_cr) have.add(key({ ...r, cr: r.origin_cr }));
   }
   const crById = new Map(ours.filter((r) => r.kind === 'cr').map((r) => [r.id, r]));
   // a fork CR merged earlier under a new id: reuse the mapping
@@ -103,9 +104,9 @@ function mergeChanges(ourDir, theirDir, options = {}) {
   let merged = 0;
   for (const r of theirs) {
     if (r.kind === 'program_edit' && r.action === 'program_fork') continue; // the fork's own bookkeeping
-    if (have.has(key(r))) continue;
     let rec = { ...r };
     if (r.kind === 'cr') {
+      if (have.has(key(r))) continue;
       const taken = crById.get(r.id);
       if (taken && !(taken.at === r.at && taken.summary === r.summary)) {
         const id = nextId([...crById.values(), ...pending], r.phase || options.phase || 'X');
@@ -114,11 +115,16 @@ function mergeChanges(ourDir, theirDir, options = {}) {
       }
       crById.set(rec.id, rec);
       pending.push(rec);
-    } else if (r.id && renamed[r.id]) {
-      rec = { ...r, id: renamed[r.id], origin_id: r.id };
+    } else {
+      if (r.id && renamed[r.id]) rec = { ...rec, id: renamed[r.id], origin_id: r.id };
+      if (rec.cr && renamed[rec.cr]) rec = { ...rec, cr: renamed[rec.cr], origin_cr: rec.cr };
+      if (Array.isArray(rec.resolves)) rec.resolves = rec.resolves.map((x) => renamed[x] || x);
+      if (have.has(key(rec)) || (!rec.origin_id && !rec.origin_cr && have.has(key(r)))) continue;
     }
-    if (rec.cr && renamed[rec.cr]) rec = { ...rec, cr: renamed[rec.cr], origin_cr: rec.cr };
-    if (Array.isArray(rec.resolves)) rec.resolves = rec.resolves.map((x) => renamed[x] || x);
+    if (r.kind === 'cr') {
+      if (rec.cr && renamed[rec.cr]) rec = { ...rec, cr: renamed[rec.cr], origin_cr: rec.cr };
+      if (Array.isArray(rec.resolves)) rec.resolves = rec.resolves.map((x) => renamed[x] || x);
+    }
     appendNdjson(changesFile(ourDir), rec);
     have.add(key(rec));
     merged += 1;

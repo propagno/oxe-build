@@ -150,9 +150,18 @@ describe('policy refusal names its likely trigger', () => {
     assert.match(small.output, /restrinja o escopo da tarefa/);
   });
 
-  test('at the first request: the trigger is in the starting prompt', async () => {
+  test('at the first request: the trigger is in the starting prompt (even when over 200k chars)', async () => {
     const { result } = await run(async () => { throw refusal(); });
     assert.equal(result.failure_class, 'policy');
     assert.match(result.output, /primeira requisição: o gatilho está no prompt inicial/);
+    const bigNode = { ...node, title: 'z'.repeat(210_000) };
+    const lease = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-pol0-'));
+    try {
+      const exec = new LlmTaskExecutor({ baseUrl: '', apiKey: '', model: '', maxTurns: 2 }, null, () => {}, async () => { throw refusal(); });
+      const r0 = await exec.execute(bigNode, { workspace_id: 'w', strategy: 'inplace', isolation_level: 'shared', branch: null, base_commit: null, root_path: lease, ttl_minutes: 5 }, 'run-0', 1);
+      assert.doesNotMatch(r0.output, /As saídas do último turno somam só 0 chars/);
+    } finally {
+      fs.rmSync(lease, { recursive: true, force: true });
+    }
   });
 });

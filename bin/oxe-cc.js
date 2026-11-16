@@ -7967,7 +7967,7 @@ async function main() {
         if (!out.planned && !out.confirmed) process.exitCode = 1;
       } else if (action === 'version') console.log(out.exists ? `  ${dim}= versão ${out.version} já existe${out.released ? ' (lançada)' : ''}${reset}` : out.planned ? `  ${yellow}[ensaio]${reset} criaria a versão ${out.version}` : `  ${green}✓${reset} versão ${out.version} criada`);
       else if (out.planned) {
-        console.log(`  ${yellow}[ensaio]${reset} criaria ${out.planned.type} "${out.planned.summary}"${out.planned.epic ? ` · épico ${out.planned.epic}` : ''}${out.planned.version ? ` · versão ${out.planned.version}` : ''} · rótulos ${out.planned.labels.join(', ')} · ${out.planned.description_lines} linha(s) de descrição (ref ${out.ref})${out.offline ? ' · conferido offline (sem credencial)' : ''}`);
+        console.log(`  ${yellow}[ensaio]${reset} criaria ${out.planned.type} "${out.planned.summary}"${out.planned.epic ? ` · épico ${out.planned.epic}` : ''}${out.planned.version ? ` · versão ${out.planned.version}` : ''}${out.planned.priority ? ` · prioridade ${out.planned.priority}` : ''} · rótulos ${out.planned.labels.join(', ')} · ${out.planned.description_lines} linha(s) de descrição (ref ${out.ref})${out.offline ? ' · conferido offline (sem credencial)' : ''}`);
         if (out.lint) {
           console.log(`  ${out.lint.ok ? `${green}✓${reset}` : `${red}✗${reset}`} lint do arquivo (refine): ${out.lint.criteria} critério(s)${out.lint.needs_info ? ' · com "A confirmar" (needs-info)' : ''}`);
           for (const e of out.lint.errors) console.log(`      ${red}✗${reset} ${e}`);

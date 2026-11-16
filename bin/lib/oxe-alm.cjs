@@ -250,8 +250,8 @@ function jiraProvider(cfg, env, ctx) {
       if (item.kind === 'bug' && !(cfg.p.types && cfg.p.types.bug) && !bugTypeResolved) {
         bugTypeResolved = true;
         try {
-          const pj = await request(c, 'GET', `${site}/rest/api/3/project/${project}`);
-          const hit = ((pj && pj.issueTypes) || []).map((t) => t && t.name).find((n) => /^(bug|defeito|erro)$/i.test(String(n || '').trim()));
+          const pj = await request(c, 'GET', `${site}/rest/api/3/project/${encodeURIComponent(project)}`);
+          const hit = ((pj && pj.issueTypes) || []).filter((t) => t && !t.subtask && t.name).map((t) => t.name).find((n) => /^(bug|defeito|erro)$/i.test(String(n || '').trim()));
           if (hit) types.bug = hit;
         } catch { /* keep the map */ }
       }

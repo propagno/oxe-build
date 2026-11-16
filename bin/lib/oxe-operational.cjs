@@ -9228,41 +9228,74 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
     .map((c) => String(c || '').trim())
     .filter(Boolean);
 
-  const scopeHash = computeScopeFingerprint(projectRoot, inScopeDirty);
+  // Lower declared ratchets before running Tn.verify.commands so suites checking `cap <= count` pass on commit-task too (R54)
+  const projectConfigForCommit = readProjectConfig(projectRoot) || {};
+  const ratchetBackups = new Map();
+  let preRatchetsLowered = [];
+  try {
+    const ratchetsLib = require('./oxe-ratchets.cjs');
+    for (const r of ratchetsLib.ratchetsOf(projectConfigForCommit)) {
+      if (isPathInScope(r.file, allowedScope) && !ratchetBackups.has(r.file)) {
+        try { ratchetBackups.set(r.file, fs.readFileSync(path.join(projectRoot, r.file), 'utf8')); } catch { /* */ }
+      }
+    }
+    preRatchetsLowered = ratchetsLib.lowerRatchets(projectRoot, projectConfigForCommit, allowedScope);
+  } catch { preRatchetsLowered = []; }
+  const restorePreRatchets = () => {
+    if (!preRatchetsLowered.length) return;
+    for (const [rel, content] of ratchetBackups) {
+      try { fs.writeFileSync(path.join(projectRoot, rel), content, 'utf8'); } catch { /* */ }
+    }
+  };
+  const effectiveDirty = preRatchetsLowered.length
+    ? [...new Set([...inScopeDirty, ...preRatchetsLowered.map((r) => r.file)])]
+    : inScopeDirty;
+
+  const scopeHash = computeScopeFingerprint(projectRoot, effectiveDirty);
   // the project's verify_timeout_ms, as the execute reads it (OxeSpace 15/11, OQ T18: killed at 10 min while the
   // remote run went on); --verify-timeout-ms still wins
-  const verifyTimeoutMs = Number(options.verifyTimeoutMs) > 0 ? Number(options.verifyTimeoutMs) : Number((readProjectConfig(projectRoot) || {}).verify_timeout_ms) > 0 ? Number(readProjectConfig(projectRoot).verify_timeout_ms) : 10 * 60_000;
+  const verifyTimeoutMs = Number(options.verifyTimeoutMs) > 0 ? Number(options.verifyTimeoutMs) : Number(projectConfigForCommit.verify_timeout_ms) > 0 ? Number(projectConfigForCommit.verify_timeout_ms) : 10 * 60_000;
   let verifySkipped = false;
 
-  if (commands.length > 0) {
-    if (options.skipVerifyIfFresh && isTaskVerifyFresh(projectRoot, taskId, inScopeDirty, scopeHash, options.freshMaxAgeMs)) {
-      verifySkipped = true;
-    } else {
-      for (const cmd of commands) {
-        const ms = commitTaskVerifyTimeout(projectRoot, options, cmd, verifyTimeoutMs);
-        const res = runChildCommandFull(projectRoot, cmd, ms);
-        if (!res.ok && res.timedOut) {
-          throw new Error(timedOutMessage(`verify de ${taskId}`, cmd, ms, res));
+  try {
+    if (commands.length > 0) {
+      if (options.skipVerifyIfFresh && isTaskVerifyFresh(projectRoot, taskId, effectiveDirty, scopeHash, options.freshMaxAgeMs)) {
+        verifySkipped = true;
+      } else {
+        for (const cmd of commands) {
+          const ms = commitTaskVerifyTimeout(projectRoot, options, cmd, verifyTimeoutMs);
+          const res = runChildCommandFull(projectRoot, cmd, ms);
+          if (!res.ok && res.timedOut) {
+            throw new Error(timedOutMessage(`verify de ${taskId}`, cmd, ms, res));
+          }
+          if (!res.ok) {
+            throw new Error(`verify de ${taskId} falhou (\`${cmd}\`): ${String(res.tail || res.output || '').trim().slice(-500)}`);
+          }
         }
-        if (!res.ok) {
-          throw new Error(`verify de ${taskId} falhou (\`${cmd}\`): ${String(res.tail || res.output || '').trim().slice(-500)}`);
-        }
+        writeTaskVerifyFresh(projectRoot, taskId, { scopeHash, commands, ok: true });
       }
-      writeTaskVerifyFresh(projectRoot, taskId, { scopeHash, commands, ok: true });
     }
-  }
 
-  // Re-verify frozen acceptance tests were not touched by a verify command
-  verifyFrozenAcceptanceUntampered(projectRoot, activeSession, doc, runState);
+    // Re-verify frozen acceptance tests were not touched by a verify command
+    verifyFrozenAcceptanceUntampered(projectRoot, activeSession, doc, runState);
+  } catch (err) {
+    restorePreRatchets();
+    throw err;
+  }
 
   // 5. Create isolated commit with only Tn.files and trailer `OXE-Task: <Phase>/<Tn>`
   const cp = commitTaskCheckpoint(projectRoot, runState || { run_id: runId }, taskId, {
     task: { ...task, files: allowedScope },
     phase,
-    config: readProjectConfig(projectRoot),
+    config: projectConfigForCommit,
+    ratchets: false,
   });
   if (!cp.committed || !cp.commit) {
+    restorePreRatchets();
     throw new Error(cp.reason || `Falha ao criar checkpoint de ${taskId}.`);
+  }
+  if (preRatchetsLowered.length) {
+    appendEvent(projectRoot, activeSession, { type: 'RatchetLowered', run_id: runId, work_item_id: taskId, payload: { task: taskId, ratchets: preRatchetsLowered } });
   }
 
   const leakedOutOfScope = (cp.files || []).filter((f) => !isPathInScope(f, allowedScope));
@@ -10590,24 +10623,43 @@ function commitTaskCheckpoint(projectRoot, runState, taskId, options = {}) {
   // OxeSpace 15/11 (F6 T34/T35): a declared ratchet whose file is in the scope comes down to the real count in this
   // task's own commit (never up), so the suites that require cap <= count do not fail the checkpoint.
   let ratchetsLowered = [];
+  const ratchetBackups = new Map();
   if (options.ratchets !== false) {
-    try { ratchetsLowered = require('./oxe-ratchets.cjs').lowerRatchets(projectRoot, options.config || readProjectConfig(projectRoot) || {}, files); } catch { ratchetsLowered = []; }
+    try {
+      const ratchetsLib = require('./oxe-ratchets.cjs');
+      const cfg = options.config || readProjectConfig(projectRoot) || {};
+      for (const r of ratchetsLib.ratchetsOf(cfg)) {
+        if (!ratchetBackups.has(r.file)) {
+          try { ratchetBackups.set(r.file, fs.readFileSync(path.join(projectRoot, r.file), 'utf8')); } catch { /* */ }
+        }
+      }
+      ratchetsLowered = ratchetsLib.lowerRatchets(projectRoot, cfg, files);
+    } catch { ratchetsLowered = []; }
   }
+  const restoreRatchetsIfNeeded = () => {
+    if (!ratchetsLowered.length) return;
+    for (const r of ratchetsLowered) {
+      if (ratchetBackups.has(r.file)) {
+        try { fs.writeFileSync(path.join(projectRoot, r.file), ratchetBackups.get(r.file), 'utf8'); } catch { /* */ }
+      }
+    }
+  };
   // OXB-168: built from what CHANGED under the scope, never from the scope as pathspecs (a path another task already
   // removed made git reject the whole commit).
   const changed = changedPathsUnder(projectRoot, files);
   const scopeAbsent = files.filter((p) => !fs.existsSync(path.join(projectRoot, p)) && !(gitLines(projectRoot, ['ls-files', '--', p]) || []).length && !changed.some((c) => isPathInScope(c, [p])));
-  if (!changed.length) return { committed: false, reason: 'nada mudou no escopo da tarefa', scope_absent: scopeAbsent };
+  if (!changed.length) { restoreRatchetsIfNeeded(); return { committed: false, reason: 'nada mudou no escopo da tarefa', scope_absent: scopeAbsent }; }
   // OXB-170: only what THIS task wrote — paths already dirty when it started carry only its own diff.
   const own = taskOwnContent(projectRoot, changed, options.baseline || null);
-  if (own.problems.length) return { committed: false, failed: true, reason: own.problems.join(' · '), snapshot: own.entries, scope_absent: scopeAbsent };
-  if (!Object.keys(own.entries).length) return { committed: false, reason: 'nada mudou no escopo da tarefa (o que está sujo já estava antes dela)', scope_absent: scopeAbsent };
+  if (own.problems.length) { restoreRatchetsIfNeeded(); return { committed: false, failed: true, reason: own.problems.join(' · '), snapshot: own.entries, scope_absent: scopeAbsent }; }
+  if (!Object.keys(own.entries).length) { restoreRatchetsIfNeeded(); return { committed: false, reason: 'nada mudou no escopo da tarefa (o que está sujo já estava antes dela)', scope_absent: scopeAbsent }; }
   // OXB-188: a done checkpoint never carries an added stub marker (BLOCKED / TODO() / not implemented …).
   if (options.stubGuard !== false) {
     try {
       const stub = require('./oxe-stub-check.cjs');
       const found = stub.stubFindings(projectRoot, { levels: ['substantive'], since: 'HEAD', scope: Object.keys(own.entries) });
       if (found.length) {
+        restoreRatchetsIfNeeded();
         const bl = stub.blockedLine(found);
         return { committed: false, failed: true, stub_markers: found.map((f) => ({ file: f.file, line: f.line, why: f.why, needs: f.needs || [] })), reason: `${bl ? `${bl} · ` : ''}checkpoint recusado: ${found.length} marcador(es) de stub adicionados (${found.slice(0, 3).map((f) => `${f.file}:${f.line} ${f.why}`).join('; ')}) — uma tarefa done não leva stub`, snapshot: own.entries, scope_absent: scopeAbsent };
       }
@@ -10615,7 +10667,8 @@ function commitTaskCheckpoint(projectRoot, runState, taskId, options = {}) {
   }
   const message = options.message || checkpointMessageFor(projectRoot, runState, taskId, options.task || {}, options.phase, options.config || null);
   const res = commitExactContent(projectRoot, own.entries, message, { ...options, scope: files });
-  return { ...res, scope: files, ...(scopeAbsent.length ? { scope_absent: scopeAbsent } : {}), ...(ratchetsLowered.length ? { ratchets_lowered: ratchetsLowered } : {}), snapshot: res.committed ? undefined : own.entries };
+  if (!res.committed) restoreRatchetsIfNeeded();
+  return { ...res, scope: files, ...(scopeAbsent.length ? { scope_absent: scopeAbsent } : {}), ...(res.committed && ratchetsLowered.length ? { ratchets_lowered: ratchetsLowered } : {}), snapshot: res.committed ? undefined : own.entries };
 }
 
 /**

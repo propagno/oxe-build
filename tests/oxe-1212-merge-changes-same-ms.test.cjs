@@ -28,4 +28,26 @@ describe('mergeChanges: two different CRs with the same id in the same milliseco
     change.appendNdjson(change.changesFile(same), { kind: 'cr', id: 'CR-01', class: 'constraint', summary: 'main', status: 'open', at });
     assert.equal(change.mergeChanges(main, same, { phase: 'F4', from: same }).merged, 0, 'the very same record is not duplicated');
   });
+
+  it('R54: same-millisecond status and spec_edit records of a renamed fork CR follow the new id and stay idempotent', () => {
+    const at = '2026-11-16T00:00:00.000Z';
+    const main = tmp();
+    const fork = tmp();
+    change.appendNdjson(change.changesFile(main), { kind: 'cr', id: 'CR-01', class: 'spec_gap', summary: 'main gap', status: 'open', at });
+    change.appendNdjson(change.changesFile(main), { kind: 'spec_edit', cr: 'CR-01', criterion: 'A1', at });
+    change.appendNdjson(change.changesFile(main), { kind: 'status', id: 'CR-01', status: 'resolved', resolution: 'main test', at });
+
+    change.appendNdjson(change.changesFile(fork), { kind: 'cr', id: 'CR-01', class: 'spec_gap', summary: 'fork gap', status: 'open', phase: 'F4', at });
+    change.appendNdjson(change.changesFile(fork), { kind: 'spec_edit', cr: 'CR-01', criterion: 'A9', at });
+    change.appendNdjson(change.changesFile(fork), { kind: 'status', id: 'CR-01', status: 'resolved', resolution: 'fork test', at });
+
+    const out1 = change.mergeChanges(main, fork, { phase: 'F4', from: fork });
+    assert.deepEqual(out1.renamed, { 'CR-01': 'CR-F4-1' });
+    const crs = change.listChanges(main);
+    assert.equal(crs.find((c) => c.id === 'CR-F4-1').status, 'resolved', 'fork resolution was not dropped');
+    const raw = change.readNdjson(change.changesFile(main));
+    assert.ok(raw.some((r) => r.kind === 'spec_edit' && r.cr === 'CR-F4-1' && r.criterion === 'A9'));
+    // Second merge is idempotent
+    assert.equal(change.mergeChanges(main, fork, { phase: 'F4', from: fork }).merged, 0);
+  });
 });

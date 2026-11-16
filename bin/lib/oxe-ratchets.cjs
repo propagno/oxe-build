@@ -38,7 +38,7 @@ function ratchetsOf(config) {
   for (const r of list) {
     if (!r || !r.file || !r.pattern || !r.counts) continue;
     try {
-      const pattern = new RegExp(r.pattern);
+      const pattern = new RegExp(r.pattern, 'd');
       const counts = new RegExp(r.counts, 'g');
       out.push({ file: norm(r.file), pattern, counts, paths: (r.paths || ['**/*']).map(globToRe), exclude: (r.exclude || []).map(globToRe), direction: r.direction === 'up' ? 'up' : 'down', raw: r });
     } catch { /* an invalid regex is skipped */ }
@@ -50,8 +50,8 @@ function ratchetsOf(config) {
 function capOf(text, ratchet) {
   const m = ratchet.pattern.exec(String(text || ''));
   if (!m || m[1] == null || !/^\d+$/.test(m[1])) return null;
-  // the captured number is the last occurrence of the capture inside the match (the cap sits at the end of the pattern)
-  const numAt = m.index + m[0].lastIndexOf(m[1]);
+  const span = m.indices && m.indices[1];
+  const numAt = span ? span[0] : m.index + m[0].lastIndexOf(m[1]);
   return { value: Number(m[1]), index: numAt, length: m[1].length, line: String(text).slice(0, numAt).split('\n').length };
 }
 
@@ -109,18 +109,22 @@ function ratchetNotes(root, config, scope) {
   return notes;
 }
 
-/** Whether a diff of a ratchet file only moves the cap number (every changed line differs only in that number). */
+/** Whether a diff of a ratchet file only moves the cap number (every changed line differs only in a declared cap). */
 function onlyCapChanged(before, after, config, file) {
-  const r = ratchetsOf(config).find((x) => x.file === norm(file));
-  if (!r) return false;
+  const rs = ratchetsOf(config).filter((x) => x.file === norm(file));
+  if (!rs.length) return false;
   const a = String(before || '').split(/\r?\n/);
   const b = String(after || '').split(/\r?\n/);
   if (a.length !== b.length) return false;
+  const maskCap = (line, r) => {
+    const c = capOf(line, r);
+    return c ? `${line.slice(0, c.index)}#${line.slice(c.index + c.length)}` : null;
+  };
   let changed = 0;
   for (let i = 0; i < a.length; i += 1) {
     if (a[i] === b[i]) continue;
     changed += 1;
-    if (a[i].replace(/\d+/g, '#') !== b[i].replace(/\d+/g, '#') || !r.pattern.test(a[i]) || !r.pattern.test(b[i])) return false;
+    if (!rs.some((r) => { const ma = maskCap(a[i], r); const mb = maskCap(b[i], r); return ma !== null && ma === mb; })) return false;
   }
   return changed > 0;
 }

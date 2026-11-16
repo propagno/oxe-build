@@ -54,8 +54,8 @@ function usageReport(projectRoot) {
 async function bugIssueType(rest, cfg) {
   if (cfg.p.types && cfg.p.types.bug) return { name: cfg.p.types.bug, source: 'config' };
   try {
-    const project = await rest.request('GET', `${rest.site}/rest/api/3/project/${cfg.p.project}`);
-    const names = ((project && project.issueTypes) || []).map((t) => t && t.name).filter(Boolean);
+    const project = await rest.request('GET', `${rest.site}/rest/api/3/project/${encodeURIComponent(cfg.p.project)}`);
+    const names = ((project && project.issueTypes) || []).filter((t) => t && !t.subtask && t.name).map((t) => t.name);
     const hit = names.find((n) => /^(bug|defeito|erro)$/i.test(String(n).trim()));
     if (hit) return { name: hit, source: 'project' };
   } catch { /* the fallback below */ }
@@ -144,7 +144,8 @@ async function intake(rest, cfg, input, ctx) {
   if (input.version && !versions.includes(String(input.version))) {
     try { versionFix = await alm.provider(cfg, ctx.options).setFixVersion(created.key, String(input.version)); } catch (err) { versionFix = { ok: false, error: err.message }; }
   }
-  return { ref, key: created.key, created: true, type: types[kind], status: back && back.fields && back.fields.status ? back.fields.status.name : null, ...(priority ? { priority: back && back.fields && back.fields.priority ? back.fields.priority.name : null } : {}), confirmed: Boolean(back), ...(versionFix ? { version_set: versionFix.ok !== false } : {}) };
+  const readPriority = back && back.fields && back.fields.priority ? back.fields.priority.name : null;
+  return { ref, key: created.key, created: true, type: types[kind], status: back && back.fields && back.fields.status ? back.fields.status.name : null, ...(priority ? { priority: readPriority, priority_confirmed: readPriority === priority } : {}), confirmed: Boolean(back) && (!priority || readPriority === priority), ...(versionFix ? { version_set: versionFix.ok !== false } : {}) };
 }
 
 /** `version ensure <name>`: the fix version exists in the project (created when missing). */
