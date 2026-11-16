@@ -587,6 +587,25 @@ function buildNodeContextProvider(projectRoot, activeSession) {
             return line ? [line] : [];
           } catch { return []; }
         })(),
+        // OXB-C6 #1 (G45): tell the executor which specs/tests in scope (or across the repo) assert shapes this task changes
+        ...(() => {
+          try {
+            if (((projectConfig && projectConfig.lint) || {}).cross_card_conflicts === 'off') return [];
+            const pDocNow = readPlanJsonDoc(projectRoot, activeSession).doc;
+            const tNow = pDocNow && Array.isArray(pDocNow.tasks) ? pDocNow.tasks.find((x) => x && x.id === node.id) : null;
+            if (!tNow) return [];
+            const findings = require('./oxe-cross-card-conflicts.cjs').crossCardFrozenConflicts(
+              root,
+              { tasks: [{ ...tNow, done: false }], acceptance_tests: pDocNow.acceptance_tests || [] },
+              { specText: readTextIfExists(paths.spec) || '' }
+            );
+            return findings.slice(0, 12).map((f) => (
+              f.in_scope
+                ? `Spec no escopo afetado (${f.test}:${f.line} → ${f.change_desc || f.token || f.expected_by_test}): ajuste este spec em conjunto durante a execução para refletir o contrato novo de ${node.id}.`
+                : `Spec existente afetado (${f.test}:${f.line} → ${f.change_desc || f.token || f.expected_by_test}): atenção ao alterar seletores/roles/catálogo; se for no escopo ou precisa de ajuste, alinhe sem quebrar testes do repo.`
+            ));
+          } catch { return []; }
+        })(),
       ],
       externalSignals: externalSignalsFor(node),
     };
@@ -4797,22 +4816,60 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
                 checkpointFailure = { reason: `checkpoint incompleto: ${cp.leftover.length} arquivo(s) do escopo fora do commit (${cp.leftover.slice(0, 5).join(', ')})`, commit: cp.commit, leftover: cp.leftover };
               }
             } else if (!cp.failed) {
-              // OXB-176: the attempt added nothing. Done only with an earlier checkpoint of this task (its work is
-              // already committed); otherwise empty_checkpoint — never "completed with no commit" and on to the next.
+              // OXB-176 / OXB-C6 #2: [verify] passed with nothing new to commit. Reused only if scope is clean and not
+              // reopened by an open CR: first check this task's own checkpoint, then inspect git log touching `task.files`
+              // (`git log -n 1 --format=%H -- <scope>`, NEVER blind HEAD) in case another task/commit already delivered it.
               const earlier = findTaskCheckpoint(projectRoot, event.work_item_id, phaseCtxForCommits);
               const planTaskNow = planTaskById.get(event.work_item_id) || {};
-              const scopeNow = (planTaskNow.files || []).map((p) => String(p).replace(/\\/g, '/')).filter((p) => p && !p.includes('*'));
+              const rawScopeNow = (planTaskNow.files || [])
+                .map((p) => String(typeof p === 'string' ? p : (p && p.path) || '').replace(/\\/g, '/').replace(/^\.\//, ''))
+                .filter(Boolean);
+              const scopeNow = rawScopeNow.filter((p) => !p.includes('*'));
+              const gitScopeArgs = rawScopeNow
+                .map((p) => p.replace(/\/\*\*$/, '').replace(/\/\*$/, ''))
+                .filter((p) => p && !p.includes('*'));
               const dirtyNow = scopeNow.length ? changedPathsUnder(projectRoot, scopeNow) : [];
-              if (!scopeNow.length || isVerifyOnlyNode(event.work_item_id) || planTaskNow.kind === 'external_delivery' || (planTaskNow.meta && ['external_delivery', 'spike'].includes(planTaskNow.meta.kind))) {
+              const crsNow = reopeningCrsOf(projectRoot, event.work_item_id);
+              if (!rawScopeNow.length || isVerifyOnlyNode(event.work_item_id) || planTaskNow.kind === 'external_delivery' || (planTaskNow.meta && ['external_delivery', 'spike'].includes(planTaskNow.meta.kind))) {
                 // no file scope (verify-only / external / spike): nothing to commit, done as before
-              } else if (earlier && !dirtyNow.length && reopeningCrsOf(projectRoot, event.work_item_id).length) {
-                // P0: a task reopened by an open CR never reuses the checkpoint it had before the CR — the redo must
-                // change something, or the CR is not resolved (OxeSpace 14/11, Celular F2 CR-03: f1cbce07 reused)
-                const crsNow = reopeningCrsOf(projectRoot, event.work_item_id);
-                checkpointFailure = { kind: 'empty_checkpoint', reason: `empty_checkpoint: ${event.work_item_id} foi reaberta por ${crsNow.join(', ')} e a tentativa não mudou nada — o checkpoint anterior (${String(earlier).slice(0, 8)}) é de antes do CR e não vale` };
+              } else if (!dirtyNow.length && crsNow.length) {
+                // P0: a task reopened by an open CR never reuses an older checkpoint — the redo must change something,
+                // or the CR is not resolved (OxeSpace 14/11, Celular F2 CR-03: f1cbce07 reused)
+                checkpointFailure = { kind: 'empty_checkpoint', reason: `empty_checkpoint: ${event.work_item_id} foi reaberta por ${crsNow.join(', ')} e a tentativa não mudou nada — o checkpoint anterior${earlier ? ` (${String(earlier).slice(0, 8)})` : ''} é de antes do CR e não vale` };
               } else if (earlier && !dirtyNow.length) {
                 checkpoint = earlier;
                 appendEvent(projectRoot, activeSession, { type: 'GateResolved', run_id: current.run_id, work_item_id: event.work_item_id, payload: { gate: 'checkpoint', commit: earlier, reused: true } });
+              } else if (!dirtyNow.length && gitScopeArgs.length) {
+                const deliveredSha = (gitLines(projectRoot, ['log', '-n', '1', '--format=%H', '--', ...gitScopeArgs]) || [])[0] || null;
+                // Require at least one parent commit so synthetic root-init repos with no delivery history still report empty_checkpoint
+                const hasParentCommit = deliveredSha
+                  ? gitRun(projectRoot, ['rev-parse', '--verify', '-q', `${deliveredSha}^`]).ok
+                  : false;
+                if (deliveredSha && hasParentCommit) {
+                  const commitBody = gitRun(projectRoot, ['log', '-1', '--format=%B', deliveredSha]).stdout || '';
+                  const subj = (commitBody.split(/\r?\n/)[0] || '').trim();
+                  const taskMatch = /^OXE-Task:\s*(?:F\d+\/)?(T\d+)\s*$/m.exec(commitBody) || /^oxe\((T\d+)\):/i.exec(subj);
+                  const authorLabel = taskMatch ? taskMatch[1] : (subj ? subj.slice(0, 60) : 'commit anterior no escopo');
+                  checkpoint = deliveredSha;
+                  appendEvent(projectRoot, activeSession, {
+                    type: 'GateResolved',
+                    run_id: current.run_id,
+                    work_item_id: event.work_item_id,
+                    payload: {
+                      gate: 'checkpoint',
+                      commit: deliveredSha,
+                      reused: true,
+                      already_delivered: true,
+                      delivered_by: taskMatch ? taskMatch[1] : null,
+                      note: `entregue por ${deliveredSha.slice(0, 8)} (${authorLabel})`,
+                    },
+                  });
+                } else {
+                  checkpointFailure = {
+                    kind: 'empty_checkpoint',
+                    reason: 'empty_checkpoint: a tarefa completou sem nenhuma mudança e sem checkpoint anterior dela — confira se o trabalho já está na base (oxe-cc plan done Tn --commit <sha>) ou reabra',
+                  };
+                }
               } else {
                 checkpointFailure = {
                   kind: 'empty_checkpoint',
@@ -7720,6 +7777,31 @@ function finalizePromotedWorktree({
     const riskSuites = promoteHelpers.discoverMainCiRiskSuites(work, promotedDiffFiles, {
       excludeSuites: [...verifyTests, ...(result.frozen_tests || [])],
     });
+    // OXB-C6 #1: Include non-frozen active unit/integration/e2e specs discovered by extended G45 on `work`
+    try {
+      const lintCfg = (pcfg && pcfg.lint) || {};
+      if (lintCfg.cross_card_conflicts !== 'off') {
+        const { doc: docG45 } = readPlanJsonDoc(projectRoot, activeSession);
+        const pathsG45 = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+        const g45Hits = require('./oxe-cross-card-conflicts.cjs').crossCardFrozenConflicts(
+          work,
+          {
+            tasks: (planTasks || []).map((t) => ({ ...t, done: false })),
+            acceptance_tests: (docG45 && docG45.acceptance_tests) || [],
+          },
+          { specText: readTextIfExists(pathsG45.spec) || '' }
+        );
+        const excludedSet = new Set([...verifyTests, ...(result.frozen_tests || [])].map((s) => String(s || '').replace(/\\/g, '/')));
+        const existingSuites = new Set(riskSuites.map((s) => s.suite));
+        for (const f of g45Hits) {
+          if (!f || !f.test || excludedSet.has(f.test) || existingSuites.has(f.test)) continue;
+          existingSuites.add(f.test);
+          const isE2e = /(^|\/)(e2e|playwright)\//i.test(f.test) || /\.e2e\./i.test(f.test)
+            || (/\.spec\.[cm]?[jt]sx?$/i.test(f.test) && /@playwright\/test|playwright/i.test(readTextIfExists(path.join(work, f.test)) || ''));
+          riskSuites.push({ suite: f.test, kind: isE2e ? 'e2e' : 'unit_g45', covers: [f.component || f.token || f.test] });
+        }
+      }
+    } catch { /* auxiliar */ }
     if (riskSuites.length) result.ci_risk_suites = riskSuites;
     if (options.previewCi) {
       const previewCmds = promoteHelpers.buildPreviewCiCommands(work, riskSuites, pcfg);
@@ -7782,7 +7864,9 @@ function finalizePromotePrBodyAndEvents({
   const body = [
     `## ${taskId} — ${task.title || ''}`.trim(),
     '',
-    `Promovida de \`${original}\` por \`oxe-cc runtime promote\` (cherry-pick -x de ${ordered.length} commit(s)).`,
+    options.testsOnly
+      ? `Promovida de \`${original}\` por \`oxe-cc runtime promote --tests-only\` (apenas ${((result.frozen_tests || []).length)} arquivo(s) de testes congelados e fixtures; commits de código já na base).`
+      : `Promovida de \`${original}\` por \`oxe-cc runtime promote\` (cherry-pick -x de ${ordered.length} commit(s)).`,
     '',
     ...(stack ? [
       `> **Empilhada sobre ${stack.task}** (${stack.pr ? `PR ${stack.pr}, ` : ''}branch \`${stack.branch}\`), ainda não mergeada em \`${base}\`: este PR traz os commits dela até ela entrar. Mergeie ${stack.task} primeiro; depois disso o diff deste PR encolhe para os commits de ${taskId}.`,
@@ -7816,11 +7900,18 @@ function finalizePromotePrBodyAndEvents({
   writeTextAtomic(bodyFile, body);
   result.body_file = path.relative(projectRoot, bodyFile).replace(/\\/g, '/');
   let almKey = null;
+  const lookupIds = [taskId, ...(Array.isArray(options.taskIds) ? options.taskIds : [])].filter(Boolean);
   try {
     const almLib = require('./oxe-alm.cjs');
     const cfgAlm = almLib.almConfig(readProjectConfig(projectRoot) || {});
     const ph = activeProgramPhase(projectRoot, activeSession);
-    if (cfgAlm) almKey = almLib.keyFor(resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program'), cfgAlm, ph ? ph.id : null, taskId);
+    const pd = resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program');
+    if (cfgAlm) {
+      for (const lid of lookupIds) {
+        almKey = almLib.keyFor(pd, cfgAlm, ph ? ph.id : null, lid);
+        if (almKey) break;
+      }
+    }
   } catch { almKey = null; }
   if (almKey) result.alm_key = almKey;
   if (almKey) {
@@ -7830,7 +7921,11 @@ function finalizePromotePrBodyAndEvents({
       const ph = activeProgramPhase(projectRoot, activeSession);
       const pd = resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program');
       const docM = readPlanJsonDoc(projectRoot, activeSession).doc;
-      const mk = require('./oxe-alm-prs.cjs').prMarkerFor(almKey, taskId, docM, (id) => almLib.keyFor(pd, cfgAlm, ph ? ph.id : null, id));
+      const promotedSet = new Set(lookupIds);
+      const docForMarker = docM && promotedSet.size > 1 && Array.isArray(docM.tasks)
+        ? { ...docM, tasks: docM.tasks.map((t) => (t && promotedSet.has(t.id) ? { ...t, done: true } : t)) }
+        : docM;
+      const mk = require('./oxe-alm-prs.cjs').prMarkerFor(almKey, taskId, docForMarker, (id) => almLib.keyFor(pd, cfgAlm, ph ? ph.id : null, id));
       if (mk) {
         result.alm_marker = mk.marker;
         writeTextAtomic(bodyFile, `${body}\n${mk.marker}${mk.open_tasks.length ? ` (ainda abertas no card: ${mk.open_tasks.join(', ')})` : ''}\n`);
@@ -8024,7 +8119,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       appendEvent(projectRoot, activeSession, { type: 'TaskPromoteFailed', work_item_id: taskId, payload: { base, reason: result.error || 'conflict', commit: result.conflict.commit, files: result.conflict.files, kept_worktree: result.kept_worktree || null } });
       return result;
     }
-    return finalizePromotePrBodyAndEvents({ projectRoot, activeSession, result, task, taskId, criteria, ordered, branch, original: saved.original || original, base, remote: saved.remote || remote, stack: saved.stack || null, pushArgs, options });
+    return finalizePromotePrBodyAndEvents({ projectRoot, activeSession, result, task, taskId, criteria, ordered, branch, original: saved.original || original, base, remote: saved.remote || remote, stack: saved.stack || null, pushArgs, options: { ...options, taskIds } });
   }
 
   // OXB-169: `--tasks T4,T5,T6,T7` builds ONE branch from the tasks' commits in commit order (the execute may commit
@@ -8033,6 +8128,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     .map((t) => String(t || '').trim().toUpperCase()).filter(Boolean))];
   if (!taskIds.length || !taskIds.every((t) => /^T\d+$/.test(t))) throw new Error('informe a tarefa: oxe-cc runtime promote T<n> --base main  (ou --tasks T4,T5,…)');
   const taskId = taskIds.join('-');
+  const testsOnly = options.testsOnly === true;
   // OXB-157: `--base main` used the LOCAL main (11 days old) — the PR conflicted on files identical on origin/main.
   const resolvedBase = resolvePromoteBase(projectRoot, options.base, remote, options);
   const base = resolvedBase.ref;
@@ -8067,18 +8163,20 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   // OXB-166: by phase + task; with a done_commit, the phase-less legacy trailers are not searched at all.
   const phaseCtx = taskPhaseContext(projectRoot, activeSession);
   const shas = new Set();
-  const inRangeAll = gitLines(projectRoot, ['rev-list', range]) || [];
-  for (const t of planTasks) {
-    const own = t.done_commit && phaseCtx.phase
-      ? (gitLines(projectRoot, ['log', '--format=%H', '-E', `--grep=^OXE-Task: ${phaseCtx.phase}/${t.id}$`, range]) || [])
-      : taskCommitShas(projectRoot, t.id, range, phaseCtx);
-    for (const sha of own) shas.add(sha);
-    if (t.done_commit) {
-      const full = (gitLines(projectRoot, ['rev-parse', '--verify', `${t.done_commit}^{commit}`]) || [])[0];
-      if (full && inRangeAll.includes(full)) shas.add(full);
+  if (!testsOnly) {
+    const inRangeAll = gitLines(projectRoot, ['rev-list', range]) || [];
+    for (const t of planTasks) {
+      const own = t.done_commit && phaseCtx.phase
+        ? (gitLines(projectRoot, ['log', '--format=%H', '-E', `--grep=^OXE-Task: ${phaseCtx.phase}/${t.id}$`, range]) || [])
+        : taskCommitShas(projectRoot, t.id, range, phaseCtx);
+      for (const sha of own) shas.add(sha);
+      if (t.done_commit) {
+        const full = (gitLines(projectRoot, ['rev-parse', '--verify', `${t.done_commit}^{commit}`]) || [])[0];
+        if (full && inRangeAll.includes(full)) shas.add(full);
+      }
     }
   }
-  const quickSelection = options.quicks === false
+  const quickSelection = (testsOnly || options.quicks === false)
     ? { quicks: [], skipped: [], warnings: [] }
     : promoteHelpers.selectPromoteQuickCommits(projectRoot, {
         range,
@@ -8089,7 +8187,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
         programDir: resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir,
         config: readProjectConfig(projectRoot) || {},
       });
-  for (const q of quickSelection.quicks) shas.add(q.sha);
+  if (!testsOnly) for (const q of quickSelection.quicks) shas.add(q.sha);
   const criteria = new Set(Array.isArray(task.acceptance) ? task.acceptance : []);
   // OXB-156: the PR carries (a) the task's OWN commits (OXE-Task trailer / done_commit) and (b) the frozen tests it
   // proves, taken as FILES from the program tip (+ the local fixtures they import) — never the program branch's import
@@ -8142,17 +8240,30 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     }
     return [...out];
   })();
-  const ordered = (gitLines(projectRoot, ['rev-list', '--reverse', '--topo-order', range]) || []).filter((sha) => shas.has(sha));
+  if (testsOnly) {
+    const differingTests = withFixtures.filter((f) => differsFromBase(f));
+    if (!withFixtures.length || !differingTests.length) {
+      throw new Error(`${taskId}: nenhum teste congelado ou fixture diferente de ${base} para promover com --tests-only`);
+    }
+  }
+  const ordered = testsOnly ? [] : (gitLines(projectRoot, ['rev-list', '--reverse', '--topo-order', range]) || []).filter((sha) => shas.has(sha));
   // OXB-169: other tasks' unpromoted commits BEFORE this task's, on the same files — this diff assumes them; the
   // cherry-pick will likely conflict. Name them and the combined promote.
-  const assumed = promoteAssumedTasks(projectRoot, range, ordered, idSet, phaseCtx);
+  const assumed = testsOnly ? [] : promoteAssumedTasks(projectRoot, range, ordered, idSet, phaseCtx);
   // ALM: with an item for the task, the branch starts with its key ("oxe-12-t3"; Azure DevOps "ab-123-t3").
   let branchKey = null;
   try {
     const almLib = require('./oxe-alm.cjs');
     const almCfg = almLib.almConfig(readProjectConfig(projectRoot) || {});
     const ph = activeProgramPhase(projectRoot, activeSession);
-    const k = almCfg ? almLib.keyFor(resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program'), almCfg, ph ? ph.id : null, taskId) : null;
+    const pd = resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program');
+    let k = null;
+    if (almCfg) {
+      for (const lid of [taskId, ...taskIds]) {
+        k = almLib.keyFor(pd, almCfg, ph ? ph.id : null, lid);
+        if (k) break;
+      }
+    }
     branchKey = k ? k.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : null;
   } catch { branchKey = null; }
   const branch = String(options.branch || (branchKey ? `${branchKey}-${taskId.toLowerCase()}` : `oxe/promote-${taskId.toLowerCase()}`)).trim();
@@ -8160,14 +8271,16 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   baseSha = stackInfo.baseSha;
   const stack = stackInfo.stack;
   const buildSha = stack ? stack.sha : baseSha;
-  const unpromoDeps = promoteHelpers.analyzeUnpromotedDependencies(projectRoot, {
-    range,
-    baseSha: buildSha,
-    orderedTaskShas: ordered,
-    planTasks,
-    phase: phaseCtx.phase,
-    stackedTaskIds: stack ? [stack.task] : [],
-  });
+  const unpromoDeps = testsOnly
+    ? { dependencies: [], suggested_order: [], warnings: [] }
+    : promoteHelpers.analyzeUnpromotedDependencies(projectRoot, {
+        range,
+        baseSha: buildSha,
+        orderedTaskShas: ordered,
+        planTasks,
+        phase: phaseCtx.phase,
+        stackedTaskIds: stack ? [stack.task] : [],
+      });
   if (options.strict && unpromoDeps.dependencies.length) {
     throw new Error(`promote --strict recusado para ${taskId}: ${unpromoDeps.warnings[0]}`);
   }
@@ -8190,6 +8303,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     const quickShaSet = new Set(quickSelection.quicks.map((q) => q.sha));
     return {
       dry_run: true,
+      ...(testsOnly ? { tests_only: true } : {}),
       task: taskId,
       base,
       base_sha: baseSha,
@@ -8244,6 +8358,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   const pushArgs = () => ['push', ...(forceLease ? [`--force-with-lease=${branch}:${forceLease}`] : []), '-u', remote, branch];
   const result = {
     task: taskId,
+    ...(testsOnly ? { tests_only: true } : {}),
     base,
     base_sha: baseSha,
     ...(stack ? { stacked_on: { task: stack.task, branch: stack.branch, pr: stack.pr || null, sha: stack.sha } } : {}),
@@ -8402,7 +8517,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     appendEvent(projectRoot, activeSession, { type: 'TaskPromoteFailed', work_item_id: taskId, payload: { base, reason: result.error || 'conflict', commit: result.conflict.commit, files: result.conflict.files, ...(keepWorktree ? { kept_worktree: result.kept_worktree } : {}) } });
     return result;
   }
-  return finalizePromotePrBodyAndEvents({ projectRoot, activeSession, result, task, taskId, criteria, ordered, branch, original, base, remote, stack, pushArgs, options });
+  return finalizePromotePrBodyAndEvents({ projectRoot, activeSession, result, task, taskId, criteria, ordered, branch, original, base, remote, stack, pushArgs, options: { ...options, taskIds } });
 }
 
 /**

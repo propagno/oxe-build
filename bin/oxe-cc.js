@@ -4349,6 +4349,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--ci' && argv[i + 1]) out.ciRun = String(argv[++i]);
     else if (a === '--strict') out.strict = true;
     else if (a === '--preview-ci') out.previewCi = true;
+    else if (a === '--tests-only') out.testsOnly = true;
     else if (a === '--no-quicks') out.noQuicks = true;
     else if (a === '--all-segments') out.allSegments = true;
     else if (a === '--fail-fast') out.failFast = true;
@@ -6446,6 +6447,7 @@ async function runRuntime(opts) {
         holdDeps: Boolean(opts.holdDeps),
         strict: Boolean(opts.strict),
         previewCi: Boolean(opts.previewCi),
+        testsOnly: Boolean(opts.testsOnly),
         quicks: !opts.noQuicks,
         dryRun: Boolean(opts.dryRun),
         resolve: opts.resolve || null,
@@ -6455,14 +6457,14 @@ async function runRuntime(opts) {
       });
       if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimePromoteSchema: 1, ...out }, null, 2));
       else if (out.dry_run) {
-        console.log(`  ${c ? yellow : ''}(simulação)${c ? reset : ''} ${out.task} → branch ${out.branch} a partir de ${out.base} @ ${String(out.base_sha || '').slice(0, 10)} (${out.commits.length} commit(s) em cherry-pick -x${out.quick_commits && out.quick_commits.length ? `, incl. ${out.quick_commits.length} quick(s)` : ''})`);
+        console.log(`  ${c ? yellow : ''}(simulação)${c ? reset : ''} ${out.task} → branch ${out.branch} a partir de ${out.base} @ ${String(out.base_sha || '').slice(0, 10)} (${out.tests_only ? 'tests-only: só testes congelados' : `${out.commits.length} commit(s) em cherry-pick -x${out.quick_commits && out.quick_commits.length ? `, incl. ${out.quick_commits.length} quick(s)` : ''}`})`);
         if (out.stacked_on) console.log(`  empilhada sobre ${out.stacked_on.task} (${out.stacked_on.pr || out.stacked_on.branch})`);
         for (const cd of out.commit_details || []) console.log(`    - ${String(cd.sha).slice(0, 10)} ${cd.subject}${cd.is_quick ? ' [quick]' : ''}`);
         if (out.frozen_tests && out.frozen_tests.length) console.log(`  testes congelados (do tip): ${out.frozen_tests.join(', ')}`);
         for (const w of out.warnings || []) console.log(`  ${c ? yellow : ''}AVISO${c ? reset : ''} ${w}`);
       } else if (out.conflict) console.log(`  ${red}✗${reset} ${out.error}`);
       else {
-        console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.task} → branch ${out.branch} a partir de ${out.base} @ ${String(out.base_sha || '').slice(0, 10)} (${out.commits.length} commit(s), cherry-pick -x${out.quick_commits && out.quick_commits.length ? `, incl. ${out.quick_commits.length} quick(s)` : ''})`);
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.task} → branch ${out.branch} a partir de ${out.base} @ ${String(out.base_sha || '').slice(0, 10)} (${out.tests_only ? 'tests-only: só testes congelados' : `${out.commits.length} commit(s), cherry-pick -x${out.quick_commits && out.quick_commits.length ? `, incl. ${out.quick_commits.length} quick(s)` : ''}`})`);
         if (out.swept && out.swept.length) console.log(`  limpas ${out.swept.length} worktree(s) de promote interrompido: ${out.swept.join(', ')}`);
         if (out.replaced_remote) console.log(`  branch ${out.branch} (do promote, sem PR) refeita: force-push com lease sobre ${String(out.replaced_remote).slice(0, 8)}`);
         if (out.stacked_on) console.log(`  empilhada sobre ${out.stacked_on.task} (${out.stacked_on.pr || out.stacked_on.branch}, ainda não mergeada) — o PR vai contra ${String(out.base).replace(/^[^/]+\//, '')} e traz os commits dela até o merge`);

@@ -56,27 +56,50 @@ function parseSpecCriteriaText(specText) {
  * and from negative/exact-count assertions in the task's own frozen acceptance tests.
  */
 function extractTaskShapeMutations(task, specCriteriaMap, ownFrozenTexts) {
-  const removedTokens = new Map(); // token -> { token, kind: 'selector'|'attr'|'class'|'token', source }
+  const removedTokens = new Map(); // token -> { token, kind: 'selector'|'aria_role'|'attr'|'class'|'locale_string'|'token', source, desc? }
   const countTargets = []; // { count: number, noun: string|null, source: string }
 
-  const addRemoved = (raw, source) => {
+  const inferKind = (clean, hintKind = null) => {
+    if (hintKind) return hintKind;
+    if (/^\[?(?:role\s*=\s*['"]?[\w-]+['"]?|aria-[\w-]+(?:\s*=\s*['"][^'"]+['"])?)\]?$/i.test(clean)) return 'aria_role';
+    if (/^(?:\[data-|#)[A-Za-z0-9_="'-]+/.test(clean) || /^data-[\w-]+\s*=/.test(clean)) return 'selector';
+    if (clean.startsWith('[') || clean.includes('=')) return 'attr';
+    if (clean.startsWith('.')) return 'class';
+    if (/^[a-z][\w-]*(?:\.[a-z0-9_-]+){2,}$/i.test(clean)) return 'locale_string';
+    return 'token';
+  };
+
+  const addRemoved = (raw, source, hintKind = null, desc = null) => {
     const t = String(raw || '').trim();
     if (!t || t.length < 3 || t.length > 80) return;
-    const clean = t.replace(/^['"`]|['"`]$/g, '').trim();
-    if (!clean || clean.length < 3 || /\s{2,}/.test(clean)) return;
+    const clean = t.replace(/^['"`]+|['"`]+$/g, '').trim();
+    if (!clean || clean.length < 3 || /\s{3,}/.test(clean)) return;
     if (STOP_TOKENS.has(clean.toLowerCase())) return;
-    // Ignore file paths (contain `/` or file extensions like `.ts`, `.tsx`, `.cjs`, `.json`, `.md`)
-    if (clean.includes('/') || /\.(c|m)?[jt]sx?$|(\.json|\.md|\.ya?ml|\.css|\.scss|\.html)$/i.test(clean)) return;
-    const kind = clean.startsWith('[') || clean.includes('=')
-      ? 'attr'
-      : clean.startsWith('.')
-        ? 'class'
-        : 'token';
-    if (!removedTokens.has(clean)) removedTokens.set(clean, { token: clean, kind, source });
-    // If `data-variant="plain"` or `variant="plain"`, also register the value if >= 4 chars and specific, or `.plain`
-    const attrVal = /^(?:data-)?[\w-]+\s*=\s*["']?([\w-]+)["']?$/.exec(clean);
-    if (attrVal && attrVal[1].length >= 4 && !STOP_TOKENS.has(attrVal[1].toLowerCase())) {
-      if (!removedTokens.has(attrVal[1])) removedTokens.set(attrVal[1], { token: attrVal[1], kind: 'token', source });
+    // Ignore file paths (contain `/` or file extensions like `.ts`, `.tsx`, `.cjs`, `.json`, `.md`) unless it looks like a selector
+    if (!clean.startsWith('[') && (clean.includes('/') || /\.(c|m)?[jt]sx?$|(\.json|\.md|\.ya?ml|\.css|\.scss|\.html)$/i.test(clean))) return;
+    const kind = inferKind(clean, hintKind);
+    const existing = removedTokens.get(clean);
+    if (!existing) {
+      removedTokens.set(clean, { token: clean, kind, source, ...(desc ? { desc } : {}) });
+    } else if (existing.kind === 'token' && kind !== 'token') {
+      existing.kind = kind;
+      if (desc && !existing.desc) existing.desc = desc;
+    }
+    // Extract bare ARIA role token from `role="tablist"` or `[role="tablist"]`
+    const roleVal = /^\[?role\s*=\s*["']?([\w-]+)["']?\]?$/i.exec(clean);
+    if (roleVal && roleVal[1].length >= 3 && !STOP_TOKENS.has(roleVal[1].toLowerCase())) {
+      const roleTok = roleVal[1];
+      if (!removedTokens.has(roleTok)) {
+        removedTokens.set(roleTok, { token: roleTok, kind: 'aria_role', source, desc: desc || `altera/remove role="${roleTok}"` });
+      }
+    }
+    // Extract value from `data-testid="old-bar"` or `data-variant="plain"` or `aria-label="..."`
+    const attrVal = /^\[?(?:data-|aria-)?[\w-]+\s*=\s*["']?([^"'\]]+)["']?\]?$/.exec(clean);
+    if (!roleVal && attrVal && attrVal[1].length >= 4 && !STOP_TOKENS.has(attrVal[1].toLowerCase())) {
+      const vKind = clean.startsWith('aria-') || clean.startsWith('[aria-') ? 'locale_string' : 'token';
+      if (!removedTokens.has(attrVal[1])) {
+        removedTokens.set(attrVal[1], { token: attrVal[1], kind: vKind, source, ...(desc ? { desc } : {}) });
+      }
     }
   };
 
@@ -90,23 +113,36 @@ function extractTaskShapeMutations(task, specCriteriaMap, ownFrozenTexts) {
   const prose = proseParts.join('\n');
 
   // 1a. Negation / removal clauses in task prose (PT + EN)
-  const NEG_CLAUSE_RE = /\b(?:remove[r]?|removi\w+|elimina\w*|sem|sai|saem|deixa\s+de\s+(?:ter|exibir|mostrar|renderizar)|esconde\w*|oculta\w*|suprime\w*|substitui\w*|descarta\w*|drop(?:s|ped)?|hide[s]?|hidden|without|no\s+longer|removes?|eliminates?)\b([^\n;]{1,160})/gi;
+  const NEG_CLAUSE_RE = /\b(?:remove[r]?|removi\w+|elimina\w*|sem|sai|saem|deixa\s+de\s+(?:ter|exibir|mostrar|renderizar)|esconde\w*|oculta\w*|suprime\w*|substitui\w*|descarta\w*|drop(?:s|ped)?|hide[s]?|hidden|without|no\s+longer|removes?|eliminates?)\b([^\n;]{1,180})/gi;
   for (const m of prose.matchAll(NEG_CLAUSE_RE)) {
     // Stop before sentence period (`.` followed by whitespace/end) or replacement target (`por`, `para`, `with`, `->`, `→`)
     const clause = m[1].split(/\.(?=\s|$)|\b(?:por|para|em\s+favor\s+de|with|in\s+favor\s+of)\b|->|→/i)[0];
     for (const q of clause.matchAll(/`([^`]{2,80})`|"([^"]{2,80})"|'([^']{2,80})'/g)) {
       addRemoved(q[1] || q[2] || q[3], 'spec/notes');
     }
-    for (const c of clause.matchAll(/(?:^|\s)(\.[A-Za-z_-][\w-]{2,})\b/g)) {
-      addRemoved(c[1], 'spec/notes');
+    for (const c of clause.matchAll(/(?:^|\s)([.#][A-Za-z_-][\w-]{2,})\b/g)) {
+      addRemoved(c[1], 'spec/notes', c[1].startsWith('#') ? 'selector' : 'class');
     }
-    for (const a of clause.matchAll(/\[?(data-[\w-]+(?:\s*=\s*["'][^"']+["'])?)\]?/g)) {
+    for (const a of clause.matchAll(/\[?((?:data-[\w-]+|role|aria-[\w-]+)(?:\s*=\s*["'][^"']+["'])?)\]?/g)) {
       addRemoved(a[1], 'spec/notes');
     }
   }
 
+  // 1a-bis (OXB-C6 #1): Rename / replacement / selector / role / locale string / menu IA transitions (`de X para Y`, `X -> Y`)
+  const touchesLocaleFile = Array.isArray(task.files) && task.files.some((f) => /locales?\/|i18n\//i.test(norm(f)));
+  const isLocaleProseCtx = touchesLocaleFile || /\b(?:locales?|catálogo|catalogo|i18n|translation|traduç|label|texto|renomei\w*|menu|seç|aria|role|seletor|selector|IA)\b/i.test(prose);
+  const REPLACE_PAIR_RE = /(?:^|[\s(,;])(?:\bde\s+)?(?:`([^`\r\n]{3,80})`|(["'])([^'"\r\n]{3,80})\2|(\[?(?:role|data-[\w-]+|aria-[\w-]+)\s*=\s*["'][^"'\r\n]+["']\]?)|(\.[A-Za-z_-][\w-]{2,}|#[A-Za-z_-][\w-]{2,}))[^\S\r\n]*(?:->|→|\bpara\b|\bpor\b|\bto\b)[^\S\r\n]*(?:`[^`\r\n]{2,80}`|["'][^'"\r\n]{2,80}["']|\[?(?:role|data-[\w-]+|aria-[\w-]+)\s*=|\.[A-Za-z_-][\w-]+|#[A-Za-z_-][\w-]+|[A-Za-z])/gi;
+  for (const m of prose.matchAll(REPLACE_PAIR_RE)) {
+    const oldTok = m[1] || m[3] || m[4] || m[5];
+    if (!oldTok) continue;
+    const isQuotedText = Boolean(m[1] || m[3]);
+    const cleanLen = oldTok.replace(/^['"`]+|['"`]+$/g, '').trim().length;
+    const hint = isQuotedText && cleanLen >= 4 && isLocaleProseCtx ? 'locale_string' : null;
+    addRemoved(oldTok, 'spec/notes', hint, `altera/substitui \`${oldTok.replace(/^['"`]+|['"`]+$/g, '').trim()}\``);
+  }
+
   // 1b. Explicit count targets in task prose (`9 seções`, `consolida em 9 seções`, `exactly 9 sections`, etc.)
-  const COUNT_PROSE_RE = /\b(?:exatamente\s+|apenas\s+|consolida\w*\s+(?:em|para)\s+|reduz\w*\s+para\s+|exact(?:ly)?\s+|into\s+|down\s+to\s+)?(\d{1,3})\s+(seç(?:ões|oes)|secoes|navegaç\w*|linhas(?:\s+de\s+navegaç\w*)?|abas|itens|sections|nav\s+rows|rows|tabs|items)\b/gi;
+  const COUNT_PROSE_RE = /\b(?:exatamente\s+|apenas\s+|consolida\w*\s+(?:em|para)\s+|reduz\w*\s+para\s+|exact(?:ly)?\s+|into\s+|down\s+to\s+)?(\d{1,3})\s+(seç(?:ões|oes)|secoes|navegaç\w*|linhas(?:\s+de\s+navegaç\w*)?|abas|itens|menus?|submenus?|sections|nav\s+rows|rows|tabs|items)\b/gi;
   for (const m of prose.matchAll(COUNT_PROSE_RE)) {
     const n = Number(m[1]);
     if (Number.isInteger(n) && n >= 1 && n <= 100) {
@@ -122,15 +158,20 @@ function extractTaskShapeMutations(task, specCriteriaMap, ownFrozenTexts) {
       addRemoved(m[1], file);
     }
     for (const m of clean.matchAll(/\.not\.toHaveAttribute\(\s*['"`]([\w-]+)['"`]\s*,\s*['"`]([^'"`]+)['"`]\s*\)/g)) {
-      addRemoved(`${m[1]}="${m[2]}"`, file);
-      addRemoved(m[2], file);
+      const k = m[1].toLowerCase() === 'role' ? 'aria_role' : null;
+      addRemoved(`${m[1]}="${m[2]}"`, file, k);
+      addRemoved(m[2], file, k);
     }
     for (const m of clean.matchAll(/\.not\.toMatch\(\s*\/\\?(\.[A-Za-z_-][\w-]{2,})\\b?\//g)) {
+      addRemoved(m[1], file, 'class');
+    }
+    // `queryByText('main') ... .toBeNull()`, `getByRole('tablist', ...).not.toBeVisible()`, `getByTestId('old') ... .toHaveCount(0)`
+    for (const m of clean.matchAll(/(?:queryByText|getByText|getByTestId|queryByTestId|getByLabelText|queryByLabelText|locator)\(\s*['"`]([^'"`]{3,80})['"`]\s*\)[^\n]{0,80}?(?:\.toBeNull\(\)|\.toHaveCount\(\s*0\s*\)|\.not\.toBeVisible\(\)|\.not\.toBeInTheDocument\(\))/g)) {
       addRemoved(m[1], file);
     }
-    // `queryByText('main') ... .toBeNull()` or `locator('...').toHaveCount(0)` or `expect(chip).not.toBeVisible()`
-    for (const m of clean.matchAll(/(?:queryByText|getByText|locator)\(\s*['"`]([^'"`]{3,60})['"`]\s*\)[^\n]{0,80}?(?:\.toBeNull\(\)|\.toHaveCount\(\s*0\s*\)|\.not\.toBeVisible\(\)|\.not\.toBeInTheDocument\(\))/g)) {
-      addRemoved(m[1], file);
+    for (const m of clean.matchAll(/(?:getByRole|queryByRole|findByRole)\(\s*['"`]([\w-]+)['"`]\s*(?:,\s*\{[^\n}]*name:\s*['"`]([^'"`]{3,60})['"`][^\n}]*\})?\s*\)[^\n]{0,80}?(?:\.toBeNull\(\)|\.toHaveCount\(\s*0\s*\)|\.not\.toBeVisible\(\)|\.not\.toBeInTheDocument\(\))/g)) {
+      if (m[2]) addRemoved(m[2], file, 'locale_string');
+      else addRemoved(m[1], file, 'aria_role');
     }
     // Exact count in task's frozen test: `expect(sections).toHaveLength(9)` or `.toHaveCount(9)`
     for (const m of clean.matchAll(/expect\(([^)\n]{1,100})\)\s*\.\s*(?:toHaveLength|toHaveCount)\(\s*(\d{1,3})\s*\)/g)) {
@@ -153,7 +194,7 @@ function isNegativeAssertionLine(line) {
 }
 
 function isAssertionOrSelectorContext(windowText) {
-  return /\b(?:expect|assert|getBy\w+|findBy\w+|queryBy\w+|locator|querySelector\w*|toHave\w+|toContain\w*|toBe\w*|toEqual|toMatch|data-variant|variant\s*[:=]|className)\b/.test(windowText);
+  return /\b(?:expect|assert|getBy\w+|findBy\w+|queryBy\w+|getAllBy\w+|locator|querySelector\w*|toHave\w+|toContain\w*|toBe\w*|toEqual|toMatch|toMatchObject|data-testid|data-variant|variant\s*[:=]|role\s*[:=]|className)\b/.test(windowText);
 }
 
 function findPositiveTokenConflict(cleanTestText, mut) {
@@ -164,12 +205,28 @@ function findPositiveTokenConflict(cleanTestText, mut) {
     // Match `.plain` in string/regex/selector (`'.plain'`, `/\.plain\b/`, `classList.contains('plain')`)
     const bare = escapeRegExp(tok.slice(1));
     patterns.push(new RegExp(`(?:\\\\?\\.${bare}\\b|className[^\\n]*['"\`]${bare}['"\`]|toHaveClass\\(\\s*['"\`]${bare}['"\`])`));
+  } else if (mut.kind === 'aria_role') {
+    const bare = escapeRegExp(tok.replace(/^\[?role\s*=\s*["']?|["']?\]?$/gi, ''));
+    patterns.push(new RegExp(`(?:(?:get|find|query|getAll|findAll|queryAll)ByRole\\(\\s*['"\`]${bare}['"\`]|toHaveAttribute\\(\\s*['"\`]role['"\`]\\s*,\\s*['"\`]${bare}['"\`]|\\[\\s*role\\s*=\\s*['"\`]${bare}['"\`]\\s*\\]|toHaveRole\\(\\s*['"\`]${bare}['"\`])`));
+  } else if (mut.kind === 'selector') {
+    const cleanSel = tok.replace(/^\[|\]$/g, '');
+    const esc = escapeRegExp(cleanSel);
+    const idMatch = /^#([A-Za-z_-][\w-]+)$/.exec(cleanSel);
+    const dtMatch = /^data-testid\s*=\s*["']?([^"']+)["']?$/i.exec(cleanSel);
+    if (idMatch) {
+      patterns.push(new RegExp(`(?:['"\`]#${escapeRegExp(idMatch[1])}\\b|toHaveAttribute\\(\\s*['"\`]id['"\`]\\s*,\\s*['"\`]${escapeRegExp(idMatch[1])}['"\`])`));
+    } else if (dtMatch) {
+      const val = escapeRegExp(dtMatch[1]);
+      patterns.push(new RegExp(`(?:getByTestId\\(\\s*['"\`]${val}['"\`]|data-testid\\s*=\\s*['"\`]${val}['"\`]|toHaveAttribute\\(\\s*['"\`]data-testid['"\`]\\s*,\\s*['"\`]${val}['"\`])`));
+    } else {
+      patterns.push(new RegExp(esc));
+    }
   } else if (mut.kind === 'attr') {
     patterns.push(new RegExp(escapeRegExp(tok)));
   } else {
     const esc = escapeRegExp(tok);
-    // Match quoted `'plain'` / `"plain"` / `data-...="plain"` / regex `/\bplain\b/`
-    patterns.push(new RegExp(`(?:['"\`=]${esc}['"\`\\]]|/${esc}/)`));
+    // Match quoted `'plain'` / `"plain"` / `data-...="plain"` / regex `/\bplain\b/` / JSX text/t('key')
+    patterns.push(new RegExp(`(?:['"\`=]${esc}['"\`\\]]|/${esc}/i?)`));
   }
 
   for (let i = 0; i < lines.length; i += 1) {
@@ -198,9 +255,9 @@ function findCountConflict(cleanTestText, target) {
 
   for (let i = 0; i < lines.length; i += 1) {
     const win = lines.slice(i, Math.min(lines.length, i + 3)).join(' ');
-    // Match `expect(expr).toBeGreaterThan(M)` / `toBeGreaterThanOrEqual(M)` / `toBeLessThan(M)` / `toBeLessThanOrEqual(M)` starting on line i
-    const bound = /\bexpect\s*\(/.test(lines[i])
-      ? /expect\(([^)]{1,120})\)\s*\.\s*(toBeGreaterThan|toBeGreaterThanOrEqual|toBeLessThan|toBeLessThanOrEqual)\(\s*(\d{1,4})\s*\)/.exec(win)
+    // Match `expect(expr).toBeGreaterThan(M)` / `toBeGreaterThanOrEqual(M)` / `toBeLessThan(M)` / `toBeLessThanOrEqual(M)` / `toHaveLength(M)` / `toHaveCount(M)` starting on line i
+    const bound = /\bexpect\s*\(/.test(lines[i]) && !/\.not\b/.test(lines[i])
+      ? /expect\(([^)]{1,120})\)\s*\.\s*(toBeGreaterThan|toBeGreaterThanOrEqual|toBeLessThan|toBeLessThanOrEqual|toHaveLength|toHaveCount)\(\s*(\d{1,4})\s*\)/.exec(win)
       : null;
     if (bound) {
       const expr = bound[1];
@@ -212,7 +269,8 @@ function findCountConflict(cleanTestText, target) {
       const incompatible = (op === 'toBeGreaterThan' && !(K > M))
         || (op === 'toBeGreaterThanOrEqual' && !(K >= M))
         || (op === 'toBeLessThan' && !(K < M))
-        || (op === 'toBeLessThanOrEqual' && !(K <= M));
+        || (op === 'toBeLessThanOrEqual' && !(K <= M))
+        || ((op === 'toHaveLength' || op === 'toHaveCount') && K !== M);
       if (incompatible) {
         return { line: i + 1, expected_by_test: `${op}(${M})`, snippet: lines[i].trim().slice(0, 140) };
       }
@@ -285,14 +343,22 @@ function crossCardFrozenConflicts(root, planDoc, options = {}) {
       }
     }
 
-    // Also match CSS / PascalCase component references in acceptance/e2e tests that read CSS or mount via route/app
+    // Also match CSS / PascalCase / kebab-case component references in unit, integration, or e2e tests
     const nonTestScope = scope.filter((f) => !TEST_RE.test(f));
     const refTerms = [];
     for (const sf of nonTestScope) {
       const base = path.posix.basename(sf);
       const stem = base.replace(/\.(module\.)?(css|scss|less)$/i, '').replace(/\.[cm]?[jt]sx?$/i, '');
       if (/\.(css|scss|less)$/i.test(base) && base.length >= 6) refTerms.push({ file: sf, needle: base });
-      if (/^[A-Z][A-Za-z0-9]{4,}$/.test(stem)) refTerms.push({ file: sf, needle: stem });
+      if (/^[A-Z][A-Za-z0-9]{4,}$/.test(stem)) {
+        refTerms.push({ file: sf, needle: stem });
+        const kebab = stem.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+        if (kebab.length >= 6) refTerms.push({ file: sf, needle: kebab });
+      }
+      if (/locales\/[^/]+\.json$/i.test(sf)) {
+        refTerms.push({ file: sf, needle: base });
+        refTerms.push({ file: sf, needle: 'locales/' });
+      }
     }
     if (refTerms.length) {
       for (const tf of allTests) {
@@ -303,16 +369,36 @@ function crossCardFrozenConflicts(root, planDoc, options = {}) {
       }
     }
 
-    for (const [testFile, touchedFile] of candidateTests.entries()) {
+    // OXB-C6 #1: Specific selectors, ARIA roles, locale strings, or non-trivial tokens/counts may also break active repo
+    // tests that mount via shell/app router without naming the leaf file directly.
+    const isSpecificGlobalMutation = (mut) => (
+      mut.kind === 'aria_role'
+      || mut.kind === 'selector'
+      || mut.kind === 'locale_string'
+      || (mut.kind === 'class' && mut.token.length >= 5)
+      || (mut.kind === 'attr' && mut.token.includes('='))
+      || (mut.token.length >= 8 && /\s|[._-]/.test(mut.token))
+    );
+    const hasSpecificGlobal = mutations.removedTokens.some(isSpecificGlobalMutation) || mutations.countTargets.length > 0;
+    const defaultScopeFile = nonTestScope[0] || scope[0];
+    const testEntries = [...candidateTests.entries()];
+    if (hasSpecificGlobal) {
+      for (const tf of allTests) {
+        if (!candidateTests.has(tf)) testEntries.push([tf, defaultScopeFile]);
+      }
+    }
+
+    for (const [testFile, touchedFile] of testEntries) {
       if (ownAcceptFiles.has(testFile)) continue;
+      const isCandidate = candidateTests.has(testFile);
       const isFrozen = FROZEN_DIR_RE.test(testFile);
-      // Mutable unit test already inside the task's own `files` can be updated directly by the task — not a cross-card block
-      if (inScope(testFile) && !isFrozen) continue;
+      const testInScope = inScope(testFile);
 
       const clean = cleanOf(testFile);
       if (!clean) continue;
 
       for (const mut of mutations.removedTokens) {
+        if (!isCandidate && !isSpecificGlobalMutation(mut)) continue;
         const hit = findPositiveTokenConflict(clean, mut);
         if (!hit) continue;
         const key = `${t.id}\u0000${testFile}:${hit.line}\u0000${mut.token}`;
@@ -324,14 +410,18 @@ function crossCardFrozenConflicts(root, planDoc, options = {}) {
           test: testFile,
           line: hit.line,
           kind: 'removed_token',
+          mutation_kind: mut.kind,
           token: mut.token,
+          change_desc: mut.desc || `remove/altera \`${mut.token}\``,
           source: mut.source,
           snippet: hit.snippet,
           frozen: isFrozen,
+          in_scope: testInScope,
         });
       }
 
       for (const ct of mutations.countTargets) {
+        if (!isCandidate && !ct.noun) continue;
         const hit = findCountConflict(clean, ct);
         if (!hit) continue;
         const key = `${t.id}\u0000${testFile}:${hit.line}\u0000count:${ct.count}`;
@@ -345,9 +435,11 @@ function crossCardFrozenConflicts(root, planDoc, options = {}) {
           kind: 'count_conflict',
           target_count: ct.count,
           expected_by_test: hit.expected_by_test,
+          change_desc: `define ${ct.count} ${ct.noun || 'itens'}`,
           source: ct.source,
           snippet: hit.snippet,
           frozen: isFrozen,
+          in_scope: testInScope,
         });
       }
     }
@@ -360,11 +452,13 @@ function crossCardConflictMessages(findings, { level = 'warn' } = {}) {
   const lines = findings.map((f) => {
     const fix = f.frozen
       ? `abra CR e atualize/reescreva o teste congelado (spec freeze / plan amend-test) antes de rodar ${f.task}`
-      : `inclua ${f.test} em files de ${f.task} (plan scope add) ou abra CR se for contrato de outro card`;
+      : f.in_scope
+        ? `já no escopo de ${f.task}: o executor deve ajustar este spec durante a execução`
+        : `inclua ${f.test} em files de ${f.task} (plan scope add) para ajustar na execução, ou abra CR se for contrato de outro card`;
     if (f.kind === 'count_conflict') {
-      return `${f.task} (${f.component}): define ${f.target_count} (${f.source}), mas ${f.test}:${f.line} afirma \`${f.expected_by_test}\` (\`${f.snippet}\`) — conflito entre cards: ${fix} [G45]`;
+      return `${f.test}:${f.line} → ${f.task} (${f.component}) define ${f.target_count} (${f.source}), mas o teste afirma \`${f.expected_by_test}\` (\`${f.snippet}\`) — conflito entre cards: ${fix} [G45]`;
     }
-    return `${f.task} (${f.component}): remove/esconde \`${f.token}\` (${f.source}), mas ${f.test}:${f.line} afirma \`${f.token}\` (\`${f.snippet}\`) — conflito com teste existente: ${fix} [G45]`;
+    return `${f.test}:${f.line} → ${f.task} (${f.component}) ${f.change_desc || `remove/esconde \`${f.token}\``} (${f.source}), mas o teste afirma \`${f.token}\` (\`${f.snippet}\`) — ${fix} [G45]`;
   });
   return level === 'error' ? { errors: lines, warnings: [] } : { errors: [], warnings: lines };
 }

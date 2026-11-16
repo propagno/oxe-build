@@ -706,7 +706,17 @@ function buildPreviewCiCommands(work, riskSuites, config = {}) {
     .find((rel) => fs.existsSync(path.join(work, rel)));
   const prefix = remoteScript ? `node ${remoteScript} -- ` : '';
 
-  const playwrightSuites = riskSuites.filter((r) => r.kind === 'e2e' || r.kind === 'conformance' || /(^|\/)(e2e|playwright)\//i.test(r.suite)).map((r) => r.suite);
+  const isPlaywrightSuite = (r) => {
+    if (r.kind === 'e2e' || r.kind === 'conformance' || /(^|\/)(e2e|playwright)\//i.test(r.suite)) return true;
+    if (/\.spec\.[cm]?[jt]sx?$/i.test(r.suite)) {
+      try {
+        const txt = fs.readFileSync(path.join(work, r.suite), 'utf8');
+        return /@playwright\/test|playwright/i.test(txt);
+      } catch { return false; }
+    }
+    return false;
+  };
+  const playwrightSuites = riskSuites.filter(isPlaywrightSuite).map((r) => r.suite);
   const vitestSuites = files.filter((f) => !playwrightSuites.includes(f));
   const cmds = [];
   if (vitestSuites.length) cmds.push(`${prefix}npx vitest run ${vitestSuites.join(' ')}`);

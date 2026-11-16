@@ -948,15 +948,16 @@ function findUnrunFrozenAcceptanceCi(projectRoot, planDoc = null, options = {}) 
   ];
 
   // 1. Discover frozen acceptance config files and acceptance test directories
-  const configsMap = new Map(); // relConfig -> { runner, files: Set }
+  const configsMap = new Map(); // relConfig -> { runner, files: Set, dirs: Set }
   const dirsMap = new Map(); // relDir -> { runner, files: Set }
-  const addConfig = (cfgPath, runner = 'unknown', file = null) => {
+  const addConfig = (cfgPath, runner = 'unknown', file = null, dirRel = null) => {
     const c = norm(cfgPath);
     if (!c || /(^|\/)parked[^/]*\//i.test(c)) return;
-    if (!configsMap.has(c)) configsMap.set(c, { runner, files: new Set() });
+    if (!configsMap.has(c)) configsMap.set(c, { runner, files: new Set(), dirs: new Set() });
     const entry = configsMap.get(c);
     if (runner !== 'unknown' && entry.runner === 'unknown') entry.runner = runner;
     if (file) entry.files.add(norm(file));
+    if (dirRel) entry.dirs.add(norm(dirRel).replace(/\/+$/, '') + '/');
   };
   const addDir = (dirRel, runner = 'unknown', file = null) => {
     const d = norm(dirRel).replace(/\/+$/, '') + '/';
@@ -987,12 +988,14 @@ function findUnrunFrozenAcceptanceCi(projectRoot, planDoc = null, options = {}) 
     const cmd = typeof a.command === 'string' ? a.command : '';
     const aFiles = extractEntryTestFiles(a).filter((f) => !/(^|\/)parked[^/]*\//i.test(f));
     const cfgM = /(?:^|\s)(?:-c|--config(?:=|\s+))["']?([^\s"']+)["']?/.exec(cmd);
-    if (cfgM) addConfig(cfgM[1], inferRunner(cmd, ''), aFiles[0] || null);
+    const aFolders = aFiles.map((f) => acceptanceFolderFor(f)).filter(Boolean);
+    if (cfgM) addConfig(cfgM[1], inferRunner(cmd, ''), aFiles[0] || null, aFolders[0] || null);
     for (const f of aFiles) {
       const folder = acceptanceFolderFor(f);
       if (folder) {
         const txt = readFile(f) || '';
         addDir(folder, inferRunner(cmd || f, txt), f);
+        if (cfgM) addConfig(cfgM[1], inferRunner(cmd, ''), f, folder);
       }
     }
   }
@@ -1001,7 +1004,9 @@ function findUnrunFrozenAcceptanceCi(projectRoot, planDoc = null, options = {}) 
     const rel = norm(f);
     if (!rel || /(^|\/)parked[^/]*\//i.test(rel)) continue;
     if (/^(?:playwright|vitest|jest)\.[^/]*acceptance[^/]*\.config\.[cm]?[jt]s$/i.test(path.posix.basename(rel))) {
-      addConfig(rel, inferRunner(rel, readFile(rel) || ''));
+      const cfgBody = readFile(rel) || '';
+      const tdMatch = /testDir\s*:\s*['"](?:\.\/)?([^'"]+)['"]/.exec(cfgBody);
+      addConfig(rel, inferRunner(rel, cfgBody), null, tdMatch ? tdMatch[1] : null);
     }
     if (TEST_RE.test(rel)) {
       const folder = acceptanceFolderFor(rel);
@@ -1116,8 +1121,9 @@ function findUnrunFrozenAcceptanceCi(projectRoot, planDoc = null, options = {}) 
 
   for (const [cfg, info] of configsMap.entries()) evalTarget(cfg, info, 'config');
   for (const [dirRel, info] of dirsMap.entries()) {
-    // If an explicit acceptance config already covers this same runner/dir and was reported, still skip duplicate only when redundant;
-    // keep dir finding when tests live in `tests/acceptance/` / `e2e/acceptance/` without a config or with an uncovered folder
+    // If an explicit acceptance config covers this directory (either reported unrun OR verified covered in CI/scripts), skip redundant dir entry
+    const assocConfigs = [...configsMap.entries()].filter(([, cfgInfo]) => cfgInfo.dirs.has(dirRel));
+    if (assocConfigs.length > 0) continue;
     const coveredByReportedCfg = [...configsMap.keys()].some((c) => findings.some((f) => f.target === c) && info.runner === (configsMap.get(c) || {}).runner);
     if (coveredByReportedCfg) continue;
     evalTarget(dirRel, info, 'dir');
