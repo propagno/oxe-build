@@ -212,4 +212,12 @@ describe('OXB-200: `oxe-cc runtime commit-task <Tn>` atomic CLI for external sub
     const out = op.runtimeCommitTask(dir, null, { task: 'T2', by: 'tl', verifyTimeoutMs: 20_000 });
     assert.equal(out.ok, true);
   });
+
+  it('R53: a remote-verify command gets at least its own 30 min above verify_timeout_ms; an explicit option wins', () => {
+    const t = op.commitTaskVerifyTimeout;
+    assert.equal(t('.', {}, 'node scripts/remote-verify.mjs --job e2e', 900_000), 30 * 60_000);
+    assert.equal(t('.', {}, 'node scripts/remote-verify.mjs', 45 * 60_000), 45 * 60_000, 'a larger config stays');
+    assert.equal(t('.', {}, 'npx vitest run', 900_000), 900_000);
+    assert.equal(t('.', { verifyTimeoutMs: 60_000 }, 'node scripts/remote-verify.mjs', 900_000), 60_000);
+  });
 });

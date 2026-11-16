@@ -5698,7 +5698,7 @@ async function runRuntime(opts) {
   if (opts.action === 'retry') {
     try {
       if (!opts.reuseAttempt) throw new Error('use: oxe-cc runtime retry T<n> --reuse-attempt [--run <id>] — reaplica a tentativa revertida, roda o verify e commita, sem turno de modelo (uma tentativa nova é o runtime execute)');
-      const out = oxeOperational.runtimeReuseAttempt(opts.dir, activeSession, { task: opts.task, run: opts.runId || null, by: opts.actor || undefined });
+      const out = oxeOperational.runtimeReuseAttempt(opts.dir, activeSession, { task: opts.task, run: opts.runId || null, by: opts.actor || undefined, verifyTimeoutMs: opts.verifyTimeoutMs || undefined });
       if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeRetrySchema: 1, ...out }, null, 2)); return; }
       console.log(`  ${green}✓${reset} ${out.task}: tentativa reaproveitada de ${out.reused_from} — verify verde, commit ${String(out.commit || '').slice(0, 10)} (${out.files.length} arquivo(s)), sem turno de modelo`);
     } catch (err) {

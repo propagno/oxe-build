@@ -6957,6 +6957,25 @@ function dirtyProjectPaths(projectRoot) {
 }
 
 /** runChildCommand, plus the whole (bounded) output — OXB-172 reads the failing test files from it. */
+/**
+ * The verify timeout of `runtime commit-task` for one command (R53): an explicit --verify-timeout-ms wins; a
+ * remote-verify command gets at least its own 30 min (the CI queue and run), above the project's verify_timeout_ms.
+ */
+function commitTaskVerifyTimeout(projectRoot, options, cmd, base) {
+  if (Number(options.verifyTimeoutMs) > 0) return Number(options.verifyTimeoutMs);
+  try {
+    const pc = require('./oxe-test-precheck.cjs');
+    if (pc.isRemoteVerify(cmd)) return Math.max(base, pc.REMOTE_VERIFY_TIMEOUT_MS);
+  } catch { /* the base */ }
+  return base;
+}
+
+/** "… estourou o tempo (cmd, N min; …)" with the output's tail when there is one (R53). */
+function timedOutMessage(what, cmd, ms, res) {
+  const snippet = String((res && (res.tail || res.output)) || '').trim().slice(-300);
+  return `${what} estourou o tempo (\`${cmd}\`, ${ms >= 60_000 ? `${Math.round(ms / 60_000)} min` : `${Math.round(ms / 1000)} s`}; verify_timeout_ms no config ou --verify-timeout-ms)${snippet ? `: ${snippet}` : ''}`;
+}
+
 function runChildCommandFull(projectRoot, command, timeoutMs = 600_000) {
   applyChildEnvPolicy(projectRoot);
   const rt = loadRuntimeModule();
@@ -8994,8 +9013,9 @@ function runtimeCommitTasksTogether(projectRoot, activeSession, options = {}) {
   }))];
   if (!options.skipVerify) {
     for (const cmd of commands) {
-      const res = runChildCommandFull(projectRoot, cmd, verifyTimeoutMs);
-      if (!res.ok && res.timedOut) throw new Error(`verify estourou o tempo (\`${cmd}\`, ${verifyTimeoutMs >= 60_000 ? `${Math.round(verifyTimeoutMs / 60_000)} min` : `${Math.round(verifyTimeoutMs / 1000)} s`}; verify_timeout_ms no config ou --verify-timeout-ms): ${String(res.tail || res.output || '').trim().slice(-300)}`);
+      const ms = commitTaskVerifyTimeout(projectRoot, options, cmd, verifyTimeoutMs);
+      const res = runChildCommandFull(projectRoot, cmd, ms);
+      if (!res.ok && res.timedOut) throw new Error(timedOutMessage('verify', cmd, ms, res));
       if (!res.ok) throw new Error(`verify falhou (\`${cmd}\`): ${String(res.tail || res.output || '').trim().slice(-500)}`);
     }
   }
@@ -9061,7 +9081,7 @@ function runtimeReuseAttempt(projectRoot, activeSession, options = {}) {
   }
   for (const f of newFiles) { ensureDirForFile(path.join(projectRoot, f)); fs.copyFileSync(path.join(newRoot, f), path.join(projectRoot, f)); }
   try {
-    const out = runtimeCommitTask(projectRoot, activeSession, { task: taskId, by: options.by || 'reuse-attempt', force: true });
+    const out = runtimeCommitTask(projectRoot, activeSession, { task: taskId, by: options.by || 'reuse-attempt', force: true, ...(Number(options.verifyTimeoutMs) > 0 ? { verifyTimeoutMs: Number(options.verifyTimeoutMs) } : {}) });
     appendEvent(projectRoot, activeSession, { type: 'AttemptReused', work_item_id: taskId, payload: { task: taskId, from: path.relative(projectRoot, dir).replace(/\\/g, '/'), files: touched, commit: out.commit || out.done_commit || null } });
     return { task: taskId, reused_from: path.relative(projectRoot, dir).replace(/\\/g, '/'), files: touched, ...out };
   } catch (err) {
@@ -9210,9 +9230,10 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
       verifySkipped = true;
     } else {
       for (const cmd of commands) {
-        const res = runChildCommandFull(projectRoot, cmd, verifyTimeoutMs);
+        const ms = commitTaskVerifyTimeout(projectRoot, options, cmd, verifyTimeoutMs);
+        const res = runChildCommandFull(projectRoot, cmd, ms);
         if (!res.ok && res.timedOut) {
-          throw new Error(`verify de ${taskId} estourou o tempo (\`${cmd}\`, ${verifyTimeoutMs >= 60_000 ? `${Math.round(verifyTimeoutMs / 60_000)} min` : `${Math.round(verifyTimeoutMs / 1000)} s`}; verify_timeout_ms no config ou --verify-timeout-ms)`);
+          throw new Error(timedOutMessage(`verify de ${taskId}`, cmd, ms, res));
         }
         if (!res.ok) {
           throw new Error(`verify de ${taskId} falhou (\`${cmd}\`): ${String(res.tail || res.output || '').trim().slice(-500)}`);
@@ -12673,6 +12694,7 @@ module.exports = {
   runtimePlanVerifyPrune,
   runtimePlanTaskSupersede,
   runtimePauseHold,
+  commitTaskVerifyTimeout,
   isClosedPhaseRun,
   pruneVerifyCommand,
   isExternallyDelivered,
