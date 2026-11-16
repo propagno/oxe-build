@@ -42,13 +42,14 @@ function claimsOf(text) {
 
 function symbolDefinedIn(root, symbol) {
   const ereSym = String(symbol || '').replace(/[.\\+*?[^\]$(){}=!<>|:-]/g, '\\$&');
-  const r = spawnSync('git', ['grep', '-l', '-E', `(function|class|const|let|var|def|interface|type|enum|export)[[:space:]]+${ereSym}([^A-Za-z0-9_$]|$)|(^|[^A-Za-z0-9_$])${ereSym}[[:space:]]*[:=][[:space:]]*(async[[:space:]]*)?(function|\\()`], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
-  return r.status === 0 ? r.stdout.split(/\r?\n/).filter(Boolean) : [];
+  const r = spawnSync('git', ['-c', 'core.quotepath=false', 'grep', '-l', '-E', `(function|class|const|let|var|def|interface|type|enum|export)[[:space:]]+${ereSym}([^A-Za-z0-9_$]|$)|(^|[^A-Za-z0-9_$])${ereSym}[[:space:]]*[:=][[:space:]]*(async[[:space:]]*)?(function|\\()`], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
+  return r.status === 0 ? r.stdout.split(/\r?\n/).map((f) => f.replace(/\\/g, '/')).filter((f) => f && !f.startsWith('.oxe/')) : [];
 }
 
 function checkClaim(root, c, cache) {
   const abs = path.join(root, c.file);
-  const exists = fs.existsSync(abs);
+  let exists = false;
+  try { exists = fs.statSync(abs).isFile(); } catch { exists = false; }
   if (!c.symbol) return exists ? null : { why: 'não existe mais' };
   const text = exists ? (cache.get(c.file) ?? (cache.set(c.file, readText(abs) || ''), cache.get(c.file))) : '';
   const escSym = String(c.symbol).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -62,16 +63,22 @@ function checkClaim(root, c, cache) {
  * ctx: { programDir, dossierRoot, codebaseDir, program (PROGRAM.json), decisions, phase?, runCheck(cmd) → {ok, tail} }
  */
 function check(root, ctx) {
-  const closed = new Set(((ctx.program && ctx.program.phases) || []).filter((p) => p.status === 'closed').map((p) => p.id));
+  const closedByUpper = new Map();
+  for (const p of (ctx.program && ctx.program.phases) || []) {
+    if (p && p.status === 'closed' && p.id && !/[/\\]|\.\./.test(String(p.id))) {
+      closedByUpper.set(String(p.id).toUpperCase(), String(p.id));
+    }
+  }
   const only = ctx.phase ? String(ctx.phase).toUpperCase() : null;
   const artifacts = [];
   for (const d of ctx.decisions || []) {
-    if (!d.phase || !closed.has(d.phase) || (only && d.phase !== only)) continue;
+    const dp = d && d.phase ? String(d.phase).toUpperCase() : '';
+    if (!dp || !closedByUpper.has(dp) || (only && dp !== only)) continue;
     if (d.status && d.status !== 'active') continue;
     artifacts.push({ artifact: `decision:${d.id}`, text: `${d.title || ''}\n${d.text || ''}`, decision: d });
   }
-  for (const ph of closed) {
-    if (only && ph !== only) continue;
+  for (const [phUpper, ph] of closedByUpper) {
+    if (only && phUpper !== only) continue;
     const dir = path.join(ctx.dossierRoot, ph);
     let names = [];
     try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.md')); } catch { names = []; }

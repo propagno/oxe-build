@@ -251,6 +251,19 @@ function substantiveFindings(root, files, base, ignore, scope) {
   return out;
 }
 
+function collectPkgEntryPaths(val, acc = []) {
+  if (!val) return acc;
+  if (typeof val === 'string') {
+    const clean = norm(val);
+    if (clean) acc.push(clean);
+  } else if (Array.isArray(val)) {
+    for (const item of val) collectPkgEntryPaths(item, acc);
+  } else if (typeof val === 'object') {
+    for (const v of Object.values(val)) collectPkgEntryPaths(v, acc);
+  }
+  return acc;
+}
+
 /** Level 3: a new source file referenced by another non-test file, or a declared entry point. */
 function wiredFindings(root, newFiles, entries, ignore) {
   const out = [];
@@ -258,14 +271,16 @@ function wiredFindings(root, newFiles, entries, ignore) {
   if (!candidates.length) return out;
   let pkg = {};
   try { pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')); } catch { pkg = {}; }
-  const pkgEntries = JSON.stringify([pkg.main, pkg.bin, pkg.exports, pkg.module]).replace(/\\\\/g, '/');
+  const pkgEntryPaths = collectPkgEntryPaths([pkg.main, pkg.bin, pkg.exports, pkg.module]);
+  const pkgEntryStems = new Set(pkgEntryPaths.map((p) => path.posix.basename(p).replace(/\.[^.]+$/, '')));
   const tracked = (git(root, ['ls-files', '--cached', '--others', '--exclude-standard']).stdout || '').split(/\r?\n/).map(norm).filter((f) => f && CODE_RE.test(f) && !TEST_RE.test(f));
   const texts = new Map();
   const read = (f) => { if (!texts.has(f)) { try { const st = fs.statSync(path.join(root, f)); texts.set(f, st.size < 1_500_000 ? fs.readFileSync(path.join(root, f), 'utf8') : ''); } catch { texts.set(f, ''); } } return texts.get(f); };
   for (const file of candidates) {
     const stem = path.posix.basename(file).replace(/\.[^.]+$/, '');
-    if (pkgEntries.includes(file) || pkgEntries.includes(stem)) continue;
-    const re = new RegExp(`['"\`][^'"\`]*\\b${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\.[a-z]+)?['"\`]|\\bimport\\s+[\\w.]*\\b${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+    if (pkgEntryPaths.includes(file) || pkgEntryStems.has(stem)) continue;
+    const stemEsc = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`['"\`](?:[^'"\`]*[/\\\\])?${stemEsc}(?:\\.[A-Za-z0-9]+)*['"\`]|\\bimport\\s+[\\w.]*(?<![\\w$])${stemEsc}(?![\\w$])`);
     const used = tracked.some((other) => other !== file && re.test(read(other)));
     if (!used) out.push({ level: 'wired', file, line: 0, why: 'arquivo novo que nenhum outro arquivo (fora dos testes) importa ou usa' });
   }

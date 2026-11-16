@@ -24,11 +24,17 @@ function copyRec(src, dst) {
 }
 
 function snapshot(projectRoot, toDir, name) {
-  if (!toDir || !name) throw new Error('use: oxe-cc program snapshot --to <pasta fora do repositório> --name <f2>');
-  const target = path.resolve(toDir, name, '.oxe');
+  const cleanName = typeof name === 'string' ? name.trim() : '';
+  if (!toDir || !cleanName) throw new Error('use: oxe-cc program snapshot --to <pasta fora do repositório> --name <f2>');
+  if (/[/\\]/.test(cleanName) || cleanName === '.' || cleanName === '..') {
+    throw new Error(`nome de snapshot inválido: ${cleanName}`);
+  }
+  const target = path.resolve(toDir, cleanName, '.oxe');
   const rel = path.relative(path.resolve(projectRoot), target);
-  if (!rel.startsWith('..')) throw new Error('o snapshot de um programa fica FORA do repositório (são os planos do projeto): use --to <pasta externa>');
+  const insideRepo = !rel || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
+  if (insideRepo) throw new Error('o snapshot de um programa fica FORA do repositório (são os planos do projeto): use --to <pasta externa>');
   const src = path.join(projectRoot, '.oxe');
+  fs.rmSync(target, { recursive: true, force: true });
   const copied = [];
   for (const n of KEEP) { const p = path.join(src, n); if (fs.existsSync(p)) { copyRec(p, path.join(target, n)); copied.push(n); } }
   return { dir: path.dirname(target), copied };

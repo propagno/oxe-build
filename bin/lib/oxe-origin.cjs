@@ -17,7 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const TASK_RE = /^OXE-Task:\s*(?:F\d+\/)?T\d+\s*$/m;
+const TASK_RE = /^OXE-Task:\s*(?:[A-Za-z][\w.-]*\/)?T(?:\d[\w.-]*|-[A-Za-z0-9][\w.-]*)\s*$/m;
 const RUN_RE = /^OXE-Run:\s*\S+\s*$/m;
 const QUICK_RE = /^OXE-Quick:\s*(Q-\d{8}-[a-z0-9]{4})\s*$/im;
 const CARD_RE = /^OXE-Card:\s*([A-Za-z][A-Za-z0-9]*-\d+|\d+)\s*$/m;
@@ -174,8 +174,11 @@ function classify(commit, ocfg, ctx = {}) {
   const authored = ocfg.exempt.authored.find((r) => who.includes(r.author.toLowerCase()) && files.length && files.every((f) => underPaths(f, r.paths)));
   if (authored) return { ...base, ok: true, kind: 'exempt', reason: `autor ${authored.author} só em ${authored.paths.join(', ')}` };
   if (files.length && files.every((f) => underPaths(f, ocfg.exempt.paths))) return { ...base, ok: true, kind: 'exempt', reason: `só ${ocfg.exempt.paths.join(', ')}` };
-  const msg = String(commit.message || '');
-  if (TASK_RE.test(msg)) return { ...base, ok: true, kind: 'task', task: TASK_RE.exec(msg)[0].replace(/^OXE-Task:\s*/, '').trim(), run: RUN_RE.test(msg) ? RUN_RE.exec(msg)[0].replace(/^OXE-Run:\s*/, '').trim() : null };
+  const msg = String(commit.message || '').replace(/\r\n/g, '\n');
+  if (TASK_RE.test(msg)) {
+    const tasks = [...msg.matchAll(new RegExp(TASK_RE.source, 'gm'))].map((m) => m[0].replace(/^OXE-Task:\s*/, '').trim());
+    return { ...base, ok: true, kind: 'task', task: tasks[0], ...(tasks.length > 1 ? { tasks } : {}), run: RUN_RE.test(msg) ? RUN_RE.exec(msg)[0].replace(/^OXE-Run:\s*/, '').trim() : null };
+  }
   const q = QUICK_RE.exec(msg);
   if (q) {
     const card = CARD_RE.exec(msg);
@@ -292,8 +295,11 @@ function check(root, options = {}) {
 
 /** The trailers lines to append to a message that has none of them. */
 function appendTrailers(message, trailers) {
-  const body = String(message).replace(/\s+$/, '');
-  const missing = trailers.filter((t) => !new RegExp(`^${t.split(':')[0]}:`, 'm').test(body));
+  const body = String(message).replace(/\r\n/g, '\n').replace(/\s+$/, '');
+  const missing = trailers.filter((t) => {
+    const key = t.split(':')[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return !new RegExp(`^${key}:`, 'm').test(body);
+  });
   if (!missing.length) return `${body}\n`;
   // a trailer block is the last paragraph of "Key: value" lines; join it when there is one already
   const lastPara = body.split(/\n\s*\n/).pop() || '';
@@ -313,7 +319,7 @@ function commitMsg(root, file, options = {}) {
   if (ocfg.commit_msg === 'off') return { ok: true, skipped: 'origin.commit_msg off' };
   const spawn = options.spawn || spawnSync;
   const message = fs.readFileSync(file, 'utf8');
-  const text = message.split('\n').filter((l) => !l.startsWith('#')).join('\n');
+  const text = message.replace(/\r\n/g, '\n').split('\n').filter((l) => !l.startsWith('#')).join('\n');
   if (TASK_RE.test(text) || QUICK_RE.test(text)) return { ok: true };
   const quick = options.currentQuick || null;
   if (quick) {

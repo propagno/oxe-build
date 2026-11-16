@@ -21,9 +21,10 @@ const CODE_RE = /\.(c|m)?[jt]sx?$/i;
 const TEST_RE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$/i;
 const SKIP_DIR_RE = /(^|\/)(node_modules|dist|build|out|coverage|\.oxe)\//;
 const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+const isInactiveTask = (t) => !t || t.done === true || t.status === 'done' || t.status === 'superseded' || Boolean(t.superseded) || Boolean(t.merged_into);
 
 function trackedFiles(root) {
-  const r = spawnSync('git', ['ls-files'], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync('git', ['-c', 'core.quotepath=false', 'ls-files'], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
   if (r.status === 0 && r.stdout) return r.stdout.split(/\r?\n/).map(norm).filter(Boolean);
   const out = [];
   const walk = (dir) => {
@@ -134,7 +135,7 @@ function dataFilesOf(root, test, text, known) {
  * @returns {{ task: string, file: string, suites: { test: string, level: 'warn'|'error', names: string[] }[] }[]}
  */
 function suiteImpact(root, planDoc, options = {}) {
-  const tasks = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter((t) => t && !(t.done === true || t.status === 'done'));
+  const tasks = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter((t) => !isInactiveTask(t));
   if (!tasks.length) return [];
   const { byTarget, read } = options.index || importIndex(root, options);
   const known = new Set(options.files || trackedFiles(root));
@@ -203,7 +204,7 @@ function suiteImpact(root, planDoc, options = {}) {
  */
 function laterOwnedTests(planDoc) {
   const all = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter(Boolean);
-  const pending = all.filter((t) => !(t.done === true || t.status === 'done'));
+  const pending = all.filter((t) => !isInactiveTask(t));
   if (pending.length < 2) return [];
   const byId = new Map(all.map((t) => [t.id, t]));
   const ancestors = (id, seen = new Set()) => {
@@ -285,9 +286,9 @@ function laterOwnedTests(planDoc) {
  * @returns {{ task: string, path: string, parent: string, entry: string, pinned_by: string, line: string }[]}
  */
 function pinnedByExisting(root, planDoc, options = {}) {
-  const git = (args) => { const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 }); return r.status === 0 ? r.stdout : ''; };
+  const git = (args) => { const r = spawnSync('git', ['-c', 'core.quotepath=false', ...args], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 }); return r.status === 0 ? r.stdout : ''; };
   const read = options.readText || ((f) => { try { return fs.readFileSync(path.join(root, f), 'utf8'); } catch { return ''; } });
-  const tasks = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter((t) => t && !(t.done === true || t.status === 'done'));
+  const tasks = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter((t) => !isInactiveTask(t));
   const accept = planDoc && Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : [];
   const planFrozen = new Set(accept.flatMap((a) => (a && a.files) || []).map((f) => norm(typeof f === 'string' ? f : f.path)));
   // a member path, never a method call (`X.y.includes(`) — cross-review 15/11
@@ -499,7 +500,7 @@ function messages(findings, { mode = 'error' } = {}) {
  */
 function registryManifestGaps(root, planDoc, options = {}) {
   const all = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter(Boolean);
-  const pending = all.filter((t) => !(t.done === true || t.status === 'done') && !t.superseded && !t.merged_into);
+  const pending = all.filter((t) => !isInactiveTask(t));
   if (!pending.length) return [];
   const testScope = require('./oxe-test-scope.cjs');
   const pb = require('./oxe-plan-build.cjs');

@@ -54,6 +54,7 @@ function mirrorDirOf(root) {
 }
 
 function read(root, id) {
+  if (!ID_RE.test(String(id || ''))) return null;
   try { return JSON.parse(fs.readFileSync(fileOf(root, id), 'utf8')); } catch { /* not here: the mirror */ }
   const m = mirrorDirOf(root);
   if (!m) return null;
@@ -67,6 +68,7 @@ function read(root, id) {
 }
 
 function write(root, rec) {
+  if (!rec || !ID_RE.test(String(rec.id || ''))) throw new Error(`quick id inválido: ${rec && rec.id}`);
   fs.mkdirSync(dirOf(root), { recursive: true });
   const text = `${JSON.stringify(rec, null, 2)}\n`;
   fs.writeFileSync(fileOf(root, rec.id), text);
@@ -76,6 +78,7 @@ function write(root, rec) {
 
 /** A quick record exists here or in the repo's mirror (the check-origin question). */
 function exists(root, id) {
+  if (!ID_RE.test(String(id || ''))) return false;
   if (fs.existsSync(fileOf(root, id))) return true;
   const m = mirrorDirOf(root);
   return Boolean(m && fs.existsSync(path.join(m, `${id}.json`)));
@@ -136,9 +139,10 @@ function start(root, input = {}) {
  * 4 commits in two branches were counted as 1 from HEAD). Not `--all`: a stash commit is not the quick's.
  */
 function commitsOf(root, id, spawn = spawnSync) {
+  if (!ID_RE.test(String(id || ''))) return [];
   const r = spawn('git', ['log', '--format=%H%x1f%s', '-E', `--grep=^OXE-Quick: ${id}$`, 'HEAD', '--branches', '--remotes'], { cwd: root, encoding: 'utf8', windowsHide: true });
   if (r.status !== 0) return [];
-  return String(r.stdout || '').split('\n').filter(Boolean).map((l) => { const [sha, subject] = l.split('\x1f'); return { sha, subject }; });
+  return String(r.stdout || '').split(/\r?\n/).filter(Boolean).map((l) => { const [sha, subject] = l.split('\x1f'); return { sha, subject }; });
 }
 
 /**
@@ -201,16 +205,22 @@ function commit(root, input = {}) {
   const message = String(input.message || '').trim();
   if (message.length < 4) throw new Error('informe a mensagem do commit (-m "<mensagem>")');
   const spawn = input.spawn || spawnSync;
+  const originMod = require('./oxe-origin.cjs');
   const git = (args) => {
     const r = spawn('git', args, { cwd: root, encoding: 'utf8', windowsHide: true });
     if (r.status !== 0) throw new Error(`git ${args[0]}: ${String(r.stderr || r.stdout || '').trim().split('\n')[0]}`);
     return String(r.stdout || '');
   };
+  const parsePorcelainLine = (l) => {
+    const body = l.slice(3);
+    const target = l.startsWith('R') || l.startsWith('C') ? body.split(' -> ').pop() : body;
+    return originMod.unquoteGitPath(target);
+  };
   if (input.dryRun) {
     // --dry-run: what would be committed and the message with the trailers; nothing staged, nothing committed
-    const files = input.all ? git(['status', '--porcelain']).split('\n').map((l) => l.slice(3).trim()).filter(Boolean)
-      : input.paths && input.paths.length ? input.paths : git(['diff', '--cached', '--name-only']).split('\n').map((l) => l.trim()).filter(Boolean);
-    return { id: rec.id, key: rec.key, dry_run: true, files, message: require('./oxe-origin.cjs').appendTrailers(message, trailers(rec)).trim() };
+    const files = input.all ? git(['status', '--porcelain']).split(/\r?\n/).filter((l) => l.length > 3).map(parsePorcelainLine).filter(Boolean)
+      : input.paths && input.paths.length ? input.paths : git(['diff', '--cached', '--name-only']).split(/\r?\n/).map((l) => originMod.unquoteGitPath(l)).filter(Boolean);
+    return { id: rec.id, key: rec.key, dry_run: true, files, message: originMod.appendTrailers(message, trailers(rec)).trim() };
   }
   if (input.all) git(['add', '-A']);
   else if (input.paths && input.paths.length) {
@@ -221,9 +231,9 @@ function commit(root, input = {}) {
     if (present.length) git(['add', '--', ...present]);
     if (gone.length) git(['rm', '-q', '--cached', '--ignore-unmatch', '--', ...gone]);
   }
-  const staged = git(['diff', '--cached', '--name-only']).split('\n').map((l) => l.trim()).filter(Boolean);
+  const staged = git(['diff', '--cached', '--name-only']).split(/\r?\n/).map((l) => originMod.unquoteGitPath(l)).filter(Boolean);
   if (!staged.length) throw new Error('nada para commitar: passe os arquivos, --all, ou faça git add antes');
-  const full = require('./oxe-origin.cjs').appendTrailers(message, trailers(rec));
+  const full = originMod.appendTrailers(message, trailers(rec));
   const tmp = path.join(dirOf(root), `.commit-${rec.id}.txt`);
   fs.mkdirSync(dirOf(root), { recursive: true });
   fs.writeFileSync(tmp, full);
