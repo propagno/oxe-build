@@ -172,22 +172,41 @@ function contentAt(root, ref, file, spawn = spawnSync) {
   return r.status === 0 ? r.stdout : null;
 }
 
+function stagedFilesSet(root, spawn = spawnSync) {
+  try {
+    const r = spawn('git', ['-c', 'core.quotepath=false', 'diff', '--cached', '--name-only'], { cwd: root, encoding: 'utf8', windowsHide: true });
+    if (!r || r.status !== 0 || !r.stdout) return new Set();
+    return new Set(String(r.stdout).split(/\r?\n/).filter(Boolean).map((f) => norm(unquoteGitPath(f))));
+  } catch {
+    return new Set();
+  }
+}
+
 function freeze(root, jsonPath, doc, options = {}) {
   if (options.task && !(doc.tasks || []).some((t) => t && String(t.id).toUpperCase() === String(options.task).toUpperCase())) throw new Error(`--task ${options.task}: tarefa inexistente no PLAN.json`);
-  const origin = resolveRef(root, options.from, options.spawn);
+  const spawn = options.spawn || spawnSync;
+  const stagedBefore = stagedFilesSet(root, spawn);
+  const origin = resolveRef(root, options.from, spawn);
   const globs = options.paths ? String(options.paths).split(',').map((g) => globRe(g.trim())) : null;
   const files = origin.files.filter((f) => TEST_RE.test(f) && (!globs || globs.some((re) => re.test(f))));
   if (!files.length) throw new Error(`${origin.ref}: nenhum arquivo de teste${options.paths ? ` em ${options.paths}` : ''}`);
   doc.acceptance_tests = Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [];
   const frozen = [];
   const refused = [];
+  const unscopedTasks = new Set();
+  const crNorm = options.cr ? String(options.cr).toUpperCase() : null;
+  const crObj = crNorm && Array.isArray(options.crs) ? options.crs.find((c) => c && String(c.id || '').toUpperCase() === crNorm) : null;
   for (const f of files) {
-    let text = contentAt(root, origin.sha, f, options.spawn);
+    let text = contentAt(root, origin.sha, f, spawn);
     const abs = path.join(root, f);
     const local = fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : null;
     if (text == null) text = local;
     if (text == null) { refused.push({ file: f, why: `o conteúdo de ${f} em ${origin.ref} não está disponível (faça fetch do PR)` }); continue; }
-    const hash = sha(text);
+    // OXB-C2 #2: on Windows (autocrlf), `git show` returns LF while `local` has CRLF; never rewrite `abs` to LF when
+    // normalized text is identical, and compute the hash from the preserved on-disk representation so nothing goes dirty/staged.
+    const sameModuloEol = local != null && local.replace(/\r\n/g, '\n') === text.replace(/\r\n/g, '\n');
+    const effectiveText = sameModuloEol ? local : text;
+    const hash = sha(effectiveText);
     // OxeSpace 15/11 (OxeCode F4, CR-F4-6): A17 and A18 share a test file; picking the first entry listing it made
     // `--criteria A18` overwrite A17's entry. With --criteria, the entry is that criterion's (a new one when the file is
     // only another criterion's); without it, the first entry listing the file, as before.
@@ -196,16 +215,34 @@ function freeze(root, jsonPath, doc, options = {}) {
     const existing = wantedCriterion
       ? withFile.find((a) => String(a.criterion || '').toUpperCase() === wantedCriterion) || withFile.find((a) => !a.criterion) || null
       : withFile[0] || null;
-    if (existing && existing.sha256 && existing.sha256 !== hash && !options.cr) { refused.push({ file: f, why: `${f} já está congelado com outro conteúdo — mudar um teste congelado exige um CR (--cr CR-n)` }); continue; }
-    const criterion = (options.criteria && String(options.criteria).split(',')[0].trim().toUpperCase()) || criterionOf(text) || (existing && existing.criterion) || null;
+    if (existing && existing.sha256 && existing.sha256 !== hash && !crNorm) { refused.push({ file: f, why: `${f} já está congelado com outro conteúdo — mudar um teste congelado exige um CR (--cr CR-n)` }); continue; }
+    const criterion = (options.criteria && String(options.criteria).split(',')[0].trim().toUpperCase()) || criterionOf(effectiveText) || (existing && existing.criterion) || null;
     if (!criterion) { refused.push({ file: f, why: `${f}: sem critério — informe --criteria A<n> ou cite o A<n> no describe` }); continue; }
-    const allTitles = titlesOf(text, f);
+    const allTitles = titlesOf(effectiveText, f);
     if (!allTitles.length) { refused.push({ file: f, why: `${f}: nenhum it/test com título — nada a provar` }); continue; }
     // only the titles the entry's command selects (--proves-filter, or its -t / --testNamePattern)
     const pattern = options.provesFilter || namePatternOf(options.command || (existing && existing.command) || '');
-    const proves = filterTitles(text, allTitles, pattern, f);
+    const proves = filterTitles(effectiveText, allTitles, pattern, f);
     if (!proves.length) { refused.push({ file: f, why: `${f}: o filtro "${pattern}" não seleciona nenhum dos ${allTitles.length} testes — confira o -t do comando ou o --proves-filter` }); continue; }
-    if (local == null || local !== text) { fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, text); }
+    if (local == null || !sameModuloEol) { fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, text); }
+    // OXB-C2 #2: ensure spec freeze never leaves newly staged entries in the git index
+    if (!stagedBefore.has(f)) {
+      try { spawn('git', ['reset', '-q', 'HEAD', '--', f], { cwd: root, encoding: 'utf8', windowsHide: true }); } catch { /* ignore */ }
+    }
+    // OXB-C2 #1: align frozen entry version with SPEC amendment requirements (`A30@v3`, `A33@v2`) and `--cr` so re-freezing
+    // after CRs never leaves `version: 1` ("stale") blocking waves.
+    const amendReq = options.amendments instanceof Map ? options.amendments.get(criterion) : null;
+    const reqVersion = amendReq && Number(amendReq.required) > 1 ? Number(amendReq.required) : 1;
+    const crAmendVersion = crObj && Number(crObj.amend_to) > 1 ? Number(crObj.amend_to) : 1;
+    const prevVersion = Number(existing && existing.version) > 0 ? Number(existing.version) : 1;
+    const nextVersion = crNorm
+      ? Math.max(
+        prevVersion,
+        reqVersion,
+        crAmendVersion,
+        existing && !((existing.resolves || []).includes(crNorm)) ? prevVersion + 1 : 2,
+      )
+      : Math.max(prevVersion, reqVersion);
     const entry = {
       ...(existing || {}),
       criterion,
@@ -218,16 +255,27 @@ function freeze(root, jsonPath, doc, options = {}) {
       // per file: the run's acceptance lock and the dossier read the re-frozen hash of THIS file (OxeSpace 14/11, F2 close)
       hashes: { ...((existing && existing.hashes) || {}), [f]: hash },
       origin: { kind: origin.kind, ref: origin.ref, sha: origin.sha, ...(origin.url ? { url: origin.url } : {}) },
-      // idempotent: freezing again for the same CR re-reads the titles and the hash, but bumps the version only the
-      // first time that CR touches the entry
-      ...(options.cr ? { resolves: [...new Set([...((existing && existing.resolves) || []), String(options.cr).toUpperCase()])], version: ((existing && existing.version) || 1) + (existing && !((existing.resolves || []).includes(String(options.cr).toUpperCase())) ? 1 : 0) } : {}),
+      ...(crNorm
+        ? {
+          resolves: [...new Set([...((existing && existing.resolves) || []), crNorm])],
+          version: nextVersion,
+        }
+        : (nextVersion > 1 ? { version: nextVersion } : {})),
       // --task T3: the test belongs to that task (no hand edit of "task" in an executing phase's PLAN.json)
       ...(options.task ? { task: String(options.task).toUpperCase() } : {}),
     };
     if (existing) Object.assign(existing, entry); else doc.acceptance_tests.push(entry);
-    frozen.push({ file: f, criterion, proves: proves.length, origin: origin.ref });
+    // OXB-C2 #3: if `f` was mistakenly added to any pending task's `files` (e.g. via `plan scope add` before freezing),
+    // strip it automatically so `plan lint` does not deadlock on "o executor não pode escrever o próprio aceite".
+    for (const t of Array.isArray(doc.tasks) ? doc.tasks : []) {
+      if (!t || t.done === true || !Array.isArray(t.files)) continue;
+      const beforeLen = t.files.length;
+      t.files = t.files.filter((tf) => norm(typeof tf === 'string' ? tf : tf.path) !== f);
+      if (t.files.length < beforeLen) unscopedTasks.add(t.id);
+    }
+    frozen.push({ file: f, criterion, proves: proves.length, origin: origin.ref, ...(entry.version ? { version: entry.version } : {}) });
   }
-  if (frozen.length) fs.writeFileSync(jsonPath, `${JSON.stringify(doc, null, 2)}\n`);
+  if (frozen.length || unscopedTasks.size) fs.writeFileSync(jsonPath, `${JSON.stringify(doc, null, 2)}\n`);
   // OXB-109 / OXB-205: the imported tests go through the same rigor + suspicious-regex lint as the planned ones.
   let rigor = [];
   try {
@@ -239,7 +287,7 @@ function freeze(root, jsonPath, doc, options = {}) {
       ...r.pausedSocketMessages(r.pausedSocketFindings(root, imported)),
     ];
   } catch { rigor = []; }
-  return { origin, frozen, refused, rigor };
+  return { origin, frozen, refused, rigor, ...(unscopedTasks.size ? { unscoped_tasks: [...unscopedTasks] } : {}) };
 }
 
 module.exports = { freeze, titlesOf, criterionOf, resolveRef, fullTestNames, fullJvmTestNames, namePatternOf, filterTitles };

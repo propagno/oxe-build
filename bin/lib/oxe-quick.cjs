@@ -222,8 +222,16 @@ function commit(root, input = {}) {
       : input.paths && input.paths.length ? input.paths : git(['diff', '--cached', '--name-only']).split(/\r?\n/).map((l) => originMod.unquoteGitPath(l)).filter(Boolean);
     return { id: rec.id, key: rec.key, dry_run: true, files, message: originMod.appendTrailers(message, trailers(rec)).trim() };
   }
+  const hasExplicitPaths = Boolean(!input.all && input.paths && input.paths.length);
+  const normRel = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  let otherStaged = [];
+  if (hasExplicitPaths) {
+    const preStaged = git(['diff', '--cached', '--name-only']).split(/\r?\n/).map((l) => normRel(originMod.unquoteGitPath(l))).filter(Boolean);
+    const wantedSet = new Set(input.paths.map(normRel));
+    otherStaged = preStaged.filter((p) => !wantedSet.has(p));
+  }
   if (input.all) git(['add', '-A']);
-  else if (input.paths && input.paths.length) {
+  else if (hasExplicitPaths) {
     // a path deleted in this commit (OxeSpace 14/11): `git add` refuses it once `git rm` staged the deletion; stage the
     // deletion if it is not staged yet, and nothing if it already is
     const present = input.paths.filter((p) => fs.existsSync(path.join(root, p)));
@@ -231,15 +239,21 @@ function commit(root, input = {}) {
     if (present.length) git(['add', '--', ...present]);
     if (gone.length) git(['rm', '-q', '--cached', '--ignore-unmatch', '--', ...gone]);
   }
-  const staged = git(['diff', '--cached', '--name-only']).split(/\r?\n/).map((l) => originMod.unquoteGitPath(l)).filter(Boolean);
+  const stagedAll = git(['diff', '--cached', '--name-only']).split(/\r?\n/).map((l) => originMod.unquoteGitPath(l)).filter(Boolean);
+  const staged = hasExplicitPaths
+    ? stagedAll.filter((p) => input.paths.map(normRel).includes(normRel(p)))
+    : stagedAll;
   if (!staged.length) throw new Error('nada para commitar: passe os arquivos, --all, ou faça git add antes');
   const full = originMod.appendTrailers(message, trailers(rec));
   const tmp = path.join(dirOf(root), `.commit-${rec.id}.txt`);
   fs.mkdirSync(dirOf(root), { recursive: true });
   fs.writeFileSync(tmp, full);
-  try { git(['commit', '-q', '-F', tmp]); } finally { try { fs.unlinkSync(tmp); } catch { /* */ } }
+  // OXB-C2 #2: when explicit paths are given, commit ONLY those paths (`--only -- <paths>`) so unrelated staged files
+  // (e.g. a leftover LF rewrite in index) are never swept into the quick commit.
+  const commitArgs = hasExplicitPaths ? ['commit', '-q', '-F', tmp, '--only', '--', ...input.paths] : ['commit', '-q', '-F', tmp];
+  try { git(commitArgs); } finally { try { fs.unlinkSync(tmp); } catch { /* */ } }
   const sha = git(['rev-parse', 'HEAD']).trim();
-  return { id: rec.id, key: rec.key, sha, files: staged, message: full.trim() };
+  return { id: rec.id, key: rec.key, sha, files: staged, message: full.trim(), ...(otherStaged.length ? { other_staged: otherStaged } : {}) };
 }
 
 /**

@@ -382,6 +382,235 @@ function generatedMessage(found) {
   return found.map((g) => `${g.files.join(', ')} é gerado de ${g.source.join(', ')}: edite a fonte e rode o gerador${g.generator ? ` (${g.generator})` : ''}${g.test ? `; o teste ${g.test} compara a saída com o arquivo commitado` : ''}`).join('; ');
 }
 
+// ── G14 / G48 (OXB-C1 Adendo 2, OQ T13 / OXE-223): CSS classes guard ──────────────────────────────────────────────
+
+const CSS_FILE_RE = /\.(?:css|scss|sass|less)$/i;
+const CSS_CLASS_SELECTOR_RE = /(?<![\w-])\.([a-zA-Z_-][a-zA-Z0-9_-]{2,})(?![\w-])/g;
+const PRODUCT_CLASS_READER_RE = /\.(?:[cm]?[jt]sx?|vue|svelte|html?|astro)$/i;
+
+function extractCssClassesFromLine(lineText) {
+  const cleaned = stripMarkupComments(lineText)
+    .replace(/url\([^)]*\)/gi, ' ')
+    .replace(/@import\s+[^;]+;?/gi, ' ')
+    .replace(/(['"`])(?:\\.|(?!\1)[^\\])*\1/g, ' ');
+  const out = [];
+  for (const m of cleaned.matchAll(CSS_CLASS_SELECTOR_RE)) {
+    const cls = m[1];
+    // Ignore numeric-like decimals or CSS file extensions if any slipped past string stripping
+    if (/^\d/.test(cls) || /^(?:css|scss|less|svg|png|woff2?|ttf)$/i.test(cls)) continue;
+    out.push(cls);
+  }
+  return out;
+}
+
+/**
+ * Extracts CSS class names removed (`-`) vs added (`+`) in a unified diff of `.css`/`.scss` files.
+ */
+function removedCssClasses(diffText) {
+  const removed = new Map();
+  const addedInSameFile = new Set();
+  let file = null;
+  for (const line of String(diffText || '').split(/\r?\n/)) {
+    if (line === '--- /dev/null') { file = null; continue; }
+    const hdr = /^(?:\+\+\+ b\/|--- a\/)(.+)$/.exec(line) || /^(?:\+\+\+ "b\/|--- "a\/)(.+)"$/.exec(line);
+    if (hdr) {
+      if (line.startsWith('---')) file = unquoteGitPath(line.startsWith('--- "') ? `"${hdr[1]}"` : hdr[1]);
+      continue;
+    }
+    if (!file || !CSS_FILE_RE.test(file) || TEST_PATH_RE.test(file)) continue;
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      for (const cls of extractCssClassesFromLine(line.slice(1))) {
+        addedInSameFile.add(`${file}::${cls}`);
+      }
+      continue;
+    }
+    if (!line.startsWith('-') || line.startsWith('---')) continue;
+    for (const cls of extractCssClassesFromLine(line.slice(1))) {
+      const key = `${file}::${cls}`;
+      if (!removed.has(key)) removed.set(key, { className: cls, file });
+    }
+  }
+  return [...removed.entries()]
+    .filter(([key]) => !addedInSameFile.has(key))
+    .map(([, v]) => v);
+}
+
+function isCssClassDefinedInTree(root, ref, className) {
+  const esc = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const selRe = new RegExp(`(?<![\\w-])\\.${esc}(?![\\w-])`);
+  if (ref) {
+    const raw = git(root, ['grep', '-n', '-I', '-F', `-e`, `.${className}`, ref]);
+    const prefix = `${ref}:`;
+    for (const l of raw.split(/\r?\n/)) {
+      if (!l) continue;
+      const stripped = l.startsWith(prefix) ? l.slice(prefix.length) : l;
+      const m = /^(.+?):(\d+):(.*)$/.exec(stripped);
+      if (!m || !CSS_FILE_RE.test(m[1]) || TEST_PATH_RE.test(m[1])) continue;
+      if (extractCssClassesFromLine(m[3]).includes(className) && selRe.test(stripMarkupComments(m[3]))) return true;
+    }
+    return false;
+  }
+  // Working-tree scan via git grep (untracked/dirty tracked CSS files on disk)
+  const raw = git(root, ['grep', '-n', '-I', '-F', '-e', `.${className}`]);
+  for (const l of raw.split(/\r?\n/)) {
+    if (!l) continue;
+    const m = /^(.+?):(\d+):(.*)$/.exec(l);
+    if (!m || !CSS_FILE_RE.test(m[1]) || TEST_PATH_RE.test(m[1])) continue;
+    if (extractCssClassesFromLine(m[3]).includes(className) && selRe.test(stripMarkupComments(m[3]))) return true;
+  }
+  return false;
+}
+
+function findProductReadersOfCssClass(root, ref, className) {
+  const esc = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const tokenRe = new RegExp(`(?<![\\w/.$-])${esc}(?![\\w-])`);
+  const args = ref ? ['grep', '-n', '-I', '-F', '-e', className, ref] : ['grep', '-n', '-I', '-F', '-e', className];
+  const raw = git(root, args);
+  const prefix = ref ? `${ref}:` : '';
+  const readers = [];
+  for (const l of raw.split(/\r?\n/)) {
+    if (!l) continue;
+    const stripped = prefix && l.startsWith(prefix) ? l.slice(prefix.length) : l;
+    const m = /^(.+?):(\d+):(.*)$/.exec(stripped);
+    if (!m) continue;
+    const file = m[1];
+    if (!PRODUCT_CLASS_READER_RE.test(file) || TEST_PATH_RE.test(file) || NON_DOM_RE.test(file) || CSS_FILE_RE.test(file)) continue;
+    const cleanBody = stripMarkupComments(m[3]);
+    if (!tokenRe.test(cleanBody)) continue;
+    // Ignore import paths (`from './oq-primary'`)
+    if (/^\s*(?:import|export)\b.*\bfrom\s+['"]/.test(cleanBody) && !/className|class\s*=/.test(cleanBody)) continue;
+    readers.push(`${file}:${m[2]}: ${cleanBody.trim().slice(0, 160)}`);
+  }
+  return readers;
+}
+
+/**
+ * Checkpoint check (commit `sha` vs `parent`): CSS classes removed from `.css`/`.scss` files that are no longer
+ * defined anywhere in the stylesheet tree, yet still referenced in product code (`src/`, `electron/`, etc.).
+ */
+function orphanCssClasses(root, parent, sha, options = {}) {
+  const diff = git(root, ['diff', '--unified=0', '--no-color', parent, sha, '--', ...(options.paths || [])]);
+  const removed = removedCssClasses(diff);
+  if (!removed.length) return [];
+  const seen = new Set();
+  const findings = [];
+  for (const r of removed) {
+    if (seen.has(r.className)) continue;
+    seen.add(r.className);
+    if (isCssClassDefinedInTree(root, sha, r.className)) continue;
+    const readers = findProductReadersOfCssClass(root, sha, r.className);
+    if (!readers.length) continue;
+    findings.push({
+      hook: `.${r.className}`,
+      className: r.className,
+      removed_in: r.file,
+      readers: readers.slice(0, 12),
+      readers_total: readers.length,
+    });
+  }
+  return findings;
+}
+
+/**
+ * Working-tree pre-commit check (for `runtime commit-task` and attempt verify): checks uncommitted `.css`/`.scss` diffs against HEAD.
+ */
+function orphanCssClassesInWorkingTree(root, changedPaths = []) {
+  const cssChanged = (changedPaths || []).map((p) => String(p || '').replace(/\\/g, '/')).filter((p) => CSS_FILE_RE.test(p));
+  if (!cssChanged.length) return [];
+  const diff = git(root, ['diff', '--unified=0', '--no-color', 'HEAD', '--', ...cssChanged]);
+  const removed = removedCssClasses(diff);
+  if (!removed.length) return [];
+  const seen = new Set();
+  const findings = [];
+  for (const r of removed) {
+    if (seen.has(r.className)) continue;
+    seen.add(r.className);
+    if (isCssClassDefinedInTree(root, null, r.className)) continue;
+    const readers = findProductReadersOfCssClass(root, null, r.className);
+    if (!readers.length) continue;
+    findings.push({
+      hook: `.${r.className}`,
+      className: r.className,
+      removed_in: r.file,
+      readers: readers.slice(0, 12),
+      readers_total: readers.length,
+    });
+  }
+  return findings;
+}
+
+/**
+ * Discovers any repo CSS-classes guard suite (e.g. `tests/unit/css-classes-guard.test.ts`).
+ */
+function findCssGuardTests(root) {
+  const raw = git(root, ['ls-files']);
+  return raw
+    .split(/\r?\n/)
+    .map((l) => l.trim().replace(/\\/g, '/'))
+    .filter((f) => TEST_PATH_RE.test(f) && /css[-_.]?class.*guard|class[-_.]?guard.*css/i.test(f));
+}
+
+/**
+ * G48 (`plan lint`): warns when a pending task deletes a `.css`/`.scss` file or explicitly states removing `.class-name`
+ * while product files outside `task.files` still reference that class.
+ */
+function lintPlanCssRemovals(root, planDoc) {
+  if (!planDoc || !Array.isArray(planDoc.tasks) || !fs.existsSync(path.join(root, '.git'))) return [];
+  const findings = [];
+  for (const task of planDoc.tasks) {
+    if (!task || task.done === true || task.superseded || task.status === 'superseded' || task.merged_into) continue;
+    const taskScope = new Set((task.files || []).map((f) => String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/')));
+    const removedCssFiles = (task.removed_paths || [])
+      .map((f) => String(f || '').replace(/\\/g, '/'))
+      .filter((f) => CSS_FILE_RE.test(f));
+    const candidateClasses = new Map();
+    for (const cssFile of removedCssFiles) {
+      let txt = null;
+      try { txt = fs.readFileSync(path.join(root, cssFile), 'utf8'); } catch { txt = null; }
+      if (!txt) continue;
+      for (const line of txt.split(/\r?\n/)) {
+        for (const cls of extractCssClassesFromLine(line)) {
+          if (!candidateClasses.has(cls)) candidateClasses.set(cls, cssFile);
+        }
+      }
+    }
+    const prose = `${task.title || ''}\n${task.notes || ''}`;
+    const hasRemoveVerb = /\b(?:remov\w*|tir\w*|exclu\w*|apag\w*|drop\w*|delet\w*|retir\w*)\b/i.test(prose);
+    if (hasRemoveVerb) {
+      const taskCss = [...taskScope].filter((f) => CSS_FILE_RE.test(f));
+      for (const m of prose.matchAll(/(?<![\w/-])\.([a-zA-Z_-][a-zA-Z0-9_-]{2,})(?![\w.-])/g)) {
+        const cls = m[1];
+        if (!/^(?:ts|tsx|js|jsx|css|scss|mjs|cjs|json|md)$/i.test(cls) && !candidateClasses.has(cls)) {
+          candidateClasses.set(cls, taskCss[0] || 'CSS');
+        }
+      }
+    }
+    for (const [cls, fromCss] of candidateClasses) {
+      const readers = findProductReadersOfCssClass(root, null, cls);
+      const outOfScopeReaders = readers.filter((r) => !taskScope.has(r.split(':')[0]));
+      if (outOfScopeReaders.length) {
+        findings.push({
+          task: task.id,
+          className: cls,
+          from: fromCss,
+          readers: outOfScopeReaders.slice(0, 8),
+          readers_total: outOfScopeReaders.length,
+        });
+      }
+    }
+  }
+  return findings;
+}
+
+function cssRemovalLintMessages(findings, options = {}) {
+  const level = options.level === 'error' ? 'error' : 'warn';
+  const msgs = (findings || []).map((f) => {
+    const files = [...new Set(f.readers.map((r) => r.split(':').slice(0, 2).join(':')))].slice(0, 4).join(', ');
+    return `${f.task}: [G48] classe CSS \`.${f.className}\` (${f.from}) ainda tem ${f.readers_total} uso(s) fora de ${f.task}.files (${files}) — inclua os consumidores no escopo para migrar a classe ou mantenha a regra CSS`;
+  });
+  return { errors: level === 'error' ? msgs : [], warnings: level === 'error' ? [] : msgs };
+}
+
 module.exports = {
   removedHooks,
   hooksStillRead,
@@ -392,7 +621,14 @@ module.exports = {
   globRe,
   generatedEdits,
   generatedMessage,
+  removedCssClasses,
+  orphanCssClasses,
+  orphanCssClassesInWorkingTree,
+  findCssGuardTests,
+  lintPlanCssRemovals,
+  cssRemovalLintMessages,
   MARKUP_RE,
+  CSS_FILE_RE,
   TEST_PATH_RE,
   stripMarkupComments,
 };

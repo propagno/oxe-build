@@ -58,6 +58,23 @@ function recoveryStep(target, activeSession, ctx = {}) {
     const cf = t.checkpoint_failed;
     if (cf.kind === 'scope_insufficient') {
       const files = (cf.related_red || []).slice(0, 4);
+      const frozenSet = new Set(
+        ((doc && doc.acceptance_tests) || [])
+          .flatMap((a) => (a && a.files) || [])
+          .map(normF),
+      );
+      const isFrozenPath = (f) => frozenSet.has(normF(f)) || /(?:^|\/)(?:tests\/acceptance|e2e\/acceptance|tests\/oxe\d+)\//i.test(normF(f));
+      const frozenRed = files.filter(isFrozenPath);
+      if (frozenRed.length) {
+        const firstFrozen = shellQuote(frozenRed[0]);
+        return out(
+          'scope_insufficient',
+          'plan-amend-test',
+          `oxe-cc plan amend-test ${firstFrozen} --reason CR-<n> --by <papel>`,
+          `${t.id}: teste(s) congelado(s) fora do escopo ficaram vermelhos (${frozenRed.join(', ')}) — teste congelado nunca entra em files de tarefa; libere/atualize o teste por CR de constraint (plan amend-test ou spec freeze --cr CR-<n>) e depois: oxe-cc plan reopen ${t.id}`,
+          ['.oxe/PLAN.json'],
+        );
+      }
       const cliFiles = files.map(shellQuote).join(' ') || '<arquivo>';
       return out('scope_insufficient', 'plan-scope', `oxe-cc plan scope add ${t.id} ${cliFiles} --cr CR-<n> --by <papel> --reason "…"`,
         `${t.id}: testes que importam os arquivos da tarefa ficaram vermelhos fora do escopo dela (${files.join(', ') || 'veja o checkpoint'}) — inclua-os no escopo (ou abra um CR/tarefa) e depois: oxe-cc plan reopen ${t.id}`, ['.oxe/PLAN.json']);

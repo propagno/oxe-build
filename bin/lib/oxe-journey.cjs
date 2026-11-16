@@ -162,7 +162,7 @@ const STEP_STAGE = {
   discuss: 'decide', plan: 'plan', dashboard: 'plan', execute: 'build', signoff: 'verify', verify: 'verify', retro: 'verify',
   ship: 'deliver', 'ship-wait': 'deliver', deploy: 'deliver', 'program-close': 'deliver', quick: 'build',
   // guided recovery and the CI close (R42): the map marks the stage they belong to
-  resume: 'build', 'plan-scope': 'build', 'plan-done': 'build', 'checkpoint-integration': 'build', 'commit-task': 'build',
+  resume: 'build', 'plan-scope': 'build', 'plan-amend-test': 'build', 'plan-done': 'build', 'checkpoint-integration': 'build', 'commit-task': 'build',
   'spec-amend': 'validate', 'deferred-retry': 'build', 'ci-attach': 'deliver',
 };
 

@@ -294,7 +294,7 @@ function reconcileChanges(programDir, phaseId, plan, checkResults, options = {})
 function amendedVersions(programDir) {
   const out = new Map();
   for (const r of readNdjson(changesFile(programDir))) {
-    if (!r || r.kind !== 'spec_edit' || r.action !== 'amend_criterion' || !r.cr || !r.id || !Number.isFinite(Number(r.version))) continue;
+    if (!r || r.kind !== 'spec_edit' || r.action !== 'amend_criterion' || r.constraint_release || !r.cr || !r.id || !Number.isFinite(Number(r.version))) continue;
     const k = `${r.cr}\u0000${r.id}`;
     out.set(k, Math.max(out.get(k) || 0, Number(r.version)));
   }

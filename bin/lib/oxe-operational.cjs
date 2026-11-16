@@ -1005,10 +1005,18 @@ function runtimeDesignBuild(projectRoot, activeSession) {
 /** OXB-099: `oxe-cc spec freeze --from <PR|sha> [--paths glob] [--criteria A12] [--cr CR-n]`. */
 function runtimeSpecFreeze(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-spec-freeze.cjs');
-  const { jsonPath, doc } = readPlanJsonDoc(projectRoot, activeSession);
+  const changeLib = require('./oxe-change.cjs');
+  const { jsonPath, doc, paths } = readPlanJsonDoc(projectRoot, activeSession);
   if (!doc) throw new Error('spec freeze exige PLAN.json');
-  const out = lib.freeze(projectRoot, jsonPath, doc, options);
-  if (out.frozen.length) appendEvent(projectRoot, activeSession, { type: 'AcceptanceImported', payload: { origin: { kind: out.origin.kind, ref: out.origin.ref, sha: out.origin.sha }, frozen: out.frozen, cr: options.cr || null } });
+  const programDir = (paths && paths.programDir) || path.join(projectRoot, '.oxe', 'program');
+  let amendments = new Map();
+  let crs = [];
+  try {
+    amendments = changeLib.amendmentRequirements(programDir);
+    crs = changeLib.listChanges(programDir);
+  } catch { /* sem programa */ }
+  const out = lib.freeze(projectRoot, jsonPath, doc, { ...options, amendments, crs });
+  if (out.frozen.length) appendEvent(projectRoot, activeSession, { type: 'AcceptanceImported', payload: { origin: { kind: out.origin.kind, ref: out.origin.ref, sha: out.origin.sha }, frozen: out.frozen, cr: options.cr || null, ...(out.unscoped_tasks ? { unscoped_tasks: out.unscoped_tasks } : {}) } });
   return out;
 }
 
@@ -3413,6 +3421,7 @@ function applyTaskGatesToGraph(projectRoot, artifactPaths, compiledGraph) {
   if (!gates.length && !anySuites) {
     appendStubCheck(projectRoot, doc, compiledGraph);
     appendFileSizeCheck(projectRoot, doc, compiledGraph, jsonPath);
+    appendCssGuardCheck(projectRoot, doc, compiledGraph);
     return;
   }
   const byId = new Map((doc.tasks || []).filter(Boolean).map((t) => [t.id, t]));
@@ -3428,6 +3437,7 @@ function applyTaskGatesToGraph(projectRoot, artifactPaths, compiledGraph) {
   }
   appendStubCheck(projectRoot, doc, compiledGraph);
   appendFileSizeCheck(projectRoot, doc, compiledGraph, jsonPath);
+  appendCssGuardCheck(projectRoot, doc, compiledGraph);
 }
 
 /** G34: what a UI card's spec still lacks (BRD-n, target, measures in the CAs, both themes, both densities). */
@@ -3499,6 +3509,33 @@ function appendFileSizeCheck(projectRoot, doc, compiledGraph, jsonPath) {
       const existing = String(node.verify.command || '');
       if (!existing.includes('oxe-file-size-guard') && !existing.includes('check-file-size')) {
         node.verify.command = [node.verify.command, `node "${guardScript}" --verify --task ${node.id}${planArg}`].filter(Boolean).join(' && ');
+      }
+    }
+  } catch { /* auxiliar */ }
+}
+
+/**
+ * OXB-C1 Adendo 2 (G14, OQ T13 / OXE-223): when the repo has a CSS classes guard suite (e.g. tests/unit/css-classes-guard.test.ts)
+ * and a task touches/removes a stylesheet, run the guard suite in the task's own verify.
+ */
+function appendCssGuardCheck(projectRoot, doc, compiledGraph) {
+  try {
+    const cfgCss = readProjectConfig(projectRoot) || {};
+    if (cfgCss.verify_css_guard === false) return;
+    const dh = require('./oxe-dom-hooks.cjs');
+    const cssGuards = dh.findCssGuardTests(projectRoot);
+    if (!cssGuards.length) return;
+    const nodesCss = Array.isArray(compiledGraph.nodes) ? compiledGraph.nodes : Object.values(compiledGraph.nodes);
+    for (const node of nodesCss) {
+      const task = node && (doc.tasks || []).find((t) => t && t.id === node.id);
+      if (!task) continue;
+      const allTaskPaths = [...(task.files || []), ...(task.removed_paths || [])].map((f) => String(typeof f === 'string' ? f : f.path));
+      if (!allTaskPaths.some((f) => dh.CSS_FILE_RE.test(f))) continue;
+      node.verify = node.verify && typeof node.verify === 'object' ? node.verify : {};
+      const guardCmd = `npx vitest run ${cssGuards.join(' ')} --maxWorkers=1`;
+      const curCmd = String(node.verify.command || '');
+      if (!cssGuards.some((g) => curCmd.includes(g))) {
+        node.verify.command = [node.verify.command, guardCmd].filter(Boolean).join(' && ');
       }
     }
   } catch { /* auxiliar */ }
@@ -6401,6 +6438,17 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
           }
         }
       }
+      // G48 (OXB-C1 Adendo 2, OQ T13 / OXE-223): CSS class removal in plan with out-of-scope consumers in src/
+      if (lintCfg45.css_classes !== false && lintCfg45.css_classes !== 'off') {
+        const dh48 = require('./oxe-dom-hooks.cjs');
+        const cssGaps = dh48.lintPlanCssRemovals(projectRoot, pjs);
+        if (cssGaps.length) {
+          const cssMsgs = dh48.cssRemovalLintMessages(cssGaps, { level: lintCfg45.css_classes_level === 'error' ? 'error' : 'warn' });
+          result.errors.push(...cssMsgs.errors);
+          result.warnings.push(...cssMsgs.warnings);
+          result.css_removal_gaps = cssGaps;
+        }
+      }
     }
   } catch { /* auxiliar */ }
   // OXB-171: the product files a task's frozen tests import/read must be in its scope (or a dependency's); T8 of F2
@@ -6965,7 +7013,9 @@ function runtimeSpecAmend(projectRoot, activeSession, options = {}) {
     const want = String(options.cr).toUpperCase();
     target = changeLib.listChanges(programDir).find((cr) => cr.id === want) || null;
     if (!target) throw new Error(`${want} não existe (oxe-cc runtime feedback list)`);
-    if (target.status !== 'open' || target.class !== 'spec_gap') throw new Error(`${want} é ${target.class} ${target.status}: só um spec_gap aberto recebe emenda`);
+    if (target.status !== 'open' || !['spec_gap', 'constraint'].includes(target.class)) {
+      throw new Error(`${want} é ${target.class} ${target.status}: só um CR aberto (spec_gap ou constraint) recebe emenda`);
+    }
     // OxeSpace 15/11 (Approvals polish): A2 and A3 amended under CR-01 opened CR-02/CR-03 by themselves. The CR named
     // with --cr takes the amendment: a criterion it did not cite joins it (recorded), never a new CR.
     if (!(target.criteria || []).includes(id)) {
@@ -6984,9 +7034,13 @@ function runtimeSpecAmend(projectRoot, activeSession, options = {}) {
     // goes one past its current one (never back); a criterion the CR cited keeps the CR's version (one bump per CR)
     const joined = Boolean(target._attached);
     delete target._attached;
-    const version = joined ? Math.max(target.amend_to || 2, (current ? current.required : 1) + 1) : target.amend_to || 2;
+    const isConstraint = target.class === 'constraint';
+    // OXB-C2 #1: a constraint CR (frozen test release) does NOT bump the SPEC required version
+    const version = isConstraint
+      ? (current ? current.required : 1)
+      : (joined ? Math.max(target.amend_to || 2, (current ? current.required : 1) + 1) : target.amend_to || 2);
     const additive = Boolean(options.additive || target.amendment === 'additive');
-    const record = { kind: 'spec_edit', action: 'amend_criterion', id, cr: target.id, version, by, reason, file: path.relative(projectRoot, paths.spec).replace(/\\/g, '/'), before: edit.before, after: edit.after, at: new Date().toISOString() };
+    const record = { kind: 'spec_edit', action: 'amend_criterion', id, cr: target.id, version, ...(isConstraint ? { constraint_release: true } : {}), by, reason, file: path.relative(projectRoot, paths.spec).replace(/\\/g, '/'), before: edit.before, after: edit.after, at: new Date().toISOString() };
     changeLib.appendNdjson(changeLib.changesFile(programDir), record);
     writeTextAtomic(paths.spec, edit.text);
     appendEvent(projectRoot, activeSession, { type: 'SpecAmended', payload: { id, version, cr: target.id, attached: true, additive, phase } });
@@ -9247,11 +9301,17 @@ function runtimePlanAmendTest(projectRoot, activeSession, options = {}) {
   const newSha = sha256BufferOrFile(absFile);
   const by = String(options.by || 'tech-lead').trim();
   const at = new Date().toISOString();
+  let amendReqs = new Map();
+  try {
+    const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+    amendReqs = require('./oxe-change.cjs').amendmentRequirements(programDir);
+  } catch { /* sem programa */ }
   const amended = planJsonLib.amendFrozenTestInPlanJson(paths.plan, relPath, newSha, {
     reason,
     by,
     at,
     previous_sha256: lockPrevSha,
+    amendments: amendReqs,
   });
   if (!amended.ok) {
     throw new Error(amended.error || `Falha ao emendar ${relPath} em PLAN.json`);
@@ -9592,6 +9652,19 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
     }
   }
 
+  // OXB-C1 Adendo 2 (G14, OQ T13 / OXE-223): check orphan CSS classes removed from .css/.scss before slow verify commands
+  if (options.cssGuard !== false) {
+    const cfgCss = readProjectConfig(projectRoot) || {};
+    const domOpt = cfgCss.checkpoint_dom_hooks;
+    if (domOpt !== false && !(domOpt && typeof domOpt === 'object' && domOpt.mode === false) && !(domOpt && typeof domOpt === 'object' && domOpt.mode === 'off')) {
+      const dh = require('./oxe-dom-hooks.cjs');
+      const orphanCss = dh.orphanCssClassesInWorkingTree(projectRoot, inScopeDirty);
+      if (orphanCss.length) {
+        throw new Error(`verify de ${taskId} reprovado — guarda de classes CSS: ${dh.message(orphanCss)} (migre os consumidores ou mantenha a regra CSS)`);
+      }
+    }
+  }
+
   // 4. Run (or validate fresh log of) Tn.verify.commands
   const rawVerify = task.verify;
   const commands = (Array.isArray(rawVerify)
@@ -9787,8 +9860,13 @@ function runtimePlanScopeAdd(projectRoot, activeSession, options = {}) {
     if (!task) throw new Error(`Tarefa ${taskId} não encontrada em PLAN.json`);
     if (task.done === true) throw new Error(`${taskId} está done: reabra antes (oxe-cc plan reopen ${taskId})`);
     const frozen = new Set((doc.acceptance_tests || []).flatMap((a) => (a && a.files) || []).map((f) => String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/')));
-    const bad = add.filter((p) => frozen.has(p));
-    if (bad.length) throw new Error(`${bad.join(', ')}: teste congelado não entra em files de tarefa`);
+    const isFrozenCandidate = (p) => frozen.has(p) || /(?:^|\/)(?:tests\/acceptance|e2e\/acceptance|tests\/oxe\d+)\//i.test(p);
+    const bad = add.filter(isFrozenCandidate);
+    if (bad.length) {
+      throw new Error(
+        `${bad.join(', ')}: teste congelado NUNCA entra em files de tarefa (o plan lint reprova). Para liberar/atualizar teste congelado por CR, edite-o num quick e rode: oxe-cc plan amend-test ${bad[0]} --reason ${crId || 'CR-<n>'} --by ${by || '<papel>'} (ou oxe-cc spec freeze --from <sha|#PR> --cr ${crId || 'CR-<n>'})`,
+      );
+    }
     const have = new Set((task.files || []).map((f) => String(f).replace(/\\/g, '/')));
     const added = add.filter((p) => !have.has(p));
     if (added.length) {
@@ -9862,9 +9940,12 @@ function runtimePlanTaskEdit(projectRoot, activeSession, options = {}) {
     if (wave != null) task.wave = wave;
     if (remove.length) {
       const frozen = new Set((doc.acceptance_tests || []).flatMap((a) => (a && a.files) || []).map((f) => String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/')));
-      const bad = remove.filter((p) => frozen.has(p));
+      const taskFilesNorm = new Set((task.files || []).map((f) => String(f).replace(/\\/g, '/')));
+      // OXB-C2 #3: if a frozen test was NOT in `task.files`, refuse (cannot strip `acceptance_tests` via `task edit`);
+      // if it WAS mistakenly placed inside `task.files`, allow `--remove-paths` to clean `task.files`!
+      const bad = remove.filter((p) => frozen.has(p) && !taskFilesNorm.has(p));
       if (bad.length) throw new Error(`${bad.join(', ')}: teste congelado não sai por aqui (um CR e spec freeze)`);
-      const missing = remove.filter((p) => !(task.files || []).map((f) => String(f).replace(/\\/g, '/')).includes(p));
+      const missing = remove.filter((p) => !taskFilesNorm.has(p));
       if (missing.length) throw new Error(`${missing.join(', ')} não está(ão) em files de ${taskId}`);
       task.files = (task.files || []).filter((f) => !remove.includes(String(f).replace(/\\/g, '/')));
     }
@@ -10835,10 +10916,12 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
       const opt = raw && typeof raw === 'object' ? raw : { mode: raw };
       if (opt.mode !== false && opt.mode !== 'off') {
         const dh = require('./oxe-dom-hooks.cjs');
-        const found = dh.hooksStillRead(projectRoot, oldHead, head, { locale: opt.locale || null });
+        const foundHooks = dh.hooksStillRead(projectRoot, oldHead, head, { locale: opt.locale || null });
+        const foundCss = dh.orphanCssClasses(projectRoot, oldHead, head);
+        const found = [...foundHooks, ...foundCss];
         if (found.length) {
           domHooks = { mode: opt.mode === 'warn' ? 'warn' : 'error', findings: found, message: dh.message(found) };
-          if (domHooks.mode === 'error') check = { ok: false, kind: 'dom_hooks', command: 'dom hooks (estático)', tail: domHooks.message, dom_hooks: found };
+          if (domHooks.mode === 'error') check = { ok: false, kind: 'dom_hooks', command: foundCss.length && !foundHooks.length ? 'guarda de classes CSS (estático)' : 'dom hooks (estático)', tail: domHooks.message, dom_hooks: found };
         }
       }
     } catch { /* auxiliar */ }
@@ -10882,6 +10965,20 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
       const failing = check.failing_tests || [];
       const outside = failing.filter((t) => !isPathInScope(t.file, scope));
       const named = failing.map((t) => `${t.file}${t.names.length ? ` (${t.names.slice(0, 2).join('; ')})` : ''}`).join(', ') || check.tail;
+      const frozenSet = (() => {
+        try {
+          const { doc: pjDoc } = readPlanJsonDoc(projectRoot, null);
+          return new Set(((pjDoc && pjDoc.acceptance_tests) || []).flatMap((a) => (a && a.files) || []).map((f) => String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/')));
+        } catch { return new Set(); }
+      })();
+      const isFrozenPath = (p) => frozenSet.has(String(p).replace(/\\/g, '/')) || /(?:^|\/)(?:tests\/acceptance|e2e\/acceptance|tests\/oxe\d+)\//i.test(String(p).replace(/\\/g, '/'));
+      const frozenOutside = outside.filter((t) => isFrozenPath(t.file));
+      const mutableOutside = outside.filter((t) => !isFrozenPath(t.file));
+      const outsideGuidance = frozenOutside.length && !mutableOutside.length
+        ? `teste(s) congelado(s) (${frozenOutside.map((t) => t.file).join(', ')}) NUNCA entram em files da tarefa — libere/atualize por CR de constraint (oxe-cc plan amend-test ${frozenOutside[0].file} --reason CR-<n> --by <papel>, ou oxe-cc spec freeze --from <sha|#PR> --cr CR-<n>), depois rode oxe-cc plan reopen`
+        : frozenOutside.length
+          ? `inclua os mutáveis (${mutableOutside.map((t) => t.file).join(', ')}) nos files e libere os testes congelados (${frozenOutside.map((t) => t.file).join(', ')}) por CR (plan amend-test / spec freeze --cr, nunca plan scope add), depois rode oxe-cc plan reopen`
+          : `Inclua ${outside.map((t) => t.file).join(', ')} nos files (ou abra um CR/tarefa), depois rode oxe-cc plan reopen`;
       return {
         committed: false,
         failed: true,
@@ -10890,7 +10987,7 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
         ...(check.related_set_size != null ? { related_set_size: check.related_set_size } : {}),
         ...(check.flaky_reds && check.flaky_reds.length ? { flaky_reds: check.flaky_reds } : {}),
         reason: outside.length
-          ? `scope_insufficient: testes que importam os arquivos da tarefa ficaram vermelhos fora do escopo dela — ${named}. Inclua ${outside.map((t) => t.file).join(', ')} nos files (ou abra um CR/tarefa), depois rode oxe-cc plan reopen`
+          ? `scope_insufficient: testes que importam os arquivos da tarefa ficaram vermelhos fora do escopo dela — ${named}. ${outsideGuidance}`
           : `testes relacionados vermelhos (\`${check.command.slice(0, 120)}\`${check.related_set_size != null ? `, ${check.related_set_size} arquivo(s) no conjunto` : ''}): ${named} — vermelhos também sozinhos (--maxWorkers=1) no commit e na árvore do projeto — entram no verify da tarefa no próximo execute`,
         snapshot: entries,
       };

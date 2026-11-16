@@ -550,7 +550,9 @@ function amendFrozenTestInPlanJson(planMdPath, relPath, newSha, info = {}) {
         const resolves = Array.isArray(entry.resolves) ? [...entry.resolves] : [];
         if (!resolves.includes(reason)) resolves.push(reason);
         entry.resolves = resolves;
-        entry.version = Math.max(2, (Number.isInteger(entry.version) ? entry.version : 1) + 1);
+        const req = info.amendments instanceof Map && entry.criterion ? info.amendments.get(entry.criterion) : null;
+        const reqVer = req && Number(req.required) > 1 ? Number(req.required) : 2;
+        entry.version = Math.max(reqVer, (Number.isInteger(entry.version) ? entry.version : 1) + 1);
       }
       entry.amended = [
         ...(Array.isArray(entry.amended) ? entry.amended : []),
@@ -881,7 +883,8 @@ function lintPlan(input) {
         errors.push(`teste de aceite ${entry.criterion}: ${file} não existe (escreva-o no /oxe-plan, antes da execução)`);
       }
       if (ownedByTasks.has(file)) {
-        errors.push(`teste de aceite ${entry.criterion}: ${file} está no escopo de ${ownedByTasks.get(file)} — o executor não pode escrever o próprio aceite`);
+        const badOwner = ownedByTasks.get(file);
+        errors.push(`teste de aceite ${entry.criterion}: ${file} está no escopo de ${badOwner} — o executor não pode escrever o próprio aceite (remova de files com: oxe-cc plan task edit ${badOwner} --remove-paths ${file} --by <papel> --reason "remover teste congelado de files")`);
       }
     }
   }

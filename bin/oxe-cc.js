@@ -8368,7 +8368,12 @@ async function main() {
       if (action === 'status') console.log(out.open ? `  quick aberto: ${out.open.id}${out.open.key ? ` (${out.open.key})` : ''} — ${out.open.objective}` : '  nenhum quick aberto (oxe-cc quick <KEY> "<objetivo>")');
       else if (action === 'trailers') console.log(out.trailers.join('\n'));
       else if (action === 'commit' && out.dry_run) console.log(`  ${yellow}(simulação)${reset} commitaria ${out.files.length} arquivo(s): ${out.files.join(', ') || '—'}\n${out.message.split('\n').map((l) => `      ${l}`).join('\n')}\n  ${dim}nada foi preparado nem commitado${reset}`);
-      else if (action === 'commit') console.log(`  ${green}✓${reset} ${out.sha.slice(0, 9)} ${out.message.split('\n')[0]} · ${out.files.length} arquivo(s) · ${out.id}${out.key ? ` (${out.key})` : ''}`);
+      else if (action === 'commit') {
+        console.log(`  ${green}✓${reset} ${out.sha.slice(0, 9)} ${out.message.split('\n')[0]} · ${out.files.length} arquivo(s) · ${out.id}${out.key ? ` (${out.key})` : ''}`);
+        if (Array.isArray(out.other_staged) && out.other_staged.length) {
+          console.log(`  ${yellow}!${reset} aviso: havia outro(s) arquivo(s) no stage fora dos paths informados (${out.other_staged.join(', ')}) — não foram incluídos neste commit`);
+        }
+      }
       else if (action === 'list') { if (!out.quicks.length) console.log('  nenhum quick registrado'); for (const r of out.quicks) console.log(`  ${r.id} ${r.status.padEnd(8)} ${r.key || '—'} · ${r.commits.length} commit(s) · ${r.objective}`); }
       else if (action === 'start') {
         console.log(out.dry_run ? `  ${yellow}(simulação)${reset} abriria ${out.id}${out.key ? ` (${out.key})` : ''} — ${out.objective}${out.would_replace ? ` · substituiria ${out.would_replace}` : ''}` : `  ${green}✓${reset} ${out.resumed ? 'retomado' : 'aberto'}: ${out.id}${out.key ? ` (${out.key})` : ''} — ${out.objective}`);
