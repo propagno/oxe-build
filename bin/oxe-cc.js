@@ -9202,9 +9202,11 @@ async function main() {
     let noPrecheck = false;
     let precheckRuns = 0;
     let precheckTimeoutMs = 0;
+    let annotateFileSize = true;
     for (let i = 0; i < rest.length; i += 1) {
       const a = rest[i];
       if (a === '--json') json = true;
+      else if (a === '--no-file-size-notes') annotateFileSize = false;
       else if (a === '--precheck-tests') { precheckTests = true; noPrecheck = false; }
       else if (a === '--no-precheck') { noPrecheck = true; precheckTests = false; }
       else if ((a === '--precheck-runs' && rest[i + 1]) || a.startsWith('--precheck-runs=')) {
@@ -9276,7 +9278,7 @@ async function main() {
       // Progress goes to stderr, so --json on stdout stays parseable.
       const onProgress = quiet ? null : (line) => process.stderr.write(`  ${line}\n`);
       const effectivePrecheck = noPrecheck ? false : precheckTests;
-      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave, dryVerify, preflight: !noPreflight, onProgress, resume, changed, only, dryVerifyAnyway, mutation, mutationMax, review, reviewWaive, by: reviewBy, reason: reviewReason, precheckTests: effectivePrecheck, noPrecheck, precheckRuns, precheckTimeoutMs });
+      result = oxeOperational.runtimePlanLint(dir, session, { maxTasksPerWave, dryVerify, preflight: !noPreflight, onProgress, resume, changed, only, dryVerifyAnyway, mutation, mutationMax, review, reviewWaive, by: reviewBy, reason: reviewReason, precheckTests: effectivePrecheck, noPrecheck, precheckRuns, precheckTimeoutMs, annotateFileSize });
     } catch (err) {
       console.error(`${red}✗${reset} ${err && err.message ? err.message : err}`);
       process.exit(1);
@@ -9288,6 +9290,9 @@ async function main() {
       console.log(`  ${c ? dim : ''}Fonte:${c ? reset : ''} ${result.source} · ${result.tasks} tarefas${result.phase ? ` · fase ${result.phase}` : ''}`);
       if (result.precheck && Array.isArray(result.precheck.notes)) {
         for (const n of result.precheck.notes) console.log(`  ${c ? dim : ''}ℹ${c ? reset : ''} ${n}`);
+      }
+      if (Array.isArray(result.file_size_notes_updated) && result.file_size_notes_updated.length) {
+        console.log(`  ${c ? dim : ''}ℹ${c ? reset : ''} notas de limite de tamanho gravadas em PLAN.json (${result.file_size_notes_updated.join(', ')})`);
       }
       for (const e of result.errors) console.log(`  ${c ? red : ''}✗${c ? reset : ''} ${e}`);
       for (const w of result.warnings) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${w}`);

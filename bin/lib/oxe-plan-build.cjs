@@ -333,7 +333,19 @@ function renderPlanMd(plan, phase) {
   for (const w of waves) {
     lines.push(`## Onda ${w}`, '');
     for (const t of plan.tasks.filter((x) => x.wave === w)) {
-      lines.push(`### ${t.id} — ${t.title}`, '', `- **Arquivos prováveis:** ${(t.files || []).map((f) => `\`${f}\``).join(', ') || '—'}`, `- **Depende de:** ${(t.depends_on || []).join(', ') || '—'}`, `- **Onda:** ${t.wave}`, ...(t.kind ? [`- **Tipo:** ${t.kind}`] : []), '- **Verificar:**', `  - Comando: ${((t.verify && t.verify.commands) || []).map((c) => `\`${c}\``).join(' · ') || '—'}`, `- **Aceite vinculado:** ${(t.acceptance || []).join(', ') || '—'}`, '');
+      lines.push(
+        `### ${t.id} — ${t.title}`,
+        '',
+        `- **Arquivos prováveis:** ${(t.files || []).map((f) => `\`${f}\``).join(', ') || '—'}`,
+        `- **Depende de:** ${(t.depends_on || []).join(', ') || '—'}`,
+        `- **Onda:** ${t.wave}`,
+        ...(t.kind ? [`- **Tipo:** ${t.kind}`] : []),
+        ...(t.notes && String(t.notes).trim() ? [`- **Notas:** ${String(t.notes).trim().replace(/\r?\n/g, ' · ')}`] : []),
+        '- **Verificar:**',
+        `  - Comando: ${((t.verify && t.verify.commands) || []).map((c) => `\`${c}\``).join(' · ') || '—'}`,
+        `- **Aceite vinculado:** ${(t.acceptance || []).join(', ') || '—'}`,
+        '',
+      );
     }
   }
   return lines.join('\n');
@@ -1351,6 +1363,14 @@ function build(inputs, ctx = {}) {
       ...rigor.suspiciousRegexMessages(rigor.suspiciousRegexFindings(root, plan)),
       ...rigor.pausedSocketMessages(rigor.pausedSocketFindings(root, plan)),
     );
+  } catch { /* */ }
+  // OXB-C1 Adendo 2 (G47): warn and enrich task.notes when an in-scope file is within ~20 lines of its file-size cap.
+  try {
+    const fsg = require('./oxe-file-size-guard.cjs');
+    const annotated = fsg.annotatePlanFileSizeNotes(root, plan, { pack });
+    if (annotated.findings.length) {
+      warnings.push(...fsg.fileSizeHeadroomMessages(annotated.findings).warnings);
+    }
   } catch { /* */ }
   return { plan, pack, planMd: renderPlanMd(plan, ctx.phase), errors, warnings, map: res.map, paired, notices_gate: noticesGate };
 }

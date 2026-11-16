@@ -42,6 +42,16 @@ export declare class BoundedOutput {
  * `$null` in the worktree (a ScopeViolation). On Windows, a redirect to `$null` or `/dev/null` goes to `nul`.
  */
 export declare function windowsNullRedirects(command: string): string;
+export interface FinishTaskGuardResult {
+    ok: boolean;
+    error?: string | null;
+}
+/**
+ * OXB-C1 Adendo 2: optional synchronous guard checked inside `finish_task` (e.g. file-size cap check)
+ * so oversized files fail inside the SAME executor attempt for free instead of ending the attempt and
+ * paying for a second attempt after checkpoint failure.
+ */
+export declare function setFinishTaskGuard(fn: ((cwd: string, args: Record<string, unknown>) => FinishTaskGuardResult | null | undefined) | null): void;
 export interface ExecutorQuestion {
     question: string;
     options: string[];

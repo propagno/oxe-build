@@ -291,7 +291,7 @@ describe('OXB-170: a checkpoint holds only its own task\'s hunks', () => {
   it('the integration checks promote runs (check-file-size) run at the checkpoint too (OxeSpace 15/11, OxeQuery polish T2)', async () => {
     const plan = { schema_version: 1, tasks: [{ id: 'T2', title: 'B', wave: 1, files: ['big.ts'], verify: { commands: [ok] } }] };
     const sizeCheck = "import fs from 'fs';\nconst n = fs.readFileSync('big.ts', 'utf8').split('\\n').length; if (n > 5) { console.error('big.ts: ' + n + ' linhas (teto 5)'); process.exit(1); }\n";
-    const dir = project({ plan, files: { 'big.ts': 'a\n', 'scripts/check-file-size.mjs': sizeCheck } });
+    const dir = project({ plan, files: { 'big.ts': 'a\n', 'scripts/check-file-size.mjs': sizeCheck }, config: { verify_file_size: false } });
     const before = git(dir, 'rev-parse', 'HEAD').stdout.trim();
     const exec = { async execute() { fs.writeFileSync(path.join(dir, 'big.ts'), 'a\nb\nc\nd\ne\nf\ng\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
     const res = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, checkpointCommits: true });

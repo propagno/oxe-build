@@ -524,7 +524,17 @@ function buildNodeContextProvider(projectRoot, activeSession) {
       if (res.status === 0) gitStatus = res.stdout;
     }
     return {
-      taskBody: extractPlanTaskBody(planText, node.id),
+      taskBody: (() => {
+        const mdBody = extractPlanTaskBody(planText, node.id);
+        try {
+          const t = ((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).find((x) => x && x.id === node.id);
+          const jsonNotes = t && typeof t.notes === 'string' ? t.notes.trim() : '';
+          if (jsonNotes && (!mdBody || !mdBody.includes(jsonNotes))) {
+            return [mdBody, `**Notas da tarefa:**\n${jsonNotes}`].filter(Boolean).join('\n\n');
+          }
+        } catch { /* auxiliar */ }
+        return mdBody;
+      })(),
       implementationContract: contract,
       fixture,
       workspaceFiles: files,
@@ -552,6 +562,13 @@ function buildNodeContextProvider(projectRoot, activeSession) {
           try {
             const t = ((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).find((x) => x && x.id === node.id);
             return require('./oxe-ratchets.cjs').ratchetNotes(root, readProjectConfig(projectRoot) || {}, (t && t.files) || []).map((n) => `Trava: ${n}`);
+          } catch { return []; }
+        })(),
+        // OXB-C1 Adendo 2 (OQ T1 / OXE-220): warn executor when an in-scope file is near its file-size cap and name the delegation target
+        ...(() => {
+          try {
+            const t = ((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).find((x) => x && x.id === node.id);
+            return require('./oxe-file-size-guard.cjs').fileSizeLessons(root, readProjectConfig(projectRoot) || {}, t, contract);
           } catch { return []; }
         })(),
         // cross-review 15/11: the attempt that comes back after a failed checkpoint (dom_hooks, related tests) is told
@@ -1889,6 +1906,23 @@ function createAdapterExecutor(runtime, projectRoot, activeSession, options, get
     antigravity: adapterId === 'antigravity' ? resolvedAdapterOpts : {},
   });
   installQuestionResolver(runtime, projectRoot, activeSession, getRunId);
+  if (typeof runtime.setFinishTaskGuard === 'function') {
+    runtime.setFinishTaskGuard((cwd) => {
+      try {
+        const check = require('./oxe-file-size-guard.cjs').verifyTaskFileSize(cwd || projectRoot, {
+          configRoot: projectRoot,
+          changedOnly: true,
+        });
+        if (!check.ok) {
+          return {
+            ok: false,
+            error: `finish_task recusado — ${check.message} (corrija nesta tentativa antes de chamar finish_task)`,
+          };
+        }
+      } catch { /* auxiliar */ }
+      return { ok: true };
+    });
+  }
   const provider = options.providerConfig || {};
   const progress = (event) => {
     if (event && event.type === 'executor_usage') {
@@ -3376,7 +3410,11 @@ function applyTaskGatesToGraph(projectRoot, artifactPaths, compiledGraph) {
       }
     }
   } catch { /* sem CRs: segue */ }
-  if (!gates.length && !anySuites) { appendStubCheck(projectRoot, doc, compiledGraph); return; }
+  if (!gates.length && !anySuites) {
+    appendStubCheck(projectRoot, doc, compiledGraph);
+    appendFileSizeCheck(projectRoot, doc, compiledGraph, jsonPath);
+    return;
+  }
   const byId = new Map((doc.tasks || []).filter(Boolean).map((t) => [t.id, t]));
   const nodeList = Array.isArray(compiledGraph.nodes) ? compiledGraph.nodes : Object.values(compiledGraph.nodes);
   for (const node of nodeList) {
@@ -3389,6 +3427,7 @@ function applyTaskGatesToGraph(projectRoot, artifactPaths, compiledGraph) {
     node.verify.task_gates = commands.map((c) => c.id);
   }
   appendStubCheck(projectRoot, doc, compiledGraph);
+  appendFileSizeCheck(projectRoot, doc, compiledGraph, jsonPath);
 }
 
 /** G34: what a UI card's spec still lacks (BRD-n, target, measures in the CAs, both themes, both densities). */
@@ -3433,6 +3472,34 @@ function appendStubCheck(projectRoot, doc, compiledGraph) {
       if (!task || !gatesLib.taskWritesCode(task)) continue;
       node.verify = node.verify && typeof node.verify === 'object' ? node.verify : {};
       if (!String(node.verify.command || '').includes('oxe-stub-check')) node.verify.command = [node.verify.command, `node "${stubScript}" --task ${node.id}`].filter(Boolean).join(' && ');
+    }
+  } catch { /* auxiliar */ }
+}
+
+/**
+ * OXB-C1 Adendo 2 (OQ T1 / OXE-220): appends the repo's file-size rule (`oxe-file-size-guard.cjs`) to each code task's
+ * verify command so oversized files fail in the attempt's own verify (and in the prompt's Verificação) before checkpoint.
+ */
+function appendFileSizeCheck(projectRoot, doc, compiledGraph, jsonPath) {
+  try {
+    const cfg = readProjectConfig(projectRoot) || {};
+    if (cfg.integration_checks === false || cfg.verify_file_size === false) return;
+    const fsg = require('./oxe-file-size-guard.cjs');
+    const policy = fsg.detectFileSizePolicy(projectRoot, cfg);
+    if (!policy.enabled) return;
+    const gatesLib = require('./oxe-task-gates.cjs');
+    const guardScript = path.join(__dirname, 'oxe-file-size-guard.cjs').replace(/\\/g, '/');
+    const relPlan = jsonPath ? path.relative(projectRoot, jsonPath).replace(/\\/g, '/') : null;
+    const planArg = relPlan && relPlan !== '.oxe/PLAN.json' && !relPlan.startsWith('..') ? ` --plan "${relPlan}"` : '';
+    const nodes = Array.isArray(compiledGraph.nodes) ? compiledGraph.nodes : Object.values(compiledGraph.nodes);
+    for (const node of nodes) {
+      const task = node && (doc.tasks || []).find((t) => t && t.id === node.id);
+      if (!task || !gatesLib.taskWritesCode(task)) continue;
+      node.verify = node.verify && typeof node.verify === 'object' ? node.verify : {};
+      const existing = String(node.verify.command || '');
+      if (!existing.includes('oxe-file-size-guard') && !existing.includes('check-file-size')) {
+        node.verify.command = [node.verify.command, `node "${guardScript}" --verify --task ${node.id}${planArg}`].filter(Boolean).join(' && ');
+      }
     }
   } catch { /* auxiliar */ }
 }
@@ -6309,6 +6376,29 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
           result.errors.push(...rm.errors);
           result.warnings.push(...rm.warnings);
           result.rate_limit_hazards = rl;
+        }
+      }
+      // G47 (OXB-C1 Adendo 2, OQ T1 / OXE-220): file-size headroom warning (<= ~20 lines from cap) + task.notes delegation note
+      if (lintCfg45.file_size !== false && lintCfg45.file_size !== 'off') {
+        const fsg = require('./oxe-file-size-guard.cjs');
+        const packDoc47 = readJsonQuiet(paths.implementationPack);
+        const cfg47 = readProjectConfig(projectRoot) || {};
+        const fsh = fsg.fileSizeHeadroomFindings(projectRoot, pjs, { pack: packDoc47, config: cfg47 });
+        if (fsh.length) {
+          const fsm = fsg.fileSizeHeadroomMessages(fsh, { level: lintCfg45.file_size_level === 'error' ? 'error' : 'warn' });
+          result.errors.push(...fsm.errors);
+          result.warnings.push(...fsm.warnings);
+          result.file_size_headroom = fsh;
+          if (options.annotateFileSize !== false && lintCfg45.file_size_annotate !== false) {
+            const planJsonPath47 = require('./oxe-plan-json.cjs').planJsonPathFor(paths.plan);
+            if (planJsonPath47 && fs.existsSync(planJsonPath47)) {
+              const ann = fsg.annotatePlanFileSizeNotes(projectRoot, pjs, { findings: fsh, pack: packDoc47, config: cfg47 });
+              if (ann.updatedTasks.length) {
+                fs.writeFileSync(planJsonPath47, `${JSON.stringify(pjs, null, 2)}\n`, 'utf8');
+                result.file_size_notes_updated = ann.updatedTasks;
+              }
+            }
+          }
         }
       }
     }
@@ -9282,6 +9372,15 @@ function runtimeCommitTasksTogether(projectRoot, activeSession, options = {}) {
   }))];
   if (!options.skipVerify) {
     const cfgTogether = readProjectConfig(projectRoot) || {};
+    if (options.fileSizeCheck !== false && cfgTogether.verify_file_size !== false) {
+      const fsCheck = require('./oxe-file-size-guard.cjs').verifyTaskFileSize(projectRoot, {
+        config: cfgTogether,
+        scope,
+        dirtyPaths: dirty,
+        task: { id: ids.join(','), files: scope },
+      });
+      if (!fsCheck.ok) throw new Error(`verify conjunto (${ids.join(',')}) reprovado — ${fsCheck.message}`);
+    }
     const allSegs = options.failFast ? false : (options.allSegments != null ? Boolean(options.allSegments) : (((cfgTogether.verify || {}).all_segments) !== false));
     runVerifyCommandSegments(projectRoot, options, commands, verifyTimeoutMs, 'verify', { allSegments: allSegs });
   }
@@ -9405,11 +9504,12 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
   const runFiles = taskScopeFiles(runState, taskId);
   let packFiles = [];
   let packRemoved = [];
+  let packTask = null;
   try {
     const packPath = paths.implementationPack || path.join(path.dirname(jsonPath), 'IMPLEMENTATION-PACK.json');
     if (fs.existsSync(packPath)) {
       const packDoc = JSON.parse(fs.readFileSync(packPath, 'utf8'));
-      const packTask = (packDoc && Array.isArray(packDoc.tasks) ? packDoc.tasks : []).find((x) => x && (x.id === taskId || x.task === taskId));
+      packTask = (packDoc && Array.isArray(packDoc.tasks) ? packDoc.tasks : []).find((x) => x && (x.id === taskId || x.task === taskId)) || null;
       if (packTask) {
         packFiles = (packTask.exact_paths || []).map(normPath);
         packRemoved = (packTask.removed_paths || []).map(normPath);
@@ -9472,6 +9572,23 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
   for (const rem of mustBeRemoved) {
     if (fs.existsSync(path.join(projectRoot, rem))) {
       throw new Error(`verify de ${taskId} reprovado: caminho declarado em removed_paths ainda existe (${rem})`);
+    }
+  }
+
+  // OXB-C1 Adendo 2: run checkpoint file-size rule before spending time on Tn.verify.commands
+  if (options.fileSizeCheck !== false) {
+    const cfgFs = readProjectConfig(projectRoot) || {};
+    if (cfgFs.verify_file_size !== false) {
+      const fsCheck = require('./oxe-file-size-guard.cjs').verifyTaskFileSize(projectRoot, {
+        config: cfgFs,
+        scope: allowedScope,
+        dirtyPaths: inScopeDirty,
+        task,
+        packTask,
+      });
+      if (!fsCheck.ok) {
+        throw new Error(`verify de ${taskId} reprovado — ${fsCheck.message}`);
+      }
     }
   }
 

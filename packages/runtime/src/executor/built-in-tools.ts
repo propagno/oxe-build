@@ -411,6 +411,24 @@ function runShell(command: string, cwd: string, timeoutMs: number): Promise<stri
 
 // ─── finish_task ──────────────────────────────────────────────────────────────
 
+export interface FinishTaskGuardResult {
+  ok: boolean;
+  error?: string | null;
+}
+
+let finishTaskGuard: ((cwd: string, args: Record<string, unknown>) => FinishTaskGuardResult | null | undefined) | null = null;
+
+/**
+ * OXB-C1 Adendo 2: optional synchronous guard checked inside `finish_task` (e.g. file-size cap check)
+ * so oversized files fail inside the SAME executor attempt for free instead of ending the attempt and
+ * paying for a second attempt after checkpoint failure.
+ */
+export function setFinishTaskGuard(
+  fn: ((cwd: string, args: Record<string, unknown>) => FinishTaskGuardResult | null | undefined) | null,
+): void {
+  finishTaskGuard = fn;
+}
+
 const finishTask: BuiltInToolHandler = {
   idempotent: true,
   schema: {
@@ -428,7 +446,20 @@ const finishTask: BuiltInToolHandler = {
       },
     },
   },
-  async execute(args, _cwd) {
+  async execute(args, cwd) {
+    if (finishTaskGuard) {
+      try {
+        const res = finishTaskGuard(cwd, args);
+        if (res && res.ok === false) {
+          return JSON.stringify({
+            __finish_task__: false,
+            error: String(res.error || 'finish_task recusado pela validação pré-conclusão'),
+          });
+        }
+      } catch {
+        // Guard failure must never crash the tool handler
+      }
+    }
     return JSON.stringify({
       __finish_task__: true,
       summary: String(args.summary || ''),
