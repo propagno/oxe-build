@@ -25,8 +25,29 @@ function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
 }
 
+function readMergedConfig(root) {
+  const base = readJson(path.join(root, 'oxe.config.json'));
+  const local = readJson(path.join(root, '.oxe', 'config.json'));
+  if (base && typeof base === 'object' && local && typeof local === 'object') return { ...base, ...local };
+  return local || base || {};
+}
+
+function resolveGitHooksDir(root) {
+  const hooksPathRes = spawnSync('git', ['rev-parse', '--git-path', 'hooks'], { cwd: root, encoding: 'utf8', windowsHide: true });
+  if (hooksPathRes.status === 0 && hooksPathRes.stdout && hooksPathRes.stdout.trim()) {
+    return path.resolve(root, hooksPathRes.stdout.trim());
+  }
+  const gitDirRes = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: root, encoding: 'utf8', windowsHide: true });
+  if (gitDirRes.status !== 0 || !gitDirRes.stdout || !gitDirRes.stdout.trim()) return null;
+  return path.join(path.resolve(root, gitDirRes.stdout.trim()), 'hooks');
+}
+
 function norm(p) {
-  return String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  let s = String(p || '').trim();
+  if (s.startsWith('"') && s.endsWith('"')) {
+    try { s = JSON.parse(s); } catch { s = s.slice(1, -1); }
+  }
+  return s.replace(/\\/g, '/').replace(/^\.\//, '');
 }
 
 function gitBlobSha(root, rev, file) {
@@ -49,7 +70,9 @@ function findTrackedParkedAcceptance(root, options = {}) {
   const baseRef = options.baseRef && !/^0+$/.test(String(options.baseRef).trim()) ? String(options.baseRef).trim() : null;
   let lines = [];
   try {
-    const args = ref ? ['ls-tree', '-r', '--name-only', ref] : ['ls-files'];
+    const args = ref
+      ? ['-c', 'core.quotepath=false', 'ls-tree', '-r', '--name-only', ref]
+      : ['-c', 'core.quotepath=false', 'ls-files'];
     const res = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
     if (res.status === 0 && res.stdout) {
       lines = res.stdout.split(/\r?\n/).map(norm).filter(Boolean);
@@ -120,12 +143,11 @@ function checkPrePush(root, stdinText = '', options = {}) {
   };
 }
 
-/** Installs an idempotent OXE pre-push hook into `<root>/.git/hooks/pre-push` when `<root>` is a git checkout. */
+/** Installs an idempotent OXE pre-push hook into `<hooksDir>/pre-push` (respecting `core.hooksPath` & worktrees). */
 function installPrePushHook(root, cliScriptPath = path.resolve(__dirname, '..', 'oxe-cc.js')) {
-  const gitDirRes = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: root, encoding: 'utf8', windowsHide: true });
-  if (gitDirRes.status !== 0 || !gitDirRes.stdout.trim()) return { installed: false, path: null };
-  const gitDir = path.resolve(root, gitDirRes.stdout.trim());
-  const hookPath = path.join(gitDir, 'hooks', 'pre-push');
+  const hooksDir = resolveGitHooksDir(root);
+  if (!hooksDir) return { installed: false, path: null };
+  const hookPath = path.join(hooksDir, 'pre-push');
   fs.mkdirSync(path.dirname(hookPath), { recursive: true });
   const cliNorm = cliScriptPath.replace(/\\/g, '/');
   const markerStart = '# >>> oxe-cc pre-push >>>';
@@ -156,9 +178,9 @@ function installPrePushHook(root, cliScriptPath = path.resolve(__dirname, '..', 
  * origin (origin.commit_msg "require"; exemptions only in origin.exempt). Same marker block as the pre-push hook.
  */
 function installCommitMsgHook(root, cliScriptPath = path.resolve(__dirname, '..', 'oxe-cc.js')) {
-  const gitDirRes = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: root, encoding: 'utf8', windowsHide: true });
-  if (gitDirRes.status !== 0 || !gitDirRes.stdout.trim()) return { installed: false, path: null };
-  const hookPath = path.join(path.resolve(root, gitDirRes.stdout.trim()), 'hooks', 'commit-msg');
+  const hooksDir = resolveGitHooksDir(root);
+  if (!hooksDir) return { installed: false, path: null };
+  const hookPath = path.join(hooksDir, 'commit-msg');
   fs.mkdirSync(path.dirname(hookPath), { recursive: true });
   const markerStart = '# >>> oxe-cc commit-msg >>>';
   const markerEnd = '# <<< oxe-cc commit-msg <<<';
@@ -176,7 +198,7 @@ function installCommitMsgHook(root, cliScriptPath = path.resolve(__dirname, '..'
 
 /** The commands to run in `root` (a checkout or a worktree), from config or detected. */
 function integrationCommands(root, config) {
-  const cfg = config || readJson(path.join(root, '.oxe', 'config.json')) || {};
+  const cfg = config || readMergedConfig(root);
   if (cfg.integration_checks === false) return [];
   if (Array.isArray(cfg.integration_checks)) return cfg.integration_checks.map((c) => String(c).trim()).filter(Boolean);
   const out = [];
@@ -197,7 +219,7 @@ function childEnv() {
  * @returns {{ ran: Array<{ command: string, ok: boolean, exit: number|null, tail?: string }>, ok: boolean, failed: object|null }}
  */
 function runIntegrationChecks(root, options = {}) {
-  const config = options.config || readJson(path.join(options.configRoot || root, '.oxe', 'config.json')) || {};
+  const config = options.config || readMergedConfig(options.configRoot || root);
   const ran = [];
   if (options.parkedCheck !== false && config.parked_acceptance_check !== false) {
     const parked = findTrackedParkedAcceptance(root, { ref: options.ref || null, baseRef: options.baseRef || null });

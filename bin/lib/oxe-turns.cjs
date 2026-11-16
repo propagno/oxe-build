@@ -17,15 +17,27 @@ function estimateSize(task, packEntry) {
   return weight <= 2 ? 'S' : weight <= 6 ? 'M' : 'L';
 }
 
+function positiveInt(v, fallback) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : fallback;
+}
+
 function createTurnSizer(config, tasksById, packById) {
   const table = { ...DEFAULT_TURNS, ...((config && config.execute && config.execute.turns) || {}) };
   return (taskId, attempt, lastFailureClass) => {
     const task = tasksById.get(taskId);
     if (!task) return null;
     if (Number.isInteger(task.max_turns) && task.max_turns > 0) return lastFailureClass === 'turns_exhausted' ? task.max_turns * 2 : task.max_turns;
-    let size = estimateSize(task, packById.get(taskId));
-    if (lastFailureClass === 'turns_exhausted') size = ORDER[Math.min(ORDER.length - 1, ORDER.indexOf(size) + 1)];
-    return Number(table[size]) || DEFAULT_TURNS[size];
+    const size = estimateSize(task, packById.get(taskId));
+    const base = positiveInt(table[size], DEFAULT_TURNS[size]);
+    if (lastFailureClass !== 'turns_exhausted') return base;
+    const idx = ORDER.indexOf(size);
+    if (idx < ORDER.length - 1) {
+      const nextSize = ORDER[idx + 1];
+      return positiveInt(table[nextSize], DEFAULT_TURNS[nextSize]);
+    }
+    // Already at largest tier (`L`): escalate to configured `XL` or 1.5× `L` so retry actually gets more turns!
+    return positiveInt(table.XL, Math.ceil(base * 1.5));
   };
 }
 
@@ -36,9 +48,10 @@ function turnWarnings(doc, pack, config) {
   const packById = new Map(((pack && pack.tasks) || []).map((x) => [x.id || x.task, x]));
   const out = [];
   for (const t of (doc && doc.tasks) || []) {
-    if (!t || t.done) continue;
-    const need = Number.isInteger(t.max_turns) ? t.max_turns : table[estimateSize(t, packById.get(t.id))];
-    if (cap && cap < need) out.push(`${t.id}: tarefa ${estimateSize(t, packById.get(t.id))} pede ${need} turnos, mas runtime.provider.maxTurns=${cap} limita — a tentativa termina em turns_exhausted (suba o teto, declare max_turns ou divida a tarefa)`);
+    if (!t || t.done || t.status === 'done' || t.status === 'superseded' || t.superseded || t.merged_into) continue;
+    const sz = estimateSize(t, packById.get(t.id));
+    const need = Number.isInteger(t.max_turns) && t.max_turns > 0 ? t.max_turns : positiveInt(table[sz], DEFAULT_TURNS[sz]);
+    if (cap && cap < need) out.push(`${t.id}: tarefa ${sz} pede ${need} turnos, mas runtime.provider.maxTurns=${cap} limita — a tentativa termina em turns_exhausted (suba o teto, declare max_turns ou divida a tarefa)`);
   }
   return out;
 }

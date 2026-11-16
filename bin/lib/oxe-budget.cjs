@@ -14,7 +14,16 @@ const fs = require('fs');
 const path = require('path');
 
 function ledgerPath(projectRoot, runId) {
-  return path.join(projectRoot, '.oxe', 'runs', `${runId}.budget.json`);
+  const safeId = String(runId || '').trim();
+  if (!safeId || /[\\/]|\.\./.test(safeId)) {
+    throw new Error(`runId inválido para o ledger de orçamento: ${runId}`);
+  }
+  return path.join(projectRoot, '.oxe', 'runs', `${safeId}.budget.json`);
+}
+
+function nonNegativeFinite(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 function positive(value) {
@@ -77,10 +86,10 @@ function openBudget(projectRoot, runId, limits = {}) {
 /** Adds one attempt's usage (an `executor_usage` detail) and persists. */
 function recordUsage(projectRoot, ledger, usage) {
   if (!ledger) return ledger;
-  const turns = Number(usage && usage.turns) || 0;
-  const cost = Number(usage && usage.cost_usd) || 0;
-  ledger.used_turns += turns;
-  ledger.used_usd = Math.round((ledger.used_usd + cost) * 1e6) / 1e6;
+  const turns = nonNegativeFinite(usage && usage.turns);
+  const cost = nonNegativeFinite(usage && usage.cost_usd);
+  ledger.used_turns = nonNegativeFinite(ledger.used_turns) + turns;
+  ledger.used_usd = Math.round((nonNegativeFinite(ledger.used_usd) + cost) * 1e6) / 1e6;
   ledger.attempts.push({ task: usage && usage.task ? usage.task : null, attempt: usage && usage.attempt ? usage.attempt : null, turns, cost_usd: cost, at: new Date().toISOString() });
   ledger.updated_at = new Date().toISOString();
   writeLedger(projectRoot, ledger);

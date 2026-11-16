@@ -15,6 +15,7 @@ const op = () => require('./oxe-operational.cjs');
 const pendingTask = (t) => t && t.done !== true && t.status !== 'done' && !t.superseded && !t.merged_into;
 const short = (s, n = 160) => { const x = String(s || '').replace(/\s+/g, ' ').trim(); return x.length > n ? `${x.slice(0, n - 1)}…` : x; };
 const normF = (f) => String(typeof f === 'string' ? f : (f && f.path) || '').replace(/\\/g, '/');
+const shellQuote = (p) => (/[\s"'()[\]&|<>^;$`!]/.test(String(p)) ? `"${String(p).replace(/"/g, '\\"')}"` : String(p));
 
 /**
  * @param {string} target project root
@@ -57,7 +58,8 @@ function recoveryStep(target, activeSession, ctx = {}) {
     const cf = t.checkpoint_failed;
     if (cf.kind === 'scope_insufficient') {
       const files = (cf.related_red || []).slice(0, 4);
-      return out('scope_insufficient', 'plan-scope', `oxe-cc plan scope add ${t.id} ${files.join(' ') || '<arquivo>'} --cr CR-<n> --by <papel> --reason "…"`,
+      const cliFiles = files.map(shellQuote).join(' ') || '<arquivo>';
+      return out('scope_insufficient', 'plan-scope', `oxe-cc plan scope add ${t.id} ${cliFiles} --cr CR-<n> --by <papel> --reason "…"`,
         `${t.id}: testes que importam os arquivos da tarefa ficaram vermelhos fora do escopo dela (${files.join(', ') || 'veja o checkpoint'}) — inclua-os no escopo (ou abra um CR/tarefa) e depois: oxe-cc plan reopen ${t.id}`, ['.oxe/PLAN.json']);
     }
     if (emptyNoWork(cf)) {
@@ -120,7 +122,14 @@ function recoveryStep(target, activeSession, ctx = {}) {
       if (run.verification_head && head && run.verification_head !== head) {
         let closeCi = false;
         try { closeCi = require('./oxe-journey.cjs').deliveryMode(ctx.cfg || {}).close === 'ci'; } catch { closeCi = false; }
-        if (ctx.cfg === undefined) { try { closeCi = require('./oxe-journey.cjs').deliveryMode(JSON.parse(require('fs').readFileSync(path.join(target, '.oxe', 'config.json'), 'utf8'))).close === 'ci'; } catch { /* sem config */ } }
+        if (ctx.cfg === undefined) {
+          try {
+            const fsLib = require('fs');
+            const rootCfg = fsLib.existsSync(path.join(target, 'oxe.config.json')) ? JSON.parse(fsLib.readFileSync(path.join(target, 'oxe.config.json'), 'utf8')) : {};
+            const dotCfg = fsLib.existsSync(path.join(target, '.oxe', 'config.json')) ? JSON.parse(fsLib.readFileSync(path.join(target, '.oxe', 'config.json'), 'utf8')) : {};
+            closeCi = require('./oxe-journey.cjs').deliveryMode({ ...rootCfg, ...dotCfg }).close === 'ci';
+          } catch { /* sem config */ }
+        }
         if (closeCi) return null;
         return out('verify_stale', 'verify', '/oxe-verify', `o verify reprovou em ${String(run.verification_head).slice(0, 8)} (${red.check_id}); o HEAD mudou depois disso — rode /oxe-verify de novo`, ['.oxe/VERIFY.md']);
       }

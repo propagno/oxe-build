@@ -41,10 +41,18 @@ function build(s) {
     for (const u of d.stories || []) add(decisionsOfUS, u, d.id);
   }
   for (const u of s.stories) for (const a of u.criteria || []) for (const d of decisionsOfA.get(a) || []) add(decisionsOfUS, u.id, d);
+  const normFileRef = (f) => (typeof f === 'string' ? f : (f && typeof f === 'object' && f.path ? String(f.path) : null));
   const testsOfA = new Map();
-  for (const t of s.tests) if (t.criterion) add(testsOfA, t.criterion, (t.files || [])[0] || t.id || t.criterion);
+  for (const t of s.tests) {
+    if (!t || !t.criterion) continue;
+    const firstFile = (t.files || []).map(normFileRef).find(Boolean);
+    add(testsOfA, t.criterion, firstFile || t.id || t.criterion);
+  }
   const tasksOfA = new Map();
-  for (const t of s.tasks) for (const a of [...(t.acceptance || []), ...(t.aceite || [])]) add(tasksOfA, a, t.id);
+  for (const t of s.tasks) {
+    if (!t || t.superseded || t.merged_into || t.status === 'superseded') continue;
+    for (const a of [...(t.acceptance || []), ...(t.aceite || [])]) add(tasksOfA, a, t.id);
+  }
   const cardsOfA = new Map();
   for (const a of s.criteria) for (const k of s.cardKeysOf(a.text)) add(cardsOfA, a.id, k);
   for (const [key, cas] of s.cardSpecs) for (const c of cas) if (c.spec_id) add(cardsOfA, c.spec_id, key);
@@ -121,8 +129,12 @@ function build(s) {
   });
   const criterion = (a) => ({ id: a.id, stories: [...(storiesOfA.get(a.id) || [])], cards: [...(cardsOfA.get(a.id) || [])], decisions: [...(decisionsOfA.get(a.id) || [])], tests: [...(testsOfA.get(a.id) || [])], tasks: [...(tasksOfA.get(a.id) || [])], changes: [...(changesOfA.get(a.id) || [])], evidence: evidence.get(a.id) || null });
   const tasks = s.tasks.map((t) => ({ id: t.id, ref: taskRef(t), card: cardOf(taskRef(t)), criteria: [...(t.acceptance || []), ...(t.aceite || [])], decisions: t.decisions || [] }));
+  const uniqueCards = new Set([
+    ...[...s.links.values()].map((l) => l && l.key).filter(Boolean),
+    ...s.cardSpecs.keys(),
+  ]);
   return {
-    counts: { stories: s.stories.length, criteria: s.criteria.length, decisions: activeD.length, rfcs: s.rfcs.length, tasks: s.tasks.length, tests: s.tests.length, changes: s.changes.length, cards: s.links.size + s.cardSpecs.size },
+    counts: { stories: s.stories.length, criteria: s.criteria.length, decisions: activeD.length, rfcs: s.rfcs.length, tasks: s.tasks.length, tests: s.tests.length, changes: s.changes.length, cards: uniqueCards.size },
     orphans,
     errors: orphans.filter((o) => o.severity === 'error').length,
     stories: s.stories.map(story),

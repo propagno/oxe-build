@@ -19,7 +19,8 @@
 const CODE_FILE_RE = /\.(c|m)?[jt]sx?$|\.(vue|svelte|py|go|rs|java|kt|cs|rb|php|swift)$/i;
 
 function quoteArg(value) {
-  return /[\s"'&|<>^()]/.test(value) ? `"${String(value).replace(/"/g, '\\"')}"` : String(value);
+  const s = String(value);
+  return /[\s"'&|<>^();`$![\]{}*?]/.test(s) ? `"${s.replace(/(["\\`$])/g, '\\$1')}"` : s;
 }
 
 function normalizeTaskGate(raw) {
@@ -50,7 +51,7 @@ function collectTaskGates(config, planDoc) {
 
 /** A task the executor does not write code for gets no gates (done, external, verify-only, spike, docs-only). */
 function taskWritesCode(task) {
-  if (!task || task.done === true) return false;
+  if (!task || task.done === true || task.status === 'done' || task.status === 'superseded' || task.superseded || task.merged_into) return false;
   if (['external_delivery', 'verify_only', 'spike'].includes(task.kind)) return false;
   // OXB-085: string entries = delivered elsewhere; a precondition object still writes code once it starts.
   if (Array.isArray(task.blocked_by) && task.blocked_by.some((e) => typeof e === 'string' && e.trim())) return false;
@@ -68,8 +69,12 @@ function taskGateCommands(task, gates, config = {}) {
   for (const gate of gates) {
     const matching = files.filter((f) => (gate.applies_to ? gate.applies_to.test(f) : CODE_FILE_RE.test(f)));
     if (!matching.length) continue;
-    let command = gate.command.replace(/\{files\}/g, matching.map(quoteArg).join(' '));
-    if (gate.runner) command = gate.runner.replace(/\{command\}/g, command);
+    const expandedFiles = matching.map(quoteArg).join(' ');
+    let command = gate.command.replace(/\{files\}/g, () => expandedFiles);
+    if (gate.runner) {
+      const inner = command;
+      command = gate.runner.replace(/\{command\}/g, () => inner);
+    }
     out.push({ id: `task-gate-${gate.id}`, command });
   }
   // OXB-162: a suite the task's own verify already runs is not run twice (F4-T1: the same four files ran in segment
@@ -79,7 +84,10 @@ function taskGateCommands(task, gates, config = {}) {
   const named = (s) => { const p = s.replace(/\\/g, '/').replace(/^\.\//, ''); return verifyText.split(/[\s"']+/).some((tok) => tok.replace(/^\.\//, '') === p); };
   const suites = (Array.isArray(task.affected_suites) ? task.affected_suites.filter(Boolean).map(String) : []).filter((s) => !named(s));
   const template = typeof config.task_suite_command === 'string' && config.task_suite_command.includes('{suites}') ? config.task_suite_command : null;
-  if (suites.length && template) out.push({ id: 'affected-suites', command: template.replace(/\{suites\}/g, suites.map(quoteArg).join(' ')) });
+  if (suites.length && template) {
+    const expandedSuites = suites.map(quoteArg).join(' ');
+    out.push({ id: 'affected-suites', command: template.replace(/\{suites\}/g, () => expandedSuites) });
+  }
   return out;
 }
 
@@ -109,12 +117,12 @@ function lintTaskGates(planDoc, config = {}) {
   const tasks = planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : [];
   const rules = Array.isArray(config.suite_rules) ? config.suite_rules : [];
   for (const task of tasks) {
-    if (!task || task.done === true) continue;
+    if (!task || task.done === true || task.status === 'done' || task.status === 'superseded' || task.superseded || task.merged_into) continue;
     const suites = Array.isArray(task.affected_suites) ? task.affected_suites.map(String) : [];
     if (suites.length && !(typeof config.task_suite_command === 'string' && config.task_suite_command.includes('{suites}'))) {
       warnings.push(`${task.id}: affected_suites declarado, mas o config.json não tem task_suite_command (ex.: "npx vitest run {suites}") — as suítes não rodam`);
     }
-    const verifyText = (task.verify && Array.isArray(task.verify.commands) ? task.verify.commands : []).join(' ');
+    const verifyText = [task.verifyCommand, task.verify && task.verify.command, ...((task.verify && Array.isArray(task.verify.commands)) ? task.verify.commands : [])].filter(Boolean).join(' ');
     for (const rule of rules) {
       if (!rule || !rule.paths || !rule.suite) continue;
       let re;
