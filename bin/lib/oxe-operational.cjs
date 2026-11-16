@@ -4296,7 +4296,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     pluginRegistry: options.pluginRegistry || buildRuntimePluginRegistry(projectRoot),
     // OXB-165: no run-level timeout by default (the scheduler's 30 min aborted at the first wave past it); the
     // stale-progress guard covers hangs. --max-run-ms > config executor.max_run_ms.
-    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, outOfScopeRequirements: execScopeGaps, deferFailed: ((readProjectConfig(projectRoot) || {}).execute || {}).defer_failed !== false, dispatch: ((readProjectConfig(projectRoot) || {}).execute || {}).dispatch === 'stream' ? 'stream' : 'wave', failureClasses: ((readProjectConfig(projectRoot) || {}).execute || {}).failure_classes || undefined, ...(options.schedulerOptions || {}), ...(policyRefusedBefore.length ? { policyRefusedBefore } : {}), ...(policyRetryExhausted.length ? { policyRetryExhausted } : {}) },
+    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, outOfScopeRequirements: execScopeGaps, deferFailed: ((readProjectConfig(projectRoot) || {}).execute || {}).defer_failed !== false, dispatch: ((readProjectConfig(projectRoot) || {}).execute || {}).dispatch === 'stream' ? 'stream' : 'wave', failureClasses: ((readProjectConfig(projectRoot) || {}).execute || {}).failure_classes || undefined, allSegments: Boolean(options.allSegments || (((readProjectConfig(projectRoot) || {}).verify || {}).all_segments === true) || (((readProjectConfig(projectRoot) || {}).execute || {}).all_segments === true)), ...(options.schedulerOptions || {}), ...(policyRefusedBefore.length ? { policyRefusedBefore } : {}), ...(policyRetryExhausted.length ? { policyRetryExhausted } : {}) },
     // The scheduler already persists every event through the runtime bus (events/bus.ts →
     // appendEvent). This hook only forwards progress; writing here again duplicated the log.
     attemptChanges: (id) => lastAttemptChanges.get(id) || null,
@@ -6241,6 +6241,29 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
         result.pinned_by_existing = pinned;
       }
     }
+    if (pjs) {
+      // G45 & G46 (OXB-C1 P2 #5 & #7): cross-card frozen test conflicts (removed/hidden tokens & count bounds) + lint.rate_limits
+      const lintCfg45 = ((readProjectConfig(projectRoot) || {}).lint || {});
+      const ccLib = require('./oxe-cross-card-conflicts.cjs');
+      if (lintCfg45.cross_card_conflicts !== 'off') {
+        const cc = ccLib.crossCardFrozenConflicts(projectRoot, pjs, { specText: readTextIfExists(paths.spec) || '' });
+        if (cc.length) {
+          const cm = ccLib.crossCardConflictMessages(cc, { level: lintCfg45.cross_card_conflicts === 'error' ? 'error' : 'warn' });
+          result.errors.push(...cm.errors);
+          result.warnings.push(...cm.warnings);
+          result.cross_card_conflicts = cc;
+        }
+      }
+      if (lintCfg45.rate_limits) {
+        const rl = ccLib.rateLimitHazards(projectRoot, pjs, { rules: lintCfg45.rate_limits });
+        if (rl.length) {
+          const rm = ccLib.rateLimitMessages(rl, { level: lintCfg45.rate_limits_level === 'error' ? 'error' : 'warn' });
+          result.errors.push(...rm.errors);
+          result.warnings.push(...rm.warnings);
+          result.rate_limit_hazards = rl;
+        }
+      }
+    }
   } catch { /* auxiliar */ }
   // OXB-171: the product files a task's frozen tests import/read must be in its scope (or a dependency's); T8 of F2
   // retried 3× a test on shared/types/ipc.ts that was outside its files. config lint.test_scope: "error" makes it fatal.
@@ -6983,6 +7006,60 @@ function commitTaskVerifyTimeout(projectRoot, options, cmd, base) {
 function timedOutMessage(what, cmd, ms, res) {
   const snippet = String((res && (res.tail || res.output)) || '').trim().slice(-300);
   return `${what} estourou o tempo (\`${cmd}\`, ${ms >= 60_000 ? `${Math.round(ms / 60_000)} min` : `${Math.round(ms / 1000)} s`}; verify_timeout_ms no config ou --verify-timeout-ms)${snippet ? `: ${snippet}` : ''}`;
+}
+
+function splitVerifyCommandSegments(command) {
+  const rt = loadRuntimeModule();
+  if (rt && typeof rt.splitVerifySegments === 'function') return rt.splitVerifySegments(command);
+  const out = [];
+  let cur = '';
+  let q = null;
+  const s = String(command || '');
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (q) { if (ch === q) q = null; }
+    else if (ch === '"' || ch === "'") q = ch;
+    else if (ch === '&' && s[i + 1] === '&') {
+      if (cur.trim()) out.push(cur.trim());
+      cur = '';
+      i += 1;
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out.length ? out : [s];
+}
+
+/**
+ * OXB-C1 (#6): Runs every segment of `commands` (splitting `&&` subcommands), collecting all failing segments when
+ * `allSegments` is enabled (default true in `commit-task`, opt-out via `--fail-fast` or `verify.all_segments: false`).
+ */
+function runVerifyCommandSegments(projectRoot, options, commands, verifyTimeoutMs, label, { allSegments = true } = {}) {
+  const segments = (commands || []).flatMap((c) => splitVerifyCommandSegments(c)).map((s) => String(s || '').trim()).filter(Boolean);
+  const failed = [];
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i];
+    const ms = commitTaskVerifyTimeout(projectRoot, options, seg, verifyTimeoutMs);
+    const res = runChildCommandFull(projectRoot, seg, ms);
+    if (!res.ok) {
+      failed.push({ index: i + 1, total: segments.length, command: seg, ms, res });
+      if (!allSegments) break;
+    }
+  }
+  if (!failed.length) return { ok: true, segments: segments.length, failed: [] };
+  if (failed.length === 1) {
+    const f = failed[0];
+    if (f.res.timedOut) throw new Error(timedOutMessage(label, f.command, f.ms, f.res));
+    throw new Error(`${label} falhou (\`${f.command}\`): ${String(f.res.tail || f.res.output || '').trim().slice(-500)}`);
+  }
+  const lines = failed.map((f) => {
+    const detail = f.res.timedOut
+      ? timedOutMessage(label, f.command, f.ms, f.res)
+      : `exit ${f.res.status ?? 1}: ${String(f.res.tail || f.res.output || '').trim().slice(-350)}`;
+    return `  [${f.index}/${f.total}] \`${f.command}\` — ${detail}`;
+  });
+  throw new Error(`${label} falhou em ${failed.length}/${segments.length} segmentos:\n${lines.join('\n')}`);
 }
 
 function runChildCommandFull(projectRoot, command, timeoutMs = 600_000) {
@@ -9125,12 +9202,9 @@ function runtimeCommitTasksTogether(projectRoot, activeSession, options = {}) {
     return (Array.isArray(v) ? v : v && Array.isArray(v.commands) ? v.commands : typeof v === 'string' ? [v] : t.verifyCommand ? [t.verifyCommand] : []).map((c) => String(c || '').trim()).filter(Boolean);
   }))];
   if (!options.skipVerify) {
-    for (const cmd of commands) {
-      const ms = commitTaskVerifyTimeout(projectRoot, options, cmd, verifyTimeoutMs);
-      const res = runChildCommandFull(projectRoot, cmd, ms);
-      if (!res.ok && res.timedOut) throw new Error(timedOutMessage('verify', cmd, ms, res));
-      if (!res.ok) throw new Error(`verify falhou (\`${cmd}\`): ${String(res.tail || res.output || '').trim().slice(-500)}`);
-    }
+    const cfgTogether = readProjectConfig(projectRoot) || {};
+    const allSegs = options.failFast ? false : (options.allSegments != null ? Boolean(options.allSegments) : (((cfgTogether.verify || {}).all_segments) !== false));
+    runVerifyCommandSegments(projectRoot, options, commands, verifyTimeoutMs, 'verify', { allSegments: allSegs });
   }
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const crs = (() => { try { return [...new Set(require('./oxe-change.cjs').listChanges(programDir).filter((c) => c.status === 'open' && (c.tasks || []).some((t) => ids.includes(String(t).toUpperCase()))).map((c) => c.id))]; } catch { return []; } })();
@@ -9366,16 +9440,8 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
       if (options.skipVerifyIfFresh && isTaskVerifyFresh(projectRoot, taskId, effectiveDirty, scopeHash, options.freshMaxAgeMs)) {
         verifySkipped = true;
       } else {
-        for (const cmd of commands) {
-          const ms = commitTaskVerifyTimeout(projectRoot, options, cmd, verifyTimeoutMs);
-          const res = runChildCommandFull(projectRoot, cmd, ms);
-          if (!res.ok && res.timedOut) {
-            throw new Error(timedOutMessage(`verify de ${taskId}`, cmd, ms, res));
-          }
-          if (!res.ok) {
-            throw new Error(`verify de ${taskId} falhou (\`${cmd}\`): ${String(res.tail || res.output || '').trim().slice(-500)}`);
-          }
-        }
+        const allSegs = options.failFast ? false : (options.allSegments != null ? Boolean(options.allSegments) : (((projectConfigForCommit.verify || {}).all_segments) !== false));
+        runVerifyCommandSegments(projectRoot, options, commands, verifyTimeoutMs, `verify de ${taskId}`, { allSegments: allSegs });
         writeTaskVerifyFresh(projectRoot, taskId, { scopeHash, commands, ok: true });
       }
     }
@@ -9791,6 +9857,195 @@ function runtimePlanVerifyPrune(projectRoot, activeSession, options = {}) {
     changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'verify_prune', by, reason, at, changes: out.changes.map((c) => ({ task: c.task, removed: c.removed, anchored: c.anchored })) });
     appendEvent(projectRoot, activeSession, { type: 'PlanVerifyPruned', payload: { by, reason, tasks: out.changes.map((c) => c.task) } });
   }
+  return { dry_run: Boolean(options.dryRun), ...out };
+}
+
+function extractAndRemoveVerifySegment(task, rawTarget, { apply = true } = {}) {
+  const target = String(rawTarget || '').trim();
+  if (!target) return null;
+  const normTarget = target.replace(/\\/g, '/').replace(/^\.\//, '');
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pat = esc(normTarget).replace(/\//g, '[\\\\/]');
+  const argRe = new RegExp(`(^|\\s)(["'\`]?)(${pat}(?:\\.(?:test|spec)\\.[cm]?[jt]sx?)?)\\$?\\2(?=\\s|$)`, 'g');
+  const TEST_ARG = /[^\s"'`]+\.(?:test|spec)\.[cm]?[jt]sx?/g;
+
+  const extracted = [];
+  const rewriteCommand = (cmdStr) => {
+    const parts = String(cmdStr).split(/(\s*(?:&&|\|\||;)\s*)/);
+    const keep = [];
+    for (let i = 0; i < parts.length; i += 2) {
+      const sub = parts[i].trim();
+      if (!sub) continue;
+      // 1. Exact full subcommand match (or multi-word command substring match)
+      if (sub === target || (/\s/.test(target) && sub.includes(target))) {
+        extracted.push(sub);
+        continue;
+      }
+      // 2. Test-argument / path match inside the subcommand
+      const matchedArgs = [];
+      const stripped = sub.replace(argRe, (_m, p1, q, argVal) => {
+        matchedArgs.push(`${q}${argVal}${q}`);
+        return p1;
+      });
+      if (!matchedArgs.length) {
+        keep.push({ sep: i ? parts[i - 1] : null, text: parts[i] });
+        continue;
+      }
+      const cleaned = stripped.replace(/\s{2,}/g, ' ').trim();
+      const hadTests = (sub.match(TEST_ARG) || []).length;
+      const hasTests = (cleaned.match(TEST_ARG) || []).length;
+      if (hadTests && !hasTests) {
+        // Every test argument in this subcommand was moved/dropped: whole subcommand leaves
+        extracted.push(sub);
+        continue;
+      }
+      // Reconstruct runnable subcommand for `--to T<m>` with the same runner prefix + only the moved arg(s)
+      const runnerOnly = sub.replace(TEST_ARG, '').replace(/\s{2,}/g, ' ').trim();
+      extracted.push(runnerOnly ? `${runnerOnly} ${matchedArgs.join(' ')}`.replace(/\s{2,}/g, ' ').trim() : matchedArgs.join(' '));
+      if (cleaned) keep.push({ sep: i ? parts[i - 1] : null, text: cleaned });
+    }
+    return keep.map((k, j) => (j ? (k.sep || ' && ') : '') + k.text).join('');
+  };
+
+  const before = {
+    commands: task.verify && Array.isArray(task.verify.commands) ? [...task.verify.commands] : null,
+    command: task.verify && task.verify.command ? task.verify.command : null,
+    verifyCommand: task.verifyCommand || null,
+  };
+  const after = {
+    commands: before.commands ? before.commands.map(rewriteCommand).filter(Boolean) : null,
+    command: before.command ? rewriteCommand(before.command) || null : null,
+    verifyCommand: before.verifyCommand ? rewriteCommand(before.verifyCommand) || null : null,
+  };
+  const flat = (x) => [...(x.commands || []), ...(x.command ? [x.command] : []), ...(x.verifyCommand ? [x.verifyCommand] : [])];
+  if (JSON.stringify(flat(after)) === JSON.stringify(flat(before))) return null;
+  if (apply) {
+    if (before.commands) task.verify.commands = after.commands;
+    if (before.command) { if (after.command) task.verify.command = after.command; else delete task.verify.command; }
+    if (before.verifyCommand) { if (after.verifyCommand) task.verifyCommand = after.verifyCommand; else delete task.verifyCommand; }
+  }
+  return { before: flat(before), after: flat(after), extracted: [...new Set(extracted)] };
+}
+
+/**
+ * OXB-C1 (#8): `oxe-cc plan verify move T<n> "<segmento|arquivo>" --to <T<m>|KEY> --cr CR-n --by <papel> [--reason "…"] [--dry-run]`
+ * and `oxe-cc plan verify drop T<n> "<segmento|arquivo>" --by <papel> --reason "…" [--cr CR-n] [--dry-run]`.
+ */
+function runtimePlanVerifyEdit(projectRoot, activeSession, options = {}) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const criteriaIds = require('./oxe-criteria-ids.cjs');
+  const action = options.action === 'move' ? 'move' : 'drop';
+  const taskId = String(options.task || '').trim().toUpperCase();
+  const segment = String(options.segment || '').trim();
+  if (!/^T\d+$/.test(taskId) || !segment) {
+    throw new Error(
+      action === 'move'
+        ? 'use: oxe-cc plan verify move T<n> "<segmento|arquivo>" --to <T<m>|KEY> --cr CR-n --by <papel> [--reason "…"] [--dry-run]'
+        : 'use: oxe-cc plan verify drop T<n> "<segmento|arquivo>" --by <papel> --reason "…" [--cr CR-n] [--dry-run]'
+    );
+  }
+  const cr = options.cr ? String(options.cr).trim().toUpperCase() : null;
+  if (action === 'move') {
+    if (!cr || !criteriaIds.CR_ID_RE.test(cr)) {
+      throw new Error('plan verify move exige um CR válido (--cr CR-<n>)');
+    }
+  } else if (cr && !criteriaIds.CR_ID_RE.test(cr)) {
+    throw new Error(`CR inválido: ${cr}`);
+  }
+  const toRaw = action === 'move' ? String(options.to || '').trim().toUpperCase() : null;
+  const toIsTask = Boolean(toRaw && /^T\d+$/.test(toRaw));
+  const toIsCard = Boolean(toRaw && !toIsTask && (/^[A-Z][A-Z0-9]*-\d+$/.test(toRaw) || /^\d+$/.test(toRaw)));
+  if (action === 'move' && !toIsTask && !toIsCard) {
+    throw new Error('informe o destino (--to T<m> ou --to <CARD-KEY>, ex.: OXE-292)');
+  }
+  if (toIsTask && toRaw === taskId) {
+    throw new Error(`--to: ${taskId} já é a tarefa de origem`);
+  }
+  const fallbackReason = action === 'move' && !options.reason ? `movido de ${taskId} para ${toRaw} (${cr})` : options.reason;
+  const { by, reason } = requireEditReason({ by: options.by, reason: fallbackReason });
+
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error(`plan verify ${action} exige PLAN.json`);
+  const at = new Date().toISOString();
+
+  const out = planJsonLib.withPlanLock(jsonPath, () => {
+    const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const tasks = (doc.tasks || []).filter(Boolean);
+    const srcTask = tasks.find((t) => String(t.id).toUpperCase() === taskId);
+    if (!srcTask) throw new Error(`Tarefa ${taskId} não encontrada em PLAN.json`);
+    if (srcTask.done === true) throw new Error(`${taskId} está done: reabra antes (oxe-cc plan reopen ${taskId})`);
+
+    let dstTask = null;
+    if (toIsTask) {
+      dstTask = tasks.find((t) => String(t.id).toUpperCase() === toRaw);
+      if (!dstTask) throw new Error(`Tarefa destino ${toRaw} não encontrada em PLAN.json`);
+      if (dstTask.done === true) throw new Error(`Tarefa destino ${toRaw} já está done`);
+    }
+
+    const removed = extractAndRemoveVerifySegment(srcTask, segment, { apply: !options.dryRun });
+    if (!removed) {
+      throw new Error(`segmento/arquivo "${segment}" não encontrado no verify de ${taskId}`);
+    }
+
+    let dstBefore = null;
+    let dstAfter = null;
+    if (dstTask) {
+      const curCmds = dstTask.verify && Array.isArray(dstTask.verify.commands)
+        ? [...dstTask.verify.commands]
+        : (dstTask.verify && dstTask.verify.command ? [dstTask.verify.command] : (dstTask.verifyCommand ? [dstTask.verifyCommand] : []));
+      dstBefore = [...curCmds];
+      const nextCmds = [...new Set([...curCmds, ...removed.extracted])];
+      dstAfter = nextCmds;
+      if (!options.dryRun) {
+        dstTask.verify = { ...(dstTask.verify && typeof dstTask.verify === 'object' && !Array.isArray(dstTask.verify) ? dstTask.verify : {}), commands: nextCmds };
+        if (dstTask.verify.command) delete dstTask.verify.command;
+        if (dstTask.verifyCommand) delete dstTask.verifyCommand;
+        dstTask.edits = [...(Array.isArray(dstTask.edits) ? dstTask.edits : []), { by, reason, cr, at, verify_received_from: taskId, added: removed.extracted }];
+      }
+    }
+
+    if (!options.dryRun) {
+      srcTask.edits = [
+        ...(Array.isArray(srcTask.edits) ? srcTask.edits : []),
+        action === 'move'
+          ? { by, reason, cr, at, verify_moved: segment, to: toRaw, extracted: removed.extracted }
+          : { by, reason, cr, at, verify_dropped: segment, extracted: removed.extracted },
+      ];
+      const tmp = `${jsonPath}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+      fs.renameSync(tmp, jsonPath);
+    }
+
+    return {
+      action,
+      task: taskId,
+      segment,
+      extracted: removed.extracted,
+      before: removed.before,
+      after: removed.after,
+      ...(action === 'move' ? { to: toRaw, to_kind: toIsTask ? 'task' : 'card', ...(dstTask ? { target_before: dstBefore, target_after: dstAfter } : {}) } : {}),
+      cr,
+      by,
+      reason,
+    };
+  });
+
+  if (!options.dryRun) {
+    changeLib.appendNdjson(changeLib.changesFile(programDir), {
+      kind: action === 'move' ? 'verify_move' : 'verify_drop',
+      ...out,
+      at,
+    });
+    appendEvent(projectRoot, activeSession, {
+      type: action === 'move' ? 'PlanVerifyMoved' : 'PlanVerifyDropped',
+      work_item_id: taskId,
+      payload: { ...out },
+    });
+  }
+
   return { dry_run: Boolean(options.dryRun), ...out };
 }
 
@@ -12864,6 +13119,7 @@ module.exports = {
   runtimePlanTaskEdit,
   runtimePlanTaskFold,
   runtimePlanVerifyPrune,
+  runtimePlanVerifyEdit,
   runtimePlanTaskSupersede,
   runtimePauseHold,
   commitTaskVerifyTimeout,

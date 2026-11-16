@@ -4337,6 +4337,8 @@ function parseRuntimeArgs(argv) {
     else if (a === '--strict') out.strict = true;
     else if (a === '--preview-ci') out.previewCi = true;
     else if (a === '--no-quicks') out.noQuicks = true;
+    else if (a === '--all-segments') out.allSegments = true;
+    else if (a === '--fail-fast') out.failFast = true;
     else if (a === '--hold-deps' || a === '--promote-hold-deps') out.holdDeps = true;
     else if (a === '--allow-undelivered') out.allowUndelivered = true;
     else if (a === '--strict-delivery') out.strictDelivery = true;
@@ -5258,7 +5260,7 @@ async function runRuntime(opts) {
   if (opts.action === 'commit-task' && Array.isArray(opts.tasks) && opts.tasks.length > 1) {
     try {
       if (!opts.together) throw new Error(`várias tarefas num commit só exigem --together: oxe-cc runtime commit-task ${opts.tasks.join(',')} --together (a atribuição fica por lista de tarefas, não por trecho)`);
-      const r = oxeOperational.runtimeCommitTasksTogether(opts.dir, activeSession, { tasks: opts.tasks, by: opts.by || undefined, phase: opts.phase || undefined, skipVerify: Boolean(opts.skipVerify), verifyTimeoutMs: opts.verifyTimeoutMs || opts.timeoutMs || undefined, force: Boolean(opts.force) });
+      const r = oxeOperational.runtimeCommitTasksTogether(opts.dir, activeSession, { tasks: opts.tasks, by: opts.by || undefined, phase: opts.phase || undefined, skipVerify: Boolean(opts.skipVerify), verifyTimeoutMs: opts.verifyTimeoutMs || opts.timeoutMs || undefined, allSegments: opts.allSegments, failFast: Boolean(opts.failFast), force: Boolean(opts.force) });
       if (opts.jsonOutput) { console.log(JSON.stringify({ oxeRuntimeCommitTaskSchema: 1, ...r }, null, 2)); return; }
       console.log(`  ${green}✓${reset} commit conjunto ${r.commit.slice(0, 9)} · ${r.tasks.join(', ')} · ${(r.files || []).length} arquivo(s)${r.crs.length ? ` · ${r.crs.join(', ')}` : ''}${r.verified ? ' · verify rodado' : ''}`);
     } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
@@ -5273,6 +5275,8 @@ async function runRuntime(opts) {
         skipVerifyIfFresh: Boolean(opts.skipVerifyIfFresh),
         strictScope: Boolean(opts.strictScope),
         verifyTimeoutMs: opts.verifyTimeoutMs || opts.timeoutMs || undefined,
+        allSegments: opts.allSegments,
+        failFast: Boolean(opts.failFast),
         force: Boolean(opts.force),
       });
       if (opts.jsonOutput) {
@@ -5916,6 +5920,7 @@ async function runRuntime(opts) {
         promoteEach: opts.promoteEach ? { base: opts.baseBranch || null, remote: opts.remote || 'origin', holdDeps: Boolean(opts.holdDeps) } : null,
         maxParallel: opts.maxParallel || undefined,
         agentsPlanPath: opts.agentsPlanPath || undefined,
+        allSegments: Boolean(opts.allSegments),
         // OxeSpace 15/11 (Celular F3 T9): one more attempt after a policy refusal, chosen by a person
         ...(opts.retryPolicyOnce ? { schedulerOptions: { retryPolicyOnce: true } } : {}),
         onProgress: (event) => {
@@ -8949,6 +8954,44 @@ async function main() {
       if (o.json) { console.log(JSON.stringify({ oxePlanScopeSchema: 1, ...out }, null, 2)); return; }
       console.log(out.added.length ? `  ${green}✓${reset} ${out.task}: +${out.added.join(', ')} no escopo (${out.cr}, por ${out.by})` : `  ${dim}= ${out.task}: já no escopo${reset}`);
       if (out.existed.length) console.log(`  ${dim}já estavam: ${out.existed.join(', ')}${reset}`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  // OXB-C1 (#8): oxe-cc plan verify move T<n> "<segmento>" --to <T<m>|KEY> --cr CR-n --by <papel> [--reason "…"] [--dry-run]
+  //              oxe-cc plan verify drop T<n> "<segmento>" --by <papel> --reason "…" [--cr CR-n] [--dry-run]
+  if (command === 'plan' && argv[0] === 'verify' && (argv[1] === 'move' || argv[1] === 'drop')) {
+    const act = argv[1];
+    const o = { dir: process.cwd(), session: null, json: false, dryRun: false, action: act };
+    const pos = [];
+    for (let i = 2; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dry-run') o.dryRun = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (a === '--session' && argv[i + 1]) o.session = String(argv[++i]).replace(/\\/g, '/');
+      else if (['--to', '--cr', '--by', '--reason', '--segment'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
+      else if (!a.startsWith('-')) pos.push(a);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    if (pos[0] && /^T\d+$/i.test(pos[0])) o.task = pos.shift().toUpperCase();
+    if (!o.segment && pos.length) o.segment = pos.join(' ');
+    if (!o.session) {
+      try {
+        const statePath = oxeHealth.oxePaths(o.dir).state;
+        o.session = oxeHealth.parseActiveSession(fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : '') || null;
+      } catch { o.session = null; }
+    }
+    try {
+      const out = oxeOperational.runtimePlanVerifyEdit(o.dir, o.session, o);
+      if (o.json) { console.log(JSON.stringify({ oxePlanVerifyEditSchema: 1, ...out }, null, 2)); return; }
+      const tag = out.dry_run ? `${yellow}(simulação)${reset} ` : `${green}✓${reset} `;
+      if (act === 'move') {
+        console.log(`  ${tag}${out.task} → ${out.to} (${out.to_kind === 'task' ? 'tarefa' : 'card ALM'}): movido \`${out.extracted.join(' && ')}\` (${out.cr}, por ${out.by})`);
+      } else {
+        console.log(`  ${tag}${out.task}: removido \`${out.extracted.join(' && ')}\` do verify (${out.cr ? `${out.cr}, ` : ''}por ${out.by}: ${out.reason})`);
+      }
+      if (out.dry_run) console.log(`  ${dim}nada gravado; sem --dry-run grava no PLAN.json, changes.ndjson e OXE-EVENTS.ndjson${reset}`);
     } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
     return;
   }

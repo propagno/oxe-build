@@ -84,6 +84,8 @@ export interface SchedulerOptions {
     maxQuotaWaitMs?: number;
     /** OXB-204: max consecutive automatic 429 waits per attempt before pausing as quota (default: 3). */
     maxQuotaWaits?: number;
+    /** OXB-C1 (#6): run every top-level `&&` verify segment and report all red segments at once instead of stopping at the first failure. */
+    allSegments?: boolean;
     /** Injectable sleep for deterministic tests. */
     sleep?: (ms: number) => Promise<void>;
 }
@@ -297,6 +299,6 @@ export declare function describeVerifyFailure(command: string | null | undefined
     index: number;
     total: number;
     command: string;
-} | null): string;
+} | null, segments?: VerifySegmentRun[]): string;
 /** Normalized failure fingerprint: timings, timestamps, hashes and temp paths removed. */
 export declare function verifyFailureSignature(check: CheckResult | undefined): string | null;
