@@ -9001,6 +9001,27 @@ async function main() {
   }
 
   // oxe-cc plan pack fix T<n> --symbol <arquivo>#<nome> (--internal | --member-of <Classe> | --remove) --by --reason
+  if (command === 'plan' && argv[0] === 'pack' && (argv[1] === 'sync' || argv[1] === 'rebuild')) {
+    const o = { dir: process.cwd(), session: null, json: false, dryRun: false };
+    for (let i = 2; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dry-run') o.dryRun = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (a === '--session' && argv[i + 1]) o.session = String(argv[++i]).replace(/\\/g, '/');
+      else if (['--by', '--reason'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
+      else if (/^T\d+$/i.test(a) && !o.task) o.task = a.toUpperCase();
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    try {
+      const out = oxeOperational.runtimePlanPackSync(o.dir, o.session, o);
+      if (o.json) { console.log(JSON.stringify({ oxePlanPackSyncSchema: 1, ...out }, null, 2)); return; }
+      const tag = out.dry_run ? `${yellow}(simulação)${reset} ` : `${green}✓${reset} `;
+      console.log(`  ${tag}${out.task}: entrada do ${out.pack} ${out.action === 'rebuilt' ? 'reconstruída' : 'criada'} (${out.after.exact_paths.length} paths · ${out.after.symbols.length} symbols · ${out.after.expected_checks.length} checks)`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   if (command === 'plan' && argv[0] === 'pack' && argv[1] === 'fix') {
     const o = { dir: process.cwd(), json: false };
     for (let i = 2; i < argv.length; i += 1) {
@@ -9040,6 +9061,31 @@ async function main() {
       if (o.json) { console.log(JSON.stringify({ oxePlanScopeSchema: 1, ...out }, null, 2)); return; }
       console.log(out.added.length ? `  ${green}✓${reset} ${out.task}: +${out.added.join(', ')} no escopo (${out.cr}, por ${out.by})${out.pack_updated ? ' (+IMPLEMENTATION-PACK.json)' : ''}` : `  ${dim}= ${out.task}: já no escopo${reset}`);
       if (out.existed.length) console.log(`  ${dim}já estavam: ${out.existed.join(', ')}${reset}`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
+  if (command === 'plan' && argv[0] === 'verify' && argv[1] === 'add') {
+    const o = { dir: process.cwd(), session: null, json: false, dryRun: false, commands: [], suites: [] };
+    for (let i = 2; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dry-run') o.dryRun = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (a === '--session' && argv[i + 1]) o.session = String(argv[++i]).replace(/\\/g, '/');
+      else if (a === '--command' && argv[i + 1] != null) o.commands.push(String(argv[++i]));
+      else if (a === '--suite' && argv[i + 1] != null) o.suites.push(String(argv[++i]));
+      else if (['--cr', '--by', '--reason'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
+      else if (/^T\d+$/i.test(a) && !o.task) o.task = a.toUpperCase();
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    try {
+      const out = oxeOperational.runtimePlanVerifyAdd(o.dir, o.session, o);
+      if (o.json) { console.log(JSON.stringify({ oxePlanVerifyAddSchema: 1, ...out }, null, 2)); return; }
+      const tag = out.dry_run ? `${yellow}(simulação)${reset} ` : `${green}✓${reset} `;
+      console.log(out.added.length
+        ? `  ${tag}${out.task}: +${out.added.length} verify (${out.added.join(' ; ')})${out.pack_updated ? ' (+IMPLEMENTATION-PACK.json)' : ''}`
+        : `  ${dim}= ${out.task}: comando já estava no verify${reset}`);
     } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
     return;
   }
@@ -9163,6 +9209,7 @@ async function main() {
       else if (['--cr', '--by', '--reason', '--wave', '--notes'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
       else if (a === '--depends-on' && argv[i + 1] != null) o.dependsOn = String(argv[++i]);
       else if (a === '--add-paths' && argv[i + 1] != null) o.addPaths = [...(Array.isArray(o.addPaths) ? o.addPaths : []), ...String(argv[++i]).split(',')].filter(Boolean);
+      else if ((a === '--add-verify' || a === '--verify') && argv[i + 1] != null) o.addVerify = [...(Array.isArray(o.addVerify) ? o.addVerify : []), String(argv[++i])];
       else if (a === '--remove-paths' && argv[i + 1] != null) o.removePaths = String(argv[++i]);
       else if (/^T\d+$/i.test(a) && !o.task) o.task = a.toUpperCase();
       else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
@@ -9179,6 +9226,7 @@ async function main() {
         b.depends_on.join(',') !== n.depends_on.join(',') ? `depende de ${b.depends_on.join(', ') || '—'} → ${n.depends_on.join(', ') || '—'}` : null,
         added.length ? `escopo +${added.join(', ')}` : null,
         removed.length ? `escopo −${removed.join(', ')}` : null,
+        out.added_verify && out.added_verify.length ? `verify +${out.added_verify.join(' ; ')}` : null,
         b.notes !== n.notes ? 'notas atualizadas' : null,
       ].filter(Boolean);
       console.log(`  ${green}✓${reset} ${out.task}: ${diff.join(' · ') || 'sem mudança'} (por ${out.by})${out.pack_updated ? ' (+IMPLEMENTATION-PACK.json)' : ''}`);

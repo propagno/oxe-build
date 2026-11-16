@@ -196,6 +196,14 @@ function freeze(root, jsonPath, doc, options = {}) {
   const unscopedTasks = new Set();
   const crNorm = options.cr ? String(options.cr).toUpperCase() : null;
   const crObj = crNorm && Array.isArray(options.crs) ? options.crs.find((c) => c && String(c.id || '').toUpperCase() === crNorm) : null;
+  const wantedCriteria = options.criteria
+    ? [...new Set(String(options.criteria).split(',').map((s) => s.trim().toUpperCase()).filter(Boolean))]
+    : [];
+  const badCrit = wantedCriteria.filter((c) => !/^(?:A\d+(?:\.\d+)*|AC-\d+(?:\.\d+)*|G\d+)$/.test(c));
+  if (badCrit.length) throw new Error(`--criteria inválido: ${badCrit.join(', ')}`);
+  const frozenCriteriaSet = new Set();
+  const refusedCriteriaSet = new Set();
+
   for (const f of files) {
     let text = contentAt(root, origin.sha, f, spawn);
     const abs = path.join(root, f);
@@ -207,64 +215,109 @@ function freeze(root, jsonPath, doc, options = {}) {
     const sameModuloEol = local != null && local.replace(/\r\n/g, '\n') === text.replace(/\r\n/g, '\n');
     const effectiveText = sameModuloEol ? local : text;
     const hash = sha(effectiveText);
-    // OxeSpace 15/11 (OxeCode F4, CR-F4-6): A17 and A18 share a test file; picking the first entry listing it made
-    // `--criteria A18` overwrite A17's entry. With --criteria, the entry is that criterion's (a new one when the file is
-    // only another criterion's); without it, the first entry listing the file, as before.
-    const wantedCriterion = options.criteria ? String(options.criteria).split(',')[0].trim().toUpperCase() : null;
-    const withFile = doc.acceptance_tests.filter((a) => (a.files || []).map((x) => norm(typeof x === 'string' ? x : x.path)).includes(f));
-    const existing = wantedCriterion
-      ? withFile.find((a) => String(a.criterion || '').toUpperCase() === wantedCriterion) || withFile.find((a) => !a.criterion) || null
-      : withFile[0] || null;
-    if (existing && existing.sha256 && existing.sha256 !== hash && !crNorm) { refused.push({ file: f, why: `${f} já está congelado com outro conteúdo — mudar um teste congelado exige um CR (--cr CR-n)` }); continue; }
-    const criterion = (options.criteria && String(options.criteria).split(',')[0].trim().toUpperCase()) || criterionOf(effectiveText) || (existing && existing.criterion) || null;
-    if (!criterion) { refused.push({ file: f, why: `${f}: sem critério — informe --criteria A<n> ou cite o A<n> no describe` }); continue; }
     const allTitles = titlesOf(effectiveText, f);
     if (!allTitles.length) { refused.push({ file: f, why: `${f}: nenhum it/test com título — nada a provar` }); continue; }
-    // only the titles the entry's command selects (--proves-filter, or its -t / --testNamePattern)
-    const pattern = options.provesFilter || namePatternOf(options.command || (existing && existing.command) || '');
-    const proves = filterTitles(effectiveText, allTitles, pattern, f);
-    if (!proves.length) { refused.push({ file: f, why: `${f}: o filtro "${pattern}" não seleciona nenhum dos ${allTitles.length} testes — confira o -t do comando ou o --proves-filter` }); continue; }
-    if (local == null || !sameModuloEol) { fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, text); }
-    // OXB-C2 #2: ensure spec freeze never leaves newly staged entries in the git index
-    if (!stagedBefore.has(f)) {
-      try { spawn('git', ['reset', '-q', 'HEAD', '--', f], { cwd: root, encoding: 'utf8', windowsHide: true }); } catch { /* ignore */ }
+    const withFile = doc.acceptance_tests.filter((a) => (a.files || []).map((x) => norm(typeof x === 'string' ? x : x.path)).includes(f));
+
+    // OXB-C7 #3: `--criteria A15,A16,A17` must freeze EVERY listed criterion instead of silently dropping all but the first.
+    let targetCriteria;
+    if (wantedCriteria.length === 0) {
+      targetCriteria = [criterionOf(effectiveText) || (withFile[0] && withFile[0].criterion) || null];
+    } else if (wantedCriteria.length === 1) {
+      targetCriteria = [wantedCriteria[0]];
+    } else {
+      const codeOnly = blankComments(effectiveText);
+      const mentioned = wantedCriteria.filter((cid) => new RegExp(`\\b${cid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(codeOnly));
+      if (mentioned.length) targetCriteria = mentioned;
+      else {
+        const existingMatching = withFile
+          .map((a) => String(a && a.criterion || '').toUpperCase())
+          .filter((cid) => cid && wantedCriteria.includes(cid));
+        targetCriteria = existingMatching.length ? [...new Set(existingMatching)] : wantedCriteria;
+      }
     }
-    // OXB-C2 #1: align frozen entry version with SPEC amendment requirements (`A30@v3`, `A33@v2`) and `--cr` so re-freezing
-    // after CRs never leaves `version: 1` ("stale") blocking waves.
-    const amendReq = options.amendments instanceof Map ? options.amendments.get(criterion) : null;
-    const reqVersion = amendReq && Number(amendReq.required) > 1 ? Number(amendReq.required) : 1;
-    const crAmendVersion = crObj && Number(crObj.amend_to) > 1 ? Number(crObj.amend_to) : 1;
-    const prevVersion = Number(existing && existing.version) > 0 ? Number(existing.version) : 1;
-    const nextVersion = crNorm
-      ? Math.max(
-        prevVersion,
-        reqVersion,
-        crAmendVersion,
-        existing && !((existing.resolves || []).includes(crNorm)) ? prevVersion + 1 : 2,
-      )
-      : Math.max(prevVersion, reqVersion);
-    const entry = {
-      ...(existing || {}),
-      criterion,
-      // the entry's other files stay (OxeSpace 14/11, Celular F3: RenderedScreen.kt dropped out of A7/A8/A9/A11)
-      files: [...new Set([...((existing && existing.files) || []).map((x) => norm(typeof x === 'string' ? x : x.path)), f])],
-      // an explicit --command wins on a re-freeze (OxeSpace 14/11: A5 kept a command naming a deleted .ts)
-      command: options.command || (existing && existing.command) || `npx vitest run ${f}`,
-      proves,
-      sha256: hash,
-      // per file: the run's acceptance lock and the dossier read the re-frozen hash of THIS file (OxeSpace 14/11, F2 close)
-      hashes: { ...((existing && existing.hashes) || {}), [f]: hash },
-      origin: { kind: origin.kind, ref: origin.ref, sha: origin.sha, ...(origin.url ? { url: origin.url } : {}) },
-      ...(crNorm
-        ? {
-          resolves: [...new Set([...((existing && existing.resolves) || []), crNorm])],
-          version: nextVersion,
+
+    const fullNames = !options.provesFilter && wantedCriteria.length > 1 && !JVM_FILE.test(String(f))
+      ? fullTestNames(effectiveText)
+      : null;
+
+    let wroteDisk = false;
+    for (const criterion of targetCriteria) {
+      if (!criterion) {
+        refused.push({ file: f, why: `${f}: sem critério — informe --criteria A<n> ou cite o A<n> no describe` });
+        continue;
+      }
+      // OxeSpace 15/11 (OxeCode F4, CR-F4-6): A17 and A18 share a test file; picking the first entry listing it made
+      // `--criteria A18` overwrite A17's entry. With --criteria, match that criterion's entry (or create a new one).
+      const existing = wantedCriteria.length > 0
+        ? withFile.find((a) => String(a.criterion || '').toUpperCase() === criterion) || withFile.find((a) => !a.criterion) || null
+        : withFile[0] || null;
+      if (existing && existing.sha256 && existing.sha256 !== hash && !crNorm) {
+        refusedCriteriaSet.add(criterion);
+        refused.push({ file: f, why: `${f} (${criterion}) já está congelado com outro conteúdo — mudar um teste congelado exige um CR (--cr CR-n)` });
+        continue;
+      }
+      // only the titles the entry's command selects (--proves-filter, or its -t / --testNamePattern)
+      const pattern = options.provesFilter || namePatternOf(options.command || (existing && existing.command) || '');
+      let proves = filterTitles(effectiveText, allTitles, pattern, f);
+      if (!pattern && fullNames && targetCriteria.length > 1) {
+        const critRe = new RegExp(`\\b${criterion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+        const scoped = [...new Set(fullNames.filter((t) => critRe.test(t.full)).map((t) => t.title))].filter((t) => proves.includes(t));
+        if (scoped.length) proves = scoped;
+      }
+      if (!proves.length) {
+        refusedCriteriaSet.add(criterion);
+        refused.push({ file: f, why: `${f}: o filtro "${pattern}" não seleciona nenhum dos ${allTitles.length} testes — confira o -t do comando ou o --proves-filter` });
+        continue;
+      }
+      if (!wroteDisk) {
+        if (local == null || !sameModuloEol) { fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, text); }
+        // OXB-C2 #2: ensure spec freeze never leaves newly staged entries in the git index
+        if (!stagedBefore.has(f)) {
+          try { spawn('git', ['reset', '-q', 'HEAD', '--', f], { cwd: root, encoding: 'utf8', windowsHide: true }); } catch { /* ignore */ }
         }
-        : (nextVersion > 1 ? { version: nextVersion } : {})),
-      // --task T3: the test belongs to that task (no hand edit of "task" in an executing phase's PLAN.json)
-      ...(options.task ? { task: String(options.task).toUpperCase() } : {}),
-    };
-    if (existing) Object.assign(existing, entry); else doc.acceptance_tests.push(entry);
+        wroteDisk = true;
+      }
+      // OXB-C2 #1: align frozen entry version with SPEC amendment requirements (`A30@v3`, `A33@v2`) and `--cr` so re-freezing
+      // after CRs never leaves `version: 1` ("stale") blocking waves.
+      const amendReq = options.amendments instanceof Map ? options.amendments.get(criterion) : null;
+      const reqVersion = amendReq && Number(amendReq.required) > 1 ? Number(amendReq.required) : 1;
+      const crAmendVersion = crObj && Number(crObj.amend_to) > 1 ? Number(crObj.amend_to) : 1;
+      const prevVersion = Number(existing && existing.version) > 0 ? Number(existing.version) : 1;
+      const nextVersion = crNorm
+        ? Math.max(
+          prevVersion,
+          reqVersion,
+          crAmendVersion,
+          existing && !((existing.resolves || []).includes(crNorm)) ? prevVersion + 1 : 2,
+        )
+        : Math.max(prevVersion, reqVersion);
+      const entry = {
+        ...(existing || {}),
+        criterion,
+        // the entry's other files stay (OxeSpace 14/11, Celular F3: RenderedScreen.kt dropped out of A7/A8/A9/A11)
+        files: [...new Set([...((existing && existing.files) || []).map((x) => norm(typeof x === 'string' ? x : x.path)), f])],
+        // an explicit --command wins on a re-freeze (OxeSpace 14/11: A5 kept a command naming a deleted .ts)
+        command: options.command || (existing && existing.command) || `npx vitest run ${f}`,
+        proves,
+        sha256: hash,
+        // per file: the run's acceptance lock and the dossier read the re-frozen hash of THIS file (OxeSpace 14/11, F2 close)
+        hashes: { ...((existing && existing.hashes) || {}), [f]: hash },
+        origin: { kind: origin.kind, ref: origin.ref, sha: origin.sha, ...(origin.url ? { url: origin.url } : {}) },
+        ...(crNorm
+          ? {
+            resolves: [...new Set([...((existing && existing.resolves) || []), crNorm])],
+            version: nextVersion,
+          }
+          : (nextVersion > 1 ? { version: nextVersion } : {})),
+        // --task T3: the test belongs to that task (no hand edit of "task" in an executing phase's PLAN.json)
+        ...(options.task ? { task: String(options.task).toUpperCase() } : {}),
+      };
+      if (existing) Object.assign(existing, entry); else doc.acceptance_tests.push(entry);
+      frozenCriteriaSet.add(criterion);
+      frozen.push({ file: f, criterion, proves: proves.length, origin: origin.ref, ...(entry.version ? { version: entry.version } : {}) });
+    }
+
     // OXB-C2 #3: if `f` was mistakenly added to any pending task's `files` (e.g. via `plan scope add` before freezing),
     // strip it automatically so `plan lint` does not deadlock on "o executor não pode escrever o próprio aceite".
     for (const t of Array.isArray(doc.tasks) ? doc.tasks : []) {
@@ -273,7 +326,11 @@ function freeze(root, jsonPath, doc, options = {}) {
       t.files = t.files.filter((tf) => norm(typeof tf === 'string' ? tf : tf.path) !== f);
       if (t.files.length < beforeLen) unscopedTasks.add(t.id);
     }
-    frozen.push({ file: f, criterion, proves: proves.length, origin: origin.ref, ...(entry.version ? { version: entry.version } : {}) });
+  }
+  for (const cid of wantedCriteria) {
+    if (!frozenCriteriaSet.has(cid) && !refusedCriteriaSet.has(cid)) {
+      refused.push({ file: files[0] || '*', why: `critério ${cid} listado em --criteria (${wantedCriteria.join(',')}) não correspondeu a nenhum teste em ${origin.ref}` });
+    }
   }
   if (frozen.length || unscopedTasks.size) fs.writeFileSync(jsonPath, `${JSON.stringify(doc, null, 2)}\n`);
   // OXB-109 / OXB-205: the imported tests go through the same rigor + suspicious-regex lint as the planned ones.

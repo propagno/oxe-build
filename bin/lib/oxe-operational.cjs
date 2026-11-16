@@ -8783,10 +8783,37 @@ function hasTaskExecutionStarted(projectRoot, activeSession, task) {
   try {
     const events = readEvents(projectRoot, activeSession) || [];
     return events.some((e) => e && String(e.work_item_id || '').toUpperCase() === taskId
-      && ['TaskStarted', 'TaskAttemptStarted', 'TaskCompleted', 'ExecutorTurn', 'TaskVerified'].includes(e.type));
+      && ['TaskStarted', 'AttemptStarted', 'TaskAttemptStarted', 'TaskCompleted', 'ExecutorTurn', 'TaskVerified'].includes(e.type));
   } catch {
     return false;
   }
+}
+
+function readTaskVerifyCommands(task) {
+  if (!task || typeof task !== 'object') return [];
+  const raw = [
+    ...(task.verify && Array.isArray(task.verify.commands) ? task.verify.commands : []),
+    ...(task.verify && typeof task.verify.command === 'string' ? [task.verify.command] : []),
+    ...(typeof task.verifyCommand === 'string' ? [task.verifyCommand] : []),
+  ];
+  return [...new Set(raw.map((c) => String(c || '').trim()).filter(Boolean))];
+}
+
+function syncImplementationPackExpectedChecks(paths, jsonPath, taskId, commands) {
+  const packPath = (paths && paths.implementationPack) || path.join(path.dirname(jsonPath), 'IMPLEMENTATION-PACK.json');
+  if (!fs.existsSync(packPath)) return false;
+  let packDoc = null;
+  try { packDoc = JSON.parse(fs.readFileSync(packPath, 'utf8')); } catch { return false; }
+  const ptasks = packDoc && Array.isArray(packDoc.tasks) ? packDoc.tasks : null;
+  if (!ptasks) return false;
+  const entry = ptasks.find((t) => t && String(t.id || t.task_id || '').toUpperCase() === String(taskId).toUpperCase());
+  if (!entry) return false;
+  const prev = Array.isArray(entry.expected_checks) ? entry.expected_checks.map((c) => String(c || '').trim()).filter(Boolean) : [];
+  const next = [...new Set((commands || []).map((c) => String(c || '').trim()).filter(Boolean))];
+  if (prev.length === next.length && prev.every((v, i) => v === next[i])) return false;
+  entry.expected_checks = next;
+  writeTextAtomic(packPath, `${JSON.stringify(packDoc, null, 2)}\n`);
+  return true;
 }
 
 function syncImplementationPackTaskPaths(paths, jsonPath, taskId, { addPaths = [], removePaths = [] } = {}) {
@@ -8863,7 +8890,7 @@ function buildPackEntryFromAppendTask(projectRoot, doc, task, extraDoc, rawTask)
   const mode = override.mode || (exact.length === 0 && !symbols.length ? 'not_applicable' : 'mutating');
   const expectedChecks = Array.isArray(override.expected_checks) && override.expected_checks.length
     ? override.expected_checks
-    : ((task.verify && Array.isArray(task.verify.commands) ? task.verify.commands : []).filter(Boolean));
+    : readTaskVerifyCommands(task);
   const contracts = Array.isArray(override.contracts) && override.contracts.length
     ? override.contracts
     : [
@@ -10585,7 +10612,12 @@ function runtimePlanTaskEdit(projectRoot, activeSession, options = {}) {
   const remove = list(options.removePaths).map((p) => p.replace(/\\/g, '/').replace(/^\.\//, ''));
   if (add.some((p) => p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.split('/').includes('..'))) throw new Error('--add-paths: caminho relativo ao repositório, sem ".." nem absoluto');
   const notes = options.notes != null ? String(options.notes) : null;
-  if (wave == null && deps == null && !add.length && !remove.length && notes == null) throw new Error('nada a editar: --wave, --depends-on, --add-paths, --remove-paths ou --notes');
+  const addVerify = (Array.isArray(options.addVerify) ? options.addVerify : options.addVerify ? [options.addVerify] : [])
+    .map((c) => String(c || '').trim())
+    .filter(Boolean);
+  if (wave == null && deps == null && !add.length && !remove.length && notes == null && !addVerify.length) {
+    throw new Error('nada a editar: --wave, --depends-on, --add-paths, --remove-paths, --add-verify ou --notes');
+  }
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
@@ -10643,15 +10675,37 @@ function runtimePlanTaskEdit(projectRoot, activeSession, options = {}) {
       task.files = (task.files || []).filter((f) => !remove.includes(String(f).replace(/\\/g, '/')));
     }
     if (notes != null) task.notes = notes;
-    const after = { wave: task.wave ?? null, depends_on: [...(task.depends_on || [])], files: [...(task.files || [])], notes: task.notes ?? null };
-    task.edits = [...(Array.isArray(task.edits) ? task.edits : []), { by, reason, cr: options.cr ? String(options.cr).toUpperCase() : null, at: new Date().toISOString(), ...(wave != null ? { wave } : {}), ...(deps ? { depends_on: deps } : {}), ...(addedPaths.length ? { added_paths: addedPaths } : {}), ...(remove.length ? { removed_paths: remove } : {}), ...(notes != null ? { notes: true } : {}) }];
+    let addedVerify = [];
+    if (addVerify.length) {
+      const beforeCmds = readTaskVerifyCommands(task);
+      const beforeSet = new Set(beforeCmds);
+      addedVerify = [...new Set(addVerify)].filter((c) => !beforeSet.has(c));
+      if (addedVerify.length) {
+        const nextCmds = [...beforeCmds, ...addedVerify];
+        task.verify = { ...(task.verify && typeof task.verify === 'object' && !Array.isArray(task.verify) ? task.verify : {}), commands: nextCmds };
+        if (task.verify.command) delete task.verify.command;
+        if (task.verifyCommand) delete task.verifyCommand;
+      }
+    }
+    const after = {
+      wave: task.wave ?? null,
+      depends_on: [...(task.depends_on || [])],
+      files: [...(task.files || [])],
+      notes: task.notes ?? null,
+      ...(addedVerify.length ? { verify_commands: readTaskVerifyCommands(task) } : {}),
+    };
+    task.edits = [...(Array.isArray(task.edits) ? task.edits : []), { by, reason, cr: options.cr ? String(options.cr).toUpperCase() : null, at: new Date().toISOString(), ...(wave != null ? { wave } : {}), ...(deps ? { depends_on: deps } : {}), ...(addedPaths.length ? { added_paths: addedPaths } : {}), ...(remove.length ? { removed_paths: remove } : {}), ...(addedVerify.length ? { added_verify: addedVerify } : {}), ...(notes != null ? { notes: true } : {}) }];
     const tmp = `${jsonPath}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
     fs.renameSync(tmp, jsonPath);
-    const packUpdated = (addedPaths.length || remove.length)
+    const packPathsUpdated = (addedPaths.length || remove.length)
       ? syncImplementationPackTaskPaths(paths, jsonPath, taskId, { addPaths: addedPaths, removePaths: remove })
       : false;
-    return { before, after, ...(addedPaths.length ? { added_paths: addedPaths } : {}), ...(packUpdated ? { pack_updated: true } : {}) };
+    const packVerifyUpdated = addedVerify.length
+      ? syncImplementationPackExpectedChecks(paths, jsonPath, taskId, readTaskVerifyCommands(task))
+      : false;
+    const packUpdated = packPathsUpdated || packVerifyUpdated;
+    return { before, after, ...(addedPaths.length ? { added_paths: addedPaths } : {}), ...(addedVerify.length ? { added_verify: addedVerify } : {}), ...(packUpdated ? { pack_updated: true } : {}) };
   });
   changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'task_edit', task: taskId, ...out, cr: options.cr ? String(options.cr).toUpperCase() : null, by, reason, at: new Date().toISOString() });
   appendEvent(projectRoot, activeSession, { type: 'PlanTaskEdited', work_item_id: taskId, payload: { task: taskId, by, reason, before: out.before, after: out.after, ...(out.added_paths ? { added_paths: out.added_paths } : {}), ...(out.pack_updated ? { pack_updated: true } : {}) } });
@@ -11017,6 +11071,158 @@ function runtimePlanVerifyEdit(projectRoot, activeSession, options = {}) {
       work_item_id: taskId,
       payload: { ...out },
     });
+  }
+
+  return { dry_run: Boolean(options.dryRun), ...out };
+}
+
+function buildSuiteVerifyCommand(projectRoot, suites) {
+  const rels = suites.map((p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '').trim()).filter(Boolean);
+  if (rels.some((p) => p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.split('/').includes('..'))) {
+    throw new Error('--suite: caminho deve ser relativo ao repositório, sem ".." nem absoluto');
+  }
+  const cfg = readProjectConfig(projectRoot) || {};
+  const customTpl = typeof cfg.task_suite_command === 'string' && cfg.task_suite_command.includes('{files}')
+    ? cfg.task_suite_command
+    : cfg.checkpoint_related_tests && typeof cfg.checkpoint_related_tests === 'object'
+      && typeof cfg.checkpoint_related_tests.run_command === 'string' && cfg.checkpoint_related_tests.run_command.includes('{files}')
+      ? cfg.checkpoint_related_tests.run_command
+      : null;
+  if (customTpl) return customTpl.replace('{files}', rels.join(' '));
+  const combinedText = rels.map((r) => readTextIfExists(path.join(projectRoot, r)) || '').join('\n');
+  if (rels.some((r) => /(^|\/)(e2e|playwright)\//i.test(r) || /\.e2e\./i.test(r)) || /@playwright\/test/.test(combinedText)) {
+    return `npx playwright test ${rels.join(' ')}`;
+  }
+  if (/node:test/.test(combinedText) || rels.every((r) => /\.test\.c?js$/i.test(r))) {
+    return `node --test ${rels.join(' ')}`;
+  }
+  return `npx vitest run ${rels.join(' ')}`;
+}
+
+/**
+ * OXB-C7 #2: `oxe-cc plan verify add T<n> (--command "…" | --suite <arquivo…>) [--by <papel> --reason "…"] [--dry-run]`
+ * Appends command(s) or test suite runner invocations to a task's `verify.commands` and keeps `IMPLEMENTATION-PACK.json`
+ * `expected_checks` synchronized.
+ */
+function runtimePlanVerifyAdd(projectRoot, activeSession, options = {}) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const criteriaIds = require('./oxe-criteria-ids.cjs');
+  const taskId = String(options.task || '').trim().toUpperCase();
+  if (!/^T\d+$/.test(taskId)) {
+    throw new Error('use: oxe-cc plan verify add T<n> (--command "…" | --suite <arquivo…>) [--cr CR-n] [--by <papel> --reason "…"] [--dry-run]');
+  }
+  const rawCommands = (Array.isArray(options.commands) ? options.commands : options.command ? [options.command] : [])
+    .map((c) => String(c || '').trim())
+    .filter(Boolean);
+  const rawSuites = (Array.isArray(options.suites) ? options.suites : options.suite ? [options.suite] : [])
+    .flatMap((s) => String(s || '').split(','))
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!rawCommands.length && !rawSuites.length) {
+    throw new Error('informe --command "…" ou --suite <arquivo…> para adicionar ao verify');
+  }
+  const candidates = [...rawCommands];
+  if (rawSuites.length) candidates.push(buildSuiteVerifyCommand(projectRoot, rawSuites));
+
+  const cr = options.cr ? String(options.cr).trim().toUpperCase() : null;
+  if (cr && !criteriaIds.CR_ID_RE.test(cr)) throw new Error(`CR inválido: ${cr}`);
+  const by = String(options.by || '').trim() || 'planner';
+  if (options.reason != null && String(options.reason).trim().length < 8) {
+    throw new Error('informe o motivo em uma frase (--reason "…", mínimo 8 caracteres)');
+  }
+  const reason = options.reason ? String(options.reason).trim() : 'adicionado check/suíte ao verify da tarefa';
+
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan verify add exige PLAN.json');
+  const at = new Date().toISOString();
+
+  const out = planJsonLib.withPlanLock(jsonPath, () => {
+    const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const task = (doc.tasks || []).find((t) => t && String(t.id).toUpperCase() === taskId);
+    if (!task) throw new Error(`Tarefa ${taskId} não encontrada em PLAN.json`);
+    if (task.done === true) throw new Error(`${taskId} está done: reabra antes (oxe-cc plan reopen ${taskId})`);
+    const before = readTaskVerifyCommands(task);
+    const beforeSet = new Set(before);
+    const added = [...new Set(candidates)].filter((c) => !beforeSet.has(c));
+    const after = [...before, ...added];
+    let packUpdated = false;
+    if (!options.dryRun && added.length) {
+      task.verify = { ...(task.verify && typeof task.verify === 'object' && !Array.isArray(task.verify) ? task.verify : {}), commands: after };
+      if (task.verify.command) delete task.verify.command;
+      if (task.verifyCommand) delete task.verifyCommand;
+      task.edits = [...(Array.isArray(task.edits) ? task.edits : []), { by, reason, ...(cr ? { cr } : {}), at, verify_added: added }];
+      const tmp = `${jsonPath}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+      fs.renameSync(tmp, jsonPath);
+      packUpdated = syncImplementationPackExpectedChecks(paths, jsonPath, taskId, after);
+    }
+    return { task: taskId, added, before, after, pack_updated: packUpdated, ...(cr ? { cr } : {}), by, reason };
+  });
+
+  if (!options.dryRun && out.added.length) {
+    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'verify_add', ...out, at });
+    appendEvent(projectRoot, activeSession, { type: 'PlanVerifyAdded', work_item_id: taskId, payload: { ...out } });
+  }
+
+  return { dry_run: Boolean(options.dryRun), ...out };
+}
+
+/**
+ * OXB-C7 #1: `oxe-cc plan pack sync|rebuild T<n> [--by <papel> --reason "…"] [--dry-run]`
+ * Regenerates an existing task's `IMPLEMENTATION-PACK.json` entry from `PLAN.json` using the canonical C5b builder
+ * (`buildPackEntryFromAppendTask`). Refuses if the task has already started execution or is done.
+ */
+function runtimePlanPackSync(projectRoot, activeSession, options = {}) {
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const taskId = String(options.task || '').trim().toUpperCase();
+  if (!/^T\d+$/.test(taskId)) {
+    throw new Error('use: oxe-cc plan pack sync T<n> [--by <papel> --reason "…"] [--dry-run]');
+  }
+  const by = String(options.by || '').trim() || 'planner';
+  if (options.reason != null && String(options.reason).trim().length < 8) {
+    throw new Error('informe o motivo em uma frase (--reason "…", mínimo 8 caracteres)');
+  }
+  const reason = options.reason ? String(options.reason).trim() : 'entrada reconstruída a partir do PLAN.json';
+
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan pack sync exige PLAN.json');
+  const packPath = paths.implementationPack || path.join(path.dirname(jsonPath), 'IMPLEMENTATION-PACK.json');
+  if (!fs.existsSync(packPath)) {
+    throw new Error(`IMPLEMENTATION-PACK.json ausente (${path.relative(projectRoot, packPath)}) — rode \`oxe-cc plan build\``);
+  }
+  const at = new Date().toISOString();
+
+  const out = planJsonLib.withPlanLock(jsonPath, () => {
+    const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const task = (doc.tasks || []).find((t) => t && String(t.id).toUpperCase() === taskId);
+    if (!task) throw new Error(`Tarefa ${taskId} não encontrada em PLAN.json`);
+    if (hasTaskExecutionStarted(projectRoot, activeSession, task)) {
+      throw new Error(`${taskId} já iniciou execução — ` + '`plan pack sync` recusa regenerar tarefa já iniciada ou concluída');
+    }
+    let packDoc;
+    try { packDoc = JSON.parse(fs.readFileSync(packPath, 'utf8')); } catch { throw new Error(`IMPLEMENTATION-PACK.json inválido (${path.relative(projectRoot, packPath)})`); }
+    packDoc.tasks = Array.isArray(packDoc.tasks) ? packDoc.tasks : [];
+    const idx = packDoc.tasks.findIndex((p) => p && String(p.id || p.task_id || '').toUpperCase() === taskId);
+    const before = idx >= 0 ? JSON.parse(JSON.stringify(packDoc.tasks[idx])) : null;
+    const after = buildPackEntryFromAppendTask(projectRoot, doc, task, null, task);
+    const action = idx >= 0 ? 'rebuilt' : 'added';
+    if (!options.dryRun) {
+      if (idx >= 0) packDoc.tasks[idx] = after;
+      else packDoc.tasks.push(after);
+      writeTextAtomic(packPath, `${JSON.stringify(packDoc, null, 2)}\n`);
+    }
+    return { task: taskId, action, pack: path.relative(projectRoot, packPath).replace(/\\/g, '/'), before, after, by, reason };
+  });
+
+  if (!options.dryRun) {
+    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'pack_sync', task: taskId, action: out.action, by, reason, at });
+    appendEvent(projectRoot, activeSession, { type: 'PlanPackSynced', work_item_id: taskId, payload: { task: taskId, action: out.action, by, reason } });
   }
 
   return { dry_run: Boolean(options.dryRun), ...out };
@@ -14441,6 +14647,8 @@ module.exports = {
   runtimePlanTaskFold,
   runtimePlanVerifyPrune,
   runtimePlanVerifyEdit,
+  runtimePlanVerifyAdd,
+  runtimePlanPackSync,
   runtimePlanTaskSupersede,
   runtimePauseHold,
   commitTaskVerifyTimeout,
