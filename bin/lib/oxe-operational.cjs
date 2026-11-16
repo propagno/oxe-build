@@ -3047,6 +3047,54 @@ async function runtimeAlmRefine(projectRoot, activeSession, options = {}) {
  * before it, never backwards); the done comments the commits and the verification. ALM writes follow --apply /
  * --dry-run / alm.require_apply and the writer rule, as every alm command.
  */
+function discoverInheritedAlmConfig(projectRoot, activeSession, explicitAlmDir = null) {
+  const hasAlm = (c) => Boolean(c && c.alm && typeof c.alm === 'object' && c.alm.provider && c.alm.provider !== 'none');
+  if (explicitAlmDir) {
+    const abs = path.resolve(projectRoot, String(explicitAlmDir));
+    const c = readProjectConfig(abs);
+    if (!hasAlm(c)) throw new Error(`--alm-dir ${explicitAlmDir}: nenhum bloco "alm" configurado em ${abs}`);
+    return { alm: c.alm, from: abs };
+  }
+  const candidates = [];
+  // 1. PROGRAM.json `forked_from.root` (a parallel phase worktree forked from a program root)
+  try {
+    const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+    const prog = readJsonQuiet(path.join(paths.programDir || path.join(projectRoot, '.oxe', 'program'), 'PROGRAM.json'));
+    if (prog && prog.forked_from && prog.forked_from.root) candidates.push(path.resolve(prog.forked_from.root));
+  } catch { /* no program */ }
+  // 2. Main git worktree (`<gitCommonDir>/..`)
+  try {
+    const common = (gitLines(projectRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir']) || [])[0];
+    const main = common ? path.dirname(common) : null;
+    if (main) candidates.push(path.resolve(main));
+  } catch { /* no git */ }
+  // 3. Sibling git worktrees of the same repository (`git worktree list --porcelain`), newest `.oxe/config.json` first
+  try {
+    const wts = [];
+    for (const line of gitLines(projectRoot, ['worktree', 'list', '--porcelain']) || []) {
+      if (line.startsWith('worktree ')) {
+        const wt = path.resolve(line.slice('worktree '.length).trim());
+        if (wt !== path.resolve(projectRoot)) {
+          let mtime = 0;
+          try { mtime = fs.statSync(path.join(wt, '.oxe', 'config.json')).mtimeMs; } catch { mtime = 0; }
+          wts.push({ wt, mtime });
+        }
+      }
+    }
+    wts.sort((a, b) => b.mtime - a.mtime);
+    for (const x of wts) candidates.push(x.wt);
+  } catch { /* no git */ }
+
+  const seen = new Set([path.resolve(projectRoot)]);
+  for (const cand of candidates) {
+    if (!cand || seen.has(cand)) continue;
+    seen.add(cand);
+    const c = readProjectConfig(cand);
+    if (hasAlm(c)) return { alm: c.alm, from: cand };
+  }
+  return null;
+}
+
 async function runtimeQuick(projectRoot, activeSession, options = {}) {
   const q = require('./oxe-quick.cjs');
   const action = options.action || 'status';
@@ -3064,18 +3112,15 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
   }
   let config = readProjectConfig(projectRoot) || {};
   const lib = require('./oxe-alm.cjs');
-  // OxeSpace 14/11 (Celular F3): a new worktree has no "alm" block and the quick wrote nothing to the card. Without
-  // one here, the ALM of the clone's main worktree is used, and the result says which.
+  // OxeSpace 14/11 & OXB-C1 (#11): a program worktree may have no local `.oxe/config.json` "alm" block; inherit from
+  // `--alm-dir`, `PROGRAM.json -> forked_from.root`, main worktree, or sibling worktrees of the same clone.
   let almFrom = null;
-  if (!config.alm) {
-    try {
-      const common = (gitLines(projectRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir']) || [])[0];
-      const main = common ? path.dirname(common) : null;
-      if (main && path.resolve(main) !== path.resolve(projectRoot)) {
-        const mainCfg = readProjectConfig(main) || {};
-        if (mainCfg.alm) { config = { ...config, alm: mainCfg.alm }; almFrom = main; }
-      }
-    } catch { /* sem git */ }
+  if (options.almDir || !config.alm) {
+    const inherited = discoverInheritedAlmConfig(projectRoot, activeSession, options.almDir || null);
+    if (inherited) {
+      config = { ...config, alm: inherited.alm };
+      almFrom = inherited.from;
+    }
   }
   const cfg = lib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) });
   if (action === 'start' && cfg && cfg.provider !== 'none' && !options.key) throw new Error('com ALM configurado, o quick nomeia o card: oxe-cc quick <KEY> "<objetivo>"');
@@ -3090,7 +3135,7 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
   if (action === 'cancel' && rec.cancelled) appendEvent(projectRoot, activeSession, { type: 'QuickAbandoned', payload: { id: rec.id, key: rec.key, reason: rec.cancel.reason, evidence: rec.cancel.evidence } });
   if (action === 'done' && rec.closed) appendEvent(projectRoot, activeSession, { type: 'QuickDone', payload: { id: rec.id, key: rec.key, commits: rec.commits.length, verify_ok: rec.verify ? rec.verify.ok : null } });
   // a card named but no ALM here: say it, never a silent OK (OxeSpace 14/11, OXE-144 in a worktree with no alm block)
-  if (!cfg && rec.key && !rec.resumed && !(action === 'done' && rec.closed === false)) return { ...rec, alm: { skipped: true, why: `ALM não configurado aqui: nada foi gravado no card ${rec.key} (rode na pasta que tem o bloco "alm" do .oxe/config.json, ou com --dir dela)` } };
+  if (!cfg && rec.key && !rec.resumed && !(action === 'done' && rec.closed === false)) return { ...rec, alm: { skipped: true, why: `ALM não configurado aqui: nada foi gravado no card ${rec.key} (rode na pasta que tem o bloco "alm" do .oxe/config.json, ou use --alm-dir <pasta>)` } };
   // the card: only when there is one, an ALM, and the quick is not a resume or a failed verification
   if (!cfg || !rec.key || rec.resumed || (action === 'done' && !rec.closed)) return { ...rec, alm: null };
   const env = options.env || process.env;
@@ -3099,12 +3144,15 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
   if (!dry && !lib.isWriter(cfg, env)) {
     const phase = action === 'start' ? 'start' : action === 'cancel' ? 'cancel' : 'done';
     const by = `quick ${rec.id}`;
-    const pending = [lib.addPending(projectRoot, { op: 'comment', key: rec.key, text: q.cardComment(rec, phase), by })];
-    if (action === 'start' && cfg.states.in_progress) pending.push(lib.addPending(projectRoot, { op: 'move', key: rec.key, stage: 'in_progress', by }));
-    return { ...rec, alm: { pending: pending.map((p) => ({ id: p.id, op: p.op, key: p.key, stage: p.stage || null })), why: `${lib.writerError(cfg).message} — ${pending.length} pedido(s) gravado(s) para o escritor: oxe-cc alm pending apply` } };
+    const pendingRoot = almFrom || projectRoot;
+    const pending = [lib.addPending(pendingRoot, { op: 'comment', key: rec.key, text: q.cardComment(rec, phase), by })];
+    if (action === 'start' && cfg.states.in_progress) pending.push(lib.addPending(pendingRoot, { op: 'move', key: rec.key, stage: 'in_progress', by }));
+    return { ...rec, alm: { pending: pending.map((p) => ({ id: p.id, op: p.op, key: p.key, stage: p.stage || null })), ...(almFrom ? { from: almFrom } : {}), why: `${lib.writerError(cfg).message} — ${pending.length} pedido(s) gravado(s) para o escritor${almFrom ? ` em ${almFrom}` : ''}: oxe-cc alm pending apply` } };
   }
   if (!dry) lib.warnApply(cfg, options);
-  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const programDir = almFrom && fs.existsSync(path.join(almFrom, '.oxe', 'program'))
+    ? path.join(almFrom, '.oxe', 'program')
+    : (paths.programDir || path.join(projectRoot, '.oxe', 'program'));
   const net = { http: options.http, env, sleep: options.sleep, retries: options.retries, dryRun: dry, apply: options.apply };
   const alm = {};
   try {
@@ -4264,7 +4312,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     : Number(((readProjectConfig(projectRoot) || {}).executor || {}).max_run_ms) > 0 ? Number(readProjectConfig(projectRoot).executor.max_run_ms) : Number.MAX_SAFE_INTEGER;
   const execVerifyTimeoutMs = Number(options.verifyTimeoutMs) > 0
     ? Number(options.verifyTimeoutMs)
-    : Number(readProjectConfig(projectRoot).verify_timeout_ms) > 0 ? Number(readProjectConfig(projectRoot).verify_timeout_ms) : 600_000;
+    : resolveConfigVerifyTimeoutMs(projectRoot, readProjectConfig(projectRoot));
   // cross-review 15/11: with --retry-policy-once in a LATER execute, attempt 1 already is the one extra attempt for a
   // task this run saw refused — the scheduler must not add a second one
   const policyRefusedBefore = [];
@@ -6560,7 +6608,38 @@ function runtimeSignoff(projectRoot, activeSession, options = {}) {
 // ─── Ciclo de correção: Change Requests (1.20b) ───────────────────────────────
 
 function readProjectConfig(projectRoot) {
-  return readJsonQuiet(path.join(projectRoot, '.oxe', 'config.json')) || {};
+  const rootCfg = readJsonQuiet(path.join(projectRoot, 'oxe.config.json'));
+  const dotCfg = readJsonQuiet(path.join(projectRoot, '.oxe', 'config.json'));
+  if (rootCfg && typeof rootCfg === 'object' && dotCfg && typeof dotCfg === 'object') {
+    return { ...rootCfg, ...dotCfg };
+  }
+  return dotCfg || rootCfg || {};
+}
+
+function resolveConfigVerifyTimeoutMs(projectRoot, cfg, defaultMs = 10 * 60_000) {
+  const pick = (c) => {
+    if (!c || typeof c !== 'object') return 0;
+    for (const v of [
+      c.verify_timeout_ms,
+      c.execute && c.execute.verify_timeout_ms,
+      c.executor && c.executor.verify_timeout_ms,
+      c.verify && (c.verify.timeout_ms || c.verify.verify_timeout_ms),
+    ]) {
+      if (Number(v) > 0) return Number(v);
+    }
+    return 0;
+  };
+  const local = pick(cfg || readProjectConfig(projectRoot));
+  if (local > 0) return local;
+  try {
+    const common = (gitLines(projectRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir']) || [])[0];
+    const main = common ? path.dirname(common) : null;
+    if (main && path.resolve(main) !== path.resolve(projectRoot)) {
+      const fromMain = pick(readProjectConfig(main));
+      if (fromMain > 0) return fromMain;
+    }
+  } catch { /* no git */ }
+  return defaultMs;
 }
 
 /**
@@ -9196,7 +9275,7 @@ function runtimeCommitTasksTogether(projectRoot, activeSession, options = {}) {
   }
   // the project's verify_timeout_ms, as the execute reads it (OxeSpace 15/11, OQ T18: killed at 10 min while the
   // remote run went on); --verify-timeout-ms still wins
-  const verifyTimeoutMs = Number(options.verifyTimeoutMs) > 0 ? Number(options.verifyTimeoutMs) : Number((readProjectConfig(projectRoot) || {}).verify_timeout_ms) > 0 ? Number(readProjectConfig(projectRoot).verify_timeout_ms) : 10 * 60_000;
+  const verifyTimeoutMs = Number(options.verifyTimeoutMs) > 0 ? Number(options.verifyTimeoutMs) : resolveConfigVerifyTimeoutMs(projectRoot, readProjectConfig(projectRoot));
   const commands = [...new Set(tasks.flatMap((t) => {
     const v = t.verify;
     return (Array.isArray(v) ? v : v && Array.isArray(v.commands) ? v.commands : typeof v === 'string' ? [v] : t.verifyCommand ? [t.verifyCommand] : []).map((c) => String(c || '').trim()).filter(Boolean);
@@ -9432,7 +9511,7 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
   const scopeHash = computeScopeFingerprint(projectRoot, effectiveDirty);
   // the project's verify_timeout_ms, as the execute reads it (OxeSpace 15/11, OQ T18: killed at 10 min while the
   // remote run went on); --verify-timeout-ms still wins
-  const verifyTimeoutMs = Number(options.verifyTimeoutMs) > 0 ? Number(options.verifyTimeoutMs) : Number(projectConfigForCommit.verify_timeout_ms) > 0 ? Number(projectConfigForCommit.verify_timeout_ms) : 10 * 60_000;
+  const verifyTimeoutMs = Number(options.verifyTimeoutMs) > 0 ? Number(options.verifyTimeoutMs) : resolveConfigVerifyTimeoutMs(projectRoot, projectConfigForCommit);
   let verifySkipped = false;
 
   try {
@@ -11333,6 +11412,14 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     const by = String(options.by || '').trim();
     const reason = String(options.reason || '').trim();
     if (!by || reason.length < 8) throw new Error('--by-ci exige --by <papel> e --reason "…" (o close sem verify fica registrado)');
+    if (options.ciRun) {
+      runtimeCiAttach(projectRoot, activeSession, {
+        run: options.ciRun,
+        repo: options.repo || undefined,
+        phase: phase.id,
+        spawn: options.ghSpawn,
+      });
+    }
     byCi = closeProofByCi(projectRoot, paths.programDir || path.join(projectRoot, '.oxe', 'program'), phase.id, options);
     if (byCi.ok) {
       // R36: a verify of another commit is not this close's proof — its old reds (fixed since, green on CI) and its

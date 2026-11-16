@@ -4319,6 +4319,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--llm-timeout-ms' && argv[i + 1]) out.llmTimeoutMs = Number(argv[++i]);
     else if (a === '--max-run-ms' && argv[i + 1]) out.maxRunMs = Number(argv[++i]);
     else if (a === '--verify-timeout-ms' && argv[i + 1]) out.verifyTimeoutMs = Number(argv[++i]);
+    else if (a === '--verify-timeout' && argv[i + 1]) out.verifyTimeoutMs = Number(argv[++i]) * 1000;
     else if (a === '--in-place') out.inPlace = true;
     else if (a === '--promote-each') out.promoteEach = true;
     else if (a === '--reopen') out.reopen = true;
@@ -4333,7 +4334,13 @@ function parseRuntimeArgs(argv) {
     else if (a === '--note' && argv[i + 1]) out.note = String(argv[++i]);
     else if (a === '--no-defects') out.noDefects = true;
     else if (a === '--no-rollback-check') out.noRollbackCheck = true;
-    else if (a === '--by-ci') out.byCi = true;
+    else if (a === '--by-ci') {
+      out.byCi = true;
+      if (argv[i + 1] && !String(argv[i + 1]).startsWith('-') && (/^\d{5,}$/.test(argv[i + 1]) || /^https?:\/\//i.test(argv[i + 1]))) {
+        out.ciRun = String(argv[++i]);
+      }
+    }
+    else if (a === '--ci' && argv[i + 1]) out.ciRun = String(argv[++i]);
     else if (a === '--strict') out.strict = true;
     else if (a === '--preview-ci') out.previewCi = true;
     else if (a === '--no-quicks') out.noQuicks = true;
@@ -4488,9 +4495,17 @@ function parseRuntimeArgs(argv) {
     let k = 2;
     if (/^Q-\d+$/i.test(positionals[2] || '')) { out.questionId = positionals[2].toUpperCase(); k = 3; }
     if (positionals[k]) out.dir = path.resolve(positionals[k]);
-  } else if (out.action === 'gates' || out.action === 'program') {
+  } else if (out.action === 'gates') {
     if (positionals[1]) out.subAction = positionals[1];
     if (positionals[2]) out.dir = path.resolve(positionals[2]);
+  } else if (out.action === 'program') {
+    if (positionals[1]) out.subAction = positionals[1];
+    if (/^F\d+$/i.test(positionals[2] || '')) {
+      if (!out.phase) out.phase = positionals[2].toUpperCase();
+      if (positionals[3]) out.dir = path.resolve(positionals[3]);
+    } else if (positionals[2]) {
+      out.dir = path.resolve(positionals[2]);
+    }
   } else {
     if (positionals[1]) out.dir = path.resolve(positionals[1]);
   }
@@ -5457,6 +5472,8 @@ async function runRuntime(opts) {
           defects: !opts.noDefects,
           rollbackCheck: !opts.noRollbackCheck,
           byCi: Boolean(opts.byCi),
+          ciRun: opts.ciRun || opts.attach || undefined,
+          repo: opts.repo || undefined,
           message: opts.message || undefined,
           deferSignoff: opts.deferSignoff,
           by: opts.by || undefined,
@@ -7253,6 +7270,19 @@ async function main() {
     return;
   }
 
+  if (command === 'program' && (argv.includes('--help') || argv.includes('-h'))) {
+    console.log(`
+  oxe-cc program status | init [--force | --from <pasta>] | start [Fn] | adopt --from <pasta>
+  oxe-cc program close [Fn] [--by-ci [<run|url>] | --ci <run|url>] --by <papel> --reason "…"
+        [--no-commit] [--no-rollback-check --by <papel> --reason "…"] [--accept-drift <glob>…]
+  oxe-cc program phase add|edit … · criterion move … · regression repin … · budget … · export [--out <pasta>]
+
+  Com --by-ci: fecha a fase pela run verde do CI que contém HEAD (anexada antes via oxe-cc runtime ci --attach <run|url>
+  ou passada direto em --by-ci <run|url> / --ci <run|url>), dispensando o runtime verify local da fase.
+`);
+    return;
+  }
+
   if (command === 'program' && !(argv[0] === 'phase' || argv[0] === 'export' || argv[0] === 'criterion')) {
     command = 'runtime';
     argv.unshift('program');
@@ -8285,13 +8315,13 @@ async function main() {
   if (command === 'quick') {
     const SUBS = ['status', 'trailers', 'list', 'done', 'start', 'commit', 'cancel'];
     if (argv.includes('--help') || argv.includes('-h')) {
-      console.log(`\n  oxe-cc quick <KEY> "<objetivo>" [--by <papel>] [--replace] [--apply|--dry-run]   abre um quick: registro em .oxe/quick/, minispec no QUICK.md, trailers dos commits
+      console.log(`\n  oxe-cc quick <KEY> "<objetivo>" [--by <papel>] [--replace] [--alm-dir <pasta>] [--apply|--dry-run]   abre um quick: registro em .oxe/quick/, minispec no QUICK.md, trailers dos commits
   oxe-cc quick status | trailers | list                                              o quick aberto, as linhas de trailer, os quicks do projeto
   oxe-cc quick commit -m "<mensagem>" [<arquivos…>|--all]                            o commit do quick, feito pelo CLI com os trailers
   oxe-cc quick cancel --reason "…" [--evidence <url|caminho>] [--apply|--dry-run]       abandona o quick aberto (nunca "feito"); o card é comentado, não avança
   oxe-cc quick done [--verify "<comando>"] [--no-commit] [--apply|--dry-run]          fecha: commits com OXE-Quick, verificação rodada pelo CLI
 
-  Com ALM: o card recebe a minispec e vai para "em desenvolvimento" (só de uma coluna anterior); no done, os commits e a verificação.
+  Com ALM: herda automaticamente o bloco "alm" de oxe.config.json, PROGRAM.json (forked_from), worktree principal ou irmãs (ou --alm-dir <pasta>).
   Todo commit do quick leva OXE-Quick (e OXE-Card com ALM); o hook commit-msg do oxe-cc guards install acrescenta.
   Workflow: /oxe-quick · conferência no PR: oxe-cc ship check-origin <#PR>\n`);
       return;
@@ -8308,6 +8338,7 @@ async function main() {
       else if (a === '--all') o.all = true;
       else if ((a === '-m' || a === '--message') && argv[i + 1] != null) o.message = String(argv[++i]);
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (a === '--alm-dir' && argv[i + 1]) o.almDir = path.resolve(argv[++i]);
       else if (['--by', '--verify', '--id', '--key', '--objective', '--reason', '--evidence'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
       else if (!a.startsWith('-')) positional.push(a);
       else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
