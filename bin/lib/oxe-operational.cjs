@@ -3545,19 +3545,36 @@ function applyTaskGatesToGraph(projectRoot, artifactPaths, compiledGraph) {
 }
 
 /** G34: what a UI card's spec still lacks (BRD-n, target, measures in the CAs, both themes, both densities). */
+function criteriaOnlyReadSharedLocales(crit) {
+  if (!Array.isArray(crit) || !crit.length) return false;
+  const combined = crit.map((c) => String((c && c.text) || '')).join('\n');
+  if (!/\bshared\/locales(?:\/[^\s`'",)*]+)?/i.test(combined)) return false;
+  const PATH_RE = /\b(?:src|shared|app|mobile|packages|desktop|web|client|server)\/[\w./*{}-]+/gi;
+  const TEST_FILE_RE = /(^|\/)(?:tests?|__tests__|specs?|e2e|playwright)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/i;
+  for (const m of combined.matchAll(PATH_RE)) {
+    const p = m[0];
+    if (TEST_FILE_RE.test(p)) continue;
+    if (!/^shared\/locales(?:\/|$)/i.test(p)) return false;
+  }
+  if (/\b[\w.-]+\.(?:tsx|jsx|css|scss|less|kt)\b/i.test(combined)) return false;
+  return true;
+}
+
 function uiCardGaps(md, collected = {}) {
   const text = String(md || '');
   const labels = (collected.labels || []).map((l) => String(l).toLowerCase());
   const UI_PATHS = /\b(src\/(renderer|ui|styles|design|components)\/|mobile\/android\/[\w/.-]*\/ui\/)/;
   const isUi = labels.includes('area-marca') || UI_PATHS.test(text);
   if (!isUi) return { isUi: false, gaps: [] };
+  const crit = refineLibCriteria(text);
+  // OXB-C6 #7 (P3): catalog/copy cards whose criteria only inspect `shared/locales/**` (e.g. OXE-233, OXE-253) are not UI geometry cards
+  if (criteriaOnlyReadSharedLocales(crit)) return { isUi: false, gaps: [], locale_only_exempt: true };
   const gaps = [];
   // a card with no BRD (a new function, OxeSpace 15/11 OXE-170) says so: "BRD: nenhum" / "sem BRD" / "função nova"
   if (!/\bBRD-\d+\b/.test(text) && !/\bsem BRD\b|\bBRD:\s*(nenhum|n\/a|—|-)|\bfun[cç][aã]o nova\b|\bnova fun[cç][aã]o\b/i.test(text)) gaps.push('qual é o BRD-n deste card? (a referência do rebranding; sem BRD, escreva "BRD: nenhum (função nova)")');
   // the approved target: a file (also src/design/targets/brd-NN.json), a playground, or a claude.ai artifact link
   const target = /(\.brand-audit\/|playground|src\/[\w/.-]+\.(tsx?|css|kt|json)|mobile\/android\/[\w/.-]+\.kt|[\w/.-]+\.(png|fig|html)|https?:\/\/claude\.ai\/[\w/-]*artifact\/[\w-]+|\bartefato\s+[A-Za-z0-9]{12,})/.test(text);
   if (!target) gaps.push('qual é o alvo aprovado (arquivo, playground ou artefato da marca)?');
-  const crit = refineLibCriteria(text);
   const measured = crit.filter((c) => (
     /\b\d+(?:[.,]\d+)?\s*(?:px|dp|sp|ms)\b|var\(--[\w-]+\)|--[a-z][\w-]+|Oxe(?:Radius|Theme|Space)\.\w+|\b(?:raio|altura|fonte|peso)\s+\d+|\bforced-colors\b/i.test(c.text)
     || /\b(?:Highlight(?:Text)?|Canvas(?:Text)?)\b/.test(c.text)
@@ -6575,6 +6592,12 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
       const msgs = testScope.scopeGapMessages(testScope.scopeGaps(projectRoot, pj));
       const cfgLint = (readProjectConfig(projectRoot) || {}).lint || {};
       (cfgLint.test_scope === 'error' ? result.errors : result.warnings).push(...msgs);
+      // OXB-C6 #6 (P2): warn when frozen acceptance tests live in a config/dir never executed by package.json or CI workflows
+      const unrunCi = require('./oxe-suite-impact.cjs').findUnrunFrozenAcceptanceCi(projectRoot, pj);
+      if (unrunCi.length) {
+        result.unrun_acceptance_ci = unrunCi;
+        result.warnings.push(...require('./oxe-suite-impact.cjs').unrunFrozenAcceptanceCiMessages(unrunCi));
+      }
     }
   } catch { /* auxiliar */ }
   result.ok = result.errors.length === 0;
@@ -12316,6 +12339,119 @@ function closeProofByCi(projectRoot, programDir, phaseId, options = {}) {
   return { ok: false, why: `nenhum run de CI verde anexado contém HEAD — ${why}`, checked };
 }
 
+/**
+ * OXB-C6 #4 (P2): Checks whether every task marked `done` in the closing phase has its commit/work landed on
+ * `base` (`main`/`origin/main`) by ancestry, `cherry picked from commit` trailer, equivalent patch (`git cherry`),
+ * or matching files at `base` (squash/external PR merge). Returns `{ checked, base, base_sha, unpromoted }`.
+ */
+function findUnpromotedDoneTasks(projectRoot, activeSession, phase, options = {}) {
+  if (!gitLines(projectRoot, ['rev-parse', '--git-dir'])) return { checked: false, base: null, base_sha: null, unpromoted: [] };
+  const remote = String(options.remote || 'origin');
+  let base = options.base ? String(options.base).trim() : null;
+  if (!base) {
+    base = resolvePromoteBase(projectRoot, null, remote, { fetch: options.fetch === true }).ref;
+  }
+  let baseSha = (gitLines(projectRoot, ['rev-parse', '--verify', '-q', `${base}^{commit}`]) || [])[0];
+  if (!baseSha && !options.base) {
+    for (const fallback of ['master', `${remote}/master`]) {
+      const s = (gitLines(projectRoot, ['rev-parse', '--verify', '-q', `${fallback}^{commit}`]) || [])[0];
+      if (s) { base = fallback; baseSha = s; break; }
+    }
+  }
+  const headSha = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
+  if (!baseSha || !headSha) return { checked: false, base, base_sha: null, unpromoted: [] };
+
+  let doc = null;
+  try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
+  if (!doc || !Array.isArray(doc.tasks)) return { checked: true, base, base_sha: baseSha, unpromoted: [] };
+  if (phase && phase.id && doc.phase && String(doc.phase).toUpperCase() !== String(phase.id).toUpperCase()) {
+    return { checked: true, base, base_sha: baseSha, unpromoted: [] };
+  }
+
+  const headOnBase = spawnSync('git', ['merge-base', '--is-ancestor', headSha, baseSha], { cwd: projectRoot, windowsHide: true }).status === 0;
+  const picked = new Set();
+  const equivalent = new Set();
+  if (!headOnBase) {
+    for (const line of gitLines(projectRoot, ['log', baseSha, '--format=%B', '--grep=cherry picked from commit']) || []) {
+      const m = /cherry picked from commit ([0-9a-f]{7,40})/.exec(line);
+      if (m) picked.add(m[1]);
+    }
+    for (const l of gitLines(projectRoot, ['cherry', baseSha, headSha, baseSha]) || []) {
+      if (l.startsWith('-')) equivalent.add(l.slice(2).trim());
+    }
+  }
+
+  const isCommitOnBase = (sha) => {
+    if (!sha) return true;
+    const full = (gitLines(projectRoot, ['rev-parse', '--verify', '-q', `${sha}^{commit}`]) || [])[0];
+    if (!full) return false;
+    if (spawnSync('git', ['merge-base', '--is-ancestor', full, baseSha], { cwd: projectRoot, windowsHide: true }).status === 0) return true;
+    for (const p of picked) { if (full.startsWith(p) || p.startsWith(full)) return true; }
+    if (equivalent.has(full)) return true;
+    // Squash merge or another PR delivering the exact same file contents onto `base`
+    const touched = (gitLines(projectRoot, ['diff-tree', '--no-commit-id', '--name-only', '-r', full]) || [])
+      .filter((f) => f && !f.startsWith('.oxe/') && !/(^|\/)parked[^/]*\//i.test(f));
+    if (touched.length) {
+      const d = spawnSync('git', ['diff', '--quiet', baseSha, full, '--', ...touched], { cwd: projectRoot, windowsHide: true });
+      if (d.status === 0) return true;
+    }
+    return false;
+  };
+
+  const range = `${baseSha}..HEAD`;
+  const phaseCtx = { phase: phase && phase.id ? phase.id : null, since: (phase && phase.started_at) || null };
+  const unpromoted = [];
+
+  for (const t of doc.tasks) {
+    if (!t || t.done !== true) continue;
+    if (t.superseded || t.merged_into) continue;
+    if (t.kind === 'external_delivery' || t.kind === 'verify_only' || t.verify_only || (t.meta && (['external_delivery', 'spike', 'verify_only'].includes(t.meta.kind) || t.meta.verify_only))) continue;
+
+    const taskShas = [];
+    if (t.done_commit) {
+      const fullDone = (gitLines(projectRoot, ['rev-parse', '--verify', '-q', `${t.done_commit}^{commit}`]) || [])[0];
+      taskShas.push(fullDone || String(t.done_commit));
+    }
+    if (!headOnBase) {
+      for (const s of taskCommitShas(projectRoot, t.id, range, phaseCtx)) {
+        if (!taskShas.includes(s)) taskShas.push(s);
+      }
+    }
+
+    if (taskShas.length) {
+      const pendingShas = taskShas.filter((s) => !isCommitOnBase(s));
+      if (pendingShas.length) {
+        unpromoted.push({
+          task: t.id,
+          title: t.title || null,
+          shas: pendingShas,
+          detail: `commit ${String(pendingShas[0]).slice(0, 8)} não está em ${base}`,
+        });
+      }
+      continue;
+    }
+
+    if (!headOnBase) {
+      const scopeFiles = (Array.isArray(t.files) ? t.files : [])
+        .map((p) => String(typeof p === 'string' ? p : (p && p.path) || '').replace(/\\/g, '/').replace(/^\.\//, ''))
+        .filter((p) => p && !p.includes('*') && !p.startsWith('.oxe/') && !/(^|\/)parked[^/]*\//i.test(p));
+      if (!scopeFiles.length) continue;
+      const scopeCommits = (gitLines(projectRoot, ['log', '--format=%H', range, '--', ...scopeFiles]) || [])
+        .filter((sha) => !isCommitOnBase(sha));
+      if (scopeCommits.length) {
+        unpromoted.push({
+          task: t.id,
+          title: t.title || null,
+          shas: scopeCommits,
+          detail: `mudanças em ${scopeFiles.slice(0, 2).join(', ')} não estão em ${base} (${String(scopeCommits[0]).slice(0, 8)})`,
+        });
+      }
+    }
+  }
+
+  return { checked: true, base, base_sha: baseSha, unpromoted };
+}
+
 function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   const runtime = requireProgramRuntime();
   const programLib = require('./oxe-program.cjs');
@@ -12346,6 +12482,13 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     const changeLib = require('./oxe-change.cjs');
     changeLib.appendNdjson(changeLib.changesFile(paths.programDir || path.join(projectRoot, '.oxe', 'program')), { kind: 'drift_waiver', phase: phase.id, globs: acceptDrift, by, reason, at: new Date().toISOString() });
     appendEvent(projectRoot, activeSession, { type: 'DriftWaived', payload: { phase: phase.id, globs: acceptDrift, by } });
+  }
+  const acceptUnpromotedRaw = options.acceptUnpromoted;
+  const acceptUnpromotedReason = typeof acceptUnpromotedRaw === 'string'
+    ? acceptUnpromotedRaw.trim()
+    : (acceptUnpromotedRaw === true ? String(options.reason || '').trim() : '');
+  if (acceptUnpromotedRaw && acceptUnpromotedReason.length < 8) {
+    throw new Error('--accept-unpromoted exige o motivo (mínimo 8 caracteres), ex.: --accept-unpromoted "motivo…"');
   }
   // OxeSpace 15/11 (user decision, ~18:00Z): `program close --by-ci --by <papel> --reason "…"` — the phase closes on
   // the green CI attached to it (runtime ci --attach: its PRs' runs or the main run that contains it), without a phase
@@ -12379,6 +12522,35 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   }
   const closeGates = programCloseGateReasons(projectRoot, activeSession, { phase, run, paths, state, skip: options.gates === false, byCi: Boolean(byCi && byCi.ok) });
   if (byCi && !byCi.ok) closeGates.reasons.push(`close --by-ci: ${byCi.why}`);
+  // OXB-C6 #4 (P2): every `done` task in the phase must have landed on `base` (`main`/`origin/main`) unless `--accept-unpromoted "<motivo>"` is given.
+  let unpromotedAccepted = null;
+  if (options.checkPromoted !== false) {
+    const promoStatus = findUnpromotedDoneTasks(projectRoot, activeSession, phase, options);
+    if (promoStatus.unpromoted.length) {
+      if (acceptUnpromotedRaw) {
+        unpromotedAccepted = {
+          base: promoStatus.base,
+          tasks: promoStatus.unpromoted.map((u) => u.task),
+          by: options.by ? String(options.by) : null,
+          reason: acceptUnpromotedReason,
+        };
+        try {
+          const changeLib = require('./oxe-change.cjs');
+          changeLib.appendNdjson(changeLib.changesFile(paths.programDir || path.join(projectRoot, '.oxe', 'program')), {
+            kind: 'unpromoted_waiver',
+            phase: phase.id,
+            ...unpromotedAccepted,
+            at: new Date().toISOString(),
+          });
+        } catch { /* auxiliar */ }
+        appendEvent(projectRoot, activeSession, { type: 'UnpromotedTasksAccepted', payload: { phase: phase.id, ...unpromotedAccepted } });
+      } else {
+        for (const u of promoStatus.unpromoted) {
+          closeGates.reasons.push(`tarefa done não promovida para ${promoStatus.base}: ${u.task} (${u.detail}) — promova com \`oxe-cc runtime promote ${u.task} --base ${promoStatus.base} --open-pr\` ou feche com --accept-unpromoted "<motivo>"`);
+        }
+      }
+    }
+  }
   // OXB-124: the phase verify must be of the code being closed — no code commit after the commit it judged.
   // With --by-ci the proof is the CI run that contains HEAD (checked above), not the verify's head.
   if (run && run.verification_head && !(byCi && byCi.ok)) {
@@ -12663,6 +12835,7 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     gate,
     commit,
     ...(closeByCi ? { close_by_ci: closeByCi } : {}),
+    ...(unpromotedAccepted ? { unpromoted_accepted: unpromotedAccepted } : {}),
     report: reportFile,
     rollback_rehearsal: rollbackRehearsal,
     regression_checks: regressionChecks.length,
@@ -14204,6 +14377,7 @@ module.exports = {
   runtimeProgramInit,
   runtimeProgramStart,
   runtimeProgramClose,
+  findUnpromotedDoneTasks,
   phaseChanges,
   phaseGateInputFromRun,
   readExecutorUsageRows,

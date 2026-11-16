@@ -912,4 +912,228 @@ function laterOwnedExcludesForTask(planDoc, taskId) {
   return [...new Set([...classified.later_owned, ...classified.other_ignored].map((x) => x.file))];
 }
 
-module.exports = { suiteImpact, messages, laterOwnedTests, laterOwnedMessages, classifyRelatedTestFiles, laterOwnedExcludesForTask, criterionMatches, pinnedByExisting, pinnedMessages, registryManifestGaps, registryManifestMessages, importIndex, exportedConstants, trackedFiles, dataFilesOf, TEST_RE };
+/**
+ * OXB-C6 #6: Detects when frozen acceptance tests live in a config or directory (e.g. `playwright.acceptance.config.ts`,
+ * `tests/acceptance/`, `e2e/acceptance/`) that NO `package.json` script and NO job in `.github/workflows/*.yml` executes.
+ */
+function findUnrunFrozenAcceptanceCi(projectRoot, planDoc = null, options = {}) {
+  const readFile = options.readText || ((rel) => {
+    try { return fs.readFileSync(path.join(projectRoot, rel), 'utf8'); } catch { return null; }
+  });
+  let pkg = null;
+  try {
+    const rawPkg = readFile('package.json');
+    if (rawPkg) pkg = JSON.parse(rawPkg);
+  } catch { pkg = null; }
+  const scripts = pkg && pkg.scripts && typeof pkg.scripts === 'object' ? pkg.scripts : {};
+  const scriptEntries = Object.entries(scripts).filter(([, cmd]) => typeof cmd === 'string' && cmd.trim());
+
+  const wfDir = path.join(projectRoot, '.github', 'workflows');
+  const workflowFiles = [];
+  if (fs.existsSync(wfDir)) {
+    try {
+      for (const name of fs.readdirSync(wfDir).sort()) {
+        if (/\.ya?ml$/i.test(name)) workflowFiles.push(`.github/workflows/${name}`);
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Bare synthetic test fixtures with neither package scripts nor CI workflows have nothing to audit against
+  if (!scriptEntries.length && !workflowFiles.length) return [];
+
+  const allTracked = options.files || trackedFiles(projectRoot);
+  const acceptEntries = [
+    ...(planDoc && Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : []),
+    ...(planDoc && Array.isArray(planDoc.acceptanceTests) ? planDoc.acceptanceTests : []),
+  ];
+
+  // 1. Discover frozen acceptance config files and acceptance test directories
+  const configsMap = new Map(); // relConfig -> { runner, files: Set }
+  const dirsMap = new Map(); // relDir -> { runner, files: Set }
+  const addConfig = (cfgPath, runner = 'unknown', file = null) => {
+    const c = norm(cfgPath);
+    if (!c || /(^|\/)parked[^/]*\//i.test(c)) return;
+    if (!configsMap.has(c)) configsMap.set(c, { runner, files: new Set() });
+    const entry = configsMap.get(c);
+    if (runner !== 'unknown' && entry.runner === 'unknown') entry.runner = runner;
+    if (file) entry.files.add(norm(file));
+  };
+  const addDir = (dirRel, runner = 'unknown', file = null) => {
+    const d = norm(dirRel).replace(/\/+$/, '') + '/';
+    if (!d || d === '/' || /(^|\/)parked[^/]*\//i.test(d)) return;
+    if (!dirsMap.has(d)) dirsMap.set(d, { runner, files: new Set() });
+    const entry = dirsMap.get(d);
+    if (runner !== 'unknown' && entry.runner === 'unknown') entry.runner = runner;
+    if (file) entry.files.add(norm(file));
+  };
+  const inferRunner = (cmdOrPath, fileText) => {
+    const s = `${cmdOrPath || ''}\n${fileText || ''}`;
+    if (/\bplaywright\b|@playwright\/test/i.test(s)) return 'playwright';
+    if (/\bvitest\b|from\s+['"]vitest['"]/i.test(s)) return 'vitest';
+    if (/\bjest\b/i.test(s)) return 'jest';
+    if (/\.e2e\.|\.spec\.[cm]?[jt]sx?$/i.test(String(cmdOrPath || '')) && !/\bvitest\b/i.test(s)) return 'playwright';
+    return 'unknown';
+  };
+  const acceptanceFolderFor = (rel) => {
+    const f = norm(rel);
+    if (/(^|\/)parked[^/]*\//i.test(f)) return null;
+    const m = /^((?:[^/]+\/)*acceptance)(?:\/|$)/i.exec(f);
+    if (m) return `${m[1]}/`;
+    return null;
+  };
+
+  for (const a of acceptEntries) {
+    if (!a || typeof a !== 'object') continue;
+    const cmd = typeof a.command === 'string' ? a.command : '';
+    const aFiles = extractEntryTestFiles(a).filter((f) => !/(^|\/)parked[^/]*\//i.test(f));
+    const cfgM = /(?:^|\s)(?:-c|--config(?:=|\s+))["']?([^\s"']+)["']?/.exec(cmd);
+    if (cfgM) addConfig(cfgM[1], inferRunner(cmd, ''), aFiles[0] || null);
+    for (const f of aFiles) {
+      const folder = acceptanceFolderFor(f);
+      if (folder) {
+        const txt = readFile(f) || '';
+        addDir(folder, inferRunner(cmd || f, txt), f);
+      }
+    }
+  }
+
+  for (const f of allTracked) {
+    const rel = norm(f);
+    if (!rel || /(^|\/)parked[^/]*\//i.test(rel)) continue;
+    if (/^(?:playwright|vitest|jest)\.[^/]*acceptance[^/]*\.config\.[cm]?[jt]s$/i.test(path.posix.basename(rel))) {
+      addConfig(rel, inferRunner(rel, readFile(rel) || ''));
+    }
+    if (TEST_RE.test(rel)) {
+      const folder = acceptanceFolderFor(rel);
+      if (folder) {
+        addDir(folder, inferRunner(rel, readFile(rel) || ''), rel);
+      }
+    }
+  }
+
+  if (!configsMap.size && !dirsMap.size) return [];
+
+  // Read workflow YAML contents (strip `# ...` comments line-by-line)
+  const workflows = workflowFiles.map((wf) => {
+    const raw = readFile(wf) || '';
+    const clean = raw
+      .split(/\r?\n/)
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n');
+    return { file: wf, text: clean };
+  });
+
+  // Read root vitest/playwright configs once to avoid false positives when a root runner excludes/overrides acceptance dirs
+  const vitestCfgText = ['vitest.config.ts', 'vitest.config.mts', 'vitest.config.js', 'vitest.config.mjs', 'vitest.config.cjs']
+    .map((c) => readFile(c))
+    .find(Boolean) || '';
+  const pwCfgText = ['playwright.config.ts', 'playwright.config.mts', 'playwright.config.js', 'playwright.config.mjs']
+    .map((c) => readFile(c))
+    .find(Boolean) || '';
+
+  const textCoversTarget = (cmdText, target, isConfig, runner) => {
+    const cleanTarget = norm(target).replace(/\/+$/, '');
+    const esc = cleanTarget.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Explicit path/config reference or `tests/acceptance` / `e2e/acceptance` substring match
+    if (new RegExp(`(?:^|[\\s"'=/:])${esc}(?:$|[/\\s"'])`, 'i').test(cmdText)) return true;
+    const base = path.posix.basename(cleanTarget);
+    if (isConfig && new RegExp(`(?:-c|--config(?:=|\\s+))["']?(?:\\./)?${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(cmdText)) {
+      return true;
+    }
+    if (!isConfig) {
+      // Bare runner command without explicit path/config filter: check if default config covers this folder
+      const hasPwCfgFile = [...configsMap.keys()].some((c) => /playwright/i.test(c));
+      if ((runner === 'playwright' || /^e2e\//i.test(cleanTarget)) && /\bplaywright\s+test\b/i.test(cmdText)) {
+        const filteredElsewhere = /\bplaywright\s+test\b[^\n;|&]*(?:\s(?:-c|--config)|\s(?:e2e|tests)\/)/i.test(cmdText);
+        if (!filteredElsewhere && !hasPwCfgFile && (!pwCfgText || pwCfgText.includes(cleanTarget))) return true;
+      }
+      if ((runner === 'vitest' || runner === 'unknown') && !/^e2e\//i.test(cleanTarget) && /\bvitest(?:\s+run)?\b/i.test(cmdText)) {
+        // If `vitest run <specificPath>` targets e.g. `tests/unit`, it does NOT cover `tests/acceptance`
+        const explicitPaths = [...cmdText.matchAll(/\bvitest(?:\s+run)?\s+([^\n;|&]+)/gi)]
+          .flatMap((m) => m[1].replace(/(?:^|\s)(?:-c|--config(?:=|\s+))["']?[^\s"']+["']?/gi, ' ').trim().split(/\s+/))
+          .filter((tok) => tok && !tok.startsWith('-'));
+        const excludesInCfg = vitestCfgText && new RegExp(`exclude[^\\]]*${esc}`, 'is').test(vitestCfgText);
+        if (!explicitPaths.length && !excludesInCfg && !hasPwCfgFile) return true;
+        if (explicitPaths.some((p) => cleanTarget.startsWith(norm(p).replace(/\/+$/, '')))) return true;
+      }
+    }
+    return false;
+  };
+
+  const scriptCallsTarget = new Map(); // scriptName -> boolean (resolved recursively max depth 3 for wrapper scripts)
+  const matchesViaScript = (name, target, isConfig, runner, seen = new Set()) => {
+    if (seen.has(name)) return false;
+    seen.add(name);
+    const body = scripts[name];
+    if (typeof body !== 'string') return false;
+    if (textCoversTarget(body, target, isConfig, runner)) return true;
+    for (const m of body.matchAll(/\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?([a-zA-Z0-9:_-]+)\b/g)) {
+      if (m[1] === 'install' || m[1] === 'ci') continue;
+      if (matchesViaScript(m[1], target, isConfig, runner, seen)) return true;
+    }
+    return false;
+  };
+
+  const findings = [];
+  const evalTarget = (target, info, kind) => {
+    const isConfig = kind === 'config';
+    const matchingScripts = scriptEntries
+      .filter(([name]) => matchesViaScript(name, target, isConfig, info.runner))
+      .map(([name]) => name);
+    scriptCallsTarget.set(target, matchingScripts);
+
+    const coveredByWorkflow = workflows.some((wf) => {
+      if (textCoversTarget(wf.text, target, isConfig, info.runner)) return true;
+      return matchingScripts.some((sn) => {
+        const snEsc = sn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (sn === 'test') return /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b/i.test(wf.text);
+        return new RegExp(`\\b(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?${snEsc}\\b`, 'i').test(wf.text);
+      });
+    });
+
+    if (workflows.length && !coveredByWorkflow) {
+      findings.push({
+        target,
+        kind,
+        runner: info.runner,
+        files_count: info.files.size,
+        sample_files: [...info.files].slice(0, 3),
+        in_package_scripts: matchingScripts,
+        in_workflows: false,
+      });
+    } else if (!workflows.length && scriptEntries.length && !matchingScripts.length) {
+      findings.push({
+        target,
+        kind,
+        runner: info.runner,
+        files_count: info.files.size,
+        sample_files: [...info.files].slice(0, 3),
+        in_package_scripts: [],
+        in_workflows: false,
+      });
+    }
+  };
+
+  for (const [cfg, info] of configsMap.entries()) evalTarget(cfg, info, 'config');
+  for (const [dirRel, info] of dirsMap.entries()) {
+    // If an explicit acceptance config already covers this same runner/dir and was reported, still skip duplicate only when redundant;
+    // keep dir finding when tests live in `tests/acceptance/` / `e2e/acceptance/` without a config or with an uncovered folder
+    const coveredByReportedCfg = [...configsMap.keys()].some((c) => findings.some((f) => f.target === c) && info.runner === (configsMap.get(c) || {}).runner);
+    if (coveredByReportedCfg) continue;
+    evalTarget(dirRel, info, 'dir');
+  }
+
+  return findings;
+}
+
+function unrunFrozenAcceptanceCiMessages(findings) {
+  return (findings || []).map((f) => {
+    const scopeHint = f.sample_files && f.sample_files.length ? ` (ex.: ${f.sample_files.slice(0, 2).join(', ')})` : '';
+    if (f.in_package_scripts && f.in_package_scripts.length) {
+      return `testes de aceite em \`${f.target}\`${scopeHint} têm script em package.json (${f.in_package_scripts.join(', ')}), mas nenhum job em \`.github/workflows/*.yml\` o executa — adicione ao workflow de CI ou estes testes nunca rodam no merge`;
+    }
+    return `testes de aceite congelados em \`${f.target}\`${scopeHint} nunca rodam no CI: nenhum script em \`package.json\` nem job em \`.github/workflows/*.yml\` executa essa config/pasta`;
+  });
+}
+
+module.exports = { suiteImpact, messages, laterOwnedTests, laterOwnedMessages, classifyRelatedTestFiles, laterOwnedExcludesForTask, findUnrunFrozenAcceptanceCi, unrunFrozenAcceptanceCiMessages, criterionMatches, pinnedByExisting, pinnedMessages, registryManifestGaps, registryManifestMessages, importIndex, exportedConstants, trackedFiles, dataFilesOf, TEST_RE };

@@ -4312,6 +4312,10 @@ function parseRuntimeArgs(argv) {
     else if (a === '--defer-signoff') out.deferSignoff = true;
     else if (a === '--risk' && argv[i + 1]) out.risk = String(argv[++i]);
     else if (a === '--accept-drift' && argv[i + 1]) out.acceptDrift = [...(out.acceptDrift || []), String(argv[++i])];
+    else if (a === '--accept-unpromoted') {
+      if (argv[i + 1] && !String(argv[i + 1]).startsWith('-')) out.acceptUnpromoted = String(argv[++i]);
+      else out.acceptUnpromoted = true;
+    }
     else if (a === '--yes') out.yes = true;
     else if (a === '--checkpoint-commits') out.checkpointCommits = true;
     else if (a === '--attach' && argv[i + 1]) out.attach = String(argv[++i]);
@@ -5486,6 +5490,8 @@ async function runRuntime(opts) {
           deferSignoff: opts.deferSignoff,
           by: opts.by || undefined,
           acceptDrift: opts.acceptDrift || undefined,
+          acceptUnpromoted: opts.acceptUnpromoted || undefined,
+          base: opts.baseBranch || undefined,
           reason: opts.reason || undefined,
           risk: opts.risk || undefined,
         });

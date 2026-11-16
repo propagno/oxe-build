@@ -313,11 +313,15 @@ function reconcilePromotedRatchets(work, buildSha, config, options = {}) {
     const realCount = ratchetsLib.countOf(work, r);
     const touchedHere = changedInWork.has(norm(r.file)) || resolvedCapSet.has(norm(r.file));
     const violated = r.direction === 'down' ? cap.value < realCount : cap.value > realCount;
+    const matchesPat = (pat, f) => (pat instanceof RegExp ? pat.test(f) : testScope.covers(pat, f));
+    const excludes = Array.isArray(r.exclude) ? r.exclude : [];
     const touchedCountedPath = Array.isArray(r.paths) && r.paths.length
-      ? changedList.some((f) => r.paths.some((pat) => testScope.covers(pat, f)))
+      ? changedList.some((f) => r.paths.some((pat) => matchesPat(pat, f)) && !excludes.some((pat) => matchesPat(pat, f)))
       : false;
 
-    if (!touchedHere && !violated && !(touchedCountedPath && baseCap != null && realCount !== baseCap)) continue;
+    // Reconcile against the final promoted tree whenever the ratchet file was touched/resolved, cap is violated,
+    // or counted source files changed in promote and the real count differs from the current cap (#907 / OXB-C6 #5).
+    if (!touchedHere && !violated && !(touchedCountedPath && realCount !== cap.value)) continue;
 
     const nextCap = realCount;
     if (nextCap === cap.value) continue;

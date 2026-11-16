@@ -2618,12 +2618,20 @@ function buildHealthReport(target) {
     activeSession,
     activeRun
   );
+  let unrunCiWarn = [];
+  try {
+    const si = require('./oxe-suite-impact.cjs');
+    const planJsonSibling = p.plan ? path.join(path.dirname(p.plan), 'PLAN.json') : null;
+    const planDocHealth = planJsonSibling ? readJsonFileSafe(planJsonSibling).data : null;
+    unrunCiWarn = si.unrunFrozenAcceptanceCiMessages(si.findUnrunFrozenAcceptanceCi(target, planDocHealth));
+  } catch { unrunCiWarn = []; }
   const executionPlanWarn = [
     ...planWaveWarningsFixed(p.plan, Number(config.plan_max_tasks_per_wave) || 0),
     ...planTaskAceiteWarnings(p.plan),
     ...planSelfEvaluationWarningsFromInfo(parsedPlanSelfEvaluation, threshold),
     ...executionRationalityWarningsFromSummary(executionRationality),
     ...planAgentsWarnings(target),
+    ...unrunCiWarn,
   ];
   const planWarn = suppressExecutionWorkspaceGates ? [] : executionPlanWarn;
   const sessionWarn = sessionWarnings(target, activeSession);
