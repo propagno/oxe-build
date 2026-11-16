@@ -2651,12 +2651,47 @@ function runtimeAlmRefineImport(projectRoot, activeSession, options = {}) {
   const refine = require('./oxe-alm-refine.cjs');
   const specEdit = require('./oxe-spec-edit.cjs');
   const changeLib = require('./oxe-change.cjs');
+  const keysAll = (options.keys || []).map((k) => String(k).toUpperCase());
   const d = refine.dirs(projectRoot);
-  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
-  if (!paths.spec || !fs.existsSync(paths.spec)) throw new Error('SPEC.md ausente: o import leva os critérios do card para a SPEC do programa (/oxe-spec primeiro)');
+  const catalog = refine.discoverProgramCatalog(projectRoot, { activeSession, programRoots: options.programRoots || null });
+  let targetRoot = projectRoot;
+  let targetSession = activeSession;
+  let targetSlug = null;
+  let explicitTarget = null;
+  if (options.spec) {
+    explicitTarget = refine.resolveProgramSpec(projectRoot, activeSession, options.spec, { catalogCache: catalog, programRoots: options.programRoots || null });
+    if (!explicitTarget || !explicitTarget.specPath) {
+      throw new Error(`--spec "${options.spec}" não encontrado ou sem SPEC.md`);
+    }
+    targetRoot = explicitTarget.root;
+    targetSession = targetRoot === path.resolve(projectRoot) ? activeSession : null;
+    targetSlug = targetRoot !== path.resolve(projectRoot) ? explicitTarget.slug : null;
+  } else if (keysAll.length) {
+    const resolvedTargets = [];
+    for (const key of keysAll) {
+      const mdPath = path.join(d.specs, `${key}.md`);
+      if (!fs.existsSync(mdPath)) continue;
+      const mdText = fs.readFileSync(mdPath, 'utf8');
+      const r = refine.resolveCardProgram(projectRoot, activeSession, { key, md: mdText, catalogCache: catalog, programRoots: options.programRoots || null });
+      if (r && r.entry && r.matchedBy !== 'dir_default') resolvedTargets.push(r.entry);
+    }
+    const distinctRoots = [...new Set(resolvedTargets.map((e) => e.root))];
+    if (distinctRoots.length > 1) {
+      throw new Error(`os cards pertencem a programas diferentes (${[...new Set(resolvedTargets.map((e) => e.slug))].join(', ')}): informe --spec <programa|caminho> ou rode por card`);
+    }
+    if (distinctRoots.length === 1 && distinctRoots[0] !== path.resolve(projectRoot)) {
+      explicitTarget = resolvedTargets[0];
+      targetRoot = explicitTarget.root;
+      targetSession = null;
+      targetSlug = explicitTarget.slug;
+    }
+  }
+  const paths = resolveRuntimeArtifactPaths(targetRoot, targetSession);
+  const specPath = (explicitTarget && explicitTarget.specPath) || paths.spec;
+  if (!specPath || !fs.existsSync(specPath)) throw new Error('SPEC.md ausente: o import leva os critérios do card para a SPEC do programa (/oxe-spec primeiro)');
   if (!options.dryRun && !options.by) throw new Error('o import emenda a SPEC: informe --by <papel>');
-  let specText = fs.readFileSync(paths.spec, 'utf8');
-  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  let specText = fs.readFileSync(specPath, 'utf8');
+  const programDir = (explicitTarget && explicitTarget.programDir) || paths.programDir || path.join(targetRoot, '.oxe', 'program');
   const results = [];
   // A phase that is executing or closed is frozen (its SPEC rows, its PLAN, its tests): a change there is a CR,
   // never a direct edit, and a later phase amends a frozen test with a new version instead of replacing it.
@@ -2665,7 +2700,7 @@ function runtimeAlmRefineImport(projectRoot, activeSession, options = {}) {
   const phases = (program && program.phases) || [];
   const frozen = (ph) => Boolean(ph) && (['executing', 'verifying', 'closed'].includes(ph.status) || Boolean(ph.run_id));
   const phaseOfA = (a) => phases.find((ph) => (ph.acceptance || []).includes(a)) || null;
-  const keysAll = (options.keys || []).map((k) => String(k).toUpperCase());
+  const relSpec = path.relative(projectRoot, specPath).replace(/\\/g, '/');
   if (options.phase) {
     const target = phases.find((ph) => ph.id === String(options.phase).toUpperCase());
     if (target && frozen(target)) {
@@ -2673,11 +2708,12 @@ function runtimeAlmRefineImport(projectRoot, activeSession, options = {}) {
       return {
         dry_run: true,
         refused: true,
-        spec: path.relative(projectRoot, paths.spec).replace(/\\/g, '/'),
+        spec: relSpec,
+        ...(targetSlug ? { program: targetSlug } : {}),
         reason: `a fase ${target.id} está ${target.status}${target.run_id ? ' (com run)' : ''}: os arquivos dela estão congelados e nada foi escrito. Critério novo entra por CR nesta fase ou numa fase posterior`,
         commands: [
           `oxe-cc runtime feedback --class new_scope --summary "critérios dos cards refinados ${cas}" --by <papel>`,
-          `oxe-cc alm refine import ${keysAll.join(' ')} --phase <fase ainda não iniciada> --by <papel>`,
+          `oxe-cc alm refine import ${keysAll.join(' ')}${options.spec ? ` --spec ${options.spec}` : ''} --phase <fase ainda não iniciada> --by <papel>`,
         ],
         results: [],
       };
@@ -2695,7 +2731,14 @@ function runtimeAlmRefineImport(projectRoot, activeSession, options = {}) {
     const out = { key, added: [], linked: [], problems: [] };
     for (const c of criteria) {
       if (c.spec_id) {
-        if (!existing.includes(c.spec_id)) out.problems.push(`${c.id} aponta para ${c.spec_id}, que não existe na SPEC`);
+        if (c.spec_program) {
+          const critProg = refine.resolveProgramSpec(projectRoot, activeSession, c.spec_program, { catalogCache: catalog, programRoots: options.programRoots || null });
+          if (!critProg || path.resolve(critProg.root) !== path.resolve(targetRoot)) {
+            out.linked.push({ ca: c.id, a: `${c.spec_program}:${c.spec_id}` });
+            continue;
+          }
+        }
+        if (!existing.includes(c.spec_id)) out.problems.push(`${c.id} aponta para ${c.spec_id}, que não existe na SPEC${targetSlug ? ` de ${targetSlug}` : ''}`);
         else {
           const row = String(specText).split(/\r?\n/).find((l) => new RegExp(`^\\|\\s*\\**${c.spec_id}\\**\\s*\\|`).test(l)) || '';
           const ph = phaseOfA(c.spec_id);
@@ -2728,21 +2771,21 @@ function runtimeAlmRefineImport(projectRoot, activeSession, options = {}) {
       } catch (err) { out.problems.push(`${c.id}: ${err.message}`); }
     }
     if (!options.dryRun && added.size) {
-      md = refine.setSpecIds(md, added);
+      md = refine.setSpecIds(md, added, targetSlug ? { program: targetSlug } : {});
       fs.writeFileSync(specFile, md);
       for (const a of out.added) changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'spec_edit', action: 'add_criterion', id: a.a, by: options.by, reason: `alm refine import ${key} ${a.ca}`, origin: 'alm_refine', at: new Date().toISOString(), after: a.row });
     }
     results.push(out);
   }
   if (!options.dryRun && results.some((r) => r.added && r.added.length)) {
-    writeTextAtomic(paths.spec, specText);
-    appendEvent(projectRoot, activeSession, { type: 'SpecEdited', payload: { action: 'alm_refine_import', keys: results.map((r) => r.key), added: results.flatMap((r) => (r.added || []).map((a) => a.a)) } });
+    writeTextAtomic(specPath, specText);
+    appendEvent(targetRoot, targetSession, { type: 'SpecEdited', payload: { action: 'alm_refine_import', keys: results.map((r) => r.key), added: results.flatMap((r) => (r.added || []).map((a) => a.a)) } });
     if (options.phase) {
       const ids = results.flatMap((r) => (r.added || []).map((a) => a.a));
-      try { runtimeProgramPhaseEdit(projectRoot, activeSession, { phase: options.phase, addAcceptance: ids.join(','), by: options.by, reason: `alm refine import ${results.map((r) => r.key).join(', ')}` }); } catch (err) { results.push({ key: '(fase)', problems: [`os critérios entraram na SPEC, mas não na fase ${options.phase}: ${err.message}`], added: [], linked: [] }); }
+      try { runtimeProgramPhaseEdit(targetRoot, targetSession, { phase: options.phase, addAcceptance: ids.join(','), by: options.by, reason: `alm refine import ${results.map((r) => r.key).join(', ')}` }); } catch (err) { results.push({ key: '(fase)', problems: [`os critérios entraram na SPEC, mas não na fase ${options.phase}: ${err.message}`], added: [], linked: [] }); }
     }
   }
-  return { dry_run: Boolean(options.dryRun), spec: path.relative(projectRoot, paths.spec).replace(/\\/g, '/'), results };
+  return { dry_run: Boolean(options.dryRun), spec: relSpec, ...(targetSlug ? { program: targetSlug } : {}), results };
 }
 
 /**
@@ -2986,6 +3029,7 @@ async function runtimeAlmRefine(projectRoot, activeSession, options = {}) {
   let keys = (options.keys || []).map((k) => String(k).toUpperCase());
   if (action === 'lint' || action === 'apply') {
     if (!keys.length) keys = fs.existsSync(d.specs) ? fs.readdirSync(d.specs).filter((f) => /\.md$/.test(f)).map((f) => f.replace(/\.md$/, '')) : [];
+    const catalogCache = refine.discoverProgramCatalog(projectRoot, { activeSession, programRoots: options.programRoots || null });
     const out = [];
     for (const key of keys) {
       const specFile = path.join(d.specs, `${key}.md`);
@@ -2993,39 +3037,72 @@ async function runtimeAlmRefine(projectRoot, activeSession, options = {}) {
       if (!fs.existsSync(specFile) || !fs.existsSync(dataFile)) { out.push({ key, error: `sem coleta: rode oxe-cc alm refine ${key}` }); continue; }
       const collected = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
       const md = fs.readFileSync(specFile, 'utf8');
+      let resolvedProgram = null;
+      try {
+        resolvedProgram = refine.resolveCardProgram(projectRoot, activeSession, {
+          key,
+          md,
+          spec: options.spec || null,
+          catalogCache,
+          programRoots: options.programRoots || null,
+        });
+      } catch (err) {
+        if (action === 'lint') {
+          out.push({ key, kind: collected.kind, ok: false, errors: [err.message], warnings: [], questions: [], criteria: [], needs_info: false });
+          continue;
+        }
+        out.push({ key, error: err.message });
+        continue;
+      }
+      const targetEntry = resolvedProgram ? resolvedProgram.entry : null;
       if (action === 'lint') {
         const l = refine.lintSpec(md, collected.kind);
         // G34 (user decision 14/11, via the brand: the 1.5.2 is faithful to the rebranding end to end): a UI card
         // passes the refine only with (1) its BRD-n, (2) the target (a file or an approved artifact) and (3)
-        // measures in the CAs (size, font, radius, color as a token), for both themes and both densities. Without
-        // them: needs-info, with the question for the brand.
+        // measures in the CAs (size, font, radius, color as a token, ms, or system colors / forced-colors), for
+        // both themes and both densities. Without them: needs-info, with the question for the brand.
         const ui = uiCardGaps(md, collected);
         if (ui.isUi && ui.gaps.length) {
           for (const g of ui.gaps) { l.warnings.push(`interface: ${g}`); l.questions.push(`MARCA: ${g}`); }
           l.needs_info = true;
         }
-        // CA ↔ A: with a program SPEC, every CA names its criterion and that criterion exists
-        const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
-        const specText = paths.spec && fs.existsSync(paths.spec) ? fs.readFileSync(paths.spec, 'utf8') : null;
-        if (specText) {
-          const ids = require('./oxe-spec-edit.cjs').criteriaIds(specText);
-          // one line for the CAs not imported yet (before the planner imports, every CA had its own warning — noise)
-          const notLinked = [];
-          for (const c of refine.parseCriteria(md)) {
-            if (!c.spec_id) notLinked.push(c.id);
-            else if (!ids.includes(c.spec_id)) { l.errors.push(`${c.id} aponta para ${c.spec_id}, que não existe na SPEC`); l.ok = false; }
-          }
-          if (notLinked.length) l.warnings.push(`${notLinked.length} CA(s) ainda sem critério da SPEC (${notLinked.join(', ')}) — oxe-cc alm refine import ${key} cria e liga`);
-        }
+        // CA ↔ A + PLAN.json: check each CA criterion against the card's own program SPEC/PLAN (or --spec / qualified prog:A-n)
+        const cross = refine.lintCardCriteriaAgainstPrograms(md, key, targetEntry, {
+          projectRoot,
+          activeSession,
+          catalog: catalogCache,
+          programRoots: options.programRoots || null,
+        });
+        if (cross.errors.length) { l.errors.push(...cross.errors); l.ok = false; }
+        if (cross.warnings.length) l.warnings.push(...cross.warnings);
         // the domain glossary: a forbidden synonym in the card spec (one term, one meaning, in the card too)
         try {
-          const gl = require('./oxe-grill.cjs').readGlossary(grillPaths(projectRoot, activeSession).glossary);
+          const glRoot = targetEntry ? targetEntry.root : projectRoot;
+          const glSess = glRoot === path.resolve(projectRoot) ? activeSession : null;
+          const gl = require('./oxe-grill.cjs').readGlossary(grillPaths(glRoot, glSess).glossary);
           for (const t of gl) for (const syn of t.synonyms || []) {
             if (syn.length >= 3 && wholeWord(syn).test(md)) l.warnings.push(`glossário: "${syn}" é sinônimo proibido de "${t.term}" — use "${t.term}"`);
           }
         } catch { /* sem glossário */ }
-        out.push({ key, kind: collected.kind, ...l });
+        out.push({
+          key,
+          kind: collected.kind,
+          ...(targetEntry && targetEntry.root !== path.resolve(projectRoot) ? { program: targetEntry.slug, spec: path.relative(path.dirname(path.resolve(projectRoot)), targetEntry.specPath || targetEntry.planPath || targetEntry.root).replace(/\\/g, '/') } : {}),
+          ...l,
+        });
         continue;
+      }
+      if (options.spec || (resolvedProgram && resolvedProgram.matchedBy !== 'dir_default')) {
+        const crossApply = refine.lintCardCriteriaAgainstPrograms(md, key, targetEntry, {
+          projectRoot,
+          activeSession,
+          catalog: catalogCache,
+          programRoots: options.programRoots || null,
+        });
+        if (crossApply.errors.length) {
+          out.push({ key, error: `spec reprovado no lint (SPEC/PLAN):\n  - ${crossApply.errors.join('\n  - ')}`, lint: { ok: false, errors: crossApply.errors, warnings: crossApply.warnings } });
+          continue;
+        }
       }
       const dry = lib.isDry(cfg, options);
       // a simulation only reads: any session may run it; writing is the writer's
@@ -3454,7 +3531,10 @@ function uiCardGaps(md, collected = {}) {
   const target = /(\.brand-audit\/|playground|src\/[\w/.-]+\.(tsx?|css|kt|json)|mobile\/android\/[\w/.-]+\.kt|[\w/.-]+\.(png|fig|html)|https?:\/\/claude\.ai\/[\w/-]*artifact\/[\w-]+|\bartefato\s+[A-Za-z0-9]{12,})/.test(text);
   if (!target) gaps.push('qual é o alvo aprovado (arquivo, playground ou artefato da marca)?');
   const crit = refineLibCriteria(text);
-  const measured = crit.filter((c) => /\b\d+(\.\d+)?\s*(px|dp|sp)\b|var\(--[\w-]+\)|--[a-z][\w-]+|Oxe(Radius|Theme|Space)\.\w+|\b(raio|altura|fonte|peso)\s+\d+/i.test(c.text));
+  const measured = crit.filter((c) => (
+    /\b\d+(?:[.,]\d+)?\s*(?:px|dp|sp|ms)\b|var\(--[\w-]+\)|--[a-z][\w-]+|Oxe(?:Radius|Theme|Space)\.\w+|\b(?:raio|altura|fonte|peso)\s+\d+|\bforced-colors\b/i.test(c.text)
+    || /\b(?:Highlight(?:Text)?|Canvas(?:Text)?)\b/.test(c.text)
+  ));
   if (!crit.length || !measured.length) gaps.push('quais medidas os critérios conferem (altura, fonte, raio, cor como token)?');
   if (!/(dois temas|ambos os temas|claro e (o )?escuro|escuro e (o )?claro|noite e (o )?dia|light and dark|dark and light)/i.test(text)) gaps.push('as medidas valem nos dois temas (claro e escuro)?');
   if (!/(duas densidades|compacta e (a )?confortável|confortável e (a )?compacta|data-density|densidade)/i.test(text)) gaps.push('as medidas valem nas duas densidades (compacta e confortável)?');

@@ -7965,7 +7965,7 @@ async function main() {
       defect: ['oxe-cc alm defect --title "…" --origin <US-n|Fn-Tn> [--cr CR-n] [--ref BUG-n]', 'defeito depois do deploy, ligado à origem e ao CR', 'oxe-cc alm defect --title "não chega offline" --origin US-1 --cr CR-4'],
       queue: ['oxe-cc alm queue [--json]', 'transporte MCP: a fila de operações que o agente executa', 'oxe-cc alm queue --json'],
       ack: ['oxe-cc alm ack <id> [--key <chave>] [--error "…"]', 'transporte MCP: confirma (ou registra a falha de) uma operação da fila', 'oxe-cc alm ack ensure:US-1 --key OXE-48'],
-      refine: ['oxe-cc alm refine <KEY…> [--jql "…"] [--max-cards 15] [--claim] [--reset] · refine lint <KEY…> · refine apply <KEY…> [--confirm-overwrite] [--keep-status] · refine import <KEY…> --by <papel> [--phase Fn] [--risk P2] [--dry-run]', 'relê cards para um spec guiado por tipo (coleta só lê; apply só o escritor); import leva os CA para a SPEC', 'oxe-cc alm refine OXE-20 OXE-103 && oxe-cc alm refine lint OXE-20'],
+      refine: ['oxe-cc alm refine <KEY…> [--jql "…"] [--max-cards 15] [--claim] [--reset] · refine lint <KEY…> [--spec <programa|caminho>] · refine apply <KEY…> [--spec <programa|caminho>] [--confirm-overwrite] [--keep-status] · refine import <KEY…> [--spec <programa|caminho>] --by <papel> [--phase Fn] [--risk P2] [--dry-run]', 'relê cards para um spec guiado por tipo (coleta só lê; apply só o escritor); import leva os CA para a SPEC (do programa indicado ou encontrado)', 'oxe-cc alm refine OXE-20 OXE-103 && oxe-cc alm refine lint OXE-20 --spec base-polish'],
       metrics: ['oxe-cc alm metrics [--jql "…"] [--max N] [--json]', 'tempo por coluna, lead/cycle time, vazão semanal, WIP e gargalo (só leitura)', 'oxe-cc alm metrics'],
       version: ['oxe-cc alm version ensure <nome> [--dry-run] · oxe-cc alm version <chave> <versão|none> [--comment "…"] --apply', 'garante a versão-alvo no projeto (cria se faltar); ou troca/remove (none) a versão de correção de um card (só o escritor)', 'oxe-cc alm version OXE-10 1.5.3 --apply'],
       summary: ['oxe-cc alm summary <chave> "<título>" [--comment "…"] --apply', 'troca o título de um card existente (só o escritor)', 'oxe-cc alm summary OXE-160 "Menu com 8 itens" --apply'],
@@ -8075,7 +8075,7 @@ async function main() {
       else if (a === '--claim') o.claim = true;
       else if (a === '--dry-run') o.dryRun = true;
       else if (a === '--apply') o.apply = true;
-      else if (['--risk', '--phase', '--by'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
+      else if (['--risk', '--phase', '--by', '--spec'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
       else if (a === '--jql' && argv[i + 1]) o.jql = String(argv[++i]);
       else if (a === '--max-cards' && argv[i + 1]) o.maxCards = Number(argv[++i]);
@@ -8110,7 +8110,7 @@ async function main() {
         if (action === 'collect') console.log(`  ${green}✓${reset} ${r.key} (${r.kind}${r.already_refined ? ', já tem spec-v1' : ''}) — ${r.summary}
       ${r.comments} comentário(s), ${r.links} ligação(ões), ${r.code_refs} referência(s) a código → ${r.spec}${r.kept ? ' (mantido; --reset recria o esqueleto)' : ''}${r.moved ? `\n      ${refineMoveText(r.moved)}` : ''}`);
         else if (action === 'lint') {
-          console.log(`  ${r.ok ? `${green}✓${reset}` : `${red}✗${reset}`} ${r.key} (${r.kind}): ${r.criteria.length} critério(s)${r.needs_info ? ` · ${r.questions.length} pergunta(s) em aberto (needs-info)` : ''}`);
+          console.log(`  ${r.ok ? `${green}✓${reset}` : `${red}✗${reset}`} ${r.key} (${r.kind}${r.program ? `, programa ${r.program}` : ''}): ${r.criteria.length} critério(s)${r.needs_info ? ` · ${r.questions.length} pergunta(s) em aberto (needs-info)` : ''}`);
           for (const e of r.errors) console.log(`      ${red}✗${reset} ${e}`);
           for (const w of r.warnings) console.log(`      ${yellow}!${reset} ${w}`);
           if (!r.ok) process.exitCode = 1;

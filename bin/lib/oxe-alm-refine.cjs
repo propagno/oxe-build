@@ -265,9 +265,9 @@ function sectionsOf(md) {
 }
 
 /**
- * The card's criteria: `1. **CA-2 (A14)** — Dado … · Teste: <teste> · Risco: P1`. The `(A14)` is the program SPEC's
- * criterion the CA becomes (oxe-cc alm refine import writes it); `Risco` feeds the SPEC's Risco column.
- * @returns {Array<{ id: string, spec_id: string|null, text: string, test: string|null, risk: string|null, line: number }>}
+ * The card's criteria: `1. **CA-2 (A14)** — Dado … · Teste: <teste> · Risco: P1` or `1. **CA-2 (base-polish:A14)** — …`
+ * (or fallback `(plano: A14, <programa>)` inside the criterion text). `Risco` feeds the SPEC's Risco column.
+ * @returns {Array<{ id: string, spec_id: string|null, spec_program: string|null, plan_ref: { spec_id: string, program: string|null }|null, text: string, test: string|null, risk: string|null, line: number }>}
  */
 function parseCriteria(md) {
   const sec = sectionsOf(md);
@@ -275,27 +275,62 @@ function parseCriteria(md) {
   const out = [];
   const lines = String(md).replace(/\r\n/g, '\n').split('\n');
   let inside = false;
-  lines.forEach((line, i) => {
+  let inComment = false;
+  let inFence = false;
+  lines.forEach((rawLine, i) => {
+    let line = rawLine;
+    if (inComment) {
+      const closeIdx = line.indexOf('-->');
+      if (closeIdx < 0) return;
+      inComment = false;
+      line = line.slice(closeIdx + 3);
+    }
+    line = line.replace(/<!--[\s\S]*?-->/g, '');
+    const openIdx = line.indexOf('<!--');
+    if (openIdx >= 0) {
+      inComment = true;
+      line = line.slice(0, openIdx);
+    }
+    if (/^\s*(?:```|~~~)/.test(line)) { inFence = !inFence; return; }
+    if (inFence) return;
     const h = /^##\s+(.*)$/.exec(line);
     if (h) { inside = h[1].trim() === name; return; }
     if (!inside) return;
-    const m = /^\s*(?:\d+[.)]|[-*])\s+\*\*(CA-\d+)(?:\s*\(([AG]\d+(?:\.\d+)?)\))?\*\*(?:\s*\(([AG]\d+(?:\.\d+)?)\))?\s*[—–:-]\s*(.*)$/.exec(line);
+    const m = /^\s*(?:\d+[.)]|[-*])\s+\*\*(CA-\d+)(?:\s*\((?:([A-Za-z0-9][A-Za-z0-9._-]*):)?([AG]\d+(?:\.\d+)*)\))?\*\*(?:\s*\((?:([A-Za-z0-9][A-Za-z0-9._-]*):)?([AG]\d+(?:\.\d+)*)\))?\s*[—–:-]\s*(.*)$/.exec(line);
     if (!m) return;
-    const rest = m[4];
+    const rest = m[6];
     const testM = /·\s*Teste:\s*([^·]+)/i.exec(rest);
     const riskM = /·\s*Risco:\s*(P[0-3])\b/i.exec(rest);
-    out.push({ id: m[1], spec_id: m[2] || m[3] || null, text: rest.split(/\s*·\s*(?:Teste|Risco):/i)[0].trim(), test: testM ? testM[1].trim() : null, risk: riskM ? riskM[1].toUpperCase() : null, line: i });
+    const text = rest.split(/\s*·\s*(?:Teste|Risco):/i)[0].trim();
+    const specId = m[3] || m[5] || null;
+    const specProgram = m[2] || m[4] || null;
+    let planRef = null;
+    const planoM = /\(\s*plano:\s*([AG]\d+(?:\.\d+)*)(?:\s*,\s*([^)\n]+))?\)/i.exec(text);
+    if (planoM) {
+      planRef = { spec_id: planoM[1].toUpperCase(), program: planoM[2] ? planoM[2].trim() : null };
+    }
+    out.push({
+      id: m[1],
+      spec_id: specId ? specId.toUpperCase() : null,
+      spec_program: specProgram || null,
+      plan_ref: planRef,
+      text,
+      test: testM ? testM[1].trim() : null,
+      risk: riskM ? riskM[1].toUpperCase() : null,
+      line: i,
+    });
   });
   return out;
 }
 
-/** Writes `(A14)` into the CA lines that got a SPEC criterion. */
-function setSpecIds(md, map) {
+/** Writes `(A14)` or `(prog:A14)` into the CA lines that got a SPEC criterion. */
+function setSpecIds(md, map, options = {}) {
   const lines = String(md).replace(/\r\n/g, '\n').split('\n');
+  const prefix = options && options.program ? `${options.program}:` : '';
   for (const c of parseCriteria(md)) {
     const a = map.get(c.id);
     if (!a || c.spec_id) continue;
-    lines[c.line] = lines[c.line].replace(`**${c.id}**`, `**${c.id} (${a})**`);
+    lines[c.line] = lines[c.line].replace(`**${c.id}**`, `**${c.id} (${prefix}${a})**`);
   }
   return lines.join('\n');
 }
@@ -347,9 +382,10 @@ function descriptionBody(md) {
  */
 async function apply(ctx, collected, md, options = {}) {
   const { request, site } = ctx;
+  const encKey = encodeURIComponent(collected.key);
   const lint = lintSpec(md, collected.kind);
   if (!lint.ok && !options.allowLintErrors) throw Object.assign(new Error(`spec reprovado no lint:\n  - ${lint.errors.join('\n  - ')}`), { lint });
-  const now = await request('GET', `${site}/rest/api/3/issue/${collected.key}?fields=description,labels`);
+  const now = await request('GET', `${site}/rest/api/3/issue/${encKey}?fields=description,labels`);
   const currentText = adfToText(now && now.fields ? now.fields.description : null).trim();
   const body = descriptionBody(md);
   const specHash = hash(body);
@@ -357,33 +393,367 @@ async function apply(ctx, collected, md, options = {}) {
   // first. The version follows the card's own marker: a different sha than the applied one is the next version. spec-v1
   // stays (it means "refined", what the ready gate reads); spec-vN is added from v2 on.
   const prev = /oxe-refine spec-v(\d+) · sha ([0-9a-f]+)/.exec(currentText);
+  const prevFromCollect = /oxe-refine spec-v(\d+) · sha ([0-9a-f]+)/.exec(collected && collected.description ? collected.description : '');
+  const alreadyRefinedInJira = Boolean(prev);
+  // OXB-C4: when Jira already holds our own prior `oxe-refine spec-vN`, re-applying an amended spec overwrites
+  // cleanly without `--confirm-overwrite` and without reposting `Texto original (antes do refine)` as a new comment.
+  const sameRefinedCard = alreadyRefinedInJira && (!prevFromCollect || prevFromCollect[2] === prev[2]);
   const version = prev ? Number(prev[1]) + (prev[2] === specHash ? 0 : 1) : 1;
   const marker = `oxe-refine spec-v${version} · sha ${specHash}`;
   // OxeSpace 15/11 (OXE-189): a spec with no open question left takes needs-info off the card (apply only added it)
   const hadLabels = now && now.fields && Array.isArray(now.fields.labels) ? now.fields.labels : [];
   const clearNeedsInfo = !lint.needs_info && hadLabels.includes('needs-info');
   if (currentText.includes(`sha ${specHash}`)) {
-    if (clearNeedsInfo && !options.dryRun) await request('PUT', `${site}/rest/api/3/issue/${collected.key}`, { update: { labels: [{ remove: 'needs-info' }] } });
+    if (clearNeedsInfo && !options.dryRun) await request('PUT', `${site}/rest/api/3/issue/${encKey}`, { update: { labels: [{ remove: 'needs-info' }] } });
     return { key: collected.key, unchanged: true, sha: specHash, ...(clearNeedsInfo ? { [options.dryRun ? 'would_remove' : 'removed']: ['needs-info'] } : {}) };
   }
-  if (hash(currentText) !== collected.description_hash && !options.confirmOverwrite) {
+  if (hash(currentText) !== collected.description_hash && !sameRefinedCard && !options.confirmOverwrite) {
     throw Object.assign(new Error(`${collected.key} mudou depois da coleta (alguém editou o card): nada foi gravado. Colete de novo (oxe-cc alm refine ${collected.key}) ou, depois de revisar a diferença, rode com --confirm-overwrite`), { changed: true, current: currentText });
   }
   const labels = ['spec-v1', ...(version > 1 ? [`spec-v${version}`] : []), ...(lint.needs_info ? ['needs-info'] : [])];
+  const postOriginalComment = Boolean(collected.description) && !alreadyRefinedInJira && !prevFromCollect;
   // --dry-run: everything above only read; report what the apply would write and stop (OXB-G13)
-  if (options.dryRun) return { key: collected.key, dry_run: true, sha: specHash, labels, questions: lint.questions.length, would: { original_comment: Boolean(collected.description), description: true, labels, questions_comment: Boolean(lint.needs_info && lint.questions.length), ...(clearNeedsInfo ? { remove_labels: ['needs-info'] } : {}) } };
+  if (options.dryRun) return { key: collected.key, dry_run: true, sha: specHash, labels, questions: lint.questions.length, would: { original_comment: postOriginalComment, description: true, labels, questions_comment: Boolean(lint.needs_info && lint.questions.length), ...(clearNeedsInfo ? { remove_labels: ['needs-info'] } : {}) } };
   const adf = mdToAdf(`${body}\n\n---\n${marker}`);
-  if (collected.description) {
-    await request('POST', `${site}/rest/api/3/issue/${collected.key}/comment`, { body: mdToAdf(`**Texto original (antes do refine)**\n\n${collected.description}`) });
+  if (postOriginalComment) {
+    await request('POST', `${site}/rest/api/3/issue/${encKey}/comment`, { body: mdToAdf(`**Texto original (antes do refine)**\n\n${collected.description}`) });
   }
-  await request('PUT', `${site}/rest/api/3/issue/${collected.key}`, { fields: { description: adf }, update: { labels: [...labels.map((l) => ({ add: l })), ...(clearNeedsInfo ? [{ remove: 'needs-info' }] : [])] } });
+  await request('PUT', `${site}/rest/api/3/issue/${encKey}`, { fields: { description: adf }, update: { labels: [...labels.map((l) => ({ add: l })), ...(clearNeedsInfo ? [{ remove: 'needs-info' }] : [])] } });
   if (lint.needs_info && lint.questions.length) {
-    await request('POST', `${site}/rest/api/3/issue/${collected.key}/comment`, { body: mdToAdf(`**Perguntas em aberto (refine)**\n\n${lint.questions.map((q) => `- ${q}`).join('\n')}`) });
+    await request('POST', `${site}/rest/api/3/issue/${encKey}/comment`, { body: mdToAdf(`**Perguntas em aberto (refine)**\n\n${lint.questions.map((q) => `- ${q}`).join('\n')}`) });
   }
-  const back = await request('GET', `${site}/rest/api/3/issue/${collected.key}?fields=description,labels`);
+  const back = await request('GET', `${site}/rest/api/3/issue/${encKey}?fields=description,labels`);
   const ok = adfToText(back.fields.description).includes(`sha ${specHash}`) && labels.every((l) => (back.fields.labels || []).includes(l))
     && !(clearNeedsInfo && (back.fields.labels || []).includes('needs-info'));
   return { key: collected.key, applied: true, confirmed: ok, sha: specHash, version, labels, questions: lint.questions.length, ...(clearNeedsInfo ? { removed: ['needs-info'] } : {}) };
 }
 
-module.exports = { TBC_RE, parseCriteria, setSpecIds, collect, skeleton, lintSpec, apply, mdToAdf, adfToText, descriptionBody, kindOf, sectionsOf, dirs, hash, SECTIONS, REQUIRED };
+// ── cross-program SPEC / PLAN resolution (OXB-C4) ────────────────────────────────────────────────────────────────
+
+const EPHEMERAL_WT_RE = /-(?:pr\d+|t\d+(?:dbg)?|oq-t\d+\w*|f\d+-t\d+\w*|oxe\d+fix)$/i;
+const normProg = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[·/,_:]+/g, ' ').replace(/\s+/g, ' ').trim();
+const escRe = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const keyBoundaryRe = (key) => new RegExp(`(?<![A-Za-z0-9-])${escRe(key)}(?![A-Za-z0-9-])`, 'i');
+
+function readTextQuiet(p) {
+  try { return p && fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : ''; } catch { return ''; }
+}
+function readJsonQuietLocal(p) {
+  try { return p && fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null; } catch { return null; }
+}
+
+function activeSessionDirForRoot(rootAbs, activeSession) {
+  let sess = activeSession || null;
+  if (!sess) {
+    const state = readTextQuiet(path.join(rootAbs, '.oxe', 'STATE.md'));
+    const m = /active_session\s*[:=]\s*([^\r\n]+)/i.exec(state);
+    if (m) {
+      const cand = m[1].trim().replace(/^[`'"]+|[`'"]+$/g, '');
+      if (cand && cand !== 'none' && cand !== 'null' && !/^[-—]$/.test(cand)) sess = cand;
+    }
+  }
+  return sess ? path.join(rootAbs, '.oxe', sess) : null;
+}
+
+function readProgramEntry(rootAbs, options = {}) {
+  const abs = path.resolve(rootAbs);
+  const oxeDir = path.join(abs, '.oxe');
+  const sessDir = options.activeSession !== false ? activeSessionDirForRoot(abs, options.activeSession || null) : null;
+  const pickFile = (rels) => {
+    for (const rel of rels) if (rel && fs.existsSync(rel)) return rel;
+    return null;
+  };
+  const specPath = pickFile([
+    options.explicitSpecFile || null,
+    sessDir ? path.join(sessDir, 'spec', 'SPEC.md') : null,
+    path.join(oxeDir, 'SPEC.md'),
+  ]);
+  const planPath = pickFile([
+    sessDir ? path.join(sessDir, 'plan', 'PLAN.json') : null,
+    path.join(oxeDir, 'PLAN.json'),
+  ]);
+  if (!specPath && !planPath) return null;
+  const specText = readTextQuiet(specPath);
+  const planRaw = readTextQuiet(planPath);
+  let planDoc = null;
+  try { planDoc = planRaw ? JSON.parse(planRaw) : null; } catch { planDoc = null; }
+  const programDir = pickFile([sessDir ? path.join(sessDir, 'program') : null, path.join(oxeDir, 'program')]) || path.join(oxeDir, 'program');
+  const almLinksText = readTextQuiet(path.join(programDir, 'alm-links.ndjson'));
+  const cfg = readJsonQuietLocal(path.join(oxeDir, 'config.json')) || {};
+  const roadmapText = readTextQuiet(pickFile([sessDir ? path.join(sessDir, 'spec', 'ROADMAP.md') : null, path.join(oxeDir, 'ROADMAP.md')]));
+  const prdText = readTextQuiet(pickFile([sessDir ? path.join(sessDir, 'spec', 'PRD.md') : null, path.join(oxeDir, 'PRD.md')]));
+
+  const name = path.basename(abs);
+  const stripVer = (s) => String(s || '').replace(/\s+\d+(?:\.\d+)+\s*$/, '').trim();
+  const titleCandidates = [];
+  if (cfg.alm && cfg.alm.program) titleCandidates.push(String(cfg.alm.program));
+  if (cfg.program && typeof cfg.program === 'string') titleCandidates.push(cfg.program);
+  const rmH = /^#\s+[^—\n-]+[—-]\s*(.+)$/m.exec(roadmapText);
+  if (rmH) { titleCandidates.push(rmH[1].trim()); titleCandidates.push(stripVer(rmH[1].trim())); }
+  const specH = /^#\s+(?:OXE\s*[—-]\s*Especifica[çc][ãa]o:\s*)?(.+)$/m.exec(specText);
+  if (specH) { titleCandidates.push(specH[1].trim()); titleCandidates.push(stripVer(specH[1].trim())); }
+  const prdH = /^#\s+(?:PRD\s*[—-]\s*)?(.+)$/m.exec(prdText);
+  if (prdH) { titleCandidates.push(prdH[1].trim()); titleCandidates.push(stripVer(prdH[1].trim())); }
+  if (planDoc && typeof planDoc.summary === 'string') {
+    const preParen = planDoc.summary.split('(')[0].trim();
+    if (preParen) titleCandidates.push(preParen);
+  }
+  const primaryTitle = rmH ? stripVer(rmH[1].trim()) : (cfg.alm && cfg.alm.program ? String(cfg.alm.program) : name);
+  const specIds = specText ? require('./oxe-spec-edit.cjs').criteriaIds(specText) : [];
+  const basePrefix = options.repoPrefix || '';
+  const slug = basePrefix && name.startsWith(basePrefix) ? name.slice(basePrefix.length) : name;
+  return {
+    root: abs,
+    name,
+    slug,
+    label: primaryTitle !== name ? `${slug} (${primaryTitle})` : slug,
+    ephemeral: EPHEMERAL_WT_RE.test(name),
+    titles: [...new Set([name, slug, ...titleCandidates].filter(Boolean))],
+    specPath,
+    specText,
+    specIds,
+    planPath,
+    planDoc,
+    planRaw,
+    programDir,
+    almLinksText,
+  };
+}
+
+function repoFamilyPrefix(dirName) {
+  const m = /^(.*-\d+(?:\.\d+)*-)/.exec(String(dirName || ''));
+  return m ? m[1] : '';
+}
+
+function discoverProgramCatalog(projectRoot, options = {}) {
+  if (Array.isArray(options.catalogCache)) return options.catalogCache;
+  const os = require('os');
+  const rootAbs = path.resolve(projectRoot);
+  const baseName = path.basename(rootAbs);
+  const prefix = options.repoPrefix != null ? String(options.repoPrefix) : repoFamilyPrefix(baseName);
+  const tmpAbs = path.resolve(os.tmpdir());
+  const parentDirs = [...new Set([
+    path.dirname(rootAbs),
+    ...((Array.isArray(options.programRoots) ? options.programRoots : []).map((d) => path.resolve(String(d)))),
+  ])];
+  const explicitRoots = new Set((Array.isArray(options.programRoots) ? options.programRoots : []).map((d) => path.resolve(String(d))));
+  const candidateDirs = new Set([rootAbs]);
+  const cfg = readJsonQuietLocal(path.join(rootAbs, '.oxe', 'config.json')) || {};
+  for (const extra of [
+    ...((cfg.alm && Array.isArray(cfg.alm.program_dirs)) ? cfg.alm.program_dirs : []),
+    ...((Array.isArray(options.extraProgramDirs)) ? options.extraProgramDirs : []),
+  ]) {
+    if (extra) candidateDirs.add(path.resolve(rootAbs, String(extra)));
+  }
+  for (const parent of parentDirs) {
+    // Avoid scanning unrelated temp dirs directly in os.tmpdir() unless explicitly requested or family-prefixed
+    if (parent === tmpAbs && !prefix && !explicitRoots.has(parent)) continue;
+    let entries = [];
+    try { entries = fs.readdirSync(parent, { withFileTypes: true }); } catch { entries = []; }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      if (prefix && !e.name.startsWith(prefix)) continue;
+      candidateDirs.add(path.join(parent, e.name));
+    }
+  }
+  const catalog = [];
+  for (const dir of candidateDirs) {
+    const isLocal = dir === rootAbs;
+    const entry = readProgramEntry(dir, { activeSession: isLocal ? options.activeSession : null, repoPrefix: prefix });
+    if (entry) catalog.push(entry);
+  }
+  catalog.sort((a, b) => {
+    if (a.root === rootAbs) return -1;
+    if (b.root === rootAbs) return 1;
+    if (a.ephemeral !== b.ephemeral) return a.ephemeral ? 1 : -1;
+    return a.name.localeCompare(b.name);
+  });
+  return catalog;
+}
+
+function resolveProgramSpec(projectRoot, activeSession, specRef, options = {}) {
+  const ref = String(specRef || '').trim();
+  if (!ref) return null;
+  const rootAbs = path.resolve(projectRoot);
+  const prefix = options.repoPrefix != null ? String(options.repoPrefix) : repoFamilyPrefix(path.basename(rootAbs));
+
+  // 1. Direct filesystem path (to a SPEC .md, PLAN.json, or program folder)
+  for (const cand of [...new Set([path.resolve(rootAbs, ref), path.resolve(ref)])]) {
+    if (!fs.existsSync(cand)) continue;
+    let st = null;
+    try { st = fs.statSync(cand); } catch { st = null; }
+    if (st && st.isFile()) {
+      const parent = path.dirname(cand);
+      const grand = path.basename(parent) === '.oxe' ? path.dirname(parent) : (path.basename(parent) === 'spec' ? path.dirname(path.dirname(path.dirname(parent))) : parent);
+      const entry = readProgramEntry(grand, { activeSession: grand === rootAbs ? activeSession : false, explicitSpecFile: /\.md$/i.test(cand) ? cand : null, repoPrefix: prefix });
+      if (entry) return entry;
+      return {
+        root: grand,
+        name: path.basename(grand),
+        slug: path.basename(grand),
+        label: path.basename(cand),
+        ephemeral: false,
+        titles: [path.basename(cand)],
+        specPath: cand,
+        specText: readTextQuiet(cand),
+        specIds: require('./oxe-spec-edit.cjs').criteriaIds(readTextQuiet(cand)),
+        planPath: null,
+        planDoc: null,
+        planRaw: '',
+        programDir: path.join(grand, '.oxe', 'program'),
+        almLinksText: '',
+      };
+    }
+    if (st && st.isDirectory()) {
+      const entry = readProgramEntry(cand, { activeSession: cand === rootAbs ? activeSession : null, repoPrefix: prefix });
+      if (entry) return entry;
+    }
+  }
+
+  // 2. Match against sibling program catalog (slug, folder basename, normalized title)
+  const catalog = discoverProgramCatalog(projectRoot, { activeSession, ...options });
+  const targetNorm = normProg(ref);
+  if (!targetNorm) return null;
+  const ordered = [...catalog.filter((e) => !e.ephemeral), ...catalog.filter((e) => e.ephemeral)];
+  for (const e of ordered) {
+    if (e.name.toLowerCase() === ref.toLowerCase() || e.slug.toLowerCase() === ref.toLowerCase()) return e;
+    if (prefix && e.name.toLowerCase() === `${prefix}${ref}`.toLowerCase()) return e;
+    if (e.titles.some((t) => normProg(t) === targetNorm)) return e;
+  }
+  // Suffix or unambiguous partial title match (e.g. "Polimento Componentes base" vs versioned heading)
+  for (const e of ordered) {
+    if (e.name.toLowerCase().endsWith(`-${ref.toLowerCase()}`)) return e;
+    if (e.titles.some((t) => { const nt = normProg(t); return nt && nt.length >= 4 && (nt.includes(targetNorm) || targetNorm.includes(nt)); })) return e;
+  }
+  return null;
+}
+
+function cardProgramHints(md) {
+  const hints = [];
+  const text = String(md || '');
+  for (const m of text.matchAll(/\(\s*worktree\s+([^)\r\n]+)\)/gi)) hints.push(m[1].trim());
+  for (const m of text.matchAll(/^\s*-\s*Plano:\s*(?:programa\s+)?([^(\r\n]+)/gim)) hints.push(m[1].trim());
+  for (const c of parseCriteria(text)) {
+    if (c.spec_program) hints.push(c.spec_program);
+    if (c.plan_ref && c.plan_ref.program) hints.push(c.plan_ref.program);
+  }
+  return [...new Set(hints.map((h) => h.trim()).filter(Boolean))];
+}
+
+function resolveCardProgram(projectRoot, activeSession, { key, md = '', spec = null, catalogCache = null, programRoots = null } = {}) {
+  const catalog = discoverProgramCatalog(projectRoot, { activeSession, catalogCache, programRoots });
+  if (spec) {
+    const explicit = resolveProgramSpec(projectRoot, activeSession, spec, { catalogCache: catalog, programRoots });
+    if (!explicit) {
+      throw new Error(`--spec "${spec}" não encontrado (disponíveis: ${catalog.filter((e) => !e.ephemeral).map((e) => e.slug).join(', ') || 'nenhum'})`);
+    }
+    return { entry: explicit, matchedBy: 'explicit_spec', catalog };
+  }
+
+  const rootAbs = path.resolve(projectRoot);
+  const hints = cardProgramHints(md);
+  const hintEntries = new Set();
+  for (const h of hints) {
+    const resolved = resolveProgramSpec(projectRoot, activeSession, h, { catalogCache: catalog, programRoots });
+    if (resolved) hintEntries.add(resolved.root);
+  }
+
+  const keyStr = key ? String(key).toUpperCase() : '';
+  const keyRe = keyStr ? keyBoundaryRe(keyStr) : null;
+  let best = null;
+  let bestScore = 0;
+
+  for (const e of catalog) {
+    let score = 0;
+    if (keyRe && e.planDoc && Array.isArray(e.planDoc.tasks)) {
+      const taskHit = e.planDoc.tasks.some((t) => t && [t.id, t.title, t.commit, ...(Array.isArray(t.refs) ? t.refs : []), ...(Array.isArray(t.notes) ? t.notes : [t.notes])].filter(Boolean).some((v) => keyRe.test(String(v))));
+      if (taskHit) score += 100;
+      else if (e.planRaw && keyRe.test(e.planRaw)) score += 80;
+    }
+    if (keyRe && e.almLinksText && keyRe.test(e.almLinksText)) score += 60;
+    if (hintEntries.has(e.root)) score += 50;
+    if (keyRe && e.specText && keyRe.test(e.specText)) score += 40;
+    if (score > 0 && e.root === rootAbs) score += 1; // local tie-breaker only when local actually matched the card
+    if (score > 0 && !e.ephemeral) score += 2;
+    if (score > bestScore) {
+      bestScore = score;
+      best = e;
+    }
+  }
+
+  if (best) return { entry: best, matchedBy: bestScore >= 100 ? 'plan_card_lookup' : 'card_lookup', catalog };
+  const local = catalog.find((e) => e.root === rootAbs) || readProgramEntry(rootAbs, { activeSession });
+  return { entry: local, matchedBy: 'dir_default', catalog };
+}
+
+function planTaskCriteria(task) {
+  if (!task || typeof task !== 'object') return [];
+  return [...new Set([...(Array.isArray(task.acceptance) ? task.acceptance : []), ...(Array.isArray(task.aceite) ? task.aceite : [])].map((x) => String(x || '').toUpperCase()).filter(Boolean))];
+}
+
+function lintCardCriteriaAgainstPrograms(md, key, primaryEntry, options = {}) {
+  const errors = [];
+  const warnings = [];
+  const notLinked = [];
+  const criteria = parseCriteria(md);
+  const catalog = options.catalog || discoverProgramCatalog(options.projectRoot || (primaryEntry && primaryEntry.root) || '.', options);
+  const keyStr = String(key || '').toUpperCase();
+  const keyRe = keyStr ? keyBoundaryRe(keyStr) : null;
+  const checkedPrograms = new Set();
+
+  const taskSummary = (t) => `${t.id}${planTaskCriteria(t).length ? ` (${planTaskCriteria(t).join(', ')})` : ''}`;
+
+  for (const c of criteria) {
+    const rawTarget = c.spec_id ? { id: c.spec_id, program: c.spec_program, qualified: true }
+      : (c.plan_ref ? { id: c.plan_ref.spec_id, program: c.plan_ref.program, qualified: false } : null);
+    if (!rawTarget) {
+      notLinked.push(c.id);
+      continue;
+    }
+    let targetEntry = primaryEntry;
+    if (rawTarget.program) {
+      const resolved = resolveProgramSpec(options.projectRoot || (primaryEntry && primaryEntry.root) || '.', options.activeSession || null, rawTarget.program, { catalogCache: catalog, programRoots: options.programRoots });
+      if (!resolved) {
+        errors.push(`${c.id} aponta para programa "${rawTarget.program}" (${rawTarget.id}), que não foi encontrado`);
+        continue;
+      }
+      targetEntry = resolved;
+    }
+    if (!targetEntry || !targetEntry.specText) continue;
+    checkedPrograms.add(targetEntry.label || targetEntry.slug);
+    const progSuffix = targetEntry.root !== (options.projectRoot ? path.resolve(options.projectRoot) : targetEntry.root)
+      ? ` de ${targetEntry.slug}`
+      : '';
+    if (!targetEntry.specIds.includes(rawTarget.id)) {
+      errors.push(`${c.id} aponta para ${rawTarget.id}, que não existe na SPEC${progSuffix}`);
+      continue;
+    }
+    // Check card criteria against the target program's PLAN.json
+    const tasks = targetEntry.planDoc && Array.isArray(targetEntry.planDoc.tasks)
+      ? targetEntry.planDoc.tasks.filter((t) => t && t.status !== 'superseded' && !t.superseded && !t.merged_into)
+      : [];
+    if (tasks.length) {
+      const tasksWithA = tasks.filter((t) => planTaskCriteria(t).includes(rawTarget.id));
+      const tasksForCard = keyRe
+        ? tasks.filter((t) => [t.id, t.title, t.commit, ...(Array.isArray(t.refs) ? t.refs : []), ...(Array.isArray(t.notes) ? t.notes : [t.notes])].filter(Boolean).some((v) => keyRe.test(String(v))))
+        : [];
+      if (!tasksWithA.length) {
+        warnings.push(`${c.id} (${rawTarget.id}) existe na SPEC${progSuffix}, mas nenhuma tarefa do PLAN.json cobre ${rawTarget.id}`);
+      } else if (tasksForCard.length && !tasksForCard.some((t) => planTaskCriteria(t).includes(rawTarget.id))) {
+        const otherKeys = [...new Set(tasksWithA.flatMap((t) => String(t.title || '').match(/\b[A-Z][A-Z0-9]+-\d+\b/g) || []).filter((k) => k.toUpperCase() !== keyStr))];
+        if (otherKeys.length) {
+          errors.push(`${c.id} aponta para ${rawTarget.id}, mas no PLAN.json${progSuffix} ${rawTarget.id} pertence a ${otherKeys.join(', ')} (${tasksWithA.map((t) => t.id).join(', ')}); ${keyStr} está em ${tasksForCard.map(taskSummary).join(', ')}`);
+        } else {
+          warnings.push(`${c.id} (${rawTarget.id}) não está nas tarefas de ${keyStr} no PLAN.json${progSuffix} (${tasksForCard.map(taskSummary).join(', ')})`);
+        }
+      }
+    }
+  }
+  if (notLinked.length && primaryEntry && primaryEntry.specText) {
+    const hintArg = primaryEntry.root !== (options.projectRoot ? path.resolve(options.projectRoot) : primaryEntry.root) ? ` --spec ${primaryEntry.slug}` : '';
+    warnings.push(`${notLinked.length} CA(s) ainda sem critério da SPEC (${notLinked.join(', ')}) — oxe-cc alm refine import ${key}${hintArg} cria e liga`);
+  }
+  return { errors, warnings, programs: [...checkedPrograms] };
+}
+
+module.exports = { TBC_RE, parseCriteria, setSpecIds, collect, skeleton, lintSpec, apply, mdToAdf, adfToText, descriptionBody, kindOf, sectionsOf, dirs, hash, SECTIONS, REQUIRED, discoverProgramCatalog, resolveProgramSpec, resolveCardProgram, lintCardCriteriaAgainstPrograms };
