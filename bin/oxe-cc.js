@@ -4334,6 +4334,9 @@ function parseRuntimeArgs(argv) {
     else if (a === '--no-defects') out.noDefects = true;
     else if (a === '--no-rollback-check') out.noRollbackCheck = true;
     else if (a === '--by-ci') out.byCi = true;
+    else if (a === '--strict') out.strict = true;
+    else if (a === '--preview-ci') out.previewCi = true;
+    else if (a === '--no-quicks') out.noQuicks = true;
     else if (a === '--hold-deps' || a === '--promote-hold-deps') out.holdDeps = true;
     else if (a === '--allow-undelivered') out.allowUndelivered = true;
     else if (a === '--strict-delivery') out.strictDelivery = true;
@@ -6387,15 +6390,16 @@ async function runRuntime(opts) {
 
   if (opts.action === 'promote' && (opts.task || opts.tasks)) {
     try {
-      const out = oxeOperational.runtimePromote(opts.dir, activeSession, { task: opts.task, tasks: opts.tasks || null, base: opts.baseBranch || null, branch: opts.branch, remote: opts.remote || 'origin', openPr: Boolean(opts.openPr), prReady: !opts.noPrReady, inPlace: Boolean(opts.inPlace), holdDeps: Boolean(opts.holdDeps) });
+      const out = oxeOperational.runtimePromote(opts.dir, activeSession, { task: opts.task, tasks: opts.tasks || null, base: opts.baseBranch || null, branch: opts.branch, remote: opts.remote || 'origin', openPr: Boolean(opts.openPr), prReady: !opts.noPrReady, inPlace: Boolean(opts.inPlace), holdDeps: Boolean(opts.holdDeps), strict: Boolean(opts.strict), previewCi: Boolean(opts.previewCi), quicks: !opts.noQuicks, verifyTimeoutMs: opts.verifyTimeoutMs || undefined });
       if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimePromoteSchema: 1, ...out }, null, 2));
       else if (out.conflict) console.log(`  ${red}✗${reset} ${out.error}`);
       else {
-        console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.task} → branch ${out.branch} a partir de ${out.base} @ ${String(out.base_sha || "").slice(0, 10)} (${out.commits.length} commit(s), cherry-pick -x)`);
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.task} → branch ${out.branch} a partir de ${out.base} @ ${String(out.base_sha || "").slice(0, 10)} (${out.commits.length} commit(s), cherry-pick -x${out.quick_commits && out.quick_commits.length ? `, incl. ${out.quick_commits.length} quick(s)` : ''})`);
         if (out.swept && out.swept.length) console.log(`  limpas ${out.swept.length} worktree(s) de promote interrompido: ${out.swept.join(', ')}`);
         if (out.replaced_remote) console.log(`  branch ${out.branch} (do promote, sem PR) refeita: force-push com lease sobre ${String(out.replaced_remote).slice(0, 8)}`);
         if (out.stacked_on) console.log(`  empilhada sobre ${out.stacked_on.task} (${out.stacked_on.pr || out.stacked_on.branch}, ainda não mergeada) — o PR vai contra ${String(out.base).replace(/^[^/]+\//, '')} e traz os commits dela até o merge`);
         for (const w of out.warnings || []) console.log(`  ${c ? yellow : ""}AVISO${c ? reset : ""} ${w}`);
+        if (out.preview_ci) console.log(`  preview-ci: ${out.preview_ci.ok ? 'OK verde' : 'FAIL vermelho'} (${out.preview_ci.suites.length} suíte(s))`);
         if (out.pr_ready) console.log(`  pr:ready: ${out.pr_ready.ok ? 'OK verde' : 'FAIL vermelho'}${out.pr_ready.ok ? '' : `
 ${out.pr_ready.tail}`}`);
         console.log(`  Corpo do PR: ${out.body_file}`);

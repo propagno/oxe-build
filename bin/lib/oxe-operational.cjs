@@ -1646,7 +1646,7 @@ function ownUnpushedPromoteBranch(projectRoot, branch, remote, baseSha, opts = {
   const marked = (gitRun(projectRoot, ['config', '--get', `branch.${branch}.oxePromote`]).stdout || '').trim() === 'true';
   if (marked) return { ok: true, sha };
   const bodies = (gitRun(projectRoot, ['log', '--format=%s%n%b%x00', `${baseSha}..${branch}`]).stdout || '').split('\0').map((x) => x.trim()).filter(Boolean);
-  const promoteLike = bodies.every((b) => /\(cherry picked from commit [0-9a-f]{7,40}\)/.test(b) || /^test\(acceptance\): frozen tests of /.test(b));
+  const promoteLike = bodies.every((b) => /\(cherry picked from commit [0-9a-f]{7,40}\)/.test(b) || /^test\(acceptance\): frozen tests of /.test(b) || /^chore\(ratchet\): reconcile ratchet caps of /.test(b));
   return promoteLike ? { ok: true, sha } : { ok: false, why: 'tem commits que não são do promote' };
 }
 
@@ -1665,7 +1665,7 @@ function ownPushedPromoteBranch(projectRoot, activeSession, branch, remote, remo
   const have = gitRun(projectRoot, ['cat-file', '-e', `${remoteSha}^{commit}`]).ok;
   if (!have) return { ok: false, why: 'não consegui ler a branch remota' };
   const bodies = (gitRun(projectRoot, ['log', '--format=%s%n%b%x00', `${baseSha}..${remoteSha}`]).stdout || '').split('\0').map((x) => x.trim()).filter(Boolean);
-  if (!bodies.every((b) => /\(cherry picked from commit [0-9a-f]{7,40}\)/.test(b) || /^test\(acceptance\): frozen tests of /.test(b))) return { ok: false, why: 'tem commits que não são do promote' };
+  if (!bodies.every((b) => /\(cherry picked from commit [0-9a-f]{7,40}\)/.test(b) || /^test\(acceptance\): frozen tests of /.test(b) || /^chore\(ratchet\): reconcile ratchet caps of /.test(b))) return { ok: false, why: 'tem commits que não são do promote' };
   const gh = (options.ghSpawn || spawnSync)('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,state,url'], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
   if (!gh || gh.status !== 0) return { ok: false, why: 'não consegui confirmar pelo gh que ela não tem PR' };
   let prs = [];
@@ -7257,6 +7257,19 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       if (full && inRangeAll.includes(full)) shas.add(full);
     }
   }
+  const promoteHelpers = require('./oxe-promote-helpers.cjs');
+  const quickSelection = options.quicks === false
+    ? { quicks: [], skipped: [], warnings: [] }
+    : promoteHelpers.selectPromoteQuickCommits(projectRoot, {
+        range,
+        orderedTaskShas: [...shas],
+        planTasks,
+        allTasks: doc && Array.isArray(doc.tasks) ? doc.tasks : [],
+        phase: phaseCtx.phase,
+        programDir: resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir,
+        config: readProjectConfig(projectRoot) || {},
+      });
+  for (const q of quickSelection.quicks) shas.add(q.sha);
   const criteria = new Set(Array.isArray(task.acceptance) ? task.acceptance : []);
   // OXB-156: the PR carries (a) the task's OWN commits (OXE-Task trailer / done_commit) and (b) the frozen tests it
   // proves, taken as FILES from the program tip (+ the local fixtures they import) — never the program branch's import
@@ -7358,11 +7371,45 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   baseSha = stackInfo.baseSha;
   const stack = stackInfo.stack;
   const buildSha = stack ? stack.sha : baseSha;
-  resolvedBase.warnings = [...(resolvedBase.warnings || []), ...stackInfo.warnings];
+  const unpromoDeps = promoteHelpers.analyzeUnpromotedDependencies(projectRoot, {
+    range,
+    baseSha: buildSha,
+    orderedTaskShas: ordered,
+    planTasks,
+    phase: phaseCtx.phase,
+    stackedTaskIds: stack ? [stack.task] : [],
+  });
+  if (options.strict && unpromoDeps.dependencies.length) {
+    throw new Error(`promote --strict recusado para ${taskId}: ${unpromoDeps.warnings[0]}`);
+  }
+  resolvedBase.warnings = [...(resolvedBase.warnings || []), ...stackInfo.warnings, ...quickSelection.warnings];
   if (assumed.length && !stack) {
     resolvedBase.warnings.push(`${taskId} vem depois de ${assumed.map((a) => `${a.task} (${a.sha.slice(0, 8)})`).join(', ')} no histórico e mexe nos mesmos arquivos (${[...new Set(assumed.flatMap((a) => a.files))].slice(0, 4).join(', ')}) — o cherry-pick pode conflitar; promova junto: oxe-cc runtime promote --tasks ${[...new Set([...assumed.map((a) => a.task), ...taskIds])].join(',')}`);
   }
-  const result = { task: taskId, base, base_sha: baseSha, ...(stack ? { stacked_on: { task: stack.task, branch: stack.branch, pr: stack.pr || null, sha: stack.sha } } : {}), base_requested: resolvedBase.requested, warnings: resolvedBase.warnings, branch, commits: ordered, conflict: null, pr_ready: null, body_file: null, pr: null, commands: [], worktree: null, ...(replacedBranch ? { replaced_branch: replacedBranch } : {}), ...(forceLease ? { replaced_remote: forceLease } : {}) };
+  for (const w of unpromoDeps.warnings) {
+    if (!resolvedBase.warnings.includes(w)) resolvedBase.warnings.push(w);
+  }
+  const result = {
+    task: taskId,
+    base,
+    base_sha: baseSha,
+    ...(stack ? { stacked_on: { task: stack.task, branch: stack.branch, pr: stack.pr || null, sha: stack.sha } } : {}),
+    base_requested: resolvedBase.requested,
+    warnings: resolvedBase.warnings,
+    branch,
+    commits: ordered,
+    ...(quickSelection.quicks.length ? { quick_commits: quickSelection.quicks } : {}),
+    ...(quickSelection.skipped.length ? { skipped_quicks: quickSelection.skipped } : {}),
+    ...(unpromoDeps.dependencies.length ? { unpromoted_dependencies: unpromoDeps.dependencies, suggested_promote_order: unpromoDeps.suggested_order } : {}),
+    conflict: null,
+    pr_ready: null,
+    body_file: null,
+    pr: null,
+    commands: [],
+    worktree: null,
+    ...(replacedBranch ? { replaced_branch: replacedBranch } : {}),
+    ...(forceLease ? { replaced_remote: forceLease } : {}),
+  };
   for (const f of notCarried) {
     const by = (gitLines(projectRoot, ['log', '--format=%h %s', range, '--', f]) || []).slice(0, 3);
     result.warnings.push(sharedSkipped.includes(f)
@@ -7464,6 +7511,25 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       }
       result.frozen_tests = added;
     }
+    // OXB-C1 (P1.2): recalculate `lint.ratchets` caps against `base + task` so program caps lowered by other unpromoted
+    // tasks never turn design-lint red on main; check `enforced.lock.json` targets against main's conformance scene.
+    if (!result.conflict && !result.error) {
+      const pcfg = readProjectConfig(projectRoot) || {};
+      const ratchetAdj = promoteHelpers.reconcilePromotedRatchets(work, buildSha, pcfg);
+      if (ratchetAdj.adjusted.length) {
+        gitRun(work, ['add', '--', ...ratchetAdj.files]);
+        const originTrailers = [...planTasks.map((t) => `OXE-Task: ${phaseCtx.phase ? `${phaseCtx.phase}/` : ''}${t.id}`), ...[...new Set(planTasks.map((t) => t.run_id).filter(Boolean))].map((r) => `OXE-Run: ${r}`)].join('\n');
+        const rc = gitRun(work, ['commit', '-q', '-m', `chore(ratchet): reconcile ratchet caps of ${taskId} on ${base}`, '-m', ratchetAdj.adjusted.map((a) => `${a.file}:${a.line} ${a.program_cap} -> ${a.promoted_cap} (real count: ${a.real_count})`).join('\n'), '-m', originTrailers]);
+        if (!rc.ok) result.error = `commit de ajuste de ratchet falhou: ${rc.stderr.trim().split(/\r?\n/).pop()}`;
+        result.ratchets_adjusted = ratchetAdj.adjusted;
+        result.warnings.push(`ratchet(s) recalculado(s) contra ${base} + ${taskId}: ${ratchetAdj.adjusted.map((a) => `${a.file}:${a.line} ${a.program_cap} → ${a.promoted_cap}`).join(', ')}`);
+      }
+      const enforcedCheck = promoteHelpers.checkPromotedEnforcedTargets(work, buildSha, { base, config: pcfg });
+      if (enforcedCheck.gaps.length) {
+        result.enforced_scene_gaps = enforcedCheck.gaps;
+        result.warnings.push(...enforcedCheck.warnings);
+      }
+    }
     // OXB-206: never promote a branch carrying Git-tracked parked future-phase suites (`tests/acceptance/parked-*`).
     if (!result.conflict && !result.error) {
       const icLib = require('./oxe-integration-checks.cjs');
@@ -7479,6 +7545,34 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       if (ic.ran.length) result.integration_checks = ic.ran;
       // OxeSpace 15/11 (OxeQuery polish T2): the failing output (the file above the cap) and what happens to the branch
       if (!ic.ok) result.error = `check de integração vermelho em ${branch}: \`${ic.failed.command}\` (exit ${ic.failed.exit})${ic.failed.tail ? `\n${String(ic.failed.tail).split(/\r?\n/).slice(-5).map((l) => `    ${l}`).join('\n')}\n` : ''} — nada foi enviado; a branch local ${branch} fica (não enviada). Corrija no programa (ex.: um quick que reduz o arquivo acima do teto, ou npm run notices:generate) e rode o promote de novo: a branch é refeita com o conserto`;
+    }
+    // OXB-C1 (P1.4): discover main CI suites covering the touched components (axe/a11y/conformance/e2e); run with --preview-ci.
+    if (!result.conflict && !result.error) {
+      const pcfg = readProjectConfig(projectRoot) || {};
+      const promotedDiffFiles = gitLines(work, ['diff', '--name-only', buildSha, 'HEAD']) || [];
+      const riskSuites = promoteHelpers.discoverMainCiRiskSuites(work, promotedDiffFiles, {
+        excludeSuites: [...verifyTests, ...(result.frozen_tests || [])],
+      });
+      if (riskSuites.length) result.ci_risk_suites = riskSuites;
+      if (options.previewCi) {
+        const previewCmds = promoteHelpers.buildPreviewCiCommands(work, riskSuites, pcfg);
+        const previewRuns = [];
+        let previewOk = true;
+        const baseVerifyTimeout = Number(pcfg.verify_timeout_ms) > 0 ? Number(pcfg.verify_timeout_ms) : 10 * 60_000;
+        for (const cmd of previewCmds) {
+          const ms = commitTaskVerifyTimeout(projectRoot, options, cmd, baseVerifyTimeout);
+          const r = runChildCommandFull(work, cmd, ms);
+          previewRuns.push({ command: cmd, ok: r.ok, status: r.status, timed_out: r.timedOut, tail: r.tail });
+          if (!r.ok) {
+            previewOk = false;
+            result.error = r.timedOut
+              ? timedOutMessage(`preview-ci em ${branch}`, cmd, ms, r)
+              : `preview-ci vermelho em ${branch}: \`${cmd}\` (exit ${r.status})${r.tail ? `\n${String(r.tail).split(/\r?\n/).slice(-6).map((l) => `    ${l}`).join('\n')}` : ''}`;
+            break;
+          }
+        }
+        result.preview_ci = { ok: previewOk, suites: riskSuites.map((s) => s.suite), runs: previewRuns };
+      }
     }
     // OXB-158: with --open-pr the branch is pushed FIRST — pr:ready posts its GitHub status on the pushed sha (before,
     // it passed its checks, failed to post "… is not on GitHub yet: push it first", and the PR was never opened).
@@ -7537,6 +7631,16 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     '',
     '### Testes congelados (arquivos do tip do programa)',
     ...((result.frozen_tests || []).length ? result.frozen_tests.map((f) => `- \`${f}\``) : ['- — (já na base, ou nenhum)']),
+    ...((result.quick_commits || []).length ? ['', '### Quicks incluídos', ...result.quick_commits.map((q) => `- ${q.sha.slice(0, 10)} (${q.quick}${q.card ? `, ${q.card}` : ''})`)] : []),
+    ...((result.ratchets_adjusted || []).length ? ['', '### Ratchets ajustados para a base', ...result.ratchets_adjusted.map((a) => `- \`${a.file}:${a.line}\`: ${a.program_cap} → ${a.promoted_cap} (contagem real na branch: ${a.real_count})`)] : []),
+    ...(result.suggested_promote_order && result.suggested_promote_order.length ? ['', `### Ordem sugerida de promoção: ${result.suggested_promote_order.join(' → ')}`] : []),
+    ...(((result.ci_risk_suites && result.ci_risk_suites.length) || (result.enforced_scene_gaps && result.enforced_scene_gaps.length)) ? [
+      '',
+      '### Riscos de CI na main (fora do verify da tarefa)',
+      ...((result.ci_risk_suites || []).map((s) => `- \`${s.suite}\` (${s.kind} — cobre ${s.covers.map((c) => `\`${c}\``).join(', ')})`)),
+      ...((result.enforced_scene_gaps || []).map((g) => `- \`${g.file}\` → \`${g.id}\`: seletor \`${g.selector}\` ausente na cena de conformidade (sugestão: manter \`${g.proposed_status}\` — ${g.proposed_reason})`)),
+    ] : []),
+    ...(result.preview_ci ? ['', `### preview-ci: ${result.preview_ci.ok ? 'verde' : 'VERMELHO'} (${result.preview_ci.suites.length} suíte(s))`] : []),
     ...(result.pr_ready ? ['', `### pr:ready: ${result.pr_ready.ok ? 'verde' : 'VERMELHO'}`] : []),
     '',
   ].join('\n');
