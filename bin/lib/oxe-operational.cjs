@@ -978,7 +978,7 @@ function runtimeTrain(projectRoot, activeSession, options = {}) {
   for (const item of left) {
     const task = ((doc && doc.tasks) || []).find((t) => t.id === item.task);
     const verifyCommand = task && task.verify && Array.isArray(task.verify.commands) ? task.verify.commands.join(' && ') : null;
-    const r = lib.resync({ root: projectRoot, item, verifyCommand, spawn: options.spawn, reopen: (id) => { try { require('./oxe-plan-json.cjs').markPlanTaskOpen(paths.plan, id, { by: 'merge-train' }); } catch { /* sem PLAN.md */ } } });
+    const r = lib.resync({ root: projectRoot, item, verifyCommand, config: readProjectConfig(projectRoot) || {}, spawn: options.spawn, reopen: (id) => { try { require('./oxe-plan-json.cjs').markPlanTaskOpen(paths.plan, id, { by: 'merge-train' }); } catch { /* sem PLAN.md */ } } });
     appendEvent(projectRoot, activeSession, { type: 'MergeTrainResync', work_item_id: item.task, payload: { url: item.url, ok: r.ok, why: r.why || null, steps: r.steps } });
     results.push({ task: item.task, ...r });
   }
@@ -7777,6 +7777,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   const signals = ['SIGINT', 'SIGTERM'];
   for (const sig of signals) process.once(sig, onSignal);
   try {
+    const resolvedCapFiles = new Set();
     for (const sha of ordered) {
       const pick = gitRun(work, ['cherry-pick', '-x', sha]);
       if (!pick.ok) {
@@ -7784,6 +7785,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
         const pcfgPick = readProjectConfig(projectRoot) || {};
         const autoRatchet = promoteHelpers.tryResolveRatchetCherryPickConflict(projectRoot, work, sha, pcfgPick, files);
         if (autoRatchet.resolved) {
+          for (const rf of autoRatchet.files || []) resolvedCapFiles.add(rf);
           continue;
         }
         gitRun(work, ['cherry-pick', '--abort']);
@@ -7820,7 +7822,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     // tasks never turn design-lint red on main; check `enforced.lock.json` targets against main's conformance scene.
     if (!result.conflict && !result.error) {
       const pcfg = readProjectConfig(projectRoot) || {};
-      const ratchetAdj = promoteHelpers.reconcilePromotedRatchets(work, buildSha, pcfg);
+      const ratchetAdj = promoteHelpers.reconcilePromotedRatchets(work, buildSha, pcfg, { resolvedCapFiles: [...resolvedCapFiles] });
       if (ratchetAdj.adjusted.length) {
         gitRun(work, ['add', '--', ...ratchetAdj.files]);
         const originTrailers = [...planTasks.map((t) => `OXE-Task: ${phaseCtx.phase ? `${phaseCtx.phase}/` : ''}${t.id}`), ...[...new Set(planTasks.map((t) => t.run_id).filter(Boolean))].map((r) => `OXE-Run: ${r}`)].join('\n');

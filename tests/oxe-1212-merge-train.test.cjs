@@ -73,4 +73,75 @@ describe('OXB-102: merge train', () => {
     assert.equal(t1.done, false, 'T1 reopened');
     assert.equal(t1.reopened[0].by, 'merge-train');
   });
+
+  it('sync --apply: auto-resolves cap-only ratchet conflict with main and recalculates cap = realCount before verify (OXB-C2 06:10Z)', () => {
+    const remote = tmp('oxe-1212-mt-ratchet-r-');
+    git(remote, 'init', '-q', '--bare');
+    const dir = tmp('oxe-1212-mt-ratchet-');
+    write(dir, '.gitignore', '.oxe/\n');
+    write(dir, 'src/a.tsx', 'export const A = () => "<div><button>1</button><button>2</button></div>";\n');
+    write(dir, 'src/b.tsx', 'export const B = () => "<div><button>3</button><button>4</button></div>";\n');
+    write(dir, 'tests/design-lint.test.ts', 'const RAW_BUTTON_CAP = 4;\n');
+    write(dir, '.oxe/STATE.md', '# S\n');
+    write(dir, '.oxe/PLAN.md', '# PLAN\n');
+    write(dir, '.oxe/config.json', JSON.stringify({
+      lint: {
+        ratchets: [{
+          file: 'tests/design-lint.test.ts',
+          pattern: 'RAW_BUTTON_CAP = (\\d+)',
+          counts: '<button\\b',
+          paths: ['src/**/*.tsx'],
+          direction: 'down',
+        }],
+      },
+    }, null, 2));
+    // Strict brd-01/brd-03 verify: requires RAW_BUTTON_CAP === exact <button> count in src/*.tsx!
+    write(dir, 'scripts/check-ratchet.cjs', [
+      "const fs = require('fs');",
+      "const cap = Number(/RAW_BUTTON_CAP = (\\d+)/.exec(fs.readFileSync('tests/design-lint.test.ts', 'utf8'))[1]);",
+      "const all = [fs.readFileSync('src/a.tsx', 'utf8'), fs.readFileSync('src/b.tsx', 'utf8')].join('\\n');",
+      'const cnt = (all.match(/<button\\b/g) || []).length;',
+      'process.exit(cap === cnt ? 0 : 1);',
+    ].join('\n'));
+    const strictVerify = 'node scripts/check-ratchet.cjs';
+    write(dir, '.oxe/PLAN.json', JSON.stringify({
+      schema_version: 1,
+      tasks: [{ id: 'T2', title: 'b', wave: 1, files: ['src/b.tsx', 'tests/design-lint.test.ts'], done: true, verify: { commands: [strictVerify] } }],
+    }, null, 2));
+    git(dir, 'init', '-q', '-b', 'main'); git(dir, 'config', 'user.email', 't@t'); git(dir, 'config', 'user.name', 't');
+    git(dir, 'add', '-A'); git(dir, 'commit', '-qm', 'base');
+    git(dir, 'remote', 'add', 'origin', remote); git(dir, 'push', '-q', 'origin', 'main');
+
+    // PR #2 (oxe/t2) removes 1 button in src/b.tsx and lowers cap 4 -> 3
+    git(dir, 'checkout', '-qb', 'oxe/t2', 'main');
+    write(dir, 'src/b.tsx', 'export const B = () => "<div><button>4</button></div>";\n');
+    write(dir, 'tests/design-lint.test.ts', 'const RAW_BUTTON_CAP = 3;\n');
+    git(dir, 'add', '-A'); git(dir, 'commit', '-qm', 'feat: T2\n\nOXE-Task: F6/T2');
+    git(dir, 'push', '-q', 'origin', 'oxe/t2');
+
+    // Meanwhile on main, PR #1 merged: removed 2 buttons in src/a.tsx and lowered cap 4 -> 2 (conflicts on same line!)
+    git(dir, 'checkout', '-q', 'main');
+    write(dir, 'src/a.tsx', 'export const A = () => "<div/>";\n');
+    write(dir, 'tests/design-lint.test.ts', 'const RAW_BUTTON_CAP = 2;\n');
+    git(dir, 'add', '-A'); git(dir, 'commit', '-qm', 'PR #1 merged on main');
+    git(dir, 'push', '-q', 'origin', 'main');
+
+    op.appendEvent(dir, null, { type: 'TaskPromoted', work_item_id: 'T2', payload: { base: 'main', branch: 'oxe/t2', pr: 'https://github.com/o/r/pull/886' } });
+    const spawn = (cmd, args, opts) => {
+      if (cmd === 'gh') {
+        if (args[1] === 'view') {
+          return { status: 0, stdout: JSON.stringify({ state: 'OPEN', headRefName: 'oxe/t2', url: args[2], labels: [{ name: 'merge-train:removed' }], comments: [{ body: 'merge-train: removed (conflict with main)' }] }) };
+        }
+        return { status: 0, stdout: '' };
+      }
+      return spawnSync(cmd, args, opts);
+    };
+
+    const out = op.runtimeTrain(dir, null, { action: 'sync', apply: true, spawn });
+    assert.equal(out.results.length, 1);
+    assert.equal(out.results[0].ok, true, JSON.stringify(out.results[0]));
+    assert.deepEqual(out.results[0].steps.map((s) => s.step), ['reopen', 'merge origin/main', 'ratchet', 'verify', 'push (sem force)', 'relabel']);
+    // Merged tree has 0 buttons in a.tsx + 1 button in b.tsx = 1!
+    assert.equal(git(remote, 'show', 'oxe/t2:tests/design-lint.test.ts').stdout.trim(), 'const RAW_BUTTON_CAP = 1;');
+  });
 });

@@ -167,14 +167,16 @@ describe('OXB-C1 P1: runtime promote hardening (#1 quicks, #2 ratchets & enforce
       ],
     }, null, 2));
 
-    // OXB-C2 Adendo: T34 conflicted on tests/design-lint.test.ts (2->1 vs main's 4) AND decreased count (3 <= 4):
-    // promote auto-resolves the cap conflict and keeps main's cap line INTACT (4, zero diff vs main!) so merge-train cars never conflict!
+    // OXB-C2 Adendo revisto (06:10Z): frozen design-lint tests (brd-01/brd-03) require cap === realCount!
+    // T34 conflicted on tests/design-lint.test.ts (2->1 vs main's 4): promote auto-resolves the cherry-pick cap conflict
+    // AND sets RAW_BUTTON_CAP = 3 (exact real count on main + T34)!
     const out = op.runtimePromote(dir, null, { task: 'T34', base: 'main', prReady: false });
     assert.equal(out.error, undefined, out.error);
-    assert.equal(git(dir, 'show', `${out.branch}:tests/design-lint.test.ts`), 'const RAW_BUTTON_CAP = 4;');
-    assert.equal(git(dir, 'diff', `main..${out.branch}`, '--', 'tests/design-lint.test.ts'), '', 'zero diff on ratchet file vs main when count <= baseCap');
+    assert.equal(out.ratchets_adjusted.length, 1);
+    assert.equal(out.ratchets_adjusted[0].promoted_cap, 3);
+    assert.equal(git(dir, 'show', `${out.branch}:tests/design-lint.test.ts`), 'const RAW_BUTTON_CAP = 3;');
 
-    // Conversely, when a task INCREASES the count above main's cap (5 > 4), promote updates the cap to 5!
+    // Conversely, when a task INCREASES the count above main's cap (7 > 4), promote updates the cap to 7!
     write(dir, 'src/ExtraButtons.tsx', 'export const C = () => "<div><button>5</button><button>6</button><button>7</button></div>";\n');
     git(dir, 'add', '-A');
     git(dir, 'commit', '-qm', 'feat: T35 adds buttons\n\nOXE-Task: F6/T35');

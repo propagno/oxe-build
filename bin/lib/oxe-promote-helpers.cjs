@@ -280,20 +280,21 @@ function tryResolveRatchetCherryPickConflict(projectRoot, work, sha, config, con
 }
 
 /**
- * P1.2 (a) + OXB-C2 Adendo (16/11):
+ * P1.2 (a) + OXB-C2 Adendo revisto (16/11 06:10Z):
  * Reconciles `lint.ratchets` in the promote worktree `work` against `buildSha` (`base` + promoted task).
- * To prevent cascading merge-train conflicts on the ratchet cap line across concurrent PRs (#882, #883, #886, #894):
- * - Promote ONLY changes `base`'s cap when the task INCREASES the count beyond `base`'s cap (`realCount > baseCap` for
- *   `down`, or `realCount < baseCap` for `up`).
- * - Whenever `realCount` fits within `base`'s cap (`realCount <= baseCap`), promote restores `base`'s cap line intact
- *   (tightening happens in a standalone commit after the batch merges).
+ * Frozen design-lint tests (e.g. `brd-01`/`brd-03`) require `cap === realCount` ("a trava acompanha o código para baixo"),
+ * so whenever the promoted task touched the ratchet file (including auto-resolved cap-only cherry-pick conflicts),
+ * violated `base`'s cap, or changed files counted by a tight ratchet on `base`, promote writes `nextCap = realCount`.
  */
-function reconcilePromotedRatchets(work, buildSha, config) {
+function reconcilePromotedRatchets(work, buildSha, config, options = {}) {
   const ratchetsLib = require('./oxe-ratchets.cjs');
+  const testScope = require('./oxe-test-scope.cjs');
   const list = ratchetsLib.ratchetsOf(config || {});
   if (!list.length) return { adjusted: [], files: [] };
 
-  const changedInWork = new Set(gitLines(work, ['diff', '--name-only', buildSha, 'HEAD']).map(norm));
+  const changedList = gitLines(work, ['diff', '--name-only', buildSha, 'HEAD']).map(norm);
+  const changedInWork = new Set(changedList);
+  const resolvedCapSet = new Set((options.resolvedCapFiles || []).map(norm));
   const adjusted = [];
   const files = new Set();
 
@@ -310,27 +311,15 @@ function reconcilePromotedRatchets(work, buildSha, config) {
     const baseCap = baseCapObj ? baseCapObj.value : null;
 
     const realCount = ratchetsLib.countOf(work, r);
-    const touchedHere = changedInWork.has(r.file);
+    const touchedHere = changedInWork.has(norm(r.file)) || resolvedCapSet.has(norm(r.file));
+    const violated = r.direction === 'down' ? cap.value < realCount : cap.value > realCount;
+    const touchedCountedPath = Array.isArray(r.paths) && r.paths.length
+      ? changedList.some((f) => r.paths.some((pat) => testScope.covers(pat, f)))
+      : false;
 
-    let nextCap;
-    let reason;
-    if (baseCap != null) {
-      const exceedsBase = r.direction === 'down' ? realCount > baseCap : realCount < baseCap;
-      if (exceedsBase) {
-        nextCap = realCount;
-        reason = 'increased_above_base';
-      } else {
-        // Task decreased or preserved count within base's cap: keep base's cap line intact!
-        nextCap = baseCap;
-        reason = 'kept_base_cap';
-      }
-    } else {
-      const violated = r.direction === 'down' ? cap.value < realCount : cap.value > realCount;
-      if (!violated && !touchedHere) continue;
-      nextCap = violated ? realCount : cap.value;
-      reason = 'new_ratchet_file';
-    }
+    if (!touchedHere && !violated && !(touchedCountedPath && baseCap != null && realCount !== baseCap)) continue;
 
+    const nextCap = realCount;
     if (nextCap === cap.value) continue;
 
     let nextText = text.slice(0, cap.index) + String(nextCap) + text.slice(cap.index + cap.length);
@@ -346,7 +335,7 @@ function reconcilePromotedRatchets(work, buildSha, config) {
       base_cap: baseCap,
       promoted_cap: nextCap,
       real_count: realCount,
-      reason,
+      reason: violated ? 'increased_above_cap' : 'matched_real_count',
     });
   }
 
