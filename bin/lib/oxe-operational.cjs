@@ -2743,6 +2743,11 @@ async function runtimeAlmAdmin(projectRoot, activeSession, options = {}) {
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   if (options.action === 'version') return admin.versionEnsure(rest, cfg, options.name, options);
+  if (options.action === 'priority') {
+    const out = await admin.setPriority(rest, cfg, options.key, options.name, options);
+    if (!out.planned) appendEvent(projectRoot, activeSession, { type: 'AlmPrioritySet', payload: { key: out.key, priority: out.priority, confirmed: out.confirmed } });
+    return out;
+  }
   if (options.action === 'intake') {
     let fromText = null;
     if (options.from && !/^https?:\/\//i.test(options.from)) {

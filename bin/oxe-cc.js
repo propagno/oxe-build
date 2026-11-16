@@ -7901,7 +7901,8 @@ async function main() {
     const H = {
       status: ['oxe-cc alm status', 'provedor, transporte, itens ligados, pendências e fila do MCP', 'oxe-cc alm status'],
       doctor: ['oxe-cc alm doctor', 'só leitura: credenciais, projeto, cada etapa de alm.states existe no Jira e as colunas do quadro estão na ordem', 'oxe-cc alm doctor'],
-      intake: ['oxe-cc alm intake --type story|task|bug|epic --summary "…" [--epic OXE-n] [--version 1.5.2] [--labels a,b] [--from <arquivo.md|url>] [--ref <id>] [--dry-run]', 'item novo fora do PRD/PLAN (estudo, pedido, bug de HML): nasce na primeira coluna com o esqueleto do tipo, vai para o registro e é conferido por GET (só o escritor)', 'oxe-cc alm intake --type bug --summary "A lateral pisca no Windows" --epic OXE-5 --version 1.5.2 --dry-run'],
+      priority: ['oxe-cc alm priority <CHAVE> <nome> [--dry-run]', 'troca a prioridade de um card (validada contra as prioridades do Jira, conferida por GET; só o escritor)', 'oxe-cc alm priority OXE-292 High'],
+      intake: ['oxe-cc alm intake --type story|task|bug|epic --summary "…" [--epic OXE-n] [--version 1.5.2] [--labels a,b] [--from <arquivo.md|url>] [--ref <id>] [--priority <nome>] [--dry-run]', 'item novo fora do PRD/PLAN (estudo, pedido, bug de HML): nasce na primeira coluna com o esqueleto do tipo, vai para o registro e é conferido por GET (só o escritor)', 'oxe-cc alm intake --type bug --summary "A lateral pisca no Windows" --epic OXE-5 --version 1.5.2 --dry-run'],
       push: ['oxe-cc alm push [--stories-only|--tasks-only] [--dry-run] [--rebuild-ledger] [--first-push]', 'histórias do PRD e tarefas do PLAN viram itens, sem duplicar; com stories_source "alm" só liga a cards existentes', 'oxe-cc alm push --tasks-only --dry-run'],
       sync: ['oxe-cc alm sync [--dry-run]', 'move os itens pelas etapas do ciclo (eventos do OXE), nunca para trás', 'oxe-cc alm sync --dry-run'],
       move: ['oxe-cc alm move <US-n|Tn|chave> <etapa> [--comment "…"] [--apply]', 'move um item à mão (etapas: intake grooming refinement ready in_progress review verified queued integrated staging accepted released)', 'oxe-cc alm move OXE-20 review --comment "PR #801"'],
@@ -7933,7 +7934,7 @@ async function main() {
 
   // `alm version <KEY> <versão>` (a card's fix version) goes to the alm handler below; `alm version ensure` stays here
   const almVersionSet = command === 'alm' && argv[0] === 'version' && /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(argv[1] || '');
-  if (command === 'alm' && ['intake', 'doctor', 'version', 'usage'].includes(argv[0]) && !almVersionSet) {
+  if (command === 'alm' && ['intake', 'doctor', 'version', 'usage', 'priority'].includes(argv[0]) && !almVersionSet) {
     const action = argv[0];
     const o = { dir: process.cwd(), json: false };
     let i = action === 'version' && argv[1] === 'ensure' ? 2 : 1;
@@ -7944,8 +7945,11 @@ async function main() {
       else if (a === '--dry-run') o.dryRun = true;
       else if (a === '--apply') o.apply = true;
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
-      else if (['--type', '--summary', '--epic', '--version', '--labels', '--from', '--ref', '--release-date'].includes(a) && argv[i + 1]) o[a === '--release-date' ? 'releaseDate' : a.slice(2)] = String(argv[++i]);
+      else if (['--type', '--summary', '--epic', '--version', '--labels', '--from', '--ref', '--release-date', '--priority'].includes(a) && argv[i + 1]) o[a === '--release-date' ? 'releaseDate' : a.slice(2)] = String(argv[++i]);
       else if (!a.startsWith('-') && action === 'version' && !o.name && !fs.existsSync(a)) o.name = a;
+      // alm priority <KEY> <nome> (OXE-292)
+      else if (!a.startsWith('-') && action === 'priority' && !o.key) o.key = a;
+      else if (!a.startsWith('-') && action === 'priority' && !o.name) o.name = a;
       else if (!a.startsWith('-') && fs.existsSync(a)) o.dir = path.resolve(a);
       else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
     }
@@ -7958,6 +7962,9 @@ async function main() {
       } else if (action === 'usage') {
         if (!out.commands.length) console.log('  nenhum comando alm registrado ainda (.oxe/alm/usage.ndjson)');
         for (const c of out.commands) console.log(`  ${c.cmd.padEnd(22)} ${String(c.runs).padStart(4)} execução(ões) · ${c.failed} falha(s) · mediana ${c.median_ms ?? '—'} ms${c.last_error ? `\n      ${dim}última falha: ${c.last_error}${reset}` : ''}`);
+      } else if (action === 'priority') {
+        console.log(out.planned ? `  ${yellow}[ensaio]${reset} ${out.key}: prioridade → ${out.planned.priority}` : out.confirmed ? `  ${green}✓${reset} ${out.key}: prioridade ${out.priority} (conferida)` : `  ${yellow}!${reset} ${out.key}: pedi ${out.priority}, a leitura devolveu ${out.read_back || '—'}`);
+        if (!out.planned && !out.confirmed) process.exitCode = 1;
       } else if (action === 'version') console.log(out.exists ? `  ${dim}= versão ${out.version} já existe${out.released ? ' (lançada)' : ''}${reset}` : out.planned ? `  ${yellow}[ensaio]${reset} criaria a versão ${out.version}` : `  ${green}✓${reset} versão ${out.version} criada`);
       else if (out.planned) {
         console.log(`  ${yellow}[ensaio]${reset} criaria ${out.planned.type} "${out.planned.summary}"${out.planned.epic ? ` · épico ${out.planned.epic}` : ''}${out.planned.version ? ` · versão ${out.planned.version}` : ''} · rótulos ${out.planned.labels.join(', ')} · ${out.planned.description_lines} linha(s) de descrição (ref ${out.ref})${out.offline ? ' · conferido offline (sem credencial)' : ''}`);

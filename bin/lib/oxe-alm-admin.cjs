@@ -46,6 +46,48 @@ function usageReport(projectRoot) {
 }
 
 /**
+ * OxeSpace 15/11 (OXE-292): `--type bug` became a Task with a "bug" label — the default map says bug: 'Task'. With no
+ * explicit alm.jira.types.bug, the project's own issue types decide: a "Bug" (or "Defeito" / "Erro") type is used,
+ * otherwise Task with the label as before.
+ * @returns {Promise<{ name: string, source: 'config'|'project'|'fallback' }>}
+ */
+async function bugIssueType(rest, cfg) {
+  if (cfg.p.types && cfg.p.types.bug) return { name: cfg.p.types.bug, source: 'config' };
+  try {
+    const project = await rest.request('GET', `${rest.site}/rest/api/3/project/${cfg.p.project}`);
+    const names = ((project && project.issueTypes) || []).map((t) => t && t.name).filter(Boolean);
+    const hit = names.find((n) => /^(bug|defeito|erro)$/i.test(String(n).trim()));
+    if (hit) return { name: hit, source: 'project' };
+  } catch { /* the fallback below */ }
+  return { name: 'Task', source: 'fallback' };
+}
+
+/** A priority name of the Jira instance, matched case-insensitively (null when it does not exist). */
+async function priorityOf(rest, name) {
+  const want = String(name || '').trim();
+  if (!want) return null;
+  const list = await rest.request('GET', `${rest.site}/rest/api/3/priority`);
+  const hit = (list || []).find((p) => p && String(p.name).toLowerCase() === want.toLowerCase());
+  if (!hit) throw new Error(`prioridade "${want}" não existe no Jira (existem: ${(list || []).map((p) => p.name).join(', ') || '—'})`);
+  return hit.name;
+}
+
+/**
+ * `oxe-cc alm priority <KEY> <nome>` (OxeSpace 15/11, OXE-292): the writer sets a card's priority, confirmed by GET.
+ */
+async function setPriority(rest, cfg, key, name, input = {}) {
+  const k = String(key || '').trim().toUpperCase();
+  if (!new RegExp(`^${String(cfg.p.project || '[A-Z][A-Z0-9]+').toUpperCase()}-\\d+$`).test(k)) throw new Error('uso: oxe-cc alm priority <CHAVE> <nome> (ex.: OXE-292 High)');
+  const priority = await priorityOf(rest, name);
+  if (!priority) throw new Error('informe a prioridade (ex.: High)');
+  if (input.dryRun) return { key: k, planned: { priority } };
+  await rest.request('PUT', `${rest.site}/rest/api/3/issue/${k}`, { fields: { priority: { name: priority } } });
+  const back = await rest.request('GET', `${rest.site}/rest/api/3/issue/${k}?fields=priority`);
+  const now = back && back.fields && back.fields.priority ? back.fields.priority.name : null;
+  return { key: k, priority, confirmed: now === priority, ...(now !== priority ? { read_back: now } : {}) };
+}
+
+/**
  * A new item outside the PRD/PLAN. Idempotent by its ref label (ref-<program>-<ref>) and the ledger.
  * @param {{ request: Function, site: string }} rest
  */
@@ -70,6 +112,9 @@ async function intake(rest, cfg, input, ctx) {
   }
   if (input.from && !input.fromText) body += `\n\nOrigem: ${input.from}`;
   const types = { epic: 'Epic', story: 'Story', task: 'Task', bug: 'Task', ...(cfg.p.types || {}) };
+  // the project's Bug type when it has one (OXE-292); offline (dry run without credentials) keeps the map
+  if (kind === 'bug' && !input.offline) types.bug = (await bugIssueType(rest, cfg)).name;
+  const priority = input.priority && !input.offline ? await priorityOf(rest, input.priority) : input.priority ? String(input.priority) : null;
   const fields = {
     project: { key: cfg.p.project },
     issuetype: { name: types[kind] },
@@ -78,12 +123,13 @@ async function intake(rest, cfg, input, ctx) {
     labels,
     ...(input.epic && kind !== 'epic' ? { parent: { key: String(input.epic) } } : {}),
     ...(input.version ? { fixVersions: [{ name: String(input.version) }] } : {}),
+    ...(priority ? { priority: { name: priority } } : {}),
   };
   if (input.dryRun) {
     // the file is checked offline too: the sections of the type, the CA format, the refine lint (a reader session
     // validates the card before handing it to the writer)
     const lint = input.fromText ? refine.lintSpec(input.fromText, kind) : null;
-    return { ref, planned: { type: types[kind], summary, labels, epic: input.epic || null, version: input.version || null, description_lines: body.split('\n').length }, ...(lint ? { lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings, criteria: lint.criteria.length, needs_info: lint.needs_info } } : {}), offline: Boolean(input.offline) };
+    return { ref, planned: { type: types[kind], summary, labels, epic: input.epic || null, version: input.version || null, priority: priority || null, description_lines: body.split('\n').length }, ...(lint ? { lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings, criteria: lint.criteria.length, needs_info: lint.needs_info } } : {}), offline: Boolean(input.offline) };
   }
   const found = await rest.request('GET', `${rest.site}/rest/api/3/search/jql?jql=${encodeURIComponent(`project = "${cfg.p.project}" AND labels = "${label}"`)}&fields=summary&maxResults=1`);
   if (found && found.issues && found.issues[0]) {
@@ -92,13 +138,13 @@ async function intake(rest, cfg, input, ctx) {
   }
   const created = await rest.request('POST', `${rest.site}/rest/api/3/issue`, { fields });
   alm.addLink(ctx.programDir, { ref, key: created.key, kind, provider: 'jira', intake: true });
-  const back = await rest.request('GET', `${rest.site}/rest/api/3/issue/${created.key}?fields=status,fixVersions,labels`);
+  const back = await rest.request('GET', `${rest.site}/rest/api/3/issue/${created.key}?fields=status,fixVersions,labels,priority,issuetype`);
   const versions = ((back && back.fields && back.fields.fixVersions) || []).map((v) => v.name);
   let versionFix = null;
   if (input.version && !versions.includes(String(input.version))) {
     try { versionFix = await alm.provider(cfg, ctx.options).setFixVersion(created.key, String(input.version)); } catch (err) { versionFix = { ok: false, error: err.message }; }
   }
-  return { ref, key: created.key, created: true, status: back && back.fields && back.fields.status ? back.fields.status.name : null, confirmed: Boolean(back), ...(versionFix ? { version_set: versionFix.ok !== false } : {}) };
+  return { ref, key: created.key, created: true, type: types[kind], status: back && back.fields && back.fields.status ? back.fields.status.name : null, ...(priority ? { priority: back && back.fields && back.fields.priority ? back.fields.priority.name : null } : {}), confirmed: Boolean(back), ...(versionFix ? { version_set: versionFix.ok !== false } : {}) };
 }
 
 /** `version ensure <name>`: the fix version exists in the project (created when missing). */
@@ -139,6 +185,11 @@ async function doctor(rest, cfg) {
   out.done_statuses = doneNames;
   // informative (never fails the doctor): a workflow without a cancel status is valid, it only limits alm supersede
   out.checks.push({ name: 'fechar sem entregar', ok: closable.length > 0, info: true, detail: closable.length ? `status done para cancelar/substituir: ${closable.join(', ')}` : `só há status done de release (${doneNames.join(', ') || '—'}): alm supersede só fecha com --close-to ou --no-close; peça ao admin um status como "Cancelado"` });
+  // OXE-292: which issue type `alm intake --type bug` will use (informative: a project without Bug is valid)
+  try {
+    const bt = await bugIssueType(rest, cfg);
+    out.checks.push({ name: 'tipo do bug', ok: bt.source !== 'fallback', info: true, detail: bt.source === 'config' ? `alm.jira.types.bug → "${bt.name}"` : bt.source === 'project' ? `o projeto tem "${bt.name}": alm intake --type bug o usa` : 'o projeto não tem um tipo Bug: alm intake --type bug cria Task com o label bug (ou mapeie alm.jira.types.bug)' });
+  } catch { /* informative */ }
   const notTracked = (cfg.track || []).filter((s) => !cfg.states[s]);
   check('track', !notTracked.length, notTracked.length ? `etapas em alm.track sem estado mapeado: ${notTracked.join(', ')}` : `o OXE move ${cfg.track.join(', ') || 'nada'}`);
   try {
@@ -160,4 +211,4 @@ async function doctor(rest, cfg) {
   return out;
 }
 
-module.exports = { logUsage, usageReport, intake, versionEnsure, doctor, KINDS };
+module.exports = { logUsage, usageReport, intake, versionEnsure, doctor, setPriority, bugIssueType, KINDS };

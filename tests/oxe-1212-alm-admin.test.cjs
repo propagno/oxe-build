@@ -132,3 +132,51 @@ describe('alm usage log and help', () => {
     assert.match(hs.stdout, /Exemplo: oxe-cc alm refine OXE-20/);
   });
 });
+
+describe('OXE-292: the project Bug type and the card priority', () => {
+  // a Jira with a Bug issue type and the default priorities
+  function jira2(withBug) {
+    const issues = new Map();
+    const calls = [];
+    let n = 290;
+    const http = async (method, url, headers, body) => {
+      calls.push({ method, url, body });
+      const u = new URL(url);
+      const p = u.pathname;
+      if (p === '/rest/api/3/project/OXE' && method === 'GET') return { status: 200, json: { id: '100', key: 'OXE', issueTypes: [{ name: 'Task' }, { name: 'Story' }, ...(withBug ? [{ name: 'Bug' }] : [])] } };
+      if (p === '/rest/api/3/priority') return { status: 200, json: [{ name: 'Highest' }, { name: 'High' }, { name: 'Medium' }, { name: 'Low' }] };
+      if (p === '/rest/api/3/search/jql') return { status: 200, json: { issues: [] } };
+      if (p === '/rest/api/3/issue' && method === 'POST') { n += 1; const key = `OXE-${n}`; issues.set(key, { key, fields: { ...body.fields, status: { name: 'Backlog' }, fixVersions: [] } }); return { status: 201, json: { key } }; }
+      const m = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)$/.exec(p);
+      if (m && method === 'GET') return issues.has(m[1]) ? { status: 200, json: issues.get(m[1]) } : { status: 404, json: null, text: 'nf' };
+      if (m && method === 'PUT') { const it = issues.get(m[1]); if (it && body.fields.priority) it.fields.priority = { name: body.fields.priority.name }; return { status: 204, json: null }; }
+      return { status: 404, json: null, text: `no route ${method} ${p}` };
+    };
+    return { http, issues, calls };
+  }
+
+  it('a project with a Bug type gets a Bug; without it, Task with the label (as before)', async () => {
+    const dir = project();
+    const j = jira2(true);
+    const out = await op.runtimeAlmAdmin(dir, null, { action: 'intake', type: 'bug', summary: 'O release quebra no Windows', ref: 'REL-1', http: j.http, env: ENV });
+    assert.equal(out.type, 'Bug');
+    assert.equal(j.issues.get(out.key).fields.issuetype.name, 'Bug');
+    const j2 = jira2(false);
+    const dir2 = project();
+    const out2 = await op.runtimeAlmAdmin(dir2, null, { action: 'intake', type: 'bug', summary: 'O release quebra no Windows', ref: 'REL-2', http: j2.http, env: ENV });
+    assert.equal(out2.type, 'Task');
+  });
+
+  it('intake --priority and alm priority set it, validated against the instance and confirmed by GET', async () => {
+    const dir = project();
+    const j = jira2(true);
+    const out = await op.runtimeAlmAdmin(dir, null, { action: 'intake', type: 'bug', summary: 'O release quebra no Windows', ref: 'REL-3', priority: 'high', http: j.http, env: ENV });
+    assert.equal(j.issues.get(out.key).fields.priority.name, 'High', 'matched case-insensitively');
+    assert.equal(out.priority, 'High');
+    const set = await op.runtimeAlmAdmin(dir, null, { action: 'priority', key: out.key, name: 'Highest', http: j.http, env: ENV });
+    assert.equal(set.confirmed, true);
+    assert.equal(j.issues.get(out.key).fields.priority.name, 'Highest');
+    await assert.rejects(op.runtimeAlmAdmin(dir, null, { action: 'priority', key: out.key, name: 'Urgentíssima', http: j.http, env: ENV }), /prioridade "Urgentíssima" não existe no Jira/);
+    await assert.rejects(op.runtimeAlmAdmin(dir, null, { action: 'priority', key: out.key, name: 'High', http: j.http, env: { ...ENV, OXE_ALM_WRITER: 'outra' } }), /escritor|writer/i);
+  });
+});

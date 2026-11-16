@@ -218,6 +218,7 @@ function jiraProvider(cfg, env, ctx) {
   const auth = Buffer.from(`${env[cfg.p.email_env || 'JIRA_EMAIL']}:${env[cfg.p.token_env || 'JIRA_API_TOKEN']}`).toString('base64');
   const c = { ...ctx, headers: { Authorization: `Basic ${auth}`, Accept: 'application/json', 'Content-Type': 'application/json' } };
   const types = { epic: 'Epic', story: 'Story', task: 'Task', bug: 'Task', ...(cfg.p.types || {}) };
+  let bugTypeResolved = false;
   const project = cfg.p.project;
   const keyUrl = (key) => `${site}/browse/${key}`;
   return {
@@ -245,6 +246,15 @@ function jiraProvider(cfg, env, ctx) {
       return issue ? { key: issue.key, id: issue.id, status: issue.fields && issue.fields.status ? issue.fields.status.name : null } : null;
     },
     async create(item) {
+      // OXE-292: a bug uses the project's Bug type when it has one and the config does not map it (once per provider)
+      if (item.kind === 'bug' && !(cfg.p.types && cfg.p.types.bug) && !bugTypeResolved) {
+        bugTypeResolved = true;
+        try {
+          const pj = await request(c, 'GET', `${site}/rest/api/3/project/${project}`);
+          const hit = ((pj && pj.issueTypes) || []).map((t) => t && t.name).find((n) => /^(bug|defeito|erro)$/i.test(String(n || '').trim()));
+          if (hit) types.bug = hit;
+        } catch { /* keep the map */ }
+      }
       const fields = {
         project: { key: project },
         issuetype: { name: types[item.kind] || types.task },
