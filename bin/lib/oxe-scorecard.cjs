@@ -78,13 +78,36 @@ function foldChanges(lines) {
 /**
  * @param {{ events: object[], changeLines: object[], ledgers: object[] }} input
  */
-function computeScorecard(input) {
+function computeScorecard(input = {}) {
   // `since` (ISO date/time): measure only the work done from then on — e.g. a project's history from before 1.21.
-  const since = input.since ? new Date(input.since).toISOString() : null;
+  let since = null;
+  if (input.since) {
+    const d = new Date(input.since);
+    if (Number.isNaN(d.getTime())) throw new Error(`scorecard: data --since inválida (${input.since})`);
+    since = d.toISOString();
+  }
   const after = (ts) => !since || String(ts || '') >= since;
-  const events = (Array.isArray(input.events) ? input.events : []).filter((e) => after(e.timestamp));
+  const allEvents = (Array.isArray(input.events) ? input.events : []).filter(Boolean);
+  const phaseWindows = [];
+  const knownPhases = new Set();
+  for (const e of [...allEvents].sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')))) {
+    if (e.type === 'PhaseStarted' && e.payload && e.payload.phase) {
+      knownPhases.add(e.payload.phase);
+      phaseWindows.push({ phase: e.payload.phase, at: String(e.timestamp || '') });
+    }
+  }
+  const inferPhaseAt = (ts) => {
+    const t = String(ts || '');
+    let ph = null;
+    for (const w of phaseWindows) {
+      if (w.at <= t) ph = w.phase;
+      else break;
+    }
+    return ph;
+  };
+  const events = allEvents.filter((e) => after(e.timestamp));
   const changes = foldChanges(input.changeLines).filter((cr) => after(cr.at));
-  const ledgers = (Array.isArray(input.ledgers) ? input.ledgers : []).filter((l) => after(l.updated_at || l.started_at));
+  const ledgers = (Array.isArray(input.ledgers) ? input.ledgers : []).filter((l) => l && after(l.updated_at || l.started_at));
 
   // 1.21.1 (OXB-054): first-attempt rate PER TASK over every execute of the run. A task counts as first-attempt only if
   // its first terminal outcome is a completion of attempt 1 with no failed attempt before it; a task that failed and
@@ -112,7 +135,7 @@ function computeScorecard(input) {
       failedBefore.add(key);
       if (!outcome.has(key)) outcome.set(key, 'failed');
     } else if (e.type === 'WorkItemCompleted') {
-      if (p.completed_by === 'verify_only') {
+      if (p.completed_by === 'verify_only' || p.completed_by === 'external_delivery') {
         external += 1;
         if (!completedAt.has(key)) completedAt.set(key, e.timestamp || '');
         continue;
@@ -131,10 +154,30 @@ function computeScorecard(input) {
   const resolved = changes.filter((cr) => cr.status === 'resolved');
   const withoutProof = resolved.filter((cr) => !/teste de aceite|gate do projeto/i.test(String(cr.resolution || ''))).length;
 
-  // a phase's green verify is the last VerificationCompleted passed before the CR, in that phase's run
-  const greens = events.filter((e) => e.type === 'VerificationCompleted' && e.payload && e.payload.status === 'passed').map((e) => e.timestamp || '');
+  // a phase's green verify is the earliest VerificationCompleted passed in that phase; in multi-phase programs,
+  // a CR filed in F2 before F2 has passed verification must not be blamed on F1's earlier green verify.
+  const greenEvents = events.filter((e) => e.type === 'VerificationCompleted' && e.payload && e.payload.status === 'passed');
+  const greenByPhase = new Map();
+  for (const e of greenEvents) {
+    const ts = String(e.timestamp || '');
+    const ph = (e.payload && e.payload.phase) || inferPhaseAt(ts);
+    if (ph) {
+      knownPhases.add(ph);
+      const prev = greenByPhase.get(ph);
+      if (prev == null || ts < prev) greenByPhase.set(ph, ts);
+    }
+  }
+  const greens = greenEvents.map((e) => String(e.timestamp || ''));
   const firstGreen = greens.length ? greens.sort()[0] : null;
-  const postGreen = changes.filter((cr) => (cr.class === 'defect' || cr.class === 'constraint') && !cr.gate && firstGreen && String(cr.at || '') > firstGreen).length;
+  const postGreen = changes.filter((cr) => {
+    if ((cr.class !== 'defect' && cr.class !== 'constraint') || cr.gate) return false;
+    const at = String(cr.at || '');
+    const crPhase = cr.phase || inferPhaseAt(at);
+    if (crPhase && knownPhases.has(crPhase)) {
+      return greenByPhase.has(crPhase) && at > greenByPhase.get(crPhase);
+    }
+    return Boolean(firstGreen && at > firstGreen);
+  }).length;
 
   // interventions per phase started (at least one: a project without a program is one phase of work)
   const interventions = {};

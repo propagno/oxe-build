@@ -8,12 +8,13 @@
  */
 
 const UNSAFE = [
-  { re: /\bnpm\s+(ci|clean-install|install|i|add|uninstall|un|remove|rm|prune|dedupe|update|up|rebuild|link|unlink)\b/i, why: 'reinstala/remove pacotes (npm ci apaga node_modules antes de instalar)' },
-  { re: /\b(yarn|pnpm|bun)\s+(install|add|remove|i|up|upgrade|prune|import)\b/i, why: 'reinstala/remove pacotes' },
+  { re: /\bnpm\s+(?:--?[a-z0-9-]+(?:=\S+)?\s+)*(?<!-)(ci|clean-install|install|i|add|uninstall|un|remove|rm|prune|dedupe|update|up|rebuild|link|unlink)\b/i, why: 'reinstala/remove pacotes (npm ci apaga node_modules antes de instalar)' },
+  { re: /\b(yarn|pnpm|bun)\s+(?:--?[a-z0-9-]+(?:=\S+)?\s+)*(?<!-)(install|add|remove|i|up|upgrade|prune|import)\b/i, why: 'reinstala/remove pacotes' },
   { re: /^\s*(yarn|pnpm)\s*$/i, why: 'instala as dependências' },
   { re: /\b(rm|del|rmdir|rd)\s+(-[a-z]*\s+|\/[a-z]\s+)*[^\s]*node_modules/i, why: 'apaga node_modules' },
+  { re: /\bRemove-Item\b[^\n;&|]*node_modules/i, why: 'apaga node_modules' },
   { re: /\b(rimraf|del-cli|trash)\b/i, why: 'apaga arquivos' },
-  { re: /\bgit\s+(stash|checkout|switch|reset\s+--hard|clean\s+-[a-z]*[fdx]|restore|rebase|merge|pull|push|commit|tag|branch\s+-[dD])\b/i, why: 'muda o estado do git do checkout' },
+  { re: /\bgit\s+(stash|checkout|switch|reset\s+--hard|clean\s+-[a-z]*[fdx]|restore|rebase|merge|pull|push|commit|tag|branch\s+-[dD]|cherry-pick|revert)\b/i, why: 'muda o estado do git do checkout' },
   { re: /\bnpx\s+(?:-y\s+|--yes\s+)?(npm-check-updates|ncu)\b.*-u\b/i, why: 'reescreve o package.json' },
 ];
 
@@ -40,11 +41,49 @@ function looksLikeProse(command) {
   return false;
 }
 
+function hasClosingQuote(text, from, quote) {
+  for (let i = from; i < text.length; i += 1) {
+    if (quote === '"' && text[i] === '\\') { i += 1; continue; }
+    if (text[i] === quote) return true;
+  }
+  return false;
+}
+
+function splitTopLevelAnd(command) {
+  const text = String(command || '');
+  const out = [];
+  let start = 0;
+  let quote = null;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote === '"') {
+      if (ch === '\\') { i += 1; continue; }
+      if (ch === '"') quote = null;
+      continue;
+    }
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      continue;
+    }
+    if (ch === '"' && hasClosingQuote(text, i + 1, '"')) { quote = '"'; continue; }
+    // an English apostrophe in prose ("the PR's …") or an unclosed single quote must not glue && segments together
+    if (ch === "'" && !/[A-Za-z0-9_]/.test(text[i - 1] || '') && hasClosingQuote(text, i + 1, "'")) { quote = "'"; continue; }
+    if (ch === '&' && text[i + 1] === '&') {
+      const seg = text.slice(start, i).trim();
+      if (seg) out.push(seg);
+      start = i + 2;
+      i += 1;
+    }
+  }
+  const tail = text.slice(start).trim();
+  if (tail) out.push(tail);
+  return out;
+}
+
 /** Problems of a task's verify command (split on top-level &&). */
-function verifyCommandProblems(taskId, command, split) {
+function verifyCommandProblems(taskId, command, _split) {
   const problems = [];
-  // naive && split: an apostrophe in prose ("the PR's …") must not glue two commands together here
-  for (const segment of String(command || '').split('&&').map((s) => s.trim()).filter(Boolean)) {
+  for (const segment of splitTopLevelAnd(command)) {
     const why = unsafeReason(segment);
     if (why) problems.push(`${taskId}: comando de verify em prosa ou destrutivo: ${segment.slice(0, 120)} — ${why}; um verify só observa (passo de setup/CI vai em notes ou numa tarefa external_delivery)`);
     else if (looksLikeProse(segment)) problems.push(`${taskId}: comando de verify em prosa ou destrutivo: ${segment.slice(0, 120)} — é texto, não comando (evidência de CI/manual vai em notes, sign-off ou external_delivery)`);
