@@ -5304,6 +5304,12 @@ async function runRuntime(opts) {
       if (result.ignored_out_of_scope && result.ignored_out_of_scope.length) {
         console.log(`  ${c ? yellow : ''}!${c ? reset : ''} Ignorados fora do escopo (não commitados): ${result.ignored_out_of_scope.join(', ')}`);
       }
+      if (result.check && Array.isArray(result.check.later_owned_reds) && result.check.later_owned_reds.length) {
+        console.log(`  ${c ? dim : ''}Congelado(s) de tarefa posterior ignorado(s) (G38):${c ? reset : ''} ${result.check.later_owned_reds.map((x) => `${x.file} → ${x.owner}${x.owner_wave != null ? ` (onda ${x.owner_wave})` : ''}`).join(', ')}`);
+      }
+      if (result.check && Array.isArray(result.check.preexisting_reds) && result.check.preexisting_reds.length) {
+        console.log(`  ${c ? dim : ''}Pré-existente(s)/ambiente ignorado(s):${c ? reset : ''} ${result.check.preexisting_reds.join(', ')}`);
+      }
     } catch (err) {
       if (opts.jsonOutput) {
         console.log(JSON.stringify({ oxeRuntimeCommitTaskSchema: 1, ok: false, error: err && err.message ? err.message : String(err) }, null, 2));
@@ -6038,7 +6044,15 @@ async function runRuntime(opts) {
       // external_pending only fails the run with --strict-external (exit 3).
       // OXB-167: verify green but the checkpoint commit failed — NOT done; the work is in the tree, not in a commit.
       const cpFailed = Array.isArray(r.checkpoint_failed) ? r.checkpoint_failed : [];
-      for (const f of cpFailed) console.log(`  ${c ? red : ''}✗ checkpoint de ${f.task} falhou${c ? reset : ''} — ${f.reason}. A tarefa NÃO ficou done; o próximo execute tenta o commit de novo antes de tudo.`);
+      for (const f of cpFailed) {
+        console.log(`  ${c ? red : ''}✗ checkpoint de ${f.task} falhou${c ? reset : ''} — ${f.reason}. A tarefa NÃO ficou done; o próximo execute tenta o commit de novo antes de tudo.`);
+        if (Array.isArray(f.real_regressions) && f.real_regressions.length) {
+          console.log(`    ${c ? red : ''}Regressão real:${c ? reset : ''} ${f.real_regressions.join(', ')}`);
+        }
+        if (Array.isArray(f.later_owned_reds) && f.later_owned_reds.length) {
+          console.log(`    ${c ? dim : ''}Congelado de tarefa posterior (ignorado por G38):${c ? reset : ''} ${f.later_owned_reds.map((x) => `${x.file} → ${x.owner}${x.owner_wave != null ? ` (onda ${x.owner_wave})` : ''}`).join(', ')}`);
+        }
+      }
       if (cpFailed.length) process.exitCode = 1;
       if (failed.length > 0 || blocked.length > 0 || (r.status === 'blocked' && result.mode !== 'single' && result.mode !== 'parallel')) process.exitCode = 1;
       else if (opts.strictExternal && externalPending.length > 0) process.exitCode = 3;

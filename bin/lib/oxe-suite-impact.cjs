@@ -19,9 +19,32 @@ const { spawnSync } = require('child_process');
 
 const CODE_RE = /\.(c|m)?[jt]sx?$/i;
 const TEST_RE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$/i;
+const ACCEPT_OR_FROZEN_DIR_RE = /(?:^|\/)(?:acceptance|tests\/acceptance|e2e\/acceptance|tests\/oxe\d+)\//i;
+const PARKED_DIR_RE = /(?:^|\/)parked[^/]*\//i;
 const SKIP_DIR_RE = /(^|\/)(node_modules|dist|build|out|coverage|\.oxe)\//;
 const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
-const isInactiveTask = (t) => !t || t.done === true || t.status === 'done' || t.status === 'superseded' || Boolean(t.superseded) || Boolean(t.merged_into);
+const isSupersededTask = (t) => !t || t.status === 'superseded' || Boolean(t.superseded) || Boolean(t.merged_into);
+const isDoneTask = (t) => Boolean(t && !isSupersededTask(t) && (t.done === true || t.status === 'done'));
+const isInactiveTask = (t) => !t || isDoneTask(t) || isSupersededTask(t);
+
+function taskCriteriaOf(task) {
+  if (!task || typeof task !== 'object') return [];
+  const raw = [
+    ...(Array.isArray(task.acceptance) ? task.acceptance : []),
+    ...(Array.isArray(task.aceite) ? task.aceite : []),
+  ];
+  return [...new Set(raw.map((c) => String(c || '').trim().toUpperCase()).filter(Boolean))];
+}
+
+function criterionMatches(taskCriteria, entryCriterion) {
+  const ec = String(entryCriterion || '').trim().toUpperCase();
+  if (!ec || !Array.isArray(taskCriteria) || !taskCriteria.length) return false;
+  return taskCriteria.some((raw) => {
+    const tc = String(raw || '').trim().toUpperCase();
+    if (!tc) return false;
+    return tc === ec || tc.startsWith(`${ec}.`) || ec.startsWith(`${tc}.`);
+  });
+}
 
 function trackedFiles(root) {
   const r = spawnSync('git', ['-c', 'core.quotepath=false', 'ls-files'], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
@@ -145,13 +168,15 @@ function suiteImpact(root, planDoc, options = {}) {
   const laterOwner = new Map();
   for (const o of tasks) for (const f of o.files || []) {
     const p = norm(typeof f === 'string' ? f : f && f.path);
-    if (p && TEST_RE.test(p) && /(^|\/)acceptance\//i.test(p)) laterOwner.set(p, [...(laterOwner.get(p) || []), o]);
+    if (p && TEST_RE.test(p) && ACCEPT_OR_FROZEN_DIR_RE.test(p)) laterOwner.set(p, [...(laterOwner.get(p) || []), o]);
   }
   // cross-review 15/11: the frozen entries count as G38 counts them — a frozen test is never in its owner's files, and
   // G30 asking it into the earlier verify while G38 asks it out was a deadlock
   for (const a of accept) {
     if (!a) continue;
-    const owners = a.task ? tasks.filter((o) => o.id === a.task) : tasks.filter((o) => (o.acceptance || []).includes(a.criterion));
+    const owners = a.task
+      ? tasks.filter((o) => String(o.id).toUpperCase() === String(a.task).toUpperCase())
+      : tasks.filter((o) => criterionMatches(taskCriteriaOf(o), a.criterion));
     for (const f of a.files || []) {
       const p = norm(typeof f === 'string' ? f : f && f.path);
       if (p) laterOwner.set(p, [...(laterOwner.get(p) || []), ...owners]);
@@ -215,13 +240,14 @@ function laterOwnedTests(planDoc) {
   const frozenOwners = new Set(); // `${file}\0${id}`: the owner holds the file as a FROZEN acceptance entry
   const own =(file, id) => { const f = norm(file); if (f && TEST_RE.test(f)) owners.set(f, [...new Set([...(owners.get(f) || []), id])]); };
   // a shared suite many tasks extend (brand-targets, design-lint) is not "green only later": only ACCEPTANCE tests count —
-  // a frozen entry of the owner, or a file of its scope under an acceptance/ folder
-  const ACCEPT_DIR = /(^|\/)acceptance\//i;
-  for (const t of pending) for (const f of t.files || []) { const p = norm(typeof f === 'string' ? f : f && f.path); if (ACCEPT_DIR.test(p)) own(p, t.id); }
+  // a frozen entry of the owner, or a file of its scope under an acceptance/ or tests/oxe<N>/ folder
+  for (const t of pending) for (const f of t.files || []) { const p = norm(typeof f === 'string' ? f : f && f.path); if (ACCEPT_OR_FROZEN_DIR_RE.test(p)) own(p, t.id); }
   for (const a of (planDoc && Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : [])) {
     if (!a) continue;
-    const ids = a.task ? [a.task] : pending.filter((t) => (t.acceptance || []).includes(a.criterion)).map((t) => t.id);
-    for (const id of ids) if (pending.some((t) => t.id === id)) for (const f of a.files || []) { own(typeof f === 'string' ? f : f.path, id); frozenOwners.add(`${norm(typeof f === 'string' ? f : f.path)}\u0000${id}`); }
+    const ids = a.task
+      ? [String(a.task).toUpperCase()]
+      : pending.filter((t) => criterionMatches(taskCriteriaOf(t), a.criterion)).map((t) => t.id);
+    for (const id of ids) if (pending.some((t) => String(t.id).toUpperCase() === String(id).toUpperCase())) for (const f of a.files || []) { own(typeof f === 'string' ? f : f.path, id); frozenOwners.add(`${norm(typeof f === 'string' ? f : f.path)}\u0000${id}`); }
   }
   const waveOf = (t) => (Number.isFinite(Number(t && t.wave)) ? Number(t.wave) : null);
   const out = [];
@@ -601,4 +627,289 @@ function registryManifestMessages(found, { level = 'warn' } = {}) {
   return level === 'error' ? { errors: lines, warnings: [] } : { errors: [], warnings: lines };
 }
 
-module.exports = { suiteImpact, messages, laterOwnedTests, laterOwnedMessages, pinnedByExisting, pinnedMessages, registryManifestGaps, registryManifestMessages, importIndex, exportedConstants, trackedFiles, dataFilesOf, TEST_RE };
+function extractEntryTestFiles(entry) {
+  if (!entry || typeof entry !== 'object') return [];
+  const out = [];
+  for (const f of entry.files || []) {
+    const p = norm(typeof f === 'string' ? f : f && f.path);
+    if (p) out.push(p);
+  }
+  if (typeof entry.command === 'string' && entry.command.trim()) {
+    for (const m of entry.command.replace(/\\/g, '/').matchAll(/([^\s"'`]+\.(?:test|spec)\.[cm]?[jt]sx?)\$?/gi)) {
+      const p = norm(m[1]);
+      if (p && p.includes('/')) out.push(p);
+    }
+  }
+  return [...new Set(out)];
+}
+
+function extractTaskVerifySpecs(task) {
+  const commands = [
+    ...((task && task.verify && Array.isArray(task.verify.commands)) ? task.verify.commands : []),
+    task && task.verify && task.verify.command,
+    task && task.verifyCommand,
+  ].filter(Boolean).map((c) => String(c).replace(/\\/g, '/'));
+  const exact = new Set();
+  const filters = new Set();
+  for (const sub of commands.flatMap((c) => c.split(/\s*(?:&&|\|\||;)\s*/)).filter(Boolean)) {
+    const narrowed = /(^|\s)(-t|--testNamePattern|--grep|-g)(\s|=)/.test(sub);
+    const exactRunner = /\bnode\b[^|;&]*\s--test(\s|=|$)/.test(sub);
+    for (const raw of sub.match(/[^\s"'`]+/g) || []) {
+      const anchored = raw.endsWith('$');
+      const cleaned = norm(anchored ? raw.slice(0, -1) : raw);
+      if (!cleaned || cleaned.startsWith('-')) continue;
+      if (cleaned.includes('/') && TEST_RE.test(cleaned) && /\.[cm]?[jt]sx?$/i.test(cleaned)) {
+        exact.add(cleaned);
+        if (!narrowed && !anchored && !exactRunner) filters.add(cleaned);
+      } else if (!narrowed && !exactRunner && /^[A-Za-z0-9][\w./-]{5,}$/.test(cleaned) && !/\.(?:mjs|cjs|js|json)$/i.test(cleaned)) {
+        // e.g. `vitest run ag04d-changes-badge` or `vitest run tests/oxe152/ag/ag04d-changes-badge`
+        filters.add(cleaned);
+      }
+    }
+  }
+  return { exact, filters };
+}
+
+function canonicalRepoTestPath(rawFile, knownPaths, projectRoot) {
+  let f = norm(rawFile);
+  if (!f) return '';
+  if (knownPaths.has(f)) return f;
+  if (projectRoot && path.isAbsolute(String(rawFile || ''))) {
+    const rel = norm(path.relative(projectRoot, String(rawFile)));
+    if (rel && !rel.startsWith('..') && (knownPaths.has(rel) || fs.existsSync(path.join(projectRoot, rel)))) return rel;
+  }
+  for (const k of knownPaths) {
+    if (f.endsWith(`/${k}`)) return k;
+  }
+  if (projectRoot && f.includes('/')) {
+    const parts = f.split('/').filter(Boolean);
+    for (let i = 1; i < parts.length - 1; i += 1) {
+      const suffix = parts.slice(i).join('/');
+      if (TEST_RE.test(suffix) && fs.existsSync(path.join(projectRoot, suffix))) return suffix;
+    }
+  }
+  return f;
+}
+
+/**
+ * OXB-C3 (OxeSpace 16/11, F6 T39 wave 14): applies G38 (`laterOwnedTests` / `plan verify prune --later-owned`) to the
+ * failing list of `checkpoint_related_tests` (`vitest related`), separating frozen tests of pending later tasks (e.g.
+ * `ag04d-changes-badge` → T43, `ag04c-pin-a11y` → T41, `pu03-first-run-forced` → T54) and superseded/parked tests from
+ * candidate regressions of `taskId`.
+ */
+function classifyRelatedTestFiles(planDoc, taskId, failingItems, options = {}) {
+  const items = Array.isArray(failingItems)
+    ? failingItems.map((it) => (typeof it === 'string' ? { file: it, names: [] } : { file: it && it.file, names: Array.isArray(it && it.names) ? it.names : [] })).filter((it) => it.file)
+    : [];
+  if (!items.length) return { candidates: [], later_owned: [], other_ignored: [] };
+
+  const allTasks = (planDoc && Array.isArray(planDoc.tasks) ? planDoc.tasks : []).filter(Boolean);
+  const activeOrDone = allTasks.filter((t) => !isSupersededTask(t));
+  const byId = new Map(activeOrDone.map((t) => [String(t.id).toUpperCase(), t]));
+  const normTaskId = taskId ? String(taskId).trim().toUpperCase() : null;
+  const curTask = normTaskId ? byId.get(normTaskId) : null;
+  const curOwnFiles = new Set(((curTask && curTask.files) || []).map((f) => norm(typeof f === 'string' ? f : f && f.path)).filter(Boolean));
+  const waveOf = (t) => (t && Number.isFinite(Number(t.wave)) ? Number(t.wave) : null);
+
+  const knownPaths = new Set();
+  const supersededMap = new Map();
+  for (const s of (planDoc && Array.isArray(planDoc.superseded_tests) ? planDoc.superseded_tests : [])) {
+    if (!s) continue;
+    const owner = (s.superseded && s.superseded.by_phase) || 'fase-posterior';
+    for (const p of extractEntryTestFiles(s)) {
+      knownPaths.add(p);
+      supersededMap.set(p, { owner, criterion: s.criterion || null });
+    }
+  }
+
+  const explicitOwners = new Map(); // file → { ids: Set, criteria: Set, declaredTasks: Set, frozenOwners: Set }
+  const ensureExplicit = (p) => {
+    knownPaths.add(p);
+    if (!explicitOwners.has(p)) explicitOwners.set(p, { ids: new Set(), criteria: new Set(), declaredTasks: new Set(), frozenOwners: new Set() });
+    return explicitOwners.get(p);
+  };
+
+  const acceptList = [
+    ...((planDoc && Array.isArray(planDoc.acceptance_tests)) ? planDoc.acceptance_tests : []),
+    ...((planDoc && Array.isArray(planDoc.acceptanceTests)) ? planDoc.acceptanceTests : []),
+  ];
+  for (const a of acceptList) {
+    if (!a) continue;
+    const declaredTask = a.task ? String(a.task).trim().toUpperCase() : null;
+    const matched = declaredTask
+      ? activeOrDone.filter((t) => String(t.id).toUpperCase() === declaredTask)
+      : activeOrDone.filter((t) => criterionMatches(taskCriteriaOf(t), a.criterion));
+    for (const p of extractEntryTestFiles(a)) {
+      const rec = ensureExplicit(p);
+      if (a.criterion) rec.criteria.add(String(a.criterion));
+      if (declaredTask) rec.declaredTasks.add(declaredTask);
+      for (const t of matched) {
+        const uid = String(t.id).toUpperCase();
+        rec.ids.add(uid);
+        rec.frozenOwners.add(uid);
+      }
+    }
+  }
+
+  for (const t of activeOrDone) {
+    const uid = String(t.id).toUpperCase();
+    for (const f of t.files || []) {
+      const p = norm(typeof f === 'string' ? f : f && f.path);
+      if (p) knownPaths.add(p);
+      if (p && TEST_RE.test(p) && ACCEPT_OR_FROZEN_DIR_RE.test(p)) {
+        const rec = ensureExplicit(p);
+        rec.ids.add(uid);
+      }
+    }
+  }
+
+  const verifySpecsByTask = new Map();
+  for (const t of activeOrDone) {
+    const spec = extractTaskVerifySpecs(t);
+    for (const p of spec.exact) knownPaths.add(p);
+    verifySpecsByTask.set(String(t.id).toUpperCase(), { task: t, ...spec });
+  }
+
+  const resolveVerifyOwnersForFrozen = (file) => {
+    const exactIds = [];
+    for (const [uid, spec] of verifySpecsByTask) {
+      if (spec.exact.has(file)) exactIds.push(uid);
+    }
+    if (exactIds.length) return exactIds;
+    const stem = path.posix.basename(file).replace(/\.(test|spec)\.[cm]?[jt]sx?$/i, '').replace(/\.[cm]?[jt]sx?$/i, '');
+    const filterIds = [];
+    for (const [uid, spec] of verifySpecsByTask) {
+      for (const flt of spec.filters) {
+        if (file.includes(flt) || (stem.length >= 6 && flt === stem)) {
+          filterIds.push(uid);
+          break;
+        }
+      }
+    }
+    return filterIds;
+  };
+
+  const candidates = [];
+  const laterOwned = [];
+  const otherIgnored = [];
+
+  for (const rawItem of items) {
+    const file = canonicalRepoTestPath(rawItem.file, knownPaths, options.projectRoot || null);
+    const item = { ...rawItem, file };
+    if (PARKED_DIR_RE.test(file)) {
+      otherIgnored.push({ file, names: item.names, owner: 'parked', reason: 'parked' });
+      continue;
+    }
+
+    const exp = explicitOwners.get(file);
+    if (exp) {
+      const ids = [...exp.ids];
+      // G38 cross-review rule: if curTask writes a mutable acceptance file (in its own files) and no later task holds it
+      // as a frozen acceptance_tests entry, curTask runs it itself; if a later pending task holds it as frozen, later wins.
+      const frozenPendingLater = [...exp.frozenOwners].filter((id) => id !== normTaskId && !isDoneTask(byId.get(id)));
+      if (normTaskId && ids.includes(normTaskId) && (!frozenPendingLater.length || exp.frozenOwners.has(normTaskId) || curOwnFiles.has(file))) {
+        if (!frozenPendingLater.length || exp.frozenOwners.has(normTaskId)) {
+          candidates.push(item);
+          continue;
+        }
+      }
+      if (ids.length > 0 && ids.every((id) => isDoneTask(byId.get(id)))) {
+        candidates.push(item);
+        continue;
+      }
+      const pendingIds = ids.filter((id) => id !== normTaskId && !isDoneTask(byId.get(id)));
+      const firstOwner = pendingIds.length ? byId.get(pendingIds[0]) : null;
+      const criterion = exp.criteria.size ? [...exp.criteria][0] : null;
+      const ownerLabel = pendingIds.length
+        ? pendingIds.map((id) => (byId.get(id) ? byId.get(id).id : id)).join(', ')
+        : ([...exp.declaredTasks][0] || (criterion ? `critério ${criterion}` : 'outra-fase'));
+      laterOwned.push({
+        file,
+        names: item.names,
+        owner: ownerLabel,
+        owner_wave: waveOf(firstOwner),
+        ...(criterion ? { criterion } : {}),
+      });
+      continue;
+    }
+
+    if (supersededMap.has(file)) {
+      const sup = supersededMap.get(file);
+      laterOwned.push({
+        file,
+        names: item.names,
+        owner: sup.owner,
+        owner_wave: null,
+        ...(sup.criterion ? { criterion: sup.criterion } : {}),
+      });
+      continue;
+    }
+
+    if (ACCEPT_OR_FROZEN_DIR_RE.test(file)) {
+      const vIds = resolveVerifyOwnersForFrozen(file);
+      if (vIds.length > 0) {
+        if (normTaskId && vIds.includes(normTaskId)) {
+          candidates.push(item);
+          continue;
+        }
+        if (vIds.every((id) => isDoneTask(byId.get(id)))) {
+          candidates.push(item);
+          continue;
+        }
+        const pendingIds = vIds.filter((id) => id !== normTaskId && !isDoneTask(byId.get(id)));
+        const firstOwner = pendingIds.length ? byId.get(pendingIds[0]) : null;
+        laterOwned.push({
+          file,
+          names: item.names,
+          owner: pendingIds.map((id) => (byId.get(id) ? byId.get(id).id : id)).join(', '),
+          owner_wave: waveOf(firstOwner),
+        });
+        continue;
+      }
+      if (/(?:^|\/)acceptance\//i.test(file)) {
+        otherIgnored.push({ file, names: item.names, owner: 'outra-fase', reason: 'other_phase_acceptance' });
+        continue;
+      }
+    }
+
+    candidates.push(item);
+  }
+
+  return { candidates, later_owned: laterOwned, other_ignored: otherIgnored };
+}
+
+/**
+ * OXB-C3: returns all Vitest-runnable frozen/acceptance test paths owned by pending later tasks, superseded_tests or
+ * unowned criteria relative to `taskId`, so `relatedTestsCommand` can proactively pass `--exclude <path>` to Vitest
+ * before running `vitest related --run`.
+ */
+function laterOwnedExcludesForTask(planDoc, taskId) {
+  if (!planDoc || typeof planDoc !== 'object') return [];
+  const isE2e = (f) => /(^|\/)(e2e|playwright)\//i.test(f) || /\.e2e\.[cm]?[jt]sx?$/i.test(f);
+  const allFrozenCandidates = new Set();
+  for (const a of [
+    ...(Array.isArray(planDoc.acceptance_tests) ? planDoc.acceptance_tests : []),
+    ...(Array.isArray(planDoc.acceptanceTests) ? planDoc.acceptanceTests : []),
+    ...(Array.isArray(planDoc.superseded_tests) ? planDoc.superseded_tests : []),
+  ]) {
+    for (const p of extractEntryTestFiles(a)) {
+      if (p && TEST_RE.test(p) && !isE2e(p)) allFrozenCandidates.add(p);
+    }
+  }
+  for (const t of (Array.isArray(planDoc.tasks) ? planDoc.tasks : [])) {
+    if (isSupersededTask(t)) continue;
+    for (const f of t.files || []) {
+      const p = norm(typeof f === 'string' ? f : f && f.path);
+      if (p && TEST_RE.test(p) && ACCEPT_OR_FROZEN_DIR_RE.test(p) && !isE2e(p)) allFrozenCandidates.add(p);
+    }
+    const spec = extractTaskVerifySpecs(t);
+    for (const p of spec.exact) {
+      if (p && ACCEPT_OR_FROZEN_DIR_RE.test(p) && !isE2e(p)) allFrozenCandidates.add(p);
+    }
+  }
+  if (!allFrozenCandidates.size) return [];
+  const classified = classifyRelatedTestFiles(planDoc, taskId || null, [...allFrozenCandidates]);
+  return [...new Set([...classified.later_owned, ...classified.other_ignored].map((x) => x.file))];
+}
+
+module.exports = { suiteImpact, messages, laterOwnedTests, laterOwnedMessages, classifyRelatedTestFiles, laterOwnedExcludesForTask, criterionMatches, pinnedByExisting, pinnedMessages, registryManifestGaps, registryManifestMessages, importIndex, exportedConstants, trackedFiles, dataFilesOf, TEST_RE };

@@ -4657,7 +4657,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
             const unsep = sbNow && sbNow.unseparable ? Object.entries(sbNow.unseparable) : [];
             const cp = unsep.length
               ? { committed: false, failed: true, kind: 'shared_file_conflict', reason: `shared_file_conflict: ${unsep.map(([p, ids]) => `${p} tem edições de ${event.work_item_id} e de ${ids.join(', ')}`).join('; ')} — sem a base da 1ª tentativa (histórico anterior à 1.21.2-rc.36) não dá para separar; commite à mão o hunk de cada tarefa (ou plan done --commit)` }
-              : commitTaskCheckpoint(projectRoot, current, event.work_item_id, { task: planTaskById.get(event.work_item_id), phase: phaseCtxForCommits.phase, baseline: taskBaseline.get(event.work_item_id) || null });
+              : commitTaskCheckpoint(projectRoot, current, event.work_item_id, { task: planTaskById.get(event.work_item_id), phase: phaseCtxForCommits.phase, baseline: taskBaseline.get(event.work_item_id) || null, activeSession });
             if (cp.ratchets_lowered) appendEvent(projectRoot, activeSession, { type: 'RatchetLowered', run_id: current.run_id, work_item_id: event.work_item_id, payload: { task: event.work_item_id, ratchets: cp.ratchets_lowered } });
             if (!cp.committed && cp.failed && !cp.kind && /sobrepõe edições de outra tarefa/.test(String(cp.reason || ''))) {
               const pt = planTaskById.get(event.work_item_id) || {};
@@ -4700,8 +4700,16 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
                 };
               }
             } else if (cp.failed) {
-              checkpointFailure = { reason: cp.reason, ...(cp.snapshot ? { snapshot: cp.snapshot } : {}), ...(cp.kind ? { kind: cp.kind } : {}), ...(cp.related_red ? { related_red: cp.related_red } : {}) };
-              if (cp.kind === 'scope_insufficient') appendEvent(projectRoot, activeSession, { type: 'ScopeInsufficient', run_id: current.run_id, work_item_id: event.work_item_id, payload: { task: event.work_item_id, reason: 'related_tests_outside_scope', tests: cp.related_red || [], at: 'checkpoint' } });
+              checkpointFailure = {
+                reason: cp.reason,
+                ...(cp.snapshot ? { snapshot: cp.snapshot } : {}),
+                ...(cp.kind ? { kind: cp.kind } : {}),
+                ...(cp.related_red ? { related_red: cp.related_red } : {}),
+                ...(cp.real_regressions ? { real_regressions: cp.real_regressions } : {}),
+                ...(cp.later_owned_reds && cp.later_owned_reds.length ? { later_owned_reds: cp.later_owned_reds } : {}),
+                ...(cp.preexisting_reds && cp.preexisting_reds.length ? { preexisting_reds: cp.preexisting_reds } : {}),
+              };
+              if (cp.kind === 'scope_insufficient') appendEvent(projectRoot, activeSession, { type: 'ScopeInsufficient', run_id: current.run_id, work_item_id: event.work_item_id, payload: { task: event.work_item_id, reason: 'related_tests_outside_scope', tests: cp.related_red || [], ...(cp.later_owned_reds && cp.later_owned_reds.length ? { later_owned_reds: cp.later_owned_reds } : {}), at: 'checkpoint' } });
             }
           } catch (err) {
             checkpointFailure = { reason: `checkpoint falhou: ${err && err.message ? err.message : err}` };
@@ -9735,6 +9743,7 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
     phase,
     config: projectConfigForCommit,
     ratchets: false,
+    activeSession,
   });
   if (!cp.committed || !cp.commit) {
     restorePreRatchets();
@@ -9759,7 +9768,7 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
     type: 'GateResolved',
     run_id: runId,
     work_item_id: taskId,
-    payload: { gate: 'checkpoint', commit: cp.commit, files: cp.files, leftover: cp.leftover || [], actor },
+    payload: { gate: 'checkpoint', commit: cp.commit, files: cp.files, leftover: cp.leftover || [], actor, ...(cp.check ? { check: cp.check } : {}) },
   });
   appendEvent(projectRoot, activeSession, {
     type: 'CheckpointCreated',
@@ -9789,6 +9798,7 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
     ignored_out_of_scope: outOfScopeDirty,
     verify_skipped: verifySkipped,
     by: actor,
+    ...(cp.check ? { check: cp.check } : {}),
   };
 }
 
@@ -10716,7 +10726,7 @@ function retryFailedCheckpoints(projectRoot, activeSession, options = {}) {
     try {
       if (snapshot) {
         // the task's OWN content, saved when its checkpoint failed — whatever the tree holds now
-        cp = commitExactContent(projectRoot, snapshot, checkpointMessageFor(projectRoot, { run_id: task.checkpoint_failed.run_id || null }, task.id, task, ctx.phase), {});
+        cp = commitExactContent(projectRoot, snapshot, checkpointMessageFor(projectRoot, { run_id: task.checkpoint_failed.run_id || null }, task.id, task, ctx.phase), { task, scope: task.files || [], activeSession });
       } else {
         // legacy record (rc ≤ 29, no snapshot): refuse paths another task may own (interrupted, or in its scope)
         const scope = (task.files || []).map((p) => String(p).replace(/\\/g, '/')).filter((p) => p && !p.includes('*'));
@@ -10726,7 +10736,7 @@ function retryFailedCheckpoints(projectRoot, activeSession, options = {}) {
         if (shared.length) {
           cp = { committed: false, failed: true, reason: `retry recusado: ${shared.slice(0, 6).map((p) => `${p} (${foreign.get(p) || others.get(p) || 'outra tarefa'})`).join(', ')} também ${shared.length > 1 ? 'são' : 'é'} de outra tarefa pendente/interrompida — o commit misturaria o trabalho dela (OXB-170); revise e rode oxe-cc plan done ${task.id} --commit <sha> depois de commitar à mão` };
         } else {
-          cp = commitTaskCheckpoint(projectRoot, { run_id: task.checkpoint_failed.run_id || null }, task.id, { task, phase: ctx.phase });
+          cp = commitTaskCheckpoint(projectRoot, { run_id: task.checkpoint_failed.run_id || null }, task.id, { task, phase: ctx.phase, activeSession });
         }
       }
     } catch (err) { cp = { committed: false, failed: true, reason: String(err && err.message || err) }; }
@@ -10879,15 +10889,51 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
     return { committed: false, failed: true, reason: `git commit falhou: ${String(commit.stderr || commit.stdout).trim().split(/\r?\n/).slice(-8).join(' · ')}`, snapshot: entries };
   }
   const head = gitOut(projectRoot, ['rev-parse', 'HEAD']).stdout.trim();
-  let check = checkpointCheck(projectRoot, head, { ...options, changedFiles: paths.filter((p) => entries[p] !== 'deleted') });
-  // OXB-175: a related red is the task's only when (1) the test is not a frozen acceptance test of a pending task,
-  // another phase or a parked folder, and (2) it was green on the parent commit. T9 (CR37) of F2 had e98c9d54 undone
-  // by three tests red by design (a parked F3 test, a CR repro, a later F2 task's frozen test).
+  const changedCodeOrAssets = paths.filter((p) => entries[p] !== 'deleted');
+  let check = checkpointCheck(projectRoot, head, { ...options, changedFiles: changedCodeOrAssets });
+  // OXB-175 + OXB-C3: a related red is the task's only when (1) G38 does not prune it as a frozen/acceptance test of a
+  // pending later task, another phase, superseded_tests or parked folder, and (2) it was green on the parent commit.
   if (check && !check.ok && check.kind === 'related' && Array.isArray(check.failing_tests) && check.failing_tests.length) {
     const flakyReds = [];
-    const own = relatedRedsOfTask(projectRoot, oldHead, check.failing_tests, { ...options, commitSha: head, flakyReds });
-    if (!own.length) check = { ...check, ok: true, ignored_reds: check.failing_tests.map((t) => t.file), ...(flakyReds.length ? { flaky_reds: flakyReds } : {}) };
-    else check = { ...check, failing_tests: own, ignored_reds: check.failing_tests.filter((t) => !own.some((o) => o.file === t.file)).map((t) => t.file), ...(flakyReds.length ? { flaky_reds: flakyReds } : {}) };
+    const laterOwnedReds = [];
+    const preexistingReds = [];
+    const otherIgnoredReds = [];
+    const own = relatedRedsOfTask(projectRoot, oldHead, check.failing_tests, {
+      ...options,
+      changedFiles: changedCodeOrAssets,
+      commitSha: head,
+      relatedOutput: check.output || check.tail || '',
+      flakyReds,
+      laterOwnedReds,
+      preexistingReds,
+      otherIgnoredReds,
+    });
+    const compactLater = laterOwnedReds.map(({ file, owner, owner_wave, criterion }) => ({
+      file,
+      owner,
+      ...(owner_wave != null ? { owner_wave } : {}),
+      ...(criterion ? { criterion } : {}),
+    }));
+    if (!own.length) {
+      check = {
+        ...check,
+        ok: true,
+        ignored_reds: check.failing_tests.map((t) => t.file),
+        ...(compactLater.length ? { later_owned_reds: compactLater } : {}),
+        ...(preexistingReds.length ? { preexisting_reds: preexistingReds } : {}),
+        ...(flakyReds.length ? { flaky_reds: flakyReds } : {}),
+      };
+    } else {
+      check = {
+        ...check,
+        failing_tests: own,
+        real_regressions: own.map((t) => t.file),
+        ignored_reds: check.failing_tests.filter((t) => !own.some((o) => o.file === t.file)).map((t) => t.file),
+        ...(compactLater.length ? { later_owned_reds: compactLater } : {}),
+        ...(preexistingReds.length ? { preexisting_reds: preexistingReds } : {}),
+        ...(flakyReds.length ? { flaky_reds: flakyReds } : {}),
+      };
+    }
   }
   // OxeSpace 15/11 (OxeCode F6 T30 → #852): a DOM hook the commit removes from markup (data-* / cmdk-*) that is gone
   // from the product but still read by e2e/tests — static, no e2e run. config checkpoint_dom_hooks: false | "warn".
@@ -10966,15 +11012,25 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
     gitOut(projectRoot, ['update-ref', '-m', 'oxe: checkpoint_check vermelho', 'HEAD', oldHead, head]);
     restore();
     if (check.kind === 'related') {
-      // OXB-172: tests that import the task's changed files went red. In the task's scope → its work (the next execute
-      // runs them in its verify); outside it → scope_insufficient, naming the test (OXB-171).
+      // OXB-172 + OXB-C3: tests that import the task's changed files went red. Later-owned frozen tests were already
+      // pruned by G38 into check.later_owned_reds; report real regressions separately from later-owned frozen tests.
       const scope = (options.scope || []).map((p) => String(p).replace(/\\/g, '/'));
       const failing = check.failing_tests || [];
       const outside = failing.filter((t) => !isPathInScope(t.file, scope));
       const named = failing.map((t) => `${t.file}${t.names.length ? ` (${t.names.slice(0, 2).join('; ')})` : ''}`).join(', ') || check.tail;
+      const laterOwnedList = Array.isArray(check.later_owned_reds) ? check.later_owned_reds : [];
+      const preexistingList = Array.isArray(check.preexisting_reds) ? check.preexisting_reds : [];
+      const sepParts = [];
+      if (laterOwnedList.length) {
+        sepParts.push(`congelado de tarefa posterior (ignorado por G38): ${laterOwnedList.map((x) => `${x.file} → ${x.owner}${x.owner_wave != null ? ` (onda ${x.owner_wave})` : ''}`).join(', ')}`);
+      }
+      if (preexistingList.length) {
+        sepParts.push(`pré-existente/ambiente (ignorado): ${preexistingList.join(', ')}`);
+      }
+      const sepSuffix = sepParts.length ? ` · ${sepParts.join(' · ')}` : '';
       const frozenSet = (() => {
         try {
-          const { doc: pjDoc } = readPlanJsonDoc(projectRoot, null);
+          const { doc: pjDoc } = readPlanJsonDoc(projectRoot, options.activeSession || null);
           return new Set(((pjDoc && pjDoc.acceptance_tests) || []).flatMap((a) => (a && a.files) || []).map((f) => String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/')));
         } catch { return new Set(); }
       })();
@@ -10986,16 +11042,24 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
         : frozenOutside.length
           ? `inclua os mutáveis (${mutableOutside.map((t) => t.file).join(', ')}) nos files e libere os testes congelados (${frozenOutside.map((t) => t.file).join(', ')}) por CR (plan amend-test / spec freeze --cr, nunca plan scope add), depois rode oxe-cc plan reopen`
           : `Inclua ${outside.map((t) => t.file).join(', ')} nos files (ou abra um CR/tarefa), depois rode oxe-cc plan reopen`;
+      const reasonText = outside.length
+        ? `scope_insufficient: regressão real em testes que importam os arquivos da tarefa fora do escopo dela — ${named}. ${outsideGuidance}${sepSuffix}`
+        : check.timedOut
+          ? `timeout em testes relacionados (\`${check.command.slice(0, 120)}\`): ${check.tail}${sepSuffix}`
+          : !failing.length
+            ? `falha no runner de testes relacionados sem suíte identificada (\`${check.command.slice(0, 120)}\`): ${check.tail}${sepSuffix}`
+            : `testes relacionados vermelhos — regressão real (\`${check.command.slice(0, 120)}\`${check.related_set_size != null ? `, ${check.related_set_size} arquivo(s) no conjunto` : ''}): ${named} — vermelhos também sozinhos (--maxWorkers=1) no commit e na árvore do projeto — entram no verify da tarefa no próximo execute${sepSuffix}`;
       return {
         committed: false,
         failed: true,
         kind: outside.length ? 'scope_insufficient' : 'related_tests',
         related_red: failing.map((t) => t.file),
+        real_regressions: failing.map((t) => t.file),
+        ...(laterOwnedList.length ? { later_owned_reds: laterOwnedList } : {}),
+        ...(preexistingList.length ? { preexisting_reds: preexistingList } : {}),
         ...(check.related_set_size != null ? { related_set_size: check.related_set_size } : {}),
         ...(check.flaky_reds && check.flaky_reds.length ? { flaky_reds: check.flaky_reds } : {}),
-        reason: outside.length
-          ? `scope_insufficient: testes que importam os arquivos da tarefa ficaram vermelhos fora do escopo dela — ${named}. ${outsideGuidance}`
-          : `testes relacionados vermelhos (\`${check.command.slice(0, 120)}\`${check.related_set_size != null ? `, ${check.related_set_size} arquivo(s) no conjunto` : ''}): ${named} — vermelhos também sozinhos (--maxWorkers=1) no commit e na árvore do projeto — entram no verify da tarefa no próximo execute`,
+        reason: reasonText,
         snapshot: entries,
       };
     }
@@ -11011,7 +11075,7 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
     return entries[p] === 'deleted' ? Boolean(inCommit) : inCommit !== entries[p];
   });
   const committedFiles = (gitOut(projectRoot, ['show', '--name-only', '--format=', 'HEAD']).stdout || '').split(/\r?\n/).filter(Boolean);
-  return { committed: true, commit: head, files: committedFiles, leftover, ...(domHooks ? { dom_hooks_warning: domHooks.message } : {}), ...(check ? { check: { command: check.command, ok: true, ...(check.integration_preexisting ? { integration_preexisting: check.integration_preexisting } : {}), ...(check.ignored_reds && check.ignored_reds.length ? { ignored_reds: check.ignored_reds } : {}), ...(check.flaky_reds && check.flaky_reds.length ? { flaky_reds: check.flaky_reds } : {}), ...(check.related_set_size != null ? { related_set_size: check.related_set_size } : {}) } } : {}) };
+  return { committed: true, commit: head, files: committedFiles, leftover, ...(domHooks ? { dom_hooks_warning: domHooks.message } : {}), ...(check ? { check: { command: check.command, ok: true, ...(check.integration_preexisting ? { integration_preexisting: check.integration_preexisting } : {}), ...(check.ignored_reds && check.ignored_reds.length ? { ignored_reds: check.ignored_reds } : {}), ...(check.later_owned_reds && check.later_owned_reds.length ? { later_owned_reds: check.later_owned_reds } : {}), ...(check.preexisting_reds && check.preexisting_reds.length ? { preexisting_reds: check.preexisting_reds } : {}), ...(check.flaky_reds && check.flaky_reds.length ? { flaky_reds: check.flaky_reds } : {}), ...(check.related_set_size != null ? { related_set_size: check.related_set_size } : {}) } } : {}) };
 }
 
 /**
@@ -11082,8 +11146,8 @@ function checkpointCheck(projectRoot, sha, options = {}) {
   try { sweepCheckpointWorkspaces(projectRoot); } catch { /* auxiliar */ }
   const cfg = readProjectConfig(projectRoot) || {};
   const typecheck = options.checkpointCheck != null ? options.checkpointCheck : cfg.checkpoint_check;
-  // OXB-172: the tests that import the task's OWN changed files (vitest related), not only the task's verify.
-  const related = relatedTestsCommand(cfg, options.changedFiles || [], projectRoot);
+  // OXB-172 + OXB-C3: the tests that import the task's OWN changed files (vitest related), with G38 later-owned excluded.
+  const related = relatedTestsCommand(cfg, options.changedFiles || [], projectRoot, options);
   // OxeSpace 15/11 (OxeQuery polish T2): the integration checks promote runs (check-file-size, notices:check) run at
   // the checkpoint too — a task never passes its checkpoint to fail promote. Off with checkpoint_integration_checks: false.
   const integrationOn = cfg.checkpoint_integration_checks !== false && options.integrationChecks !== false;
@@ -11118,7 +11182,7 @@ function checkpointCheck(projectRoot, sha, options = {}) {
       // OxeSpace 14/11: minutes of silence after WorkItemCompleted looked like a hang — say what runs, and for how long
       try { process.stderr.write(`\n  [checkpoint ${String(sha).slice(0, 8)}] ${c.kind === 'related' ? 'testes relacionados' : c.kind === 'integration' ? 'check de integração' : 'checkpoint_check'}: ${String(c.command).slice(0, 160)} (até ${Math.round((c.timeout || 0) / 60000)} min)\n`); } catch { /* */ }
       const r = runChildCommandFull(wt, c.command, c.timeout);
-      res = { ok: r.ok, tail: r.tail, kind: c.kind, command: c.command, output: r.output, skipped: c.skipped || [] };
+      res = { ok: r.ok, timedOut: Boolean(r.timedOut), tail: r.tail, kind: c.kind, command: c.command, output: r.output, skipped: c.skipped || [], excluded_later_owned: c.excluded_later_owned || [] };
       if (!r.ok && c.kind === 'integration' && integrationRedIsPreexisting(projectRoot, wt, sha, c, r, options.changedFiles || [])) {
         // cross-review 15/11 (R29): red on the parent too, and nothing the task changed is named — not this task's to
         // fix (it could not, without a scope violation); recorded, the checkpoint goes on
@@ -11139,10 +11203,20 @@ function checkpointCheck(projectRoot, sha, options = {}) {
     if (!linkLeft) gitOut(projectRoot, ['worktree', 'remove', '--force', wt]);
     gitOut(projectRoot, ['worktree', 'prune']);
   }
-  const out = { ok: Boolean(res && res.ok), command: (res && res.command) || command, kind: res && res.kind, tail: String((res && res.tail) || '').split(/\r?\n/).slice(-6).join(' · '), ...(preexisting.length ? { integration_preexisting: preexisting } : {}) };
-  if (res && !res.ok && res.kind === 'related') out.failing_tests = failingTestFiles(res.output || res.tail || '');
+  const rawOut = String((res && (res.output || res.tail)) || '');
+  const out = {
+    ok: Boolean(res && res.ok),
+    ...(res && res.timedOut ? { timedOut: true } : {}),
+    command: (res && res.command) || command,
+    kind: res && res.kind,
+    tail: String((res && res.tail) || '').split(/\r?\n/).slice(-6).join(' · '),
+    ...(res && !res.ok && res.kind === 'related' ? { output: rawOut } : {}),
+    ...(res && Array.isArray(res.excluded_later_owned) && res.excluded_later_owned.length ? { excluded_later_owned: res.excluded_later_owned } : {}),
+    ...(preexisting.length ? { integration_preexisting: preexisting } : {}),
+  };
+  if (res && !res.ok && res.kind === 'related') out.failing_tests = failingTestFiles(rawOut, { projectRoot });
   // OXB-189: the size of the related set vitest ran (Test Files … (N)), so an oversized related run is visible.
-  if (res && res.kind === 'related') { const m = /Test Files\s+[^\n(]*\((\d+)\)/.exec(String(res.output || res.tail || '')); if (m) out.related_set_size = Number(m[1]); }
+  if (res && res.kind === 'related') { const m = /Test Files\s+[^\n(]*\((\d+)\)/.exec(stripRunnerNoise(rawOut)); if (m) out.related_set_size = Number(m[1]); }
   if (res && res.skipped && res.skipped.length) out.related_skipped = res.skipped;
   return out;
 }
@@ -11151,7 +11225,7 @@ function checkpointCheck(projectRoot, sha, options = {}) {
  * OXB-172: config `checkpoint_related_tests`: true | { command, max_files, timeout_ms }. The command gets the task's own
  * changed code files ({files}); default `npx vitest related --run {files}`; at most max_files (40) files.
  */
-function relatedTestsCommand(cfg, changedFiles, root) {
+function relatedTestsCommand(cfg, changedFiles, root, options = {}) {
   const opt = cfg && cfg.checkpoint_related_tests;
   if (!opt) return null;
   const o = typeof opt === 'object' ? opt : {};
@@ -11165,83 +11239,159 @@ function relatedTestsCommand(cfg, changedFiles, root) {
   const files = code.slice(0, max);
   const template = typeof o.command === 'string' && o.command.includes('{files}') ? o.command : 'npx vitest related --run {files}';
   const quote = (f) => (/[\s"']/.test(f) ? JSON.stringify(f) : f);
-  return { kind: 'related', command: template.replace('{files}', files.map(quote).join(' ')), timeout: Number(o.timeout_ms) > 0 ? Number(o.timeout_ms) : 600_000, skipped: code.slice(max) };
+  let cmd = template.replace('{files}', files.map(quote).join(' '));
+  let excludedLaterOwned = [];
+  if (o.prune_later_owned !== false && /\bvitest\b/.test(template) && (options.planDoc || (root && options.task && options.task.id))) {
+    try {
+      const planDoc = options.planDoc || readPlanJsonDoc(root, options.activeSession || null).doc;
+      const taskId = options.task && options.task.id ? options.task.id : null;
+      const excludes = require('./oxe-suite-impact.cjs').laterOwnedExcludesForTask(planDoc, taskId).slice(0, 80);
+      if (excludes.length) {
+        excludedLaterOwned = excludes;
+        cmd = `${cmd} ${excludes.map((f) => `--exclude ${quote(f)}`).join(' ')}`;
+      }
+    } catch { /* best-effort proactive prune */ }
+  }
+  const defaultTimeout = /(?:^|[\s/\\"'])remote-verify(?:\.[cm]?js|\b)/i.test(cmd) ? 30 * 60_000 : 600_000;
+  return {
+    kind: 'related',
+    command: cmd,
+    timeout: Number(o.timeout_ms) > 0 ? Number(o.timeout_ms) : defaultTimeout,
+    skipped: code.slice(max),
+    ...(excludedLaterOwned.length ? { excluded_later_owned: excludedLaterOwned } : {}),
+  };
 }
 
 /**
- * OXB-175: of the related tests that failed on the task's commit, the ones that are the task's: not a frozen acceptance
- * test owned by a PENDING task (or with no owner in this plan — another phase), not under a parked folder, and green on
- * the parent commit (run_command on the parent's tree). A test red before and after is not this task's red.
+ * OXB-175 + OXB-C3: of the related tests that failed on the task's commit, the ones that are the task's real
+ * regressions: G38 prunes frozen/acceptance tests owned by pending later tasks, superseded_tests, other phases and
+ * parked folders first; native Node ABI mismatches on .native. suites and tests already red on the parent commit go
+ * to preexistingReds; one-off parallel flakes go to flakyReds.
  */
 function relatedRedsOfTask(projectRoot, parentSha, failing, options = {}) {
   let doc = null;
-  try { doc = readPlanJsonDoc(projectRoot, null).doc; } catch { doc = null; }
+  try { doc = readPlanJsonDoc(projectRoot, options.activeSession || null).doc; } catch { doc = null; }
   const taskId = options.task && options.task.id;
-  const tasks = (doc && Array.isArray(doc.tasks) ? doc.tasks : []).filter(Boolean);
-  const doneIds = new Set(tasks.filter((t) => t.done === true).map((t) => t.id));
-  const owners = new Map(); // acceptance file → owning task ids
-  for (const a of (doc && Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])) {
-    if (!a) continue;
-    const ids = a.task ? [a.task] : tasks.filter((t) => (t.acceptance || []).includes(a.criterion)).map((t) => t.id);
-    for (const f of a.files || []) {
-      const p = String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/');
-      owners.set(p, [...(owners.get(p) || []), ...ids]);
-    }
+  const classified = require('./oxe-suite-impact.cjs').classifyRelatedTestFiles(doc, taskId, failing, { projectRoot });
+  if (Array.isArray(options.laterOwnedReds)) options.laterOwnedReds.push(...classified.later_owned);
+  if (Array.isArray(options.otherIgnoredReds)) options.otherIgnoredReds.push(...classified.other_ignored);
+  if (classified.later_owned.length) {
+    try {
+      process.stderr.write(`\n  [checkpoint] congelado(s) de tarefa posterior ignorado(s) (G38): ${classified.later_owned.map((x) => `${x.file} → ${x.owner}${x.owner_wave != null ? ` (onda ${x.owner_wave})` : ''}`).join(', ')}\n`);
+    } catch { /* */ }
   }
-  const isAcceptanceDir = (p) => /(^|\/)acceptance\//.test(p);
-  const parked = (p) => /(^|\/)parked[^/]*\//i.test(p);
-  let candidates = failing.filter((t) => {
-    if (parked(t.file)) return false;
-    const own = owners.get(t.file);
-    if (own) return own.includes(taskId) || own.every((id) => doneIds.has(id)); // pending owner → red by design
-    return !isAcceptanceDir(t.file); // a frozen test of another phase / a CR repro not in this plan
-  });
-  if (!candidates.length) return candidates;
+  let candidates = classified.candidates;
+  if (!candidates.length) return [];
+
+  // Native addon ABI mismatch (e.g. `db-replay.native.test.ts` or `policy-tool-use-enforcement.test.ts` importing
+  // Electron's `better-sqlite3` under plain Node `vitest related`) when the task touched no package/lockfile/build script
+  const changedNorm = (options.changedFiles || []).map((f) => String(f || '').replace(/\\/g, '/'));
+  const touchedNativeDeps = changedNorm.some((f) => /(^|\/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|\.npmrc)|\.node$|(^|\/)scripts\//i.test(f));
+  const NATIVE_ABI_RE = /NODE_MODULE_VERSION|ERR_DLOPEN_FAILED|was compiled against a different Node\.js version/i;
+  if (!touchedNativeDeps && options.relatedOutput && NATIVE_ABI_RE.test(String(options.relatedOutput))) {
+    const cleanLines = stripRunnerNoise(options.relatedOutput).split(/\r?\n/);
+    const suiteFailedByNativeAbi = (filePath) => {
+      const base = path.posix.basename(filePath);
+      if (/\.native\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(filePath) && cleanLines.some((l) => l.includes(base))) return true;
+      for (let i = 0; i < cleanLines.length; i += 1) {
+        if (!cleanLines[i].includes(filePath) && !cleanLines[i].includes(base)) continue;
+        const window = [];
+        for (let j = i + 1; j < Math.min(cleanLines.length, i + 25); j += 1) {
+          if (/^\s*(?:FAIL|⎯⎯⎯⎯)\b/.test(cleanLines[j]) && !cleanLines[j].includes(base)) break;
+          window.push(cleanLines[j]);
+        }
+        if (NATIVE_ABI_RE.test(window.join('\n'))) return true;
+      }
+      return false;
+    };
+    const keptAfterNative = [];
+    for (const t of candidates) {
+      if (suiteFailedByNativeAbi(t.file)) {
+        if (Array.isArray(options.preexistingReds) && !options.preexistingReds.includes(t.file)) options.preexistingReds.push(t.file);
+        continue;
+      }
+      keptAfterNative.push(t);
+    }
+    candidates = keptAfterNative;
+    if (!candidates.length) return [];
+  }
+
   const cfg = readProjectConfig(projectRoot) || {};
   const rt0 = cfg.checkpoint_related_tests;
-  const runTpl = rt0 && typeof rt0 === 'object' && typeof rt0.run_command === 'string' && rt0.run_command.includes('{files}') ? rt0.run_command : 'npx vitest run {files}';
+  const runTpl = rt0 && typeof rt0 === 'object' && typeof rt0.run_command === 'string' && rt0.run_command.includes('{files}') ? rt0.run_command : 'npx vitest run {files} --maxWorkers=1';
   const timeoutMs = Number(rt0 && rt0.timeout_ms) > 0 ? Number(rt0.timeout_ms) : 600_000;
+  const quoteArg = (f) => (/[\s"']/.test(f) ? JSON.stringify(f) : f);
   // OXB-178: a one-off red (memory pressure on a busy machine, a timing test) never undoes a good commit — each failing
   // file reruns ONCE, alone, on the commit's tree; it counts only if red again. Both results go in check.flaky_reds.
   if (options.commitSha) {
     const confirmed = [];
     for (const t of candidates) {
-      const again = runInCommitWorktree(projectRoot, options.commitSha, runTpl.replace('{files}', t.file), timeoutMs);
+      const again = runInCommitWorktree(projectRoot, options.commitSha, runTpl.replace('{files}', quoteArg(t.file)), timeoutMs);
       if (again && again.ok) { if (Array.isArray(options.flakyReds)) options.flakyReds.push({ file: t.file, first: 'red', rerun: 'green', where: 'commit_worktree' }); continue; }
       // OXB-189: still red in the temporary worktree → run it alone in the project's own tree (where the task's verify
       // ran green). Green there = the red is the environment of the check, not the task: flaky, the commit stays.
       try { process.stderr.write(`\n  [checkpoint] reconfere ${t.file} na árvore do projeto (até ${Math.round(timeoutMs / 60000)} min)\n`); } catch { /* */ }
-      const inTree = runChildCommandFull(projectRoot, runTpl.replace('{files}', t.file), timeoutMs);
+      const inTree = runChildCommandFull(projectRoot, runTpl.replace('{files}', quoteArg(t.file)), timeoutMs);
       if (inTree && inTree.ok) { if (Array.isArray(options.flakyReds)) options.flakyReds.push({ file: t.file, first: 'red', rerun: 'red', project_tree: 'green', where: 'project_tree' }); continue; }
       confirmed.push(t);
     }
     candidates = confirmed;
-    if (!candidates.length) return candidates;
+    if (!candidates.length) return [];
   }
   if (!parentSha) return candidates;
-  // red on the parent too → not this task's
-  const cmd = runTpl.replace('{files}', candidates.map((t) => t.file).join(' '));
-  const before = runInCommitWorktree(projectRoot, parentSha, cmd, timeoutMs);
-  if (!before) return candidates;
-  if (before.ok) return candidates; // all green before: every red is this task's
-  const redBefore = new Set(failingTestFiles(before.output || '').map((t) => t.file));
-  return candidates.filter((t) => !redBefore.has(t.file));
+  // red on the parent too → not this task's (run inside a single shared parent worktree; if a combined run crashes early
+  // on one native/broken suite, verify remaining candidates individually in the same worktree so none is masked).
+  const CRASHED_RUNNER_RE = /NODE_MODULE_VERSION|ERR_DLOPEN_FAILED|was compiled against a different Node\.js version|Worker exited unexpectedly|Segmentation fault|Failed Suites|Test Files\s+\d+\s+failed/i;
+  const parentCheck = withCommitWorktree(projectRoot, parentSha, (wt) => {
+    const cmd = runTpl.replace('{files}', candidates.map((t) => quoteArg(t.file)).join(' '));
+    try { process.stderr.write(`\n  [checkpoint] reconfere vermelho em ${String(parentSha).slice(0, 8)}: ${String(cmd).slice(0, 160)} (até ${Math.round((timeoutMs || 0) / 60000)} min)\n`); } catch { /* */ }
+    const before = runChildCommandFull(wt, cmd, timeoutMs);
+    if (!before || before.ok) return { allGreen: Boolean(before && before.ok), redBefore: new Set() };
+    const combinedOut = `${before.output || ''}\n${before.tail || ''}`;
+    const redSet = new Set(failingTestFiles(combinedOut, { projectRoot }).map((t) => t.file));
+    const matchesRed = (file) => redSet.has(file) || [...redSet].some((rb) => file.endsWith(`/${rb}`) || rb.endsWith(`/${file}`));
+    if (candidates.length === 1 && !before.timedOut && !matchesRed(candidates[0].file) && CRASHED_RUNNER_RE.test(stripRunnerNoise(combinedOut))) {
+      redSet.add(candidates[0].file);
+    } else if (candidates.length > 1) {
+      for (const c of candidates) {
+        if (matchesRed(c.file)) continue;
+        const single = runChildCommandFull(wt, runTpl.replace('{files}', quoteArg(c.file)), timeoutMs);
+        if (single && !single.ok && !single.timedOut) {
+          const singleOut = `${single.output || ''}\n${single.tail || ''}`;
+          const sf = failingTestFiles(singleOut, { projectRoot });
+          if (sf.length > 0 || CRASHED_RUNNER_RE.test(stripRunnerNoise(singleOut))) {
+            redSet.add(c.file);
+          }
+        }
+      }
+    }
+    return { allGreen: false, redBefore: redSet };
+  });
+  if (!parentCheck || parentCheck.allGreen) return candidates;
+  const redBefore = parentCheck.redBefore;
+  const isRedOnParent = (file) => redBefore.has(file) || [...redBefore].some((rb) => file.endsWith(`/${rb}`) || rb.endsWith(`/${file}`));
+  const regressions = [];
+  for (const t of candidates) {
+    if (isRedOnParent(t.file)) {
+      if (Array.isArray(options.preexistingReds) && !options.preexistingReds.includes(t.file)) options.preexistingReds.push(t.file);
+    } else {
+      regressions.push(t);
+    }
+  }
+  return regressions;
 }
 
-/** OXB-175: runs a command on a commit's own tree (temporary detached worktree; junction unlinked before removal). */
-function runInCommitWorktree(projectRoot, sha, command, timeoutMs) {
+function withCommitWorktree(projectRoot, sha, fn) {
   try { sweepCheckpointWorkspaces(projectRoot); } catch { /* auxiliar */ }
-  try { process.stderr.write(`\n  [checkpoint] reconfere vermelho em ${String(sha).slice(0, 8)}: ${String(command).slice(0, 160)} (até ${Math.round((timeoutMs || 0) / 60000)} min)\n`); } catch { /* */ }
-  const wt =path.join(projectRoot, '.oxe', 'checkpoint-ws', `p-${String(sha).slice(0, 10)}-${Date.now().toString(36)}`);
+  const wt = path.join(projectRoot, '.oxe', 'checkpoint-ws', `p-${String(sha).slice(0, 10)}-${Date.now().toString(36)}`);
   fs.mkdirSync(path.dirname(wt), { recursive: true });
   const add = gitOut(projectRoot, ['worktree', 'add', '-q', '--detach', wt, sha]);
   if (add.status !== 0) return null;
-  let r = null;
   try {
     const nm = path.join(projectRoot, 'node_modules');
     if (fs.existsSync(nm)) fs.symlinkSync(fs.realpathSync(nm), path.join(wt, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
     try { require('./oxe-local-config.cjs').copyLocalFiles(projectRoot, wt); } catch { /* */ }
-    r = runChildCommandFull(wt, command, timeoutMs);
+    return fn(wt);
   } finally {
     try {
       const rt = loadRuntimeModule();
@@ -11253,16 +11403,48 @@ function runInCommitWorktree(projectRoot, sha, command, timeoutMs) {
     if (!linkLeft) gitOut(projectRoot, ['worktree', 'remove', '--force', wt]);
     gitOut(projectRoot, ['worktree', 'prune']);
   }
-  return r;
 }
 
-/** OXB-172: the test files a vitest/jest run reports as failing (FAIL / × / ❯ lines). */
-function failingTestFiles(output) {
+/** OXB-175: runs a command on a commit's own tree (temporary detached worktree; junction unlinked before removal). */
+function runInCommitWorktree(projectRoot, sha, command, timeoutMs) {
+  try { process.stderr.write(`\n  [checkpoint] reconfere vermelho em ${String(sha).slice(0, 8)}: ${String(command).slice(0, 160)} (até ${Math.round((timeoutMs || 0) / 60000)} min)\n`); } catch { /* */ }
+  return withCommitWorktree(projectRoot, sha, (wt) => runChildCommandFull(wt, command, timeoutMs));
+}
+
+function stripRunnerNoise(text) {
+  return String(text || '')
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/^[^\t\r\n]+\t[^\t\r\n]+\t\d{4}-\d{2}-\d{2}T[\d:.]+Z\s?/gm, '')
+    .replace(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+/gm, '');
+}
+
+/** OXB-172 + OXB-C3: the test files a vitest/jest/node-test run reports as failing (local or remote-verify / GH Actions). */
+function failingTestFiles(output, options = {}) {
+  const cleaned = stripRunnerNoise(output);
+  const projectRoot = options && options.projectRoot ? String(options.projectRoot) : null;
+  const normCandidatePath = (raw) => {
+    let f = String(raw || '').replace(/\\/g, '/').replace(/^\.\//, '');
+    if (projectRoot) {
+      const rootSlash = projectRoot.replace(/\\/g, '/').replace(/\/+$/, '');
+      if (f.toLowerCase().startsWith(`${rootSlash.toLowerCase()}/`)) {
+        f = f.slice(rootSlash.length + 1);
+      } else if (f.startsWith('/') && f.includes('/')) {
+        const parts = f.split('/').filter(Boolean);
+        for (let i = 1; i < parts.length - 1; i += 1) {
+          const suffix = parts.slice(i).join('/');
+          if (fs.existsSync(path.join(projectRoot, suffix))) { f = suffix; break; }
+        }
+      }
+    }
+    return f;
+  };
   const out = new Map();
-  for (const m of String(output).matchAll(/^\s*(?:FAIL|×|✗|❯)\s+([\w./\\@-]+\.(?:test|spec)\.[cm]?[jt]sx?)(?:\s*>\s*([^\n]+))?/gm)) {
-    const file = m[1].replace(/\\/g, '/').replace(/^\.\//, '');
+  const LINE_RE = /^\s*(?:FAIL|×|✗|✖|❯|❌)\s+(?:\|[^|\r\n]+\|\s+|\[[^\]\r\n]+\]\s+)?([\w./\\@+$()[\]-]+\.(?:test|spec)\.[cm]?[jt]sx?)(?::\d+(?::\d+)?)?(?:\s*(?:>|›)\s*([^\r\n]+))?/gm;
+  for (const m of cleaned.matchAll(LINE_RE)) {
+    const file = normCandidatePath(m[1]);
     if (!out.has(file)) out.set(file, []);
-    if (m[2] && !/\(\d+ tests?/.test(m[2])) out.get(file).push(m[2].trim().slice(0, 120));
+    if (m[2] && !/\(\d+ tests?/.test(m[2]) && !/^\[.*\]$/.test(m[2].trim())) out.get(file).push(m[2].trim().slice(0, 120));
   }
   return [...out].map(([file, names]) => ({ file, names: [...new Set(names)].slice(0, 5) }));
 }
@@ -13330,6 +13512,8 @@ function replayRuntimeState(projectRoot, activeSession, options = {}) {
 
 module.exports = {
   relatedTestsCommand,
+  relatedRedsOfTask,
+  failingTestFiles,
   runtimePlanSkeleton,
   runtimeProgramMember,
   runtimeProgramQueue,

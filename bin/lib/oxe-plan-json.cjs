@@ -582,7 +582,7 @@ function markPlanTaskCheckpointFailed(planMdPath, taskId, info = {}) {
     task.done = false;
     delete task.done_at;
     delete task.done_commit;
-    task.checkpoint_failed = { at: new Date().toISOString(), reason: String(info.reason || '').slice(0, 800), ...(info.commit ? { commit: info.commit } : {}), ...(info.leftover ? { leftover: info.leftover.slice(0, 50) } : {}), ...(info.run_id ? { run_id: info.run_id } : {}), ...(info.snapshot ? { snapshot: info.snapshot } : {}), ...(info.kind ? { kind: info.kind } : {}), ...(info.related_red ? { related_red: info.related_red } : {}), ...(info.title ? { title: info.title } : {}) };
+    task.checkpoint_failed = { at: new Date().toISOString(), reason: String(info.reason || '').slice(0, 800), ...(info.commit ? { commit: info.commit } : {}), ...(info.leftover ? { leftover: info.leftover.slice(0, 50) } : {}), ...(info.run_id ? { run_id: info.run_id } : {}), ...(info.snapshot ? { snapshot: info.snapshot } : {}), ...(info.kind ? { kind: info.kind } : {}), ...(info.related_red ? { related_red: info.related_red } : {}), ...(info.real_regressions ? { real_regressions: info.real_regressions } : {}), ...(info.later_owned_reds && info.later_owned_reds.length ? { later_owned_reds: info.later_owned_reds } : {}), ...(info.preexisting_reds && info.preexisting_reds.length ? { preexisting_reds: info.preexisting_reds } : {}), ...(info.title ? { title: info.title } : {}) };
     const tmp = `${jsonPath}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
     fs.renameSync(tmp, jsonPath);
