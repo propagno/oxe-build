@@ -710,9 +710,190 @@ function buildPreviewCiCommands(work, riskSuites, config = {}) {
   return cmds;
 }
 
+/**
+ * Valid conflict resolution strategies for `--resolve <path>=ours|theirs|union-json-array`.
+ */
+const VALID_RESOLVE_STRATEGIES = new Set(['ours', 'theirs', 'union-json-array']);
+
+/**
+ * Parses `--resolve` arguments (`<path>=<strategy>` strings or `{ path, strategy }` objects).
+ * Throws immediately if syntax or strategy is invalid.
+ */
+function parseResolveRules(rawList) {
+  const rules = [];
+  const items = Array.isArray(rawList) ? rawList : rawList ? [rawList] : [];
+  for (const raw of items) {
+    if (!raw) continue;
+    let filePath = '';
+    let strategy = '';
+    if (typeof raw === 'string') {
+      const idx = raw.lastIndexOf('=');
+      if (idx <= 0 || idx === raw.length - 1) {
+        throw new Error(`--resolve inválido ("${raw}"): use --resolve <caminho>=ours|theirs|union-json-array`);
+      }
+      filePath = norm(raw.slice(0, idx).trim());
+      strategy = raw.slice(idx + 1).trim().toLowerCase();
+    } else if (typeof raw === 'object') {
+      filePath = norm(String(raw.path || '').trim());
+      strategy = String(raw.strategy || '').trim().toLowerCase();
+    }
+    if (!filePath || !VALID_RESOLVE_STRATEGIES.has(strategy)) {
+      throw new Error(`--resolve inválido ("${typeof raw === 'string' ? raw : JSON.stringify(raw)}"): estratégia deve ser ours, theirs ou union-json-array`);
+    }
+    rules.push({ path: filePath, strategy });
+  }
+  return rules;
+}
+
+function unionJsonArrayItems(oursArr, theirsArr) {
+  const itemKey = (v) => {
+    if (v === null || typeof v !== 'object') return `${typeof v}:${String(v)}`;
+    if (!Array.isArray(v) && v.id != null) return `id:${String(v.id)}`;
+    return `json:${JSON.stringify(v)}`;
+  };
+  const seen = new Set();
+  const merged = [];
+  for (const item of [...(Array.isArray(oursArr) ? oursArr : []), ...(Array.isArray(theirsArr) ? theirsArr : [])]) {
+    const k = itemKey(item);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    merged.push(item);
+  }
+  return merged;
+}
+
+function mergeJsonLockObjects(oursObj, theirsObj) {
+  const isPlain = (x) => x && typeof x === 'object' && !Array.isArray(x);
+  const out = { ...oursObj };
+  for (const [k, tv] of Object.entries(theirsObj || {})) {
+    const ov = out[k];
+    if (Array.isArray(ov) && Array.isArray(tv)) {
+      out[k] = unionJsonArrayItems(ov, tv);
+    } else if (isPlain(ov) && isPlain(tv)) {
+      const sub = { ...ov };
+      for (const [sk, stv] of Object.entries(tv)) {
+        const sov = sub[sk];
+        if (isPlain(sov) && isPlain(stv)) {
+          // Append-only lock entry upgrade (`pending` -> `enforced`) never regresses if either side enforced it
+          const preferred = String(sov.status || sov.state || '').toLowerCase() === 'enforced' ? sov : stv;
+          sub[sk] = { ...sov, ...stv, ...(preferred === sov ? { status: sov.status, ...(sov.state ? { state: sov.state } : {}) } : {}) };
+        } else if (Array.isArray(sov) && Array.isArray(stv)) {
+          sub[sk] = unionJsonArrayItems(sov, stv);
+        } else if (!(sk in sub)) {
+          sub[sk] = stv;
+        }
+      }
+      out[k] = sub;
+    } else if (!(k in out)) {
+      out[k] = tv;
+    }
+  }
+  return out;
+}
+
+/**
+ * Combines two JSON documents (`ours` vs `theirs`) via union of JSON arrays (plus map-entry union for
+ * object-shaped lock files like `{ enforced: [...], targets: {...} }`), returning formatted JSON text or null.
+ */
+function unionJsonDocuments(oursText, theirsText) {
+  let ours;
+  let theirs;
+  try {
+    ours = JSON.parse(String(oursText || ''));
+    theirs = JSON.parse(String(theirsText || ''));
+  } catch {
+    return null;
+  }
+  if (Array.isArray(ours) && Array.isArray(theirs)) {
+    return `${JSON.stringify(unionJsonArrayItems(ours, theirs), null, 2)}\n`;
+  }
+  if (ours && theirs && typeof ours === 'object' && typeof theirs === 'object' && !Array.isArray(ours) && !Array.isArray(theirs)) {
+    return `${JSON.stringify(mergeJsonLockObjects(ours, theirs), null, 2)}\n`;
+  }
+  return null;
+}
+
+/**
+ * Resolves a conflicted cherry-pick in `work` when all conflicted files can be settled safely:
+ *   1. Ratchet cap-only conflicts (`tryResolveRatchetCherryPickConflict`);
+ *   2. Explicit `--resolve <path>=ours|theirs|union-json-array` rules;
+ *   3. Built-in `union-json-array` resolver for append-only `enforced.lock.json` files.
+ */
+function tryResolvePromoteCherryPickConflict(projectRoot, work, sha, config, conflictedFiles, options = {}) {
+  const files = (Array.isArray(conflictedFiles) ? conflictedFiles : []).map(norm).filter(Boolean);
+  if (!files.length) return { resolved: false };
+
+  if (sha && options.skipRatchet !== true) {
+    const ratchetRes = tryResolveRatchetCherryPickConflict(projectRoot, work, sha, config, files);
+    if (ratchetRes.resolved) {
+      return { ...ratchetRes, kind: 'ratchet', resolved_cap_files: ratchetRes.files || [] };
+    }
+  }
+
+  const rules = parseResolveRules(options.resolve);
+  const strategyFor = (file) => {
+    const exact = rules.find((r) => r.path === file);
+    if (exact) return exact.strategy;
+    const suffix = rules.find((r) => !r.path.includes('/') ? path.posix.basename(file) === r.path : file.endsWith(`/${r.path}`));
+    if (suffix) return suffix.strategy;
+    if (/(?:^|\/)enforced\.lock\.json$/i.test(file)) return 'union-json-array';
+    return null;
+  };
+
+  const plan = files.map((f) => ({ file: f, strategy: strategyFor(f) }));
+  if (plan.some((p) => !p.strategy)) return { resolved: false };
+
+  const stagedContents = [];
+  for (const item of plan) {
+    if (item.strategy === 'union-json-array') {
+      const oursStage = gitOut(work, ['show', `:2:${item.file}`]);
+      const theirsStage = gitOut(work, ['show', `:3:${item.file}`]);
+      if (!oursStage.ok || !theirsStage.ok) return { resolved: false };
+      const merged = unionJsonDocuments(oursStage.stdout, theirsStage.stdout);
+      if (merged == null) return { resolved: false };
+      stagedContents.push({ ...item, merged });
+    } else {
+      stagedContents.push(item);
+    }
+  }
+
+  for (const item of stagedContents) {
+    if (item.strategy === 'ours' || item.strategy === 'theirs') {
+      const co = gitOut(work, ['checkout', `--${item.strategy}`, '--', item.file]);
+      if (!co.ok) return { resolved: false };
+    } else if (item.strategy === 'union-json-array') {
+      fs.mkdirSync(path.dirname(path.join(work, item.file)), { recursive: true });
+      fs.writeFileSync(path.join(work, item.file), item.merged, 'utf8');
+    }
+    const add = gitOut(work, ['add', '--', item.file]);
+    if (!add.ok) return { resolved: false };
+  }
+
+  const resolvedFiles = stagedContents.map((s) => ({ file: s.file, strategy: s.strategy }));
+  if (options.commit === false) {
+    return { resolved: true, kind: 'staged', files, resolved_files: resolvedFiles, resolved_cap_files: [] };
+  }
+
+  const stagedDiff = gitOut(work, ['diff', '--cached', '--quiet']);
+  if (stagedDiff.status === 0) {
+    const skip = gitOut(work, ['cherry-pick', '--skip']);
+    return { resolved: skip.ok, skipped: true, kind: 'resolved', files, resolved_files: resolvedFiles, resolved_cap_files: [] };
+  }
+  const cont = spawnSync('git', ['-c', 'core.editor=true', 'cherry-pick', '--continue'], {
+    cwd: work,
+    encoding: 'utf8',
+    windowsHide: true,
+    env: { ...process.env, GIT_EDITOR: 'true' },
+  });
+  return { resolved: cont.status === 0, skipped: false, kind: 'resolved', files, resolved_files: resolvedFiles, resolved_cap_files: [] };
+}
+
 module.exports = {
   selectPromoteQuickCommits,
   tryResolveRatchetCherryPickConflict,
+  tryResolvePromoteCherryPickConflict,
+  parseResolveRules,
+  unionJsonDocuments,
   reconcilePromotedRatchets,
   checkPromotedEnforcedTargets,
   analyzeUnpromotedDependencies,

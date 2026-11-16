@@ -7433,7 +7433,13 @@ function sweepStalePromoteWorkspaces(projectRoot, options = {}) {
     const dir = path.join(root, name);
     const pidFile = `${dir}.pid`;
     let pid = null;
-    try { pid = Number(JSON.parse(fs.readFileSync(pidFile, 'utf8')).pid) || null; } catch { pid = null; }
+    let paused = false;
+    try {
+      const meta = JSON.parse(fs.readFileSync(pidFile, 'utf8'));
+      pid = Number(meta.pid) || null;
+      paused = meta.paused === true;
+    } catch { pid = null; }
+    if (paused) continue;
     if (pid && pid !== process.pid && alive(pid)) continue;
     if (!pid) {
       let age = 0;
@@ -7586,27 +7592,404 @@ function runtimeSync(projectRoot, activeSession, options = {}) {
   return result;
 }
 
+function finalizePromotedWorktree({
+  projectRoot,
+  activeSession,
+  work,
+  result,
+  taskId,
+  planTasks,
+  phaseCtx,
+  base,
+  baseSha,
+  buildSha,
+  branch,
+  programTip,
+  withFixtures,
+  verifyTests,
+  resolvedCapFiles,
+  pushArgs,
+  options,
+}) {
+  const promoteHelpers = require('./oxe-promote-helpers.cjs');
+  // OXB-156 (b): the task's frozen tests as files from the program tip; identical-on-base ones are skipped.
+  if (!result.conflict && withFixtures.length) {
+    const added = [];
+    for (const file of withFixtures) {
+      const tip = gitRun(projectRoot, ['show', `${programTip}:${file}`]);
+      if (!tip.ok) continue;
+      const onBase = gitRun(projectRoot, ['show', `${baseSha}:${file}`]);
+      const current = fs.existsSync(path.join(work, file)) ? fs.readFileSync(path.join(work, file), 'utf8') : null;
+      if ((onBase.ok && onBase.stdout === tip.stdout) || current === tip.stdout) continue;
+      const r = spawnSync('git', ['show', `${programTip}:${file}`], { cwd: projectRoot, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+      fs.mkdirSync(path.dirname(path.join(work, file)), { recursive: true });
+      fs.writeFileSync(path.join(work, file), r.stdout);
+      added.push(file);
+    }
+    if (added.length) {
+      gitRun(work, ['add', '--', ...added]);
+      const originTrailers = [...planTasks.map((t) => `OXE-Task: ${phaseCtx.phase ? `${phaseCtx.phase}/` : ''}${t.id}`), ...[...new Set(planTasks.map((t) => t.run_id).filter(Boolean))].map((r) => `OXE-Run: ${r}`)].join('\n');
+      const c = gitRun(work, ['commit', '-q', '-m', `test(acceptance): frozen tests of ${taskId}`, '-m', `From the program branch at ${String(programTip).slice(0, 10)}: ${added.join(', ')}`, '-m', originTrailers]);
+      if (!c.ok) result.error = `commit dos testes congelados falhou: ${c.stderr.trim().split(/\r?\n/).pop()}`;
+    }
+    result.frozen_tests = added;
+  }
+  if (!result.conflict && !result.error) {
+    const pcfg = readProjectConfig(projectRoot) || {};
+    const ratchetAdj = promoteHelpers.reconcilePromotedRatchets(work, buildSha, pcfg, { resolvedCapFiles: [...resolvedCapFiles] });
+    if (ratchetAdj.adjusted.length) {
+      gitRun(work, ['add', '--', ...ratchetAdj.files]);
+      const originTrailers = [...planTasks.map((t) => `OXE-Task: ${phaseCtx.phase ? `${phaseCtx.phase}/` : ''}${t.id}`), ...[...new Set(planTasks.map((t) => t.run_id).filter(Boolean))].map((r) => `OXE-Run: ${r}`)].join('\n');
+      const rc = gitRun(work, ['commit', '-q', '-m', `chore(ratchet): reconcile ratchet caps of ${taskId} on ${base}`, '-m', ratchetAdj.adjusted.map((a) => `${a.file}:${a.line} ${a.program_cap} -> ${a.promoted_cap} (real count: ${a.real_count})`).join('\n'), '-m', originTrailers]);
+      if (!rc.ok) result.error = `commit de ajuste de ratchet falhou: ${rc.stderr.trim().split(/\r?\n/).pop()}`;
+      result.ratchets_adjusted = ratchetAdj.adjusted;
+      result.warnings.push(`ratchet(s) recalculado(s) contra ${base} + ${taskId}: ${ratchetAdj.adjusted.map((a) => `${a.file}:${a.line} ${a.program_cap} → ${a.promoted_cap}`).join(', ')}`);
+    }
+    const enforcedCheck = promoteHelpers.checkPromotedEnforcedTargets(work, buildSha, { base, config: pcfg });
+    if (enforcedCheck.gaps.length) {
+      result.enforced_scene_gaps = enforcedCheck.gaps;
+      result.warnings.push(...enforcedCheck.warnings);
+    }
+  }
+  if (!result.conflict && !result.error) {
+    const icLib = require('./oxe-integration-checks.cjs');
+    const parked = icLib.findTrackedParkedAcceptance(work, { baseRef: baseSha });
+    if (parked.length) {
+      result.parked_acceptance = parked;
+      result.error = `gate de PR bloqueado em ${branch}: ${icLib.formatParkedAcceptanceError(parked)}`;
+    }
+  }
+  if (!result.conflict && !result.error && options.integrationChecks !== false) {
+    const ic = require('./oxe-integration-checks.cjs').runIntegrationChecks(work, { configRoot: projectRoot, baseRef: baseSha });
+    if (ic.ran.length) result.integration_checks = ic.ran;
+    if (!ic.ok) result.error = `check de integração vermelho em ${branch}: \`${ic.failed.command}\` (exit ${ic.failed.exit})${ic.failed.tail ? `\n${String(ic.failed.tail).split(/\r?\n/).slice(-5).map((l) => `    ${l}`).join('\n')}\n` : ''} — nada foi enviado; a branch local ${branch} fica (não enviada). Corrija no programa (ex.: um quick que reduz o arquivo acima do teto, ou npm run notices:generate) e rode o promote de novo: a branch é refeita com o conserto`;
+  }
+  if (!result.conflict && !result.error) {
+    const pcfg = readProjectConfig(projectRoot) || {};
+    const promotedDiffFiles = gitLines(work, ['diff', '--name-only', buildSha, 'HEAD']) || [];
+    const riskSuites = promoteHelpers.discoverMainCiRiskSuites(work, promotedDiffFiles, {
+      excludeSuites: [...verifyTests, ...(result.frozen_tests || [])],
+    });
+    if (riskSuites.length) result.ci_risk_suites = riskSuites;
+    if (options.previewCi) {
+      const previewCmds = promoteHelpers.buildPreviewCiCommands(work, riskSuites, pcfg);
+      const previewRuns = [];
+      let previewOk = true;
+      const baseVerifyTimeout = Number(pcfg.verify_timeout_ms) > 0 ? Number(pcfg.verify_timeout_ms) : 10 * 60_000;
+      for (const cmd of previewCmds) {
+        const ms = commitTaskVerifyTimeout(projectRoot, options, cmd, baseVerifyTimeout);
+        const r = runChildCommandFull(work, cmd, ms);
+        previewRuns.push({ command: cmd, ok: r.ok, status: r.status, timed_out: r.timedOut, tail: r.tail });
+        if (!r.ok) {
+          previewOk = false;
+          result.error = r.timedOut
+            ? timedOutMessage(`preview-ci em ${branch}`, cmd, ms, r)
+            : `preview-ci vermelho em ${branch}: \`${cmd}\` (exit ${r.status})${r.tail ? `\n${String(r.tail).split(/\r?\n/).slice(-6).map((l) => `    ${l}`).join('\n')}` : ''}`;
+          break;
+        }
+      }
+      result.preview_ci = { ok: previewOk, suites: riskSuites.map((s) => s.suite), runs: previewRuns };
+    }
+  }
+  if (!result.conflict && options.openPr && !result.error) {
+    const push = gitRun(work, pushArgs());
+    if (!push.ok) result.error = `push falhou: ${push.stderr.trim().split(/\r?\n/).slice(-2).join(' · ')}`;
+    else result.pushed = true;
+  }
+  if (!result.conflict && !result.error) {
+    let pkg = null;
+    try { pkg = JSON.parse(fs.readFileSync(path.join(work, 'package.json'), 'utf8')); } catch { pkg = null; }
+    if (pkg && pkg.scripts && pkg.scripts['pr:ready'] && options.prReady !== false) {
+      const ready = runProgressCommand(work, 'npm run pr:ready', 1_800_000, { quiet: options.quietProgress === true || process.env.OXE_PROGRESS === '0' });
+      const tail = String(ready.tail || '');
+      const STATUS_LINE = /not on GitHub yet|push it first|(post|create|set)\w*\s+(the\s+)?(commit\s+)?status/i;
+      const otherLines = tail.split(/\r?\n/).filter((l) => !STATUS_LINE.test(l) && !/^\s*npm (ERR!|error|warn)\b/i.test(l)).join('\n');
+      const statusOnly = !ready.ok && STATUS_LINE.test(tail) && !/\bFAIL\b|\bfailed\b|✗|×|error TS\d+|\d+ (failing|failed)/i.test(otherLines);
+      result.pr_ready = { ok: ready.ok || statusOnly, tail: ready.tail, ...(statusOnly ? { status_post_failed: true } : {}) };
+    }
+  }
+}
+
+function finalizePromotePrBodyAndEvents({
+  projectRoot,
+  activeSession,
+  result,
+  task,
+  taskId,
+  criteria,
+  ordered,
+  branch,
+  original,
+  base,
+  remote,
+  stack,
+  pushArgs,
+  options,
+}) {
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const crs = require('./oxe-change.cjs').listChanges(paths.programDir || path.join(projectRoot, '.oxe', 'program'))
+    .filter((cr) => (cr.criteria || []).some((a) => criteria.has(a)));
+  const body = [
+    `## ${taskId} — ${task.title || ''}`.trim(),
+    '',
+    `Promovida de \`${original}\` por \`oxe-cc runtime promote\` (cherry-pick -x de ${ordered.length} commit(s)).`,
+    '',
+    ...(stack ? [
+      `> **Empilhada sobre ${stack.task}** (${stack.pr ? `PR ${stack.pr}, ` : ''}branch \`${stack.branch}\`), ainda não mergeada em \`${base}\`: este PR traz os commits dela até ela entrar. Mergeie ${stack.task} primeiro; depois disso o diff deste PR encolhe para os commits de ${taskId}.`,
+      '',
+    ] : []),
+    '### Arquivos',
+    ...(task.files || []).map((f) => `- \`${f}\``),
+    '',
+    `### Critérios: ${[...criteria].join(', ') || '—'}`,
+    ...(crs.length ? ['', '### Change requests', ...crs.map((cr) => `- ${cr.id} (${cr.class}, ${cr.status}): ${cr.summary}`)] : []),
+    '',
+    '### Commits da tarefa',
+    ...(ordered.length ? ordered.map((sha) => `- ${sha.slice(0, 10)} ${(gitLines(projectRoot, ['log', '-1', '--format=%s', sha]) || [''])[0]}`) : ['- —']),
+    '',
+    '### Testes congelados (arquivos do tip do programa)',
+    ...((result.frozen_tests || []).length ? result.frozen_tests.map((f) => `- \`${f}\``) : ['- — (já na base, ou nenhum)']),
+    ...((result.quick_commits || []).length ? ['', '### Quicks incluídos', ...result.quick_commits.map((q) => `- ${q.sha.slice(0, 10)} (${q.quick}${q.card ? `, ${q.card}` : ''})`)] : []),
+    ...((result.ratchets_adjusted || []).length ? ['', '### Ratchets ajustados para a base', ...result.ratchets_adjusted.map((a) => `- \`${a.file}:${a.line}\`: ${a.program_cap} → ${a.promoted_cap} (contagem real na branch: ${a.real_count})`)] : []),
+    ...(result.suggested_promote_order && result.suggested_promote_order.length ? ['', `### Ordem sugerida de promoção: ${result.suggested_promote_order.join(' → ')}`] : []),
+    ...(((result.ci_risk_suites && result.ci_risk_suites.length) || (result.enforced_scene_gaps && result.enforced_scene_gaps.length)) ? [
+      '',
+      '### Riscos de CI na main (fora do verify da tarefa)',
+      ...((result.ci_risk_suites || []).map((s) => `- \`${s.suite}\` (${s.kind} — cobre ${s.covers.map((c) => `\`${c}\``).join(', ')})`)),
+      ...((result.enforced_scene_gaps || []).map((g) => `- \`${g.file}\` → \`${g.id}\`: seletor \`${g.selector}\` ausente na cena de conformidade (sugestão: manter \`${g.proposed_status}\` — ${g.proposed_reason})`)),
+    ] : []),
+    ...(result.preview_ci ? ['', `### preview-ci: ${result.preview_ci.ok ? 'verde' : 'VERMELHO'} (${result.preview_ci.suites.length} suíte(s))`] : []),
+    ...(result.pr_ready ? ['', `### pr:ready: ${result.pr_ready.ok ? 'verde' : 'VERMELHO'}`] : []),
+    '',
+  ].join('\n');
+  const bodyFile = path.join(projectRoot, '.oxe', 'promote', `${taskId}.md`);
+  writeTextAtomic(bodyFile, body);
+  result.body_file = path.relative(projectRoot, bodyFile).replace(/\\/g, '/');
+  let almKey = null;
+  try {
+    const almLib = require('./oxe-alm.cjs');
+    const cfgAlm = almLib.almConfig(readProjectConfig(projectRoot) || {});
+    const ph = activeProgramPhase(projectRoot, activeSession);
+    if (cfgAlm) almKey = almLib.keyFor(resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program'), cfgAlm, ph ? ph.id : null, taskId);
+  } catch { almKey = null; }
+  if (almKey) result.alm_key = almKey;
+  if (almKey) {
+    try {
+      const almLib = require('./oxe-alm.cjs');
+      const cfgAlm = almLib.almConfig(readProjectConfig(projectRoot) || {});
+      const ph = activeProgramPhase(projectRoot, activeSession);
+      const pd = resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program');
+      const docM = readPlanJsonDoc(projectRoot, activeSession).doc;
+      const mk = require('./oxe-alm-prs.cjs').prMarkerFor(almKey, taskId, docM, (id) => almLib.keyFor(pd, cfgAlm, ph ? ph.id : null, id));
+      if (mk) {
+        result.alm_marker = mk.marker;
+        writeTextAtomic(bodyFile, `${body}\n${mk.marker}${mk.open_tasks.length ? ` (ainda abertas no card: ${mk.open_tasks.join(', ')})` : ''}\n`);
+      }
+    } catch { /* auxiliar: o PR segue sem o marcador */ }
+  }
+  const title = `${taskId}: ${task.title || 'promote'}${almKey ? ` (${almKey})` : ''}`;
+  const prBase = base.replace(new RegExp(`^${remote}/`), '');
+  result.commands = [
+    `git push -u ${remote} ${branch}`,
+    `gh pr create --base ${prBase} --head ${branch} --title ${JSON.stringify(title)} --body-file ${result.body_file}`,
+  ];
+  if (options.openPr && !result.error) {
+    if (result.pr_ready && !result.pr_ready.ok) {
+      result.error = `pr:ready vermelho em ${branch} — PR não aberto (a branch já está em ${remote}; corrija e rode os comandos abaixo — o PR vai contra ${prBase}${stack ? `, não contra a branch de ${stack.task}` : ''})`;
+    } else {
+      const push = result.pushed ? { ok: true } : gitRun(projectRoot, pushArgs());
+      if (!push.ok) result.error = `push falhou: ${push.stderr.trim().split(/\r?\n/).slice(-2).join(' · ')}`;
+      else {
+        const gh = (options.ghSpawn || spawnSync)('gh', ['pr', 'create', '--base', prBase, '--head', branch, '--title', title, '--body-file', bodyFile], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+        if (gh.status === 0) result.pr = String(gh.stdout || '').trim().split(/\r?\n/).pop();
+        else result.error = `gh pr create falhou: ${String(gh.stderr || gh.stdout || '').trim().split(/\r?\n/).slice(-2).join(' · ')}`;
+      }
+    }
+  }
+  appendEvent(projectRoot, activeSession, { type: 'TaskPromoted', work_item_id: taskId, payload: { base, branch, commits: ordered, pr_ready: result.pr_ready ? result.pr_ready.ok : null, pr: result.pr, ...(stack ? { stacked_on: result.stacked_on } : {}) } });
+  almAutoSync(projectRoot, activeSession);
+  return result;
+}
+
+function cleanupPromoteWorktree(projectRoot, wt, linked) {
+  const rel = path.relative(projectRoot, wt).replace(/\\/g, '/');
+  try {
+    const rt = loadRuntimeModule();
+    if (rt && typeof rt.unlinkExternalLinks === 'function') rt.unlinkExternalLinks(wt);
+    else if (linked && fs.existsSync(path.join(wt, 'node_modules'))) fs.unlinkSync(path.join(wt, 'node_modules'));
+  } catch { /* */ }
+  let rm = gitRun(projectRoot, ['worktree', 'remove', wt]);
+  if (!rm.ok) {
+    let linkLeft = false;
+    try { linkLeft = fs.lstatSync(path.join(wt, 'node_modules')).isSymbolicLink(); } catch { linkLeft = false; }
+    if (!linkLeft) rm = gitRun(projectRoot, ['worktree', 'remove', '--force', wt]);
+  }
+  if (rm.ok) { try { fs.rmSync(`${wt}.pid`, { force: true }); } catch { /* */ } }
+  gitRun(projectRoot, ['worktree', 'prune']);
+  return rm.ok ? null : `worktree ${rel} não removida (${rm.stderr.trim().split(/\r?\n/).pop()}) — remova à mão depois de conferir que não há links dentro`;
+}
+
 /**
  * `oxe-cc runtime promote <Tn> --base main [--branch name] [--open-pr] [--remote origin]`: a branch from the base with
  * the task's checkpoint commits (OXE-Task trailer / done_commit) and the commits of its frozen acceptance tests,
- * cherry-picked with -x in history order. Stops (and cleans up) on a conflict; runs the project's `pr:ready` script
- * when there is one; writes the PR body from the task and its CRs. Push + `gh pr create` only with `--open-pr`.
+ * cherry-picked with -x in history order. Stops (and cleans up, unless `--keep-on-conflict`) on a conflict; resolves
+ * `lint.ratchets` cap-only conflicts and append-only `enforced.lock.json` JSON unions automatically (or per `--resolve`).
  */
 function runtimePromote(projectRoot, activeSession, options = {}) {
+  const promoteHelpers = require('./oxe-promote-helpers.cjs');
+  promoteHelpers.parseResolveRules(options.resolve); // fail fast on malformed --resolve rules
+  if (!gitLines(projectRoot, ['rev-parse', '--git-dir'])) throw new Error('runtime promote exige um repositório git');
+
+  const pendingFile = path.join(projectRoot, '.oxe', 'promote', 'pending-conflict.json');
+  const original = (gitLines(projectRoot, ['rev-parse', '--abbrev-ref', 'HEAD']) || [])[0];
+  const originalSha = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
+  const remote = String(options.remote || 'origin');
+
+  if (options.continue === true) {
+    if (!fs.existsSync(pendingFile)) {
+      throw new Error('nenhum promote pausado em conflito (.oxe/promote/pending-conflict.json não encontrado)');
+    }
+    const saved = JSON.parse(fs.readFileSync(pendingFile, 'utf8'));
+    if ((options.task || options.tasks) && saved.task) {
+      const reqIds = [...new Set((options.tasks ? (Array.isArray(options.tasks) ? options.tasks : String(options.tasks).split(',')) : [options.task]).map((t) => String(t || '').trim().toUpperCase()).filter(Boolean))].join('-');
+      if (reqIds && reqIds !== saved.task) {
+        throw new Error(`promote pausado é para ${saved.task} (worktree ${path.relative(projectRoot, saved.worktree).replace(/\\/g, '/')}), não para ${reqIds}`);
+      }
+    }
+    const work = saved.worktree;
+    if (!fs.existsSync(work)) {
+      throw new Error(`worktree do promote pausado não existe mais (${saved.worktree}) — rode o promote do início sem --continue`);
+    }
+    const taskId = saved.task;
+    const taskIds = saved.taskIds || [];
+    const branch = saved.branch;
+    const base = saved.base;
+    const baseSha = saved.baseSha;
+    const buildSha = saved.buildSha || baseSha;
+    const programTip = saved.programTip || originalSha;
+    const ordered = saved.ordered || [];
+    const remaining = Array.isArray(saved.remaining_commits) ? saved.remaining_commits : [];
+    const withFixtures = saved.withFixtures || [];
+    const verifyTests = saved.verifyTests || [];
+    const sharedSkipped = saved.sharedSkipped || [];
+    const criteria = new Set(saved.criteria || []);
+    const phaseCtx = saved.phaseCtx || taskPhaseContext(projectRoot, activeSession);
+    const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+    const planTasks = taskIds.map((id) => (doc && Array.isArray(doc.tasks) ? doc.tasks.find((x) => x && x.id === id) : null) || { id, acceptance: saved.criteria || [], files: [] });
+    const task = saved.taskMeta || planTasks[0];
+    const resolvedCapFiles = new Set(saved.resolved_cap_files || []);
+    const resolvedConflicts = Array.isArray(saved.resolved_conflicts) ? [...saved.resolved_conflicts] : [];
+    const result = {
+      ...(saved.resultSnapshot || {}),
+      task: taskId,
+      branch,
+      base,
+      base_sha: baseSha,
+      worktree: path.relative(projectRoot, work).replace(/\\/g, '/'),
+      conflict: null,
+      error: undefined,
+      warnings: [...((saved.resultSnapshot && saved.resultSnapshot.warnings) || [])],
+      resumed_from_conflict: true,
+    };
+    if (resolvedConflicts.length) result.resolved_conflicts = resolvedConflicts;
+    const pcfg = readProjectConfig(projectRoot) || {};
+    const linked = (() => { try { return fs.lstatSync(path.join(work, 'node_modules')).isSymbolicLink(); } catch { return false; } })();
+    let keepWorktree = false;
+    const cleanup = () => {
+      if (saved.inPlace) {
+        gitRun(projectRoot, ['checkout', '-q', original && original !== 'HEAD' ? original : originalSha]);
+      } else {
+        const w = cleanupPromoteWorktree(projectRoot, work, linked);
+        if (w) result.cleanup_warning = w;
+      }
+    };
+    const pushArgs = () => ['push', ...(saved.forceLease ? [`--force-with-lease=${branch}:${saved.forceLease}`] : []), '-u', saved.remote || remote, branch];
+    const onSignal = (sig) => { try { if (!keepWorktree) cleanup(); } catch { /* */ } process.exit(sig === 'SIGINT' ? 130 : 143); };
+    const signals = ['SIGINT', 'SIGTERM'];
+    for (const sig of signals) process.once(sig, onSignal);
+    try {
+      const stillUnmerged = gitLines(work, ['diff', '--name-only', '--diff-filter=U']) || [];
+      if (stillUnmerged.length && options.resolve && (Array.isArray(options.resolve) ? options.resolve.length : options.resolve)) {
+        const res = promoteHelpers.tryResolvePromoteCherryPickConflict(projectRoot, work, saved.conflict_commit, pcfg, stillUnmerged, { resolve: options.resolve, skipRatchet: true, commit: false });
+        if (res.resolved && res.resolved_files) {
+          for (const rf of res.resolved_files) {
+            resolvedConflicts.push({ commit: saved.conflict_commit, ...rf });
+            result.warnings.push(`conflito resolvido em ${rf.file} (${rf.strategy})`);
+          }
+        }
+      }
+      const unmergedAfter = gitLines(work, ['diff', '--name-only', '--diff-filter=U']) || [];
+      if (unmergedAfter.length) {
+        keepWorktree = true;
+        result.conflict = { commit: saved.conflict_commit, files: unmergedAfter };
+        result.kept_worktree = result.worktree;
+        result.error = `conflito ainda aberto em ${unmergedAfter.join(', ')} (worktree ${result.worktree}) — resolva, rode \`git add\` e depois \`oxe-cc runtime promote ${taskId} --continue\` (ou passe --resolve <arquivo>=ours|theirs|union-json-array)`;
+      } else if (gitLines(work, ['rev-parse', '--verify', '-q', 'CHERRY_PICK_HEAD'])) {
+        const cached = gitRun(work, ['diff', '--cached', '--quiet']);
+        const contRes = cached.ok
+          ? gitRun(work, ['cherry-pick', '--skip'])
+          : spawnSync('git', ['-c', 'core.editor=true', 'cherry-pick', '--continue'], { cwd: work, encoding: 'utf8', windowsHide: true, env: { ...process.env, GIT_EDITOR: 'true' } });
+        if ((contRes.status != null ? contRes.status : (contRes.ok ? 0 : 1)) !== 0) {
+          keepWorktree = true;
+          result.conflict = { commit: saved.conflict_commit, files: gitLines(work, ['diff', '--name-only', '--diff-filter=U']) || [] };
+          result.kept_worktree = result.worktree;
+          result.error = `cherry-pick --continue falhou em ${result.worktree}: ${String(contRes.stderr || contRes.stdout || '').trim().split(/\r?\n/).slice(-3).join(' · ')}`;
+        }
+      }
+      if (!result.conflict && !result.error) {
+        for (let idx = 0; idx < remaining.length; idx += 1) {
+          const sha = remaining[idx];
+          const pick = gitRun(work, ['cherry-pick', '-x', sha]);
+          if (!pick.ok) {
+            const files = gitLines(work, ['diff', '--name-only', '--diff-filter=U']) || [];
+            const auto = promoteHelpers.tryResolvePromoteCherryPickConflict(projectRoot, work, sha, pcfg, files, { resolve: options.resolve });
+            if (auto.resolved) {
+              for (const rf of auto.resolved_cap_files || []) resolvedCapFiles.add(rf);
+              for (const rf of auto.resolved_files || []) {
+                resolvedConflicts.push({ commit: sha, ...rf });
+                result.warnings.push(`conflito auto-resolvido em ${rf.file} (${rf.strategy})`);
+              }
+              continue;
+            }
+            keepWorktree = true;
+            const updatedPending = { ...saved, conflict_commit: sha, remaining_commits: remaining.slice(idx + 1), resolved_cap_files: [...resolvedCapFiles], resolved_conflicts: resolvedConflicts };
+            writeTextAtomic(pendingFile, `${JSON.stringify(updatedPending, null, 2)}\n`);
+            result.conflict = { commit: sha, files };
+            result.kept_worktree = result.worktree;
+            result.error = `conflito no cherry-pick de ${sha.slice(0, 8)} (${files.join(', ') || 'sem arquivos'}) — worktree mantida em ${result.worktree}; resolva, rode \`git add\` e \`oxe-cc runtime promote ${taskId} --continue\` (ou use --resolve <arquivo>=ours|theirs|union-json-array)`;
+            break;
+          }
+        }
+      }
+      if (!result.conflict && !result.error) {
+        if (resolvedConflicts.length) result.resolved_conflicts = resolvedConflicts;
+        finalizePromotedWorktree({ projectRoot, activeSession, work, result, task, taskId, taskIds, planTasks, phaseCtx, base, baseSha, buildSha, branch, remote: saved.remote || remote, programTip, withFixtures, verifyTests, criteria, resolvedCapFiles, pushArgs, options });
+        try { fs.rmSync(pendingFile, { force: true }); } catch { /* */ }
+      }
+    } finally {
+      for (const sig of signals) process.removeListener(sig, onSignal);
+      if (!keepWorktree) cleanup();
+    }
+    if (result.conflict) {
+      appendEvent(projectRoot, activeSession, { type: 'TaskPromoteFailed', work_item_id: taskId, payload: { base, reason: result.error || 'conflict', commit: result.conflict.commit, files: result.conflict.files, kept_worktree: result.kept_worktree || null } });
+      return result;
+    }
+    return finalizePromotePrBodyAndEvents({ projectRoot, activeSession, result, task, taskId, criteria, ordered, branch, original: saved.original || original, base, remote: saved.remote || remote, stack: saved.stack || null, pushArgs, options });
+  }
+
   // OXB-169: `--tasks T4,T5,T6,T7` builds ONE branch from the tasks' commits in commit order (the execute may commit
   // them out of plan order — a checkpoint retry committed T4/T5 after T6/T7, and T4's diff assumed theirs).
   const taskIds = [...new Set((options.tasks ? (Array.isArray(options.tasks) ? options.tasks : String(options.tasks).split(',')) : [options.task])
     .map((t) => String(t || '').trim().toUpperCase()).filter(Boolean))];
   if (!taskIds.length || !taskIds.every((t) => /^T\d+$/.test(t))) throw new Error('informe a tarefa: oxe-cc runtime promote T<n> --base main  (ou --tasks T4,T5,…)');
   const taskId = taskIds.join('-');
-  if (!gitLines(projectRoot, ['rev-parse', '--git-dir'])) throw new Error('runtime promote exige um repositório git');
   // OXB-157: `--base main` used the LOCAL main (11 days old) — the PR conflicted on files identical on origin/main.
-  const resolvedBase = resolvePromoteBase(projectRoot, options.base, String(options.remote || 'origin'), options);
+  const resolvedBase = resolvePromoteBase(projectRoot, options.base, remote, options);
   const base = resolvedBase.ref;
   // OXB-151: by default promote works in its OWN temporary worktree — the program tree (checkout, index, node_modules)
   // is never touched, so it is safe while `runtime execute` runs there. --in-place keeps the old behavior.
   const inPlace = options.inPlace === true;
-  if (inPlace) {
+  if (inPlace && !options.dryRun) {
     const dirty = dirtyProjectPaths(projectRoot);
     if (dirty.length) throw new Error(`working tree com mudanças fora de .oxe/ (${dirty.slice(0, 5).join(', ')}) — faça commit ou stash antes do promote`);
   }
@@ -7645,7 +8028,6 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       if (full && inRangeAll.includes(full)) shas.add(full);
     }
   }
-  const promoteHelpers = require('./oxe-promote-helpers.cjs');
   const quickSelection = options.quicks === false
     ? { quicks: [], skipped: [], warnings: [] }
     : promoteHelpers.selectPromoteQuickCommits(projectRoot, {
@@ -7714,8 +8096,6 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   // OXB-169: other tasks' unpromoted commits BEFORE this task's, on the same files — this diff assumes them; the
   // cherry-pick will likely conflict. Name them and the combined promote.
   const assumed = promoteAssumedTasks(projectRoot, range, ordered, idSet, phaseCtx);
-  const original = (gitLines(projectRoot, ['rev-parse', '--abbrev-ref', 'HEAD']) || [])[0];
-  const originalSha = (gitLines(projectRoot, ['rev-parse', 'HEAD']) || [])[0];
   // ALM: with an item for the task, the branch starts with its key ("oxe-12-t3"; Azure DevOps "ab-123-t3").
   let branchKey = null;
   try {
@@ -7726,8 +8106,67 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     branchKey = k ? k.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : null;
   } catch { branchKey = null; }
   const branch = String(options.branch || (branchKey ? `${branchKey}-${taskId.toLowerCase()}` : `oxe/promote-${taskId.toLowerCase()}`)).trim();
+  const stackInfo = promoteStack(projectRoot, activeSession, task, { base, baseSha, remote, options });
+  baseSha = stackInfo.baseSha;
+  const stack = stackInfo.stack;
+  const buildSha = stack ? stack.sha : baseSha;
+  const unpromoDeps = promoteHelpers.analyzeUnpromotedDependencies(projectRoot, {
+    range,
+    baseSha: buildSha,
+    orderedTaskShas: ordered,
+    planTasks,
+    phase: phaseCtx.phase,
+    stackedTaskIds: stack ? [stack.task] : [],
+  });
+  if (options.strict && unpromoDeps.dependencies.length) {
+    throw new Error(`promote --strict recusado para ${taskId}: ${unpromoDeps.warnings[0]}`);
+  }
+  resolvedBase.warnings = [...(resolvedBase.warnings || []), ...stackInfo.warnings, ...quickSelection.warnings];
+  if (assumed.length && !stack) {
+    resolvedBase.warnings.push(`${taskId} vem depois de ${assumed.map((a) => `${a.task} (${a.sha.slice(0, 8)})`).join(', ')} no histórico e mexe nos mesmos arquivos (${[...new Set(assumed.flatMap((a) => a.files))].slice(0, 4).join(', ')}) — o cherry-pick pode conflitar; promova junto: oxe-cc runtime promote --tasks ${[...new Set([...assumed.map((a) => a.task), ...taskIds])].join(',')}`);
+  }
+  for (const w of unpromoDeps.warnings) {
+    if (!resolvedBase.warnings.includes(w)) resolvedBase.warnings.push(w);
+  }
+  const notCarriedWarnings = [];
+  for (const f of notCarried) {
+    const by = (gitLines(projectRoot, ['log', '--format=%h %s', range, '--', f]) || []).slice(0, 3);
+    notCarriedWarnings.push(sharedSkipped.includes(f)
+      ? `${f} está nos files de ${taskId}, mas outra tarefa também o mudou no programa: o PR leva só o que o cherry-pick da tarefa trouxe (não a versão da ponta, com as asserções dela)${by.length ? ` — commits: ${by.join('; ')}` : ''}. Se precisar das duas, promova junto`
+      : `${f} está no verify de ${taskId} e difere de ${base}, mas não é da tarefa (fora dos files e dos testes congelados dela): o PR roda a versão de ${base}${by.length ? ` — mudado por ${by.join('; ')}` : ''}. Se a tarefa foi construída contra a nova, ponha o arquivo nos files dela (ou promova junto com a dona)`);
+  }
+  resolvedBase.warnings.push(...notCarriedWarnings);
+  if (options.dryRun) {
+    const quickShaSet = new Set(quickSelection.quicks.map((q) => q.sha));
+    return {
+      dry_run: true,
+      task: taskId,
+      base,
+      base_sha: baseSha,
+      ...(stack ? { stacked_on: { task: stack.task, branch: stack.branch, pr: stack.pr || null, sha: stack.sha } } : {}),
+      base_requested: resolvedBase.requested,
+      warnings: resolvedBase.warnings,
+      branch,
+      commits: ordered,
+      commit_details: ordered.map((sha) => ({
+        sha,
+        subject: (gitLines(projectRoot, ['log', '-1', '--format=%s', sha]) || [''])[0],
+        is_quick: quickShaSet.has(sha),
+      })),
+      ...(quickSelection.quicks.length ? { quick_commits: quickSelection.quicks } : {}),
+      ...(quickSelection.skipped.length ? { skipped_quicks: quickSelection.skipped } : {}),
+      ...(unpromoDeps.dependencies.length ? { unpromoted_dependencies: unpromoDeps.dependencies, suggested_promote_order: unpromoDeps.suggested_order } : {}),
+      ...(notCarried.length ? { not_carried_tests: notCarried } : {}),
+      frozen_tests: withFixtures,
+      conflict: null,
+      pr_ready: null,
+      body_file: null,
+      pr: null,
+      commands: [],
+      worktree: null,
+    };
+  }
   // Never a force-push: a branch already on the remote with commits we do not have is refused before anything changes.
-  const remote = String(options.remote || 'origin');
   // OXB-160: a local branch an earlier (failed) promote left behind — created by the promote, never pushed — is
   // reused: dropped and rebuilt. Any other existing branch is refused, as before.
   let replacedBranch = null;
@@ -7753,30 +8192,6 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     replacedBranch = own.sha;
   }
   const pushArgs = () => ['push', ...(forceLease ? [`--force-with-lease=${branch}:${forceLease}`] : []), '-u', remote, branch];
-  // OXB-161: a dependency promoted but not merged yet → the branch is built ON TOP of its promote branch (stacked);
-  // the PR still targets the base, carrying the dependency's commits until it merges. --hold-deps waits instead.
-  const stackInfo = promoteStack(projectRoot, activeSession, task, { base, baseSha, remote, options });
-  baseSha = stackInfo.baseSha;
-  const stack = stackInfo.stack;
-  const buildSha = stack ? stack.sha : baseSha;
-  const unpromoDeps = promoteHelpers.analyzeUnpromotedDependencies(projectRoot, {
-    range,
-    baseSha: buildSha,
-    orderedTaskShas: ordered,
-    planTasks,
-    phase: phaseCtx.phase,
-    stackedTaskIds: stack ? [stack.task] : [],
-  });
-  if (options.strict && unpromoDeps.dependencies.length) {
-    throw new Error(`promote --strict recusado para ${taskId}: ${unpromoDeps.warnings[0]}`);
-  }
-  resolvedBase.warnings = [...(resolvedBase.warnings || []), ...stackInfo.warnings, ...quickSelection.warnings];
-  if (assumed.length && !stack) {
-    resolvedBase.warnings.push(`${taskId} vem depois de ${assumed.map((a) => `${a.task} (${a.sha.slice(0, 8)})`).join(', ')} no histórico e mexe nos mesmos arquivos (${[...new Set(assumed.flatMap((a) => a.files))].slice(0, 4).join(', ')}) — o cherry-pick pode conflitar; promova junto: oxe-cc runtime promote --tasks ${[...new Set([...assumed.map((a) => a.task), ...taskIds])].join(',')}`);
-  }
-  for (const w of unpromoDeps.warnings) {
-    if (!resolvedBase.warnings.includes(w)) resolvedBase.warnings.push(w);
-  }
   const result = {
     task: taskId,
     base,
@@ -7798,12 +8213,6 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     ...(replacedBranch ? { replaced_branch: replacedBranch } : {}),
     ...(forceLease ? { replaced_remote: forceLease } : {}),
   };
-  for (const f of notCarried) {
-    const by = (gitLines(projectRoot, ['log', '--format=%h %s', range, '--', f]) || []).slice(0, 3);
-    result.warnings.push(sharedSkipped.includes(f)
-      ? `${f} está nos files de ${taskId}, mas outra tarefa também o mudou no programa: o PR leva só o que o cherry-pick da tarefa trouxe (não a versão da ponta, com as asserções dela)${by.length ? ` — commits: ${by.join('; ')}` : ''}. Se precisar das duas, promova junto`
-      : `${f} está no verify de ${taskId} e difere de ${base}, mas não é da tarefa (fora dos files e dos testes congelados dela): o PR roda a versão de ${base}${by.length ? ` — mudado por ${by.join('; ')}` : ''}. Se a tarefa foi construída contra a nova, ponha o arquivo nos files dela (ou promova junto com a dona)`);
-  }
   if (notCarried.length) result.not_carried_tests = notCarried;
   // Where the branch is built: a temporary worktree (default) or, with --in-place, the program checkout.
   let work = projectRoot;
@@ -7861,236 +8270,89 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   }
   // OXB-162: Ctrl+C / SIGTERM while the promote runs still unlinks and removes its worktree (a hard kill is swept by
   // the next promote).
-  const onSignal = (sig) => { try { cleanup(); } catch { /* */ } process.exit(sig === 'SIGINT' ? 130 : 143); };
+  let keepWorktree = false;
+  const onSignal = (sig) => { try { if (!keepWorktree) cleanup(); } catch { /* */ } process.exit(sig === 'SIGINT' ? 130 : 143); };
   const signals = ['SIGINT', 'SIGTERM'];
   for (const sig of signals) process.once(sig, onSignal);
   try {
     const resolvedCapFiles = new Set();
-    for (const sha of ordered) {
+    const resolvedConflicts = [];
+    const pcfgPick = readProjectConfig(projectRoot) || {};
+    for (let idx = 0; idx < ordered.length; idx += 1) {
+      const sha = ordered[idx];
       const pick = gitRun(work, ['cherry-pick', '-x', sha]);
       if (!pick.ok) {
         const files = gitLines(work, ['diff', '--name-only', '--diff-filter=U']) || [];
-        const pcfgPick = readProjectConfig(projectRoot) || {};
-        const autoRatchet = promoteHelpers.tryResolveRatchetCherryPickConflict(projectRoot, work, sha, pcfgPick, files);
-        if (autoRatchet.resolved) {
-          for (const rf of autoRatchet.files || []) resolvedCapFiles.add(rf);
+        const auto = promoteHelpers.tryResolvePromoteCherryPickConflict(projectRoot, work, sha, pcfgPick, files, { resolve: options.resolve });
+        if (auto.resolved) {
+          for (const rf of auto.resolved_cap_files || []) resolvedCapFiles.add(rf);
+          for (const rf of auto.resolved_files || []) {
+            resolvedConflicts.push({ commit: sha, ...rf });
+            result.warnings.push(`conflito auto-resolvido em ${rf.file} (${rf.strategy})`);
+          }
           continue;
+        }
+        if (options.keepOnConflict && !inPlace) {
+          keepWorktree = true;
+          try {
+            fs.writeFileSync(`${work}.pid`, JSON.stringify({ pid: process.pid, task: taskId, paused: true, at: new Date().toISOString() }));
+          } catch { /* */ }
+          const pendingState = {
+            task: taskId,
+            taskIds,
+            branch,
+            base,
+            baseSha,
+            buildSha,
+            original,
+            originalSha,
+            remote,
+            inPlace,
+            forceLease,
+            worktree: work,
+            programTip,
+            ordered,
+            conflict_commit: sha,
+            remaining_commits: ordered.slice(idx + 1),
+            resolved_cap_files: [...resolvedCapFiles],
+            resolved_conflicts: resolvedConflicts,
+            withFixtures,
+            verifyTests,
+            sharedSkipped,
+            criteria: [...criteria],
+            phaseCtx,
+            taskMeta: { id: task.id, title: task.title || '', files: task.files || [], acceptance: task.acceptance || [] },
+            quickSelection,
+            stack,
+            resultSnapshot: { ...result },
+          };
+          writeTextAtomic(pendingFile, `${JSON.stringify(pendingState, null, 2)}\n`);
+          result.conflict = { commit: sha, files };
+          result.kept_worktree = result.worktree;
+          result.error = `conflito no cherry-pick de ${sha.slice(0, 8)} (${files.join(', ') || 'sem arquivos'}) — worktree mantida em ${result.worktree} (branch ${branch}); resolva os arquivos, rode \`git -C ${work} add ${files.join(' ') || '.'}\` e finalize com \`oxe-cc runtime promote ${taskId} --continue\`${assumed.length ? ` (ou promova junto: --tasks ${[...new Set([...assumed.map((a) => a.task), ...taskIds])].join(',')})` : ''}`;
+          break;
         }
         gitRun(work, ['cherry-pick', '--abort']);
         result.conflict = { commit: sha, files };
-        result.error = `conflito no cherry-pick de ${sha.slice(0, 8)} (${files.join(', ') || 'sem arquivos'}) — branch ${branch} descartada; ${assumed.length ? `a tarefa depende de commits de ${assumed.map((a) => a.task).join(', ')} feitos antes dela: promova junto (--tasks ${[...new Set([...assumed.map((a) => a.task), ...taskIds])].join(',')}) — ` : ''}ou resolva à mão / rode runtime sync --from ${base} antes`;
+        result.error = `conflito no cherry-pick de ${sha.slice(0, 8)} (${files.join(', ') || 'sem arquivos'}) — branch ${branch} descartada; ${assumed.length ? `a tarefa depende de commits de ${assumed.map((a) => a.task).join(', ')} feitos antes dela: promova junto (--tasks ${[...new Set([...assumed.map((a) => a.task), ...taskIds])].join(',')}) — ` : ''}use --resolve <arquivo>=ours|theirs|union-json-array ou rode com --keep-on-conflict para resolver na worktree e finalizar com \`oxe-cc runtime promote ${taskId} --continue\``;
         break;
       }
     }
-    // OXB-156 (b): the task's frozen tests as files from the program tip; identical-on-base ones are skipped.
-    if (!result.conflict && withFixtures.length) {
-      const added = [];
-      for (const file of withFixtures) {
-        const tip = gitRun(projectRoot, ['show', `${programTip}:${file}`]);
-        if (!tip.ok) continue;
-        const onBase = gitRun(projectRoot, ['show', `${baseSha}:${file}`]);
-        const current = fs.existsSync(path.join(work, file)) ? fs.readFileSync(path.join(work, file), 'utf8') : null;
-        if ((onBase.ok && onBase.stdout === tip.stdout) || current === tip.stdout) continue;
-        const r = spawnSync('git', ['show', `${programTip}:${file}`], { cwd: projectRoot, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
-        fs.mkdirSync(path.dirname(path.join(work, file)), { recursive: true });
-        fs.writeFileSync(path.join(work, file), r.stdout);
-        added.push(file);
-      }
-      if (added.length) {
-        gitRun(work, ['add', '--', ...added]);
-        // OxeSpace 14/11: the commit-msg origin hook refused this commit. The frozen tests are part of the task's
-        // delivery: OXE-Task per promoted task (with the phase) and OXE-Run when known, like a checkpoint.
-        const originTrailers = [...planTasks.map((t) => `OXE-Task: ${phaseCtx.phase ? `${phaseCtx.phase}/` : ''}${t.id}`), ...[...new Set(planTasks.map((t) => t.run_id).filter(Boolean))].map((r) => `OXE-Run: ${r}`)].join('\n');
-        const c = gitRun(work, ['commit', '-q', '-m', `test(acceptance): frozen tests of ${taskId}`, '-m', `From the program branch at ${String(programTip).slice(0, 10)}: ${added.join(', ')}`, '-m', originTrailers]);
-        if (!c.ok) result.error = `commit dos testes congelados falhou: ${c.stderr.trim().split(/\r?\n/).pop()}`;
-      }
-      result.frozen_tests = added;
-    }
-    // OXB-C1 (P1.2): recalculate `lint.ratchets` caps against `base + task` so program caps lowered by other unpromoted
-    // tasks never turn design-lint red on main; check `enforced.lock.json` targets against main's conformance scene.
+    if (resolvedConflicts.length) result.resolved_conflicts = resolvedConflicts;
     if (!result.conflict && !result.error) {
-      const pcfg = readProjectConfig(projectRoot) || {};
-      const ratchetAdj = promoteHelpers.reconcilePromotedRatchets(work, buildSha, pcfg, { resolvedCapFiles: [...resolvedCapFiles] });
-      if (ratchetAdj.adjusted.length) {
-        gitRun(work, ['add', '--', ...ratchetAdj.files]);
-        const originTrailers = [...planTasks.map((t) => `OXE-Task: ${phaseCtx.phase ? `${phaseCtx.phase}/` : ''}${t.id}`), ...[...new Set(planTasks.map((t) => t.run_id).filter(Boolean))].map((r) => `OXE-Run: ${r}`)].join('\n');
-        const rc = gitRun(work, ['commit', '-q', '-m', `chore(ratchet): reconcile ratchet caps of ${taskId} on ${base}`, '-m', ratchetAdj.adjusted.map((a) => `${a.file}:${a.line} ${a.program_cap} -> ${a.promoted_cap} (real count: ${a.real_count})`).join('\n'), '-m', originTrailers]);
-        if (!rc.ok) result.error = `commit de ajuste de ratchet falhou: ${rc.stderr.trim().split(/\r?\n/).pop()}`;
-        result.ratchets_adjusted = ratchetAdj.adjusted;
-        result.warnings.push(`ratchet(s) recalculado(s) contra ${base} + ${taskId}: ${ratchetAdj.adjusted.map((a) => `${a.file}:${a.line} ${a.program_cap} → ${a.promoted_cap}`).join(', ')}`);
-      }
-      const enforcedCheck = promoteHelpers.checkPromotedEnforcedTargets(work, buildSha, { base, config: pcfg });
-      if (enforcedCheck.gaps.length) {
-        result.enforced_scene_gaps = enforcedCheck.gaps;
-        result.warnings.push(...enforcedCheck.warnings);
-      }
-    }
-    // OXB-206: never promote a branch carrying Git-tracked parked future-phase suites (`tests/acceptance/parked-*`).
-    if (!result.conflict && !result.error) {
-      const icLib = require('./oxe-integration-checks.cjs');
-      const parked = icLib.findTrackedParkedAcceptance(work, { baseRef: baseSha });
-      if (parked.length) {
-        result.parked_acceptance = parked;
-        result.error = `gate de PR bloqueado em ${branch}: ${icLib.formatParkedAcceptanceError(parked)}`;
-      }
-    }
-    // OXB-202: what only breaks when work meets (size baseline summed by two phases, stale notices) — before any push.
-    if (!result.conflict && !result.error && options.integrationChecks !== false) {
-      const ic = require('./oxe-integration-checks.cjs').runIntegrationChecks(work, { configRoot: projectRoot, baseRef: baseSha });
-      if (ic.ran.length) result.integration_checks = ic.ran;
-      // OxeSpace 15/11 (OxeQuery polish T2): the failing output (the file above the cap) and what happens to the branch
-      if (!ic.ok) result.error = `check de integração vermelho em ${branch}: \`${ic.failed.command}\` (exit ${ic.failed.exit})${ic.failed.tail ? `\n${String(ic.failed.tail).split(/\r?\n/).slice(-5).map((l) => `    ${l}`).join('\n')}\n` : ''} — nada foi enviado; a branch local ${branch} fica (não enviada). Corrija no programa (ex.: um quick que reduz o arquivo acima do teto, ou npm run notices:generate) e rode o promote de novo: a branch é refeita com o conserto`;
-    }
-    // OXB-C1 (P1.4): discover main CI suites covering the touched components (axe/a11y/conformance/e2e); run with --preview-ci.
-    if (!result.conflict && !result.error) {
-      const pcfg = readProjectConfig(projectRoot) || {};
-      const promotedDiffFiles = gitLines(work, ['diff', '--name-only', buildSha, 'HEAD']) || [];
-      const riskSuites = promoteHelpers.discoverMainCiRiskSuites(work, promotedDiffFiles, {
-        excludeSuites: [...verifyTests, ...(result.frozen_tests || [])],
-      });
-      if (riskSuites.length) result.ci_risk_suites = riskSuites;
-      if (options.previewCi) {
-        const previewCmds = promoteHelpers.buildPreviewCiCommands(work, riskSuites, pcfg);
-        const previewRuns = [];
-        let previewOk = true;
-        const baseVerifyTimeout = Number(pcfg.verify_timeout_ms) > 0 ? Number(pcfg.verify_timeout_ms) : 10 * 60_000;
-        for (const cmd of previewCmds) {
-          const ms = commitTaskVerifyTimeout(projectRoot, options, cmd, baseVerifyTimeout);
-          const r = runChildCommandFull(work, cmd, ms);
-          previewRuns.push({ command: cmd, ok: r.ok, status: r.status, timed_out: r.timedOut, tail: r.tail });
-          if (!r.ok) {
-            previewOk = false;
-            result.error = r.timedOut
-              ? timedOutMessage(`preview-ci em ${branch}`, cmd, ms, r)
-              : `preview-ci vermelho em ${branch}: \`${cmd}\` (exit ${r.status})${r.tail ? `\n${String(r.tail).split(/\r?\n/).slice(-6).map((l) => `    ${l}`).join('\n')}` : ''}`;
-            break;
-          }
-        }
-        result.preview_ci = { ok: previewOk, suites: riskSuites.map((s) => s.suite), runs: previewRuns };
-      }
-    }
-    // OXB-158: with --open-pr the branch is pushed FIRST — pr:ready posts its GitHub status on the pushed sha (before,
-    // it passed its checks, failed to post "… is not on GitHub yet: push it first", and the PR was never opened).
-    if (!result.conflict && options.openPr && !result.error) {
-      const push = gitRun(work, pushArgs());
-      if (!push.ok) result.error = `push falhou: ${push.stderr.trim().split(/\r?\n/).slice(-2).join(' · ')}`;
-      else result.pushed = true;
-    }
-    // The project's own PR checks, on the promoted branch.
-    if (!result.conflict && !result.error) {
-      let pkg = null;
-      try { pkg = JSON.parse(fs.readFileSync(path.join(work, 'package.json'), 'utf8')); } catch { pkg = null; }
-      if (pkg && pkg.scripts && pkg.scripts['pr:ready'] && options.prReady !== false) {
-        const ready = runProgressCommand(work, 'npm run pr:ready', 1_800_000, { quiet: options.quietProgress === true || process.env.OXE_PROGRESS === '0' });
-        // OXB-158: "the checks failed" is not "only posting the status failed".
-        // Only the status post failed when the output says so AND, without those lines, nothing else reports a failure.
-        const tail = String(ready.tail || '');
-        const STATUS_LINE = /not on GitHub yet|push it first|(post|create|set)\w*\s+(the\s+)?(commit\s+)?status/i;
-        // npm's own wrapper lines ("npm error Lifecycle script … failed", "npm error code 1") say "failed" for ANY
-        // non-zero exit: they are not a check result.
-        const otherLines = tail.split(/\r?\n/).filter((l) => !STATUS_LINE.test(l) && !/^\s*npm (ERR!|error|warn)\b/i.test(l)).join('\n');
-        const statusOnly = !ready.ok && STATUS_LINE.test(tail) && !/\bFAIL\b|\bfailed\b|✗|×|error TS\d+|\d+ (failing|failed)/i.test(otherLines);
-        result.pr_ready = { ok: ready.ok || statusOnly, tail: ready.tail, ...(statusOnly ? { status_post_failed: true } : {}) };
-      }
+      finalizePromotedWorktree({ projectRoot, activeSession, work, result, taskId, planTasks, phaseCtx, base, baseSha, buildSha, branch, programTip, withFixtures, verifyTests, resolvedCapFiles, pushArgs, options });
+      if (fs.existsSync(pendingFile)) { try { fs.rmSync(pendingFile, { force: true }); } catch { /* */ } }
     }
   } finally {
     for (const sig of signals) process.removeListener(sig, onSignal);
-    cleanup();
+    if (!keepWorktree) cleanup();
   }
   if (result.conflict) {
-    gitRun(projectRoot, ['branch', '-D', branch]);
-    appendEvent(projectRoot, activeSession, { type: 'TaskPromoteFailed', work_item_id: taskId, payload: { base, reason: result.error || 'conflict', commit: result.conflict.commit, files: result.conflict.files } });
+    if (!keepWorktree) gitRun(projectRoot, ['branch', '-D', branch]);
+    appendEvent(projectRoot, activeSession, { type: 'TaskPromoteFailed', work_item_id: taskId, payload: { base, reason: result.error || 'conflict', commit: result.conflict.commit, files: result.conflict.files, ...(keepWorktree ? { kept_worktree: result.kept_worktree } : {}) } });
     return result;
   }
-  // PR body: the task, its files and criteria, the CRs on those criteria.
-  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
-  const crs = require('./oxe-change.cjs').listChanges(paths.programDir || path.join(projectRoot, '.oxe', 'program'))
-    .filter((cr) => (cr.criteria || []).some((a) => criteria.has(a)));
-  const body = [
-    `## ${taskId} — ${task.title || ''}`.trim(),
-    '',
-    `Promovida de \`${original}\` por \`oxe-cc runtime promote\` (cherry-pick -x de ${ordered.length} commit(s)).`,
-    '',
-    ...(stack ? [
-      `> **Empilhada sobre ${stack.task}** (${stack.pr ? `PR ${stack.pr}, ` : ''}branch \`${stack.branch}\`), ainda não mergeada em \`${base}\`: este PR traz os commits dela até ela entrar. Mergeie ${stack.task} primeiro; depois disso o diff deste PR encolhe para os commits de ${taskId}.`,
-      '',
-    ] : []),
-    '### Arquivos',
-    ...(task.files || []).map((f) => `- \`${f}\``),
-    '',
-    `### Critérios: ${[...criteria].join(', ') || '—'}`,
-    ...(crs.length ? ['', '### Change requests', ...crs.map((cr) => `- ${cr.id} (${cr.class}, ${cr.status}): ${cr.summary}`)] : []),
-    '',
-    '### Commits da tarefa',
-    ...(ordered.length ? ordered.map((sha) => `- ${sha.slice(0, 10)} ${(gitLines(projectRoot, ['log', '-1', '--format=%s', sha]) || [''])[0]}`) : ['- —']),
-    '',
-    '### Testes congelados (arquivos do tip do programa)',
-    ...((result.frozen_tests || []).length ? result.frozen_tests.map((f) => `- \`${f}\``) : ['- — (já na base, ou nenhum)']),
-    ...((result.quick_commits || []).length ? ['', '### Quicks incluídos', ...result.quick_commits.map((q) => `- ${q.sha.slice(0, 10)} (${q.quick}${q.card ? `, ${q.card}` : ''})`)] : []),
-    ...((result.ratchets_adjusted || []).length ? ['', '### Ratchets ajustados para a base', ...result.ratchets_adjusted.map((a) => `- \`${a.file}:${a.line}\`: ${a.program_cap} → ${a.promoted_cap} (contagem real na branch: ${a.real_count})`)] : []),
-    ...(result.suggested_promote_order && result.suggested_promote_order.length ? ['', `### Ordem sugerida de promoção: ${result.suggested_promote_order.join(' → ')}`] : []),
-    ...(((result.ci_risk_suites && result.ci_risk_suites.length) || (result.enforced_scene_gaps && result.enforced_scene_gaps.length)) ? [
-      '',
-      '### Riscos de CI na main (fora do verify da tarefa)',
-      ...((result.ci_risk_suites || []).map((s) => `- \`${s.suite}\` (${s.kind} — cobre ${s.covers.map((c) => `\`${c}\``).join(', ')})`)),
-      ...((result.enforced_scene_gaps || []).map((g) => `- \`${g.file}\` → \`${g.id}\`: seletor \`${g.selector}\` ausente na cena de conformidade (sugestão: manter \`${g.proposed_status}\` — ${g.proposed_reason})`)),
-    ] : []),
-    ...(result.preview_ci ? ['', `### preview-ci: ${result.preview_ci.ok ? 'verde' : 'VERMELHO'} (${result.preview_ci.suites.length} suíte(s))`] : []),
-    ...(result.pr_ready ? ['', `### pr:ready: ${result.pr_ready.ok ? 'verde' : 'VERMELHO'}`] : []),
-    '',
-  ].join('\n');
-  const bodyFile = path.join(projectRoot, '.oxe', 'promote', `${taskId}.md`);
-  writeTextAtomic(bodyFile, body);
-  result.body_file = path.relative(projectRoot, bodyFile).replace(/\\/g, '/');
-  // ALM: the item key goes in the PR title (Jira "(OXE-12)", Azure DevOps "(AB#123)") so the provider links PR ↔ item.
-  let almKey = null;
-  try {
-    const almLib = require('./oxe-alm.cjs');
-    const cfgAlm = almLib.almConfig(readProjectConfig(projectRoot) || {});
-    const ph = activeProgramPhase(projectRoot, activeSession);
-    if (cfgAlm) almKey = almLib.keyFor(resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program'), cfgAlm, ph ? ph.id : null, taskId);
-  } catch { almKey = null; }
-  if (almKey) result.alm_key = almKey;
-  // OxeSpace 15/11 (OXE-277): the body says "Fecha KEY" only for the card's last open task, "Parte de KEY" otherwise —
-  // the merge (alm pr-merged) moves the card only on "Fecha"
-  if (almKey) {
-    try {
-      const almLib = require('./oxe-alm.cjs');
-      const cfgAlm = almLib.almConfig(readProjectConfig(projectRoot) || {});
-      const ph = activeProgramPhase(projectRoot, activeSession);
-      const pd = resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program');
-      const docM = readPlanJsonDoc(projectRoot, activeSession).doc;
-      const mk = require('./oxe-alm-prs.cjs').prMarkerFor(almKey, taskId, docM, (id) => almLib.keyFor(pd, cfgAlm, ph ? ph.id : null, id));
-      if (mk) {
-        result.alm_marker = mk.marker;
-        writeTextAtomic(bodyFile, `${body}\n${mk.marker}${mk.open_tasks.length ? ` (ainda abertas no card: ${mk.open_tasks.join(', ')})` : ''}\n`);
-      }
-    } catch { /* auxiliar: o PR segue sem o marcador */ }
-  }
-  const title = `${taskId}: ${task.title || 'promote'}${almKey ? ` (${almKey})` : ''}`;
-  // OXB-157: the PR targets the branch NAME on the remote (`main`), not the local tracking ref (`origin/main`).
-  const prBase = base.replace(new RegExp(`^${remote}/`), '');
-  result.commands = [
-    `git push -u ${remote} ${branch}`,
-    `gh pr create --base ${prBase} --head ${branch} --title ${JSON.stringify(title)} --body-file ${result.body_file}`,
-  ];
-  if (options.openPr && !result.error) {
-    if (result.pr_ready && !result.pr_ready.ok) {
-      result.error = `pr:ready vermelho em ${branch} — PR não aberto (a branch já está em ${remote}; corrija e rode os comandos abaixo — o PR vai contra ${prBase}${stack ? `, não contra a branch de ${stack.task}` : ''})`;
-    } else {
-      // pushed before pr:ready (OXB-158); --in-place pushes here as before
-      const push = result.pushed ? { ok: true } : gitRun(projectRoot, pushArgs());
-      if (!push.ok) result.error = `push falhou: ${push.stderr.trim().split(/\r?\n/).slice(-2).join(' · ')}`;
-      else {
-        const gh = (options.ghSpawn || spawnSync)('gh', ['pr', 'create', '--base', prBase, '--head', branch, '--title', title, '--body-file', bodyFile], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
-        if (gh.status === 0) result.pr = String(gh.stdout || '').trim().split(/\r?\n/).pop();
-        else result.error = `gh pr create falhou: ${String(gh.stderr || gh.stdout || '').trim().split(/\r?\n/).slice(-2).join(' · ')}`;
-      }
-    }
-  }
-  appendEvent(projectRoot, activeSession, { type: 'TaskPromoted', work_item_id: taskId, payload: { base, branch, commits: ordered, pr_ready: result.pr_ready ? result.pr_ready.ok : null, pr: result.pr, ...(stack ? { stacked_on: result.stacked_on } : {}) } });
-  almAutoSync(projectRoot, activeSession);
-  return result;
+  return finalizePromotePrBodyAndEvents({ projectRoot, activeSession, result, task, taskId, criteria, ordered, branch, original, base, remote, stack, pushArgs, options });
 }
 
 /**
@@ -13757,6 +14019,7 @@ module.exports = {
   readRunState,
   markRunLive,
   sweepCheckpointWorkspaces,
+  sweepStalePromoteWorkspaces,
   readGitActivity,
   verifyGitEvidence,
   runtimeStateWarnings,

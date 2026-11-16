@@ -2684,8 +2684,8 @@ ${cyan}oxe-cc${reset} — instala workflows OXE (núcleo .oxe/ + integrações: 
   npx oxe-cc runtime deploy --attach <env> --version <v> --ref <tag|url> [--check "<cmd>"]… [--phase Fn]   (registra e verifica; nunca faz o deploy)
   npx oxe-cc runtime program budget [--mode cap|track_only] [--budget-usd N] [--budget-turns N] --by <papel> --reason "…"
   npx oxe-cc runtime program close [--defer-signoff --by <dono> --risk "<risco assumido>"] [--no-gates] [--accept-drift <glob> --by <papel> --reason "…"] [--no-rollback-check --by <papel> --reason "…"] [--by-ci --by <papel> --reason "…"]
-  npx oxe-cc runtime sync --from origin/main [--no-fetch] [--no-reverify]   (merge local; reverify das tarefas done tocadas pela base)
-  npx oxe-cc runtime promote T<n> --base main [--branch <nome>] [--open-pr] [--remote origin] [--no-pr-ready]
+  npx oxe-cc runtime sync --from origin/main [--no-fetch] [--no-reverify|--no-verify]   (merge local; reverify das tarefas done tocadas pela base)
+  npx oxe-cc runtime promote T<n> --base main [--branch <nome>] [--dry-run] [--resolve <path>=ours|theirs|union-json-array] [--keep-on-conflict] [--continue] [--open-pr] [--remote origin] [--no-pr-ready]
   npx oxe-cc spec amend A<n> (--text "…"|--append "…"|--verify "…") --by <papel> --reason "…" [--additive] [--phase Fn]
   npx oxe-cc spec add criterion A<n> --text "…" --verify "…" [--risk P1] --by <papel> --reason "…" [--allow-gap]
   npx oxe-cc spec add requirement R<n> --text "…" [--criteria A<n>,…] [--before "### Fora do escopo"] --by <papel> --reason "…"
@@ -4304,7 +4304,9 @@ function parseRuntimeArgs(argv) {
     else if (a === '--branch' && argv[i + 1]) out.branch = String(argv[++i]);
     else if (a === '--open-pr') out.openPr = true;
     else if (a === '--no-fetch') out.noFetch = true;
-    else if (a === '--no-reverify') out.noReverify = true;
+    else if (a === '--no-reverify' || a === '--no-verify') out.noReverify = true;
+    else if (a === '--resolve' && argv[i + 1]) out.resolve = [...(out.resolve || []), String(argv[++i])];
+    else if (a === '--keep-on-conflict' || a === '--keep-worktree-on-conflict') out.keepOnConflict = true;
     else if (a === '--no-pr-ready') out.noPrReady = true;
     else if (a === '--additive') out.additive = true;
     else if (a === '--defer-signoff') out.deferSignoff = true;
@@ -6424,13 +6426,37 @@ async function runRuntime(opts) {
     return;
   }
 
-  if (opts.action === 'promote' && (opts.task || opts.tasks)) {
+  if (opts.action === 'promote' && (opts.task || opts.tasks || opts.resumeDecision === 'continue')) {
     try {
-      const out = oxeOperational.runtimePromote(opts.dir, activeSession, { task: opts.task, tasks: opts.tasks || null, base: opts.baseBranch || null, branch: opts.branch, remote: opts.remote || 'origin', openPr: Boolean(opts.openPr), prReady: !opts.noPrReady, inPlace: Boolean(opts.inPlace), holdDeps: Boolean(opts.holdDeps), strict: Boolean(opts.strict), previewCi: Boolean(opts.previewCi), quicks: !opts.noQuicks, verifyTimeoutMs: opts.verifyTimeoutMs || undefined });
+      const out = oxeOperational.runtimePromote(opts.dir, activeSession, {
+        task: opts.task,
+        tasks: opts.tasks || null,
+        base: opts.baseBranch || null,
+        branch: opts.branch,
+        remote: opts.remote || 'origin',
+        openPr: Boolean(opts.openPr),
+        prReady: !opts.noPrReady,
+        inPlace: Boolean(opts.inPlace),
+        holdDeps: Boolean(opts.holdDeps),
+        strict: Boolean(opts.strict),
+        previewCi: Boolean(opts.previewCi),
+        quicks: !opts.noQuicks,
+        dryRun: Boolean(opts.dryRun),
+        resolve: opts.resolve || null,
+        keepOnConflict: Boolean(opts.keepOnConflict),
+        continue: opts.resumeDecision === 'continue',
+        verifyTimeoutMs: opts.verifyTimeoutMs || undefined,
+      });
       if (opts.jsonOutput) console.log(JSON.stringify({ oxeRuntimePromoteSchema: 1, ...out }, null, 2));
-      else if (out.conflict) console.log(`  ${red}✗${reset} ${out.error}`);
+      else if (out.dry_run) {
+        console.log(`  ${c ? yellow : ''}(simulação)${c ? reset : ''} ${out.task} → branch ${out.branch} a partir de ${out.base} @ ${String(out.base_sha || '').slice(0, 10)} (${out.commits.length} commit(s) em cherry-pick -x${out.quick_commits && out.quick_commits.length ? `, incl. ${out.quick_commits.length} quick(s)` : ''})`);
+        if (out.stacked_on) console.log(`  empilhada sobre ${out.stacked_on.task} (${out.stacked_on.pr || out.stacked_on.branch})`);
+        for (const cd of out.commit_details || []) console.log(`    - ${String(cd.sha).slice(0, 10)} ${cd.subject}${cd.is_quick ? ' [quick]' : ''}`);
+        if (out.frozen_tests && out.frozen_tests.length) console.log(`  testes congelados (do tip): ${out.frozen_tests.join(', ')}`);
+        for (const w of out.warnings || []) console.log(`  ${c ? yellow : ''}AVISO${c ? reset : ''} ${w}`);
+      } else if (out.conflict) console.log(`  ${red}✗${reset} ${out.error}`);
       else {
-        console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.task} → branch ${out.branch} a partir de ${out.base} @ ${String(out.base_sha || "").slice(0, 10)} (${out.commits.length} commit(s), cherry-pick -x${out.quick_commits && out.quick_commits.length ? `, incl. ${out.quick_commits.length} quick(s)` : ''})`);
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} ${out.task} → branch ${out.branch} a partir de ${out.base} @ ${String(out.base_sha || '').slice(0, 10)} (${out.commits.length} commit(s), cherry-pick -x${out.quick_commits && out.quick_commits.length ? `, incl. ${out.quick_commits.length} quick(s)` : ''})`);
         if (out.swept && out.swept.length) console.log(`  limpas ${out.swept.length} worktree(s) de promote interrompido: ${out.swept.join(', ')}`);
         if (out.replaced_remote) console.log(`  branch ${out.branch} (do promote, sem PR) refeita: force-push com lease sobre ${String(out.replaced_remote).slice(0, 8)}`);
         if (out.stacked_on) console.log(`  empilhada sobre ${out.stacked_on.task} (${out.stacked_on.pr || out.stacked_on.branch}, ainda não mergeada) — o PR vai contra ${String(out.base).replace(/^[^/]+\//, '')} e traz os commits dela até o merge`);
