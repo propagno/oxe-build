@@ -215,7 +215,8 @@ describe('OXB-C5b (8e 17:00Z): refine round trip, middle-dot Teste, plan append 
 
     // Now open a CR for T2 and run plan scope add -> updates BOTH PLAN.json and IMPLEMENTATION-PACK.json exact_paths
     const fb = op.runtimeFeedback(dir, null, { class: 'spec_gap', criteria: ['A2'], summary: 'precisa do estilo banner.css', tasks: ['T2'], by: 'dev' });
-    const scoped = op.runtimePlanScopeAdd(dir, null, { task: 'T2', paths: ['src/banner.css'], cr: fb.id, by: 'tl', reason: 'inclui CSS necessario' });
+    const crId = (fb && ((fb.entry && fb.entry.id) || (fb.cr && fb.cr.id) || fb.id)) || 'CR-01';
+    const scoped = op.runtimePlanScopeAdd(dir, null, { task: 'T2', paths: ['src/banner.css'], cr: crId, by: 'tl', reason: 'inclui CSS necessario' });
     assert.equal(scoped.pack_updated, true);
     const packScoped = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'IMPLEMENTATION-PACK.json'), 'utf8'));
     assert.deepEqual(packScoped.tasks.find((p) => p.id === 'T2').exact_paths, ['src/approval-banner.tsx', 'src/banner.css']);
