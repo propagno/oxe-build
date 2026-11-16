@@ -7781,6 +7781,11 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       const pick = gitRun(work, ['cherry-pick', '-x', sha]);
       if (!pick.ok) {
         const files = gitLines(work, ['diff', '--name-only', '--diff-filter=U']) || [];
+        const pcfgPick = readProjectConfig(projectRoot) || {};
+        const autoRatchet = promoteHelpers.tryResolveRatchetCherryPickConflict(projectRoot, work, sha, pcfgPick, files);
+        if (autoRatchet.resolved) {
+          continue;
+        }
         gitRun(work, ['cherry-pick', '--abort']);
         result.conflict = { commit: sha, files };
         result.error = `conflito no cherry-pick de ${sha.slice(0, 8)} (${files.join(', ') || 'sem arquivos'}) — branch ${branch} descartada; ${assumed.length ? `a tarefa depende de commits de ${assumed.map((a) => a.task).join(', ')} feitos antes dela: promova junto (--tasks ${[...new Set([...assumed.map((a) => a.task), ...taskIds])].join(',')}) — ` : ''}ou resolva à mão / rode runtime sync --from ${base} antes`;

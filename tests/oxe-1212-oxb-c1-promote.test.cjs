@@ -124,13 +124,14 @@ describe('OXB-C1 P1: runtime promote hardening (#1 quicks, #2 ratchets & enforce
     git(dir, 'push', '-q', 'origin', 'main');
     git(dir, 'checkout', '-q', '-b', 'oxe/f6');
 
-    // Unpromoted T31 removes 2 buttons in OtherPanel -> program count drops to 2
+    // Unpromoted T31 removes 2 buttons in OtherPanel AND lowers RAW_BUTTON_CAP 4 -> 2 (creating a cap-line conflict for T34!)
     write(dir, 'src/OtherPanel.tsx', 'export const A = () => "<div/>";\n');
+    write(dir, 'tests/design-lint.test.ts', 'const RAW_BUTTON_CAP = 2;\n');
     git(dir, 'add', '-A');
     git(dir, 'commit', '-qm', 'feat: T31 remove buttons\n\nOXE-Task: F6/T31');
     const t31 = git(dir, 'rev-parse', 'HEAD');
 
-    // T34 removes 1 button in ChangesPanel (leaving 1 there; program total = 1, but main + T34 has 2 + 1 = 3!)
+    // T34 removes 1 button in ChangesPanel (leaving 1 there; program total = 1, main + T34 = 3 <= main's cap 4!)
     // and promotes BRD-13.branch.font-family to enforced even though main's conformance scene has no git-branch
     write(dir, 'src/ChangesPanel.tsx', 'export const B = () => "<div><button>4</button></div>";\n');
     write(dir, 'tests/design-lint.test.ts', 'const RAW_BUTTON_CAP = 1;\n');
@@ -161,17 +162,31 @@ describe('OXB-C1 P1: runtime promote hardening (#1 quicks, #2 ratchets & enforce
       schema_version: 1,
       phase: 'F6',
       tasks: [
-        { id: 'T31', title: 'other', wave: 1, files: ['src/OtherPanel.tsx'], done: true, done_commit: t31 },
+        { id: 'T31', title: 'other', wave: 1, files: ['src/OtherPanel.tsx', 'tests/design-lint.test.ts'], done: true, done_commit: t31 },
         { id: 'T34', title: 'changes', wave: 2, files: ['src/ChangesPanel.tsx', 'tests/design-lint.test.ts', 'tests/enforced.lock.json'], done: true, done_commit: t34 },
       ],
     }, null, 2));
 
+    // OXB-C2 Adendo: T34 conflicted on tests/design-lint.test.ts (2->1 vs main's 4) AND decreased count (3 <= 4):
+    // promote auto-resolves the cap conflict and keeps main's cap line INTACT (4, zero diff vs main!) so merge-train cars never conflict!
     const out = op.runtimePromote(dir, null, { task: 'T34', base: 'main', prReady: false });
     assert.equal(out.error, undefined, out.error);
-    assert.equal(out.ratchets_adjusted.length, 1);
-    assert.equal(out.ratchets_adjusted[0].program_cap, 1);
-    assert.equal(out.ratchets_adjusted[0].promoted_cap, 3, 'main (2 in OtherPanel) + T34 (1 in ChangesPanel) = 3');
-    assert.equal(git(dir, 'show', `${out.branch}:tests/design-lint.test.ts`), 'const RAW_BUTTON_CAP = 3;');
+    assert.equal(git(dir, 'show', `${out.branch}:tests/design-lint.test.ts`), 'const RAW_BUTTON_CAP = 4;');
+    assert.equal(git(dir, 'diff', `main..${out.branch}`, '--', 'tests/design-lint.test.ts'), '', 'zero diff on ratchet file vs main when count <= baseCap');
+
+    // Conversely, when a task INCREASES the count above main's cap (5 > 4), promote updates the cap to 5!
+    write(dir, 'src/ExtraButtons.tsx', 'export const C = () => "<div><button>5</button><button>6</button><button>7</button></div>";\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'feat: T35 adds buttons\n\nOXE-Task: F6/T35');
+    const t35 = git(dir, 'rev-parse', 'HEAD');
+    const planWith35 = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8'));
+    planWith35.tasks.push({ id: 'T35', title: 'extra', wave: 3, files: ['src/ExtraButtons.tsx'], done: true, done_commit: t35 });
+    write(dir, '.oxe/PLAN.json', JSON.stringify(planWith35, null, 2));
+    const out35 = op.runtimePromote(dir, null, { task: 'T35', base: 'main', prReady: false });
+    assert.equal(out35.error, undefined, out35.error);
+    assert.equal(out35.ratchets_adjusted.length, 1);
+    assert.equal(out35.ratchets_adjusted[0].promoted_cap, 7, 'main (4) + T35 (3) = 7 > 4');
+    assert.equal(git(dir, 'show', `${out35.branch}:tests/design-lint.test.ts`), 'const RAW_BUTTON_CAP = 7;');
 
     assert.equal(out.enforced_scene_gaps.length, 1);
     assert.equal(out.enforced_scene_gaps[0].id, 'BRD-13.branch.font-family');

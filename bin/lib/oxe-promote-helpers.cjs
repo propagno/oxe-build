@@ -240,10 +240,53 @@ function selectPromoteQuickCommits(projectRoot, {
 }
 
 /**
- * P1.2 (a): Reconciles `lint.ratchets` in the promote worktree `work` against `buildSha` (`base` + promoted task).
- * If a ratchet's cap in `work` is tighter than the real count in `work` (because unpromoted sibling tasks lowered it
- * on the program branch), or looser when `r.file` was modified by the promote, rewrites the cap to `realCount` (never
- * below what `work` actually has) and returns the modified files + adjustments.
+ * OXB-C2 Adendo (16/11, PRs #882/#883/#886/#894 kicked from merge train):
+ * Auto-resolves `git cherry-pick` conflicts when ALL conflicted files are `lint.ratchets` files whose commit diff on
+ * `projectRoot` ONLY moved the cap number — keeping `ours` (`base`'s cap line) so sequential task promotes never conflict.
+ */
+function tryResolveRatchetCherryPickConflict(projectRoot, work, sha, config, conflictedFiles) {
+  const ratchetsLib = require('./oxe-ratchets.cjs');
+  const list = ratchetsLib.ratchetsOf(config || {});
+  if (!list.length || !Array.isArray(conflictedFiles) || !conflictedFiles.length) return { resolved: false };
+  const ratchetFiles = new Set(list.map((r) => norm(r.file)));
+  if (!conflictedFiles.every((f) => ratchetFiles.has(norm(f)))) return { resolved: false };
+
+  for (const f of conflictedFiles) {
+    const parentRes = gitOut(projectRoot, ['show', `${sha}^:${norm(f)}`]);
+    const commitRes = gitOut(projectRoot, ['show', `${sha}:${norm(f)}`]);
+    if (parentRes.status !== 0 || commitRes.status !== 0) return { resolved: false };
+    if (!ratchetsLib.onlyCapChanged(parentRes.stdout, commitRes.stdout, config, f)) {
+      return { resolved: false };
+    }
+  }
+
+  const co = gitOut(work, ['checkout', '--ours', '--', ...conflictedFiles]);
+  if (co.status !== 0) return { resolved: false };
+  const add = gitOut(work, ['add', '--', ...conflictedFiles]);
+  if (add.status !== 0) return { resolved: false };
+
+  const stagedDiff = gitOut(work, ['diff', '--cached', '--quiet']);
+  if (stagedDiff.status === 0) {
+    const skip = gitOut(work, ['cherry-pick', '--skip']);
+    return { resolved: skip.status === 0, skipped: true, files: conflictedFiles.map(norm) };
+  }
+  const cont = spawnSync('git', ['-c', 'core.editor=true', 'cherry-pick', '--continue'], {
+    cwd: work,
+    encoding: 'utf8',
+    windowsHide: true,
+    env: { ...process.env, GIT_EDITOR: 'true' },
+  });
+  return { resolved: cont.status === 0, skipped: false, files: conflictedFiles.map(norm) };
+}
+
+/**
+ * P1.2 (a) + OXB-C2 Adendo (16/11):
+ * Reconciles `lint.ratchets` in the promote worktree `work` against `buildSha` (`base` + promoted task).
+ * To prevent cascading merge-train conflicts on the ratchet cap line across concurrent PRs (#882, #883, #886, #894):
+ * - Promote ONLY changes `base`'s cap when the task INCREASES the count beyond `base`'s cap (`realCount > baseCap` for
+ *   `down`, or `realCount < baseCap` for `up`).
+ * - Whenever `realCount` fits within `base`'s cap (`realCount <= baseCap`), promote restores `base`'s cap line intact
+ *   (tightening happens in a standalone commit after the batch merges).
  */
 function reconcilePromotedRatchets(work, buildSha, config) {
   const ratchetsLib = require('./oxe-ratchets.cjs');
@@ -261,27 +304,49 @@ function reconcilePromotedRatchets(work, buildSha, config) {
     try { text = fs.readFileSync(abs, 'utf8'); } catch { continue; }
     const cap = ratchetsLib.capOf(text, r);
     if (!cap) continue;
-    const realCount = ratchetsLib.countOf(work, r);
-    const violatedOnMainPlusTask = r.direction === 'down' ? cap.value < realCount : cap.value > realCount;
-    const touchedHere = changedInWork.has(r.file);
-    if (!violatedOnMainPlusTask && !touchedHere) continue;
-    if (cap.value === realCount) continue;
+    const baseRes = buildSha ? gitOut(work, ['show', `${buildSha}:${r.file}`]) : { status: 1, stdout: '' };
+    const baseText = baseRes.status === 0 ? baseRes.stdout : null;
+    const baseCapObj = baseText != null ? ratchetsLib.capOf(baseText, r) : null;
+    const baseCap = baseCapObj ? baseCapObj.value : null;
 
-    // Never leave cap below realCount on a `down` ratchet, and when r.file was brought by the task set cap = realCount
-    const nextCap = r.direction === 'down'
-      ? (violatedOnMainPlusTask ? realCount : Math.min(cap.value, realCount))
-      : (violatedOnMainPlusTask ? realCount : Math.max(cap.value, realCount));
+    const realCount = ratchetsLib.countOf(work, r);
+    const touchedHere = changedInWork.has(r.file);
+
+    let nextCap;
+    let reason;
+    if (baseCap != null) {
+      const exceedsBase = r.direction === 'down' ? realCount > baseCap : realCount < baseCap;
+      if (exceedsBase) {
+        nextCap = realCount;
+        reason = 'increased_above_base';
+      } else {
+        // Task decreased or preserved count within base's cap: keep base's cap line intact!
+        nextCap = baseCap;
+        reason = 'kept_base_cap';
+      }
+    } else {
+      const violated = r.direction === 'down' ? cap.value < realCount : cap.value > realCount;
+      if (!violated && !touchedHere) continue;
+      nextCap = violated ? realCount : cap.value;
+      reason = 'new_ratchet_file';
+    }
+
     if (nextCap === cap.value) continue;
 
-    const nextText = text.slice(0, cap.index) + String(nextCap) + text.slice(cap.index + cap.length);
+    let nextText = text.slice(0, cap.index) + String(nextCap) + text.slice(cap.index + cap.length);
+    if (baseText != null && nextText.replace(/\r\n/g, '\n') === baseText.replace(/\r\n/g, '\n')) {
+      nextText = baseText;
+    }
     fs.writeFileSync(abs, nextText, 'utf8');
     files.add(r.file);
     adjusted.push({
       file: r.file,
       line: cap.line,
       program_cap: cap.value,
+      base_cap: baseCap,
       promoted_cap: nextCap,
       real_count: realCount,
+      reason,
     });
   }
 
@@ -658,6 +723,7 @@ function buildPreviewCiCommands(work, riskSuites, config = {}) {
 
 module.exports = {
   selectPromoteQuickCommits,
+  tryResolveRatchetCherryPickConflict,
   reconcilePromotedRatchets,
   checkPromotedEnforcedTargets,
   analyzeUnpromotedDependencies,
