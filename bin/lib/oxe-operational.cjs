@@ -2700,6 +2700,7 @@ function runtimeAlmRefineImport(projectRoot, activeSession, options = {}) {
   const phases = (program && program.phases) || [];
   const frozen = (ph) => Boolean(ph) && (['executing', 'verifying', 'closed'].includes(ph.status) || Boolean(ph.run_id));
   const phaseOfA = (a) => phases.find((ph) => (ph.acceptance || []).includes(a)) || null;
+  const activePh = program && program.active_phase ? phases.find((ph) => ph.id === String(program.active_phase).toUpperCase()) || null : null;
   const relSpec = path.relative(projectRoot, specPath).replace(/\\/g, '/');
   if (options.phase) {
     const target = phases.find((ph) => ph.id === String(options.phase).toUpperCase());
@@ -2728,7 +2729,10 @@ function runtimeAlmRefineImport(projectRoot, activeSession, options = {}) {
     const criteria = refine.parseCriteria(md);
     const existing = specEdit.criteriaIds(specText);
     const added = new Map();
-    const out = { key, added: [], linked: [], problems: [] };
+    const out = { key, criteria_count: criteria.length, added: [], linked: [], problems: [] };
+    if (!criteria.length) {
+      out.problems.push(`0 critérios lidos em ${key}.md (esperado "1. **CA-n** — Dado … · Teste: …" ou "- CA-n — …")`);
+    }
     for (const c of criteria) {
       if (c.spec_id) {
         if (c.spec_program) {
@@ -2777,15 +2781,38 @@ function runtimeAlmRefineImport(projectRoot, activeSession, options = {}) {
     }
     results.push(out);
   }
-  if (!options.dryRun && results.some((r) => r.added && r.added.length)) {
+  let assignedPhase = null;
+  let phaseWarning = null;
+  const addedIds = results.flatMap((r) => (r.added || []).map((a) => a.a));
+  if (!options.dryRun && addedIds.length) {
     writeTextAtomic(specPath, specText);
-    appendEvent(targetRoot, targetSession, { type: 'SpecEdited', payload: { action: 'alm_refine_import', keys: results.map((r) => r.key), added: results.flatMap((r) => (r.added || []).map((a) => a.a)) } });
-    if (options.phase) {
-      const ids = results.flatMap((r) => (r.added || []).map((a) => a.a));
-      try { runtimeProgramPhaseEdit(targetRoot, targetSession, { phase: options.phase, addAcceptance: ids.join(','), by: options.by, reason: `alm refine import ${results.map((r) => r.key).join(', ')}` }); } catch (err) { results.push({ key: '(fase)', problems: [`os critérios entraram na SPEC, mas não na fase ${options.phase}: ${err.message}`], added: [], linked: [] }); }
+    appendEvent(targetRoot, targetSession, { type: 'SpecEdited', payload: { action: 'alm_refine_import', keys: results.map((r) => r.key), added: addedIds } });
+    const targetPhaseId = options.phase
+      ? String(options.phase).toUpperCase()
+      : (activePh && !frozen(activePh) ? activePh.id : null);
+    if (targetPhaseId) {
+      try {
+        runtimeProgramPhaseEdit(targetRoot, targetSession, { phase: targetPhaseId, addAcceptance: addedIds.join(','), by: options.by, reason: `alm refine import ${results.map((r) => r.key).join(', ')}` });
+        assignedPhase = targetPhaseId;
+      } catch (err) {
+        if (options.phase) {
+          results.push({ key: '(fase)', problems: [`os critérios entraram na SPEC, mas não na fase ${targetPhaseId}: ${err.message}`], added: [], linked: [] });
+        } else {
+          phaseWarning = `critério(s) ${addedIds.join(', ')} adicionado(s) na SPEC sem fase ("fase -"): ${err.message}`;
+        }
+      }
+    } else if (program) {
+      phaseWarning = `critério(s) ${addedIds.join(', ')} adicionado(s) na SPEC sem fase ("fase -")${activePh ? ` porque a fase ativa ${activePh.id} está ${activePh.status}` : ''} — vincule à fase (oxe-cc runtime program phase edit ${activePh ? activePh.id : '<Fn>'} --add-acceptance ${addedIds.join(',')} --by ${options.by || '<papel>'} --reason "…" ou via --phase <Fn> / CR) antes de plan append`;
     }
   }
-  return { dry_run: Boolean(options.dryRun), spec: relSpec, ...(targetSlug ? { program: targetSlug } : {}), results };
+  return {
+    dry_run: Boolean(options.dryRun),
+    spec: relSpec,
+    ...(targetSlug ? { program: targetSlug } : {}),
+    ...(assignedPhase ? { phase: assignedPhase } : {}),
+    ...(phaseWarning ? { phase_warning: phaseWarning } : {}),
+    results,
+  };
 }
 
 /**
@@ -8601,6 +8628,126 @@ function runtimeProgramCriterionMove(projectRoot, activeSession, options = {}) {
  * graph; the next `runtime execute` recompiles the same run (done tasks skipped) and runs the batch. The phase closes
  * only when every task of every batch is done (PLAN.json is the source of truth, OXB-059).
  */
+function isFrozenTestPathCandidate(doc, relPath) {
+  const normP = String(relPath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const frozen = new Set((doc && Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])
+    .flatMap((a) => (a && a.files) || [])
+    .map((f) => String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/').replace(/^\.\//, '')));
+  return frozen.has(normP) || /(?:^|\/)(?:tests\/acceptance|e2e\/acceptance|tests\/oxe\d+)\//i.test(normP);
+}
+
+function hasTaskExecutionStarted(projectRoot, activeSession, task) {
+  if (!task) return false;
+  const taskId = String(task.id || '').toUpperCase();
+  if (task.done === true || task.done_commit || task.status === 'in_progress' || task.started_at || Number(task.attempts || 0) > 0) {
+    return true;
+  }
+  try {
+    const events = readEvents(projectRoot, activeSession) || [];
+    return events.some((e) => e && String(e.work_item_id || '').toUpperCase() === taskId
+      && ['TaskStarted', 'TaskAttemptStarted', 'TaskCompleted', 'ExecutorTurn', 'TaskVerified'].includes(e.type));
+  } catch {
+    return false;
+  }
+}
+
+function syncImplementationPackTaskPaths(paths, jsonPath, taskId, { addPaths = [], removePaths = [] } = {}) {
+  const packPath = (paths && paths.implementationPack) || path.join(path.dirname(jsonPath), 'IMPLEMENTATION-PACK.json');
+  if (!fs.existsSync(packPath)) return false;
+  let packDoc = null;
+  try { packDoc = JSON.parse(fs.readFileSync(packPath, 'utf8')); } catch { return false; }
+  const ptasks = packDoc && Array.isArray(packDoc.tasks) ? packDoc.tasks : null;
+  if (!ptasks) return false;
+  const entry = ptasks.find((t) => t && String(t.id || t.task_id || '').toUpperCase() === String(taskId).toUpperCase());
+  if (!entry) return false;
+  const normP = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '').trim();
+  const prev = Array.isArray(entry.exact_paths) ? entry.exact_paths.map(normP).filter(Boolean) : [];
+  const removeSet = new Set(removePaths.map(normP).filter(Boolean));
+  const nextSet = [];
+  for (const p of prev) {
+    if (!removeSet.has(p) && !nextSet.includes(p)) nextSet.push(p);
+  }
+  for (const p of addPaths.map(normP).filter(Boolean)) {
+    if (!removeSet.has(p) && !nextSet.includes(p)) nextSet.push(p);
+  }
+  if (nextSet.length === prev.length && nextSet.every((v, i) => v === prev[i])) return false;
+  entry.exact_paths = nextSet;
+  if (Array.isArray(entry.contracts) && entry.contracts.some((c) => /^escopo fechado:/i.test(String(c)))) {
+    entry.contracts = entry.contracts.map((c) => (/^escopo fechado:/i.test(String(c)) ? `escopo fechado: ${nextSet.slice(0, 4).join(', ')}` : c));
+  }
+  writeTextAtomic(packPath, `${JSON.stringify(packDoc, null, 2)}\n`);
+  return true;
+}
+
+function buildPackEntryFromAppendTask(projectRoot, doc, task, extraDoc, rawTask) {
+  const planBuild = require('./oxe-plan-build.cjs');
+  const normP = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '').trim();
+  const uniq = (xs) => [...new Set(xs.filter(Boolean))];
+  const frozenFiles = new Set((doc && Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])
+    .flatMap((a) => (a && a.files) || []).map(normP));
+  const packOverrides = Array.isArray(extraDoc && extraDoc.pack_tasks)
+    ? extraDoc.pack_tasks
+    : Array.isArray(extraDoc && extraDoc.implementation_pack && extraDoc.implementation_pack.tasks)
+      ? extraDoc.implementation_pack.tasks
+      : [];
+  const rawId = rawTask && rawTask.id != null ? String(rawTask.id).toUpperCase() : null;
+  const override = packOverrides.find((p) => {
+    const pid = String((p && (p.id || p.task_id)) || '').toUpperCase();
+    return pid && (pid === String(task.id).toUpperCase() || (rawId && pid === rawId));
+  }) || {};
+
+  const removed = uniq([...(Array.isArray(override.removed_paths) ? override.removed_paths : []), ...(Array.isArray(rawTask && rawTask.removed_paths) ? rawTask.removed_paths : [])].map(normP));
+  const exact = uniq([...(task.files || []).map(normP), ...(Array.isArray(override.exact_paths) ? override.exact_paths : []).map(normP), ...removed])
+    .filter((f) => !frozenFiles.has(f));
+
+  const symKey = (s) => `${s && s.path}#${s && s.name}`;
+  const explicitSyms = [...(Array.isArray(override.symbols) ? override.symbols : []), ...(Array.isArray(rawTask && (rawTask.pack_symbols || rawTask.symbols)) ? (rawTask.pack_symbols || rawTask.symbols) : [])]
+    .filter((s) => s && typeof s === 'object' && s.name && s.path)
+    .map((s) => ({ kind: s.kind || 'export', name: String(s.name), path: normP(s.path) }));
+
+  const taskAcceptSet = new Set((task.acceptance || []).map((a) => String(a).toUpperCase()));
+  const taskFrozenTests = (doc && Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])
+    .filter((a) => a && ((a.task && String(a.task).toUpperCase() === String(task.id).toUpperCase()) || (a.criterion && taskAcceptSet.has(String(a.criterion).toUpperCase()))))
+    .flatMap((a) => (a.files || []).map(normP));
+  const derivedSyms = [];
+  for (const tf of uniq(taskFrozenTests)) {
+    for (const s of planBuild.importedSymbols(projectRoot, tf, exact)) {
+      derivedSyms.push({ kind: 'export', name: s.name, path: normP(s.path) });
+    }
+  }
+  const symbols = [];
+  const seenSyms = new Set();
+  for (const s of [...explicitSyms, ...derivedSyms]) {
+    const k = symKey(s);
+    if (!seenSyms.has(k)) { seenSyms.add(k); symbols.push(s); }
+  }
+
+  const mode = override.mode || (exact.length === 0 && !symbols.length ? 'not_applicable' : 'mutating');
+  const expectedChecks = Array.isArray(override.expected_checks) && override.expected_checks.length
+    ? override.expected_checks
+    : ((task.verify && Array.isArray(task.verify.commands) ? task.verify.commands : []).filter(Boolean));
+  const contracts = Array.isArray(override.contracts) && override.contracts.length
+    ? override.contracts
+    : [
+        ...symbols.map((s) => `${s.name} exportado de ${s.path}`),
+        ...removed.map((p) => `${p} não existe mais`),
+        ...(symbols.length || removed.length ? [] : [exact.length ? `escopo fechado: ${exact.slice(0, 4).join(', ')}` : 'tarefa sem mutação de arquivo']),
+      ];
+
+  const phaseVal = override.phase || task.phase || (doc && doc.phase) || null;
+  return {
+    id: task.id,
+    mode,
+    ...(mode === 'mutating' ? { write_set: 'closed' } : {}),
+    exact_paths: exact,
+    ...(removed.length ? { removed_paths: removed } : {}),
+    symbols,
+    contracts,
+    expected_checks: expectedChecks,
+    ...(phaseVal ? { phase: phaseVal } : {}),
+  };
+}
+
 function runtimePlanAppend(projectRoot, activeSession, options = {}) {
   const planJsonLib = require('./oxe-plan-json.cjs');
   const changeLib = require('./oxe-change.cjs');
@@ -8630,6 +8777,7 @@ function runtimePlanAppend(projectRoot, activeSession, options = {}) {
       idMap.set(own, `T${nextId++}`);
     });
     const errors = [];
+    const appendedRaw = [];
     const appended = batchTasks.map((t, i) => {
       const own = t && t.id != null ? String(t.id) : `#${i}`;
       const deps = (Array.isArray(t.depends_on) ? t.depends_on : []).map(String).map((d) => {
@@ -8639,15 +8787,20 @@ function runtimePlanAppend(projectRoot, activeSession, options = {}) {
         return d;
       });
       const wave = lastWave + ((Number.isInteger(t.wave) && t.wave >= 1 ? t.wave : 1) - minBatchWave) + 1;
-      const { id: _drop, done: _d, done_at: _da, done_commit: _dc, ...rest } = t;
-      return { ...rest, id: idMap.get(own), wave, ...(deps.length ? { depends_on: deps } : {}), batch: (doc.batches ? doc.batches.length : 1) + 1, ...(own !== idMap.get(own) && t.id != null ? { batch_ref: own } : {}) };
+      const { id: _drop, done: _d, done_at: _da, done_commit: _dc, pack_symbols: _ps, symbols: _sym, ...rest } = t;
+      const mapped = { ...rest, id: idMap.get(own), wave, ...(deps.length ? { depends_on: deps } : {}), batch: (doc.batches ? doc.batches.length : 1) + 1, ...(own !== idMap.get(own) && t.id != null ? { batch_ref: own } : {}) };
+      appendedRaw.push({ task: mapped, raw: t });
+      return mapped;
     });
     if (errors.length) throw new Error(errors.join('\n'));
+    const remappedTests = Array.isArray(extra.acceptance_tests)
+      ? extra.acceptance_tests.map((a) => (a && a.task && idMap.has(String(a.task)) ? { ...a, task: idMap.get(String(a.task)) } : a))
+      : [];
     const batchNo = (doc.batches ? doc.batches.length : 1) + 1;
     const next = {
       ...doc,
       tasks: [...tasks, ...appended],
-      ...(Array.isArray(extra.acceptance_tests) && extra.acceptance_tests.length ? { acceptance_tests: [...(doc.acceptance_tests || []), ...extra.acceptance_tests] } : {}),
+      ...(remappedTests.length ? { acceptance_tests: [...(doc.acceptance_tests || []), ...remappedTests] } : {}),
       batches: [
         ...(doc.batches || [{ batch: 1, tasks: tasks.map((t) => t.id), at: null, from: 'PLAN.json' }]),
         { batch: batchNo, tasks: appended.map((t) => t.id), from: path.relative(projectRoot, fromFile).replace(/\\/g, '/'), by, reason, at: new Date().toISOString() },
@@ -8655,8 +8808,6 @@ function runtimePlanAppend(projectRoot, activeSession, options = {}) {
     };
     const schemaErrors = planJsonLib.validatePlanJson(next);
     if (schemaErrors.length) throw new Error(`o lote não passa no schema do PLAN.json:\n  ${schemaErrors.join('\n  ')}`);
-    // The same lint as the first batch: an error the batch INTRODUCES rolls the append back (errors the plan already
-    // had — e.g. a missing pack the TL waived — are not the batch's and do not block it; they stay in the warnings).
     const runLint = () => {
       try {
         return runtimePlanLint(projectRoot, activeSession, { preflight: false, noPrecheck: true, ...(options.lintOptions || {}) });
@@ -8668,12 +8819,37 @@ function runtimePlanAppend(projectRoot, activeSession, options = {}) {
     const tmp = `${jsonPath}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
     fs.renameSync(tmp, jsonPath);
+
+    // OXB-C5b: when IMPLEMENTATION-PACK.json exists alongside PLAN.json, create entries for each appended task
+    // before running plan lint so append never leaves `PLAN.json` and `IMPLEMENTATION-PACK.json` out of sync.
+    const packPath = paths.implementationPack || path.join(path.dirname(jsonPath), 'IMPLEMENTATION-PACK.json');
+    const packExisted = fs.existsSync(packPath);
+    const originalPackText = packExisted ? fs.readFileSync(packPath, 'utf8') : null;
+    let packUpdated = false;
+    if (packExisted) {
+      let packDoc = null;
+      try { packDoc = JSON.parse(originalPackText); } catch { packDoc = null; }
+      if (packDoc && typeof packDoc === 'object') {
+        const ptasks = Array.isArray(packDoc.tasks) ? [...packDoc.tasks] : [];
+        const existingPackIds = new Set(ptasks.map((p) => String((p && (p.id || p.task_id)) || '').toUpperCase()));
+        for (const item of appendedRaw) {
+          if (existingPackIds.has(String(item.task.id).toUpperCase())) continue;
+          ptasks.push(buildPackEntryFromAppendTask(projectRoot, next, item.task, extra, item.raw));
+          existingPackIds.add(String(item.task.id).toUpperCase());
+        }
+        packDoc.tasks = ptasks;
+        writeTextAtomic(packPath, `${JSON.stringify(packDoc, null, 2)}\n`);
+        packUpdated = true;
+      }
+    }
+
     const after = runLint();
     const introduced = (after.errors || []).filter((e) => !baseline.has(e));
     const lint = { ok: introduced.length === 0, errors: introduced, warnings: [...(after.warnings || []), ...[...baseline].filter((e) => (after.errors || []).includes(e)).map((e) => `já existia antes do lote: ${e}`)] };
     if (!lint.ok) {
       fs.writeFileSync(tmp, originalText, 'utf8');
       fs.renameSync(tmp, jsonPath);
+      if (packUpdated && originalPackText != null) writeTextAtomic(packPath, originalPackText);
       const e = new Error(`plan lint reprovou o lote (nada foi gravado):\n  ${lint.errors.join('\n  ')}`);
       e.lint = lint;
       throw e;
@@ -8682,8 +8858,13 @@ function runtimePlanAppend(projectRoot, activeSession, options = {}) {
     if (fs.existsSync(programDir)) {
       changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'program_edit', action: 'plan_append', batch: batchNo, tasks: appended.map((t) => t.id), from: next.batches[next.batches.length - 1].from, by, reason, at: new Date().toISOString() });
     }
-    appendEvent(projectRoot, activeSession, { type: 'PlanBatchAppended', payload: { batch: batchNo, tasks: appended.map((t) => t.id), by } });
-    return { batch: batchNo, tasks: appended.map((t) => ({ id: t.id, wave: t.wave, title: t.title, ...(t.batch_ref ? { from_id: t.batch_ref } : {}) })), warnings: lint.warnings || [] };
+    appendEvent(projectRoot, activeSession, { type: 'PlanBatchAppended', payload: { batch: batchNo, tasks: appended.map((t) => t.id), by, pack_updated: packUpdated } });
+    return {
+      batch: batchNo,
+      tasks: appended.map((t) => ({ id: t.id, wave: t.wave, title: t.title, ...(t.batch_ref ? { from_id: t.batch_ref } : {}) })),
+      ...(packUpdated ? { pack_updated: true } : {}),
+      warnings: lint.warnings || [],
+    };
   });
 }
 
@@ -10218,9 +10399,7 @@ function runtimePlanScopeAdd(projectRoot, activeSession, options = {}) {
     const task = (doc.tasks || []).find((t) => t && String(t.id).toUpperCase() === taskId);
     if (!task) throw new Error(`Tarefa ${taskId} não encontrada em PLAN.json`);
     if (task.done === true) throw new Error(`${taskId} está done: reabra antes (oxe-cc plan reopen ${taskId})`);
-    const frozen = new Set((doc.acceptance_tests || []).flatMap((a) => (a && a.files) || []).map((f) => String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/')));
-    const isFrozenCandidate = (p) => frozen.has(p) || /(?:^|\/)(?:tests\/acceptance|e2e\/acceptance|tests\/oxe\d+)\//i.test(p);
-    const bad = add.filter(isFrozenCandidate);
+    const bad = add.filter((p) => isFrozenTestPathCandidate(doc, p));
     if (bad.length) {
       throw new Error(
         `${bad.join(', ')}: teste congelado NUNCA entra em files de tarefa (o plan lint reprova). Para liberar/atualizar teste congelado por CR, edite-o num quick e rode: oxe-cc plan amend-test ${bad[0]} --reason ${crId || 'CR-<n>'} --by ${by || '<papel>'} (ou oxe-cc spec freeze --from <sha|#PR> --cr ${crId || 'CR-<n>'})`,
@@ -10228,34 +10407,34 @@ function runtimePlanScopeAdd(projectRoot, activeSession, options = {}) {
     }
     const have = new Set((task.files || []).map((f) => String(f).replace(/\\/g, '/')));
     const added = add.filter((p) => !have.has(p));
+    let packUpdated = false;
     if (added.length) {
       task.files = [...(task.files || []), ...added];
       task.scope_added = [...(Array.isArray(task.scope_added) ? task.scope_added : []), { paths: added, cr: crId, by, reason, at: new Date().toISOString() }];
       const tmp = `${jsonPath}.${process.pid}.tmp`;
       fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
       fs.renameSync(tmp, jsonPath);
+      packUpdated = syncImplementationPackTaskPaths(paths, jsonPath, taskId, { addPaths: added });
     }
-    return { added, existed: add.filter((p) => have.has(p)) };
+    return { added, existed: add.filter((p) => have.has(p)), ...(packUpdated ? { pack_updated: true } : {}) };
   });
   if (result.added.length) {
-    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'scope', id: crId, task: taskId, paths: result.added, by, reason, at: new Date().toISOString() });
-    appendEvent(projectRoot, activeSession, { type: 'PlanScopeAmended', work_item_id: taskId, payload: { task: taskId, paths: result.added, cr: crId, by, reason } });
+    changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'scope', id: crId, task: taskId, paths: result.added, by, reason, at: new Date().toISOString(), ...(result.pack_updated ? { pack_updated: true } : {}) });
+    appendEvent(projectRoot, activeSession, { type: 'PlanScopeAmended', work_item_id: taskId, payload: { task: taskId, paths: result.added, cr: crId, by, reason, ...(result.pack_updated ? { pack_updated: true } : {}) } });
   }
   return { task: taskId, cr: crId, by, ...result };
 }
 
 /**
- * `oxe-cc plan task edit T<n> [--wave <n>] [--depends-on T1,T2 | --depends-on none] [--remove-paths a,b] [--notes "…"]
- * --by <papel> --reason "…" [--cr CR-n]` (OxeSpace 14/11, Celular F3): the planner had to hand-edit PLAN.json to move a
- * task's wave, fix its dependencies, take a path out of its scope or update notes a CR made stale. Never a done task;
- * a dependency that does not exist, points to the task itself or closes a cycle is refused; a frozen test never leaves
- * through here. Recorded in the task (edits), in changes.ndjson (kind "task_edit") and as an event.
+ * `oxe-cc plan task edit T<n> [--wave <n>] [--depends-on T1,T2 | --depends-on none] [--add-paths a,b] [--remove-paths a,b] [--notes "…"]
+ * --by <papel> --reason "…" [--cr CR-n]` (OxeSpace 14/11, Celular F3): edits a non-done task in PLAN.json and keeps
+ * `IMPLEMENTATION-PACK.json` `exact_paths` in sync. `--add-paths` works directly when the task never started (or with an open CR).
  */
 function runtimePlanTaskEdit(projectRoot, activeSession, options = {}) {
   const planJsonLib = require('./oxe-plan-json.cjs');
   const changeLib = require('./oxe-change.cjs');
   const taskId = String(options.task || '').toUpperCase();
-  if (!/^T\d+$/.test(taskId)) throw new Error('use: oxe-cc plan task edit T<n> [--wave n] [--depends-on T1,T2|none] [--remove-paths a,b] [--notes "…"] --by <papel> --reason "…"');
+  if (!/^T\d+$/.test(taskId)) throw new Error('use: oxe-cc plan task edit T<n> [--wave n] [--depends-on T1,T2|none] [--add-paths a,b] [--remove-paths a,b] [--notes "…"] --by <papel> --reason "…"');
   const by = String(options.by || '').trim();
   const reason = String(options.reason || '').trim();
   if (!by) throw new Error('informe quem decide (--by <papel>)');
@@ -10264,9 +10443,11 @@ function runtimePlanTaskEdit(projectRoot, activeSession, options = {}) {
   if (wave != null && !(Number.isInteger(wave) && wave > 0)) throw new Error('--wave: um número inteiro ≥ 1');
   const list = (v) => (Array.isArray(v) ? v : String(v || '').split(',')).map((x) => String(x).trim()).filter(Boolean);
   const deps = options.dependsOn == null ? null : String(options.dependsOn).trim().toLowerCase() === 'none' ? [] : list(options.dependsOn).map((d) => d.toUpperCase());
+  const add = [...new Set(list(options.addPaths).map((p) => p.replace(/\\/g, '/').replace(/^\.\//, '').trim()).filter(Boolean))];
   const remove = list(options.removePaths).map((p) => p.replace(/\\/g, '/').replace(/^\.\//, ''));
+  if (add.some((p) => p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.split('/').includes('..'))) throw new Error('--add-paths: caminho relativo ao repositório, sem ".." nem absoluto');
   const notes = options.notes != null ? String(options.notes) : null;
-  if (wave == null && deps == null && !remove.length && notes == null) throw new Error('nada a editar: --wave, --depends-on, --remove-paths ou --notes');
+  if (wave == null && deps == null && !add.length && !remove.length && notes == null) throw new Error('nada a editar: --wave, --depends-on, --add-paths, --remove-paths ou --notes');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
@@ -10283,7 +10464,6 @@ function runtimePlanTaskEdit(projectRoot, activeSession, options = {}) {
       const unknown = deps.filter((d) => !ids.has(d));
       if (unknown.length) throw new Error(`--depends-on: ${unknown.join(', ')} não existe(m) no plano`);
       if (deps.includes(taskId)) throw new Error(`--depends-on: ${taskId} não depende de si mesma`);
-      // a cycle: some dependency (transitively) depends on this task
       const depsOf = (id) => (id === taskId ? deps : ((tasks.find((t) => String(t.id).toUpperCase() === id) || {}).depends_on || []).map((d) => String(d).toUpperCase()));
       const seen = new Set();
       const stack = [...deps];
@@ -10297,11 +10477,27 @@ function runtimePlanTaskEdit(projectRoot, activeSession, options = {}) {
       task.depends_on = deps;
     }
     if (wave != null) task.wave = wave;
+    let addedPaths = [];
+    if (add.length) {
+      const started = hasTaskExecutionStarted(projectRoot, activeSession, task);
+      if (started) {
+        const crId = String(options.cr || '').toUpperCase();
+        const cr = crId ? changeLib.listChanges(programDir).find((c) => c.id === crId) : null;
+        if (!cr || cr.status !== 'open' || !(cr.tasks || []).map((t) => String(t).toUpperCase()).includes(taskId)) {
+          throw new Error(`${taskId} já iniciou execução — para ampliar escopo de tarefa iniciada, use \`oxe-cc plan scope add ${taskId} ${add.join(' ')} --cr CR-n --by ${by} --reason "…"\``);
+        }
+      }
+      const badFrozen = add.filter((p) => isFrozenTestPathCandidate(doc, p));
+      if (badFrozen.length) {
+        throw new Error(`${badFrozen.join(', ')}: teste congelado NUNCA entra em files de tarefa (use plan amend-test / spec freeze)`);
+      }
+      const have = new Set((task.files || []).map((f) => String(f).replace(/\\/g, '/')));
+      addedPaths = add.filter((p) => !have.has(p));
+      if (addedPaths.length) task.files = [...(task.files || []), ...addedPaths];
+    }
     if (remove.length) {
       const frozen = new Set((doc.acceptance_tests || []).flatMap((a) => (a && a.files) || []).map((f) => String(typeof f === 'string' ? f : f.path).replace(/\\/g, '/')));
       const taskFilesNorm = new Set((task.files || []).map((f) => String(f).replace(/\\/g, '/')));
-      // OXB-C2 #3: if a frozen test was NOT in `task.files`, refuse (cannot strip `acceptance_tests` via `task edit`);
-      // if it WAS mistakenly placed inside `task.files`, allow `--remove-paths` to clean `task.files`!
       const bad = remove.filter((p) => frozen.has(p) && !taskFilesNorm.has(p));
       if (bad.length) throw new Error(`${bad.join(', ')}: teste congelado não sai por aqui (um CR e spec freeze)`);
       const missing = remove.filter((p) => !taskFilesNorm.has(p));
@@ -10310,14 +10506,17 @@ function runtimePlanTaskEdit(projectRoot, activeSession, options = {}) {
     }
     if (notes != null) task.notes = notes;
     const after = { wave: task.wave ?? null, depends_on: [...(task.depends_on || [])], files: [...(task.files || [])], notes: task.notes ?? null };
-    task.edits = [...(Array.isArray(task.edits) ? task.edits : []), { by, reason, cr: options.cr ? String(options.cr).toUpperCase() : null, at: new Date().toISOString(), ...(wave != null ? { wave } : {}), ...(deps ? { depends_on: deps } : {}), ...(remove.length ? { removed_paths: remove } : {}), ...(notes != null ? { notes: true } : {}) }];
+    task.edits = [...(Array.isArray(task.edits) ? task.edits : []), { by, reason, cr: options.cr ? String(options.cr).toUpperCase() : null, at: new Date().toISOString(), ...(wave != null ? { wave } : {}), ...(deps ? { depends_on: deps } : {}), ...(addedPaths.length ? { added_paths: addedPaths } : {}), ...(remove.length ? { removed_paths: remove } : {}), ...(notes != null ? { notes: true } : {}) }];
     const tmp = `${jsonPath}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
     fs.renameSync(tmp, jsonPath);
-    return { before, after };
+    const packUpdated = (addedPaths.length || remove.length)
+      ? syncImplementationPackTaskPaths(paths, jsonPath, taskId, { addPaths: addedPaths, removePaths: remove })
+      : false;
+    return { before, after, ...(addedPaths.length ? { added_paths: addedPaths } : {}), ...(packUpdated ? { pack_updated: true } : {}) };
   });
   changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'task_edit', task: taskId, ...out, cr: options.cr ? String(options.cr).toUpperCase() : null, by, reason, at: new Date().toISOString() });
-  appendEvent(projectRoot, activeSession, { type: 'PlanTaskEdited', work_item_id: taskId, payload: { task: taskId, by, reason, before: out.before, after: out.after } });
+  appendEvent(projectRoot, activeSession, { type: 'PlanTaskEdited', work_item_id: taskId, payload: { task: taskId, by, reason, before: out.before, after: out.after, ...(out.added_paths ? { added_paths: out.added_paths } : {}), ...(out.pack_updated ? { pack_updated: true } : {}) } });
   return { task: taskId, by, ...out };
 }
 

@@ -8126,6 +8126,8 @@ async function main() {
           for (const l of r.linked) console.log(`  ${dim}= ${r.key} ${l.ca} ↔ ${l.a}${reset}`);
           for (const p of r.problems) { console.log(`  ${yellow}!${reset} ${r.key}: ${p}`); }
         }
+        if (imp.phase) console.log(`  ${green}✓${reset} fase ${imp.phase}: critérios adicionados`);
+        if (imp.phase_warning) console.log(`  ${yellow}!${reset} ${imp.phase_warning}`);
         console.log(`  ${dim}${imp.dry_run ? 'ensaio: nada gravado' : `SPEC: ${imp.spec}`}${reset}`);
         return;
       }
@@ -8870,7 +8872,7 @@ async function main() {
       if (o.json) console.log(JSON.stringify({ oxePlanAppendSchema: 1, ok: true, ...out }, null, 2));
       else {
         const c = useAnsiColors();
-        console.log(`  ${c ? green : ''}✓${c ? reset : ''} lote ${out.batch}: ${out.tasks.map((t) => `${t.id}${t.from_id ? ` (${t.from_id})` : ''} onda ${t.wave}`).join(', ')}`);
+        console.log(`  ${c ? green : ''}✓${c ? reset : ''} lote ${out.batch}: ${out.tasks.map((t) => `${t.id}${t.from_id ? ` (${t.from_id})` : ''} onda ${t.wave}`).join(', ')}${out.pack_updated ? ' (+IMPLEMENTATION-PACK.json)' : ''}`);
         for (const w of out.warnings) console.log(`  ${c ? yellow : ''}!${c ? reset : ''} ${w}`);
         console.log('  Um execute em andamento termina o próprio grafo; o próximo oxe-cc runtime execute roda o lote (as tarefas feitas são puladas).');
       }
@@ -9028,7 +9030,7 @@ async function main() {
     try {
       const out = oxeOperational.runtimePlanScopeAdd(o.dir, null, o);
       if (o.json) { console.log(JSON.stringify({ oxePlanScopeSchema: 1, ...out }, null, 2)); return; }
-      console.log(out.added.length ? `  ${green}✓${reset} ${out.task}: +${out.added.join(', ')} no escopo (${out.cr}, por ${out.by})` : `  ${dim}= ${out.task}: já no escopo${reset}`);
+      console.log(out.added.length ? `  ${green}✓${reset} ${out.task}: +${out.added.join(', ')} no escopo (${out.cr}, por ${out.by})${out.pack_updated ? ' (+IMPLEMENTATION-PACK.json)' : ''}` : `  ${dim}= ${out.task}: já no escopo${reset}`);
       if (out.existed.length) console.log(`  ${dim}já estavam: ${out.existed.join(', ')}${reset}`);
     } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
     return;
@@ -9142,7 +9144,7 @@ async function main() {
     return;
   }
 
-  // oxe-cc plan task edit T<n> [--wave n] [--depends-on T1,T2|none] [--remove-paths a,b] [--notes "…"] --by --reason
+  // oxe-cc plan task edit T<n> [--wave n] [--depends-on T1,T2|none] [--add-paths a,b] [--remove-paths a,b] [--notes "…"] --by --reason
   // (OxeSpace 14/11, Celular F3: no hand edit of an executing PLAN.json)
   if (command === 'plan' && argv[0] === 'task' && argv[1] === 'edit') {
     const o = { dir: process.cwd(), json: false };
@@ -9152,6 +9154,7 @@ async function main() {
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
       else if (['--cr', '--by', '--reason', '--wave', '--notes'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
       else if (a === '--depends-on' && argv[i + 1] != null) o.dependsOn = String(argv[++i]);
+      else if (a === '--add-paths' && argv[i + 1] != null) o.addPaths = [...(Array.isArray(o.addPaths) ? o.addPaths : []), ...String(argv[++i]).split(',')].filter(Boolean);
       else if (a === '--remove-paths' && argv[i + 1] != null) o.removePaths = String(argv[++i]);
       else if (/^T\d+$/i.test(a) && !o.task) o.task = a.toUpperCase();
       else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
@@ -9161,13 +9164,16 @@ async function main() {
       if (o.json) { console.log(JSON.stringify({ oxePlanTaskEditSchema: 1, ...out }, null, 2)); return; }
       const b = out.before;
       const n = out.after;
+      const added = n.files.filter((f) => !b.files.includes(f));
+      const removed = b.files.filter((f) => !n.files.includes(f));
       const diff = [
         b.wave !== n.wave ? `onda ${b.wave ?? '—'} → ${n.wave}` : null,
         b.depends_on.join(',') !== n.depends_on.join(',') ? `depende de ${b.depends_on.join(', ') || '—'} → ${n.depends_on.join(', ') || '—'}` : null,
-        b.files.length !== n.files.length ? `escopo −${b.files.filter((f) => !n.files.includes(f)).join(', ')}` : null,
+        added.length ? `escopo +${added.join(', ')}` : null,
+        removed.length ? `escopo −${removed.join(', ')}` : null,
         b.notes !== n.notes ? 'notas atualizadas' : null,
       ].filter(Boolean);
-      console.log(`  ${green}✓${reset} ${out.task}: ${diff.join(' · ') || 'sem mudança'} (por ${out.by})`);
+      console.log(`  ${green}✓${reset} ${out.task}: ${diff.join(' · ') || 'sem mudança'} (por ${out.by})${out.pack_updated ? ' (+IMPLEMENTATION-PACK.json)' : ''}`);
     } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
     return;
   }

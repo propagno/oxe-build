@@ -40,7 +40,17 @@ function adfToText(node, depth = 0) {
   if (typeof node === 'string') return node;
   const kids = (node.content || []).map((c) => adfToText(c, depth + (node.type === 'bulletList' || node.type === 'orderedList' ? 1 : 0)));
   switch (node.type) {
-    case 'text': return node.text || '';
+    case 'text': {
+      const t = node.text || '';
+      if (!t) return '';
+      const marks = Array.isArray(node.marks) ? node.marks.map((m) => m && m.type) : [];
+      const wm = /^(\s*)(.*?)(\s*)$/.exec(t);
+      const core = wm ? wm[2] : '';
+      if (!core) return t;
+      if (marks.includes('code') && !/^`.*`$/.test(core)) return `${wm[1]}\`${core}\`${wm[3]}`;
+      if (marks.includes('strong') && !/^\*\*.*\*\*$/.test(core)) return `${wm[1]}**${core}**${wm[3]}`;
+      return t;
+    }
     case 'hardBreak': return '\n';
     case 'heading': return `\n${'#'.repeat(Math.min(6, (node.attrs && node.attrs.level) || 2))} ${kids.join('')}\n`;
     case 'paragraph': return `${kids.join('')}\n`;
@@ -296,27 +306,45 @@ function parseCriteria(md) {
     const h = /^##\s+(.*)$/.exec(line);
     if (h) { inside = h[1].trim() === name; return; }
     if (!inside) return;
-    const m = /^\s*(?:\d+[.)]|[-*])\s+\*\*(CA-\d+)(?:\s*\((?:([A-Za-z0-9][A-Za-z0-9._-]*):)?([AG]\d+(?:\.\d+)*)\))?\*\*(?:\s*\((?:([A-Za-z0-9][A-Za-z0-9._-]*):)?([AG]\d+(?:\.\d+)*)\))?\s*[—–:-]\s*(.*)$/.exec(line);
+    const m = /^\s*(?:\d+[.)]|[-*])\s+(?:\*\*(CA-\d+)(?:\s*\((?:([A-Za-z0-9][A-Za-z0-9._-]*):)?([AG]\d+(?:\.\d+)*)\))?\*\*|(CA-\d+)(?:\s*\((?:([A-Za-z0-9][A-Za-z0-9._-]*):)?([AG]\d+(?:\.\d+)*)\))?)(?:\s*\((?:([A-Za-z0-9][A-Za-z0-9._-]*):)?([AG]\d+(?:\.\d+)*)\))?\s*[—–:-]\s*(.*)$/.exec(line);
     if (!m) return;
-    const rest = m[6];
-    const testM = /·\s*Teste:\s*([^·]+)/i.exec(rest);
-    const riskM = /·\s*Risco:\s*(P[0-3])\b/i.exec(rest);
-    const text = rest.split(/\s*·\s*(?:Teste|Risco):/i)[0].trim();
-    const specId = m[3] || m[5] || null;
-    const specProgram = m[2] || m[4] || null;
+    const id = m[1] || m[4];
+    const specProgram = m[2] || m[5] || m[7] || null;
+    const specId = m[3] || m[6] || m[8] || null;
+    const rest = m[9];
+    // Split on explicit field delimiters (`· Teste:` / `· Risco:`) rather than stopping at any middle dot `·`,
+    // so test titles containing `·` (e.g. `"{project} · OxeQuery"`) and criterion text with `·` stay intact.
+    const markerRe = /\s*·\s*(Teste|Risco)\s*:/gi;
+    const markers = [];
+    let mm;
+    while ((mm = markerRe.exec(rest))) {
+      markers.push({ key: mm[1].toLowerCase(), index: mm.index, valueStart: mm.index + mm[0].length });
+    }
+    const text = (markers.length ? rest.slice(0, markers[0].index) : rest).trim();
+    let testVal = null;
+    let riskVal = null;
+    for (let idx = 0; idx < markers.length; idx += 1) {
+      const end = idx + 1 < markers.length ? markers[idx + 1].index : rest.length;
+      const val = rest.slice(markers[idx].valueStart, end).trim();
+      if (markers[idx].key === 'teste') testVal = val || null;
+      else if (markers[idx].key === 'risco') {
+        const rm = /^(P[0-3])\b/i.exec(val);
+        if (rm) riskVal = rm[1].toUpperCase();
+      }
+    }
     let planRef = null;
     const planoM = /\(\s*plano:\s*([AG]\d+(?:\.\d+)*)(?:\s*,\s*([^)\n]+))?\)/i.exec(text);
     if (planoM) {
       planRef = { spec_id: planoM[1].toUpperCase(), program: planoM[2] ? planoM[2].trim() : null };
     }
     out.push({
-      id: m[1],
+      id,
       spec_id: specId ? specId.toUpperCase() : null,
       spec_program: specProgram || null,
       plan_ref: planRef,
       text,
-      test: testM ? testM[1].trim() : null,
-      risk: riskM ? riskM[1].toUpperCase() : null,
+      test: testVal,
+      risk: riskVal,
       line: i,
     });
   });
@@ -330,7 +358,12 @@ function setSpecIds(md, map, options = {}) {
   for (const c of parseCriteria(md)) {
     const a = map.get(c.id);
     if (!a || c.spec_id) continue;
-    lines[c.line] = lines[c.line].replace(`**${c.id}**`, `**${c.id} (${prefix}${a})**`);
+    const boldNeedle = `**${c.id}**`;
+    if (lines[c.line].includes(boldNeedle)) {
+      lines[c.line] = lines[c.line].replace(boldNeedle, `**${c.id} (${prefix}${a})**`);
+    } else {
+      lines[c.line] = lines[c.line].replace(new RegExp(`(?<=^\\s*(?:\\d+[.)]|[-*])\\s+)${c.id}\\b`), `**${c.id} (${prefix}${a})**`);
+    }
   }
   return lines.join('\n');
 }
