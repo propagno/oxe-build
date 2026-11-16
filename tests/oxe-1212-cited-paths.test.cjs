@@ -56,4 +56,118 @@ describe('G44: a cited path or component out of the task scope', () => {
     assert.match(cp.testHeader("it(\"ChangesPanel's skeleton waits\", () => {});"), /ChangesPanel's skeleton/);
     assert.match(cp.testHeader("/*\n  brd15: ChangesPanel wait\n*/\nimport {\n  render,\n} from 'x';\n// SecondNote here\nconst a = 1;"), /brd15: ChangesPanel wait[\s\S]*SecondNote/);
   });
+
+  it('OxeSpace 16/11 (F6 + OQ): primitives/reuse lists, platform-tree scoping, reference clauses, test runners/docs, and frozen-header change verbs', () => {
+    const repoFiles = [
+      ...files,
+      'mobile/android/app/src/main/java/com/oxespace/ui/EmptyState.kt',
+      'src/ui/DockPanel.tsx',
+      'src/ui/CodeRail.tsx',
+      'src/components/Agent/AgentActivityBadge.tsx',
+      'src/styles/tokens.generated.css',
+      'src/tokens/css.ts',
+      'src/design/motion.ts',
+      'src/state/mode.ts',
+      'docs/design/motion.md',
+      'docs/security/ccr-h1-http-audit.md',
+      'scripts/test-electron.mjs',
+      'scripts/custom-verify.mjs',
+      'tests/acceptance/f6-motion.test.ts',
+      'tests/acceptance/f6-mutate.test.ts',
+      'tests/acceptance/oq-audit.test.ts',
+    ];
+    const extraTexts = {
+      ...texts,
+      'tests/acceptance/f6-motion.test.ts': [
+        '// Reads durations from src/design/motion.ts and spec in docs/design/motion.md',
+        "import { DURATION } from '../../src/design/motion';",
+        "describe('Toast inside CodeRail with src/state/mode.ts', () => { it('renders smoothly', () => {}); });",
+      ].join('\n'),
+      'tests/acceptance/f6-mutate.test.ts': [
+        '// A18: CodeRail now collapses on Escape and adds aria-expanded',
+        "describe('CodeRail collapse', () => { it('cria atalho de teclado em ChangesPanel', () => {}); });",
+      ].join('\n'),
+      'tests/acceptance/oq-audit.test.ts': [
+        '// Audit check for docs/security/ccr-h1-http-audit.md',
+        "describe('HTTP audit', () => { it('passes', () => {}); });",
+      ].join('\n'),
+    };
+    const read = (f) => extraTexts[f] || '';
+
+    // 1a + 1b: "primitives only" / "use ... primitives" / "from ... primitives" / "a partir de", and src/ never resolves PascalCase to mobile/android
+    const doc1 = {
+      tasks: [
+        {
+          id: 'T36',
+          title: 'Chat empty view',
+          notes: [
+            'UI primitives only: DockPanel, CodeRail.',
+            'Render EmptyState when thread has no messages.',
+            'Construir layout a partir de DockPanel; reuse existing components from src/ui primitives.',
+          ].join('\n'),
+          files: ['src/components/Chat/ChatEmpty.tsx'],
+        },
+      ],
+      acceptance_tests: [],
+    };
+    assert.deepEqual(cp.citedPathGaps('.', doc1, { files: repoFiles, readText: read }), []);
+
+    // 2: Reference phrases ("names are the ... of X", "never a ... name of Y", "generated ones of", "conforme", "ver", "see", "per", "according to") count as reads
+    const doc2 = {
+      tasks: [
+        {
+          id: 'T56',
+          notes: [
+            'Token names are the keys of src/tokens/css.ts; only the generated ones of src/styles/tokens.generated.css.',
+            'Never a raw class name of AgentActivityBadge.',
+            'Implementar conforme docs/design/motion.md; see CodeRail; ver src/state/mode.ts; per docs/security/ccr-h1-http-audit.md; according to src/design/motion.ts.',
+          ].join('\n'),
+          files: ['src/components/Theme/ThemePreview.tsx'],
+        },
+      ],
+      acceptance_tests: [],
+    };
+    assert.deepEqual(cp.citedPathGaps('.', doc2, { files: repoFiles, readText: read }), []);
+
+    // Reference clause followed by a real out-of-scope mutation still catches the mutated target
+    const doc2Mut = {
+      tasks: [
+        {
+          id: 'T57',
+          notes: 'Conforme docs/design/motion.md, alterar src/state/store.ts.',
+          files: ['src/components/Theme/ThemePreview.tsx'],
+        },
+      ],
+      acceptance_tests: [],
+    };
+    assert.deepEqual(cp.citedPathGaps('.', doc2Mut, { files: repoFiles, readText: read }).map((g) => g.file), ['src/state/store.ts']);
+
+    // 3 + 4: scripts/test-*.mjs, verify command files, docs/**/*.md in frozen header, and frozen header imports without change verbs do NOT fire
+    const doc3 = {
+      tasks: [
+        {
+          id: 'T45',
+          notes: 'Run via scripts/test-electron.mjs and scripts/custom-verify.mjs.',
+          files: ['src/components/Toast/Toast.tsx'],
+          verify: { commands: ['node scripts/custom-verify.mjs tests/acceptance/f6-motion.test.ts'] },
+          acceptance: ['A45', 'AQ1'],
+        },
+      ],
+      acceptance_tests: [
+        { criterion: 'A45', task: 'T45', files: ['tests/acceptance/f6-motion.test.ts'] },
+        { criterion: 'AQ1', task: 'T45', files: ['tests/acceptance/oq-audit.test.ts'] },
+      ],
+    };
+    assert.deepEqual(cp.citedPathGaps('.', doc3, { files: repoFiles, readText: read }), []);
+
+    // 4 (positive): frozen header WITH a change verb ("now", "cria") DOES flag out-of-scope components
+    const doc4 = {
+      tasks: [{ id: 'T58', files: ['src/components/Toast/Toast.tsx'], acceptance: ['A18'] }],
+      acceptance_tests: [{ criterion: 'A18', task: 'T58', files: ['tests/acceptance/f6-mutate.test.ts'] }],
+    };
+    assert.deepEqual(
+      cp.citedPathGaps('.', doc4, { files: repoFiles, readText: read }).map((g) => g.file).sort(),
+      ['src/components/Changes/ChangesPanel.tsx', 'src/ui/CodeRail.tsx'],
+    );
+  });
 });

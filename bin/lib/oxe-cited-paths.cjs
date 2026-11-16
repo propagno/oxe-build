@@ -14,6 +14,17 @@ const path = require('path');
 
 const CODE_RE = /\.(c|m)?[jt]sx?$|\.(kt|java|swift|py|rs|go|vue|svelte)$/i;
 const TEST_RE = /(^|\/)(tests?|__tests__|spec|e2e)\/|\.(test|spec)\.[cm]?[jt]sx?$/i;
+const RUNNER_RE = /(^|\/)scripts\/(?:test-[^/]+|remote-verify)\.[cm]?[jt]s$/i;
+const PATH_TOKEN_RE = /[\w@.-]+(?:\/[\w@.-]+)+\.[A-Za-z0-9]{1,5}\b/g;
+const PASCAL_TOKEN_RE = /(?<![/@.\w])[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+\b/g;
+const SENTENCE_SPLIT_RE = /(?<!\b(?:e\.g|i\.e|p\.ex|ex|etc|vs|cf)\.)(?<=[.;!?])\s+|\r?\n/i;
+// R51 + G44-fp (1): scope-boundary sentences and "use/reuse these primitives/components" lists are read-only / excluded
+const NOT_IN_SCOPE = /\b(?:n[aã]o\s+(?:tocar|alterar|mexer|editar|mudar|incluir)|sem\s+(?:tocar|alterar|mexer|editar)|fora\s+d[eo]\s+escopo|do\s+not\s+(?:touch|edit|modify|change)|don'?t\s+(?:touch|edit|modify|change)|out\s+of\s+scope|leave\s+(?:\S+\s+)?(?:as\s+is|untouched))\b/i;
+const USE_COMPONENTS = /\b(?:primitives\s+only|(?:use|uses|using|reuse|reuses|reusing|usar|usando|reusar|reutilizar)\b[^.;!?\n]*\b(?:primitives?|primitivas?|components?|componentes?)|(?:primitives?|primitivas?|components?|componentes?)\b[^.;!?\n]*\b(?:only|apenas|somente)|a\s+partir\s+d[eao]s?|from\b[^.;!?\n]*\b(?:primitives?|primitivas?))\b/i;
+// G44-fp (2): reference clauses ("names are the … of X", "never a … name of Y", "generated ones of", "conforme", "ver", "see", "per", "according to") count as reads
+const REF_CLAUSE_RE = /(?:\b(?:names?\s+(?:are|is)\s+the\b[^;!?\n]*?\bof|never\s+an?\b[^;!?\n]*?\bnames?\s+of|generated\s+ones?\s+of|according\s+to|conforme|vide)\b|(?:^|[\s(,;:])(?:ver|veja|see|per)\b)\s+([^;!?\n]+?)(?=,?\s+\b(?:ajustar|alterar|mudar|criar|adicionar|editar|update|change|modify|add|create|edit)\b|$)/gi;
+// G44-fp (4): in a frozen test header, a cited module/component only counts when the header sentence states a change
+const CHANGE_VERB_RE = /\b(?:muda\w*|altera\w*|adiciona\w*|cria\w*|passa\s+a\b|nov[oa]s?|chang(?:e|es|ed|ing)|add(?:s|ed|ing)?|creat(?:e|es|ed|ing)|new|now)\b/i;
 const norm = (p) => String(typeof p === 'string' ? p : (p && p.path) || '').replace(/\\/g, '/').replace(/^\.\//, '');
 // Web / JS builtins with two humps a repo may shim (ResizeObserver.ts) and the prose names as the platform type
 const BUILTINS = new Set(['ResizeObserver', 'IntersectionObserver', 'MutationObserver', 'PerformanceObserver', 'AbortController', 'AbortSignal', 'EventEmitter', 'EventTarget', 'FormData', 'WebSocket', 'TypeError', 'RangeError', 'SyntaxError', 'ReferenceError', 'TextEncoder', 'TextDecoder', 'ReadableStream', 'WritableStream', 'TransformStream', 'BroadcastChannel', 'MessageChannel', 'MessagePort', 'SharedWorker', 'WeakMap', 'WeakSet', 'WeakRef', 'ArrayBuffer', 'DataView', 'BigInt', 'TypeScript', 'JavaScript', 'GitHub', 'GitLab', 'PowerShell']);
@@ -93,28 +104,65 @@ function citedPathGaps(root, planDoc, options = {}) {
         siblingScopes.set(f, [...(siblingScopes.get(f) || []), ...sibs]);
       }
     }
-    // R51: a sentence that marks a scope boundary ("não alterar X", "fora do escopo: X", "do not touch X") cites X
-    // precisely to keep it out
-    const NOT_IN_SCOPE = /\b(?:n[aã]o\s+(?:tocar|alterar|mexer|editar|mudar|incluir)|sem\s+(?:tocar|alterar|mexer|editar)|fora\s+d[eo]\s+escopo|do\s+not\s+(?:touch|edit|modify|change)|don'?t\s+(?:touch|edit|modify|change)|out\s+of\s+scope|leave\s+(?:\S+\s+)?(?:as\s+is|untouched))\b/i;
-    // a sentence ends at . ; ! ? — never after an abbreviation ("p.ex.", "e.g.", "i.e.", R52)
-    const keepIn = (text) => String(text || '').split(/(?<!\b(?:e\.g|i\.e|p\.ex|ex|etc|vs|cf)\.)(?<=[.;!?])\s+|\r?\n/i).filter((s) => !NOT_IN_SCOPE.test(s)).join('\n');
+    const ownFiles = (t.files || []).map(norm).filter(Boolean);
+    // G44-fp (1): PascalCase resolves only within the task's platform tree (1st path segment); root files or empty files stay unrestricted
+    const platformRoots = ownFiles.length && ownFiles.every((f) => f.includes('/'))
+      ? new Set(ownFiles.map((f) => f.split('/')[0]))
+      : null;
+    const resolvePascal = (ident) => {
+      if (BUILTINS.has(ident)) return null;
+      const list = (byBase.get(ident) || []).filter((f) => !platformRoots || (f.includes('/') && platformRoots.has(f.split('/')[0])));
+      return list.length === 1 ? list[0] : null;
+    };
+    const extractRefs = (fragment) => {
+      const refs = [];
+      for (const m of String(fragment || '').matchAll(PATH_TOKEN_RE)) {
+        const p = norm(m[0]);
+        if (trackedSet.has(p)) refs.push({ file: p, cited: m[0] });
+      }
+      for (const m of String(fragment || '').matchAll(PASCAL_TOKEN_RE)) {
+        const file = resolvePascal(m[0]);
+        if (file) refs.push({ file, cited: m[0] });
+      }
+      return refs;
+    };
+    // G44-fp (3): files invoked by the task's verify / acceptance test commands (and scripts/test-*.mjs) never count
+    const verifyCmds = [
+      ...(typeof t.verify === 'string' ? [t.verify] : Array.isArray(t.verify) ? t.verify : t.verify ? [t.verify.command, ...(t.verify.commands || [])] : []),
+      t.verifyCommand,
+      ...entries.map((a) => a && a.command),
+    ].filter(Boolean).join('\n');
+    const implicitReads = new Set();
+    for (const m of verifyCmds.matchAll(PATH_TOKEN_RE)) {
+      const p = norm(m[0]);
+      if (trackedSet.has(p)) implicitReads.add(p);
+    }
+    const prepareText = (rawText, requireChangeVerb) => {
+      const sentences = String(rawText || '').split(SENTENCE_SPLIT_RE);
+      const kept = [];
+      for (const s of sentences) {
+        if (!s.trim() || NOT_IN_SCOPE.test(s) || USE_COMPONENTS.test(s)) continue;
+        const clean = s.replace(/[.;!?]+\s*$/, '');
+        for (const rm of clean.matchAll(REF_CLAUSE_RE)) {
+          for (const r of extractRefs(rm[1])) implicitReads.add(r.file);
+        }
+        if (requireChangeVerb && !CHANGE_VERB_RE.test(s)) continue;
+        kept.push(s);
+      }
+      return kept.join('\n');
+    };
+    const notesText = [t.title, Array.isArray(t.notes) ? t.notes.join('\n') : t.notes, t.description].filter(Boolean).join('\n');
     const sources = [
-      { where: 'title/notes', text: keepIn([t.title, t.notes, t.description].filter(Boolean).join('\n')) },
-      ...frozen.map((f) => ({ where: f, text: keepIn(testHeader(read(f))), siblings: siblingScopes.get(f) || [] })),
+      { where: 'title/notes', text: prepareText(notesText, false), isFrozenHeader: false },
+      ...frozen.map((f) => ({ where: f, text: prepareText(testHeader(read(f)), true), siblings: siblingScopes.get(f) || [], isFrozenHeader: true })),
     ];
     const seen = new Set();
     for (const src of sources) {
       if (!src.text) continue;
-      const hits = [];
-      for (const m of src.text.matchAll(/[\w@.-]+(?:\/[\w@.-]+)+\.[A-Za-z0-9]{1,5}\b/g)) { const p = norm(m[0]); if (trackedSet.has(p)) hits.push({ file: p, cited: m[0] }); }
-      // never a segment of a path, a URL or a package (`@scope/ChangesPanel`), nor a platform builtin a shim may share
-      for (const m of src.text.matchAll(/(?<![/@.\w])[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+\b/g)) {
-        if (BUILTINS.has(m[0])) continue;
-        const files = byBase.get(m[0]);
-        if (files && files.length === 1) hits.push({ file: files[0], cited: m[0] });
-      }
+      const hits = extractRefs(src.text);
       for (const h of hits) {
-        if (frozen.includes(h.file) || TEST_RE.test(h.file) || inScope(h.file) || seen.has(h.file)) continue;
+        if (frozen.includes(h.file) || TEST_RE.test(h.file) || RUNNER_RE.test(h.file) || implicitReads.has(h.file) || inScope(h.file) || seen.has(h.file)) continue;
+        if (src.isFrozenHeader && /\.md$/i.test(h.file)) continue;
         if ((src.siblings || []).some((s) => testScope.covers(s, h.file))) continue;
         seen.add(h.file);
         out.push({ task: t.id, file: h.file, cited: h.cited, where: src.where });
