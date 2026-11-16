@@ -87,7 +87,9 @@ function idPrefixFor(program, phaseId) {
 function mergeChanges(ourDir, theirDir, options = {}) {
   const ours = readNdjson(changesFile(ourDir));
   const theirs = readNdjson(changesFile(theirDir));
-  const key = (r) => `${r.kind}|${r.id || ''}|${r.at || ''}|${r.status || r.action || ''}`;
+  // a CR's summary is part of its identity: two different CRs with the same id written in the same millisecond (a fork
+  // and the main program) are not one — the fork's was skipped and never renamed (flaky in the R9 test)
+  const key = (r) => `${r.kind}|${r.id || ''}|${r.at || ''}|${r.status || r.action || ''}${r.kind === 'cr' ? `|${r.summary || ''}` : ''}`;
   const have = new Set();
   for (const r of ours) {
     have.add(key(r));
