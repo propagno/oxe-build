@@ -546,6 +546,14 @@ function buildNodeContextProvider(projectRoot, activeSession) {
       lessons: [
         ...lessons,
         ...(reviewSentinel ? [`Marcador desta sessão de execução (não o repita em arquivos): ${reviewSentinel}`] : []),
+        // OxeSpace 15/11 (F6 T34/T35): a declared ratchet whose file is in the task's scope — the executor is told the
+        // cap and that it comes down with the count
+        ...(() => {
+          try {
+            const t = ((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).find((x) => x && x.id === node.id);
+            return require('./oxe-ratchets.cjs').ratchetNotes(root, readProjectConfig(projectRoot) || {}, (t && t.files) || []).map((n) => `Trava: ${n}`);
+          } catch { return []; }
+        })(),
         // cross-review 15/11: the attempt that comes back after a failed checkpoint (dom_hooks, related tests) is told
         // why the last one was undone — otherwise it redelivers the same change
         ...(() => {
@@ -4498,6 +4506,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
             const cp = unsep.length
               ? { committed: false, failed: true, kind: 'shared_file_conflict', reason: `shared_file_conflict: ${unsep.map(([p, ids]) => `${p} tem edições de ${event.work_item_id} e de ${ids.join(', ')}`).join('; ')} — sem a base da 1ª tentativa (histórico anterior à 1.21.2-rc.36) não dá para separar; commite à mão o hunk de cada tarefa (ou plan done --commit)` }
               : commitTaskCheckpoint(projectRoot, current, event.work_item_id, { task: planTaskById.get(event.work_item_id), phase: phaseCtxForCommits.phase, baseline: taskBaseline.get(event.work_item_id) || null });
+            if (cp.ratchets_lowered) appendEvent(projectRoot, activeSession, { type: 'RatchetLowered', run_id: current.run_id, work_item_id: event.work_item_id, payload: { task: event.work_item_id, ratchets: cp.ratchets_lowered } });
             if (!cp.committed && cp.failed && !cp.kind && /sobrepõe edições de outra tarefa/.test(String(cp.reason || ''))) {
               const pt = planTaskById.get(event.work_item_id) || {};
               const others = [...planTaskById.values()].filter((o) => o.id !== event.work_item_id && !o.done && (o.files || []).some((f) => (pt.files || []).includes(f))).map((o) => o.id);
@@ -10578,6 +10587,12 @@ function commitTaskCheckpoint(projectRoot, runState, taskId, options = {}) {
   const files = [...new Set([...baseFiles, ...coupled])];
   if (!files.length) return { committed: false, reason: 'tarefa sem escopo declarado' };
   if (!gitLines(projectRoot, ['rev-parse', '--is-inside-work-tree'])) return { committed: false, reason: 'sem repositório git' };
+  // OxeSpace 15/11 (F6 T34/T35): a declared ratchet whose file is in the scope comes down to the real count in this
+  // task's own commit (never up), so the suites that require cap <= count do not fail the checkpoint.
+  let ratchetsLowered = [];
+  if (options.ratchets !== false) {
+    try { ratchetsLowered = require('./oxe-ratchets.cjs').lowerRatchets(projectRoot, options.config || readProjectConfig(projectRoot) || {}, files); } catch { ratchetsLowered = []; }
+  }
   // OXB-168: built from what CHANGED under the scope, never from the scope as pathspecs (a path another task already
   // removed made git reject the whole commit).
   const changed = changedPathsUnder(projectRoot, files);
@@ -10600,7 +10615,7 @@ function commitTaskCheckpoint(projectRoot, runState, taskId, options = {}) {
   }
   const message = options.message || checkpointMessageFor(projectRoot, runState, taskId, options.task || {}, options.phase, options.config || null);
   const res = commitExactContent(projectRoot, own.entries, message, { ...options, scope: files });
-  return { ...res, scope: files, ...(scopeAbsent.length ? { scope_absent: scopeAbsent } : {}), snapshot: res.committed ? undefined : own.entries };
+  return { ...res, scope: files, ...(scopeAbsent.length ? { scope_absent: scopeAbsent } : {}), ...(ratchetsLowered.length ? { ratchets_lowered: ratchetsLowered } : {}), snapshot: res.committed ? undefined : own.entries };
 }
 
 /**

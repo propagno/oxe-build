@@ -51,12 +51,36 @@ function foreignChanges(root, base, ownTaskIds) {
   return out;
 }
 
+/**
+ * OxeSpace 15/11 (F6): a declared ratchet file (config lint.ratchets) whose diff since the base only moves the cap
+ * number does not make the plan stale for the other tasks listing it (a cap-down quick touched every later task).
+ */
+function capOnlyFiles(root, base, changed) {
+  const out = new Set();
+  let config = null;
+  try { config = JSON.parse(fs.readFileSync(path.join(root, '.oxe', 'config.json'), 'utf8')); } catch { return out; }
+  let ratchets;
+  try { ratchets = require('./oxe-ratchets.cjs'); } catch { return out; }
+  for (const r of ratchets.ratchetsOf(config)) {
+    if (!changed.has(r.file) || changed.get(r.file) === 'D') continue;
+    const before = git(root, ['show', `${base}:${r.file}`]);
+    if (before.status !== 0) continue;
+    let after = '';
+    try { after = fs.readFileSync(path.join(root, r.file), 'utf8'); } catch { continue; }
+    const headText = git(root, ['show', `HEAD:${r.file}`]);
+    if (headText.status === 0) after = headText.stdout;
+    if (ratchets.onlyCapChanged(before.stdout, after, config, r.file)) out.add(r.file);
+  }
+  return out;
+}
+
 function staleness(root, doc, pack) {
   const tasks = (doc && doc.tasks) || [];
   const own = new Set(tasks.map((t) => t && t.id).filter(Boolean));
   const head = headOf(root);
   const report = [];
   const cache = new Map();
+  const capOnly = new Map();
   const accept = (doc && (Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : Array.isArray(doc.acceptanceTests) ? doc.acceptanceTests : [])) || [];
   for (const t of tasks) {
     if (isClosedTask(t)) continue;
@@ -64,11 +88,12 @@ function staleness(root, doc, pack) {
     if (!base || base === head) continue;
     if (!cache.has(base)) cache.set(base, git(root, ['cat-file', '-e', `${base}^{commit}`]).status === 0 ? foreignChanges(root, base, own) : null);
     const changed = cache.get(base);
+    if (changed && !capOnly.has(base)) capOnly.set(base, capOnlyFiles(root, base, changed));
     if (!changed) { report.push({ task: t.id, file: null, why: `base_sha ${String(base).slice(0, 10)} não existe neste repositório` }); continue; }
     const seen = new Set();
     const pushHit = (file, why) => { if (file && !seen.has(file)) { seen.add(file); report.push({ task: t.id, file, why }); } };
     const scope = (t.files || []).map(norm).filter((f) => f && !f.includes('*'));
-    for (const f of scope) if (changed.has(f)) pushHit(f, changed.get(f) === 'D' ? 'o caminho foi removido depois do plano' : 'o arquivo mudou depois do plano');
+    for (const f of scope) if (changed.has(f) && !capOnly.get(base).has(f)) pushHit(f, changed.get(f) === 'D' ? 'o caminho foi removido depois do plano' : 'o arquivo mudou depois do plano');
     const entries = pack && (Array.isArray(pack.tasks) ? pack.tasks : Array.isArray(pack.entries) ? pack.entries : []);
     const entry = entries ? entries.find((x) => x && (x.id === t.id || x.task === t.id)) : null;
     for (const s of (entry && entry.symbols) || []) {
