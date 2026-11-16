@@ -130,6 +130,26 @@ describe('policy refusal names its likely trigger', () => {
     }
   });
 
+  test('the context size at the refusal is recorded; a long context with small tool outputs names the size, not the files (F6 T36, 360k)', async () => {
+    let t = 0;
+    const big = 'z'.repeat(210_000);
+    const { result, events } = await run(async () => {
+      t += 1;
+      if (t === 1) return { content: '', finish_reason: 'tool_calls', tool_calls: [{ id: 'w1', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'a.kt', content: big }) } }] };
+      throw refusal();
+    });
+    assert.equal(result.failure_class, 'policy');
+    assert.match(result.output, /O contexto tinha \d{6,} chars no turno 1\./);
+    assert.match(result.output, /o tamanho do contexto é o suspeito, não o conteúdo — considere execute\.max_context_chars/);
+    assert.doesNotMatch(result.output, /restrinja o escopo da tarefa/);
+    const u = events.find((e) => e.type === 'executor_usage')?.detail as { policy_context_chars?: number };
+    assert.ok((u.policy_context_chars ?? 0) > 200_000);
+    // a short context: the size is still recorded, the content hint stays
+    const { result: small } = await run(async () => { t += 1; if (t === 3) return { content: '', finish_reason: 'tool_calls', tool_calls: [{ id: 'r1', type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'Conversation.kt' }) } }] }; throw refusal(); });
+    assert.match(small.output, /O contexto tinha \d+ chars no turno 1\.$/);
+    assert.match(small.output, /restrinja o escopo da tarefa/);
+  });
+
   test('at the first request: the trigger is in the starting prompt', async () => {
     const { result } = await run(async () => { throw refusal(); });
     assert.equal(result.failure_class, 'policy');

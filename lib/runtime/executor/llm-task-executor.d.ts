@@ -82,6 +82,8 @@ export interface ExecutorUsage {
         target: string | null;
         chars: number;
     }>;
+    /** A policy refusal: the context chars the refused request carried (OxeSpace 16/11, F6 T36). */
+    policy_context_chars?: number;
     /**
      * OXB-118: what the attempt did, for the project's action rules checked after the fact (a command run, a path
      * read or written). Capped; long commands are cut.
