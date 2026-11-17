@@ -340,4 +340,85 @@ describe('OXB-C4: alm refine cross-program --spec & PLAN.json, G34 ms/system-col
     assert.equal(out.results[0].ok, true, JSON.stringify(out.results[0]));
     assert.equal(out.results[0].errors.length, 0, JSON.stringify(out.results[0].errors));
   });
+
+  it('OXB-C10 (OXE-178 / OXE-41 / OXE-57): skips G34 UI gaps on area-desempenho/backend cards without area-marca even when src/components/ appears in Contexto/RT/CA', async () => {
+    const { codeF3 } = setupMultiProgramWorkspace();
+    const perfMd = [
+      '<!-- oxe-refine: OXE-178 -->',
+      '# OXE-178 — Carregamento preguiçoso de módulos pesados',
+      '',
+      '## História',
+      '',
+      'Como **usuário**, quero **abrir o app rapidamente**, para **reduzir o tempo inicial de render**.',
+      '',
+      '## Contexto',
+      '',
+      '- Perfilamento em `src/components/ChatPanel.tsx` e `src/renderer/WorkspaceGrid.tsx` mostra bundle inicial acima da meta.',
+      '',
+      '## Critérios de aceite',
+      '',
+      '1. **CA-1 (A1)** — Dado bootstrap inicial, quando mede TTI, então `src/components/ChatPanel.tsx` carrega via import dinâmico reduzindo o chunk em >= 30% · Teste: `npx vitest run tests/perf/bundle.test.ts` · Risco: P2',
+      '',
+      '## Regras de negócio',
+      '',
+      '- **RN-1** — Sem regressão funcional no painel de chat.',
+      '',
+      '## Regras técnicas',
+      '',
+      '- **RT-1** — Lazy boundary em `src/components/ChatPanel.tsx` e prefetch no idle.',
+      '',
+      '## Fora de escopo',
+      '',
+      '- Mudanças visuais no layout.',
+      '',
+      '## Dependências',
+      '',
+      '- Nenhuma',
+      '',
+      '## Definição de pronto',
+      '',
+      '- Critérios com teste verde no CI.',
+      '- Homologado (HML).',
+      '- Sem perguntas em aberto.',
+      '',
+      '## Perguntas em aberto',
+      '',
+      '- Nenhuma.',
+      '',
+    ].join('\n');
+
+    fs.writeFileSync(path.join(codeF3, '.oxe', 'alm', 'refine', 'OXE-178.json'), JSON.stringify({
+      key: 'OXE-178',
+      kind: 'story',
+      labels: ['area-desempenho', 'area-oxecode'],
+      description_hash: 'h178',
+      description: '',
+    }));
+    fs.writeFileSync(path.join(codeF3, '.oxe', 'alm', 'specs', 'OXE-178.md'), perfMd);
+
+    fs.writeFileSync(path.join(codeF3, '.oxe', 'alm', 'refine', 'OXE-41.json'), JSON.stringify({
+      key: 'OXE-41',
+      kind: 'story',
+      labels: ['backend'],
+      description_hash: 'h41',
+      description: '',
+    }));
+    fs.writeFileSync(path.join(codeF3, '.oxe', 'alm', 'specs', 'OXE-41.md'), perfMd.replace(/OXE-178/g, 'OXE-41').replace('(A1)', '(A2)'));
+
+    const out = await op.runtimeAlmRefine(codeF3, null, { action: 'lint', keys: ['OXE-178', 'OXE-41'] });
+    for (const r of out.results) {
+      assert.equal(r.ok, true, `${r.key} expected ok: ${JSON.stringify(r)}`);
+      assert.equal(r.needs_info, false, `${r.key} must not mark needs_info for G34: ${JSON.stringify(r)}`);
+      assert.ok(!r.warnings.some((w) => /^interface:/i.test(w)), `${r.key} unexpected UI warnings: ${JSON.stringify(r.warnings)}`);
+    }
+
+    // Still activates G34 if area-marca is explicitly present OR CAs touch src/styles/|src/design/|src/ui/
+    assert.equal(op.uiCardGaps(perfMd, { labels: ['area-desempenho', 'area-marca'] }).isUi, true);
+    assert.equal(
+      op.uiCardGaps(perfMd.replace('`src/components/ChatPanel.tsx` carrega', '`src/styles/tokens.css` aplica borda'), { labels: ['area-desempenho'] }).isUi,
+      true,
+    );
+    // Card with no non-UI label keeps previous fallback check over UI paths
+    assert.equal(op.uiCardGaps(perfMd, { labels: ['area-oxecode'] }).isUi, true);
+  });
 });

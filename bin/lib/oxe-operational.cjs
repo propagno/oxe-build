@@ -3583,13 +3583,22 @@ function criteriaOnlyReadSharedLocales(crit) {
   return true;
 }
 
+const NON_UI_DOMAIN_LABEL_RE = /^(?:area-(?:desempenho|performance|perf|backend|infra(?:estrutura)?|dados|db|database|seguran[cç]a|security|arquitetura|architecture|ipc|runtime|terminal|git|ci|build|cli|core|engine)|desempenho|performance|perf|backend|infra(?:estrutura)?|seguran[cç]a|security|arquitetura|database|db)$/i;
+
 function uiCardGaps(md, collected = {}) {
   const text = String(md || '');
   const labels = (collected.labels || []).map((l) => String(l).toLowerCase());
-  const UI_PATHS = /\b(src\/(renderer|ui|styles|design|components)\/|mobile\/android\/[\w/.-]*\/ui\/)/;
-  const isUi = labels.includes('area-marca') || UI_PATHS.test(text);
-  if (!isUi) return { isUi: false, gaps: [] };
+  const hasMarca = labels.includes('area-marca');
+  const hasExplicitNonUiLabel = !hasMarca && labels.some((l) => NON_UI_DOMAIN_LABEL_RE.test(l));
   const crit = refineLibCriteria(text);
+  const critText = crit.map((c) => String((c && c.text) || '')).join('\n');
+  const UI_PATHS = /\b(src\/(renderer|ui|styles|design|components)\/|mobile\/android\/[\w/.-]*\/ui\/)/;
+  // OXB-C10 (OXE-178 / OXE-41 / OXE-57): cards with an explicit non-UI domain label (e.g. area-desempenho, backend)
+  // and without area-marca often reference src/components/ for profiling/lazy-loading — require explicit styling/UI
+  // paths (src/styles|design|ui) inside the CAs themselves before applying UI geometry checks.
+  const STRICT_UI_PATHS = /\b(src\/(ui|styles|design)\/|mobile\/android\/[\w/.-]*\/ui\/)/;
+  const isUi = hasMarca || (hasExplicitNonUiLabel ? STRICT_UI_PATHS.test(critText) : UI_PATHS.test(text));
+  if (!isUi) return { isUi: false, gaps: [] };
   // OXB-C6 #7 (P3): catalog/copy cards whose criteria only inspect `shared/locales/**` (e.g. OXE-233, OXE-253) are not UI geometry cards
   if (criteriaOnlyReadSharedLocales(crit)) return { isUi: false, gaps: [], locale_only_exempt: true };
   const gaps = [];
