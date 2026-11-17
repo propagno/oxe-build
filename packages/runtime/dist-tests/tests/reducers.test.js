@@ -203,6 +203,39 @@ function makeEvent(overrides) {
         strict_1.default.ok(refs.includes('ev-a'));
         strict_1.default.ok(refs.includes('ev-b'));
     });
+    (0, node_test_1.test)('CheckpointFailed and PlanTaskReopened remove item from completedWorkItems and allow re-execution', () => {
+        const events = [
+            makeEvent({ type: 'WorkItemReady', work_item_id: 'T5', payload: { work_item_id: 'T5', title: 'T5', type: 'task', depends_on: [], mutation_scope: [], policy_ref: null, verify_ref: [], status: 'pending', workspace_strategy: 'inplace', run_id: 'r001' } }),
+            makeEvent({ type: 'WorkItemCompleted', work_item_id: 'T5', payload: { attempt_number: 1 } }),
+            makeEvent({ type: 'CheckpointFailed', work_item_id: 'T5', payload: { task: 'T5', kind: 'scope_insufficient' } }),
+        ];
+        const afterCp = (0, run_state_reducer_1.reduce)(events);
+        strict_1.default.equal(afterCp.completedWorkItems.has('T5'), false);
+        strict_1.default.equal((0, run_state_reducer_1.getWorkItemStatus)(afterCp, 'T5'), 'pending');
+        const reopened = (0, run_state_reducer_1.reduce)([
+            ...events.slice(0, 2),
+            makeEvent({ type: 'PlanTaskReopened', work_item_id: 'T5', payload: { task: 'T5' } }),
+            makeEvent({ type: 'WorkItemReady', work_item_id: 'T5', payload: { work_item_id: 'T5', title: 'T5', type: 'task', depends_on: [], mutation_scope: [], policy_ref: null, verify_ref: [], status: 'pending', workspace_strategy: 'inplace', run_id: 'r001' } }),
+            makeEvent({ type: 'WorkItemCompleted', work_item_id: 'T5', payload: { attempt_number: 2 } }),
+        ]);
+        strict_1.default.equal(reopened.completedWorkItems.has('T5'), true);
+        strict_1.default.equal((0, run_state_reducer_1.getWorkItemStatus)(reopened, 'T5'), 'completed');
+        // RunCompleted with status='blocked' followed by resumed execution must reduce without throwing
+        const resumedAfterBlocked = (0, run_state_reducer_1.reduce)([
+            makeEvent({ type: 'RunStarted', payload: { run_id: 'r001', status: 'running', session_id: 's001', graph_version: '1', started_at: new Date().toISOString(), ended_at: null, initiator: 'scheduler', mode: 'por_onda' } }),
+            makeEvent({ type: 'WorkItemReady', work_item_id: 'T6', payload: { work_item_id: 'T6', title: 'T6', type: 'task', depends_on: [], mutation_scope: [], policy_ref: null, verify_ref: [], status: 'pending', workspace_strategy: 'inplace', run_id: 'r001' } }),
+            makeEvent({ type: 'WorkItemBlocked', work_item_id: 'T6', payload: { reason: 'waiting_runtime_precondition' } }),
+            makeEvent({ type: 'RunCompleted', payload: { run_id: 'r001', status: 'blocked' } }),
+            makeEvent({ type: 'RunStarted', payload: { run_id: 'r001', status: 'running', session_id: 's001', graph_version: '1', started_at: new Date().toISOString(), ended_at: null, initiator: 'scheduler', mode: 'por_onda' } }),
+            makeEvent({ type: 'WorkItemReady', work_item_id: 'T6', payload: { work_item_id: 'T6', title: 'T6', type: 'task', depends_on: [], mutation_scope: [], policy_ref: null, verify_ref: [], status: 'pending', workspace_strategy: 'inplace', run_id: 'r001' } }),
+            makeEvent({ type: 'WorkItemCompleted', work_item_id: 'T6', payload: { attempt_number: 1 } }),
+            makeEvent({ type: 'RunCompleted', payload: { run_id: 'r001', status: 'completed' } }),
+        ]);
+        strict_1.default.equal(resumedAfterBlocked.run.status, 'completed');
+        strict_1.default.ok(resumedAfterBlocked.completedWorkItems.has('T6'));
+        strict_1.default.equal(resumedAfterBlocked.blockedWorkItems.has('T6'), false);
+        strict_1.default.equal((0, run_state_reducer_1.getWorkItemStatus)(resumedAfterBlocked, 'T6'), 'completed');
+    });
     (0, node_test_1.test)('createEmptyRunState initializes all Phase 1 fields', () => {
         const state = (0, run_state_reducer_1.createEmptyRunState)();
         strict_1.default.equal(state.retryCounts.size, 0);

@@ -323,12 +323,22 @@ function planJsonToParsedPlan(doc) {
     }
     return out;
   };
+  const scopeInsufficientFor = (task) => {
+    if (!task || !task.checkpoint_failed || task.checkpoint_failed.kind !== 'scope_insufficient') return [];
+    const reds = Array.isArray(task.checkpoint_failed.related_red) ? task.checkpoint_failed.related_red.map(normF).filter(Boolean) : [];
+    if (!reds.length) return ['scope_insufficient: (verifique o escopo)'];
+    const mine = (task.files || []).map(normF).filter(Boolean);
+    const unresolved = reds.filter((r) => !mine.some((m) => under(m, r)));
+    return unresolved.length ? [`scope_insufficient: ${unresolved.join(', ')}`] : [];
+  };
   const tasks = doc.tasks.map((task) => {
     const commands = task.verify && Array.isArray(task.verify.commands) ? task.verify.commands.map((c) => c.trim()).filter(Boolean) : [];
     // OXB-007: a spike writes only its report and is verified by it (question, answer, evidence).
     const spike = task.kind === 'spike';
     if (spike) commands.push(spikeLib.spikeVerifyCommand(task.id));
     const files = Array.isArray(task.files) && task.files.length ? [...task.files] : spike ? [spikeLib.spikeReportPath(task.id)] : [];
+    const scopeWaits = scopeInsufficientFor(task);
+    const blockedByList = [...externalRefs(task), ...scopeWaits, ...sharedWait(task)];
     return {
       id: task.id,
       title: task.title,
@@ -352,7 +362,7 @@ function planJsonToParsedPlan(doc) {
         ...(typeof task.question === 'string' ? { question: task.question } : {}),
         ...(task.gate ? { gate: task.gate } : {}),
         // OXB-172: a task whose related tests went red OUTSIDE its scope waits (a CR / a plan edit), never re-runs blind.
-        ...((externalRefs(task).length || (task.checkpoint_failed && task.checkpoint_failed.kind === 'scope_insufficient') || sharedWait(task).length) ? { blocked_by: [...externalRefs(task), ...(task.checkpoint_failed && task.checkpoint_failed.kind === 'scope_insufficient' ? [`scope_insufficient: ${(task.checkpoint_failed.related_red || []).join(', ')}`] : []), ...sharedWait(task)] } : {}),
+        ...(blockedByList.length ? { blocked_by: blockedByList } : {}),
         ...(taskPreconditions(task).length ? { waits_on: taskPreconditions(task) } : {}),
       },
     };
@@ -1025,7 +1035,7 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
     return false;
   }
   const task = Array.isArray(doc.tasks) ? doc.tasks.find((t) => t && t.id === taskId) : null;
-  if (!task || (task.done !== true && !task.checkpoint_failed && task.status !== 'done')) return false;
+  if (!task || (task.done !== true && !task.checkpoint_failed && task.status !== 'done' && task.status !== 'in_progress')) return false;
   // a task folded into another (plan task fold) never comes back: its scope now belongs to the target
   if (task.merged_into) throw new Error(`${taskId} foi fundida em ${task.merged_into} (plan task fold): reabra ${task.merged_into}, não ${taskId}`);
   if (task.superseded) throw new Error(`${taskId} foi substituída por ${task.superseded.by_phase} (plan task supersede): não volta a este plano`);

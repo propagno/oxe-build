@@ -78,11 +78,12 @@ const VALID_WORK_ITEM_TRANSITIONS: Record<WorkItemStatus, readonly WorkItemStatu
 
 const VALID_RUN_TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
   planned:          ['running'],
-  running:          ['paused', 'failed', 'completed', 'aborted', 'cancelled', 'waiting_approval'],
+  running:          ['paused', 'failed', 'completed', 'blocked', 'aborted', 'cancelled', 'waiting_approval'],
   paused:           ['running', 'cancelled'],
   waiting_approval: ['running', 'cancelled'],
+  blocked:          ['running', 'replaying'],
   failed:           ['replaying'],
-  replaying:        ['running', 'failed', 'completed'],
+  replaying:        ['running', 'failed', 'completed', 'blocked'],
   completed:        [],
   aborted:          [],
   cancelled:        [],
@@ -141,7 +142,11 @@ function applyEvent(state: RunState, event: OxeEvent): RunState {
         const item = event.payload as unknown as WorkItem;
         workItems.set(event.work_item_id, { ...item, work_item_id: event.work_item_id, status: 'ready' });
       }
-      return { ...state, workItems };
+      const failedWorkItems = new Set(state.failedWorkItems);
+      failedWorkItems.delete(event.work_item_id);
+      const blockedWorkItems = new Set(state.blockedWorkItems);
+      blockedWorkItems.delete(event.work_item_id);
+      return { ...state, workItems, failedWorkItems, blockedWorkItems };
     }
 
     case 'AttemptStarted': {
@@ -181,15 +186,19 @@ function applyEvent(state: RunState, event: OxeEvent): RunState {
       }
       const completedWorkItems = new Set(state.completedWorkItems);
       completedWorkItems.add(event.work_item_id);
+      const failedWorkItems = new Set(state.failedWorkItems);
+      failedWorkItems.delete(event.work_item_id);
+      const blockedWorkItems = new Set(state.blockedWorkItems);
+      blockedWorkItems.delete(event.work_item_id);
       // Collect evidence refs from payload
       const evidence = (event.payload as { evidence?: string[] }).evidence ?? [];
       if (evidence.length > 0) {
         const evidenceRefs = new Map(state.evidenceRefs);
         const existing = evidenceRefs.get(event.work_item_id) ?? [];
         evidenceRefs.set(event.work_item_id, [...existing, ...evidence]);
-        return { ...state, workItems, completedWorkItems, evidenceRefs };
+        return { ...state, workItems, completedWorkItems, failedWorkItems, blockedWorkItems, evidenceRefs };
       }
-      return { ...state, workItems, completedWorkItems };
+      return { ...state, workItems, completedWorkItems, failedWorkItems, blockedWorkItems };
     }
 
     case 'WorkItemBlocked': {
@@ -203,6 +212,33 @@ function applyEvent(state: RunState, event: OxeEvent): RunState {
       const blockedWorkItems = new Set(state.blockedWorkItems);
       blockedWorkItems.add(event.work_item_id);
       return { ...state, workItems, blockedWorkItems };
+    }
+
+    case 'CheckpointFailed': {
+      const id = event.work_item_id ?? (event.payload as { task?: string }).task;
+      if (!id) return state;
+      const completedWorkItems = new Set(state.completedWorkItems);
+      completedWorkItems.delete(id);
+      const workItems = new Map(state.workItems);
+      const item = workItems.get(id);
+      if (item) workItems.set(id, { ...item, status: 'pending' });
+      return { ...state, workItems, completedWorkItems };
+    }
+
+    case 'PlanTaskReopened':
+    case 'TaskReopened': {
+      const id = event.work_item_id ?? (event.payload as { task?: string }).task;
+      if (!id) return state;
+      const completedWorkItems = new Set(state.completedWorkItems);
+      completedWorkItems.delete(id);
+      const failedWorkItems = new Set(state.failedWorkItems);
+      failedWorkItems.delete(id);
+      const blockedWorkItems = new Set(state.blockedWorkItems);
+      blockedWorkItems.delete(id);
+      const workItems = new Map(state.workItems);
+      const item = workItems.get(id);
+      if (item) workItems.set(id, { ...item, status: 'pending' });
+      return { ...state, workItems, completedWorkItems, failedWorkItems, blockedWorkItems };
     }
 
     case 'RetryScheduled': {

@@ -806,6 +806,11 @@ export class Scheduler {
     // 1.21.1 (OXB-047): work that arrives by another path never pays an agent and never becomes a human gate.
     // An explicit human gate (PLAN.json `gate`) still comes first: the attempt loop requests it as before.
     const humanGatePending = node.policy.requires_human_approval && !this.hasApprovedGate(node, ctx);
+    if (!humanGatePending && (node.policy.runtime_wait?.length ?? 0) > 0) {
+      const waits = node.policy.runtime_wait ?? [];
+      this.blockNode(nodeId, ctx, status, blocked, 'waiting_runtime_precondition', waits.join(', '));
+      return;
+    }
     if (!humanGatePending && (node.policy.verify_only || (node.policy.external_dependency?.length ?? 0) > 0)) {
       await this.runExternalNode(node, ctx, status, completed, failed, blocked);
       return;

@@ -9251,19 +9251,35 @@ async function main() {
   }
 
   if (command === 'plan' && argv[0] === 'reopen') {
-    // oxe-cc plan reopen T<n> [--dir <pasta>]
+    // oxe-cc plan reopen T<n> [--dir <pasta>] [--session <s>] [--by <papel>] [--json]
     const rest = argv.slice(1);
     let dir = process.cwd();
     let task = null;
+    let session = null;
+    let by = null;
+    let json = false;
     for (let i = 0; i < rest.length; i += 1) {
       const a = rest[i];
       if (a === '--dir' && rest[i + 1]) dir = path.resolve(rest[++i]);
-      else if (/^T\d+$/.test(a)) task = a;
+      else if (a === '--session' && rest[i + 1]) session = String(rest[++i]).replace(/\\/g, '/');
+      else if (a === '--by' && rest[i + 1]) by = String(rest[++i]);
+      else if (a === '--json') json = true;
+      else if (a === '--plain') continue;
+      else if (/^T\d+$/i.test(a) && !task) task = a.toUpperCase();
       else if (!a.startsWith('-')) dir = path.resolve(a);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
     }
     try {
-      const out = oxeOperational.runtimePlanReopen(dir, null, { task });
-      console.log(`  ${out.changed ? '✓' : '·'} ${out.task} ${out.changed ? 'reaberta (o próximo execute a refaz)' : 'não estava done'}`);
+      const out = oxeOperational.runtimePlanReopen(dir, session, { task, by });
+      if (json) { console.log(JSON.stringify({ oxePlanReopenSchema: 1, ...out }, null, 2)); return; }
+      const details = [
+        out.cleared_run_state ? 'completedWorkItems limpo' : null,
+        out.closed_deferred && out.closed_deferred.length ? `adiamento fechado (${out.closed_deferred.join(', ')})` : null,
+      ].filter(Boolean);
+      const msg = out.changed
+        ? `reaberta (o próximo execute a refaz)${details.length ? ` · ${details.join(' · ')}` : ''}`
+        : 'não estava done';
+      console.log(`  ${out.changed ? '✓' : '·'} ${out.task} ${msg}`);
       process.exit(0);
     } catch (err) {
       console.error(`${red}✗${reset} ${err && err.message ? err.message : err}`);

@@ -1279,6 +1279,9 @@ function runtimeDeferred(projectRoot, activeSession, options = {}) {
   let doc = null;
   try { doc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { doc = null; }
   const out = [];
+  const planPaths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const normF = (p) => String(typeof p === 'string' ? p : (p && p.path) || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const underScope = (a, b) => a === b || b.startsWith(`${a.replace(/\/+$/, '')}/`);
   for (const e of open) {
     const t = ((doc && doc.tasks) || []).find((x) => x && x.id === e.task);
     if (t && t.done) { out.push({ id: e.id, task: e.task, status: 'done_elsewhere' }); if (!options.dryRun) lib.close(programDir, e.id, 'done_elsewhere'); continue; }
@@ -1286,7 +1289,23 @@ function runtimeDeferred(projectRoot, activeSession, options = {}) {
     if (!cmds.length) { out.push({ id: e.id, task: e.task, status: 'human_decision', why: 'tarefa sem verify' }); continue; }
     const r = runChildCommand(projectRoot, cmds.join(' && '), 600_000);
     if (r.ok) { out.push({ id: e.id, task: e.task, status: 'already_resolved' }); if (!options.dryRun) lib.close(programDir, e.id, 'already_resolved'); }
-    else out.push({ id: e.id, task: e.task, status: 'ready', tail: r.tail.split(/\r?\n/).slice(-3).join(' · ') });
+    else {
+      const tail = r.tail.split(/\r?\n/).slice(-3).join(' · ');
+      if (!options.dryRun) {
+        try {
+          if (t && t.checkpoint_failed && t.checkpoint_failed.kind === 'scope_insufficient') {
+            const reds = Array.isArray(t.checkpoint_failed.related_red) ? t.checkpoint_failed.related_red.map(normF).filter(Boolean) : [];
+            const mine = (t.files || []).map(normF).filter(Boolean);
+            if (reds.length && reds.every((red) => mine.some((m) => underScope(m, red)))) {
+              require('./oxe-plan-json.cjs').markPlanTaskOpen(planPaths.plan, e.task, { by: 'deferred retry' });
+            }
+          }
+        } catch { /* ignore */ }
+        clearTaskResidualRunState(projectRoot, activeSession, [e.task], { clearFailedAndBlocked: true });
+        lib.markRetried(programDir, e.id, { task: e.task, tail });
+      }
+      out.push({ id: e.id, task: e.task, status: 'ready', tail });
+    }
   }
   return { retry: out, dry_run: Boolean(options.dryRun) };
 }
@@ -2331,6 +2350,87 @@ function unionCanonicalStates(primary, secondary) {
     if (item && item.status !== 'completed') primary.workItems.set(completedId, { ...item, status: 'completed' });
   }
   return primary;
+}
+
+function excludedCompletedIdsFromPlan(projectRoot, activeSession, runId = null) {
+  const excluded = new Set();
+  try {
+    const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+    for (const t of (doc && Array.isArray(doc.tasks) ? doc.tasks : [])) {
+      if (t && t.id && t.done !== true && t.status !== 'done' && t.checkpoint_failed) excluded.add(t.id);
+    }
+  } catch { /* ignore */ }
+  try {
+    const lastKind = new Map();
+    for (const e of readEvents(projectRoot, activeSession)) {
+      if (!e || (runId && e.run_id && e.run_id !== runId)) continue;
+      const id = e.work_item_id || (e.payload && e.payload.task) || null;
+      if (!id) continue;
+      const t = normalizeRuntimeEventType(e.type);
+      if (t === 'WorkItemCompleted' || t === 'CheckpointFailed' || t === 'PlanTaskReopened' || t === 'TaskReopened') {
+        lastKind.set(id, t);
+      }
+    }
+    for (const [id, kind] of lastKind) {
+      if (kind !== 'WorkItemCompleted') excluded.add(id);
+    }
+  } catch { /* ignore */ }
+  return excluded;
+}
+
+function stripTasksFromCanonicalState(serializedOrLive, ids, options = {}) {
+  const targetIds = new Set([...(ids || [])].filter(Boolean));
+  if (!serializedOrLive || !targetIds.size) return { state: serializedOrLive, changed: false };
+  const isMap = serializedOrLive.workItems instanceof Map;
+  const live = isMap ? serializedOrLive : hydrateCanonicalState(serializedOrLive);
+  let changed = false;
+  for (const id of targetIds) {
+    if (live.completedWorkItems.delete(id)) changed = true;
+    if (options.clearFailedAndBlocked) {
+      if (live.failedWorkItems.delete(id)) changed = true;
+      if (live.blockedWorkItems.delete(id)) changed = true;
+    }
+    const item = live.workItems.get(id);
+    if (item && (item.status === 'completed' || (options.clearFailedAndBlocked && item.status !== 'pending'))) {
+      live.workItems.set(id, { ...item, status: 'pending' });
+      changed = true;
+    }
+  }
+  return { state: isMap ? live : serializeCanonicalState(live), changed };
+}
+
+function clearTaskResidualRunState(projectRoot, activeSession, taskIds, options = {}) {
+  const targetIds = new Set((Array.isArray(taskIds) ? taskIds : [taskIds]).filter(Boolean));
+  if (!targetIds.size) return false;
+  const current = readRunState(projectRoot, activeSession);
+  if (!current) return false;
+  let changed = false;
+  const next = { ...current };
+  if (current.canonical_state) {
+    const stripped = stripTasksFromCanonicalState(current.canonical_state, targetIds, options);
+    if (stripped.changed) {
+      next.canonical_state = stripped.state;
+      changed = true;
+    }
+  }
+  if (Array.isArray(current.pending_checkpoints)) {
+    const filtered = current.pending_checkpoints.filter((id) => !targetIds.has(String(id)));
+    if (filtered.length !== current.pending_checkpoints.length) {
+      next.pending_checkpoints = filtered;
+      changed = true;
+    }
+  }
+  if (options.clearFailedAndBlocked && Array.isArray(current.failures)) {
+    const filteredFailures = current.failures.filter((f) => !f || !targetIds.has(String(f.work_item_id || f.task_id || f.id || '')));
+    if (filteredFailures.length !== current.failures.length) {
+      next.failures = filteredFailures;
+      changed = true;
+    }
+  }
+  if (!changed) return false;
+  next.updated_at = new Date().toISOString();
+  writeRunState(projectRoot, activeSession, next);
+  return true;
 }
 
 function reduceCanonicalRunStateLive(projectRoot, activeSession, options = {}) {
@@ -3901,6 +4001,17 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
 
   const current = options.runState || readRunState(projectRoot, activeSession) || {};
   const runId = current.run_id || makeRunId();
+  const excludedIds = excludedCompletedIdsFromPlan(projectRoot, activeSession, runId);
+  const sanitizedCurrent = current.canonical_state
+    ? { ...current, canonical_state: stripTasksFromCanonicalState(current.canonical_state, excludedIds).state }
+    : current;
+  const mergedCanonical = mergeCanonicalStateWithRunState(
+    reduceCanonicalRunState(projectRoot, activeSession, { runState: { ...sanitizedCurrent, run_id: runId } }),
+    { ...sanitizedCurrent, run_id: runId },
+    activeSession,
+    compiledGraph
+  );
+  stripTasksFromCanonicalState(mergedCanonical, excludedIds);
   const next = writeRunState(projectRoot, activeSession, {
     ...current,
     run_id: runId,
@@ -3910,14 +4021,7 @@ function compileExecutionGraphFromArtifacts(projectRoot, activeSession, options 
     source_hash: planSourceHash(projectRoot, activeSession),
     acceptance_lock: freezeAcceptanceTests(projectRoot, parsedPlan),
     graph_version: compiledGraph.metadata && compiledGraph.metadata.plan_hash ? compiledGraph.metadata.plan_hash : 'compiled',
-    canonical_state: serializeCanonicalState(
-      mergeCanonicalStateWithRunState(
-        reduceCanonicalRunState(projectRoot, activeSession, { runState: { ...current, run_id: runId } }),
-        { ...current, run_id: runId },
-        activeSession,
-        compiledGraph
-      )
-    ),
+    canonical_state: serializeCanonicalState(mergedCanonical),
     projections: current.projections || {},
   });
   appendEvent(projectRoot, activeSession, {
@@ -4329,11 +4433,15 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     // never executed as is — it re-ran done tasks and checkpointed the old write set.
     if (current && current.compiled_graph && !options.runState) {
       const nowHash = planSourceHash(projectRoot, activeSession);
-      if (current.source_hash !== nowHash) {
+      const cachedNodes = current.compiled_graph.nodes
+        ? (Array.isArray(current.compiled_graph.nodes) ? current.compiled_graph.nodes : Object.values(current.compiled_graph.nodes))
+        : [];
+      const hasLegacyInternalExternalDep = cachedNodes.some((n) => n && n.policy && Array.isArray(n.policy.external_dependency) && n.policy.external_dependency.some((d) => /^(?:scope_insufficient|waiting_shared_files):/.test(String(d))));
+      if (current.source_hash !== nowHash || hasLegacyInternalExternalDep) {
         appendEvent(projectRoot, activeSession, {
           type: 'VerificationSuiteRecompiled',
           run_id: current.run_id,
-          payload: { reason: 'plan_changed_since_compile', previous: current.source_hash || null, current: nowHash, scope: 'graph' },
+          payload: { reason: hasLegacyInternalExternalDep ? 'legacy_internal_wait_classification' : 'plan_changed_since_compile', previous: current.source_hash || null, current: nowHash, scope: 'graph' },
         });
         current = compileExecutionGraphFromArtifacts(projectRoot, activeSession, { runState: current }).run;
       }
@@ -5055,10 +5163,28 @@ function syncRunStateAfterExecute(projectRoot, activeSession, current, result, m
   let onDisk = null;
   try { onDisk = readRunState(projectRoot, activeSession); } catch { onDisk = null; }
   const held = onDisk && onDisk.run_id === current.run_id && onDisk.pause_requested ? onDisk.pause_requested : null;
-  const base = { ...current, status: held ? 'paused' : status, updated_at: now, failures, active_tasks: [], ...(held ? { pause_requested: held } : {}) };
-  const canonical = reduceCanonicalRunState(projectRoot, activeSession, { runState: base, runId: current.run_id })
-    || current.canonical_state
+  const failedCheckpointIds = new Set([
+    ...((Array.isArray(safeResult.checkpoint_failed) ? safeResult.checkpoint_failed : []).map((f) => f && f.task).filter(Boolean)),
+    ...excludedCompletedIdsFromPlan(projectRoot, activeSession, current.run_id),
+  ]);
+  const sanitizedCurrentCanonical = current.canonical_state
+    ? stripTasksFromCanonicalState(current.canonical_state, failedCheckpointIds).state
+    : current.canonical_state;
+  const base = {
+    ...current,
+    canonical_state: sanitizedCurrentCanonical,
+    status: held ? 'paused' : status,
+    updated_at: now,
+    failures,
+    active_tasks: [],
+    ...(held ? { pause_requested: held } : {}),
+  };
+  let canonical = reduceCanonicalRunState(projectRoot, activeSession, { runState: base, runId: current.run_id })
+    || base.canonical_state
     || null;
+  if (canonical && failedCheckpointIds.size) {
+    canonical = stripTasksFromCanonicalState(canonical, failedCheckpointIds).state;
+  }
   return writeRunState(projectRoot, activeSession, {
     ...base,
     canonical_state: canonical,
@@ -9504,9 +9630,10 @@ function runtimePhaseWork(projectRoot, activeSession) {
   // regenerated PLAN.json that dropped the done writeback.
   const runDoneNotInPlan = [];
   try {
+    const excluded = new Set(tasks.filter((t) => t && t.done !== true && t.checkpoint_failed).map((t) => t.id));
     const run = readRunState(projectRoot, activeSession) || {};
     const completed = new Set([...(Array.isArray(run.completed) ? run.completed : []), ...((run.canonical_state && run.canonical_state.completedWorkItems) || [])]);
-    for (const id of pending) if (completed.has(id)) runDoneNotInPlan.push(id);
+    for (const id of pending) if (completed.has(id) && !excluded.has(id)) runDoneNotInPlan.push(id);
   } catch { /* auxiliar */ }
   return { total: tasks.length, done, external_pending: external, pending, waiting, complete, program: Boolean(program), phase, multi_agent: multiAgent, next_steps: nextSteps, run_done_not_in_plan: runDoneNotInPlan };
 }
@@ -10721,8 +10848,11 @@ function classifyBlockedResult(result, graph) {
   for (const id of result.blocked) {
     const node = nodeOf(id);
     const policy = node && node.policy ? node.policy : {};
+    const realExtDeps = Array.isArray(policy.external_dependency)
+      ? policy.external_dependency.filter((d) => !/^(?:scope_insufficient|waiting_shared_files):/.test(String(d)))
+      : [];
     if (selected.size && !selected.has(id)) outOfScope.push(id);
-    else if (policy.verify_only || (Array.isArray(policy.external_dependency) && policy.external_dependency.length)) external.push(id);
+    else if (policy.verify_only || realExtDeps.length) external.push(id);
     else real.push(id);
   }
   result.blocked = real;
@@ -10774,19 +10904,33 @@ function runtimePlanScopeAdd(projectRoot, activeSession, options = {}) {
     const have = new Set((task.files || []).map((f) => String(f).replace(/\\/g, '/')));
     const added = add.filter((p) => !have.has(p));
     let packUpdated = false;
+    let clearedScopeFailure = false;
     if (added.length) {
       task.files = [...(task.files || []), ...added];
       task.scope_added = [...(Array.isArray(task.scope_added) ? task.scope_added : []), { paths: added, cr: crId, by, reason, at: new Date().toISOString() }];
+      if (task.checkpoint_failed && task.checkpoint_failed.kind === 'scope_insufficient') {
+        const normF = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+        const under = (a, b) => a === b || b.startsWith(`${a.replace(/\/+$/, '')}/`);
+        const reds = Array.isArray(task.checkpoint_failed.related_red) ? task.checkpoint_failed.related_red.map(normF).filter(Boolean) : [];
+        const mine = task.files.map(normF).filter(Boolean);
+        if (reds.length && reds.every((red) => mine.some((m) => under(m, red)))) {
+          delete task.checkpoint_failed;
+          clearedScopeFailure = true;
+        }
+      }
       const tmp = `${jsonPath}.${process.pid}.tmp`;
       fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
       fs.renameSync(tmp, jsonPath);
       packUpdated = syncImplementationPackTaskPaths(paths, jsonPath, taskId, { addPaths: added });
     }
-    return { added, existed: add.filter((p) => have.has(p)), ...(packUpdated ? { pack_updated: true } : {}) };
+    return { added, existed: add.filter((p) => have.has(p)), ...(packUpdated ? { pack_updated: true } : {}), ...(clearedScopeFailure ? { cleared_checkpoint_failed: true } : {}) };
   });
   if (result.added.length) {
+    if (result.cleared_checkpoint_failed) {
+      clearTaskResidualRunState(projectRoot, activeSession, [taskId], { clearFailedAndBlocked: true });
+    }
     changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'scope', id: crId, task: taskId, paths: result.added, by, reason, at: new Date().toISOString(), ...(result.pack_updated ? { pack_updated: true } : {}) });
-    appendEvent(projectRoot, activeSession, { type: 'PlanScopeAmended', work_item_id: taskId, payload: { task: taskId, paths: result.added, cr: crId, by, reason, ...(result.pack_updated ? { pack_updated: true } : {}) } });
+    appendEvent(projectRoot, activeSession, { type: 'PlanScopeAmended', work_item_id: taskId, payload: { task: taskId, paths: result.added, cr: crId, by, reason, ...(result.pack_updated ? { pack_updated: true } : {}), ...(result.cleared_checkpoint_failed ? { cleared_checkpoint_failed: true } : {}) } });
   }
   return { task: taskId, cr: crId, by, ...result };
 }
@@ -11617,12 +11761,41 @@ function runtimePlanPackFix(projectRoot, activeSession, options = {}) {
 }
 
 function runtimePlanReopen(projectRoot, activeSession, options = {}) {
-  const taskId = String(options.task || '').trim();
+  const taskId = String(options.task || '').trim().toUpperCase();
   if (!/^T\d+$/.test(taskId)) throw new Error('Informe a tarefa: oxe-cc plan reopen T<n>');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
-  const changed = require('./oxe-plan-json.cjs').markPlanTaskOpen(paths.plan, taskId, { by: options.by || 'plan reopen' });
-  if (changed) appendEvent(projectRoot, activeSession, { type: 'PlanTaskReopened', work_item_id: taskId, payload: { task: taskId, by: options.by || null, manual: true } });
-  return { task: taskId, changed };
+  const planJsonLib = require('./oxe-plan-json.cjs');
+  const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
+  if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error(`plan reopen exige PLAN.json em ${projectRoot}`);
+  const planChanged = planJsonLib.markPlanTaskOpen(paths.plan, taskId, { by: options.by || 'plan reopen' });
+  const clearedRunState = clearTaskResidualRunState(projectRoot, activeSession, [taskId], { clearFailedAndBlocked: true });
+  let closedDeferred = [];
+  try {
+    const phase = (taskPhaseContext(projectRoot, activeSession) || {}).phase || null;
+    closedDeferred = require('./oxe-deferred.cjs').closeTask(paths.programDir || path.join(projectRoot, '.oxe', 'program'), taskId, phase, 'reopened');
+  } catch { closedDeferred = []; }
+  const changed = Boolean(planChanged || clearedRunState || closedDeferred.length);
+  if (changed) {
+    appendEvent(projectRoot, activeSession, {
+      type: 'PlanTaskReopened',
+      work_item_id: taskId,
+      payload: {
+        task: taskId,
+        by: options.by || null,
+        manual: true,
+        plan_changed: planChanged,
+        cleared_run_state: clearedRunState,
+        ...(closedDeferred.length ? { closed_deferred: closedDeferred } : {}),
+      },
+    });
+  }
+  return {
+    task: taskId,
+    changed,
+    plan_changed: planChanged,
+    cleared_run_state: clearedRunState,
+    closed_deferred: closedDeferred,
+  };
 }
 
 /**
@@ -13560,10 +13733,13 @@ function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
   // execute/verify and used to project "planned / 0 concluídos" over real progress. The stored
   // snapshot is only merged in as a fallback for progress recorded without events.
   let canonicalLive = reduceCanonicalRunStateLive(projectRoot, activeSession, { runState: current });
+  const excludedIds = excludedCompletedIdsFromPlan(projectRoot, activeSession, current && current.run_id ? current.run_id : null);
   if (current.canonical_state) {
-    const stored = mergeCanonicalStateWithRunState(current.canonical_state, current, activeSession, current.compiled_graph);
+    const sanitizedStored = stripTasksFromCanonicalState(current.canonical_state, excludedIds).state;
+    const stored = mergeCanonicalStateWithRunState(sanitizedStored, current, activeSession, current.compiled_graph);
     canonicalLive = canonicalLive ? unionCanonicalStates(canonicalLive, stored) : stored;
   }
+  if (canonicalLive) stripTasksFromCanonicalState(canonicalLive, excludedIds);
   if (!canonicalLive) {
     throw new Error('Não foi possível reconstruir o estado canônico da run.');
   }

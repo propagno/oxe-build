@@ -50,6 +50,10 @@ export const EVENT_TYPES = [
   'TaskReset',
   'RateLimitWait',
   'FrozenTestAmended',
+  'CheckpointFailed',
+  'PlanTaskReopened',
+  'PlanScopeAmended',
+  'TaskReopened',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

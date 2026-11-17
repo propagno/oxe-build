@@ -589,6 +589,11 @@ class Scheduler {
         // 1.21.1 (OXB-047): work that arrives by another path never pays an agent and never becomes a human gate.
         // An explicit human gate (PLAN.json `gate`) still comes first: the attempt loop requests it as before.
         const humanGatePending = node.policy.requires_human_approval && !this.hasApprovedGate(node, ctx);
+        if (!humanGatePending && (node.policy.runtime_wait?.length ?? 0) > 0) {
+            const waits = node.policy.runtime_wait ?? [];
+            this.blockNode(nodeId, ctx, status, blocked, 'waiting_runtime_precondition', waits.join(', '));
+            return;
+        }
         if (!humanGatePending && (node.policy.verify_only || (node.policy.external_dependency?.length ?? 0) > 0)) {
             await this.runExternalNode(node, ctx, status, completed, failed, blocked);
             return;
@@ -720,7 +725,7 @@ class Scheduler {
                             // OXB-185: out of turns, the red verify is a consequence — the class stays turns_exhausted.
                             failure_class: turnLimitWithWork ? (contextCap ? lastResult.failure_class : 'turns_exhausted') : 'verify',
                             evidence: lastResult.evidence,
-                            output: `${turnLimitWithWork ? (contextCap ? `contexto cheio no turno ${lastResult.turns_used ?? '?'}; o verify do trabalho parcial:\n` : `turns_exhausted: ${lastResult.turns_used ?? '?'}/${lastResult.turns_cap ?? '?'} turnos usados sem finish_task; o verify do trabalho parcial:\n`) : ''}${describeVerifyFailure(node.verify.command, verifyResult.check, verifyResult.gaps, verifyResult.segment)}`,
+                            output: `${turnLimitWithWork ? (contextCap ? `contexto cheio no turno ${lastResult.turns_used ?? '?'}; o verify do trabalho parcial:\n` : `turns_exhausted: ${lastResult.turns_used ?? '?'}/${lastResult.turns_cap ?? '?'} turnos usados sem finish_task; o verify do trabalho parcial:\n`) : ''}${describeVerifyFailure(node.verify.command, verifyResult.check, verifyResult.gaps, verifyResult.segment, verifyResult.segments)}`,
                             verify_log: buildVerifyLog(verifyResult.segments),
                             ...(turnLimitWithWork ? { turns_used: lastResult.turns_used, turns_cap: lastResult.turns_cap } : {}),
                         };
@@ -808,7 +813,7 @@ class Scheduler {
                                 await ctx.parallel.discard(integration.files);
                                 return {
                                     ok: false,
-                                    output: `Verify on the integrated tree failed (it passed in the task's worktree; another task's change may conflict).\n${describeVerifyFailure(node.verify.command, integrated.check, integrated.gaps, integrated.segment)}`,
+                                    output: `Verify on the integrated tree failed (it passed in the task's worktree; another task's change may conflict).\n${describeVerifyFailure(node.verify.command, integrated.check, integrated.gaps, integrated.segment, integrated.segments)}`,
                                 };
                             }
                             this.emit(ctx, {
@@ -1236,21 +1241,35 @@ class Scheduler {
             gaps.push(...(result.gaps ?? []));
             if (result.status === 'failed') {
                 status = 'failed';
-                failing = segmentRun;
-                break;
+                if (!failing)
+                    failing = segmentRun;
+                if (!ctx.options?.allSegments)
+                    break;
             }
             if (result.status !== 'passed' && status === 'passed')
                 status = result.status;
         }
+        const failedRuns = ran.filter((r) => r.status === 'failed');
         // OXB-171: the failing segment's own output tail rides in the event (the cause was only found by rerunning by hand).
         const failedSegment = failing
             ? { index: failing.index, total: failing.total, command: failing.command, exit_code: failing.check?.exit_code ?? null, output_tail: tailLines(`${failing.check?.stdout ?? ''}\n${failing.check?.stderr ?? ''}\n${failing.check?.error ?? ''}`, 40) }
             : null;
+        const failedSegments = failedRuns.map((f) => ({
+            index: f.index,
+            total: f.total,
+            command: f.command,
+            exit_code: f.check?.exit_code ?? null,
+            output_tail: tailLines(`${f.check?.stdout ?? ''}\n${f.check?.stderr ?? ''}\n${f.check?.error ?? ''}`, 40),
+        }));
         this.emit(ctx, {
             type: 'VerificationCompleted',
             work_item_id: node.id,
             attempt_id: attemptId,
-            payload: { status, ...(failedSegment ? { failed_segment: failedSegment } : {}) },
+            payload: {
+                status,
+                ...(failedSegment ? { failed_segment: failedSegment } : {}),
+                ...(failedSegments.length > 1 ? { failed_segments: failedSegments } : {}),
+            },
         });
         const last = ran[ran.length - 1];
         return {
@@ -1646,7 +1665,22 @@ function buildVerifyLog(segments, maxLinesPerSegment = 120) {
         return `=== [${s.index}/${s.total}] ${s.command} — ${s.status} (${exit})${s.flaky_suspect ? ' · flaky_suspect (repetido: passou antes nesta tentativa)' : ''} ===\n${body || '(sem saída)'}`;
     }).join('\n\n');
 }
-function describeVerifyFailure(command, check, gaps, segment) {
+function describeVerifyFailure(command, check, gaps, segment, segments) {
+    const failedList = (segments ?? []).filter((s) => s.status === 'failed');
+    if (failedList.length > 1) {
+        const blocks = failedList.map((f) => {
+            const r = f.check?.error || (f.check?.exit_code != null ? `exit code ${f.check.exit_code}` : 'failed');
+            const out = tailLines(`${f.check?.stdout ?? ''}\n${f.check?.stderr ?? ''}`, 30);
+            return `Failing segment [${f.index}/${f.total}]: ${f.command} (${r})\n${out ? out.slice(-2500) : '(empty)'}`;
+        });
+        return [
+            'Verification failed after your previous attempt.',
+            `Command: ${command ?? '(none)'}`,
+            `${failedList.length} of ${failedList[0].total} verify segments failed:`,
+            ...blocks,
+            'Fix the code so all failing segments pass. If you are certain a command itself is wrong (not the code), stop and call finish_task explaining why — do not work around it.',
+        ].join('\n');
+    }
     const reason = check?.error || (check?.exit_code != null ? `exit code ${check.exit_code}` : (gaps || []).join('; ') || 'checks did not pass');
     // Only the failing segment's output: the tail of a passing earlier segment never reaches the executor (OXB-066).
     const output = tailLines(`${check?.stdout ?? ''}\n${check?.stderr ?? ''}`, 40);

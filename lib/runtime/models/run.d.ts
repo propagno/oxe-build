@@ -1,4 +1,4 @@
-export type RunStatus = 'planned' | 'running' | 'paused' | 'waiting_approval' | 'failed' | 'completed' | 'replaying' | 'aborted' | 'cancelled';
+export type RunStatus = 'planned' | 'running' | 'paused' | 'waiting_approval' | 'blocked' | 'failed' | 'completed' | 'replaying' | 'aborted' | 'cancelled';
 export type RunMode = 'completo' | 'por_onda' | 'por_tarefa';
 export type RunInitiator = 'user' | 'scheduler' | 'retry' | 'replay';
 export interface Run {

@@ -3,6 +3,7 @@ export type RunStatus =
   | 'running'
   | 'paused'
   | 'waiting_approval'
+  | 'blocked'
   | 'failed'
   | 'completed'
   | 'replaying'
