@@ -104,20 +104,36 @@ function normalizeToolCallEntry(raw: unknown, seq: number, index: number): ToolC
   };
 }
 
+function extractErrorString(
+  payload: Record<string, unknown>,
+  rawEv: Record<string, unknown>,
+  fallback = 'agy error',
+): string {
+  if (typeof payload.error === 'string' && payload.error) return payload.error;
+  if (payload.error && typeof payload.error === 'object') {
+    const errObj = payload.error as Record<string, unknown>;
+    if (typeof errObj.message === 'string' && errObj.message) return errObj.message;
+  }
+  if (typeof payload.result === 'string' && payload.result) return payload.result;
+  if (typeof payload.response === 'string' && payload.response) return payload.response;
+  if (typeof payload.message === 'string' && payload.message) return payload.message;
+  return rawEv ? JSON.stringify(rawEv) : fallback;
+}
+
 /**
  * Parses NDJSON (`stream-json`) or single-JSON (`json`) stdout emitted by `agy -p`.
  * Supports:
- *  - `{ type: "init", conversation_id }`
- *  - `{ type: "step_update", state, message }`
- *  - `{ type: "tool_call" | "tool_use", name, arguments | input, id? }` or `{ tool_calls: [...] }`
- *  - `{ status: "SUCCESS" | "ERROR", response, structured_output?, error?, usage? }` (`agy` v1.5+)
- *  - `{ type: "result", is_error, subtype?, result, total_cost_usd?, usage? }`
+ *  - Real `agy --output-format stream-json` envelope (`{ event: "init"|"step_update"|"result"|"error"|"tool_call", "<event>": {...} }`)
+ *  - Legacy `{ type: "init"|"step_update"|"tool_call"|"tool_use"|"result"|"error", ... }`
+ *  - Single-object `--output-format json` (`{ conversation_id, status: "SUCCESS" | "ERROR", response, structured_output?, error?, usage? }`)
+ *  - Claude-compatible `{ type: "result", is_error, subtype?, result, total_cost_usd?, usage? }`
  */
 export function parseAntigravityEvents(stdout: string): ParsedAntigravityStream {
   const events: Array<Record<string, unknown>> = [];
   let conversationId: string | null = null;
   const steps: Array<{ state: string; message: string }> = [];
   let responseText = '';
+  let streamedDelta = '';
   let structuredOutput: Record<string, unknown> | null = null;
   const toolCalls: ToolCall[] = [];
   let isError = false;
@@ -160,77 +176,116 @@ export function parseAntigravityEvents(stdout: string): ParsedAntigravityStream 
   const seq = ++agyCallSeq;
   for (const ev of parsedObjects) {
     events.push(ev);
-    const type = typeof ev.type === 'string' ? ev.type : '';
+    const rawType = typeof ev.type === 'string' && ev.type ? ev.type : '';
+    const rawEvent = typeof ev.event === 'string' && ev.event ? ev.event : '';
+    const eventKind = rawType || rawEvent;
+    const nestedCandidate = rawEvent && ev[rawEvent] && typeof ev[rawEvent] === 'object' && !Array.isArray(ev[rawEvent])
+      ? (ev[rawEvent] as Record<string, unknown>)
+      : (rawType && ev[rawType] && typeof ev[rawType] === 'object' && !Array.isArray(ev[rawType])
+        ? (ev[rawType] as Record<string, unknown>)
+        : null);
+    const payload: Record<string, unknown> = nestedCandidate ? { ...ev, ...nestedCandidate } : ev;
 
-    if (type === 'init' && typeof ev.conversation_id === 'string') {
-      conversationId = ev.conversation_id;
-    } else if (type === 'step_update') {
-      steps.push({
-        state: typeof ev.state === 'string' ? ev.state : '',
-        message: typeof ev.message === 'string' ? ev.message : '',
-      });
-    } else if (type === 'tool_call' || type === 'tool_use') {
-      const tc = normalizeToolCallEntry(ev, seq, toolCalls.length);
+    if (typeof payload.conversation_id === 'string' && payload.conversation_id) {
+      conversationId = payload.conversation_id;
+    }
+
+    if (eventKind === 'step_update') {
+      const state = typeof payload.state === 'string' ? payload.state : '';
+      const message = typeof payload.message === 'string' && payload.message
+        ? payload.message
+        : (typeof payload.text_delta === 'string' && payload.text_delta
+          ? payload.text_delta
+          : (typeof payload.step_type === 'string' ? payload.step_type : ''));
+      steps.push({ state, message });
+      if (typeof payload.text_delta === 'string' && payload.step_type !== 'thinking') {
+        streamedDelta += payload.text_delta;
+      }
+      if (payload.tool_call && typeof payload.tool_call === 'object') {
+        const tc = normalizeToolCallEntry(payload.tool_call, seq, toolCalls.length);
+        if (tc) toolCalls.push(tc);
+      }
+      if (Array.isArray(payload.tool_calls)) {
+        for (const item of payload.tool_calls) {
+          const tc = normalizeToolCallEntry(item, seq, toolCalls.length);
+          if (tc) toolCalls.push(tc);
+        }
+      }
+    } else if (eventKind === 'tool_call' || eventKind === 'tool_use') {
+      const tc = normalizeToolCallEntry(payload, seq, toolCalls.length);
       if (tc) toolCalls.push(tc);
-    } else if (type === 'error') {
+    } else if (eventKind === 'error') {
       isError = true;
-      errorMessage = typeof ev.error === 'string' ? ev.error : (typeof ev.message === 'string' ? ev.message : JSON.stringify(ev));
+      errorMessage = extractErrorString(payload, ev);
     }
 
-    if (ev.usage && typeof ev.usage === 'object') {
-      const u = ev.usage as Record<string, unknown>;
-      if (typeof u.input_tokens === 'number') usage.promptTokens = u.input_tokens;
-      else if (typeof u.prompt_tokens === 'number') usage.promptTokens = u.prompt_tokens;
-      if (typeof u.output_tokens === 'number') usage.completionTokens = u.output_tokens;
-      else if (typeof u.completion_tokens === 'number') usage.completionTokens = u.completion_tokens;
-      if (typeof u.thinking_tokens === 'number') usage.thinkingTokens = u.thinking_tokens;
-      if (typeof u.total_tokens === 'number') usage.totalTokens = u.total_tokens;
-      if (typeof u.cost_usd === 'number') usage.costUsd = u.cost_usd;
+    if (payload.usage && typeof payload.usage === 'object') {
+      const u = payload.usage as Record<string, unknown>;
+      const inTok = typeof u.input_tokens === 'number' ? u.input_tokens : (typeof u.prompt_tokens === 'number' ? u.prompt_tokens : null);
+      if (inTok !== null && (inTok > 0 || usage.promptTokens === 0)) usage.promptTokens = inTok;
+      const outTok = typeof u.output_tokens === 'number' ? u.output_tokens : (typeof u.completion_tokens === 'number' ? u.completion_tokens : null);
+      if (outTok !== null && (outTok > 0 || usage.completionTokens === 0)) usage.completionTokens = outTok;
+      if (typeof u.thinking_tokens === 'number' && (u.thinking_tokens > 0 || usage.thinkingTokens === 0)) {
+        usage.thinkingTokens = u.thinking_tokens;
+      }
+      if (typeof u.total_tokens === 'number' && (u.total_tokens > 0 || usage.totalTokens === 0)) {
+        usage.totalTokens = u.total_tokens;
+      }
+      if (typeof u.cost_usd === 'number' && (u.cost_usd > 0 || usage.costUsd === 0)) {
+        usage.costUsd = u.cost_usd;
+      }
     }
-    if (typeof ev.total_cost_usd === 'number') {
-      usage.costUsd = ev.total_cost_usd;
+    if (typeof payload.total_cost_usd === 'number') {
+      usage.costUsd = payload.total_cost_usd;
     }
 
     // Terminal envelope of `agy --output-format stream-json` / `json`
-    if (typeof ev.status === 'string') {
-      const statusUpper = ev.status.toUpperCase();
+    if (typeof payload.status === 'string') {
+      const statusUpper = payload.status.toUpperCase();
       if (statusUpper === 'ERROR' || statusUpper === 'FAILED') {
         isError = true;
-        subtype = typeof ev.subtype === 'string' ? ev.subtype : statusUpper.toLowerCase();
-        errorMessage = typeof ev.error === 'string'
-          ? ev.error
-          : (typeof ev.response === 'string' && ev.response ? ev.response : (typeof ev.message === 'string' ? ev.message : 'agy status=ERROR'));
+        subtype = typeof payload.subtype === 'string' ? payload.subtype : statusUpper.toLowerCase();
+        errorMessage = extractErrorString(payload, ev, 'agy status=ERROR');
       } else if (statusUpper === 'SUCCESS' || statusUpper === 'DONE' || statusUpper === 'OK') {
-        if (typeof ev.response === 'string') responseText = ev.response;
-        if (ev.structured_output && typeof ev.structured_output === 'object' && !Array.isArray(ev.structured_output)) {
-          structuredOutput = ev.structured_output as Record<string, unknown>;
+        if (typeof payload.response === 'string') responseText = payload.response;
+        else if (payload.response && typeof payload.response === 'object') responseText = JSON.stringify(payload.response);
+        if (payload.structured_output && typeof payload.structured_output === 'object' && !Array.isArray(payload.structured_output)) {
+          structuredOutput = payload.structured_output as Record<string, unknown>;
+        }
+        if (Array.isArray(payload.tool_calls)) {
+          for (const item of payload.tool_calls) {
+            const tc = normalizeToolCallEntry(item, seq, toolCalls.length);
+            if (tc) toolCalls.push(tc);
+          }
         }
       }
     }
 
-    // Claude-compatible `{ type: "result", result, is_error }` envelope
-    if (type === 'result') {
-      if (typeof ev.subtype === 'string') subtype = ev.subtype;
-      if (ev.is_error) {
+    // Claude-compatible `{ type: "result", result, is_error }` envelope (or `{ event: "result" }` without `status`)
+    if (eventKind === 'result') {
+      if (typeof payload.subtype === 'string') subtype = payload.subtype;
+      if (payload.is_error === true) {
         isError = true;
-        errorMessage = typeof ev.result === 'string' && ev.result
-          ? ev.result
-          : (typeof ev.error === 'string' ? ev.error : 'agy is_error=true');
-      } else if (typeof ev.result === 'string') {
-        responseText = ev.result;
+        errorMessage = extractErrorString(payload, ev, 'agy is_error=true');
+      } else if (!isError && !responseText && typeof payload.result === 'string') {
+        responseText = payload.result;
       }
     }
 
     // Direct bridge JSON object (`{"content": "...", "tool_calls": [...]}`) emitted as a line
-    if (!type && ev.status === undefined && (Array.isArray(ev.tool_calls) || typeof ev.content === 'string')) {
-      if (typeof ev.content === 'string' && !responseText) responseText = JSON.stringify(ev);
-      if (Array.isArray(ev.tool_calls)) {
-        for (const item of ev.tool_calls) {
+    if (!eventKind && payload.status === undefined && (Array.isArray(payload.tool_calls) || typeof payload.content === 'string')) {
+      if (typeof payload.content === 'string' && !responseText) responseText = JSON.stringify(payload);
+      if (Array.isArray(payload.tool_calls)) {
+        for (const item of payload.tool_calls) {
           const tc = normalizeToolCallEntry(item, seq, toolCalls.length);
           if (tc) toolCalls.push(tc);
         }
       }
     }
+  }
+
+  if (!responseText && streamedDelta && !isError) {
+    responseText = streamedDelta;
   }
 
   if (structuredOutput && Array.isArray(structuredOutput.tool_calls)) {
@@ -370,7 +425,14 @@ export class AntigravityCliAdapter implements ExecutorAdapter {
     let costUsd = 0;
     let promptTokens = 0;
     let completionTokens = 0;
+    let thinkingTokens = 0;
     let lastText = '';
+    const buildUsage = () => ({
+      input_tokens: promptTokens || undefined,
+      output_tokens: completionTokens || undefined,
+      thinking_tokens: thinkingTokens || undefined,
+      cost_usd: costUsd,
+    });
     const maxChars = this.options.maxPromptChars ?? DEFAULT_MAX_PROMPT_CHARS;
     const messages = fitTranscript(opts.messages, maxChars);
 
@@ -405,6 +467,7 @@ export class AntigravityCliAdapter implements ExecutorAdapter {
       costUsd += parsedStream.usage.costUsd;
       promptTokens += parsedStream.usage.promptTokens;
       completionTokens += parsedStream.usage.completionTokens;
+      thinkingTokens += parsedStream.usage.thinkingTokens;
       lastText = parsedStream.responseText;
 
       const parsedBridge = parseBridgeReply(parsedStream.responseText);
@@ -413,11 +476,7 @@ export class AntigravityCliAdapter implements ExecutorAdapter {
           content: parsedBridge.content,
           tool_calls: parsedBridge.tool_calls,
           finish_reason: parsedBridge.tool_calls.length ? 'tool_calls' : 'stop',
-          usage: {
-            input_tokens: promptTokens || undefined,
-            output_tokens: completionTokens || undefined,
-            cost_usd: costUsd,
-          },
+          usage: buildUsage(),
         };
       }
 
@@ -429,11 +488,7 @@ export class AntigravityCliAdapter implements ExecutorAdapter {
           content: structuredContent,
           tool_calls: parsedStream.toolCalls,
           finish_reason: 'tool_calls',
-          usage: {
-            input_tokens: promptTokens || undefined,
-            output_tokens: completionTokens || undefined,
-            cost_usd: costUsd,
-          },
+          usage: buildUsage(),
         };
       }
     }
@@ -442,11 +497,7 @@ export class AntigravityCliAdapter implements ExecutorAdapter {
       content: lastText,
       tool_calls: [],
       finish_reason: 'stop',
-      usage: {
-        input_tokens: promptTokens || undefined,
-        output_tokens: completionTokens || undefined,
-        cost_usd: costUsd,
-      },
+      usage: buildUsage(),
     };
   }
 

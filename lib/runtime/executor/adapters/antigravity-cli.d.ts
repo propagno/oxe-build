@@ -59,11 +59,10 @@ export interface ParsedAntigravityStream {
 /**
  * Parses NDJSON (`stream-json`) or single-JSON (`json`) stdout emitted by `agy -p`.
  * Supports:
- *  - `{ type: "init", conversation_id }`
- *  - `{ type: "step_update", state, message }`
- *  - `{ type: "tool_call" | "tool_use", name, arguments | input, id? }` or `{ tool_calls: [...] }`
- *  - `{ status: "SUCCESS" | "ERROR", response, structured_output?, error?, usage? }` (`agy` v1.5+)
- *  - `{ type: "result", is_error, subtype?, result, total_cost_usd?, usage? }`
+ *  - Real `agy --output-format stream-json` envelope (`{ event: "init"|"step_update"|"result"|"error"|"tool_call", "<event>": {...} }`)
+ *  - Legacy `{ type: "init"|"step_update"|"tool_call"|"tool_use"|"result"|"error", ... }`
+ *  - Single-object `--output-format json` (`{ conversation_id, status: "SUCCESS" | "ERROR", response, structured_output?, error?, usage? }`)
+ *  - Claude-compatible `{ type: "result", is_error, subtype?, result, total_cost_usd?, usage? }`
  */
 export declare function parseAntigravityEvents(stdout: string): ParsedAntigravityStream;
 export declare function agyFailure(input: {
