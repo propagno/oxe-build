@@ -6461,6 +6461,16 @@ async function runRuntime(opts) {
         if (out.stacked_on) console.log(`  empilhada sobre ${out.stacked_on.task} (${out.stacked_on.pr || out.stacked_on.branch})`);
         for (const cd of out.commit_details || []) console.log(`    - ${String(cd.sha).slice(0, 10)} ${cd.subject}${cd.is_quick ? ' [quick]' : ''}`);
         if (out.frozen_tests && out.frozen_tests.length) console.log(`  testes congelados (do tip): ${out.frozen_tests.join(', ')}`);
+        if (out.ci_risk_suites && out.ci_risk_suites.length) {
+          console.log(`  specs a vigiar (G45 / riscos de CI na base, ${out.ci_risk_suites.length}):`);
+          for (const s of out.ci_risk_suites) {
+            console.log(`    - ${s.suite} (${s.kind}${s.covers && s.covers.length ? ` — cobre ${s.covers.join(', ')}` : ''})`);
+          }
+        }
+        if (out.preview_ci_commands && out.preview_ci_commands.length) {
+          console.log('  comandos preview-ci:');
+          for (const cmd of out.preview_ci_commands) console.log(`    ${cmd}`);
+        }
         for (const w of out.warnings || []) console.log(`  ${c ? yellow : ''}AVISO${c ? reset : ''} ${w}`);
       } else if (out.conflict) console.log(`  ${red}✗${reset} ${out.error}`);
       else {
@@ -6469,6 +6479,12 @@ async function runRuntime(opts) {
         if (out.replaced_remote) console.log(`  branch ${out.branch} (do promote, sem PR) refeita: force-push com lease sobre ${String(out.replaced_remote).slice(0, 8)}`);
         if (out.stacked_on) console.log(`  empilhada sobre ${out.stacked_on.task} (${out.stacked_on.pr || out.stacked_on.branch}, ainda não mergeada) — o PR vai contra ${String(out.base).replace(/^[^/]+\//, '')} e traz os commits dela até o merge`);
         for (const w of out.warnings || []) console.log(`  ${c ? yellow : ""}AVISO${c ? reset : ""} ${w}`);
+        if (out.ci_risk_suites && out.ci_risk_suites.length) {
+          console.log(`  specs a vigiar (G45 / riscos de CI na base, ${out.ci_risk_suites.length}):`);
+          for (const s of out.ci_risk_suites) {
+            console.log(`    - ${s.suite} (${s.kind}${s.covers && s.covers.length ? ` — cobre ${s.covers.join(', ')}` : ''})`);
+          }
+        }
         if (out.preview_ci) console.log(`  preview-ci: ${out.preview_ci.ok ? 'OK verde' : 'FAIL vermelho'} (${out.preview_ci.suites.length} suíte(s))`);
         if (out.pr_ready) console.log(`  pr:ready: ${out.pr_ready.ok ? 'OK verde' : 'FAIL vermelho'}${out.pr_ready.ok ? '' : `
 ${out.pr_ready.tail}`}`);

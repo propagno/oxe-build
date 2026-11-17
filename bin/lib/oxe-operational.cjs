@@ -7699,6 +7699,42 @@ function runtimeSync(projectRoot, activeSession, options = {}) {
   return result;
 }
 
+function collectPromoteRiskSuites(repoDir, { projectRoot, activeSession, planTasks, touchedFiles, excludeSuites = [], config = null }) {
+  const promoteHelpers = require('./oxe-promote-helpers.cjs');
+  const pcfg = config || readProjectConfig(projectRoot) || {};
+  const excludedList = (excludeSuites || []).map((s) => String(s || '').replace(/\\/g, '/'));
+  const riskSuites = promoteHelpers.discoverMainCiRiskSuites(repoDir, touchedFiles || [], {
+    excludeSuites: excludedList,
+  });
+  let planDoc = null;
+  try { planDoc = readPlanJsonDoc(projectRoot, activeSession).doc; } catch { planDoc = null; }
+  // OXB-C6 #1: Include non-frozen active unit/integration/e2e specs discovered by extended G45 on `repoDir`
+  try {
+    const lintCfg = (pcfg && pcfg.lint) || {};
+    if (lintCfg.cross_card_conflicts !== 'off') {
+      const pathsG45 = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+      const g45Hits = require('./oxe-cross-card-conflicts.cjs').crossCardFrozenConflicts(
+        repoDir,
+        {
+          tasks: (planTasks || []).map((t) => ({ ...t, done: false })),
+          acceptance_tests: (planDoc && planDoc.acceptance_tests) || [],
+        },
+        { specText: readTextIfExists(pathsG45.spec) || '' },
+      );
+      const excludedSet = new Set(excludedList);
+      const existingSuites = new Set(riskSuites.map((s) => s.suite));
+      for (const f of g45Hits) {
+        if (!f || !f.test || excludedSet.has(f.test) || existingSuites.has(f.test)) continue;
+        existingSuites.add(f.test);
+        const isE2e = /(^|\/)(e2e|playwright)\//i.test(f.test) || /\.e2e\./i.test(f.test)
+          || (/\.spec\.[cm]?[jt]sx?$/i.test(f.test) && /@playwright\/test|playwright/i.test(readTextIfExists(path.join(repoDir, f.test)) || ''));
+        riskSuites.push({ suite: f.test, kind: isE2e ? 'e2e' : 'unit_g45', covers: [f.component || f.token || f.test] });
+      }
+    }
+  } catch { /* auxiliar */ }
+  return { riskSuites, planDoc };
+}
+
 function finalizePromotedWorktree({
   projectRoot,
   activeSession,
@@ -7713,42 +7749,88 @@ function finalizePromotedWorktree({
   branch,
   programTip,
   withFixtures,
+  preserveMergedFixtures,
+  ordered,
   verifyTests,
   resolvedCapFiles,
   pushArgs,
   options,
 }) {
   const promoteHelpers = require('./oxe-promote-helpers.cjs');
+  const preserveMergedSet = new Set(Array.isArray(preserveMergedFixtures) ? preserveMergedFixtures : []);
+  const originTrailers = [
+    ...planTasks.map((t) => `OXE-Task: ${phaseCtx.phase ? `${phaseCtx.phase}/` : ''}${t.id}`),
+    ...[...new Set(planTasks.map((t) => t.run_id).filter(Boolean))].map((r) => `OXE-Run: ${r}`),
+  ].join('\n');
+  const commitWorkFiles = (files, subject, body, errLabel) => {
+    if (!files || !files.length) return true;
+    gitRun(work, ['add', '--', ...files]);
+    if (gitRun(work, ['diff', '--cached', '--quiet']).ok) return true;
+    const cm = gitRun(work, ['commit', '-q', '-m', subject, '-m', body, '-m', originTrailers]);
+    if (!cm.ok) {
+      result.error = `${errLabel}: ${(cm.stderr || cm.stdout || '').trim().split(/\r?\n/).pop()}`;
+      return false;
+    }
+    return true;
+  };
+  const eqLf = (a, b) => a != null && b != null && a.replace(/\r\n/g, '\n') === b.replace(/\r\n/g, '\n');
   // OXB-156 (b): the task's frozen tests as files from the program tip; identical-on-base ones are skipped.
+  // OXB-C8: fixtures modified on both `base` and the task's commits preserve cherry-pick's merge instead of overwriting with tip.
   if (!result.conflict && withFixtures.length) {
     const added = [];
     for (const file of withFixtures) {
+      if (preserveMergedSet.has(file) && fs.existsSync(path.join(work, file))) continue;
       const tip = gitRun(projectRoot, ['show', `${programTip}:${file}`]);
       if (!tip.ok) continue;
       const onBase = gitRun(projectRoot, ['show', `${baseSha}:${file}`]);
       const current = fs.existsSync(path.join(work, file)) ? fs.readFileSync(path.join(work, file), 'utf8') : null;
-      if ((onBase.ok && onBase.stdout === tip.stdout) || current === tip.stdout) continue;
+      if ((onBase.ok && eqLf(onBase.stdout, tip.stdout)) || eqLf(current, tip.stdout)) continue;
       const r = spawnSync('git', ['show', `${programTip}:${file}`], { cwd: projectRoot, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
       fs.mkdirSync(path.dirname(path.join(work, file)), { recursive: true });
       fs.writeFileSync(path.join(work, file), r.stdout);
       added.push(file);
     }
     if (added.length) {
-      gitRun(work, ['add', '--', ...added]);
-      const originTrailers = [...planTasks.map((t) => `OXE-Task: ${phaseCtx.phase ? `${phaseCtx.phase}/` : ''}${t.id}`), ...[...new Set(planTasks.map((t) => t.run_id).filter(Boolean))].map((r) => `OXE-Run: ${r}`)].join('\n');
-      const c = gitRun(work, ['commit', '-q', '-m', `test(acceptance): frozen tests of ${taskId}`, '-m', `From the program branch at ${String(programTip).slice(0, 10)}: ${added.join(', ')}`, '-m', originTrailers]);
-      if (!c.ok) result.error = `commit dos testes congelados falhou: ${c.stderr.trim().split(/\r?\n/).pop()}`;
+      commitWorkFiles(
+        added,
+        `test(acceptance): frozen tests of ${taskId}`,
+        `From the program branch at ${String(programTip).slice(0, 10)}: ${added.join(', ')}`,
+        'commit dos testes congelados falhou',
+      );
     }
     result.frozen_tests = added;
   }
   if (!result.conflict && !result.error) {
     const pcfg = readProjectConfig(projectRoot) || {};
+    const lockAdj = promoteHelpers.reconcilePromotedEnforcedLocks(
+      projectRoot,
+      work,
+      buildSha,
+      Array.isArray(ordered) ? ordered : null,
+      { resolve: options && options.resolve },
+    );
+    if (lockAdj.adjusted.length) {
+      const lockMsg = lockAdj.adjusted.map((a) => `${a.file}: removido(s) [${a.removed_ids.join(', ') || 'stale'}] de fora de ${base}`).join('\n');
+      commitWorkFiles(
+        lockAdj.files,
+        `chore(lock): reconcile enforced lock of ${taskId} on ${base}`,
+        lockMsg,
+        'commit de ajuste de enforced.lock falhou',
+      );
+      result.enforced_locks_adjusted = lockAdj.adjusted;
+      const pruned = [...new Set(lockAdj.adjusted.flatMap((a) => a.removed_ids || []))];
+      if (pruned.length) {
+        result.warnings.push(`enforced.lock reconciliado contra ${base} + ${taskId}: removido(s) ${pruned.join(', ')} (já ausente(s)/retirado(s) em ${base})`);
+      }
+    }
     const ratchetAdj = promoteHelpers.reconcilePromotedRatchets(work, buildSha, pcfg, { resolvedCapFiles: [...resolvedCapFiles] });
     if (ratchetAdj.adjusted.length) {
-      gitRun(work, ['add', '--', ...ratchetAdj.files]);
-      const originTrailers = [...planTasks.map((t) => `OXE-Task: ${phaseCtx.phase ? `${phaseCtx.phase}/` : ''}${t.id}`), ...[...new Set(planTasks.map((t) => t.run_id).filter(Boolean))].map((r) => `OXE-Run: ${r}`)].join('\n');
-      const rc = gitRun(work, ['commit', '-q', '-m', `chore(ratchet): reconcile ratchet caps of ${taskId} on ${base}`, '-m', ratchetAdj.adjusted.map((a) => `${a.file}:${a.line} ${a.program_cap} -> ${a.promoted_cap} (real count: ${a.real_count})`).join('\n'), '-m', originTrailers]);
-      if (!rc.ok) result.error = `commit de ajuste de ratchet falhou: ${rc.stderr.trim().split(/\r?\n/).pop()}`;
+      commitWorkFiles(
+        ratchetAdj.files,
+        `chore(ratchet): reconcile ratchet caps of ${taskId} on ${base}`,
+        ratchetAdj.adjusted.map((a) => `${a.file}:${a.line} ${a.program_cap} -> ${a.promoted_cap} (real count: ${a.real_count})`).join('\n'),
+        'commit de ajuste de ratchet falhou',
+      );
       result.ratchets_adjusted = ratchetAdj.adjusted;
       result.warnings.push(`ratchet(s) recalculado(s) contra ${base} + ${taskId}: ${ratchetAdj.adjusted.map((a) => `${a.file}:${a.line} ${a.program_cap} → ${a.promoted_cap}`).join(', ')}`);
     }
@@ -7774,49 +7856,44 @@ function finalizePromotedWorktree({
   if (!result.conflict && !result.error) {
     const pcfg = readProjectConfig(projectRoot) || {};
     const promotedDiffFiles = gitLines(work, ['diff', '--name-only', buildSha, 'HEAD']) || [];
-    const riskSuites = promoteHelpers.discoverMainCiRiskSuites(work, promotedDiffFiles, {
+    const { riskSuites, planDoc } = collectPromoteRiskSuites(work, {
+      projectRoot,
+      activeSession,
+      planTasks,
+      touchedFiles: promotedDiffFiles,
       excludeSuites: [...verifyTests, ...(result.frozen_tests || [])],
+      config: pcfg,
     });
-    // OXB-C6 #1: Include non-frozen active unit/integration/e2e specs discovered by extended G45 on `work`
-    try {
-      const lintCfg = (pcfg && pcfg.lint) || {};
-      if (lintCfg.cross_card_conflicts !== 'off') {
-        const { doc: docG45 } = readPlanJsonDoc(projectRoot, activeSession);
-        const pathsG45 = resolveRuntimeArtifactPaths(projectRoot, activeSession);
-        const g45Hits = require('./oxe-cross-card-conflicts.cjs').crossCardFrozenConflicts(
-          work,
-          {
-            tasks: (planTasks || []).map((t) => ({ ...t, done: false })),
-            acceptance_tests: (docG45 && docG45.acceptance_tests) || [],
-          },
-          { specText: readTextIfExists(pathsG45.spec) || '' }
-        );
-        const excludedSet = new Set([...verifyTests, ...(result.frozen_tests || [])].map((s) => String(s || '').replace(/\\/g, '/')));
-        const existingSuites = new Set(riskSuites.map((s) => s.suite));
-        for (const f of g45Hits) {
-          if (!f || !f.test || excludedSet.has(f.test) || existingSuites.has(f.test)) continue;
-          existingSuites.add(f.test);
-          const isE2e = /(^|\/)(e2e|playwright)\//i.test(f.test) || /\.e2e\./i.test(f.test)
-            || (/\.spec\.[cm]?[jt]sx?$/i.test(f.test) && /@playwright\/test|playwright/i.test(readTextIfExists(path.join(work, f.test)) || ''));
-          riskSuites.push({ suite: f.test, kind: isE2e ? 'e2e' : 'unit_g45', covers: [f.component || f.token || f.test] });
-        }
-      }
-    } catch { /* auxiliar */ }
     if (riskSuites.length) result.ci_risk_suites = riskSuites;
     if (options.previewCi) {
-      const previewCmds = promoteHelpers.buildPreviewCiCommands(work, riskSuites, pcfg);
+      const previewCmds = promoteHelpers.buildPreviewCiCommands(work, riskSuites, pcfg, { projectRoot, planTasks, planDoc });
       const previewRuns = [];
       let previewOk = true;
       const baseVerifyTimeout = Number(pcfg.verify_timeout_ms) > 0 ? Number(pcfg.verify_timeout_ms) : 10 * 60_000;
       for (const cmd of previewCmds) {
         const ms = commitTaskVerifyTimeout(projectRoot, options, cmd, baseVerifyTimeout);
         const r = runChildCommandFull(work, cmd, ms);
-        previewRuns.push({ command: cmd, ok: r.ok, status: r.status, timed_out: r.timedOut, tail: r.tail });
+        const failInfo = !r.ok ? promoteHelpers.extractPreviewCiFailure(r.output || r.tail) : null;
+        previewRuns.push({
+          command: cmd,
+          ok: r.ok,
+          status: r.status,
+          timed_out: r.timedOut,
+          tail: failInfo ? failInfo.summary : r.tail,
+          ...(failInfo && failInfo.failing_specs.length ? { failing_specs: failInfo.failing_specs } : {}),
+        });
         if (!r.ok) {
           previewOk = false;
+          const specLine = failInfo && failInfo.failing_specs.length
+            ? `\n    spec(s) falhando: ${failInfo.failing_specs.join(', ')}`
+            : '';
+          const detailText = failInfo ? failInfo.summary : String(r.tail || '');
+          const detailLines = detailText
+            ? `\n${detailText.split(/\r?\n/).filter(Boolean).slice(-8).map((l) => `    ${l}`).join('\n')}`
+            : '';
           result.error = r.timedOut
-            ? timedOutMessage(`preview-ci em ${branch}`, cmd, ms, r)
-            : `preview-ci vermelho em ${branch}: \`${cmd}\` (exit ${r.status})${r.tail ? `\n${String(r.tail).split(/\r?\n/).slice(-6).map((l) => `    ${l}`).join('\n')}` : ''}`;
+            ? timedOutMessage(`preview-ci em ${branch}`, cmd, ms, { ...r, tail: detailText || r.tail })
+            : `preview-ci vermelho em ${branch}: \`${cmd}\` (exit ${r.status})${specLine}${detailLines}`;
           break;
         }
       }
@@ -8108,7 +8185,31 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       }
       if (!result.conflict && !result.error) {
         if (resolvedConflicts.length) result.resolved_conflicts = resolvedConflicts;
-        finalizePromotedWorktree({ projectRoot, activeSession, work, result, task, taskId, taskIds, planTasks, phaseCtx, base, baseSha, buildSha, branch, remote: saved.remote || remote, programTip, withFixtures, verifyTests, criteria, resolvedCapFiles, pushArgs, options });
+        finalizePromotedWorktree({
+          projectRoot,
+          activeSession,
+          work,
+          result,
+          task,
+          taskId,
+          taskIds,
+          planTasks,
+          phaseCtx,
+          base,
+          baseSha,
+          buildSha,
+          branch,
+          remote: saved.remote || remote,
+          programTip,
+          withFixtures,
+          preserveMergedFixtures: saved.preserveMergedFixtures || [],
+          ordered,
+          verifyTests,
+          criteria,
+          resolvedCapFiles,
+          pushArgs,
+          options,
+        });
         try { fs.rmSync(pendingFile, { force: true }); } catch { /* */ }
       }
     } finally {
@@ -8225,17 +8326,64 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   // a shared suite that is ALSO the task's own frozen entry is carried (as before): never reported as not carried
   const notCarried = [...new Set([...verifyTests.filter((f) => !testFiles.includes(f) && differsFromBase(f)), ...sharedSkipped.filter((f) => !testFiles.includes(f))])];
   if (!shas.size && !testFiles.length) throw new Error(`${taskId}: nenhum commit da tarefa fora de ${base} (sem trailer OXE-Task/done_commit em ${base}..HEAD) — já está na base?`);
-  // local fixtures the frozen tests import (relative specifiers), one level deep — OXB-160: only what resolves INSIDE
-  // the tests' own tree (fixtures, helpers), resolved like node/TS (file, extensions, then dir/index.*) and only to a
-  // file: product modules the test imports (`../../../shared/types/ipc`, a directory) are never copied.
+  const ordered = testsOnly ? [] : (gitLines(projectRoot, ['rev-list', '--reverse', '--topo-order', range]) || []).filter((sha) => shas.has(sha));
+  // local fixtures the frozen tests import (relative specifiers), one level deep — OXB-160 + OXB-C8 (T59 / #917):
+  // carry a local fixture from the program tree ONLY when it is new on `base` (not deleted on `base`) or when THIS
+  // task itself modified it; otherwise keep `base`'s file and warn when `base` has a newer/divergent version.
+  const directTestSet = new Set(testFiles);
+  const mergeBaseWithBase = (gitLines(projectRoot, ['merge-base', baseSha, programTip]) || [])[0] || null;
+  const skippedFixtures = [];
+  const preserveMergedFixtures = [];
+  const fixtureWarnings = [];
   const withFixtures = (() => {
     const out = new Set(testFiles);
+    const seenFixtures = new Set();
     for (const file of testFiles) {
       const root = promoteTestRoot(file);
       const text = (gitRun(projectRoot, ['show', `${programTip}:${file}`]).stdout) || '';
       for (const m of text.matchAll(/(?:from\s+|require\(\s*|import\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g)) {
         const cand = resolveImportAt(projectRoot, programTip, path.posix.normalize(path.posix.join(path.posix.dirname(file), m[1])));
-        if (cand && (cand + '/').startsWith(root + '/') && !/\/src\//.test(`/${cand}`)) out.add(cand);
+        if (!cand || !(cand + '/').startsWith(root + '/') || /\/src\//.test(`/${cand}`)) continue;
+        if (directTestSet.has(cand) || seenFixtures.has(cand)) continue;
+        seenFixtures.add(cand);
+
+        const existsOnBase = gitRun(projectRoot, ['show', `${baseSha}:${cand}`]).ok;
+        const divergesFromBase = differsFromBase(cand);
+        if (!divergesFromBase) {
+          out.add(cand);
+          continue;
+        }
+        const baseChangedAfterFork = mergeBaseWithBase
+          ? (gitLines(projectRoot, ['diff', '--name-only', mergeBaseWithBase, baseSha, '--', cand]) || []).length > 0
+          : false;
+        const existsAtMergeBase = mergeBaseWithBase ? gitRun(projectRoot, ['show', `${mergeBaseWithBase}:${cand}`]).ok : false;
+        const deletedOnBase = !existsOnBase && existsAtMergeBase && baseChangedAfterFork;
+        const taskCommitsTouching = (gitLines(projectRoot, ['log', '--no-merges', '--format=%H', range, '--', cand]) || []).filter((h) => shas.has(h));
+        const inTaskFiles = planTasks.some((t) => (t.files || []).some((f) => normRel(f) === cand));
+        const taskChangedFixture = taskCommitsTouching.length > 0 || (inTaskFiles && !otherTaskTouched(cand));
+
+        if ((existsOnBase || deletedOnBase) && !taskChangedFixture) {
+          const reason = deletedOnBase ? 'removed_on_base' : (baseChangedAfterFork ? 'older_than_base' : 'not_changed_by_task');
+          skippedFixtures.push({ file: cand, reason });
+          fixtureWarnings.push(
+            `fixture ${cand} importada pelo teste congelado difere de ${base}, mas não foi alterada por ${taskId}${deletedOnBase ? ` (removida em ${base})` : baseChangedAfterFork ? ` (cópia do programa é mais antiga que ${base})` : ''} — mantida a versão de ${base}`
+          );
+          continue;
+        }
+
+        if (baseChangedAfterFork) {
+          if (!testsOnly && taskCommitsTouching.length > 0) {
+            preserveMergedFixtures.push(cand);
+            fixtureWarnings.push(
+              `fixture ${cand} alterada por ${taskId} também mudou em ${base} após o fork — mantida a mescla do cherry-pick em vez da cópia antiga do programa`
+            );
+          } else {
+            fixtureWarnings.push(
+              `fixture ${cand} carregada do programa difere de ${base}, que a modificou após o fork (cópia pode estar mais antiga que ${base})`
+            );
+          }
+        }
+        out.add(cand);
       }
     }
     return [...out];
@@ -8246,7 +8394,6 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       throw new Error(`${taskId}: nenhum teste congelado ou fixture diferente de ${base} para promover com --tests-only`);
     }
   }
-  const ordered = testsOnly ? [] : (gitLines(projectRoot, ['rev-list', '--reverse', '--topo-order', range]) || []).filter((sha) => shas.has(sha));
   // OXB-169: other tasks' unpromoted commits BEFORE this task's, on the same files — this diff assumes them; the
   // cherry-pick will likely conflict. Name them and the combined promote.
   const assumed = testsOnly ? [] : promoteAssumedTasks(projectRoot, range, ordered, idSet, phaseCtx);
@@ -8284,7 +8431,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   if (options.strict && unpromoDeps.dependencies.length) {
     throw new Error(`promote --strict recusado para ${taskId}: ${unpromoDeps.warnings[0]}`);
   }
-  resolvedBase.warnings = [...(resolvedBase.warnings || []), ...stackInfo.warnings, ...quickSelection.warnings];
+  resolvedBase.warnings = [...(resolvedBase.warnings || []), ...stackInfo.warnings, ...quickSelection.warnings, ...fixtureWarnings];
   if (assumed.length && !stack) {
     resolvedBase.warnings.push(`${taskId} vem depois de ${assumed.map((a) => `${a.task} (${a.sha.slice(0, 8)})`).join(', ')} no histórico e mexe nos mesmos arquivos (${[...new Set(assumed.flatMap((a) => a.files))].slice(0, 4).join(', ')}) — o cherry-pick pode conflitar; promova junto: oxe-cc runtime promote --tasks ${[...new Set([...assumed.map((a) => a.task), ...taskIds])].join(',')}`);
   }
@@ -8301,6 +8448,22 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   resolvedBase.warnings.push(...notCarriedWarnings);
   if (options.dryRun) {
     const quickShaSet = new Set(quickSelection.quicks.map((q) => q.sha));
+    const pcfgDry = readProjectConfig(projectRoot) || {};
+    const dryTouchedFiles = [...new Set([
+      ...planTasks.flatMap((t) => (t.files || []).map(normRel)),
+      ...ordered.flatMap((sha) => gitLines(projectRoot, ['diff-tree', '--no-commit-id', '--name-only', '-r', sha]) || []),
+    ])].filter((f) => f && !f.includes('*'));
+    const { riskSuites: dryRiskSuites, planDoc: dryPlanDoc } = collectPromoteRiskSuites(projectRoot, {
+      projectRoot,
+      activeSession,
+      planTasks,
+      touchedFiles: dryTouchedFiles,
+      excludeSuites: [...verifyTests, ...withFixtures],
+      config: pcfgDry,
+    });
+    const dryPreviewCmds = options.previewCi && dryRiskSuites.length
+      ? promoteHelpers.buildPreviewCiCommands(projectRoot, dryRiskSuites, pcfgDry, { projectRoot, planTasks, planDoc: dryPlanDoc })
+      : [];
     return {
       dry_run: true,
       ...(testsOnly ? { tests_only: true } : {}),
@@ -8321,6 +8484,9 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       ...(quickSelection.skipped.length ? { skipped_quicks: quickSelection.skipped } : {}),
       ...(unpromoDeps.dependencies.length ? { unpromoted_dependencies: unpromoDeps.dependencies, suggested_promote_order: unpromoDeps.suggested_order } : {}),
       ...(notCarried.length ? { not_carried_tests: notCarried } : {}),
+      ...(skippedFixtures.length ? { skipped_fixtures: skippedFixtures } : {}),
+      ...(dryRiskSuites.length ? { ci_risk_suites: dryRiskSuites } : {}),
+      ...(dryPreviewCmds.length ? { preview_ci_commands: dryPreviewCmds } : {}),
       frozen_tests: withFixtures,
       conflict: null,
       pr_ready: null,
@@ -8368,6 +8534,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     commits: ordered,
     ...(quickSelection.quicks.length ? { quick_commits: quickSelection.quicks } : {}),
     ...(quickSelection.skipped.length ? { skipped_quicks: quickSelection.skipped } : {}),
+    ...(skippedFixtures.length ? { skipped_fixtures: skippedFixtures } : {}),
     ...(unpromoDeps.dependencies.length ? { unpromoted_dependencies: unpromoDeps.dependencies, suggested_promote_order: unpromoDeps.suggested_order } : {}),
     conflict: null,
     pr_ready: null,
@@ -8482,6 +8649,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
             resolved_cap_files: [...resolvedCapFiles],
             resolved_conflicts: resolvedConflicts,
             withFixtures,
+            preserveMergedFixtures,
             verifyTests,
             sharedSkipped,
             criteria: [...criteria],
@@ -8505,7 +8673,27 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     }
     if (resolvedConflicts.length) result.resolved_conflicts = resolvedConflicts;
     if (!result.conflict && !result.error) {
-      finalizePromotedWorktree({ projectRoot, activeSession, work, result, taskId, planTasks, phaseCtx, base, baseSha, buildSha, branch, programTip, withFixtures, verifyTests, resolvedCapFiles, pushArgs, options });
+      finalizePromotedWorktree({
+        projectRoot,
+        activeSession,
+        work,
+        result,
+        taskId,
+        planTasks,
+        phaseCtx,
+        base,
+        baseSha,
+        buildSha,
+        branch,
+        programTip,
+        withFixtures,
+        preserveMergedFixtures,
+        ordered,
+        verifyTests,
+        resolvedCapFiles,
+        pushArgs,
+        options,
+      });
       if (fs.existsSync(pendingFile)) { try { fs.rmSync(pendingFile, { force: true }); } catch { /* */ } }
     }
   } finally {

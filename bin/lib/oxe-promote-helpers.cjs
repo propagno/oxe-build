@@ -688,11 +688,275 @@ function discoverMainCiRiskSuites(work, changedFiles, { excludeSuites = [] } = {
   return hits;
 }
 
+function collectVerifyStringsFromOptions(options = {}) {
+  const out = [];
+  const push = (v) => {
+    if (typeof v === 'string' && v.trim()) out.push(v.trim());
+  };
+  for (const c of Array.isArray(options.verifyCommands) ? options.verifyCommands : []) push(c);
+  const readTaskCmds = (tasks) => {
+    for (const t of Array.isArray(tasks) ? tasks : []) {
+      if (!t || typeof t !== 'object') continue;
+      for (const c of (t.verify && Array.isArray(t.verify.commands)) ? t.verify.commands : []) push(c);
+      if (t.verify && t.verify.command) push(t.verify.command);
+      if (t.verifyCommand) push(t.verifyCommand);
+    }
+  };
+  readTaskCmds(options.planTasks);
+  if (options.planDoc && typeof options.planDoc === 'object') {
+    readTaskCmds(options.planDoc.tasks);
+    for (const a of Array.isArray(options.planDoc.acceptance_tests) ? options.planDoc.acceptance_tests : []) {
+      if (a && a.command) push(a.command);
+    }
+  }
+  return [...new Set(out)];
+}
+
+function splitShellSegments(cmd) {
+  const out = [];
+  let cur = '';
+  let q = null;
+  const s = String(cmd || '');
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (q) {
+      if (ch === q && s[i - 1] !== '\\') q = null;
+      cur += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      q = ch;
+      cur += ch;
+      continue;
+    }
+    if ((ch === '&' && s[i + 1] === '&') || (ch === '|' && s[i + 1] === '|')) {
+      if (cur.trim()) out.push(cur.trim());
+      cur = '';
+      i += 1;
+      continue;
+    }
+    if (ch === ';') {
+      if (cur.trim()) out.push(cur.trim());
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out.length ? out : (s.trim() ? [s.trim()] : []);
+}
+
+function normalizeRemoteWrapperPrefix(rawPrefix, work, projectRoot) {
+  let prefix = String(rawPrefix || '').trim();
+  if (!prefix) return '';
+  // If wrapper references a relative script outside `work` (e.g. `../deps/scripts/remote-verify.mjs`), resolve
+  // relative to `projectRoot` so running inside `.oxe/promote-ws/<task>/` keeps working.
+  prefix = prefix.replace(/(["']?)([^\s"']*remote-verify(?:\.[cm]?js)?)\1/i, (full, q, rel) => {
+    const clean = rel.replace(/\\/g, '/');
+    if (path.isAbsolute(rel) || /^[A-Za-z]:[\\/]/.test(rel)) return full;
+    if (projectRoot && clean.startsWith('..')) {
+      const fromRoot = path.resolve(projectRoot, clean);
+      if (fs.existsSync(fromRoot)) {
+        const fwd = fromRoot.replace(/\\/g, '/');
+        return /\s/.test(fwd) ? `"${fwd}"` : fwd;
+      }
+    }
+    if (fs.existsSync(path.resolve(work, clean))) return full;
+    if (projectRoot) {
+      const fromRoot = path.resolve(projectRoot, clean);
+      if (fs.existsSync(fromRoot)) {
+        const fwd = fromRoot.replace(/\\/g, '/');
+        return /\s/.test(fwd) ? `"${fwd}"` : fwd;
+      }
+    }
+    return full;
+  });
+  return `${prefix} `;
+}
+
+function resolvePreviewCiWrapper(work, config = {}, options = {}) {
+  const customRunner = config && config.promote && typeof config.promote.preview_ci_runner === 'string'
+    ? config.promote.preview_ci_runner.trim()
+    : '';
+  if (customRunner) {
+    const expanded = customRunner
+      .replace(/\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, n) => process.env[n] || '')
+      .split('{command}')[0]
+      .trim();
+    if (expanded) return normalizeRemoteWrapperPrefix(expanded, work, options.projectRoot);
+  }
+
+  const isRemoteSeg = (s) => /(?:^|[\s/\\"'])remote-verify(?:\.[cm]?js|\b)/i.test(String(s || ''));
+  for (const fullCmd of collectVerifyStringsFromOptions(options)) {
+    for (const seg of splitShellSegments(fullCmd)) {
+      if (!isRemoteSeg(seg)) continue;
+      const idx = seg.indexOf(' -- ');
+      if (idx > 0) {
+        return normalizeRemoteWrapperPrefix(seg.slice(0, idx + 4), work, options.projectRoot);
+      }
+      const trailIdx = seg.search(/\s+--$/);
+      if (trailIdx > 0) {
+        return normalizeRemoteWrapperPrefix(`${seg.slice(0, trailIdx)} --`, work, options.projectRoot);
+      }
+    }
+  }
+
+  const gatesRunner = config && typeof config.phase_gates_runner === 'string' ? config.phase_gates_runner.trim() : '';
+  if (gatesRunner && isRemoteSeg(gatesRunner)) {
+    const expanded = gatesRunner
+      .replace(/\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, n) => process.env[n] || '')
+      .split('{command}')[0]
+      .trim();
+    if (expanded) return normalizeRemoteWrapperPrefix(expanded, work, options.projectRoot);
+  }
+
+  const candidates = ['scripts/remote-verify.mjs', 'scripts/remote-verify.cjs', 'scripts/remote-verify.js'];
+  const inWork = candidates.find((rel) => fs.existsSync(path.join(work, rel)));
+  if (inWork) return `node ${inWork} -- `;
+  if (options.projectRoot) {
+    const inRoot = candidates.find((rel) => fs.existsSync(path.join(options.projectRoot, rel)));
+    if (inRoot) {
+      const abs = path.resolve(options.projectRoot, inRoot).replace(/\\/g, '/');
+      return `node ${/\s/.test(abs) ? `"${abs}"` : abs} -- `;
+    }
+  }
+  return '';
+}
+
+function extractPlaywrightTestDirs(cfgRel, cfgText) {
+  const cfgDir = path.posix.dirname(norm(cfgRel));
+  const resolveRel = (raw) => {
+    const clean = String(raw || '').trim().replace(/\\/g, '/');
+    if (!clean) return null;
+    const joined = cfgDir && cfgDir !== '.' ? path.posix.normalize(path.posix.join(cfgDir, clean)) : path.posix.normalize(clean);
+    const out = joined.replace(/^\.\//, '').replace(/\/+$/, '');
+    return out === '.' ? '' : out;
+  };
+  const dirs = [];
+  for (const m of String(cfgText || '').matchAll(/\btestDir\s*:\s*(['"`])([^'"`]+)\1/g)) {
+    const d = resolveRel(m[2]);
+    if (d !== null) dirs.push(d);
+  }
+  for (const m of String(cfgText || '').matchAll(/\btestDir\s*:\s*path\.(?:join|resolve)\(\s*__dirname\s*,\s*([^)]+)\)/g)) {
+    const parts = [...m[1].matchAll(/(['"`])([^'"`]+)\1/g)].map((x) => x[2]);
+    if (parts.length) {
+      const d = resolveRel(parts.join('/'));
+      if (d !== null) dirs.push(d);
+    }
+  }
+  return [...new Set(dirs)];
+}
+
+function discoverPlaywrightConfigs(work) {
+  const PW_CFG_RE = /(^|\/)playwright(?:\.([^/]+))?\.config\.[cm]?[jt]s$/i;
+  const found = new Set();
+  for (const f of gitLines(work, ['ls-files']).map(norm)) {
+    if (PW_CFG_RE.test(f) && !/(^|\/)(?:node_modules|\.oxe|parked[^/]*)\//i.test(f)) found.add(f);
+  }
+  const scanDir = (relDir, depth) => {
+    if (depth > 2) return;
+    const abs = relDir ? path.join(work, relDir) : work;
+    let entries = [];
+    try { entries = fs.readdirSync(abs, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name.startsWith('.') || e.name === 'node_modules' || /^parked/i.test(e.name)) continue;
+      const rel = relDir ? `${relDir}/${e.name}` : e.name;
+      if (e.isFile() && PW_CFG_RE.test(rel)) found.add(rel);
+      else if (e.isDirectory() && depth < 2) scanDir(rel, depth + 1);
+    }
+  };
+  scanDir('', 0);
+
+  return [...found]
+    .sort((a, b) => {
+      const aDef = /(?:^|\/)playwright\.config\.[cm]?[jt]s$/i.test(a) ? 0 : 1;
+      const bDef = /(?:^|\/)playwright\.config\.[cm]?[jt]s$/i.test(b) ? 0 : 1;
+      return aDef - bDef || a.localeCompare(b);
+    })
+    .map((file) => {
+      let text = '';
+      try { text = fs.readFileSync(path.join(work, file), 'utf8'); } catch { text = ''; }
+      const base = path.posix.basename(file);
+      const tagMatch = /^playwright\.(.+)\.config\.[cm]?[jt]s$/i.exec(base);
+      const tag = tagMatch ? tagMatch[1].toLowerCase() : null;
+      return {
+        file,
+        dir: path.posix.dirname(file) === '.' ? '' : path.posix.dirname(file),
+        tag,
+        isDefault: !tag,
+        testDirs: extractPlaywrightTestDirs(file, text),
+      };
+    });
+}
+
+function collectPlaywrightCommandHints(work, options = {}) {
+  const hints = [];
+  const texts = [...collectVerifyStringsFromOptions(options)];
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(work, 'package.json'), 'utf8'));
+    if (pkg && pkg.scripts && typeof pkg.scripts === 'object') {
+      for (const cmd of Object.values(pkg.scripts)) {
+        if (typeof cmd === 'string' && /playwright/.test(cmd)) texts.push(cmd);
+      }
+    }
+  } catch { /* ignore */ }
+  for (const cmd of texts) {
+    if (!/playwright\s+test/i.test(cmd)) continue;
+    const cfgM = /(?:^|\s)(?:-c|--config(?:=|\s+))["']?([^\s"']+)["']?/.exec(cmd);
+    if (!cfgM) continue;
+    const cfg = norm(cfgM[1]);
+    const afterPw = cmd.split(/playwright\s+test/i)[1] || '';
+    const tokens = (afterPw.replace(/(?:-c|--config(?:=|\s+))["']?[^\s"']+["']?/g, '').match(/[^\s"'`]+/g) || [])
+      .map(norm)
+      .filter((t) => t && !t.startsWith('-') && (t.includes('/') || /\.(?:spec|test)\.[cm]?[jt]sx?$/i.test(t)));
+    if (cfg && tokens.length) hints.push({ cfg, targets: tokens });
+  }
+  return hints;
+}
+
+function assignPlaywrightConfigForSuite(suiteRel, pwConfigs, commandHints = []) {
+  if (!pwConfigs || !pwConfigs.length) return null;
+  const s = norm(suiteRel);
+  // 1. Most specific (longest) `testDir` prefix declared in Playwright config files
+  let bestDirCfg = null;
+  let bestLen = -1;
+  for (const cfg of pwConfigs) {
+    for (const td of cfg.testDirs) {
+      if (!td) continue;
+      if (s === td || s.startsWith(`${td}/`)) {
+        if (td.length > bestLen || (td.length === bestLen && bestDirCfg && bestDirCfg.isDefault && !cfg.isDefault)) {
+          bestLen = td.length;
+          bestDirCfg = cfg.file;
+        }
+      }
+    }
+  }
+  if (bestDirCfg) return bestDirCfg;
+
+  // 2. Explicit `--config <file>` hint matching exact suite or directory prefix
+  for (const h of commandHints) {
+    if (!pwConfigs.some((c) => c.file === h.cfg)) continue;
+    if (h.targets.some((t) => s === t || s.startsWith(`${t.replace(/\/+$/, '')}/`))) return h.cfg;
+  }
+
+  // 3. Named config `playwright.<tag>.config.*` matching a path segment of the suite
+  const segs = s.toLowerCase().split('/');
+  const named = pwConfigs.find((cfg) => cfg.tag && segs.includes(cfg.tag));
+  if (named) return named.file;
+
+  // 4. Explicit `testDir: '.'` or default `playwright.config.*`
+  const rootMatch = pwConfigs.find((cfg) => cfg.testDirs.includes('') && cfg.isDefault)
+    || pwConfigs.find((cfg) => cfg.isDefault && (!cfg.dir || s.startsWith(`${cfg.dir}/`)))
+    || pwConfigs.find((cfg) => cfg.isDefault);
+  return rootMatch ? rootMatch.file : null;
+}
+
 /**
- * Builds the shell command(s) for `promote --preview-ci` over discovered risk suites, preferring `remote-verify` when
- * present in the repository (or `config.promote.preview_ci_command`).
+ * Builds the shell command(s) for `promote --preview-ci` over discovered risk suites, grouping Playwright suites by
+ * their Playwright config (`--config <file>`) and preferring the project's `remote-verify` verify wrapper (from
+ * `config.promote.preview_ci_command` / `PLAN.json` verify lines / `phase_gates_runner` / `scripts/remote-verify.*`).
  */
-function buildPreviewCiCommands(work, riskSuites, config = {}) {
+function buildPreviewCiCommands(work, riskSuites, config = {}, options = {}) {
   if (!riskSuites || !riskSuites.length) return [];
   const custom = config && config.promote && typeof config.promote.preview_ci_command === 'string'
     ? config.promote.preview_ci_command.trim()
@@ -702,26 +966,114 @@ function buildPreviewCiCommands(work, riskSuites, config = {}) {
     return [custom.includes('{suites}') ? custom.replace('{suites}', files.join(' ')) : `${custom} ${files.join(' ')}`];
   }
 
-  const remoteScript = ['scripts/remote-verify.mjs', 'scripts/remote-verify.cjs', 'scripts/remote-verify.js']
-    .find((rel) => fs.existsSync(path.join(work, rel)));
-  const prefix = remoteScript ? `node ${remoteScript} -- ` : '';
+  const prefix = resolvePreviewCiWrapper(work, config, options);
 
   const isPlaywrightSuite = (r) => {
-    if (r.kind === 'e2e' || r.kind === 'conformance' || /(^|\/)(e2e|playwright)\//i.test(r.suite)) return true;
-    if (/\.spec\.[cm]?[jt]sx?$/i.test(r.suite)) {
-      try {
-        const txt = fs.readFileSync(path.join(work, r.suite), 'utf8');
-        return /@playwright\/test|playwright/i.test(txt);
-      } catch { return false; }
-    }
+    let txt = '';
+    try { txt = fs.readFileSync(path.join(work, r.suite), 'utf8'); } catch { txt = ''; }
+    const usesPlaywright = /@playwright\/test|\bfrom\s+['"][^'"]*playwright|playwright\.expect/i.test(txt);
+    const usesVitestOrNodeTest = /\bfrom\s+['"](?:vitest|node:test)['"]|require\(\s*['"](?:vitest|node:test)['"]\s*\)/i.test(txt);
+    if (usesVitestOrNodeTest && !usesPlaywright) return false;
+    if (usesPlaywright || r.kind === 'e2e' || r.kind === 'conformance' || /(^|\/)(e2e|playwright)\//i.test(r.suite)) return true;
     return false;
   };
   const playwrightSuites = riskSuites.filter(isPlaywrightSuite).map((r) => r.suite);
   const vitestSuites = files.filter((f) => !playwrightSuites.includes(f));
   const cmds = [];
   if (vitestSuites.length) cmds.push(`${prefix}npx vitest run ${vitestSuites.join(' ')}`);
-  if (playwrightSuites.length) cmds.push(`${prefix}npx playwright test ${playwrightSuites.join(' ')}`);
+  if (playwrightSuites.length) {
+    const pwConfigs = discoverPlaywrightConfigs(work);
+    const commandHints = collectPlaywrightCommandHints(work, options);
+    const grouped = new Map();
+    for (const suite of playwrightSuites) {
+      const cfg = assignPlaywrightConfigForSuite(suite, pwConfigs, commandHints);
+      if (!grouped.has(cfg)) grouped.set(cfg, []);
+      grouped.get(cfg).push(suite);
+    }
+    for (const [cfgFile, groupSuites] of grouped) {
+      const cfgFlag = cfgFile ? `--config ${cfgFile} ` : '';
+      cmds.push(`${prefix}npx playwright test ${cfgFlag}${groupSuites.join(' ')}`);
+    }
+  }
   return cmds;
+}
+
+const PREVIEW_NOISE_LINE_RES = [
+  /^(?:\(node:\d+\)\s*)?(?:Warning:\s*)?The\s+['"]?NO_COLOR['"]?\s+env\s+is\s+ignored\b/i,
+  /^(?:\(node:\d+\)\s*)?(?:DeprecationWarning|ExperimentalWarning|MaxListenersExceededWarning):/i,
+  /^\(Use\s+`node\s+--trace-(?:deprecation|warnings)\b[^)]*\)\s*$/i,
+  /^\s*npm\s+(?:warn|notice)\b/i,
+];
+
+function stripAnsiAndTimestamps(text) {
+  return String(text || '')
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/^[^\t\r\n]+\t[^\t\r\n]+\t\d{4}-\d{2}-\d{2}T[\d:.]+Z\s?/gm, '')
+    .replace(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+/gm, '');
+}
+
+/**
+ * Extracts failing spec paths and real failure diagnostics from `--preview-ci` output, stripping Node/npm warning
+ * noise (`NO_COLOR`/`FORCE_COLOR`, `DeprecationWarning`) so failures are never hidden behind a tail of warnings.
+ */
+function extractPreviewCiFailure(rawOutput, maxLines = 12) {
+  const cleaned = stripAnsiAndTimestamps(rawOutput);
+  const rawLines = cleaned.split(/\r?\n/).map((l) => l.trimEnd());
+  const nonNoise = rawLines.filter((l) => {
+    const t = l.trim();
+    if (!t) return false;
+    return !PREVIEW_NOISE_LINE_RES.some((re) => re.test(t));
+  });
+
+  const specs = new Set();
+  const PW_SPEC_RE = /^\s*(?:\d+\)|✘|✗|×|FAIL|❌)?\s*(?:\d+\s+)?(?:\[[^\]]+\]\s*›\s*|│[^│]+│\s*)?([\w./\\@+$()[\]-]+\.(?:spec|test)\.[cm]?[jt]sx?)(?::\d+(?::\d+)?)?(?:\s*(?:›|>)\s*.+)?$/i;
+  for (const l of nonNoise) {
+    const t = l.trim();
+    if (!/(^\s*\d+\)|^\s*(?:FAIL|✘|✗|×|❯|❌)\b)/.test(l) && !/\[[^\]]+\]\s*›\s*[\w./\\-]+/.test(t)) continue;
+    const m = PW_SPEC_RE.exec(t);
+    if (m && m[1]) specs.add(norm(m[1]));
+  }
+
+  const FAILURE_SIGNAL_RES = [
+    /^\s*\d+\)\s+/,
+    /^\s*(?:FAIL|✘|✗|×|❯|❌|not ok\s+\d+)\b/,
+    /^\s*(?:Error|TimeoutError|AssertionError|TypeError|ReferenceError)\b[:\s]/i,
+    /^\s*(?:Expected|Received|Locator|Strict mode violation|waiting for locator)\b[:\s]/i,
+    /\berror TS\d{4}\b/,
+    /^npm ERR!/,
+    /^\s*(?:\d+\s+failed|Tests?\s+\d+\s+failed|\d+\s+failing)\b/i,
+  ];
+  const picked = [];
+  const seen = new Set();
+  const pushUnique = (line) => {
+    const trimmed = String(line || '').trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    picked.push(trimmed);
+  };
+  for (let i = 0; i < nonNoise.length; i += 1) {
+    const line = nonNoise[i];
+    if (FAILURE_SIGNAL_RES.some((re) => re.test(line))) {
+      pushUnique(line);
+      // Include immediate detail line after a failure header if non-empty and not stack noise
+      const next = nonNoise[i + 1];
+      if (next && !/^\s*at\s/.test(next) && !FAILURE_SIGNAL_RES.some((re) => re.test(next))) {
+        pushUnique(next);
+      }
+    }
+  }
+
+  const lines = picked.length
+    ? picked.slice(0, maxLines)
+    : nonNoise.length
+      ? nonNoise.slice(-maxLines)
+      : ['(saída continha apenas avisos de ambiente; consulte o log completo)'];
+  return {
+    failing_specs: [...specs],
+    lines,
+    summary: lines.join('\n'),
+  };
 }
 
 /**
@@ -827,11 +1179,285 @@ function unionJsonDocuments(oursText, theirsText) {
   return null;
 }
 
+const LOCK_META_KEYS = new Set(['schema', 'schema_version', 'version', 'updated_at', 'generated_at', 'enforced', 'targets', 'entries']);
+const lockItemKey = (v) => {
+  if (v === null || typeof v !== 'object') return `${typeof v}:${String(v)}`;
+  if (!Array.isArray(v) && v.id != null) return `id:${String(v.id)}`;
+  return `json:${JSON.stringify(v)}`;
+};
+const isEntryEnforced = (v) => {
+  if (!v || typeof v !== 'object') return false;
+  return String(v.status || v.state || (v.enforced === true ? 'enforced' : '')).toLowerCase() === 'enforced';
+};
+
+function mergeLockArrayThreeWay(oursArr, theirsArr, baseArr) {
+  const baseByKey = new Map();
+  for (const item of Array.isArray(baseArr) ? baseArr : []) baseByKey.set(lockItemKey(item), item);
+  const delta = [];
+  for (const item of Array.isArray(theirsArr) ? theirsArr : []) {
+    const k = lockItemKey(item);
+    if (!baseByKey.has(k)) {
+      delta.push(item);
+    } else if (isEntryEnforced(item) && !isEntryEnforced(baseByKey.get(k))) {
+      delta.push(item);
+    }
+  }
+  return unionJsonArrayItems(oursArr, delta);
+}
+
+function mergeLockMapThreeWay(oursMap, theirsMap, baseMap) {
+  const isPlain = (x) => x && typeof x === 'object' && !Array.isArray(x);
+  const out = { ...(oursMap || {}) };
+  const base = baseMap && typeof baseMap === 'object' ? baseMap : {};
+  for (const [k, tv] of Object.entries(theirsMap || {})) {
+    const ov = out[k];
+    const inBase = Object.prototype.hasOwnProperty.call(base, k);
+    const bv = base[k];
+    if (!inBase) {
+      // Newly added entry by this commit
+      if (isPlain(ov) && isPlain(tv)) {
+        const preferred = isEntryEnforced(ov) ? ov : tv;
+        out[k] = { ...ov, ...tv, ...(preferred === ov ? { status: ov.status, ...(ov.state ? { state: ov.state } : {}) } : {}) };
+      } else if (!(k in out)) {
+        out[k] = tv;
+      }
+      continue;
+    }
+    // Entry already existed in parent: carry update only if `ours` kept it OR `theirs` newly promoted it to `enforced`
+    const promotedHere = isPlain(tv) && isEntryEnforced(tv) && !(isPlain(bv) && isEntryEnforced(bv));
+    if (Object.prototype.hasOwnProperty.call(out, k)) {
+      if (isPlain(ov) && isPlain(tv) && promotedHere) {
+        out[k] = { ...ov, ...tv };
+      }
+    } else if (promotedHere) {
+      out[k] = tv;
+    }
+  }
+  return out;
+}
+
+/**
+ * 3-way JSON lock merge (`base`, `ours`, `theirs`): applies ONLY entries added or promoted to `enforced` by
+ * `theirs` relative to `base`, never reintroducing entries that `base` already had and `ours` removed (#914 / T56).
+ */
+function mergeJsonLockThreeWay(oursText, theirsText, baseText) {
+  let ours;
+  let theirs;
+  let base;
+  try {
+    ours = JSON.parse(String(oursText || ''));
+    theirs = JSON.parse(String(theirsText || ''));
+    base = JSON.parse(String(baseText || ''));
+  } catch {
+    return null;
+  }
+  const isPlain = (x) => x && typeof x === 'object' && !Array.isArray(x);
+  if (Array.isArray(ours) && Array.isArray(theirs) && Array.isArray(base)) {
+    return `${JSON.stringify(mergeLockArrayThreeWay(ours, theirs, base), null, 2)}\n`;
+  }
+  if (!isPlain(ours) || !isPlain(theirs) || !isPlain(base)) return null;
+
+  const out = { ...ours };
+  for (const [k, tv] of Object.entries(theirs)) {
+    const ov = out[k];
+    const bv = base[k];
+    if (k === 'enforced' && Array.isArray(ov) && Array.isArray(tv)) {
+      out[k] = mergeLockArrayThreeWay(ov, tv, Array.isArray(bv) ? bv : []);
+    } else if ((k === 'targets' || k === 'entries') && isPlain(ov) && isPlain(tv)) {
+      out[k] = mergeLockMapThreeWay(ov, tv, isPlain(bv) ? bv : {});
+    } else if (!LOCK_META_KEYS.has(k)) {
+      const mergedFlat = mergeLockMapThreeWay(
+        Object.prototype.hasOwnProperty.call(ours, k) ? { [k]: ov } : {},
+        { [k]: tv },
+        Object.prototype.hasOwnProperty.call(base, k) ? { [k]: bv } : {},
+      );
+      if (Object.prototype.hasOwnProperty.call(mergedFlat, k)) out[k] = mergedFlat[k];
+    } else if (!Object.prototype.hasOwnProperty.call(out, k) && !Object.prototype.hasOwnProperty.call(base, k)) {
+      out[k] = tv;
+    }
+  }
+  return `${JSON.stringify(out, null, 2)}\n`;
+}
+
+function reconcileSingleLockDoc(baseDoc, workDoc, taskAddedOrEnforced, taskRemoved) {
+  const isPlain = (x) => x && typeof x === 'object' && !Array.isArray(x);
+  const removedIds = [];
+  if (Array.isArray(workDoc)) {
+    const baseArr = Array.isArray(baseDoc) ? baseDoc : [];
+    const baseKeys = new Set(baseArr.map((x) => (x && typeof x === 'object' && x.id != null ? String(x.id) : String(x))));
+    const next = [];
+    for (const item of workDoc) {
+      const id = item && typeof item === 'object' && item.id != null ? String(item.id) : String(item);
+      if (taskRemoved.has(id) && !taskAddedOrEnforced.has(id)) {
+        removedIds.push(id);
+        continue;
+      }
+      if (baseKeys.has(id) || taskAddedOrEnforced.has(id)) next.push(item);
+      else removedIds.push(id);
+    }
+    return { nextDoc: next, removedIds };
+  }
+  if (!isPlain(workDoc)) return { nextDoc: workDoc, removedIds };
+
+  const base = isPlain(baseDoc) ? baseDoc : {};
+  const next = { ...workDoc };
+
+  if (Array.isArray(workDoc.enforced)) {
+    const baseArr = Array.isArray(base.enforced) ? base.enforced.map(String) : [];
+    const baseEnforced = new Set(baseArr);
+    const workArr = workDoc.enforced.map(String);
+    const seen = new Set();
+    const nextEnforced = [];
+    for (const bid of baseArr) {
+      if (taskRemoved.has(bid) && !taskAddedOrEnforced.has(bid)) continue;
+      if (seen.has(bid)) continue;
+      seen.add(bid);
+      nextEnforced.push(bid);
+    }
+    for (const wid of workArr) {
+      if (seen.has(wid)) continue;
+      if (baseEnforced.has(wid) || taskAddedOrEnforced.has(wid)) {
+        seen.add(wid);
+        nextEnforced.push(wid);
+      } else {
+        removedIds.push(wid);
+      }
+    }
+    next.enforced = nextEnforced;
+  }
+
+  const reconcileMapContainer = (baseMap, workMap) => {
+    const out = {};
+    const b = isPlain(baseMap) ? baseMap : {};
+    const w = isPlain(workMap) ? workMap : {};
+    for (const [id, bVal] of Object.entries(b)) {
+      if (taskRemoved.has(id) && !taskAddedOrEnforced.has(id)) continue;
+      if (taskAddedOrEnforced.has(id) && Object.prototype.hasOwnProperty.call(w, id)) {
+        out[id] = w[id];
+      } else {
+        out[id] = bVal;
+      }
+    }
+    for (const [id, wVal] of Object.entries(w)) {
+      if (Object.prototype.hasOwnProperty.call(out, id)) continue;
+      if (taskAddedOrEnforced.has(id)) {
+        out[id] = wVal;
+      } else {
+        removedIds.push(id);
+      }
+    }
+    return out;
+  };
+
+  if (isPlain(workDoc.targets)) {
+    next.targets = reconcileMapContainer(base.targets, workDoc.targets);
+  } else if (isPlain(workDoc.entries)) {
+    next.entries = reconcileMapContainer(base.entries, workDoc.entries);
+  } else if (!Array.isArray(workDoc.enforced) && !isPlain(workDoc.targets) && !isPlain(workDoc.entries)) {
+    // Flat ID-keyed lock map (preserving schema/meta keys)
+    const meta = {};
+    const baseEntriesOnly = {};
+    const workEntriesOnly = {};
+    for (const [k, v] of Object.entries(base)) {
+      if (!LOCK_META_KEYS.has(k)) baseEntriesOnly[k] = v;
+    }
+    for (const [k, v] of Object.entries(workDoc)) {
+      if (LOCK_META_KEYS.has(k)) meta[k] = v;
+      else workEntriesOnly[k] = v;
+    }
+    return { nextDoc: { ...meta, ...reconcileMapContainer(baseEntriesOnly, workEntriesOnly) }, removedIds: [...new Set(removedIds)] };
+  }
+
+  return { nextDoc: next, removedIds: [...new Set(removedIds)] };
+}
+
+/**
+ * OXB-C8 (T56 / #914): Reconciles `*enforced*.json` lock files in `work` (`buildSha..HEAD`) so the promoted lock
+ * holds strictly `base's entries + only the IDs this task itself adds or promotes to enforced`. Prevents silent
+ * carry-over of older program entries that `base` removed after fork (even when cherry-pick succeeded cleanly).
+ */
+function reconcilePromotedEnforcedLocks(projectRoot, work, buildSha, ordered, options = {}) {
+  if (!Array.isArray(ordered)) return { adjusted: [], files: [] };
+  const changed = gitLines(work, ['diff', '--name-only', buildSha, 'HEAD']).map(norm);
+  const lockFiles = changed.filter((f) => /(?:^|\/)[^/]*enforced[^/]*\.json$/i.test(f));
+  if (!lockFiles.length) return { adjusted: [], files: [] };
+
+  const explicitRules = parseResolveRules(options.resolve);
+  const explicitOverride = (lf) => explicitRules.some((r) => (r.strategy === 'ours' || r.strategy === 'theirs')
+    && (r.path === lf || (!r.path.includes('/') ? path.posix.basename(lf) === r.path : lf.endsWith(`/${r.path}`))));
+
+  const adjusted = [];
+  const files = [];
+
+  for (const lf of lockFiles) {
+    if (explicitOverride(lf)) continue;
+    const abs = path.join(work, lf);
+    if (!fs.existsSync(abs)) continue;
+    let workText = '';
+    let workDoc = null;
+    try {
+      workText = fs.readFileSync(abs, 'utf8');
+      workDoc = JSON.parse(workText);
+    } catch { continue; }
+
+    let baseDoc = null;
+    const baseShow = gitOut(work, ['show', `${buildSha}:${lf}`]);
+    if (baseShow.ok) {
+      try { baseDoc = JSON.parse(baseShow.stdout); } catch { baseDoc = null; }
+    }
+
+    const workEntries = extractEnforcedEntries(workDoc);
+    const baseEntries = extractEnforcedEntries(baseDoc);
+    if (!workEntries.size && !baseEntries.size) continue;
+
+    const taskAddedOrEnforced = new Set();
+    const taskRemoved = new Set();
+    for (const sha of ordered) {
+      const parentShow = gitOut(projectRoot, ['show', `${sha}^:${lf}`]);
+      const commitShow = gitOut(projectRoot, ['show', `${sha}:${lf}`]);
+      if (!parentShow.ok && !commitShow.ok) continue;
+      if (parentShow.ok && commitShow.ok && parentShow.stdout === commitShow.stdout) continue;
+      let beforeDoc = null;
+      let afterDoc = null;
+      if (parentShow.ok) { try { beforeDoc = JSON.parse(parentShow.stdout); } catch { beforeDoc = null; } }
+      if (commitShow.ok) { try { afterDoc = JSON.parse(commitShow.stdout); } catch { afterDoc = null; } }
+      const beforeMap = extractEnforcedEntries(beforeDoc);
+      const afterMap = extractEnforcedEntries(afterDoc);
+      for (const [id, aInfo] of afterMap) {
+        const bInfo = beforeMap.get(id);
+        if (!bInfo || (aInfo.status === 'enforced' && bInfo.status !== 'enforced')) {
+          taskAddedOrEnforced.add(id);
+          taskRemoved.delete(id);
+        }
+      }
+      for (const id of beforeMap.keys()) {
+        if (!afterMap.has(id) && !taskAddedOrEnforced.has(id)) {
+          taskRemoved.add(id);
+        }
+      }
+    }
+
+    const { nextDoc, removedIds } = reconcileSingleLockDoc(baseDoc, workDoc, taskAddedOrEnforced, taskRemoved);
+    const nextText = `${JSON.stringify(nextDoc, null, 2)}\n`;
+    if (JSON.stringify(nextDoc) === JSON.stringify(workDoc)) continue;
+    const finalText = baseShow.ok && JSON.stringify(nextDoc) === JSON.stringify(baseDoc) ? baseShow.stdout : nextText;
+    fs.writeFileSync(abs, finalText, 'utf8');
+    files.push(lf);
+    adjusted.push({
+      file: lf,
+      removed_ids: removedIds,
+      kept_task_ids: [...taskAddedOrEnforced],
+    });
+  }
+
+  return { adjusted, files };
+}
+
 /**
  * Resolves a conflicted cherry-pick in `work` when all conflicted files can be settled safely:
  *   1. Ratchet cap-only conflicts (`tryResolveRatchetCherryPickConflict`);
  *   2. Explicit `--resolve <path>=ours|theirs|union-json-array` rules;
- *   3. Built-in `union-json-array` resolver for append-only `enforced.lock.json` files.
+ *   3. Built-in 3-way JSON lock resolver for `enforced.lock.json` files (never restores entries removed in `ours`/`base`).
  */
 function tryResolvePromoteCherryPickConflict(projectRoot, work, sha, config, conflictedFiles, options = {}) {
   const files = (Array.isArray(conflictedFiles) ? conflictedFiles : []).map(norm).filter(Boolean);
@@ -863,7 +1489,12 @@ function tryResolvePromoteCherryPickConflict(projectRoot, work, sha, config, con
       const oursStage = gitOut(work, ['show', `:2:${item.file}`]);
       const theirsStage = gitOut(work, ['show', `:3:${item.file}`]);
       if (!oursStage.ok || !theirsStage.ok) return { resolved: false };
-      const merged = unionJsonDocuments(oursStage.stdout, theirsStage.stdout);
+      let merged = null;
+      if (/(?:^|\/)[^/]*enforced[^/]*\.json$/i.test(item.file)) {
+        const baseStage = gitOut(work, ['show', `:1:${item.file}`]);
+        if (baseStage.ok) merged = mergeJsonLockThreeWay(oursStage.stdout, theirsStage.stdout, baseStage.stdout);
+      }
+      if (merged == null) merged = unionJsonDocuments(oursStage.stdout, theirsStage.stdout);
       if (merged == null) return { resolved: false };
       stagedContents.push({ ...item, merged });
     } else {
@@ -908,10 +1539,14 @@ module.exports = {
   tryResolvePromoteCherryPickConflict,
   parseResolveRules,
   unionJsonDocuments,
+  mergeJsonLockThreeWay,
   reconcilePromotedRatchets,
+  reconcilePromotedEnforcedLocks,
   checkPromotedEnforcedTargets,
   analyzeUnpromotedDependencies,
   discoverMainCiRiskSuites,
+  discoverPlaywrightConfigs,
   buildPreviewCiCommands,
+  extractPreviewCiFailure,
   resolveTaskCards,
 };
