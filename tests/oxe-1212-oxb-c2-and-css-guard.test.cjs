@@ -299,5 +299,144 @@ describe('OXB-C2 (active F6 blocker) & Adendo 2 CSS classes guard (G14 / G48)', 
     assert.equal(orphans.length, 1);
     assert.equal(orphans[0].hook, '.oq-primary');
     assert.equal(orphans[0].readers_total, 5);
+    assert.match(domHooks.message(orphans), /5 linha\(s\) de produto/);
+  });
+
+  it('OXB-C13 (G48 CSS Modules): checks only actual module importers & test selectors without false-positive TS properties, and never labels product files as "linha(s) de teste"', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-c13-css-mod-'));
+    tmpDirs.push(dir);
+
+    writeRel(dir, '.gitignore', '.oxe/\n');
+    writeRel(dir, '.oxe/STATE.md', '# STATE\n');
+    writeRel(dir, '.oxe/config.json', { external_dependency_check: false, plan_lint_preflight: false, stub_check: false, lint: { suite_impact: 'off' } });
+    writeRel(
+      dir,
+      'src/components/Activity/ActivityCenter.module.css',
+      '.panel { width: 320px; }\n.needsYou { color: orange; }\n.finished { color: green; }\n.urgent { background: amber; }\n',
+    );
+    // Unrelated CSS module also defines `.finished` & `.urgent` — must not hide a real broken importer of ActivityCenter.module.css
+    writeRel(dir, 'src/components/Activity/Other.module.css', '.finished { color: blue; }\n.urgent { color: red; }\n');
+    writeRel(
+      dir,
+      'src/components/Activity/ActivityCenter.tsx',
+      "import styles from './ActivityCenter.module.css';\nexport const ActivityCenter = ({ item }: { item: { finished: boolean } }) => (\n  <div className={styles.panel}>\n    <span className={styles.needsYou} />\n    {item.finished ? 'ok' : ''}\n  </div>\n);\n",
+    );
+    writeRel(
+      dir,
+      'src/components/Activity/ActivityPanel.tsx',
+      "import mod from './ActivityCenter.module.css';\nexport const ActivityPanel = () => <div className={mod['finished']} />;\n",
+    );
+    // Product files outside Activity that happen to use JS/TS identifiers `needsYou` / `finished` (NO import of ActivityCenter.module.css)
+    writeRel(
+      dir,
+      'src/components/Sidebar/CodeRail.tsx',
+      'export function CodeRail({ needsYou }: { needsYou: ReadonlySet<string> }) {\n  const attention = needsYou.has("a");\n  return attention ? 1 : 0;\n}\n',
+    );
+    writeRel(
+      dir,
+      'electron/main/services/agent-state.service.ts',
+      '// done: it finished a turn\nexport function update(finished: boolean) { return finished ? "done" : "working"; }\n',
+    );
+    // Test files with plain identifiers / i18n keys (`const needsYou = ...`, `t('step.finished')`) must NOT false-positive
+    writeRel(
+      dir,
+      'e2e/activity-center.spec.ts',
+      "const needsYou = { has: () => true };\nconst label = t('step.finished');\n",
+    );
+    writeRel(
+      dir,
+      'mobile/android/NeedsYouRowTest.kt',
+      'fun testFinished() { val needsYou = true; val finished = 1 }\n',
+    );
+    writeRel(dir, '.oxe/PLAN.json', {
+      schema_version: 1,
+      phase: 'F1',
+      tasks: [
+        {
+          id: 'T2',
+          title: 'OXE-181: remover .needsYou, .finished e .urgent de ActivityCenter.module.css',
+          wave: 1,
+          files: [
+            'src/components/Activity/ActivityCenter.module.css',
+            'src/components/Activity/ActivityCenter.tsx',
+            'src/components/Activity/ActivityPanel.tsx',
+          ],
+          acceptance: ['A1'],
+          verify: { commands: [`"${process.execPath}" -e "process.exit(0)"`] },
+        },
+      ],
+    });
+
+    git(dir, 'init', '-q', '-b', 'main');
+    git(dir, 'config', 'user.email', 't@oxe.test');
+    git(dir, 'config', 'user.name', 'OXE Test');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'base css module');
+
+    // 1. plan lint: no false positives on CodeRail.tsx or agent-state.service.ts (they don't import ActivityCenter.module.css);
+    //    only real out-of-scope module consumers would trigger [G48].
+    const lintClean = op.runtimePlanLint(dir, null, { noPrecheck: true, preflight: false });
+    assert.ok(
+      !(lintClean.warnings || []).some((w) => w.includes('[G48]')),
+      `did not expect [G48] false positive on TS identifiers, got: ${JSON.stringify(lintClean.warnings)}`,
+    );
+
+    const taskT2 = JSON.parse(fs.readFileSync(path.join(dir, '.oxe', 'PLAN.json'), 'utf8')).tasks[0];
+
+    // 2. Broken consumer: T2 removes .needsYou, .finished, .urgent from ActivityCenter.module.css and migrates ActivityCenter.tsx,
+    //    but forgets `mod['finished']` in ActivityPanel.tsx -> checkpoint fails accurately naming ActivityPanel.tsx as produto!
+    writeRel(dir, 'src/components/Activity/ActivityCenter.module.css', '.panel { width: 320px; }\n');
+    writeRel(
+      dir,
+      'src/components/Activity/ActivityCenter.tsx',
+      "import styles from './ActivityCenter.module.css';\nexport const ActivityCenter = ({ item }: { item: { finished: boolean } }) => (\n  <div className={styles.panel}>\n    {item.finished ? 'ok' : ''}\n  </div>\n);\n",
+    );
+    const cpFailProd = op.commitTaskCheckpoint(dir, null, 'T2', { task: taskT2, ratchets: false });
+    assert.equal(cpFailProd.committed, false);
+    assert.equal(cpFailProd.failed, true);
+    assert.equal(cpFailProd.kind, 'dom_hooks');
+    assert.match(cpFailProd.reason, /a mudança remove classe\(s\) CSS ainda em uso/);
+    assert.match(cpFailProd.reason, /\.finished \(removido de src\/components\/Activity\/ActivityCenter\.module\.css\) ainda é lido por 1 linha\(s\) de produto — src\/components\/Activity\/ActivityPanel\.tsx:2/);
+    assert.doesNotMatch(cpFailProd.reason, /CodeRail|agent-state|NeedsYouRowTest|linha\(s\) de teste|data-\*\/cmdk-\*/);
+
+    // 3. Clean migration: migrate ActivityPanel.tsx (`mod.panel`) -> checkpoint commits cleanly despite homonymous TS identifiers!
+    writeRel(
+      dir,
+      'src/components/Activity/ActivityPanel.tsx',
+      "import mod from './ActivityCenter.module.css';\nexport const ActivityPanel = () => <div className={mod.panel} />;\n",
+    );
+    const cpPass = op.commitTaskCheckpoint(dir, null, 'T2', { task: taskT2, ratchets: false });
+    assert.equal(cpPass.committed, true, `expected checkpoint to commit cleanly, got: ${JSON.stringify(cpPass)}`);
+
+    // 4. Test selectors & direct test CSS module imports ARE flagged and accurately labeled as `linha(s) de teste`
+    writeRel(
+      dir,
+      'src/components/Activity/ActivityCenter.module.css',
+      '.panel { width: 320px; }\n.urgent { background: amber; }\n',
+    );
+    writeRel(
+      dir,
+      'e2e/activity-center.spec.ts',
+      "const needsYou = { has: () => true };\nconst label = t('step.finished');\nconst s = page.locator('.urgent');\n",
+    );
+    writeRel(
+      dir,
+      'tests/activity-panel.test.tsx',
+      "import st from '../src/components/Activity/ActivityCenter.module.css';\nexport const cls = st.urgent;\n",
+    );
+    git(dir, 'add', 'src/components/Activity/ActivityCenter.module.css', 'e2e/activity-center.spec.ts', 'tests/activity-panel.test.tsx');
+    git(dir, 'commit', '-qm', 'restore urgent with test readers');
+    const parentSha = git(dir, 'rev-parse', 'HEAD').stdout.trim();
+    writeRel(dir, 'src/components/Activity/ActivityCenter.module.css', '.panel { width: 320px; }\n');
+    git(dir, 'add', 'src/components/Activity/ActivityCenter.module.css');
+    git(dir, 'commit', '-qm', 'drop urgent again');
+    const dropSha = git(dir, 'rev-parse', 'HEAD').stdout.trim();
+    const cssOrphans = domHooks.orphanCssClasses(dir, parentSha, dropSha);
+    assert.equal(cssOrphans.length, 1);
+    assert.equal(cssOrphans[0].hook, '.urgent');
+    assert.equal(cssOrphans[0].readers_total, 2);
+    assert.match(domHooks.message(cssOrphans), /2 linha\(s\) de teste/);
+    assert.ok(cssOrphans[0].readers.some((r) => r.startsWith('e2e/activity-center.spec.ts:3')));
+    assert.ok(cssOrphans[0].readers.some((r) => r.startsWith('tests/activity-panel.test.tsx:2')));
   });
 });

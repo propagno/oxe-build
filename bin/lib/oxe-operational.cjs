@@ -12085,12 +12085,20 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
   if (check && !check.ok && check.kind === 'dom_hooks') {
     gitOut(projectRoot, ['update-ref', '-m', 'oxe: checkpoint dom hooks', 'HEAD', oldHead, head]);
     restore();
+    const isCssFinding = (f) => Boolean(f && (f.className || (typeof f.hook === 'string' && f.hook.startsWith('.'))));
+    const hasCss = (check.dom_hooks || []).some(isCssFinding);
+    const hasHooks = (check.dom_hooks || []).some((f) => !isCssFinding(f));
+    const reason = hasCss && !hasHooks
+      ? `a mudança remove classe(s) CSS ainda em uso: ${check.tail}. Mantenha a regra CSS ou migre os consumidores/testes no escopo da tarefa`
+      : hasCss && hasHooks
+        ? `a mudança remove marcação e classe(s) CSS ainda em uso: ${check.tail}. Mantenha os atributos/classes ou ajuste os consumidores e testes no escopo da tarefa`
+        : `a mudança remove marcação que testes ainda leem: ${check.tail}. Mantenha esses atributos (data-*/cmdk-*) na nova marcação, ou ajuste os testes/helpers no escopo da tarefa`;
     return {
       committed: false,
       failed: true,
       kind: 'dom_hooks',
       dom_hooks: check.dom_hooks,
-      reason: `a mudança remove marcação que testes ainda leem: ${check.tail}. Mantenha esses atributos (data-*/cmdk-*) na nova marcação, ou ajuste os testes/helpers no escopo da tarefa`,
+      reason,
       snapshot: entries,
     };
   }

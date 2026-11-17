@@ -335,7 +335,17 @@ function activeHooksLesson(root, files, options = {}) {
 }
 
 function message(findings) {
-  return findings.map((f) => `${f.hook} (removido de ${f.removed_in}) ainda é lido por ${f.readers_total} linha(s) de teste — ${f.readers.slice(0, 3).map((r) => r.split(':').slice(0, 2).join(':')).join(', ')}${f.readers_total > 3 ? ', …' : ''}`).join('; ');
+  return findings.map((f) => {
+    const readerPaths = (f.readers || []).map((r) => String(r).split(':')[0]).filter(Boolean);
+    const hasProduct = readerPaths.some((p) => !TEST_PATH_RE.test(p));
+    const hasTest = readerPaths.some((p) => TEST_PATH_RE.test(p));
+    const readerLabel = hasProduct && hasTest
+      ? 'linha(s) (produto e teste)'
+      : hasProduct
+        ? 'linha(s) de produto'
+        : 'linha(s) de teste';
+    return `${f.hook} (removido de ${f.removed_in}) ainda é lido por ${f.readers_total} ${readerLabel} — ${f.readers.slice(0, 3).map((r) => r.split(':').slice(0, 2).join(':')).join(', ')}${f.readers_total > 3 ? ', …' : ''}`;
+  }).join('; ');
 }
 
 /**
@@ -385,8 +395,264 @@ function generatedMessage(found) {
 // ── G14 / G48 (OXB-C1 Adendo 2, OQ T13 / OXE-223): CSS classes guard ──────────────────────────────────────────────
 
 const CSS_FILE_RE = /\.(?:css|scss|sass|less)$/i;
+const CSS_MODULE_FILE_RE = /\.module\.(?:css|scss|sass|less)$/i;
 const CSS_CLASS_SELECTOR_RE = /(?<![\w-])\.([a-zA-Z_-][a-zA-Z0-9_-]{2,})(?![\w-])/g;
 const PRODUCT_CLASS_READER_RE = /\.(?:[cm]?[jt]sx?|vue|svelte|html?|astro)$/i;
+
+function isCssModuleFile(filePath) {
+  return Boolean(filePath) && CSS_MODULE_FILE_RE.test(String(filePath));
+}
+
+function normalizePosixPath(p) {
+  return String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function camelCaseCssName(cls) {
+  return String(cls || '').replace(/-+([a-zA-Z0-9])/g, (_, ch) => ch.toUpperCase());
+}
+
+function readFileAtRef(root, ref, relPath) {
+  const norm = normalizePosixPath(relPath);
+  if (!norm) return '';
+  if (ref) return git(root, ['show', `${ref}:${norm}`]);
+  const abs = path.resolve(root, norm);
+  const relCheck = path.relative(root, abs);
+  if (!relCheck || relCheck.startsWith('..') || path.isAbsolute(relCheck)) return '';
+  try {
+    const st = fs.statSync(abs);
+    if (!st.isFile() || st.size > 2 * 1024 * 1024) return '';
+    return fs.readFileSync(abs, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+function specifierMatchesCssModule(importerFile, rawSpec, targetCssFile) {
+  const spec = String(rawSpec || '').split(/[?#]/)[0].trim();
+  if (!spec) return false;
+  if (spec.startsWith('./') || spec.startsWith('../')) {
+    const baseDir = path.posix.dirname(importerFile);
+    const resolved = path.posix.normalize(baseDir === '.' ? spec : path.posix.join(baseDir, spec));
+    if (resolved === targetCssFile) return true;
+    return /[*?]/.test(resolved) ? globRe(resolved).test(targetCssFile) : false;
+  }
+  const stripped = spec.replace(/^(?:@[^/]*\/|~\/|\/)/, '');
+  if (!stripped) return false;
+  if (/[*?]/.test(stripped)) {
+    return globRe(stripped).test(targetCssFile) || globRe(`**/${stripped}`).test(targetCssFile);
+  }
+  return targetCssFile === spec || targetCssFile === stripped || targetCssFile.endsWith(`/${stripped}`);
+}
+
+function parseNamedBindings(braceBody, namedList) {
+  for (const rawPart of String(braceBody || '').split(',')) {
+    const part = rawPart.trim().replace(/^type\s+/, '');
+    if (!part) continue;
+    const m = /^(?:(['"`])([^'"`]+)\1|([A-Za-z_$][\w$]*))(?:\s+as\s+([A-Za-z_$][\w$]*)|:\s*([A-Za-z_$][\w$]*))?$/.exec(part);
+    if (!m) continue;
+    const exported = m[2] || m[3];
+    const local = m[4] || m[5] || exported;
+    if (exported && local) namedList.push({ exported, local });
+  }
+}
+
+function parseImportClause(clause, defaultBindings, namedList) {
+  const clean = String(clause || '').trim();
+  if (!clean || /^type\b/.test(clean)) return;
+  const braceMatch = /\{([^}]*)\}/.exec(clean);
+  if (braceMatch) parseNamedBindings(braceMatch[1], namedList);
+  const withoutBraces = clean.replace(/\{[^}]*\}/, '').replace(/,/g, ' ').trim();
+  const nsMatch = /\*\s+as\s+([A-Za-z_$][\w$]*)/.exec(withoutBraces);
+  if (nsMatch) defaultBindings.add(nsMatch[1]);
+  const defMatch = /^([A-Za-z_$][\w$]*)/.exec(withoutBraces.replace(/\*\s+as\s+[A-Za-z_$][\w$]*/, '').trim());
+  if (defMatch) defaultBindings.add(defMatch[1]);
+}
+
+function extractCssModuleImporterBindings(filePath, cleanSrc, targetCssFile) {
+  const defaultBindings = new Set();
+  const namedList = [];
+  const composesList = [];
+  const inlineLines = [];
+  let hasGlobImport = false;
+  let matchedImport = false;
+
+  const esRe = /(?:^|\r?\n)\s*(?:import|export)\s+([\s\S]*?)\s+from\s+(['"])([^'"]+)\2/g;
+  for (const m of cleanSrc.matchAll(esRe)) {
+    if (!specifierMatchesCssModule(filePath, m[3], targetCssFile)) continue;
+    matchedImport = true;
+    parseImportClause(m[1], defaultBindings, namedList);
+  }
+
+  const varReqRe = /\b(?:const|let|var)\s+(\{[^}]+\}|[A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?(?:require|import)\(\s*(['"])([^'"]+)\2\s*\)/g;
+  for (const m of cleanSrc.matchAll(varReqRe)) {
+    if (!specifierMatchesCssModule(filePath, m[3], targetCssFile)) continue;
+    matchedImport = true;
+    const lhs = m[1].trim();
+    if (lhs.startsWith('{')) parseNamedBindings(lhs.slice(1, -1), namedList);
+    else defaultBindings.add(lhs);
+  }
+
+  const inlineRe = /(?:require|import)\(\s*(['"])([^'"]+)\1\s*\)\s*(?:(?:\?\.)?\.\s*([A-Za-z_$][\w$]*)|(?:\?\.)?\[\s*(['"`])([^'"`]+)\4\s*\])/g;
+  for (const m of cleanSrc.matchAll(inlineRe)) {
+    if (!specifierMatchesCssModule(filePath, m[2], targetCssFile)) continue;
+    matchedImport = true;
+    const prop = m[3] || m[5];
+    if (prop) {
+      const lineNo = cleanSrc.slice(0, m.index).split(/\r?\n/).length;
+      inlineLines.push({ lineNo, prop });
+    }
+  }
+
+  const globImportRe = /import\.meta\.glob\(\s*(['"])([^'"]+)\1/g;
+  for (const m of cleanSrc.matchAll(globImportRe)) {
+    if (specifierMatchesCssModule(filePath, m[2], targetCssFile)) hasGlobImport = true;
+  }
+
+  if (CSS_FILE_RE.test(filePath)) {
+    const composesRe = /composes\s*:([^;{}\r\n]+?)\s+from\s+(['"])([^'"]+)\2/gi;
+    for (const m of cleanSrc.matchAll(composesRe)) {
+      if (!specifierMatchesCssModule(filePath, m[3], targetCssFile)) continue;
+      matchedImport = true;
+      const lineNo = cleanSrc.slice(0, m.index).split(/\r?\n/).length;
+      composesList.push({ lineNo, tokens: m[1].trim().split(/\s+/).filter(Boolean) });
+    }
+  }
+
+  return { matchedImport, hasGlobImport, defaultBindings, namedList, inlineLines, composesList };
+}
+
+function findCssModuleClassUsagesInFile(filePath, src, className, targetCssFile) {
+  const cleanSrc = stripMarkupComments(src);
+  const info = extractCssModuleImporterBindings(filePath, cleanSrc, targetCssFile);
+  if (!info.matchedImport) return { matchedImport: false, hasGlobImport: info.hasGlobImport, cleanSrc, readers: [] };
+
+  const camel = camelCaseCssName(className);
+  const candidateNames = camel && camel !== className ? [className, camel] : [className];
+  const namesAlt = candidateNames.map(escapeRegExp).join('|');
+  const literalClsRe = new RegExp(`['"\`](?:${namesAlt})['"\`]`);
+
+  const lines = cleanSrc.split(/\r?\n/);
+  const matchedLines = new Set();
+
+  for (const c of info.composesList) {
+    if (c.tokens.includes(className)) matchedLines.add(c.lineNo);
+  }
+  for (const inl of info.inlineLines) {
+    if (candidateNames.includes(inl.prop)) matchedLines.add(inl.lineNo);
+  }
+
+  for (const bind of info.defaultBindings) {
+    const bEsc = escapeRegExp(bind);
+    const dotRe = new RegExp(`\\b${bEsc}\\s*(?:\\?\\.)?\\.\\s*(?:${namesAlt})(?![\\w-])`);
+    const brkRe = new RegExp(`\\b${bEsc}\\s*(?:\\?\\.)?\\[\\s*['"\`](?:${namesAlt})['"\`]\\s*\\]`);
+    const dynBrkRe = new RegExp(`\\b${bEsc}\\s*(?:\\?\\.)?\\[`);
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      if (!line.includes(bind)) continue;
+      if (dotRe.test(line) || brkRe.test(line) || (dynBrkRe.test(line) && literalClsRe.test(line))) {
+        matchedLines.add(i + 1);
+      }
+    }
+    const destructRe = new RegExp(`\\{[^}]*\\b(?:${namesAlt})\\b[^}]*\\}\\s*=\\s*${bEsc}\\b`, 'g');
+    for (const m of cleanSrc.matchAll(destructRe)) {
+      const tokenMatch = new RegExp(`\\b(?:${namesAlt})\\b`).exec(m[0]);
+      const at = m.index + (tokenMatch ? tokenMatch.index : 0);
+      matchedLines.add(cleanSrc.slice(0, at).split(/\r?\n/).length);
+    }
+  }
+
+  for (const nb of info.namedList) {
+    if (!candidateNames.includes(nb.exported)) continue;
+    const localRe = new RegExp(`\\b${escapeRegExp(nb.local)}(?![\\w-])`);
+    for (let i = 0; i < lines.length; i += 1) {
+      if (localRe.test(lines[i])) matchedLines.add(i + 1);
+    }
+  }
+
+  const readers = [...matchedLines]
+    .sort((a, b) => a - b)
+    .map((ln) => `${filePath}:${ln}: ${(lines[ln - 1] || '').trim().slice(0, 160)}`);
+  return { matchedImport: true, hasGlobImport: info.hasGlobImport, cleanSrc, readers };
+}
+
+function findCssModuleTestSelectorReaders(root, ref, className, targetCssFile, directMatchedFiles) {
+  const esc = escapeRegExp(className);
+  const directQuoteDotRe = new RegExp(`['"\`]\\.${esc}(?![\\w-])`);
+  const combinatorDotRe = new RegExp(`['"\`][^'"\`\\r\\n]*[\\s>+~,(]\\.${esc}(?![\\w-])`);
+  const selectorApiDotRe = new RegExp(`(?:locator|querySelector(?:All)?|closest|\\$\\$?)\\([^\\r\\n]*['"\`/][^'"\`\\r\\n]*\\.${esc}(?![\\w-])`);
+  const attrClassRe = new RegExp(`\\[class[*~^$|]?=['"]?[^'"\\]]*\\b${esc}\\b`);
+  const domClassMatcherRe = new RegExp(
+    `(?:toHaveClass|classList\\.(?:contains|add|remove|toggle)|getElementsByClassName)\\([^)]*['"\`/]${esc}(?![\\w-])|` +
+    `\\bclassName\\b[^\\r\\n]{0,40}(?:includes|contains|match|test|toContain|toMatch|toEqual|===)\\([^)]*['"\`/]${esc}(?![\\w-])`,
+  );
+  const globStyleAccessRe = new RegExp(`\\.default\\.(?:${cssModuleCandidateNames(className).map(escapeRegExp).join('|')})(?![\\w-])`);
+
+  const args = ref ? ['grep', '-n', '-I', '-F', '-e', className, ref] : ['grep', '-n', '-I', '-F', '-e', className];
+  const raw = git(root, args);
+  const prefix = ref ? `${ref}:` : '';
+  const readers = [];
+  const fileSrcCache = new Map();
+
+  for (const l of raw.split(/\r?\n/)) {
+    if (!l) continue;
+    const stripped = prefix && l.startsWith(prefix) ? l.slice(prefix.length) : l;
+    const m = /^(.+?):(\d+):(.*)$/.exec(stripped);
+    if (!m) continue;
+    const file = m[1];
+    if (directMatchedFiles.has(file)) continue;
+    if (!TEST_PATH_RE.test(file) || !PRODUCT_CLASS_READER_RE.test(file) || NON_DOM_RE.test(file)) continue;
+    const cleanBody = stripMarkupComments(m[3]);
+    if (!cleanBody.trim()) continue;
+    const isSelector = directQuoteDotRe.test(cleanBody)
+      || combinatorDotRe.test(cleanBody)
+      || selectorApiDotRe.test(cleanBody)
+      || attrClassRe.test(cleanBody)
+      || domClassMatcherRe.test(cleanBody);
+    let isGlobAccess = false;
+    if (!isSelector && globStyleAccessRe.test(cleanBody)) {
+      if (!fileSrcCache.has(file)) fileSrcCache.set(file, stripMarkupComments(readFileAtRef(root, ref, file)));
+      const src = fileSrcCache.get(file);
+      isGlobAccess = extractCssModuleImporterBindings(file, src, targetCssFile).hasGlobImport;
+    }
+    if (!isSelector && !isGlobAccess) continue;
+    readers.push(`${file}:${m[2]}: ${cleanBody.trim().slice(0, 160)}`);
+  }
+  return readers;
+}
+
+function cssModuleCandidateNames(className) {
+  const camel = camelCaseCssName(className);
+  return camel && camel !== className ? [className, camel] : [className];
+}
+
+function findCssModuleReaders(root, ref, className, targetCssFile) {
+  const normCss = normalizePosixPath(targetCssFile);
+  const modBase = path.posix.basename(normCss);
+  const grepArgs = ref ? ['grep', '-l', '-I', '-F', '-e', modBase, ref] : ['grep', '-l', '-I', '-F', '-e', modBase];
+  const rawFiles = git(root, grepArgs);
+  const prefix = ref ? `${ref}:` : '';
+  const candidateFiles = [...new Set(
+    rawFiles.split(/\r?\n/).filter(Boolean).map((f) => (prefix && f.startsWith(prefix) ? f.slice(prefix.length) : f)),
+  )].filter((f) => (PRODUCT_CLASS_READER_RE.test(f) || CSS_FILE_RE.test(f)) && !NON_DOM_RE.test(f));
+
+  const readers = [];
+  const directMatchedFiles = new Set();
+  for (const file of candidateFiles) {
+    const src = readFileAtRef(root, ref, file);
+    if (!src) continue;
+    const res = findCssModuleClassUsagesInFile(file, src, className, normCss);
+    if (res.matchedImport) {
+      directMatchedFiles.add(file);
+      readers.push(...res.readers);
+    }
+  }
+  readers.push(...findCssModuleTestSelectorReaders(root, ref, className, normCss, directMatchedFiles));
+  return readers;
+}
 
 function extractCssClassesFromLine(lineText) {
   const cleaned = stripMarkupComments(lineText)
@@ -435,34 +701,37 @@ function removedCssClasses(diffText) {
     .map(([, v]) => v);
 }
 
-function isCssClassDefinedInTree(root, ref, className) {
-  const esc = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function isCssClassDefinedInTree(root, ref, className, cssFile = null) {
+  const esc = escapeRegExp(className);
   const selRe = new RegExp(`(?<![\\w-])\\.${esc}(?![\\w-])`);
-  if (ref) {
-    const raw = git(root, ['grep', '-n', '-I', '-F', `-e`, `.${className}`, ref]);
-    const prefix = `${ref}:`;
-    for (const l of raw.split(/\r?\n/)) {
-      if (!l) continue;
-      const stripped = l.startsWith(prefix) ? l.slice(prefix.length) : l;
-      const m = /^(.+?):(\d+):(.*)$/.exec(stripped);
-      if (!m || !CSS_FILE_RE.test(m[1]) || TEST_PATH_RE.test(m[1])) continue;
-      if (extractCssClassesFromLine(m[3]).includes(className) && selRe.test(stripMarkupComments(m[3]))) return true;
+  if (cssFile && isCssModuleFile(cssFile)) {
+    // CSS Modules are file-scoped: a homonymous class in another module never satisfies importers of `cssFile`.
+    const src = readFileAtRef(root, ref, cssFile);
+    if (!src) return false;
+    for (const line of src.split(/\r?\n/)) {
+      if (extractCssClassesFromLine(line).includes(className) && selRe.test(stripMarkupComments(line))) return true;
     }
     return false;
   }
-  // Working-tree scan via git grep (untracked/dirty tracked CSS files on disk)
-  const raw = git(root, ['grep', '-n', '-I', '-F', '-e', `.${className}`]);
+  const raw = ref
+    ? git(root, ['grep', '-n', '-I', '-F', '-e', `.${className}`, ref])
+    : git(root, ['grep', '-n', '-I', '-F', '-e', `.${className}`]);
+  const prefix = ref ? `${ref}:` : '';
   for (const l of raw.split(/\r?\n/)) {
     if (!l) continue;
-    const m = /^(.+?):(\d+):(.*)$/.exec(l);
-    if (!m || !CSS_FILE_RE.test(m[1]) || TEST_PATH_RE.test(m[1])) continue;
+    const stripped = prefix && l.startsWith(prefix) ? l.slice(prefix.length) : l;
+    const m = /^(.+?):(\d+):(.*)$/.exec(stripped);
+    if (!m || !CSS_FILE_RE.test(m[1]) || isCssModuleFile(m[1]) || TEST_PATH_RE.test(m[1])) continue;
     if (extractCssClassesFromLine(m[3]).includes(className) && selRe.test(stripMarkupComments(m[3]))) return true;
   }
   return false;
 }
 
-function findProductReadersOfCssClass(root, ref, className) {
-  const esc = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function findProductReadersOfCssClass(root, ref, className, options = {}) {
+  if (options && options.cssFile && isCssModuleFile(options.cssFile)) {
+    return findCssModuleReaders(root, ref, className, options.cssFile);
+  }
+  const esc = escapeRegExp(className);
   const tokenRe = new RegExp(`(?<![\\w/.$-])${esc}(?![\\w-])`);
   const args = ref ? ['grep', '-n', '-I', '-F', '-e', className, ref] : ['grep', '-n', '-I', '-F', '-e', className];
   const raw = git(root, args);
@@ -484,21 +753,16 @@ function findProductReadersOfCssClass(root, ref, className) {
   return readers;
 }
 
-/**
- * Checkpoint check (commit `sha` vs `parent`): CSS classes removed from `.css`/`.scss` files that are no longer
- * defined anywhere in the stylesheet tree, yet still referenced in product code (`src/`, `electron/`, etc.).
- */
-function orphanCssClasses(root, parent, sha, options = {}) {
-  const diff = git(root, ['diff', '--unified=0', '--no-color', parent, sha, '--', ...(options.paths || [])]);
-  const removed = removedCssClasses(diff);
+function collectOrphanCssFindings(root, ref, removed) {
   if (!removed.length) return [];
   const seen = new Set();
   const findings = [];
   for (const r of removed) {
-    if (seen.has(r.className)) continue;
-    seen.add(r.className);
-    if (isCssClassDefinedInTree(root, sha, r.className)) continue;
-    const readers = findProductReadersOfCssClass(root, sha, r.className);
+    const dedupKey = isCssModuleFile(r.file) ? `${r.file}::${r.className}` : `global::${r.className}`;
+    if (seen.has(dedupKey)) continue;
+    seen.add(dedupKey);
+    if (isCssClassDefinedInTree(root, ref, r.className, r.file)) continue;
+    const readers = findProductReadersOfCssClass(root, ref, r.className, { cssFile: r.file });
     if (!readers.length) continue;
     findings.push({
       hook: `.${r.className}`,
@@ -512,31 +776,22 @@ function orphanCssClasses(root, parent, sha, options = {}) {
 }
 
 /**
+ * Checkpoint check (commit `sha` vs `parent`): CSS classes removed from `.css`/`.scss` files that are no longer
+ * defined anywhere in the stylesheet tree (or that CSS Module file), yet still referenced by active importers or tests.
+ */
+function orphanCssClasses(root, parent, sha, options = {}) {
+  const diff = git(root, ['diff', '--unified=0', '--no-color', parent, sha, '--', ...(options.paths || [])]);
+  return collectOrphanCssFindings(root, sha, removedCssClasses(diff));
+}
+
+/**
  * Working-tree pre-commit check (for `runtime commit-task` and attempt verify): checks uncommitted `.css`/`.scss` diffs against HEAD.
  */
 function orphanCssClassesInWorkingTree(root, changedPaths = []) {
   const cssChanged = (changedPaths || []).map((p) => String(p || '').replace(/\\/g, '/')).filter((p) => CSS_FILE_RE.test(p));
   if (!cssChanged.length) return [];
   const diff = git(root, ['diff', '--unified=0', '--no-color', 'HEAD', '--', ...cssChanged]);
-  const removed = removedCssClasses(diff);
-  if (!removed.length) return [];
-  const seen = new Set();
-  const findings = [];
-  for (const r of removed) {
-    if (seen.has(r.className)) continue;
-    seen.add(r.className);
-    if (isCssClassDefinedInTree(root, null, r.className)) continue;
-    const readers = findProductReadersOfCssClass(root, null, r.className);
-    if (!readers.length) continue;
-    findings.push({
-      hook: `.${r.className}`,
-      className: r.className,
-      removed_in: r.file,
-      readers: readers.slice(0, 12),
-      readers_total: readers.length,
-    });
-  }
-  return findings;
+  return collectOrphanCssFindings(root, null, removedCssClasses(diff));
 }
 
 /**
@@ -548,6 +803,17 @@ function findCssGuardTests(root) {
     .split(/\r?\n/)
     .map((l) => l.trim().replace(/\\/g, '/'))
     .filter((f) => TEST_PATH_RE.test(f) && /css[-_.]?class.*guard|class[-_.]?guard.*css/i.test(f));
+}
+
+function resolveCssSourceForClass(root, taskCss, cls) {
+  if (!taskCss.length) return null;
+  if (taskCss.length === 1) return taskCss[0];
+  const selRe = new RegExp(`(?<![\\w-])\\.${escapeRegExp(cls)}(?![\\w-])`);
+  for (const cssPath of taskCss) {
+    const src = readFileAtRef(root, null, cssPath);
+    if (src && selRe.test(stripMarkupComments(src))) return cssPath;
+  }
+  return taskCss[0];
 }
 
 /**
@@ -581,12 +847,13 @@ function lintPlanCssRemovals(root, planDoc) {
       for (const m of prose.matchAll(/(?<![\w/-])\.([a-zA-Z_-][a-zA-Z0-9_-]{2,})(?![\w.-])/g)) {
         const cls = m[1];
         if (!/^(?:ts|tsx|js|jsx|css|scss|mjs|cjs|json|md)$/i.test(cls) && !candidateClasses.has(cls)) {
-          candidateClasses.set(cls, taskCss[0] || 'CSS');
+          candidateClasses.set(cls, resolveCssSourceForClass(root, taskCss, cls) || 'CSS');
         }
       }
     }
     for (const [cls, fromCss] of candidateClasses) {
-      const readers = findProductReadersOfCssClass(root, null, cls);
+      const cssOpt = CSS_FILE_RE.test(fromCss) ? { cssFile: fromCss } : {};
+      const readers = findProductReadersOfCssClass(root, null, cls, cssOpt);
       const outOfScopeReaders = readers.filter((r) => !taskScope.has(r.split(':')[0]));
       if (outOfScopeReaders.length) {
         findings.push({
@@ -629,6 +896,7 @@ module.exports = {
   cssRemovalLintMessages,
   MARKUP_RE,
   CSS_FILE_RE,
+  CSS_MODULE_FILE_RE,
   TEST_PATH_RE,
   stripMarkupComments,
 };
