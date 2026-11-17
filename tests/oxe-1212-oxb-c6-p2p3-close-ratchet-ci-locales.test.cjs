@@ -275,4 +275,30 @@ describe('OXB-C6 P3 #7: G34 exemption for catalog cards whose CAs only read shar
     assert.ok(resMixed.gaps.some((g) => /BRD-n/.test(g)));
     assert.ok(resMixed.gaps.some((g) => /quais medidas/.test(g)));
   });
+
+  it('OXB-C9 (OXE-270): ignores *.test.tsx / *.spec.tsx citations when checking shared/locales/** exemption', () => {
+    const ox270Card = [
+      '# OXE-270 — Remover chaves mortas em shared/locales/*',
+      '## Descrição',
+      'Ajuste de textos sem alterar componentes de `src/ui/Composer.tsx`.',
+      '## Critérios de aceite',
+      '- **CA-1 (A1)** — Dado `shared/locales/pt-BR.json` e `shared/locales/en-US.json`, quando conferir as chaves citadas em `u62-u63-fold-and-composer.test.tsx:79`, então o catálogo fica consistente · Teste: `npx vitest run u62-u63-fold-and-composer.test.tsx` · Risco: P2',
+      '- **CA-2 (A2)** — Dado `e2e/foo.spec.jsx:10`, quando conferir o texto em `shared/locales/**`, então não sobram chaves antigas · Teste: `npx vitest run tests/unit/locales.test.ts` · Risco: P2',
+    ].join('\n');
+
+    const res = op.uiCardGaps(ox270Card, { labels: ['area-marca'] });
+    assert.equal(res.isUi, false);
+    assert.deepEqual(res.gaps, []);
+    assert.equal(res.locale_only_exempt, true);
+
+    const uiComponentCard = [
+      '# OXE-271 — Ajusta componente',
+      '## Critérios de aceite',
+      '- **CA-1 (A1)** — Confere `shared/locales/pt-BR.json` e `Composer.tsx` (com `u62-u63-fold-and-composer.test.tsx:79`) · Teste: manual · Risco: P1',
+    ].join('\n');
+
+    const resUi = op.uiCardGaps(uiComponentCard, { labels: ['area-marca'] });
+    assert.equal(resUi.isUi, true);
+    assert.ok(resUi.gaps.length >= 2);
+  });
 });

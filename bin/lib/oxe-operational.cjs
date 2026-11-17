@@ -3575,7 +3575,11 @@ function criteriaOnlyReadSharedLocales(crit) {
     if (TEST_FILE_RE.test(p)) continue;
     if (!/^shared\/locales(?:\/|$)/i.test(p)) return false;
   }
-  if (/\b[\w.-]+\.(?:tsx|jsx|css|scss|less|kt)\b/i.test(combined)) return false;
+  // OXB-C9 (OXE-270): citing test files like `u62-u63-fold-and-composer.test.tsx:79` in a catalog CA stays exempt
+  const NON_LOCALE_EXT_RE = /\b[\w.-]+\.(?:tsx|jsx|css|scss|less|kt)\b/gi;
+  for (const m of combined.matchAll(NON_LOCALE_EXT_RE)) {
+    if (!/\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(m[0])) return false;
+  }
   return true;
 }
 

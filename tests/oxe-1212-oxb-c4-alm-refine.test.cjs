@@ -315,4 +315,29 @@ describe('OXB-C4: alm refine cross-program --spec & PLAN.json, G34 ms/system-col
       /mudou depois da coleta/,
     );
   });
+
+  it('OXB-C9 (OXE-270): alm refine lint keeps shared/locales/** G34 exemption when CAs cite *.test.tsx / *.spec.tsx', async () => {
+    const { codeF3 } = setupMultiProgramWorkspace();
+    fs.writeFileSync(path.join(codeF3, '.oxe', 'alm', 'refine', 'OXE-270.json'), JSON.stringify({
+      key: 'OXE-270',
+      kind: 'story',
+      labels: ['area-marca'],
+      description_hash: 'h270',
+      description: '',
+    }));
+    const ox270Md = makeCardSpec({
+      key: 'OXE-270',
+      title: 'Limpeza de chaves no catálogo',
+      bodyLines: ['- Contexto: chaves usadas por `src/components/Composer.tsx`, alterações restritas ao catálogo.'],
+      criteriaLines: [
+        '1. **CA-1 (A1)** — Dado `shared/locales/pt-BR.json` e `shared/locales/en-US.json`, quando conferir as chaves referidas em `u62-u63-fold-and-composer.test.tsx:79`, então não restam chaves órfãs · Teste: `npx vitest run u62-u63-fold-and-composer.test.tsx` · Risco: P2',
+      ],
+    });
+    fs.writeFileSync(path.join(codeF3, '.oxe', 'alm', 'specs', 'OXE-270.md'), ox270Md);
+
+    const out = await op.runtimeAlmRefine(codeF3, null, { action: 'lint', keys: ['OXE-270'] });
+    assert.equal(out.results.length, 1);
+    assert.equal(out.results[0].ok, true, JSON.stringify(out.results[0]));
+    assert.equal(out.results[0].errors.length, 0, JSON.stringify(out.results[0].errors));
+  });
 });
