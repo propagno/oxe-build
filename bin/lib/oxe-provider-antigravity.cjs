@@ -54,7 +54,7 @@ function normalizeProviderConfig(provider) {
 /**
  * Resolves options passed to `AntigravityCliAdapter` from CLI flags, `.oxe/config.json` `runtime.provider`, and `process.env`.
  */
-function resolveAntigravityOptions({ flagModel = null, timeoutMs = undefined, persisted = null, env = process.env } = {}) {
+function resolveAntigravityOptions({ flagModel = null, timeoutMs = undefined, persisted = null, cwd = undefined, env = process.env } = {}) {
   const norm = normalizeProviderConfig(persisted) || {};
   const isPersistedAgy = isAntigravityAlias(norm.adapter || norm.name);
   const persistedModel = isPersistedAgy && norm.model && norm.model !== HTTP_DEFAULT_MODEL ? String(norm.model) : null;
@@ -67,6 +67,7 @@ function resolveAntigravityOptions({ flagModel = null, timeoutMs = undefined, pe
   return {
     ...(command ? { command } : {}),
     model,
+    ...(cwd ? { cwd } : {}),
     ...(mode !== undefined ? { mode } : {}),
     ...(outputFormat ? { outputFormat } : {}),
     ...(timeoutMs ? { timeoutMs } : {}),

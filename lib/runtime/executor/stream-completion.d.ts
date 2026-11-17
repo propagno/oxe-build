@@ -37,6 +37,8 @@ export interface StreamCompletionOptions {
     tools?: ToolSchema[];
     maxTokens?: number;
     timeoutMs?: number;
+    /** Active workspace directory for CLI adapters (e.g. reading oversized prompt files inside the task workspace). */
+    cwd?: string;
 }
 export interface ToolSchema {
     type: 'function';

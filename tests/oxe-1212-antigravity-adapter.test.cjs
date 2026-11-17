@@ -402,4 +402,139 @@ process.stdout.write(JSON.stringify({ event: 'result', result: { conversation_id
     const compiledJs = fs.readFileSync(path.resolve(__dirname, '../lib/runtime/executor/adapters/antigravity-cli.js'), 'utf8');
     assert.ok(srcTs.includes('extractErrorString') && compiledJs.includes('extractErrorString'), 'lib/runtime must match compiled TypeScript source');
   });
+
+  it('OXB-C12: delivers prompts > maxArgvChars via temp workspace file (.oxe/tmp/agy-bridge-*) for view_file instead of ignored stdin and cleans up on both success and failure', async () => {
+    const oversized = 'A'.repeat(25_000);
+    const argsShort = agyProvider.buildAntigravityArgs('short prompt', { maxArgvChars: 16_000 });
+    assert.equal(argsShort.stdinPrompt, null);
+    assert.equal(argsShort.promptFile, null);
+    assert.equal(argsShort.args[argsShort.args.length - 1], 'short prompt');
+
+    const argsLong = agyProvider.buildAntigravityArgs(oversized, { maxArgvChars: 16_000, promptFile: '.oxe/tmp/agy-bridge-1-1.txt' });
+    assert.equal(argsLong.stdinPrompt, null, 'must NOT rely on stdin when prompt exceeds maxArgvChars');
+    assert.equal(argsLong.promptFile, '.oxe/tmp/agy-bridge-1-1.txt');
+    const pFlagIdx = argsLong.args.indexOf('-p');
+    assert.match(argsLong.args[pFlagIdx + 1], /Read the entire file \.oxe\/tmp\/agy-bridge-1-1\.txt with view_file/);
+    assert.doesNotMatch(argsLong.args[pFlagIdx + 1], /Follow the OXE bridge prompt on stdin/);
+
+    // Shim mimics real agy.exe: IGNORES process.stdin completely; when -p instructs reading `.oxe/tmp/...`, reads via path from cwd
+    const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-c12-agy-file-'));
+    dirs.push(shimDir);
+    const shimJs = path.join(shimDir, 'agy-file-shim.cjs');
+    const stateFile = path.join(shimDir, 'observed.json');
+    fs.writeFileSync(shimJs, `'use strict';
+const fs = require('fs');
+const path = require('path');
+const argv = process.argv.slice(2);
+if (argv.includes('--version')) { process.stdout.write('1.6.0\\n'); process.exit(0); }
+const pIdx = argv.indexOf('-p');
+const promptArg = pIdx >= 0 ? argv[pFlagIdxFix(pIdx)] : '';
+function pFlagIdxFix(i) { return i + 1; }
+let receivedPrompt = promptArg;
+let readFromFile = null;
+const m = /Read the entire file (\\.oxe\\/tmp\\/[^\\s]+) with view_file/.exec(promptArg);
+if (m) {
+  readFromFile = m[1];
+  const fullPath = path.resolve(process.cwd(), m[1]);
+  receivedPrompt = fs.readFileSync(fullPath, 'utf8');
+}
+const mode = process.env.OXE_C12_MODE || 'ok';
+const log = fs.existsSync(${JSON.stringify(stateFile)}) ? JSON.parse(fs.readFileSync(${JSON.stringify(stateFile)}, 'utf8')) : [];
+log.push({ cwd: process.cwd(), promptArgLen: promptArg.length, receivedLen: receivedPrompt.length, readFromFile, hasMarker: receivedPrompt.includes('PACK_LARGE_MARKER_') });
+fs.writeFileSync(${JSON.stringify(stateFile)}, JSON.stringify(log));
+if (mode === 'fail') {
+  process.stdout.write(JSON.stringify({ event: 'result', result: { status: 'ERROR', error: 'simulated failure after file read' } }) + '\\n');
+  process.exit(1);
+}
+const reply = receivedPrompt.includes('TOOL RESULT (write_file')
+  ? { content: 'done', tool_calls: [{ name: 'finish_task', arguments: { summary: 'wrote via temp prompt file' } }] }
+  : { content: 'writing', tool_calls: [{ name: 'write_file', arguments: { path: 'src/hello.js', content: 'module.exports = "c12-file-ok";\\n' } }] };
+process.stdout.write(JSON.stringify({ event: 'init', conversation_id: 'c12-' + log.length }) + '\\n');
+process.stdout.write(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: JSON.stringify(reply), usage: { input_tokens: 12000, output_tokens: 50, thinking_tokens: 12, total_tokens: 12062 } } }) + '\\n');
+`, 'utf8');
+
+    const padding = 'PACK_LARGE_MARKER_' + 'x'.repeat(20_000);
+    const projectDir = makeProject([
+      {
+        id: 'T1',
+        title: 'Large prompt over maxArgvChars',
+        wave: 1,
+        files: ['src/hello.js'],
+        acceptance: ['A1'],
+        notes: padding,
+        verify: { commands: ['node -e "const v = require(\'./src/hello.js\'); if (v !== \'c12-file-ok\') process.exit(1);"'] },
+      },
+    ]);
+
+    const res = await op.runRuntimeExecute(projectDir, null, {
+      skipPreflight: true,
+      adapter: 'antigravity',
+      adapterOptions: {
+        command: process.execPath,
+        prefixArgs: [shimJs],
+        maxArgvChars: 2000,
+      },
+    });
+    assert.equal(res.result.status, 'completed');
+    assert.equal(fs.readFileSync(path.join(projectDir, 'src/hello.js'), 'utf8'), 'module.exports = "c12-file-ok";\n');
+
+    const obs = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    assert.equal(obs.length, 2);
+    assert.match(obs[0].readFromFile || '', /^\.oxe\/tmp\/agy-bridge-/);
+    assert.ok(obs[0].receivedLen > 2000, `expected full bridge prompt > 2000 read via view_file, got ${obs[0].receivedLen}`);
+    assert.equal(obs[0].hasMarker, true);
+
+    const tmpDir = path.join(projectDir, '.oxe', 'tmp');
+    const leftovers = fs.existsSync(tmpDir) ? fs.readdirSync(tmpDir).filter((n) => n.startsWith('agy-bridge-')) : [];
+    assert.deepEqual(leftovers, [], 'temp prompt files must be removed after turn completion');
+
+    // Also verify default 16k maxArgvChars delivers > 20k user prompts verbatim via .oxe/tmp/agy-bridge-* and cleans up
+    fs.writeFileSync(stateFile, '[]', 'utf8');
+    const directAdapter = agyProvider.createAntigravityAdapter({
+      command: process.execPath,
+      prefixArgs: [shimJs],
+      cwd: projectDir,
+    });
+    const bigPayload = 'PACK_LARGE_MARKER_' + 'y'.repeat(21_000) + '_TAIL_OK';
+    await directAdapter.createCompletion()({
+      baseUrl: '',
+      apiKey: '',
+      model: 'default',
+      messages: [{ role: 'user', content: bigPayload }],
+      tools: [],
+    });
+    const directObs = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    assert.equal(directObs.length, 1);
+    assert.match(directObs[0].readFromFile || '', /^\.oxe\/tmp\/agy-bridge-/);
+    assert.ok(directObs[0].receivedLen > 20_000, `expected > 20k prompt read via view_file, got ${directObs[0].receivedLen}`);
+    assert.equal(directObs[0].hasMarker, true);
+    const afterDirectLeftovers = fs.existsSync(tmpDir) ? fs.readdirSync(tmpDir).filter((n) => n.startsWith('agy-bridge-')) : [];
+    assert.deepEqual(afterDirectLeftovers, [], 'temp prompt files must be removed after direct >20k completion');
+
+    // Error path must ALSO remove the temporary prompt file
+    process.env.OXE_C12_MODE = 'fail';
+    try {
+      const failAdapter = agyProvider.createAntigravityAdapter({
+        command: process.execPath,
+        prefixArgs: [shimJs],
+        cwd: projectDir,
+        maxArgvChars: 100,
+      });
+      await assert.rejects(
+        () => failAdapter.createCompletion()({
+          baseUrl: '',
+          apiKey: '',
+          model: 'default',
+          cwd: projectDir,
+          messages: [{ role: 'user', content: 'LARGE_FAIL_PROMPT_' + 'z'.repeat(1000) }],
+          tools: [],
+        }),
+        /simulated failure/,
+      );
+      const afterFailLeftovers = fs.existsSync(tmpDir) ? fs.readdirSync(tmpDir).filter((n) => n.startsWith('agy-bridge-')) : [];
+      assert.deepEqual(afterFailLeftovers, [], 'temp prompt files must also be cleaned up when agy fails');
+    } finally {
+      delete process.env.OXE_C12_MODE;
+    }
+  });
 });

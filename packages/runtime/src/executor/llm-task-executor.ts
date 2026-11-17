@@ -338,6 +338,7 @@ export class LlmTaskExecutor implements TaskExecutor {
           tools: tools.length > 0 ? tools : undefined,
           maxTokens: this.provider.maxTokens,
           timeoutMs: this.provider.timeoutMs,
+          cwd,
         });
       } catch (err) {
         // OXB-148: the adapter classifies its failure (context / quota / llm / env) and reports what it already cost.

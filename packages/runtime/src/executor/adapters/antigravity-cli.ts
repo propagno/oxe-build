@@ -1,4 +1,6 @@
+import fs from 'fs';
 import os from 'os';
+import path from 'path';
 import { CLI_FAILURE_QUOTA_RE } from '../quota-patterns';
 import { spawn, spawnSync } from 'child_process';
 import type { CompletionResponse, StreamCompletionOptions, ToolCall } from '../stream-completion';
@@ -36,8 +38,10 @@ export interface AntigravityCliAdapterOptions {
   /** Extra attempts when the reply is not the expected JSON (default 2). */
   parseRetries?: number;
   extraArgs?: string[];
-  /** Maximum prompt length passed directly via `-p <prompt>` before falling back to stdin (default 16_000 chars). */
+  /** Maximum prompt length passed directly via `-p <prompt>` before falling back to a workspace prompt file (default 16_000 chars). */
   maxArgvChars?: number;
+  /** Default workspace directory used when writing oversized prompt files and spawning `agy`. */
+  cwd?: string;
   /** Additional environment variable names allowed through `childProcessEnv` scrub. */
   allowEnv?: string[];
   /** Memory gate floor in MB before spawning `agy` (default `$OXE_EXECUTOR_MIN_FREE_MB` or 0). */
@@ -70,7 +74,13 @@ export interface ParsedAntigravityStream {
 
 const DEFAULT_TIMEOUT_MS = 20 * 60_000;
 const DEFAULT_MAX_ARGV_CHARS = 16_000;
-const STDIN_BRIDGE_INSTRUCTION = 'Follow the OXE bridge prompt on stdin and output ONLY the JSON object.';
+const DEFAULT_CMD_ARGV_CHARS = 6_000;
+let promptFileSeq = 0;
+
+function promptFileInstruction(relPath: string): string {
+  const clean = String(relPath || '').replace(/\\/g, '/');
+  return `Read the entire file ${clean} with view_file (continuing to the end if paginated) and follow every instruction inside it, outputting ONLY the JSON object.`;
+}
 
 const CONTEXT_RE = /prompt is too long|too many tokens|context (window|length)|input is too long|maximum context|exceeds? the (model'?s? )?(context|token)|token limit exceeded/i;
 const QUOTA_RE = CLI_FAILURE_QUOTA_RE;
@@ -358,13 +368,15 @@ export function buildAntigravityArgs(
     outputFormat?: 'stream-json' | 'json';
     extraArgs?: string[];
     maxArgvChars?: number;
+    promptFile?: string | null;
   } = {},
-): { args: string[]; stdinPrompt: string | null } {
+): { args: string[]; stdinPrompt: string | null; promptFile: string | null } {
   const format = options.outputFormat || 'stream-json';
   const mode = options.mode === undefined ? 'plan' : options.mode;
   const maxArgv = options.maxArgvChars ?? DEFAULT_MAX_ARGV_CHARS;
-  const useStdin = prompt.length > maxArgv;
-  const promptArg = useStdin ? STDIN_BRIDGE_INSTRUCTION : prompt;
+  const useFile = prompt.length > maxArgv && Boolean(options.promptFile);
+  const promptFile = useFile && options.promptFile ? String(options.promptFile).replace(/\\/g, '/') : null;
+  const promptArg = promptFile ? promptFileInstruction(promptFile) : prompt;
   const args = [
     ...(options.prefixArgs ?? []),
     '--output-format',
@@ -376,7 +388,7 @@ export function buildAntigravityArgs(
     '-p',
     promptArg,
   ];
-  return { args, stdinPrompt: useStdin ? prompt : null };
+  return { args, stdinPrompt: null, promptFile };
 }
 
 export class AntigravityCliAdapter implements ExecutorAdapter {
@@ -461,7 +473,7 @@ export class AntigravityCliAdapter implements ExecutorAdapter {
 
       const parsedStream = await singleFlight(async () => {
         await this.waitForMemory();
-        return this.runOnce(prompt, opts.timeoutMs, opts.attemptModel || null);
+        return this.runOnce(prompt, opts.timeoutMs, opts.attemptModel || null, opts.cwd);
       });
 
       costUsd += parsedStream.usage.costUsd;
@@ -517,31 +529,65 @@ export class AntigravityCliAdapter implements ExecutorAdapter {
     }
   }
 
-  private runOnce(prompt: string, timeoutMs?: number, modelOverride?: string | null): Promise<ParsedAntigravityStream> {
+  private runOnce(
+    prompt: string,
+    timeoutMs?: number,
+    modelOverride?: string | null,
+    cwdOverride?: string,
+  ): Promise<ParsedAntigravityStream> {
     const executable = this.executable();
     if (!executable) return Promise.reject(new Error(`${this.command} não encontrado no PATH`));
     const chosen = modelOverride || this.options.model || null;
+    const workCwd = cwdOverride || this.options.cwd || process.cwd();
+    const configuredMaxArgv = this.options.maxArgvChars ?? DEFAULT_MAX_ARGV_CHARS;
+    const effectiveMaxArgv = process.platform === 'win32' && /\.(cmd|bat)$/i.test(executable)
+      ? Math.min(configuredMaxArgv, DEFAULT_CMD_ARGV_CHARS)
+      : configuredMaxArgv;
+
+    let absPromptFile: string | null = null;
+    let relPromptFile: string | null = null;
+    if (prompt.length > effectiveMaxArgv) {
+      relPromptFile = path.posix.join('.oxe', 'tmp', `agy-bridge-${process.pid}-${++promptFileSeq}.txt`);
+      absPromptFile = path.resolve(workCwd, relPromptFile);
+      fs.mkdirSync(path.dirname(absPromptFile), { recursive: true });
+      fs.writeFileSync(absPromptFile, prompt, 'utf8');
+    }
+
+    const cleanupPromptFile = () => {
+      if (!absPromptFile) return;
+      try { fs.rmSync(absPromptFile, { force: true }); } catch { /* ignore */ }
+    };
+
     const built = buildAntigravityArgs(prompt, {
       prefixArgs: this.options.prefixArgs,
       model: chosen,
       mode: this.options.mode,
       outputFormat: this.options.outputFormat,
       extraArgs: this.options.extraArgs,
-      maxArgvChars: this.options.maxArgvChars,
+      maxArgvChars: effectiveMaxArgv,
+      promptFile: relPromptFile,
     });
     const spawnable = buildSpawnable(executable, built.args);
     const limit = timeoutMs ?? this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
     return new Promise((resolve, reject) => {
-      const proc = spawn(spawnable.file, spawnable.args, {
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: childProcessEnv(process.env, { allow: this.allowedEnv }),
-        windowsVerbatimArguments: spawnable.windowsVerbatimArguments,
-      });
+      let proc;
+      try {
+        proc = spawn(spawnable.file, spawnable.args, {
+          cwd: workCwd,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: childProcessEnv(process.env, { allow: this.allowedEnv }),
+          windowsVerbatimArguments: spawnable.windowsVerbatimArguments,
+        });
+      } catch (err) {
+        cleanupPromptFile();
+        return reject(err);
+      }
       let out = '';
       let err = '';
       const timer = setTimeout(() => {
         proc.kill();
+        cleanupPromptFile();
         const e = new Error(`agy -p excedeu ${limit} ms (timeout por chamada; executor.timeout_ms / --llm-timeout-ms)`) as Error & { kind: string; costUsd: number };
         e.kind = 'timeout';
         e.costUsd = 0;
@@ -551,10 +597,12 @@ export class AntigravityCliAdapter implements ExecutorAdapter {
       proc.stderr.on('data', (chunk) => { err += chunk; });
       proc.on('error', (e) => {
         clearTimeout(timer);
+        cleanupPromptFile();
         reject(e);
       });
       proc.on('close', (code) => {
         clearTimeout(timer);
+        cleanupPromptFile();
         const parsed = parseAntigravityEvents(out);
         if (code !== 0 || parsed.isError || (!parsed.events.length && !out.trim())) {
           return reject(agyFailure({ code, stdout: out, stderr: err, parsed, promptChars: prompt.length }));
@@ -565,11 +613,7 @@ export class AntigravityCliAdapter implements ExecutorAdapter {
         }
         resolve(parsed);
       });
-      if (built.stdinPrompt !== null) {
-        proc.stdin.end(built.stdinPrompt);
-      } else {
-        proc.stdin.end();
-      }
+      proc.stdin.end();
     });
   }
 }

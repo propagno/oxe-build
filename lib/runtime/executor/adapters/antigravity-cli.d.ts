@@ -23,8 +23,10 @@ export interface AntigravityCliAdapterOptions {
     /** Extra attempts when the reply is not the expected JSON (default 2). */
     parseRetries?: number;
     extraArgs?: string[];
-    /** Maximum prompt length passed directly via `-p <prompt>` before falling back to stdin (default 16_000 chars). */
+    /** Maximum prompt length passed directly via `-p <prompt>` before falling back to a workspace prompt file (default 16_000 chars). */
     maxArgvChars?: number;
+    /** Default workspace directory used when writing oversized prompt files and spawning `agy`. */
+    cwd?: string;
     /** Additional environment variable names allowed through `childProcessEnv` scrub. */
     allowEnv?: string[];
     /** Memory gate floor in MB before spawning `agy` (default `$OXE_EXECUTOR_MIN_FREE_MB` or 0). */
@@ -79,9 +81,11 @@ export declare function buildAntigravityArgs(prompt: string, options?: {
     outputFormat?: 'stream-json' | 'json';
     extraArgs?: string[];
     maxArgvChars?: number;
+    promptFile?: string | null;
 }): {
     args: string[];
     stdinPrompt: string | null;
+    promptFile: string | null;
 };
 export declare class AntigravityCliAdapter implements ExecutorAdapter {
     private readonly options;

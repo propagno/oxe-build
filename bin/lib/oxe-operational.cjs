@@ -1926,7 +1926,7 @@ function createAdapterExecutor(runtime, projectRoot, activeSession, options, get
   const adapterId = agyLib.normalizeAdapterId(rawAdapter) || 'http';
   if (typeof runtime.createExecutorAdapter !== 'function') throw new Error('Runtime não exporta createExecutorAdapter.');
   const resolvedAdapterOpts = adapterId === 'antigravity'
-    ? { ...agyLib.resolveAntigravityOptions({ persisted }), ...(options.adapterOptions || {}) }
+    ? { ...agyLib.resolveAntigravityOptions({ persisted, cwd: projectRoot }), ...(options.adapterOptions || {}) }
     : (options.adapterOptions || {});
   const adapter = runtime.createExecutorAdapter(adapterId, {
     claude: adapterId === 'claude' ? resolvedAdapterOpts : {},
