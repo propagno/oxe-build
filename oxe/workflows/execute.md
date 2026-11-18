@@ -31,19 +31,19 @@ Ao receber qualquer argumento, verificar flags antes de iniciar o fluxo principa
 </flags_processing>
 
 <execution_modes>
-**Modo Solo (padrão):** seguir `PLAN.md` do escopo resolvido da sessão onda a onda sem `plan-agents.json`. O agente implementa diretamente cada tarefa Tn da onda atual, roda a verificação e avança. Não exige nenhum artefato além do PLAN.md.
+**Modo Solo (padrão):** seguir **`PLAN.json`** (fonte primária executada pelo runtime) e **`PLAN.md`** (visão legível) do escopo resolvido da sessão onda a onda sem `plan-agents.json`. O agente implementa diretamente cada tarefa Tn da onda atual, roda a verificação e avança. Testes em `acceptance_tests` congelados no compile **são imutáveis** pelo executor (qualquer ajuste exige CR + `oxe-cc plan amend-test`).
 
 **Modo com Agentes (extensão):** quando existe `plan-agents.json` válido no escopo resolvido (schema 2+, lifecycle ativo, runId alinhado ao STATE), adotar roles e personas por agente conforme o blueprint.
 
 **Seleção de execução (redução de requisições):** quando o plano tem 2+ ondas, o usuário escolhe entre Completo (1 sessão), Por onda (N sessões) ou Por tarefa (N tarefas). A escolha é feita **uma vez** no início.
 
-Se existir apenas **`QUICK.md`** no escopo resolvido: tratar passos numerados como onda única (modo sempre Completo).
+Se existir apenas **`QUICK.md`** no escopo resolvido: tratar passos numerados como onda única (modo sempre Completo), usando `oxe-cc quick commit` / `oxe-cc quick done` para gerar commits com trailer `OXE-Quick`.
 </execution_modes>
 
 <modo_solo>
-## Modo Solo — Execução direta do PLAN.md
+## Modo Solo — Execução direta do PLAN.json / PLAN.md
 
-O modo padrão. Funciona sem `plan-agents.json`. O agente lê PLAN.md, segue as tarefas Tn na ordem das ondas, implementa e verifica.
+O modo padrão. Funciona sem `plan-agents.json`. O agente lê `PLAN.json` e `PLAN.md`, segue as tarefas Tn na ordem das ondas, implementa e verifica. Sempre que `oxe-cc runtime` estiver disponível, usar `oxe-cc runtime execute` (ou `oxe-cc runtime commit-task T<n>` para trabalho já pronto na árvore) para que todo commit leve os trailers `OXE-Task` / `OXE-Quick` exigidos por `oxe-cc ship check-origin <#PR>` no `/oxe-ship`.
 
 **Checklist de onda (solo):**
 ```markdown
@@ -62,7 +62,7 @@ O modo padrão. Funciona sem `plan-agents.json`. O agente lê PLAN.md, segue as 
 
 **Argumento direto:** se o foco/argumento recebido já for `A`, `B` ou `C` (sozinho), usar diretamente como seleção de modo sem apresentar o menu.
 
-**Quando aplicar:** ao início do execute, se PLAN.md tiver **2 ou mais ondas**. Apresentar UMA VEZ e armazenar a escolha em STATE.md para não perguntar novamente nas rodadas seguintes.
+**Quando aplicar:** ao início do execute, se `PLAN.json` / `PLAN.md` tiver **2 ou mais ondas**. Apresentar UMA VEZ e armazenar a escolha em STATE.md para não perguntar novamente nas rodadas seguintes.
 
 **Não aplicar** quando: QUICK.md (sempre Completo), PLAN.md com 1 onda (executar diretamente).
 
@@ -124,7 +124,7 @@ Quando o comando `**Verificar:**` de uma tarefa `Tn` falha, **não parar silenci
 
 **Context pack prioritário:** antes de abrir o conjunto amplo de artefatos, resolver `.oxe/context/packs/execute.md` e `.oxe/context/packs/execute.json` como entrada principal do passo. Se o pack estiver fresco/coerente, usar `read_order` e `selected_artifacts` para limitar o reconhecimento inicial à onda/tarefa atual. Se estiver stale, ausente ou com lacunas críticas, fazer fallback explícito para leitura direta e registrar isso no runtime ou no resumo da execução.
 
-**Artefatos racionais obrigatórios:** quando a execução vier de `PLAN.md`, ler antes da primeira mutação:
+**Artefatos racionais obrigatórios:** quando a execução vier de `PLAN.json` / `PLAN.md`, ler antes da primeira mutação:
 - `IMPLEMENTATION-PACK.md` / `IMPLEMENTATION-PACK.json`
 - `REFERENCE-ANCHORS.md`
 - `FIXTURE-PACK.md` / `FIXTURE-PACK.json`
@@ -138,8 +138,9 @@ O `execute` é **pack-first**, não apenas `plan-first`. Esses artefatos existem
 **Runtime operacional:** usar `EXECUTION-RUNTIME.md` do escopo resolvido como artefato tático da execução. Ele deve refletir agentes ativos, onda atual, handoffs, evidências, retries, checkpoints pendentes e tarefas bloqueadas. O `PLAN.md` continua estratégico; o runtime regista a operação do ciclo.
 
 **Runtime enterprise como caminho padrão:** quando `oxe-cc runtime` estiver disponível no ambiente, preferir o caminho formal deste passo:
-- executar `oxe-cc runtime compile --dir <projeto>` antes da primeira mutação para materializar `compiled_graph`, `canonical_state` e `verification_suite`;
-- tratar `ACTIVE-RUN.json` e `.oxe/runs/<run_id>.json` como fonte operacional primária da onda/tarefa atual;
+- executar `oxe-cc runtime compile --dir <projeto>` antes da primeira mutação para materializar `compiled_graph`, `canonical_state` e `verification_suite` (congelando `acceptance_tests` de `PLAN.json`, que não podem ser editados pelo executor);
+- executar as tarefas via `oxe-cc runtime execute --dir <projeto>` (com `--checkpoint-commits` quando aplicável) ou fechar trabalho já na árvore com `oxe-cc runtime commit-task T<n>` — todo commit precisa do trailer `OXE-Task` (ou `OXE-Quick` via `oxe-cc quick`) para passar em `oxe-cc ship check-origin <#PR>`;
+- tratar `ACTIVE-RUN.json`, `PLAN.json` e `.oxe/runs/<run_id>.json` como fonte operacional primária da onda/tarefa atual;
 - executar `oxe-cc runtime project --dir <projeto>` ao fim de cada onda ou bloco concluído para reprojetar `PLAN.md`, `STATE.md`, `VERIFY.md`, `RUN-SUMMARY.md`, `COMMIT-SUMMARY.md` e `PROMOTION-SUMMARY.md`.
 Se o runtime não estiver compilado, falhar por indisponibilidade do pacote ou não puder ser executado no ambiente atual, declarar `fallback legado` explicitamente antes de seguir apenas com os artefatos markdown.
 
@@ -178,7 +179,7 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
 
 **Se PLAN.md não existir mas QUICK.md existir:** seguir QUICK.md — passos = onda única, sempre Modo Completo.
 
-**Se nem PLAN nem QUICK existir:** recomendar `oxe:plan` ou `oxe:quick` primeiro.
+**Se nem PLAN nem QUICK existir:** recomendar `/oxe-plan` ou `/oxe-quick` primeiro.
 
 **Legado / brownfield:** entregáveis podem ser só documentação. Ver **`oxe/workflows/references/legacy-brownfield.md`**.
 
@@ -186,7 +187,7 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
 </context>
 
 <process>
-1. Ler **`.oxe/STATE.md`** global para resolver `active_session`, depois ler **`PLAN.md`** (se existir) e **`QUICK.md`** do escopo resolvido.
+1. Ler **`.oxe/STATE.md`** global para resolver `active_session`, depois ler **`PLAN.json`** (fonte primária executada pelo runtime) e **`PLAN.md`** (se existirem) ou **`QUICK.md`** do escopo resolvido.
 1a. Resolver o context pack `execute` primeiro:
    - ler `.oxe/context/packs/execute.md|json` (ou `oxe-cc context inspect --workflow execute --json`);
    - se o pack estiver fresco e coerente, usá-lo como mapa primário para o reconhecimento inicial da onda/tarefa;

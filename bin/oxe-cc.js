@@ -7742,6 +7742,14 @@ async function main() {
 
   // OXB-178b/179/139/180: independent review, findings ledger, bounded rounds, author responses.
   if (command === 'review') {
+    if (argv.includes('--help') || argv.includes('-h')) {
+      console.log(`
+  oxe-cc review status [<id>] [--json] [--dir <pasta>]
+  oxe-cc review run --role <papel> [--task Tn] [--model <m>] [--criteria A1,A2] [--allow-external] [--json]
+  oxe-cc review respond <F-n> --fix|--dispute|--to-owner|--note|--waive [--reason "…"] [--commit <sha>] [--by <papel>] [--json]
+`);
+      return;
+    }
     const sub = ['run', 'status', 'respond'].includes(argv[0]) ? argv[0] : 'status';
     const o = { dir: process.cwd(), json: false, respond: {} };
     for (let i = 1; i < argv.length; i += 1) {
@@ -7907,6 +7915,14 @@ async function main() {
   }
 
   // 1.21.2: PRD, RFCs, ADRs and SYSTEM-DESIGN published into the repository (docs/).
+  if (command === 'docs' && (argv.includes('--help') || argv.includes('-h'))) {
+    console.log(`
+  oxe-cc docs check [--phase F<n>] [--json] [--dir <pasta>]      confere referências dos artefatos fechados contra o código
+  oxe-cc docs publish [--out <pasta>] [--json] [--dir <pasta>]   publica PRD, RFCs, ADRs, glossário e SYSTEM-DESIGN
+`);
+    return;
+  }
+
   if (command === 'docs' && argv[0] === 'publish') {
     const o = { dir: process.cwd(), json: false, out: null };
     for (let i = 1; i < argv.length; i += 1) {
@@ -7932,6 +7948,12 @@ async function main() {
 
   // 1.21.2: PRD traceability.
   if (command === 'prd') {
+    if (argv.includes('--help') || argv.includes('-h')) {
+      console.log(`
+  oxe-cc prd lint [--json] [--dir <pasta>]   valida rastreabilidade US-n → R* / A* e métricas no PRD.md
+`);
+      return;
+    }
     const o = { dir: process.cwd(), json: false };
     for (let i = argv[0] === 'lint' ? 1 : 0; i < argv.length; i += 1) {
       const a = argv[i];
@@ -7956,6 +7978,15 @@ async function main() {
 
   // 1.21.2: RFCs before the plan of a risky phase.
   if (command === 'rfc') {
+    if (argv.includes('--help') || argv.includes('-h')) {
+      console.log(`
+  oxe-cc rfc list [--json] [--dir <pasta>]                                 lista RFCs e perguntas em aberto
+  oxe-cc rfc new --title "…" [--phase F<n>] [--by <papel>]                 cria rascunho de RFC antes do plano
+  oxe-cc rfc accept <RFC-n> [--by <papel>] [--force]                       aceita RFC e publica decisão/ADR
+  oxe-cc rfc reject <RFC-n> --reason "…" [--by <papel>]                    recusa RFC com motivo registrado
+`);
+      return;
+    }
     const SUBS = ['new', 'list', 'accept', 'reject'];
     const sub = SUBS.includes(argv[0]) ? argv[0] : 'list';
     const o = { dir: process.cwd(), json: false };
@@ -8337,6 +8368,7 @@ async function main() {
     for (let i = action === 'publish' ? 1 : 0; i < argv.length; i += 1) {
       const a = argv[i];
       if (a === '--json') o.json = true;
+      else if (a === '--plain') o.plain = true;
       else if (a === '--apply') o.apply = true;
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
       else if (!a.startsWith('-')) o.dir = path.resolve(a);
@@ -8397,6 +8429,7 @@ async function main() {
     for (let i = 0; i < argv.length; i += 1) {
       const a = argv[i];
       if (a === '--json') o.json = true;
+      else if (a === '--plain') o.plain = true;
       else if (a === '--apply') o.apply = true;
       else if (a === '--dry-run') o.dryRun = true;
       else if (a === '--replace') o.replace = true;
@@ -8677,6 +8710,7 @@ async function main() {
     for (let i = 1; i < argv.length; i += 1) {
       const a = argv[i];
       if (a === '--json') o.json = true;
+      else if (a === '--plain') o.plain = true;
       else if (a === '--apply') o.apply = true;
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
       else if (['--card', '--out'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
@@ -8750,6 +8784,15 @@ async function main() {
   }
 
   if (command === 'decision') {
+    if (argv.includes('--help') || argv.includes('-h')) {
+      console.log(`
+  oxe-cc decision list [--json] [--dir <pasta>]                                           lista decisões e alternativas recusadas
+  oxe-cc decision add --title "…" [--text "…"] [--phase F<n>] [--alt "texto::motivo"]   registra decisão D-NN (e atualiza ADRs)
+  oxe-cc decision status <D-NN> <active|superseded|retired> --reason "…" [--superseded-by D-…]
+  oxe-cc decision import [--from DISCUSS.md] · publish [--out docs/adr]
+`);
+      return;
+    }
     const SUBS = ['add', 'list', 'status', 'import', 'publish'];
     const sub = SUBS.includes(argv[0]) ? argv[0] : 'list';
     const o = { dir: process.cwd(), json: false };
@@ -9442,7 +9485,18 @@ async function main() {
 
   if (command === 'plan') {
     const planOpts = parsePlanArgs(argv);
-    if (planOpts.help) { printBanner(); usage(); process.exit(0); }
+    if (planOpts.help) {
+      console.log(`
+  oxe-cc plan lint [--json] [--precheck-tests|--no-precheck] [--dir <pasta>]   valida PLAN.json, packs, aceites congelados e gates
+  oxe-cc plan done T<n> [--commit <sha>] [--json]                              marca tarefa concluída no PLAN.json
+  oxe-cc plan reopen T<n> [--by <papel>] [--session <s>] [--json]              reabre tarefa, limpa completedWorkItems e fecha adiamento
+  oxe-cc plan scope add T<n> <arquivo…> --cr CR-n --by <papel> --reason "…"    amplia escopo da tarefa via CR aberto
+  oxe-cc plan task edit|fold|supersede …                                       edita, agrupa ou substitui tarefa do PLAN.json
+  oxe-cc plan verify add|move|drop|prune … · amend-test · append · skeleton · build · merge · pack sync|rebuild|fix · staleness · refresh
+  oxe-cc plan --visual [--dir <pasta>]                                         abre visualização do plano
+`);
+      process.exit(0);
+    }
     if (planOpts.parseError) { printBanner(); console.error(`${red}Opção desconhecida:${reset} ${planOpts.unknownFlag}`); usage(); process.exit(1); }
     if (!planOpts.visual) { printBanner(); console.error(`${yellow}Use oxe-cc plan --visual${reset}`); process.exit(1); }
     printBanner();

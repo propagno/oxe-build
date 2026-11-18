@@ -48,12 +48,12 @@ Levar o trabalho verificado até produção, um passo verde por vez: **PR → CI
 
 ### Passo 4 — Documentos e fechamento
 1. Com `docs_publish` configurado: `oxe-cc docs publish` (PRD, RFCs, ADRs, glossário, SYSTEM-DESIGN).
-2. `oxe-cc runtime program close`: regressão congelada, contratos e commit da fase. Num branch com PR aberto, o close não commita (use um branch separado ou `--force-branch`).
+2. `oxe-cc runtime program close`: regressão congelada, contratos e commit da fase (exige `--by <papel> --reason "…"` quando combinado com `--by-ci`, `--no-rollback-check` ou `--accept-drift`). Num branch com PR aberto, o close não commita (use um branch separado ou `--force-branch`).
 3. Com ALM: `oxe-cc alm sync --apply`, que leva os itens a "lançado".
 
 ### Passo X — Defeito depois da entrega (`--defect`)
 1. Pergunte a reprodução, o impacto e o critério ou a história de origem (uma pergunta por vez, com a recomendada).
-2. `oxe-cc alm defect --title "…" --origin <US-n|Fn-Tn> --apply` (com ALM) e `oxe-cc runtime feedback --class defect --summary "…" --criteria A<n>`.
+2. `oxe-cc alm defect --title "…" --origin <US-n|Fn-Tn> --apply` (com ALM) e `oxe-cc runtime feedback --class defect --summary "…" --criteria A<n> --tasks T<n> --reopen` (sem `--reopen`, apenas vincula a tarefa sem reabri-la para o próximo `/oxe-execute`).
 3. O próximo passo é `/oxe-plan --replan`, para cobrir o CR com teste de aceite na fase atual ou numa fase nova (ver `references/change-management.md`).
 
 ### Passo L — Commit local (`--local`)

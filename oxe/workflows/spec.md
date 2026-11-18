@@ -9,9 +9,9 @@ Conduzir as **5 fases** do processo de especificação e produzir dois artefatos
 
 **Foco em redução de requisições:** as fases são estruturadas para extrair o máximo de informação por rodada — nunca uma pergunta por vez, sempre blocos coesos.
 
-Para trabalho **muito pequeno** que não justifica spec completa: redirecionar para **`oxe:quick`**.
+Para trabalho **muito pequeno** que não justifica spec completa: redirecionar para **`/oxe-quick`**.
 
-Se **`.oxe/config.json`** tiver `discuss_before_plan: true`: mencionar no final da Fase 5 que o próximo passo é **`oxe:discuss`** antes do plano.
+Se **`.oxe/config.json`** tiver `discuss_before_plan: true`: mencionar no final da Fase 5 que o próximo passo é **`/oxe-discuss`** antes do plano.
 
 **Flags suportadas:**
 - `--refresh` — antes de iniciar, atualizar `.oxe/codebase/` em modo incremental (equivalente a `scan` modo refresh). Usar quando o codebase mudou desde o último scan.
@@ -92,9 +92,9 @@ Para entradas visuais, usar também **`oxe/templates/VISUAL-INPUTS.template.md`*
 
 **Padrão — grill** (protocolo completo em **`oxe/workflows/references/grill.md`**):
 1. `oxe-cc grill start --type <tipo>`. Se já houver grill aberto, ele é retomado: `oxe-cc grill status` mostra onde parou.
-2. Explore o repo e os artefatos primeiro. O que já tem resposta vira `oxe-cc grill fact … --source`, nunca pergunta.
+2. Explore o repo e os artefatos primeiro. O que já tem resposta vira `oxe-cc grill fact --branch <ramo> --text "…" --source <arquivo:linha|card>`, nunca pergunta.
 3. **Uma pergunta por mensagem**, seguindo o `next_branch` da árvore (problema → personas → escopo → fluxos → regras/glossário → bordas → NFR → integrações → rollout → métricas → riscos). Cada pergunta traz o que decide, as opções com consequência e a **resposta recomendada com o porquê**. Registre com `grill ask` antes de perguntar e com `grill answer` depois.
-4. Contradição → `grill conflict`; "não sei" → `grill defer --reason` (vira suposição); termos de negócio → `grill term`; decisão de arquitetura, produto ou trade-off → `--decision` (vira ADR).
+4. Contradição → `grill conflict <Q-a,Q-b>`; "não sei" → `grill defer <Q-n> --reason "…"` (vira suposição); termos de negócio → `grill term "<termo>" --definition "…"`; decisão de arquitetura, produto ou trade-off → `--decision` (vira ADR).
 5. Ao fechar cada ramo, faça o playback em 3 a 5 linhas e, com o "sim", rode `oxe-cc grill confirm <ramo>`.
 6. Não há limite de rodadas: o grill termina quando `oxe-cc grill close` aceita. Se ele recusar, mostre o que falta e continue.
 
@@ -405,7 +405,7 @@ Complemento adaptativo para a Fase 1. Quando o domínio for confirmado (via scan
 - Fases 2+ = ciclos futuros de plan→execute→verify **dentro do mesmo programa** (não reabrir a SPEC a cada fase)
 - Cada fase declara **Requisitos** (R*), **Critérios de aceite** (A*) e **Escopo** — o runtime lê exatamente esses campos; um A* pertence a uma única fase
 
-**Programa por fases (aplicações com 2+ fases):** depois da aprovação, rodar `oxe-cc runtime program init` (lê o `ROADMAP.md` e grava `.oxe/program/PROGRAM.json`) e `oxe-cc runtime program start`. A partir daí cada fase é um ciclo completo que fecha pelo gate `oxe-cc runtime program close`: verify concluído, **regressão das fases anteriores verde**, contratos do IMPLEMENTATION-PACK cumpridos e commit local da fase. As interfaces entregues por uma fase entram no contexto da seguinte. ROADMAP de fase única dispensa o programa.
+**Programa por fases (aplicações com 2+ fases):** depois da aprovação, rodar `oxe-cc runtime program init` (lê o `ROADMAP.md` e grava `.oxe/program/PROGRAM.json`) e `oxe-cc runtime program start`. A partir daí cada fase é um ciclo completo que fecha pelo gate `oxe-cc runtime program close` (exige `--by <papel> --reason "…"` quando usado com `--by-ci`, `--no-rollback-check` ou `--accept-drift`): verify concluído, **regressão das fases anteriores verde**, contratos do IMPLEMENTATION-PACK cumpridos e commit local da fase. As interfaces entregues por uma fase entram no contexto da seguinte. ROADMAP de fase única dispensa o programa.
 
 **Escrever `ROADMAP.md`** usando `oxe/templates/ROADMAP.template.md` no escopo ativo:
 
@@ -573,7 +573,7 @@ Detectar e corrigir estes problemas antes de entregar a SPEC. A auto-reflexão d
 
 **Ao finalizar:**
 - Rodar **`oxe-cc prd lint`**: história sem critério, critério sem história, referência a A*/R* inexistente. Corrigir antes de seguir.
-- **ALM:** se `.oxe/config.json` tem `alm.provider` (`jira` ou `azure-devops`), rodar `oxe-cc alm push --stories-only --dry-run`, mostrar ao usuário o que será criado (épico, histórias com a versão-alvo) e, com o OK, `oxe-cc alm push --stories-only`. Sem ALM configurado, seguir sem ele — nada no fluxo depende disso.
+- **ALM:** se `.oxe/config.json` tem `alm.provider` (`jira` ou `azure-devops`), rodar `oxe-cc alm push --stories-only --dry-run`, mostrar ao usuário o que será criado (épico, histórias com a versão-alvo) e, com o OK, `oxe-cc alm push --stories-only --apply`. Sem ALM configurado, seguir sem ele — nada no fluxo depende disso.
 - Marcar `ROADMAP.md` → `status: approved`
 - Atualizar `STATE.md`: `phase: spec_ready`, próximo passo conforme escolha
 - Se flag `--ui` foi recebida **ou** se UI foi detectada como domínio crítico: executar a lógica de `oxe/workflows/ui-spec.md` e produzir `.oxe/UI-SPEC.md` como extensão desta spec. Mencionar ao usuário que o contrato UI foi gerado.
