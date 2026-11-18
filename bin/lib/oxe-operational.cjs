@@ -5972,6 +5972,9 @@ function runtimeCiAttach(projectRoot, activeSession, options = {}) {
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const program = programLib.readProgram(programDir);
   const phase = options.phase || (program && program.active_phase) || null;
+  const activePhaseWarning = (program && !options.phase && !program.active_phase)
+    ? 'PROGRAM.json está com active_phase: null — rode `oxe-cc runtime program start --phase F1` (ou passe `--phase Fn`)'
+    : null;
   const gatesLib = require('./oxe-phase-gates.cjs');
   const record = gatesLib.attachCiRun(programDir, { run: options.run, repo: options.repo, head: options.head, phase });
   // OxeSpace 15/11 (Celular F3 CR-F3-1): a constraint CR opened by a red `kind: ci` gate stayed open after a green run
@@ -6003,9 +6006,9 @@ function runtimeCiAttach(projectRoot, activeSession, options = {}) {
       appendEvent(projectRoot, activeSession, { type: 'ChangeResolved', payload: { id: cr.id, status: 'resolved', by: 'ci_attach', run: String(record.run) } });
       resolved.push(cr.id);
     }
-    if (resolved.length) return { ...record, resolved_changes: resolved };
+    if (resolved.length) return { ...record, resolved_changes: resolved, ...(activePhaseWarning ? { warning: activePhaseWarning } : {}) };
   } catch { /* auxiliar: the attach itself stands */ }
-  return record;
+  return activePhaseWarning ? { ...record, warning: activePhaseWarning } : record;
 }
 
 /**
@@ -6868,6 +6871,10 @@ function runtimeDossier(projectRoot, activeSession, options = {}) {
   const program = paths.programDir ? programLib.readProgram(paths.programDir) : null;
   const phaseId = options.phase || (program && program.active_phase) || null;
   const phase = program && phaseId ? program.phases.find((p) => p.id === phaseId) || null : null;
+  const hasNextPhase = Boolean(program && Array.isArray(program.phases) && phaseId && program.phases.some((p, idx) => p && p.id === phaseId && idx < program.phases.length - 1));
+  const activePhaseWarning = (program && !options.phase && !program.active_phase)
+    ? 'PROGRAM.json está com active_phase: null — rode `oxe-cc runtime program start --phase F1` (ou passe `--phase Fn`)'
+    : null;
   const run = options.runState || readRunState(projectRoot, activeSession) || {};
   const planText = readTextIfExists(paths.plan) || '';
   const plan = attachAcceptanceLock(parsePlanArtifact(parsers, planText, paths.plan), run, projectRoot);
@@ -6934,7 +6941,19 @@ function runtimeDossier(projectRoot, activeSession, options = {}) {
   } catch {
     // STATE é projeção auxiliar; nunca falha o dossiê.
   }
-  return { dir, phase: phaseId, base, issues: built.issues, pending: built.pending, untouched: built.untouched, handoff_filled: handoffFilled, totals: built.totals, api_surface: apiSurface };
+  return {
+    dir,
+    phase: phaseId,
+    base,
+    issues: built.issues,
+    pending: built.pending,
+    untouched: built.untouched,
+    handoff_filled: handoffFilled,
+    handoff_required: hasNextPhase,
+    ...(activePhaseWarning ? { warning: activePhaseWarning } : {}),
+    totals: built.totals,
+    api_surface: apiSurface,
+  };
 }
 
 const STATE_PHASE_BY_STATUS = { pending: 'spec_ready', planning: 'spec_ready', executing: 'executing', verifying: 'executing', closed: 'verify_complete', reopened: 'executing' };
@@ -7623,7 +7642,10 @@ function runChildCommandFull(projectRoot, command, timeoutMs = 600_000) {
   applyChildEnvPolicy(projectRoot);
   const rt = loadRuntimeModule();
   const env = rt && typeof rt.childProcessEnv === 'function' ? rt.childProcessEnv(process.env) : (() => { const e = { ...process.env }; delete e.NODE_TEST_CONTEXT; return e; })();
-  const res = spawnSync(command, { cwd: projectRoot, shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true, env });
+  const inv = rt && typeof rt.shellInvocation === 'function' ? rt.shellInvocation(command) : null;
+  const res = inv
+    ? spawnSync(inv.file, inv.args, { cwd: projectRoot, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true, windowsVerbatimArguments: inv.windowsVerbatimArguments, env })
+    : spawnSync(command, { cwd: projectRoot, shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true, env });
   const output = `${res.stdout || ''}\n${res.stderr || ''}`;
   // killed by the timeout (OxeSpace 15/11, OQ T18): a timed-out verify is not a failed one
   const timedOut = Boolean(res.error && res.error.code === 'ETIMEDOUT');
@@ -7636,7 +7658,10 @@ function runChildCommand(projectRoot, command, timeoutMs = 600_000) {
   const env = rt && typeof rt.childProcessEnv === 'function'
     ? rt.childProcessEnv(process.env)
     : (() => { const e = { ...process.env }; delete e.NODE_TEST_CONTEXT; return e; })();
-  const res = spawnSync(command, { cwd: projectRoot, shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true, env });
+  const inv = rt && typeof rt.shellInvocation === 'function' ? rt.shellInvocation(command) : null;
+  const res = inv
+    ? spawnSync(inv.file, inv.args, { cwd: projectRoot, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true, windowsVerbatimArguments: inv.windowsVerbatimArguments, env })
+    : spawnSync(command, { cwd: projectRoot, shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true, env });
   const output = `${res.stdout || ''}\n${res.stderr || ''}`;
   return { ok: res.status === 0, status: res.status, tail: output.split(/\r?\n/).filter(Boolean).slice(-15).join('\n') };
 }
@@ -13145,16 +13170,18 @@ function findUnpromotedDoneTasks(projectRoot, activeSession, phase, options = {}
   }
 
   const headOnBase = spawnSync('git', ['merge-base', '--is-ancestor', headSha, baseSha], { cwd: projectRoot, windowsHide: true }).status === 0;
+  if (headOnBase) {
+    // HEAD is already at/behind baseSha (e.g. origin/main after cherry-pick/squash PRs merged): no unpromoted program work remains.
+    return { checked: true, base, base_sha: baseSha, unpromoted: [] };
+  }
   const picked = new Set();
   const equivalent = new Set();
-  if (!headOnBase) {
-    for (const line of gitLines(projectRoot, ['log', baseSha, '--format=%B', '--grep=cherry picked from commit']) || []) {
-      const m = /cherry picked from commit ([0-9a-f]{7,40})/.exec(line);
-      if (m) picked.add(m[1]);
-    }
-    for (const l of gitLines(projectRoot, ['cherry', baseSha, headSha, baseSha]) || []) {
-      if (l.startsWith('-')) equivalent.add(l.slice(2).trim());
-    }
+  for (const line of gitLines(projectRoot, ['log', baseSha, '--format=%B', '--grep=cherry picked from commit']) || []) {
+    const m = /cherry picked from commit ([0-9a-f]{7,40})/.exec(line);
+    if (m) picked.add(m[1]);
+  }
+  for (const l of gitLines(projectRoot, ['cherry', baseSha, headSha, baseSha]) || []) {
+    if (l.startsWith('-')) equivalent.add(l.slice(2).trim());
   }
 
   const isCommitOnBase = (sha) => {
@@ -13370,9 +13397,11 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
   } catch { /* auxiliar */ }
   // OXB-136: seam review — seams.md in the dossier; open retro actions / missing end-to-end runs block when required.
   try {
-    const sm = runtimeSeams(projectRoot, activeSession, { phase: phase.id });
+    const sm = runtimeSeams(projectRoot, activeSession, { phase: phase.id, byCi: Boolean(byCi && byCi.ok) });
     const sc = ((readProjectConfig(projectRoot) || {}).close || {}).seams || {};
-    if (sc.require_behavior_run !== false) for (const c of sm.report.behavior_missing) closeGates.reasons.push(`costura: o critério ${c} pede o fluxo de ponta a ponta executado — registre com oxe-cc runtime seams --behavior-ran ${c} --evidence <relatório>`);
+    if (sc.require_behavior_run !== false && !(byCi && byCi.ok)) {
+      for (const c of sm.report.behavior_missing) closeGates.reasons.push(`costura: o critério ${c} pede o fluxo de ponta a ponta executado — registre com oxe-cc runtime seams --behavior-ran ${c} --evidence <relatório>`);
+    }
     if (sc.require_retro) for (const a of sm.report.retro_open) closeGates.reasons.push(`costura: ação da retro ${a.id} sem evidência (${a.action})`);
   } catch { /* auxiliar */ }
   // OXB-115: complexity alarms — a proposal always; a block in strict (profile strict or complexity.block).
@@ -13465,7 +13494,7 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
       else gate.reasons.push(`sign-off pendente: ${criterion} (ou adie: --defer-signoff --by <dono> --risk "<risco assumido>")`);
     }
     if (deferred.length) gate.deferred = deferred;
-    if (!dossier.handoff_filled) gate.reasons.push(`handoff vazio: preencha "O que a próxima fase deve saber" em ${path.relative(projectRoot, path.join(dossier.dir, 'plan.md'))}`);
+    if (dossier.handoff_required !== false && !dossier.handoff_filled) gate.reasons.push(`handoff vazio: preencha "O que a próxima fase deve saber" em ${path.relative(projectRoot, path.join(dossier.dir, 'plan.md'))}`);
     gate.ok = gate.reasons.length === 0;
   }
   if (closeGates.reasons.length) {

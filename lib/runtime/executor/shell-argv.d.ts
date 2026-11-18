@@ -5,12 +5,16 @@
  * which cmd.exe does not understand: `grep -q "npm start" README.md` and `node -e "..."` broke
  * and agents burned retries on quoting instead of code. `cmd /d /s /c "<command>"` with
  * `windowsVerbatimArguments` hands cmd the command line exactly as written.
+ * When a verify command uses POSIX/bash syntax (e.g. `|| touch ... ; ... && test ! -e ...`),
+ * route it through Git Bash (`bash.exe`) when available on Windows.
  */
 export interface ShellInvocation {
     file: string;
     args: string[];
     windowsVerbatimArguments: boolean;
 }
+export declare function isPosixShellCommand(command: string): boolean;
+export declare function findWindowsGitBash(env?: NodeJS.ProcessEnv): string | null;
 /**
  * OXB-152: POSIX launchers written in plans (`./mobile/android/gradlew -p … test`, `./mvnw`) fail in cmd.exe ("'.' não é
  * reconhecido"). On Windows they map to their batch siblings (`mobile\android\gradlew.bat`, `mvnw.cmd`).
