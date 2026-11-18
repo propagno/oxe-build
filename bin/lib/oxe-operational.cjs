@@ -7646,22 +7646,64 @@ function runChildCommand(projectRoot, command, timeoutMs = 600_000) {
  * through bin/lib/oxe-progress-run.cjs. `quiet` keeps the progress off the terminal (tests, --json).
  */
 function runProgressCommand(cwd, command, timeoutMs = 1_800_000, options = {}) {
-  applyChildEnvPolicy(cwd);
+  let canonicalCwd = cwd;
+  try {
+    canonicalCwd = fs.realpathSync.native ? fs.realpathSync.native(cwd) : fs.realpathSync(cwd);
+  } catch { canonicalCwd = cwd; }
+  applyChildEnvPolicy(canonicalCwd);
   const rt = loadRuntimeModule();
   const env = rt && typeof rt.childProcessEnv === 'function'
     ? rt.childProcessEnv(process.env)
     : (() => { const e = { ...process.env }; delete e.NODE_TEST_CONTEXT; return e; })();
+  if (env.PWD) env.PWD = canonicalCwd;
   const heartbeat = Number(options.heartbeatMs || process.env.OXE_PROGRESS_HEARTBEAT_MS) || 60_000;
   const res = spawnSync(process.execPath, [path.join(__dirname, 'oxe-progress-run.cjs'), options.label || 'pr:ready', String(timeoutMs), String(heartbeat), '--', command], {
-    cwd, env, encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024, timeout: timeoutMs + 120_000,
+    cwd: canonicalCwd, env, encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024, timeout: timeoutMs + 120_000,
     stdio: ['ignore', 'pipe', options.quiet ? 'pipe' : 'inherit'],
   });
   try {
     const out = JSON.parse(String(res.stdout || '').trim());
     return { ok: out.status === 0, status: out.status, tail: out.tail, timed_out: out.timed_out, scripts: out.scripts };
   } catch {
-    return runChildCommand(cwd, command, timeoutMs);
+    return runChildCommand(canonicalCwd, command, timeoutMs);
   }
+}
+
+function promoteWorktreeSlug(taskIds, taskId) {
+  const ids = Array.isArray(taskIds) ? taskIds.filter(Boolean).map((t) => String(t).trim()) : [];
+  if (ids.length > 1) {
+    const first = ids[0].toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'batch';
+    const hash = require('crypto').createHash('sha1').update(String(taskId || ids.join('-'))).digest('hex').slice(0, 6);
+    return `${first}-${ids.length}t-${hash}`;
+  }
+  const clean = String(taskId || ids[0] || 'task').toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'task';
+  if (clean.length > 16) {
+    const hash = require('crypto').createHash('sha1').update(clean).digest('hex').slice(0, 6);
+    return `${clean.slice(0, 8)}-${hash}`;
+  }
+  return clean;
+}
+
+function allocatePromoteWorktreePath(projectRoot, taskIds, taskId, buildSha) {
+  const ts = Date.now().toString(36);
+  const slug = promoteWorktreeSlug(taskIds, taskId);
+  const localDir = path.join(projectRoot, '.oxe', 'promote-ws', `${slug}-${ts}`);
+  const pidFile = `${localDir}.pid`;
+  if (process.platform !== 'win32') {
+    return { wt: localDir, pidFile, external: false };
+  }
+  let maxRelLen = 150;
+  try {
+    const tracked = gitLines(projectRoot, ['ls-tree', '-r', '--name-only', buildSha || 'HEAD']) || [];
+    for (const p of tracked) {
+      if (p.length > maxRelLen) maxRelLen = p.length;
+    }
+  } catch { /* fallback to conservative 150 */ }
+  if (localDir.length + 1 + maxRelLen < 250) {
+    return { wt: localDir, pidFile, external: false };
+  }
+  const extDir = path.join(os.tmpdir(), 'oxe-pw', `${slug}-${ts}`);
+  return { wt: extDir, pidFile, external: true };
 }
 
 /**
@@ -7672,12 +7714,10 @@ function runProgressCommand(cwd, command, timeoutMs = 1_800_000, options = {}) {
 function sweepStalePromoteWorkspaces(projectRoot, options = {}) {
   const root = path.join(projectRoot, '.oxe', 'promote-ws');
   const removed = [];
-  let names = [];
-  try { names = fs.readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name); } catch { return removed; }
+  let entries = [];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return removed; }
   const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return Boolean(e && e.code === 'EPERM'); } };
-  for (const name of names) {
-    const dir = path.join(root, name);
-    const pidFile = `${dir}.pid`;
+  const sweepOne = (dir, pidFile, minAgeMs) => {
     let pid = null;
     let paused = false;
     try {
@@ -7685,12 +7725,12 @@ function sweepStalePromoteWorkspaces(projectRoot, options = {}) {
       pid = Number(meta.pid) || null;
       paused = meta.paused === true;
     } catch { pid = null; }
-    if (paused) continue;
-    if (pid && pid !== process.pid && alive(pid)) continue;
+    if (paused) return;
+    if (pid && pid !== process.pid && alive(pid)) return;
     if (!pid) {
       let age = 0;
       try { age = Date.now() - fs.statSync(dir).mtimeMs; } catch { age = 0; }
-      if (age < (options.minAgeMs != null ? options.minAgeMs : 30 * 60_000)) continue;
+      if (age < minAgeMs) return;
     }
     try {
       const rt = loadRuntimeModule();
@@ -7699,11 +7739,30 @@ function sweepStalePromoteWorkspaces(projectRoot, options = {}) {
     } catch { /* */ }
     let linkLeft = false;
     try { linkLeft = fs.lstatSync(path.join(dir, 'node_modules')).isSymbolicLink(); } catch { linkLeft = false; }
-    if (linkLeft) continue; // never a forced removal with the junction in place
+    if (linkLeft) return; // never a forced removal with the junction in place
     const rm = gitRun(projectRoot, ['worktree', 'remove', '--force', dir]);
-    if (!rm.ok) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { continue; } }
+    if (!rm.ok) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { return; } }
     try { fs.rmSync(pidFile, { force: true }); } catch { /* */ }
-    removed.push(path.relative(projectRoot, dir).replace(/\\/g, '/'));
+    const rel = path.relative(projectRoot, dir).replace(/\\/g, '/');
+    removed.push(rel.startsWith('..') ? dir.replace(/\\/g, '/') : rel);
+  };
+  const minAgeMs = options.minAgeMs != null ? options.minAgeMs : 30 * 60_000;
+  const seenDirs = new Set();
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    const dir = path.join(root, e.name);
+    seenDirs.add(path.resolve(dir));
+    sweepOne(dir, `${dir}.pid`, minAgeMs);
+  }
+  for (const e of entries) {
+    if (!e.isFile() || !e.name.endsWith('.pid')) continue;
+    const pidFile = path.join(root, e.name);
+    try {
+      const meta = JSON.parse(fs.readFileSync(pidFile, 'utf8'));
+      if (meta && meta.dir && !seenDirs.has(path.resolve(meta.dir))) {
+        sweepOne(meta.dir, pidFile, minAgeMs);
+      }
+    } catch { /* ignore */ }
   }
   if (removed.length) gitRun(projectRoot, ['worktree', 'prune']);
   return removed;
@@ -8687,6 +8746,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   if (notCarried.length) result.not_carried_tests = notCarried;
   // Where the branch is built: a temporary worktree (default) or, with --in-place, the program checkout.
   let work = projectRoot;
+  let wtPidFile = null;
   let cleanup = () => {};
   if (inPlace) {
     const back = () => gitRun(projectRoot, ['checkout', '-q', original && original !== 'HEAD' ? original : originalSha]);
@@ -8695,26 +8755,33 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
     gitRun(projectRoot, ['config', `branch.${branch}.oxePromote`, 'true']);
     cleanup = back;
   } else {
-    const wt = path.join(projectRoot, '.oxe', 'promote-ws', `${taskId.toLowerCase()}-${Date.now().toString(36)}`);
+    const alloc = allocatePromoteWorktreePath(projectRoot, taskIds, taskId, buildSha);
+    const wt = alloc.wt;
+    wtPidFile = alloc.pidFile;
     fs.mkdirSync(path.dirname(wt), { recursive: true });
+    fs.mkdirSync(path.dirname(wtPidFile), { recursive: true });
     // OXB-162: worktrees of killed promotes (their junction unlinked first), and this one's pid for the next sweep.
     result.swept = [...sweptEarly, ...sweepStalePromoteWorkspaces(projectRoot)];
-    fs.writeFileSync(`${wt}.pid`, JSON.stringify({ pid: process.pid, task: taskId, at: new Date().toISOString() }));
-    const add = gitRun(projectRoot, ['worktree', 'add', '-q', '-b', branch, wt, buildSha]);
+    fs.writeFileSync(wtPidFile, JSON.stringify({ pid: process.pid, task: taskId, ...(alloc.external ? { dir: wt } : {}), at: new Date().toISOString() }));
+    const addArgs = process.platform === 'win32'
+      ? ['-c', 'core.longpaths=true', 'worktree', 'add', '-q', '-b', branch, wt, buildSha]
+      : ['worktree', 'add', '-q', '-b', branch, wt, buildSha];
+    const add = gitRun(projectRoot, addArgs);
     if (!add.ok) throw new Error(`não foi possível criar a worktree de ${branch}: ${add.stderr.trim()}`);
     gitRun(projectRoot, ['config', `branch.${branch}.oxePromote`, 'true']);
-    work = wt;
+    work = (() => { try { return fs.realpathSync.native ? fs.realpathSync.native(wt) : fs.realpathSync(wt); } catch { return wt; } })();
     // OXB-163: machine-local files (worktree.copy_local) pr:ready needs (gradle's local.properties, .env.local).
-    try { result.local_copied = require('./oxe-local-config.cjs').copyLocalFiles(projectRoot, wt).copied; } catch { /* auxiliar */ }
-    result.worktree = path.relative(projectRoot, wt).replace(/\\/g, '/');
+    try { result.local_copied = require('./oxe-local-config.cjs').copyLocalFiles(projectRoot, work).copied; } catch { /* auxiliar */ }
+    const relWt = path.relative(projectRoot, work).replace(/\\/g, '/');
+    result.worktree = relWt.startsWith('..') ? work.replace(/\\/g, '/') : relWt;
     // pr:ready needs the dependencies: a junction to the program's node_modules (or deps_link_from), never an install.
     let linked = false;
     try {
       const pc = require('./oxe-parallel.cjs').parallelConfig(projectRoot);
       const from = pc.deps && pc.deps.from ? pc.deps.from : projectRoot;
       const src = path.join(from, 'node_modules');
-      if (fs.existsSync(src) && !fs.existsSync(path.join(wt, 'node_modules'))) {
-        fs.symlinkSync(fs.realpathSync(src), path.join(wt, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+      if (fs.existsSync(src) && !fs.existsSync(path.join(work, 'node_modules'))) {
+        fs.symlinkSync(fs.realpathSync(src), path.join(work, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
         linked = true;
       }
     } catch { /* pr:ready reports the missing deps */ }
@@ -8722,19 +8789,22 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
       // Links first (a junction must never be followed by a recursive delete), then the worktree — never --force.
       try {
         const rt = loadRuntimeModule();
-        if (rt && typeof rt.unlinkExternalLinks === 'function') rt.unlinkExternalLinks(wt);
-        else if (linked) fs.unlinkSync(path.join(wt, 'node_modules'));
+        if (rt && typeof rt.unlinkExternalLinks === 'function') rt.unlinkExternalLinks(work);
+        else if (linked) fs.unlinkSync(path.join(work, 'node_modules'));
       } catch { /* */ }
-      let rm = gitRun(projectRoot, ['worktree', 'remove', wt]);
+      let rm = gitRun(projectRoot, ['worktree', 'remove', work]);
       // OxeSpace 14/11: a failed step (the frozen-tests commit refused) leaves uncommitted files in this promote's OWN
       // worktree; plain remove refuses and the worktree keeps holding the branch, so the next promote cannot rebuild
       // it. It is ours (created above): with no link left inside, a forced removal is safe.
       if (!rm.ok) {
         let linkLeft = false;
-        try { linkLeft = fs.lstatSync(path.join(wt, 'node_modules')).isSymbolicLink(); } catch { linkLeft = false; }
-        if (!linkLeft) rm = gitRun(projectRoot, ['worktree', 'remove', '--force', wt]);
+        try { linkLeft = fs.lstatSync(path.join(work, 'node_modules')).isSymbolicLink(); } catch { linkLeft = false; }
+        if (!linkLeft) rm = gitRun(projectRoot, ['worktree', 'remove', '--force', work]);
       }
-      if (rm.ok) { try { fs.rmSync(`${wt}.pid`, { force: true }); } catch { /* */ } }
+      if (rm.ok) {
+        try { fs.rmSync(wtPidFile, { force: true }); } catch { /* */ }
+        if (alloc.external) { try { fs.rmSync(`${work}.pid`, { force: true }); } catch { /* */ } }
+      }
       if (!rm.ok) result.cleanup_warning = `worktree ${result.worktree} não removida (${rm.stderr.trim().split(/\r?\n/).pop()}) — remova à mão depois de conferir que não há links dentro`;
       gitRun(projectRoot, ['worktree', 'prune']);
     };
@@ -8766,7 +8836,10 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
         if (options.keepOnConflict && !inPlace) {
           keepWorktree = true;
           try {
-            fs.writeFileSync(`${work}.pid`, JSON.stringify({ pid: process.pid, task: taskId, paused: true, at: new Date().toISOString() }));
+            const pidTarget = wtPidFile || `${work}.pid`;
+            const pausedMeta = JSON.stringify({ pid: process.pid, task: taskId, paused: true, ...(pidTarget !== `${work}.pid` ? { dir: work } : {}), at: new Date().toISOString() });
+            fs.writeFileSync(pidTarget, pausedMeta);
+            if (pidTarget !== `${work}.pid`) fs.writeFileSync(`${work}.pid`, pausedMeta);
           } catch { /* */ }
           const pendingState = {
             task: taskId,
