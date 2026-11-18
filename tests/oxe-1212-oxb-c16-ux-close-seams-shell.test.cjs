@@ -162,4 +162,49 @@ describe('OXB-C16 (UX/CLI dogfooding close/seams/ci/dossier/shell)', () => {
     const dos = op.runtimeDossier(dir, null, {});
     assert.match(dos.warning || '', /active_phase: null/);
   });
+
+  it('6) ship status and suggestNextStep do not suggest /oxe-execute when all program phases are closed without VERIFY.md (--by-ci)', () => {
+    const health = require('../bin/lib/oxe-project-health.cjs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-c16-closed-ship-'));
+    dirs.push(dir);
+    writeRel(dir, '.oxe/STATE.md', '## Fase atual\n\n`plan_ready`\n');
+    writeRel(dir, '.oxe/SPEC.md', '# SPEC\n\n## Critérios de aceite\n\n| ID | Critério | Como verificar |\n|---|---|---|\n| A1 | ok | pass |\n');
+    writeRel(dir, '.oxe/PLAN.md', '# PLAN\n');
+    writeRel(dir, '.oxe/program/PROGRAM.json', {
+      schema_version: 1,
+      roadmap_ref: null,
+      active_phase: null,
+      phases: [
+        {
+          id: 'F1',
+          title: 'Base polish',
+          requirements: [],
+          acceptance: ['A1'],
+          scope: null,
+          status: 'closed',
+          plan_ref: null,
+          run_id: null,
+          started_at: '2026-11-18T00:00:00Z',
+          closed_at: '2026-11-18T01:00:00Z',
+          closed_commit: 'abc1234',
+          closed_by_ci: { run: '101', by: 'ci-bot', reason: 'CI green on main' },
+          regression_ref: null,
+          interfaces_ref: null,
+        },
+      ],
+      created_at: '2026-11-18T00:00:00Z',
+      updated_at: '2026-11-18T01:00:00Z',
+    });
+
+    const next = health.suggestNextStep(dir, {});
+    assert.notEqual(next.cursorCmd, '/oxe-execute');
+    assert.equal(next.step, 'next');
+    assert.equal(next.cursorCmd, '/oxe-spec');
+    assert.match(next.reason, /Programa concluído \(1\/1 fase\(s\) fechada\(s\)\)/);
+
+    const ship = op.runtimeDeliveryStatus(dir, null, { refresh: false });
+    assert.ok(ship.next);
+    assert.notEqual(ship.next.cursorCmd, '/oxe-execute');
+    assert.equal(ship.next.step, 'next');
+  });
 });

@@ -2380,6 +2380,22 @@ function suggestNextStep(target, cfg = {}) {
     };
   }
 
+  let closedProgram = null;
+  try {
+    const ps = operational.runtimeProgramStatus(target, activeSession);
+    if (ps && ps.exists && ps.progress && ps.progress.total > 0 && ps.progress.closed === ps.progress.total && !ps.progress.phase) {
+      closedProgram = ps;
+    }
+  } catch { closedProgram = null; }
+  if (closedProgram) {
+    return {
+      step: 'next',
+      cursorCmd: '/oxe-spec',
+      reason: `Programa concluído (${closedProgram.progress.closed}/${closedProgram.progress.total} fase(s) fechada(s)) — use /oxe-spec ou /oxe-quick para nova entrega.`,
+      artifacts: ['.oxe/program/PROGRAM.json', '.oxe/STATE.md'],
+    };
+  }
+
   if (!has(p.spec)) {
     return {
       step: 'spec',
