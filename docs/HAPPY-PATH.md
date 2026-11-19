@@ -52,6 +52,7 @@ Está ligado por padrão:
 Os opt-ins ficam em `.oxe/config.json`:
 
 - `runtime.provider.name: "antigravity"` (ou `--adapter antigravity`): executa as tentativas com `agy -p` em vez de `claude -p`;
+- `runtime.provider.name: "grok"` (ou `--adapter grok`): executa as tentativas com `grok --prompt-file` (JSON, um turno, sem as tools do Grok). O modelo sai de `--model` ou `OXE_GROK_MODEL`;
 - `execute.failure_classes: { "quota": [...], "environment": [...] }`: padrões do projeto para o que pausa a run sem gastar tentativa. A saída do verify só é lida como cota por um padrão declarado aqui, porque um teste chamado "resets the form" ou um erro na linha 429 é lógica, não o provedor;
 - `coupled_scope`: arquivos que entram no escopo junto com outros (`[{ "when": [...], "include": [...], "note": "…" }]`); `builtin_coupled_scope: false` desliga as regras embutidas;
 - `integration_checks`: comandos rodados no `runtime sync` e antes do push do `promote` (`false` desliga; uma lista substitui os detectados);

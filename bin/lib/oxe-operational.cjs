@@ -156,10 +156,10 @@ function saveRuntimeProviderConfig(projectRoot, providerConfig) {
   try { cfg = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch {}
   if (!cfg.runtime || typeof cfg.runtime !== 'object') cfg.runtime = {};
   const normalizedAdapter = agyLib.normalizeAdapterId(providerConfig.adapter || providerConfig.name || '');
-  const isCliAdapter = normalizedAdapter === 'claude' || normalizedAdapter === 'antigravity';
+  const isCliAdapter = normalizedAdapter === 'claude' || normalizedAdapter === 'antigravity' || normalizedAdapter === 'grok';
   cfg.runtime.provider = {};
-  if (providerConfig.name) cfg.runtime.provider.name = normalizedAdapter === 'antigravity' ? 'antigravity' : providerConfig.name;
-  else if (normalizedAdapter === 'antigravity') cfg.runtime.provider.name = 'antigravity';
+  if (providerConfig.name) cfg.runtime.provider.name = (normalizedAdapter === 'antigravity' || normalizedAdapter === 'grok') ? normalizedAdapter : providerConfig.name;
+  else if (normalizedAdapter === 'antigravity' || normalizedAdapter === 'grok') cfg.runtime.provider.name = normalizedAdapter;
   if (!isCliAdapter || providerConfig.baseUrl) {
     cfg.runtime.provider.baseUrl = providerConfig.baseUrl || 'https://api.anthropic.com/v1';
   }
@@ -1935,21 +1935,25 @@ function runtimeQuestions(projectRoot, activeSession, options = {}) {
 }
 
 /**
- * LlmTaskExecutor sobre um adapter (`claude` = `claude -p` por turno, `antigravity` = `agy -p` por turno, `http` = OpenAI-compatível).
+ * LlmTaskExecutor sobre um adapter (`claude` = `claude -p` por turno, `antigravity` = `agy -p` por turno, `grok` = `grok --prompt-file` por turno, `http` = OpenAI-compatível).
  * O uso por tentativa vira evento `ExecutorUsage`.
  */
 function createAdapterExecutor(runtime, projectRoot, activeSession, options, getRunId) {
   const agyLib = require('./oxe-provider-antigravity.cjs');
+  const grokLib = require('./oxe-provider-grok.cjs');
   const persisted = loadRuntimeProviderConfig(projectRoot);
   const rawAdapter = options.adapter || (persisted && (persisted.adapter || persisted.name)) || 'http';
   const adapterId = agyLib.normalizeAdapterId(rawAdapter) || 'http';
   if (typeof runtime.createExecutorAdapter !== 'function') throw new Error('Runtime não exporta createExecutorAdapter.');
   const resolvedAdapterOpts = adapterId === 'antigravity'
     ? { ...agyLib.resolveAntigravityOptions({ persisted, cwd: projectRoot }), ...(options.adapterOptions || {}) }
-    : (options.adapterOptions || {});
+    : adapterId === 'grok'
+      ? { ...grokLib.resolveGrokOptions({ persisted, cwd: projectRoot }), ...(options.adapterOptions || {}) }
+      : (options.adapterOptions || {});
   const adapter = runtime.createExecutorAdapter(adapterId, {
     claude: adapterId === 'claude' ? resolvedAdapterOpts : {},
     antigravity: adapterId === 'antigravity' ? resolvedAdapterOpts : {},
+    grok: adapterId === 'grok' ? resolvedAdapterOpts : {},
   });
   installQuestionResolver(runtime, projectRoot, activeSession, getRunId);
   if (typeof runtime.setFinishTaskGuard === 'function') {

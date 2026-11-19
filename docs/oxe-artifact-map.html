@@ -1,0 +1,1172 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mapa Interativo dos Artefatos OXE Build</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232d7ff9'/%3E%3Ctext x='16' y='20' text-anchor='middle' font-family='Arial' font-size='10' font-weight='700' fill='white'%3EOXE%3C/text%3E%3C/svg%3E">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d141c;
+      --panel: #111b25;
+      --panel-2: #142231;
+      --line: #42556b;
+      --text: #e6edf5;
+      --muted: #8ea0b5;
+      --blue: #2d7ff9;
+      --cyan: #22b7d8;
+      --green: #21a979;
+      --orange: #f08b24;
+      --red: #df5b57;
+      --violet: #8757d9;
+      --yellow: #d5b243;
+      --shadow: 0 18px 52px rgba(0, 0, 0, .34);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow: hidden;
+      font-family: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 10% 15%, rgba(45, 127, 249, .12), transparent 32%),
+        linear-gradient(135deg, #0b1119 0%, #101924 48%, #0b121b 100%);
+    }
+
+    button, input { font: inherit; }
+
+    .app {
+      display: grid;
+      grid-template-columns: 292px minmax(0, 1fr) 338px;
+      height: 100vh;
+    }
+
+    .sidebar,
+    .details {
+      background: rgba(13, 22, 32, .92);
+      border-color: rgba(136, 159, 184, .18);
+      border-style: solid;
+      backdrop-filter: blur(18px);
+      overflow: auto;
+    }
+
+    .sidebar {
+      border-width: 0 1px 0 0;
+      padding: 22px 18px;
+    }
+
+    .details {
+      border-width: 0 0 0 1px;
+      padding: 22px 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 22px;
+    }
+
+    .mark {
+      display: grid;
+      width: 42px;
+      height: 42px;
+      place-items: center;
+      border-radius: 8px;
+      color: white;
+      font-weight: 800;
+      letter-spacing: .04em;
+      background: linear-gradient(135deg, #2d7ff9, #21a979);
+      box-shadow: 0 12px 30px rgba(45, 127, 249, .28);
+    }
+
+    h1, h2, h3, p { margin: 0; }
+
+    h1 {
+      font-size: 17px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .search {
+      position: relative;
+      margin-bottom: 20px;
+    }
+
+    .search input {
+      width: 100%;
+      height: 38px;
+      color: var(--text);
+      background: #0b141e;
+      border: 1px solid rgba(142, 160, 181, .22);
+      border-radius: 8px;
+      padding: 0 12px;
+      outline: none;
+    }
+
+    .search input:focus {
+      border-color: rgba(45, 127, 249, .85);
+      box-shadow: 0 0 0 3px rgba(45, 127, 249, .16);
+    }
+
+    .section {
+      margin-top: 20px;
+    }
+
+    .section h2 {
+      color: #f5f8fb;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin-bottom: 10px;
+    }
+
+    .filters,
+    .views {
+      display: grid;
+      gap: 8px;
+    }
+
+    .chip,
+    .view-btn,
+    .tool-btn {
+      color: var(--text);
+      background: rgba(20, 34, 49, .92);
+      border: 1px solid rgba(142, 160, 181, .2);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: transform .15s ease, border-color .15s ease, background .15s ease;
+    }
+
+    .chip,
+    .view-btn {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 36px;
+      padding: 8px 10px;
+      text-align: left;
+    }
+
+    .chip:hover,
+    .view-btn:hover,
+    .tool-btn:hover {
+      transform: translateY(-1px);
+      border-color: rgba(255, 255, 255, .34);
+    }
+
+    .chip.active,
+    .view-btn.active {
+      background: rgba(45, 127, 249, .22);
+      border-color: rgba(45, 127, 249, .9);
+    }
+
+    .count {
+      min-width: 24px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 11px;
+      border-radius: 999px;
+      padding: 2px 6px;
+      background: rgba(255, 255, 255, .06);
+    }
+
+    .legend {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--dot);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--dot), transparent 75%);
+    }
+
+    .workspace {
+      position: relative;
+      overflow: hidden;
+      background-color: var(--bg);
+      background-image:
+        linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+      background-size: 18px 18px;
+    }
+
+    .toolbar {
+      position: absolute;
+      z-index: 5;
+      top: 18px;
+      left: 18px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      background: rgba(12, 20, 30, .78);
+      border: 1px solid rgba(142, 160, 181, .16);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(14px);
+    }
+
+    .tool-btn {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      padding: 0;
+      font-size: 16px;
+    }
+
+    .zoom-readout {
+      min-width: 54px;
+      color: var(--muted);
+      text-align: center;
+      font-size: 12px;
+    }
+
+    .canvas {
+      position: absolute;
+      inset: 0;
+      transform-origin: 0 0;
+      will-change: transform;
+    }
+
+    svg.links {
+      position: absolute;
+      inset: 0;
+      width: 2400px;
+      height: 1260px;
+      overflow: visible;
+      pointer-events: none;
+    }
+
+    .edge {
+      fill: none;
+      stroke: rgba(142, 160, 181, .42);
+      stroke-width: 2;
+      marker-end: url(#arrow);
+    }
+
+    .edge.dim {
+      opacity: .13;
+    }
+
+    .edge.hot {
+      stroke: #9ac5ff;
+      stroke-width: 3;
+      filter: drop-shadow(0 0 8px rgba(45, 127, 249, .55));
+      opacity: 1;
+    }
+
+    .node {
+      position: absolute;
+      width: 196px;
+      min-height: 88px;
+      background: rgba(17, 27, 37, .96);
+      border: 1px solid rgba(255, 255, 255, .14);
+      border-top: 4px solid var(--accent);
+      border-radius: 8px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, .26);
+      cursor: pointer;
+      user-select: none;
+      transition: transform .12s ease, box-shadow .12s ease, opacity .15s ease, border-color .15s ease;
+    }
+
+    .node:hover {
+      transform: translateY(-2px);
+      border-color: rgba(255, 255, 255, .42);
+      box-shadow: 0 24px 48px rgba(0, 0, 0, .34);
+    }
+
+    .node.selected {
+      border-color: #fff;
+      box-shadow: 0 0 0 3px rgba(255, 255, 255, .18), 0 24px 58px rgba(0, 0, 0, .4);
+    }
+
+    .node.dim {
+      opacity: .18;
+    }
+
+    .node.hidden {
+      display: none;
+    }
+
+    .node-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 9px 10px 7px;
+      border-bottom: 1px solid rgba(255, 255, 255, .08);
+    }
+
+    .node-type {
+      color: rgba(255, 255, 255, .72);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
+    .port {
+      width: 10px;
+      height: 10px;
+      border: 2px solid rgba(255,255,255,.72);
+      border-radius: 50%;
+      background: var(--accent);
+      flex: 0 0 auto;
+    }
+
+    .node-body {
+      padding: 10px;
+    }
+
+    .node-title {
+      color: #fff;
+      font-size: 14px;
+      line-height: 1.15;
+      font-weight: 720;
+      letter-spacing: 0;
+    }
+
+    .node-summary {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .status-card {
+      margin-top: 16px;
+      padding: 12px;
+      background: rgba(20, 34, 49, .72);
+      border: 1px solid rgba(142, 160, 181, .16);
+      border-radius: 8px;
+    }
+
+    .status-card strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+    }
+
+    .status-card p,
+    .detail-copy,
+    .detail-list li {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.48;
+    }
+
+    .details h2 {
+      font-size: 18px;
+      line-height: 1.2;
+      margin-bottom: 6px;
+    }
+
+    .detail-type {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: #fff;
+      font-size: 12px;
+      margin-bottom: 14px;
+      padding: 5px 8px;
+      border: 1px solid color-mix(in srgb, var(--accent), transparent 52%);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--accent), transparent 84%);
+    }
+
+    .path {
+      display: block;
+      width: 100%;
+      margin: 14px 0;
+      padding: 10px;
+      color: #cfe1f5;
+      background: #0a121a;
+      border: 1px solid rgba(142, 160, 181, .16);
+      border-radius: 8px;
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+
+    .detail-group {
+      margin-top: 18px;
+    }
+
+    .detail-group h3 {
+      margin-bottom: 8px;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: #f1f5fa;
+    }
+
+    .detail-list {
+      display: grid;
+      gap: 7px;
+      padding: 0;
+      margin: 0;
+      list-style: none;
+    }
+
+    .detail-list li {
+      padding: 8px 9px;
+      background: rgba(20, 34, 49, .7);
+      border: 1px solid rgba(142, 160, 181, .14);
+      border-radius: 8px;
+    }
+
+    .mobile-note {
+      display: none;
+      position: absolute;
+      right: 14px;
+      bottom: 14px;
+      left: 14px;
+      z-index: 10;
+      padding: 10px 12px;
+      color: var(--muted);
+      background: rgba(12, 20, 30, .92);
+      border: 1px solid rgba(142, 160, 181, .18);
+      border-radius: 8px;
+    }
+
+    @media (max-width: 1040px) {
+      .app {
+        grid-template-columns: 250px minmax(0, 1fr);
+      }
+
+      .details {
+        display: none;
+      }
+    }
+
+    @media (max-width: 760px) {
+      body {
+        overflow: auto;
+      }
+
+      .app {
+        grid-template-columns: 1fr;
+        height: auto;
+        min-height: 100vh;
+      }
+
+      .sidebar {
+        border-width: 0 0 1px 0;
+      }
+
+      .workspace {
+        height: 72vh;
+      }
+
+      .details {
+        display: block;
+        border-width: 1px 0 0 0;
+      }
+
+      .mobile-note {
+        display: block;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="mark">OXE</div>
+        <div>
+          <h1>Mapa de comunicação</h1>
+          <p class="subtitle">Artefatos, workflows, runtime, agentes e integrações do OXE Build.</p>
+        </div>
+      </div>
+
+      <label class="search" aria-label="Buscar no mapa">
+        <input id="search" type="search" placeholder="Buscar artefato, fluxo ou path">
+      </label>
+
+      <section class="section">
+        <h2>Visões</h2>
+        <div class="views" id="views"></div>
+      </section>
+
+      <section class="section">
+        <h2>Tipos</h2>
+        <div class="filters" id="filters"></div>
+      </section>
+
+      <section class="section">
+        <h2>Legenda</h2>
+        <div class="legend" id="legend"></div>
+      </section>
+
+      <div class="status-card">
+        <strong>Como ler</strong>
+        <p>As setas indicam consumo, produção ou projeção. Clique em um nó para destacar dependências e saídas; use as visões para focar no ciclo, runtime, agentes ou release.</p>
+      </div>
+    </aside>
+
+    <section class="workspace" id="workspace" aria-label="Mapa visual interativo dos artefatos OXE">
+      <div class="toolbar" aria-label="Controles do mapa">
+        <button class="tool-btn" id="zoomOut" title="Diminuir zoom">-</button>
+        <span class="zoom-readout" id="zoomLabel">100%</span>
+        <button class="tool-btn" id="zoomIn" title="Aumentar zoom">+</button>
+        <button class="tool-btn" id="reset" title="Centralizar">⌂</button>
+      </div>
+      <div class="canvas" id="canvas">
+        <svg class="links" id="links" viewBox="0 0 2400 1260" aria-hidden="true">
+          <defs>
+            <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="rgba(142, 160, 181, .7)"></path>
+            </marker>
+          </defs>
+        </svg>
+      </div>
+      <div class="mobile-note">Arraste para navegar pelo mapa. Toque em um cartão para ver suas conexões.</div>
+    </section>
+
+    <aside class="details" id="details" style="--accent: var(--blue)">
+      <h2>Selecione um artefato</h2>
+      <span class="detail-type"><span class="dot" style="--dot: var(--blue)"></span>Visão geral</span>
+      <p class="detail-copy">O mapa parte dos comandos e workflows canônicos, atravessa os artefatos em `.oxe/`, passa pelo runtime enterprise e termina nas integrações, SDK e gates de release.</p>
+      <div class="detail-group">
+        <h3>Atalhos úteis</h3>
+        <ul class="detail-list">
+          <li>`/oxe-spec -> /oxe-plan -> /oxe-execute -> /oxe-verify` é o ciclo principal.</li>
+          <li>`oxe-cc runtime` compila, verifica, projeta e promove runs.</li>
+          <li>`oxe/workflows/**` é a fonte canônica; wrappers são projeções.</li>
+        </ul>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    const colors = {
+      cli: "var(--violet)",
+      workflow: "var(--blue)",
+      artifact: "var(--green)",
+      runtime: "var(--cyan)",
+      agent: "var(--orange)",
+      integration: "var(--yellow)",
+      release: "var(--red)"
+    };
+
+    const labels = {
+      cli: "Entrada",
+      workflow: "Workflow",
+      artifact: "Artefato",
+      runtime: "Runtime",
+      agent: "Agente",
+      integration: "Integração",
+      release: "Release"
+    };
+
+    const nodes = [
+      {
+        id: "user",
+        title: "Usuário / IDE",
+        type: "cli",
+        x: 60,
+        y: 420,
+        path: "Cursor, Copilot, Claude, Gemini, Codex, Windsurf, Antigravity",
+        summary: "Inicia comandos OXE em linguagem natural ou slash commands.",
+        details: "A entrada do usuário chega por wrappers de IDE/CLI, mas o estado real continua em `.oxe/` e os workflows canônicos ficam em `oxe/workflows/`.",
+        produces: ["Pedidos de spec", "Pedidos de plano", "Execução", "Verificação"],
+        consumes: ["Status do ciclo", "Resultados de verify", "Dashboard"]
+      },
+      {
+        id: "cli",
+        title: "oxe-cc CLI",
+        type: "cli",
+        x: 310,
+        y: 420,
+        path: "bin/oxe-cc.js",
+        summary: "Instala, diagnostica, sincroniza, controla runtime e expõe comandos administrativos.",
+        details: "Ponto executável do pacote npm. Orquestra `install`, `doctor`, `status`, `update`, `runtime`, `dashboard`, `context` e gates de release.",
+        produces: ["Workflows instalados", "Manifests", "Relatórios", "Context packs"],
+        consumes: ["package.json", "bin/lib/*.cjs", "oxe/workflows/**", ".oxe/config.json"]
+      },
+      {
+        id: "canonical",
+        title: "Workflows canônicos",
+        type: "workflow",
+        x: 575,
+        y: 385,
+        path: "oxe/workflows/*.md",
+        summary: "Fonte primária de comportamento de `/oxe-*`.",
+        details: "Cada passo OXE deve seguir seu arquivo canônico sem atalhos. Os wrappers de runtime apontam para estes documentos.",
+        produces: ["Fluxo spec-plan-execute-verify", "Regras runtime-first", "Contratos por comando"],
+        consumes: ["References", "Templates", "Personas", "Contratos de raciocínio"]
+      },
+      {
+        id: "contracts",
+        title: "Contratos de raciocínio",
+        type: "workflow",
+        x: 575,
+        y: 570,
+        path: "oxe/workflows/references/workflow-runtime-contracts.json",
+        summary: "Mapeia cada workflow para modo, artefatos exigidos e contexto.",
+        details: "Define `discovery`, `planning`, `execution`, `review` e `status`, além de required/optional artifacts e context tiers por workflow.",
+        produces: ["Metadados cognitivos", "Context tiers", "Bloqueios formais"],
+        consumes: ["reasoning-*.md", "workflow metadata"]
+      },
+      {
+        id: "wrappers",
+        title: "Wrappers por runtime",
+        type: "integration",
+        x: 850,
+        y: 330,
+        path: "commands/oxe, .github/prompts, .cursor/commands, .claude/commands",
+        summary: "Projeções para IDEs e CLIs, derivadas dos workflows.",
+        details: "Permitem que cada ambiente invoque o mesmo comportamento sem duplicar a lógica canônica.",
+        produces: ["Slash commands", "Prompt files", "Instruções de agente"],
+        consumes: ["oxe/workflows/**", "metadata OXE"]
+      },
+      {
+        id: "templates",
+        title: "Templates de artefatos",
+        type: "artifact",
+        x: 850,
+        y: 545,
+        path: "oxe/templates/*.template.*",
+        summary: "Esqueleto dos arquivos persistidos em `.oxe/`.",
+        details: "Padroniza SPEC, PLAN, VERIFY, STATE, EXECUTION-RUNTIME, checkpoints, capabilities, swarm e release docs.",
+        produces: [".oxe/*.md", ".oxe/*.json", "Estrutura inicial de sessão"],
+        consumes: ["Workflows", "Config", "Sessão ativa"]
+      },
+      {
+        id: "config",
+        title: "Config e estado",
+        type: "artifact",
+        x: 1120,
+        y: 170,
+        path: ".oxe/config.json, .oxe/STATE.md",
+        summary: "Define perfil e cursor operacional do projeto.",
+        details: "`config.json` controla profile e defaults. `STATE.md` aponta sessão, fase, workstream e leitura de continuidade.",
+        produces: ["Perfil balanced/strict/fast/legacy", "Sessão ativa", "Próximo passo"],
+        consumes: ["Templates", "Comandos administrativos"]
+      },
+      {
+        id: "spec",
+        title: "SPEC / QUICK",
+        type: "artifact",
+        x: 1120,
+        y: 345,
+        path: ".oxe/SPEC.md, .oxe/QUICK.md",
+        summary: "Converte objetivo em requisitos, escopo e critérios.",
+        details: "`/oxe-spec` gera requisitos estruturados e roteiro. `/oxe-quick` cobre mudanças pequenas com menos cerimônia.",
+        produces: ["Requisitos R-ID", "Critérios de aceite", "Escopo aprovado"],
+        consumes: ["Discussão", "Pesquisa", "Codebase scan", "Visual inputs"]
+      },
+      {
+        id: "plan",
+        title: "PLAN e plan-agents",
+        type: "artifact",
+        x: 1120,
+        y: 525,
+        path: ".oxe/PLAN.md, .oxe/plan-agents.json",
+        summary: "Quebra requisitos em ondas, tarefas, validação e agentes.",
+        details: "`/oxe-plan` produz tarefas verificáveis. Com `--agents`, gera blueprints PDDA com role, persona, model_hint e ownership.",
+        produces: ["Ondas", "Implementation packs", "Blueprints de agentes"],
+        consumes: ["SPEC", "Context packs", "Personas", "Schemas"]
+      },
+      {
+        id: "execute",
+        title: "EXECUTION-RUNTIME",
+        type: "artifact",
+        x: 1120,
+        y: 710,
+        path: ".oxe/EXECUTION-RUNTIME.md, .oxe/ACTIVE-RUN.json",
+        summary: "Registra run, checkpoints, eventos e progresso de execução.",
+        details: "`/oxe-execute` é runtime-first quando disponível. O markdown vira projeção derivada do estado operacional.",
+        produces: ["Active run", "Checkpoints", "Eventos", "Mutations log"],
+        consumes: ["PLAN", "Runtime", "Agentes", "Evidence"]
+      },
+      {
+        id: "verify",
+        title: "VERIFY e gaps",
+        type: "artifact",
+        x: 1120,
+        y: 890,
+        path: ".oxe/VERIFY.md, .oxe/VALIDATION-GAPS.md",
+        summary: "Fecha critérios, riscos residuais, gaps e retro.",
+        details: "`/oxe-verify` valida implementação por camadas, podendo acionar gaps, security, UI review, PR review e retro automática.",
+        produces: ["Resultado de validação", "Risk ledger", "Gaps", "Lessons"],
+        consumes: ["SPEC", "PLAN", "Runtime verify", "Evidence store"]
+      },
+      {
+        id: "runtime",
+        title: "Runtime enterprise",
+        type: "runtime",
+        x: 1395,
+        y: 460,
+        path: "packages/runtime/src, lib/runtime",
+        summary: "ExecutionGraph, scheduler, gates, evidence, policy e promotion.",
+        details: "O runtime TypeScript compila para CJS em `lib/runtime` e executa operações robustas de run, verify, gates, recovery e promoção.",
+        produces: ["Compiled graph", "Run state", "Verification manifest", "Gates"],
+        consumes: ["PLAN", "Artifacts", "Policies", "Workspace strategies"]
+      },
+      {
+        id: "graph",
+        title: "Compiler e projection",
+        type: "runtime",
+        x: 1665,
+        y: 300,
+        path: "lib/runtime/compiler, lib/runtime/projection",
+        summary: "Transforma artefatos em grafo executável e projeções markdown.",
+        details: "O compiler estrutura o trabalho como grafo; projection mantém artefatos legíveis sem virar fonte paralela de verdade.",
+        produces: ["ExecutionGraph", "Projeções de artefato", "Estado legível"],
+        consumes: ["SPEC", "PLAN", "Workflow contracts"]
+      },
+      {
+        id: "scheduler",
+        title: "Scheduler multi-agente",
+        type: "runtime",
+        x: 1665,
+        y: 500,
+        path: "lib/runtime/scheduler",
+        summary: "Coordena agentes, ownership, handoffs e heartbeat.",
+        details: "Gerencia estratégias parallel, competitive e cooperative, além de journal, registry, roles e coordenação multi-agent.",
+        produces: ["Agent status", "Run journal", "Handoffs"],
+        consumes: ["plan-agents.json", "Personas", "Work items"]
+      },
+      {
+        id: "evidence",
+        title: "Evidence, gates e policy",
+        type: "runtime",
+        x: 1665,
+        y: 700,
+        path: "lib/runtime/evidence, gate, policy, audit",
+        summary: "Guarda evidências, aplica decisões e registra auditoria.",
+        details: "Sustenta `runtime verify`, risk ledger, policy packs, gate-manager e trilha auditável para decisões de promoção.",
+        produces: ["Evidence store", "Gate decisions", "Audit trail"],
+        consumes: ["Testes", "Work items", "Verification criteria"]
+      },
+      {
+        id: "agents",
+        title: "Personas e agentes OXE",
+        type: "agent",
+        x: 1395,
+        y: 745,
+        path: "oxe/personas, oxe/agents, .oxe/agents",
+        summary: "Especialistas de planejamento, execução, verificação, UI, DB e debug.",
+        details: "As 8 personas builtin e agentes OXE dão postura operacional específica para cada domínio da entrega.",
+        produces: ["Análises especializadas", "Execução por domínio", "Auditorias"],
+        consumes: ["PLAN", "Context packs", "Agent blueprints"]
+      },
+      {
+        id: "context",
+        title: "Context packs e memória",
+        type: "artifact",
+        x: 1395,
+        y: 180,
+        path: ".oxe/context, .oxe/codebase, .oxe/global, .oxe/memory",
+        summary: "Compacta conhecimento do projeto para leitura rápida e consistente.",
+        details: "Guarda mapas de codebase, summaries, lessons, observations e memória persistente entre sessões.",
+        produces: ["Packs por workflow", "Resumo de sessão", "Lessons"],
+        consumes: ["Scan", "Retro", "Distill", "Observações"]
+      },
+      {
+        id: "sdk",
+        title: "SDK programático",
+        type: "integration",
+        x: 1935,
+        y: 365,
+        path: "lib/sdk/index.cjs",
+        summary: "API para scripts, CI e integrações internas.",
+        details: "Expõe doctor, health, workflows, install, manifest, agents, verifyRun e bridges operacionais do runtime.",
+        produces: ["APIs estáveis", "Integrações CI", "Automação externa"],
+        consumes: ["bin/lib", "lib/runtime", "workflow metadata"]
+      },
+      {
+        id: "dashboard",
+        title: "Dashboard local",
+        type: "integration",
+        x: 1935,
+        y: 565,
+        path: "oxe-cc dashboard, .oxe/dashboard",
+        summary: "Visão web dos artefatos reais, gates, ondas e aprovação.",
+        details: "Lê os arquivos OXE reais e mostra ciclo principal, mapa de artefatos, active run, trace log, handoffs, evidências e promotion state.",
+        produces: ["Visão operacional", "Revisão de equipe", "Aprovação visual"],
+        consumes: [".oxe/STATE.md", ".oxe/PLAN.md", ".oxe/runs", ".oxe/VERIFY.md"]
+      },
+      {
+        id: "release",
+        title: "Release gates",
+        type: "release",
+        x: 1935,
+        y: 770,
+        path: "npm test, release:pack-check, doctor --release",
+        summary: "Impede publicação com drift ou artefatos inválidos.",
+        details: "O gate local exige runtime compilado, árvore canônica, contratos válidos, wrappers sincronizados e relatórios `.oxe/release/*.json`.",
+        produces: ["release-manifest.json", "runtime reports", "multi-agent reports"],
+        consumes: ["Test suite", "Package files", "Runtime build", "Workflows"]
+      },
+      {
+        id: "npm",
+        title: "Pacote npm oxe-cc",
+        type: "release",
+        x: 2180,
+        y: 585,
+        path: "package.json files[]",
+        summary: "Distribui CLI, SDK, workflows, assets, docs e integrações.",
+        details: "Empacota `bin`, `lib`, `oxe`, `assets`, `.cursor`, `.github`, `commands`, `docs`, runtime source e documentação.",
+        produces: ["npx oxe-cc@latest", "Instalação em projetos", "Atualizações"],
+        consumes: ["Release gates", "Manifest", "Package whitelist"]
+      }
+    ];
+
+    const edges = [
+      ["user", "cli", "invoca"],
+      ["cli", "canonical", "resolve"],
+      ["canonical", "contracts", "declara"],
+      ["canonical", "wrappers", "projeta"],
+      ["canonical", "templates", "materializa"],
+      ["wrappers", "user", "expõe"],
+      ["templates", "config", "cria"],
+      ["templates", "spec", "cria"],
+      ["templates", "plan", "cria"],
+      ["templates", "execute", "cria"],
+      ["templates", "verify", "cria"],
+      ["config", "spec", "orienta"],
+      ["spec", "plan", "alimenta"],
+      ["plan", "execute", "direciona"],
+      ["execute", "verify", "evidencia"],
+      ["verify", "context", "retroalimenta"],
+      ["context", "spec", "informa"],
+      ["context", "plan", "informa"],
+      ["context", "agents", "contextualiza"],
+      ["plan", "runtime", "compila"],
+      ["execute", "runtime", "controla"],
+      ["runtime", "graph", "usa"],
+      ["runtime", "scheduler", "usa"],
+      ["runtime", "evidence", "usa"],
+      ["agents", "scheduler", "executa"],
+      ["scheduler", "execute", "atualiza"],
+      ["evidence", "verify", "prova"],
+      ["graph", "execute", "projeta"],
+      ["runtime", "sdk", "reexporta"],
+      ["runtime", "dashboard", "expõe"],
+      ["verify", "release", "libera"],
+      ["sdk", "release", "suporta"],
+      ["release", "npm", "publica"],
+      ["npm", "cli", "instala"]
+    ];
+
+    const views = {
+      all: { label: "Mapa completo", nodes: nodes.map(n => n.id) },
+      cycle: { label: "Ciclo principal", nodes: ["user", "cli", "canonical", "templates", "config", "spec", "plan", "execute", "verify", "context"] },
+      runtime: { label: "Runtime-first", nodes: ["plan", "execute", "verify", "runtime", "graph", "scheduler", "evidence", "dashboard", "sdk"] },
+      agents: { label: "Multi-agente", nodes: ["plan", "agents", "scheduler", "execute", "evidence", "verify", "context"] },
+      install: { label: "Instalação IDE", nodes: ["user", "cli", "canonical", "contracts", "wrappers", "sdk", "npm"] },
+      release: { label: "Publicação", nodes: ["canonical", "contracts", "runtime", "evidence", "verify", "sdk", "release", "npm"] }
+    };
+
+    const canvas = document.getElementById("canvas");
+    const links = document.getElementById("links");
+    const workspace = document.getElementById("workspace");
+    const details = document.getElementById("details");
+    const filtersEl = document.getElementById("filters");
+    const legendEl = document.getElementById("legend");
+    const viewsEl = document.getElementById("views");
+    const searchEl = document.getElementById("search");
+    const zoomLabel = document.getElementById("zoomLabel");
+
+    const nodeMap = new Map(nodes.map(node => [node.id, node]));
+    const activeTypes = new Set(Object.keys(labels));
+    let selectedId = null;
+    let activeView = "all";
+    let query = "";
+    let scale = 0.72;
+    let pan = { x: 18, y: 38 };
+    let dragging = false;
+    let dragStart = { x: 0, y: 0 };
+    let panStart = { x: 0, y: 0 };
+
+    function renderFilters() {
+      filtersEl.innerHTML = "";
+      Object.entries(labels).forEach(([type, label]) => {
+        const count = nodes.filter(node => node.type === type).length;
+        const button = document.createElement("button");
+        button.className = "chip active";
+        button.dataset.type = type;
+        button.innerHTML = `<span><span class="dot" style="--dot:${colors[type]}"></span> ${label}</span><span class="count">${count}</span>`;
+        button.addEventListener("click", () => {
+          if (activeTypes.has(type)) {
+            activeTypes.delete(type);
+            button.classList.remove("active");
+          } else {
+            activeTypes.add(type);
+            button.classList.add("active");
+          }
+          updateVisibility();
+        });
+        filtersEl.appendChild(button);
+      });
+    }
+
+    function renderLegend() {
+      legendEl.innerHTML = "";
+      Object.entries(labels).forEach(([type, label]) => {
+        const item = document.createElement("div");
+        item.className = "legend-item";
+        item.innerHTML = `<span class="dot" style="--dot:${colors[type]}"></span><span>${label}</span>`;
+        legendEl.appendChild(item);
+      });
+    }
+
+    function renderViews() {
+      viewsEl.innerHTML = "";
+      Object.entries(views).forEach(([id, view]) => {
+        const button = document.createElement("button");
+        button.className = `view-btn${id === activeView ? " active" : ""}`;
+        button.dataset.view = id;
+        button.innerHTML = `<span>${view.label}</span><span class="count">${view.nodes.length}</span>`;
+        button.addEventListener("click", () => {
+          activeView = id;
+          document.querySelectorAll(".view-btn").forEach(btn => btn.classList.toggle("active", btn.dataset.view === id));
+          selectedId = null;
+          fitView(id);
+          updateVisibility();
+        });
+        viewsEl.appendChild(button);
+      });
+    }
+
+    function renderNodes() {
+      nodes.forEach(node => {
+        const el = document.createElement("article");
+        el.className = "node";
+        el.id = `node-${node.id}`;
+        el.dataset.id = node.id;
+        el.dataset.type = node.type;
+        el.style.left = `${node.x}px`;
+        el.style.top = `${node.y}px`;
+        el.style.setProperty("--accent", colors[node.type]);
+        el.innerHTML = `
+          <div class="node-head">
+            <span class="node-type">${labels[node.type]}</span>
+            <span class="port"></span>
+          </div>
+          <div class="node-body">
+            <div class="node-title">${node.title}</div>
+            <div class="node-summary">${node.summary}</div>
+          </div>
+        `;
+        el.addEventListener("click", event => {
+          event.stopPropagation();
+          selectedId = node.id;
+          updateDetails(node);
+          updateVisibility();
+        });
+        canvas.appendChild(el);
+      });
+    }
+
+    function renderEdges() {
+      const frag = document.createDocumentFragment();
+      edges.forEach(([from, to, label], index) => {
+        const a = nodeMap.get(from);
+        const b = nodeMap.get(to);
+        const x1 = a.x + 196;
+        const y1 = a.y + 44;
+        const x2 = b.x;
+        const y2 = b.y + 44;
+        const gap = Math.max(80, Math.abs(x2 - x1) * .42);
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", `M ${x1} ${y1} C ${x1 + gap} ${y1}, ${x2 - gap} ${y2}, ${x2} ${y2}`);
+        path.setAttribute("class", "edge");
+        path.dataset.from = from;
+        path.dataset.to = to;
+        path.dataset.label = label;
+        path.dataset.index = String(index);
+        frag.appendChild(path);
+      });
+      links.appendChild(frag);
+    }
+
+    function matchesQuery(node) {
+      if (!query) return true;
+      const haystack = `${node.title} ${node.type} ${node.path} ${node.summary} ${node.details}`.toLowerCase();
+      return haystack.includes(query);
+    }
+
+    function nodeInView(node) {
+      return activeView === "all" || views[activeView].nodes.includes(node.id);
+    }
+
+    function connectedToSelected(id) {
+      return edges.some(([from, to]) => (from === selectedId && to === id) || (to === selectedId && from === id));
+    }
+
+    function updateVisibility() {
+      const visible = new Set();
+      nodes.forEach(node => {
+        const el = document.getElementById(`node-${node.id}`);
+        const isVisible = activeTypes.has(node.type) && nodeInView(node) && matchesQuery(node);
+        el.classList.toggle("hidden", !isVisible);
+        if (isVisible) visible.add(node.id);
+
+        const shouldDim = selectedId && node.id !== selectedId && !connectedToSelected(node.id);
+        el.classList.toggle("dim", Boolean(isVisible && shouldDim));
+        el.classList.toggle("selected", node.id === selectedId);
+      });
+
+      links.querySelectorAll(".edge").forEach(edge => {
+        const from = edge.dataset.from;
+        const to = edge.dataset.to;
+        const edgeVisible = visible.has(from) && visible.has(to);
+        edge.style.display = edgeVisible ? "block" : "none";
+        const hot = selectedId && (from === selectedId || to === selectedId);
+        edge.classList.toggle("hot", Boolean(hot));
+        edge.classList.toggle("dim", Boolean(selectedId && !hot));
+      });
+    }
+
+    function updateDetails(node) {
+      details.style.setProperty("--accent", colors[node.type]);
+      const incoming = edges.filter(([, to]) => to === node.id).map(([from, , label]) => `${nodeMap.get(from).title} -> ${label}`);
+      const outgoing = edges.filter(([from]) => from === node.id).map(([, to, label]) => `${label} -> ${nodeMap.get(to).title}`);
+      details.innerHTML = `
+        <h2>${node.title}</h2>
+        <span class="detail-type"><span class="dot" style="--dot:${colors[node.type]}"></span>${labels[node.type]}</span>
+        <p class="detail-copy">${node.details}</p>
+        <code class="path">${node.path}</code>
+        <div class="detail-group">
+          <h3>Produz ou atualiza</h3>
+          <ul class="detail-list">${node.produces.map(item => `<li>${item}</li>`).join("")}</ul>
+        </div>
+        <div class="detail-group">
+          <h3>Consome ou depende</h3>
+          <ul class="detail-list">${node.consumes.map(item => `<li>${item}</li>`).join("")}</ul>
+        </div>
+        <div class="detail-group">
+          <h3>Entradas no mapa</h3>
+          <ul class="detail-list">${(incoming.length ? incoming : ["Sem entrada direta nesta visão."]).map(item => `<li>${item}</li>`).join("")}</ul>
+        </div>
+        <div class="detail-group">
+          <h3>Saídas no mapa</h3>
+          <ul class="detail-list">${(outgoing.length ? outgoing : ["Sem saída direta nesta visão."]).map(item => `<li>${item}</li>`).join("")}</ul>
+        </div>
+      `;
+    }
+
+    function applyTransform() {
+      canvas.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${scale})`;
+      zoomLabel.textContent = `${Math.round(scale * 100)}%`;
+    }
+
+    function fitView(id) {
+      const viewNodes = (id === "all" ? nodes : nodes.filter(node => views[id].nodes.includes(node.id)));
+      const minX = Math.min(...viewNodes.map(node => node.x));
+      const minY = Math.min(...viewNodes.map(node => node.y));
+      const maxX = Math.max(...viewNodes.map(node => node.x + 196));
+      const maxY = Math.max(...viewNodes.map(node => node.y + 110));
+      const width = maxX - minX;
+      const height = maxY - minY;
+      const scaleX = (workspace.clientWidth - 80) / width;
+      const scaleY = (workspace.clientHeight - 90) / height;
+      scale = Math.min(.92, Math.max(.42, Math.min(scaleX, scaleY)));
+      pan = {
+        x: Math.max(12, (workspace.clientWidth - width * scale) / 2 - minX * scale),
+        y: Math.max(24, (workspace.clientHeight - height * scale) / 2 - minY * scale)
+      };
+      applyTransform();
+    }
+
+    searchEl.addEventListener("input", event => {
+      query = event.target.value.trim().toLowerCase();
+      selectedId = null;
+      updateVisibility();
+    });
+
+    document.getElementById("zoomIn").addEventListener("click", () => {
+      scale = Math.min(1.35, scale + .1);
+      applyTransform();
+    });
+
+    document.getElementById("zoomOut").addEventListener("click", () => {
+      scale = Math.max(.35, scale - .1);
+      applyTransform();
+    });
+
+    document.getElementById("reset").addEventListener("click", () => {
+      activeView = "all";
+      selectedId = null;
+      document.querySelectorAll(".view-btn").forEach(btn => btn.classList.toggle("active", btn.dataset.view === "all"));
+      fitView("all");
+      updateVisibility();
+    });
+
+    workspace.addEventListener("pointerdown", event => {
+      if (event.target.closest(".node") || event.target.closest(".toolbar")) return;
+      dragging = true;
+      dragStart = { x: event.clientX, y: event.clientY };
+      panStart = { ...pan };
+      workspace.setPointerCapture(event.pointerId);
+    });
+
+    workspace.addEventListener("pointermove", event => {
+      if (!dragging) return;
+      pan = {
+        x: panStart.x + event.clientX - dragStart.x,
+        y: panStart.y + event.clientY - dragStart.y
+      };
+      applyTransform();
+    });
+
+    workspace.addEventListener("pointerup", event => {
+      dragging = false;
+      if (workspace.hasPointerCapture(event.pointerId)) workspace.releasePointerCapture(event.pointerId);
+    });
+
+    workspace.addEventListener("wheel", event => {
+      event.preventDefault();
+      const direction = event.deltaY > 0 ? -1 : 1;
+      const nextScale = Math.min(1.35, Math.max(.35, scale + direction * .06));
+      const rect = workspace.getBoundingClientRect();
+      const mx = event.clientX - rect.left;
+      const my = event.clientY - rect.top;
+      const worldX = (mx - pan.x) / scale;
+      const worldY = (my - pan.y) / scale;
+      scale = nextScale;
+      pan = { x: mx - worldX * scale, y: my - worldY * scale };
+      applyTransform();
+    }, { passive: false });
+
+    window.addEventListener("resize", () => fitView(activeView));
+
+    renderFilters();
+    renderLegend();
+    renderViews();
+    renderEdges();
+    renderNodes();
+    fitView("all");
+    updateVisibility();
+  </script>
+</body>
+</html>

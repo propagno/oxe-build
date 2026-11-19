@@ -28,6 +28,7 @@ function normalizeAdapterId(value) {
   const clean = String(value || '').trim().toLowerCase();
   if (clean === 'antigravity' || clean === 'agy') return 'antigravity';
   if (clean === 'claude') return 'claude';
+  if (clean === 'grok') return 'grok';
   if (clean === 'http') return 'http';
   return clean;
 }
@@ -43,6 +44,9 @@ function normalizeProviderConfig(provider) {
   if (isAntigravityAlias(candidate)) {
     out.adapter = ADAPTER_ID;
     if (!out.name) out.name = ADAPTER_ID;
+  } else if (String(candidate).trim().toLowerCase() === 'grok') {
+    out.adapter = 'grok';
+    if (!out.name || String(out.name).toLowerCase() === 'grok') out.name = 'grok';
   } else if (out.adapter) {
     out.adapter = normalizeAdapterId(out.adapter);
   } else if (out.name && (String(out.name).toLowerCase() === 'claude' || String(out.name).toLowerCase() === 'http')) {

@@ -1,10 +1,12 @@
 import type { AntigravityCliAdapterOptions } from './antigravity-cli';
 import type { ClaudeCliAdapterOptions } from './claude-cli';
+import type { GrokCliAdapterOptions } from './grok-cli';
 import type { AdapterDetection, ExecutorAdapter, ExecutorAdapterId } from './types';
 export declare const EXECUTOR_ADAPTER_IDS: readonly ExecutorAdapterId[];
 export interface AdapterFactoryOptions {
     claude?: ClaudeCliAdapterOptions;
     antigravity?: AntigravityCliAdapterOptions;
+    grok?: GrokCliAdapterOptions;
 }
 export declare function normalizeExecutorAdapterId(value: string): ExecutorAdapterId | null;
 export declare function isExecutorAdapterId(value: string): value is ExecutorAdapterId;

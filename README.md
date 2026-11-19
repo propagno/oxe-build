@@ -315,9 +315,10 @@ Executor (`runtime execute --adapter`):
 | Adapter | Como roda | Credencial |
 |---|---|---|
 | `claude` | `claude -p` (Claude Code headless) por turno; as tools rodam no runtime, sob a allowlist do nó e contidas no workspace | nenhuma — usa o login do Claude Code |
+| `grok` | `grok --prompt-file` (Grok headless) por turno; as tools do Grok ficam desligadas e as do runtime executam o JSON | nenhuma — usa o login do Grok, ou `XAI_API_KEY` |
 | `http` | API OpenAI-compatível (`--base-url`, padrão Anthropic `/v1`) | `--api-key` ou `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
 
-Sem `--adapter`, o runtime usa `http` quando há chave ou `--base-url`, e `claude` quando o CLI está instalado e não há chave. `oxe-cc runtime providers` lista o que foi detectado. O prompt de cada tarefa leva o trecho dela no PLAN, o contrato do IMPLEMENTATION-PACK, o FIXTURE-PACK, o estado atual dos arquivos do escopo e as lições; custo e turnos por tarefa aparecem no RUN-SUMMARY.
+Sem `--adapter`, o runtime usa `http` quando há chave ou `--base-url`. Sem chave, usa o primeiro CLI instalado nesta ordem: `claude`, `grok`, `antigravity`. `oxe-cc runtime providers` lista o que foi detectado. O prompt de cada tarefa leva o trecho dela no PLAN, o contrato do IMPLEMENTATION-PACK, o FIXTURE-PACK, o estado atual dos arquivos do escopo e as lições; custo e turnos por tarefa aparecem no RUN-SUMMARY.
 
 Isso permite pausar, retomar, repetir uma onda, recuperar um journal interrompido e exigir aprovação formal sem depender do histórico do chat.
 
