@@ -3322,21 +3322,21 @@ function discoverInheritedAlmConfig(projectRoot, activeSession, explicitAlmDir =
     const abs = path.resolve(projectRoot, String(explicitAlmDir));
     const c = readProjectConfig(abs);
     if (!hasAlm(c)) throw new Error(`--alm-dir ${explicitAlmDir}: nenhum bloco "alm" configurado em ${abs}`);
-    return { alm: c.alm, from: abs };
+    return { alm: c.alm, from: abs, from_kind: 'explicit' };
   }
   const candidates = [];
-  // 1. PROGRAM.json `forked_from.root` (a parallel phase worktree forked from a program root)
-  try {
-    const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
-    const prog = readJsonQuiet(path.join(paths.programDir || path.join(projectRoot, '.oxe', 'program'), 'PROGRAM.json'));
-    if (prog && prog.forked_from && prog.forked_from.root) candidates.push(path.resolve(prog.forked_from.root));
-  } catch { /* no program */ }
-  // 2. Main git worktree (`<gitCommonDir>/..`)
+  // 1. Main git worktree (`<gitCommonDir>/..`) — prioritized over sibling worktrees (OXB-C18 #5)
   try {
     const common = (gitLines(projectRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir']) || [])[0];
     const main = common ? path.dirname(common) : null;
-    if (main) candidates.push(path.resolve(main));
+    if (main) candidates.push({ dir: path.resolve(main), kind: 'main' });
   } catch { /* no git */ }
+  // 2. PROGRAM.json `forked_from.root` (a parallel phase worktree forked from a program root)
+  try {
+    const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+    const prog = readJsonQuiet(path.join(paths.programDir || path.join(projectRoot, '.oxe', 'program'), 'PROGRAM.json'));
+    if (prog && prog.forked_from && prog.forked_from.root) candidates.push({ dir: path.resolve(prog.forked_from.root), kind: 'forked_from' });
+  } catch { /* no program */ }
   // 3. Sibling git worktrees of the same repository (`git worktree list --porcelain`), newest `.oxe/config.json` first
   try {
     const wts = [];
@@ -3351,15 +3351,15 @@ function discoverInheritedAlmConfig(projectRoot, activeSession, explicitAlmDir =
       }
     }
     wts.sort((a, b) => b.mtime - a.mtime);
-    for (const x of wts) candidates.push(x.wt);
+    for (const x of wts) candidates.push({ dir: x.wt, kind: 'sibling' });
   } catch { /* no git */ }
 
   const seen = new Set([path.resolve(projectRoot)]);
   for (const cand of candidates) {
-    if (!cand || seen.has(cand)) continue;
-    seen.add(cand);
-    const c = readProjectConfig(cand);
-    if (hasAlm(c)) return { alm: c.alm, from: cand };
+    if (!cand || !cand.dir || seen.has(cand.dir)) continue;
+    seen.add(cand.dir);
+    const c = readProjectConfig(cand.dir);
+    if (hasAlm(c)) return { alm: c.alm, from: cand.dir, from_kind: cand.kind };
   }
   return null;
 }
@@ -3384,11 +3384,13 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
   // OxeSpace 14/11 & OXB-C1 (#11): a program worktree may have no local `.oxe/config.json` "alm" block; inherit from
   // `--alm-dir`, `PROGRAM.json -> forked_from.root`, main worktree, or sibling worktrees of the same clone.
   let almFrom = null;
+  let almFromKind = null;
   if (options.almDir || !config.alm) {
     const inherited = discoverInheritedAlmConfig(projectRoot, activeSession, options.almDir || null);
     if (inherited) {
       config = { ...config, alm: inherited.alm };
       almFrom = inherited.from;
+      almFromKind = inherited.from_kind || null;
     }
   }
   const cfg = lib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) });
@@ -3416,7 +3418,7 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
     const pendingRoot = almFrom || projectRoot;
     const pending = [lib.addPending(pendingRoot, { op: 'comment', key: rec.key, text: q.cardComment(rec, phase), by })];
     if (action === 'start' && cfg.states.in_progress) pending.push(lib.addPending(pendingRoot, { op: 'move', key: rec.key, stage: 'in_progress', by }));
-    return { ...rec, alm: { pending: pending.map((p) => ({ id: p.id, op: p.op, key: p.key, stage: p.stage || null })), ...(almFrom ? { from: almFrom } : {}), why: `${lib.writerError(cfg).message} — ${pending.length} pedido(s) gravado(s) para o escritor${almFrom ? ` em ${almFrom}` : ''}: oxe-cc alm pending apply` } };
+    return { ...rec, alm: { pending: pending.map((p) => ({ id: p.id, op: p.op, key: p.key, stage: p.stage || null })), ...(almFrom ? { from: almFrom, from_kind: almFromKind } : {}), why: `${lib.writerError(cfg).message} — ${pending.length} pedido(s) gravado(s) para o escritor${almFrom ? ` em ${almFrom}` : ''}: oxe-cc alm pending apply` } };
   }
   if (!dry) lib.warnApply(cfg, options);
   const programDir = almFrom && fs.existsSync(path.join(almFrom, '.oxe', 'program'))
@@ -3428,7 +3430,7 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
     alm.comment = await lib.comment(programDir, cfg, rec.key, q.cardComment(rec, action === 'start' ? 'start' : action === 'cancel' ? 'cancel' : 'done'), net);
     if (action === 'start' && cfg.states.in_progress) alm.move = await lib.moveForward(programDir, cfg, rec.key, 'in_progress', net);
   } catch (err) { alm.error = err.message; }
-  return { ...rec, alm: { dry_run: dry, ...alm, ...(almFrom ? { from: almFrom } : {}) } };
+  return { ...rec, alm: { dry_run: dry, ...alm, ...(almFrom ? { from: almFrom, from_kind: almFromKind } : {}) } };
 }
 
 /**
@@ -12440,7 +12442,15 @@ function commitExactContent(projectRoot, entries, message, options = {}) {
       };
     }
     if (check.kind === 'integration') {
+      if (check.timedOut) {
+        const secs = Math.round((Number(check.timeoutMs) || 900_000) / 1000);
+        return { committed: false, failed: true, kind: 'integration', timed_out: true, reason: `check de integração timeout: passou de ${secs}s (\`${check.command}\`) — aumente checkpoint_check_timeout_ms em .oxe/config.json${check.tail ? `: ${check.tail}` : ''}`, snapshot: entries };
+      }
       return { committed: false, failed: true, kind: 'integration', reason: `check de integração vermelho na árvore do commit (\`${check.command}\`) — o promote recusaria esta tarefa: ${check.tail}`, snapshot: entries };
+    }
+    if (check.timedOut) {
+      const secs = Math.round((Number(check.timeoutMs) || 900_000) / 1000);
+      return { committed: false, failed: true, timed_out: true, reason: `checkpoint_check timeout: passou de ${secs}s (\`${check.command}\`) — aumente checkpoint_check_timeout_ms em .oxe/config.json${check.tail ? `: ${check.tail}` : ''}`, snapshot: entries };
     }
     return { committed: false, failed: true, reason: `checkpoint_check vermelho na árvore do commit (\`${check.command}\`): ${check.tail}`, snapshot: entries };
   }
@@ -12558,7 +12568,7 @@ function checkpointCheck(projectRoot, sha, options = {}) {
       // OxeSpace 14/11: minutes of silence after WorkItemCompleted looked like a hang — say what runs, and for how long
       try { process.stderr.write(`\n  [checkpoint ${String(sha).slice(0, 8)}] ${c.kind === 'related' ? 'testes relacionados' : c.kind === 'integration' ? 'check de integração' : 'checkpoint_check'}: ${String(c.command).slice(0, 160)} (até ${Math.round((c.timeout || 0) / 60000)} min)\n`); } catch { /* */ }
       const r = runChildCommandFull(wt, c.command, c.timeout);
-      res = { ok: r.ok, timedOut: Boolean(r.timedOut), tail: r.tail, kind: c.kind, command: c.command, output: r.output, skipped: c.skipped || [], excluded_later_owned: c.excluded_later_owned || [] };
+      res = { ok: r.ok, timedOut: Boolean(r.timedOut), timeoutMs: c.timeout, tail: r.tail, kind: c.kind, command: c.command, output: r.output, skipped: c.skipped || [], excluded_later_owned: c.excluded_later_owned || [] };
       if (!r.ok && c.kind === 'integration' && integrationRedIsPreexisting(projectRoot, wt, sha, c, r, options.changedFiles || [])) {
         // cross-review 15/11 (R29): red on the parent too, and nothing the task changed is named — not this task's to
         // fix (it could not, without a scope violation); recorded, the checkpoint goes on

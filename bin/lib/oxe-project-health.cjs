@@ -383,6 +383,46 @@ function loadOxeConfigMerged(targetProject) {
 function validateConfigShape(cfg) {
   const unknownKeys = Object.keys(cfg).filter((k) => !ALLOWED_CONFIG_KEYS.includes(k));
   const typeErrors = [];
+  // OXB-C18 (#6): validate execute.* and executor.* subkeys and flag ambiguous duplicate max_context_chars
+  const EXECUTE_OBJECT_KEYS = [
+    'ask_orchestrator', 'no_progress_turns', 'slow_turn_ms', 'max_context_chars', 'max_context_action',
+    'interrupt_on', 'repair', 'turns', 'defer_failed', 'dispatch', 'failure_classes', 'all_segments',
+    'supervise', 'budget', 'max_turns', 'max_run_ms', 'verify_timeout_ms', 'llm_timeout_ms',
+    'model', 'provider', 'adapter', 'base_url', 'api_key_env', 'in_place', 'parallel_mutating',
+    'promote_each', 'checkpoint_commits',
+  ];
+  const EXECUTOR_OBJECT_KEYS = [
+    'provider', 'adapter', 'model', 'base_url', 'api_key_env', 'max_turns', 'max_run_ms',
+    'verify_timeout_ms', 'llm_timeout_ms', 'max_context_chars', 'max_context_action',
+    'scratch_ignore', 'turns', 'no_progress_turns', 'slow_turn_ms', 'ask_orchestrator',
+    'timeout_ms', 'stream', 'temperature', 'reasoning_effort', 'mode', 'command', 'args', 'env', 'binary', 'bin',
+  ];
+  if (cfg.execute != null) {
+    if (typeof cfg.execute !== 'object' || Array.isArray(cfg.execute)) {
+      typeErrors.push('execute deve ser um objeto');
+    } else {
+      for (const k of Object.keys(cfg.execute)) {
+        if (!EXECUTE_OBJECT_KEYS.includes(k)) unknownKeys.push(`execute.${k}`);
+      }
+    }
+  }
+  if (cfg.executor != null) {
+    if (typeof cfg.executor !== 'object' || Array.isArray(cfg.executor)) {
+      typeErrors.push('executor deve ser um objeto');
+    } else {
+      for (const k of Object.keys(cfg.executor)) {
+        if (!EXECUTOR_OBJECT_KEYS.includes(k)) unknownKeys.push(`executor.${k}`);
+      }
+    }
+  }
+  if (
+    cfg.execute && typeof cfg.execute === 'object' && !Array.isArray(cfg.execute)
+    && cfg.executor && typeof cfg.executor === 'object' && !Array.isArray(cfg.executor)
+    && cfg.execute.max_context_chars != null && cfg.executor.max_context_chars != null
+    && Number(cfg.execute.max_context_chars) !== Number(cfg.executor.max_context_chars)
+  ) {
+    unknownKeys.push('execute.max_context_chars (conflito com executor.max_context_chars; execute.* tem precedência)');
+  }
   if (cfg.install != null) {
     if (typeof cfg.install !== 'object' || Array.isArray(cfg.install)) {
       typeErrors.push('install deve ser um objeto');

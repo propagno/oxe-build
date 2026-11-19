@@ -4276,11 +4276,13 @@ function parseRuntimeArgs(argv) {
     risk: '',
     yes: false,
     checkpointCommits: false,
+    verbose: false,
   };
   const positionals = [];
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '-h' || a === '--help') out.help = true;
+    else if (a === '--verbose' || a === '-v') out.verbose = true;
     else if (a === '--phase' && argv[i + 1]) out.phase = String(argv[++i]);
     else if (a === '--base-commit' && argv[i + 1]) out.base = String(argv[++i]);
     else if (a === '--criteria' && argv[i + 1]) out.criteria = String(argv[++i]);
@@ -5074,8 +5076,20 @@ async function runRuntime(opts) {
       const recIssues = Array.isArray(report.recoveryState.issues) ? report.recoveryState.issues.length : 0;
       const recLabel = recIssues === 0
         ? `${report.recoveryState.status} · ok`
+        : opts.verbose
+        ? `${report.recoveryState.status} · issues=${recIssues}`
         : `${report.recoveryState.status} · issues=${recIssues} — rode ${c ? cyan : ''}runtime status --verbose${c ? reset : ''} para detalhes`;
       console.log(`  ${c ? green : ''}Recovery:${c ? reset : ''} ${recLabel} · recoveries=${report.recoveryState.recoverCount ?? 0}`);
+      if (opts.verbose && recIssues > 0) {
+        for (const issue of report.recoveryState.issues) {
+          if (typeof issue === 'string') {
+            console.log(`    ${c ? yellow : ''}-${c ? reset : ''} ${issue}`);
+          } else if (issue && typeof issue === 'object') {
+            const parts = [issue.code || issue.kind || issue.id, issue.message || issue.reason || issue.detail, issue.path || issue.file].filter(Boolean);
+            console.log(`    ${c ? yellow : ''}-${c ? reset : ''} ${parts.join(' · ') || JSON.stringify(issue)}`);
+          }
+        }
+      }
     }
     if (multiAgent) {
       const blockers = Array.isArray(multiAgent.mergeBlockers) ? multiAgent.mergeBlockers.length : 0;
@@ -7360,10 +7374,17 @@ async function main() {
     argv.unshift('program');
   }
 
+  const runtimeUsage = (opts = {}) => {
+    const act = opts && opts.action ? String(opts.action) : 'status';
+    console.log(`\n  Uso: oxe-cc runtime <ação> [opções]   (ação atual: ${act})`);
+    console.log('  Ações comuns: status [--verbose] [--json] [--plain] [--dir <pasta>] | compile | execute | verify | gates | promote | program | dossier | ci | seams | commit-task');
+    console.log('  Ajuda completa: oxe-cc runtime --help\n');
+  };
   const coreRegistry = createCoreCommandRegistry({
     existsSync: fs.existsSync,
     printBanner,
     usage,
+    runtimeUsage,
     log: console.log,
     error: console.error,
     exit: process.exit,
@@ -8421,13 +8442,18 @@ async function main() {
   if (command === 'quick') {
     const SUBS = ['status', 'trailers', 'list', 'done', 'start', 'commit', 'cancel'];
     if (argv.includes('--help') || argv.includes('-h')) {
-      console.log(`\n  oxe-cc quick <KEY> "<objetivo>" [--by <papel>] [--replace] [--alm-dir <pasta>] [--apply|--dry-run]   abre um quick: registro em .oxe/quick/, minispec no QUICK.md, trailers dos commits
-  oxe-cc quick status | trailers | list                                              o quick aberto, as linhas de trailer, os quicks do projeto
-  oxe-cc quick commit -m "<mensagem>" [<arquivos…>|--all]                            o commit do quick, feito pelo CLI com os trailers
-  oxe-cc quick cancel --reason "…" [--evidence <url|caminho>] [--apply|--dry-run]       abandona o quick aberto (nunca "feito"); o card é comentado, não avança
-  oxe-cc quick done [--verify "<comando>"] [--no-commit] [--apply|--dry-run]          fecha: commits com OXE-Quick, verificação rodada pelo CLI
+      console.log(`\n  oxe-cc quick <KEY> "<objetivo>" [--by <papel>] [--replace] [--alm-dir <pasta>] [--apply|--dry-run] [--plain|--json]   abre um quick: registro em .oxe/quick/, minispec no QUICK.md, trailers dos commits
+  oxe-cc quick status | trailers | list [--plain|--json]                                                                  o quick aberto, as linhas de trailer, os quicks do projeto
+  oxe-cc quick commit -m "<mensagem>" [<arquivos…>|--all] [--plain|--json]                                                o commit do quick, feito pelo CLI com os trailers
+  oxe-cc quick cancel --reason "…" [--evidence <url|caminho>] [--apply|--dry-run] [--plain|--json]                        abandona o quick aberto (nunca "feito"); o card é comentado, não avança
+  oxe-cc quick done [--verify "<comando>"] [--no-commit] [--apply|--dry-run] [--plain|--json]                             fecha: commits com OXE-Quick, verificação rodada pelo CLI
 
-  Com ALM: herda automaticamente o bloco "alm" de oxe.config.json, PROGRAM.json (forked_from), worktree principal ou irmãs (ou --alm-dir <pasta>).
+  Modos de escrita:
+    --dry-run       simula sem gravar nem localmente (.oxe/quick/ e QUICK.md ficam intactos; commits sem origem falham no hook commit-msg).
+    (sem --apply)   grava o quick localmente (.oxe/quick/, QUICK.md e trailers) sem escrever no ALM; passe --apply para gravar também no ALM.
+    --plain         saída sem cores/decoração ANSI (útil em logs e scripts).
+
+  Com ALM: herda automaticamente o bloco "alm" de oxe.config.json, worktree principal, PROGRAM.json (forked_from) ou irmãs (ou --alm-dir <pasta>).
   Todo commit do quick leva OXE-Quick (e OXE-Card com ALM); o hook commit-msg do oxe-cc guards install acrescenta.
   Workflow: /oxe-quick · conferência no PR: oxe-cc ship check-origin <#PR>\n`);
       return;
@@ -8467,7 +8493,10 @@ async function main() {
         if (a.pending) { console.log(`  ${yellow}⇢${reset} ALM: ${a.why}`); return; }
         if (a.error) { console.log(`  ${red}✗${reset} ALM: ${a.error}`); process.exitCode = 1; return; }
         const tag = a.dry_run ? `${yellow}(simulação)${reset} ` : '';
-        if (a.from) console.log(`  ${dim}ALM da worktree principal: ${a.from} (esta não tem o bloco "alm")${reset}`);
+        if (a.from) {
+          const srcLabel = a.from_kind === 'main' ? 'worktree principal' : a.from_kind === 'explicit' ? '--alm-dir' : 'worktree';
+          console.log(`  ${dim}ALM herdado da ${srcLabel} ${a.from} (esta worktree não tem o bloco "alm")${reset}`);
+        }
         if (a.comment) console.log(`  ${tag}${a.comment.planned ? 'comentaria' : a.comment.queued ? 'comentário na fila do MCP' : 'comentou'} no card`);
         if (a.move) console.log(`  ${tag}${a.move.skipped ? `não moveu: ${a.move.why}` : a.move.planned ? `moveria para "${a.move.planned.state}"` : a.move.queued ? `movimento na fila do MCP` : a.move.changed === false ? `já em "${a.move.state}"` : `→ movido para "${a.move.state}"`}`);
         if (a.dry_run) console.log(`  ${dim}nada foi gravado no ALM; para gravar, rode com --apply${o.dryRun ? ' e sem --dry-run' : ''}${reset}`);

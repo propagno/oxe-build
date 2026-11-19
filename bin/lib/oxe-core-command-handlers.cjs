@@ -5,19 +5,20 @@ const { createCommandRegistry } = require('./oxe-command-registry.cjs');
 /** Build the high-level CLI handlers from explicit parser/domain dependencies. */
 function createCoreCommandRegistry(deps) {
   const {
-    existsSync, printBanner, usage, log, error, exit, colors,
+    existsSync, printBanner, usage, runtimeUsage, log, error, exit, colors,
     readPkgVersion, parseUninstallArgs, parseUpdateArgs, parseCapabilitiesArgs,
     parseRuntimeArgs, parseAzureArgs, parseInstallArgs, runUninstall,
     runUpdateVersionCheck, runUpdate, runCapabilities, runRuntime, runAzure,
     runDoctor, runStatus, runStatusFull,
   } = deps;
 
-  function showParseFailure(opts) {
+  function showParseFailure(opts, customUsage) {
+    const printHelp = typeof customUsage === 'function' ? () => customUsage(opts) : usage;
     if (opts.conflictFlags) {
-      printBanner(); error(`${colors.red}${opts.conflictFlags}${colors.reset}`); usage(); exit(1);
+      printBanner(); error(`${colors.red}${opts.conflictFlags}${colors.reset}`); printHelp(); exit(1);
     }
     if (opts.parseError) {
-      printBanner(); error(`${colors.red}Opção desconhecida:${colors.reset} ${opts.unknownFlag}`); usage(); exit(1);
+      printBanner(); error(`${colors.red}Opção desconhecida:${colors.reset} ${opts.unknownFlag}`); printHelp(); exit(1);
     }
   }
   function showHelp(opts) {
@@ -50,7 +51,7 @@ function createCoreCommandRegistry(deps) {
     } },
     { name: 'runtime', async handler(argv) {
       const opts = parseRuntimeArgs(argv);
-      showHelp(opts); showParseFailure(opts); printBanner(); requireDirectory(opts.dir, false);
+      showHelp(opts); showParseFailure(opts, runtimeUsage); if (!opts.jsonOutput) printBanner(); requireDirectory(opts.dir, false);
       return runRuntime(opts);
     } },
     { name: 'azure', handler(argv) {
