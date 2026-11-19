@@ -5881,25 +5881,27 @@ async function runRuntime(opts) {
       // OXB-185: no fixed 10 — the global cap only when given; each attempt gets turns sized to its task.
       const maxTurns = opts.maxTurns || (_persisted && _persisted.maxTurns) || undefined;
       // Adapter: --adapter > configurado (`adapter` ou `name`) > `http` quando há chave/URL >
-      // `claude` ou `antigravity` quando o CLI está instalado (sem API key) > http.
+      // `claude`, depois `grok`, depois `antigravity`, quando o CLI está instalado (sem API key) > http.
       const agyProviderLib = require('./lib/oxe-provider-antigravity.cjs');
+      const grokProviderLib = require('./lib/oxe-provider-grok.cjs');
       let adapterId = agyProviderLib.normalizeAdapterId(opts.adapter || opts.provider || (_persisted && (_persisted.adapter || _persisted.name)) || '');
       if (!adapterId) {
         if (apiKey || opts.baseUrl) adapterId = 'http';
         else {
           const detected = oxeOperational.detectRuntimeAdapters();
           const claude = detected.find((a) => a.id === 'claude');
+          const grok = detected.find((a) => a.id === 'grok');
           const agy = detected.find((a) => a.id === 'antigravity');
-          adapterId = claude && claude.available ? 'claude' : (agy && agy.available ? 'antigravity' : 'http');
+          adapterId = claude && claude.available ? 'claude' : (grok && grok.available ? 'grok' : (agy && agy.available ? 'antigravity' : 'http'));
         }
       }
-      if (adapterId !== 'claude' && adapterId !== 'antigravity' && adapterId !== 'http') {
-        console.error(`${red}Erro: --adapter ${adapterId} desconhecido (use claude, antigravity ou http).${reset}`);
+      if (adapterId !== 'claude' && adapterId !== 'antigravity' && adapterId !== 'grok' && adapterId !== 'http') {
+        console.error(`${red}Erro: --adapter ${adapterId} desconhecido (use claude, antigravity, grok ou http).${reset}`);
         process.exit(1);
       }
       if (adapterId === 'http' && !apiKey) {
         console.error(`${red}Erro: executor LLM não configurado.${reset}`);
-        console.error(`  Use: --adapter claude  ou  --adapter antigravity (sem API key)`);
+        console.error(`  Use: --adapter claude, --adapter grok  ou  --adapter antigravity (sem API key)`);
         console.error(`  Ou:  --api-key <chave>  ou  exporte ANTHROPIC_API_KEY`);
         console.error(`  Ou persista com: oxe-cc runtime configure --model <modelo> --api-key-env ANTHROPIC_API_KEY`);
         process.exit(1);
@@ -5918,12 +5920,16 @@ async function runRuntime(opts) {
         ? { model: opts.model || process.env.OXE_CLAUDE_MODEL || null, timeoutMs: llmTimeoutMs }
         : adapterId === 'antigravity'
           ? agyProviderLib.resolveAntigravityOptions({ flagModel: opts.model || null, timeoutMs: llmTimeoutMs, persisted: _persisted })
-          : {};
+          : adapterId === 'grok'
+            ? grokProviderLib.resolveGrokOptions({ flagModel: opts.model || null, timeoutMs: llmTimeoutMs, persisted: _persisted, cwd: opts.dir })
+            : {};
       const adapterBanner = adapterId === 'claude'
         ? ` (claude -p${adapterOptions.model ? ` --model ${adapterOptions.model}` : ''})`
         : adapterId === 'antigravity'
           ? ` (agy -p${adapterOptions.model ? ` --model ${adapterOptions.model}` : ''})`
-          : ` (${baseUrl})`;
+          : adapterId === 'grok'
+            ? ` (grok --prompt-file${adapterOptions.model ? ` --model ${adapterOptions.model}` : ''})`
+            : ` (${baseUrl})`;
       if (!opts.jsonOutput) console.log(`  ${c ? green : ''}Adapter:${c ? reset : ''} ${adapterId}${adapterBanner}`);
       // OXB-187: the model this run will really use, and who chose it — a default nobody picked is said out loud.
       const modelInfo = require('./lib/oxe-model-resolve.cjs').resolve({ adapter: adapterId, flag: opts.model || null, persisted: _persisted || {}, config: (() => { try { return JSON.parse(fs.readFileSync(path.join(opts.dir, '.oxe', 'config.json'), 'utf8')); } catch { return {}; } })() });

@@ -6,6 +6,8 @@
  *
  *   claude adapter: --model > OXE_CLAUDE_MODEL > (none: Claude Code's own default). `runtime.provider.model` is the
  *                   http model and is NOT applied to `claude -p`.
+ *   grok adapter:   --model > OXE_GROK_MODEL > runtime.provider.model when the persisted provider is grok.
+ *                   Otherwise the Grok CLI default. An http model is NOT applied to `grok`.
  *   http adapter:   --model > OXE_MODEL > runtime.provider.model > the built-in default (claude-sonnet-4-6) — the last
  *                   one is NOT the operator's choice and is reported.
  *   models.tiers / models.overrides (OXB-131) change the model per attempt — reported as such.
@@ -40,6 +42,18 @@ function resolve(input) {
     if (persisted && persisted.model && !isPersistedAgy && !flag && !env.OXE_AGY_MODEL && !env.OXE_ANTIGRAVITY_MODEL) {
       notes.push(`runtime.provider.model=${persisted.model} é do adaptador http e não se aplica ao agy -p; para fixar o modelo do antigravity, use --model, OXE_AGY_MODEL ou runtime.provider.name="antigravity"`);
     }
+  } else if (adapter === 'grok') {
+    const isPersistedGrok = persisted && (
+      String(persisted.name || '').toLowerCase() === 'grok'
+      || String(persisted.adapter || '').toLowerCase() === 'grok'
+    );
+    if (flag) { model = flag; source = '--model'; }
+    else if (env.OXE_GROK_MODEL) { model = env.OXE_GROK_MODEL; source = 'OXE_GROK_MODEL'; }
+    else if (isPersistedGrok && persisted.model && persisted.model !== HTTP_DEFAULT_MODEL) { model = persisted.model; source = 'runtime.provider.model'; }
+    else { model = null; source = 'padrão do Grok CLI (sem --model)'; }
+    if (persisted && persisted.model && !isPersistedGrok && !flag && !env.OXE_GROK_MODEL) {
+      notes.push(`runtime.provider.model=${persisted.model} é do adaptador http e não se aplica ao grok; para fixar o modelo do grok, use --model, OXE_GROK_MODEL ou runtime.provider.name="grok"`);
+    }
   } else {
     if (flag) { model = flag; source = '--model'; }
     else if (env.OXE_MODEL) { model = env.OXE_MODEL; source = 'OXE_MODEL'; }
@@ -53,7 +67,7 @@ function resolve(input) {
 }
 
 function describe(r) {
-  const defaultLabel = r.adapter === 'antigravity' ? '(padrão do Antigravity CLI)' : '(padrão do Claude Code)';
+  const defaultLabel = r.adapter === 'antigravity' ? '(padrão do Antigravity CLI)' : r.adapter === 'grok' ? '(padrão do Grok CLI)' : '(padrão do Claude Code)';
   return `${r.model || defaultLabel} — ${r.source}`;
 }
 

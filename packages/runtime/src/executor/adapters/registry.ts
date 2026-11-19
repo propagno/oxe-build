@@ -2,20 +2,24 @@ import { AntigravityCliAdapter } from './antigravity-cli';
 import type { AntigravityCliAdapterOptions } from './antigravity-cli';
 import { ClaudeCliAdapter } from './claude-cli';
 import type { ClaudeCliAdapterOptions } from './claude-cli';
+import { GrokCliAdapter } from './grok-cli';
+import type { GrokCliAdapterOptions } from './grok-cli';
 import { HttpOpenAiAdapter } from './http-openai';
 import type { AdapterDetection, ExecutorAdapter, ExecutorAdapterId } from './types';
 
-export const EXECUTOR_ADAPTER_IDS: readonly ExecutorAdapterId[] = ['claude', 'antigravity', 'http'];
+export const EXECUTOR_ADAPTER_IDS: readonly ExecutorAdapterId[] = ['claude', 'antigravity', 'grok', 'http'];
 
 export interface AdapterFactoryOptions {
   claude?: ClaudeCliAdapterOptions;
   antigravity?: AntigravityCliAdapterOptions;
+  grok?: GrokCliAdapterOptions;
 }
 
 export function normalizeExecutorAdapterId(value: string): ExecutorAdapterId | null {
   const clean = String(value || '').trim().toLowerCase();
   if (clean === 'agy' || clean === 'antigravity') return 'antigravity';
   if (clean === 'claude') return 'claude';
+  if (clean === 'grok') return 'grok';
   if (clean === 'http') return 'http';
   return null;
 }
@@ -31,6 +35,8 @@ export function createExecutorAdapter(id: ExecutorAdapterId | 'agy', options: Ad
       return new ClaudeCliAdapter(options.claude);
     case 'antigravity':
       return new AntigravityCliAdapter(options.antigravity);
+    case 'grok':
+      return new GrokCliAdapter(options.grok);
     case 'http':
       return new HttpOpenAiAdapter();
     default:

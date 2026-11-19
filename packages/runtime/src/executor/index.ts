@@ -6,6 +6,8 @@ export { ClaudeCliAdapter, buildBridgePrompt, parseBridgeReply, resolveExecutabl
 export type { ClaudeCliAdapterOptions } from './adapters/claude-cli';
 export { AntigravityCliAdapter, parseAntigravityEvents, agyFailure, buildAntigravityArgs } from './adapters/antigravity-cli';
 export type { AntigravityCliAdapterOptions, ParsedAntigravityStream } from './adapters/antigravity-cli';
+export { GrokCliAdapter, parseGrokStdout, grokBridgeText, grokFailure, grokTurnOutcome, buildGrokArgs } from './adapters/grok-cli';
+export type { GrokCliAdapterOptions, GrokJsonResult } from './adapters/grok-cli';
 export { HttpOpenAiAdapter } from './adapters/http-openai';
 export { createExecutorAdapter, detectExecutorAdapters, isExecutorAdapterId, normalizeExecutorAdapterId, EXECUTOR_ADAPTER_IDS } from './adapters/registry';
 export type { ExecutorAdapter, ExecutorAdapterId, AdapterDetection } from './adapters/types';
