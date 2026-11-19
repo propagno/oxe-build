@@ -4919,9 +4919,16 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
           try {
             const sbNow = sharedBases.get(event.work_item_id);
             const unsep = sbNow && sbNow.unseparable ? Object.entries(sbNow.unseparable) : [];
+            const foreignDirty = new Set();
+            for (const [otherId, otherFiles] of interruptedWork.entries()) {
+              if (otherId === event.work_item_id) continue;
+              const ot = planTaskById.get(otherId);
+              if (ot && ot.done === true) continue;
+              for (const f of otherFiles || []) foreignDirty.add(f);
+            }
             const cp = unsep.length
               ? { committed: false, failed: true, kind: 'shared_file_conflict', reason: `shared_file_conflict: ${unsep.map(([p, ids]) => `${p} tem edições de ${event.work_item_id} e de ${ids.join(', ')}`).join('; ')} — sem a base da 1ª tentativa (histórico anterior à 1.21.2-rc.36) não dá para separar; commite à mão o hunk de cada tarefa (ou plan done --commit)` }
-              : commitTaskCheckpoint(projectRoot, current, event.work_item_id, { task: planTaskById.get(event.work_item_id), phase: phaseCtxForCommits.phase, baseline: taskBaseline.get(event.work_item_id) || null, activeSession });
+              : commitTaskCheckpoint(projectRoot, current, event.work_item_id, { task: planTaskById.get(event.work_item_id), phase: phaseCtxForCommits.phase, baseline: taskBaseline.get(event.work_item_id) || null, foreignDirty, activeSession });
             if (cp.ratchets_lowered) appendEvent(projectRoot, activeSession, { type: 'RatchetLowered', run_id: current.run_id, work_item_id: event.work_item_id, payload: { task: event.work_item_id, ratchets: cp.ratchets_lowered } });
             if (!cp.committed && cp.failed && !cp.kind && /sobrepõe edições de outra tarefa/.test(String(cp.reason || ''))) {
               const pt = planTaskById.get(event.work_item_id) || {};
@@ -12028,7 +12035,7 @@ function ownLeftoversByTask(projectRoot, activeSession, interrupted = []) {
     const unseparable = {};
     for (const p of dirty) {
       const holder = claimed.get(p);
-      const others = [...scopes].filter(([id, sc]) => id !== t.id && inScope(sc, p)).map(([id]) => id);
+      const others = [...scopes].filter(([id, sc]) => id !== t.id && lastStart.get(id) != null && inScope(sc, p)).map(([id]) => id);
       const shared = (holder && holder !== t.id) || others.length > 0;
       if (!shared) { own.push(p); continue; }
       // OXB-177: shared with another pending/interrupted task — never the whole file.
@@ -12856,7 +12863,18 @@ function commitTaskCheckpoint(projectRoot, runState, taskId, options = {}) {
   const scopeAbsent = files.filter((p) => !fs.existsSync(path.join(projectRoot, p)) && !(gitLines(projectRoot, ['ls-files', '--', p]) || []).length && !changed.some((c) => isPathInScope(c, [p])));
   if (!changed.length) { restoreRatchetsIfNeeded(); return { committed: false, reason: 'nada mudou no escopo da tarefa', scope_absent: scopeAbsent }; }
   // OXB-170: only what THIS task wrote — paths already dirty when it started carry only its own diff.
+  // OXB-C17: any dirty path in task.files already present from prior attempts/reopens (before === nowBlob) is still
+  // part of this task's checkpoint unless another pending/interrupted task holds it.
   const own = taskOwnContent(projectRoot, changed, options.baseline || null);
+  if (options.baseline) {
+    const failedPaths = new Set(own.problems.map((pr) => String(pr).split(':')[0].trim()));
+    const foreign = options.foreignDirty instanceof Set ? options.foreignDirty : null;
+    for (const rel of changed) {
+      if (Object.prototype.hasOwnProperty.call(own.entries, rel) || failedPaths.has(rel)) continue;
+      if (foreign && foreign.has(rel)) continue;
+      own.entries[rel] = storeBlob(projectRoot, rel) || 'deleted';
+    }
+  }
   if (own.problems.length) { restoreRatchetsIfNeeded(); return { committed: false, failed: true, reason: own.problems.join(' · '), snapshot: own.entries, scope_absent: scopeAbsent }; }
   if (!Object.keys(own.entries).length) { restoreRatchetsIfNeeded(); return { committed: false, reason: 'nada mudou no escopo da tarefa (o que está sujo já estava antes dela)', scope_absent: scopeAbsent }; }
   // OXB-188: a done checkpoint never carries an added stub marker (BLOCKED / TODO() / not implemented …).

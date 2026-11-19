@@ -706,3 +706,54 @@ describe('OXB-189: related tests — files only, no e2e, alone in one worker, gr
     assert.equal(ev.payload.check.related_set_size, 29);
   });
 });
+
+describe('OXB-C17 #1: commitTaskCheckpoint includes all dirty task.files from prior attempts/reopens', () => {
+  it('includes task.files already dirty before the current attempt (even when shared with an unstarted future task) so checkpoint_check passes', async () => {
+    const plan = {
+      schema_version: 1,
+      tasks: [
+        { id: 'T10', title: 'Request card', wave: 1, files: ['src/card.tsx', 'shared/locales/en/thread.json', 'shared/locales/pt-BR/thread.json'], verify: { commands: [ok] } },
+        { id: 'T11', title: 'Future wave', wave: 2, depends_on: ['T10'], files: ['shared/locales/en/thread.json', 'src/other.tsx'], verify: { commands: [ok] } },
+      ],
+    };
+    const dir = project({
+      plan,
+      files: {
+        'src/card.tsx': 'export const Card = () => "old";\n',
+        'shared/locales/en/thread.json': '{"old":true}\n',
+        'shared/locales/pt-BR/thread.json': '{"old":true}\n',
+        'src/other.tsx': 'export const Other = 1;\n',
+      },
+      config: {
+        checkpoint_check: 'node -e "const fs=require(\'fs\');const en=JSON.parse(fs.readFileSync(\'shared/locales/en/thread.json\',\'utf8\'));const pt=JSON.parse(fs.readFileSync(\'shared/locales/pt-BR/thread.json\',\'utf8\'));if(!en.allowMenu||!pt.allowMenu)process.exit(1)"',
+      },
+    });
+
+    // Simulate dirty leftovers in T10.files preserved from an earlier run / plan reopen
+    fs.writeFileSync(path.join(dir, 'shared', 'locales', 'en', 'thread.json'), '{"allowMenu":"Allow"}\n');
+    fs.writeFileSync(path.join(dir, 'shared', 'locales', 'pt-BR', 'thread.json'), '{"allowMenu":"Permitir"}\n');
+
+    // Current attempt only modifies src/card.tsx and does not touch the already-dirty locale files
+    const exec = {
+      async execute(node) {
+        if (node.id === 'T10') {
+          fs.writeFileSync(path.join(dir, 'src', 'card.tsx'), 'export const Card = () => "allowMenu";\n');
+        }
+        return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' };
+      },
+    };
+
+    const res = await op.runRuntimeExecute(dir, null, { executor: exec, skipPreflight: true, checkpointCommits: true, wave: 1 });
+    assert.equal(res.result.checkpoint_failed, undefined, JSON.stringify(res.result.checkpoint_failed));
+    const t10 = planOf(dir).tasks.find((t) => t.id === 'T10');
+    assert.equal(t10.done, true);
+    assert.ok(t10.done_commit);
+    const committedFiles = git(dir, 'show', '--name-only', '--format=', t10.done_commit).stdout.trim().split(/\r?\n/).sort();
+    assert.deepEqual(committedFiles, [
+      'shared/locales/en/thread.json',
+      'shared/locales/pt-BR/thread.json',
+      'src/card.tsx',
+    ]);
+    assert.equal(git(dir, 'status', '--porcelain').stdout.trim(), '');
+  });
+});
