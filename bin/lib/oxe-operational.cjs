@@ -2015,7 +2015,8 @@ function createAdapterExecutor(runtime, projectRoot, activeSession, options, get
         const cfgX = readProjectConfig(projectRoot) || {};
         const pick = (k) => ((cfgX.execute || {})[k] != null ? (cfgX.execute || {})[k] : (cfgX.executor || {})[k]);
         const cap = Number(pick('max_context_chars'));
-        return cap > 0 ? { maxContextChars: cap, maxContextAction: pick('max_context_action') === 'retry' ? 'retry' : 'warn' } : {};
+        const act = pick('max_context_action');
+        return cap > 0 ? { maxContextChars: cap, maxContextAction: act === 'retry' || act === 'compact' ? act : 'warn' } : {};
       })(),
     }
   );

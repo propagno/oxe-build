@@ -3,7 +3,7 @@ import type { WorkspaceLease } from '../models/workspace';
 import type { TaskExecutor, TaskResult } from '../scheduler/scheduler';
 import type { PluginRegistry } from '../plugins/plugin-registry';
 import { streamCompletion } from './stream-completion';
-import type { ToolCall } from './stream-completion';
+import type { ChatMessage, ToolCall } from './stream-completion';
 import type { NodeContextProvider } from './node-context';
 export interface LlmProviderConfig {
     baseUrl: string;
@@ -16,7 +16,7 @@ export interface LlmProviderConfig {
 }
 export type LlmExecutorEventType = 'executor_turn' | 'executor_slow_turn' | 'executor_context_cap' | 'turn_start' | 'turn_complete' | 'tool_call' | 'tool_result' | 'tool_denied' | 'executor_complete'
 /** Once per attempt: turns, tool calls and backend-reported cost. */
- | 'executor_usage' | 'turn_timeout' | 'rate_limit_wait' | 'network_retry';
+ | 'executor_usage' | 'turn_timeout' | 'rate_limit_wait' | 'network_retry' | 'context_compacted';
 /** Injectable completion function (defaults to the HTTP OpenAI-compatible client). */
 export type CompletionFn = typeof streamCompletion;
 export interface LlmExecutorEvent {
@@ -56,7 +56,7 @@ export interface LlmTaskExecutorOptions {
      * (a normal failed attempt: the scheduler's retry starts a fresh context with the tree's changes, inside max_retries).
      */
     maxContextChars?: number;
-    maxContextAction?: 'warn' | 'retry';
+    maxContextAction?: 'warn' | 'retry' | 'compact';
     /** The project root (R44): run artifacts go there, never into an ephemeral worktree lease that is disposed. */
     projectRoot?: string;
     /** OXB-204: max automatic backoff wait (ms) on 429 / rate-limit reset before failing as quota (default 300000). */
@@ -65,9 +65,32 @@ export interface LlmTaskExecutorOptions {
     maxQuotaRetries?: number;
     /** OXB-C19: exponential backoff delays (ms) for transient network drops inside the same turn (default [5000, 15000, 30000, 60000]). */
     networkRetryDelaysMs?: number[];
+    /** Pre-write in-memory validation hook: rejects invalid mutations before flushing to disk. */
+    preWrite?: (input: {
+        tool: 'write_file' | 'patch_file';
+        path: string;
+        content: string;
+        cwd: string;
+        node: GraphNode;
+    }) => {
+        ok: boolean;
+        reason?: string;
+        diagnostics?: string[];
+    } | Promise<{
+        ok: boolean;
+        reason?: string;
+        diagnostics?: string[];
+    }>;
+    /** Protect harness/CI control-plane paths (.oxe/, .git/, .github/workflows/) unless explicitly in mutation_scope (default true). */
+    protectControlPlane?: boolean;
     /** Injectable sleep for deterministic tests. */
     sleep?: (ms: number) => Promise<void>;
 }
+export declare function compactMessages(messages: ChatMessage[], targetChars: number): {
+    compacted: ChatMessage[];
+    removedChars: number;
+    summarizedCount: number;
+};
 export interface ExecutorUsage {
     turns: number;
     tool_calls: number;

@@ -4205,6 +4205,8 @@ function parseContextArgs(argv) {
     }
     else if (a === '--session' && argv[i + 1]) out.activeSession = String(argv[++i]).replace(/\\/g, '/');
     else if (a === '--json') out.json = true;
+    else if (a === '--repo-map') out.repoMap = true;
+    else if (a === '--max-chars' && argv[i + 1]) out.maxChars = Number(argv[++i]);
     else if (!a.startsWith('-')) positionals.push(a);
     else {
       out.parseError = true;
@@ -4283,6 +4285,7 @@ function parseRuntimeArgs(argv) {
     const a = argv[i];
     if (a === '-h' || a === '--help') out.help = true;
     else if (a === '--verbose' || a === '-v') out.verbose = true;
+    else if (a === '--otel') { out.otel = true; out.jsonOutput = true; }
     else if (a === '--phase' && argv[i + 1]) out.phase = String(argv[++i]);
     else if (a === '--base-commit' && argv[i + 1]) out.base = String(argv[++i]);
     else if (a === '--criteria' && argv[i + 1]) out.criteria = String(argv[++i]);
@@ -4942,14 +4945,14 @@ function runMap(opts) {
  */
 async function runRuntime(opts) {
   const c = useAnsiColors();
-  printSection('OXE ▸ runtime');
+  if (!opts.jsonOutput) printSection('OXE ▸ runtime');
   if (!fs.existsSync(opts.dir)) {
     console.error(`${yellow}Diretório não encontrado: ${opts.dir}${reset}`);
     process.exit(1);
   }
   // 1.21 (OXB-003/024): runtime commands never recreate files inside an existing `.oxe/` (a STATE.md the person
   // deleted stays deleted). Read commands need an existing `.oxe/`; a write command on a fresh project initializes it.
-  const RUNTIME_READ_ONLY = new Set(['status', 'providers', 'agents', 'replay', 'gates']);
+  const RUNTIME_READ_ONLY = new Set(['status', 'providers', 'agents', 'replay', 'gates', 'telemetry']);
   const readOnly = RUNTIME_READ_ONLY.has(opts.action) && !(opts.action === 'gates' && opts.subAction && opts.subAction !== 'list');
   // A git hook (pre-push, installed in the common .git, so it runs in EVERY worktree) and autoresume never create
   // .oxe/ in a checkout: a fresh skeleton appeared in a worktree at a push (OxeSpace 14/11).
@@ -4965,8 +4968,10 @@ async function runRuntime(opts) {
   const stateText = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : '';
   const activeSession = opts.activeSession || oxeHealth.parseActiveSession(stateText) || null;
   const p = oxeOperational.operationalPaths(opts.dir, activeSession);
-  decor(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
-  decor(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
+  if (!opts.jsonOutput) {
+    decor(`  ${c ? green : ''}Projeto:${c ? reset : ''} ${c ? cyan : ''}${opts.dir}${c ? reset : ''}`);
+    decor(`  ${c ? green : ''}Sessão:${c ? reset : ''} ${c ? cyan : ''}${activeSession || '— (sem sessão ativa)'}${c ? reset : ''}`);
+  }
 
   if (opts.action === 'status') {
     const current = oxeOperational.readRunState(opts.dir, activeSession);
@@ -6308,6 +6313,28 @@ async function runRuntime(opts) {
     }
   }
 
+  if (opts.action === 'telemetry') {
+    const telemetryLib = require(path.join(__dirname, 'lib', 'oxe-telemetry.cjs'));
+    const report = telemetryLib.buildOperationalTelemetry(opts.dir);
+    if (opts.otel) {
+      console.log(JSON.stringify(telemetryLib.toOtelEnvelope(report), null, 2));
+      return;
+    }
+    if (opts.jsonOutput) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+    console.log(`  ${c ? green : ''}Telemetria operacional:${c ? reset : ''} runs=${report.totals.runs} · concluídas=${report.totals.tasks_completed} · falhas=${report.totals.tasks_failed} · bloqueadas=${report.totals.tasks_blocked} · reopens=${report.totals.reopens}`);
+    console.log(`  ${c ? green : ''}Retries:${c ? reset : ''} total=${report.retries.total} · network_retry=${report.retries.network_retries} · rate_limit_wait=${report.retries.rate_limit_waits} · context_compact=${report.retries.context_compactions}`);
+    console.log(`  ${c ? green : ''}Checkpoints:${c ? reset : ''} ok=${report.checkpoints.passed} · falhos=${report.checkpoints.failed}${Object.keys(report.checkpoints.failed_by_kind).length ? ` (${Object.entries(report.checkpoints.failed_by_kind).map(([k, v]) => `${k}=${v}`).join(', ')})` : ''}`);
+    console.log(`  ${c ? green : ''}Custo / Tokens:${c ? reset : ''} $${report.totals.cost_usd.toFixed(4)} · in=${report.totals.input_tokens} · out=${report.totals.output_tokens}`);
+    if (report.hotspots.length) {
+      console.log(`  ${c ? yellow : ''}Hotspots:${c ? reset : ''} ${report.hotspots.slice(0, 5).map((h) => `${h.task}(r=${h.retries},f=${h.failures},cp=${h.checkpoint_failures})`).join(' · ')}`);
+    }
+    for (const rec of report.recommendations) console.log(`  ${c ? cyan : ''}→${c ? reset : ''} ${rec}`);
+    return;
+  }
+
   if (opts.action === 'scorecard') {
     const card = oxeOperational.runtimeScorecard(opts.dir, activeSession, { write: Boolean(opts.writeReport), releaseReport: opts.releaseReport || null, name: opts.name || null, since: opts.since || null });
     if (opts.jsonOutput) {
@@ -7234,6 +7261,7 @@ async function main() {
     argv[0] === 'quick' ||
     argv[0] === 'workflow' ||
     argv[0] === 'report' ||
+    argv[0] === 'change' ||
     argv[0] === 'install'
   ) {
     command = argv[0];
@@ -7243,7 +7271,7 @@ async function main() {
   } else if (argv[0] && /^[a-z][a-z-]*$/.test(argv[0]) && !fs.existsSync(argv[0])) {
     // 1.21.2 (OXB-G10): a word that is no command used to fall into the install with exit 0 — "oxe-cc quick --help"
     // printed the install help. It is an error now, with the closest command or the workflow it names.
-    const KNOWN = ['doctor', 'status', 'init-oxe', 'context', 'dashboard', 'events', 'map', 'runtime', 'azure', 'uninstall', 'update', 'capabilities', 'plugins', 'plan', 'spec', 'program', 'policy', 'decision', 'prd', 'grill', 'ship', 'trace', 'rfc', 'alm', 'review', 'docs', 'eval', 'design', 'release', 'customize', 'state', 'guards', 'verify', 'install', 'member', 'queue', 'quick', 'workflow', 'report'];
+    const KNOWN = ['doctor', 'status', 'init-oxe', 'context', 'dashboard', 'events', 'map', 'runtime', 'azure', 'uninstall', 'update', 'capabilities', 'plugins', 'plan', 'spec', 'program', 'policy', 'decision', 'prd', 'grill', 'ship', 'trace', 'rfc', 'alm', 'review', 'docs', 'eval', 'design', 'release', 'customize', 'state', 'guards', 'verify', 'install', 'member', 'queue', 'quick', 'workflow', 'report', 'change'];
     const WORKFLOWS = { execute: '/oxe-execute (ou oxe-cc runtime execute)', discuss: '/oxe-discuss', scan: '/oxe-scan', debug: '/oxe-execute --debug', retro: '/oxe-retro', next: '/oxe-next (ou oxe-cc status)', oxe: '/oxe' };
     const word = argv[0];
     const dist = (a, b) => { const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]); for (let j = 1; j <= b.length; j += 1) d[0][j] = j; for (let i = 1; i <= a.length; i += 1) for (let j = 1; j <= b.length; j += 1) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); return d[a.length][b.length]; };
@@ -7476,7 +7504,14 @@ async function main() {
       usage();
       process.exit(1);
     }
-    printBanner();
+    if (!contextOpts.json) printBanner();
+    if (contextOpts.repoMap) {
+      const repoMapLib = require(path.join(__dirname, 'lib', 'oxe-repo-map.cjs'));
+      const map = repoMapLib.buildRepoMap(contextOpts.dir, { maxChars: contextOpts.maxChars });
+      if (contextOpts.json) console.log(JSON.stringify(map, null, 2));
+      else console.log(map.markdown);
+      return;
+    }
     runContext(contextOpts);
     return;
   }
@@ -7501,6 +7536,8 @@ async function main() {
       const a = argv[i];
       if (a === '--json') o.json = true;
       else if (a === '--fast') o.fast = true;
+      else if (a === '--ears') o.ears = true;
+      else if (a === '--strict-ears') { o.ears = true; o.strictEars = true; }
       else if (a === '--by' && argv[i + 1]) o.by = String(argv[++i]);
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
       else if (!a.startsWith('-')) o.dir = path.resolve(a);
@@ -7508,6 +7545,15 @@ async function main() {
     }
     try {
       const out = sub === 'check' ? oxeOperational.runtimeSpecCheck(o.dir, null, o) : oxeOperational.runtimeSpecApprove(o.dir, null, o);
+      if (sub === 'check' && o.ears) {
+        const earsLib = require(path.join(__dirname, 'lib', 'oxe-spec-ears.cjs'));
+        const specPath = path.join(o.dir, '.oxe', 'SPEC.md');
+        const ears = earsLib.validateSpecEars(fs.existsSync(specPath) ? fs.readFileSync(specPath, 'utf8') : '', { strictEars: Boolean(o.strictEars) });
+        out.ears = ears;
+        for (const e of ears.errors) out.errors.push(e.message);
+        for (const w of ears.warnings) out.warnings.push(w.message);
+        if (!ears.ok) out.ok = false;
+      }
       if (o.json) { console.log(JSON.stringify({ oxeSpecCheckSchema: 1, ...out }, null, 2)); if (sub === 'check' && !out.ok) process.exitCode = 1; return; }
       const check = sub === 'check' ? out : out.check;
       const s = check.summary;
@@ -7770,13 +7816,75 @@ async function main() {
   }
 
   // OXB-178b/179/139/180: independent review, findings ledger, bounded rounds, author responses.
+  if (command === 'change') {
+    if (argv.includes('--help') || argv.includes('-h') || !argv.length) {
+      console.log(`
+  oxe-cc change init <slug> [--title "<título>"] [--card <KEY>] [--json] [--dir <pasta>]   cria change folder (.oxe/changes/<slug>/)
+  oxe-cc change list [--json] [--dir <pasta>]                                              lista change folders do projeto
+  oxe-cc change status <slug> [--json] [--dir <pasta>]                                     estado e artefatos de um change folder
+  oxe-cc change promote [--slug <slug>] [--json] [--dir <pasta>]                           promove o quick aberto para change folder
+`);
+      return;
+    }
+    const changeLib = require(path.join(__dirname, 'lib', 'oxe-change-folder.cjs'));
+    const sub = ['init', 'list', 'status', 'promote'].includes(argv[0]) ? argv[0] : 'list';
+    const o = { dir: process.cwd(), json: false, slug: '', title: '', card: null };
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (a === '--slug' && argv[i + 1]) o.slug = String(argv[++i]);
+      else if (a === '--title' && argv[i + 1]) o.title = String(argv[++i]);
+      else if (a === '--card' && argv[i + 1]) o.card = String(argv[++i]);
+      else if (!a.startsWith('-') && !o.slug) o.slug = a;
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+    }
+    try {
+      const out = sub === 'init'
+        ? changeLib.initChangeFolder(o.dir, { slug: o.slug, title: o.title || o.slug, card: o.card })
+        : sub === 'status'
+        ? changeLib.getChangeFolderStatus(o.dir, o.slug)
+        : sub === 'promote'
+        ? changeLib.promoteQuickToChange(o.dir, { slug: o.slug || undefined })
+        : { changes: changeLib.listChangeFolders(o.dir) };
+      if (o.json) { console.log(JSON.stringify({ oxeChangeSchema: 1, action: sub, ...out }, null, 2)); return; }
+      if (sub === 'list') {
+        if (!out.changes.length) console.log('  nenhum change folder em .oxe/changes/');
+        for (const ch of out.changes) console.log(`  ${ch.slug} [${ch.status}] ${ch.card || '—'} · tarefas ${ch.tasks_done}/${ch.tasks_total} · ${ch.title}`);
+      } else {
+        console.log(`  ${green}✓${reset} change ${out.slug} (${out.dir}) · ${out.title}`);
+      }
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   if (command === 'review') {
     if (argv.includes('--help') || argv.includes('-h')) {
       console.log(`
   oxe-cc review status [<id>] [--json] [--dir <pasta>]
   oxe-cc review run --role <papel> [--task Tn] [--model <m>] [--criteria A1,A2] [--allow-external] [--json]
+  oxe-cc review diff [--base <ref>] [--prompt] [--json] [--dir <pasta>]
   oxe-cc review respond <F-n> --fix|--dispute|--to-owner|--note|--waive [--reason "…"] [--commit <sha>] [--by <papel>] [--json]
 `);
+      return;
+    }
+    if (argv[0] === 'diff') {
+      const diffLib = require(path.join(__dirname, 'lib', 'oxe-diff-reviewer.cjs'));
+      const o = { dir: process.cwd(), json: false, prompt: false, base: 'HEAD' };
+      for (let i = 1; i < argv.length; i += 1) {
+        const a = argv[i];
+        if (a === '--json') o.json = true;
+        else if (a === '--prompt') o.prompt = true;
+        else if (a === '--base' && argv[i + 1]) o.base = String(argv[++i]);
+        else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+        else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exit(1); }
+      }
+      const out = diffLib.buildCleanDiffReview(o.dir, { base: o.base });
+      if (o.json) { console.log(JSON.stringify(out, null, 2)); if (!out.ok) process.exitCode = 1; return; }
+      if (o.prompt) { console.log(out.review_prompt); return; }
+      console.log(`  Diff review (${out.base}): ${out.changed_files.length} arquivo(s) · erros=${out.errors.length} · avisos=${out.warnings.length}`);
+      for (const f of out.findings) console.log(`  ${f.severity === 'error' ? `${red}✗${reset}` : `${yellow}!${reset}`} ${f.file}: ${f.message}`);
+      if (!out.ok) process.exitCode = 1;
       return;
     }
     const sub = ['run', 'status', 'respond'].includes(argv[0]) ? argv[0] : 'status';

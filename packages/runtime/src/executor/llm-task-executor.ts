@@ -37,7 +37,8 @@ export type LlmExecutorEventType =
   | 'executor_usage'
   | 'turn_timeout'
   | 'rate_limit_wait'
-  | 'network_retry';
+  | 'network_retry'
+  | 'context_compacted';
 
 /** Injectable completion function (defaults to the HTTP OpenAI-compatible client). */
 export type CompletionFn = typeof streamCompletion;
@@ -81,7 +82,7 @@ export interface LlmTaskExecutorOptions {
    * (a normal failed attempt: the scheduler's retry starts a fresh context with the tree's changes, inside max_retries).
    */
   maxContextChars?: number;
-  maxContextAction?: 'warn' | 'retry';
+  maxContextAction?: 'warn' | 'retry' | 'compact';
   /** The project root (R44): run artifacts go there, never into an ephemeral worktree lease that is disposed. */
   projectRoot?: string;
   /** OXB-204: max automatic backoff wait (ms) on 429 / rate-limit reset before failing as quota (default 300000). */
@@ -90,8 +91,86 @@ export interface LlmTaskExecutorOptions {
   maxQuotaRetries?: number;
   /** OXB-C19: exponential backoff delays (ms) for transient network drops inside the same turn (default [5000, 15000, 30000, 60000]). */
   networkRetryDelaysMs?: number[];
+  /** Pre-write in-memory validation hook: rejects invalid mutations before flushing to disk. */
+  preWrite?: (input: {
+    tool: 'write_file' | 'patch_file';
+    path: string;
+    content: string;
+    cwd: string;
+    node: GraphNode;
+  }) => { ok: boolean; reason?: string; diagnostics?: string[] } | Promise<{ ok: boolean; reason?: string; diagnostics?: string[] }>;
+  /** Protect harness/CI control-plane paths (.oxe/, .git/, .github/workflows/) unless explicitly in mutation_scope (default true). */
+  protectControlPlane?: boolean;
   /** Injectable sleep for deterministic tests. */
   sleep?: (ms: number) => Promise<void>;
+}
+
+const CONTROL_PLANE_PREFIXES = ['.oxe/', '.git/', '.github/workflows/'];
+
+function isControlPlanePath(relPath: string): boolean {
+  const norm = normalizeRel(relPath);
+  return CONTROL_PLANE_PREFIXES.some((prefix) => norm === prefix.slice(0, -1) || norm.startsWith(prefix));
+}
+
+export function compactMessages(
+  messages: ChatMessage[],
+  targetChars: number,
+): { compacted: ChatMessage[]; removedChars: number; summarizedCount: number } {
+  const measure = (list: ChatMessage[]): number => list.reduce((n, m) => {
+    const mm = m as { content?: unknown; tool_calls?: Array<{ function?: { name?: unknown; arguments?: unknown } }> };
+    const c = typeof mm.content === 'string' ? mm.content.length : mm.content ? JSON.stringify(mm.content).length : 0;
+    const tc = (mm.tool_calls || []).reduce((s, t) => s + String(t?.function?.name ?? '').length + String(t?.function?.arguments ?? '').length, 0);
+    return n + c + tc;
+  }, 0);
+
+  const beforeChars = measure(messages);
+  if (messages.length <= 4 || beforeChars <= targetChars) {
+    return { compacted: messages.slice(), removedChars: 0, summarizedCount: 0 };
+  }
+
+  // Keep head (system + initial user prompt) and tail (most recent 2 messages) intact.
+  const headCount = Math.min(2, messages.length);
+  const tailCount = Math.min(2, Math.max(0, messages.length - headCount));
+  const head = messages.slice(0, headCount);
+  const middle = messages.slice(headCount, messages.length - tailCount);
+  const tail = messages.slice(messages.length - tailCount);
+
+  let summarizedCount = 0;
+  // Pass 1: compact verbose tool outputs in middle messages while preserving tool names and first line.
+  const shrunkMiddle: ChatMessage[] = middle.map((m) => {
+    if (m.role === 'tool' && typeof m.content === 'string' && m.content.length > 400) {
+      summarizedCount += 1;
+      const firstLine = m.content.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim().slice(0, 140) || '';
+      return {
+        ...m,
+        content: `[compacted tool:${m.name || 'tool'} (${m.content.length} chars) — ${firstLine}]`,
+      };
+    }
+    return m;
+  });
+
+  let candidate = [...head, ...shrunkMiddle, ...tail];
+  let afterChars = measure(candidate);
+
+  // Pass 2: if still above targetChars, fold older middle messages into a single structured summary notice.
+  if (afterChars > targetChars && shrunkMiddle.length > 2) {
+    const keptRecentMiddle = shrunkMiddle.slice(-2);
+    const folded = shrunkMiddle.slice(0, -2);
+    summarizedCount += folded.length;
+    const toolNames = [...new Set(folded.filter((m) => m.role === 'tool' && m.name).map((m) => String(m.name)))];
+    const summaryMsg: ChatMessage = {
+      role: 'user',
+      content: `[context_compacted: ${folded.length} intermediate message(s) folded to stay within max_context_chars${toolNames.length ? ` (tools: ${toolNames.join(', ')})` : ''}. All edits written so far remain on disk in the workspace.]`,
+    };
+    candidate = [...head, summaryMsg, ...keptRecentMiddle, ...tail];
+    afterChars = measure(candidate);
+  }
+
+  return {
+    compacted: candidate,
+    removedChars: Math.max(0, beforeChars - afterChars),
+    summarizedCount,
+  };
 }
 
 const DEFAULT_NETWORK_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000];
@@ -318,12 +397,23 @@ export class LlmTaskExecutor implements TaskExecutor {
         // write_file / patch_file has null content and its code in the arguments)
         const chars = contextChars();
         if (chars > contextCap) {
-          if (this.options.maxContextAction === 'retry') {
+          if (this.options.maxContextAction === 'compact') {
+            const { compacted, removedChars, summarizedCount } = compactMessages(messages, Math.floor(contextCap * 0.7));
+            if (removedChars > 0) {
+              messages.splice(0, messages.length, ...compacted);
+              const afterChars = contextChars();
+              this.emit({
+                type: 'context_compacted',
+                nodeId: node.id,
+                attempt,
+                detail: { turn, before_chars: chars, after_chars: afterChars, removed_chars: removedChars, cap: contextCap, summarized_count: summarizedCount },
+              });
+            }
+          } else if (this.options.maxContextAction === 'retry') {
             this.emit({ type: 'executor_context_cap', nodeId: node.id, attempt, detail: { turn, chars, cap: contextCap, action: 'retry' } });
             // completed_by context_cap (R44): with work written, the scheduler verifies it before paying a retry
             return done({ success: false, failure_class: 'context_full', evidence: evidencePaths, completed_by: 'context_cap', turns_used: usage.turns, turns_cap: maxTurns, output: `contexto cheio: ${chars} caracteres acumulados no turno ${turn} (teto ${contextCap}, execute.max_context_chars) — a tentativa fecha aqui; a próxima começa um contexto novo com o que ficou na árvore` });
-          }
-          if (!contextCapWarned) {
+          } else if (!contextCapWarned) {
             contextCapWarned = true;
             this.emit({ type: 'executor_context_cap', nodeId: node.id, attempt, detail: { turn, chars, cap: contextCap, action: 'warn' } });
           }
@@ -626,24 +716,80 @@ export class LlmTaskExecutor implements TaskExecutor {
     const builtIn = BUILT_IN_TOOLS[tc.function.name];
     const writesFile = tc.function.name === 'write_file' || tc.function.name === 'patch_file';
     const protectedTarget = writesFile && typeof args.path === 'string' && this.isProtected(args.path, cwd);
+    const scopeList = (node.mutation_scope || []).map((p) => normalizeRel(p));
+    const explicitlyScoped = writesFile && typeof args.path === 'string' && scopeList.some((s) => normalizeRel(String(args.path)) === s || normalizeRel(String(args.path)).startsWith(`${s.replace(/\/+$/, '')}/`));
+    const controlPlaneBlocked = writesFile
+      && this.options.protectControlPlane !== false
+      && typeof args.path === 'string'
+      && isControlPlanePath(args.path)
+      && !explicitlyScoped;
     if (protectedTarget) {
       this.emit({ type: 'tool_denied', nodeId: node.id, attempt, detail: { tool: tc.function.name, path: args.path, reason: 'frozen_acceptance_test' } });
       result = `[tool denied: ${String(args.path)} is a frozen acceptance test owned by the plan — implement the code so this test passes; do not edit it]`;
+    } else if (controlPlaneBlocked) {
+      this.emit({ type: 'tool_denied', nodeId: node.id, attempt, detail: { tool: tc.function.name, path: args.path, reason: 'control_plane_protected' } });
+      result = `[tool denied: ${String(args.path)} is a control-plane path (.oxe/, .git/, .github/workflows/) not declared in task mutation_scope — do not modify harness or CI control files]`;
     } else if (builtIn && !allowedTools.has(tc.function.name)) {
       this.emit({ type: 'tool_denied', nodeId: node.id, attempt, detail: { tool: tc.function.name } });
       result = `[tool denied: ${tc.function.name} is not permitted for this task]`;
     } else if (builtIn) {
-      // OXB-118: recorded before running (a command that fails or times out still happened).
-      if (tc.function.name === 'run_command') logAction(usage?.commands, args.command);
-      else if (tc.function.name === 'read_file' || tc.function.name === 'list_dir') logAction(usage?.reads, args.path);
-      else if (writesFile) logAction(usage?.writes, args.path);
-      try {
-        result = await builtIn.execute(args, cwd);
-        if (tc.function.name === 'write_file' || tc.function.name === 'patch_file') {
-          if (typeof args.path === 'string') evidencePaths.push(args.path);
+      let preWriteRejection: string | null = null;
+      if (writesFile && typeof args.path === 'string') {
+        let proposedContent: string | null = null;
+        if (tc.function.name === 'write_file') {
+          proposedContent = String(args.content ?? '');
+        } else if (tc.function.name === 'patch_file') {
+          try {
+            const absTarget = path.resolve(cwd, args.path);
+            if (fs.existsSync(absTarget)) {
+              const cur = fs.readFileSync(absTarget, 'utf8');
+              const oldStr = String(args.old_string ?? '');
+              const newStr = String(args.new_string ?? '');
+              if (oldStr && cur.includes(oldStr)) proposedContent = cur.replace(oldStr, newStr);
+            }
+          } catch { proposedContent = null; }
         }
-      } catch (err) {
-        result = `[tool error] ${err}`;
+        if (proposedContent !== null) {
+          if (/\.json$/i.test(args.path)) {
+            try {
+              JSON.parse(proposedContent);
+            } catch (jsonErr) {
+              preWriteRejection = `[pre_write rejected: ${args.path} has invalid JSON syntax (${(jsonErr as Error).message}) — fix the JSON and retry]`;
+            }
+          }
+          if (!preWriteRejection && typeof this.options.preWrite === 'function') {
+            try {
+              const verdict = await this.options.preWrite({
+                tool: tc.function.name as 'write_file' | 'patch_file',
+                path: args.path,
+                content: proposedContent,
+                cwd,
+                node,
+              });
+              if (verdict && verdict.ok === false) {
+                const diag = Array.isArray(verdict.diagnostics) && verdict.diagnostics.length ? ` · ${verdict.diagnostics.join('; ')}` : '';
+                preWriteRejection = `[pre_write rejected: ${verdict.reason || 'validation failed'}${diag} — fix before writing]`;
+              }
+            } catch { /* preWrite hook errors never crash the tool call */ }
+          }
+        }
+      }
+      if (preWriteRejection) {
+        this.emit({ type: 'tool_denied', nodeId: node.id, attempt, detail: { tool: tc.function.name, path: args.path, reason: 'pre_write_validation' } });
+        result = preWriteRejection;
+      } else {
+        // OXB-118: recorded before running (a command that fails or times out still happened).
+        if (tc.function.name === 'run_command') logAction(usage?.commands, args.command);
+        else if (tc.function.name === 'read_file' || tc.function.name === 'list_dir') logAction(usage?.reads, args.path);
+        else if (writesFile) logAction(usage?.writes, args.path);
+        try {
+          result = await builtIn.execute(args, cwd);
+          if (tc.function.name === 'write_file' || tc.function.name === 'patch_file') {
+            if (typeof args.path === 'string') evidencePaths.push(args.path);
+          }
+        } catch (err) {
+          result = `[tool error] ${err}`;
+        }
       }
     } else {
       // Delegate to plugin registry
