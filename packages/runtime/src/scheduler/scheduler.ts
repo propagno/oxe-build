@@ -593,65 +593,69 @@ export class Scheduler {
     failed: string[],
     blocked: string[]
   ): Promise<boolean> {
-    const eligible: string[] = [];
-    const depsNotMet: string[] = [];
+    // OXB-C19 (#2): re-evaluate intra-wave dependencies as nodes complete so a resumed/checkpointed task
+    // unblocks subsequent eligible tasks in the same wave instead of marking them blocked up-front.
+    const warnedEmptyScope = new Set<string>();
+    while (!this.cancelled && !this.paused) {
+      const eligible: string[] = [];
+      for (const id of nodeIds) {
+        if (status.get(id) !== 'pending') continue;
+        const node = graph.nodes.get(id)!;
+        const depsMet = node.depends_on.every((dep) => status.get(dep) === 'completed');
+        if (depsMet) eligible.push(id);
+      }
+      if (eligible.length === 0) break;
 
-    for (const id of nodeIds) {
-      if (status.get(id) === 'completed') continue; // already done in recovery
-      const node = graph.nodes.get(id)!;
-      const depsMet = node.depends_on.every((dep) => status.get(dep) === 'completed');
-      if (depsMet) {
-        eligible.push(id);
+      for (const id of eligible) {
+        if (warnedEmptyScope.has(id)) continue;
+        const node = graph.nodes.get(id)!;
+        // OXB-068: a verify_only / external-dependency node has an enforced empty scope (checked by the caller), not a
+        // "may write files" warning.
+        const externalNode = Boolean(node.policy.verify_only) || (node.policy.external_dependency?.length ?? 0) > 0;
+        if (node.mutation_scope.length === 0 && nodeMayMutate(node) && !externalNode) {
+          warnedEmptyScope.add(id);
+          this.emit(ctx, {
+            type: 'PolicyWarning',
+            work_item_id: id,
+            payload: {
+              reason: 'empty_mutation_scope',
+              detail: 'node may write files but declares no mutation_scope; running serially and without scope checks',
+            },
+          });
+        }
+      }
+
+      const readOnly = eligible.filter((id) => this.isConcurrentSafe(id, graph, ctx));
+      const mutations = eligible.filter((id) => !readOnly.includes(id));
+
+      if (readOnly.length > 0) {
+        await Promise.all(
+          readOnly.map((id) => this.runNode(id, graph, ctx, status, completed, failed, blocked))
+        );
+      }
+
+      if (ctx.parallel && mutations.length > 1) {
+        await this.runMutationsInParallel(mutations, graph, ctx, status, completed, failed, blocked);
       } else {
-        depsNotMet.push(id);
+        for (const id of mutations) {
+          this.checkRequestedPause(ctx);
+          if (this.cancelled || this.paused) break;
+          await this.runNode(id, graph, ctx, status, completed, failed, blocked);
+        }
       }
     }
 
-    for (const id of depsNotMet) {
-      status.set(id, 'blocked');
-      blocked.push(id);
-      this.emit(ctx, {
-        type: 'WorkItemBlocked',
-        work_item_id: id,
-        payload: { reason: 'dependency_not_met' },
-      });
-    }
-
-    for (const id of eligible) {
-      const node = graph.nodes.get(id)!;
-      // OXB-068: a verify_only / external-dependency node has an enforced empty scope (checked by the caller), not a
-      // "may write files" warning.
-      const externalNode = Boolean(node.policy.verify_only) || (node.policy.external_dependency?.length ?? 0) > 0;
-      if (node.mutation_scope.length === 0 && nodeMayMutate(node) && !externalNode) {
+    if (!this.cancelled && !this.paused) {
+      for (const id of nodeIds) {
+        if (status.get(id) !== 'pending') continue;
+        status.set(id, 'blocked');
+        blocked.push(id);
         this.emit(ctx, {
-          type: 'PolicyWarning',
+          type: 'WorkItemBlocked',
           work_item_id: id,
-          payload: {
-            reason: 'empty_mutation_scope',
-            detail: 'node may write files but declares no mutation_scope; running serially and without scope checks',
-          },
+          payload: { reason: 'dependency_not_met' },
         });
       }
-    }
-
-    const readOnly = eligible.filter((id) => this.isConcurrentSafe(id, graph, ctx));
-    const mutations = eligible.filter((id) => !readOnly.includes(id));
-
-    if (readOnly.length > 0) {
-      await Promise.all(
-        readOnly.map((id) => this.runNode(id, graph, ctx, status, completed, failed, blocked))
-      );
-    }
-
-    if (ctx.parallel && mutations.length > 1) {
-      await this.runMutationsInParallel(mutations, graph, ctx, status, completed, failed, blocked);
-      return failed.length > 0;
-    }
-
-    for (const id of mutations) {
-      this.checkRequestedPause(ctx);
-      if (this.cancelled || this.paused) break;
-      await this.runNode(id, graph, ctx, status, completed, failed, blocked);
     }
 
     return failed.length > 0;

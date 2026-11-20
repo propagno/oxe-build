@@ -36,7 +36,8 @@ export type LlmExecutorEventType =
   /** Once per attempt: turns, tool calls and backend-reported cost. */
   | 'executor_usage'
   | 'turn_timeout'
-  | 'rate_limit_wait';
+  | 'rate_limit_wait'
+  | 'network_retry';
 
 /** Injectable completion function (defaults to the HTTP OpenAI-compatible client). */
 export type CompletionFn = typeof streamCompletion;
@@ -87,9 +88,14 @@ export interface LlmTaskExecutorOptions {
   maxQuotaWaitMs?: number;
   /** OXB-204: max consecutive automatic 429 waits inside an attempt before failing as quota (default 3). */
   maxQuotaRetries?: number;
+  /** OXB-C19: exponential backoff delays (ms) for transient network drops inside the same turn (default [5000, 15000, 30000, 60000]). */
+  networkRetryDelaysMs?: number[];
   /** Injectable sleep for deterministic tests. */
   sleep?: (ms: number) => Promise<void>;
 }
+
+const DEFAULT_NETWORK_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000];
+const TRANSIENT_NETWORK_RE = /\b(wsasend|wsarecv|forcibly closed by the remote host|TLS handshake timeout|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|socket hang up|dial tcp|connectex|i\/o timeout|unexpected EOF|early EOF|WSAE[A-Z]+|HTTP\s*(?:502|503|504)|(?:502|503|504)\s+(?:Bad Gateway|Service Unavailable|Gateway Time-?out))\b/i;
 
 function normalizeRel(p: string): string {
   return path.normalize(String(p || '')).replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
@@ -277,8 +283,12 @@ export class LlmTaskExecutor implements TaskExecutor {
     let turn = 0;
     let timeoutsInARow = 0;
     let quotaWaitsInARow = 0;
+    let networkRetriesInARow = 0;
     const maxQuotaWaitMs = this.options.maxQuotaWaitMs ?? 5 * 60_000;
     const maxQuotaRetries = this.options.maxQuotaRetries ?? 3;
+    const networkRetryDelaysMs = Array.isArray(this.options.networkRetryDelaysMs)
+      ? this.options.networkRetryDelaysMs
+      : DEFAULT_NETWORK_RETRY_DELAYS_MS;
     const sleepFn = this.options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     // OXB-186: progress = a file written (write/patch) or finish_task; K turns without it end the attempt.
     const noProgressLimit = this.options.noProgressTurns ?? 8;
@@ -375,6 +385,26 @@ export class LlmTaskExecutor implements TaskExecutor {
             continue;
           }
         }
+        // OXB-C19: transient network/environment drops (wsasend/wsarecv/TLS handshake timeout/ECONNRESET/502-504)
+        // retry in-place with exponential backoff inside the same turn, preserving conversation and tree edits.
+        const isTransientNetwork = !isQuota
+          && kind !== 'policy'
+          && kind !== 'context'
+          && kind !== 'llm'
+          && TRANSIENT_NETWORK_RE.test(errMsg);
+        if (isTransientNetwork && networkRetriesInARow < networkRetryDelaysMs.length) {
+          const waitMs = Math.max(0, Number(networkRetryDelaysMs[networkRetriesInARow]) || 0);
+          networkRetriesInARow += 1;
+          this.emit({
+            type: 'network_retry',
+            nodeId: node.id,
+            attempt,
+            detail: { turn, wait_ms: waitMs, retry: networkRetriesInARow, max_retries: networkRetryDelaysMs.length, reason: errMsg.slice(0, 200) },
+          });
+          await sleepFn(waitMs);
+          turn -= 1; // transient network drop is not a model turn
+          continue;
+        }
         const failureClass = isQuota
           ? 'quota'
           : (kind === 'context' || kind === 'llm' || kind === 'timeout' || kind === 'policy' || kind === 'environment' ? kind : 'env');
@@ -418,6 +448,7 @@ export class LlmTaskExecutor implements TaskExecutor {
       usage.turns += 1;
       timeoutsInARow = 0;
       quotaWaitsInARow = 0;
+      networkRetriesInARow = 0;
       if (typeof response.usage?.cost_usd === 'number') usage.cost_usd = (usage.cost_usd ?? 0) + response.usage.cost_usd;
       for (const k of ['input_tokens', 'output_tokens', 'thinking_tokens'] as const) {
         const n = response.usage?.[k];

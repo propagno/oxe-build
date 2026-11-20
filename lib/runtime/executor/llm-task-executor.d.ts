@@ -16,7 +16,7 @@ export interface LlmProviderConfig {
 }
 export type LlmExecutorEventType = 'executor_turn' | 'executor_slow_turn' | 'executor_context_cap' | 'turn_start' | 'turn_complete' | 'tool_call' | 'tool_result' | 'tool_denied' | 'executor_complete'
 /** Once per attempt: turns, tool calls and backend-reported cost. */
- | 'executor_usage' | 'turn_timeout' | 'rate_limit_wait';
+ | 'executor_usage' | 'turn_timeout' | 'rate_limit_wait' | 'network_retry';
 /** Injectable completion function (defaults to the HTTP OpenAI-compatible client). */
 export type CompletionFn = typeof streamCompletion;
 export interface LlmExecutorEvent {
@@ -63,6 +63,8 @@ export interface LlmTaskExecutorOptions {
     maxQuotaWaitMs?: number;
     /** OXB-204: max consecutive automatic 429 waits inside an attempt before failing as quota (default 3). */
     maxQuotaRetries?: number;
+    /** OXB-C19: exponential backoff delays (ms) for transient network drops inside the same turn (default [5000, 15000, 30000, 60000]). */
+    networkRetryDelaysMs?: number[];
     /** Injectable sleep for deterministic tests. */
     sleep?: (ms: number) => Promise<void>;
 }
