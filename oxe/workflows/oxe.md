@@ -20,7 +20,7 @@ Ponto de entrada inteligente do OXE. Faz uma de três coisas dependendo do input
 <modo_status>
 ## Modo: Status + Próximo Passo (sem input ou "o que faço agora?")
 
-Aplicar a lógica completa de `oxe/workflows/next.md`. **Com o `oxe-cc` disponível, a resposta é o `next` de `oxe-cc status --json`**, que já cobre o grill e a aprovação da spec, o ALM, o RFC da fase e a entrega. A lista abaixo é o fallback; `oxe-cc status --journey` mostra o mapa das etapas 0 a 9.
+Aplicar a lógica completa de `oxe/workflows/next.md`. **Com o `oxe-cc` disponível, a resposta é `nextStep` / `cursorCmd` / `reason` de `oxe-cc status --json`** (ver `references/next-step-footer.md`), que já cobre o grill e a aprovação da spec, o ALM, o RFC da fase e a entrega. A lista abaixo é o fallback; `oxe-cc status --journey` mostra o mapa das etapas 0 a 9.
 
 0. Se existir `.oxe/program/PROGRAM.json` com fase aberta → seguir a **fase ativa** (`oxe-cc runtime program status`): `pending` → `runtime program start`; `planning` → **plan** só da fase (a menos que `PLAN.json` já declare essa fase → **execute**); `executing` → **execute**; `verifying` com verify verde → `runtime program close`, com verify reprovado → **execute**. Sempre dizer "Fase k/N — Fx". O PLAN/run de uma fase fechada nunca é reaproveitado.
 1. Se `.oxe/` ou `STATE.md` não existir → **scan** (`npx oxe-cc@latest` primeiro se OXE não instalado)
@@ -30,7 +30,7 @@ Aplicar a lógica completa de `oxe/workflows/next.md`. **Com o `oxe-cc` disponí
 5. Se SPEC mas sem PLAN → verificar `discuss_before_plan` → **discuss** ou **plan**
 6. Se PLAN sem VERIFY pós-implementação → **execute** ou **verify**
 7. Se VERIFY com falha → **plan --replan**
-8. Se VERIFY OK → próxima feature ou milestone
+8. Se VERIFY OK → **`/oxe-ship`** (entregar); entregue → próxima entrega em **`/oxe-spec`** ou **`/oxe-quick`**
 
 **Saída:** exatamente 1 passo, 1 comando, 1 frase de justificativa.
 </modo_status>
@@ -55,12 +55,13 @@ Mapear o input para o workflow correto e executar ou orientar:
 
 | Se o usuário disser | Executar |
 |---------------------|----------|
-| "quero [feature / tarefa / entrega]" | Verificar estado → **spec** ou **quick** |
+| "quero [feature / tarefa / entrega]", "cria / implementa / corrige X" | regra única de `<process>` passo 1: **`/oxe-quick`** se for pequeno, senão **`/oxe-spec`** |
 | "analisa / mapeia o projeto" | **`/oxe-spec --refresh`** (incremental) ou **`/oxe-scan`** (scan completo) |
 | "o que faz esse módulo / o que usa esse projeto" | **`/oxe "pergunta"`** com base nos artefatos existentes |
 | "pesquisa / spike / quero entender X" | **`/oxe-spec --research`** |
 | "executa tudo / faz tudo / modo automático" | **`/oxe-execute`** |
-| "executa sem parar / autônomo" | **`/oxe-execute`** |
+| "executa sem parar" (plano já existe) | **`/oxe-execute`** |
+| "faz sozinho de ponta a ponta / modo autônomo" (pedido explícito) | **`oxe/workflows/conduct.md`** (Conductor: Agent ou Swarm Mode) |
 | "revisa PR / diff" | **`/oxe-verify --pr`** |
 | "auditoria de segurança" | **`/oxe-verify --security`** |
 | "valida / verifica" | **verify** |
@@ -86,7 +87,7 @@ Se o input não mapear claramente → apresentar 2 opções mais prováveis e pe
 
 Apresentar de forma concisa:
 
-### A trilha principal (6 comandos)
+### A trilha principal (7 comandos)
 
 ```
 /oxe              → onde estou / o que faço / help (entrada universal)
@@ -98,14 +99,16 @@ Apresentar de forma concisa:
                     (absorve obs, debug, forensics, checkpoint, loop)
 /oxe-verify       → validar e fechar o ciclo
                     (absorve gaps, security, ui-review, review-pr, retro)
+/oxe-ship         → entregar: PR → CI/merge → deploy → docs → close
+                    (--local só commita; --defect registra defeito pós-entrega)
 ```
 
 ### A cadeia
 
 ```
-/oxe → /oxe-spec → /oxe-plan → /oxe-execute → /oxe-verify
-                       ↓
-                  /oxe-quick (trabalho pequeno)
+/oxe → /oxe-spec → /oxe-plan → /oxe-execute → /oxe-verify → /oxe-ship
+          ↓
+     /oxe-quick (trabalho pequeno) → oxe-cc quick done → /oxe-ship
 ```
 
 ### Trilha avançada
@@ -141,7 +144,7 @@ Não precisam ser decorados como comandos separados:
    - **Sem input ou "next / o que faço / status":** aplicar `<modo_status>`.
    - **"help / comandos / o que é OXE":** aplicar `<modo_help>`.
    - **Pergunta situacional** ("onde estou?", "qual o risco?", "o que está acontecendo?", "me contextualize"): aplicar `<modo_pergunta>`.
-   - **Objetivo de implementação** (linguagem natural descrevendo uma tarefa, feature ou mudança a executar — ex.: "cria X", "implementa Y", "adiciona Z", "corrige W"): carregar e executar diretamente `oxe/workflows/conduct.md`. O Conductor decide Agent Mode vs Swarm Mode automaticamente.
+   - **Objetivo de implementação** (linguagem natural descrevendo uma tarefa, feature ou mudança — ex.: "cria X", "implementa Y", "adiciona Z", "corrige W"): **regra única** — se cabe nos critérios do quick (até ~10 passos, poucos arquivos, sem contrato público, segurança ou dados pessoais) → executar `oxe/workflows/quick.md`; senão → executar `oxe/workflows/spec.md`. Com programa ou plano em andamento, o `nextStep` do `oxe-cc status --json` prevalece. O Conductor (`oxe/workflows/conduct.md`) só entra quando o usuário pede explicitamente o modo autônomo.
    - **Input de roteamento simples** (pedido que mapeia diretamente a um comando OXE existente sem necessidade de execução): aplicar `<modo_route>` e, se o workflow for claro, carregar e executar diretamente o `oxe/workflows/<nome>.md` correspondente.
 2. Nunca produzir listas longas de alternativas. Um passo, um comando, uma frase.
 3. Se o workflow executado diretamente gerar artefatos, reportar no chat conforme esse workflow.
@@ -151,5 +154,5 @@ Não precisam ser decorados como comandos separados:
 - [ ] Usuário recebe exatamente 1 próximo passo (modo status) OU 1 workflow executado (modo route) OU o bloco help compacto (modo help) OU resposta situacional (modo pergunta).
 - [ ] Nenhum artefato criado por este workflow diretamente (a menos que o workflow delegado o faça).
 - [ ] Nunca lista mais de 2 alternativas ao mesmo tempo.
-- [ ] Help mostra apenas os 6 comandos da trilha principal + 2 avançados; comandos especializados aparecem apenas como flags/comportamentos.
+- [ ] Help mostra apenas os 7 comandos da trilha principal + 2 avançados; comandos especializados aparecem apenas como flags/comportamentos.
 </success_criteria>

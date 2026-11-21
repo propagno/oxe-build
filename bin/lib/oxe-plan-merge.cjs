@@ -60,7 +60,7 @@ function mergeRolePlans(inputs, options = {}) {
       if (!k) { errors.push(`${at}: sem "${key}" — a chave que junta as tarefas dos papéis (ex.: "${key}": "R5")`); return; }
       let g = groups.get(k);
       if (!g) {
-        g = { key: k, order: groups.size, title: null, roles: [], files: [], edited_paths: [], removed_paths: [], symbols_removed: [], decisions: [], gates: [], verify: [], acceptance: [], deps: [], notes: [], kind: null, blocked_by: [], complexity: null, max_turns: null, model_hint: null, proves: [], ids: [] };
+        g = { key: k, order: groups.size, title: null, roles: [], files: [], edited_paths: [], removed_paths: [], symbols_removed: [], decisions: [], gates: [], verify: [], acceptance: [], deps: [], notes: [], kind: null, blocked_by: [], complexity: null, max_turns: null, budget_usd: null, model_hint: null, proves: [], ids: [] };
         groups.set(k, g);
       }
       if (!g.roles.includes(role)) g.roles.push(role);
@@ -97,6 +97,8 @@ function mergeRolePlans(inputs, options = {}) {
         if (!g.complexity || (COMPLEXITY_RANK[task.complexity] || 0) > (COMPLEXITY_RANK[g.complexity] || 0)) g.complexity = task.complexity;
       }
       if (Number.isInteger(task.max_turns) && task.max_turns > 0) g.max_turns = Math.max(g.max_turns || 0, task.max_turns);
+      // OXB-C24-1: the role file's per-task budget reaches PLAN.json (largest of the group, like max_turns)
+      if (Number.isFinite(Number(task.budget_usd)) && Number(task.budget_usd) > 0) g.budget_usd = Math.max(g.budget_usd || 0, Number(task.budget_usd));
       if (task.model_hint && (!g.model_hint || (MODEL_HINT_RANK[task.model_hint] || 0) > (MODEL_HINT_RANK[g.model_hint] || 0))) g.model_hint = task.model_hint;
       if (task.proves && typeof task.proves === 'object' && !Array.isArray(task.proves)) g.proves.push({ role, map: task.proves, at });
       else if (Array.isArray(task.proves) && task.proves.length) warnings.push(`${at} (${k}): "proves" em lista na tarefa — use acceptance_tests[] ou { arquivo: [títulos] }; ignorado`);
@@ -220,6 +222,7 @@ function mergeRolePlans(inputs, options = {}) {
       ...(g.blocked_by.length ? { blocked_by: dedupeBlocked(g.blocked_by) } : {}),
       ...(g.complexity ? { complexity: g.complexity } : {}),
       ...(g.max_turns ? { max_turns: g.max_turns } : {}),
+      ...(g.budget_usd ? { budget_usd: g.budget_usd } : {}),
       ...(g.model_hint ? { model_hint: g.model_hint } : {}),
       ...(g.notes.length ? { notes: uniq(g.notes).join('\n') } : {}),
     };

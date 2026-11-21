@@ -91,7 +91,7 @@ Para entradas visuais, usar também **`oxe/templates/VISUAL-INPUTS.template.md`*
 **Classificar a demanda no início:** rotular a trilha com um tipo dominante (`feature`, `bugfix`, `refactor`, `investigação`, `migração`, `integração`, `infra`, `dados`, `ui`, `segurança`) e registrá-lo na seção de contexto da SPEC.
 
 **Padrão — grill** (protocolo completo em **`oxe/workflows/references/grill.md`**):
-1. `oxe-cc grill start --type <tipo>`. Se já houver grill aberto, ele é retomado: `oxe-cc grill status` mostra onde parou.
+1. `oxe-cc grill start --type <tipo>`. **Ao refinar um card isolado de ALM/Jira**, passe **sempre `--card <KEY>`** em todos os comandos do grill (`oxe-cc grill start --card OXE-n`, `ask --card OXE-n`, `answer --card OXE-n`, `close --card OXE-n`, `report --card OXE-n`) — isso isola o estado em `.oxe/alm/grill/<KEY>/` (incluindo ADRs em `.oxe/alm/grill/<KEY>/adr/` e relatório em `.oxe/alm/grill/grooming-quality.md`) sem sobrescrever `.oxe/grill/` ou `.oxe/SPEC.md` do programa inteiro. Se já houver grill aberto, ele é retomado: `oxe-cc grill status [--card <KEY>]` mostra onde parou.
 2. Explore o repo e os artefatos primeiro. O que já tem resposta vira `oxe-cc grill fact --branch <ramo> --text "…" --source <arquivo:linha|card>`, nunca pergunta.
 3. **Uma pergunta por mensagem**, seguindo o `next_branch` da árvore (problema → personas → escopo → fluxos → regras/glossário → bordas → NFR → integrações → rollout → métricas → riscos). Cada pergunta traz o que decide, as opções com consequência e a **resposta recomendada com o porquê**. Registre com `grill ask` antes de perguntar e com `grill answer` depois.
 4. Contradição → `grill conflict <Q-a,Q-b>`; "não sei" → `grill defer <Q-n> --reason "…"` (vira suposição); termos de negócio → `grill term "<termo>" --definition "…"`; decisão de arquitetura, produto ou trade-off → `--decision` (vira ADR).
@@ -553,15 +553,9 @@ Detectar e corrigir estes problemas antes de entregar a SPEC. A auto-reflexão d
 - Critérios de aceite da Fase 1: A1, A2, …
 
 **Perguntar ao usuário:**
-> "Roteiro aprovado? Quer gerar o plano agora ou ajustar algo antes?"
+> "Roteiro aprovado ou quer ajustar algo antes?"
 
-**Se aprovado — oferecer os próximos passos:**
-
-| Opção | Quando usar | Próximo passo |
-|-------|-------------|---------------|
-| Plano simples | Tarefa clara, sem orquestração multi-agente | `/oxe-plan` |
-| Plano com agentes | Time distribuído, domínios distintos, ondas paralelas | `/oxe-plan-agent` |
-| Discutir antes | `discuss_before_plan: true` em config, ou risco técnico | `/oxe-discuss` → `/oxe-plan` |
+**Se aprovado:** termine com **um** próximo passo, o do rodapé (`references/next-step-footer.md`). Em geral: `spec check` verde → `oxe-cc spec approve --by <papel>`; aprovada com ROADMAP de 2+ fases → `oxe-cc runtime program init`; senão → `/oxe-plan` (agentes e discuss são decididos dentro dele, com `--agents` ou `discuss_before_plan`).
 
 **Se ajustar:** voltar à fase indicada (Requisitos, Roteiro ou Perguntas) e repetir.
 
@@ -575,7 +569,7 @@ Detectar e corrigir estes problemas antes de entregar a SPEC. A auto-reflexão d
 - Rodar **`oxe-cc prd lint`**: história sem critério, critério sem história, referência a A*/R* inexistente. Corrigir antes de seguir.
 - **ALM:** se `.oxe/config.json` tem `alm.provider` (`jira` ou `azure-devops`), rodar `oxe-cc alm push --stories-only --dry-run`, mostrar ao usuário o que será criado (épico, histórias com a versão-alvo) e, com o OK, `oxe-cc alm push --stories-only --apply`. Sem ALM configurado, seguir sem ele — nada no fluxo depende disso.
 - Marcar `ROADMAP.md` → `status: approved`
-- Atualizar `STATE.md`: `phase: spec_ready`, próximo passo conforme escolha
+- Atualizar `STATE.md`: `phase: spec_ready`, próximo passo do rodapé
 - Se flag `--ui` foi recebida **ou** se UI foi detectada como domínio crítico: executar a lógica de `oxe/workflows/ui-spec.md` e produzir `.oxe/UI-SPEC.md` como extensão desta spec. Mencionar ao usuário que o contrato UI foi gerado.
 </fase_5_aprovacao>
 
@@ -613,7 +607,7 @@ Detectar e corrigir estes problemas antes de entregar a SPEC. A auto-reflexão d
 - [ ] `ROADMAP.md` existe no mesmo escopo com fases mapeadas a R-IDs e A*, status `approved` (ou `draft` se usuário não confirmou).
 - [ ] Tabela de requisitos R-ID foi apresentada e validada (v1/v2/fora) antes do roteiro.
 - [ ] `PRD.md` existe com histórias US-n ligadas aos A*, e `oxe-cc prd lint` passa; com ALM configurado, as histórias foram enviadas (`oxe-cc alm push --stories-only --apply`).
-- [ ] Usuário foi consultado no gate da Fase 5 e escolheu o próximo passo.
+- [ ] Usuário aprovou o roteiro no gate da Fase 5, e a resposta terminou com um único próximo passo (rodapé).
 - [ ] OBS pendentes com impacto `spec` foram incorporadas e marcadas `incorporada`.
 - [ ] Grill fechado (`oxe-cc grill close`), com cada critério, história e termo rastreável a uma pergunta; ou `--fast` com no máximo 3 rodadas.
 - [ ] `oxe-cc spec check` verde e spec aprovada (`oxe-cc spec approve`); RFC em rascunho para cada P0/P1.

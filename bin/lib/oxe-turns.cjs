@@ -10,8 +10,13 @@
 const DEFAULT_TURNS = Object.freeze({ S: 15, M: 30, L: 60 });
 const ORDER = ['S', 'M', 'L'];
 
+const COMPLEXITY_TO_SIZE = Object.freeze({ XS: 'S', S: 'S', M: 'M', L: 'L', XL: 'L' });
+
 function estimateSize(task, packEntry) {
   if (task && ORDER.includes(String(task.size || '').toUpperCase())) return String(task.size).toUpperCase();
+  // OXB-C21 #3: respect explicit `complexity` (XS|S|M|L|XL) declared in PLAN.json instead of overriding M as L.
+  const comp = task && task.complexity ? COMPLEXITY_TO_SIZE[String(task.complexity).toUpperCase()] : null;
+  if (comp) return comp;
   const files = Array.isArray(task && task.files) ? task.files : [];
   const weight = files.reduce((n, f) => n + (String(f).includes('*') ? 3 : 1), 0) + Math.ceil((((packEntry && packEntry.symbols) || []).length) / 2);
   return weight <= 2 ? 'S' : weight <= 6 ? 'M' : 'L';

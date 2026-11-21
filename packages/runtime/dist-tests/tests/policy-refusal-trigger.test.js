@@ -130,9 +130,40 @@ const refusal = () => Object.assign(new Error('API Error: safeguards flagged thi
             fs_1.default.rmSync(root, { recursive: true, force: true });
         }
     });
-    (0, node_test_1.test)('at the first request: the trigger is in the starting prompt', async () => {
+    (0, node_test_1.test)('the context size at the refusal is recorded; a long context with small tool outputs names the size, not the files (F6 T36, 360k)', async () => {
+        let t = 0;
+        const big = 'z'.repeat(210000);
+        const { result, events } = await run(async () => {
+            t += 1;
+            if (t === 1)
+                return { content: '', finish_reason: 'tool_calls', tool_calls: [{ id: 'w1', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'a.kt', content: big }) } }] };
+            throw refusal();
+        });
+        strict_1.default.equal(result.failure_class, 'policy');
+        strict_1.default.match(result.output, /O contexto tinha \d{6,} chars no turno 1\./);
+        strict_1.default.match(result.output, /o tamanho do contexto é o suspeito, não o conteúdo — considere execute\.max_context_chars/);
+        strict_1.default.doesNotMatch(result.output, /restrinja o escopo da tarefa/);
+        const u = events.find((e) => e.type === 'executor_usage')?.detail;
+        strict_1.default.ok((u.policy_context_chars ?? 0) > 200000);
+        // a short context: the size is still recorded, the content hint stays
+        const { result: small } = await run(async () => { t += 1; if (t === 3)
+            return { content: '', finish_reason: 'tool_calls', tool_calls: [{ id: 'r1', type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'Conversation.kt' }) } }] }; throw refusal(); });
+        strict_1.default.match(small.output, /O contexto tinha \d+ chars no turno 1\.$/);
+        strict_1.default.match(small.output, /restrinja o escopo da tarefa/);
+    });
+    (0, node_test_1.test)('at the first request: the trigger is in the starting prompt (even when over 200k chars)', async () => {
         const { result } = await run(async () => { throw refusal(); });
         strict_1.default.equal(result.failure_class, 'policy');
         strict_1.default.match(result.output, /primeira requisição: o gatilho está no prompt inicial/);
+        const bigNode = { ...node, title: 'z'.repeat(210000) };
+        const lease = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'oxe-pol0-'));
+        try {
+            const exec = new llm_task_executor_1.LlmTaskExecutor({ baseUrl: '', apiKey: '', model: '', maxTurns: 2 }, null, () => { }, async () => { throw refusal(); });
+            const r0 = await exec.execute(bigNode, { workspace_id: 'w', strategy: 'inplace', isolation_level: 'shared', branch: null, base_commit: null, root_path: lease, ttl_minutes: 5 }, 'run-0', 1);
+            strict_1.default.doesNotMatch(r0.output, /As saídas do último turno somam só 0 chars/);
+        }
+        finally {
+            fs_1.default.rmSync(lease, { recursive: true, force: true });
+        }
     });
 });

@@ -489,6 +489,6 @@ describe('grooming of a card (grill --card) → the card comment and the quality
     const rep = await op.runtimeGrooming(dir, null, { action: 'report' });
     const row = rep.rows.find((r) => r.key === 'OXE-20');
     assert.deepEqual([row.questions, row.facts_from_card, row.answered_by_user_decision, row.answered_by_coordination, row.no_basis], [3, 1, 1, 1, 1]);
-    assert.ok(fs.existsSync(path.join(dir, 'docs', 'grooming-quality.md')));
+    assert.ok(fs.existsSync(path.join(dir, '.oxe', 'alm', 'grill', 'grooming-quality.md')));
   });
 });

@@ -8,6 +8,93 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-build, mais o roteiro de excelência e os backlogs de comparação aprovados pelo TECH LEAD. Cada item tem uma seção em `docs/oxespace-1.5/BACKLOG.md`, com a evidência e o teste que a reproduz (`tests/oxe-1212-*.test.cjs`). Para usar só a trilha recomendada, veja [docs/HAPPY-PATH.md](docs/HAPPY-PATH.md).
 
+### Lote OXB-C28: recusa de política, verify remoto e ferramentas do planejador (21/11, noite)
+
+- **C28-1: recusa falsa da política.**
+  - Quando o gatilho veio de saídas de ferramenta de turnos anteriores, e não do pack, a tarefa ganha **uma** nova tentativa automática, limpa e com contexto novo.
+  - O evento sai como `RetryScheduled` com o motivo `policy_auto_retry`.
+  - `execute.policy_auto_retry: false` desliga a nova tentativa. Uma recusa disparada pelo prompt continua pedindo `--retry-policy-once`.
+  - Uma tarefa adiada agora conta como progresso do run: o run segue com as tarefas que não dependem dela, em vez de abortar com `no_progress_timeout`.
+- **C28-2: segmentos remotos do verify numa rodada só.**
+  - Segmentos `… remote-verify … -- <cmd>` consecutivos, com o mesmo runner, rodam como **um** job remoto (`<runner> -- "echo ===OXE-SEG-1=== && cmd1 && …"`).
+  - Os marcadores no log remoto dizem qual segmento falhou, e `failed_segment` aponta o segmento original.
+  - Não entra na rodada única um comando com aspas, `$`, crase, `\`, `%` ou `!`, nem o caminho `gradle152`.
+  - Com `all_segments` o comportamento não muda: cada segmento continua rodando sozinho.
+- **C28-3:** o `spec freeze` passa a ver os títulos de `test.each([...])('…')`, no filtro `-t` e na detecção do `A<n>`.
+- **C28-4:** com `spec freeze --from <sha> --paths <arquivo>`, um teste que já existia no ref também é congelado. Um glob continua valendo só para o diff do ref, exceto quando o diff não tem nenhum arquivo sob ele.
+- **C28-5:** `plan pack fix T<n> --symbol <arquivo>#<nome> --add [--signature …] [--internal | --member-of …]` acrescenta ao pack um símbolo de um arquivo do escopo da tarefa, com o contrato correspondente e o registro em `fixes`.
+- **C28-6:** o `refine lint` não trata mais como card de geometria de UI um card de comportamento que só cita `src/components/` e não traz nada visual (medida, token, CSS, tema, densidade, BRD-n). `area-marca` e os rótulos visuais continuam valendo.
+- **C28-7:** o `plan amend-test` emenda o PLAN.json do programa dono do teste congelado.
+  - O dono é o que estiver em `--program <nome>`, ou o único irmão cujo `acceptance_tests` lista o arquivo.
+  - O hash vem do arquivo da árvore atual. Não é preciso reabrir o worktree do dono.
+- **C28-8:** o ensaio do `alm intake` (sem `--apply`) termina com "nada gravado — rode de novo com --apply".
+- **C28-9:** no início do quick, o comentário e a mudança de estado do card são escritas independentes: a falha de uma não impede a outra. Um HTTP 404 agora nomeia o método e o caminho da chamada que falhou. A causa do 404 do Q-20261121-df4b ainda não foi reproduzida.
+
+### Achados do 1.5.2 de ponta a ponta: OXB-C23..C27 (21/11)
+
+- **C25:** `plan build` grava `ready: true` (e `critical_gaps: []`) quando as próprias checagens passam. Um pack sem `ready` vira a lacuna `implementation_pack:ready missing`, nunca um `not_ready` com a lista vazia. Para packs antigos, `oxe-cc plan pack ready --by <papel>` marca o pack só quando não resta outra lacuna crítica.
+- **C26:** `runtime execute --dry-run` (e o novo `--preflight-only`) roda só o preflight e não inicia nada. Sai com 1 quando o execute recusaria.
+- **C27-1:** `scope_insufficient` exige que a falha passe por um arquivo fora do escopo, citado na pilha ou na saída do agente; um import não basta. Um defeito de fixture é tentado de novo e, se a falha se repetir, vira `verify_suspect`.
+- **C27-2:** `plan lint --precheck-e2e` roda cada congelado e2e novo uma vez contra o HEAD com o stub:
+  - vermelho na montagem (launch, conexão, módulo, hook) é erro;
+  - vermelho num seletor antes de qualquer asserção é aviso, ou erro com `lint.precheck_e2e_selector: "error"`.
+- **C27-3:** o commit único dos congelados do planejador fica fora do PR de cada tarefa. Os congelados da tarefa vão como arquivos.
+- **C23-1:** um quick que mexe nos arquivos da tarefa e fica fora da janela do cartão é citado no promote, nunca descartado em silêncio.
+- **C23-2:** um teste do escopo que outra tarefa mudou por quick não é copiado da ponta do programa.
+- **C24:**
+  - `budget_usd` do papel chega ao PLAN.json, e `plan task edit Tn --budget-usd N`;
+  - `plan pack fix Tn --symbol arq#nome --signature "…"`;
+  - `swept` vale em qualquer tarefa.
+- **C27-5:** `alm refine import` usa o programa do `config.alm.program`, a não ser que um PLAN irmão cite o card numa tarefa, e nunca escolhe um programa fechado.
+- **C27-7:** o trailer `OXE-Plan: <programa>/<fase>` é aceito em commit só de testes do planejador.
+- **C27-8:** o `doctor` avisa quando o oxe-cc em uso roda de uma árvore com mudanças não commitadas no código.
+
+### Jornada guiada de ponta a ponta com os 7 comandos principais (21/11)
+
+- **Próximo passo** (`suggestNextStep`, `oxe-journey.cjs`):
+  - todas as tarefas feitas → `/oxe-verify`;
+  - verify verde → `/oxe-ship`, também sem programa. A retro roda dentro do verify e deixou de ser um passo. O ciclo sem programa fecha pelo `commit-record.json` (modo local) ou pelo PR → CI/merge → deploy (modo PR), sem `program close`;
+  - depois do `init-oxe` → `/oxe-spec`, e não `/oxe`;
+  - SPEC aprovada com ROADMAP de 2+ fases → `oxe-cc runtime program init`. Sem grill, passa antes por `spec check --fast` / `spec approve`;
+  - plano pronto → `/oxe-execute`. O dashboard só aparece com `review.plan_required`;
+  - com o check verde, o `cursorCmd` do spec-approve vira `spec approve`;
+  - um CR ou defeito aberto depois do programa fechado → `/oxe-plan --replan`;
+  - RFC global aceito ou em rascunho conta. O rascunho só bloqueia com `rfc.required`;
+  - o grill com risco P0/P1 sugere `oxe-cc rfc new`.
+- **Quick:**
+  - `quick done` fecha o QUICK.md e o STATE (`quick_done`);
+  - no modo local, a quick fechada é o ciclo entregue;
+  - no modo PR, o promote só é sugerido fora da base e o ciclo espera CI/merge/deploy.
+  - O `quick promote` passa o intervalo certo ao check-origin.
+- **`status --json` e `--journey`:**
+  - o `status --json` ganha `next`, alias de `nextStep`;
+  - o `status --journey` considera a sessão ativa e mapeia `next`, `program-init` e `rfc`.
+- **Sessões:**
+  - `session create|switch|list` grava `**active_session:**` e mantém `.oxe/SESSIONS.md`;
+  - id livre vira `sNNN-<slug>`; id de card fica como está;
+  - `--session <id>` solto resolve para `sessions/<id>`.
+- **Workflows:**
+  - o rodapé único lê `nextStep`/`cursorCmd`/`reason`;
+  - a Fase 5 do `spec.md` tem um próximo passo só;
+  - o `/oxe-ship` pergunta o modo de entrega uma vez (`delivery.mode`) e só roda `program close` com programa;
+  - o roteador `/oxe` e o README mostram os 7 comandos;
+  - os fallbacks sem comandos legados;
+  - o `quick.md` ganha o rodapé.
+- **OXB-C20/C21** (dogfooding de 42 PRs): grill `--card` com ledger próprio, que nunca publica em `docs/adr/`. Também entram:
+  - quick `promote`/`--from-card`/`list`/`--no-alm`;
+  - `status --json` compacto;
+  - `runtime compile --json`;
+  - VERIFY.md da sessão;
+  - `plan amend-test` com os hashes reais;
+  - `plan lint` com `proves`.
+  - O spec freeze ignora títulos de `describe`.
+- **Correções:**
+  - `file_size`/`verify_file_size` entram nas chaves conhecidas do doctor;
+  - o cabeçalho do `runtime` volta ao stderr em `--json`;
+  - `--otel` é modo JSON;
+  - o `dry-run` do ALM não toca a rede.
+- **Testes:** `tests/oxe-1212-journey-e2e.test.cjs` (com programa, sem programa e quick, até a entrega), `oxe-1212-journey-next-step.test.cjs`, `oxe-1212-review-2111.test.cjs`, `oxb-c20-*` e `oxb-c21-*`.
+
 ### Skeleton (`plan skeleton`) sem erro de sintaxe em TS/JS e checagem `checkStubSyntax`
 
 - `oxe-plan-skeleton.cjs` preserva o corpo já declarado em `interface`/`class`, gera `export const X: T = undefined as unknown as T;` em TS (`export const X = undefined;` em JS), extrai o nome certo em funções genéricas (`parse<T>(`) e constantes sem duplicar símbolos, e expõe `checkStubSyntax(file, text)` (`vm.Script` / `node --check` em CJS/JS/MJS e `ts.transpileModule` só de sintaxe quando o projeto tem `typescript`, caindo para aviso sem `typescript`).

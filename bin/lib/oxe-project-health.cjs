@@ -14,6 +14,9 @@ const ALLOWED_CONFIG_KEYS = [
   'after_verify_draft_commit',
   'after_verify_suggest_uat',
   'default_verify_command',
+  // file-size cap (oxe-file-size-guard.cjs): `file_size` (object, number or false) and the checkpoint switch
+  'file_size',
+  'verify_file_size',
   'scan_max_age_days',
   'compact_max_age_days',
   'lessons_max_age_days',
@@ -386,7 +389,7 @@ function validateConfigShape(cfg) {
   // OXB-C18 (#6): validate execute.* and executor.* subkeys and flag ambiguous duplicate max_context_chars
   const EXECUTE_OBJECT_KEYS = [
     'ask_orchestrator', 'no_progress_turns', 'slow_turn_ms', 'max_context_chars', 'max_context_action',
-    'interrupt_on', 'repair', 'turns', 'defer_failed', 'dispatch', 'failure_classes', 'all_segments',
+    'interrupt_on', 'repair', 'turns', 'defer_failed', 'policy_auto_retry', 'dispatch', 'failure_classes', 'all_segments',
     'supervise', 'budget', 'max_turns', 'max_run_ms', 'verify_timeout_ms', 'llm_timeout_ms',
     'model', 'provider', 'adapter', 'base_url', 'api_key_env', 'in_place', 'parallel_mutating',
     'promote_each', 'checkpoint_commits',
@@ -2051,8 +2054,9 @@ function sessionWarnings(target, activeSession) {
   const scoped = scopedOxePaths(target, activeSession);
   /** @type {string[]} */
   const warns = [];
-  if (!/^sessions\/s\d{3}-/.test(activeSession)) {
-    warns.push(`active_session "${activeSession}" não segue o formato sessions/sNNN-slug`);
+  // sNNN-slug (session.md) ou o id de um card (oxe-cc session create OXE-294): os dois formatos aceitos
+  if (!/^sessions\/(?:s\d{3}-|[A-Z][A-Z0-9]+-\d+(?:-[A-Za-z0-9._-]+)?$)/.test(activeSession)) {
+    warns.push(`active_session "${activeSession}" não segue o formato sessions/sNNN-slug (nem sessions/<CARD>, ex. sessions/OXE-294)`);
   }
   if (!fs.existsSync(scoped.sessionRoot)) {
     warns.push(`active_session aponta para ${activeSession}, mas a pasta da sessão não existe em .oxe/`);
@@ -2252,7 +2256,13 @@ function suggestProgramStep(target, activeSession, activeRun) {
     let ciClose = null;
     try { ciClose = require('./oxe-journey.cjs').ciCloseStep(target, activeSession, phase, { label, program }); } catch { ciClose = null; }
     if (ciClose) return ciClose;
-    return { step: 'execute', cursorCmd: '/oxe-execute', reason: `${label}: em execução — concluir e verificar.`, artifacts: programArtifacts, program };
+    // item 1: every task of the phase done → the verify (it moves the phase to verifying), never execute again
+    let work = null;
+    try { work = operational.runtimePhaseWork(target, activeSession); } catch { work = null; }
+    if (work && work.complete) {
+      return { step: 'verify', cursorCmd: '/oxe-verify', reason: `${label}: todas as tarefas da fase concluídas — verificar (o verify roda os critérios e a regressão das fases anteriores).`, artifacts: ['.oxe/PLAN.json', ...programArtifacts], program };
+    }
+    return { step: 'execute', cursorCmd: '/oxe-execute', reason: `${label}: em execução — concluir as tarefas pendentes; depois /oxe-verify.`, artifacts: programArtifacts, program };
   }
   if (phase.status === 'verifying') {
     // delivery.close "ci" set while the phase was already verifying (R42): the CI close decides here too
@@ -2340,6 +2350,25 @@ function suggestNextStep(target, cfg = {}) {
     };
   }
 
+  // OXB-C20 #6: an active (or recently completed on this branch) `.oxe/quick/` record takes precedence over
+  // a stale/closed `PROGRAM.json` from an older phase in reused worktrees.
+  let activeQuick = null;
+  try { activeQuick = require('./oxe-quick.cjs').activeOnWorktree(target); } catch { activeQuick = null; }
+  if (activeQuick && activeQuick.state === 'open') {
+    const q = activeQuick.quick;
+    return {
+      step: 'quick',
+      cursorCmd: 'oxe-cc quick done --verify "<comando>"',
+      reason: `Quick ${q.id}${q.key ? ` (${q.key})` : ''} aberto — conclua as alterações e feche com oxe-cc quick done --verify "<comando>" (ou /oxe-verify)`,
+      artifacts: ['.oxe/QUICK.md', '.oxe/quick/current.json'],
+    };
+  }
+  // a quick done on this branch: only a delivery still pending (PR, CI/merge, deploy) comes before the rest; the closed
+  // cycle is said below (closedQuick), after recovery / upstream / program
+  if (activeQuick && activeQuick.state === 'done') {
+    const qd = quickDeliveryStep(target, activeSession, activeQuick.quick, p, cfg);
+    if (qd && !qd.delivered) return qd;
+  }
   // 1.21.2: guided recovery — a pause, a failed checkpoint, an open spec gap, a deferral or a red verify comes first,
   // with the exact command out of it (the happy path below assumed nothing had failed)
   let recovery = null;
@@ -2354,17 +2383,66 @@ function suggestNextStep(target, cfg = {}) {
   const programStep = suggestProgramStep(target, activeSession, activeRun);
   if (programStep) return programStep;
 
-  if (!mapsComplete && !has(p.quick) && !has(p.spec) && !has(p.plan)) {
+  // item 9: a QUICK.md whose quick is closed (done, promoted, abandoned) is no longer "quick active": without this the
+  // step fell to "/oxe-execute" forever after `quick done` / `quick promote`
+  const closedQuick = closedQuickOf(target, p);
+  // a SPEC written after the closed quick is the next demand already under way: the normal routing follows it
+  const mtimeOf = (f) => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } };
+  const specAfterQuick = closedQuick && has(p.spec) && mtimeOf(p.spec) > mtimeOf(p.quick) + 1000;
+  if (closedQuick && !has(p.plan) && !specAfterQuick) {
+    const q = closedQuick;
+    const qd = q.status === 'done' ? quickDeliveryStep(target, activeSession, q, p, cfg) : null;
+    if (qd && !qd.delivered) return qd;
+    let openCr = null;
+    try { openCr = openChangeStep(target, activeSession, 'Quick entregue'); } catch { openCr = null; }
+    if (openCr) return openCr;
+    const what = q.status === 'done' ? (qd && qd.how ? `entregue (${qd.how})` : 'concluído sem commit (nada precisou mudar)') : q.status === 'abandoned' ? 'abandonado' : q.status;
     return {
-      step: 'oxe',
-      cursorCmd: '/oxe',
-      reason: 'Projeto recém-inicializado e sem SPEC/PLAN — use a entrada universal para começar o fluxo e escolher o primeiro scan.',
-      artifacts: ['.oxe/STATE.md', '.oxe/codebase/'],
+      step: 'next',
+      cursorCmd: '/oxe-spec',
+      reason: `Quick ${q.id}${q.key ? ` (${q.key})` : ''} ${what} — ciclo fechado. Nova demanda: /oxe-spec (ou /oxe-quick para tarefa pequena).`,
+      artifacts: ['.oxe/QUICK.md', `.oxe/quick/${q.id}.json`],
+      delivered: q.status === 'done',
     };
   }
 
-  // Com PLAN pronto, mapas ausentes não justificam scan (greenfield nunca tem codebase a mapear).
-  if (!mapsComplete && !has(p.quick) && !has(p.plan)) {
+  let closedProgram = null;
+  try {
+    const ps = operational.runtimeProgramStatus(target, activeSession);
+    if (ps && ps.exists && ps.progress && ps.progress.total > 0 && ps.progress.closed === ps.progress.total && !ps.progress.phase) {
+      closedProgram = ps;
+    }
+  } catch { closedProgram = null; }
+  if (closedProgram && phase !== 'quick_active') {
+    // item 8: a CR / defect opened after the program closed (one that did not reopen a phase) is the next step
+    let openCr = null;
+    try { openCr = openChangeStep(target, activeSession, `Programa concluído (${closedProgram.progress.closed}/${closedProgram.progress.total})`); } catch { openCr = null; }
+    if (openCr) return openCr;
+    return {
+      step: 'next',
+      cursorCmd: '/oxe-spec',
+      reason: `Programa concluído (${closedProgram.progress.closed}/${closedProgram.progress.total} fase(s) fechada(s)) — use /oxe-spec ou /oxe-quick para nova entrega.`,
+      artifacts: ['.oxe/program/PROGRAM.json', '.oxe/STATE.md'],
+      delivered: true,
+    };
+  }
+
+  // item 3: right after init-oxe the next step is the spec, never /oxe again (the /oxe → /oxe loop). The /oxe-spec
+  // maps the codebase itself when the repo has code (--refresh is inside it).
+  if (!has(p.quick) && !has(p.spec) && !has(p.plan)) {
+    return {
+      step: 'spec',
+      cursorCmd: '/oxe-spec',
+      reason: 'Projeto inicializado e sem SPEC/PLAN — comece pela spec com /oxe-spec (descoberta uma pergunta por vez); para uma tarefa pequena e pontual, /oxe-quick.',
+      artifacts: ['.oxe/STATE.md', '.oxe/SPEC.md'],
+    };
+  }
+
+  // Com PLAN pronto, mapas ausentes não justificam scan (greenfield nunca tem codebase a mapear). Item 4: nem com a
+  // SPEC aprovada (o contexto já foi lido para escrevê-la), nem num repo sem código (greenfield).
+  let specApprovedNow = false;
+  try { const ap = operational.specApproval(target, activeSession); specApprovedNow = Boolean(ap && !ap.changed_since); } catch { specApprovedNow = false; }
+  if (!mapsComplete && !has(p.quick) && !has(p.plan) && !specApprovedNow && looksBrownfield(target)) {
     return {
       step: 'scan',
       cursorCmd: '/oxe-spec --refresh',
@@ -2411,7 +2489,7 @@ function suggestNextStep(target, cfg = {}) {
     }
   }
 
-  if (phase === 'quick_active' || (has(p.quick) && !has(p.plan))) {
+  if (!closedQuick && (phase === 'quick_active' || (has(p.quick) && !has(p.plan)))) {
     return {
       step: 'execute',
       cursorCmd: '/oxe-execute',
@@ -2420,21 +2498,6 @@ function suggestNextStep(target, cfg = {}) {
     };
   }
 
-  let closedProgram = null;
-  try {
-    const ps = operational.runtimeProgramStatus(target, activeSession);
-    if (ps && ps.exists && ps.progress && ps.progress.total > 0 && ps.progress.closed === ps.progress.total && !ps.progress.phase) {
-      closedProgram = ps;
-    }
-  } catch { closedProgram = null; }
-  if (closedProgram) {
-    return {
-      step: 'next',
-      cursorCmd: '/oxe-spec',
-      reason: `Programa concluído (${closedProgram.progress.closed}/${closedProgram.progress.total} fase(s) fechada(s)) — use /oxe-spec ou /oxe-quick para nova entrega.`,
-      artifacts: ['.oxe/program/PROGRAM.json', '.oxe/STATE.md'],
-    };
-  }
 
   if (!has(p.spec)) {
     return {
@@ -2444,6 +2507,11 @@ function suggestNextStep(target, cfg = {}) {
       artifacts: ['.oxe/SPEC.md'],
     };
   }
+
+  // item 4: SPEC aprovada com ROADMAP de 2+ fases e sem programa → program init (spec.md, depois da aprovação)
+  let programInit = null;
+  try { programInit = require('./oxe-journey.cjs').programInitStep(target, activeSession); } catch { programInit = null; }
+  if (programInit) return programInit;
 
   if (discussBefore && !has(p.discuss)) {
     return {
@@ -2455,10 +2523,13 @@ function suggestNextStep(target, cfg = {}) {
   }
 
   if (!has(p.plan)) {
+    // item 18: with rfc advisory, the RFC the grill asked for is named in the plan step (it never blocks it)
+    let rfcHint = null;
+    try { rfcHint = require('./oxe-journey.cjs').grillRfcHint(target, activeSession, cfg); } catch { rfcHint = null; }
     return {
       step: 'plan',
       cursorCmd: '/oxe-plan',
-      reason: 'SPEC existe mas PLAN.md não — gere o plano com verificação por tarefa',
+      reason: `SPEC existe mas PLAN.md não — gere o plano com verificação por tarefa${rfcHint ? ` (${rfcHint})` : ''}`,
       artifacts: ['.oxe/PLAN.md'],
     };
   }
@@ -2517,7 +2588,10 @@ function suggestNextStep(target, cfg = {}) {
       artifacts: ['.oxe/PLAN.md', '.oxe/PLAN-REVIEW.md', '.oxe/STATE.md'],
     };
   }
-  if (phase === 'plan_ready' && (!reviewStatus || reviewStatus === 'draft' || reviewStatus === 'in_review')) {
+  // item 6: plan_review_status is only written by the dashboard; the review is a step only when the project asks for
+  // it (review.plan_required: true in the config) or a review was started (draft / in_review)
+  const reviewRequired = Boolean(cfg.review && typeof cfg.review === 'object' && cfg.review.plan_required === true);
+  if (phase === 'plan_ready' && ((reviewRequired && !reviewStatus) || reviewStatus === 'draft' || reviewStatus === 'in_review')) {
     return {
       step: 'dashboard',
       cursorCmd: '/oxe-dashboard',
@@ -2551,6 +2625,18 @@ function suggestNextStep(target, cfg = {}) {
     };
   }
 
+  // item 1 (sem programa): todas as tarefas do PLAN.json feitas → /oxe-verify, não /oxe-execute de novo
+  let planWork = null;
+  try { planWork = operational.runtimePhaseWork(target, activeSession); } catch { planWork = null; }
+  if (!has(p.verify) && planWork && planWork.complete) {
+    return {
+      step: 'verify',
+      cursorCmd: '/oxe-verify',
+      reason: 'Todas as tarefas do plano concluídas — rode /oxe-verify (valida os critérios e fecha o ciclo com a retro automática)',
+      artifacts: ['.oxe/PLAN.json', '.oxe/VERIFY.md'],
+    };
+  }
+
   if (!has(p.verify)) {
     return {
       step: 'execute',
@@ -2562,7 +2648,10 @@ function suggestNextStep(target, cfg = {}) {
 
   const verifyText = fs.readFileSync(p.verify, 'utf8');
   const phaseLow = (phase || '').toLowerCase();
-  if (phaseLow === 'verify_failed' || /\bverify_failed\b/i.test(stateText)) {
+  // the STATE template of init-oxe lists every phase in one legend line ("`plan_ready` | … | `verify_failed`"): that
+  // line is not the state — only a line naming verify_failed alone counts (or the parsed phase)
+  const failedLine = stateText.split(/\r?\n/).some((l) => /\bverify_failed\b/i.test(l) && !/\|/.test(l));
+  if (phaseLow === 'verify_failed' || failedLine) {
     return {
       step: 'plan',
       cursorCmd: '/oxe-plan',
@@ -2597,26 +2686,136 @@ function suggestNextStep(target, cfg = {}) {
     };
   }
 
-  // Após verify_complete, sugerir retro se LESSONS.md não existe ou last_retro ausente no STATE
-  if (phaseLow === 'verify_complete' || /\bverify_complete\b/i.test(stateText)) {
-    const lessonsExist = has(path.join(target, '.oxe', 'LESSONS.md'));
-    const hasRetroInState = /\blast_retro\s*:/i.test(stateText);
-    if (!lessonsExist || !hasRetroInState) {
-      return {
-        step: 'retro',
-        cursorCmd: '/oxe-retro',
-        reason: 'Verify completo — capture as lições do ciclo em .oxe/LESSONS.md para orientar o próximo spec/plan',
-        artifacts: ['.oxe/LESSONS.md'],
-      };
-    }
-  }
+  // Item 2: verify verde sem programa → entregar (/oxe-ship); a retro é automática no /oxe-verify, não um passo.
+  return deliveryCycleStep(target, activeSession, p, cfg, planWork);
+}
 
-  return {
+/**
+ * Sem programa, depois de um verify verde: a entrega do ciclo (SPEC/PLAN inteiro) e o seu fechamento.
+ * - um PLAN (ou SPEC) escrito depois do VERIFY é o ciclo seguinte já em curso: execute / verify / plan;
+ * - um CR aberto (defeito, spec_gap, constraint) → /oxe-plan --replan;
+ * - delivery.mode "pr": PR → CI/merge → deploy (oxe-journey deliveryStep, sem fase);
+ * - local: /oxe-ship (commit local, .oxe/commit-record.json);
+ * - entregue → ciclo fechado: step "next", /oxe-spec (ou /oxe-quick) para a próxima demanda.
+ */
+function deliveryCycleStep(target, activeSession, p, cfg, planWork) {
+  const mtimeOf = (f) => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } };
+  const verifyAt = mtimeOf(p.verify);
+  const planAt = mtimeOf(p.plan);
+  if (planAt > verifyAt + 2000) {
+    return planWork && planWork.complete
+      ? { step: 'verify', cursorCmd: '/oxe-verify', reason: 'Plano novo depois do último verify, com as tarefas concluídas — rode /oxe-verify', artifacts: ['.oxe/PLAN.json', '.oxe/VERIFY.md'] }
+      : { step: 'execute', cursorCmd: '/oxe-execute', reason: 'Plano novo depois do último verify — execute as tarefas; depois /oxe-verify', artifacts: ['.oxe/PLAN.md', '.oxe/STATE.md'] };
+  }
+  if (mtimeOf(p.spec) > verifyAt + 2000) {
+    return { step: 'plan', cursorCmd: '/oxe-plan', reason: 'SPEC nova depois da última entrega — planeje a nova demanda com /oxe-plan', artifacts: ['.oxe/SPEC.md', '.oxe/PLAN.md'] };
+  }
+  let openCr = null;
+  try { openCr = openChangeStep(target, activeSession, 'Verify verde'); } catch { openCr = null; }
+  if (openCr) return openCr;
+  const journeyLib = require('./oxe-journey.cjs');
+  const merged = { ...(readJsonFileSafe(path.join(target, 'oxe.config.json')).data || {}), ...(readJsonFileSafe(path.join(target, '.oxe', 'config.json')).data || {}), ...(cfg || {}) };
+  const mode = journeyLib.deliveryMode(merged);
+  const closedStep = (how) => ({
     step: 'next',
-    cursorCmd: '/oxe-next',
-    reason: 'Artefatos coerentes — /oxe-next confirma o passo único; use /oxe-spec ou /oxe-quick para nova entrega',
-    artifacts: ['.oxe/STATE.md', '.oxe/VERIFY.md'],
+    cursorCmd: '/oxe-spec',
+    reason: `Ciclo entregue (${how}) — nada pendente. Nova demanda: /oxe-spec (ou /oxe-quick para tarefa pequena).`,
+    artifacts: ['.oxe/VERIFY.md', '.oxe/STATE.md'],
+    delivered: true,
+  });
+  if (mode.mode === 'pr') {
+    const since = planAt ? new Date(planAt - 1000).toISOString() : null;
+    let d = null;
+    try { d = journeyLib.deliveryStep(target, activeSession, { id: null, started_at: since }, { label: 'Verify verde', cfg: merged }); } catch { d = null; }
+    if (d) return d;
+    return closedStep(`PR com merge${mode.deploy_env ? ` e deploy em ${mode.deploy_env}` : ''}`);
+  }
+  const record = path.join(target, '.oxe', 'commit-record.json');
+  if (fs.existsSync(record) && mtimeOf(record) + 1000 >= verifyAt) {
+    const rec = readJsonFileSafe(record).data || {};
+    return closedStep(`commit local${rec.sha ? ` ${String(rec.sha).slice(0, 9)}` : ''}`);
+  }
+  return {
+    step: 'ship',
+    cursorCmd: '/oxe-ship',
+    reason: 'Verify verde — entregar com /oxe-ship (sem delivery.mode "pr" é o commit local com a mensagem de SPEC/PLAN/VERIFY, --local; a retro já rodou no verify)',
+    artifacts: ['.oxe/VERIFY.md', '.oxe/commit-record.json'],
   };
+}
+
+/**
+ * Achados 1 e 6 (revisão 21/11): a entrega de um quick concluído, pelo `delivery.mode`.
+ * - null: nada do quick a entregar (sem commits), ou uma demanda mais nova já em curso — SPEC/PLAN escritos depois do
+ *   `closed_at` — ou um `/oxe-ship --local` (commit-record.json) posterior: o roteamento normal segue;
+ * - local (padrão): os commits do quick já são a entrega local → `{ delivered: true, how }` (ciclo fechado);
+ * - pr: sem PR → `oxe-cc quick promote --open-pr` (só numa branch ≠ base; na base, criar a branch antes); com PR →
+ *   o mesmo caminho do deliveryStep: CI/merge (`ship status`), deploy quando `deploy_env`, e só então fechado.
+ */
+function quickDeliveryStep(target, activeSession, q, p, cfg = {}) {
+  if (!q || q.status !== 'done') return null;
+  const commits = Array.isArray(q.commits) ? q.commits.length : 0;
+  if (!commits && !q.pr) return null;
+  const closedAt = Date.parse(q.closed_at || q.started_at || '') || 0;
+  const mtimeOf = (f) => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } };
+  if (closedAt && ((p.spec && mtimeOf(p.spec) > closedAt + 1000) || (p.plan && mtimeOf(p.plan) > closedAt + 1000))) return null;
+  const label = `Quick ${q.id}${q.key ? ` (${q.key})` : ''}`;
+  const record = path.join(target, '.oxe', 'commit-record.json');
+  if (closedAt && mtimeOf(record) >= closedAt) {
+    const rec = readJsonFileSafe(record).data || {};
+    return { delivered: true, how: `commit local${rec.sha ? ` ${String(rec.sha).slice(0, 9)}` : ''}` };
+  }
+  const journeyLib = require('./oxe-journey.cjs');
+  const merged = { ...(readJsonFileSafe(path.join(target, 'oxe.config.json')).data || {}), ...(readJsonFileSafe(path.join(target, '.oxe', 'config.json')).data || {}), ...(cfg || {}) };
+  const mode = journeyLib.deliveryMode(merged);
+  if (mode.mode !== 'pr') return { delivered: true, how: `${commits} commit(s) local(is)` };
+  const artifacts = ['.oxe/QUICK.md', `.oxe/quick/${q.id}.json`];
+  let d = null;
+  try { d = journeyLib.deliveryStep(target, activeSession, { id: null, started_at: q.started_at || null }, { label, cfg: merged, quick: q.id }); } catch { d = null; }
+  if (d && d.step === 'ship') {
+    // a PR in the record but no QuickPromoted event (older record): it is open until the merge is recorded
+    if (q.pr) return { step: 'ship-wait', cursorCmd: 'oxe-cc ship status', reason: `${label}: PR aberto (${q.pr}) — acompanhe o CI e o merge; oxe-cc ship status confere de novo.`, artifacts };
+    const qlib = require('./oxe-quick.cjs');
+    const branch = qlib.currentBranchOf(target);
+    const base = qlib.baseBranchOf(target, merged);
+    if (branch && branch === base) {
+      return { step: 'ship', cursorCmd: '/oxe-ship', reason: `${label} concluído na branch base (${base}) com delivery.mode "pr" — o PR precisa de uma branch: crie-a com os commits do quick (git switch -c <branch>) e rode oxe-cc quick promote --open-pr; para entregar só localmente, /oxe-ship --local.`, artifacts };
+    }
+    return { step: 'ship', cursorCmd: 'oxe-cc quick promote --open-pr', reason: `${label} concluído na branch ${branch || 'atual'} — abra o PR com oxe-cc quick promote --open-pr (--dry-run para revisar antes); depois CI, merge${mode.deploy_env ? ` e deploy em ${mode.deploy_env}` : ''}.`, artifacts };
+  }
+  if (d) return { ...d, artifacts };
+  return { delivered: true, how: `PR${q.pr ? ` ${q.pr}` : ''} com merge${mode.deploy_env ? ` e deploy em ${mode.deploy_env}` : ''}` };
+}
+
+/** Item 8: um CR aberto (não new_scope) é o próximo passo — cobrir com teste de aceite e replanejar só o impactado. */
+function openChangeStep(target, activeSession, label) {
+  let open = [];
+  try { open = operational.runtimeChanges(target, activeSession).filter((cr) => cr && cr.status === 'open' && cr.class !== 'new_scope'); } catch { open = []; }
+  if (!open.length) return null;
+  return {
+    step: 'plan',
+    cursorCmd: '/oxe-plan --replan',
+    reason: `${label}, mas há ${open.length} change request(s) aberto(s) — ${open.slice(0, 4).map((cr) => `${cr.id} ${cr.class}`).join(', ')}. Planeje o teste de aceite que reproduz/resolve cada um (resolves) e só as tarefas impactadas.`,
+    artifacts: ['.oxe/program/changes.ndjson'],
+  };
+}
+
+/** Item 9: o quick do QUICK.md (pelo cabeçalho <!-- oxe-quick: Q-… -->) quando já não está aberto; null senão. */
+function closedQuickOf(target, p) {
+  try {
+    if (!p.quick || !fs.existsSync(p.quick)) return null;
+    const m = /<!--\s*oxe-quick:\s*(Q-\d{8}-[a-z0-9]{4})/.exec(fs.readFileSync(p.quick, 'utf8'));
+    if (!m) return null;
+    const rec = require('./oxe-quick.cjs').read(target, m[1]);
+    return rec && rec.status && rec.status !== 'open' ? rec : null;
+  } catch { return null; }
+}
+
+/** Item 4: há código no repo além do .oxe/ e de documentos (brownfield) — só então um scan faz sentido. */
+function looksBrownfield(target) {
+  try {
+    const skip = /^(?:\..*|node_modules|README.*|LICENSE.*|CHANGELOG.*|.*\.md)$/i;
+    return fs.readdirSync(target).some((n) => !skip.test(n));
+  } catch { return false; }
 }
 
 /**
@@ -2741,6 +2940,10 @@ function buildHealthReport(target) {
     discuss_before_plan: config.discuss_before_plan,
     plan_confidence_threshold: threshold,
     azure: config.azure,
+    // only the keys the config has: an undefined key would hide the file's value where the config is merged again
+    ...(config.review !== undefined ? { review: config.review } : {}),
+    ...(config.delivery !== undefined ? { delivery: config.delivery } : {}),
+    ...(config.rfc !== undefined ? { rfc: config.rfc } : {}),
   });
   /** @type {string[]} */
   const contextWarn = [];
@@ -3118,6 +3321,9 @@ module.exports = {
   detectWorkspaceMode,
   shouldSuppressExecutionWorkspaceGates,
   suggestNextStep,
+  deliveryCycleStep,
+  openChangeStep,
+  resolvedReadableOxePaths,
   buildHealthReport,
   buildStatusSummary,
   agentSkillsReport,

@@ -18,11 +18,30 @@ const path = require('path');
 // not behavior — "(OXE-104)" made 104 look like a status code the test had to exercise.
 const ITEM_KEY_RE = /\b[A-Z][A-Z0-9]+-\d+\b|\bAB#\d+\b/g;
 
+const NON_STATUS_UNIT_RE = /^\s*(?:ms|s|min|h|mb|gb|kb|tb|px|pt|rem|em|vh|vw|fps|hz|dpi|itens|items|linhas|lines|arquivos|files|caracteres|chars|bytes|palavras|words|segundos|minutos|dias)\b/i;
+
+const CODE_LIKE_SPAN_RE = /[/.\\_()[\]{}:=$<>@]|--|\b[a-z]+[A-Z][A-Za-z0-9]*\b|\b[A-Z]{2,}(?:_[A-Z0-9]+)+\b/;
+
+function isPlausibleCodeSpan(span) {
+  const s = String(span || '').trim();
+  if (!s) return false;
+  if (!/\s/.test(s)) return true;
+  return CODE_LIKE_SPAN_RE.test(s);
+}
+
 function verifiableTerms(criterionText) {
   const text = String(criterionText || '');
   const terms = new Set();
-  for (const m of text.replace(ITEM_KEY_RE, ' ').matchAll(/(?<![\w.])([1-5]\d\d)(?![\w.])/g)) terms.add(m[1]);
-  for (const m of text.matchAll(/`([^`]{2,60})`/g)) terms.add(m[1].trim());
+  const scrubbed = text.replace(ITEM_KEY_RE, ' ');
+  for (const m of scrubbed.matchAll(/(?<![#\w.])([1-5]\d\d)(?![\w.%])/g)) {
+    const after = scrubbed.slice(m.index + m[0].length);
+    if (NON_STATUS_UNIT_RE.test(after)) continue;
+    terms.add(m[1]);
+  }
+  for (const m of text.matchAll(/`([^`]{2,60})`/g)) {
+    const span = m[1].trim();
+    if (isPlausibleCodeSpan(span)) terms.add(span);
+  }
   for (const m of text.matchAll(/"([^"]{2,60})"/g)) terms.add(m[1].trim());
   return [...terms].filter((t) => t && !new RegExp(`^(?:${ITEM_KEY_RE.source})$`).test(t));
 }

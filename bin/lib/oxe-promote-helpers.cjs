@@ -210,7 +210,16 @@ function selectPromoteQuickCommits(projectRoot, {
       cardWindowMatch = meta.idx > lowerBound && meta.idx < upperBound;
     }
 
-    if (!directTaskMatch && !cardWindowMatch) continue;
+    if (!directTaskMatch && !cardWindowMatch) {
+      // OXB-C23-1 (152chat T9, b14246ae3): a quick outside the card window that still changes the task's own files
+      // is never dropped in silence — the PR would lack the feature.
+      const own = meta.files.filter((f) => inOwnScope(f));
+      if (own.length) {
+        warnings.push(`quick ${sha.slice(0, 8)} (${quickId}${quickCard ? `, ${quickCard}` : ''}) mexe nos arquivos de ${[...idSet].join(',')} (${own.slice(0, 4).join(', ')}) e não vai no PR: fora da janela do cartão/sem citar a tarefa — confira; se for da tarefa, cite ${[...idSet].join(',')} no quick (OXE-Task) ou leve o commit à mão [OXB-C23-1]`);
+        skipped.push({ sha, quick: quickId, card: quickCard, reason: 'outside_card_window', own_files: own });
+      }
+      continue;
+    }
 
     // Check if this quick touches files belonging to ANOTHER task
     const foreignTouches = [];

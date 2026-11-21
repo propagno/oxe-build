@@ -1189,6 +1189,8 @@ function build(inputs, ctx = {}) {
     for (const f of ['deleted', 'created', 'edited']) {
       cur[f].push(...expandRolePaths(root, ref, rolePathList(t, f)));
     }
+    // OXB-C24-3: `swept` (existing tests the task updates, no symbols needed) on ANY task, not only removals
+    cur.swept.push(...expandRolePaths(root, ref, rolePathList(t, 'swept')));
     cur.moves.push(...(Array.isArray(t.moves) ? t.moves : []));
     roleByKey.set(k, cur);
   }
@@ -1372,6 +1374,10 @@ function build(inputs, ctx = {}) {
       warnings.push(...fsg.fileSizeHeadroomMessages(annotated.findings).warnings);
     }
   } catch { /* */ }
+  // OXB-C25: the preflight needs `ready: true`; without it, execute stopped on execution_rationality:not_ready with an
+  // empty gap list while plan lint said ok. The build's own checks decide it.
+  pack.ready = errors.length === 0;
+  pack.critical_gaps = [];
   return { plan, pack, planMd: renderPlanMd(plan, ctx.phase), errors, warnings, map: res.map, paired, notices_gate: noticesGate };
 }
 

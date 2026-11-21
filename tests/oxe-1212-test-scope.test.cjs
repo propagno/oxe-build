@@ -78,7 +78,7 @@ describe('OXB-171: frozen test needs vs the task scope', () => {
     const verify = 'node -e "console.error(\'FAIL tests/acceptance/f2/r4-removal.test.js > its IPC channel groups are gone\'); console.error(\'AssertionError: expected [ \\\'rtk\\\' ] to deeply equal []\'); process.exit(1)"';
     const dir = project({ tasks: [{ id: 'T8', title: 'R4', wave: 1, files: ['electron/main/rtk/remove.ts'], acceptance: ['A1'], verify: { commands: [verify] } }] });
     let calls = 0;
-    const executor = { async execute() { calls += 1; fs.writeFileSync(path.join(dir, 'electron', 'main', 'rtk', 'remove.ts'), 'export {};\n'); return { success: true, failure_class: null, evidence: [], output: 'ok', completed_by: 'finish_task' }; } };
+    const executor = { async execute() { calls += 1; fs.writeFileSync(path.join(dir, 'electron', 'main', 'rtk', 'remove.ts'), 'export {};\n'); return { success: true, failure_class: null, evidence: [], output: 'removi o rtk; os grupos de canais vêm de shared/types/ipc.ts', completed_by: 'finish_task' }; } };
     await op.runRuntimeExecute(dir, null, { executor, skipPreflight: true, maxRetries: 2 });
     assert.equal(calls, 1, 'no retry of a task that cannot pass');
     const events = op.readEvents(dir, null);
@@ -91,6 +91,18 @@ describe('OXB-171: frozen test needs vs the task scope', () => {
     assert.equal(blocked.payload.failure_class, 'scope_insufficient');
     const vc = events.find((e) => e.type === 'VerificationCompleted' && e.payload.failed_segment);
     assert.match(vc.payload.failed_segment.output_tail, /AssertionError/, 'failed_segment carries the output tail');
+  });
+
+  it('OXB-C27-1: an out-of-scope import alone is not scope_insufficient (a fixture defect is retried, then verify_suspect)', async () => {
+    const verify = 'node -e "console.error(\'FAIL tests/acceptance/f2/r4-removal.test.js > renders twice\'); console.error(\'AssertionError: expected 2 sections, got 4 (module state not reset)\'); process.exit(1)"';
+    const dir = project({ tasks: [{ id: 'T8', title: 'R4', wave: 1, files: ['electron/main/rtk/remove.ts'], acceptance: ['A1'], verify: { commands: [verify] } }] });
+    let calls = 0;
+    const executor = { async execute() { calls += 1; fs.writeFileSync(path.join(dir, 'electron', 'main', 'rtk', 'remove.ts'), `export const n = ${calls};\n`); return { success: true, failure_class: null, evidence: [], output: 'feito', completed_by: 'finish_task' }; } };
+    await op.runRuntimeExecute(dir, null, { executor, skipPreflight: true, maxRetries: 2 });
+    const events = op.readEvents(dir, null);
+    assert.ok(!events.some((e) => e.type === 'ScopeInsufficient'), 'no ScopeInsufficient without the file in the stack or the agent output');
+    assert.ok(calls >= 2, `retried (calls=${calls})`);
+    assert.ok(events.some((e) => e.type === 'VerifyCommandSuspect'), 'the repeated failure is a suspect verify');
   });
 
   it('a file the task creates, imported without extension, is in scope (files: menu.tsx, test imports …/menu)', () => {

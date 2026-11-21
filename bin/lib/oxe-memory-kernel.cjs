@@ -85,9 +85,11 @@ function retrieveMemory(projectRoot, intentTags, phase, objective) {
 
   // Layer 2: session_memory (read active session from STATE.md)
   if (layers.runtime_state) {
-    const sessionMatch = layers.runtime_state.match(/active_session:\s*(.+)/);
-    if (sessionMatch && sessionMatch[1].trim() !== '—') {
-      const sessionPath = sessionMatch[1].trim();
+    // both formats: `**active_session:** sessions/x` (session create) and `active_session: sessions/x`
+    const sessionMatch = layers.runtime_state.match(/^\s*(?:[-*]\s*)?(?:\*\*)?active_session(?:\*\*)?\s*:\s*(?:\*\*\s*)?`?([^\r\n`]+?)`?\s*$/im);
+    const sessionRaw = sessionMatch ? sessionMatch[1].trim() : '';
+    if (sessionRaw && sessionRaw !== '—' && !/^none$/i.test(sessionRaw)) {
+      const sessionPath = sessionRaw.replace(/\\/g, '/');
       layers.session_memory = readFileSafe(path.join(projectRoot, sessionPath, 'SESSION.md'))
         || readFileSafe(path.join(projectRoot, '.oxe', sessionPath, 'SESSION.md'));
     }

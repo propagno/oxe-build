@@ -8,6 +8,7 @@ exports.resolveWithin = resolveWithin;
 exports.realPathOf = realPathOf;
 exports.samePathKey = samePathKey;
 exports.windowsNullRedirects = windowsNullRedirects;
+exports.setFinishTaskGuard = setFinishTaskGuard;
 exports.setQuestionResolver = setQuestionResolver;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
@@ -428,7 +429,15 @@ function runShell(command, cwd, timeoutMs) {
         proc.on('error', (err) => { clearTimeout(timer); resolve(`[error] ${err}`); });
     });
 }
-// ─── finish_task ──────────────────────────────────────────────────────────────
+let finishTaskGuard = null;
+/**
+ * OXB-C1 Adendo 2: optional synchronous guard checked inside `finish_task` (e.g. file-size cap check)
+ * so oversized files fail inside the SAME executor attempt for free instead of ending the attempt and
+ * paying for a second attempt after checkpoint failure.
+ */
+function setFinishTaskGuard(fn) {
+    finishTaskGuard = fn;
+}
 const finishTask = {
     idempotent: true,
     schema: {
@@ -446,7 +455,21 @@ const finishTask = {
             },
         },
     },
-    async execute(args, _cwd) {
+    async execute(args, cwd) {
+        if (finishTaskGuard) {
+            try {
+                const res = finishTaskGuard(cwd, args);
+                if (res && res.ok === false) {
+                    return JSON.stringify({
+                        __finish_task__: false,
+                        error: String(res.error || 'finish_task recusado pela validação pré-conclusão'),
+                    });
+                }
+            }
+            catch {
+                // Guard failure must never crash the tool handler
+            }
+        }
         return JSON.stringify({
             __finish_task__: true,
             summary: String(args.summary || ''),

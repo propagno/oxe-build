@@ -146,6 +146,38 @@ function childMain(timeoutMs, command) {
 
 if (require.main === module) childMain(Number(process.argv[2]) || 120_000, process.argv.slice(3).join(' '));
 
+/** OXB-C27-2: a frozen e2e (Playwright/Cypress, an e2e path, or a remote-verify run). */
+function isE2e(entry) {
+  const files = (entry && entry.files || []).map((f) => norm(typeof f === 'string' ? f : f && f.path)).join(' ');
+  const cmd = String(entry && entry.command || '');
+  return isRemoteVerify(cmd) || /\b(playwright|cypress|wdio|detox)\b/i.test(cmd) || /(^|[\s/._-])e2e([\s/._-]|$)/i.test(`${cmd} ${files}`);
+}
+
+// Red for a setup reason: the app/browser never got to the contract. Definitive ones block; a selector the task may
+// still create is reported (and blocks with lint.precheck_e2e_selector: "error").
+const SETUP_HARD_RE = /(browserType\.launch|Failed to launch|ECONNREFUSED|net::ERR_CONNECTION_REFUSED|Cannot find module|ERR_MODULE_NOT_FOUND|webServer.*(exited|timed out)|Error: (before|after)(All|Each)? hook|"before (all|each)" hook|beforeAll hook|global ?setup)/i;
+const SETUP_SELECTOR_RE = /(waiting for (locator|selector|getBy\w+)\(([^\n]{0,160})|locator\.\w+: Timeout [\d,.]+ ?ms exceeded[^\n]*|element\(s\) not found|Unable to find an? (accessible )?element[^\n]*|No element (found|matches)[^\n]*|strict mode violation[^\n]*)/i;
+const ASSERTION_RE = /(AssertionError|toEqual|toStrictEqual|toBe\(|toHaveText|toHaveCount|toHaveValue|toContainText|deepStrictEqual|Expected[:\s][^\n]*\n\s*Received[:\s](?![^\n]*element\(s\) not found))/;
+
+/** OXB-C27-2: why a red run is red — 'assertion', 'setup' (hard) or 'selector', with the line that says so. */
+function redReason(output) {
+  const out = String(output || '');
+  const hard = SETUP_HARD_RE.exec(out);
+  if (hard) return { kind: 'setup', line: lineOf(out, hard.index) };
+  const sel = SETUP_SELECTOR_RE.exec(out);
+  if (sel && !ASSERTION_RE.test(out.replace(/Expected[^\n]*\n\s*Received[^\n]*element\(s\) not found[^\n]*/g, ''))) {
+    const s = /(getBy\w+\([^)]*\)|locator\([^)]*\)|\[data-testid=[^\]]+\])/.exec(sel[0]) || /(getBy\w+\([^)]*\)|locator\([^)]*\)|\[data-testid=[^\]]+\])/.exec(out);
+    return { kind: 'selector', line: lineOf(out, sel.index), selector: s ? s[1] : null };
+  }
+  if (ASSERTION_RE.test(out)) return { kind: 'assertion', line: null };
+  return { kind: 'unknown', line: null };
+}
+function lineOf(text, index) {
+  const start = text.lastIndexOf('\n', index) + 1;
+  const end = text.indexOf('\n', index);
+  return text.slice(start, end < 0 ? undefined : end).trim().slice(0, 240);
+}
+
 function resultNames(output) {
   let ex = null;
   try { ex = require('../../lib/runtime/index.js').extractTestResults; } catch { ex = null; }
@@ -304,7 +336,8 @@ function precheck(root, doc, pack, options = {}) {
       // is not the test's. Remote: 30 min by default, one run (no CI quota doubled), and a timeout is a warning.
       const resolved = resolveTimeout(a.command, a.timeout_ms, options.timeoutMs);
       const { remote, timeoutMs } = resolved;
-      const n = remote ? 1 : runs;
+      const e2eMode = mode === 'e2e';
+      const n = remote || e2eMode ? 1 : runs;
       const note = remote
         ? `teste de aceite ${id}${a.task ? ` (${a.task})` : ''}: ${resolved.reason}`
         : Number(options.timeoutMs) > 0
@@ -317,9 +350,11 @@ function precheck(root, doc, pack, options = {}) {
       details.push({ criterion: a.criterion || null, id, task: a.task || null, command: a.command, remote, runs: n, timeout_ms: timeoutMs, timeout_reason: resolved.reason });
       const seen = [];
       let hang = null;
+      let last = null;
       for (let i = 0; i < n; i += 1) {
         const r = run(wt, a.command, timeoutMs);
         if (r.timedOut) { hang = r; break; }
+        last = r;
         seen.push(resultNames(r.output));
       }
       const base = { criterion: a.criterion, id, task: a.task || null, command: a.command };
@@ -338,6 +373,16 @@ function precheck(root, doc, pack, options = {}) {
           const passed = seen[0] ? seen[0].passed : [];
           if (proves.length && proves.every((p) => passed.some((n) => n.toLowerCase().includes(String(p).toLowerCase())))) {
             findings.push({ ...base, level: 'warn', kind: 'precheck_passes_on_stub', why: 'todos os testes nomeados passam contra o stub, sem a implementação — o teste não prova o critério' });
+          } else if (last && last.code !== 0 && (e2eMode || isE2e(a))) {
+            // OXB-C27-2 (polish2 pp-05-13, US$ 15.8): an e2e must be red on a contract assertion, not on setup
+            const why = redReason(last.output);
+            if (why.kind === 'setup') {
+              findings.push({ ...base, level: e2eMode ? 'error' : 'warn', kind: 'precheck_red_on_setup', line: why.line, why: `vermelho na montagem, não no contrato: "${why.line}" — nenhuma implementação faz este teste passar; corrija o teste antes do execute` });
+            } else if (why.kind === 'selector') {
+              findings.push({ ...base, level: e2eMode && options.selectorLevel === 'error' ? 'error' : 'warn', kind: 'precheck_red_on_selector', line: why.line, selector: why.selector, why: `vermelho num seletor${why.selector ? ` (${why.selector})` : ''} antes de qualquer asserção: "${why.line}" — confirme que a tarefa cria esse elemento neste app (senão o teste é impossível)` });
+            } else if (why.kind === 'unknown' && e2eMode) {
+              findings.push({ ...base, level: 'warn', kind: 'precheck_red_unclassified', why: 'vermelho sem asserção reconhecível na saída — confira o motivo antes do execute' });
+            }
           }
         }
       }
@@ -449,6 +494,8 @@ module.exports = {
   DEFAULT_TIMEOUT_MS,
   REMOTE_VERIFY_TIMEOUT_MS,
   isRemoteVerify,
+  isE2e,
+  redReason,
   resolveTimeout,
   sha256Lf,
   readPrecheckCache,

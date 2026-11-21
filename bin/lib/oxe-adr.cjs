@@ -99,11 +99,22 @@ function renderIndex(decisions, fileMap = null) {
  * Writes the ADR files and the README index. Spikes (D-SPIKE-*) are evidence of a task, not architecture: left out.
  * @returns {{ dir: string, written: string[], unchanged: number }}
  */
-function publish(projectRoot, dirRel, decisions) {
-  const dir = path.resolve(projectRoot, dirRel);
-  const rel = path.relative(path.join(projectRoot, '.oxe'), dir);
-  if (!rel.startsWith('..') && !path.isAbsolute(rel)) throw new Error('a pasta dos ADRs não pode ficar dentro de .oxe/ (ela existe para ser versionada)');
-  if (path.relative(path.resolve(projectRoot), dir) === '') throw new Error('a pasta dos ADRs não pode ser a raiz do projeto (ex.: docs/adr)');
+function publish(projectRoot, dirRel, decisions, options = {}) {
+  const rootAbs = path.resolve(projectRoot);
+  const dir = path.resolve(rootAbs, String(dirRel || 'docs/adr'));
+  const relRoot = path.relative(rootAbs, dir);
+  if (relRoot.startsWith('..') || path.isAbsolute(relRoot)) {
+    throw new Error('a pasta dos ADRs não pode ficar fora da raiz do projeto');
+  }
+  if (relRoot === '') throw new Error('a pasta dos ADRs não pode ser a raiz do projeto (ex.: docs/adr)');
+  const relOxe = path.relative(path.join(rootAbs, '.oxe'), dir);
+  if (!options.allowOxeDir && !relOxe.startsWith('..') && !path.isAbsolute(relOxe)) {
+    throw new Error('a pasta dos ADRs não pode ficar dentro de .oxe/ (ela existe para ser versionada)');
+  }
+  const relGit = path.relative(path.join(rootAbs, '.git'), dir);
+  if (!relGit.startsWith('..') && !path.isAbsolute(relGit)) {
+    throw new Error('a pasta dos ADRs não pode ficar dentro de .git/');
+  }
   const list = decisions.filter((d) => d && d.id && !/^D-SPIKE-/.test(d.id)).sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')) || String(a.id).localeCompare(String(b.id)));
   // No decision → no file: an empty index is noise in somebody's commit (oxespace-152-code F1 close).
   if (!list.length) return { dir: path.relative(projectRoot, dir).replace(/\\/g, '/'), written: [], unchanged: 0 };

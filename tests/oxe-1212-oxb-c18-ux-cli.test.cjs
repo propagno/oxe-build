@@ -8,6 +8,8 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const CLI = path.join(__dirname, '..', 'bin', 'oxe-cc.js');
+// a test never reaches a real ALM: the spawned CLI gets an environment without the ALM credentials of this machine
+const NO_ALM_ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(JIRA_|AZURE_|AZDO_|OXE_ALM_)/i.test(k)));
 const prs = require('../bin/lib/oxe-alm-prs.cjs');
 const op = require('../bin/lib/oxe-operational.cjs');
 const health = require('../bin/lib/oxe-project-health.cjs');
@@ -135,7 +137,7 @@ describe('OXB-C18: 6 UX/CLI improvements from 42-PR quick/ship/alm + OxeChat F5 
     git(mainDir, 'worktree', 'add', '-q', '-b', 'wt-cur', curDir);
     writeRel(curDir, '.oxe/config.json', { profile: 'balanced' });
 
-    const r = spawnSync(process.execPath, [CLI, 'quick', 'OXE-10', 'Test worktree ALM inheritance', '--plain', '--dir', curDir], { encoding: 'utf8', windowsHide: true });
+    const r = spawnSync(process.execPath, [CLI, 'quick', 'OXE-10', 'Test worktree ALM inheritance', '--plain', '--dir', curDir], { encoding: 'utf8', windowsHide: true, env: NO_ALM_ENV });
     assert.equal(r.status, 0, r.stderr + r.stdout);
     assert.match(r.stdout, /ALM herdado da worktree principal/);
     assert.ok(r.stdout.includes(mainDir), `expected mainDir ${mainDir} in output:\n${r.stdout}`);

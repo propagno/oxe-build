@@ -4,9 +4,41 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.EphemeralContainerManager = void 0;
+exports.buildDockerRunArgs = buildDockerRunArgs;
 const child_process_1 = require("child_process");
 const crypto_1 = __importDefault(require("crypto"));
+const fs_1 = __importDefault(require("fs"));
+const path_1 = __importDefault(require("path"));
 const git_worktree_1 = require("./git-worktree");
+/** Build hardened `docker run` arguments with network isolation, control-plane read-only mounts, and resource caps. */
+function buildDockerRunArgs(projectRoot, opts) {
+    const envArgs = Object.entries(opts.extraEnv ?? {}).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
+    const networkArgs = ['--network', opts.networkMode || 'none'];
+    const resourceArgs = [
+        ...(opts.memoryLimit ? ['--memory', opts.memoryLimit] : []),
+        ...(opts.cpus ? ['--cpus', opts.cpus] : []),
+    ];
+    const roMounts = [];
+    if (opts.readOnlyControlPlane !== false) {
+        for (const rel of ['.oxe', '.github/workflows']) {
+            const abs = path_1.default.join(projectRoot, rel);
+            if (fs_1.default.existsSync(abs)) {
+                roMounts.push('-v', `${abs}:${opts.mountPath.replace(/\/+$/, '')}/${rel}:ro`);
+            }
+        }
+    }
+    return [
+        'run', '-d', '--rm',
+        ...networkArgs,
+        ...resourceArgs,
+        '-v', `${projectRoot}:${opts.mountPath}`,
+        ...roMounts,
+        '-w', opts.mountPath,
+        ...envArgs,
+        opts.image,
+        'sleep', '3600',
+    ];
+}
 function isDockerAvailable() {
     const result = (0, child_process_1.spawnSync)('docker', ['version', '--format', '{{.Server.Version}}'], {
         encoding: 'utf8',
@@ -37,16 +69,11 @@ class EphemeralContainerManager {
     async allocate(req) {
         if (this.useFallback)
             return this.fallbackManager.allocate(req);
-        const wsId = `ws-container-${req.work_item_id}-a${req.attempt_number}`;
-        const envArgs = Object.entries(this.opts.extraEnv ?? {}).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
-        const result = (0, child_process_1.spawnSync)('docker', [
-            'run', '-d',
-            '-v', `${this.projectRoot}:${this.opts.mountPath}`,
-            '-w', this.opts.mountPath,
-            ...envArgs,
-            this.opts.image,
-            'sleep', '3600',
-        ], { encoding: 'utf8' });
+        const safeWorkItem = String(req.work_item_id).replace(/[^A-Za-z0-9._-]/g, '-');
+        const suffix = crypto_1.default.randomBytes(3).toString('hex');
+        const wsId = `ws-container-${safeWorkItem}-a${req.attempt_number}-${suffix}`;
+        const dockerArgs = buildDockerRunArgs(this.projectRoot, this.opts);
+        const result = (0, child_process_1.spawnSync)('docker', dockerArgs, { encoding: 'utf8', windowsHide: true });
         if (result.status !== 0) {
             if (this.opts.fallback !== false) {
                 this.useFallback = true;

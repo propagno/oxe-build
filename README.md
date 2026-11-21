@@ -114,7 +114,7 @@ npx oxe-cc status --full
 /oxe adicionar importação de CSV com validação e histórico
 ```
 
-O Conductor classifica a complexidade, recupera contexto, seleciona personas e escolhe entre execução individual e Swarm Mode.
+O `/oxe` encaminha o objetivo: pequeno vai para `/oxe-quick`; o resto, para `/oxe-spec`. Cada etapa termina com **um** próximo passo, vindo de `oxe-cc status --json` (`nextStep`, `cursorCmd`, `reason`). Para o modo autônomo (Conductor, Agent ou Swarm Mode), peça explicitamente: "faz sozinho de ponta a ponta".
 
 ### 4. Ou controle o ciclo manualmente
 
@@ -123,6 +123,7 @@ O Conductor classifica a complexidade, recupera contexto, seleciona personas e e
 /oxe-plan
 /oxe-execute
 /oxe-verify
+/oxe-ship
 ```
 
 Ao terminar, o projeto contém não só a implementação, mas também os requisitos, decisões, evidências e lições que explicam como ela foi construída.
@@ -180,16 +181,19 @@ Use quando existirem três ou mais domínios, trabalho paralelo, risco operacion
 
 ## A trilha principal
 
-São seis comandos para o uso cotidiano:
+São sete comandos para o uso cotidiano (os mesmos do [AGENTS.md](AGENTS.md)):
 
 | Comando | Responsabilidade |
 |---|---|
-| `/oxe` | Entrada universal: situação, ajuda, pergunta contextual ou objetivo autônomo |
+| `/oxe` | Entrada universal: situação, ajuda, pergunta contextual ou objetivo (encaminha para quick ou spec) |
 | `/oxe-quick` | Demanda pequena com miniobjetivo, passos e verificação |
 | `/oxe-spec` | Perguntas → pesquisa opcional → requisitos → roteiro → aprovação |
 | `/oxe-plan` | Plano test-first por ondas; `--agents` gera blueprint multiagente |
 | `/oxe-execute` | Implementação completa, por onda ou por tarefa, com runtime tracking |
-| `/oxe-verify` | Critérios, evidências, integração, riscos, UAT e retrospectiva |
+| `/oxe-verify` | Critérios, evidências, integração, riscos, UAT e retrospectiva (automática) |
+| `/oxe-ship` | Entrega: PR → CI/merge → deploy → docs → close; `--local` só commita; `--defect` registra defeito pós-entrega |
+
+Toda etapa termina com **um** próximo passo, o de `oxe-cc status --json`; `oxe-cc status --journey` mostra o mapa da jornada.
 
 ### Flags que absorvem fluxos especializados
 
@@ -220,7 +224,7 @@ Os antigos comandos `scan`, `research`, `debug`, `forensics`, `checkpoint`, `sec
 
 ## Modo autônomo e agentes dinâmicos
 
-Quando recebe `/oxe <objetivo>`, o Conductor aplica uma heurística explícita:
+Quando o usuário pede explicitamente o modo autônomo (`/oxe <objetivo>` com "faz sozinho de ponta a ponta"), o Conductor aplica uma heurística explícita:
 
 | Complexidade | Sinal típico | Modo |
 |---|---|---|

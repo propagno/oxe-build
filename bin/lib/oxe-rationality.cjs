@@ -192,6 +192,9 @@ function summarizeImplementationPack(filePath, planTasks) {
   }
   if (data.ready === false) {
     criticalGaps.push('IMPLEMENTATION-PACK.json com ready=false');
+  } else if (data.ready !== true) {
+    // OXB-C25: a missing flag is a named gap, never an empty "not_ready"
+    criticalGaps.push('implementation_pack:ready missing — IMPLEMENTATION-PACK.json sem "ready": true (rode oxe-cc plan pack ready --by <papel>)');
   }
   if (Array.isArray(data.critical_gaps) && data.critical_gaps.length) {
     criticalGaps.push(...data.critical_gaps.map((gap) => `IMPLEMENTATION-PACK.json: ${String(gap)}`));

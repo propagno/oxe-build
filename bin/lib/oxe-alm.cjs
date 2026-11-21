@@ -198,6 +198,8 @@ async function request(ctx, method, url, body, extraHeaders = {}) {
       }
       if (r.status === 401) throw Object.assign(new Error('HTTP 401: credencial recusada (confira as variáveis de ambiente do ALM)'), { fatal: true });
       if (r.status === 403) throw Object.assign(new Error(`HTTP 403: sem permissão para ${method} ${url.replace(/\?.*$/, '')}`), { fatal: true });
+      // OXB-C28-9: a 404 names the call (quick start: comment or transition?) — the bare body did not say which write
+      if (r.status === 404) throw Object.assign(new Error(`HTTP 404 em ${method} ${String(url).replace(/^https?:\/\/[^/]+/, '').replace(/\?.*$/, '')}: ${String(r.text || '').slice(0, 300)} — o card existe e é visível para esta credencial (site e projeto do bloco "alm")?`), { fatal: true, status: 404 });
       if (r.status >= 400) throw Object.assign(new Error(`HTTP ${r.status}: ${String(r.text || '').slice(0, 300)}`), { fatal: true });
       return r.json;
     } catch (err) {
@@ -1000,6 +1002,9 @@ async function stageAtOrPast(programDir, cfg, key, stage, options = {}) {
 
 async function moveForward(programDir, cfg, key, stage, options = {}) {
   if (!cfg.states[stage]) return { skipped: true, why: `alm.states sem "${stage}": nada movido` };
+  // a dry run never touches the network, not even to read the card's live state (the same rule as `push`): it says
+  // what it would move; the "never backwards" check runs on the real write
+  if (options.dryRun || cfg.dry_run) return move(programDir, cfg, key, stage, options);
   const prov = options.provider || provider(cfg, options);
   const live = typeof prov.status === 'function' && !prov.deferred ? await prov.status(key) : null;
   const liveStage = STAGES.find((s) => cfg.states[s] && live && String(cfg.states[s]).toLowerCase() === String(live).toLowerCase()) || null;

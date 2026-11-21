@@ -4,22 +4,22 @@ Guia curto para quem usa só a trilha recomendada. O detalhe de cada passo está
 
 ## A jornada (SDLC), do zero ao deploy
 
-Cada etapa termina com **um** próximo passo (`oxe-cc status --json`), e `oxe-cc status --journey` mostra o mapa abaixo com o que já foi feito.
+Cada etapa termina com **um** próximo passo, o de `oxe-cc status --json` (campos `nextStep`, `cursorCmd` e `reason`), e `oxe-cc status --journey` mostra o mapa abaixo com o que já foi feito. Basta conhecer os 7 comandos da trilha principal (`/oxe`, `/oxe-quick`, `/oxe-spec`, `/oxe-plan`, `/oxe-execute`, `/oxe-verify`, `/oxe-ship`): os `oxe-cc …` da tabela aparecem sozinhos no próximo passo quando chega a vez deles.
 
 | # | Etapa | Você roda | O que sai | Pare aqui se… |
 |---|---|---|---|---|
 | 0 | Preparar | `/oxe` | `.oxe/`, scan e o próximo passo | — |
 | 1 | Descobrir | `/oxe-spec` | **grill**: uma pergunta por vez, cada uma com a resposta recomendada, até não sobrar ambiguidade (`.oxe/grill/GRILL.md`, retomável). Depois, SPEC (A* com **Risco** e **Como verificar**), ROADMAP, PRD (histórias US-n e métricas), GLOSSARY, decisões e ADRs, RFC em rascunho para P0/P1 | o `oxe-cc grill close` recusa (mostra o que falta) |
 | 2 | Validar | `oxe-cc spec check` → `spec probe` → `spec approve --by <papel>` | rastreabilidade R→A→US, glossário, bordas e proibições, aprovação registrada | há erro no check |
-| 3 | Programar | `/oxe` (`program start`) · `oxe-cc alm push --stories-only` | fases e, com ALM, épico e histórias no Jira ou no Azure DevOps | — |
-| 4 | Decidir | `/oxe-discuss` · `/oxe-discuss --rfc` | DISCUSS, RFC aceito ou recusado → D-NN e ADR | a fase tem P0/P1 sem RFC decidido |
+| 3 | Programar | só com ROADMAP de 2+ fases: `oxe-cc runtime program init` → `program start` · com ALM: `oxe-cc alm push --stories-only` | fases e, com ALM, épico e histórias no Jira ou no Azure DevOps | — (fase única pula esta etapa) |
+| 4 | Decidir (opcional) | `/oxe-discuss` · `/oxe-discuss --rfc`, quando o próximo passo apontar | DISCUSS, RFC aceito ou recusado → D-NN e ADR | a fase tem P0/P1 sem RFC decidido |
 | 5 | Planejar | `/oxe-plan` · `oxe-cc plan lint` · `alm push --tasks-only` | PLAN.json com testes de aceite congelados; tarefas no ALM | o lint tem erro |
 | 6 | Construir | `/oxe-execute` | uma tarefa por vez, com verify, checkpoint e a chave do ALM no commit | aparece **ATENÇÃO** no `oxe-cc status` |
-| 7 | Verificar | `/oxe-verify` | VERIFY, gates, regressão; checks pesados no CI (`verify.remote`); sign-off e dossiê | há um gate vermelho (vira CR sozinho) |
-| 8 | Entregar | `/oxe-ship` (`oxe-cc ship status`) | PR com a chave do ALM → CI e merge → deploy anexado → docs → `program close` | o CI está vermelho (não se faz merge) |
+| 7 | Verificar | `/oxe-verify` | VERIFY, gates, regressão, retro automática; checks pesados no CI (`verify.remote`); sign-off e dossiê. Verde → `/oxe-ship` | há um gate vermelho (vira CR sozinho) |
+| 8 | Entregar | `/oxe-ship` (`oxe-cc ship status`) | na 1ª entrega, pergunta o modo (`delivery` no config); PR com a chave do ALM → CI e merge → deploy anexado → docs → close (`program close` só com programa) | o CI está vermelho (não se faz merge) |
 | 9 | Operar | `/oxe-ship --defect "…" --origin US-n` · `/oxe "muda o A3"` | defeito no ALM e CR; mudanças pela trilha (`references/change-management.md`) | — |
 
-Para trabalho pequeno: `/oxe-quick`. Para uma spec rápida, sem o grill: `/oxe-spec --fast`. Sem `delivery.mode: "pr"`, a etapa 8 é o `program close` com commit local, como antes.
+Para trabalho pequeno: `/oxe-quick` → `oxe-cc quick done --verify "<comando>"` (fecha a quick) → `/oxe-ship`. Para uma spec rápida, sem o grill: `/oxe-spec --fast`. Com `delivery: { "mode": "local" }`, a etapa 8 é o commit local (`/oxe-ship --local`) e, com programa, o `program close`; sem programa, o ciclo fecha sem `program close`.
 
 ## Quando a execução para
 
@@ -67,7 +67,7 @@ Os opt-ins ficam em `.oxe/config.json`:
 
 ## Programa com várias fases
 
-- `oxe-cc program init` e depois `oxe-cc program start F1` começam o programa.
+- `oxe-cc runtime program init` e depois `oxe-cc runtime program start --phase F1` começam o programa (o próximo passo indica os dois).
 - Cada fase repete os passos 4 a 8.
 - A próxima fase recebe as interfaces congeladas e o handoff da anterior.
 - `oxe-cc program queue` diz o próximo item de cada papel.

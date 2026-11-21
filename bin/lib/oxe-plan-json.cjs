@@ -232,11 +232,18 @@ function declaredJvmTestTitles(text) {
  * without the case), and — when the table is a literal array of strings/numbers — every expanded name.
  */
 function eachTestTitles(text) {
-  const out = [];
+  return eachTestGroups(text).flatMap((g) => g.titles);
+}
+
+/** OXB-C28-3: each it/test/describe.each call with its position and kind (a full test name needs the describe chain). */
+function eachTestGroups(text) {
+  const groups = [];
   const src = blankCodeComments(text);
-  const re = /\b(?:it|test|describe)(?:\.(?:only|skip|concurrent))?\.each\s*/g;
+  const re = /\b(it|test|describe)(?:\.(?:only|skip|concurrent))?\.each\s*/g;
   let m;
   while ((m = re.exec(src))) {
+    const out = [];
+    groups.push({ at: m.index, kind: m[1], titles: out });
     let i = m.index + m[0].length;
     let table = null;
     if (src[i] === '(') {
@@ -275,15 +282,23 @@ function eachTestTitles(text) {
       }
     }
   }
-  return out;
+  return groups.filter((g) => g.titles.length);
 }
 
-function declaredTestTitles(text, file) {
+function declaredTestTitles(text, file, opts = {}) {
   if (file && /\.(kt|kts|java|groovy|scala)$/i.test(String(file))) return declaredJvmTestTitles(text);
   const src = blankCodeComments(text);
   const out = eachTestTitles(src);
   const re = /\b(?:it|test)(?!\.(?:describe|suite|step|beforeEach|afterEach|beforeAll|afterAll|before|after|use|info|expect|extend|setTimeout|configure)\b)(?:\.\w+)*\s*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
   for (const m of src.matchAll(re)) {
+    if (m[1] === '`' && m[2].includes('${')) continue;
+    out.push(m[2].replace(/\\(['"`\\])/g, '$1'));
+  }
+  // OXB-C21 #3: `plan lint` proves may name a describe()/suite() title (aligned with `alm refine lint`), but only when
+  // asked: spec freeze builds `proves` from the it/test titles alone (a suite title is not a test that runs).
+  if (!opts.includeSuites) return out;
+  const suiteRe = /\b(?:(?:it|test)\.)?(?:describe|suite)(?:\.(?:only|skip|concurrent|sequential|serial|parallel))*\s*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
+  for (const m of src.matchAll(suiteRe)) {
     if (m[1] === '`' && m[2].includes('${')) continue;
     out.push(m[2].replace(/\\(['"`\\])/g, '$1'));
   }
@@ -545,10 +560,14 @@ function amendFrozenTestInPlanJson(planMdPath, relPath, newSha, info = {}) {
       const idx = entry.files.findIndex((f) => String(f || '').replace(/\\/g, '/').replace(/^\.\//, '') === normTarget);
       if (idx < 0) continue;
       const canonicalFile = String(entry.files[idx]).replace(/\\/g, '/').replace(/^\.\//, '');
-      const prevSha = (entry.hashes && entry.hashes[canonicalFile])
+      const planStoredSha = (entry.hashes && entry.hashes[canonicalFile])
         || (entry.files.length === 1 && typeof entry.sha256 === 'string' ? entry.sha256 : null)
-        || info.previous_sha256
         || null;
+      // OXB-C21 #2: when PLAN.json already holds newSha while the run lock held the prior hash (e.g. after acceptance_tampered),
+      // prefer info.previous_sha256 so before/after logs show the real lock hash vs new disk hash instead of identical hashes.
+      const prevSha = (planStoredSha && planStoredSha !== newSha)
+        ? planStoredSha
+        : (info.previous_sha256 && info.previous_sha256 !== newSha ? info.previous_sha256 : (planStoredSha || info.previous_sha256 || null));
       if (entry.files.length === 1) {
         entry.sha256 = newSha;
       }
@@ -912,7 +931,7 @@ function lintPlan(input) {
       for (const file of entry.files || []) {
         let text = '';
         try { text = fs.readFileSync(path.resolve(input.projectRoot, file), 'utf8'); } catch { continue; }
-        declared.push(...declaredTestTitles(text, file));
+        declared.push(...declaredTestTitles(text, file, { includeSuites: true }));
       }
       if (declared.length) {
         const norm = (s) => String(s).toLowerCase().replace(/[›>]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -1057,6 +1076,7 @@ function markPlanTaskOpen(planMdPath, taskId, info = {}) {
 module.exports = {
   supersededCriteria,
   eachTestTitles,
+  eachTestGroups,
   markPlanTaskCheckpointFailed,
   markPlanTaskStarted,
   clearPlanTaskInProgress,

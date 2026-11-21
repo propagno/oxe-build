@@ -387,6 +387,13 @@ function lintSpec(md, kind) {
     const vague = new RegExp(VAGUE_RE.source, 'gi');
     let vm;
     while ((vm = vague.exec(c.text))) {
+      // OXB-C20 #5: allow "simples" when qualifying a known domain noun (e.g. "shell simples", "texto simples", "clique simples")
+      if (/^simples$/i.test(vm[0])) {
+        const before = c.text.slice(Math.max(0, vm.index - 32), vm.index);
+        if (/\b(?:shell|texto|clique|valor|lista|consulta|busca|modo|campo|sele[cç][aã]o|linha|comando|arquivo|filtro|tipo|formato|rota|requisi[cç][aã]o|tabela|vis[aã]o|layout|terminal|prompt|editor|string|json|sql|regex)\s+$/i.test(before)) {
+          continue;
+        }
+      }
       if (!HAS_NUMBER_RE.test(c.text.slice(vm.index, vm.index + vm[0].length + 30))) { errors.push(`${c.id} é vago ("${vm[0]}" sem número ou limiar): diga o que se mede e quanto`); break; }
     }
     if (!c.test || TBC_RE.test(c.test)) errors.push(`${c.id} sem o teste que o prova (· Teste: <arquivo ou nome do teste>)`);
@@ -479,9 +486,10 @@ function activeSessionDirForRoot(rootAbs, activeSession) {
   let sess = activeSession || null;
   if (!sess) {
     const state = readTextQuiet(path.join(rootAbs, '.oxe', 'STATE.md'));
-    const m = /active_session\s*[:=]\s*([^\r\n]+)/i.exec(state);
+    // both formats: `**active_session:** sessions/x` (session create, parseActiveSession) and `active_session: sessions/x`
+    const m = /^\s*(?:[-*]\s*)?(?:\*\*)?active_session(?:\*\*)?\s*[:=]\s*(?:\*\*\s*)?([^\r\n]+)/im.exec(state);
     if (m) {
-      const cand = m[1].trim().replace(/^[`'"]+|[`'"]+$/g, '');
+      const cand = m[1].trim().replace(/^[`'"]+|[`'"]+$/g, '').replace(/\\/g, '/');
       if (cand && cand !== 'none' && cand !== 'null' && !/^[-—]$/.test(cand)) sess = cand;
     }
   }
@@ -673,6 +681,16 @@ function cardProgramHints(md) {
   return [...new Set(hints.map((h) => h.trim()).filter(Boolean))];
 }
 
+/** OXB-C27-5: every phase of the entry's program is closed (or the program itself is). */
+function programClosed(entry) {
+  try {
+    const state = require('./oxe-program.cjs').readProgram(entry && entry.programDir);
+    if (!state) return false;
+    if (state.status === 'closed') return true;
+    return state.phases.length > 0 && state.phases.every((p) => p && p.status === 'closed');
+  } catch { return false; }
+}
+
 function resolveCardProgram(projectRoot, activeSession, { key, md = '', spec = null, catalogCache = null, programRoots = null } = {}) {
   const catalog = discoverProgramCatalog(projectRoot, { activeSession, catalogCache, programRoots });
   if (spec) {
@@ -684,6 +702,14 @@ function resolveCardProgram(projectRoot, activeSession, { key, md = '', spec = n
   }
 
   const rootAbs = path.resolve(projectRoot);
+  // OXB-C27-5: the program of --dir (config.alm.program) wins over a loose card lookup (text in a SPEC, alm-links),
+  // which picked another program's CLOSED phase until --spec was given. Only a PLAN task naming the card (OXB-C4)
+  // still sends it to a sibling program; a closed program is never picked by lookup.
+  const localCfg = readJsonQuietLocal(path.join(rootAbs, '.oxe', 'config.json')) || {};
+  const ownProgram = localCfg.alm && localCfg.alm.program
+    ? resolveProgramSpec(projectRoot, activeSession, String(localCfg.alm.program), { catalogCache: catalog, programRoots })
+    : null;
+  const own = ownProgram && !programClosed(ownProgram) ? ownProgram : null;
   const hints = cardProgramHints(md);
   const hintEntries = new Set();
   for (const h of hints) {
@@ -698,6 +724,7 @@ function resolveCardProgram(projectRoot, activeSession, { key, md = '', spec = n
 
   for (const e of catalog) {
     let score = 0;
+    if (programClosed(e)) continue;
     if (keyRe && e.planDoc && Array.isArray(e.planDoc.tasks)) {
       const taskHit = e.planDoc.tasks.some((t) => t && [t.id, t.title, t.commit, ...(Array.isArray(t.refs) ? t.refs : []), ...(Array.isArray(t.notes) ? t.notes : [t.notes])].filter(Boolean).some((v) => keyRe.test(String(v))));
       if (taskHit) score += 100;
@@ -714,7 +741,9 @@ function resolveCardProgram(projectRoot, activeSession, { key, md = '', spec = n
     }
   }
 
-  if (best) return { entry: best, matchedBy: bestScore >= 100 ? 'plan_card_lookup' : 'card_lookup', catalog };
+  if (best && bestScore >= 100) return { entry: best, matchedBy: 'plan_card_lookup', catalog };
+  if (own) return { entry: own, matchedBy: 'config_program', catalog };
+  if (best) return { entry: best, matchedBy: 'card_lookup', catalog };
   const local = catalog.find((e) => e.root === rootAbs) || readProgramEntry(rootAbs, { activeSession });
   return { entry: local, matchedBy: 'dir_default', catalog };
 }

@@ -179,6 +179,10 @@ function classify(commit, ocfg, ctx = {}) {
     const tasks = [...msg.matchAll(new RegExp(TASK_RE.source, 'gm'))].map((m) => m[0].replace(/^OXE-Task:\s*/, '').trim());
     return { ...base, ok: true, kind: 'task', task: tasks[0], ...(tasks.length > 1 ? { tasks } : {}), run: RUN_RE.test(msg) ? RUN_RE.exec(msg)[0].replace(/^OXE-Run:\s*/, '').trim() : null };
   }
+  // OXB-C27-7: the planner's frozen-tests commit (tests of several tasks) is `OXE-Plan: <programa>/<fase>`, not a fake
+  // OXE-Task of one task. Accepted only when every file is a test (or a .oxe/ artifact): code still needs a task/quick.
+  const plan = planTrailerVerdict(msg, files);
+  if (plan) return { ...base, ...plan };
   const q = QUICK_RE.exec(msg);
   if (q) {
     const card = CARD_RE.exec(msg);
@@ -313,6 +317,17 @@ function appendTrailers(message, trailers) {
  * (commit_msg "require") a merge in progress, an exempt author or only exempt staged paths pass; anything else is
  * refused, with the way out.
  */
+const PLAN_RE = /^OXE-Plan:\s*([\w.-]+\/F\d+)\s*$/m;
+const PLAN_TEST_FILE_RE = /(^|\/)(tests?|__tests__|spec|e2e)\/|\.(test|spec)\.[cm]?[jt]sx?$|^\.oxe\//i;
+/** OXB-C27-7: null without an OXE-Plan trailer; else ok only when every file is a test or a .oxe/ artifact. */
+function planTrailerVerdict(msg, files) {
+  const m = PLAN_RE.exec(String(msg || ''));
+  if (!m) return null;
+  const code = (files || []).map((f) => normOriginPath(unquoteGitPath(f))).filter((f) => f && !PLAN_TEST_FILE_RE.test(f));
+  if (!code.length) return { ok: true, kind: 'plan', plan: m[1] };
+  return { ok: false, kind: 'plan', plan: m[1], reason: `OXE-Plan só vale para commit de testes do planejador; este muda código (${code.slice(0, 3).join(', ')}) — use OXE-Task ou um quick` };
+}
+
 function commitMsg(root, file, options = {}) {
   const config = resolveConfig(root, options.config || {}, options.configFile || null);
   const ocfg = originConfig(config);
@@ -321,6 +336,11 @@ function commitMsg(root, file, options = {}) {
   const message = fs.readFileSync(file, 'utf8');
   const text = message.replace(/\r\n/g, '\n').split('\n').filter((l) => !l.startsWith('#')).join('\n');
   if (TASK_RE.test(text) || QUICK_RE.test(text)) return { ok: true };
+  if (PLAN_RE.test(text)) {
+    const staged = (() => { try { return run(spawn, 'git', ['diff', '--cached', '--name-only'], root).split('\n').map((l) => unquoteGitPath(l)).filter(Boolean); } catch { return []; } })();
+    const v = planTrailerVerdict(text, staged);
+    return v.ok ? { ok: true, plan: v.plan } : { ok: false, reason: v.reason };
+  }
   const quick = options.currentQuick || null;
   if (quick) {
     const trailers = [`OXE-Quick: ${quick.id}`, ...(quick.key ? [`OXE-Card: ${quick.key}`] : [])];
@@ -340,4 +360,4 @@ function commitMsg(root, file, options = {}) {
   return { ok: false, reason: 'commit sem origem: abra um quick (oxe-cc quick <KEY> "<objetivo>") ou rode a tarefa por oxe-cc runtime execute. Isenções só em origin.exempt (.oxe/config.json)' };
 }
 
-module.exports = { resolveConfig, originConfig, classify, check, commitsFromGit, commitsFromPr, commitMsg, appendTrailers, unquoteGitPath, underPaths, TASK_RE, QUICK_RE, CARD_RE };
+module.exports = { resolveConfig, originConfig, classify, check, commitsFromGit, commitsFromPr, commitMsg, planTrailerVerdict, appendTrailers, unquoteGitPath, underPaths, TASK_RE, QUICK_RE, CARD_RE };

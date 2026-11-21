@@ -19,6 +19,8 @@ export interface TaskResult {
     /** OXB-185: turns used and the cap of the attempt, when it ended at the cap. */
     turns_used?: number;
     turns_cap?: number;
+    /** OXB-C28-1: a policy refusal whose trigger came from tool outputs of earlier turns (not from the pack). */
+    policy_trigger?: 'tool_output' | 'prompt';
     /** Every verify segment's output with headers (1.21.2, OXB-066), for the attempt log. */
     verify_log?: string;
 }
@@ -63,6 +65,8 @@ export interface SchedulerOptions {
      * a person) each task gets ONE more attempt after a policy refusal, even past its max_retries.
      */
     retryPolicyOnce?: boolean;
+    /** OXB-C28-1: one automatic clean retry for a refusal triggered by tool outputs (default on; false = off). */
+    policyAutoRetry?: boolean;
     /** Tasks this run already saw refused by policy (a later execute): their attempt 1 IS the one extra attempt. */
     policyRefusedBefore?: string[];
     /** Tasks whose one extra policy attempt was already spent in this run: blocked before any attempt (no model call). */
@@ -268,7 +272,21 @@ export interface VerifySegmentRun {
     check?: CheckResult;
     /** OXB-162: failed after an earlier segment of the same attempt passed the same files; rerun once. */
     flaky_suspect?: boolean;
+    /** OXB-C28-2: the segments (1-based) that ran in this one remote round trip; index is the failing (or last) one. */
+    merged?: number[];
 }
+/**
+ * OXB-C28-2: consecutive `… remote-verify … -- <cmd>` segments with the same runner prefix run as ONE remote job
+ * (`<prefix> -- "echo ===OXE-SEG-1=== && cmd1 && echo ===OXE-SEG-2=== && cmd2"`) — one push/queue/CI round trip
+ * instead of one per segment (polish2 T3: 8 segments, 2–5 min each). The markers name the failing segment.
+ * `members` are 0-based indexes into `segments`.
+ */
+export declare function groupRemoteSegments(segments: string[]): Array<{
+    command: string;
+    members: number[];
+}>;
+/** OXB-C28-2: the 0-based segment of a merged remote run that failed — the last marker the remote log printed. */
+export declare function remoteFailedMember(output: string, members: number[]): number;
 export interface VerifyNodeResult {
     status: string;
     gaps?: string[];

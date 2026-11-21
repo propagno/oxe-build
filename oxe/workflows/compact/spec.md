@@ -5,8 +5,6 @@
 2. **`.oxe/ROADMAP.md`** — fases de entrega mapeadas a requisitos (R-ID) e critérios (A*).
 3. **`.oxe/PRD.md`** — a camada de produto acima da SPEC (`oxe/templates/PRD.template.md`): problema, personas, objetivos com métricas (M-n) e **histórias de usuário** (US-n: Como / Quero / Para), cada uma ligada aos R* e A* que a entregam. As histórias são o que vai para o ALM (Jira / Azure DevOps) quando o projeto usa um.
 **Foco em redução de requisições:** as fases são estruturadas para extrair o máximo de informação por rodada — nunca uma pergunta por vez, sempre blocos coesos.
-Para trabalho **muito pequeno** que não justifica spec completa: redirecionar para **`oxe:quick`**.
-Se **`.oxe/config.json`** tiver `discuss_before_plan: true`: mencionar no final da Fase 5 que o próximo passo é **`oxe:discuss`** antes do plano.
 </objective>
 <context>
 **Contrato de robustez:** seguir `oxe/workflows/references/flow-robustness-contract.md`. Antes de escrever, resolver artefatos obrigatórios, validar pré-condições e só então produzir a spec. O output desta fase deve deixar evidência estruturada suficiente para o `plan` decidir se o plano é realmente o melhor disponível.
@@ -18,10 +16,10 @@ Se **`.oxe/config.json`** tiver `discuss_before_plan: true`: mencionar no final 
 - Se o problema tocar Azure, ler `.oxe/cloud/azure/profile.json`, `auth-status.json` e `INVENTORY.md` antes de fechar requisitos; se o inventário estiver ausente ou stale, exigir discovery via `oxe-cc azure sync` antes de consolidar a spec
 </context>
 ## Fase 1 — Perguntas (grill)
-1. `oxe-cc grill start --type <tipo>`. Se já houver grill aberto, ele é retomado: `oxe-cc grill status` mostra onde parou.
-2. Explore o repo e os artefatos primeiro. O que já tem resposta vira `oxe-cc grill fact … --source`, nunca pergunta.
+1. `oxe-cc grill start --type <tipo>`. **Ao refinar um card isolado de ALM/Jira**, passe **sempre `--card <KEY>`** em todos os comandos do grill (`oxe-cc grill start --card OXE-n`, `ask --card OXE-n`, `answer --card OXE-n`, `close --card OXE-n`, `report --card OXE-n`) — isso isola o estado em `.oxe/alm/grill/<KEY>/` (incluindo ADRs em `.oxe/alm/grill/<KEY>/adr/` e relatório em `.oxe/alm/grill/grooming-quality.md`) sem sobrescrever `.oxe/grill/` ou `.oxe/SPEC.md` do programa inteiro. Se já houver grill aberto, ele é retomado: `oxe-cc grill status [--card <KEY>]` mostra onde parou.
+2. Explore o repo e os artefatos primeiro. O que já tem resposta vira `oxe-cc grill fact --branch <ramo> --text "…" --source <arquivo:linha|card>`, nunca pergunta.
 3. **Uma pergunta por mensagem**, seguindo o `next_branch` da árvore (problema → personas → escopo → fluxos → regras/glossário → bordas → NFR → integrações → rollout → métricas → riscos). Cada pergunta traz o que decide, as opções com consequência e a **resposta recomendada com o porquê**. Registre com `grill ask` antes de perguntar e com `grill answer` depois.
-4. Contradição → `grill conflict`; "não sei" → `grill defer --reason` (vira suposição); termos de negócio → `grill term`; decisão de arquitetura, produto ou trade-off → `--decision` (vira ADR).
+4. Contradição → `grill conflict <Q-a,Q-b>`; "não sei" → `grill defer <Q-n> --reason "…"` (vira suposição); termos de negócio → `grill term "<termo>" --definition "…"`; decisão de arquitetura, produto ou trade-off → `--decision` (vira ADR).
 5. Ao fechar cada ramo, faça o playback em 3 a 5 linhas e, com o "sim", rode `oxe-cc grill confirm <ramo>`.
 6. Não há limite de rodadas: o grill termina quando `oxe-cc grill close` aceita. Se ele recusar, mostre o que falta e continue.
 - quais anchors, fixtures ou investigações serão obrigatórios para permitir `Confiança > 90%` no plano.
@@ -62,7 +60,7 @@ Complemento adaptativo para a Fase 1. Quando o domínio for confirmado (via scan
 #### FILE / Storage — critérios de segurança de upload
 | R-RB-S04 | Nome do arquivo sanitizado — nunca usar nome original do cliente | v1 | Path traversal no sistema de arquivos |
 ## Fase 4 — Roteiro
-**Programa por fases (aplicações com 2+ fases):** depois da aprovação, rodar `oxe-cc runtime program init` (lê o `ROADMAP.md` e grava `.oxe/program/PROGRAM.json`) e `oxe-cc runtime program start`. A partir daí cada fase é um ciclo completo que fecha pelo gate `oxe-cc runtime program close`: verify concluído, **regressão das fases anteriores verde**, contratos do IMPLEMENTATION-PACK cumpridos e commit local da fase. As interfaces entregues por uma fase entram no contexto da seguinte. ROADMAP de fase única dispensa o programa.
+**Programa por fases (aplicações com 2+ fases):** depois da aprovação, rodar `oxe-cc runtime program init` (lê o `ROADMAP.md` e grava `.oxe/program/PROGRAM.json`) e `oxe-cc runtime program start`. A partir daí cada fase é um ciclo completo que fecha pelo gate `oxe-cc runtime program close` (exige `--by <papel> --reason "…"` quando usado com `--by-ci`, `--no-rollback-check` ou `--accept-drift`): verify concluído, **regressão das fases anteriores verde**, contratos do IMPLEMENTATION-PACK cumpridos e commit local da fase. As interfaces entregues por uma fase entram no contexto da seguinte. ROADMAP de fase única dispensa o programa.
 <auto_reflexao>
 ## Auto-reflexão semântica (executa automaticamente antes da Fase 5)
 **Resultado obrigatório antes de avançar:**
@@ -83,12 +81,13 @@ Complemento adaptativo para a Fase 1. Quando o domínio for confirmado (via scan
 ### Requisito verificável apenas em produção
 </spec_anti_patterns>
 ## Fase 5 — Aprovação e próximo passo
+**Se aprovado:** termine com **um** próximo passo, o do rodapé (`references/next-step-footer.md`). Em geral: `spec check` verde → `oxe-cc spec approve --by <papel>`; aprovada com ROADMAP de 2+ fases → `oxe-cc runtime program init`; senão → `/oxe-plan` (agentes e discuss são decididos dentro dele, com `--agents` ou `discuss_before_plan`).
 1. `oxe-cc spec check`: rastreabilidade R→A, Risco e Como verificar em todo A*, PRD (`prd lint`), glossário (sinônimos proibidos), grill fechado, decisões registradas, RFC para P0/P1. Corrija tudo o que ele apontar.
 2. `oxe-cc spec probe`: bordas e proibições por critério. Resolva cada borda: coberta, descartada com motivo ou suposição.
 3. Opcional: `oxe-cc spec stress`, com leitores independentes que propõem mudanças. Roda processos pagos, então peça o OK do usuário antes.
 4. Com o resumo aprovado: `oxe-cc spec approve --by <papel>`. Daí em diante, mudança de critério passa por `oxe-cc spec amend` (ver `references/change-management.md`).
 - Rodar **`oxe-cc prd lint`**: história sem critério, critério sem história, referência a A*/R* inexistente. Corrigir antes de seguir.
-- **ALM:** se `.oxe/config.json` tem `alm.provider` (`jira` ou `azure-devops`), rodar `oxe-cc alm push --stories-only --dry-run`, mostrar ao usuário o que será criado (épico, histórias com a versão-alvo) e, com o OK, `oxe-cc alm push --stories-only`. Sem ALM configurado, seguir sem ele — nada no fluxo depende disso.
+- **ALM:** se `.oxe/config.json` tem `alm.provider` (`jira` ou `azure-devops`), rodar `oxe-cc alm push --stories-only --dry-run`, mostrar ao usuário o que será criado (épico, histórias com a versão-alvo) e, com o OK, `oxe-cc alm push --stories-only --apply`. Sem ALM configurado, seguir sem ele — nada no fluxo depende disso.
 <process>
 0. **Processar flags recebidas:**
 1. Ler `.oxe/STATE.md`, `OVERVIEW.md`, `STACK.md` e `OBSERVATIONS.md` do escopo ativo (verificar pendentes).
@@ -109,7 +108,7 @@ Complemento adaptativo para a Fase 1. Quando o domínio for confirmado (via scan
 **Ao terminar:** o **Próximo passo** de `oxe-cc status --json` (ver `references/next-step-footer.md`).
 <success_criteria>
 - [ ] `PRD.md` existe com histórias US-n ligadas aos A*, e `oxe-cc prd lint` passa; com ALM configurado, as histórias foram enviadas (`oxe-cc alm push --stories-only --apply`).
-- [ ] Usuário foi consultado no gate da Fase 5 e escolheu o próximo passo.
+- [ ] Usuário aprovou o roteiro no gate da Fase 5, e a resposta terminou com um único próximo passo (rodapé).
 - [ ] Grill fechado (`oxe-cc grill close`), com cada critério, história e termo rastreável a uma pergunta; ou `--fast` com no máximo 3 rodadas.
 - [ ] `oxe-cc spec check` verde e spec aprovada (`oxe-cc spec approve`); RFC em rascunho para cada P0/P1.
 </success_criteria>

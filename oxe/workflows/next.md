@@ -14,33 +14,34 @@ Inspecionar `.oxe/STATE.md` global, a sessão ativa quando existir, e a existên
 </context>
 
 <process>
-0. **Fonte única:** se o `oxe-cc` estiver disponível, rode `oxe-cc status --json` e use o `next` (step, cursorCmd, reason) como resposta. Ele já cobre o grill e a aprovação da spec, o ALM (histórias, tarefas, fila do MCP), o RFC da fase, o programa por fases e a entrega (PR, CI/merge, deploy, close). Os passos abaixo são o fallback sem CLI. Para o mapa completo: `oxe-cc status --journey`.
-1. Se `.oxe/` ou `STATE.md` não existir → **único** passo: **scan** (ou `oxe-cc init-oxe` seguido de scan).
-2. Se não houver `.oxe/codebase/*.md` completos (sete mapas) e o trabalho **não** for só um quick isolado → **scan**.
+0. **Fonte única:** se o `oxe-cc` estiver disponível, rode `oxe-cc status --json` e use `nextStep`, `cursorCmd` e `reason` como resposta (ver `references/next-step-footer.md`). Ele já cobre o grill e a aprovação da spec, o ALM (histórias, tarefas, fila do MCP), o RFC da fase, o programa por fases e a entrega (PR, CI/merge, deploy, close). Os passos abaixo são o fallback sem CLI: declare **fallback** na resposta. Para o mapa completo: `oxe-cc status --journey`.
+1. Se `.oxe/` ou `STATE.md` não existir → **único** passo: `oxe-cc init-oxe`, seguido de `/oxe-spec --full` (o scan).
+2. Se não houver `.oxe/codebase/*.md` completos (sete mapas) e o trabalho **não** for só um quick isolado → **scan** (`/oxe-spec --refresh`).
 3. Se fase `quick_active` ou existir `QUICK.md` no escopo resolvido **sem** `PLAN.md`:
    - Se `QUICK.md` contiver linha `Promover para spec/plan?: sim` → **spec** (promoção declarada pelo autor; ignorar demais heurísticas).
    - Se o `QUICK.md` tiver **mais de 10 passos**, ou o utilizador/descrição indicar **contrato público**, **segurança**, **dados pessoais**, ou **>8 ficheiros** tocados ou previstos → **spec** (promoção obrigatória).
-   - Senão → **execute** (há passos curtos a implementar).
+   - Senão → **quick** (implementar os passos curtos e fechar com `oxe-cc quick done --verify "<comando>"`); fechada → **ship**.
 4. Se não houver `SPEC.md` no escopo resolvido e não for quick intencional declarado → **spec** (passo único).
 5. Se houver SPEC no escopo resolvido mas não PLAN → se `.oxe/config.json` tiver `discuss_before_plan: true` e faltar **`DISCUSS.md`** com decisões → **discuss**; senão → **plan**.
 6. Se PLAN existe mas a seção **Autoavaliação do Plano** estiver incompleta, disser `Melhor plano atual: não`, ou a `Confiança` não superar o limiar configurado (padrão canónico `>90%`), o próximo passo deve ser **plan** (replanejar) ou **discuss/research** se a própria autoavaliação indicar isso.
 7. Se PLAN existe, **VERIFY.md** ainda **não** existe ou está claramente antes da implementação atual → **execute** (onda atual).
 8. Se PLAN existe e VERIFY falta após implementação declarada → **verify**.
 9. Se VERIFY indica falha ou gaps não resolvidos → **plan** (replanejamento) como passo único, com referência a `SUMMARY.md`.
-10. Se VERIFY OK e estado coerente → **spec** ou **quick** para **próxima** entrega, ou mensagem “fluxo da feature atual concluído”.
+10. Se VERIFY OK e a entrega ainda não foi feita → **ship** (`/oxe-ship`; a retro já rodou dentro do verify).
+11. Se VERIFY OK e entregue (merge/commit registrado) → mensagem “ciclo concluído”; a próxima entrega começa em `/oxe-spec` ou `/oxe-quick`.
 
 **Saída obrigatória (só isto, nesta ordem):**
 
 - **Próximo passo:** um único entre `scan` | `spec` | `spec-approve` | `alm-push` | `alm-queue` | `discuss` | `plan` | `quick` | `execute` | `verify` | `signoff` | `ship` | `ship-wait` | `deploy` | `program-close`
-- **Comando:** o slash correspondente (ex.: `/oxe-scan`) **ou** `npx oxe-cc status` para conferir de novo
+- **Comando:** o `cursorCmd` do motor; no fallback, um dos 7 comandos principais (`/oxe`, `/oxe-quick`, `/oxe-spec`, `/oxe-plan`, `/oxe-execute`, `/oxe-verify`, `/oxe-ship`) ou o `oxe-cc …` correspondente
 - **Por quê:** uma frase
 - **Confiança / lacuna:** só quando o estado estiver incompleto ou ambíguo
 - **Artefatos em jogo:** lista curta (máx. 4 itens)
 </process>
 
 <success_criteria>
-- [ ] Foi indicado **exatamente um** próximo passo entre os valores canónicos (`scan`, `spec`, `discuss`, `plan`, `quick`, `execute`, `verify`) ou mensagem explícita de fluxo concluído.
+- [ ] Foi indicado **exatamente um** próximo passo entre os valores canónicos (lista da saída acima) ou mensagem explícita de ciclo concluído.
 - [ ] A justificativa é **uma** frase; não há lista equiparável de alternativas como “próximo passo”.
-- [ ] O comando sugerido corresponde ao passo (slash `/oxe-*` ou `npx oxe-cc status` quando aplicável).
+- [ ] O comando sugerido corresponde ao passo e nunca é um comando legado (`/oxe-next`, `/oxe-retro`, `/oxe-scan`…).
 - [ ] **Artefatos em jogo** tem no máximo quatro itens e são caminhos ou nomes reais em `.oxe/`.
 </success_criteria>

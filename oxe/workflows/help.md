@@ -106,7 +106,7 @@ Tudo o mais é ativado automaticamente por contexto, por config, ou existe como 
 
 ### Cursor
 
-Slash commands da trilha principal: `/oxe`, `/oxe-quick`, `/oxe-spec`, `/oxe-plan`, `/oxe-execute`, `/oxe-verify`
+Slash commands da trilha principal: `/oxe`, `/oxe-quick`, `/oxe-spec`, `/oxe-plan`, `/oxe-execute`, `/oxe-verify`, `/oxe-ship`
 
 Slash commands avançados: `/oxe-session`, `/oxe-dashboard`
 
@@ -225,7 +225,7 @@ Um pedido → **um** destino (sem gerar contrato). O agente aplica `route.md` ou
 
 | Se o utilizador disser (exemplos) | Comando / ação |
 |-----------------------------------|----------------|
-| **Objetivo de implementação** (“cria X”, “implementa Y”, “adiciona Z”, “corrige W”, “desenvolve N”) | `/oxe <objetivo>` → Conductor decide automaticamente Agent Mode (simples/médio) ou Swarm Mode (complexo) |
+| **Objetivo de implementação** (“cria X”, “implementa Y”, “adiciona Z”, “corrige W”, “desenvolve N”) | `/oxe <objetivo>` → pequeno (critérios do quick) → `/oxe-quick`; senão → `/oxe-spec`. Conductor (Agent/Swarm Mode) só com pedido explícito de modo autônomo |
 | Não sei que passo OXE sou / “o que faço agora?” | `/oxe` ou `npx oxe-cc status` |
 | Quero entender rapidamente a situação real da trilha atual | `/oxe “pergunta”` |
 | Acabei de clonar / falta OXE no projeto | `npx oxe-cc@latest` (ou `oxe-cc`) na raiz do repo |

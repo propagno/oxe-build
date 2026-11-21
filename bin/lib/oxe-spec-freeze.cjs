@@ -88,6 +88,13 @@ function fullTestNames(text) {
     const chain = describes.filter((d) => d.start < at && at < d.end).sort((a, b) => a.start - b.start).map((d) => d.title);
     out.push({ title: unq(m[2]), full: [...chain, unq(m[2])].join(' ') });
   }
+  // OXB-C28-3: test.each([...])('title %s') — the regex above needs a quote right after "(": the titles of an each
+  // table (template, literal part, expanded rows) are names in the file too, under the describes around the call
+  for (const g of require('./oxe-plan-json.cjs').eachTestGroups(text)) {
+    if (g.kind === 'describe') continue;
+    const chain = describes.filter((d) => d.start < g.at && g.at < d.end).sort((a, b) => a.start - b.start).map((d) => d.title);
+    for (const t of g.titles) out.push({ title: t, full: [...chain, t].join(' ') });
+  }
   return out;
 }
 
@@ -148,6 +155,11 @@ function criterionOf(text) {
     const hit = /\b(A\d+(?:\.\d+)?|AC-\d+(?:\.\d+)?)\b/.exec(m[2]);
     if (hit) return hit[1];
   }
+  // OXB-C28-3: an A<n> only in a test.each title
+  for (const t of require('./oxe-plan-json.cjs').eachTestTitles(text)) {
+    const hit = /\b(A\d+(?:\.\d+)?|AC-\d+(?:\.\d+)?)\b/.exec(t);
+    if (hit) return hit[1];
+  }
   return null;
 }
 
@@ -188,7 +200,23 @@ function freeze(root, jsonPath, doc, options = {}) {
   const stagedBefore = stagedFilesSet(root, spawn);
   const origin = resolveRef(root, options.from, spawn);
   const globs = options.paths ? String(options.paths).split(',').map((g) => globRe(g.trim())) : null;
-  const files = origin.files.filter((f) => TEST_RE.test(f) && (!globs || globs.some((re) => re.test(f))));
+  // OXB-C28-4: with --paths, a test that already existed at the ref (not changed by it) is frozen too — the planner
+  // freezes an existing test as the proof of a criterion. The ref's tree is read for an explicit path always, and for a
+  // glob only when the ref's diff has no file under it (`--paths tests/**` on a PR still means "the PR's tests").
+  const rawGlobs = options.paths ? String(options.paths).split(',').map((g) => g.trim()).filter(Boolean) : [];
+  let candidates = origin.files;
+  const fromTree = rawGlobs.filter((g) => !/[*?]/.test(g) || !origin.files.some((f) => TEST_RE.test(f) && globRe(g).test(f)));
+  if (fromTree.length && origin.sha) {
+    try {
+      const ls = spawn('git', ['-c', 'core.quotepath=false', 'ls-tree', '-r', '--name-only', origin.sha], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+      const res = fromTree.map((g) => globRe(g));
+      if (ls && ls.status === 0) {
+        const tree = String(ls.stdout || '').split(/\r?\n/).filter(Boolean).map((f) => norm(unquoteGitPath(f)));
+        candidates = [...new Set([...candidates, ...tree.filter((f) => res.some((re) => re.test(f)))])];
+      }
+    } catch { /* the diff alone */ }
+  }
+  const files = candidates.filter((f) => TEST_RE.test(f) && (!globs || globs.some((re) => re.test(f))));
   if (!files.length) throw new Error(`${origin.ref}: nenhum arquivo de teste${options.paths ? ` em ${options.paths}` : ''}`);
   doc.acceptance_tests = Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [];
   const frozen = [];

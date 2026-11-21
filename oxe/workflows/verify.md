@@ -206,7 +206,7 @@ Registrar em `VERIFY.md`: `Resultado de calibração | Confiança declarada | Re
    - **Checklist UAT** (Camada 4).
    - **Gaps** — o que falhou e sugestão de correção; se não houver, escrever `Nenhum gap restante`.
    Quando `runtime verify` já tiver projetado `VERIFY.md`, usar essa projeção como base e complementar manualmente apenas as seções ou evidências que o runtime ainda não cobrir.
-7. Atualizar **`.oxe/STATE.md`** global: `verify_complete` ou `verify_failed` + próximo passo (replan, corrigir ou publicar).
+7. Atualizar **`.oxe/STATE.md`** global: `verify_complete` ou `verify_failed` + próximo passo (verde: `/oxe-ship`; reprovado: corrigir ou replanejar).
 7a. **Registro de calibração:** após escrever `STATE.md`, se `PLAN.md` contiver bloco `<confidence_vector>` — extrair o vetor e comparar com o resultado real. Criar ou atualizar `.oxe/calibration.json` com um novo record no formato:
 ```json
 { "cycle": "C-NN", "plan_global_confidence": 0.74, "plan_dimensions": { "technical_risk": 0.45 }, "outcome": { "verify_status": "complete", "actual_waves": 3, "estimated_waves": 2 }, "calibration_error": { "technical_risk": 0.35 } }
@@ -226,7 +226,7 @@ O `calibration_error` de cada dimensão = `|score declarado - resultado observad
    - Escrever/atualizar `.oxe/global/LESSONS.md` (com fallback para `.oxe/LESSONS.md`)
    - Incluir seção **Retrospectiva** resumida no VERIFY.md
    - Especialmente importante quando: houve replanejamento, falhas em execute, critérios A* ajustados, ou ciclo durou mais de 2 ondas
-   - Com `--skip-retro`: pular esta etapa e mencionar que a retrospectiva está disponível via `/oxe-retro` manualmente
+   - Com `--skip-retro`: pular esta etapa e mencionar que a retrospectiva foi pulada. A retro é parte do verify, nunca um passo separado da jornada.
 8c. **Camada 5 — Validate-gaps:** se `verification_depth: "thorough"` em `.oxe/config.json` **ou** flag `--gaps` foi recebida, executar a lógica de `oxe/workflows/validate-gaps.md` e adicionar seção **Gaps de Cobertura** ao VERIFY.md (mesmo conteúdo de VALIDATION-GAPS.md). Também escrever `.oxe/VALIDATION-GAPS.md` separado.
 8d. **Camada 6 — Security:** se `security_in_verify: true` em `.oxe/config.json` **ou** flag `--security` foi recebida, executar a lógica de `oxe/workflows/security.md` e adicionar seção **Auditoria de Segurança** ao VERIFY.md. Também escrever `.oxe/SECURITY.md` separado. Achados P0 bloqueiam o `verify_complete` — registrar `verify_failed` até P0s serem resolvidos.
 8d2. **Camada UI — Revisão de implementação:** se `UI-SPEC.md` existir no escopo **ou** flag `--ui` foi recebida, executar a lógica de `oxe/workflows/ui-review.md` e adicionar seção **Auditoria UI** ao VERIFY.md. Também escrever `.oxe/UI-REVIEW.md` separado.
@@ -241,7 +241,7 @@ O `calibration_error` de cada dimensão = `|score declarado - resultado observad
    - **Resumo**
 </process>
 
-**Ao terminar o verify verde:** com `docs_publish` configurado, `oxe-cc docs publish` antes do `program close`; com `alm.transport: "mcp"`, `oxe-cc alm queue`; com `delivery.mode: "pr"`, a entrega segue no `/oxe-ship` (PR, CI e merge, deploy, close). Termine com o **Próximo passo** de `oxe-cc status --json` (ver `references/next-step-footer.md`).
+**Ao terminar o verify verde:** o próximo passo é **`/oxe-ship`** (entregar), com a retro já feita aqui dentro. O `/oxe-ship` pergunta o modo de entrega na primeira vez (`delivery` em `.oxe/config.json`) e segue PR, CI e merge, deploy, docs e close (com programa, `program close`). Com `alm.transport: "mcp"`, `oxe-cc alm queue` antes. Termine com o **Próximo passo** de `oxe-cc status --json` (ver `references/next-step-footer.md`); se o motor apontar outro passo (signoff, fila do ALM), siga o motor.
 
 <success_criteria>
 - [ ] VERIFY.md contém as quatro seções: Auditoria de pré-execução, Tabela de tarefas, Tabela de critérios SPEC, Fidelidade de decisões (quando aplicável), Checklist UAT.

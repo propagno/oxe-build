@@ -404,7 +404,31 @@ function readGlossary(file) {
   return out;
 }
 
+/**
+ * 1.21.2 (jornada, item 18): does what the grill closed ask for an RFC before the plan? A P0/P1 criterion in the SPEC
+ * (the Risco column), a risk decided as P0/P1 in the risks branch, or a decision that brings a new component
+ * (service, module, queue, database, dependency). Read only: the draft itself is `oxe-cc rfc new --title "…"`.
+ * @param {ReturnType<typeof status>} s the grill status
+ * @param {string} [specText]
+ * @returns {{ needed: boolean, risky: string[], components: string[], reasons: string[], title: string }}
+ */
+const NEW_COMPONENT_RE = /\b(?:nov[oa]s?\s+(?:componente|servi[çc]o|m[óo]dulo|microsservi[çc]o|banco(?:\s+de\s+dados)?|fila|depend[êe]ncia|biblioteca|integra[çc][ãa]o|api|tabela)|(?:componente|servi[çc]o|m[óo]dulo)\s+nov[oa]|new\s+(?:component|service|module|queue|database|dependency))\b/i;
+function rfcSuggestion(s, specText = '') {
+  const out = { needed: false, risky: [], components: [], reasons: [], title: '' };
+  if (!s || !s.closed) return out;
+  try { out.risky = [...require('./oxe-risk-decision.cjs').criterionRisks(String(specText || '')).entries()].filter(([, r]) => /^P[01]$/.test(String(r))).map(([a]) => a); } catch { out.risky = []; }
+  const decisions = Array.isArray(s.decisions) ? s.decisions : [];
+  const riskDecided = decisions.filter((d) => d.branch === 'risks' && /\bP[01]\b/.test(`${d.answer || ''}`));
+  out.components = decisions.filter((d) => NEW_COMPONENT_RE.test(`${d.question || ''} ${d.answer || ''}`)).map((d) => d.id);
+  if (out.risky.length) out.reasons.push(`critério(s) de risco ${out.risky.join(', ')}`);
+  if (riskDecided.length) out.reasons.push(`risco P0/P1 decidido no grill (${riskDecided.map((d) => d.id).join(', ')})`);
+  if (out.components.length) out.reasons.push(`componente novo decidido no grill (${out.components.join(', ')})`);
+  out.needed = out.reasons.length > 0;
+  out.title = s.title ? String(s.title) : 'proposta técnica';
+  return out;
+}
+
 module.exports = {
   BRANCHES, BRANCH_IDS, BLOCKING_BY_TYPE, TYPES, dirFor, readRecords, replay, status, start, ask, answer, fact, mark, defer, confirm, term, conflict, resolve, close,
-  renderMarkdown, writeProjection, writeGlossary, readGlossary, dependents,
+  renderMarkdown, writeProjection, writeGlossary, readGlossary, dependents, rfcSuggestion,
 };

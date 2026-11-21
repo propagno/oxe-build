@@ -296,7 +296,8 @@ function resolveRuntimeArtifactPathsRaw(projectRoot, activeSession) {
       state: path.join(oxeDir, 'STATE.md'),
       spec: preferExistingPath(path.join(sessionRoot, 'spec', 'SPEC.md'), path.join(oxeDir, 'SPEC.md')),
       plan: preferExistingPath(path.join(sessionRoot, 'plan', 'PLAN.md'), path.join(oxeDir, 'PLAN.md')),
-      verify: preferExistingPath(path.join(sessionRoot, 'verification', 'VERIFY.md'), path.join(oxeDir, 'VERIFY.md')),
+      // OXB-C21 #1: an isolated session must project VERIFY.md inside its own folder, never falling back to root .oxe/VERIFY.md
+      verify: path.join(sessionRoot, 'verification', 'VERIFY.md'),
       implementationPack: preferExistingPath(path.join(sessionRoot, 'plan', 'IMPLEMENTATION-PACK.json'), path.join(oxeDir, 'IMPLEMENTATION-PACK.json')),
       roadmap: preferExistingPath(path.join(sessionRoot, 'spec', 'ROADMAP.md'), path.join(oxeDir, 'ROADMAP.md')),
       programDir: path.join(sessionRoot, 'program'),
@@ -308,7 +309,7 @@ function resolveRuntimeArtifactPathsRaw(projectRoot, activeSession) {
     state: base.state,
     spec: preferExistingPath(scoped.spec, base.spec),
     plan: preferExistingPath(scoped.plan, base.plan),
-    verify: preferExistingPath(scoped.verify, base.verify),
+    verify: activeSession ? scoped.verify : base.verify,
     implementationPack: preferExistingPath(scoped.implementationPackJson, base.implementationPackJson),
     roadmap: preferExistingPath(
       scoped.sessionRoot ? path.join(scoped.sessionRoot, 'spec', 'ROADMAP.md') : null,
@@ -1395,20 +1396,23 @@ function runtimeDocsCheck(projectRoot, activeSession, options = {}) {
 function runtimeDecision(projectRoot, activeSession, options = {}) {
   const lib = require('./oxe-decisions.cjs');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
-  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  // revisão 21/11 (achado 7): `ledgerDir` = the card's own ledger (grill --card: .oxe/alm/grill/<KEY>/decisions.ndjson),
+  // so its decisions never reach the shared .oxe/program/decisions.ndjson nor the project's docs/adr/
+  const cardLedger = Boolean(options.ledgerDir);
+  const programDir = options.ledgerDir || paths.programDir || path.join(projectRoot, '.oxe', 'program');
   let program = null;
-  try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; }
+  if (!cardLedger) { try { program = require('./oxe-program.cjs').readProgram(programDir); } catch { program = null; } }
   const activePhase = (program && program.active_phase) || null;
   // ADRs (docs/adr by default; config `adr: false` turns them off) follow every change to the ledger.
   const publishAdrs = () => {
     const dir = options.adrDir || require('./oxe-adr.cjs').adrDir(readProjectConfig(projectRoot) || {});
     if (!dir) return null;
-    try { return require('./oxe-adr.cjs').publish(projectRoot, dir, decisionsForAdr(programDir)); } catch (err) { return { error: err.message }; }
+    try { return require('./oxe-adr.cjs').publish(projectRoot, dir, decisionsForAdr(programDir), { allowOxeDir: Boolean(options.allowOxeAdrDir) }); } catch (err) { return { error: err.message }; }
   };
   if (options.action === 'add') {
     const rec = lib.add(programDir, { ...options, phase: options.phase || activePhase });
-    appendEvent(projectRoot, activeSession, { type: 'DecisionRecorded', payload: { id: rec.id, title: rec.title, phase: rec.phase, ...(rec.supersedes ? { supersedes: rec.supersedes } : {}) } });
-    try { autoExportProgram(projectRoot, activeSession); } catch { /* */ }
+    appendEvent(projectRoot, activeSession, { type: 'DecisionRecorded', payload: { id: rec.id, title: rec.title, phase: rec.phase, ...(rec.supersedes ? { supersedes: rec.supersedes } : {}), ...(options.card ? { card: options.card } : {}) } });
+    if (!cardLedger) { try { autoExportProgram(projectRoot, activeSession); } catch { /* */ } }
     return { decision: rec, adr: publishAdrs() };
   }
   if (options.action === 'status') {
@@ -1454,7 +1458,10 @@ function grillPaths(projectRoot, activeSession, card = null) {
 function grillExportDecisions(projectRoot, activeSession, decisions, by, card = null) {
   const lib = require('./oxe-decisions.cjs');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
-  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  // a card's grill has its own ledger next to its GRILL.md (grill.md: isolated in .oxe/alm/grill/<KEY>/)
+  const cardKey = card ? String(card).toUpperCase() : null;
+  const ledgerDir = cardKey ? path.join(projectRoot, '.oxe', 'alm', 'grill', cardKey) : null;
+  const programDir = ledgerDir || paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const known = new Set(lib.list(programDir).map((d) => d.source).filter(Boolean));
   const recorded = [];
   for (const d of decisions) {
@@ -1465,7 +1472,8 @@ function grillExportDecisions(projectRoot, activeSession, decisions, by, card = 
     // a short answer ("sim", "B") only reads as a decision next to its question
     const title = String(d.answer).length >= 12 ? String(d.answer) : `${String(d.question).replace(/\s*\?\s*$/, '')}: ${d.answer}`;
     const affects = Array.isArray(d.affects) ? d.affects : [];
-    const out = runtimeDecision(projectRoot, activeSession, { action: 'add', criteria: affects.filter((x) => /^[AG]\d+(\.\d+)?$/.test(x)), stories: affects.filter((x) => /^US-\d+$/.test(x)), title: title.slice(0, 160), text: d.answer.length > 160 ? d.answer : null, context: d.question, consequences: d.why || null, source, by: author, alternatives });
+    const cardAdrDir = cardKey ? path.join('.oxe', 'alm', 'grill', cardKey, 'adr') : null;
+    const out = runtimeDecision(projectRoot, activeSession, { action: 'add', criteria: affects.filter((x) => /^[AG]\d+(?:\.\d+)*$/.test(x)), stories: affects.filter((x) => /^US-\d+$/.test(x)), title: title.slice(0, 160), text: d.answer.length > 160 ? d.answer : null, context: d.question, consequences: d.why || null, source, by: author, alternatives, ...(cardAdrDir ? { adrDir: cardAdrDir, allowOxeAdrDir: true, ledgerDir, card: cardKey } : {}) });
     recorded.push({ grill: d.id, decision: out.decision.id });
   }
   return recorded;
@@ -1544,7 +1552,7 @@ async function runtimeGrooming(projectRoot, activeSession, options = {}) {
       return { key, status: grillLib.status(path.join(base, key)), criteria: written ? refine.parseCriteria(md) : null, lint: written ? refine.lintSpec(md, kind) : null };
     });
     const r = grooming.report(cards);
-    const out = path.resolve(projectRoot, options.out || path.join('docs', 'grooming-quality.md'));
+    const out = path.resolve(projectRoot, options.out || path.join('.oxe', 'alm', 'grill', 'grooming-quality.md'));
     fs.mkdirSync(path.dirname(out), { recursive: true });
     fs.writeFileSync(out, grooming.renderReport(r));
     return { ...r, file: path.relative(projectRoot, out).replace(/\\/g, '/') };
@@ -1650,8 +1658,8 @@ function runtimeDeliveryStatus(projectRoot, activeSession, options = {}) {
   const phase = activeProgramPhase(projectRoot, activeSession);
   const since = phase && phase.started_at ? Date.parse(phase.started_at) : 0;
   const merged = new Map(events.filter((e) => e.type === 'AlmMerged').map((e) => [e.work_item_id, e.payload || {}]));
-  const prs = events.filter((e) => e.type === 'TaskPromoted' && e.payload && e.payload.pr && (!since || !e.timestamp || Date.parse(e.timestamp) >= since))
-    .map((e) => ({ task: e.work_item_id, pr: e.payload.pr, merged: merged.has(e.work_item_id), merged_at: merged.has(e.work_item_id) ? merged.get(e.work_item_id).merged_at || null : null }));
+  const prs = events.filter((e) => isPromotedPrEvent(e) && (!since || !e.timestamp || Date.parse(e.timestamp) >= since))
+    .map((e) => ({ ...(e.type === 'QuickPromoted' ? { quick: e.work_item_id } : {}), task: e.work_item_id, pr: e.payload.pr, merged: merged.has(e.work_item_id), merged_at: merged.has(e.work_item_id) ? merged.get(e.work_item_id).merged_at || null : null }));
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   let deploys = [];
@@ -1671,7 +1679,12 @@ function runtimeDeliveryStatus(projectRoot, activeSession, options = {}) {
   }
   const mode = require('./oxe-journey.cjs').deliveryMode(readProjectConfig(projectRoot) || {});
   const next = require('./oxe-project-health.cjs').suggestNextStep(projectRoot, readProjectConfig(projectRoot) || {});
-  return { mode: mode.mode, deploy_env: mode.deploy_env, phase: phase ? { id: phase.id, status: phase.status } : null, prs, deploys, next };
+  let activeQuick = null;
+  try {
+    const act = require('./oxe-quick.cjs').activeOnWorktree(projectRoot);
+    if (act && act.quick) activeQuick = { state: act.state, id: act.quick.id, key: act.quick.key || null, objective: act.quick.objective, branch: act.quick.branch || null };
+  } catch { activeQuick = null; }
+  return { mode: mode.mode, deploy_env: mode.deploy_env, phase: phase ? { id: phase.id, status: phase.status } : null, ...(activeQuick ? { quick: activeQuick } : {}), prs, deploys, next };
 }
 
 /** OXB-160: the tests' own tree for a frozen test file: up to its tests/test/__tests__/spec/e2e dir, else its own dir. */
@@ -2577,11 +2590,16 @@ function branchOpenPr(projectRoot, ghSpawn) {
   } catch { return null; }
 }
 
+/** A PR opened by the OXE: `runtime promote` (TaskPromoted) or `quick promote --open-pr` (QuickPromoted). */
+function isPromotedPrEvent(e) {
+  return Boolean(e && e.payload && e.payload.pr && (e.type === 'TaskPromoted' || (e.type === 'QuickPromoted' && e.work_item_id)));
+}
+
 /** Promoted PRs that got merged since: an `AlmMerged` event each (gh pr view; no gh → nothing). */
 function detectMergedPrs(projectRoot, activeSession, events, options = {}) {
   const merged = new Set(events.filter((e) => e.type === 'AlmMerged').map((e) => e.work_item_id));
   const found = [];
-  for (const e of events.filter((x) => x.type === 'TaskPromoted' && x.payload && x.payload.pr && !merged.has(x.work_item_id))) {
+  for (const e of events.filter((x) => isPromotedPrEvent(x) && !merged.has(x.work_item_id))) {
     const r = (options.ghSpawn || spawnSync)('gh', ['pr', 'view', String(e.payload.pr), '--json', 'state,mergedAt'], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
     if (r.status !== 0) continue;
     let j = null;
@@ -3369,7 +3387,7 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
   const q = require('./oxe-quick.cjs');
   const action = options.action || 'status';
   if (action === 'status') return { open: q.current(projectRoot) };
-  if (action === 'list') return { quicks: q.list(projectRoot) };
+  if (action === 'list') return { quicks: q.list(projectRoot, { local: Boolean(options.local) }) };
   if (action === 'commit') {
     const out = q.commit(projectRoot, { message: options.message, paths: options.paths, all: options.all, dryRun: options.dryRun });
     if (!out.dry_run) appendEvent(projectRoot, activeSession, { type: 'QuickCommitted', payload: { id: out.id, sha: out.sha, files: out.files.length } });
@@ -3380,13 +3398,31 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
     if (!open) throw new Error('nenhum quick aberto (oxe-cc quick <KEY> "<objetivo>")');
     return { id: open.id, trailers: q.trailers(open) };
   }
+  if (action === 'promote') {
+    const out = q.promote(projectRoot, {
+      id: options.id,
+      openPr: Boolean(options.openPr),
+      base: options.base || null,
+      config: readProjectConfig(projectRoot) || {},
+      draft: Boolean(options.draft),
+      dryRun: Boolean(options.dryRun),
+      force: Boolean(options.force),
+      spawn: options.spawn,
+    });
+    // work_item_id = the quick id: ship status / detectMergedPrs follow its CI and merge like a promoted task's
+    if (out.promoted) appendEvent(projectRoot, activeSession, { type: 'QuickPromoted', work_item_id: out.id, payload: { id: out.id, key: out.key, pr: out.pr, branch: out.branch } });
+    return out;
+  }
   let config = readProjectConfig(projectRoot) || {};
   const lib = require('./oxe-alm.cjs');
   // OxeSpace 14/11 & OXB-C1 (#11): a program worktree may have no local `.oxe/config.json` "alm" block; inherit from
   // `--alm-dir`, `PROGRAM.json -> forked_from.root`, main worktree, or sibling worktrees of the same clone.
+  // OXB-C20 #9: `--no-alm` skips sibling worktree scanning and disables ALM writes for fast parallel quick workflows.
   let almFrom = null;
   let almFromKind = null;
-  if (options.almDir || !config.alm) {
+  if (options.noAlm) {
+    config = { ...config, alm: { provider: 'none' } };
+  } else if (options.almDir || !config.alm) {
     const inherited = discoverInheritedAlmConfig(projectRoot, activeSession, options.almDir || null);
     if (inherited) {
       config = { ...config, alm: inherited.alm };
@@ -3395,10 +3431,35 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
     }
   }
   const cfg = lib.almConfig(config, { defaultProgram: path.basename(path.resolve(projectRoot)) });
-  if (action === 'start' && cfg && cfg.provider !== 'none' && !options.key) throw new Error('com ALM configurado, o quick nomeia o card: oxe-cc quick <KEY> "<objetivo>"');
+  // OXB-C21 #5: `--from-card <KEY>` pre-populates key & objective from `.oxe/alm/refine/<KEY>.json` or `.oxe/alm/specs/<KEY>.md`.
+  let resolvedKey = options.key || null;
+  let resolvedObjective = options.objective || null;
+  if (action === 'start' && options.fromCard) {
+    const fk = String(options.fromCard).toUpperCase();
+    resolvedKey = resolvedKey || fk;
+    if (!resolvedObjective) {
+      const refineJson = path.join(projectRoot, '.oxe', 'alm', 'refine', `${fk}.json`);
+      const refineSpec = path.join(projectRoot, '.oxe', 'alm', 'specs', `${fk}.md`);
+      if (fs.existsSync(refineJson)) {
+        try {
+          const data = JSON.parse(fs.readFileSync(refineJson, 'utf8'));
+          if (data && data.summary) resolvedObjective = String(data.summary).trim();
+        } catch { /* ignore */ }
+      }
+      if (!resolvedObjective && fs.existsSync(refineSpec)) {
+        try {
+          const md = fs.readFileSync(refineSpec, 'utf8');
+          const m = /^#\s+(?:[A-Z][A-Z0-9]+-\d+\s*[—–-]\s*)?(.+)$/m.exec(md);
+          if (m && m[1]) resolvedObjective = m[1].trim();
+        } catch { /* ignore */ }
+      }
+      if (!resolvedObjective) throw new Error(`--from-card ${fk}: coleta não encontrada em .oxe/alm/refine/${fk}.json nem .oxe/alm/specs/${fk}.md — rode \`oxe-cc alm refine ${fk}\` ou informe o objetivo`);
+    }
+  }
+  if (action === 'start' && cfg && cfg.provider !== 'none' && !resolvedKey) throw new Error('com ALM configurado, o quick nomeia o card: oxe-cc quick <KEY> "<objetivo>"');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const rec = action === 'start'
-    ? q.start(projectRoot, { key: options.key, objective: options.objective, by: options.by, replace: options.replace, dryRun: options.dryRun, quickFile: paths.quick || path.join(projectRoot, '.oxe', 'QUICK.md') })
+    ? q.start(projectRoot, { key: resolvedKey, objective: resolvedObjective, by: options.by, replace: options.replace, dryRun: options.dryRun, quickFile: paths.quick || path.join(projectRoot, '.oxe', 'QUICK.md') })
     : action === 'cancel'
       ? q.cancel(projectRoot, { reason: options.reason, evidence: options.evidence, by: options.by, id: options.id, dryRun: options.dryRun })
       : q.done(projectRoot, { verify: options.verify, noCommit: options.noCommit, by: options.by, id: options.id, dryRun: options.dryRun });
@@ -3406,6 +3467,8 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
   if (action === 'start' && !rec.resumed && !rec.dry_run) appendEvent(projectRoot, activeSession, { type: 'QuickStarted', payload: { id: rec.id, key: rec.key } });
   if (action === 'cancel' && rec.cancelled) appendEvent(projectRoot, activeSession, { type: 'QuickAbandoned', payload: { id: rec.id, key: rec.key, reason: rec.cancel.reason, evidence: rec.cancel.evidence } });
   if (action === 'done' && rec.closed) appendEvent(projectRoot, activeSession, { type: 'QuickDone', payload: { id: rec.id, key: rec.key, commits: rec.commits.length, verify_ok: rec.verify ? rec.verify.ok : null } });
+  // OXB-C20 #9: --no-alm explicitly disables ALM for fast parallel quick runs (silent null, no warning)
+  if (options.noAlm) return { ...rec, alm: null };
   // a card named but no ALM here: say it, never a silent OK (OxeSpace 14/11, OXE-144 in a worktree with no alm block)
   if (!cfg && rec.key && !rec.resumed && !(action === 'done' && rec.closed === false)) return { ...rec, alm: { skipped: true, why: `ALM não configurado aqui: nada foi gravado no card ${rec.key} (rode na pasta que tem o bloco "alm" do .oxe/config.json, ou use --alm-dir <pasta>)` } };
   // the card: only when there is one, an ALM, and the quick is not a resume or a failed verification
@@ -3427,10 +3490,16 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
     : (paths.programDir || path.join(projectRoot, '.oxe', 'program'));
   const net = { http: options.http, env, sleep: options.sleep, retries: options.retries, dryRun: dry, apply: options.apply };
   const alm = {};
+  // OXB-C28-9: the comment and the move are independent writes — a failed comment (Q-20261121-df4b: HTTP 404) no longer
+  // skips the move to in_progress; each error is named
+  const errors = [];
   try {
     alm.comment = await lib.comment(programDir, cfg, rec.key, q.cardComment(rec, action === 'start' ? 'start' : action === 'cancel' ? 'cancel' : 'done'), net);
-    if (action === 'start' && cfg.states.in_progress) alm.move = await lib.moveForward(programDir, cfg, rec.key, 'in_progress', net);
-  } catch (err) { alm.error = err.message; }
+  } catch (err) { errors.push(`comentário: ${err.message}`); }
+  if (action === 'start' && cfg.states.in_progress) {
+    try { alm.move = await lib.moveForward(programDir, cfg, rec.key, 'in_progress', net); } catch (err) { errors.push(`mover para in_progress: ${err.message}`); }
+  }
+  if (errors.length) alm.error = errors.join(' · ');
   return { ...rec, alm: { dry_run: dry, ...alm, ...(almFrom ? { from: almFrom, from_kind: almFromKind } : {}) } };
 }
 
@@ -3708,6 +3777,20 @@ function uiCardGaps(md, collected = {}) {
   if (!isUi) return { isUi: false, gaps: [] };
   // OXB-C6 #7 (P3): catalog/copy cards whose criteria only inspect `shared/locales/**` (e.g. OXE-233, OXE-253) are not UI geometry cards
   if (criteriaOnlyReadSharedLocales(crit)) return { isUi: false, gaps: [], locale_only_exempt: true };
+  // OXB-C20 #4: logical bugs (e.g. OXE-294 in TerminalPane.tsx) without visual/brand labels that explicitly declare
+  // `BRD: nenhum` and do not alter CSS/tokens/geometry should not require light/dark + compact/comfortable UI checklists.
+  const hasVisualLabel = labels.some((l) => /^(?:area-marca|visual|polish|ui|design)$/i.test(l));
+  const declaresNoBrd = /\b(?:sem BRD|BRD:\s*(?:nenhum|n\/a|—|-))\b/i.test(text);
+  const touchesStyleOrTokens = /\.(?:css|scss|less)\b|var\(--[\w-]+\)|--(?:bar|row|control|fs|radius|space)-|src\/(?:styles|design)\//i.test(text);
+  if (collected.kind === 'bug' && !hasVisualLabel && declaresNoBrd && !touchesStyleOrTokens) {
+    return { isUi: false, gaps: [], bug_non_visual_exempt: true };
+  }
+  // OXB-C28-6 (OXE-332/333): a card whose only UI path is src/components/ (a behavior card: a handler, a state) is not a
+  // geometry card unless it says something visual — a measure, a token, a style file, a theme/density, a visual label
+  if (!hasMarca && !hasVisualLabel && !/\b(src\/(renderer|ui|styles|design)\/|mobile\/android\/[\w/.-]*\/ui\/)/.test(text)) {
+    const VISUAL_RE = /\b\d+(?:[.,]\d+)?\s*(?:px|dp|sp|rem|em)\b|var\(--[\w-]+\)|\.(?:css|scss|less)\b|\b(?:raio|altura|largura|fonte|espa[cç]amento|padding|margem|margin|borda|sombra|temas?|densidades?|alinhamento|geometria|tokens?|cores?|contraste|tamanho)\b|\bBRD-\d+\b/i;
+    if (!VISUAL_RE.test(text)) return { isUi: false, gaps: [], behavior_component_exempt: true };
+  }
   const gaps = [];
   // a card with no BRD (a new function, OxeSpace 15/11 OXE-170) says so: "BRD: nenhum" / "sem BRD" / "função nova"
   if (!/\bBRD-\d+\b/.test(text) && !/\bsem BRD\b|\bBRD:\s*(nenhum|n\/a|—|-)|\bfun[cç][aã]o nova\b|\bnova fun[cç][aã]o\b/i.test(text)) gaps.push('qual é o BRD-n deste card? (a referência do rebranding; sem BRD, escreva "BRD: nenhum (função nova)")');
@@ -4719,7 +4802,7 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     pluginRegistry: options.pluginRegistry || buildRuntimePluginRegistry(projectRoot),
     // OXB-165: no run-level timeout by default (the scheduler's 30 min aborted at the first wave past it); the
     // stale-progress guard covers hangs. --max-run-ms > config executor.max_run_ms.
-    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, outOfScopeRequirements: execScopeGaps, deferFailed: ((readProjectConfig(projectRoot) || {}).execute || {}).defer_failed !== false, dispatch: ((readProjectConfig(projectRoot) || {}).execute || {}).dispatch === 'stream' ? 'stream' : 'wave', failureClasses: ((readProjectConfig(projectRoot) || {}).execute || {}).failure_classes || undefined, allSegments: Boolean(options.allSegments || (((readProjectConfig(projectRoot) || {}).verify || {}).all_segments === true) || (((readProjectConfig(projectRoot) || {}).execute || {}).all_segments === true)), ...(options.schedulerOptions || {}), ...(policyRefusedBefore.length ? { policyRefusedBefore } : {}), ...(policyRetryExhausted.length ? { policyRetryExhausted } : {}) },
+    schedulerOptions: { verifyTimeoutMs: execVerifyTimeoutMs, maxRunDurationMs: execMaxRunMs, outOfScopeRequirements: execScopeGaps, deferFailed: ((readProjectConfig(projectRoot) || {}).execute || {}).defer_failed !== false, policyAutoRetry: ((readProjectConfig(projectRoot) || {}).execute || {}).policy_auto_retry !== false, dispatch: ((readProjectConfig(projectRoot) || {}).execute || {}).dispatch === 'stream' ? 'stream' : 'wave', failureClasses: ((readProjectConfig(projectRoot) || {}).execute || {}).failure_classes || undefined, allSegments: Boolean(options.allSegments || (((readProjectConfig(projectRoot) || {}).verify || {}).all_segments === true) || (((readProjectConfig(projectRoot) || {}).execute || {}).all_segments === true)), ...(options.schedulerOptions || {}), ...(policyRefusedBefore.length ? { policyRefusedBefore } : {}), ...(policyRetryExhausted.length ? { policyRetryExhausted } : {}) },
     // The scheduler already persists every event through the runtime bus (events/bus.ts →
     // appendEvent). This hook only forwards progress; writing here again duplicated the log.
     attemptChanges: (id) => lastAttemptChanges.get(id) || null,
@@ -6590,7 +6673,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
   // G36 part 2: each pending task's frozen test against a stub, repeated — a hang or a flaky result is an error before
   // any paid attempt depends on it. Runs by default when the plan has new/modified frozen tests (disable with --no-precheck).
   const cfgPrecheck = ((readProjectConfig(projectRoot) || {}).lint || {}).precheck;
-  const precheckDisabled = options.noPrecheck === true || options.precheckTests === false || (cfgPrecheck === false && options.precheckTests !== true);
+  const precheckDisabled = !options.precheckE2e && (options.noPrecheck === true || options.precheckTests === false || (cfgPrecheck === false && options.precheckTests !== true));
   if (!precheckDisabled) {
     try {
       const { doc: pjp, paths: pp } = readPlanJsonDoc(projectRoot, activeSession);
@@ -6605,14 +6688,22 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
             acceptanceLock: runStateForPrecheck ? runStateForPrecheck.acceptance_lock : null,
             allowWithoutGit: Boolean(options.precheckWorkspace),
           });
-        const shouldRunPrecheck = explicitPrecheck || (Array.isArray(newEntries) && newEntries.length > 0);
-        if (shouldRunPrecheck) {
-          const entriesToRun = explicitPrecheck ? pre.pendingAcceptance(pjp) : newEntries;
-          const mode = explicitPrecheck ? 'explicit' : 'auto';
+        // OXB-C27-2: --precheck-e2e runs each NEW frozen e2e (remote ones too) once at HEAD + stub and requires it red on a
+        // contract assertion, not on setup (all pending e2e when nothing is new)
+        const e2eEntries = options.precheckE2e
+          ? ((Array.isArray(newEntries) && newEntries.length ? newEntries : pre.pendingAcceptance(pjp)).filter((a) => pre.isE2e(a)))
+          : null;
+        const shouldRunPrecheck = options.precheckE2e ? true : explicitPrecheck || (Array.isArray(newEntries) && newEntries.length > 0);
+        if (options.precheckE2e && !e2eEntries.length) result.warnings.push('precheck --precheck-e2e: nenhum teste e2e congelado pendente');
+        if (shouldRunPrecheck && (!e2eEntries || e2eEntries.length)) {
+          const entriesToRun = e2eEntries || (explicitPrecheck ? pre.pendingAcceptance(pjp) : newEntries);
+          const mode = e2eEntries ? 'e2e' : explicitPrecheck ? 'explicit' : 'auto';
           const cachePath = options.precheckCache === false ? false : path.join(path.dirname(pp.plan), 'precheck-cache.json');
           const runsLabel = Math.max(2, Number(options.precheckRuns) || 2);
           if (typeof options.onProgress === 'function') {
-            if (mode === 'explicit') {
+            if (mode === 'e2e') {
+              options.onProgress(`precheck e2e: ${entriesToRun.length} teste(s) e2e congelado(s), 1 vez cada contra o HEAD + stub — precisa ficar vermelho numa asserção do contrato, não na montagem`);
+            } else if (mode === 'explicit') {
               options.onProgress(`precheck: ${entriesToRun.length} teste(s) de aceite contra o stub, ${runsLabel} vez(es) cada (remote-verify: 1 vez) — veredito parcial em ${path.relative(projectRoot, path.join(path.dirname(pp.plan), 'precheck-last.json')).split(path.sep).join('/')}`);
             } else {
               const cachePreview = cachePath ? pre.readPrecheckCache(cachePath) : null;
@@ -6642,6 +6733,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
             runs: options.precheckRuns,
             suites,
             onProgress: options.onProgress,
+            selectorLevel: ((readProjectConfig(projectRoot) || {}).lint || {}).precheck_e2e_selector === 'error' ? 'error' : 'warn',
             ...(options.precheckTimeoutMs > 0 ? { timeoutMs: options.precheckTimeoutMs } : {}),
             ...(options.precheckRun ? { run: options.precheckRun } : {}),
             ...(options.precheckWorkspace ? { workspace: options.precheckWorkspace } : {}),
@@ -8526,6 +8618,32 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
         config: readProjectConfig(projectRoot) || {},
       });
   if (!testsOnly) for (const q of quickSelection.quicks) shas.add(q.sha);
+  // OXB-C27-3 (polish2 989902e60): the planner's single frozen-tests commit (only acceptance test files, of several
+  // tasks) is never cherry-picked — every task PR carried the others' red tests. The task's own frozen tests are
+  // carried as files below (OXB-156); the commit leaves the pick list, named in the warnings.
+  {
+    const frozenOwner = new Map();
+    for (const a of (doc && Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])) {
+      for (const f of (a && a.files) || []) {
+        const rel = String(typeof f === 'string' ? f : (f && f.path) || '').replace(/\\/g, '/').replace(/^\.\//, '');
+        if (!rel) continue;
+        if (!frozenOwner.has(rel)) frozenOwner.set(rel, new Set());
+        frozenOwner.get(rel).add(String(a.task || a.criterion || '?').toUpperCase());
+      }
+    }
+    if (frozenOwner.size) {
+      for (const sha of [...shas]) {
+        const files = (gitLines(projectRoot, ['show', '--name-only', '--format=', '--no-renames', sha]) || []).map((f) => f.replace(/\\/g, '/')).filter((f) => f && !f.startsWith('.oxe/'));
+        if (!files.length || !files.every((f) => frozenOwner.has(f))) continue;
+        const owners = new Set(files.flatMap((f) => [...frozenOwner.get(f)]));
+        const ownCriteria = new Set(planTasks.flatMap((t) => (t.acceptance || []).map((c) => String(c).toUpperCase())));
+        const foreign = [...owners].filter((o) => !idSet.has(o) && !ownCriteria.has(o));
+        if (!foreign.length) continue;
+        shas.delete(sha);
+        resolvedBase.warnings.push(`${sha.slice(0, 8)} é o commit de testes congelados do planejador (também de ${foreign.slice(0, 6).join(', ')}): não vai no PR; os congelados de ${taskIds.join(',')} vão como arquivos [OXB-C27-3]`);
+      }
+    }
+  }
   const criteria = new Set(Array.isArray(task.acceptance) ? task.acceptance : []);
   // OXB-156: the PR carries (a) the task's OWN commits (OXE-Task trailer / done_commit) and (b) the frozen tests it
   // proves, taken as FILES from the program tip (+ the local fixtures they import) — never the program branch's import
@@ -8549,7 +8667,15 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   const otherTaskTouched = (file) => {
     const bodies = (gitRun(projectRoot, ['log', '--format=%B%x00', `${baseSha}..HEAD`, '--', file]).stdout || '').split('\0');
     // phase-aware (OXB-166): F5/T3 is not the T3 of F6 being promoted
-    return bodies.some((b) => [...b.matchAll(/^OXE-Task:\s*(?:(F\d+)\/)?(T\d+)\s*$/gm)].some((m) => (phaseCtx.phase && m[1] && m[1] !== phaseCtx.phase) || !idSet.has(m[2])));
+    return bodies.some((b) => {
+      if ([...b.matchAll(/^OXE-Task:\s*(?:(F\d+)\/)?(T\d+)\s*$/gm)].some((m) => (phaseCtx.phase && m[1] && m[1] !== phaseCtx.phase) || !idSet.has(m[2]))) return true;
+      // OXB-C23-2 (152chat T5, tests/design-lint.test.ts 415→406): a QUICK that did another task (no OXE-Task trailer,
+      // it names T10) changed the file too — the tip carries that task's assertions. A quick naming this task (a CR
+      // re-freeze of its test) is still ours.
+      if (!/^OXE-Quick:/m.test(b)) return false;
+      const named = [...b.matchAll(/(?:(F\d+)\/)?\b(T\d+)\b/g)].filter((m) => !(phaseCtx.phase && m[1] && m[1] !== phaseCtx.phase)).map((m) => m[2]);
+      return named.length > 0 && !named.some((t) => idSet.has(t));
+    });
   };
   const scopeTests = scopeCandidates.filter((f) => !otherTaskTouched(f));
   const sharedSkipped = scopeCandidates.filter((f) => !scopeTests.includes(f));
@@ -10410,6 +10536,34 @@ function runtimePlanAmendTest(projectRoot, activeSession, options = {}) {
     throw new Error(`O arquivo precisa estar dentro do projeto (${rawFile}).`);
   }
 
+  // OXB-C28-7 (ACC-FIX / OXE-58): the frozen test may belong to ANOTHER program (a closed sibling worktree). The file
+  // (as edited here) gives the new hash; the owner's PLAN.json — `--program <nome>`, or the one sibling whose
+  // acceptance_tests list the file — is the one amended. No need to reopen the owner's worktree on a new branch.
+  const fileRoot = projectRoot;
+  let owner = null;
+  {
+    const refine = require('./oxe-alm-refine.cjs');
+    const normRel = (x) => String(typeof x === 'string' ? x : (x && (x.path || x.file)) || '').replace(/\\/g, '/').replace(/^\.\//, '');
+    const lists = (doc) => Boolean(doc && Array.isArray(doc.acceptance_tests) && doc.acceptance_tests.some((a) => a && (a.files || []).map(normRel).includes(relPath)));
+    if (options.program) {
+      const e = refine.resolveProgramSpec(projectRoot, activeSession, String(options.program));
+      if (!e) {
+        const names = refine.discoverProgramCatalog(projectRoot, { activeSession }).filter((x) => !x.ephemeral).map((x) => x.slug);
+        throw new Error(`--program ${options.program}: programa não encontrado (disponíveis: ${names.join(', ') || 'nenhum'})`);
+      }
+      if (path.resolve(e.root) !== path.resolve(projectRoot)) owner = e;
+    } else {
+      let localLists = false;
+      try { localLists = lists(readPlanJsonDoc(projectRoot, activeSession).doc); } catch { localLists = false; }
+      if (!localLists) {
+        const owners = refine.discoverProgramCatalog(projectRoot, { activeSession }).filter((x) => path.resolve(x.root) !== path.resolve(projectRoot) && lists(x.planDoc));
+        if (owners.length > 1) throw new Error(`${relPath} está congelado em ${owners.length} programas (${owners.map((x) => x.slug).join(', ')}) — diga qual: --program <nome>`);
+        if (owners.length === 1) owner = owners[0];
+      }
+    }
+    if (owner) { projectRoot = owner.root; activeSession = null; }
+  }
+
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const planJsonLib = require('./oxe-plan-json.cjs');
   const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
@@ -10419,11 +10573,11 @@ function runtimePlanAmendTest(projectRoot, activeSession, options = {}) {
 
   if (!options.force) {
     const rigor = require('./oxe-test-rigor.cjs');
-    const regexFindings = rigor.suspiciousRegexFindings(projectRoot, [relPath]);
+    const regexFindings = rigor.suspiciousRegexFindings(fileRoot, [relPath]);
     if (regexFindings.length) {
       throw new Error(`plan amend-test recusado por lint de regex suspeita:\n  - ${rigor.suspiciousRegexMessages(regexFindings).join('\n  - ')}`);
     }
-    const socketFindings = rigor.pausedSocketFindings(projectRoot, [relPath]);
+    const socketFindings = rigor.pausedSocketFindings(fileRoot, [relPath]);
     if (socketFindings.length) {
       throw new Error(`plan amend-test recusado por lint de socket pausado:\n  - ${rigor.pausedSocketMessages(socketFindings).join('\n  - ')}`);
     }
@@ -10502,11 +10656,13 @@ function runtimePlanAmendTest(projectRoot, activeSession, options = {}) {
       by,
       criteria: (amended.matched || []).map((m) => m.criterion).filter(Boolean),
       preserved_done_tasks: doneCount,
+      ...(owner ? { owner_program: owner.slug, amended_from: fileRoot } : {}),
     },
   });
 
   return {
     ok: true,
+    ...(owner ? { owner_program: owner.slug, owner_root: owner.root, owner_plan: path.relative(owner.root, jsonPath).replace(/\\/g, '/') } : {}),
     file: relPath,
     previous_sha256: previousSha,
     sha256: newSha,
@@ -11072,8 +11228,11 @@ function runtimePlanTaskEdit(projectRoot, activeSession, options = {}) {
   const addVerify = (Array.isArray(options.addVerify) ? options.addVerify : options.addVerify ? [options.addVerify] : [])
     .map((c) => String(c || '').trim())
     .filter(Boolean);
-  if (wave == null && deps == null && !add.length && !remove.length && notes == null && !addVerify.length) {
-    throw new Error('nada a editar: --wave, --depends-on, --add-paths, --remove-paths, --add-verify ou --notes');
+  // OXB-C24-1: plan task edit Tn --budget-usd N (per-task budget, recorded in PLAN.json)
+  const budgetUsd = options.budgetUsd != null && options.budgetUsd !== '' ? Number(options.budgetUsd) : null;
+  if (budgetUsd != null && !(Number.isFinite(budgetUsd) && budgetUsd > 0)) throw new Error('--budget-usd: um valor em US$ maior que 0');
+  if (wave == null && deps == null && !add.length && !remove.length && notes == null && !addVerify.length && budgetUsd == null) {
+    throw new Error('nada a editar: --wave, --depends-on, --add-paths, --remove-paths, --add-verify, --budget-usd ou --notes');
   }
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
@@ -11132,6 +11291,7 @@ function runtimePlanTaskEdit(projectRoot, activeSession, options = {}) {
       task.files = (task.files || []).filter((f) => !remove.includes(String(f).replace(/\\/g, '/')));
     }
     if (notes != null) task.notes = notes;
+    if (budgetUsd != null) task.budget_usd = budgetUsd;
     let addedVerify = [];
     if (addVerify.length) {
       const beforeCmds = readTaskVerifyCommands(task);
@@ -11839,12 +11999,16 @@ function runtimePlanTaskFold(projectRoot, activeSession, options = {}) {
  */
 function runtimePlanPackFix(projectRoot, activeSession, options = {}) {
   const taskId = String(options.task || '').toUpperCase();
-  if (!/^T\d+$/.test(taskId)) throw new Error('use: oxe-cc plan pack fix T<n> --symbol <arquivo>#<nome> (--internal | --member-of <Classe> | --remove) --by <papel> --reason "…"');
+  if (!/^T\d+$/.test(taskId)) throw new Error('use: oxe-cc plan pack fix T<n> --symbol <arquivo>#<nome> (--add | --internal | --member-of <Classe> | --signature "…" | --remove) --by <papel> --reason "…"');
   const m = /^(.+)#([A-Za-z_$][\w$]*)$/.exec(String(options.symbol || '').trim());
   if (!m) throw new Error('informe o símbolo: --symbol <arquivo>#<nome>');
   const [, file, name] = m;
-  const mode = options.remove ? 'remove' : options.memberOf ? 'member' : options.internal ? 'internal' : null;
-  if (!mode) throw new Error('diga a correção: --internal (não é export), --member-of <Classe> (é membro) ou --remove');
+  // OXB-C24-2: --signature "<assinatura>" gives a symbol the signature plan skeleton needs (no hand edit of the pack)
+  // OXB-C28-5: --add puts a symbol the frozen tests do not import (a hook, a type the task must export) in the pack
+  const mode = options.add ? 'add' : options.remove ? 'remove' : options.signature ? 'signature' : options.memberOf ? 'member' : options.internal ? 'internal' : null;
+  if (!mode) throw new Error('diga a correção: --add (símbolo novo; com --signature/--internal/--member-of opcionais), --internal (não é export), --member-of <Classe> (é membro), --signature "…" ou --remove');
+  if (options.add && options.remove) throw new Error('--add e --remove juntos: escolha um');
+  if (mode === 'signature' && String(options.signature).trim().length < 3) throw new Error('--signature: a assinatura do símbolo, ex.: "(id: string) => Promise<void>"');
   if (mode === 'member' && !/^[A-Za-z_$][\w$]*$/.test(String(options.memberOf))) throw new Error('--member-of: o nome da classe');
   const by = String(options.by || '').trim();
   const reason = String(options.reason || '').trim();
@@ -11858,18 +12022,74 @@ function runtimePlanPackFix(projectRoot, activeSession, options = {}) {
   if (!entry) throw new Error(`${taskId} não está no IMPLEMENTATION-PACK.json`);
   const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
   const syms = Array.isArray(entry.symbols) ? entry.symbols : [];
-  const idx = syms.findIndex((s) => s && typeof s === 'object' && String(s.name) === name && norm(s.path || s.file) === norm(file));
-  if (idx < 0) throw new Error(`${file}#${name} não está nos symbols de ${taskId}`);
-  const before = { ...syms[idx] };
-  if (mode === 'remove') syms.splice(idx, 1);
+  let idx = syms.findIndex((s) => s && typeof s === 'object' && String(s.name) === name && norm(s.path || s.file) === norm(file));
+  if (mode === 'add') {
+    if (idx >= 0) throw new Error(`${file}#${name} já está nos symbols de ${taskId} — use --signature/--internal/--member-of para corrigi-lo`);
+    const scope = [...(entry.exact_paths || []), ...(entry.write_set || []), ...(entry.files || [])].map((p) => norm(typeof p === 'string' ? p : p && (p.path || p.file)));
+    if (scope.length && !scope.includes(norm(file))) throw new Error(`${file} não está no escopo de ${taskId} no pack (${scope.slice(0, 6).join(', ')}${scope.length > 6 ? ', …' : ''}) — o símbolo tem de ser de um arquivo que a tarefa escreve (oxe-cc plan scope add ${taskId} ${file}, depois plan pack sync ${taskId})`);
+    const sym = {
+      name,
+      path: norm(file),
+      ...(options.internal || options.memberOf ? { exported: false } : {}),
+      ...(options.memberOf ? { member_of: String(options.memberOf) } : {}),
+      ...(options.signature ? { signature: String(options.signature).trim() } : {}),
+      added_by_fix: true,
+    };
+    syms.push(sym);
+    idx = syms.length - 1;
+    if (sym.exported !== false) {
+      entry.contracts = Array.isArray(entry.contracts) ? entry.contracts : [];
+      const c = `${name} exportado de ${sym.path}`;
+      if (!entry.contracts.includes(c)) entry.contracts.push(c);
+    }
+  }
+  if (idx < 0) throw new Error(`${file}#${name} não está nos symbols de ${taskId} (para acrescentar: --add)`);
+  const before = mode === 'add' ? null : { ...syms[idx] };
+  if (mode === 'add') { /* built above */ } else if (mode === 'remove') syms.splice(idx, 1);
+  else if (mode === 'signature') syms[idx].signature = String(options.signature).trim();
   else Object.assign(syms[idx], { exported: false, ...(mode === 'member' ? { member_of: String(options.memberOf) } : {}) });
   entry.symbols = syms;
-  entry.fixes = [...(Array.isArray(entry.fixes) ? entry.fixes : []), { symbol: `${file}#${name}`, change: mode === 'member' ? `membro de ${options.memberOf}` : mode, before, by, reason, ...(options.cr ? { cr: String(options.cr).toUpperCase() } : {}), at: new Date().toISOString() }];
+  entry.fixes = [...(Array.isArray(entry.fixes) ? entry.fixes : []), { symbol: `${file}#${name}`, change: mode === 'member' ? `membro de ${options.memberOf}` : mode, ...(mode === 'signature' ? { signature: syms[idx].signature } : {}), before, by, reason, ...(options.cr ? { cr: String(options.cr).toUpperCase() } : {}), at: new Date().toISOString() }];
   const tmp = `${packFile}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(pack, null, 2)}\n`, 'utf8');
   fs.renameSync(tmp, packFile);
   appendEvent(projectRoot, activeSession, { type: 'PackSymbolFixed', work_item_id: taskId, payload: { task: taskId, symbol: `${file}#${name}`, change: mode, member_of: options.memberOf || null, by, reason, cr: options.cr || null } });
-  return { task: taskId, symbol: `${file}#${name}`, change: mode, member_of: options.memberOf || null, by };
+  return { task: taskId, symbol: `${file}#${name}`, change: mode, member_of: options.memberOf || null, signature: mode === 'signature' ? String(options.signature).trim() : null, by };
+}
+
+/**
+ * OXB-C25: `oxe-cc plan pack ready --by <papel> [--reason "…"] [--dry-run]` marks IMPLEMENTATION-PACK.json
+ * `ready: true` only when the pack has no other critical gap (the same check the preflight runs). A pack written
+ * before plan build set the flag no longer needs a hand edit.
+ */
+function runtimePlanPackReady(projectRoot, activeSession, options = {}) {
+  const by = String(options.by || '').trim();
+  if (!by) throw new Error('informe quem marca o pack (--by <papel>)');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const packFile = paths.implementationPack || path.join(projectRoot, '.oxe', 'IMPLEMENTATION-PACK.json');
+  let pack;
+  try { pack = JSON.parse(fs.readFileSync(packFile, 'utf8')); } catch { throw new Error(`IMPLEMENTATION-PACK.json ausente ou inválido (${path.relative(projectRoot, packFile)})`); }
+  let planTasks = [];
+  try { planTasks = ((readPlanJsonDoc(projectRoot, activeSession).doc || {}).tasks || []).filter((t) => t && t.id).map((t) => ({ id: String(t.id) })); } catch { planTasks = []; }
+  const rationality = require('./oxe-rationality.cjs');
+  const summary = rationality.summarizeImplementationPack(packFile, planTasks);
+  const gaps = (summary.criticalGaps || []).filter((g) => !/ready missing|ready=false|IMPLEMENTATION-PACK\.json: /.test(g));
+  const ownGaps = Array.isArray(pack.critical_gaps) ? pack.critical_gaps.map(String) : [];
+  if (gaps.length || ownGaps.length) {
+    const all = [...gaps, ...ownGaps.map((g) => `critical_gaps: ${g}`)];
+    throw new Error(`o pack ainda tem ${all.length} lacuna(s) crítica(s); corrija antes de marcar ready:\n  - ${all.join('\n  - ')}`);
+  }
+  const already = pack.ready === true;
+  if (!options.dryRun && !already) {
+    pack.ready = true;
+    pack.critical_gaps = [];
+    pack.ready_marked = { by, reason: options.reason ? String(options.reason) : null, at: new Date().toISOString() };
+    const tmp = `${packFile}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(pack, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, packFile);
+    appendEvent(projectRoot, activeSession, { type: 'PackMarkedReady', payload: { by, reason: options.reason || null, tasks: (pack.tasks || []).length } });
+  }
+  return { pack: path.relative(projectRoot, packFile).replace(/\\/g, '/'), ready: true, changed: !already && !options.dryRun, dry_run: Boolean(options.dryRun), tasks: (pack.tasks || []).length, by };
 }
 
 function runtimePlanReopen(projectRoot, activeSession, options = {}) {
@@ -15179,6 +15399,7 @@ module.exports = {
   runtimeFailureCost,
   attachAcceptanceLock,
   runtimePlanPackFix,
+  runtimePlanPackReady,
   uiCardGaps,
   writeTaskVerifyFresh,
   findTaskCheckpoint,

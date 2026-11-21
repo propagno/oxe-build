@@ -527,13 +527,13 @@ export class LlmTaskExecutor implements TaskExecutor {
         const hint = kind !== 'policy'
           ? ''
           : lastTurnTools.length
-            ? `\n\nRecusa da política de uso do modelo: não há nova tentativa automática. O gatilho veio de saídas de ferramenta do turno anterior${savedOutputs ? `, salvas na íntegra em ${savedOutputs}` : ''} — não do pack. Uma nova tentativa começa um contexto novo (o pack mais o que ficou na árvore), sem essas saídas: oxe-cc runtime execute --retry-policy-once. Se a mesma busca voltar a ler o trecho, restrinja o escopo da tarefa (files) para não varrer fixtures.`
+            ? `\n\nRecusa da política de uso do modelo. O gatilho veio de saídas de ferramenta do turno anterior${savedOutputs ? `, salvas na íntegra em ${savedOutputs}` : ''} — não do pack. O runtime faz uma nova tentativa automática, uma vez, com contexto novo (o pack mais o que ficou na árvore), sem essas saídas (execute.policy_auto_retry: false desliga); se ela também for recusada, mais uma só com oxe-cc runtime execute --retry-policy-once. Se a mesma busca voltar a ler o trecho, restrinja o escopo da tarefa (files) para não varrer fixtures.`
             : `\n\nRecusa da política de uso do modelo: não há nova tentativa automática. Veja o prompt com oxe-cc runtime execute --task ${node.id} --print-prompt e tire o trecho que dispara a recusa (um fixture, um snippet). Se parecer falso positivo, uma única nova tentativa: oxe-cc runtime execute --retry-policy-once.`;
         const sizeNote = kind !== 'policy'
           ? ''
           : `\n\nO contexto tinha ${refusalChars} chars no turno ${turn}${contextCap ? ` (teto execute.max_context_chars ${contextCap})` : ''}.${longContext ? ` As saídas do último turno somam só ${toolChars} chars: o tamanho do contexto é o suspeito, não o conteúdo — considere execute.max_context_chars com max_context_action "retry" abaixo desse valor.` : ''}`;
         const out = kind === 'policy' ? `${errMsg}${trail}${longContext ? hint.replace('O gatilho veio de saídas de ferramenta do turno anterior', 'Saídas de ferramenta do turno anterior').replace(' Se a mesma busca voltar a ler o trecho, restrinja o escopo da tarefa (files) para não varrer fixtures.', '') : hint}${sizeNote}` : errMsg;
-        return done({ success: false, failure_class: failureClass, evidence: evidencePaths, output: out });
+        return done({ success: false, failure_class: failureClass, evidence: evidencePaths, output: out, ...(kind === 'policy' ? { policy_trigger: lastTurnTools.length && !longContext ? 'tool_output' as const : 'prompt' as const } : {}) });
       }
       usage.turns += 1;
       timeoutsInARow = 0;

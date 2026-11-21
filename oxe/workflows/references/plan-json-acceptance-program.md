@@ -158,3 +158,7 @@ Num repositório com suíte própria (typecheck, lint, testes de governança com
   - Para ajustar: `env_scrub` (regex extras) e `env_allow` (nomes) no config.
   - `oxe-cc doctor --project` mostra o que será removido.
 - **Modo inplace:** quando uma tarefa falha de vez, a tentativa é guardada em `.oxe/runs/<run>/attempts/<task>-failed/` (patch e arquivos novos) e o escopo dela é restaurado. Arquivos que você já tinha alterado antes do execute não são tocados. Cada tentativa tem seu log em `attempts/<task>-<n>.log`, e `--wave N` roda só a onda N.
+
+## Sessão isolada por card
+
+No `/oxe-plan` de card único: crie ou ative a sessão via CLI (`oxe-cc session create <id> [--title "..."]` / `oxe-cc session switch <id>`). Antes de rodar `oxe-cc runtime execute --session <id>`, **commite os novos `acceptance_tests` congelados no HEAD** com mensagem e trailer de origem válidos (ex.: `git add <teste> && git commit -m "test(acceptance): frozen tests of <KEY>" --trailer "OXE-Task: T1"`), para que `acceptance_lock` e `checkpoint_check` tenham baseline limpo no git. Se um teste congelado precisar de emenda auditada, rode `oxe-cc plan amend-test <path> --reason "<CR-id>" --session <id>`.

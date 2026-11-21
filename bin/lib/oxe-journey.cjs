@@ -58,7 +58,32 @@ function upstreamStep(target, activeSession, cfgIn = {}) {
     }
     const approval = o.specApproval(target, activeSession);
     if (!hasPlan && (!approval || approval.changed_since)) {
-      return { step: 'spec-approve', cursorCmd: 'oxe-cc spec check', reason: approval ? 'a SPEC mudou depois da aprovação — rode o spec check e aprove de novo (oxe-cc spec approve --by <papel>)' : 'grill fechado — gere SPEC/ROADMAP/PRD a partir dele, rode o spec check (e o spec probe) e aprove com oxe-cc spec approve --by <papel>', artifacts: ['.oxe/SPEC.md', '.oxe/PRD.md', '.oxe/GLOSSARY.md'] };
+      const artifacts = ['.oxe/SPEC.md', '.oxe/PRD.md', '.oxe/GLOSSARY.md'];
+      // no SPEC yet: the grill closed and the /oxe-spec writes SPEC/ROADMAP/PRD from it
+      if (!paths.spec || !fs.existsSync(paths.spec)) {
+        return { step: 'spec-approve', cursorCmd: '/oxe-spec', reason: 'grill fechado — gere SPEC/ROADMAP/PRD a partir dele com /oxe-spec; depois oxe-cc spec check e oxe-cc spec approve --by <papel>', artifacts };
+      }
+      // the check green: the next command is the approval itself (not the check again)
+      let check = null;
+      try { check = o.runtimeSpecCheck(target, activeSession, {}); } catch { check = null; }
+      // rfc.required risk/always: the check refuses a risky SPEC with no RFC — the way out is the draft (item 18)
+      if (check && !check.ok && (check.errors || []).some((e) => /sem RFC/.test(String(e)))) {
+        const rfc = grillRfcStep(target, activeSession, cfg, s);
+        if (rfc && rfc.step === 'rfc') return rfc;
+      }
+      if (check && check.ok) {
+        return { step: 'spec-approve', cursorCmd: 'oxe-cc spec approve --by <papel>', reason: `${approval ? 'a SPEC mudou depois da aprovação e' : 'grill fechado e'} o spec check está verde${check.warnings && check.warnings.length ? ` (${check.warnings.length} aviso(s))` : ''} — aprove com oxe-cc spec approve --by <papel>`, artifacts };
+      }
+      return { step: 'spec-approve', cursorCmd: 'oxe-cc spec check', reason: `${approval ? 'a SPEC mudou depois da aprovação' : 'grill fechado'} — o spec check ainda reprova${check && check.errors && check.errors.length ? ` (${check.errors.length} erro(s): ${String(check.errors[0]).slice(0, 120)})` : ''}; corrija SPEC/ROADMAP/PRD e aprove com oxe-cc spec approve --by <papel>`, artifacts };
+    }
+    // grill closed, SPEC approved, no plan and no program: a P0/P1 criterion or a new component asks for an RFC
+    if (!hasPlan) {
+      let programExists = false;
+      try { programExists = Boolean(o.runtimeProgramStatus(target, activeSession).exists); } catch { programExists = false; }
+      if (!programExists) {
+        const rfc = grillRfcStep(target, activeSession, cfg, s);
+        if (rfc) return rfc;
+      }
     }
   }
   if (alm) {
@@ -82,22 +107,154 @@ function upstreamStep(target, activeSession, cfgIn = {}) {
 }
 
 /**
+ * The RFCs that settle a phase (or, with `phaseId` null, the delivery without a program): the phase's own, plus a
+ * global one (no phase). A global accepted RFC covers when it cites every risky criterion (or there is none) — the
+ * same rule as `lintPhaseRfc`.
+ */
+function rfcCoverage(rfcs, phaseId, risky = [], opts = {}) {
+  const own = phaseId ? rfcs.filter((r) => r.phase === phaseId) : [];
+  const global = rfcs.filter((r) => !r.phase);
+  const cited = (r, a) => {
+    const body = `${r.motivation || ''} ${r.summary || ''} ${r.proposal || ''}`;
+    const parent = String(a).replace(/\.\d+$/, '');
+    return new RegExp(`\\b${String(a).replace('.', '\\.')}\\b`).test(body) || (parent !== a && new RegExp(`\\b${parent}\\b`).test(body));
+  };
+  const missingOf = (r) => risky.filter((a) => !cited(r, a));
+  const accepted = own.find((r) => r.status === 'accepted') || global.find((r) => r.status === 'accepted' && !missingOf(r).length) || null;
+  // revisão 21/11 (achado 5): a phase's own draft always waits for its decision; a global draft (no phase) only blocks
+  // when the RFC is required (risk/always) — in advisory it never held the plan of every phase
+  const draft = own.find((r) => r.status === 'draft') || (opts.required === false ? null : global.find((r) => r.status === 'draft')) || null;
+  // a global accepted RFC that does not cite every risky criterion: say WHICH ones are missing (not a blind rfc new)
+  const partial = !accepted ? global.filter((r) => r.status === 'accepted').map((r) => ({ rfc: r, missing: missingOf(r) })).sort((x, y) => x.missing.length - y.missing.length)[0] || null : null;
+  // the last rejected one (own first): its decision is recorded, the next step says so instead of a blind rfc new
+  const rejected = [...own, ...global].filter((r) => r.status === 'rejected').pop() || null;
+  return { accepted, draft, uncited: partial, rejected };
+}
+
+/** The reason/step when no RFC covers yet: a partial global RFC (criteria to cite) or a rejected one (decide anew). */
+function rfcGapStep(target, cov, label, ctx = {}) {
+  const rel = (r) => (r && r.file ? path.relative(target, r.file).replace(/\\/g, '/') : '.oxe/rfc/');
+  if (cov.uncited && cov.uncited.missing.length) {
+    const r = cov.uncited.rfc;
+    return { step: 'rfc', cursorCmd: '/oxe-discuss --rfc', reason: `${label}: ${r.id} (aceito, global) não cita o(s) critério(s) de risco ${cov.uncited.missing.join(', ')} — cite-os na Motivação/Proposta de ${rel(r)} (ou escreva um RFC da fase com oxe-cc rfc new --phase <F>) antes do plano.`, artifacts: [rel(r)], ...(ctx.program ? { program: ctx.program } : {}) };
+  }
+  if (cov.rejected) {
+    const r = cov.rejected;
+    return { step: 'rfc', cursorCmd: '/oxe-discuss --rfc', reason: `${label}: ${r.id} foi recusado — decida a alternativa no /oxe-discuss --rfc e registre-a num RFC novo (oxe-cc rfc new --title "…") para aceitar; o RFC é exigido (rfc.required), então o plano espera essa decisão.`, artifacts: [rel(r)], ...(ctx.program ? { program: ctx.program } : {}) };
+  }
+  return null;
+}
+
+/**
+ * Item 18: the grill closed and the SPEC approved, no program (a program decides per phase in `rfcStep`): a P0/P1
+ * criterion or a new component asks for the RFC before the plan. A draft waiting → decide it (/oxe-discuss --rfc);
+ * `rfc.required` risk/always and none written → `oxe-cc rfc new` (the draft is the template; the agent fills it).
+ * Advisory (the default) never blocks the plan: the hint goes in the plan's reason (`grillRfcHint`).
+ */
+function grillRfcStep(target, activeSession, cfg, grillStatus) {
+  try {
+    const rfcLib = require('./oxe-rfc.cjs');
+    const mode = rfcLib.rfcMode(cfg);
+    if (mode === 'never') return null;
+    const o = op();
+    const paths = o.resolveRuntimeArtifactPaths(target, activeSession);
+    const specText = paths.spec && fs.existsSync(paths.spec) ? fs.readFileSync(paths.spec, 'utf8') : '';
+    const sug = require('./oxe-grill.cjs').rfcSuggestion(grillStatus, specText);
+    const required = mode === 'always' || (mode === 'risk' && sug.needed);
+    // without a program every RFC is global: a draft only holds the plan when the RFC is required (advisory: the hint)
+    const cov = rfcCoverage(rfcLib.list(target), null, sug.risky, { required });
+    if (cov.accepted) return null;
+    if (cov.draft) {
+      return { step: 'discuss', cursorCmd: '/oxe-discuss --rfc', reason: `${cov.draft.id} em rascunho — decida a proposta técnica (oxe-cc rfc accept ${cov.draft.id} | rfc reject) antes do plano.`, artifacts: cov.draft.file ? [path.relative(target, cov.draft.file).replace(/\\/g, '/')] : ['.oxe/rfc/'] };
+    }
+    if (!required) return null;
+    const gap = rfcGapStep(target, cov, 'grill fechado');
+    if (gap) return gap;
+    return { step: 'rfc', cursorCmd: `oxe-cc rfc new --title "${sug.title.replace(/"/g, "'").slice(0, 60)}"`, reason: `grill fechado com ${sug.reasons.join('; ') || 'rfc.required "always"'} — escreva o rascunho do RFC (proposta, alternativas, riscos) e decida-o com /oxe-discuss --rfc antes do plano.`, artifacts: ['.oxe/rfc/'] };
+  } catch { return null; }
+}
+
+/** Advisory hint for the plan step (rfc mode advisory): the grill asked for an RFC and none was written. */
+function grillRfcHint(target, activeSession, cfg = {}) {
+  try {
+    const o = op();
+    const merged = { ...readConfig(target), ...(cfg || {}) };
+    const rfcLib = require('./oxe-rfc.cjs');
+    if (rfcLib.rfcMode(merged) !== 'advisory') return null;
+    const grill = require('./oxe-grill.cjs');
+    const gp = o.grillPaths(target, activeSession);
+    if (!grill.readRecords(gp.dir).length) return null;
+    const s = grill.status(gp.dir);
+    const paths = o.resolveRuntimeArtifactPaths(target, activeSession);
+    const sug = grill.rfcSuggestion(s, paths.spec && fs.existsSync(paths.spec) ? fs.readFileSync(paths.spec, 'utf8') : '');
+    if (!sug.needed) return null;
+    const cov = rfcCoverage(rfcLib.list(target), null, sug.risky);
+    if (cov.accepted || cov.draft) return null;
+    return `o grill pede RFC (${sug.reasons.join('; ')}): oxe-cc rfc new --title "…" antes do plano é recomendado`;
+  } catch { return null; }
+}
+
+/** Number of phases in ROADMAP.md (the same heading the program parser reads). */
+function roadmapPhaseCount(text) {
+  return [...String(text || '').replace(/<!--[\s\S]*?-->/g, '').matchAll(/^##\s+(?:Fase|Phase)\s+\d+/gim)].length;
+}
+
+/**
+ * Item 4: the SPEC approved, a ROADMAP of 2+ phases and no program yet → `oxe-cc runtime program init` (spec.md:
+ * "aprovada com ROADMAP de 2+ fases → program init"). Null with a plan already made (a single-cycle delivery).
+ */
+function programInitStep(target, activeSession) {
+  try {
+    const o = op();
+    const paths = o.resolveRuntimeArtifactPaths(target, activeSession);
+    if (paths.plan && fs.existsSync(paths.plan)) return null;
+    let st = null;
+    try { st = o.runtimeProgramStatus(target, activeSession); } catch { st = null; }
+    if (st && st.exists) return null;
+    const n = paths.roadmap && fs.existsSync(paths.roadmap) ? roadmapPhaseCount(fs.readFileSync(paths.roadmap, 'utf8')) : 0;
+    if (n < 2) return null;
+    const approval = o.specApproval(target, activeSession);
+    // revisão 21/11 (achado 4): sem grill (ex. /oxe-spec --fast) ninguém pedia a aprovação, e o ROADMAP de 2+ fases ia
+    // direto ao /oxe-plan. A aprovação vem antes do program init, com ou sem grill: check → approve → program init.
+    if (!approval || approval.changed_since) {
+      if (!paths.spec || !fs.existsSync(paths.spec)) return null;
+      // without a grill the check/approve run in the fast mode (/oxe-spec --fast): `--fast` confirms it
+      let grillUsed = false;
+      try { grillUsed = require('./oxe-grill.cjs').readRecords(o.grillPaths(target, activeSession).dir).length > 0; } catch { grillUsed = false; }
+      const fast = grillUsed ? '' : ' --fast';
+      let check = null;
+      try { check = o.runtimeSpecCheck(target, activeSession, { fast: !grillUsed }); } catch { check = null; }
+      const artifacts = ['.oxe/SPEC.md', '.oxe/ROADMAP.md'];
+      const why = `${approval ? 'a SPEC mudou depois da aprovação' : 'SPEC sem aprovação'} e ROADMAP com ${n} fases (programa por fases)`;
+      if (check && check.ok) return { step: 'spec-approve', cursorCmd: `oxe-cc spec approve --by <papel>${fast}`, reason: `${why} — o spec check${fast} está verde${check.warnings && check.warnings.length ? ` (${check.warnings.length} aviso(s))` : ''}: aprove com oxe-cc spec approve --by <papel>${fast}; depois oxe-cc runtime program init.`, artifacts };
+      return { step: 'spec-approve', cursorCmd: `oxe-cc spec check${fast}`, reason: `${why} — confira com oxe-cc spec check${fast}${check && check.errors && check.errors.length ? ` (${check.errors.length} erro(s): ${String(check.errors[0]).slice(0, 120)})` : ''}, aprove com oxe-cc spec approve --by <papel>${fast} e então oxe-cc runtime program init.`, artifacts };
+    }
+    return { step: 'program-init', cursorCmd: 'oxe-cc runtime program init', reason: `SPEC aprovada e ROADMAP com ${n} fases — crie o programa por fases (lê o ROADMAP e grava PROGRAM.json); depois oxe-cc runtime program start.`, artifacts: ['.oxe/ROADMAP.md', '.oxe/program/PROGRAM.json'] };
+  } catch { return null; }
+}
+
+/**
  * After a green verify, with `delivery.mode: "pr"`: open the PR, follow CI and merge, attach the deploy, then close.
- * @returns {object|null} the step, or null when the phase can close
+ * Without a program, `phase` is `{ id: null, started_at: <cycle start> }` (the delivery of the whole SPEC/PLAN).
+ * @returns {object|null} the step, or null when the phase (or the cycle) can close
  */
 function deliveryStep(target, activeSession, phase, ctx = {}) {
   const cfg = ctx.cfg || readConfig(target);
   const mode = deliveryMode(cfg);
   if (mode.mode !== 'pr') return null;
   const o = op();
+  phase = phase || { id: null, started_at: null };
   const since = phase.started_at ? Date.parse(phase.started_at) : 0;
   let events = [];
   try { events = o.readEvents(target, activeSession); } catch { events = []; }
   const after = (e) => !since || !e.timestamp || Date.parse(e.timestamp) >= since;
-  const promoted = events.filter((e) => e.type === 'TaskPromoted' && e.payload && e.payload.pr && after(e));
+  // a quick (ctx.quick = its id) is delivered by its own PR (quick promote --open-pr → QuickPromoted); a plan by its tasks'
+  const promoted = ctx.quick
+    ? events.filter((e) => e.type === 'QuickPromoted' && e.work_item_id === ctx.quick && e.payload && e.payload.pr)
+    : events.filter((e) => e.type === 'TaskPromoted' && e.payload && e.payload.pr && after(e));
   const merged = new Set(events.filter((e) => e.type === 'AlmMerged').map((e) => e.work_item_id));
-  const label = ctx.label || phase.id;
-  const base = { artifacts: ['.oxe/program/PROGRAM.json'], ...(ctx.program ? { program: ctx.program } : {}) };
+  const label = ctx.label || phase.id || 'Entrega';
+  const base = { artifacts: [phase.id ? '.oxe/program/PROGRAM.json' : '.oxe/VERIFY.md'], ...(ctx.program ? { program: ctx.program } : {}) };
   if (!promoted.length) return { step: 'ship', cursorCmd: '/oxe-ship', reason: `${label}: verify verde — entregar: o /oxe-ship abre o PR (runtime promote, com a chave do ALM) e guia CI, merge, deploy e close.`, ...base };
   const open = promoted.filter((e) => !merged.has(e.work_item_id));
   if (open.length) return { step: 'ship-wait', cursorCmd: 'oxe-cc ship status', reason: `${label}: ${open.length} PR(s) aberto(s) (${open.map((e) => e.payload.pr).slice(0, 3).join(', ')}) — acompanhe o CI e o merge; oxe-cc ship status confere de novo.`, ...base };
@@ -106,6 +263,8 @@ function deliveryStep(target, activeSession, phase, ctx = {}) {
     const programDir = paths.programDir || path.join(target, '.oxe', 'program');
     let deploys = [];
     try { deploys = require('./oxe-phase-gates.cjs').readDeploys(programDir, phase.id); } catch { deploys = []; }
+    // without a phase every deploy record matches: only the ones of this cycle count
+    if (!phase.id && since) deploys = deploys.filter((d) => !d.at || Date.parse(d.at) >= since);
     if (!deploys.some((d) => d.env === mode.deploy_env && d.ok !== false)) {
       return { step: 'deploy', cursorCmd: `oxe-cc runtime deploy --attach ${mode.deploy_env} --version <v> --ref <tag|url> --check "<cmd>"`, reason: `${label}: merge feito — anexe o deploy em ${mode.deploy_env} (o OXE registra e roda as checagens, nunca faz o deploy).`, ...base };
     }
@@ -123,16 +282,21 @@ function rfcStep(target, activeSession, phase, ctx = {}) {
     const rfcLib = require('./oxe-rfc.cjs');
     const mode = rfcLib.rfcMode(cfg);
     if (mode === 'never') return null;
-    const rfcs = rfcLib.list(target).filter((r) => r.phase === phase.id);
-    if (rfcs.some((r) => r.status === 'accepted')) return null;
-    const draft = rfcs.find((r) => r.status === 'draft');
     const o = op();
     const paths = o.resolveRuntimeArtifactPaths(target, activeSession);
     const risks = require('./oxe-risk-decision.cjs').criterionRisks(fs.existsSync(paths.spec || '') ? fs.readFileSync(paths.spec, 'utf8') : '');
     const risky = (phase.acceptance || []).filter((a) => /^P[01]$/.test(String(risks.get(a) || '')));
+    // item 10: a global RFC (no phase) counts too, like in lintPhaseRfc — accepted when it cites the risky criteria
     const required = mode === 'always' || (mode === 'risk' && risky.length > 0);
+    const cov = rfcCoverage(rfcLib.list(target), phase.id, risky, { required });
+    if (cov.accepted) return null;
+    const draft = cov.draft;
     if (!draft && !required) return null;
     const label = ctx.label || phase.id;
+    if (!draft) {
+      const gap = rfcGapStep(target, cov, label, ctx);
+      if (gap) return gap;
+    }
     return {
       step: 'discuss',
       cursorCmd: '/oxe-discuss --rfc',
@@ -164,6 +328,8 @@ const STEP_STAGE = {
   // guided recovery and the CI close (R42): the map marks the stage they belong to
   resume: 'build', 'plan-scope': 'build', 'plan-amend-test': 'build', 'plan-done': 'build', 'checkpoint-integration': 'build', 'commit-task': 'build',
   'spec-amend': 'validate', 'deferred-retry': 'build', 'ci-attach': 'deliver',
+  // item 17: the journey steps the map did not know — program init, the RFC draft, the closed cycle (next demand)
+  'program-init': 'program', rfc: 'decide', next: 'operate',
 };
 
 /** The journey map: each stage done / current / pending / optional, plus the next step. */
@@ -192,6 +358,14 @@ function journey(target, next, activeSession = null) {
   };
   const optional = new Set(['decide', 'operate', ...(g ? [] : ['validate']), ...(program && program.exists ? [] : ['program'])]);
   const current = next ? STEP_STAGE[next.step] || null : null;
+  // without a program (or with it closed) the phase status says nothing: the stages behind the current one of the
+  // delivery (plan → build → verify → deliver) are done; a closed cycle (next demand) has all of them done
+  if (!phase && current) {
+    const cur = STAGES.find((s) => s.id === current);
+    for (const s of STAGES) {
+      if (['plan', 'build', 'verify', 'deliver'].includes(s.id) && cur && s.n < cur.n && (s.id !== 'plan' || done.plan)) done[s.id] = true;
+    }
+  }
   return {
     stages: STAGES.map((s) => ({ ...s, state: s.id === current ? 'current' : done[s.id] ? 'done' : optional.has(s.id) ? 'optional' : 'pending' })),
     current,
@@ -226,4 +400,4 @@ function ciCloseStep(target, activeSession, phase, ctx = {}) {
   return { step: 'program-close', cursorCmd: 'oxe-cc runtime program close --by-ci --by <papel> --reason "…"', reason: `${label}: CI anexado (${attached[attached.length - 1].run}) — feche a fase pelo CI (confere que o run está verde e contém o HEAD; dossiê, sign-offs e drift continuam valendo).`, ...base };
 }
 
-module.exports = { upstreamStep, deliveryStep, deliveryMode, ciCloseStep, rfcStep, journey, STAGES, STEP_STAGE };
+module.exports = { upstreamStep, deliveryStep, deliveryMode, ciCloseStep, rfcStep, rfcCoverage, grillRfcStep, grillRfcHint, programInitStep, roadmapPhaseCount, journey, STAGES, STEP_STAGE };

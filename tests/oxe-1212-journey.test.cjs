@@ -52,7 +52,8 @@ describe('journey: upstream', () => {
     write(d2, '.oxe/ROADMAP.md', '# R\n\n**Critérios de aceite:** A1\n');
     n = next(d2);
     assert.equal(n.step, 'spec-approve');
-    assert.equal(n.cursorCmd, 'oxe-cc spec check');
+    // item 7: the check is green → the command is the approval itself, not the check again
+    assert.equal(n.cursorCmd, 'oxe-cc spec approve --by <papel>');
     op.runtimeSpecApprove(d2, null, { by: 'po' });
     assert.equal(next(d2).step, 'plan');
     fs.appendFileSync(path.join(d2, '.oxe', 'SPEC.md'), '\nmudança\n');

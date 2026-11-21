@@ -100,12 +100,25 @@ function quickMd(rec) {
   return [
     `<!-- oxe-quick: ${rec.id}${rec.key ? ` · card ${rec.key}` : ''} · aberto ${rec.started_at} -->`,
     `# Quick ${rec.id}${rec.key ? ` — ${rec.key}` : ''}`, '',
+    '## Contexto', '', rec.key ? `Card ALM: ${rec.key} · worktree: \`${rec.worktree || '.'}\`${rec.branch ? ` · branch: \`${rec.branch}\`` : ''}` : `Worktree: \`${rec.worktree || '.'}\`${rec.branch ? ` · branch: \`${rec.branch}\`` : ''}`, '',
     '## Objetivo', '', rec.objective, '',
     '## Passos', '', '1. (o /oxe-quick preenche: passos curtos, cada um rastreável ao Verificar)', '',
     '## Verificar', '', '- (o comando ou a checagem que prova o objetivo; rode com: oxe-cc quick done --verify "<comando>")', '',
     '## Origem dos commits', '', `Todo commit deste quick leva: ${trailers(rec).map((t) => `\`${t}\``).join(' e ')} (o hook commit-msg do \`oxe-cc guards install\` acrescenta sozinho).`, '',
+    'Plano formal existente?: não',
     'Promover para spec/plan?: não', '',
   ].join('\n');
+}
+
+function currentBranchOf(root, spawn = spawnSync) {
+  try {
+    const r = spawn('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true });
+    if (r.status === 0) {
+      const b = String(r.stdout || '').trim();
+      return b && b !== 'HEAD' ? b : null;
+    }
+  } catch { /* ignore */ }
+  return null;
 }
 
 /**
@@ -121,7 +134,9 @@ function start(root, input = {}) {
   if (open && !input.replace) throw new Error(`o quick ${open.id}${open.key ? ` (${open.key})` : ''} está aberto: feche com oxe-cc quick done, ou abra outro com --replace`);
   // a new quick on a card whose last quick was abandoned links back to it
   const prevAbandoned = key ? list(root).find((r) => r.key === key && r.status === 'abandoned') : null;
-  const rec = { schema: 1, id: newId(input.now), key, objective, by: input.by || null, started_at: new Date().toISOString(), status: 'open', commits: [], verify: null, closed_at: null, ...(prevAbandoned ? { follows: prevAbandoned.id } : {}) };
+  const branch = currentBranchOf(root, input.spawn || spawnSync);
+  const worktree = path.basename(path.resolve(root));
+  const rec = { schema: 1, id: newId(input.now), key, objective, by: input.by || null, worktree, branch, started_at: new Date().toISOString(), status: 'open', commits: [], verify: null, closed_at: null, ...(prevAbandoned ? { follows: prevAbandoned.id } : {}) };
   // --dry-run: validated, nothing written (no record, no QUICK.md, no current)
   if (input.dryRun) return { resumed: false, dry_run: true, ...rec, trailers: trailers(rec), would_replace: open ? open.id : null };
   if (open && input.replace) write(root, { ...open, status: 'replaced', closed_at: new Date().toISOString() });
@@ -192,7 +207,35 @@ function done(root, input = {}) {
   const closed = { ...rec, status: 'done', commits, verify, closed_at: new Date().toISOString(), by_close: input.by || null };
   write(root, closed);
   try { fs.unlinkSync(currentFile(root)); } catch { /* */ }
-  return { ...closed, closed: true };
+  const marked = markClosed(root, closed, input);
+  return { ...closed, closed: true, ...marked };
+}
+
+/**
+ * Jornada (item 9): `quick done` fecha também o QUICK.md (status no cabeçalho e na seção) e a fase do STATE.md
+ * (`quick_active` → `quick_done`), senão o próximo passo continuava em /oxe-execute. Só toca o QUICK.md deste quick
+ * (o cabeçalho `<!-- oxe-quick: <id>`) e só a fase `quick_active`; o resto do STATE fica como está.
+ */
+function markClosed(root, rec, input = {}) {
+  const out = { quick_md_closed: false, state_closed: false };
+  const quickFile = input.quickFile || path.join(root, '.oxe', 'QUICK.md');
+  try {
+    const text = fs.readFileSync(quickFile, 'utf8');
+    if (new RegExp(`<!--\\s*oxe-quick:\\s*${rec.id}\\b`).test(text) && !/<!--\s*oxe-quick-status:/.test(text)) {
+      const nl = text.includes('\r\n') ? '\r\n' : '\n';
+      const verifyLine = rec.verify ? `verificação \`${rec.verify.command}\` ${rec.verify.ok ? 'passou' : `falhou (exit ${rec.verify.exit})`}` : 'sem verificação informada';
+      const status = [`<!-- oxe-quick-status: done · ${rec.closed_at} -->`, '', '## Status', '', `Concluído em ${rec.closed_at} · ${rec.commits.length} commit(s) · ${verifyLine}. Próximo: oxe-cc status (com delivery.mode "pr": oxe-cc quick promote --open-pr numa branch, depois CI/merge; local: os commits do quick já são a entrega).`, ''].join(nl);
+      fs.writeFileSync(quickFile, `${text.replace(/\s*$/, '')}${nl}${nl}${status}`);
+      out.quick_md_closed = true;
+    }
+  } catch { /* sem QUICK.md: só o registro */ }
+  const stateFile = input.stateFile || path.join(root, '.oxe', 'STATE.md');
+  try {
+    const st = fs.readFileSync(stateFile, 'utf8');
+    const re = /(##\s*Fase atual\s*(?:\r?\n)+\s*`)quick_active(`)/i;
+    if (re.test(st)) { fs.writeFileSync(stateFile, st.replace(re, '$1quick_done$2')); out.state_closed = true; }
+  } catch { /* sem STATE */ }
+  return out;
 }
 
 /**
@@ -273,13 +316,24 @@ function cancel(root, input = {}) {
   return { ...closed, cancelled: true };
 }
 
-function list(root) {
+function list(root, opts = {}) {
+  const localIds = new Set();
   const ids = new Set();
-  const take = (dir) => { try { for (const f of fs.readdirSync(dir)) { const id = f.replace(/\.json$/, ''); if (ID_RE.test(id)) ids.add(id); } } catch { /* */ } };
-  take(dirOf(root));
-  const m = mirrorDirOf(root);
-  if (m) take(m);
-  return [...ids].map((id) => read(root, id)).filter(Boolean).sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)));
+  const take = (dir, targetSet) => { try { for (const f of fs.readdirSync(dir)) { const id = f.replace(/\.json$/, ''); if (ID_RE.test(id)) targetSet.add(id); } } catch { /* */ } };
+  take(dirOf(root), localIds);
+  for (const id of localIds) ids.add(id);
+  const includeAll = opts && opts.local === true ? false : true;
+  if (includeAll) {
+    const m = mirrorDirOf(root);
+    if (m) take(m, ids);
+  }
+  const open = current(root);
+  const openId = open ? open.id : null;
+  return [...ids].map((id) => {
+    const rec = read(root, id);
+    if (!rec) return null;
+    return { ...rec, local: localIds.has(id), active: id === openId };
+  }).filter(Boolean).sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)));
 }
 
 /** The ALM comment of a quick: the mini-spec at the start, the commits and the verification at the end. */
@@ -291,4 +345,154 @@ function cardComment(rec, phase) {
     '', rec.verify ? `Verificação: \`${rec.verify.command}\` → ${rec.verify.ok ? 'passou' : `falhou (exit ${rec.verify.exit})`}` : 'Verificação: não informada (quick done --verify "<comando>")'].join('\n');
 }
 
-module.exports = { start, done, commit, cancel, current, list, read, exists, mirrorDirOf, trailers, commitsOf, quickMd, cardComment, newId, ID_RE };
+/**
+ * The base branch a quick PR targets: `delivery.base` of the config, else the remote's default (`origin/HEAD`), else
+ * `main`. Read-only (one git call).
+ */
+function baseBranchOf(root, cfg = null, spawn = spawnSync) {
+  const d = cfg && cfg.delivery && typeof cfg.delivery === 'object' ? cfg.delivery : null;
+  if (d && d.base) return String(d.base);
+  try {
+    const r = spawn('git', ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true });
+    const ref = r && r.status === 0 ? String(r.stdout || '').trim() : '';
+    if (ref) return ref.replace(/^origin\//, '');
+  } catch { /* no remote */ }
+  return 'main';
+}
+
+/**
+ * Returns the quick relevant to this worktree: either the currently open quick (`.oxe/quick/current.json`)
+ * or a locally recorded `done` quick whose commits sit at HEAD (and not yet promoted to a PR).
+ */
+function activeOnWorktree(root, spawn = spawnSync) {
+  const open = current(root);
+  if (open) return { state: 'open', quick: open };
+  const localDir = dirOf(root);
+  if (!fs.existsSync(localDir)) return null;
+  let headSha = null;
+  let headMsg = '';
+  try {
+    const r = spawn('git', ['log', '-1', '--format=%H%x1f%B'], { cwd: root, encoding: 'utf8', windowsHide: true });
+    if (r.status === 0) {
+      const [h, ...rest] = String(r.stdout || '').split('\x1f');
+      headSha = (h || '').trim() || null;
+      headMsg = rest.join('\x1f');
+    }
+  } catch { /* ignore */ }
+  const branch = currentBranchOf(root, spawn);
+  const localRecs = [];
+  try {
+    for (const f of fs.readdirSync(localDir)) {
+      const id = f.replace(/\.json$/, '');
+      if (!ID_RE.test(id)) continue;
+      const rec = read(root, id);
+      if (rec && rec.status === 'done') localRecs.push(rec);
+    }
+  } catch { /* ignore */ }
+  localRecs.sort((a, b) => String(b.closed_at || b.started_at || '').localeCompare(String(a.closed_at || a.started_at || '')));
+  for (const rec of localRecs) {
+    if (rec.pr) continue;
+    const headHasTrailer = headMsg && new RegExp(`^OXE-Quick:\\s*${rec.id}$`, 'm').test(headMsg);
+    const headInCommits = headSha && Array.isArray(rec.commits) && rec.commits.some((c) => c && c.sha === headSha);
+    const sameBranch = branch && rec.branch && rec.branch === branch;
+    if (headHasTrailer || headInCommits || sameBranch) return { state: 'done', quick: rec };
+  }
+  return null;
+}
+
+/**
+ * OXB-C20 #7: `oxe-cc quick promote [--id <Q-...>] [--open-pr] [--base main] [--draft] [--dry-run] [--force]`:
+ * checks commit origin, pushes the current branch and opens a PR with `Fecha <KEY>` + quick verification summary.
+ */
+function promote(root, input = {}) {
+  const spawn = input.spawn || spawnSync;
+  let rec = input.id ? read(root, input.id) : null;
+  if (!rec) {
+    const act = activeOnWorktree(root, spawn);
+    rec = act ? act.quick : null;
+  }
+  if (!rec) {
+    const localDir = dirOf(root);
+    const localIds = fs.existsSync(localDir)
+      ? fs.readdirSync(localDir).map((f) => f.replace(/\.json$/, '')).filter((id) => ID_RE.test(id))
+      : [];
+    const localRecs = localIds.map((id) => read(root, id)).filter((r) => r && (r.status === 'done' || r.status === 'open'))
+      .sort((a, b) => String(b.closed_at || b.started_at || '').localeCompare(String(a.closed_at || a.started_at || '')));
+    rec = localRecs[0] || null;
+  }
+  if (!rec) throw new Error('nenhum quick local encontrado para promover (abra com oxe-cc quick <KEY> "<objetivo>" ou informe --id Q-...)');
+  const branch = currentBranchOf(root, spawn);
+  const base = String(input.base || baseBranchOf(root, input.config || null, spawn));
+  if (branch && branch === base && input.openPr && !input.dryRun) {
+    throw new Error(`você está na branch base (${base}): crie uma branch para o quick antes de abrir o PR`);
+  }
+  const commits = Array.isArray(rec.commits) && rec.commits.length ? rec.commits : commitsOf(root, rec.id, spawn);
+  let origin = null;
+  try {
+    const originLib = require('./oxe-origin.cjs');
+    // oxe-origin.check reads `target` (a range or #PR); the spawn only when injected — a mocked spawn turns off the
+    // lookup of the records mirrored for the sibling worktrees (the same rule as ship check-origin)
+    origin = originLib.check(root, { target: `${base}..HEAD`, ...(input.spawn ? { spawn: input.spawn } : {}) });
+  } catch (err) {
+    origin = { ok: true, skipped: true, reason: err.message };
+  }
+  const title = rec.key ? `${rec.key}: ${rec.objective.slice(0, 72)}` : `quick: ${rec.objective.slice(0, 72)}`;
+  const bodyLines = [
+    ...(rec.key ? [`Fecha ${rec.key}`, ''] : []),
+    '## Objetivo',
+    '',
+    rec.objective,
+    '',
+    '## Rastreabilidade OXE',
+    '',
+    `- \`OXE-Quick: ${rec.id}\``,
+    ...(rec.key ? [`- \`OXE-Card: ${rec.key}\``] : []),
+    ...(rec.verify ? [`- Verificação: \`${rec.verify.command}\` → ${rec.verify.ok ? 'passou' : `falhou (exit ${rec.verify.exit})`}`] : []),
+    ...(commits.length ? ['', '## Commits', '', ...commits.map((c) => `- \`${String(c.sha).slice(0, 9)}\` ${c.subject}`)] : []),
+  ];
+  const body = bodyLines.join('\n');
+  if (input.dryRun || !input.openPr) {
+    return {
+      promoted: false,
+      dry_run: Boolean(input.dryRun),
+      planned: true,
+      id: rec.id,
+      key: rec.key,
+      branch,
+      base,
+      title,
+      body,
+      commits: commits.length,
+      origin,
+    };
+  }
+  if (origin && origin.ok === false && !input.force) {
+    throw new Error(`ship check-origin reprovou ${(origin.violations || []).length} commit(s) sem origem na branch (${(origin.violations || []).slice(0, 3).map((v) => String(v.sha || '').slice(0, 9)).filter(Boolean).join(', ') || base + '..HEAD'}) — corrija ou use --force`);
+  }
+  const pushRes = spawn('git', ['push', '-u', 'origin', branch || 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true });
+  if (pushRes.status !== 0) {
+    throw new Error(`git push falhou: ${(pushRes.stderr || pushRes.stdout || '').trim()}`);
+  }
+  const ghArgs = ['pr', 'create', '--base', base, '--title', title, '--body', body, ...(input.draft ? ['--draft'] : [])];
+  const prRes = spawn('gh', ghArgs, { cwd: root, encoding: 'utf8', windowsHide: true });
+  if (prRes.status !== 0) {
+    throw new Error(`gh pr create falhou: ${(prRes.stderr || prRes.stdout || '').trim()}`);
+  }
+  const prUrl = String(prRes.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop() || '';
+  const updated = { ...rec, pr: prUrl || null, promoted_at: new Date().toISOString() };
+  write(root, updated);
+  return {
+    promoted: true,
+    id: rec.id,
+    key: rec.key,
+    branch,
+    base,
+    title,
+    body,
+    pr: prUrl || null,
+    commits: commits.length,
+    origin,
+  };
+}
+
+module.exports = { start, done, commit, cancel, promote, current, activeOnWorktree, baseBranchOf, currentBranchOf, list, read, exists, mirrorDirOf, trailers, commitsOf, quickMd, cardComment, newId, ID_RE };

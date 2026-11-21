@@ -37,6 +37,8 @@ export interface TaskResult {
   /** OXB-185: turns used and the cap of the attempt, when it ended at the cap. */
   turns_used?: number;
   turns_cap?: number;
+  /** OXB-C28-1: a policy refusal whose trigger came from tool outputs of earlier turns (not from the pack). */
+  policy_trigger?: 'tool_output' | 'prompt';
   /** Every verify segment's output with headers (1.21.2, OXB-066), for the attempt log. */
   verify_log?: string;
 }
@@ -80,6 +82,8 @@ export interface SchedulerOptions {
    * a person) each task gets ONE more attempt after a policy refusal, even past its max_retries.
    */
   retryPolicyOnce?: boolean;
+  /** OXB-C28-1: one automatic clean retry for a refusal triggered by tool outputs (default on; false = off). */
+  policyAutoRetry?: boolean;
   /** Tasks this run already saw refused by policy (a later execute): their attempt 1 IS the one extra attempt. */
   policyRefusedBefore?: string[];
   /** Tasks whose one extra policy attempt was already spent in this run: blocked before any attempt (no model call). */
@@ -359,6 +363,9 @@ export class Scheduler {
       );
       if (deferMode) {
         for (const id of failed.slice(failedBefore)) this.emit(ctx, { type: 'WorkItemDeferred', work_item_id: id, payload: { task: id } });
+        // OXB-C28-1: a deferred task is a decision of the run, not a stall — without this a wave whose only task was
+        // deferred after > staleProgressMs aborted the run (no_progress_timeout) and took the independent tasks along
+        if (failed.length > failedBefore || waveIds.some((id) => status.get(id) === 'blocked')) this.recordProgress();
       }
 
       // Sync journal after each wave
@@ -1103,7 +1110,13 @@ export class Scheduler {
           return;
         }
         if (lastResult.failure_class === 'policy') {
-          if (!(ctx.options as SchedulerOptions | undefined)?.retryPolicyOnce || policyRetried) break;
+          // OXB-C28-1: a refusal triggered by tool outputs of earlier turns (not the pack) gets ONE automatic clean
+          // retry — a fresh context (the pack and the tree) has none of those outputs. execute.policy_auto_retry: false
+          // turns it off. A prompt-triggered refusal still needs --retry-policy-once.
+          const autoPolicy = !policyRetried && lastResult.policy_trigger === 'tool_output'
+            && (ctx.options as SchedulerOptions | undefined)?.policyAutoRetry !== false
+            && !(ctx.options as SchedulerOptions | undefined)?.retryPolicyOnce;
+          if (!autoPolicy && (!(ctx.options as SchedulerOptions | undefined)?.retryPolicyOnce || policyRetried)) break;
           policyRetried = true;
           if (holdForPause(attempt + 1)) return;
           // the run's retry quota counts this attempt too (cross-review 15/11)
@@ -1118,7 +1131,7 @@ export class Scheduler {
             work_item_id: nodeId,
             attempt_id: attemptId,
             // output_tail: the refused attempt keeps its log (attempts/<task>-<n>.log) with the trigger candidates
-            payload: { task: nodeId, attempt_number: attempt, next_attempt: attempt + 1, reason: 'policy_retry_once', output_tail: tailLines(lastResult.output || '', 60) },
+            payload: { task: nodeId, attempt_number: attempt, next_attempt: attempt + 1, reason: autoPolicy ? 'policy_auto_retry' : 'policy_retry_once', output_tail: tailLines(lastResult.output || '', 60) },
           });
           // a clean retry: the refusal text (and the CLI hint) never goes back into the model's prompt — it would feed
           // the classifier and instruct the model with a human command (cross-review 15/11)
@@ -1411,20 +1424,29 @@ export class Scheduler {
     // command, `vitest … && tsc --noEmit` failed in tsc but the retry only carried the passing vitest output: the
     // executor never saw the type error (oxespace 1.5.0 T13: 4 attempts, US$ 4.54, 0 completed).
     const segments = splitVerifySegments(node.verify.command);
+    // OXB-C28-2: consecutive remote segments run as one remote job (all_segments keeps one run per segment: it must
+    // see every red segment, and one remote `&&` chain stops at the first)
+    const units = (ctx.options as SchedulerOptions | undefined)?.allSegments
+      ? segments.map((command, i) => ({ command, members: [i] }))
+      : groupRemoteSegments(segments);
     const ran: VerifySegmentRun[] = [];
     const gaps: string[] = [];
     let status = 'passed';
     let failing: VerifySegmentRun | null = null;
-    for (let index = 0; index < segments.length; index++) {
-      const command = segments[index];
+    for (const unit of units) {
+      const index = unit.members[0];
+      const lastMember = unit.members[unit.members.length - 1];
+      const merged = unit.members.length > 1;
+      const command = unit.command;
+      const label = merged ? `${index + 1}-${lastMember + 1}` : `${index + 1}`;
       const suite: AcceptanceCheckSuite = {
         checks: [{
-          id: segments.length > 1 ? `inline-${node.id}-s${index + 1}` : `inline-${node.id}`,
+          id: segments.length > 1 ? `inline-${node.id}-s${label}` : `inline-${node.id}`,
           type: 'custom',
           command,
           evidence_type_expected: 'stdout',
           acceptance_ref: null,
-          description: `Verify ${node.id}${segments.length > 1 ? ` [${index + 1}/${segments.length}]` : ''}`,
+          description: `Verify ${node.id}${segments.length > 1 ? ` [${label}/${segments.length}]${merged ? ' (uma rodada remota)' : ''}` : ''}`,
         }],
         compiled_at: new Date().toISOString(),
         spec_hash: '',
@@ -1452,6 +1474,11 @@ export class Scheduler {
         return null;
       }
       let segmentRun: VerifySegmentRun = { index: index + 1, total: segments.length, command, status: result.status, check: result.check_results?.[0] };
+      if (merged) {
+        const c0 = result.check_results?.[0];
+        const at = result.status === 'passed' ? lastMember : remoteFailedMember(`${c0?.stdout ?? ''}\n${c0?.stderr ?? ''}`, unit.members);
+        segmentRun = { ...segmentRun, index: at + 1, command: segments[at], merged: unit.members.map((m) => m + 1) };
+      }
       // OXB-162: the same command, or test files an earlier segment of THIS attempt already passed, failing now is a
       // flaky suspect: rerun once; green → continue (marked), red → the task fails as before.
       if (result.status === 'failed') {
@@ -1816,12 +1843,30 @@ export function parseRateLimitResetMs(
 /** OXB-171: an agent that says the change it needs is outside its files (pt/en). */
 const OUT_OF_SCOPE_RE = /\b(out of (my |the task'?s? )?scope|outside (of )?(my |the task'?s? )?(scope|files)|not in (my |the task'?s? )?(files|scope)|fora do (meu |)escopo|fora dos arquivos( da tarefa)?|não está (no|nos) (escopo|arquivos)( da tarefa)?|scope_insufficient)\b/i;
 
+/** OXB-C27-1: the output names this file (its path, or a non-generic basename such as sectionsApi.ts). */
+function mentionsFile(output: string, file: string): boolean {
+  const f = String(file || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!f) return false;
+  if (output.includes(f)) return true;
+  const base = f.split('/').pop() || '';
+  if (!base || /^index\.[cm]?[jt]sx?$/i.test(base)) {
+    const tail = f.split('/').slice(-2).join('/');
+    return tail.includes('/') && output.includes(tail);
+  }
+  return new RegExp(`(^|[\\s/\\\\(\\['"\`])${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(:\\d+|[\\s)'"\`]|$)`, 'm').test(output);
+}
+
 function scopeInsufficientReason(nodeId: string, ctx: SchedulerContext, verifyOutput: string, agentOutput: string): Record<string, unknown> | null {
   const req = (ctx.options as SchedulerOptions | undefined)?.outOfScopeRequirements?.[nodeId];
   if (req && req.files.length) {
     const out = String(verifyOutput || '').replace(/\\/g, '/');
     const named = req.tests.filter((t) => out.includes(t) || out.includes(t.split('/').pop() || t));
-    if (named.length) return { reason: 'frozen_test_needs_out_of_scope_file', files: req.files, tests: named };
+    // OXB-C27-1: an import is not a cause. Only when the failure passes through an out-of-scope file (the stack or
+    // the diff names it) is it scope_insufficient; a fixture defect in the test (polish2 T6) is retried and, when it
+    // repeats, becomes verify_suspect naming the test.
+    const said = String(agentOutput || '').replace(/\\/g, '/');
+    const touched = named.length ? req.files.filter((f) => mentionsFile(out, f) || mentionsFile(said, f)) : [];
+    if (touched.length) return { reason: 'frozen_test_needs_out_of_scope_file', files: touched, tests: named };
   }
   if (OUT_OF_SCOPE_RE.test(agentOutput)) return { reason: 'agent_reported_out_of_scope' };
   // OXB-188: the agent left a stub it labels as blocked — the change it needs is outside the scope; never a retry.
@@ -1875,6 +1920,56 @@ export interface VerifySegmentRun {
   check?: CheckResult;
   /** OXB-162: failed after an earlier segment of the same attempt passed the same files; rerun once. */
   flaky_suspect?: boolean;
+  /** OXB-C28-2: the segments (1-based) that ran in this one remote round trip; index is the failing (or last) one. */
+  merged?: number[];
+}
+
+const REMOTE_SEG_RE = /(?:^|[\s/\\"'])remote-verify(?:\.[cm]?js)?["']?(?:\s|$)/i;
+const REMOTE_MARK = (n: number) => `===OXE-SEG-${n}===`;
+
+/** The `<prefix>` and `<inner command>` of a `<… remote-verify.mjs [opts]> -- <command>` segment, or null. */
+function remoteSegmentParts(segment: string): { prefix: string; inner: string } | null {
+  const idx = segment.indexOf(' -- ');
+  if (idx <= 0) return null;
+  const prefix = segment.slice(0, idx).trim();
+  // the prefix is the runner and its own options: the remote-verify script must be in it
+  if (!REMOTE_SEG_RE.test(prefix)) return null;
+  let inner = segment.slice(idx + 4).trim();
+  const q = inner[0];
+  if ((q === '"' || q === "'") && inner.endsWith(q) && inner.length > 1 && !inner.slice(1, -1).includes(q)) inner = inner.slice(1, -1).trim();
+  // only text that survives inside one double-quoted shell argument on both sh and cmd; gradle152 has its own path
+  if (!inner || /["`$\\%!]/.test(inner) || /gradle152\.mjs/i.test(inner)) return null;
+  return { prefix, inner };
+}
+
+/**
+ * OXB-C28-2: consecutive `… remote-verify … -- <cmd>` segments with the same runner prefix run as ONE remote job
+ * (`<prefix> -- "echo ===OXE-SEG-1=== && cmd1 && echo ===OXE-SEG-2=== && cmd2"`) — one push/queue/CI round trip
+ * instead of one per segment (polish2 T3: 8 segments, 2–5 min each). The markers name the failing segment.
+ * `members` are 0-based indexes into `segments`.
+ */
+export function groupRemoteSegments(segments: string[]): Array<{ command: string; members: number[] }> {
+  const out: Array<{ command: string; members: number[]; prefix?: string; inners?: string[] }> = [];
+  segments.forEach((seg, i) => {
+    const parts = remoteSegmentParts(seg);
+    const prev = out[out.length - 1];
+    if (parts && prev && prev.prefix === parts.prefix && prev.inners) {
+      prev.members.push(i);
+      prev.inners.push(parts.inner);
+      return;
+    }
+    out.push(parts ? { command: seg, members: [i], prefix: parts.prefix, inners: [parts.inner] } : { command: seg, members: [i] });
+  });
+  return out.map((u) => (u.members.length > 1 && u.prefix && u.inners
+    ? { command: `${u.prefix} -- "${u.inners.map((c, k) => `echo ${REMOTE_MARK(u.members[k] + 1)} && ${c}`).join(' && ')}"`, members: u.members }
+    : { command: u.command, members: u.members }));
+}
+
+/** OXB-C28-2: the 0-based segment of a merged remote run that failed — the last marker the remote log printed. */
+export function remoteFailedMember(output: string, members: number[]): number {
+  let found = members[0];
+  for (const m of members) if (String(output || '').includes(REMOTE_MARK(m + 1))) found = m;
+  return found;
 }
 
 export interface VerifyNodeResult {
@@ -1929,7 +2024,7 @@ export function buildVerifyLog(segments: VerifySegmentRun[] | undefined, maxLine
     const check = s.check;
     const exit = check?.exit_code != null ? `exit ${check.exit_code}` : check?.error ? check.error : s.status;
     const body = tailLines(`${check?.stdout ?? ''}\n${check?.stderr ?? ''}`, maxLinesPerSegment);
-    return `=== [${s.index}/${s.total}] ${s.command} — ${s.status} (${exit})${s.flaky_suspect ? ' · flaky_suspect (repetido: passou antes nesta tentativa)' : ''} ===\n${body || '(sem saída)'}`;
+    return `=== [${s.index}/${s.total}] ${s.command} — ${s.status} (${exit})${s.flaky_suspect ? ' · flaky_suspect (repetido: passou antes nesta tentativa)' : ''}${s.merged ? ` · uma rodada remota com os segmentos ${s.merged.join(', ')}` : ''} ===\n${body || '(sem saída)'}`;
   }).join('\n\n');
 }
 
