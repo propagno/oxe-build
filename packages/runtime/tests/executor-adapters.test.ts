@@ -231,8 +231,9 @@ describe('claude-cli — protocolo e spawn portável', () => {
     const ids = detectExecutorAdapters({
       claude: { command: 'oxe-no-such-claude-binary' },
       antigravity: { command: 'oxe-no-such-agy-binary' },
+      grok: { command: 'oxe-no-such-grok-binary' },
     }).map((a) => `${a.id}:${a.available}`);
-    assert.deepEqual(ids, ['claude:false', 'antigravity:false', 'http:true']);
+    assert.deepEqual(ids, ['claude:false', 'antigravity:false', 'grok:false', 'http:true']);
   });
 });
 

@@ -19,7 +19,7 @@ describe('path containment: dangling links, case, walkers', () => {
       const target = path.join(base, 'outside-not-yet');
       fs.symlinkSync(target, path.join(ws, 'out'), process.platform === 'win32' ? 'junction' : 'dir');
       assert.throws(() => resolveWithin(ws, 'out/pwned.txt'), PathContainmentError);
-      assert.equal(path.relative(samePathKey(realPathOf(path.join(ws, 'out', 'pwned.txt'))), samePathKey(path.join(target, 'pwned.txt'))), '');
+      assert.equal(path.relative(samePathKey(realPathOf(path.join(ws, 'out', 'pwned.txt'))), samePathKey(path.join(fs.realpathSync.native(base), 'outside-not-yet', 'pwned.txt'))), '');
       const r = await BUILT_IN_TOOLS.write_file.execute({ path: 'out/pwned.txt', content: 'x' }, ws).catch((e: Error) => `[err] ${e.message}`);
       assert.ok(!fs.existsSync(path.join(target, 'pwned.txt')), `nothing written outside (${String(r).slice(0, 80)})`);
     } finally {

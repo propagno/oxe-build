@@ -48,8 +48,11 @@ function fakeJira() {
 }
 
 function project(extra = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-refine-'));
-  dirs.push(dir);
+  // a parent of its own: the refine scans sibling programs, and other test files leave theirs in the shared temp folder
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-1212-refine-'));
+  dirs.push(parent);
+  const dir = path.join(parent, 'project');
+  fs.mkdirSync(dir);
   fs.mkdirSync(path.join(dir, '.oxe'), { recursive: true });
   fs.mkdirSync(path.join(dir, 'src', 'send'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'src', 'send', 'bridge.ts'), 'export const x = 1;\n');
