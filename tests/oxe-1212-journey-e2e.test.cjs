@@ -48,7 +48,7 @@ describe('journey e2e (fakes only)', () => {
       assert.equal(cli('grill', 'ask', '--branch', b, '--question', `qual a decisão de ${b}?`, '--options', 'opção alfa | opção beta', '--recommended', 'opção alfa', '--why', 'evidência do código', ...(b === 'scope' ? ['--decision'] : [])).status, 0);
     }
     for (const q of ['Q-1', 'Q-2', 'Q-3']) assert.equal(cli('grill', 'answer', q, 'ok').status, 0);
-    for (const b of ['problem', 'scope', 'risks']) assert.equal(cli('grill', 'confirm', b).status, 0, `confirm ${b}`);
+    for (const b of ['problem', 'scope', 'risks']) assert.equal(cli('grill', 'confirm', b, '--playback', 'resumo do ramo confirmado pelo usuário').status, 0, `confirm ${b}`);
     const closed = cli('grill', 'close', '--by', 'po');
     assert.equal(closed.status, 0, closed.stdout + closed.stderr);
 
@@ -145,7 +145,7 @@ function journeyProject(config = {}) {
       assert.equal(cli('grill', 'ask', '--branch', b, '--question', `qual a decisão de ${b}?`, '--options', 'opção alfa | opção beta', '--recommended', 'opção alfa', '--why', 'evidência do código', ...(b === 'scope' ? ['--decision'] : [])).status, 0);
     }
     for (const q of ['Q-1', 'Q-2', 'Q-3']) assert.equal(cli('grill', 'answer', q, 'ok').status, 0);
-    for (const b of ['problem', 'scope', 'risks']) assert.equal(cli('grill', 'confirm', b).status, 0);
+    for (const b of ['problem', 'scope', 'risks']) assert.equal(cli('grill', 'confirm', b, '--playback', 'resumo do ramo confirmado pelo usuário').status, 0);
     const closed = cli('grill', 'close', '--by', 'po');
     assert.equal(closed.status, 0, closed.stdout + closed.stderr);
   };

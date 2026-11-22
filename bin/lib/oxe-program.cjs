@@ -61,13 +61,29 @@ function freezeRegressionChecks(checkResults, suite) {
       .filter((result) => result && result.status === 'pass')
       .map((result) => result.check_id),
   );
-  return (suite && Array.isArray(suite.checks) ? suite.checks : []).filter((check) => {
+  const frozen = (suite && Array.isArray(suite.checks) ? suite.checks : []).filter((check) => {
     if (!check || check.regression_phase) return false;
     const executable = Boolean(check.command)
       || (Array.isArray(check.files_exist) && check.files_exist.length > 0)
       || (Array.isArray(check.exports_expected) && check.exports_expected.length > 0);
     return executable && passed.has(check.id);
   });
+  // Bench B42: a whole-suite command (`npm test`) frozen as regression also runs the NEXT phase's frozen tests, still
+  // red before its execute — F1 showed up "regressed" as soon as F2's tests were committed. A whole-suite check whose
+  // criterion has a scoped check frozen too is dropped (the scoped one is the regression); the rest is marked.
+  const refOf = (c) => String(c.acceptance_ref || '').toUpperCase();
+  const scopedRefs = new Set(frozen.filter((c) => c.command && !isWholeSuiteCommand(c.command) && refOf(c)).map(refOf));
+  return frozen
+    .filter((c) => !(c.command && isWholeSuiteCommand(c.command) && refOf(c) && scopedRefs.has(refOf(c))))
+    .map((c) => (c.command && isWholeSuiteCommand(c.command) ? { ...c, whole_suite: true } : c));
+}
+
+/** `npm test`, `node --test` with no path, `npx vitest run` with no file: runs every test of the repo. */
+function isWholeSuiteCommand(command) {
+  const cmd = String(command || '').trim().replace(/\s+/g, ' ');
+  return /^(?:npm|pnpm|yarn)(?: run)? test(?: --)?$/.test(cmd)
+    || /^node --test(?: --[\w-]+(?:=\S+)?)*$/.test(cmd)
+    || /^npx (?:vitest(?: run)?|jest)(?: --[\w-]+(?:=\S+)?)*$/.test(cmd);
 }
 
 function isSafePhaseId(phaseId) {
@@ -91,7 +107,11 @@ function loadRegressionChecks(programDir, state, phaseId) {
   const checks = [];
   for (const phase of before) {
     const frozen = readJson(path.join(programPaths(programDir).regressionDir, `${phase.id}.json`));
-    for (const check of frozen && Array.isArray(frozen.checks) ? frozen.checks : []) {
+    const raw = frozen && Array.isArray(frozen.checks) ? frozen.checks : [];
+    // bench B42: regression frozen before the fix — the same whole-suite dedupe on read
+    const refOf = (c) => String(c.acceptance_ref || '').toUpperCase();
+    const scoped = new Set(raw.filter((c) => c.command && !isWholeSuiteCommand(c.command) && refOf(c)).map(refOf));
+    for (const check of raw.filter((c) => !(c.command && isWholeSuiteCommand(c.command) && refOf(c) && scoped.has(refOf(c))))) {
       checks.push({
         ...check,
         id: `reg-${phase.id.toLowerCase()}-${check.id}`,
@@ -214,6 +234,7 @@ module.exports = {
   writeProgram,
   relativeRef,
   freezeRegressionChecks,
+  isWholeSuiteCommand,
   writeRegression,
   loadRegressionChecks,
   contractedFiles,

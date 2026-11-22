@@ -427,12 +427,31 @@ function promote(root, input = {}) {
     throw new Error(`você está na branch base (${base}): crie uma branch para o quick antes de abrir o PR`);
   }
   const commits = Array.isArray(rec.commits) && rec.commits.length ? rec.commits : commitsOf(root, rec.id, spawn);
+  // OXB-C31-5 (152perf, OXE-386 #1059): the origin check ran against the LOCAL main, 4245 commits behind in the
+  // program worktrees, and refused 84 commits the PR never carried. Like runtime promote (OXB-157): the range starts
+  // at <remote>/<base> when it exists; the PR still targets <base>.
+  const warnings = [];
+  let rangeBase = base;
+  if (!/^[0-9a-f]{7,40}$/i.test(base) && !base.includes('/')) {
+    const git = (args) => spawn('git', args, { cwd: root, encoding: 'utf8', windowsHide: true }) || {};
+    const remotes = String((git(['remote']).stdout) || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    if (remotes.includes('origin')) {
+      if (input.fetch !== false) git(['fetch', '-q', 'origin', base]);
+      const remoteRef = `origin/${base}`;
+      const has = git(['rev-parse', '--verify', '-q', `${remoteRef}^{commit}`]);
+      if (has.status === 0 && String(has.stdout || '').trim()) {
+        rangeBase = remoteRef;
+        const behind = Number(String((git(['rev-list', '--count', `refs/heads/${base}..${remoteRef}`]).stdout) || '').trim()) || 0;
+        if (behind > 0) warnings.push(`a branch local ${base} está ${behind} commit(s) atrás de ${remoteRef} — o check-origin usa ${remoteRef}..HEAD`);
+      }
+    }
+  }
   let origin = null;
   try {
     const originLib = require('./oxe-origin.cjs');
     // oxe-origin.check reads `target` (a range or #PR); the spawn only when injected — a mocked spawn turns off the
     // lookup of the records mirrored for the sibling worktrees (the same rule as ship check-origin)
-    origin = originLib.check(root, { target: `${base}..HEAD`, ...(input.spawn ? { spawn: input.spawn } : {}) });
+    origin = originLib.check(root, { target: `${rangeBase}..HEAD`, ...(input.spawn ? { spawn: input.spawn } : {}) });
   } catch (err) {
     origin = { ok: true, skipped: true, reason: err.message };
   }
@@ -464,10 +483,12 @@ function promote(root, input = {}) {
       body,
       commits: commits.length,
       origin,
+      range_base: rangeBase,
+      warnings,
     };
   }
   if (origin && origin.ok === false && !input.force) {
-    throw new Error(`ship check-origin reprovou ${(origin.violations || []).length} commit(s) sem origem na branch (${(origin.violations || []).slice(0, 3).map((v) => String(v.sha || '').slice(0, 9)).filter(Boolean).join(', ') || base + '..HEAD'}) — corrija ou use --force`);
+    throw new Error(`ship check-origin reprovou ${(origin.violations || []).length} commit(s) sem origem na branch (${(origin.violations || []).slice(0, 3).map((v) => String(v.sha || '').slice(0, 9)).filter(Boolean).join(', ') || rangeBase + '..HEAD'}; intervalo ${rangeBase}..HEAD) — corrija ou use --force`);
   }
   const pushRes = spawn('git', ['push', '-u', 'origin', branch || 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true });
   if (pushRes.status !== 0) {
@@ -492,6 +513,8 @@ function promote(root, input = {}) {
     pr: prUrl || null,
     commits: commits.length,
     origin,
+    range_base: rangeBase,
+    warnings,
   };
 }
 

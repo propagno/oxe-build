@@ -57,15 +57,18 @@ Levar o trabalho verificado até produção, um passo verde por vez: **PR → CI
 
 ### Passo X — Defeito depois da entrega (`--defect`)
 1. Pergunte a reprodução, o impacto e o critério ou a história de origem (uma pergunta por vez, com a recomendada).
+1a. **Rode a suíte antes de afirmar qualquer cobertura** (`npm test` ou o Verificar das tarefas de origem) e cite o resultado. No bench (B58), o agente disse "os testes não cobrem" com 3 testes vermelhos na suíte. Use `oxe-cc`, nunca o `npx oxe-cc` sem versão.
 2. `oxe-cc alm defect --title "…" --origin <US-n|Fn-Tn> --apply` (com ALM) e `oxe-cc runtime feedback --class defect --summary "…" --criteria A<n> --tasks T<n> --reopen` (sem `--reopen`, apenas vincula a tarefa sem reabri-la para o próximo `/oxe-execute`).
-3. O próximo passo é `/oxe-plan --replan`, para cobrir o CR com teste de aceite na fase atual ou numa fase nova (ver `references/change-management.md`).
+3. O próximo passo é `/oxe-plan --replan`, para cobrir o CR com teste de aceite na fase atual ou numa fase nova (ver `references/change-management.md`). Para um defeito pequeno dentro de um critério que já existe, o replan cobre só o delta: um teste que **reproduz** o defeito (vermelho primeiro, com `"resolves": ["CR-…"]`), a tarefa de correção, depois execute e verify. Nunca deixe o defeito sem CR e sem teste.
 
 ### Passo L — Commit local (`--local`)
 1. Verify aprovado, ou `--no-checks` com aviso explícito.
+1a. **Com plano (`PLAN.json`):** o código entra por tarefa, nunca num commit único sem trailer. Para cada tarefa ainda sem `done` no `PLAN.json`, rode `oxe-cc runtime commit-task T<n>` (verifica, commita com `OXE-Task` e marca done). Só o que sobrar fora das tarefas (docs, CHANGELOG) segue para o passo 2. Com tudo já commitado por tarefa, pule para o passo 4.
 2. Gerar a mensagem de commit a partir de SPEC ou QUICK (objetivo), PLAN (tarefas) e VERIFY (validação): `feat|fix|refactor: <≤ 72 chars>`, com a chave do ALM quando houver (`feat: … (OXE-12)`). Salvar em `.oxe/commit-draft.md`.
 3. `git add` do escopo planejado (pare e confirme se houver arquivo fora dele) e `git commit -F .oxe/commit-draft.md`, ou `--amend`.
 4. Registrar SHA, assunto, branch e status do verify em `.oxe/commit-record.json`. Com `--dry-run`, só mostre a mensagem e o comando.
 5. Falha de hook ou conflito: mantenha o rascunho e mostre o comando que falhou.
+6. **Com programa:** feche a fase aqui — `oxe-cc runtime program close` (sign-offs pendentes e drift aparecem na saída; trate-os e rode de novo). Sem programa, o ciclo fecha no commit. Não mande o usuário de volta para `/oxe-verify` se o verify já está verde: se o `program close` disser "verify não concluído", siga o comando que ele indica (normalmente `runtime commit-task T<n>`).
 </process>
 
 <success_criteria>

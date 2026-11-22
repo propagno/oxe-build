@@ -22,7 +22,7 @@ function list(programDir) {
     try {
       const r = JSON.parse(line);
       if (r && r.kind === 'decision' && r.id) byId.set(r.id, { ...(byId.get(r.id) || {}), ...r });
-      if (r && r.kind === 'decision_status' && byId.has(r.id)) Object.assign(byId.get(r.id), { status: r.status, status_reason: r.reason, status_at: r.at, superseded_by: r.status === 'superseded' ? (r.superseded_by || null) : null });
+      if (r && r.kind === 'decision_status' && byId.has(r.id)) Object.assign(byId.get(r.id), { ...(r.status === 'active' && byId.get(r.id).status === 'proposed' ? { confirmed_by: r.by || null, confirmed_at: r.at } : {}), status: r.status, status_reason: r.reason, status_at: r.at, superseded_by: r.status === 'superseded' ? (r.superseded_by || null) : null });
     } catch { /* */ }
   }
   return [...byId.values()];
@@ -82,7 +82,10 @@ function storyIds(v) {
 function add(programDir, input = {}) {
   const title = String(input.title || '').trim();
   if (title.length < 4) throw new Error('informe a decisão em uma frase (--title "…")');
-  const author = String(input.by || '').trim() || 'usuário';
+  // Bench B11/B40: with no --by the author is the caller — an agent; it was recorded as "usuário" before any
+  // human confirmation. A decision the agent proposes is `proposed` until `decision confirm <id> --by <quem>`.
+  const author = String(input.by || '').trim() || 'agente';
+  const proposed = Boolean(input.proposed);
   const alternatives = parseAlternatives(input.alternatives || input.alt, author);
   const existing = list(programDir);
   const supersedes = input.supersedes ? String(input.supersedes).trim() : null;
@@ -101,9 +104,9 @@ function add(programDir, input = {}) {
     // the user stories the decision touches (US-n): the ADR lists them, and a card reaches its decisions through them
     ...(storyIds(input.stories).length ? { stories: storyIds(input.stories) } : {}),
     check: input.check ? String(input.check) : null,
-    by: String(input.by || '').trim() || 'usuário',
+    by: author,
     at: input.at ? String(input.at) : new Date().toISOString(),
-    status: 'active',
+    status: proposed ? 'proposed' : 'active',
     // ADR sections: why the decision was needed and what it costs (both optional; the title and text carry the rest).
     ...(input.context ? { context: String(input.context).trim() } : {}),
     ...(input.consequences ? { consequences: String(input.consequences).trim() } : {}),
@@ -117,7 +120,7 @@ function add(programDir, input = {}) {
   return record;
 }
 
-const STATUSES = ['active', 'superseded', 'retired'];
+const STATUSES = ['active', 'proposed', 'superseded', 'retired'];
 
 /**
  * A decision changes status by an appended `decision_status` record (the ledger stays append-only): `superseded`
@@ -130,10 +133,11 @@ function setStatus(programDir, id, input = {}) {
   const d = existing.find((x) => x.id === id);
   if (!d) throw new Error(`decisão ${id} inexistente (oxe-cc decision list)`);
   const reason = String(input.reason || '').trim();
-  if (status !== 'active' && reason.length < 4) throw new Error(`informe o motivo (--reason "…") para marcar ${id} como ${status}`);
+  if (status === 'active' && d.status === 'proposed' && !String(input.by || '').trim()) throw new Error(`confirmar ${id} exige --by <quem decidiu> (a decisão foi proposta por ${d.by || 'agente'})`);
+  if (status !== 'active' && status !== 'proposed' && reason.length < 4) throw new Error(`informe o motivo (--reason "…") para marcar ${id} como ${status}`);
   const superseded_by = input.superseded_by ? String(input.superseded_by) : null;
   if (status === 'superseded' && superseded_by && !existing.some((x) => x.id === superseded_by)) throw new Error(`a decisão substituta ${superseded_by} não existe`);
-  const rec = { kind: 'decision_status', id, status, reason: reason || null, by: String(input.by || '').trim() || 'usuário', at: new Date().toISOString(), ...(superseded_by ? { superseded_by } : {}) };
+  const rec = { kind: 'decision_status', id, status, reason: reason || null, by: String(input.by || '').trim() || 'agente', at: new Date().toISOString(), ...(superseded_by ? { superseded_by } : {}) };
   fs.appendFileSync(FILE(programDir), `${JSON.stringify(rec)}\n`, 'utf8');
   return rec;
 }
@@ -182,6 +186,7 @@ function lintDecisions(doc, decisions, phase) {
       cited.add(id);
       const d = known.get(id);
       if (!d) errors.push(`${t.id}: cita a decisão ${id}, que não existe (oxe-cc decision list; registre com oxe-cc decision add)`);
+      else if (!(t.done || t.status === 'done') && d.status === 'proposed') errors.push(`${t.id}: cita ${id}, proposta por ${d.by || 'agente'} e ainda sem confirmação humana — mostre a decisão ao usuário e rode oxe-cc decision confirm ${id} --by <quem decidiu>`);
       else if (!(t.done || t.status === 'done') && d.status && d.status !== 'active') warnings.push(`${t.id}: cita ${id}, que está ${d.status === 'superseded' ? `substituída${d.superseded_by ? ` por ${d.superseded_by}` : ''}` : 'aposentada'}${d.status_reason ? ` (${d.status_reason})` : ''} — cite a decisão vigente`);
     }
   }

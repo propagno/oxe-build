@@ -49,7 +49,10 @@ function findTables(lines, headerTest) {
   return out;
 }
 
-const isCriteriaHeader = (h) => /^id$/i.test(h[0] || '') && /crit[ée]rio|criterion/i.test(h[1] || '');
+// Bench B49: the `## Proibições` table of `spec probe` (| ID | Critério | Não pode | Nível | Verify |) also matched and,
+// coming after the criteria table, was the one `spec add criterion` wrote to — it is not the acceptance criteria table.
+const isCriteriaHeader = (h) => /^id$/i.test(h[0] || '') && /crit[ée]rio|criterion/i.test(h[1] || '')
+  && !h.some((cell) => /n[ãa]o\s+pode|must\s+not|forbidden|^borda$|^edge$/i.test(String(cell || '').trim()));
 const isRequirementsHeader = (h) => /^r-?id$/i.test(h[0] || '') && /requisito|requirement/i.test(h[1] || '');
 
 function idsInTables(lines, tables, prefix) {

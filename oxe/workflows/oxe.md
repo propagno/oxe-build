@@ -22,9 +22,9 @@ Ponto de entrada inteligente do OXE. Faz uma de três coisas dependendo do input
 
 Aplicar a lógica completa de `oxe/workflows/next.md`. **Com o `oxe-cc` disponível, a resposta é `nextStep` / `cursorCmd` / `reason` de `oxe-cc status --json`** (ver `references/next-step-footer.md`), que já cobre o grill e a aprovação da spec, o ALM, o RFC da fase e a entrega. A lista abaixo é o fallback; `oxe-cc status --journey` mostra o mapa das etapas 0 a 9.
 
-0. Se existir `.oxe/program/PROGRAM.json` com fase aberta → seguir a **fase ativa** (`oxe-cc runtime program status`): `pending` → `runtime program start`; `planning` → **plan** só da fase (a menos que `PLAN.json` já declare essa fase → **execute**); `executing` → **execute**; `verifying` com verify verde → `runtime program close`, com verify reprovado → **execute**. Sempre dizer "Fase k/N — Fx". O PLAN/run de uma fase fechada nunca é reaproveitado.
-1. Se `.oxe/` ou `STATE.md` não existir → **scan** (`npx oxe-cc@latest` primeiro se OXE não instalado)
-2. Se `.oxe/codebase/` incompleto e não for quick isolado → **scan**
+0. Se existir `.oxe/program/PROGRAM.json` com fase aberta → seguir a **fase ativa** (`oxe-cc runtime program status`): `pending` → `runtime program start`; `planning` → **plan** só da fase (a menos que `PLAN.json` já declare essa fase → **execute**, ou **verify** se todas as tarefas estão done); `executing` → **execute**; `verifying` com verify verde → `runtime program close`, com verify reprovado → **execute**. Sempre dizer "Fase k/N — Fx". O PLAN/run de uma fase fechada nunca é reaproveitado.
+1. Se `.oxe/` ou `STATE.md` não existir → `oxe-cc init-oxe` (instalar o oxe-cc antes, se faltar)
+2. Sem `SPEC.md` num projeto novo → **spec** (`/oxe-spec`); mapa do codebase só com `/oxe-spec --refresh` em projeto existente
 3. Se `quick_active` ou `QUICK.md` sem `PLAN.md` → avaliar promoção (ver `next.md`)
 4. Se sem `SPEC.md` → **spec**
 5. Se SPEC mas sem PLAN → verificar `discuss_before_plan` → **discuss** ou **plan**
@@ -144,7 +144,7 @@ Não precisam ser decorados como comandos separados:
    - **Sem input ou "next / o que faço / status":** aplicar `<modo_status>`.
    - **"help / comandos / o que é OXE":** aplicar `<modo_help>`.
    - **Pergunta situacional** ("onde estou?", "qual o risco?", "o que está acontecendo?", "me contextualize"): aplicar `<modo_pergunta>`.
-   - **Objetivo de implementação** (linguagem natural descrevendo uma tarefa, feature ou mudança — ex.: "cria X", "implementa Y", "adiciona Z", "corrige W"): **regra única** — se cabe nos critérios do quick (até ~10 passos, poucos arquivos, sem contrato público, segurança ou dados pessoais) → executar `oxe/workflows/quick.md`; senão → executar `oxe/workflows/spec.md`. Com programa ou plano em andamento, o `nextStep` do `oxe-cc status --json` prevalece. O Conductor (`oxe/workflows/conduct.md`) só entra quando o usuário pede explicitamente o modo autônomo.
+   - **Objetivo de implementação** (linguagem natural descrevendo uma tarefa, feature ou mudança — ex.: "cria X", "implementa Y", "adiciona Z", "corrige W"): **regra única** — se cabe nos critérios do quick (até ~10 passos, poucos arquivos, sem contrato público, segurança ou dados pessoais) → executar `oxe/workflows/quick.md`; senão → executar `oxe/workflows/spec.md`. Com programa ou plano em andamento, o `nextStep` do `oxe-cc status --json` prevalece, e um pedido de **mudança** (critério novo, escopo novo, "muda o A3") é um CR: siga `references/change-management.md` — registre a mudança, mostre o impacto e pare no próximo passo. Não implemente código de CR a partir do `/oxe` nem rode `spec approve` sem o OK humano nesta conversa. O Conductor (`oxe/workflows/conduct.md`) só entra quando o usuário pede explicitamente o modo autônomo.
    - **Input de roteamento simples** (pedido que mapeia diretamente a um comando OXE existente sem necessidade de execução): aplicar `<modo_route>` e, se o workflow for claro, carregar e executar diretamente o `oxe/workflows/<nome>.md` correspondente.
 2. Nunca produzir listas longas de alternativas. Um passo, um comando, uma frase.
 3. Se o workflow executado diretamente gerar artefatos, reportar no chat conforme esse workflow.

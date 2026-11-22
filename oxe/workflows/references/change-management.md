@@ -12,6 +12,7 @@ Depois que a spec foi aprovada (`oxe-cc spec approve`), nada se edita à mão em
 | "põe A8 na fase F2" (fase pendente, ou em planning sem tentativa executada) | `oxe-cc program phase edit F2 --add-acceptance A8 --by …` |
 | "tira A5 da F2" | `oxe-cc program phase edit F2 --remove-acceptance A5` (sai também do plano atual) |
 | "move A3 da F1 para a F4" | `oxe-cc program criterion move A3 --from F1 --to F4` |
+| "a F6 foi reaberta só por liberar um teste" (nenhum defect/spec_gap depois do close) | `oxe-cc program phase restore-close F6 --from-history --by … --reason "…"` (`--dry-run` antes); nunca editar o PROGRAM.json |
 | "fase nova entre F2 e F3" | `oxe-cc program phase add --after F2 --title "…" --acceptance A9,A10` (renumera só as fases não iniciadas) |
 | fase já executando, ou fechada | CR: `oxe-cc runtime feedback …`. O próximo `/oxe-plan --replan` cobre o CR com teste de aceite. |
 | decisão muda | `oxe-cc decision add --supersedes D-NN …` (o ADR antigo fica marcado como substituído) |
@@ -36,10 +37,12 @@ Rode `oxe-cc status` (ou `/oxe`). O próximo passo lê os estados de falha e dá
 
 ## Regras
 
+- **Decisão proposta pelo agente** (no plano, no grill, num CR): `oxe-cc decision add … --proposed`. Mostre ao usuário a decisão, a alternativa e o motivo; só com o OK dele rode `oxe-cc decision confirm D-… --by <quem decidiu>`. O `plan lint` bloqueia tarefa que cita decisão só proposta. Nunca grave `--by usuário` (ou o papel de outra pessoa) por conta própria.
+- **Um CR registra e para.** Com programa ou plano em andamento, o pedido de mudança vira os comandos da tabela acima (critério, requisito, fase, CR) e termina com o próximo passo do `oxe-cc status`. **Nunca implemente o código do CR nesta conversa**, fora de `/oxe-plan` → `/oxe-execute` → `/oxe-verify`: o teste de aceite do critério novo é congelado no plano antes do código, e é isso que o protege. Mesmo que o pedido diga "implemente", responda com o registro feito e o próximo passo.
 - Antes de mudar, mostre ao usuário o impacto: os critérios, as histórias (US-n), as tarefas e as fases afetadas. Execute só com o OK.
 - Uma mudança de comportamento que já estava aprovado tem dono: sempre `--by` e `--reason`.
 - Depois da mudança:
-  - rode `oxe-cc spec check`; se a SPEC mudou depois da aprovação, aprove de novo;
+  - rode `oxe-cc spec check`; se a SPEC mudou depois da aprovação, ela precisa ser aprovada de novo **pelo humano**: mostre o diff dos critérios e peça o OK. Só depois rode `oxe-cc spec approve --by <quem aprovou>`. Nunca rode o `spec approve` "em nome" do PO sem esse OK nesta conversa, mesmo que o pedido diga que o PO já aprovou a mudança: a aprovação da mudança não é a aprovação da SPEC emendada;
   - com ALM configurado, rode `oxe-cc alm push --apply` (cria só o que falta);
   - com plano em andamento, rode `oxe-cc plan lint`.
 - Pedido grande ou ambíguo ("refaz o fluxo de pagamento"): volte ao grill do ramo afetado (`oxe-cc grill ask --branch flows …`) em vez de emendar o critério.

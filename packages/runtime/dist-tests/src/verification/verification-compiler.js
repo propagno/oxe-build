@@ -200,7 +200,8 @@ async function runCheck(check, cwd, timeoutMs = 60000) {
     const first = await runCheckOnce(check, cwd, timeoutMs);
     if (first.status !== 'fail' || !(0, runner_timeout_1.isRunnerTimeoutOnly)(`${first.stdout}\n${first.stderr}`))
         return first;
-    const second = await runCheckOnce(check, cwd, timeoutMs);
+    // the rerun is a real second run, never the memoized output of the first
+    const second = await runCheckOnce(check, cwd, timeoutMs, { fresh: true });
     const stillTimeoutOnly = second.status === 'fail' && (0, runner_timeout_1.isRunnerTimeoutOnly)(`${second.stdout}\n${second.stderr}`);
     return {
         ...second,
@@ -213,7 +214,14 @@ async function runCheck(check, cwd, timeoutMs = 60000) {
         },
     };
 }
-async function runCheckOnce(check, cwd, timeoutMs = 60000) {
+let commandMemo = null;
+function withCommandMemo(fn) {
+    if (commandMemo || process.env.OXE_VERIFY_NO_REUSE === '1')
+        return fn();
+    commandMemo = new Map();
+    return fn().finally(() => { commandMemo = null; });
+}
+async function runCheckOnce(check, cwd, timeoutMs = 60000, opts = {}) {
     if (typeof check.timeout_ms === 'number' && check.timeout_ms > 0)
         timeoutMs = check.timeout_ms;
     const frozen = check.frozen_files ?? [];
@@ -308,20 +316,32 @@ async function runCheckOnce(check, cwd, timeoutMs = 60000) {
             tests_executed: 0,
         };
     }
-    const start = Date.now();
+    let start = Date.now();
     try {
-        // Use a shell so the full command string is interpreted (handles quotes, &&, node -e "...").
-        // The child never inherits node:test context: it would emit a serialized protocol, not TAP.
-        const shell = (0, shell_argv_1.shellInvocation)(check.command);
-        const result = (0, child_process_1.spawnSync)(shell.file, shell.args, {
-            cwd,
-            env: (0, shell_argv_1.childProcessEnv)(),
-            timeout: timeoutMs,
-            // a Gradle/Android build prints a lot before and around the test lines: 2 MB cut it (ENOBUFS)
-            maxBuffer: 32 * 1024 * 1024,
-            windowsVerbatimArguments: shell.windowsVerbatimArguments,
-        });
-        const duration_ms = Date.now() - start;
+        const memoKey = `${path_1.default.resolve(cwd)}|${timeoutMs}|${check.command}`;
+        const cached = commandMemo && !opts.fresh ? commandMemo.get(memoKey) : undefined;
+        let result;
+        if (cached) {
+            result = cached;
+            start = cached.start;
+        }
+        else {
+            // Use a shell so the full command string is interpreted (handles quotes, &&, node -e "...").
+            // The child never inherits node:test context: it would emit a serialized protocol, not TAP.
+            const shell = (0, shell_argv_1.shellInvocation)(check.command);
+            const spawned = (0, child_process_1.spawnSync)(shell.file, shell.args, {
+                cwd,
+                env: (0, shell_argv_1.childProcessEnv)(),
+                timeout: timeoutMs,
+                // a Gradle/Android build prints a lot before and around the test lines: 2 MB cut it (ENOBUFS)
+                maxBuffer: 32 * 1024 * 1024,
+                windowsVerbatimArguments: shell.windowsVerbatimArguments,
+            });
+            result = { status: spawned.status, stdout: spawned.stdout, stderr: spawned.stderr, error: spawned.error, start, duration_ms: Date.now() - start };
+            if (commandMemo)
+                commandMemo.set(memoKey, result);
+        }
+        const duration_ms = cached ? 0 : result.duration_ms;
         // OXB-150: gradle/maven report per-test results in JUnit XML files (build/test-results, target/surefire-reports),
         // not on stdout; the reports this command wrote are appended so counts and `proves` see each test.
         // also a wrapper script named after it (gradle152.mjs): no word boundary after "gradle"
@@ -383,6 +403,7 @@ ${stderr}`);
             duration_ms,
             error,
             tests_executed: report.tests_executed,
+            ...(cached ? { reused_run: true } : {}),
         };
     }
     catch (err) {
@@ -399,11 +420,13 @@ ${stderr}`);
     }
 }
 async function runSuite(suite, cwd, timeoutMs = 60000) {
-    const results = [];
-    for (const check of suite.checks) {
-        results.push(await runCheck(check, cwd, timeoutMs));
-    }
-    return results;
+    return withCommandMemo(async () => {
+        const results = [];
+        for (const check of suite.checks) {
+            results.push(await runCheck(check, cwd, timeoutMs));
+        }
+        return results;
+    });
 }
 async function executeSuite(suite, cwd, options) {
     const results = [];
@@ -411,58 +434,60 @@ async function executeSuite(suite, cwd, options) {
     const evidenceRefs = new Map();
     const timeoutMs = options.timeoutMs ?? 60000;
     const attemptNumber = options.attemptNumber ?? 1;
-    for (const check of suite.checks) {
-        const provider = options.pluginRegistry?.verifierProviderFor(check.type);
-        let result;
-        let verificationResult;
-        if (provider) {
-            const providerResult = await provider.execute({
-                check_id: check.id,
-                check_type: check.type,
-                command: check.command,
-                work_item_id: options.workItemId,
-                workspace_root: cwd,
-                evidence_dir: '',
-            });
-            result = {
-                check_id: check.id,
-                acceptance_ref: check.acceptance_ref,
-                status: providerResult.status,
-                stdout: providerResult.summary ?? '',
-                stderr: '',
-                exit_code: providerResult.status === 'pass' ? 0 : 1,
-                duration_ms: 0,
-                error: providerResult.status === 'error' ? providerResult.summary ?? 'provider error' : null,
-                evidence_refs: providerResult.evidence_refs,
-            };
-            verificationResult = providerResult;
-        }
-        else {
-            result = await runCheck(check, cwd, timeoutMs);
-            const collected = options.evidenceStore
-                ? await collectCheckEvidence(options.evidenceStore, check, result, {
-                    run_id: options.runId,
+    await withCommandMemo(async () => {
+        for (const check of suite.checks) {
+            const provider = options.pluginRegistry?.verifierProviderFor(check.type);
+            let result;
+            let verificationResult;
+            if (provider) {
+                const providerResult = await provider.execute({
+                    check_id: check.id,
+                    check_type: check.type,
+                    command: check.command,
                     work_item_id: options.workItemId,
-                    attempt_number: attemptNumber,
-                })
-                : { refs: [], summaryRef: null };
-            result.evidence_refs = collected.refs;
-            result.summary_evidence_ref = collected.summaryRef;
-            verificationResult = {
-                verification_id: `vr-${crypto_1.default.randomBytes(4).toString('hex')}`,
-                work_item_id: options.workItemId,
-                check_id: check.id,
-                status: result.status,
-                evidence_refs: collected.refs,
-                summary: result.error || result.stderr || result.stdout || null,
-            };
+                    workspace_root: cwd,
+                    evidence_dir: '',
+                });
+                result = {
+                    check_id: check.id,
+                    acceptance_ref: check.acceptance_ref,
+                    status: providerResult.status,
+                    stdout: providerResult.summary ?? '',
+                    stderr: '',
+                    exit_code: providerResult.status === 'pass' ? 0 : 1,
+                    duration_ms: 0,
+                    error: providerResult.status === 'error' ? providerResult.summary ?? 'provider error' : null,
+                    evidence_refs: providerResult.evidence_refs,
+                };
+                verificationResult = providerResult;
+            }
+            else {
+                result = await runCheck(check, cwd, timeoutMs);
+                const collected = options.evidenceStore
+                    ? await collectCheckEvidence(options.evidenceStore, check, result, {
+                        run_id: options.runId,
+                        work_item_id: options.workItemId,
+                        attempt_number: attemptNumber,
+                    })
+                    : { refs: [], summaryRef: null };
+                result.evidence_refs = collected.refs;
+                result.summary_evidence_ref = collected.summaryRef;
+                verificationResult = {
+                    verification_id: `vr-${crypto_1.default.randomBytes(4).toString('hex')}`,
+                    work_item_id: options.workItemId,
+                    check_id: check.id,
+                    status: result.status,
+                    evidence_refs: collected.refs,
+                    summary: result.error || result.stderr || result.stdout || null,
+                };
+            }
+            if (result.evidence_refs && result.evidence_refs.length > 0) {
+                evidenceRefs.set(check.id, result.evidence_refs);
+            }
+            results.push(result);
+            verificationResults.push(verificationResult);
         }
-        if (result.evidence_refs && result.evidence_refs.length > 0) {
-            evidenceRefs.set(check.id, result.evidence_refs);
-        }
-        results.push(result);
-        verificationResults.push(verificationResult);
-    }
+    });
     const manifest = (0, verification_manifest_1.buildManifest)(options.runId, results, {
         workItemId: options.workItemId,
         granularity: 'work_item',

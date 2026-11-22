@@ -29,6 +29,26 @@ function verifyIcon(status: string): string {
   }
 }
 
+/**
+ * Bench B30: the check cell carried the whole TAP output (`npm test` repeated in every check that runs it) — F1's
+ * VERIFY.md reached 93 KB and F2's ~9k lines, re-read by every agent. One line per check; the full output stays
+ * in the evidence file the row already links.
+ */
+export function checkSummaryLine(summary: string | null | undefined, fallback: string): string {
+  const text = String(summary ?? '').trim();
+  if (!text) return fallback;
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const num = (re: RegExp) => { const hit = lines.map((l) => re.exec(l)).find(Boolean); return hit ? hit[1] : null; };
+  const pass = num(/^#\s*pass\s+(\d+)/i);
+  const fail = num(/^#\s*fail\s+(\d+)/i);
+  const firstNotOk = lines.find((l) => /^not ok\b/i.test(l));
+  let line: string;
+  if (pass !== null || fail !== null) line = `pass ${pass ?? 0} · fail ${fail ?? 0}${firstNotOk ? ` · ${firstNotOk}` : ''}`;
+  else line = firstNotOk || lines[0];
+  line = line.replace(/\|/g, '\\|');
+  return line.length > 160 ? `${line.slice(0, 157)}...` : line;
+}
+
 /** One `ExecutorUsage` event: an executor attempt's turns, tool calls and cost. */
 export interface ExecutorUsageRow {
   work_item_id: string;
@@ -115,7 +135,7 @@ export class ProjectionEngine {
       lines.push('|----|-------|--------|------------|');
       for (const r of results) {
         const evidenceList = r.evidence_refs.join(', ') || '—';
-        lines.push(`| ${r.check_id} | ${r.summary ?? r.check_id} | ${verifyIcon(r.status)} | ${evidenceList} |`);
+        lines.push(`| ${r.check_id} | ${checkSummaryLine(r.summary, r.check_id)} | ${verifyIcon(r.status)} | ${evidenceList} |`);
       }
       lines.push('');
     }

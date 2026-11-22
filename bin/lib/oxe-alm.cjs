@@ -168,6 +168,33 @@ function checkConfig(cfg, env = process.env) {
 
 // ── http with retry and backoff ──────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * 8e 22/11: a token renewed in the Windows User env var does not reach processes started before the renewal; they
+ * keep the revoked one and Jira answers 404. Names (never values) of the credential vars whose process value differs
+ * from the User-scope one. Only for the real process env on Windows (or an injected `userEnv(name)` reader).
+ */
+function staleCredentialNames(credEnv) {
+  if (!credEnv || !Array.isArray(credEnv.names)) return [];
+  const reader = typeof credEnv.userEnv === 'function'
+    ? credEnv.userEnv
+    : process.platform === 'win32' && credEnv.env === process.env
+      ? (name) => {
+        const r = require('child_process').spawnSync('reg', ['query', 'HKCU\\Environment', '/v', name], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+        if (r.status !== 0) return null;
+        const m = new RegExp(`^\\s*${name}\\s+REG_(?:EXPAND_)?SZ\\s+(.*)$`, 'mi').exec(String(r.stdout || ''));
+        return m ? m[1].trim() : null;
+      }
+      : null;
+  if (!reader) return [];
+  const out = [];
+  for (const name of credEnv.names) {
+    let user = null;
+    try { user = reader(name); } catch { user = null; }
+    if (user != null && user !== '' && String(user) !== String((credEnv.env || {})[name] ?? '')) out.push(name);
+  }
+  return out;
+}
+
 /** Default transport: global fetch. Tests inject { http } with the same contract. */
 async function fetchHttp(method, url, headers, body) {
   const res = await fetch(url, { method, headers, body: body == null ? undefined : (typeof body === 'string' ? body : JSON.stringify(body)) });
@@ -199,7 +226,24 @@ async function request(ctx, method, url, body, extraHeaders = {}) {
       if (r.status === 401) throw Object.assign(new Error('HTTP 401: credencial recusada (confira as variáveis de ambiente do ALM)'), { fatal: true });
       if (r.status === 403) throw Object.assign(new Error(`HTTP 403: sem permissão para ${method} ${url.replace(/\?.*$/, '')}`), { fatal: true });
       // OXB-C28-9: a 404 names the call (quick start: comment or transition?) — the bare body did not say which write
-      if (r.status === 404) throw Object.assign(new Error(`HTTP 404 em ${method} ${String(url).replace(/^https?:\/\/[^/]+/, '').replace(/\?.*$/, '')}: ${String(r.text || '').slice(0, 300)} — o card existe e é visível para esta credencial (site e projeto do bloco "alm")?`), { fatal: true, status: 404 });
+      if (r.status === 404) {
+        // 8e 22/11 (C28-9 again): Jira answers an unauthenticated call with 404 on every issue, never 401. Ask
+        // /myself once: a 401 there means the credential is the problem, not the card.
+        let anonymous = false;
+        const jira = /^(https?:\/\/[^/]+)\/rest\/api\/\d\//.exec(String(url));
+        if (jira && !/\/myself$/.test(String(url))) {
+          try { const me = await ctx.http('GET', `${jira[1]}/rest/api/3/myself`, { ...ctx.headers }, undefined); anonymous = Boolean(me && me.status === 401); } catch { anonymous = false; }
+        }
+        const where = `${method} ${String(url).replace(/^https?:\/\/[^/]+/, '').replace(/\?.*$/, '')}`;
+        if (anonymous) {
+          const stale = staleCredentialNames(ctx.credEnv);
+          const fix = stale.length
+            ? `o valor de ${stale.join(', ')} neste processo difere da variável de usuário (renovada depois que este terminal/processo abriu): reabra o terminal ou recarregue as variáveis de usuário e rode de novo`
+            : 'renove o token (JIRA_API_TOKEN ou o token_env do bloco "alm") e confira o e-mail (JIRA_EMAIL)';
+          throw Object.assign(new Error(`HTTP 404 em ${where}: a credencial foi recusada (GET /rest/api/3/myself → 401), e o Jira responde 404 para todo card a um acesso anônimo — ${fix}`), { fatal: true, status: 404, auth: true, stale_env: stale });
+        }
+        throw Object.assign(new Error(`HTTP 404 em ${where}: ${String(r.text || '').slice(0, 300)} — o card existe e é visível para esta credencial (site e projeto do bloco "alm")?`), { fatal: true, status: 404 });
+      }
       if (r.status >= 400) throw Object.assign(new Error(`HTTP ${r.status}: ${String(r.text || '').slice(0, 300)}`), { fatal: true });
       return r.json;
     } catch (err) {
@@ -218,7 +262,7 @@ const adf = (text) => ({ type: 'doc', version: 1, content: String(text || '').sp
 function jiraProvider(cfg, env, ctx) {
   const site = String(env[cfg.p.site_env || 'JIRA_SITE'] || '').replace(/\/+$/, '');
   const auth = Buffer.from(`${env[cfg.p.email_env || 'JIRA_EMAIL']}:${env[cfg.p.token_env || 'JIRA_API_TOKEN']}`).toString('base64');
-  const c = { ...ctx, headers: { Authorization: `Basic ${auth}`, Accept: 'application/json', 'Content-Type': 'application/json' } };
+  const c = { ...ctx, credEnv: { env, names: [cfg.p.email_env || 'JIRA_EMAIL', cfg.p.token_env || 'JIRA_API_TOKEN'], userEnv: ctx.userEnv }, headers: { Authorization: `Basic ${auth}`, Accept: 'application/json', 'Content-Type': 'application/json' } };
   const types = { epic: 'Epic', story: 'Story', task: 'Task', bug: 'Task', ...(cfg.p.types || {}) };
   let bugTypeResolved = false;
   const project = cfg.p.project;
@@ -460,7 +504,7 @@ function jiraRest(cfg, options = {}) {
   const env = options.env || process.env;
   const site = String(env[cfg.p.site_env || 'JIRA_SITE'] || '').replace(/\/+$/, '');
   const auth = Buffer.from(`${env[cfg.p.email_env || 'JIRA_EMAIL']}:${env[cfg.p.token_env || 'JIRA_API_TOKEN']}`).toString('base64');
-  const c = { http: options.http || fetchHttp, sleep: options.sleep || ((ms) => new Promise((r) => setTimeout(r, ms))), retries: options.retries, readOnly: isDry(cfg, options), headers: { Authorization: `Basic ${auth}`, Accept: 'application/json', 'Content-Type': 'application/json' } };
+  const c = { http: options.http || fetchHttp, sleep: options.sleep || ((ms) => new Promise((r) => setTimeout(r, ms))), retries: options.retries, readOnly: isDry(cfg, options), credEnv: { env, names: [cfg.p.email_env || 'JIRA_EMAIL', cfg.p.token_env || 'JIRA_API_TOKEN'], userEnv: options.userEnv }, headers: { Authorization: `Basic ${auth}`, Accept: 'application/json', 'Content-Type': 'application/json' } };
   return { site, readOnly: c.readOnly, request: (method, url, body) => request(c, method, url, body) };
 }
 
@@ -482,7 +526,7 @@ const isDry = (cfg, options = {}) => Boolean(options.dryRun || options.readOnly 
 function provider(cfg, options = {}) {
   if (cfg.transport === 'mcp') return queueProvider(cfg);
   const env = options.env || process.env;
-  const ctx = { http: options.http || fetchHttp, sleep: options.sleep || ((ms) => new Promise((r) => setTimeout(r, ms))), retries: options.retries, readOnly: isDry(cfg, options) };
+  const ctx = { http: options.http || fetchHttp, sleep: options.sleep || ((ms) => new Promise((r) => setTimeout(r, ms))), retries: options.retries, readOnly: isDry(cfg, options), userEnv: options.userEnv };
   return cfg.provider === 'jira' ? jiraProvider(cfg, env, ctx) : azureProvider(cfg, env, ctx);
 }
 

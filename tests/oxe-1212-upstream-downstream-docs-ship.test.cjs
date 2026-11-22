@@ -115,7 +115,7 @@ describe('Round 10 — Grill restart replay & Glossary pipe/$ roundtrip', () => 
     const q1 = grillLib.ask(gdir, { branch: 'problem', question: 'Pergunta antiga?', recommended: 'sim', why: 'padrão' });
     grillLib.answer(gdir, q1.id, { choice: 'ok' });
     grillLib.term(gdir, { term: 'Antigo', definition: 'velho', synonyms: ['old'] });
-    grillLib.confirm(gdir, 'problem');
+    grillLib.confirm(gdir, 'problem', { playback: 'resumo do ramo confirmado pelo usuário' });
 
     grillLib.start(gdir, { type: 'refactor', title: 'Sessão 2', restart: true });
     const st = grillLib.status(gdir);

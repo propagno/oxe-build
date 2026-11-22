@@ -8,6 +8,49 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-build, mais o roteiro de excelência e os backlogs de comparação aprovados pelo TECH LEAD. Cada item tem uma seção em `docs/oxespace-1.5/BACKLOG.md`, com a evidência e o teste que a reproduz (`tests/oxe-1212-*.test.cjs`). Para usar só a trilha recomendada, veja [docs/HAPPY-PATH.md](docs/HAPPY-PATH.md).
 
+### Achados do bench OXE × Restitui: o caminho manual fecha a fase (22/11)
+
+O bench rodou a trilha principal à mão (`/oxe` → spec → plan → execute → verify → ship), sem `runtime execute`. Os achados confirmados no código foram corrigidos (`tests/oxe-bench-fixes.test.cjs`).
+
+- **A fase anda no caminho manual (B27, B32, B34, B44).** `runtime verify`, `runtime commit-task` e `plan done` avançam a fase de `planning` para `executing` e `verifying` quando o `PLAN.json` declara a fase ativa. O próximo passo sugere verify quando todas as tarefas estão done e `program close` quando o verify está verde. Isso desfaz o laço verify ↔ ship.
+- **O verify explica o run `running` (B35).** Com o verify verde e tarefas sem commit, o `runtime verify` e o `status` nomeiam as tarefas e o `runtime commit-task T<n>`.
+- **`plan done` exige evidência (B16).** A tarefa precisa de um commit com `OXE-Task`, ou de `--commit <sha>` existente, ou de `--force --reason "…"`, que fica registrado.
+- **Códigos de saída honestos (B15, B43).** O `runtime verify` sai com 0 quando passa, 1 quando falha (inclusive regressão ou gate vermelho) e 2 quando bloqueia. O `runtime compile` de um grafo vazio sai com 1 e diz por quê.
+- **Regressão sem falso vermelho (B42, B41).** O `npm test` inteiro deixa de entrar na regressão congelada quando o critério tem um check próprio. A suíte inteira vermelha junto com os testes da fase atual é reportada à parte. A CLI imprime o motivo de cada regressão.
+- **Decisões do agente (B11, B40).** Sem `--by`, o autor é `agente`, e não mais `usuário`. `decision add --proposed` cria a decisão como proposta, o `plan lint` bloqueia tarefa que cita decisão só proposta, e `decision confirm D-… --by <quem>` confirma.
+- **Grill visível (B05, B06).** O `grill ask` imprime a pergunta, as opções e a recomendada para o agente repetir. O `grill confirm` exige `--playback "…"`, o resumo que o usuário confirmou.
+- **Install sem `..oxe/` (B01).** A regex que reescrevia os caminhos casava dentro de `.oxe/workflows/`. O `--claude` sozinho instala só `.claude/`, sem `.copilot/` (B03).
+- **Versão do `npx` (B21, B22).** Os wrappers pedem `npx oxe-cc@<versão do projeto>`, e a CLI avisa quando é mais velha que o `.oxe/oxe-version.json`. O `plan.schema.json` aceita os mesmos ids de decisão que o código (`D-F1-1`).
+- **Artefatos mais leves (B17, B30).** O `status --json` traz o resumo do run (`--full` para tudo): no bench foram 627 KB. O `VERIFY.md` tem uma linha por check, em vez do TAP inteiro.
+- **Emendas visíveis ao verify (B25, B29).** O `VERIFY.md` lista as emendas de aceite (CR, hashes e autor), e o `verify.md` manda consultá-las antes de acusar adulteração. Sem trava do compile, o hash anterior vem do git.
+- **Ferramentas que travavam o fluxo.** Os ADRs e os docs publicados pelo OXE não contam como `architecture_drift` (B33). O `spec add criterion` ignora as tabelas de Proibições e Bordas (B49). O `--accept-drift` sem glob é recusado (B46). O `ship check-origin` sem remote usa a `main` local ou explica como passar o intervalo (B31).
+- **Workflows.**
+  - `/oxe` começa pelo `oxe-cc status --json` e não sugere `scan` (B04).
+  - O execute exige o `runtime compile` e fecha cada tarefa com `commit-task` (B20, B45).
+  - O ship `--local` comita por tarefa e fecha a fase (B31, B34).
+  - Um CR com programa registra a mudança e para, e a SPEC emendada é reaprovada pelo humano (B48).
+  - O plan valida os testes congelados contra uma referência descartável com mutações (B18).
+  - Os fatos do brief entram em lote no grill (B08).
+- **Achados finais do bench (B52–B65).**
+  - **Verify mais rápido (B55).** Dentro de uma rodada, cada comando idêntico (mesma pasta e mesmo timeout) roda uma vez só. É o caso do `npm test` repetido na regressão de cada fase fechada. Cada check continua sendo julgado pelos próprios critérios (congelados, `proves`, relatório do runner) sobre essa saída e fica marcado `reused_run`. Uma nova tentativa por timeout do runner roda de novo de verdade. `OXE_VERIFY_NO_REUSE=1` desliga.
+  - **NFR de tempo fora do aceite congelado (B52).** O `plan lint` avisa quando um teste de aceite afirma um limite de tempo de parede (p95, ms). A referência do plan manda declarar esse critério em `.oxe/program/nfr.json` (OXB-144: amostras, mediana e gate da fase).
+  - **`/oxe-quick` é workflow (B57).** O wrapper manda abrir o quick pelo CLI antes de qualquer edição e commitar por `oxe-cc quick commit`, nunca por `git commit` direto.
+  - **`/oxe-ship --defect` (B58).** O defeito exige rodar a suíte antes de afirmar cobertura, e o replan de um defeito pequeno cobre só o delta: teste que reproduz, depois correção.
+  - **Fase reaberta é anunciada (B60).** O próximo passo começa por "⚠ F4 foi REABERTA por CR-… — avise o usuário" e traz o campo `alert`.
+  - **`status --json` enxuto (B65).** Na cópia do app do bench, caiu de 1,1–1,7 MB para 110 KB (B17).
+  - O `runtime feedback` de defeito aponta o `plan amend-test` quando o defeito está no teste congelado (B23).
+- **C28-9: 404 do Jira com credencial recusada.** O Jira responde 404 a todo card quando a chamada é anônima. Depois de um 404, o ALM consulta `/rest/api/3/myself`; se vier 401, a mensagem diz que a credencial foi recusada. Quando o valor da variável neste processo difere da variável de usuário (token renovado depois que o terminal abriu), ela nomeia a variável, nunca o valor, e manda reabrir o terminal.
+- **C30: `runtime feedback --dry-run` não grava (P1).** Antes ele criava o CR de verdade. Agora mostra o CR, a rota e se a fase seria reaberta, sem tocar em `changes.ndjson`, `PROGRAM.json`, `PLAN.json`, eventos ou `STATE.md`. Em `resolve`/`withdraw`, ele só diz o que aconteceria.
+- **C30: liberar um teste congelado não reabre uma fase fechada (P2).** Um CR `constraint` numa fase fechada (o caminho do `plan amend-test`) agora é uma mudança pós-close (`post_close: true`): a fase segue fechada e a cobertura do close continua valendo. Antes, a fase voltava para `planning`, e o novo close recusava a cobertura que o close original tinha aceitado. Código que precisa mudar continua sendo `defect`, e esse reabre a fase.
+- **C30: `program phase restore-close Fn --from-history --by <papel> --reason "…" [--dry-run]`.** Devolve o close a uma fase que um CR sem mudança de código reabriu (caso da F6 do 152code, antes do C30). Restaura `status`, `closed_at` e `closed_commit` a partir do último close do histórico, e grava a restauração no histórico, em `changes.ndjson` e no evento `PhaseCloseRestored`. É recusado quando um CR `defect` ou `spec_gap` não retirado da fase chegou depois daquele close, ou quando o commit do close não existe. Não é preciso editar o `PROGRAM.json` à mão.
+
+### Lote OXB-C31: promote, `--mode wave` e orçamento (152perf, 22/11)
+
+- **C31-2 (P1): a emenda do planejador num teste não congelado vai junto.** O commit `OXE-Plan` que congelou os testes da T2 também emendou `tests/agent-state.test.ts`, que não é congelado. Como o promote nunca faz cherry-pick do commit do planejador, o PR #1050 nasceria vermelho. Agora, quando esse commit mexe nos testes congelados da própria tarefa, os testes não congelados que ele emendou vão no PR como arquivos. Se o mesmo commit também congela testes de outra tarefa, ou se outra tarefa também mudou o arquivo, o promote avisa que a emenda fica de fora.
+- **C31-3 (P2): `runtime execute --mode wave` para no fim da onda.** Antes o `--mode` era aceito e ignorado, e o run seguia para a onda 2. Agora `--mode wave` equivale a `--wave <primeira onda com tarefa pendente>`, e `--mode full|all` roda todas as ondas pendentes. Qualquer outro valor é erro.
+- **C31-4 (P3): `--budget-add-usd X` e `--budget-add-turns N`.** O `--budget-usd` continua sendo o teto acumulado do run. As opções novas põem o teto em "o que já foi gasto + X", e a mensagem de orçamento esgotado passa a sugerir `--budget-add-usd`. Combinar a forma absoluta e a relativa da mesma unidade é recusado.
+- **C31-5 (P2): o `quick promote` confere a origem contra `origin/<base>`.** Antes ele usava a `main` local, que estava 4245 commits atrás nas worktrees do programa, e recusou 84 commits que o PR nem levava (OXE-386, #1059). Agora faz como o `runtime promote` (OXB-157): o intervalo começa em `origin/<base>` quando ela existe, o aviso diz quantos commits a base local está atrás, e o PR continua apontando para `<base>`.
+
 ### Lote OXB-C28: recusa de política, verify remoto e ferramentas do planejador (21/11, noite)
 
 - **C28-1: recusa falsa da política.**

@@ -285,7 +285,20 @@ function check(root, options = {}) {
     source = { pr: pr.pr, url: pr.url, base: pr.base, head: pr.head };
     commits = pr.commits;
   } else {
-    const range = target || `${ocfg.base || 'origin/main'}..HEAD`;
+    // Bench B31: without a remote, `origin/main..HEAD` died with "unknown revision". Fall back to a local main/master
+    // on another branch; on main itself without a remote there is no default range — say how to give one.
+    const refExists = (ref) => {
+      const r = spawn('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd: root, windowsHide: true }) || {};
+      return typeof r.status !== 'number' || r.status === 0; // an injected spawn without a status: assume it exists
+    };
+    let base = ocfg.base || 'origin/main';
+    if (!target && !ocfg.base && !refExists(base)) {
+      const branch = String((spawn('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true }).stdout) || '').trim();
+      const local = ['main', 'master'].find((b) => b !== branch && refExists(b));
+      if (local) base = local;
+      else throw new Error('ship check-origin: sem origin/main (repositório sem remote?) e sem outra branch base — passe o intervalo (oxe-cc ship check-origin <sha-base>..HEAD) ou configure "origin": { "base": "<ref>" } no .oxe/config.json');
+    }
+    const range = target || `${base}..HEAD`;
     source = { range };
     commits = commitsFromGit(root, range, spawn);
   }

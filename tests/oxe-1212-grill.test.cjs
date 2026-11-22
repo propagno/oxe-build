@@ -31,7 +31,7 @@ function answerAll(dir, type = 'bugfix') {
   for (const b of grill.BLOCKING_BY_TYPE[type]) {
     const q = g(dir, 'ask', { branch: b, question: `pergunta do ramo ${b}?`, options: 'opção alfa | opção beta', recommended: 'opção alfa', why: 'evidência', decision: b === 'scope' });
     g(dir, 'answer', { id: q.id, choice: 'ok' });
-    g(dir, 'confirm', { branch: b });
+    g(dir, 'confirm', { branch: b, playback: 'resumo do ramo confirmado pelo usuário' });
   }
 }
 
@@ -79,10 +79,10 @@ describe('grill: changes, contradictions, deferrals', () => {
     g(dir, 'start', { type: 'bugfix' });
     const p = g(dir, 'ask', { branch: 'problem', question: 'o erro afeta todos os clientes?', recommended: 'sim' });
     g(dir, 'answer', { id: p.id, choice: 'ok' });
-    g(dir, 'confirm', { branch: 'problem' });
+    g(dir, 'confirm', { branch: 'problem', playback: 'resumo do ramo confirmado pelo usuário' });
     const s = g(dir, 'ask', { branch: 'scope', question: 'corrigimos para todos de uma vez?', recommended: 'sim', depends: p.id });
     g(dir, 'answer', { id: s.id, choice: 'ok' });
-    g(dir, 'confirm', { branch: 'scope' });
+    g(dir, 'confirm', { branch: 'scope', playback: 'resumo do ramo confirmado pelo usuário' });
     const changed = g(dir, 'answer', { id: p.id, text: 'não, só os do plano empresarial' });
     assert.deepEqual(changed.reopened, [s.id]);
     const st = g(dir, 'status');
@@ -191,7 +191,7 @@ describe('grill decisions keep their anchor (criteria and stories → ADR)', () 
     for (const b of ['problem', 'scope', 'risks']) {
       const q = g(dir, 'ask', { branch: b, question: `pergunta do ramo ${b}?`, options: 'opção alfa | opção beta', recommended: 'opção alfa', why: 'evidência', decision: b === 'scope', affects: b === 'scope' ? 'A3,US-2,R1' : '' });
       g(dir, 'answer', { id: q.id, choice: 'ok' });
-      g(dir, 'confirm', { branch: b });
+      g(dir, 'confirm', { branch: b, playback: 'resumo do ramo confirmado pelo usuário' });
     }
     g(dir, 'close', { by: 'po' });
     const d = require('../bin/lib/oxe-decisions.cjs').list(path.join(dir, '.oxe', 'program')).find((x) => /^grill:/.test(x.source));

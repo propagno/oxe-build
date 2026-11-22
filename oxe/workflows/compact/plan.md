@@ -29,7 +29,7 @@ Esses artefatos são obrigatórios para considerar o plano executável. Quando a
 </context>
 <format_plan>
 `PLAN.json` (`oxe/schemas/plan.schema.json`) é a fonte primária validada pelo `oxe-cc plan lint` (`runtimePlanLint`) e executada pelo runtime; cada tarefa projetada em `PLAN.md` deve seguir a ordem abaixo — **Verificar vem ANTES de Implementar** (test-first):
-    - **Alternativas descartadas:** cite as das decisões da fase (`oxe-cc decision list` mostra cada uma com o motivo e quem recusou) em vez de reescrevê-las. Uma alternativa nova recusada neste plano entra na decisão: `oxe-cc decision add --title "…" --alt "texto::motivo[::por::link]"`. O `plan lint` avisa quando uma tarefa propõe uma alternativa já recusada.
+    - **Alternativas descartadas:** cite as das decisões da fase (`oxe-cc decision list` mostra cada uma com o motivo e quem recusou) em vez de reescrevê-las. Uma alternativa nova recusada neste plano entra na decisão: `oxe-cc decision add --title "…" --alt "texto::motivo[::por::link]"`. O `plan lint` avisa quando uma tarefa propõe uma alternativa já recusada. Decisão sua: `--proposed` (ver `references/change-management.md`).
 **Faixas semânticas obrigatórias:**
 **Entradas obrigatórias da confiança:**
 | `XL` | > 1 dia, impacto arquitetural | **Gate: deve ser quebrada em sub-tarefas ou ter justificativa** |

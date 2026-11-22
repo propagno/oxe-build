@@ -68,6 +68,8 @@ export interface CheckResult {
     duration_ms: number;
     error: string | null;
     evidence_refs?: string[];
+    /** Bench B55: the command already ran in this suite (same cwd/timeout); this check was judged on that output. */
+    reused_run?: boolean;
     /** Why a check was skipped (`needs_structured_check` = criterion has no executable verification). */
     skip_reason?: string | null;
     /** OXB-072: killed by the check timeout (status `error`, never `fail`). */

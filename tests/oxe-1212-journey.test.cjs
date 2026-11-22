@@ -33,7 +33,7 @@ const next = (dir) => health.suggestNextStep(dir, {});
 const walkGrill = (dir) => {
   const g = (action, o = {}) => op.runtimeGrill(dir, null, { action, ...o });
   g('start', { type: 'investigação' });
-  for (const b of ['problem', 'scope', 'risks']) { const q = g('ask', { branch: b, question: `pergunta ${b}?`, recommended: 'sim' }); g('answer', { id: q.id, choice: 'ok' }); g('confirm', { branch: b }); }
+  for (const b of ['problem', 'scope', 'risks']) { const q = g('ask', { branch: b, question: `pergunta ${b}?`, recommended: 'sim' }); g('answer', { id: q.id, choice: 'ok' }); g('confirm', { branch: b, playback: 'resumo do ramo confirmado pelo usuário' }); }
   return g;
 };
 

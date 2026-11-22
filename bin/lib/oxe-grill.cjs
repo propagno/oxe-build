@@ -221,7 +221,7 @@ function ask(dir, input = {}) {
   const deps = ids(input.depends);
   for (const d of deps) if (!st.questions.has(d)) throw new Error(`--depends ${d}: pergunta inexistente`);
   append(dir, { t: 'ask', id, branch, question, options, recommended: String(input.recommended).trim(), why: input.why ? String(input.why).trim() : null, affects: ids(input.affects), depends: deps, decision: Boolean(input.decision) });
-  return { id, branch, question, recommended: String(input.recommended).trim() };
+  return { id, branch, question, options, recommended: String(input.recommended).trim(), why: input.why ? String(input.why).trim() : null };
 }
 
 /** The user's answer: "ok" / "recomendada" takes the recommended one; a number picks an option; any other text is used as is. */
@@ -292,7 +292,11 @@ function confirm(dir, branch, input = {}) {
   if (input.empty && !s.decided) {
     append(dir, { t: 'fact', id: `Q-${replay(readRecords(dir)).seq + 1}`, branch: b, question: `${b}: não se aplica`, text: input.reason ? `não se aplica: ${input.reason}` : 'não se aplica a esta demanda', source: 'usuário' });
   }
-  append(dir, { t: 'confirm', branch: b, by: input.by || null });
+  // Bench B06/B09: branches were confirmed with no playback shown to the user. The confirmation carries the playback
+  // (the 3-5 line summary the user confirmed); "does not apply" (--empty) needs none.
+  const playback = String(input.playback || '').trim();
+  if (!input.empty && playback.length < 20) throw new Error(`${b}: confirmar um ramo exige o playback que o usuário confirmou (--playback "resumo do ramo em 3-5 linhas"). Mostre o resumo, espere o OK e só então confirme.`);
+  append(dir, { t: 'confirm', branch: b, by: input.by || null, ...(playback ? { playback } : {}) });
   return { branch: b, confirmed: true, next_branch: status(dir).next_branch };
 }
 

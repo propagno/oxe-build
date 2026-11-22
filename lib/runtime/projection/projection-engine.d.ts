@@ -3,6 +3,12 @@ import type { ExecutionGraph } from '../compiler/graph-compiler';
 import type { VerificationResult } from '../models/verification-result';
 import type { CheckResult } from '../verification/verification-compiler';
 import type { VerificationManifest, ResidualRiskLedger } from '../verification/verification-manifest';
+/**
+ * Bench B30: the check cell carried the whole TAP output (`npm test` repeated in every check that runs it) — F1's
+ * VERIFY.md reached 93 KB and F2's ~9k lines, re-read by every agent. One line per check; the full output stays
+ * in the evidence file the row already links.
+ */
+export declare function checkSummaryLine(summary: string | null | undefined, fallback: string): string;
 /** One `ExecutorUsage` event: an executor attempt's turns, tool calls and cost. */
 export interface ExecutorUsageRow {
     work_item_id: string;

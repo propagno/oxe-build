@@ -77,7 +77,7 @@ function create(projectRoot, input = {}) {
   const id = phase ? `RFC-${phase}-${n}` : `RFC-${n}`;
   const tplPath = path.join(__dirname, '..', '..', 'oxe', 'templates', 'RFC.template.md');
   const tpl = fs.readFileSync(tplPath, 'utf8');
-  const author = String(input.by || 'usuário');
+  const author = String(input.by || 'agente'); // bench B11: no --by = the caller, an agent
   const today = new Date().toISOString().slice(0, 10);
   const text = tpl
     .replace(/\{\{id\}\}/g, () => id)
@@ -123,7 +123,7 @@ function accept(projectRoot, id, options = {}, recordDecision) {
     text: r.proposal,
     consequences: r.risks || null,
     alternatives: r.alternatives.map((a) => ({ text: a.text, reason: a.reason })),
-    by: options.by || r.by || 'usuário',
+    by: options.by || r.by || 'agente',
     source: r.id,
     // the criteria and stories the proposal is about (Motivação / Resumo cite them): the ADR keeps its anchor
     criteria: [...new Set(`${r.motivation || ''} ${r.summary || ''}`.match(/\b[AG]\d+(?:\.\d+)?\b/g) || [])],

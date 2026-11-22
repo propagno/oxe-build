@@ -908,6 +908,15 @@ function lintPlan(input) {
   for (const entry of acceptanceTests) {
     if (entry.criterion && criteria.length && !criteria.includes(entry.criterion)) errors.push(`teste de aceite ${entry.criterion}: critério não existe na SPEC`);
     for (const file of entry.files) {
+      // bench B52: a wall-clock assertion (p95, elapsed ms under a limit) frozen as acceptance is flaky under load —
+      // the criterion belongs in .oxe/program/nfr.json (OXB-144: samples, median, phase gate)
+      if (input.projectRoot) {
+        let text = '';
+        try { text = fs.readFileSync(path.resolve(input.projectRoot, file), 'utf8'); } catch { text = ''; }
+        const timing = /performance\.now\(\)|process\.hrtime|Date\.now\(\)\s*-|\bp9[059]\b|percentile/i.test(text);
+        const bound = /toBeLessThan(?:OrEqual)?\(|assert\.ok\([^)\n]*<=?\s*\d|expect\([^)\n]*\)\s*\.\s*to\.be\.below|<=?\s*\d{2,}\s*\)/.test(text);
+        if (timing && bound) warnings.push(`teste de aceite ${entry.criterion}: ${file} afirma um limite de tempo de parede (p95/ms) — instável sob carga; declare o NFR em .oxe/program/nfr.json (runtime nfr measure, amostras + mediana) e deixe no teste só o comportamento [bench B52]`);
+      }
       if (input.projectRoot && !fs.existsSync(path.resolve(input.projectRoot, file))) {
         errors.push(`teste de aceite ${entry.criterion}: ${file} não existe (escreva-o no /oxe-plan, antes da execução)`);
       }

@@ -101,6 +101,8 @@ export interface CheckResult {
   duration_ms: number;
   error: string | null;
   evidence_refs?: string[];
+  /** Bench B55: the command already ran in this suite (same cwd/timeout); this check was judged on that output. */
+  reused_run?: boolean;
   /** Why a check was skipped (`needs_structured_check` = criterion has no executable verification). */
   skip_reason?: string | null;
   /** OXB-072: killed by the check timeout (status `error`, never `fail`). */
@@ -348,7 +350,8 @@ export async function runCheck(
 ): Promise<CheckResult> {
   const first = await runCheckOnce(check, cwd, timeoutMs);
   if (first.status !== 'fail' || !isRunnerTimeoutOnly(`${first.stdout}\n${first.stderr}`)) return first;
-  const second = await runCheckOnce(check, cwd, timeoutMs);
+  // the rerun is a real second run, never the memoized output of the first
+  const second = await runCheckOnce(check, cwd, timeoutMs, { fresh: true });
   const stillTimeoutOnly = second.status === 'fail' && isRunnerTimeoutOnly(`${second.stdout}\n${second.stderr}`);
   return {
     ...second,
@@ -362,10 +365,26 @@ export async function runCheck(
   };
 }
 
+/**
+ * Bench B55 (Restitui F4: verify > 10 min, 111 checks): the regression of every closed phase and the phase's own checks
+ * ran the SAME command (`npm test`, the same scoped file) again and again on the same tree. Within one suite run an
+ * identical command (same cwd and timeout) runs once; every check that names it is still judged on its own (frozen
+ * files, files_exist, proves, unit report) against that output. OXE_VERIFY_NO_REUSE=1 turns it off.
+ */
+type CommandRun = { status: number | null; stdout: Buffer; stderr: Buffer; error?: Error; start: number; duration_ms: number };
+let commandMemo: Map<string, CommandRun> | null = null;
+
+function withCommandMemo<T>(fn: () => Promise<T>): Promise<T> {
+  if (commandMemo || process.env.OXE_VERIFY_NO_REUSE === '1') return fn();
+  commandMemo = new Map();
+  return fn().finally(() => { commandMemo = null; });
+}
+
 async function runCheckOnce(
   check: AcceptanceCheck,
   cwd: string,
-  timeoutMs = 60_000
+  timeoutMs = 60_000,
+  opts: { fresh?: boolean } = {}
 ): Promise<CheckResult> {
   if (typeof check.timeout_ms === 'number' && check.timeout_ms > 0) timeoutMs = check.timeout_ms;
   const frozen = check.frozen_files ?? [];
@@ -463,21 +482,31 @@ async function runCheckOnce(
     };
   }
 
-  const start = Date.now();
+  let start = Date.now();
   try {
-    // Use a shell so the full command string is interpreted (handles quotes, &&, node -e "...").
-    // The child never inherits node:test context: it would emit a serialized protocol, not TAP.
-    const shell = shellInvocation(check.command);
-    const result = spawnSync(shell.file, shell.args, {
-      cwd,
-      env: childProcessEnv(),
-      timeout: timeoutMs,
-      // a Gradle/Android build prints a lot before and around the test lines: 2 MB cut it (ENOBUFS)
-      maxBuffer: 32 * 1024 * 1024,
-      windowsVerbatimArguments: shell.windowsVerbatimArguments,
-    });
+    const memoKey = `${path.resolve(cwd)}|${timeoutMs}|${check.command}`;
+    const cached = commandMemo && !opts.fresh ? commandMemo.get(memoKey) : undefined;
+    let result: CommandRun;
+    if (cached) {
+      result = cached;
+      start = cached.start;
+    } else {
+      // Use a shell so the full command string is interpreted (handles quotes, &&, node -e "...").
+      // The child never inherits node:test context: it would emit a serialized protocol, not TAP.
+      const shell = shellInvocation(check.command);
+      const spawned = spawnSync(shell.file, shell.args, {
+        cwd,
+        env: childProcessEnv(),
+        timeout: timeoutMs,
+        // a Gradle/Android build prints a lot before and around the test lines: 2 MB cut it (ENOBUFS)
+        maxBuffer: 32 * 1024 * 1024,
+        windowsVerbatimArguments: shell.windowsVerbatimArguments,
+      });
+      result = { status: spawned.status, stdout: spawned.stdout as unknown as Buffer, stderr: spawned.stderr as unknown as Buffer, error: spawned.error, start, duration_ms: Date.now() - start };
+      if (commandMemo) commandMemo.set(memoKey, result);
+    }
 
-    const duration_ms = Date.now() - start;
+    const duration_ms = cached ? 0 : result.duration_ms;
     // OXB-150: gradle/maven report per-test results in JUnit XML files (build/test-results, target/surefire-reports),
     // not on stdout; the reports this command wrote are appended so counts and `proves` see each test.
     // also a wrapper script named after it (gradle152.mjs): no word boundary after "gradle"
@@ -539,6 +568,7 @@ ${stderr}`);
       duration_ms,
       error,
       tests_executed: report.tests_executed,
+      ...(cached ? { reused_run: true } : {}),
     };
   } catch (err) {
     return {
@@ -559,11 +589,13 @@ export async function runSuite(
   cwd: string,
   timeoutMs = 60_000
 ): Promise<CheckResult[]> {
-  const results: CheckResult[] = [];
-  for (const check of suite.checks) {
-    results.push(await runCheck(check, cwd, timeoutMs));
-  }
-  return results;
+  return withCommandMemo(async () => {
+    const results: CheckResult[] = [];
+    for (const check of suite.checks) {
+      results.push(await runCheck(check, cwd, timeoutMs));
+    }
+    return results;
+  });
 }
 
 export async function executeSuite(
@@ -584,6 +616,7 @@ export async function executeSuite(
   const timeoutMs = options.timeoutMs ?? 60_000;
   const attemptNumber = options.attemptNumber ?? 1;
 
+  await withCommandMemo(async () => {
   for (const check of suite.checks) {
     const provider = options.pluginRegistry?.verifierProviderFor(check.type);
     let result: CheckResult;
@@ -637,6 +670,7 @@ export async function executeSuite(
     results.push(result);
     verificationResults.push(verificationResult);
   }
+  });
 
   const manifest = buildManifest(options.runId, results, {
     workItemId: options.workItemId,

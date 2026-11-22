@@ -37,7 +37,7 @@ const closeGrill = (dir, extra = []) => {
   for (const b of ['problem', 'scope', 'risks']) {
     const q = g('ask', { branch: b, question: `pergunta ${b}?`, recommended: 'sim', decision: true });
     g('answer', { id: q.id, choice: (extra.find((e) => e.branch === b) || {}).answer || 'ok' });
-    g('confirm', { branch: b });
+    g('confirm', { branch: b, playback: 'resumo do ramo confirmado pelo usuário' });
   }
   g('close', { by: 'po' });
 };

@@ -25,6 +25,16 @@
 
 O teste fixa a interface exigida em código (nomes, assinatura, formato de retorno, erros) — é a SPEC executável. O runtime congela o hash no compile; o executor recebe o teste no prompt, não pode escrevê-lo (`tool denied`) e o verify reprova se ele mudar (`acceptance_tampered`) ou faltar. Motivo: quando o mesmo agente implementa e escreve a prova, uma leitura errada do requisito é "provada" pelo próprio teste (falso verde do e2e real da 1.19). O executor pode e deve escrever testes próprios adicionais em outros arquivos. `acceptance_tests_required: true` no `config.json` torna obrigatório um teste de aceite por A* da fase.
 
+**Valide o teste antes de congelar (bench B18):** um teste congelado com defeito trava o execute (na F1 do bench, A7 contradizia o 409 do próprio arquivo e A39 contradizia a decisão D-F1-1: 69/71 e 14 min de retrabalho). Antes de declarar `acceptance_tests`, para cada teste:
+1. Rode-o contra a árvore atual: ele deve ficar **vermelho pelo motivo certo** (`oxe-cc plan lint --dry-verify`).
+2. Escreva uma implementação de referência **descartável** mínima (numa pasta temporária ou num stash, nunca no commit) e rode o teste: ele deve ficar **verde**. Se não fica verde com uma implementação correta, o teste está errado.
+3. Aplique 2 ou 3 mutações óbvias na referência (`<` por `<=`, um status HTTP trocado, uma checagem de permissão removida): o teste deve ficar vermelho em cada uma.
+4. Confira que os testes do mesmo arquivo e as decisões D-* da fase não se contradizem.
+
+Descarte a referência antes de commitar os testes. Isso custa uma rodada no plano e evita a rodada de emenda (CR + `plan amend-test`) no execute.
+
+**NFR de tempo não vira teste congelado (bench B52).** Um critério de desempenho medido em tempo de parede (p95, latência, "responde em < N ms") congelado como `acceptance_tests` é instável: ele depende da carga da máquina e do `npm test` em paralelo. No bench, o A34 falhou em 2 de 4 execuções e bloqueou o close da F4 como "regressão". Declare-o em `.oxe/program/nfr.json` (OXB-144: `metric`, `method`, `threshold`, `samples` ≥ 5). A medição é feita por amostras com mediana, vira gate implícito da fase (`nfr-A<n>`) e acusa regressão contra a fase anterior. O teste de aceite do critério cobre só o comportamento (a rota existe e responde certo), nunca o tempo.
+
 **e2e congelado sem corrida:** um teste que corre contra a montagem ou a animação falha por tempo, não por código, e paga tentativas.
 - Depois de abrir o app, navegar ou redimensionar, espere um elemento da shell antes da primeira ação (G40).
 - Antes de medir geometria dentro de um overlay (dialog, menu, popover, tooltip), espere a animação de entrada terminar: `await el.evaluate((e) => Promise.all(e.getAnimations({ subtree: true }).map((a) => a.finished)))`, ou o helper do repo em `lint.e2e_ready_helpers` (G40c).
@@ -89,7 +99,7 @@ Num repositório com suíte própria (typecheck, lint, testes de governança com
 
 ## Execução econômica (1.21)
 
-- **Orçamento por run:** `runtime execute --budget-turns N [--budget-usd X]`, ou `"budget": {"turns": 20, "usd": 5, "max_retries": 1}` no PLAN.json. As flags vencem.
+- **Orçamento por run:** `runtime execute --budget-turns N [--budget-usd X]` (teto acumulado do run; `--budget-add-usd X` dá mais X sobre o já gasto), ou `"budget": {"turns": 20, "usd": 5, "max_retries": 1}` no PLAN.json. As flags vencem.
   - O ledger `.oxe/runs/<run>.budget.json` soma o uso entre execuções da mesma run.
   - O scheduler confere o orçamento **antes de cada tentativa** e limita a próxima aos turnos que restam, então a run nunca passa do teto de turnos. Ao esgotar, emite `BudgetExhausted` e bloqueia a tarefa.
   - Para continuar, peça OK ao dono do teto. Não faça um reset silencioso: `--budget-reset` só com aprovação.
@@ -157,7 +167,7 @@ Num repositório com suíte própria (typecheck, lint, testes de governança com
 - **Ambiente dos processos filhos:** executor, ferramentas, verify e gates não herdam `OXESPACE_*` nem segredos (`TOKEN`, `SECRET`, `PASSWORD`, `API_KEY`, `CREDENTIAL`, `PRIVATE_KEY`).
   - Para ajustar: `env_scrub` (regex extras) e `env_allow` (nomes) no config.
   - `oxe-cc doctor --project` mostra o que será removido.
-- **Modo inplace:** quando uma tarefa falha de vez, a tentativa é guardada em `.oxe/runs/<run>/attempts/<task>-failed/` (patch e arquivos novos) e o escopo dela é restaurado. Arquivos que você já tinha alterado antes do execute não são tocados. Cada tentativa tem seu log em `attempts/<task>-<n>.log`, e `--wave N` roda só a onda N.
+- **Modo inplace:** quando uma tarefa falha de vez, a tentativa é guardada em `.oxe/runs/<run>/attempts/<task>-failed/` (patch e arquivos novos) e o escopo dela é restaurado. Arquivos que você já tinha alterado antes do execute não são tocados. Cada tentativa tem seu log em `attempts/<task>-<n>.log`, e `--wave N` roda só a onda N (`--mode wave` = a primeira onda com tarefa pendente).
 
 ## Sessão isolada por card
 

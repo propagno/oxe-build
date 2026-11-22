@@ -78,9 +78,11 @@ function buildAgentInstallPaths(ideGlobal, projectRoot, options = {}) {
 
 /** @param {string} content */
 function adjustWorkflowPathsForNestedLayout(content) {
+  // Bench B01: `\b` also matched inside `.oxe/workflows/` (`.` is not a word char) and wrote `..oxe/workflows/` into
+  // 43+ installed files; an `oxe/` already preceded by a word char, `.` or `/` is not the package path.
   return content
-    .replace(/\boxe\/workflows\//g, '.oxe/workflows/')
-    .replace(/\boxe\/templates\//g, '.oxe/templates/');
+    .replace(/(?<![\w./-])oxe\/workflows\//g, '.oxe/workflows/')
+    .replace(/(?<![\w./-])oxe\/templates\//g, '.oxe/templates/');
 }
 
 /**

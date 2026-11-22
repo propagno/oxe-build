@@ -157,6 +157,8 @@ function routeFor(cr, impacted) {
         'oxe-cc plan lint --dry-verify  (o teste novo tem que estar vermelho pelo motivo certo)',
         `delta-plan só das tarefas impactadas: ${impacted.join(', ') || '(nova tarefa)'} — as concluídas e verdes ficam`,
         'oxe-cc runtime compile && oxe-cc runtime execute && oxe-cc runtime verify',
+        // bench B23: when the defect is in the frozen test itself, the route is the audited amendment
+        `se o defeito está no próprio teste congelado (ele contradiz a SPEC ou uma decisão): corrija o teste e rode oxe-cc plan amend-test <arquivo> --reason ${cr.id} --by <papel> — não escreva teste novo`,
       ];
     case 'spec_gap':
       return [
@@ -167,6 +169,14 @@ function routeFor(cr, impacted) {
         `replan em modo merge das tarefas ${impacted.join(', ') || '(nenhuma ligada)'}`,
       ];
     case 'constraint':
+      if (cr.post_close) {
+        return [
+          `fase ${cr.phase} segue FECHADA: este CR é uma mudança pós-close (liberação de teste congelado), e a cobertura do close continua valendo`,
+          `oxe-cc plan amend-test <arquivo> --reason ${cr.id} --by <papel>  (emenda auditada do teste)`,
+          `feche o CR com evidência: oxe-cc runtime feedback resolve ${cr.id} --by <papel> --reason "<teste emendado e verde>"`,
+          'se o código também precisa mudar, é um defect (esse reabre a fase): oxe-cc runtime feedback --class defect …',
+        ];
+      }
       return [
         `registrar a regra em .oxe/config.json "policy_rules" (id, forbid regex, paths) — vira check no verify para não se repetir`,
         `teste de aceite com "resolves": ["${cr.id}"] que prova a regra cumprida`,
@@ -218,12 +228,17 @@ function recordChange(input) {
     // OXB-058: the SPEC edit this CR made (`spec amend`): the row before and after, for the audit trail.
     ...(input.specEdit ? { spec_edit: input.specEdit } : {}),
   };
-  appendNdjson(changesFile(programDir), cr);
+  // OXB-C30 P2: a constraint CR on a CLOSED phase (a frozen-test release, `plan amend-test`) is a post-close change: the
+  // phase stays closed. Reopening it sent 152code F6 back to planning, and the re-close then refused coverage that the
+  // 17/11 close had accepted. Code that must change is a defect (that one reopens).
+  const phaseNow = program && phaseId && Array.isArray(program.phases) ? program.phases.find((p) => p.id === phaseId) : null;
+  if (cls === 'constraint' && phaseNow && phaseNow.status === 'closed') cr.post_close = true;
+  if (!input.dryRun) appendNdjson(changesFile(programDir), cr);
   const impacted = impactedTasks(plan, criteria);
 
   let reopened = false;
   let nextProgram = program;
-  if (program && phaseId && REOPENING.has(cls)) {
+  if (program && phaseId && REOPENING.has(cls) && !cr.post_close) {
     const phase = program.phases.find((p) => p.id === phaseId);
     const busy = program.active_phase && program.active_phase !== phaseId
       && program.phases.some((p) => p.id === program.active_phase && p.status !== 'closed');

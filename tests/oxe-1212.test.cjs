@@ -401,7 +401,7 @@ describe('OXB-059: runtime status after the phase work is done', () => {
     const dir = project({ plan });
     const res = await op.runRuntimeExecute(dir, null, { executor: writer(dir, {}), skipPreflight: true, maxRetries: 0 });
     assert.ok(res.result.failed.includes('T1'));
-    op.runtimePlanDone(dir, null, { task: 'T1', commit: 'abc1234' });
+    op.runtimePlanDone(dir, null, { task: 'T1', force: true, reason: 'teste sem repositório git' });
     const r = status(dir, false);
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /superado: o trabalho do plano foi concluído depois deste run/);

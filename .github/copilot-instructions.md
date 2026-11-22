@@ -89,7 +89,7 @@ Ao alterar comportamento OXE, edite primeiro **`oxe/workflows/*.md`**; mantenha 
 <!-- oxe-cc:install-begin -->
 # OXE — fluxo spec-driven (multi-IDE / multi-CLI)
 
-Este repositório (ou o pacote **oxe-cc** instalado) define o **OXE**: artefatos em **`.oxe/`** na raiz do projeto alvo e workflows em **`.oxe/workflows/*.md`** (no pacote) ou **`..oxe/workflows/*.md`** / **`.oxe/workflows/*.md`** no projeto, conforme a instalação (layout mínimo vs clássico). O fluxo é **agnóstico de ferramenta**; **Cursor** e **GitHub Copilot** são o caminho padrão mais conhecido, mas o mesmo OXE pode ser instalado em **Claude Code, OpenCode, Gemini CLI, Codex, Windsurf, Antigravity** e outras integrações via `oxe-cc --all-agents` (ou flags por runtime).
+Este repositório (ou o pacote **oxe-cc** instalado) define o **OXE**: artefatos em **`.oxe/`** na raiz do projeto alvo e workflows em **`oxe/workflows/*.md`** (no pacote) ou **`.oxe/workflows/*.md`** no projeto, conforme a instalação (layout mínimo vs clássico). O fluxo é **agnóstico de ferramenta**; **Cursor** e **GitHub Copilot** são o caminho padrão mais conhecido, mas o mesmo OXE pode ser instalado em **Claude Code, OpenCode, Gemini CLI, Codex, Windsurf, Antigravity** e outras integrações via `oxe-cc --all-agents` (ou flags por runtime).
 
 Os prompts OXE carregam metadata cognitiva comum (`oxe_reasoning_mode`, `oxe_question_policy`, `oxe_output_contract`, `oxe_tool_profile`, `oxe_confidence_policy`). Essa metadata não substitui o workflow canónico; ela alinha a postura de raciocínio entre runtimes para discovery, planning, execution, review e status.
 
@@ -157,7 +157,7 @@ Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o
 ## Artefatos
 
 - `.oxe/STATE.md`, `.oxe/config.json` (opcional), `.oxe/codebase/*.md`, `.oxe/SPEC.md`, `.oxe/DISCUSS.md` (opcional), `.oxe/PLAN.md`, `.oxe/plan-agents.json` (opcional, blueprint plan-agent; schema 2 com `runId` + `lifecycle`; **`/oxe-quick`** invalida), `.oxe/plan-agent-messages/` (opcional, handoffs agente→agente; ver `.oxe/workflows/references/plan-agent-chat-protocol.md`), `.oxe/VERIFY.md`, `.oxe/QUICK.md`, `.oxe/SUMMARY.md` (opcional), `.oxe/NOTES.md`, `.oxe/RESUME.md`, `.oxe/CODEBASE-DELTA.md`, `.oxe/CHECKPOINTS.md`, `.oxe/checkpoints/*.md`, `.oxe/RESEARCH.md`, `.oxe/research/*.md`, `.oxe/VALIDATION-GAPS.md`, `.oxe/FORENSICS.md`, `.oxe/DEBUG.md`, `.oxe/UI-SPEC.md`, `.oxe/UI-REVIEW.md` (opcionais conforme trilha)
-- Templates: `.oxe/templates/` (ou `..oxe/templates/` em layout aninhado)
+- Templates: `oxe/templates/` (ou `.oxe/templates/` no projeto)
 
 ## CLI e SDK
 
@@ -173,5 +173,5 @@ Se o usuário mencionar **OXE**, **oxe**, **/oxe-**, ou pedidos como “mapear o
 
 Ao alterar comportamento OXE, edite primeiro **`.oxe/workflows/*.md`**; mantenha prompts em **`.github/prompts/`**, wrappers em **`commands/oxe/`** e comandos Cursor gerados pelo sync alinhados à mesma semântica. Quando alterar metadata cognitiva ou contratos de raciocínio, rode `npm run sync:runtime-metadata` e `npm run sync:cursor`.
 
-**Autoria de workflows:** guia em **`.oxe/templates/WORKFLOW_AUTHORING.md`**. Para rever um `.md` de passo contra o guia, use o workflow **`.oxe/workflows/workflow-authoring.md`** (ou `..oxe/workflows/` no projeto alvo).
+**Autoria de workflows:** guia em **`.oxe/templates/WORKFLOW_AUTHORING.md`**. Para rever um `.md` de passo contra o guia, use o workflow **`.oxe/workflows/workflow-authoring.md`** (ou `.oxe/workflows/` no projeto alvo).
 <!-- oxe-cc:install-end -->

@@ -142,7 +142,7 @@ O `execute` é **pack-first**, não apenas `plan-first`. Esses artefatos existem
 - executar as tarefas via `oxe-cc runtime execute --dir <projeto>` (com `--checkpoint-commits` quando aplicável) ou fechar trabalho já na árvore com `oxe-cc runtime commit-task T<n>` — todo commit precisa do trailer `OXE-Task` (ou `OXE-Quick` via `oxe-cc quick`) para passar em `oxe-cc ship check-origin <#PR>`;
 - tratar `ACTIVE-RUN.json`, `PLAN.json` e `.oxe/runs/<run_id>.json` como fonte operacional primária da onda/tarefa atual;
 - executar `oxe-cc runtime project --dir <projeto>` ao fim de cada onda ou bloco concluído para reprojetar `PLAN.md`, `STATE.md`, `VERIFY.md`, `RUN-SUMMARY.md`, `COMMIT-SUMMARY.md` e `PROMOTION-SUMMARY.md`.
-Se o runtime não estiver compilado, falhar por indisponibilidade do pacote ou não puder ser executado no ambiente atual, declarar `fallback legado` explicitamente antes de seguir apenas com os artefatos markdown.
+O `runtime compile` é **obrigatório**, não opcional: rode-o antes de dizer qualquer coisa sobre fallback. O `fallback legado` só vale citando a saída de erro do `oxe-cc runtime compile` (ou `oxe-cc: command not found`); "preferir" não autoriza pular o compile. Mesmo no fallback, **cada tarefa termina com `oxe-cc runtime commit-task T<n>`** (roda o verify da tarefa, commita com o trailer `OXE-Task` e marca o PLAN.json) — sem isso o run fica `running` e a fase não fecha. Sem escolha explícita do usuário, o modo é o **B (por onda)**.
 
 **Checkpoints de aprovação:** usar `CHECKPOINTS.md` do escopo resolvido para gates humanos explícitos. Estados válidos: `pending_approval`, `approved`, `rejected`, `overridden`. Se houver checkpoint pendente antes de uma onda de risco, side effect externo ou fecho sensível, a execução deve pausar até resolução explícita.
 
@@ -211,10 +211,10 @@ Se condições não atendidas: responder sem persona; sugerir `/oxe-plan-agent` 
    - se houver checkpoint `pending_approval` que se aplique à onda atual, **não avançar**;
    - inicializar ou atualizar o runtime com onda atual, status, agentes ativos, handoffs e evidências esperadas.
 3a. **Caminho padrão do runtime enterprise:** se `oxe-cc runtime` estiver disponível:
-   - executar ou solicitar `oxe-cc runtime compile --dir <projeto>` antes da primeira mutação;
+   - executar `oxe-cc runtime compile --dir <projeto>` antes da primeira mutação (obrigatório; o compile também congela os `acceptance_tests` — sem ele a trava contra editar teste congelado não existe);
    - se compilar com sucesso, tratar `ACTIVE-RUN.json`, `.oxe/runs/<run_id>.json`, `compiled_graph` e `canonical_state` como estado operacional primário da execução;
    - se existir gate operacional além dos checkpoints markdown, consultar `oxe-cc runtime gates list --dir <projeto>` antes da onda de mutação;
-   - se falhar apenas por indisponibilidade do runtime, registrar `fallback legado` e continuar com o fluxo markdown.
+   - se falhar apenas por indisponibilidade do runtime, registrar `fallback legado` **com a saída do erro** e continuar com o fluxo markdown, fechando cada tarefa com `oxe-cc runtime commit-task T<n>` (ou `oxe-cc plan done T<n> --commit <sha>` com o commit `OXE-Task: T<n>`).
 4. Verificar **`OBSERVATIONS.md`** do escopo resolvido antes de iniciar cada onda:
    - Se houver obs com `Status: pendente` e `Severidade: blocking`: **não avançar** para nenhuma tarefa da onda — apresentar ao usuário o bloqueio com contexto da onda e opções A/B/C de resolução
    - Se houver obs com `Status: pendente` e `Severidade: adjustment`: incorporar como restrição nas tarefas afetadas desta onda antes de executar

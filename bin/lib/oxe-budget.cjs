@@ -60,12 +60,18 @@ function openBudget(projectRoot, runId, limits = {}) {
   // ledger's previous limit and the PLAN.json budget. CLI flags always win.
   const policy = limits.policy && typeof limits.policy === 'object' ? limits.policy : null;
   const trackOnly = Boolean(policy && policy.mode === 'track_only');
-  const turns = trackOnly
+  let turns = trackOnly
     ? positive(limits.turns)
     : positive(limits.turns) ?? positive(policy && policy.turns) ?? (existing ? existing.limit_turns : null) ?? positive(planLimits.turns);
-  const usd = trackOnly
+  let usd = trackOnly
     ? positive(limits.usd)
     : positive(limits.usd) ?? positive(policy && policy.usd) ?? (existing ? existing.limit_usd : null) ?? positive(planLimits.usd);
+  // OXB-C31-4 (152perf): --budget-usd is the run's cumulative cap; whoever relaunches wants "US$ X more": the cap becomes
+  // what was already spent + X (same for turns). An add wins over the other sources, like an explicit flag.
+  const usedUsdNow = existing ? Number(existing.used_usd) || 0 : 0;
+  const usedTurnsNow = existing ? Number(existing.used_turns) || 0 : 0;
+  if (positive(limits.usdAdd) != null) usd = Math.round((usedUsdNow + positive(limits.usdAdd)) * 1e6) / 1e6;
+  if (positive(limits.turnsAdd) != null) turns = usedTurnsNow + positive(limits.turnsAdd);
   if (turns == null && usd == null && !trackOnly && !(existing && existing.policy === 'track_only')) return null;
   const now = new Date().toISOString();
   const ledger = {
@@ -107,13 +113,13 @@ function exhaustedReason(ledger) {
     return `budget_turns: ${ledger.used_turns}/${ledger.limit_turns} turnos usados (acumulado da fase: o --budget-turns é o teto total, não o desta execução)`;
   }
   if (ledger.limit_usd != null && ledger.used_usd >= ledger.limit_usd) {
-    return `budget_usd: US$ ${ledger.used_usd.toFixed(2)}/${ledger.limit_usd.toFixed(2)} usados (acumulado da fase: o --budget-usd é o teto total, não o desta execução — para mais US$ X nesta, use --budget-usd ${(ledger.used_usd + 1).toFixed(0)}+X)`;
+    return `budget_usd: US$ ${ledger.used_usd.toFixed(2)}/${ledger.limit_usd.toFixed(2)} usados (acumulado da fase: o --budget-usd é o teto total, não o desta execução — para mais US$ X nesta, use --budget-add-usd X)`;
   }
   // OxeSpace 14/11 (OxeCode F4): at US$ 59.69 of 60 the next task started and ended above the cap. An attempt starts
   // only if what is left covers the average cost of the recent attempts (no history: the plain rule above).
   const est = attemptEstimate(ledger);
   if (ledger.limit_usd != null && est > 0 && ledger.limit_usd - ledger.used_usd < est) {
-    return `budget_usd: restam US$ ${(ledger.limit_usd - ledger.used_usd).toFixed(2)} de ${ledger.limit_usd.toFixed(2)} e uma tentativa custa em média US$ ${est.toFixed(2)} — a próxima passaria do teto (acumulado da fase; para seguir, use --budget-usd ${Math.ceil(ledger.used_usd + est)}+X)`;
+    return `budget_usd: restam US$ ${(ledger.limit_usd - ledger.used_usd).toFixed(2)} de ${ledger.limit_usd.toFixed(2)} e uma tentativa custa em média US$ ${est.toFixed(2)} — a próxima passaria do teto (acumulado da fase; para seguir, use --budget-add-usd ${Math.ceil(est)} ou mais)`;
   }
   return null;
 }

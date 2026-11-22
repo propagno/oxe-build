@@ -128,16 +128,19 @@ function architectureDrift(pack, plan, changes, hashFile, options = {}) {
   // test directory, not part of this plan) are "parked", not drift; an audited waiver (--accept-drift) covers the rest.
   const parkedGlobs = Array.isArray(options.parkedGlobs) ? options.parkedGlobs : [];
   const waivedGlobs = Array.isArray(options.waivedGlobs) ? options.waivedGlobs : [];
-  const parked = candidates.filter((p) => touched.get(p) !== 'D' && parkedGlobs.some((g) => globMatch(p, g)));
-  const waived = candidates.filter((p) => !parked.includes(p) && waivedGlobs.some((g) => globMatch(p, g)));
-  const outside = candidates.filter((p) => !parked.includes(p) && !waived.includes(p));
+  // Bench B33: the ADRs / published docs the OXE itself writes (decision add, docs publish) are not drift.
+  const generatedGlobs = Array.isArray(options.generatedGlobs) ? options.generatedGlobs : [];
+  const generated = candidates.filter((p) => touched.get(p) !== 'D' && generatedGlobs.some((g) => globMatch(p, g)));
+  const parked = candidates.filter((p) => !generated.includes(p) && touched.get(p) !== 'D' && parkedGlobs.some((g) => globMatch(p, g)));
+  const waived = candidates.filter((p) => !generated.includes(p) && !parked.includes(p) && waivedGlobs.some((g) => globMatch(p, g)));
+  const outside = candidates.filter((p) => !generated.includes(p) && !parked.includes(p) && !waived.includes(p));
   const untouched = [...contracted.keys()].filter((p) => !touched.has(p));
   // Aceite "alterado" = hash atual diferente do congelado no compile (não "aparece no diff": o planner o commita).
   // the verify's rule: bytes, LF or CRLF form (OxeSpace 14/11, core.autocrlf), when the caller gives it
   const frozenChanged = [...frozen.entries()]
     .filter(([p, sha]) => sha && (typeof options.fileMatches === 'function' ? !options.fileMatches(p, sha) : typeof hashFile === 'function' && hashFile(p) !== sha))
     .map(([p]) => p);
-  return { contracted, touched, outside, untouched, frozenChanged, parked, waived };
+  return { contracted, touched, outside, untouched, frozenChanged, parked, waived, generated };
 }
 
 function handoffFilled(humanText) {
@@ -171,7 +174,7 @@ function buildDossier(input) {
   const phaseCriteria = criteria.filter((c) => inPhase(c.id));
   const decisions = [...decisionsFromSpec(input.specText), ...(input.decisions || [])];
   const journal = taskJournal(plan, input.events || [], checks);
-  const drift = architectureDrift(input.pack, plan, input.changes, input.hashFile, { parkedGlobs: input.parkedGlobs, waivedGlobs: input.waivedGlobs, fileMatches: input.fileMatches });
+  const drift = architectureDrift(input.pack, plan, input.changes, input.hashFile, { parkedGlobs: input.parkedGlobs, waivedGlobs: input.waivedGlobs, generatedGlobs: input.generatedGlobs, fileMatches: input.fileMatches });
   const signoffs = input.signoffs || [];
 
   // --- techspec: critério → teste congelado → prova → resultado

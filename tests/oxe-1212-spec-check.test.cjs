@@ -108,7 +108,7 @@ describe('spec check / approve on a project', () => {
     for (const b of ['problem', 'scope', 'risks']) {
       const q = g('ask', { branch: b, question: `pergunta ${b}?`, recommended: 'sim' });
       g('answer', { id: q.id, choice: 'ok' });
-      g('confirm', { branch: b });
+      g('confirm', { branch: b, playback: 'resumo do ramo confirmado pelo usuário' });
     }
     g('close');
     const r = op.runtimeSpecCheck(dir, null, {});

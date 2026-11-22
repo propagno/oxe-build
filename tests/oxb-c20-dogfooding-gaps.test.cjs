@@ -55,7 +55,7 @@ describe('OXB-C20: 9 dogfooding gaps (spec/grill/refine/quick/status/ship)', () 
       const st = op.runtimeGrill(dir, null, { action: 'status', card: 'OXE-41' });
       for (const b of st.branches.filter((x) => x.blocking && !x.confirmed)) {
         if (b.id !== 'scope') op.runtimeGrill(dir, null, { action: 'fact', card: 'OXE-41', branch: b.id, text: 'N/A confirmado', source: 'OXE-41' });
-        op.runtimeGrill(dir, null, { action: 'confirm', card: 'OXE-41', branch: b.id });
+        op.runtimeGrill(dir, null, { action: 'confirm', card: 'OXE-41', branch: b.id, playback: 'resumo do ramo confirmado pelo usuário' });
       }
       op.runtimeGrill(dir, null, { action: 'term', card: 'OXE-41', none: true });
       const closed = op.runtimeGrill(dir, null, { action: 'close', card: 'OXE-41', by: 'usuário' });

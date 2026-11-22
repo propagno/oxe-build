@@ -58,6 +58,13 @@ describe('oxe-agent-install', () => {
     assert.ok(t.includes('.oxe/templates/'));
   });
 
+  test('adjustWorkflowPathsForNestedLayout never writes ..oxe/ (bench B01)', () => {
+    const t = agent.adjustWorkflowPathsForNestedLayout('encontrar `oxe/workflows/spec.md` ou `.oxe/workflows/spec.md`; ver .oxe/templates/X e (oxe/templates/Y)');
+    assert.doesNotMatch(t, /\.\.oxe\//);
+    assert.equal(t, 'encontrar `.oxe/workflows/spec.md` ou `.oxe/workflows/spec.md`; ver .oxe/templates/X e (.oxe/templates/Y)');
+    assert.equal(agent.adjustWorkflowPathsForNestedLayout(t), t, 'idempotent');
+  });
+
   test('buildAgentSkillMarkdown', () => {
     const md = agent.buildAgentSkillMarkdown('oxe-scan', 'd', 'body');
     assert.match(md, /name: oxe-scan/);
@@ -240,4 +247,14 @@ describe('oxe-agent-install', () => {
       assert.ok(d[0].includes('opencode'));
     });
   });
+});
+
+// bench B22: the published schema and the code accept the same decision ids
+test('plan.schema.json decision pattern matches DECISION_ID_RE', () => {
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'oxe', 'schemas', 'plan.schema.json'), 'utf8'));
+  const hits = [];
+  JSON.stringify(schema, (k, v) => { if (k === 'decisions' && v && v.items && v.items.pattern) hits.push(v.items.pattern); return v; });
+  assert.ok(hits.length >= 1);
+  const { DECISION_ID_RE } = require('../bin/lib/oxe-decisions.cjs');
+  for (const p of hits) assert.strictEqual(p, DECISION_ID_RE.source);
 });

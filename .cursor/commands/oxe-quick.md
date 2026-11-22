@@ -40,8 +40,10 @@ OXE — Modo rápido com Plan-Driven Dynamic Agents lean: objetivo → passos �
 
 <!-- oxe-workflow-resolution:start -->
 
-**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/quick.md ou oxe/workflows/quick.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir (um worktree sem .oxe/, um repo sem a cópia dos workflows), rodar `oxe-cc workflow path quick` (ou `npx oxe-cc workflow path quick`): ele devolve o workflow do pacote oxe-cc instalado. Aplicar esse ficheiro e avisar uma vez: "este repositório não tem .oxe/workflows; para fixar a versão, rode oxe-cc install --oxe-only .". Só se o comando também falhar, reportar os paths tentados e parar.
+**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/quick.md ou oxe/workflows/quick.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir (um worktree sem .oxe/, um repo sem a cópia dos workflows), rodar `oxe-cc workflow path quick` (sem `oxe-cc` no PATH: `npx oxe-cc@<oxe_version de .oxe/oxe-version.json> workflow path quick` — nunca o `npx oxe-cc` sem versão, que pega outra release): ele devolve o workflow do pacote oxe-cc instalado. Aplicar esse ficheiro e avisar uma vez: "este repositório não tem .oxe/workflows; para fixar a versão, rode oxe-cc install --oxe-only .". Só se o comando também falhar, reportar os paths tentados e parar.
 
 <!-- oxe-workflow-resolution:end -->
+
+**Isto é um workflow, não um pedido livre (bench B57):** antes de qualquer leitura de código ou edição, ler o workflow resolvido acima e **abrir o quick pelo CLI**: `oxe-cc quick "<objetivo>"` (com card: `oxe-cc quick <KEY> "<objetivo>"`). Os commits saem por `oxe-cc quick commit -m "…" <arquivos>` (trailer `OXE-Quick`), e o fecho é `oxe-cc quick done --verify "<comando>"`. Nunca `git commit` direto. Sem `oxe-cc`, declarar **fallback legado** em uma linha antes de seguir.
 
 Usa o texto adicional desta mensagem como objetivo e contexto.

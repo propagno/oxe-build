@@ -2190,7 +2190,27 @@ function planReviewWarnings(stateText, p) {
  * Programa por fases (1.19): com PROGRAM.json, o próximo passo é o da fase ativa — "Fase 2/4 —
  * planejar" — e nunca reaproveita o PLAN/run da fase anterior. Programa concluído → roteamento normal.
  */
+/**
+ * Bench B60: a defect CR reopened F4 and nobody told the human — the next three steps (plan/execute/verify of "F5")
+ * ran on F4 for nothing. A reopened phase (status ≠ closed, with a reopen in its history) leads the reason, and the
+ * step carries `alert` so hosts and agents show it before acting.
+ */
 function suggestProgramStep(target, activeSession, activeRun) {
+  const step = suggestProgramStepInner(target, activeSession, activeRun);
+  if (!step || !step.program || !step.program.phase) return step;
+  try {
+    const st = operational.runtimeProgramStatus(target, activeSession);
+    const ph = st && st.state && Array.isArray(st.state.phases) ? st.state.phases.find((p) => p.id === step.program.phase) : null;
+    const last = ph && ph.status !== 'closed' && ph.status !== 'pending' && Array.isArray(ph.history) ? [...ph.history].reverse().find((h) => h && h.reopened_at) : null;
+    if (last) {
+      const alert = `${ph.id} foi REABERTA${last.cr ? ` por ${last.cr}` : ''} em ${String(last.reopened_at).slice(0, 16).replace('T', ' ')} (fechada antes em ${String(last.closed_at || '').slice(0, 10) || '—'}): avise o usuário antes de seguir — nenhuma outra fase começa enquanto ${ph.id} não fechar de novo`;
+      return { ...step, alert, reason: `⚠ ${alert}. ${step.reason}` };
+    }
+  } catch { /* the alert is auxiliary */ }
+  return step;
+}
+
+function suggestProgramStepInner(target, activeSession, activeRun) {
   let status;
   try {
     status = operational.runtimeProgramStatus(target, activeSession);
@@ -2237,6 +2257,12 @@ function suggestProgramStep(target, activeSession, activeRun) {
       planPhase = null;
     }
     if (planPhase === phase.id) {
+      // Bench B27/B44: on the manual path the phase stays `planning` until a verify; finished work goes to verify.
+      let work = null;
+      try { work = operational.runtimePhaseWork(target, activeSession); } catch { work = null; }
+      if (work && work.complete) {
+        return { step: 'verify', cursorCmd: '/oxe-verify', reason: `${label}: todas as tarefas da fase concluídas — verificar (o verify roda os critérios e a regressão das fases anteriores).`, artifacts: ['.oxe/PLAN.json', ...programArtifacts], program };
+      }
       return { step: 'execute', cursorCmd: '/oxe-execute', reason: `${label}: plano da fase pronto — executar.`, artifacts: ['.oxe/PLAN.json'], program };
     }
     // 1.21.2: a draft RFC of the phase, or rfc.required with risk, is decided before the plan.
@@ -2282,7 +2308,23 @@ function suggestProgramStep(target, activeSession, activeRun) {
         program,
       };
     }
-    if (activeRun && activeRun.status === 'completed') {
+    // Bench B32/B35: a passed verify with the plan's tasks not done leaves the run `running` — say which tasks and
+    // the command, instead of "verify reprovou".
+    if (activeRun && activeRun.status === 'running' && activeRun.verification_status === 'passed') {
+      let work = null;
+      try { work = operational.runtimePhaseWork(target, activeSession); } catch { work = null; }
+      const pending = work && Array.isArray(work.pending) ? work.pending : [];
+      if (pending.length) {
+        return {
+          step: 'commit-task',
+          cursorCmd: `oxe-cc runtime commit-task ${pending[0]}`,
+          reason: `${label}: verify verde, mas ${pending.join(', ')} sem commit OXE-Task no PLAN.json — rode oxe-cc runtime commit-task <Tn> em cada uma (ou plan done <Tn> --commit <sha>) e depois program close.`,
+          artifacts: ['.oxe/PLAN.json', ...programArtifacts],
+          program,
+        };
+      }
+    }
+    if (activeRun && (activeRun.status === 'completed' || (activeRun.verification_status === 'passed' && (() => { try { return operational.runtimePhaseWork(target, activeSession).complete; } catch { return false; } })()))) {
       // 1.21.2: with delivery.mode "pr", the green verify goes PR → CI/merge → deploy before the close.
       let delivery = null;
       try { delivery = require('./oxe-journey.cjs').deliveryStep(target, activeSession, phase, { label, program }); } catch { delivery = null; }

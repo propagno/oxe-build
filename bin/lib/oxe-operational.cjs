@@ -3488,7 +3488,7 @@ async function runtimeQuick(projectRoot, activeSession, options = {}) {
   const programDir = almFrom && fs.existsSync(path.join(almFrom, '.oxe', 'program'))
     ? path.join(almFrom, '.oxe', 'program')
     : (paths.programDir || path.join(projectRoot, '.oxe', 'program'));
-  const net = { http: options.http, env, sleep: options.sleep, retries: options.retries, dryRun: dry, apply: options.apply };
+  const net = { http: options.http, env, sleep: options.sleep, retries: options.retries, dryRun: dry, apply: options.apply, userEnv: options.userEnv };
   const alm = {};
   // OXB-C28-9: the comment and the move are independent writes — a failed comment (Q-20261121-df4b: HTTP 404) no longer
   // skips the move to in_progress; each error is named
@@ -4622,6 +4622,8 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
     budgetLedger = budgetLib.openBudget(projectRoot, current.run_id, {
       turns: options.budgetTurns,
       usd: options.budgetUsd,
+      usdAdd: options.budgetAddUsd,
+      turnsAdd: options.budgetAddTurns,
       reset: Boolean(options.budgetReset),
       plan: planBudget,
       policy: programBudgetPolicy,
@@ -6995,6 +6997,18 @@ function runtimeDossier(projectRoot, activeSession, options = {}) {
     run,
     events,
     changes: phaseChanges(projectRoot, base),
+    // Bench B33: files the OXE itself writes (ADRs of `decision add`, `docs publish` targets) are not drift.
+    generatedGlobs: (() => {
+      const cfg = readProjectConfig(projectRoot) || {};
+      const clean = (d) => String(d).replace(/\\/g, '/').replace(/\/+$/, '');
+      const out = [];
+      try { const adr = require('./oxe-adr.cjs').adrDir(cfg); if (adr) out.push(`${clean(adr)}/**`); } catch { /* auxiliary */ }
+      try {
+        const docs = require('./oxe-docs-publish.cjs').docsDir(cfg);
+        if (docs) for (const sub of ['product', 'rfc', 'adr', 'architecture']) out.push(`${clean(docs)}/${sub}/**`);
+      } catch { /* auxiliary */ }
+      return out;
+    })(),
     // OXB-080: frozen tests parked for later phases (config `parked_tests`, default tests/acceptance/**) and the phase's
     // audited drift waivers (`program close --accept-drift <glob> --by --reason`).
     parkedGlobs: (() => {
@@ -7261,9 +7275,16 @@ function runtimeFeedback(projectRoot, activeSession, options = {}) {
     class: options.class, summary: options.summary, criteria: options.criteria, by: options.by,
     phase, amendTo: options.amendTo, evidence: options.evidence, additive: Boolean(options.additive),
     specEdit: options.specEdit || null,
+    dryRun: Boolean(options.dryRun),
     tasks: options.tasks ? (Array.isArray(options.tasks) ? options.tasks : String(options.tasks).split(',')).map((t) => String(t).trim().toUpperCase()).filter((t) => /^T\d+$/.test(t)) : [],
     rating: require('./oxe-findings.cjs').rate(projectRoot, { rule: options.rule || null, severity: options.severity || null }),
   });
+  // OXB-C30 P1: --dry-run used to write the CR for real (CR-F6-37). Preview only: nothing in changes.ndjson,
+  // PROGRAM.json, PLAN.json, the event log or STATE.md.
+  if (options.dryRun) {
+    const preview = selectTasksToReopen(paths.plan, plan, result, options.tasks);
+    return { ...result, dry_run: true, would_reopen_phase: result.reopened, reopened: false, program: undefined, reopened_tasks: [], would_reopen_tasks: options.reopen === true && (result.cr.class === 'defect' || result.cr.class === 'spec_gap') ? preview.targets : [], linked_tasks: preview.targets, impacted_not_reopened: result.impacted || [], external_not_reopened: preview.external, ...(preview.unknown.length ? { unknown_tasks: preview.unknown } : {}) };
+  }
   if (result.reopened && result.program) programLib.writeProgram(programDir, result.program);
   // 1.21.1: a defect or spec_gap reopens tasks (done → open), so the next execute redoes exactly them.
   // OXB-061: only what the CR targets. `--tasks T7` names them; without it, the criterion's closer task (the one that
@@ -7556,6 +7577,65 @@ function runtimeSpecAdd(projectRoot, activeSession, options = {}) {
   changeLib.appendNdjson(changeLib.changesFile(programDir), record);
   appendEvent(projectRoot, activeSession, { type: 'SpecEdited', payload: { action: record.action, id: edit.id, by } });
   return { ...record, export: autoExportProgram(projectRoot, activeSession) };
+}
+
+/**
+ * OXB-C30 (8e 22/11): `oxe-cc program phase restore-close Fn --from-history --by <papel> --reason "…" [--dry-run]`.
+ * A phase reopened by a CR that changed no code (the pre-C30 constraint CR of a frozen-test release reopened 152code
+ * F6) gets its close back: status, closed_at and closed_commit from the last close in its history, so the close's
+ * coverage stands. Refused when a code-changing CR (defect / spec_gap, not withdrawn) on the phase landed after that
+ * close, or when the closed commit is gone. PROGRAM.json is never edited by hand.
+ */
+function runtimeProgramPhaseRestoreClose(projectRoot, activeSession, options = {}) {
+  const programLib = require('./oxe-program.cjs');
+  const changeLib = require('./oxe-change.cjs');
+  const dryRun = Boolean(options.dryRun);
+  const { by, reason } = dryRun ? { by: String(options.by || '').trim() || '?', reason: String(options.reason || '').trim() } : requireEditReason(options);
+  if (!options.fromHistory) throw new Error('informe a fonte do close: --from-history (o último close do histórico da fase)');
+  const phaseId = String(options.phase || '').trim().toUpperCase();
+  if (!/^F\d+$/.test(phaseId)) throw new Error('informe a fase: oxe-cc program phase restore-close Fn --from-history --by <papel> --reason "…"');
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
+  const program = programLib.readProgram(programDir);
+  if (!program) throw new Error('sem programa (.oxe/program/PROGRAM.json)');
+  const phase = program.phases.find((p) => p.id === phaseId);
+  if (!phase) throw new Error(`fase ${phaseId} não existe no programa`);
+  if (phase.status === 'closed') throw new Error(`fase ${phaseId} já está fechada`);
+  const last = [...(phase.history || [])].reverse().find((h) => h && h.closed_at);
+  if (!last) throw new Error(`fase ${phaseId} não tem close no histórico: não há o que restaurar (feche com oxe-cc runtime program close)`);
+  const closedAt = Date.parse(last.closed_at);
+  const blocking = changeLib.listChanges(programDir).filter((cr) => cr.phase === phaseId
+    && (cr.class === 'defect' || cr.class === 'spec_gap')
+    && cr.status !== 'withdrawn'
+    && Number.isFinite(Date.parse(cr.at)) && Date.parse(cr.at) > closedAt);
+  if (blocking.length) {
+    throw new Error(`${phaseId}: ${blocking.map((cr) => `${cr.id} (${cr.class}, ${cr.status})`).join(', ')} chegou depois do close de ${last.closed_at} e muda código ou critério — a fase precisa de um close novo (oxe-cc runtime program close), ou retire o CR (runtime feedback withdraw) se ele não vale`);
+  }
+  if (last.closed_commit) {
+    const r = spawnSync('git', ['cat-file', '-e', `${last.closed_commit}^{commit}`], { cwd: projectRoot, windowsHide: true });
+    if (r.status !== 0) throw new Error(`o commit do close (${String(last.closed_commit).slice(0, 12)}) não existe neste repositório: não dá para restaurar`);
+  }
+  const reopenCr = last.cr ? changeLib.listChanges(programDir).find((cr) => cr.id === last.cr) || null : null;
+  const out = {
+    phase: phaseId, from_status: phase.status, closed_at: last.closed_at, closed_commit: last.closed_commit || null,
+    reopened_at: last.reopened_at || null, reopened_by_cr: last.cr || null, reopened_by_class: reopenCr ? reopenCr.class : null,
+    dry_run: dryRun,
+  };
+  if (dryRun) return out;
+  const at = new Date().toISOString();
+  const next = JSON.parse(JSON.stringify(program));
+  const target = next.phases.find((p) => p.id === phaseId);
+  target.status = 'closed';
+  target.closed_at = last.closed_at;
+  target.closed_commit = last.closed_commit || null;
+  target.history = [...(target.history || []), { restored_at: at, restored_close_at: last.closed_at, from_status: phase.status, by, reason }];
+  if (next.active_phase === phaseId) next.active_phase = null;
+  next.updated_at = at;
+  programLib.writeProgram(programDir, next);
+  changeLib.appendNdjson(changeLib.changesFile(programDir), { kind: 'phase_restore_close', phase: phaseId, closed_at: last.closed_at, closed_commit: last.closed_commit || null, reopened_by_cr: last.cr || null, from_status: phase.status, by, reason, at });
+  appendEvent(projectRoot, activeSession, { type: 'PhaseCloseRestored', payload: { phase: phaseId, closed_at: last.closed_at, closed_commit: last.closed_commit || null, reopened_by_cr: last.cr || null, by } });
+  try { projectStateMd(projectRoot, activeSession); } catch { /* projeção auxiliar */ }
+  return { ...out, export: autoExportProgram(projectRoot, activeSession) };
 }
 
 /**
@@ -8679,9 +8759,41 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   };
   const scopeTests = scopeCandidates.filter((f) => !otherTaskTouched(f));
   const sharedSkipped = scopeCandidates.filter((f) => !scopeTests.includes(f));
-  const testFiles = [...new Set([...(Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])
+  // OXB-C31-2 (152perf T2, #1050): the planner's commit (OXE-Plan) froze T2's test AND amended tests/agent-state.test.ts,
+  // a NON-frozen test that T2's behavior change makes wrong. The planner commit is never cherry-picked, so the PR would
+  // be born red. When a planner commit touches this task's own frozen tests, the non-frozen tests it amended go too (as
+  // files from the tip) — unless another task's frozen tests share that commit or another task changed the file: then
+  // the promote says the amendment stays out.
+  const ownFrozenFiles = new Set((Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])
     .filter((a) => a && ((a.task && idSet.has(a.task)) || (!a.task && criteria.has(a.criterion))))
-    .flatMap((a) => (a.files || []).map(normRel)), ...scopeTests])];
+    .flatMap((a) => (a.files || []).map(normRel)));
+  const anyFrozen = new Map();
+  for (const a of (Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])) {
+    for (const f of (a && a.files) || []) {
+      const rel = normRel(f);
+      if (!rel) continue;
+      if (!anyFrozen.has(rel)) anyFrozen.set(rel, new Set());
+      anyFrozen.get(rel).add(String(a.task || a.criterion || '?').toUpperCase());
+    }
+  }
+  const plannerAmends = [];
+  const plannerWarnings = [];
+  if (!testsOnly && ownFrozenFiles.size) {
+    for (const sha of gitLines(projectRoot, ['rev-list', '--reverse', range]) || []) {
+      const body = (gitRun(projectRoot, ['log', '-1', '--format=%B', sha]).stdout) || '';
+      if (!/^OXE-Plan:/m.test(body)) continue;
+      const files = (gitLines(projectRoot, ['show', '--name-only', '--format=', '--no-renames', sha]) || []).map((f) => f.replace(/\\/g, '/')).filter((f) => f && !f.startsWith('.oxe/'));
+      if (!files.some((f) => ownFrozenFiles.has(f))) continue;
+      const otherFrozenOwners = [...new Set(files.filter((f) => anyFrozen.has(f) && !ownFrozenFiles.has(f)).flatMap((f) => [...anyFrozen.get(f)]))].filter((o) => !idSet.has(o) && !criteria.has(o));
+      for (const f of files.filter((x) => !anyFrozen.has(x) && TEST_FILE_RE.test(x))) {
+        if (plannerAmends.includes(f) || scopeTests.includes(f) || !differsFromBase(f)) continue;
+        if (otherFrozenOwners.length) plannerWarnings.push(`emenda do planejador em ${f} (${sha.slice(0, 8)}) fica de fora: o mesmo commit congela testes de ${otherFrozenOwners.slice(0, 4).join(', ')} — se ${taskId} precisa dela, ponha ${f} nos files da tarefa [OXB-C31-2]`);
+        else if (otherTaskTouched(f)) plannerWarnings.push(`emenda do planejador em ${f} (${sha.slice(0, 8)}) fica de fora: outra tarefa também mudou o arquivo no programa — promova junto se precisar das duas [OXB-C31-2]`);
+        else plannerAmends.push(f);
+      }
+    }
+  }
+  const testFiles = [...new Set([...ownFrozenFiles, ...scopeTests, ...plannerAmends])];
   // a test the verify runs that differs from the base but is NOT the task's (not in its files nor its entries): the PR
   // runs the base version — named, with the commits that changed it, never carried silently
   const verifyTests = [...new Set(planTasks.flatMap((t) => [...((t.verify && t.verify.commands) || []), t.verify && t.verify.command, t.verifyCommand].filter(Boolean).join(' ').replace(/\\/g, '/').match(/[^\s"'`]+/g) || []))]
@@ -8794,7 +8906,7 @@ function runtimePromote(projectRoot, activeSession, options = {}) {
   if (options.strict && unpromoDeps.dependencies.length) {
     throw new Error(`promote --strict recusado para ${taskId}: ${unpromoDeps.warnings[0]}`);
   }
-  resolvedBase.warnings = [...(resolvedBase.warnings || []), ...stackInfo.warnings, ...quickSelection.warnings, ...fixtureWarnings];
+  resolvedBase.warnings = [...(resolvedBase.warnings || []), ...stackInfo.warnings, ...quickSelection.warnings, ...fixtureWarnings, ...plannerWarnings, ...plannerAmends.map((f) => `${f}: emenda do planejador (commit OXE-Plan que congelou os testes de ${taskId}) vai no PR como arquivo [OXB-C31-2]`)];
   if (assumed.length && !stack) {
     resolvedBase.warnings.push(`${taskId} vem depois de ${assumed.map((a) => `${a.task} (${a.sha.slice(0, 8)})`).join(', ')} no histórico e mexe nos mesmos arquivos (${[...new Set(assumed.flatMap((a) => a.files))].slice(0, 4).join(', ')}) — o cherry-pick pode conflitar; promova junto: oxe-cc runtime promote --tasks ${[...new Set([...assumed.map((a) => a.task), ...taskIds])].join(',')}`);
   }
@@ -10596,6 +10708,24 @@ function runtimePlanAmendTest(projectRoot, activeSession, options = {}) {
   }
 
   const newSha = sha256BufferOrFile(absFile);
+  // Bench B29: an amendment before any compile (no lock) and a PLAN.json without hashes logged previous_sha256: null.
+  // The committed version of the file is the baseline: HEAD's, or the commit before when HEAD already has the edit.
+  if (!lockPrevSha) {
+    try {
+      const crypto = require('crypto');
+      const gitRoot = typeof fileRoot === 'string' ? fileRoot : projectRoot;
+      const shaAt = (rev) => {
+        const r = spawnSync('git', ['show', `${rev}:${relPath}`], { cwd: gitRoot, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+        return r.status === 0 && r.stdout ? crypto.createHash('sha256').update(r.stdout).digest('hex') : null;
+      };
+      let base = shaAt('HEAD');
+      if (base === newSha) {
+        const revs = String(spawnSync('git', ['log', '-2', '--format=%H', '--', relPath], { cwd: gitRoot, encoding: 'utf8', windowsHide: true }).stdout || '').trim().split(/\s+/);
+        base = revs[1] ? shaAt(revs[1]) : null;
+      }
+      if (base && base !== newSha) lockPrevSha = base;
+    } catch { /* the baseline is auxiliary */ }
+  }
   const by = String(options.by || 'tech-lead').trim();
   const at = new Date().toISOString();
   let amendReqs = new Map();
@@ -10757,6 +10887,7 @@ function runtimeCommitTasksTogether(projectRoot, activeSession, options = {}) {
     planJsonLib.markPlanTaskDone(paths.plan, id, { commit: cp.commit });
     appendEvent(projectRoot, activeSession, { type: 'CheckpointCreated', run_id: runId, work_item_id: id, payload: { task: id, phase, commit: cp.commit, files: cp.files, by: actor, together: ids } });
   }
+  touchProgramPhase(projectRoot, activeSession, 'executing');
   return { ok: true, tasks: ids, commit: cp.commit, files: cp.files, verified: !options.skipVerify, crs };
 }
 
@@ -11044,6 +11175,7 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
 
   // 6. Mark Tn as done in PLAN.json and record CheckpointCreated + TaskCompleted (+ WorkItemCompleted / GateResolved) in OXE-EVENTS.ndjson
   planJsonLib.markPlanTaskDone(paths.plan, taskId, { commit: cp.commit });
+  touchProgramPhase(projectRoot, activeSession, 'executing'); // bench B27: the manual path moves the phase too
   try {
     require('./oxe-deferred.cjs').closeTask(paths.programDir || path.join(projectRoot, '.oxe', 'program'), taskId, phase, 'resolved');
   } catch { /* auxiliary */ }
@@ -11094,11 +11226,34 @@ function runtimePlanDone(projectRoot, activeSession, options = {}) {
   const planJsonLib = require('./oxe-plan-json.cjs');
   const jsonPath = planJsonLib.planJsonPathFor(paths.plan);
   if (!jsonPath || !fs.existsSync(jsonPath)) throw new Error('plan done exige PLAN.json (o PLAN.md não guarda done por tarefa).');
-  const commit = options.commit || findTaskCheckpoint(projectRoot, taskId);
+  // Bench B16/B35: `plan done` marked a task done with nothing implemented. It now needs evidence — a real commit
+  // (the task's OXE-Task checkpoint, or --commit <sha> that exists) — or an audited --force --reason.
+  const isCommit = (sha) => {
+    const r = spawnSync('git', ['cat-file', '-e', `${sha}^{commit}`], { cwd: projectRoot, encoding: 'utf8', windowsHide: true });
+    return r.status === 0;
+  };
+  const forced = Boolean(options.force);
+  const reason = String(options.reason || '').trim();
+  if (forced && reason.length < 8) throw new Error('plan done --force exige --reason "<por que não há commit da tarefa>" (8+ caracteres).');
+  let commit = options.commit || findTaskCheckpoint(projectRoot, taskId);
+  if (commit && !isCommit(commit) && !forced) {
+    throw new Error(`--commit ${commit}: não é um commit deste repositório.`);
+  }
+  if (!commit && !forced) {
+    throw new Error(`${taskId} sem commit com "OXE-Task: ${taskId}" — rode oxe-cc runtime commit-task ${taskId} (roda o verify da tarefa e commita com o trailer), ou --commit <sha>, ou --force --reason "…".`);
+  }
+  if (commit && !isCommit(commit)) commit = null;
   const changed = planJsonLib.markPlanTaskDone(paths.plan, taskId, { commit });
   // the scorecard counts it as a manual intervention on the flow
-  if (changed) appendEvent(projectRoot, activeSession, { type: 'PlanTaskMarkedDone', work_item_id: taskId, payload: { task: taskId, commit: commit || null, manual: true } });
-  return { task: taskId, commit: commit || null, changed };
+  if (changed) {
+    appendEvent(projectRoot, activeSession, {
+      type: 'PlanTaskMarkedDone',
+      work_item_id: taskId,
+      payload: { task: taskId, commit: commit || null, manual: true, ...(forced ? { forced: true, reason, by: options.by || 'agente' } : {}) },
+    });
+    touchProgramPhase(projectRoot, activeSession, 'executing');
+  }
+  return { task: taskId, commit: commit || null, changed, forced };
 }
 
 /**
@@ -13189,9 +13344,23 @@ function touchProgramPhase(projectRoot, activeSession, status, patch = {}) {
     const phase = runtime.findPhase(state, state.active_phase);
     if (!phase || phase.status === 'closed') return null;
     let next = state;
+    // Bench B27/B34/B44: on the manual path (no `runtime execute`) the phase stayed `planning` for good, so
+    // `status` kept saying "execute" after a green verify. A verify (or a task commit) of the plan that declares
+    // the active phase moves it forward too — planning → executing → verifying.
+    const planDeclaresPhase = () => {
+      try {
+        const planJson = path.join(path.dirname(paths.plan || path.join(projectRoot, '.oxe', 'PLAN.md')), 'PLAN.json');
+        return JSON.parse(fs.readFileSync(planJson, 'utf8')).phase === phase.id;
+      } catch {
+        return false;
+      }
+    };
     // planning → executing → verifying; execute após verify volta a `executing`.
     if (status === 'executing' && (phase.status === 'planning' || phase.status === 'verifying')) {
       next = runtime.setPhaseStatus(next, phase.id, 'executing', patch);
+    } else if (status === 'verifying' && phase.status === 'planning' && planDeclaresPhase()) {
+      next = runtime.setPhaseStatus(next, phase.id, 'executing', patch);
+      next = runtime.setPhaseStatus(next, phase.id, 'verifying', patch);
     } else if (status === 'verifying' && phase.status === 'executing') {
       next = runtime.setPhaseStatus(next, phase.id, 'verifying', patch);
     } else if (status === phase.status && Object.keys(patch).length) {
@@ -13904,16 +14073,59 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
 }
 
 /** Resumo da regressão de fases anteriores: aparece separado no VERIFY e no gate de fase. */
+/**
+ * Bench B25: the verifier saw the frozen tests changed against the plan commit and asked for a new decision — the
+ * official record (CR + `plan amend-test`) never reached it. VERIFY.md lists the amendments of PLAN.json.
+ */
+function acceptanceAmendmentsSection(projectRoot, activeSession) {
+  try {
+    const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+    const rows = [];
+    for (const entry of (doc && Array.isArray(doc.acceptance_tests) ? doc.acceptance_tests : [])) {
+      for (const a of Array.isArray(entry && entry.amended) ? entry.amended : []) {
+        const short = (s) => (s ? String(s).slice(0, 10) : '—');
+        rows.push(`| ${entry.criterion || entry.id || '—'} | ${a.file || '—'} | ${short(a.previous_sha256)} → ${short(a.sha256)} | ${String(a.reason || '—').replace(/\|/g, '\\|')} | ${a.by || '—'} | ${String(a.at || '').slice(0, 10) || '—'} |`);
+      }
+    }
+    if (!rows.length) return '';
+    return [
+      '',
+      '## Emendas de aceite (registro oficial)',
+      '',
+      'Testes congelados alterados pelo caminho oficial (`runtime feedback` → `plan amend-test`). Uma diferença destes arquivos contra o commit do plano é esperada; só um arquivo alterado **fora** desta lista é adulteração.',
+      '',
+      '| Critério | Arquivo | Hash anterior → novo | Motivo (CR) | Por | Quando |',
+      '|---|---|---|---|---|---|',
+      ...rows,
+      '',
+    ].join('\n');
+  } catch {
+    return '';
+  }
+}
+
 function summarizeRegression(regressionChecks, checkResults) {
   if (!regressionChecks.length) return null;
   const ids = new Set(regressionChecks.map((check) => check.id));
   const results = (Array.isArray(checkResults) ? checkResults : []).filter((result) => ids.has(result.check_id));
-  const failed = results.filter((result) => result.status === 'fail' || result.status === 'error');
+  const red = results.filter((result) => result.status === 'fail' || result.status === 'error');
+  // Bench B42: a whole-suite regression check (`npm test`) also runs this phase's frozen tests; while any of them is
+  // red the whole-suite red is not evidence of a regression — reported apart (`masked`), not as a regression.
+  const wholeSuite = new Set(regressionChecks.filter((c) => c.whole_suite).map((c) => c.id));
+  const currentRed = (Array.isArray(checkResults) ? checkResults : []).some((r) => !ids.has(r.check_id) && (r.status === 'fail' || r.status === 'error'));
+  const masked = currentRed ? red.filter((r) => wholeSuite.has(r.check_id)).map((r) => r.check_id) : [];
+  const failed = red.filter((r) => !masked.includes(r.check_id));
   return {
     phases: [...new Set(regressionChecks.map((check) => check.regression_phase))],
     total: regressionChecks.length,
     passed: results.filter((result) => result.status === 'pass').length,
-    failed: failed.map((result) => ({ check_id: result.check_id, error: result.error || null })),
+    ...(masked.length ? { masked } : {}),
+    failed: failed.map((result) => ({
+      check_id: result.check_id,
+      error: result.error || null,
+      // bench B41: one line of why, for the CLI (the full output stays in the evidence file)
+      summary: String(result.error || result.summary || result.stderr || '').split(/\r?\n/).map((l) => l.trim()).find((l) => /not ok|fail|erro|error|tamper|adulter/i.test(l)) || null,
+    })),
   };
 }
 
@@ -14143,7 +14355,7 @@ function projectRuntimeArtifacts(projectRoot, activeSession, options = {}) {
     ensureDirForFile(paths.state);
     fs.writeFileSync(planStatusPath, projections.plan + '\n', 'utf8');
     // STATE.md and VERIFY.md are curated by people and workflows: only the marked block is ours.
-    writeProjectedBlock(paths.verify, projections.verify, 'Verificação do runtime (projetado)');
+    writeProjectedBlock(paths.verify, `${projections.verify}${acceptanceAmendmentsSection(projectRoot, activeSession)}`, 'Verificação do runtime (projetado)');
     // OXB-121 (contradiction): the top block of STATE.md is written first (a template STATE.md is replaced whole), then the runtime block,, from the same run state, so
     // the two blocks never disagree ("completed 38/38" above, "failed · 0 concluídos · 7 falhos" below).
     try { projectStateMd(projectRoot, activeSession); } catch { /* projeção auxiliar */ }
@@ -15366,6 +15578,7 @@ module.exports = {
   runtimeProgramPhaseAdd,
   runtimeProgramExport,
   runtimeProgramPhaseEdit,
+  runtimeProgramPhaseRestoreClose,
   runtimeChangeSetStatus,
   runtimeProgramCriterionMove,
   runtimeProgramRegressionRepin,

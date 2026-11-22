@@ -20,7 +20,7 @@ O upstream decide o sucesso do desenvolvimento. O grill entrevista o usuário at
 7. **Termos do domínio:** cada substantivo de negócio ambíguo vira um termo:
    `oxe-cc grill term "Pedido" --definition "…" --synonyms "ordem | compra"`
    Os sinônimos ficam proibidos na SPEC, no PRD e no código. Se não houver termos, use `--none`.
-8. **Playback ao fechar um ramo:** resuma o ramo em 3 a 5 linhas e peça confirmação. Com o "sim", rode `oxe-cc grill confirm <ramo>`. Se o ramo não se aplica, rode `confirm <ramo> --empty --reason "…"`.
+8. **Playback ao fechar um ramo:** resuma o ramo em 3 a 5 linhas e peça confirmação. Com o "sim" do usuário numa resposta **separada** (nunca no mesmo turno da última resposta do ramo), rode `oxe-cc grill confirm <ramo> --playback "<o resumo que ele confirmou>"`. Se o ramo não se aplica, rode `confirm <ramo> --empty --reason "…"`.
 9. **Sessões e cards ALM (`--card <KEY>`):** para o programa inteiro, o estado fica em `.oxe/grill/grill.ndjson`. **Ao refinar um card isolado de ALM/Jira**, passe sempre `--card <KEY>` (`oxe-cc grill start --card OXE-n`, `ask`, `answer`, `fact`, `confirm`, `close`, `report`): o estado, os ADRs (`--decision`) e o relatório ficam isolados em `.oxe/alm/grill/<KEY>/` (decisões em `.oxe/alm/grill/<KEY>/decisions.ndjson`, ADRs em `.oxe/alm/grill/<KEY>/adr/`, relatório em `.oxe/alm/grill/grooming-quality.md`), nunca sobrescrevendo `.oxe/grill/`, `.oxe/SPEC.md` nem poluindo `docs/adr/` da árvore git. Numa nova sessão, `oxe-cc grill status [--card <KEY>]` mostra onde parou e qual é o próximo ramo; continue dali.
 
 ## A árvore (em ordem de dependência)
