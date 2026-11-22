@@ -193,6 +193,12 @@ function checkSpec(input) {
     if ((g.assumptions || []).length && !/##\s*Suposi/i.test(specText)) errors.push(`o grill adiou ${g.assumptions.map((a) => a.id).join(', ')}, mas a SPEC não tem a seção Suposições`);
   }
 
+  if (g && g.started) {
+    const f = require('./oxe-grill-cases.cjs').specFindings({ questions: g.questions, criteria: crit.list });
+    errors.push(...f.errors);
+    warnings.push(...f.warnings);
+  }
+
   // RFC for P0/P1
   const mode = input.rfcMode || 'advisory';
   const risky = crit.list.filter((c) => c.risk === 'P0' || c.risk === 'P1').map((c) => c.id);

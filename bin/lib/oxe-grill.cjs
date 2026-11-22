@@ -13,6 +13,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const casesLib = require('./oxe-grill-cases.cjs');
 
 /** The tree, in dependency order. `blocking`: must be decided and confirmed before close (per demand type). */
 const BRANCHES = [
@@ -94,7 +95,7 @@ function replay(records) {
     if (r.t === 'ask' || r.t === 'fact') {
       st.seq = Math.max(st.seq, Number(String(r.id).replace(/\D/g, '')) || 0);
       st.questions.set(r.id, {
-        id: r.id, branch: r.branch, question: r.question || r.text, options: r.options || [], recommended: r.recommended || null, why: r.why || null,
+        id: r.id, branch: r.branch, question: r.question || r.text, options: r.options || [], cases: r.cases || [], recommended: r.recommended || null, why: r.why || null,
         affects: r.affects || [], depends: r.depends || [], decision: Boolean(r.decision),
         status: r.t === 'fact' ? 'decided' : 'open', answer: r.t === 'fact' ? r.text : null, decided_by: r.t === 'fact' ? 'code' : null, source: r.source || null, by: null, history: [], ...(r.stale ? { stale: true } : {}),
       });
@@ -172,6 +173,7 @@ function status(dir) {
     decisions: [...st.questions.values()].filter((q) => q.decision && q.status === 'decided').map((q) => ({ id: q.id, branch: q.branch, question: q.question, answer: q.answer, alternatives: q.options.filter((o) => o !== q.answer), why: q.why, decided_by: q.decided_by, affects: q.affects })),
     terms: [...st.terms.values()],
     questions: [...st.questions.values()],
+    examples: casesLib.decided([...st.questions.values()]).examples,
     conflicts: [...st.conflicts.values()],
   };
 }
@@ -220,11 +222,12 @@ function ask(dir, input = {}) {
   const id = `Q-${st.seq + 1}`;
   const deps = ids(input.depends);
   for (const d of deps) if (!st.questions.has(d)) throw new Error(`--depends ${d}: pergunta inexistente`);
-  append(dir, { t: 'ask', id, branch, question, options, recommended: String(input.recommended).trim(), why: input.why ? String(input.why).trim() : null, affects: ids(input.affects), depends: deps, decision: Boolean(input.decision) });
-  return { id, branch, question, options, recommended: String(input.recommended).trim(), why: input.why ? String(input.why).trim() : null };
+  const cases = casesLib.build({ options, recommended: input.recommended, cases: input.case, needs: input.need });
+  append(dir, { t: 'ask', ...(cases.length ? { cases } : {}), id, branch, question, options, recommended: String(input.recommended).trim(), why: input.why ? String(input.why).trim() : null, affects: ids(input.affects), depends: deps, decision: Boolean(input.decision) });
+  return { id, branch, question, options, cases, recommended: String(input.recommended).trim(), why: input.why ? String(input.why).trim() : null };
 }
 
-/** The user's answer: "ok" / "recomendada" takes the recommended one; a number picks an option; any other text is used as is. */
+/** The user's answer: "ok" / "recomendada" takes the recommended one; a number or a letter picks an option; any other text is used as is. */
 function answer(dir, id, input = {}) {
   const st = requireStarted(dir);
   const q = st.questions.get(String(id).toUpperCase());
@@ -234,11 +237,13 @@ function answer(dir, id, input = {}) {
   let value = raw;
   let decidedBy = 'user';
   if (/^(ok|sim|recomendad[ao]|rec)$/i.test(raw)) { value = q.recommended; decidedBy = 'recommended'; } else if (/^\d+$/.test(raw) && q.options[Number(raw) - 1]) value = q.options[Number(raw) - 1];
+  // the question is shown as a) b) c): a letter picks the option, it is not the text of the answer
+  else if (/^[a-z]\)?$/i.test(raw) && input.text == null && q.options[raw[0].toLowerCase().charCodeAt(0) - 97]) value = q.options[raw[0].toLowerCase().charCodeAt(0) - 97];
   if (value === q.recommended && decidedBy === 'user') decidedBy = 'recommended';
   append(dir, { t: 'answer', id: q.id, answer: value, decided_by: decidedBy, by: input.by || null, ...(input.source ? { source: String(input.source) } : {}), ...(input.decision != null ? { decision: Boolean(input.decision) } : {}) });
   const after = status(dir);
   const reopened = after.questions.filter((x) => x.status === 'reopened' && x.reopened_by === q.id).map((x) => x.id);
-  return { id: q.id, answer: value, decided_by: decidedBy, source: input.source ? String(input.source) : null, changed: q.status === 'decided' && q.answer !== value, reopened, next_branch: after.next_branch };
+  return { id: q.id, answer: value, decided_by: decidedBy, examples: casesLib.examplesOf({ ...q, status: 'decided', answer: value }), source: input.source ? String(input.source) : null, changed: q.status === 'decided' && q.answer !== value, reopened, next_branch: after.next_branch };
 }
 
 /** An answer the code / artifacts already give: recorded with its source, never asked. */
@@ -357,6 +362,7 @@ function renderMarkdown(s) {
       if (q.recommended) out.push(`  - Recomendada: ${q.recommended}${q.why ? ` — ${q.why}` : ''}`);
       if (q.answer != null) out.push(`  - Resposta: ${q.answer} (${st}${q.source ? `; fonte: ${q.source}` : ''})`);
       else out.push(`  - Situação: ${st}${q.reason ? ` — ${q.reason}` : ''}`);
+      for (const e of casesLib.examplesOf(q) || []) out.push(`  - Exemplo ${e.id}: ${e.scenario} => ${e.expect}`);
       if (q.affects.length) out.push(`  - Afeta: ${q.affects.join(', ')}`);
     }
     out.push('');

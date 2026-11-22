@@ -9338,7 +9338,8 @@ async function main() {
       '',
       '    start --type <feature|bugfix|ui|…>                       inicia (ou retoma) o grill',
       '    ask --branch <ramo> --question "…" --recommended "…" [--why "…"] [--options "a | b"] [--affects A3,US-2] [--decision]',
-      '    answer Q-n ok|<n> | --text "…" [--source "decisão registrada: …"]   registra a resposta (e a fonte dela)',
+      '        ambiguidade de comportamento: --case "<cenário> => <resultado de a> | <de b>" (repetível) [--need "<cenário> => <o que o papel precisa>"]',
+      '    answer Q-n ok|<n>|<letra> | --text "…" [--source "decisão registrada: …"]   registra a resposta (e a fonte dela)',
       '    fact --branch <ramo> --text "…" --source <arquivo:linha|card>       o que o card ou o código já responde',
       '    defer Q-n --reason "…" · confirm <ramo> [--empty] · term "<termo>" --definition "…" · conflict Q-a,Q-b · resolve C-n',
       '    status · close · export',
@@ -9406,6 +9407,7 @@ async function main() {
       if (a === '--json') o.json = true;
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
       else if (['--type', '--title', '--branch', '--question', '--options', '--recommended', '--why', '--affects', '--depends', '--choice', '--text', '--by', '--source', '--reason', '--definition', '--synonyms', '--note', '--card', '--playback'].includes(a) && argv[i + 1] != null) o[a.slice(2)] = String(argv[++i]);
+      else if (['--case', '--need'].includes(a) && argv[i + 1] != null) (o[a.slice(2)] = o[a.slice(2)] || []).push(String(argv[++i]));
       else if (a === '--decision') o.decision = true;
       else if (a === '--stale') o.stale = true;
       else if (a === '--late') o.late = argv[i + 1] && !argv[i + 1].startsWith('-') ? String(argv[++i]) : true;
@@ -9431,10 +9433,15 @@ async function main() {
         console.log('');
         console.log(`  ${out.id} — ${out.question}`);
         (out.options || []).forEach((opt, idx) => console.log(`    ${String.fromCharCode(97 + idx)}) ${opt}${opt === out.recommended ? '  ← recomendada' : ''}`));
+        for (const line of require('./lib/oxe-grill-cases.cjs').render(out)) console.log(line);
         console.log(`  Recomendada: ${out.recommended}${out.why ? ` — ${out.why}` : ''}`);
         console.log('  (responda "ok" para a recomendada, a letra de outra opção ou a sua resposta)');
       }
-      else if (sub === 'answer') console.log(`  ${green}✓${reset} ${out.id}: ${out.answer} (${out.decided_by === 'recommended' ? 'recomendada aceita' : 'outra resposta'}${out.source ? ` · fonte: ${out.source}` : ''})${out.reopened.length ? `  ${yellow}reabertas: ${out.reopened.join(', ')}${reset}` : ''}`);
+      else if (sub === 'answer') {
+        console.log(`  ${green}✓${reset} ${out.id}: ${out.answer} (${out.decided_by === 'recommended' ? 'recomendada aceita' : 'outra resposta'}${out.source ? ` · fonte: ${out.source}` : ''})${out.reopened.length ? `  ${yellow}reabertas: ${out.reopened.join(', ')}${reset}` : ''}`);
+        if (out.examples === null) console.log(`  ${yellow}!${reset} resposta fora das opções: os casos não viraram exemplo — pergunte de novo com os casos da resposta nova`);
+        for (const e of out.examples || []) console.log(`    exemplo ${e.id}: ${e.scenario} => ${e.expect} (cite ${e.id} no critério e no título do teste)`);
+      }
       else if (sub === 'mark') console.log(`  ${green}✓${reset} ${out.id} marcado: ${out.late ? `achado depois do grooming${out.late_at ? ` (no ${out.late_at})` : ''}` : 'card defasado em relação ao código'}`);
       else if (sub === 'fact') console.log(`  ${green}✓${reset} ${out.id} (${out.branch}) fato registrado · fonte ${out.source}`);
       else if (sub === 'close' || sub === 'export') {
@@ -9536,6 +9543,7 @@ async function main() {
     oxe-cc plan lint [--dir <pasta>] [--session <id>] [--precheck-tests|--precheck-e2e|--no-precheck] [--json]
     oxe-cc plan amend-test <path> --reason "<CR-id>" [--by <papel>] [--program <nome>] [--session <id>] [--force] [--json]
     oxe-cc plan append <arquivo.json> [--dir <pasta>] [--json]
+    oxe-cc plan mutate [A1,A2] [--max 24] [--timeout <s>] [--json]   força dos testes congelados por critério (1: P0 fraco; 2: não medido)
     oxe-cc plan build | skeleton | merge | staleness | refresh | reopen | done
     oxe-cc plan pack sync|rebuild|fix · scope add · verify add|move|drop|prune · task fold|supersede|edit\n`);
     return;
@@ -9767,6 +9775,38 @@ async function main() {
   }
 
   // oxe-cc plan pack fix T<n> --symbol <arquivo>#<nome> (--internal | --member-of <Classe> | --remove) --by --reason
+  // strength of the frozen tests, per criterion
+  if (command === 'plan' && argv[0] === 'mutate') {
+    const o = { dir: process.cwd(), session: null, json: false, criteria: [] };
+    for (let i = 1; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (a === '--session' && argv[i + 1]) o.session = String(argv[++i]).replace(/\\/g, '/');
+      else if (a === '--max' && Number(argv[i + 1]) > 0) o.max = Number(argv[++i]);
+      else if (a === '--timeout' && Number(argv[i + 1]) > 0) o.timeoutMs = Number(argv[++i]) * 1000;
+      else if (/^[AG]\d+(\.\d+)?(,[AG]\d+(\.\d+)?)*$/i.test(a)) o.criteria.push(...a.split(','));
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    if (!o.session) {
+      try { o.session = oxeHealth.parseActiveSession(fs.readFileSync(oxeHealth.oxePaths(o.dir).state, 'utf8')) || null; } catch { o.session = null; }
+    }
+    try {
+      const out = await oxeOperational.runtimePlanMutate(o.dir, o.session, o);
+      process.exitCode = out.exit;
+      if (o.json) { console.log(JSON.stringify({ oxePlanMutateSchema: 1, ...out }, null, 2)); return; }
+      console.log(`  Força dos testes congelados: ${out.killed}/${out.mutants} mutante(s) detectado(s)`);
+      for (const c of out.criteria) {
+        const mark = c.unmeasured || !c.killed ? (c.risk === 'P0' ? `${red}✗${reset}` : `${yellow}!${reset}`) : `${green}✓${reset}`;
+        console.log(`    ${mark} ${c.id}${c.risk ? ` (${c.risk})` : ''}: ${c.unmeasured ? `não medido — ${c.unmeasured}` : `${c.killed}/${c.mutants}`}`);
+      }
+      for (const s of out.survived.slice(0, 10)) console.log(`    sobreviveu: ${s.file}:${s.line}  ${s.after}`);
+      if (out.weak.length) console.log(`  ${red}✗${reset} P0 com teste que não detecta nada: ${out.weak.join(', ')} — reforce o teste por oxe-cc plan amend-test`);
+      else if (out.exit === 2) console.log(`  ${yellow}!${reset} não medido${out.unmeasured.length ? ` em P0: ${out.unmeasured.join(', ')}` : ''}: isto não é um verde`);
+    } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
+    return;
+  }
+
   if (command === 'plan' && argv[0] === 'pack' && (argv[1] === 'sync' || argv[1] === 'rebuild')) {
     const o = { dir: process.cwd(), session: null, json: false, dryRun: false };
     for (let i = 2; i < argv.length; i += 1) {

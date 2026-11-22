@@ -1540,7 +1540,7 @@ function runtimeGrill(projectRoot, activeSession, options = {}) {
   } else if (a !== 'status') throw new Error(`grill ${a}: ação desconhecida (start | ask | answer | fact | defer | confirm | term | conflict | resolve | status | close | export)`);
   const s = lib.writeProjection(gp.dir);
   const view = { type: s.type, closed: s.closed, next_branch: s.next_branch, blockers: s.blockers, branches: s.branches.map((b) => ({ id: b.id, title: b.title, blocking: b.blocking, decided: b.decided, open: b.open, deferred: b.deferred, confirmed: b.confirmed, ready: b.ready, asks: b.asks })), file: path.relative(projectRoot, path.join(gp.dir, 'GRILL.md')).replace(/\\/g, '/') };
-  return a === 'status' ? { ...view, open_questions: s.questions.filter((q) => q.status === 'open' || q.status === 'reopened'), assumptions: s.assumptions, terms: s.terms } : { ...out, grill: view };
+  return a === 'status' ? { ...view, examples: s.examples, open_questions: s.questions.filter((q) => q.status === 'open' || q.status === 'reopened'), assumptions: s.assumptions, terms: s.terms } : { ...out, grill: view };
 }
 
 /** Updates the comment of a card that starts with `marker`, or posts it (one comment per card, in place). */
@@ -1609,6 +1609,16 @@ async function runtimeGrooming(projectRoot, activeSession, options = {}) {
   } catch (err) { moved = { error: err.message }; }
   appendEvent(projectRoot, activeSession, { type: 'GroomingPublished', payload: { key, ...counts } });
   return { key, published: true, updated: c.updated, moved, ...counts };
+}
+
+/** `oxe-cc plan mutate [A1,A2]`: strength of the frozen tests per criterion (oxe-plan-mutate.cjs). */
+async function runtimePlanMutate(projectRoot, activeSession, options = {}) {
+  const { doc, paths } = readPlanJsonDoc(projectRoot, activeSession);
+  if (!doc) throw new Error('plan mutate exige PLAN.json (oxe-cc plan build)');
+  const risks = require('./oxe-risk-decision.cjs').criterionRisks(readTextIfExists(paths.spec) || '');
+  const out = await require('./oxe-plan-mutate.cjs').measure(projectRoot, doc, { ...options, risks });
+  appendEvent(projectRoot, activeSession, { type: 'TestStrengthMeasured', payload: { tree: out.tree, mutants: out.mutants, killed: out.killed, weak: out.weak, unmeasured: out.unmeasured } });
+  return out;
 }
 
 /** `oxe-cc spec check [--fast]`: the quality gate of the upstream (oxe-spec-check.cjs) over the files of the scope. */
@@ -6369,6 +6379,20 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     const uncovered = require('./oxe-criterion-coverage.cjs').uncoveredCriterionTerms({ spec, plan, projectRoot });
     (config.acceptance_tests_required || options.requireAcceptanceTests ? result.errors : result.warnings).push(...uncovered);
     result.ok = result.errors.length === 0;
+  }
+  // executable disambiguation: the example the user chose in the grill is in the frozen test of its criterion
+  if (specText) {
+    const grillLib = require('./oxe-grill.cjs');
+    const { examples, questions } = grillLib.status(grillPaths(projectRoot, activeSession).dir);
+    if (examples.length) {
+      result.errors.push(...require('./oxe-grill-cases.cjs').planFindings({
+        questions,
+        criteria: require('./oxe-spec-check.cjs').criteria(specText).list,
+        doc: readPlanJsonDoc(projectRoot, activeSession).doc,
+        readFile: (f) => readTextIfExists(path.join(projectRoot, f)),
+      }));
+      result.ok = result.errors.length === 0;
+    }
   }
   result.warnings.push(...anchorWarnings);
   // OXB-147: a verify that would change node_modules / git, or a sentence instead of a command, is a structural error.
@@ -15836,6 +15860,7 @@ module.exports = {
   runtimeProgramStart,
   runtimeProgramClose,
   runtimePhaseClose,
+  runtimePlanMutate,
   findUnpromotedDoneTasks,
   phaseChanges,
   phaseGateInputFromRun,

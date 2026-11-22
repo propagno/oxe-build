@@ -26,6 +26,9 @@ No bench Restitui, o OXE custou 9,5× e demorou 12,7× o braço sem OXE, e quase
 - **`phase close` com critério manual:** com o automático verde e só o humano faltando, o comando commita as tarefas, lista os sign-offs e sai com 2.
 - **Perfil `lean`: `plan build` recusa código de produto alterado e sem commit** no working tree (`--allow-dirty` libera). A fase não é planejada em cima de trabalho sem origem.
 - **Drift:** as pastas onde ficam os testes congelados do plano (e `test/acceptance/**`) não contam como desvio de arquitetura.
+- **Desambiguação executável:** `oxe-cc grill ask --case "<cenário> => <resultado de a> | <de b>" [--need "<cenário> => <necessário>"]` mostra cada leitura como comportamento e recusa uma recomendada que não atende ao que o papel precisa. A resposta vira exemplo com ID (`Q-4.1b`): o `spec check` exige um critério que o cite e o `plan lint`, um teste congelado que o traga.
+- **Correção: responder o grill com a letra da opção** (que o CLI oferecia) escolhe a opção; antes gravava a letra como texto da resposta.
+- **`oxe-cc plan mutate [A1,A2]`:** força dos testes congelados por critério, com mutantes nos arquivos das tarefas (mede também teste de caixa-preta), numa cópia temporária da árvore. P0 cujo teste não detecta nada sai com 1; não medido sai com 2. No perfil `lean`, substitui a implementação descartável do plano.
 
 ### Achados do bench OXE × Restitui: o caminho manual fecha a fase (22/11)
 

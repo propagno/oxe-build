@@ -19,7 +19,8 @@ Planejar **uma fase** escrevendo só duas coisas: os **testes de aceite congelad
    - um teste por critério, com o ID no título (`A12: …`); pela interface pública (HTTP, CLI, função exportada), nunca por detalhe interno;
    - afirme o comportamento que a SPEC escreve, com os valores dela; sem `skip`, sem asserção sempre verdadeira e sem aceitar dois resultados ("403 ou 404"): se a SPEC não fixa o valor, isso é decisão a propor ao usuário, não folga no teste;
    - sem tempo de parede (`p95`, `Date.now()` como limite): requisito de desempenho vai em `phase_gates`, não em teste congelado;
-   - critério de dinheiro, permissão ou segurança (P0): antes de congelar, rode o teste contra uma implementação descartável mínima (verde) e contra 2 mutações óbvias dela (vermelho), fora do repositório; apague a descartável. Nos demais critérios, o `plan lint` já confere que o teste nasce vermelho pelo motivo certo.
+   - critério que cita um exemplo do grill (`Q-4.1b`): o teste dele executa esse caso, afirma o resultado escolhido e traz o ID no título (`A12: Q-4.1b …`); o `plan lint` reprova sem ele;
+   - não escreva implementação descartável: o `plan lint` confere que o teste nasce vermelho pelo motivo certo e, nos critérios P0, o execute mede a força dele com `oxe-cc plan mutate`.
 2. **Arquivo de papel** em `.oxe/plan/<Fn>.role.json`:
 
    ```json

@@ -27,7 +27,8 @@ Levar a fase ativa do plano ao fechamento **numa sessão só**: implementar cada
    2. rode `oxe-cc runtime commit-task T<n>` — ele roda o verify da tarefa, confere o escopo e os testes congelados, commita com `OXE-Task` e marca `done`. Vermelho: corrija e rode de novo (no máximo 3 voltas na mesma falha; depois pare e relate a falha com a saída).
    Tarefas da mesma onda com `files` disjuntos podem ir a subagentes em paralelo, um por tarefa, cada um com só a tarefa, os arquivos dela e o comando de verify; o commit continua sendo `oxe-cc runtime commit-task`, um por vez.
    Tarefa com `"model_hint": "fast"` no `PLAN.json`: entregue-a a um subagente no modelo mais rápido que o host oferece (o teste congelado é o alvo dele). Se ela voltar vermelha duas vezes, faça você mesmo, no modelo desta sessão.
-3. Com todas as tarefas `done` (e só com `--phase` ou sem argumento): `oxe-cc phase close`.
+3. Se a fase tem critério P0, rode `oxe-cc plan mutate <critérios P0>` antes de fechar. Saída 1 (o teste não detecta nada) ou 2 (não medido): pare e mostre ao usuário; teste congelado só muda por `plan amend-test`, com o OK dele.
+   Com todas as tarefas `done` (e só com `--phase` ou sem argumento): `oxe-cc phase close`.
    - Saída 0: fase fechada.
    - Saída 2: só faltam sign-offs humanos. Liste-os e pare; depois do sign-off do usuário, `oxe-cc phase close` de novo.
    - Saída 1: corrija o que ele lista (regressão de fase anterior, gate do projeto) e rode de novo. Regressão vermelha é defeito do código novo, não do teste antigo.
