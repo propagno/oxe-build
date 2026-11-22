@@ -25,6 +25,20 @@ Se o usuário indicar uma tarefa (ex.: `T2`), focar só nela nas camadas 1–2; 
 **Nota de compatibilidade v1.1.0:** `/oxe-validate-gaps`, `/oxe-security`, `/oxe-ui-review`, `/oxe-review-pr` e `/oxe-retro` foram incorporados por este comando. Esses comandos legados continuam funcionando mas exibem aviso de migração.
 </objective>
 
+<caminho_curto>
+## Caminho curto (padrão) — o runtime é o verify
+
+Use este caminho, e **só ele**, quando as três condições valem: `oxe-cc runtime` está disponível, nenhuma flag foi passada (`--gaps`, `--security`, `--ui`, `--pr`, `--diff`) e a profundidade não é `thorough` (em `.oxe/config.json`: `verification_depth: "thorough"`, ou `profile` `strict` ou `legacy` sem `verification_depth` explícito). Não leia o resto deste arquivo nesse caso.
+
+1. Rode `oxe-cc runtime verify --json` uma vez. Ele executa os testes de aceite congelados, o check de cada tarefa, a regressão das fases fechadas e os gates do projeto, e projeta o `VERIFY.md`. O código de saída é o veredito: `0` passou, `1` reprovou, `2` bloqueado (sign-off humano ou check sem comando).
+2. **Saída 0:** responda em uma tela — total de checks, regressão `x/y`, gates `x/y`, e a linha `Próximo passo: oxe-cc phase close` (com programa) ou o que `oxe-cc status --json` indicar. Não reaudite o plano, não rode os comandos das tarefas de novo, não reescreva o `VERIFY.md`, não faça calibração, rascunho de commit nem checklist de PR. A retrospectiva fica para a última fase do programa (ou para quando o usuário pedir `/oxe-retro`).
+3. **Saída 1:** liste cada check vermelho com a primeira linha do erro e o arquivo. Só aqui vale investigar (Read/Grep no que falhou). Termine com o que corrigir; não marque nada como passou. Registre uma entrada curta em `SUMMARY.md`.
+4. **Saída 2:** liste o que falta do humano (critérios de sign-off) e pare. O sign-off é do usuário: nunca rode `runtime signoff` em nome dele.
+5. Teste congelado alterado: consulte a seção **Emendas de aceite** do `VERIFY.md` projetado antes de acusar adulteração; só arquivo alterado fora desse registro é `acceptance_tampered`.
+
+O caminho completo abaixo (camadas 1 a 6) vale para `verification_depth: "thorough"`, para as flags, para `runtime verify` com resultado `partial` e para o fallback legado sem runtime.
+</caminho_curto>
+
 <flags_processing>
 ## Processamento de flags (executar antes do step 1)
 

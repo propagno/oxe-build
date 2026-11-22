@@ -1054,6 +1054,30 @@ function runtimePlanBuild(projectRoot, activeSession, options = {}) {
   }
   const files = options.files || [];
   if (files.length < 1) throw new Error('use: oxe-cc plan build --from backend.json frontend.json [--phase Fn]');
+  // lean bench L3: a change request implemented straight in the conversation left product code modified with no
+  // record, no test of its own and no commit, and the next phase was planned on top of it. Under the lean ceremony the
+  // phase plan starts from a clean tree: code changed outside a task, a quick or a CR is named and refused.
+  if (!options.dryRun && !options.allowDirty) {
+    let lean = false;
+    try { lean = require('./oxe-project-health.cjs').isLeanCeremony(projectRoot, null); } catch { lean = false; }
+    if (lean) {
+      const lib0 = require('./oxe-plan-build.cjs');
+      const frozen = new Set();
+      for (const file of files) {
+        try {
+          for (const a of (require('./oxe-plan-merge.cjs').readRolePlan(file).acceptance_tests) || []) {
+            for (const f of a.files || []) frozen.add(String(typeof f === 'string' ? f : (f && f.path) || '').replace(/\\/g, '/'));
+          }
+        } catch { /* the build below reports an unreadable role file */ }
+      }
+      const stray = changedEntriesUnder(projectRoot, ['.'])
+        .map((e) => String(e.path || '').replace(/\\/g, '/'))
+        .filter((p) => p && !p.startsWith('.oxe/') && !/^docs\//.test(p) && !frozen.has(p) && lib0.isProductCode(p));
+      if (stray.length) {
+        throw new Error(`código alterado sem origem no working tree (${stray.slice(0, 5).join(', ')}${stray.length > 5 ? `, +${stray.length - 5}` : ''}): a fase não é planejada em cima dele. Mudança pequena: oxe-cc quick <KEY> "<objetivo>" → oxe-cc quick commit -m "…" --all → oxe-cc quick done --verify "<suíte>". Mudança de critério ou contrato: registre o CR (oxe-cc runtime feedback --class new_scope --summary "…" --criteria A<n>) e emende a SPEC com o OK de quem aprova. Para planejar assim mesmo: --allow-dirty.`);
+      }
+    }
+  }
   let phase = options.phase || null;
   if (!phase) { try { const pg = require('./oxe-program.cjs').readProgram(resolveRuntimeArtifactPaths(projectRoot, activeSession).programDir || path.join(projectRoot, '.oxe', 'program')); phase = pg && pg.active_phase ? pg.active_phase : null; } catch { phase = null; } }
   const res = lib.build(files.map((file) => ({ file, doc: mergeLib.readRolePlan(file) })), { root: projectRoot, phase, key: options.key, ref: options.ref, autoCloseImports: Boolean(options.autoCloseImports), fixStalePaths: Boolean(options.fixStalePaths), pairAsDeps: Boolean(options.pairAsDeps) });
@@ -5929,6 +5953,9 @@ async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
     verification_status: report.status,
     // OXB-124: the commit the phase verify judged (the close refuses a verify of an older code tree).
     verification_head: require('./oxe-verdicts.cjs').headOf(projectRoot),
+    // lean 1.1: the tree of the files the verify actually ran on. A commit-task made after the verify with exactly
+    // these files is the same code — the close accepts it without a second verify.
+    verification_tree: require('./oxe-verdicts.cjs').worktreeTree(projectRoot),
     verified_at: new Date().toISOString(),
     verification_regression: regressionSummary,
     verification_gates: gateSummary,
@@ -6417,6 +6444,7 @@ function runtimePlanLint(projectRoot, activeSession, options = {}) {
     const health = require('./oxe-project-health.cjs');
     const p = health.oxePaths(projectRoot);
     const rationality = require('./oxe-rationality.cjs').buildExecutionRationality({
+      lean: health.isLeanCeremony(projectRoot, null),
       plan: paths.plan || p.plan,
       planAgents: p.planAgents,
       implementationPackJson: paths.implementationPack || p.implementationPackJson,
@@ -7013,7 +7041,21 @@ function runtimeDossier(projectRoot, activeSession, options = {}) {
     // audited drift waivers (`program close --accept-drift <glob> --by --reason`).
     parkedGlobs: (() => {
       const cfg = readProjectConfig(projectRoot) || {};
-      return Array.isArray(cfg.parked_tests) ? cfg.parked_tests.map(String) : ['tests/acceptance/**'];
+      if (Array.isArray(cfg.parked_tests)) return cfg.parked_tests.map(String);
+      // lean (bench): the default was only `tests/acceptance/**`. A project that keeps its frozen tests elsewhere
+      // (`test/acceptance/`) had every shared test helper and every quick's test flagged as drift, and the agent
+      // waived it by itself. The folders where this plan's own frozen tests live are acceptance folders too.
+      const globs = new Set(['tests/acceptance/**', 'test/acceptance/**']);
+      try {
+        const { doc: planDoc } = readPlanJsonDoc(projectRoot, activeSession);
+        for (const a of (planDoc && planDoc.acceptance_tests) || []) {
+          for (const f of a.files || []) {
+            const dir = path.posix.dirname(String(typeof f === 'string' ? f : (f && f.path) || '').replace(/\\/g, '/'));
+            if (dir && dir !== '.') globs.add(`${dir}/**`);
+          }
+        }
+      } catch { /* the defaults stand */ }
+      return [...globs];
     })(),
     waivedGlobs: readNdjsonQuiet(path.join(programDir, 'changes.ndjson'))
       .filter((r) => r && r.kind === 'drift_waiver' && (!phaseId || r.phase === phaseId))
@@ -11136,7 +11178,8 @@ function runtimeCommitTask(projectRoot, activeSession, options = {}) {
 
   try {
     if (commands.length > 0) {
-      if (options.skipVerifyIfFresh && isTaskVerifyFresh(projectRoot, taskId, effectiveDirty, scopeHash, options.freshMaxAgeMs)) {
+      // lean 1.1: `phase close` has just run the whole phase verify green on these very files
+      if (options.verifiedByPhase || (options.skipVerifyIfFresh && isTaskVerifyFresh(projectRoot, taskId, effectiveDirty, scopeHash, options.freshMaxAgeMs))) {
         verifySkipped = true;
       } else {
         const allSegs = options.failFast ? false : (options.allSegments != null ? Boolean(options.allSegments) : (((projectConfigForCommit.verify || {}).all_segments) !== false));
@@ -13373,6 +13416,136 @@ function touchProgramPhase(projectRoot, activeSession, status, patch = {}) {
   }
 }
 
+/**
+ * lean 1.1 — `oxe-cc phase close`: the whole end of a phase in one deterministic command, no model turn.
+ *   1. `runtime verify` (frozen acceptance tests, task checks, regression, project gates);
+ *   2. green → every plan task still pending gets its commit (OXE-Task trailer) and `done`. A task whose files are
+ *      already committed is marked done on the verified HEAD (the proof is the green verify of that commit);
+ *   3. the handoff of the dossier gets a generated draft when it is empty (the human edits it if there is more to say);
+ *   4. `runtime program close` with the options given (sign-offs, waivers) — every pending item listed at once.
+ * It stops at the first step that fails, with the reasons and the single thing to do next. Bench Restitui: closing a
+ * phase by hand took ~15 min and 6 to 10 human actions per phase.
+ * @returns {Promise<{ closed: boolean, phase: string|null, stopped_at: string|null, reasons: string[], next: string|null,
+ *   steps: Array<{ step: string, ok: boolean, detail: string }>, verify: object|null, close: object|null }>}
+ */
+async function runtimePhaseClose(projectRoot, activeSession, options = {}) {
+  const steps = [];
+  const stop = (stoppedAt, reasons, next, extra = {}) => ({ closed: false, phase: phaseId, stopped_at: stoppedAt, reasons, next, steps, verify: verifySummary, close: null, ...extra });
+  const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
+  const programLib = require('./oxe-program.cjs');
+  const program = paths.programDir ? programLib.readProgram(paths.programDir) : null;
+  let phaseId = options.phase || (program && program.active_phase) || null;
+  let verifySummary = null;
+  if (!program) throw new Error('Sem programa. Rode `oxe-cc runtime program init`.');
+  if (!phaseId) throw new Error('Nenhuma fase ativa. Rode `oxe-cc runtime program start`.');
+
+  // 1. verify
+  const verified = options.verified || await runRuntimeVerify(projectRoot, activeSession, options.verify || {});
+  const reportStatus = verified.report && verified.report.status;
+  const regFailed = (verified.regression && verified.regression.failed) || [];
+  const gatesFailed = (verified.gates && verified.gates.failed) || [];
+  const checks = (verified.report && verified.report.check_results) || [];
+  const red = checks.filter((c) => c && (c.status === 'fail' || c.status === 'error'));
+  verifySummary = { status: reportStatus, checks: checks.length, red: red.map((c) => c.check_id), regression_failed: regFailed.map((f) => f.check_id), gates_failed: gatesFailed };
+  // A criterion verified by hand has no command: its check is skipped (`needs_structured_check`) and the report is
+  // `partial`. With nothing red, that is not a failure — the automated part passed and the human part is the sign-off
+  // the close asks for below.
+  const manualChecks = checks.filter((c) => c && c.status === 'skip' && c.skip_reason === 'needs_structured_check');
+  const gapsNow = (verified.report && verified.report.gaps) || [];
+  const onlyHumanLeft = reportStatus !== 'failed' && reportStatus !== 'passed' && !red.length && !regFailed.length && !gatesFailed.length
+    && manualChecks.length > 0 && gapsNow.every((g) => /não é executável/i.test(String(g)));
+  const verifyOk = (reportStatus === 'passed' || onlyHumanLeft) && !regFailed.length && !gatesFailed.length;
+  steps.push({ step: 'verify', ok: verifyOk, detail: onlyHumanLeft ? `automático verde · ${checks.length} checks · ${manualChecks.length} critério(s) à espera de sign-off humano` : `${reportStatus || 'sem status'} · ${checks.length} checks${red.length ? ` · vermelhos: ${red.map((c) => c.check_id).join(', ')}` : ''}` });
+  if (!verifyOk) {
+    const reasons = [
+      ...red.map((c) => `check ${c.check_id}: ${String(c.error || c.summary || c.status).split(/\r?\n/).find((l) => l.trim()) || c.status}`.slice(0, 240)),
+      ...regFailed.map((f) => `regressão ${f.check_id}: ${String(f.error || f.summary || '').split(/\r?\n/).find((l) => l.trim()) || 'vermelho'}`.slice(0, 240)),
+      ...gatesFailed.map((g) => `gate do projeto vermelho: ${g}`),
+      ...((verified.report && verified.report.gaps) || []).map((g) => `gap: ${g}`),
+    ];
+    if (!reasons.length) reasons.push(`verify ${reportStatus || 'sem status'} (bloqueado ou parcial): veja ${verified.projected && verified.projected.paths ? path.relative(projectRoot, verified.projected.paths.verify) : 'VERIFY.md'}`);
+    return stop('verify', reasons, reportStatus === 'failed' || regFailed.length || gatesFailed.length ? 'corrija o que está vermelho e rode `oxe-cc phase close` de novo' : 'resolva o que bloqueia o verify (sign-off humano ou check sem comando) e rode `oxe-cc phase close` de novo');
+  }
+
+  // 2. the plan's pending tasks: commit + done
+  const work = runtimePhaseWork(projectRoot, activeSession);
+  const committed = [];
+  const markedOnHead = [];
+  if (work.pending.length) {
+    const by = String(options.by || 'phase-close').trim();
+    const planJsonLib = require('./oxe-plan-json.cjs');
+    const dirtyCode = changedEntriesUnder(projectRoot, ['.']).map((e) => String(e.path || '').replace(/\\/g, '/')).filter((p) => p && !p.startsWith('.oxe/'));
+    try {
+      if (!dirtyCode.length) {
+        // nothing left to commit: the work is already in HEAD (committed without the trailer). The verify above judged
+        // exactly this commit, so the task is done on it.
+        const head = require('./oxe-verdicts.cjs').headOf(projectRoot);
+        if (!head) throw new Error('repositório sem commit: não há o que marcar como concluído');
+        for (const id of work.pending) {
+          planJsonLib.markPlanTaskDone(paths.plan, id, { commit: head });
+          appendEvent(projectRoot, activeSession, { type: 'PlanTaskMarkedDone', work_item_id: id, payload: { task: id, commit: head, by, proof: 'phase_verify_passed', verification_tree: (readRunState(projectRoot, activeSession) || {}).verification_tree || null } });
+          markedOnHead.push(id);
+        }
+      } else if (work.pending.length === 1) {
+        const r = runtimeCommitTask(projectRoot, activeSession, { task: work.pending[0], by, verifiedByPhase: true });
+        committed.push({ tasks: [work.pending[0]], commit: r.commit || (r.checkpoint && r.checkpoint.commit) || null });
+      } else {
+        const r = runtimeCommitTasksTogether(projectRoot, activeSession, { tasks: work.pending, by, skipVerify: true });
+        committed.push({ tasks: r.tasks, commit: r.commit });
+      }
+    } catch (err) {
+      const msg = String((err && err.message) || err);
+      steps.push({ step: 'commit-task', ok: false, detail: msg.slice(0, 240) });
+      const scope = /ScopeViolation/.test(msg);
+      return stop('commit-task', [msg], scope
+        ? 'há arquivos alterados fora do escopo das tarefas: inclua-os em `files` da tarefa certa no PLAN.json (ou desfaça a mudança) e rode `oxe-cc phase close` de novo'
+        : 'resolva o erro acima e rode `oxe-cc phase close` de novo');
+    }
+    steps.push({ step: 'commit-task', ok: true, detail: committed.length ? `${committed.map((c) => `${c.tasks.join(', ')} → ${String(c.commit || '').slice(0, 8)}`).join('; ')}` : `${markedOnHead.join(', ')} concluída(s) no HEAD verificado` });
+  } else {
+    steps.push({ step: 'commit-task', ok: true, detail: 'nenhuma tarefa pendente' });
+  }
+
+  // 3. handoff draft
+  try {
+    const dossier = runtimeDossier(projectRoot, activeSession, { phase: phaseId });
+    if (dossier && dossier.handoff_required !== false && !dossier.handoff_filled) {
+      const dossierLib = require('./oxe-dossier.cjs');
+      const file = path.join(dossier.dir, 'plan.md');
+      const text = readTextIfExists(file) || '';
+      if (text.includes(dossierLib.HANDOFF_PLACEHOLDER)) {
+        const { doc } = readPlanJsonDoc(projectRoot, activeSession);
+        const tasks = ((doc && doc.tasks) || []).filter((t) => t && t.done === true);
+        const api = dossier.api_surface;
+        const lines = [
+          `_Rascunho gerado pelo \`oxe-cc phase close\` em ${new Date().toISOString().slice(0, 10)}; edite se houver mais a dizer._`,
+          '',
+          `- Entregue na ${phaseId}: ${tasks.length ? tasks.map((t) => `${t.id} ${String(t.title || '').trim()}`).join('; ') : 'sem tarefas no PLAN.json'}.`,
+          api ? `- Superfície pública: ${api.added} adicionada(s), ${api.changed} alterada(s), ${api.removed} removida(s)${api.flagged.length ? ` — fora do pack: ${api.flagged.slice(0, 5).join(', ')}` : ''} (detalhe em api-surface.md e em program/interfaces/${phaseId}.json).` : `- Interfaces da fase: program/interfaces/${phaseId}.json.`,
+          `- Regressão: os testes de aceite desta fase ficam congelados; uma fase seguinte não os edita (use \`oxe-cc plan amend-test\` com motivo).`,
+          dossier.pending.length ? `- Pendências humanas levadas adiante: ${dossier.pending.map((p) => p.replace(/^signoff_pending: /, '')).join(', ')}.` : '- Sem sign-off pendente.',
+        ];
+        fs.writeFileSync(file, text.replace(dossierLib.HANDOFF_PLACEHOLDER, lines.join('\n')), 'utf8');
+        steps.push({ step: 'handoff', ok: true, detail: `rascunho gerado em ${path.relative(projectRoot, file).replace(/\\/g, '/')}` });
+      }
+    }
+  } catch { /* the close below reports a handoff that is still empty */ }
+
+  // 4. close
+  const close = runtimeProgramClose(projectRoot, activeSession, { ...(options.close || {}), phase: phaseId });
+  steps.push({ step: 'program close', ok: Boolean(close.closed), detail: close.closed ? `fase ${close.phase} fechada` : `${close.gate.reasons.length} motivo(s)` });
+  if (!close.closed) {
+    // with only the human part left, "verify não concluído (status: blocked)" is that same pending sign-off
+    const reasons = close.gate.reasons.filter((r) => !(onlyHumanLeft && /^verify não concluído/.test(r)));
+    const signoffs = reasons.filter((r) => /^sign-off pendente: /.test(r)).map((r) => r.replace(/^sign-off pendente: /, '').replace(/ \(ou adie:.*$/, ''));
+    const next = signoffs.length && signoffs.length === reasons.length
+      ? `só faltam sign-offs humanos: depois de conferir, rode \`oxe-cc runtime signoff --phase ${phaseId} --criteria ${signoffs.join(',')} --by <quem conferiu> --evidence "<o que foi visto>"\` e \`oxe-cc phase close\` de novo`
+      : 'resolva os motivos acima (todos listados de uma vez) e rode `oxe-cc phase close` de novo';
+    return { closed: false, phase: phaseId, stopped_at: 'program close', reasons, next, steps, verify: verifySummary, close, signoffs_pending: signoffs };
+  }
+  return { closed: true, phase: close.phase, stopped_at: null, reasons: [], next: close.next ? `oxe-cc runtime program start --phase ${close.next.id}` : null, steps, verify: verifySummary, close };
+}
+
 function runtimeProgramStatus(projectRoot, activeSession) {
   const programLib = require('./oxe-program.cjs');
   const paths = resolveRuntimeArtifactPaths(projectRoot, activeSession);
@@ -13782,7 +13955,11 @@ function runtimeProgramClose(projectRoot, activeSession, options = {}) {
     const headNow = require('./oxe-verdicts.cjs').headOf(projectRoot);
     if (headNow && headNow !== run.verification_head) {
       const changedAfter = (gitLines(projectRoot, ['diff', '--name-only', run.verification_head, headNow, '--']) || []).filter((p) => !p.startsWith('.oxe/') && !/^docs\//.test(p) && !/\.md$/i.test(p));
-      if (changedAfter.length) closeGates.reasons.push(`stale_verdict: o verify da fase avaliou ${run.verification_head.slice(0, 8)}; depois disso mudaram ${changedAfter.slice(0, 4).join(', ')} — rode oxe-cc runtime verify de novo`);
+      // lean 1.1: the verify ran on the working tree; when HEAD now holds exactly that code, the verdict is of this code
+      const sameAsVerified = changedAfter.length && run.verification_tree
+        ? require('./oxe-verdicts.cjs').codeDiff(projectRoot, run.verification_tree, headNow)
+        : null;
+      if (changedAfter.length && !(sameAsVerified && sameAsVerified.length === 0)) closeGates.reasons.push(`stale_verdict: o verify da fase avaliou ${run.verification_head.slice(0, 8)}; depois disso mudaram ${changedAfter.slice(0, 4).join(', ')} — rode oxe-cc runtime verify de novo`);
     }
   }
   // OXB-117 (d): rollback rehearsal — the phase's commits must revert cleanly (a temporary worktree at HEAD).
@@ -14996,6 +15173,10 @@ function writeRunState(projectRoot, activeSession, runState = {}) {
     // OXB-079: the verify's own outcome (program close reads it; dropping it here kept the close on `running`).
     verification_status: typeof runState.verification_status === 'string' ? runState.verification_status : null,
     verified_at: typeof runState.verified_at === 'string' ? runState.verified_at : null,
+    // OXB-124 + lean 1.1: the commit and the tree the phase verify judged. They were written by the verify and dropped
+    // here, so the close never saw them: a code commit made after the verify closed the phase unverified.
+    verification_head: typeof runState.verification_head === 'string' ? runState.verification_head : null,
+    verification_tree: typeof runState.verification_tree === 'string' ? runState.verification_tree : null,
     // 1.19: hash dos testes de aceite do plano congelado no compile; resumo da regressão de fases.
     acceptance_lock: runState.acceptance_lock && typeof runState.acceptance_lock === 'object' ? runState.acceptance_lock : null,
     verification_regression: runState.verification_regression && typeof runState.verification_regression === 'object' ? runState.verification_regression : null,
@@ -15654,6 +15835,7 @@ module.exports = {
   runtimeProgramInit,
   runtimeProgramStart,
   runtimeProgramClose,
+  runtimePhaseClose,
   findUnpromotedDoneTasks,
   phaseChanges,
   phaseGateInputFromRun,

@@ -527,8 +527,15 @@ function buildExecutionRationality(paths = {}) {
   const planTasks = parsePlanTasks(paths.plan || null);
   const externalRefs = readExternalRefs(paths.planAgents || null);
   const implementationPack = summarizeImplementationPack(paths.implementationPackJson || null, planTasks);
-  const referenceAnchors = summarizeReferenceAnchors(paths.referenceAnchors || null, externalRefs);
-  const fixturePack = summarizeFixturePack(paths.fixturePackJson || null, planTasks, implementationPack);
+  let referenceAnchors = summarizeReferenceAnchors(paths.referenceAnchors || null, externalRefs);
+  let fixturePack = summarizeFixturePack(paths.fixturePackJson || null, planTasks, implementationPack);
+  // lean: REFERENCE-ANCHORS and FIXTURE-PACK are optional files. Absent, they are not a gap (unless the plan cites
+  // external references, which only the anchors resolve); present, they are validated as always.
+  if (paths.lean) {
+    const absent = (file) => !file || !fs.existsSync(file);
+    if (absent(paths.referenceAnchors) && externalRefs.length === 0) referenceAnchors = { ...referenceAnchors, ready: true, criticalGaps: [], missingCriticalCount: 0, optional_absent: true };
+    if (absent(paths.fixturePackJson)) fixturePack = { ...fixturePack, ready: true, criticalGaps: [], optional_absent: true };
+  }
   const visualInputs = summarizeVisualInputs({
     spec: paths.spec || null,
     visualInputsJson: paths.visualInputsJson || null,

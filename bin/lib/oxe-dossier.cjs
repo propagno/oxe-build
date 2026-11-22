@@ -187,7 +187,12 @@ function buildDossier(input) {
     const criterionCheck = checkById.get(`check-${c.id.toLowerCase()}`);
     // R36: closed --by-ci (no phase verify), a criterion with no frozen test and no verify result has nothing on CI
     // proving it — it needs a sign-off (or --defer-signoff), like a manual one
+    // lean bench L2: a criterion whose "Como verificar" asks for a human look (manual, UAT, sign-off, in the browser)
+    // needs the sign-off even when a frozen test covers part of it. A19 ("teste manual + checagem de assets") closed
+    // its phase on the asset test alone, with nobody having opened the app.
+    const declaredManual = /(^|[^a-zà-ú])(manual|manualmente|uat|sign-?off|navegador|browser|humano|humana)([^a-zà-ú]|$)/i.test(String(c.how || ''));
     const isManual = (criterionCheck && criterionCheck.status === 'skip' && criterionCheck.skip_reason === 'needs_structured_check')
+      || declaredManual
       || Boolean(input.byCi && !accept && !acceptCheck && !criterionCheck);
     // round 9: a sign-off of this phase (or one with no phase), the criterion in any case
     const signed = signoffs.find((s) => (!phase.id || phase.id === 'run' || !s.phase || s.phase === phase.id) && (s.criteria || []).map((x) => String(x).toUpperCase()).includes(c.id));

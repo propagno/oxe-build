@@ -44,6 +44,45 @@ function headOf(root) {
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
+/**
+ * The tree of the working directory as it is now (tracked + untracked, .gitignore respected), without touching the
+ * real index: a verify judges the files on disk, and a commit made afterwards with exactly those files is the same
+ * code. Returns the tree sha or null (no repository, git failure).
+ *
+ * Only when `root` IS the repository's top level. A project folder that merely sits inside some outer repository (a
+ * home directory under git, a monorepo) gets null: `git add -A` there would crawl — and hash into that repository —
+ * everything around the project. Null means the close falls back to the commit comparison (a second verify).
+ */
+function worktreeTree(root) {
+  const top = git(root, ['rev-parse', '--show-toplevel']);
+  if (top.status !== 0) return null;
+  const real = (p) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
+  const same = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+  if (!same(real(top.stdout.trim()), real(root))) return null;
+  const dir = git(root, ['rev-parse', '--git-dir']);
+  if (dir.status !== 0) return null;
+  const gitDir = path.resolve(root, dir.stdout.trim());
+  const tmp = path.join(gitDir, `oxe-verify-index-${process.pid}-${Date.now()}`);
+  const env = { ...process.env, GIT_INDEX_FILE: tmp };
+  const run = (args) => spawnSync('git', ['-c', 'core.quotepath=false', '-c', 'core.safecrlf=false', ...args], { cwd: root, encoding: 'utf8', windowsHide: true, env, maxBuffer: 32 * 1024 * 1024 });
+  try {
+    try { fs.copyFileSync(path.join(gitDir, 'index'), tmp); } catch { /* a repository with no index yet */ }
+    if (run(['add', '-A']).status !== 0) return null;
+    const r = run(['write-tree']);
+    return r.status === 0 ? r.stdout.trim() : null;
+  } finally {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
+    try { fs.rmSync(`${tmp}.lock`, { force: true }); } catch { /* best effort */ }
+  }
+}
+
+/** Code files that differ between a tree-ish and another (same filter as the close: no .oxe/, docs/ or *.md). */
+function codeDiff(root, from, to) {
+  const r = git(root, ['diff', '--name-only', from, to, '--']);
+  if (r.status !== 0) return null;
+  return r.stdout.split(/\r?\n/).filter(Boolean).filter((f) => !f.startsWith('.oxe/') && !/^docs\//.test(f) && !/\.md$/i.test(f));
+}
+
 function resolveCommit(root, rev) {
   const r = git(root, ['rev-parse', '--verify', `${rev}^{commit}`]);
   return r.status === 0 ? r.stdout.trim() : null;
@@ -89,4 +128,4 @@ function freshness(root, verdict, ctx = {}) {
   return { fresh: true, why: null };
 }
 
-module.exports = { criterionRow, criteriaVersions, headOf, freshness };
+module.exports = { criterionRow, criteriaVersions, headOf, freshness, worktreeTree, codeDiff };

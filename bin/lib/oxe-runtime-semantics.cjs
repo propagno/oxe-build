@@ -260,10 +260,16 @@ function buildContextPackPaths(slug) {
   };
 }
 
+/** lean: the workflows that have a short variant in oxe/workflows/lean/ (read instead of the full one under `profile: "lean"`). */
+function hasLeanVariant(slug) {
+  try { return fs.existsSync(path.join(__dirname, '..', '..', 'oxe', 'workflows', 'lean', `${slug}.md`)); } catch { return false; }
+}
+
 function buildWorkflowResolutionBlock(slug) {
   return [
     '<!-- oxe-workflow-resolution:start -->',
     '',
+    ...(hasLeanVariant(slug) ? [`**Variante enxuta (ler isto antes de abrir qualquer workflow):** se \`.oxe/config.json\` tiver \`"profile": "lean"\` ou \`"plan_ceremony": "lean"\`, o workflow a aplicar é \`lean/${slug}.md\` (na mesma pasta de workflows; \`oxe-cc workflow path ${slug}\` devolve o caminho certo). Leia e aplique só ele, sem abrir o \`${slug}.md\` completo.`, ''] : []),
     `**Resolução do workflow canónico:** a partir do CWD atual, subir diretórios até encontrar .oxe/workflows/${slug}.md ou oxe/workflows/${slug}.md. Ler e aplicar integralmente o primeiro ficheiro encontrado. Não assumir que o CWD já é a raiz do repositório. Se nenhum existir (um worktree sem .oxe/, um repo sem a cópia dos workflows), rodar \`oxe-cc workflow path ${slug}\` (sem \`oxe-cc\` no PATH: \`npx oxe-cc@<oxe_version de .oxe/oxe-version.json> workflow path ${slug}\` — nunca o \`npx oxe-cc\` sem versão, que pega outra release): ele devolve o workflow do pacote oxe-cc instalado. Aplicar esse ficheiro e avisar uma vez: "este repositório não tem .oxe/workflows; para fixar a versão, rode oxe-cc install --oxe-only .". Só se o comando também falhar, reportar os paths tentados e parar.`,
     '',
     '<!-- oxe-workflow-resolution:end -->',
@@ -486,6 +492,7 @@ function auditRuntimeTargets(projectRoot) {
 }
 
 module.exports = {
+  hasLeanVariant,
   CONTRACT_VERSION,
   CONTRACTS_PATH,
   CONTRACTS_REGISTRY,

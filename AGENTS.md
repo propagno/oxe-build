@@ -71,8 +71,9 @@ oxe-cc azure      → provider Azure local-first
 | `strict` | true | thorough | true | 14 |
 | `fast` | false | quick | false | 0 |
 | `legacy` | true | thorough | true | 0 |
+| `lean` | false | standard | false | 0 |
 
-Keys explícitas no `config.json` **prevalecem** sobre os valores do profile.
+Keys explícitas no `config.json` **prevalecem** sobre os valores do profile. O profile `lean` define também `plan_ceremony: "lean"` (plano = testes congelados + arquivo de papel, gerado por `oxe-cc plan build`; workflows de `oxe/workflows/lean/`) — ver `oxe/templates/CONFIG.md`.
 
 ## Plan-Driven Dynamic Agents (PDDA)
 

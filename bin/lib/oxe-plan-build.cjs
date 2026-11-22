@@ -28,6 +28,12 @@ const KINDS = new Set(['add', 'remove', 'move', 'test-only', 'config-only']);
 const norm = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '');
 const uniq = (xs) => [...new Set(xs.filter(Boolean))];
 
+/** Product code: a code file that is not a test, a script, a doc or a generated folder. */
+function isProductCode(file) {
+  const f = norm(file);
+  return CODE_RE.test(f) && !TEST_FILE_RE.test(f) && !NON_PROD_DIR_RE.test(f);
+}
+
 function inScope(file, scope) {
   const f = norm(file);
   for (const raw of scope || []) {
@@ -1481,6 +1487,7 @@ function checkRole(root, doc, options = {}) {
 }
 
 module.exports = {
+  isProductCode,
   build,
   checkRole,
   importedSymbols,

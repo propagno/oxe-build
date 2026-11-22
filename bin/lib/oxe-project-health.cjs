@@ -27,6 +27,7 @@ const ALLOWED_CONFIG_KEYS = [
   'profile',
   'verification_depth',
   'plan_confidence_threshold',
+  'plan_ceremony',
   'security_in_verify',
   'adversarial_verify',
   'install',
@@ -125,7 +126,9 @@ const ALLOWED_CONFIG_KEYS = [
  * Profiles de execução OXE que controlam rigor do workflow.
  * Expansão de keys: profile 'strict' liga discuss_before_plan, verification_depth thorough, etc.
  */
-const EXECUTION_PROFILES = ['strict', 'balanced', 'fast', 'legacy'];
+const EXECUTION_PROFILES = ['strict', 'balanced', 'fast', 'legacy', 'lean'];
+/** lean: how much the plan must carry by hand. `full` (default) or `lean` (PLAN.json + frozen tests; the rest is generated). */
+const PLAN_CEREMONIES = ['full', 'lean'];
 
 /**
  * Profundidade de verificação.
@@ -201,7 +204,9 @@ function shouldEnforceExecutionRationalityGate(phase) {
  * @param {number} threshold
  * @returns {boolean}
  */
-function hasExecutablePlanSelfEvaluation(info, threshold) {
+function hasExecutablePlanSelfEvaluation(info, threshold, lean = false) {
+  // lean: the self-evaluation is optional. Absent, the plan is executable (plan lint is the gate); present, it counts.
+  if (lean && info && !info.hasSection) return true;
   return Boolean(
     info
     && info.hasSection
@@ -220,6 +225,21 @@ function hasExecutablePlanSelfEvaluation(info, threshold) {
  * @param {string} profile
  * @returns {Record<string, unknown>}
  */
+/**
+ * lean: `plan_ceremony: "lean"` (or `profile: "lean"` without the explicit key). Given a config that does not carry
+ * the keys (callers pass subsets), the project's merged config answers.
+ * @param {string|null} target
+ * @param {Record<string, unknown>|null|undefined} cfg
+ * @returns {boolean}
+ */
+function isLeanCeremony(target, cfg) {
+  const read = (c) => (c && typeof c === 'object' ? (c.plan_ceremony != null ? c.plan_ceremony === 'lean' : c.profile === 'lean' ? true : null) : null);
+  const direct = read(cfg);
+  if (direct != null) return direct;
+  if (!target) return false;
+  try { return read(loadOxeConfigMerged(target).config) === true; } catch { return false; }
+}
+
 function expandExecutionProfile(profile) {
   const profiles = {
     strict: {
@@ -257,6 +277,18 @@ function expandExecutionProfile(profile) {
       after_verify_draft_commit: false,
       scan_max_age_days: 0,
       compact_max_age_days: 0,
+    },
+    // lean (bench Restitui): the gates that gave the quality stay — frozen acceptance tests, tamper check, phase
+    // gates, sign-off — and what the CLI can generate or check is no longer written or walked by hand.
+    lean: {
+      discuss_before_plan: false,
+      verification_depth: 'standard',
+      after_verify_suggest_uat: false,
+      after_verify_suggest_pr: false,
+      after_verify_draft_commit: false,
+      scan_max_age_days: 0,
+      compact_max_age_days: 0,
+      plan_ceremony: 'lean',
     },
   };
   return profiles[profile] || {};
@@ -494,6 +526,9 @@ function validateConfigShape(cfg) {
     } else if (!EXECUTION_PROFILES.includes(cfg.profile)) {
       typeErrors.push(`profile deve ser um de: ${EXECUTION_PROFILES.join(', ')}`);
     }
+  }
+  if (cfg.plan_ceremony != null && !PLAN_CEREMONIES.includes(cfg.plan_ceremony)) {
+    typeErrors.push(`plan_ceremony deve ser um de: ${PLAN_CEREMONIES.join(', ')}`);
   }
   if (cfg.verification_depth != null) {
     if (typeof cfg.verification_depth !== 'string') {
@@ -1984,7 +2019,8 @@ function parsePlanSelfEvaluation(planPath) {
  * @param {number} threshold
  * @returns {string[]}
  */
-function planSelfEvaluationWarningsFromInfo(info, threshold) {
+function planSelfEvaluationWarningsFromInfo(info, threshold, lean = false) {
+  if (lean && info && !info.hasSection) return [];
   const warns = [...info.warnings];
   if (info.bestPlan === 'não') warns.push('PLAN.md: autoavaliação declara que este não é o melhor plano atual');
   if (info.confidence != null && !isExecutablePlanConfidence(info.confidence, threshold)) {
@@ -2317,8 +2353,9 @@ function suggestProgramStepInner(target, activeSession, activeRun) {
       if (pending.length) {
         return {
           step: 'commit-task',
-          cursorCmd: `oxe-cc runtime commit-task ${pending[0]}`,
-          reason: `${label}: verify verde, mas ${pending.join(', ')} sem commit OXE-Task no PLAN.json — rode oxe-cc runtime commit-task <Tn> em cada uma (ou plan done <Tn> --commit <sha>) e depois program close.`,
+          // lean 1.1: one command does the rest (commit of each task with OXE-Task, done, handoff draft, close)
+          cursorCmd: 'oxe-cc phase close',
+          reason: `${label}: verify verde, mas ${pending.join(', ')} sem commit OXE-Task no PLAN.json — rode oxe-cc phase close (commita as tarefas pendentes, marca done e fecha a fase; sem agente).`,
           artifacts: ['.oxe/PLAN.json', ...programArtifacts],
           program,
         };
@@ -2577,8 +2614,9 @@ function suggestNextStep(target, cfg = {}) {
   }
 
   const selfEval = parsePlanSelfEvaluation(p.plan);
-  const selfEvalWarnings = planSelfEvaluationWarningsFromInfo(selfEval, threshold);
-  if (!hasExecutablePlanSelfEvaluation(selfEval, threshold)) {
+  const lean = isLeanCeremony(target, cfg);
+  const selfEvalWarnings = planSelfEvaluationWarningsFromInfo(selfEval, threshold, lean);
+  if (!hasExecutablePlanSelfEvaluation(selfEval, threshold, lean)) {
     return {
       step: 'plan',
       cursorCmd: '/oxe-plan --replan',
@@ -2590,6 +2628,7 @@ function suggestNextStep(target, cfg = {}) {
   }
 
   const executionRationality = rationality.buildExecutionRationality({
+    lean: isLeanCeremony(target, cfg),
     plan: p.plan,
     planAgents: p.planAgents,
     implementationPackJson: p.implementationPackJson,
@@ -2896,8 +2935,10 @@ function buildHealthReport(target) {
   const capabilityWarn = capabilityWarnings(p);
   const investigationWarn = investigationWarnings(p);
   const parsedPlanSelfEvaluation = parsePlanSelfEvaluation(p.plan);
+  const leanCeremony = isLeanCeremony(target, config);
   const activeRun = operational.readRunState(target, activeSession);
   const executionRationality = rationality.buildExecutionRationality({
+    lean: leanCeremony,
     plan: p.plan,
     planAgents: p.planAgents,
     implementationPackJson: p.implementationPackJson,
@@ -2925,7 +2966,7 @@ function buildHealthReport(target) {
   const executionPlanWarn = [
     ...planWaveWarningsFixed(p.plan, Number(config.plan_max_tasks_per_wave) || 0),
     ...planTaskAceiteWarnings(p.plan),
-    ...planSelfEvaluationWarningsFromInfo(parsedPlanSelfEvaluation, threshold),
+    ...planSelfEvaluationWarningsFromInfo(parsedPlanSelfEvaluation, threshold, leanCeremony),
     ...executionRationalityWarningsFromSummary(executionRationality),
     ...planAgentsWarnings(target),
     ...unrunCiWarn,
@@ -2946,7 +2987,7 @@ function buildHealthReport(target) {
         ? false
         : null,
     threshold,
-    executable: hasExecutablePlanSelfEvaluation(parsedPlanSelfEvaluation, threshold),
+    executable: hasExecutablePlanSelfEvaluation(parsedPlanSelfEvaluation, threshold, leanCeremony),
   };
   const releaseReadiness = workspaceInfo.workspaceMode === 'product_package'
     ? require('./oxe-release.cjs').inspectReleaseReadiness(target, { packageRoot: target })
@@ -3346,6 +3387,8 @@ module.exports = {
   normalizePlanConfidenceThreshold,
   isExecutablePlanConfidence,
   hasExecutablePlanSelfEvaluation,
+  isLeanCeremony,
+  PLAN_CEREMONIES,
   planAgentsWarnings,
   installationCompletenessWarnings,
   parsePlanSelfEvaluation,

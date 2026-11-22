@@ -59,9 +59,19 @@ Levar o trabalho verificado até produção, um passo verde por vez: **PR → CI
 1. Pergunte a reprodução, o impacto e o critério ou a história de origem (uma pergunta por vez, com a recomendada).
 1a. **Rode a suíte antes de afirmar qualquer cobertura** (`npm test` ou o Verificar das tarefas de origem) e cite o resultado. No bench (B58), o agente disse "os testes não cobrem" com 3 testes vermelhos na suíte. Use `oxe-cc`, nunca o `npx oxe-cc` sem versão.
 2. `oxe-cc alm defect --title "…" --origin <US-n|Fn-Tn> --apply` (com ALM) e `oxe-cc runtime feedback --class defect --summary "…" --criteria A<n> --tasks T<n> --reopen` (sem `--reopen`, apenas vincula a tarefa sem reabri-la para o próximo `/oxe-execute`).
-3. O próximo passo é `/oxe-plan --replan`, para cobrir o CR com teste de aceite na fase atual ou numa fase nova (ver `references/change-management.md`). Para um defeito pequeno dentro de um critério que já existe, o replan cobre só o delta: um teste que **reproduz** o defeito (vermelho primeiro, com `"resolves": ["CR-…"]`), a tarefa de correção, depois execute e verify. Nunca deixe o defeito sem CR e sem teste.
+3. **Defeito pequeno → corrija aqui, nesta conversa (via rápida).** Vale quando as três condições valem: o critério afetado já existe na SPEC e o texto dele não muda; a correção cabe em poucos arquivos de uma única fase; nenhum contrato público muda. Nesse caso use `oxe-cc runtime feedback --class defect …` **sem** `--reopen` no passo 2 e siga, sem `/oxe-plan`:
+   1. Escreva o teste que **reproduz** o defeito junto dos testes do critério e rode-o: ele tem de ficar **vermelho** agora. Mostre a saída. Se ficar verde, o defeito não foi reproduzido: pare e pergunte.
+   2. `oxe-cc quick <CR-n> "<correção em uma linha>"` (abre o registro; os commits levam `OXE-Quick`).
+   3. Corrija o código. Não toque em teste de aceite congelado; se a correção exigir mudar um, não é defeito pequeno (vá ao passo 4).
+   4. `oxe-cc quick commit -m "fix: <resumo> (<CR-n>)" --all` e `oxe-cc quick done --verify "<comando da suíte>"` — o CLI roda a suíte inteira e só fecha com ela verde.
+   5. `oxe-cc runtime feedback resolve <CR-n> --by <quem relatou o defeito> --reason "corrigido em <sha>; teste <arquivo>"`.
+   6. Se o CR reabriu uma fase já fechada (`oxe-cc status --json` mostra a fase ativa de novo): `oxe-cc phase close`, que reverifica e fecha num comando. Não mande o usuário rodar `/oxe-verify`.
+   Termine com o defeito, o teste (vermelho antes, verde depois), o commit e o CR resolvido.
+4. **Defeito que muda critério, contrato ou mais de uma fase:** o próximo passo é `/oxe-plan --replan`, para cobrir o CR com teste de aceite na fase atual ou numa fase nova (ver `references/change-management.md`): um teste que **reproduz** o defeito (vermelho primeiro, com `"resolves": ["CR-…"]`), a tarefa de correção, depois execute e verify.
+5. Nunca deixe o defeito sem CR e sem teste.
 
 ### Passo L — Commit local (`--local`)
+0. **Com programa e `PLAN.json` (o caso comum): rode só `oxe-cc phase close` e relate a saída.** Ele roda o verify, commita cada tarefa pendente com `OXE-Task`, marca done, gera o rascunho do handoff e fecha a fase, sem você fazer nada à mão. Saída 0: fase fechada, siga para o próximo passo que ele indica. Saída 2: só faltam sign-offs humanos — mostre a lista ao usuário e pare (o sign-off é dele; nunca registre em nome dele). Saída 1: mostre os motivos e o "O que fazer" que ele imprime. Não rode os passos 1 a 6 abaixo nesse caso.
 1. Verify aprovado, ou `--no-checks` com aviso explícito.
 1a. **Com plano (`PLAN.json`):** o código entra por tarefa, nunca num commit único sem trailer. Para cada tarefa ainda sem `done` no `PLAN.json`, rode `oxe-cc runtime commit-task T<n>` (verifica, commita com `OXE-Task` e marca done). Só o que sobrar fora das tarefas (docs, CHANGELOG) segue para o passo 2. Com tudo já commitado por tarefa, pule para o passo 4.
 2. Gerar a mensagem de commit a partir de SPEC ou QUICK (objetivo), PLAN (tarefas) e VERIFY (validação): `feat|fix|refactor: <≤ 72 chars>`, com a chave do ALM quando houver (`feat: … (OXE-12)`). Salvar em `.oxe/commit-draft.md`.

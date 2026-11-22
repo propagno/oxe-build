@@ -205,8 +205,11 @@ Conferência: `oxe-cc ship check-origin [<#PR>|<a..b>] [--json]` sai com 1 e lis
 | `strict` | true | thorough | true | 14 |
 | `fast` | false | quick | false | 0 |
 | `legacy` | true | thorough | true | 0 |
+| `lean` | false | standard | false | 0 |
 
 Keys explícitas no `config.json` **prevalecem** sobre os valores do profile.
+
+**`lean`** também define `plan_ceremony: "lean"`: o plano são os testes de aceite congelados mais um arquivo de papel (`.oxe/plan/<Fn>.role.json`); o `oxe-cc plan build` gera `PLAN.json`, `PLAN.md` e o pack, o `oxe-cc plan lint` é o gate, e `REFERENCE-ANCHORS`, `FIXTURE-PACK` e a autoavaliação do plano ficam opcionais. `/oxe-plan` e `/oxe-execute` leem as variantes de `oxe/workflows/lean/`. Os testes congelados, a detecção de adulteração, os gates de fase e o sign-off humano valem igual. `plan_ceremony` (`"full"` | `"lean"`) pode ser definido sozinho, com qualquer profile.
 
 ## Objeto `install`
 

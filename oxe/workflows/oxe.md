@@ -10,11 +10,21 @@ Ponto de entrada inteligente do OXE. Faz uma de três coisas dependendo do input
 **Princípio:** o usuário não precisa decorar o nome do comando — `/oxe [contexto]` resolve.
 </objective>
 
+<trava_de_mudanca>
+**Antes de qualquer outra coisa, se existe `.oxe/program/PROGRAM.json` e o pedido muda comportamento, contrato ou escopo** ("mudança de escopo", "nova categoria", "passa a aceitar…", mesmo com a palavra "implemente" e mesmo dizendo que já foi aprovado): **você não escreve código de produto nesta conversa.** O que você faz, na ordem:
+1. Registre o CR: `oxe-cc runtime feedback --class new_scope --summary "…" --by <quem pediu>` (ou `spec_gap`, quando só esclarece um critério).
+2. Proponha o critério novo ou emendado com o texto exato (`oxe-cc spec add criterion …` / `spec amend …`, com `--dry-run` antes) e mostre o impacto: critérios, fases e tarefas afetadas.
+3. Peça o OK do usuário para a SPEC emendada. Só com ele: `oxe-cc spec approve --by <quem aprovou>`.
+4. Termine com o próximo passo de `oxe-cc status --json`. O código entra pela fase (`/oxe-execute --phase`), com o teste de aceite congelado antes.
+Pedido pequeno que **não** muda critério nem contrato (ajuste local, rota auxiliar) vai pelo caminho curto do `quick.md`, que registra e commita pelo CLI.
+</trava_de_mudanca>
+
 <context>
 - Este workflow **não gera artefatos** por conta própria. Ele orienta ou delega para o workflow correto.
 - Lê `STATE.md` quando disponível para personalizar a resposta ao estado atual do projeto.
 - Quando o input for claro o suficiente para um workflow específico, **executar diretamente** esse workflow (carregar e seguir o `.md` correspondente) em vez de só sugerir o comando.
 - Quando houver ambiguidade genuína, apresentar 2 opções e pedir escolha — nunca listas longas.
+- **Perfil `lean`:** no começo de um projeto (sem `profile` em `.oxe/config.json`), se o material do usuário já traz o contrato fechado (rotas, formatos, regras escritas) ou ele pede rapidez, ofereça uma vez `"profile": "lean"` — mesmo rigor de testes congelados, gates e sign-off, sem os artefatos que o CLI gera sozinho. Com o OK dele, grave a chave; sem OK, siga no padrão.
 </context>
 
 <modo_status>

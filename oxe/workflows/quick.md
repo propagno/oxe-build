@@ -8,6 +8,18 @@ Quando o trabalho envolve **2 ou mais domínios distintos** (ex.: backend + fron
 Usar quando: correção pontual, refactor local, feature pequena ou protótipo que **não** justifica critérios de aceite completos.
 </objective>
 
+<caminho_curto>
+## Caminho curto (padrão) — nenhum passo é opcional
+Use este caminho quando o pedido cabe em um domínio e em poucos arquivos (correção pontual, ajuste local). Não leia o resto deste arquivo nesse caso. O quick sem estes comandos não deixa registro nem trailer: implementar e commitar à mão **não** é um quick.
+
+1. `oxe-cc quick <KEY> "<objetivo em uma frase>"` — `<KEY>` é a chave do card, do CR ou um rótulo curto (`QK-01`). Abre o registro e diz os trailers.
+2. Implemente. Mudou comportamento: inclua ou ajuste um teste. Não toque em teste de aceite congelado.
+3. `oxe-cc quick commit -m "<tipo>: <resumo>" --all` — o CLI commita com `OXE-Quick`. (Commit é local; não precisa de outro OK além do pedido do quick.)
+4. `oxe-cc quick done --verify "<comando da suíte>"` — o CLI roda a verificação e só fecha com ela verde. Vermelha: corrija e repita o passo 3 e este.
+5. Responda em até 6 linhas: objetivo, o que mudou, a verificação (comando e resultado) e o próximo passo de `oxe-cc status --json`.
+Passe ao fluxo completo abaixo (QUICK.md com passos, agentes PDDA) só quando houver 2 ou mais domínios, 5 ou mais passos ou a flag `--agents`. Mais de 8 arquivos, contrato público ou segurança: pare e recomende `/oxe-spec`.
+</caminho_curto>
+
 <context>
 - Aplicar `oxe/workflows/references/reasoning-planning.md` em modo lean. Mesmo sem plano formal completo, o quick deve explicitar objetivo, validação, riscos e condição de promoção.
 - Seguir `oxe/workflows/references/flow-robustness-contract.md`. Quick continua leve, mas não pode fingir que existe plano formal quando ele não existe.

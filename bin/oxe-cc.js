@@ -1951,7 +1951,7 @@ function runStatus(target, opts = {}) {
       planReviewStatus: report.planReviewStatus,
       // Bench B17: the whole run (each check's stdout, twice) made `status --json` 627 KB — 575 KB of activeRun — and
       // every agent that runs it pays for it. The check rows keep id/status/criterion; `--full` keeps everything.
-      activeRun: opts.statusFull ? report.activeRun : slimActiveRun(report.activeRun),
+      activeRun: (opts.full || opts.statusFull) ? report.activeRun : slimActiveRun(report.activeRun),
       eventsSummary: report.eventsSummary,
       runtimeMode: report.runtimeMode,
       fallbackMode: report.fallbackMode,
@@ -4432,6 +4432,7 @@ function parseRuntimeArgs(argv) {
     else if (a === '--note' && argv[i + 1]) out.note = String(argv[++i]);
     else if (a === '--no-defects') out.noDefects = true;
     else if (a === '--no-rollback-check') out.noRollbackCheck = true;
+    else if (a === '--auto') out.auto = true;
     else if (a === '--by-ci') {
       out.byCi = true;
       if (argv[i + 1] && !String(argv[i + 1]).startsWith('-') && (/^\d{5,}$/.test(argv[i + 1]) || /^https?:\/\//i.test(argv[i + 1]))) {
@@ -5634,7 +5635,7 @@ async function runRuntime(opts) {
           console.error(`${red}--no-rollback-check exige --by <papel> e --reason "…"${reset} (o risco fica registrado em changes.ndjson e no evento RollbackRiskAccepted)`);
           process.exit(1);
         }
-        const result = oxeOperational.runtimeProgramClose(opts.dir, activeSession, {
+        const closeOptions = {
           phase: opts.phase || null,
           commit: !opts.noCommit,
           forceBranch: Boolean(opts.forceBranch),
@@ -5652,7 +5653,37 @@ async function runRuntime(opts) {
           base: opts.baseBranch || undefined,
           reason: opts.reason || undefined,
           risk: opts.risk || undefined,
-        });
+        };
+        // lean 1.1 — `oxe-cc phase close` (= program close --auto): verify → commit das tarefas → handoff → close, sem LLM
+        if (opts.auto) {
+          let out;
+          try {
+            out = await oxeOperational.runtimePhaseClose(opts.dir, activeSession, {
+              phase: opts.phase || null,
+              by: opts.by || undefined,
+              verify: { gates: !opts.noGates, remote: opts.noRemote ? false : undefined, timeoutMs: opts.timeoutMs || undefined },
+              close: closeOptions,
+            });
+          } catch (err) {
+            console.error(`${red}${err && err.message ? err.message : 'Falha no phase close.'}${reset}`);
+            process.exit(1);
+          }
+          if (opts.jsonOutput) {
+            console.log(JSON.stringify({ oxePhaseCloseSchema: 1, ...out, close: out.close ? { closed: out.close.closed, phase: out.close.phase, commit: out.close.commit, next: out.close.next || null, gate: out.close.gate ? { ok: out.close.gate.ok, reasons: out.close.gate.reasons } : null } : null }, null, 2));
+          } else {
+            for (const s of out.steps) console.log(`  ${c ? (s.ok ? green : red) : ''}${s.ok ? '✓' : '✗'}${c ? reset : ''} ${s.step}: ${s.detail}`);
+            if (out.closed) {
+              console.log(`  ${c ? green : ''}✓${c ? reset : ''} Fase ${out.phase} fechada.${out.next ? ` Próximo: ${out.next}` : ' Programa concluído.'}`);
+            } else {
+              console.log(`  ${c ? red : ''}Parou em:${c ? reset : ''} ${out.stopped_at}`);
+              for (const reason of out.reasons) console.log(`    - ${reason}`);
+              if (out.next) console.log(`  ${c ? yellow : ''}O que fazer:${c ? reset : ''} ${out.next}`);
+            }
+          }
+          if (!out.closed) process.exitCode = out.stopped_at === 'program close' && out.signoffs_pending && out.signoffs_pending.length === out.reasons.length ? 2 : 1;
+          return;
+        }
+        const result = oxeOperational.runtimeProgramClose(opts.dir, activeSession, closeOptions);
         if (opts.jsonOutput) {
           console.log(JSON.stringify({ oxeRuntimeProgramSchema: 1, ...result }, null, 2));
         } else if (!result.closed) {
@@ -5848,7 +5879,7 @@ async function runRuntime(opts) {
         let work = null;
         try { work = oxeOperational.runtimePhaseWork(opts.dir, activeSession); } catch { work = null; }
         if (work && work.pending && work.pending.length) {
-          console.log(`  ${yellow}AVISO${reset} run continua "running": ${work.pending.join(', ')} sem commit OXE-Task no PLAN.json — rode oxe-cc runtime commit-task <Tn> em cada uma (verifica e commita) antes do program close.`);
+          console.log(`  ${yellow}AVISO${reset} run continua "running": ${work.pending.join(', ')} sem commit OXE-Task no PLAN.json — rode oxe-cc phase close (commita as tarefas, marca done e fecha a fase).`);
         }
       }
       if (verified.report.manifest && verified.report.manifest.summary) {
@@ -7517,6 +7548,7 @@ async function main() {
     argv[0] === 'plan' ||
     argv[0] === 'spec' ||
     argv[0] === 'program' ||
+    argv[0] === 'phase' ||
     argv[0] === 'policy' ||
     argv[0] === 'decision' ||
     argv[0] === 'prd' ||
@@ -7548,7 +7580,7 @@ async function main() {
   } else if (argv[0] && /^[a-z][a-z-]*$/.test(argv[0]) && !fs.existsSync(argv[0])) {
     // 1.21.2 (OXB-G10): a word that is no command used to fall into the install with exit 0 — "oxe-cc quick --help"
     // printed the install help. It is an error now, with the closest command or the workflow it names.
-    const KNOWN = ['doctor', 'status', 'init-oxe', 'context', 'dashboard', 'events', 'map', 'runtime', 'azure', 'uninstall', 'update', 'capabilities', 'plugins', 'plan', 'spec', 'program', 'policy', 'decision', 'prd', 'grill', 'ship', 'trace', 'rfc', 'alm', 'review', 'docs', 'eval', 'design', 'release', 'customize', 'state', 'guards', 'verify', 'install', 'member', 'queue', 'quick', 'workflow', 'report', 'change', 'session'];
+    const KNOWN = ['doctor', 'status', 'init-oxe', 'context', 'dashboard', 'events', 'map', 'runtime', 'azure', 'uninstall', 'update', 'capabilities', 'plugins', 'plan', 'spec', 'program', 'phase', 'policy', 'decision', 'prd', 'grill', 'ship', 'trace', 'rfc', 'alm', 'review', 'docs', 'eval', 'design', 'release', 'customize', 'state', 'guards', 'verify', 'install', 'member', 'queue', 'quick', 'workflow', 'report', 'change', 'session'];
     const WORKFLOWS = { execute: '/oxe-execute (ou oxe-cc runtime execute)', discuss: '/oxe-discuss', scan: '/oxe-scan', debug: '/oxe-execute --debug', retro: '/oxe-retro', next: '/oxe-next (ou oxe-cc status)', oxe: '/oxe' };
     const word = argv[0];
     const dist = (a, b) => { const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]); for (let j = 1; j <= b.length; j += 1) d[0][j] = j; for (let i = 1; i <= a.length; i += 1) for (let j = 1; j <= b.length; j += 1) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); return d[a.length][b.length]; };
@@ -7659,6 +7691,27 @@ async function main() {
       if (!out.ok) process.exitCode = 1;
     } catch (err) { console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`); process.exitCode = 1; }
     return;
+  }
+
+  // lean 1.1: `oxe-cc phase close [Fn] …` = `oxe-cc program close --auto …` (o fim da fase num comando, sem LLM)
+  if (command === 'phase') {
+    if (argv[0] !== 'close' || argv.includes('--help') || argv.includes('-h')) {
+      console.log(`
+  oxe-cc phase close [Fn] [--json] [--by <quem>] [opções do program close]
+
+  Fecha a fase ativa num comando só, sem agente:
+    1. roda o runtime verify (testes de aceite congelados, checks das tarefas, regressão, gates do projeto);
+    2. verde: commita as tarefas pendentes do PLAN.json com o trailer OXE-Task e marca done;
+    3. gera o rascunho do handoff do dossiê, se estiver vazio;
+    4. roda o program close e lista de uma vez tudo o que ainda falta (sign-offs humanos, por exemplo).
+  Sai com 0 (fechada), 1 (algo falhou) ou 2 (só faltam sign-offs humanos). Aceita as opções do program close
+  (--defer-signoff --by <dono> --risk "…", --accept-drift <glob> --by <papel> --reason "…", --no-commit …).
+`);
+      if (argv[0] !== 'close' && !(argv.includes('--help') || argv.includes('-h'))) process.exitCode = 1;
+      return;
+    }
+    command = 'program';
+    argv.push('--auto');
   }
 
   if (command === 'program' && (argv.includes('--help') || argv.includes('-h'))) {
@@ -8056,7 +8109,18 @@ async function main() {
     const wantGit = sub === 'install' && !argv.includes('--no-git-hooks');
     if (wantClaude) {
       const rest = pre.filter((h) => !ours(h));
-      settings.hooks = { ...(settings.hooks || {}), PreToolUse: sub === 'install' ? [...rest, { matcher: 'Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob|Bash|PowerShell', hooks: [{ type: 'command', command: command0 }] }] : rest };
+      // lean bench v2: the origin guard is a Stop hook — product code changed with no task, quick or CR keeps the session going once
+      const originScript = path.join(__dirname, 'lib', 'oxe-origin-guard.cjs').replace(/\\/g, '/');
+      const originCmd = `node "${originScript}" --project "${dir.replace(/\\/g, '/')}"`;
+      const stopHooks = (settings.hooks && Array.isArray(settings.hooks.Stop)) ? settings.hooks.Stop : [];
+      const oursStop = (h) => h && Array.isArray(h.hooks) && h.hooks.some((x) => String(x.command || '').includes('oxe-origin-guard.cjs'));
+      const restStop = stopHooks.filter((h) => !oursStop(h));
+      settings.hooks = {
+        ...(settings.hooks || {}),
+        PreToolUse: sub === 'install' ? [...rest, { matcher: 'Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob|Bash|PowerShell', hooks: [{ type: 'command', command: command0 }] }] : rest,
+        Stop: sub === 'install' && !argv.includes('--no-origin-guard') ? [...restStop, { hooks: [{ type: 'command', command: originCmd }] }] : restStop,
+      };
+      if (!settings.hooks.Stop.length) delete settings.hooks.Stop;
       fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
       fs.writeFileSync(settingsFile, `${JSON.stringify(settings, null, 2)}\n`);
     }
@@ -8831,6 +8895,17 @@ async function main() {
     if (!/^[a-z][a-z0-9-]*$/.test(slug)) { console.error(`${red}✗${reset} slug inválido: ${argv[1]}`); process.exitCode = 1; return; }
     const file = path.join(wfDir, `${slug}.md`);
     if (!fs.existsSync(file)) { console.error(`${red}✗${reset} o pacote não tem o workflow "${slug}" (oxe-cc workflow list)`); process.exitCode = 1; return; }
+    // lean: with `profile: "lean"` (or plan_ceremony lean) in the project of the current directory, the short variant
+    // is the workflow — the project's own copy first, then the package's. `--full` asks for the complete one.
+    if (!argv.includes('--full')) {
+      let lean = false;
+      try { lean = oxeHealth.isLeanCeremony(process.cwd(), null); } catch { lean = false; }
+      if (lean) {
+        const candidates = [path.join(process.cwd(), '.oxe', 'workflows', 'lean', `${slug}.md`), path.join(wfDir, 'lean', `${slug}.md`)];
+        const leanFile = candidates.find((f) => fs.existsSync(f));
+        if (leanFile) { console.log(leanFile); return; }
+      }
+    }
     console.log(file);
     return;
   }
@@ -9616,6 +9691,7 @@ async function main() {
       else if (a === '--auto-close-imports') o.autoCloseImports = true;
       else if (a === '--fix-stale-paths') o.fixStalePaths = true;
       else if (a === '--pair-as-deps') o.pairAsDeps = true;
+      else if (a === '--allow-dirty') o.allowDirty = true;
       else if (a === '--from') { while (argv[i + 1] && !argv[i + 1].startsWith('-')) o.files.push(path.resolve(argv[++i])); }
       else if (['--phase', '--ref', '--key'].includes(a) && argv[i + 1]) o[a.slice(2)] = String(argv[++i]);
       else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
@@ -9625,7 +9701,7 @@ async function main() {
     try {
       const out = argv[0] === 'check-role'
         ? oxeOperational.runtimePlanBuild(o.dir, null, { action: 'check-role', file: o.files[0], ref: o.ref, autoCloseImports: o.autoCloseImports, fixStalePaths: o.fixStalePaths })
-        : oxeOperational.runtimePlanBuild(o.dir, null, { files: o.files, phase: o.phase, ref: o.ref, force: o.force, dryRun: o.dryRun, key: o.key, autoCloseImports: o.autoCloseImports, fixStalePaths: o.fixStalePaths, pairAsDeps: o.pairAsDeps });
+        : oxeOperational.runtimePlanBuild(o.dir, null, { files: o.files, phase: o.phase, ref: o.ref, force: o.force, dryRun: o.dryRun, key: o.key, autoCloseImports: o.autoCloseImports, fixStalePaths: o.fixStalePaths, pairAsDeps: o.pairAsDeps, allowDirty: o.allowDirty });
       if (o.json) { console.log(JSON.stringify({ oxePlanBuildSchema: 1, ...out }, null, 2)); if (out.errors.length) process.exitCode = 1; return; }
       for (const w of out.warnings) console.log(`  ${yellow}!${reset} ${w}`);
       for (const e of out.errors) console.log(`  ${red}✗${reset} ${e}`);
