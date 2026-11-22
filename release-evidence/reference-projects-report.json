@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-11-04T01:25:28.847Z",
+  "generated_at": "2026-11-22T19:55:38.796Z",
   "model": "sonnet",
   "results": [
     {
@@ -25,50 +25,51 @@
               "blocked": [],
               "reason": null,
               "budget": {
-                "run_id": "oxe-run-mw1faokj-zkcdsc",
+                "run_id": "oxe-run-mws8whim-jvpmp4",
                 "limit_turns": 80,
                 "limit_usd": null,
-                "used_turns": 17,
-                "used_usd": 0.735899,
+                "policy": "cap",
+                "used_turns": 18,
+                "used_usd": 0.9209,
                 "attempts": [
                   {
                     "task": "T1",
                     "attempt": 1,
                     "turns": 3,
-                    "cost_usd": 0.124069,
-                    "at": "2026-11-04T01:13:46.044Z"
+                    "cost_usd": 0.1580487,
+                    "at": "2026-11-22T19:44:39.116Z"
                   },
                   {
                     "task": "T2",
                     "attempt": 1,
-                    "turns": 3,
-                    "cost_usd": 0.134555,
-                    "at": "2026-11-04T01:14:12.151Z"
+                    "turns": 4,
+                    "cost_usd": 0.2122996,
+                    "at": "2026-11-22T19:45:07.397Z"
                   },
                   {
                     "task": "T3",
                     "attempt": 1,
-                    "turns": 3,
-                    "cost_usd": 0.125169,
-                    "at": "2026-11-04T01:14:45.171Z"
+                    "turns": 4,
+                    "cost_usd": 0.20062960000000002,
+                    "at": "2026-11-22T19:45:36.242Z"
                   },
                   {
                     "task": "T4",
                     "attempt": 1,
-                    "turns": 5,
-                    "cost_usd": 0.22834500000000002,
-                    "at": "2026-11-04T01:15:29.134Z"
+                    "turns": 4,
+                    "cost_usd": 0.2090856,
+                    "at": "2026-11-22T19:46:04.986Z"
                   },
                   {
                     "task": "T5",
                     "attempt": 1,
                     "turns": 3,
-                    "cost_usd": 0.12376099999999998,
-                    "at": "2026-11-04T01:15:53.242Z"
+                    "cost_usd": 0.1408347,
+                    "at": "2026-11-22T19:46:23.755Z"
                   }
                 ],
-                "started_at": "2026-11-04T01:13:23.700Z",
-                "updated_at": "2026-11-04T01:15:53.242Z"
+                "started_at": "2026-11-22T19:44:10.617Z",
+                "updated_at": "2026-11-22T19:46:23.755Z"
               },
               "preflight": {
                 "ok": true,
@@ -78,10 +79,11 @@
           ],
           "verify_status": "passed",
           "gates": {
-            "total": 2,
+            "total": 3,
             "passed": [
               "test",
-              "lint"
+              "lint",
+              "stub-check"
             ],
             "failed": [],
             "changes": []
@@ -114,50 +116,51 @@
               "blocked": [],
               "reason": null,
               "budget": {
-                "run_id": "oxe-run-mw1fe0sf-yz31nf",
+                "run_id": "oxe-run-mws8zvsz-dn8bru",
                 "limit_turns": 80,
                 "limit_usd": null,
-                "used_turns": 19,
-                "used_usd": 0.914485,
+                "policy": "cap",
+                "used_turns": 17,
+                "used_usd": 0.928687,
                 "attempts": [
                   {
                     "task": "T6",
                     "attempt": 1,
-                    "turns": 5,
-                    "cost_usd": 0.217895,
-                    "at": "2026-11-04T01:16:35.596Z"
+                    "turns": 3,
+                    "cost_usd": 0.1550467,
+                    "at": "2026-11-22T19:47:14.600Z"
                   },
                   {
                     "task": "T7",
                     "attempt": 1,
-                    "turns": 3,
-                    "cost_usd": 0.127119,
-                    "at": "2026-11-04T01:16:57.839Z"
+                    "turns": 4,
+                    "cost_usd": 0.2065036,
+                    "at": "2026-11-22T19:47:50.914Z"
                   },
                   {
                     "task": "T8",
                     "attempt": 1,
-                    "turns": 2,
-                    "cost_usd": 0.08175199999999999,
-                    "at": "2026-11-04T01:17:15.182Z"
+                    "turns": 3,
+                    "cost_usd": 0.1465087,
+                    "at": "2026-11-22T19:48:16.222Z"
                   },
                   {
                     "task": "T9",
                     "attempt": 1,
                     "turns": 4,
-                    "cost_usd": 0.20057400000000003,
-                    "at": "2026-11-04T01:17:55.902Z"
+                    "cost_usd": 0.22884160000000003,
+                    "at": "2026-11-22T19:48:51.837Z"
                   },
                   {
                     "task": "T10",
                     "attempt": 1,
-                    "turns": 5,
-                    "cost_usd": 0.287145,
-                    "at": "2026-11-04T01:18:48.082Z"
+                    "turns": 3,
+                    "cost_usd": 0.19178469999999997,
+                    "at": "2026-11-22T19:49:25.844Z"
                   }
                 ],
-                "started_at": "2026-11-04T01:15:59.492Z",
-                "updated_at": "2026-11-04T01:18:48.082Z"
+                "started_at": "2026-11-22T19:46:49.281Z",
+                "updated_at": "2026-11-22T19:49:25.844Z"
               },
               "preflight": {
                 "ok": true,
@@ -167,10 +170,11 @@
           ],
           "verify_status": "passed",
           "gates": {
-            "total": 2,
+            "total": 3,
             "passed": [
               "test",
-              "lint"
+              "lint",
+              "stub-check"
             ],
             "failed": [],
             "changes": []
@@ -189,14 +193,22 @@
       ],
       "scorecard": {
         "oxeScorecardSchema": 1,
-        "generated_at": "2026-11-04T01:18:56.801Z",
+        "generated_at": "2026-11-22T19:49:44.736Z",
         "since": null,
         "sample": {
           "completed_tasks": 10,
+          "tasks_judged": 10,
+          "tasks_failed": 0,
+          "tasks_completed_late": 0,
+          "external_deliveries": 0,
           "change_requests": 0,
           "resolved_crs": 0,
           "budget_ledgers": 2,
-          "events": 98
+          "events": 145,
+          "phases_started": 2,
+          "manual_interventions": 0,
+          "interventions_by_kind": {},
+          "cost_by_tier": {}
         },
         "metrics": [
           {
@@ -228,14 +240,19 @@
             "value": 0,
             "target": "= 0",
             "ok": true
+          },
+          {
+            "metric": "manual_interventions_per_phase",
+            "value": 0,
+            "target": "<= 1",
+            "ok": true
           }
         ],
-        "ok": true,
-        "release_report": "~\\Estudos\\oxe-build\\.oxe\\release\\scorecard-report.json"
+        "ok": true
       },
-      "turns": 36,
-      "cost_usd": 1.65,
-      "duration_ms": 334523
+      "turns": 35,
+      "cost_usd": 1.85,
+      "duration_ms": 344891
     },
     {
       "name": "mdlint",
@@ -259,50 +276,51 @@
               "blocked": [],
               "reason": null,
               "budget": {
-                "run_id": "oxe-run-mw1fijsc-m6rzpf",
+                "run_id": "oxe-run-mws93x5i-iibejm",
                 "limit_turns": 80,
                 "limit_usd": null,
-                "used_turns": 22,
-                "used_usd": 0.954226,
+                "policy": "cap",
+                "used_turns": 21,
+                "used_usd": 1.038905,
                 "attempts": [
                   {
                     "task": "T1",
                     "attempt": 1,
-                    "turns": 5,
-                    "cost_usd": 0.231013,
-                    "at": "2026-11-04T01:20:14.072Z"
+                    "turns": 4,
+                    "cost_usd": 0.20066559999999997,
+                    "at": "2026-11-22T19:50:27.419Z"
                   },
                   {
                     "task": "T2",
                     "attempt": 1,
-                    "turns": 3,
-                    "cost_usd": 0.120617,
-                    "at": "2026-11-04T01:20:36.742Z"
+                    "turns": 4,
+                    "cost_usd": 0.19263960000000002,
+                    "at": "2026-11-22T19:50:50.758Z"
                   },
                   {
                     "task": "T3",
                     "attempt": 1,
-                    "turns": 5,
-                    "cost_usd": 0.225461,
-                    "at": "2026-11-04T01:21:14.475Z"
+                    "turns": 4,
+                    "cost_usd": 0.20350759999999998,
+                    "at": "2026-11-22T19:51:22.572Z"
                   },
                   {
                     "task": "T4",
                     "attempt": 1,
                     "turns": 4,
-                    "cost_usd": 0.168556,
-                    "at": "2026-11-04T01:21:45.194Z"
+                    "cost_usd": 0.19596560000000002,
+                    "at": "2026-11-22T19:51:47.663Z"
                   },
                   {
                     "task": "T5",
                     "attempt": 1,
                     "turns": 5,
-                    "cost_usd": 0.20857900000000001,
-                    "at": "2026-11-04T01:22:22.399Z"
+                    "cost_usd": 0.2461245,
+                    "at": "2026-11-22T19:52:16.796Z"
                   }
                 ],
-                "started_at": "2026-11-04T01:19:30.756Z",
-                "updated_at": "2026-11-04T01:22:22.399Z"
+                "started_at": "2026-11-22T19:49:57.420Z",
+                "updated_at": "2026-11-22T19:52:16.796Z"
               },
               "preflight": {
                 "ok": true,
@@ -312,10 +330,11 @@
           ],
           "verify_status": "passed",
           "gates": {
-            "total": 2,
+            "total": 3,
             "passed": [
               "test",
-              "lint"
+              "lint",
+              "stub-check"
             ],
             "failed": [],
             "changes": []
@@ -348,50 +367,51 @@
               "blocked": [],
               "reason": null,
               "budget": {
-                "run_id": "oxe-run-mw1fmdvm-xvn22l",
+                "run_id": "oxe-run-mws97i0q-g2x084",
                 "limit_turns": 80,
                 "limit_usd": null,
-                "used_turns": 20,
-                "used_usd": 0.973648,
+                "policy": "cap",
+                "used_turns": 19,
+                "used_usd": 1.051887,
                 "attempts": [
                   {
                     "task": "T6",
                     "attempt": 1,
-                    "turns": 3,
-                    "cost_usd": 0.132107,
-                    "at": "2026-11-04T01:22:51.211Z"
+                    "turns": 4,
+                    "cost_usd": 0.20694759999999998,
+                    "at": "2026-11-22T19:53:10.336Z"
                   },
                   {
                     "task": "T7",
                     "attempt": 1,
-                    "turns": 5,
-                    "cost_usd": 0.259123,
-                    "at": "2026-11-04T01:23:33.207Z"
+                    "turns": 4,
+                    "cost_usd": 0.2293056,
+                    "at": "2026-11-22T19:53:43.239Z"
                   },
                   {
                     "task": "T8",
                     "attempt": 1,
-                    "turns": 4,
-                    "cost_usd": 0.177678,
-                    "at": "2026-11-04T01:24:05.010Z"
+                    "turns": 3,
+                    "cost_usd": 0.1449847,
+                    "at": "2026-11-22T19:54:06.939Z"
                   },
                   {
                     "task": "T9",
                     "attempt": 1,
                     "turns": 4,
-                    "cost_usd": 0.18243000000000004,
-                    "at": "2026-11-04T01:24:35.074Z"
+                    "cost_usd": 0.2159676,
+                    "at": "2026-11-22T19:54:36.463Z"
                   },
                   {
                     "task": "T10",
                     "attempt": 1,
                     "turns": 4,
-                    "cost_usd": 0.22231,
-                    "at": "2026-11-04T01:25:17.591Z"
+                    "cost_usd": 0.2546796,
+                    "at": "2026-11-22T19:55:15.882Z"
                   }
                 ],
-                "started_at": "2026-11-04T01:22:29.703Z",
-                "updated_at": "2026-11-04T01:25:17.591Z"
+                "started_at": "2026-11-22T19:52:44.422Z",
+                "updated_at": "2026-11-22T19:55:15.882Z"
               },
               "preflight": {
                 "ok": true,
@@ -401,10 +421,11 @@
           ],
           "verify_status": "passed",
           "gates": {
-            "total": 2,
+            "total": 3,
             "passed": [
               "test",
-              "lint"
+              "lint",
+              "stub-check"
             ],
             "failed": [],
             "changes": []
@@ -423,14 +444,22 @@
       ],
       "scorecard": {
         "oxeScorecardSchema": 1,
-        "generated_at": "2026-11-04T01:25:28.839Z",
+        "generated_at": "2026-11-22T19:55:38.793Z",
         "since": null,
         "sample": {
           "completed_tasks": 10,
+          "tasks_judged": 10,
+          "tasks_failed": 0,
+          "tasks_completed_late": 0,
+          "external_deliveries": 0,
           "change_requests": 0,
           "resolved_crs": 0,
           "budget_ledgers": 2,
-          "events": 98
+          "events": 149,
+          "phases_started": 2,
+          "manual_interventions": 0,
+          "interventions_by_kind": {},
+          "cost_by_tier": {}
         },
         "metrics": [
           {
@@ -462,14 +491,19 @@
             "value": 0,
             "target": "= 0",
             "ok": true
+          },
+          {
+            "metric": "manual_interventions_per_phase",
+            "value": 0,
+            "target": "<= 1",
+            "ok": true
           }
         ],
-        "ok": true,
-        "release_report": "~\\Estudos\\oxe-build\\.oxe\\release\\scorecard-report.json"
+        "ok": true
       },
-      "turns": 42,
-      "cost_usd": 1.93,
-      "duration_ms": 360300
+      "turns": 40,
+      "cost_usd": 2.09,
+      "duration_ms": 353080
     }
   ]
 }
