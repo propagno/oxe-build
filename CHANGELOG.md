@@ -4,9 +4,9 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
-## [1.21.2] — 2026-11-11
+## [1.22.0] — 2026-11-22
 
-Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-build, mais o roteiro de excelência e os backlogs de comparação aprovados pelo TECH LEAD. Cada item tem uma seção em `docs/oxespace-1.5/BACKLOG.md`, com a evidência e o teste que a reproduz (`tests/oxe-1212-*.test.cjs`). Para usar só a trilha recomendada, veja [docs/HAPPY-PATH.md](docs/HAPPY-PATH.md).
+Reúne o que foi feito depois da tag pública `v1.21.2` de 11/11 (parte disso foi registrada no desenvolvimento com o rótulo 1.21.2): jornada guiada, correções do uso real no OXESpace e dos benches, perfil `lean`, desambiguação executável e força dos testes congelados. Ainda não publicada.
 
 ### Custo e velocidade do caminho manual: `phase close`, verify curto e perfil `lean` (22/11)
 
@@ -664,6 +664,46 @@ O bench rodou a trilha principal à mão (`/oxe` → spec → plan → execute �
   - **`oxe-cc alm metrics`:** tempo em cada coluna (mediana, p85), lead time, cycle time, vazão por semana ISO, quantidade em cada coluna agora, limites de WIP (`alm.wip`, só aviso) e o gargalo pela mediana. Uma coluna renomeada no quadro é contada pelo id. O relatório vai para `.oxe/alm/metrics.md`.
   - **O ALM nunca recua um item:** antes de mover, o OXE lê o estado real e pula se outra ferramenta já o levou mais adiante (por exemplo, um workflow de jira-sync que move PR, trem, main e release). Com `track: ["in_progress"]`, o OXE só move A fazer → Em andamento.
 
+### Execução que não desperdiça nem esconde a causa (continuação)
+
+- `runtime.provider.name: "grok"` (ou `--adapter grok`) executa cada turno com `grok --prompt-file` / `--output-format json` / `--max-turns 1` / `--json-schema`. A denylist tira as tools do runtime (`read_file`, `grep`, `list_dir`) e as que o perfil plan ainda oferece (`search_tool`, `use_tool`, `todo_write`, `ask_user_question`, `enter_plan_mode`, `exit_plan_mode`, `send_feedback`, `image_to_video`, `reference_to_video`). Um envelope `max_turn_requests` que já traz o JSON da ponte é aceito (OXB-C15). As tools continuam no runtime. A credencial é o login do Grok ou `XAI_API_KEY`. Sem `--adapter` e sem chave, a detecção usa `claude`, depois `grok`, depois `antigravity`;
+
+### Programa, coordenação e release (continuação)
+
+- **doctor:** 44 chaves de `.oxe/config.json` que o runtime lê (`task_gates`, `execute`, `parallel`, `deps_strategy`, `checkpoint_check`…) eram chamadas de "não usadas pelo oxe-cc"; a lista agora é testada contra as chaves que o código lê.
+- **plan lint:** um arquivo que a tarefa cria, importado sem extensão pelo teste congelado (`files: [menu.tsx]`, `import '…/menu'`), está no escopo; os caminhos fora de `files` de um mesmo teste saem numa linha só; sem PLAN.md, o preflight já lista IMPLEMENTATION-PACK, REFERENCE-ANCHORS e FIXTURE-PACK na mesma rodada.
+- **verify:** um check que falha só pelo timeout do próprio runner ("Test timed out in 5000ms", sem asserção falhando) roda mais uma vez sozinho antes de contar; verde no rerun passa, e o VERIFY.md mostra os dois resultados. Se o timeout se repete, a falha é `timeout`, nunca `deterministic` ([HIGH]).
+- **program start/status:** uma fase em `planning` cujo PLAN.json já existe (da própria fase, com tarefas) aponta para `oxe-cc runtime execute`, ou para corrigir o plano quando o plan lint tem erros, em vez de `/oxe-plan`.
+- **plan lint:** o `HINT(html-fetch)` (app aberto em `file://`) só aparece num projeto com cara de app estático: um `index.html` e nenhum bundler, framework ou Electron no `package.json`.
+- **plan lint / execute:** um símbolo do IMPLEMENTATION-PACK num arquivo que existe e não o define vira aviso no `plan lint` (erro quando o arquivo está fora de `files` da tarefa). No execute, se o stub-check reprova só por símbolos que nem a base tinha e a tentativa não criou, a tarefa para na 1ª tentativa (`pack_symbol_missing`) com "o pack nomeia um símbolo que não existe", em vez de pagar retries que não podem passar.
+- **program close:** num branch com PR aberto (`gh pr list --head <branch>`), a fase fecha mas o commit não é feito. A mensagem diz o PR e o que fazer (commitar num branch separado, ou `--force-branch`). Antes, o close commitava no branch de um PR que já estava na fila do trem de merge.
+- **PRD:** o `/oxe-spec` passa a escrever `.oxe/PRD.md` (`oxe/templates/PRD.template.md`) acima da SPEC, com problema, personas, métricas (M-n) e histórias de usuário (US-n: Como / Quero / Para) ligadas aos R* e A*. O `oxe-cc prd lint`, também dentro do `plan lint`, acusa história sem critério, critério sem história, referência inexistente e métrica sem meta. São avisos; viram erro com `prd: { required: true }`.
+- **RFC:** proposta técnica antes do plano de uma fase de risco: `oxe-cc rfc new | accept | reject | list` (`.oxe/rfc/`, template `RFC.template.md`). O `accept` exige as perguntas em aberto respondidas e registra a decisão (ADR) com contexto, proposta, riscos e alternativas recusadas. O `plan lint` avisa fase com critério P0/P1 sem RFC aceito; com `rfc: { required: "risk" | "always" }` é erro.
+- **Documentos versionados:** `oxe-cc docs publish` copia PRD (com a chave do ALM de cada história), RFCs (com índice), ADRs e SYSTEM-DESIGN para `docs/`. Com `docs_publish: { "dir": "docs" }` configurado, o close da fase publica antes do commit e os documentos entram nele; sem essa chave, o close não escreve nenhum arquivo além dos que já escrevia. Sem decisões registradas, nenhum ADR é escrito. O `program init` cria o SYSTEM-DESIGN quando não existe, para o gate de design desatualizado valer desde a fase 1.
+- **ALM (Jira / Azure DevOps):** bloco `alm` no config, com credenciais só por variável de ambiente.
+  - `oxe-cc alm push` cria épico, histórias do PRD e uma tarefa por tarefa do plano. É idempotente pelo rótulo `ref-<programa>-<ref>`, adota um item existente pelo código antigo (`adopt_prefixes`) e aplica a versão-alvo por fase.
+  - `alm sync` move os itens por etapa pelo nome do estado: tarefa iniciada, PR aberto, promoção que falhou (volta com comentário), merge (via `gh pr view`) e deploy, com a versão lançada se `release_version: true`. `alm.track` limita as etapas que o OXE move.
+  - `alm move` serve para o trem ("Na fila"), `alm link` para a ligação manual e `alm defect` para o defeito depois do deploy, ligado à origem.
+  - `alm.transport: "mcp"` dispensa o token. Push, sync, move, defect e o sync automático decidem o que fazer e põem as operações na fila `.oxe/program/alm-mcp-queue.json`, na ordem:
+    - `ensure`, com a busca JQL ou WIQL a rodar antes de criar e o pai por `parent_ref` enquanto ele ainda está na fila;
+    - `transition`, em que o último estágio vence e os comentários se somam;
+    - `link` e `release_version`.
+  - O agente executa a fila com as ferramentas MCP da sessão e reporta cada operação com `alm ack <id> --key …` (ou `--error`), que grava o mesmo registro do modo REST. `alm queue` mostra a fila, o `runtime execute` avisa quando há operações pendentes, e `alm link` manual também resolve o `ensure`.
+  - A chave entra no título do PR, no assunto do commit de checkpoint e no nome do branch do promote.
+  - O registro local é a defesa contra duplicata, porque a busca do Jira por rótulo leva minutos para ver um item novo. A chave é gravada logo depois do POST, e a confirmação usa GET por chave. Com `ledger_guard: true`, um push sem registro se recusa a criar até um `--rebuild-ledger`, que refaz o registro pela busca sem criar nada.
+  - `--dry-run` só lê. Uma falha é tentada de novo com backoff, relida depois da escrita e, se persistir, fica pendente para o próximo sync, sem derrubar o comando do OXE.
+- **Correções do planejamento de uma fase real com chaves do Jira:**
+  - `spec add criterion` (e `spec amend`) escreve pelas colunas do cabeçalho. Na tabela `| ID | Critério | Risco | Como verificar |`, o verify ia para Risco e "Como verificar" ficava vazio. Agora `--risk` preenche a coluna Risco e é obrigatório quando ela existe, e uma coluna que o comando não preenche faz o comando falhar com o nome dela.
+  - `program phase edit --add-acceptance/--add-requirements` aceita uma fase em `planning` enquanto nenhuma tentativa rodou (só `program start`). Se a fase já tem plano, avisa para cobrir o critério e rodar o lint de novo. Depois da primeira tentativa, o caminho continua sendo o CR.
+  - OXB-030 ignora chaves de item do ALM (`OXE-104`, `CODE-8`, `AB#123`): o "104" de "(OXE-104)" deixou de ser tratado como status HTTP que o teste de aceite precisava exercitar.
+- **Decisões → ADRs:** um único registro de decisões (`.oxe/program/decisions.ndjson`) para os IDs do DISCUSS (D-NN) e das fases (D-F2-n), publicado como ADRs versionados em `docs/adr/` (um arquivo por decisão: status, contexto, decisão, alternativas recusadas, consequências, evidência; mais o índice `README.md`). Novos: `decision add --context/--consequences/--supersedes`, `decision status <id> active|superseded|retired --reason`, `decision import` (tabela do DISCUSS.md, mesmos IDs) e `decision publish [--out]`. Cada mudança republica os ADRs, preservando o texto escrito fora dos marcadores; `adr: false` desliga. O `plan lint` avisa tarefa que cita decisão substituída ou aposentada.
+
+---
+
+## [1.21.2] — 2026-11-11
+
+Esta versão consolida o que o OXESpace 1.5.0 (F1–F7 e F10) cobrou do oxe-build, mais o roteiro de excelência e os backlogs de comparação aprovados pelo TECH LEAD. Cada item tem uma seção em `docs/oxespace-1.5/BACKLOG.md`, com a evidência e o teste que a reproduz (`tests/oxe-1212-*.test.cjs`). Para usar só a trilha recomendada, veja [docs/HAPPY-PATH.md](docs/HAPPY-PATH.md).
+
 ### Execução que não desperdiça nem esconde a causa
 - **Turnos por tarefa (OXB-185):**
   - a tentativa que termina no teto é `turns_exhausted`, com a contagem, e nunca é chamada de escopo ou de verify;
@@ -679,7 +719,6 @@ O bench rodou a trilha principal à mão (`/oxe` → spec → plan → execute �
   - strings benignas `FileSystemFileChangedEvent` com exit `0` ou após `finish_task` não abortam o fechamento da tarefa como `paused_environment` (OXB-192).
 - **Adaptador Antigravity (`agy`) e commit atômico externo (OXB-197/200):**
   - `runtime.provider.name: "antigravity"` executa tentativas via `agy -p` / `--model` em paridade com `claude` e `http` (OXB-197);
-  - `runtime.provider.name: "grok"` (ou `--adapter grok`) executa cada turno com `grok --prompt-file` / `--output-format json` / `--max-turns 1` / `--json-schema`. A denylist tira as tools do runtime (`read_file`, `grep`, `list_dir`) e as que o perfil plan ainda oferece (`search_tool`, `use_tool`, `todo_write`, `ask_user_question`, `enter_plan_mode`, `exit_plan_mode`, `send_feedback`, `image_to_video`, `reference_to_video`). Um envelope `max_turn_requests` que já traz o JSON da ponte é aceito (OXB-C15). As tools continuam no runtime. A credencial é o login do Grok ou `XAI_API_KEY`. Sem `--adapter` e sem chave, a detecção usa `claude`, depois `grok`, depois `antigravity`;
   - `oxe-cc runtime commit-task Tn` permite que subagentes externos ou fallback fechem tarefas validando escopo, `sha256` congelado, `stub-check` e `verify`, gravando `TaskCompleted` + `CheckpointCreated` no ledger (OXB-200).
 - **Stub marcado como bloqueado não fecha tarefa (OXB-188):** BLOCKED / "OXB stub" / "until … lands" num comentário vira `scope_insufficient` com o arquivo fora do escopo que falta, e o checkpoint done recusa qualquer marcador de stub adicionado.
 - **Teste relacionado que passa sozinho não recusa o checkpoint (OXB-189):** `vitest related` só com arquivos (sem diretório nem e2e), rerun de um arquivo com `--maxWorkers=1` e, se ainda vermelho, na árvore do projeto (verde ali = `flaky_reds`, o commit fica); `related_set_size` no evento.
@@ -764,33 +803,6 @@ O bench rodou a trilha principal à mão (`/oxe` → spec → plan → execute �
   - `docs check`: os documentos fechados conferidos contra o código atual (OXB-183);
   - `program snapshot` / `program regress`: regressão sobre o `.oxe/` de programas reais, com os snapshots fora do repositório (OXB-101).
 - **Canais:** `release channel` com `next` e `stable`, este último só depois de uma fase real fechada; o comando nunca publica (OXB-100).
-- **doctor:** 44 chaves de `.oxe/config.json` que o runtime lê (`task_gates`, `execute`, `parallel`, `deps_strategy`, `checkpoint_check`…) eram chamadas de "não usadas pelo oxe-cc"; a lista agora é testada contra as chaves que o código lê.
-- **plan lint:** um arquivo que a tarefa cria, importado sem extensão pelo teste congelado (`files: [menu.tsx]`, `import '…/menu'`), está no escopo; os caminhos fora de `files` de um mesmo teste saem numa linha só; sem PLAN.md, o preflight já lista IMPLEMENTATION-PACK, REFERENCE-ANCHORS e FIXTURE-PACK na mesma rodada.
-- **verify:** um check que falha só pelo timeout do próprio runner ("Test timed out in 5000ms", sem asserção falhando) roda mais uma vez sozinho antes de contar; verde no rerun passa, e o VERIFY.md mostra os dois resultados. Se o timeout se repete, a falha é `timeout`, nunca `deterministic` ([HIGH]).
-- **program start/status:** uma fase em `planning` cujo PLAN.json já existe (da própria fase, com tarefas) aponta para `oxe-cc runtime execute`, ou para corrigir o plano quando o plan lint tem erros, em vez de `/oxe-plan`.
-- **plan lint:** o `HINT(html-fetch)` (app aberto em `file://`) só aparece num projeto com cara de app estático: um `index.html` e nenhum bundler, framework ou Electron no `package.json`.
-- **plan lint / execute:** um símbolo do IMPLEMENTATION-PACK num arquivo que existe e não o define vira aviso no `plan lint` (erro quando o arquivo está fora de `files` da tarefa). No execute, se o stub-check reprova só por símbolos que nem a base tinha e a tentativa não criou, a tarefa para na 1ª tentativa (`pack_symbol_missing`) com "o pack nomeia um símbolo que não existe", em vez de pagar retries que não podem passar.
-- **program close:** num branch com PR aberto (`gh pr list --head <branch>`), a fase fecha mas o commit não é feito. A mensagem diz o PR e o que fazer (commitar num branch separado, ou `--force-branch`). Antes, o close commitava no branch de um PR que já estava na fila do trem de merge.
-- **PRD:** o `/oxe-spec` passa a escrever `.oxe/PRD.md` (`oxe/templates/PRD.template.md`) acima da SPEC, com problema, personas, métricas (M-n) e histórias de usuário (US-n: Como / Quero / Para) ligadas aos R* e A*. O `oxe-cc prd lint`, também dentro do `plan lint`, acusa história sem critério, critério sem história, referência inexistente e métrica sem meta. São avisos; viram erro com `prd: { required: true }`.
-- **RFC:** proposta técnica antes do plano de uma fase de risco: `oxe-cc rfc new | accept | reject | list` (`.oxe/rfc/`, template `RFC.template.md`). O `accept` exige as perguntas em aberto respondidas e registra a decisão (ADR) com contexto, proposta, riscos e alternativas recusadas. O `plan lint` avisa fase com critério P0/P1 sem RFC aceito; com `rfc: { required: "risk" | "always" }` é erro.
-- **Documentos versionados:** `oxe-cc docs publish` copia PRD (com a chave do ALM de cada história), RFCs (com índice), ADRs e SYSTEM-DESIGN para `docs/`. Com `docs_publish: { "dir": "docs" }` configurado, o close da fase publica antes do commit e os documentos entram nele; sem essa chave, o close não escreve nenhum arquivo além dos que já escrevia. Sem decisões registradas, nenhum ADR é escrito. O `program init` cria o SYSTEM-DESIGN quando não existe, para o gate de design desatualizado valer desde a fase 1.
-- **ALM (Jira / Azure DevOps):** bloco `alm` no config, com credenciais só por variável de ambiente.
-  - `oxe-cc alm push` cria épico, histórias do PRD e uma tarefa por tarefa do plano. É idempotente pelo rótulo `ref-<programa>-<ref>`, adota um item existente pelo código antigo (`adopt_prefixes`) e aplica a versão-alvo por fase.
-  - `alm sync` move os itens por etapa pelo nome do estado: tarefa iniciada, PR aberto, promoção que falhou (volta com comentário), merge (via `gh pr view`) e deploy, com a versão lançada se `release_version: true`. `alm.track` limita as etapas que o OXE move.
-  - `alm move` serve para o trem ("Na fila"), `alm link` para a ligação manual e `alm defect` para o defeito depois do deploy, ligado à origem.
-  - `alm.transport: "mcp"` dispensa o token. Push, sync, move, defect e o sync automático decidem o que fazer e põem as operações na fila `.oxe/program/alm-mcp-queue.json`, na ordem:
-    - `ensure`, com a busca JQL ou WIQL a rodar antes de criar e o pai por `parent_ref` enquanto ele ainda está na fila;
-    - `transition`, em que o último estágio vence e os comentários se somam;
-    - `link` e `release_version`.
-  - O agente executa a fila com as ferramentas MCP da sessão e reporta cada operação com `alm ack <id> --key …` (ou `--error`), que grava o mesmo registro do modo REST. `alm queue` mostra a fila, o `runtime execute` avisa quando há operações pendentes, e `alm link` manual também resolve o `ensure`.
-  - A chave entra no título do PR, no assunto do commit de checkpoint e no nome do branch do promote.
-  - O registro local é a defesa contra duplicata, porque a busca do Jira por rótulo leva minutos para ver um item novo. A chave é gravada logo depois do POST, e a confirmação usa GET por chave. Com `ledger_guard: true`, um push sem registro se recusa a criar até um `--rebuild-ledger`, que refaz o registro pela busca sem criar nada.
-  - `--dry-run` só lê. Uma falha é tentada de novo com backoff, relida depois da escrita e, se persistir, fica pendente para o próximo sync, sem derrubar o comando do OXE.
-- **Correções do planejamento de uma fase real com chaves do Jira:**
-  - `spec add criterion` (e `spec amend`) escreve pelas colunas do cabeçalho. Na tabela `| ID | Critério | Risco | Como verificar |`, o verify ia para Risco e "Como verificar" ficava vazio. Agora `--risk` preenche a coluna Risco e é obrigatório quando ela existe, e uma coluna que o comando não preenche faz o comando falhar com o nome dela.
-  - `program phase edit --add-acceptance/--add-requirements` aceita uma fase em `planning` enquanto nenhuma tentativa rodou (só `program start`). Se a fase já tem plano, avisa para cobrir o critério e rodar o lint de novo. Depois da primeira tentativa, o caminho continua sendo o CR.
-  - OXB-030 ignora chaves de item do ALM (`OXE-104`, `CODE-8`, `AB#123`): o "104" de "(OXE-104)" deixou de ser tratado como status HTTP que o teste de aceite precisava exercitar.
-- **Decisões → ADRs:** um único registro de decisões (`.oxe/program/decisions.ndjson`) para os IDs do DISCUSS (D-NN) e das fases (D-F2-n), publicado como ADRs versionados em `docs/adr/` (um arquivo por decisão: status, contexto, decisão, alternativas recusadas, consequências, evidência; mais o índice `README.md`). Novos: `decision add --context/--consequences/--supersedes`, `decision status <id> active|superseded|retired --reason`, `decision import` (tabela do DISCUSS.md, mesmos IDs) e `decision publish [--out]`. Cada mudança republica os ADRs, preservando o texto escrito fora dos marcadores; `adr: false` desliga. O `plan lint` avisa tarefa que cita decisão substituída ou aposentada.
 - **Gate de release:** as exigências por versão do `doctor --release` (relatório de runtime real, scorecard de 2 projetos reais, eval de workflow) liam um campo que o manifesto não grava e nunca rodavam; agora leem `versions.rootPackage.version`.
 - **CLI:**
   - `doctor --migrate-config` (OXB-100);
