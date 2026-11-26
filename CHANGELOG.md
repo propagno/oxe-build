@@ -4,9 +4,32 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
-## [1.22.0] — 2026-11-22
+## [1.22.0] — 2026-11-26
 
-Reúne o que foi feito depois da tag pública `v1.21.2` de 11/11 (parte disso foi registrada no desenvolvimento com o rótulo 1.21.2): jornada guiada, correções do uso real no OXESpace e dos benches, perfil `lean`, desambiguação executável e força dos testes congelados. Ainda não publicada.
+Reúne o que foi feito depois da tag pública `v1.21.2` de 11/11 (parte disso foi registrada no desenvolvimento com o rótulo 1.21.2): jornada guiada, correções do uso real no OXESpace (`v1.5.2`–`v1.6.1`) e dos benches, perfil `lean`, desambiguação executável, força dos testes congelados, e o pacote completo de estabilidade/CI rápido/governança de release (`OXB-G01`..`OXB-G17`) com rastreabilidade de artefatos OXE no `alm refine`.
+
+### Estabilidade, corte de retrabalho de CI e governança de release (`OXB-G01`..`OXB-G17`, 26/11)
+
+Implementados 17 itens de backlog levantados nos ciclos reais OXESpace `v1.6.0` e `v1.6.1`, documentados com ADRs (`docs/adr/D-1..D-4`) e cobertos por `tests/oxe-1230-lote1-stability.test.cjs`, `tests/oxe-1230-lote2-ci-rework.test.cjs`, `tests/oxe-1230-lote3-release-governance.test.cjs` e `tests/oxe-1230-alm-traceability.test.cjs`:
+
+- **Lote 1 — Estabilidade imediata (`OXB-G01`, `G02`, `G03+G15`, `G12`):**
+  - `ship check-origin` e `oxe-quick.mirrorDirOf({ readOnly: true })` estritamente read-only: 0 escritas em `.git/oxe/quick` em runners CI read-only (`OXB-G01`).
+  - Sanitização centralizada de variáveis de ambiente (`bin/lib/oxe-env-sanitize.cjs`, chaves `envSanitize` e `stripEnvPrefixes`) removendo por padrão `OXESPACE_*`, `AI_MEMORY_*` e `NODE_TEST_CONTEXT` antes de subprocessos (`OXB-G02`).
+  - `oxe-cc worktree link-node-modules` e `worktree.linkNodeModules` com validação obrigatória de SHA-256 normalizado em LF do `package-lock.json` e integridade dos pacotes top-level antes de criar junction/symlink (`OXB-G03`, `OXB-G15`).
+  - `oxe-cc gc-worktrees --merged` (dry-run padrão, `--apply` para remover) protegendo worktree principal, corrente, `locked` e `dirty` e desfazendo junctions antes da remoção (`OXB-G12`).
+- **Lote 2 — Corte de retrabalho de CI (`OXB-G09`, `G16`, `G10`, `G13`, `G14`, `G06`, `G07`):**
+  - `oxe-cc preflight` (<5 s) executando `preflight.checks`, gatilhos por glob `preflight.triggers` (`OXB-G09`, `G10`), integração automática no hook `pre-push` (`OXB-G16`), detector estático `--e2e-impact` cruzando `data-testid` e `locales/*.json` removidos contra `e2e/**` e `e2e/acceptance/**` (`OXB-G13`) e alerta de risco CSS em seletores de `src/design/targets/*.json` (`OXB-G14`).
+  - `inspectRequiredCommitStatuses` em `bin/lib/oxe-ship-pr.cjs` lendo explicitamente o commit status `marca/conformidade` e reprovando o veredito quando `enforced divergences > 0` mesmo com job verde (`OXB-G14`).
+  - `oxe-cc sync` detectando colisões de migrações numéricas SQLite e ratchets declarados (`lint.ratchets`) com auto-bump determinístico (`--dry-run` padrão, `--apply` + `--verify`, `OXB-G06`).
+  - Classificação de falhas transitórias de infraestrutura (`github_5xx`, `network_transient`, `runner_timeout`, `perf_spike`) e retry seletivo com backoff exponencial no merge train sem perder posição na fila (`OXB-G07`).
+- **Lote 3 — Governança de release & resiliência (`OXB-G04`, `G05`, `G08`, `G17`, `G11`):**
+  - `oxe-cc runtime autoresume reconcile` reconciliando leases de PID órfão, locks expirados e checkpoints commitados no git de forma idempotente (`OXB-G04`).
+  - `oxe-cc acceptance-audit` detectando drift de requisitos cortados/fora de escopo e imports relativos quebrados em `e2e/acceptance/**` e `tests/acceptance/**` (`OXB-G05`).
+  - `oxe-cc release-readiness --version X.Y.Z` e `oxe-cc release-finalize --version X.Y.Z` unificando conferência de board Jira, gates, assets multi-plataforma (Desktop + Android APK + `SHA256SUMS.txt`) e transição idempotente `Homologado → Lançado` (`OXB-G08`, `G17`).
+  - Suporte nativo a `OXE-Part-Of: KEY (k/N)` no merge de PRs (mantendo o card aberto até 100% das partes chegarem à `main`) e fechamento automático de Épicos quando todos os filhos estão homologados (`OXB-G11`).
+- **Rastreabilidade de artefatos OXE no `alm refine` e isenção CLI no `uiCardGaps`:**
+  - `oxe-alm-refine.cjs` descobre automaticamente `PRD.md` (headings e tabelas `| US-n |`), `SPEC.md`, `SYSTEM-DESIGN.md`, `GLOSSARY.md`, RFCs, ADRs e decisões, inclui `Arquitetura e fluxo` em `story` e avisa histórias sem rastreabilidade.
+  - `uiCardGaps` isenta épicos e repositórios CLI sem árvore de UI (`src/ui`, `src/design`, `src/components`, etc.) quando não há label visual/`area-marca`.
 
 ### Custo e velocidade do caminho manual: `phase close`, verify curto e perfil `lean` (22/11)
 

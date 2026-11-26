@@ -4502,7 +4502,15 @@ function buildRuntimeExecutePreflight(projectRoot, activeSession, runState, opti
   }
 
   async function runRuntimeExecute(projectRoot, activeSession, options = {}) {
-    applyChildEnvPolicy(projectRoot);
+    const restoreChildEnv = applyChildEnvPolicy(projectRoot);
+    try {
+      return await runRuntimeExecuteInner(projectRoot, activeSession, options);
+    } finally {
+      restoreChildEnv();
+    }
+  }
+
+  async function runRuntimeExecuteInner(projectRoot, activeSession, options = {}) {
     const liveSinceMs = Date.now();
     const runtime = loadRuntimeModule();
     if (!runtime) throw new Error('Runtime package não está disponível. Rode npm run build:runtime.');
@@ -5706,17 +5714,49 @@ function writeRecoverySummaryMarkdown(projectRoot, activeSession, runState, reco
   return summaryPath;
 }
 
+const childEnvPolicyStack = [];
+
 /** 1.21.1 (OXB-042) + 1.23.0 (OXB-G02): the project's env policy for every child process of this execute/verify. */
 function applyChildEnvPolicy(projectRoot) {
   const runtime = loadRuntimeModule();
-  if (!runtime || typeof runtime.configureChildEnv !== 'function') return;
+  if (!runtime || typeof runtime.configureChildEnv !== 'function') return () => {};
   const cfg = readProjectConfig(projectRoot);
   const policy = require('./oxe-env-sanitize.cjs').toChildEnvPolicy(cfg);
+  childEnvPolicyStack.push(policy);
   runtime.configureChildEnv(policy);
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    const idx = childEnvPolicyStack.lastIndexOf(policy);
+    if (idx >= 0) childEnvPolicyStack.splice(idx, 1);
+    const prev = childEnvPolicyStack.length ? childEnvPolicyStack[childEnvPolicyStack.length - 1] : {};
+    runtime.configureChildEnv(prev);
+  };
+}
+
+function childEnvForProject(projectRoot, baseEnv = process.env) {
+  const restore = applyChildEnvPolicy(projectRoot);
+  try {
+    const rt = loadRuntimeModule();
+    return rt && typeof rt.childProcessEnv === 'function'
+      ? rt.childProcessEnv(baseEnv)
+      : (() => { const e = { ...baseEnv }; delete e.NODE_TEST_CONTEXT; return e; })();
+  } finally {
+    restore();
+  }
 }
 
 async function runRuntimeVerify(projectRoot, activeSession, options = {}) {
-  applyChildEnvPolicy(projectRoot);
+  const restoreChildEnv = applyChildEnvPolicy(projectRoot);
+  try {
+    return await runRuntimeVerifyInner(projectRoot, activeSession, options);
+  } finally {
+    restoreChildEnv();
+  }
+}
+
+async function runRuntimeVerifyInner(projectRoot, activeSession, options = {}) {
   const runtime = loadRuntimeModule();
   const parsers = loadSdkParsers();
   if (!runtime || typeof runtime.verifyRun !== 'function') {
@@ -6058,11 +6098,7 @@ function programCloseGateReasons(projectRoot, activeSession, ctx) {
   const checks = gatesLib.gateChecks(gates, 'program_close', { programDir, phase: ctx.phase.id, defaultRunner: config.phase_gates_runner || null });
   for (const check of checks) {
     // Same env policy as every runtime child (OXB-042): no node:test context, no live-app tokens or secrets.
-    applyChildEnvPolicy(projectRoot);
-    const rt = loadRuntimeModule();
-    const gateEnv = rt && typeof rt.childProcessEnv === 'function'
-      ? rt.childProcessEnv(process.env)
-      : (() => { const e = { ...process.env }; delete e.NODE_TEST_CONTEXT; return e; })();
+    const gateEnv = childEnvForProject(projectRoot, process.env);
     const res = spawnSync(check.command, { cwd: projectRoot, shell: true, encoding: 'utf8', timeout: check.timeout_ms, maxBuffer: 4 * 1024 * 1024, windowsHide: true, env: gateEnv });
     const result = { check_id: check.id, status: res.status === 0 ? 'pass' : 'fail', stdout: res.stdout || '', stderr: res.stderr || '', error: res.error ? String(res.error) : null };
     out.results.push(result);
@@ -6166,9 +6202,7 @@ function runtimeDeployAttach(projectRoot, activeSession, options = {}) {
   const programDir = paths.programDir || path.join(projectRoot, '.oxe', 'program');
   const program = programLib.readProgram(programDir);
   const phase = options.phase || (program && program.active_phase) || null;
-  applyChildEnvPolicy(projectRoot);
-  const rt = loadRuntimeModule();
-  const envVars = rt && typeof rt.childProcessEnv === 'function' ? rt.childProcessEnv(process.env) : { ...process.env };
+  const envVars = childEnvForProject(projectRoot, process.env);
   const record = require('./oxe-phase-gates.cjs').attachDeploy(programDir, { env: options.env, version: options.version, ref: options.ref, phase, by: options.by || null, checks: options.checks || [], cwd: projectRoot, spawn: options.spawn, env_vars: envVars });
   appendEvent(projectRoot, activeSession, { type: 'DeployAttached', payload: { phase, env: record.env, version: record.version, ref: record.ref, ok: record.ok, checks: record.checks.map((c) => ({ id: c.id, ok: c.ok, exit: c.exit })) } });
   almAutoSync(projectRoot, activeSession);
@@ -7899,9 +7933,8 @@ function runVerifyCommandSegments(projectRoot, options, commands, verifyTimeoutM
 }
 
 function runChildCommandFull(projectRoot, command, timeoutMs = 600_000) {
-  applyChildEnvPolicy(projectRoot);
   const rt = loadRuntimeModule();
-  const env = rt && typeof rt.childProcessEnv === 'function' ? rt.childProcessEnv(process.env) : (() => { const e = { ...process.env }; delete e.NODE_TEST_CONTEXT; return e; })();
+  const env = childEnvForProject(projectRoot, process.env);
   const inv = rt && typeof rt.shellInvocation === 'function' ? rt.shellInvocation(command) : null;
   const res = inv
     ? spawnSync(inv.file, inv.args, { cwd: projectRoot, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true, windowsVerbatimArguments: inv.windowsVerbatimArguments, env })
@@ -7913,11 +7946,8 @@ function runChildCommandFull(projectRoot, command, timeoutMs = 600_000) {
 }
 
 function runChildCommand(projectRoot, command, timeoutMs = 600_000) {
-  applyChildEnvPolicy(projectRoot);
   const rt = loadRuntimeModule();
-  const env = rt && typeof rt.childProcessEnv === 'function'
-    ? rt.childProcessEnv(process.env)
-    : (() => { const e = { ...process.env }; delete e.NODE_TEST_CONTEXT; return e; })();
+  const env = childEnvForProject(projectRoot, process.env);
   const inv = rt && typeof rt.shellInvocation === 'function' ? rt.shellInvocation(command) : null;
   const res = inv
     ? spawnSync(inv.file, inv.args, { cwd: projectRoot, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true, windowsVerbatimArguments: inv.windowsVerbatimArguments, env })
@@ -7935,11 +7965,7 @@ function runProgressCommand(cwd, command, timeoutMs = 1_800_000, options = {}) {
   try {
     canonicalCwd = fs.realpathSync.native ? fs.realpathSync.native(cwd) : fs.realpathSync(cwd);
   } catch { canonicalCwd = cwd; }
-  applyChildEnvPolicy(canonicalCwd);
-  const rt = loadRuntimeModule();
-  const env = rt && typeof rt.childProcessEnv === 'function'
-    ? rt.childProcessEnv(process.env)
-    : (() => { const e = { ...process.env }; delete e.NODE_TEST_CONTEXT; return e; })();
+  const env = childEnvForProject(canonicalCwd, process.env);
   if (env.PWD) env.PWD = canonicalCwd;
   const heartbeat = Number(options.heartbeatMs || process.env.OXE_PROGRESS_HEARTBEAT_MS) || 60_000;
   const res = spawnSync(process.execPath, [path.join(__dirname, 'oxe-progress-run.cjs'), options.label || 'pr:ready', String(timeoutMs), String(heartbeat), '--', command], {
