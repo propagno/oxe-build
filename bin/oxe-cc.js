@@ -5993,6 +5993,18 @@ async function runRuntime(opts) {
         else console.log(out.removed ? `  ${green}✓${reset} removido: ${out.file}` : `  ${dim}nada instalado${out.why ? ` (${out.why})` : ''}${reset}`);
         return;
       }
+      if (sub === 'reconcile') {
+        const rec = ar.lib.reconcileOrphansAndResumePlan(opts.dir, {
+          session: activeSession,
+          apply: !opts.dryRun,
+          projectConfig: oxeHealth.loadOxeConfigMerged(opts.dir).config || {},
+        });
+        if (opts.jsonOutput) { console.log(JSON.stringify({ oxeAutoresumeSchema: 1, action: 'reconcile', ...rec }, null, 2)); return; }
+        console.log(`  ${green}✓${reset} reconciliação pós-reinício (${rec.applied ? 'aplicada' : 'simulação'}): ${rec.cleaned_locks.length} lock(s) limpo(s) · ${rec.reconciled_checkpoints.length} checkpoint(s) reconciliado(s)`);
+        if (rec.reconciled_lease) console.log(`  Lease órfão: pid ${rec.reconciled_lease.previous_pid} (${rec.reconciled_lease.reason})`);
+        if (rec.resume_task) console.log(`  Próxima tarefa: ${rec.resume_task.id}${rec.resume_task.title ? ` — ${rec.resume_task.title}` : ''}`);
+        return;
+      }
       const insp = ar.lib.inspect(ar.file);
       const lease = insp.lease;
       const nextT = lease ? ar.next(lease.argv) : null;
@@ -6007,6 +6019,8 @@ async function runRuntime(opts) {
         console.log(`  No logon: ${where ? where : 'não instalado — oxe-cc runtime autoresume install'}`);
         return;
       }
+      // OXB-G04: reconcile orphan PIDs and expired locks idempotently before resuming
+      try { ar.lib.reconcileOrphansAndResumePlan(opts.dir, { session: activeSession, apply: true }); } catch { /* best effort */ }
       // run: the logon entry (or by hand) — waits for the memory rule, then relaunches under the supervisor
       const d = await ar.lib.waitForResume(ar.decideNow, { waitMs: ar.cfg.waitMemoryMinutes * 60_000, onWait: (x) => console.log(`  ${dim}esperando: ${x.why}${reset}`) });
       if (!d.resume) {
@@ -8914,6 +8928,112 @@ async function main() {
       }
     }
     console.log(file);
+    return;
+  }
+
+  // 1.23.0 (OXB-G05): `oxe-cc acceptance-audit [--max-age-days <N>] [--dir <pasta>] [--json]`
+  if (command === 'acceptance-audit') {
+    if (argv.includes('--help') || argv.includes('-h')) {
+      console.log(`\n  oxe-cc acceptance-audit [--max-age-days <N>] [--dir <pasta>] [--json]
+  Audita drift em specs de aceitação congeladas (tests/acceptance/** e e2e/acceptance/**) contra requisitos
+  cortados/fora de escopo em SPEC/PRD/ROADMAP, imports relativos quebrados e referências em PLAN.json.\n`);
+      return;
+    }
+    const o = { dir: process.cwd(), maxAgeDays: 0, json: false };
+    for (let i = 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--max-age-days' && argv[i + 1]) o.maxAgeDays = Number(argv[++i]) || 0;
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    const out = require('./lib/oxe-acceptance-audit.cjs').auditAcceptanceSpecs(o.dir, o);
+    if (o.json) {
+      console.log(JSON.stringify({ oxeAcceptanceAuditSchema: 1, ...out }, null, 2));
+    } else {
+      console.log(`  ${out.ok ? `${green}✓${reset}` : `${red}✗${reset}`} acceptance-audit: ${out.specs_scanned} spec(s) congelada(s) · ${out.errors} erro(s) · ${out.warnings} aviso(s)`);
+      for (const f of out.findings) {
+        const icon = f.severity === 'error' ? `${red}✗${reset}` : `${yellow}!${reset}`;
+        console.log(`    ${icon} ${f.file} [${f.kind}]: ${f.reason}`);
+      }
+    }
+    if (!out.ok) process.exitCode = 1;
+    return;
+  }
+
+  // 1.23.0 (OXB-G08): `oxe-cc release-readiness --version <X.Y.Z> [--require-assets] [--no-assets] [--dir <pasta>] [--json]`
+  if (command === 'release-readiness') {
+    if (argv.includes('--help') || argv.includes('-h')) {
+      console.log(`\n  oxe-cc release-readiness --version <X.Y.Z> [--require-assets] [--no-assets] [--dir <pasta>] [--json]
+  Gate unificado pré-release: (1) cards sem fixVersion ou fora de Homologado, (2) gates hml/perf/smoke/acceptance,
+  (3) completude de assets multi-plataforma (Desktop + Android APK + checksums).\n`);
+      return;
+    }
+    const o = { dir: process.cwd(), version: null, requireAssets: false, checkAssets: true, json: false };
+    for (let i = 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--require-assets') o.requireAssets = true;
+      else if (a === '--no-assets') o.checkAssets = false;
+      else if (a === '--version' && argv[i + 1]) o.version = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-') && !o.version) o.version = a;
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    try {
+      const out = await require('./lib/oxe-release-ops.cjs').checkReleaseReadiness(o.dir, o);
+      if (o.json) {
+        console.log(JSON.stringify({ oxeReleaseReadinessSchema: 1, ...out }, null, 2));
+      } else {
+        console.log(`  ${out.ok ? `${green}✓${reset}` : `${red}✗${reset}`} release-readiness ${out.tag}: ${out.blockers.length} bloqueio(s) · ${out.warnings.length} aviso(s)`);
+        for (const b of out.blockers) console.log(`    ${red}✗${reset} ${b}`);
+        for (const w of out.warnings) console.log(`    ${yellow}!${reset} ${w}`);
+      }
+      if (!out.ok) process.exitCode = 1;
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  // 1.23.0 (OXB-G17): `oxe-cc release-finalize --version <X.Y.Z> [--apply|--dry-run] [--dir <pasta>] [--json]`
+  if (command === 'release-finalize') {
+    if (argv.includes('--help') || argv.includes('-h')) {
+      console.log(`\n  oxe-cc release-finalize --version <X.Y.Z> [--apply|--dry-run] [--dir <pasta>] [--json]
+  Finalização idempotente pós-publicação multi-workflow: valida Desktop + Android APK + checksums no GitHub Releases,
+  fecha a versão no Jira e transita todos os cards Homologado da versão para Lançado. Padrão: --dry-run.\n`);
+      return;
+    }
+    const o = { dir: process.cwd(), version: null, apply: false, json: false };
+    for (let i = 0; i < argv.length; i += 1) {
+      const a = argv[i];
+      if (a === '--json') o.json = true;
+      else if (a === '--apply') o.apply = true;
+      else if (a === '--dry-run') o.apply = false;
+      else if (a === '--version' && argv[i + 1]) o.version = String(argv[++i]);
+      else if (a === '--dir' && argv[i + 1]) o.dir = path.resolve(argv[++i]);
+      else if (!a.startsWith('-') && !o.version) o.version = a;
+      else { console.error(`${red}Opção desconhecida:${reset} ${a}`); process.exitCode = 1; return; }
+    }
+    try {
+      const out = await require('./lib/oxe-release-ops.cjs').finalizeRelease(o.dir, o);
+      if (o.json) {
+        console.log(JSON.stringify({ oxeReleaseFinalizeSchema: 1, ...out }, null, 2));
+      } else if (!out.ok) {
+        console.error(`  ${red}✗${reset} release-finalize ${out.tag} bloqueado:`);
+        for (const e of out.errors) console.error(`    - ${e}`);
+      } else if (out.dry_run) {
+        console.log(`  ${yellow}(simulação)${reset} release-finalize ${out.tag}: ${out.planned_transitions.length} card(s) para transitar · ${out.already_released.length} já em Lançado`);
+        console.log(`  ${dim}rode com --apply para transitar os cards e marcar a versão como lançada no Jira${reset}`);
+      } else {
+        console.log(`  ${green}✓${reset} release-finalize ${out.tag}: ${out.transitioned.length} card(s) transitado(s) · versão lançada=${out.version_released}`);
+      }
+      if (!out.ok) process.exitCode = 1;
+    } catch (err) {
+      console.error(`  ${red}✗${reset} ${err && err.message ? err.message : err}`);
+      process.exitCode = 1;
+    }
     return;
   }
 

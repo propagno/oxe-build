@@ -292,6 +292,138 @@ async function supervise(o) {
   }
 }
 
+/**
+ * 1.23.0 (OXB-G04 / OXE-143): Idempotent post-restart reconciliation of a runtime phase.
+ * Scans for orphan PID leases, expired `.lock` / `*.lock.json` files, and already-landed `OXE-Task` checkpoint commits,
+ * returning the exact next checkpoint/task to resume safely without duplicating completed work.
+ */
+function reconcileOrphansAndResumePlan(projectRoot, options = {}) {
+  const rootAbs = path.resolve(projectRoot);
+  const session = options.session || null;
+  const execRoot = session
+    ? path.join(rootAbs, '.oxe', ...String(session).split('/'), 'runs')
+    : path.join(rootAbs, '.oxe', 'runs');
+  const alive = typeof options.alive === 'function' ? options.alive : defaultAlive;
+  const now = options.now instanceof Date ? options.now : new Date();
+  const lockTtlMs = Number(options.lockTtlMs) > 0 ? Number(options.lockTtlMs) : 12 * 3600_000;
+  const apply = options.apply !== false;
+
+  // 1. Reconcile orphan EXECUTE-LEASE.json
+  const lFile = leasePath(execRoot);
+  const insp = inspect(lFile, { alive });
+  let reconciledLease = null;
+  const leaseExpired = insp.lease && insp.lease.status === 'running' && insp.lease.started_at
+    && (now.getTime() - Date.parse(insp.lease.started_at)) > lockTtlMs;
+  if (insp.state === 'interrupted' || leaseExpired) {
+    reconciledLease = {
+      file: path.relative(rootAbs, lFile).replace(/\\/g, '/'),
+      previous_pid: insp.lease ? insp.lease.pid : null,
+      reason: leaseExpired ? 'lock_expired' : 'orphan_pid',
+      reconciled: apply,
+    };
+    if (apply && insp.lease) {
+      writeJson(lFile, {
+        ...insp.lease,
+        status: 'crashed',
+        reconciled_at: now.toISOString(),
+        reconciled_reason: reconciledLease.reason,
+      });
+    }
+  }
+
+  // 2. Clean expired or dead-PID lock files in .oxe/runs, .oxe/program, .oxe/plan
+  const cleanedLocks = [];
+  const lockDirs = [
+    execRoot,
+    path.join(rootAbs, '.oxe', 'program'),
+    path.join(rootAbs, '.oxe', 'plan'),
+    path.join(rootAbs, '.oxe'),
+  ];
+  for (const dir of lockDirs) {
+    if (!fs.existsSync(dir)) continue;
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const name of names) {
+      if (!/\.lock(?:\.json)?$/i.test(name)) continue;
+      const full = path.join(dir, name);
+      try {
+        const st = fs.statSync(full);
+        if (!st.isFile()) continue;
+        const lockObj = readJson(full);
+        const lockPid = lockObj && Number.isInteger(lockObj.pid) ? lockObj.pid : null;
+        const isDeadPid = lockPid != null && !alive(lockPid);
+        const isExpired = (now.getTime() - st.mtimeMs) > lockTtlMs;
+        if (isDeadPid || isExpired) {
+          if (apply) fs.rmSync(full, { force: true });
+          cleanedLocks.push({
+            file: path.relative(rootAbs, full).replace(/\\/g, '/'),
+            pid: lockPid,
+            reason: isDeadPid ? 'orphan_pid' : 'expired_lock',
+            removed: apply,
+          });
+        }
+      } catch { /* ignore */ }
+    }
+  }
+
+  // 3. Reconcile already-committed checkpoints from git log (`OXE-Task: T<n>`) against PLAN.json
+  const planFile = session
+    ? path.join(rootAbs, '.oxe', ...String(session).split('/'), 'plan', 'PLAN.json')
+    : path.join(rootAbs, '.oxe', 'PLAN.json');
+  const planDoc = readJson(planFile);
+  const completedFromGit = new Set();
+  if (Array.isArray(options.gitCommittedTasks)) {
+    for (const id of options.gitCommittedTasks) completedFromGit.add(String(id).toUpperCase());
+  } else if (planDoc && Array.isArray(planDoc.tasks)) {
+    try {
+      const { spawnSync } = require('child_process');
+      const r = spawnSync('git', ['log', '-n', '50', '--format=%B'], { cwd: rootAbs, encoding: 'utf8', windowsHide: true });
+      if (r.status === 0) {
+        for (const m of String(r.stdout || '').matchAll(/^OXE-Task:\s*(T\d+(?:-[A-Z0-9-]+)?)/gim)) {
+          completedFromGit.add(m[1].toUpperCase());
+        }
+      }
+    } catch { /* not a git repo */ }
+  }
+  const reconciledCheckpoints = [];
+  const completedAll = new Set(completedFromGit);
+  if (planDoc && Array.isArray(planDoc.tasks)) {
+    for (const t of planDoc.tasks) {
+      if (!t || !t.id) continue;
+      const tid = String(t.id).toUpperCase();
+      if (t.done === true || t.status === 'done') {
+        completedAll.add(tid);
+      } else if (completedFromGit.has(tid)) {
+        reconciledCheckpoints.push(tid);
+      }
+    }
+  }
+
+  const next = planDoc ? nextTask(planDoc, (insp.lease && insp.lease.argv) || [], { completed: [...completedAll] }) : null;
+  const freshInsp = inspect(lFile, { alive });
+  const cfg = config(options.projectConfig || {}, options.env || process.env);
+  const freeMb = typeof options.freeMb === 'number' ? options.freeMb : Math.round(os.freemem() / (1024 * 1024));
+  const decision = decide({
+    inspection: freshInsp,
+    runState: options.runState || null,
+    events: options.events || [],
+    cfg,
+    freeMb,
+    now,
+  });
+
+  return {
+    ok: true,
+    applied: apply,
+    reconciled_lease: reconciledLease,
+    cleaned_locks: cleanedLocks,
+    reconciled_checkpoints: reconciledCheckpoints,
+    resume_task: next,
+    can_resume: Boolean(decision.resume && next),
+    decision,
+  };
+}
+
 module.exports = {
   LEASE_FILE,
   DEFAULT_MIN_FREE_MB,
@@ -312,4 +444,5 @@ module.exports = {
   uninstall,
   installed,
   supervise,
+  reconcileOrphansAndResumePlan,
 };
