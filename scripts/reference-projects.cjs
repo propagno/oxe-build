@@ -158,7 +158,62 @@ function git(dir, args) {
 function log(...parts) {
   console.log(`[ref] ${parts.join(' ')}`);
 }
-const acceptancePath = (a) => `test/acceptance/${a.toLowerCase()}.test.js`;
+const acceptancePath = (a, def = null) => (def && def.stack === 'python'
+  ? `tests/acceptance/test_${a.toLowerCase()}.py`
+  : `test/acceptance/${a.toLowerCase()}.test.js`);
+
+function testCommandFor(def, a, pyBin) {
+  const rel = acceptancePath(a, def);
+  return def && def.stack === 'python' ? `${pyBin} ${rel} -v` : `node --test ${rel}`;
+}
+
+/**
+ * Resolves a real Python >= 3.9 executable across Windows (`python` / `py -3`, avoiding the MS Store stub)
+ * and POSIX (`python3` / `python`). Returns null when unavailable.
+ */
+function resolvePythonBinary(options = {}) {
+  const spawn = options.spawn || spawnSync;
+  const candidates = Array.isArray(options.candidates)
+    ? options.candidates
+    : (process.platform === 'win32' ? ['python', 'py', 'python3'] : ['python3', 'python']);
+  for (const cand of candidates) {
+    const args = cand === 'py'
+      ? ['-3', '-c', 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")']
+      : ['-c', 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'];
+    const r = spawn(cand, args, { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+    if (!r || r.error || r.status !== 0) continue;
+    const m = /^(\d+)\.(\d+)/.exec(String(r.stdout || '').trim());
+    if (m && Number(m[1]) === 3 && Number(m[2]) >= 9) {
+      return cand === 'py' ? 'py -3' : cand;
+    }
+  }
+  return null;
+}
+
+const PY_LINT_SCRIPT = `import os
+import py_compile
+import sys
+
+problems = []
+for root, _dirs, files in os.walk("src"):
+    for name in sorted(files):
+        if name.endswith(".py"):
+            full = os.path.join(root, name)
+            try:
+                py_compile.compile(full, doraise=True)
+            except Exception as exc:
+                problems.append(f"{full}: {exc}")
+
+if problems:
+    sys.stderr.write("\\n".join(problems) + "\\n")
+    sys.exit(1)
+print("lint ok")
+`;
+
+function spawnPy(pyBin, extraArgs, opts) {
+  const parts = String(pyBin).split(/\s+/).filter(Boolean);
+  return spawnSync(parts[0], [...parts.slice(1), ...extraArgs], opts);
+}
 
 // ── project scaffolding ─────────────────────────────────────────────────────────
 
@@ -186,29 +241,47 @@ if (problems.length) { console.error(problems.join('\\n')); process.exit(1); }
 console.log('lint ok');
 `;
 
-function scaffold(def, dir) {
+function scaffold(def, dir, pyBin = null) {
   fs.mkdirSync(dir, { recursive: true });
-  writeFile(path.join(dir, 'package.json'), `${JSON.stringify({
-    name: def.name, version: '0.1.0', private: true, description: def.description,
-    scripts: { test: 'node --test', lint: 'node scripts/lint.cjs' },
-    engines: { node: '>=20' },
-  }, null, 2)}\n`);
-  writeFile(path.join(dir, '.gitignore'), '.oxe/\nnode_modules/\n');
-  writeFile(path.join(dir, 'scripts', 'lint.cjs'), LINT_SCRIPT);
-  writeFile(path.join(dir, 'AGENTS.md'), [
-    `# ${def.name}`,
-    '',
-    def.objective,
-    '',
-    '## Regras do repositório',
-    '',
-    '- Never add dependencies: plain Node (>= 20) and its built-in modules only.',
-    '- Always use CommonJS (`require` / `module.exports`) and `\'use strict\';` at the top of each file.',
-    '- Never write `console.log` in `src/`: functions return values; only `bin/` writes to the terminal.',
-    '- Never edit `test/acceptance/`: those tests are the specification.',
-    '',
-  ].join('\n'));
-  writeFile(path.join(dir, 'README.md'), `# ${def.name}\n\n${def.description}\n\n${def.objective}\n\nBuilt end to end with [oxe-build](https://www.npmjs.com/package/oxe-cc) as a 1.21 reference project.\n`);
+  if (def.stack === 'python') {
+    writeFile(path.join(dir, 'pyproject.toml'), `[project]\nname = "${def.name}"\nversion = "0.1.0"\nrequires-python = ">=3.9"\ndescription = "${def.description}"\n`);
+    writeFile(path.join(dir, '.gitignore'), '.oxe/\n__pycache__/\n*.pyc\n');
+    writeFile(path.join(dir, 'scripts', 'lint.py'), PY_LINT_SCRIPT);
+    writeFile(path.join(dir, 'src', def.name, '__init__.py'), '"""pycsv package."""\n');
+    writeFile(path.join(dir, 'AGENTS.md'), [
+      `# ${def.name}`,
+      '',
+      def.objective,
+      '',
+      '## Regras do repositório',
+      '',
+      '- Zero dependências pip: usar exclusivamente Python 3 (>= 3.9) stdlib.',
+      '- Não editar `test/acceptance/`: os testes congelados são a especificação.',
+      '',
+    ].join('\n'));
+  } else {
+    writeFile(path.join(dir, 'package.json'), `${JSON.stringify({
+      name: def.name, version: '0.1.0', private: true, description: def.description,
+      scripts: { test: 'node --test', lint: 'node scripts/lint.cjs' },
+      engines: { node: '>=20' },
+    }, null, 2)}\n`);
+    writeFile(path.join(dir, '.gitignore'), '.oxe/\nnode_modules/\n');
+    writeFile(path.join(dir, 'scripts', 'lint.cjs'), LINT_SCRIPT);
+    writeFile(path.join(dir, 'AGENTS.md'), [
+      `# ${def.name}`,
+      '',
+      def.objective,
+      '',
+      '## Regras do repositório',
+      '',
+      '- Never add dependencies: plain Node (>= 20) and its built-in modules only.',
+      '- Always use CommonJS (`require` / `module.exports`) and `\'use strict\';` at the top of each file.',
+      '- Never write `console.log` in `src/`: functions return values; only `bin/` writes to the terminal.',
+      '- Never edit `test/acceptance/`: those tests are the specification.',
+      '',
+    ].join('\n'));
+  }
+  writeFile(path.join(dir, 'README.md'), `# ${def.name}\n\n${def.description}\n\n${def.objective}\n\nBuilt end to end with [oxe-build](https://www.npmjs.com/package/oxe-cc) as a reference project.\n`);
   git(dir, ['init', '-q']);
   git(dir, ['config', 'user.email', 'oxe-reference@local']);
   git(dir, ['config', 'user.name', 'OXE reference']);
@@ -223,10 +296,15 @@ function scaffold(def, dir) {
   Object.assign(cfg, {
     acceptance_tests_required: true,
     checkpoint_commits: true,
-    phase_gates: [
-      { id: 'test', command: 'node --test', description: 'suíte completa do projeto' },
-      { id: 'lint', command: 'node scripts/lint.cjs', description: 'sintaxe e regras do repositório' },
-    ],
+    phase_gates: def.stack === 'python'
+      ? [
+        { id: 'test', command: `${pyBin} -m unittest discover -s tests/acceptance -v`, description: 'suíte completa unittest Python' },
+        { id: 'lint', command: `${pyBin} scripts/lint.py`, description: 'sintaxe e compilação Python stdlib' },
+      ]
+      : [
+        { id: 'test', command: 'node --test', description: 'suíte completa do projeto' },
+        { id: 'lint', command: 'node scripts/lint.cjs', description: 'sintaxe e regras do repositório' },
+      ],
     commit_convention: {
       template: '{type}({scope}): {title}',
       type: 'feat',
@@ -249,12 +327,12 @@ function roadmapMd(def) {
   return `---\noxe_doc: roadmap\nstatus: approved\n---\n\n# Roteiro de Entrega — ${def.name}\n\n${def.objective}\n\n${blocks.join('\n')}`;
 }
 
-function specMd(def, phase) {
-  const rows = phase.tasks.map((t) => `| ${t.aceite} | ${t.criterion} | \`node --test ${acceptancePath(t.aceite)}\` |`).join('\n');
+function specMd(def, phase, pyBin = null) {
+  const rows = phase.tasks.map((t) => `| ${t.aceite} | ${t.criterion} | \`${testCommandFor(def, t.aceite, pyBin)}\` |`).join('\n');
   return `# OXE — SPEC (${def.name} · ${phase.id})\n\n## Objetivo\n\n${def.objective}\n\nFase ${phase.id} — ${phase.title}: ${phase.scope}.\n\n## Critérios de aceite\n\n| ID | Critério | Como verificar |\n|---|---|---|\n${rows}\n\n## Fora de escopo\n\n- Dependências externas, persistência em disco além do pedido e qualquer interface não descrita acima.\n`;
 }
 
-function planMd(def, phase) {
+function planMd(def, phase, pyBin = null) {
   const blocks = phase.tasks.map((t) => `### ${t.id} — ${t.title}
 
 - **Arquivos alvo:** ${t.files.map((f) => `\`${f}\``).join(', ')}
@@ -262,7 +340,7 @@ function planMd(def, phase) {
 - **Onda:** ${t.wave}
 - **Implementar:** ${t.goal}
 - **Verificar:**
-  - Comando: \`node --test ${acceptancePath(t.aceite)}\`
+  - Comando: \`${testCommandFor(def, t.aceite, pyBin)}\`
 - **Aceite vinculado:** ${t.aceite}
 `).join('\n');
   return `# OXE — PLAN (${def.name} · ${phase.id})
@@ -300,24 +378,24 @@ ${blocks}
 `;
 }
 
-function planJson(phase) {
+function planJson(def, phase, pyBin = null) {
   return {
     schema_version: 1,
     phase: phase.id,
     budget: { max_retries: 2 },
     tasks: phase.tasks.map((t) => ({
       id: t.id, title: t.title, wave: t.wave, depends_on: t.dependsOn || [], files: t.files,
-      verify: { commands: [`node --test ${acceptancePath(t.aceite)}`] }, acceptance: [t.aceite], complexity: 'S', commit: t.commit,
+      verify: { commands: [testCommandFor(def, t.aceite, pyBin)] }, acceptance: [t.aceite], complexity: 'S', commit: t.commit,
     })),
     acceptance_tests: phase.tasks.map((t) => ({
       criterion: t.aceite,
-      files: [acceptancePath(t.aceite)],
-      command: `node --test ${acceptancePath(t.aceite)}`,
+      files: [acceptancePath(t.aceite, def)],
+      command: testCommandFor(def, t.aceite, pyBin),
     })),
   };
 }
 
-function packJson(phase) {
+function packJson(def, phase) {
   return {
     schema_version: 1,
     ready: true,
@@ -325,7 +403,7 @@ function packJson(phase) {
     tasks: phase.tasks.map((t) => ({
       id: t.id, mode: 'mutating', ready: true, exact_paths: t.files, write_set: 'closed', mutation_scope: 'code', risk: 'low',
       symbols: t.symbols.map(([file, name]) => ({ kind: 'function', name, path: file })),
-      contracts: [{ name: `${t.id}-contract`, input_shape: acceptancePath(t.aceite), output_shape: 'exports declarados em symbols', invariants: ['teste de aceite inalterado', 'sem dependências externas'], not_allowed: ['editar test/acceptance/', 'console.log em src/'] }],
+      contracts: [{ name: `${t.id}-contract`, input_shape: acceptancePath(t.aceite, def), output_shape: 'exports declarados em symbols', invariants: ['teste de aceite inalterado', 'sem dependências externas'], not_allowed: ['editar test/acceptance/'] }],
       expected_checks: ['acceptance tests', 'phase gates: test, lint'],
       requires_fixture: false,
     })),
@@ -334,17 +412,25 @@ function packJson(phase) {
 
 // ── oracle ──────────────────────────────────────────────────────────────────────
 
-function oracle(dir, phases) {
+function oracle(dir, phases, def = null, pyBin = null) {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-ref-oracle-'));
   try {
     for (const sub of ['src', 'bin']) if (fs.existsSync(path.join(dir, sub))) fs.cpSync(path.join(dir, sub), path.join(sandbox, sub), { recursive: true });
     const per = {};
     for (const phase of phases) {
-      const file = path.join(sandbox, `oracle-${phase.id}.test.js`);
-      writeFile(file, phase.oracle);
-      const res = spawnSync(process.execPath, ['--test', file], { cwd: sandbox, encoding: 'utf8', timeout: 120000 });
-      per[phase.id] = res.status === 0;
-      if (res.status !== 0) per[`${phase.id}_output`] = (res.stdout + res.stderr).split('\n').filter((l) => /not ok|Error|expected|actual/.test(l)).slice(0, 8).join('\n');
+      if (def && def.stack === 'python') {
+        const file = path.join(sandbox, `oracle_${phase.id}.py`);
+        writeFile(file, `import os, sys\nsys.path.insert(0, os.path.abspath("src"))\n${phase.oracle}`);
+        const res = spawnPy(pyBin, [file, '-v'], { cwd: sandbox, encoding: 'utf8', timeout: 120000, windowsHide: true });
+        per[phase.id] = res.status === 0;
+        if (res.status !== 0) per[`${phase.id}_output`] = (res.stdout + res.stderr).split('\n').slice(-10).join('\n');
+      } else {
+        const file = path.join(sandbox, `oracle-${phase.id}.test.js`);
+        writeFile(file, phase.oracle);
+        const res = spawnSync(process.execPath, ['--test', file], { cwd: sandbox, encoding: 'utf8', timeout: 120000 });
+        per[phase.id] = res.status === 0;
+        if (res.status !== 0) per[`${phase.id}_output`] = (res.stdout + res.stderr).split('\n').filter((l) => /not ok|Error|expected|actual/.test(l)).slice(0, 8).join('\n');
+      }
     }
     return { ok: phases.every((p) => per[p.id]), phases: per };
   } finally {
@@ -391,15 +477,21 @@ async function runPhase(def, dir, phase, priorPhases, opts) {
   }
   if (status !== 'executing' && status !== 'verifying' && status !== 'planning') operational.runtimeProgramStart(dir, null, phase.id);
 
+  const pyBin = opts.pyBin || null;
   const planJsonPath = path.join(dir, '.oxe', 'PLAN.json');
   const existing = fs.existsSync(planJsonPath) ? JSON.parse(fs.readFileSync(planJsonPath, 'utf8')) : null;
   if (!existing || existing.phase !== phase.id) {
-    writeFile(path.join(dir, '.oxe', 'SPEC.md'), specMd(def, phase));
-    writeFile(path.join(dir, '.oxe', 'PLAN.md'), planMd(def, phase));
-    writeFile(planJsonPath, `${JSON.stringify(planJson(phase), null, 2)}\n`);
-    writeFile(path.join(dir, '.oxe', 'IMPLEMENTATION-PACK.json'), `${JSON.stringify(packJson(phase), null, 2)}\n`);
-    for (const t of phase.tasks) writeFile(path.join(dir, acceptancePath(t.aceite)), phase.acceptance[t.aceite]);
-    git(dir, ['add', 'test/acceptance']);
+    writeFile(path.join(dir, '.oxe', 'SPEC.md'), specMd(def, phase, pyBin));
+    writeFile(path.join(dir, '.oxe', 'PLAN.md'), planMd(def, phase, pyBin));
+    writeFile(planJsonPath, `${JSON.stringify(planJson(def, phase, pyBin), null, 2)}\n`);
+    writeFile(path.join(dir, '.oxe', 'IMPLEMENTATION-PACK.json'), `${JSON.stringify(packJson(def, phase), null, 2)}\n`);
+    for (const t of phase.tasks) {
+      const body = def.stack === 'python'
+        ? `import os, sys\nsys.path.insert(0, os.path.abspath("src"))\n${phase.acceptance[t.aceite]}`
+        : phase.acceptance[t.aceite];
+      writeFile(path.join(dir, acceptancePath(t.aceite, def)), body);
+    }
+    git(dir, ['add', def.stack === 'python' ? 'tests/acceptance' : 'test/acceptance']);
     git(dir, ['commit', '-qm', `test(${def.name}): frozen acceptance tests for ${phase.id}`]);
   }
 
@@ -440,7 +532,7 @@ async function runPhase(def, dir, phase, priorPhases, opts) {
   const phaseTurns = usageRows.reduce((s, r) => s + (Number(r.turns) || 0), 0);
   const phaseCost = roundNum(usageRows.reduce((s, r) => s + (Number(r.cost_usd) || 0), 0), 2);
 
-  const truth = oracle(dir, [...priorPhases, phase]);
+  const truth = oracle(dir, [...priorPhases, phase], def, pyBin);
   let closed = { closed: false, gate: null };
   if (verified && verified.report.status === 'passed') {
     writeHandoff(dir, def, phase);
@@ -464,18 +556,41 @@ async function runPhase(def, dir, phase, priorPhases, opts) {
 
 async function runProject(def, opts = {}) {
   const models = resolveModels(opts);
+  const pyBin = def.stack === 'python'
+    ? (Object.prototype.hasOwnProperty.call(opts, 'pythonBin') ? opts.pythonBin : resolvePythonBinary())
+    : null;
+  if (def.stack === 'python' && !pyBin) {
+    log(def.name, 'pulado: Python >= 3.9 indisponível no ambiente');
+    return {
+      name: def.name,
+      stack: 'python',
+      dir: null,
+      ok: true,
+      skipped: true,
+      reason: 'Python >= 3.9 indisponível no ambiente',
+      models,
+      cost_by_tier: { plan: 0, execute: 0 },
+      turns_by_phase: {},
+      phases: [],
+      scorecard: null,
+      turns: 0,
+      cost_usd: 0,
+      duration_ms: 0,
+    };
+  }
   const root = opts.root || fs.mkdtempSync(path.join(os.tmpdir(), 'oxe-reference-'));
   const dir = path.join(root, def.name);
   if (opts.fresh && fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
   if (!fs.existsSync(path.join(dir, '.oxe', 'program', 'PROGRAM.json'))) {
-    if (!fs.existsSync(path.join(dir, '.oxe'))) scaffold(def, dir);
+    if (!fs.existsSync(path.join(dir, '.oxe'))) scaffold(def, dir, pyBin);
     operational.runtimeProgramInit(dir, null);
   }
   const started = Date.now();
   const phases = [];
   const turnsByPhase = {};
+  const phaseOpts = { ...opts, pyBin };
   for (let i = 0; i < def.phases.length; i += 1) {
-    const rec = await runPhase(def, dir, def.phases[i], def.phases.slice(0, i), opts);
+    const rec = await runPhase(def, dir, def.phases[i], def.phases.slice(0, i), phaseOpts);
     phases.push(rec);
     turnsByPhase[def.phases[i].id] = Number(rec.turns) || 0;
     if (!rec.closed) break;
@@ -507,7 +622,9 @@ async function runProject(def, opts = {}) {
 
 async function main(argv = process.argv.slice(2)) {
   const opts = parseCliArgs(argv);
-  const names = opts.project === 'all' ? ['ledger-api', 'mdlint'] : [opts.project];
+  const names = opts.project === 'all'
+    ? ['ledger-api', 'mdlint']
+    : (opts.project === 'all-stacks' ? ['ledger-api', 'mdlint', 'pycsv'] : [opts.project]);
   const results = [];
   for (const name of names) {
     const def = require(path.join(__dirname, 'reference-projects', `${name}.cjs`));
@@ -547,6 +664,7 @@ if (require.main === module) {
 module.exports = {
   parseCliArgs,
   resolveModels,
+  resolvePythonBinary,
   compareReferenceReports,
   runPhase,
   runProject,
