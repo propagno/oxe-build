@@ -15,10 +15,29 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const presets = require('./oxe-presets.cjs');
 
 const DEFAULT_REQUIRED_GATES = Object.freeze(['hml-packaged-pass', 'perf-gate', 'packaged-smoke', 'acceptance']);
 const DEFAULT_READY_STATES = Object.freeze(['homologado', 'done', 'lançado', 'lancado', 'released']);
 const DEFAULT_TARGET_STATE = 'Lançado';
+const DEFAULT_DESKTOP_MOBILE_ASSETS = Object.freeze([
+  { label: 'Desktop installer (.exe/.dmg/.AppImage/.deb)', patterns: ['*.exe', '*.dmg', '*.AppImage', '*.deb', '*.msi'] },
+  { label: 'Android APK (.apk)', patterns: ['*.apk'] },
+  { label: 'Checksums (SHA256SUMS / checksums)', patterns: ['*checksum*', '*sha256*'] },
+]);
+
+function resolveExpectedAssets(cfg = {}) {
+  if (cfg && cfg.release && Array.isArray(cfg.release.expectedAssets)) {
+    return cfg.release.expectedAssets;
+  }
+  const presetCfg = presets.resolvePresetConfig(cfg);
+  if (presetCfg.hasExplicitPreset) {
+    return Array.isArray(presetCfg.release && presetCfg.release.expectedAssets)
+      ? presetCfg.release.expectedAssets
+      : [];
+  }
+  return DEFAULT_DESKTOP_MOBILE_ASSETS;
+}
 
 function readJsonQuiet(file) {
   try { return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null; } catch { return null; }
@@ -45,13 +64,14 @@ function assetMatchesPattern(name, pattern) {
 
 function checkMultiPlatformAssets(assets, cfgRelease = {}) {
   const names = (Array.isArray(assets) ? assets : []).map((a) => (typeof a === 'string' ? a : (a && a.name) || '')).filter(Boolean);
-  const expected = Array.isArray(cfgRelease.expectedAssets) && cfgRelease.expectedAssets.length
-    ? cfgRelease.expectedAssets
-    : [
-      { label: 'Desktop installer (.exe/.dmg/.AppImage/.deb)', patterns: ['*.exe', '*.dmg', '*.AppImage', '*.deb', '*.msi'] },
-      { label: 'Android APK (.apk)', patterns: ['*.apk'] },
-      { label: 'Checksums (SHA256SUMS / checksums)', patterns: ['*checksum*', '*sha256*'] },
-    ];
+  let expected;
+  if (cfgRelease && Array.isArray(cfgRelease.expectedAssets)) {
+    expected = cfgRelease.expectedAssets;
+  } else if (cfgRelease && (cfgRelease.preset || cfgRelease.presets || cfgRelease.release)) {
+    expected = resolveExpectedAssets(cfgRelease);
+  } else {
+    expected = DEFAULT_DESKTOP_MOBILE_ASSETS;
+  }
   const missing = [];
   const matched = [];
   for (const spec of expected) {
@@ -132,7 +152,10 @@ async function checkReleaseReadiness(projectRoot, options = {}) {
   if (!version) throw new Error('informe a versão: oxe-cc release-readiness --version <X.Y.Z>');
   const rootAbs = path.resolve(projectRoot);
   const cfg = options.config || readMergedConfig(rootAbs);
-  const relCfg = cfg.release && typeof cfg.release === 'object' ? cfg.release : {};
+  const relCfg = {
+    ...(cfg.release && typeof cfg.release === 'object' ? cfg.release : {}),
+    expectedAssets: resolveExpectedAssets(cfg),
+  };
   const tag = `v${version}`;
   const blockers = [];
   const warnings = [];
@@ -230,7 +253,10 @@ async function finalizeRelease(projectRoot, options = {}) {
   if (!version) throw new Error('informe a versão: oxe-cc release-finalize --version <X.Y.Z>');
   const rootAbs = path.resolve(projectRoot);
   const cfg = options.config || readMergedConfig(rootAbs);
-  const relCfg = cfg.release && typeof cfg.release === 'object' ? cfg.release : {};
+  const relCfg = {
+    ...(cfg.release && typeof cfg.release === 'object' ? cfg.release : {}),
+    expectedAssets: resolveExpectedAssets(cfg),
+  };
   const tag = `v${version}`;
   const apply = Boolean(options.apply);
   const errors = [];
