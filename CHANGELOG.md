@@ -4,6 +4,37 @@ Todas as versões seguem [Semantic Versioning](https://semver.org/). As mudança
 
 ---
 
+## [1.22.1] — 2026-11-26
+
+Construída ponta a ponta com o próprio `oxe-build v1.22.0` em perfil `lean` como bench controlado (`OB-21`..`OB-36`, 3 fases `F1`–`F3`, 12 entregas + 1 hotfix P0 descoberto no dogfooding).
+
+### Distribuição, higiene Windows & correções (`OB-25`..`OB-27`, `Q-20261126-0408`)
+
+- **Correção `alm.jira.*` em `bin/lib/oxe-release-ops.cjs` (`OB-25`):** `makeJiraClient` agora resolve o formato canônico `alm.jira.site`/`alm.jira.project` com precedência `options > alm.jira > alm > env`, mantendo compatibilidade total com configs legadas.
+- **Higiene EOL no Windows (`.gitattributes`, `OB-26`):** imposição de `eol=lf` para código, Markdown, JSON, YAML e scripts shell, `eol=crlf` para `.cmd`/`.bat`/`.ps1` e `binary` para `.png`/`.vsix`/`.tgz`, zerando diffs falsos CRLF pós-sync e pós-build.
+- **Publicação automatizada no npm (`.github/workflows/release.yml`, `OB-27`):** job `publish-npm` dependente de `validate` e `create-release`, com `environment: npm-release`, Actions pinadas por SHA, `--provenance --access public` (OIDC Trusted Publishing / fallback `NPM_TOKEN`) e verificação `npm view oxe-cc@${VERSION} version`, documentado em `docs/RELEASE-READINESS.md`.
+- **Correção P0 de ReDoS em `bin/lib/oxe-complexity.cjs` (`Q-20261126-0408`):** eliminou backtracking exponencial em `START_RES[2]` que travava `oxe-cc phase close` em arquivos longos (ex.: `bin/lib/oxe-operational.cjs` caiu de hang infinito para ~212 ms).
+
+### Core 100% agnóstico por presets declarativos (`OB-28`..`OB-30`, ADR `D-5`)
+
+- **Presets declarativos (`bin/lib/oxe-presets.cjs`, `OB-28`):** 4 presets canônicos (`cli`, `web`, `desktop-mobile`, `brand-strict`), `resolvePresetConfig` / `mergePresetIntoConfig`, precedência `config explícita > preset > default agnóstico` e chaves `preset`/`presets` aceitas em `ALLOWED_CONFIG_KEYS`.
+- **Desacoplamento de heurísticas OXESpace (`OB-29`):** `uiCardGaps`, `oxe-ship-pr.cjs` (`inspectRequiredCommitStatuses`), `oxe-env-sanitize.cjs`, `oxe-vitest-batch.cjs` (`verify.noBatchPatterns`) e `oxe-preflight.cjs` passam a ler o preset/config resolvido, preservando 100% de retrocompatibilidade para `brand-strict`, `src/design/targets/` e `area-marca`. Formalizado em `docs/adr/D-5-core-agnostico-vs-presets-declarativos-de-dominio.md`.
+- **Assets de release por preset (`OB-30`):** `checkReleaseReadiness` e `finalizeRelease` em `bin/lib/oxe-release-ops.cjs` adaptam `expectedAssets` ao preset (`cli` não exige `.apk`/`.exe`; `desktop-mobile` e legado mantêm Desktop + Android APK + checksums; `release.expectedAssets` explícito sobrescreve tudo).
+
+### Velocidade de feedback & modularização Strangler Fig Fatia 1 (`OB-31`..`OB-33`, ADR `D-6`)
+
+- **Runner paralelo, `--timings` e `--shard` (`scripts/quality-check.cjs`, `OB-31`):** `test-root` passa a aceitar `--concurrency <N>` (ou `OXE_TEST_CONCURRENCY`, limitado a `<= 4` no Windows por padrão), `--timings [N]`, `--shard <k>/<total>` (particionamento 100% determinístico) e `--dry-run`, com helpers puros exportados sem efeitos colaterais no `require`.
+- **Extração de comandos CLI (`bin/lib/commands/ops-commands.cjs`, `OB-32`):** extraídos `acceptance-audit`, `release-readiness`, `release-finalize`, `preflight`, `sync`, `gc-worktrees`, `worktree`, `session` e `quick` via `oxe-command-registry.cjs`, reduzindo `bin/oxe-cc.js` em 517 linhas líquidas (`10.669 → 10.152`).
+- **Extração Strangler Fig Fatia 1 de `oxe-operational.cjs` (`OB-33`):** criados `bin/lib/operational/child-env.cjs` e `bin/lib/operational/alm-refine-runtime.cjs` com injeção explícita de dependências (0 `require` circular), reduzindo `bin/lib/oxe-operational.cjs` em 783 linhas (`15.949 → 15.166`) mantendo 209/209 exports e 0 drift em `check:sdk-types`. Formalizado em `docs/adr/D-6-decomposicao-strangler-fig-de-oxe-cc-e-oxe-operational.md`.
+
+### Benchmark multi-modelo, multi-stack Python & corte `1.22.1` (`OB-34`..`OB-36`)
+
+- **Split de modelos e ROI em `scripts/reference-projects.cjs` (`OB-34`):** suporte a `--plan-model`, `--execute-model`, `--compare <baseline.json>`, `cost_by_tier`, `turns_by_phase` e função pura `compareReferenceReports(baseline, candidate)` com detecção de regressão de oráculo / `false_green`.
+- **3º projeto de referência em Python 3 stdlib (`pycsv`, `OB-35`):** `scripts/reference-projects/pycsv.cjs` + 11 módulos solução em `scripts/reference-projects/solutions/pycsv/` (2 fases, 10 tarefas congeladas, oráculos `unittest` independentes, zero `pip`, detecção cross-platform `resolvePythonBinary` com skip limpo quando Python < 3.9).
+- **Dependências seguras & sincronização `1.22.1` (`OB-36`):** atualização de `@types/node` (`^18.19.130`), `semver` (`^7.8.6`) e `globals` (`^15.15.0`) preservando `engines.node >= 18.0.0` e `0` vulnerabilidades em `npm audit --omit=dev`.
+
+---
+
 ## [1.22.0] — 2026-11-26
 
 Reúne o que foi feito depois da tag pública `v1.21.2` de 11/11 (parte disso foi registrada no desenvolvimento com o rótulo 1.21.2): jornada guiada, correções do uso real no OXESpace (`v1.5.2`–`v1.6.1`) e dos benches, perfil `lean`, desambiguação executável, força dos testes congelados, e o pacote completo de estabilidade/CI rápido/governança de release (`OXB-G01`..`OXB-G17`) com rastreabilidade de artefatos OXE no `alm refine`.

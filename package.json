@@ -1,6 +1,6 @@
 {
   "name": "oxe-cc",
-  "version": "1.22.0",
+  "version": "1.22.1",
   "description": "OXE — spec-driven workflows in .oxe/ with runtime enterprise, evidence-first verification and multi-runtime integrations (npx)",
   "license": "MIT",
   "author": "",
@@ -124,11 +124,11 @@
   "devDependencies": {
     "c8": "^11.0.0",
     "eslint": "^9.31.0",
-    "globals": "^15.14.0",
+    "globals": "^15.15.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@types/node": "^18.19.120",
-    "semver": "^7.7.4"
+    "@types/node": "^18.19.130",
+    "semver": "^7.8.6"
   }
 }
